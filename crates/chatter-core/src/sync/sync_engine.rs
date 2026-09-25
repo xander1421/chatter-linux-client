@@ -104,12 +104,14 @@ impl SyncEngine {
         settings_repo: Arc<SettingsRepository>,
         event_bus: EventBus,
         inbound: Arc<ChannelInbound>,
+        channel_events: Arc<crate::services::channel_event_service::ChannelEventService>,
     ) -> Self {
         Self {
             channel_sync: ChannelSync::new(
                 grpc_pool.clone(),
                 channel_repo.clone(),
                 settings_repo.clone(),
+                channel_events,
             ),
             message_sync: MessageSync::new(
                 grpc_pool.clone(),

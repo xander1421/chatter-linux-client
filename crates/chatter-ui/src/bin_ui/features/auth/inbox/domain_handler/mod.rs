@@ -423,19 +423,17 @@ pub async fn handle_domain_event(
             messaging::update_active_channel_member_count(window, ui_ctx, channel_id);
         }
 
-        DomainEvent::ChannelMemberLeft { channel_id, user_id: _, display_name: _, message } => {
-            // Kicked or banned: core dropped our membership, so the composer
-            // gives way to the removal notice.
-            let removed_us = matches!(
-                message.content,
-                chatter_core::domain::message::MessageContent::System(
-                    chatter_core::domain::message::SystemMessage::SelfRemoved { .. }
-                )
-            );
+        DomainEvent::ChannelMemberLeft { channel_id, user_id, display_name: _, message } => {
+            // We left, or were kicked or banned: core dropped our membership,
+            // so the composer gives way to the notice and the sidebar row is
+            // rebuilt from core (its preview, and no "Leave channel" in its menu).
+            let we_left = ui_ctx.session_current_user_id() == Some(user_id);
             messaging::handle_message_received(window, ui_ctx, message);
             messaging::update_active_channel_member_count(window, ui_ctx, channel_id);
-            if removed_us {
+            if we_left {
                 crate::bin_ui::features::chat::refresh_send_notice(window, ui_ctx, channel_id);
+                crate::bin_ui::features::sidebar::sections::refresh_conversation_lists(window, ui_ctx);
+                crate::bin_ui::features::sidebar::sections::refresh_sections_ui(window, ui_ctx);
             }
         }
 

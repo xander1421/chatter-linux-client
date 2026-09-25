@@ -180,6 +180,7 @@ impl CoreServices {
             infra.settings_repo.clone(),
             infra.event_bus.clone(),
             channel_inbound.clone(),
+            services.channel_event_service.clone(),
         ));
 
         Self {

@@ -9,7 +9,7 @@ use chrono::Utc;
 
 use crate::domain::channel::Membership;
 use crate::domain::ids::{ChannelId, MessageId, UserId};
-use crate::domain::message::{ConversationType, Message, MessageContent, SystemMessage};
+use crate::domain::message::{Message, MessageContent, SystemMessage};
 use crate::error::StorageError;
 use crate::storage::repositories::channel_repo::ChannelRepository;
 use crate::storage::repositories::MessageRepository;
@@ -197,39 +197,24 @@ impl ChannelEventService {
                     }
                 };
                 
+                // The server's join time is the join's identity: the live
+                // event and a later roster sync key the notice on it, so the
+                // same join is filed once whichever path sees it first.
+                let joined_at = (member.joined_at > 0)
+                    .then(|| chrono::DateTime::from_timestamp_nanos(member.joined_at as i64))
+                    .unwrap_or_else(Utc::now);
                 let membership = Membership {
                     channel_id,
                     user_id,
                     role: MemberRole::Member,
                     notification_preference: NotificationPreference::All,
-                    joined_at: Utc::now(),
+                    joined_at,
                     last_read_message_id: None,
                     is_muted: false,
                     muted_until: None,
                 };
-                
-                if let Ok(Some((message, display_name))) =
-                    self.handle_member_joined(&channel_id, &user_id, &membership, timestamp)
-                {
-                    // Emit domain event for UI consumption
-                    let event = DomainEvent::ChannelMemberJoined {
-                        channel_id,
-                        user_id,
-                        display_name: display_name.clone(),
-                        message,
-                    };
-                    
-                    if let Err(e) = self.event_bus.domain_sender().send(event) {
-                        tracing::warn!("Failed to publish ChannelMemberJoined event: {}", e);
-                    }
-                    
-                    tracing::info!(
-                        "Channel member joined: channel={}, user={}, display_name={}",
-                        channel_id,
-                        user_id,
-                        display_name
-                    );
-                }
+                let key = if member.joined_at > 0 { membership_ts(&membership) } else { timestamp };
+                self.publish_member_joined(&membership, key);
             }
             Event::ChannelUpdated(proto_channel) => {
                 use crate::services::channel::converters::proto_to_domain_channel;
@@ -598,6 +583,40 @@ impl ChannelEventService {
         Ok(Some((message, self.get_display_name(user_id))))
     }
 
+    /// [`Self::handle_member_joined`], then tell the UI.
+    fn publish_member_joined(&self, membership: &Membership, event_ts: u64) {
+        let (channel_id, user_id) = (membership.channel_id, membership.user_id);
+        let Ok(Some((message, display_name))) = self.handle_member_joined(&channel_id, &user_id, membership, event_ts)
+        else {
+            return;
+        };
+        tracing::info!(%channel_id, %user_id, %display_name, "Channel member joined");
+        let event = DomainEvent::ChannelMemberJoined { channel_id, user_id, display_name, message };
+        if let Err(e) = self.event_bus.domain_sender().send(event) {
+            tracing::warn!("Failed to publish ChannelMemberJoined event: {}", e);
+        }
+    }
+
+    /// A roster sync found `membership` on the server but not locally: the
+    /// `MemberAdded` event was missed (app backgrounded, stream down). Files
+    /// the notice the event would have. Keyed on the server's `joined_at`, so
+    /// every sync that sees this join files it once.
+    pub fn record_synced_join(&self, membership: &Membership) {
+        self.publish_member_joined(membership, membership_ts(membership));
+    }
+
+    /// A roster sync found `membership` gone from the server: the
+    /// `MemberRemoved` event was missed. The roster carries no reason, so it
+    /// reads as a leave. Keyed on the membership that ended.
+    pub fn record_synced_departure(&self, membership: &Membership) {
+        self.publish_member_removed(
+            &membership.channel_id,
+            &membership.user_id,
+            MemberRemoval::Left,
+            membership_ts(membership),
+        );
+    }
+
     /// Handle a member leaving/being removed from a channel.
     ///
     /// Creates a system message and removes membership from local storage.
@@ -639,6 +658,13 @@ impl ChannelEventService {
             Err(e) => return Err(e.into()),
         }
 
+        // Our own leave reaches us twice with unrelated timestamps: the leave
+        // RPC (`record_own_leave`) and the server's broadcast on the channel
+        // stream we are still subscribed to. Neither can key off the other.
+        if is_self && reason == MemberRemoval::Left && self.recently_recorded_own_leave(channel_id, user_id) {
+            return Ok(None);
+        }
+
         if !self.message_repo.insert_or_ignore(&message)? {
             return Ok(None);
         }
@@ -668,6 +694,21 @@ impl ChannelEventService {
             Ok(me) => self.publish_member_removed(channel_id, &me, MemberRemoval::Left, 0),
             Err(e) => tracing::warn!(%channel_id, error = %e, "No current user; leave notice not filed"),
         }
+    }
+
+    /// Whether our newest membership notice in `channel_id` is a leave filed
+    /// in the last two minutes: then a second own-leave is the same one.
+    // ponytail: time window, because the RPC and the broadcast carry no shared
+    // id; a server-issued departure id on both would make this exact.
+    fn recently_recorded_own_leave(&self, channel_id: &ChannelId, me: &UserId) -> bool {
+        let conv_type = crate::services::message::conversion::conversation_type_for_channel(&self.channel_repo, channel_id);
+        let Ok(recent) = self.message_repo.list(channel_id, &conv_type, None, 20) else { return false };
+        let newest_own = recent.iter().find_map(|m| match &m.content {
+            MessageContent::System(SystemMessage::UserJoined(u)) if u == me => Some(None),
+            MessageContent::System(SystemMessage::UserLeft(u)) if u == me => Some(Some(m.created_at)),
+            _ => None,
+        });
+        matches!(newest_own, Some(Some(at)) if Utc::now() - at < chrono::Duration::minutes(2))
     }
 
     /// Get display name for a user, falling back to user ID string.
@@ -721,11 +762,12 @@ impl ChannelEventService {
         Message {
             id,
             conversation_id: *channel_id,
-            // Channel message reads use `ConversationType::AnonGroup` (see
-            // services/anon_group/storage.rs, services/conversation.rs,
-            // services/message/mod.rs). Writing under ::Channel here made
-            // join/leave/kick system messages invisible in channel history.
-            conversation_type: ConversationType::AnonGroup,
+            // The channel's own bucket, as its messages are filed: anything
+            // else is missing from its history and sidebar preview.
+            conversation_type: crate::services::message::conversion::conversation_type_for_channel(
+                &self.channel_repo,
+                channel_id,
+            ),
             sender_id: subject,
             device_id: None,
             content: MessageContent::System(content),
@@ -768,6 +810,12 @@ fn member_notice_id(channel_id: &ChannelId, user_id: &UserId, kind: &str, event_
     }
     let key = format!("channel_member_notice:{channel_id}:{user_id}:{kind}:{event_ts}");
     MessageId(uuid::Uuid::new_v5(&uuid::Uuid::nil(), key.as_bytes()))
+}
+
+/// A membership's server `joined_at` in nanoseconds: the identity of a join
+/// or departure a roster sync found, standing in for the missed event's time.
+fn membership_ts(membership: &Membership) -> u64 {
+    membership.joined_at.timestamp_nanos_opt().unwrap_or(0) as u64
 }
 
 /// Why a member dropped off the roster, from the server's `MemberRemoved`.
@@ -828,6 +876,7 @@ mod tests {
     use crate::proto::chat_v1::{
         ChannelError as ProtoChannelError, ChannelModeration, OperationFailed,
     };
+    use crate::domain::message::ConversationType;
     use crate::storage::Database;
 
     #[test]
@@ -982,7 +1031,7 @@ mod tests {
         let channel_id = channel.id;
         channel_repo.upsert(&channel).unwrap();
         let joiner = UserId::from(uuid::Uuid::new_v4());
-        let count = || service.message_repo.count(&channel_id, &ConversationType::AnonGroup).unwrap();
+        let count = || service.message_repo.count(&channel_id, &ConversationType::Channel).unwrap();
         let added = || channel_event::Event::MemberAdded(ProtoMember {
             user_id: joiner.to_string(),
             ..Default::default()
@@ -1033,7 +1082,8 @@ mod tests {
 
         service.record_own_leave(&channel.id);
 
-        assert_eq!(service.message_repo.count(&channel.id, &ConversationType::AnonGroup).unwrap(), 1);
+        // Filed where the channel's history and sidebar preview read.
+        assert_eq!(service.message_repo.count(&channel.id, &ConversationType::Channel).unwrap(), 1);
         match rx.try_recv() {
             Ok(DomainEvent::ChannelMemberLeft { user_id, message, .. }) => {
                 assert_eq!(user_id, me);
@@ -1042,6 +1092,96 @@ mod tests {
             }
             other => panic!("expected ChannelMemberLeft, got {other:?}"),
         }
+    }
+
+    fn as_me(service: &ChannelEventService) -> UserId {
+        let me = UserId::from(uuid::Uuid::new_v4());
+        service
+            .settings_repo
+            .set_string(crate::storage::repositories::settings_repo::keys::CURRENT_USER_ID, &me.to_string())
+            .unwrap();
+        me
+    }
+
+    fn private_channel(channel_repo: &ChannelRepository) -> ChannelId {
+        let channel = crate::domain::channel::Channel::new(
+            ChannelId::from(uuid::Uuid::new_v4()),
+            "invtest".to_string(),
+            crate::domain::channel::ChannelType::Private,
+            UserId::from(uuid::Uuid::new_v4()),
+        );
+        channel_repo.upsert(&channel).unwrap();
+        channel.id
+    }
+
+    /// F79: our own leave arrives from the leave RPC and from the channel
+    /// stream's broadcast, with unrelated timestamps, in either order. One
+    /// "You left" and one UI event; leaving again after a re-join is new.
+    #[tokio::test]
+    async fn own_leave_seen_on_both_paths_files_one_notice() {
+        use crate::proto::chat_v1::{channel::ChannelMember as ProtoMember, member_removed::Reason, MemberRemoved};
+        let (service, bus, channel_repo) = setup();
+        let mut rx = bus.domain_sender().subscribe();
+        let me = as_me(&service);
+        let channel_id = private_channel(&channel_repo);
+        let count = || service.message_repo.count(&channel_id, &ConversationType::Channel).unwrap();
+        let broadcast = || channel_event::Event::MemberRemoved(MemberRemoved {
+            user_id: me.to_string(),
+            reason: Reason::Left as i32,
+            moderator_id: String::new(),
+        });
+
+        service.handle_stream_event(broadcast(), &channel_id.to_string(), 1_000).await;
+        service.record_own_leave(&channel_id);
+        assert_eq!(count(), 1, "broadcast then RPC filed two notices");
+        assert!(matches!(rx.try_recv(), Ok(DomainEvent::ChannelMemberLeft { .. })));
+        assert!(rx.try_recv().is_err(), "the duplicate reached the UI");
+
+        let rejoin = channel_event::Event::MemberAdded(ProtoMember { user_id: me.to_string(), ..Default::default() });
+        service.handle_stream_event(rejoin, &channel_id.to_string(), 2_000).await;
+        service.record_own_leave(&channel_id);
+        service.handle_stream_event(broadcast(), &channel_id.to_string(), 3_000).await;
+        assert_eq!(count(), 3, "join + second leave, the RPC-first order deduped");
+    }
+
+    /// F79: a roster sync that finds a member gone (or new) files the notice
+    /// the missed live event would have, once however many syncs see it.
+    #[tokio::test]
+    async fn synced_roster_changes_file_one_notice_each() {
+        let (service, bus, channel_repo) = setup();
+        let mut rx = bus.domain_sender().subscribe();
+        let _me = as_me(&service);
+        let channel_id = private_channel(&channel_repo);
+        let count = || service.message_repo.count(&channel_id, &ConversationType::Channel).unwrap();
+        let member = Membership {
+            channel_id,
+            user_id: UserId::from(uuid::Uuid::new_v4()),
+            role: crate::domain::channel::MemberRole::Member,
+            notification_preference: crate::domain::channel::NotificationPreference::All,
+            joined_at: Utc::now(),
+            last_read_message_id: None,
+            is_muted: false,
+            muted_until: None,
+        };
+
+        service.record_synced_join(&member);
+        service.record_synced_join(&member);
+        assert_eq!(count(), 1);
+        assert!(matches!(rx.try_recv(), Ok(DomainEvent::ChannelMemberJoined { .. })));
+        assert!(rx.try_recv().is_err());
+
+        service.record_synced_departure(&member);
+        service.record_synced_departure(&member);
+        assert_eq!(count(), 2);
+        match rx.try_recv() {
+            Ok(DomainEvent::ChannelMemberLeft { user_id, message, .. }) => {
+                assert_eq!(user_id, member.user_id);
+                assert!(matches!(message.content, MessageContent::System(SystemMessage::UserLeft(u)) if u == member.user_id));
+            }
+            other => panic!("expected ChannelMemberLeft, got {other:?}"),
+        }
+        assert!(rx.try_recv().is_err());
+        assert!(channel_repo.get_membership(&channel_id, &member.user_id).unwrap().is_none());
     }
 
     /// A ban on the local user drops our own membership and surfaces to the UI.
