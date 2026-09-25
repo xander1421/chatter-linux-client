@@ -433,6 +433,8 @@ pub fn spawn_notification_listener(
 /// * Never for a muted conversation.
 /// * Never for a conversation notice (a timer change and the like): it
 ///   records something about the chat, it is not a message to read.
+/// * Never for a Call record: the call itself rang, and a missed one is on
+///   the Calls screen.
 fn should_notify_message(
     message: &crate::domain::message::Message,
     me: Option<&crate::domain::ids::UserId>,
@@ -444,6 +446,7 @@ fn should_notify_message(
         && !on_screen
         && !muted
         && !message.content.is_system()
+        && !matches!(message.content, crate::domain::message::MessageContent::Call(_))
 }
 
 /// `(on_screen, muted)` for the conversation `message` belongs to. On screen
@@ -487,6 +490,12 @@ mod tests {
         // …but not in the chat on screen, nor in a muted one.
         assert!(!should_notify_message(&m, Some(&me), true, false));
         assert!(!should_notify_message(&m, Some(&me), false, true));
+        // A call record filed under the peer is not a message to read.
+        let mut call = msg(peer);
+        call.content = crate::domain::message::MessageContent::Call(
+            crate::domain::message::CallMessage::started("c".into(), peer, "Peer".into()),
+        );
+        assert!(!should_notify_message(&call, Some(&me), false, false));
     }
 
     #[test]

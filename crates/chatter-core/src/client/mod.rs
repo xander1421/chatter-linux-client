@@ -3446,19 +3446,15 @@ impl ChatterClient {
             .map_err(|e| ClientError::Inbox(e.to_string()))
     }
 
-    /// Handle remote hangup: store history, disconnect locally. Accepts the
-    /// hangup's `call_id` so core can gate on active-call match without the
-    /// UI having to inspect call state.
+    /// Handle remote hangup: disconnect locally. Accepts the hangup's
+    /// `call_id` so core can gate on active-call match without the UI having
+    /// to inspect call state.
     #[cfg(feature = "media")]
-    pub async fn handle_remote_hangup(
-        &self,
-        call_id: &str,
-        duration_secs: i64,
-    ) -> Result<(), ClientError> {
+    pub async fn handle_remote_hangup(&self, call_id: &str) -> Result<(), ClientError> {
         let call_worker = self.call_service().get()
             .ok_or_else(|| ClientError::Inbox("call service not initialized".into()))?;
         self.call_signaling()
-            .handle_remote_hangup(call_worker, duration_secs, Some(call_id))
+            .handle_remote_hangup(call_worker, Some(call_id))
             .await
             .map_err(|e| ClientError::Inbox(e.to_string()))
     }

@@ -207,6 +207,7 @@ impl AppContext {
                 crate::services::call_history_recorder::spawn_call_history_recorder(
                     &handle,
                     self.infrastructure.database.clone(),
+                    self.core_services.message_service.clone(),
                 );
                 let _ = crate::services::call_worker::spawn_call_orchestrator_bridge(
                     &self.core_services.event_bus,

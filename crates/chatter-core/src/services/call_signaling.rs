@@ -1096,15 +1096,15 @@ impl CallSignalingService {
     // End-call orchestration (hangup + history + leave)
     // ================================================================
 
-    /// End an active DM/channel call: send hangup, store history, leave.
+    /// End an active DM call: send hangup, leave.
     ///
     /// `call_worker` must be provided since it's behind a OnceLock in the client.
-    /// `duration_secs` comes from the UI timer (core doesn't track call duration).
+    /// The Call bubble is filed by `call_history_recorder` on the `ActiveEnded`
+    /// the leave emits — the one place every end of a DM call reaches.
     #[cfg(feature = "media")]
     pub async fn end_dm_call(
         &self,
         call_worker: &CallWorkerHandle,
-        duration_secs: i64,
     ) -> Result<(), CallSignalingError> {
         let call = call_worker.active_call().await
             .ok_or(CallSignalingError::NoPendingCall)?;
@@ -1115,20 +1115,6 @@ impl CallSignalingService {
         ).await {
             tracing::error!(error = %e, "Failed to send hangup notification");
         }
-
-        // Resolve initiator name and store call history
-        let current_user = self.channel_service.current_user_id()
-            .unwrap_or_else(|_| UserId::from_uuid(uuid::Uuid::nil()));
-        let is_outgoing = call.initiator_id == current_user;
-
-        // Initiator name resolved by caller (ChatterClient facade) since we
-        // don't have UserService. Pass empty string — store_dm_call_history
-        // uses the initiator_id as fallback display.
-        self.store_dm_call_history(
-            &call.channel_id, &call.id.to_string(),
-            &call.initiator_id, &call.initiator_id.to_string(),
-            is_outgoing, duration_secs, false,
-        );
 
         // Leave the call (orchestrator cleanup is now atomic inside the worker)
         if let Err(e) = call_worker.leave_call().await {
@@ -1157,7 +1143,7 @@ impl CallSignalingService {
             .unwrap_or_else(|_| UserId::from_uuid(uuid::Uuid::nil()));
         let is_outgoing = call.initiator_id == current_user;
 
-        self.store_dm_call_history(
+        self.store_group_call_history(
             &call.channel_id, &call.id.to_string(),
             &call.initiator_id, &call.initiator_id.to_string(),
             is_outgoing, duration_secs, false,
@@ -1307,12 +1293,12 @@ impl CallSignalingService {
         Ok(conversation_id)
     }
 
-    /// Handle remote hangup: store history, disconnect locally.
+    /// Handle remote hangup: disconnect locally. The Call bubble is filed by
+    /// `call_history_recorder` on the resulting `ActiveEnded`.
     #[cfg(feature = "media")]
     pub async fn handle_remote_hangup(
         &self,
         call_worker: &CallWorkerHandle,
-        duration_secs: i64,
         expected_call_id: Option<&str>,
     ) -> Result<(), CallSignalingError> {
         let active = call_worker.active_call().await;
@@ -1322,38 +1308,27 @@ impl CallSignalingService {
         if active.is_none() && expected_call_id.is_some() {
             return Ok(());
         }
-        if let Some(call) = active {
+        if let (Some(call), Some(expected)) = (active, expected_call_id) {
             // Ignore hangups for a call we are not in. Moved here so the UI
             // doesn't need to reach into call state to gate the event.
-            if let Some(expected) = expected_call_id {
-                if call.id.to_string() != expected {
-                    tracing::debug!(
-                        expected,
-                        active = %call.id,
-                        "Ignoring remote hangup for non-active call"
-                    );
-                    return Ok(());
-                }
+            if call.id.to_string() != expected {
+                tracing::debug!(
+                    expected,
+                    active = %call.id,
+                    "Ignoring remote hangup for non-active call"
+                );
+                return Ok(());
             }
-
-            let current_user = self.channel_service.current_user_id()
-                .unwrap_or_else(|_| UserId::from_uuid(uuid::Uuid::nil()));
-            let is_outgoing = call.initiator_id == current_user;
-
-            self.store_dm_call_history(
-                &call.channel_id, &call.id.to_string(),
-                &call.initiator_id, &call.initiator_id.to_string(),
-                is_outgoing, duration_secs, false,
-            );
         }
 
         call_worker.disconnect_local(CallEndReason::RemoteHangup).await;
         Ok(())
     }
 
-    /// Store a DM/channel call history message.
+    /// Store a group/channel call history message. (A DM call's bubble is
+    /// filed by `call_history_recorder`.)
     #[cfg(feature = "media")]
-    fn store_dm_call_history(
+    fn store_group_call_history(
         &self,
         channel_id: &ChannelId,
         call_id: &str,
@@ -1386,9 +1361,8 @@ impl CallSignalingService {
         let message = Message {
             id: crate::domain::ids::MessageId::new(),
             conversation_id: *channel_id,
-            // Derive from the channel row — this stores DM *and* channel/group
-            // call history (see end_dm_call / end_group_call callers), so a
-            // hardcoded type mislabels every non-anon-group call in history.
+            // Derive from the channel row, so a hardcoded type can't
+            // mislabel the call's conversation.
             conversation_type: self.message_service.conversation_type(channel_id),
             sender_id: Some(*initiator_id),
             device_id: None,

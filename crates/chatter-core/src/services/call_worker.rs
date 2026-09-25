@@ -2396,11 +2396,7 @@ pub fn spawn_call_orchestrator_bridge(
                 },
                 event = room_rx.recv() => match event {
                     Ok(LiveKitRoomEvent::ParticipantLeft { identity }) => {
-                        spawn_end_one_to_one_if_peer_gone(
-                            worker.clone(),
-                            signaling.clone(),
-                            identity,
-                        );
+                        spawn_end_one_to_one_if_peer_gone(worker.clone(), identity);
                     }
                     Ok(_) | Err(RecvError::Lagged(_)) => {}
                     Err(RecvError::Closed) => {
@@ -2438,11 +2434,7 @@ fn peer_left_ends_call(
 /// Without this the caller sat alone in the room, timer running, until they
 /// hung up themselves. Group calls (channel, anon group) are untouched: people
 /// leaving is ordinary there, and the channel initiator rekeys instead.
-fn spawn_end_one_to_one_if_peer_gone(
-    worker: CallWorkerHandle,
-    signaling: crate::services::call_signaling::CallSignalingService,
-    departed: String,
-) {
+fn spawn_end_one_to_one_if_peer_gone(worker: CallWorkerHandle, departed: String) {
     tokio::spawn(async move {
         let Some(call) = worker.active_call().await.map(|c| c.id) else { return };
         let still_ends = || async {
@@ -2461,20 +2453,10 @@ fn spawn_end_one_to_one_if_peer_gone(
         if worker.active_call().await.map(|c| c.id) != Some(call) || !still_ends().await {
             return;
         }
-        let Some((kind, connected_at)) = worker.orch_active_since().await else { return };
         tracing::info!(call = %call, "1:1 call peer left the room — ending the call");
-        match kind {
-            OrchestratedCallKind::DmStandard => {
-                let duration_secs = connected_at.elapsed().as_secs() as i64;
-                if let Err(e) = signaling
-                    .handle_remote_hangup(&worker, duration_secs, Some(&call.to_string()))
-                    .await
-                {
-                    tracing::error!(error = %e, "Failed to end call after peer left");
-                }
-            }
-            _ => worker.disconnect_local(CallEndReason::RemoteHangup).await,
-        }
+        // The resulting `ActiveEnded` files the DM's Call bubble
+        // (`call_history_recorder`), as for any other end of the call.
+        worker.disconnect_local(CallEndReason::RemoteHangup).await;
     });
 }
 

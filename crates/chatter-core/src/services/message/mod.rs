@@ -825,6 +825,12 @@ impl MessageService {
         self.message_repo.insert(message).map_err(MessageError::from)
     }
 
+    /// [`store_message_local`](Self::store_message_local) for a record whose
+    /// id is its dedup key: `false` when it was already stored.
+    pub fn store_message_local_once(&self, message: &Message) -> Result<bool, MessageError> {
+        self.message_repo.insert_or_ignore(message).map_err(MessageError::from)
+    }
+
     /// Get the current user's ID.
     pub fn current_user_id(&self) -> Result<UserId, MessageError> {
         use crate::services::current_user::CurrentUserProvider;

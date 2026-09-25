@@ -928,15 +928,14 @@ impl ChatterClient {
 
     // ── Call lifecycle ─────────────────────────────────────────────
 
-    /// End an active DM/channel call: send hangup, store history, leave.
-    ///
-    /// `duration_secs` is the call duration from the UI timer.
+    /// End an active DM call: send hangup, leave. The Call bubble follows
+    /// from the call ending (`call_history_recorder`).
     #[cfg(feature = "media")]
-    pub async fn end_dm_call(&self, duration_secs: i64) -> Result<(), ClientError> {
+    pub async fn end_dm_call(&self) -> Result<(), ClientError> {
         let call_worker = self.call_service().get()
             .ok_or_else(|| ClientError::Inbox("call service not initialized".into()))?;
         self.call_signaling()
-            .end_dm_call(call_worker, duration_secs)
+            .end_dm_call(call_worker)
             .await
             .map_err(|e| ClientError::Inbox(e.to_string()))
     }
@@ -995,7 +994,7 @@ impl ChatterClient {
                 self.end_anon_call(duration_secs).await.map(|_| ())
             }
             OrchestratedCallKind::DmStandard => {
-                self.end_dm_call(duration_secs).await
+                self.end_dm_call().await
             }
             OrchestratedCallKind::GroupChannel => {
                 self.end_group_call(duration_secs).await

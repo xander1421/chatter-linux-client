@@ -325,11 +325,10 @@ pub fn wire_call_hangup_handler(window: &MainWindow, ui_ctx: &Arc<ChatterClient>
             );
 
             // Core gates on active-call match internally — UI just forwards.
-            let duration_secs = get_call_duration_secs();
             let ctx = ui_ctx.clone();
             let call_id_owned = call_id.clone();
             tokio::spawn(async move {
-                if let Err(e) = ctx.handle_remote_hangup(&call_id_owned, duration_secs).await {
+                if let Err(e) = ctx.handle_remote_hangup(&call_id_owned).await {
                     tracing::error!(error = %e, "Failed to handle remote hangup");
                 }
             });

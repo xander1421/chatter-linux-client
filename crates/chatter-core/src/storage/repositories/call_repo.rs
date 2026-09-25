@@ -202,6 +202,18 @@ impl CallHistoryRepository {
         Ok(out)
     }
 
+    /// One entry by id.
+    pub fn get(&self, id: &str) -> Result<Option<CallHistoryEntry>, StorageError> {
+        let conn = self.db.read_connection()?;
+        let mut stmt = conn.prepare(
+            "SELECT id, conversation_id, conversation_type, peer_name,
+                    started_at, ended_at, direction, result, duration_secs, has_video
+             FROM call_history WHERE id = ?1",
+        )?;
+        let mut rows = stmt.query(params![id])?;
+        rows.next()?.map(row_to_entry).transpose()
+    }
+
     /// Total number of entries. Cheap — uses SQLite's cached index count.
     pub fn count(&self) -> Result<u64, StorageError> {
         let conn = self.db.read_connection()?;
@@ -321,6 +333,8 @@ mod tests {
         assert_eq!(rows[0].peer_name, "Alice");
         assert_eq!(rows[0].duration_secs, Some(42));
         assert_eq!(rows[0].result, CallResult::Completed);
+        assert_eq!(repo.get("call-1").unwrap().map(|e| e.peer_name), Some("Alice".into()));
+        assert!(repo.get("call-2").unwrap().is_none());
     }
 
     #[test]
