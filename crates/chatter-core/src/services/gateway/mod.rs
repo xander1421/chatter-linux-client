@@ -95,6 +95,12 @@ pub enum CallHangupReason {
     DeclinedElsewhere,
 }
 
+impl std::fmt::Display for CallHangupReason {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        std::fmt::Debug::fmt(self, f)
+    }
+}
+
 // DmContent, DecryptResult, RouteResult, SealedSenderResult are in inbound.rs
 // and re-exported above.
 

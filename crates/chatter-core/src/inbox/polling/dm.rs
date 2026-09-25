@@ -931,11 +931,10 @@ fn dispatch_dm_content(
                 "Call hangup notification received"
             );
 
-            let reason_str = format!("{:?}", reason);
             let _ = event_tx.send(InboxEvent::CallHangup {
                 peer_id,
                 call_id,
-                reason: reason_str,
+                reason,
                 timestamp,
             });
         }
@@ -1070,11 +1069,10 @@ fn dispatch_dm_content(
                 peer_id = %peer_id,
                 "Anonymous group message received"
             );
-            let _ = event_tx.send(InboxEvent::AnonGroupMessage {
-                peer_id,
-                group_id,
-                inner_content,
-            });
+            let _ = event_tx.send(
+                InboxEvent::AnonGroupMessage { peer_id, group_id, inner_content }
+                    .server_stamp_call_offer(server_timestamp),
+            );
         }
         // =====================================================================
         // Anonymous DM Messages
@@ -1144,11 +1142,10 @@ fn dispatch_dm_content(
                 conversation_id_len = conversation_id.len(),
                 "Anonymous DM message received"
             );
-            let _ = event_tx.send(InboxEvent::AnonDmMessage {
-                peer_id,
-                conversation_id,
-                inner_content,
-            });
+            let _ = event_tx.send(
+                InboxEvent::AnonDmMessage { peer_id, conversation_id, inner_content }
+                    .server_stamp_call_offer(server_timestamp),
+            );
         }
         // Unreachable in practice — the poll loop routes this to
         // `ack_policy::drop_and_ack` before it ever calls dispatch, because the

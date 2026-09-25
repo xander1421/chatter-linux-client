@@ -762,7 +762,7 @@ impl InboxEventProcessor {
                 self.event_bus.emit_domain(DomainEvent::CallHangupReceived {
                     call_id: call_id.clone(),
                     peer_id: *peer_id,
-                    reason: reason.clone(),
+                    reason: *reason,
                 });
             }
 

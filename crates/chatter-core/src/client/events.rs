@@ -113,5 +113,5 @@ pub enum CallKeyEvent {
 pub struct RemoteCallHangup {
     pub call_id: String,
     pub peer_id: UserId,
-    pub reason: String,
+    pub reason: crate::services::gateway::CallHangupReason,
 }

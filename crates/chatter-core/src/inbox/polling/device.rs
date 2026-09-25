@@ -2132,7 +2132,7 @@ pub fn dispatch_control_content(
                 Ok(DmContent::CallHangup { call_id, reason, timestamp }) => InboxEvent::CallHangup {
                     peer_id: *sender_id,
                     call_id,
-                    reason: format!("{:?}", reason),
+                    reason,
                     timestamp,
                 },
                 Ok(DmContent::GroupCallKey { call_id, key_material, key_epoch, channel_id, timestamp }) => {

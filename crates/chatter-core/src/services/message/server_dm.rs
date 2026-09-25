@@ -27,7 +27,7 @@ use crate::domain::message::{ConversationType, Message, MessageContent, MixedCon
 use crate::network::grpc::auth_client::AuthClient;
 use crate::network::grpc::message_client::MessageClient;
 use crate::proto::chat_v1::SealedSenderMessage;
-use crate::proto::content_v1::{content, AttachmentPointer, Content, SyncSent};
+use crate::proto::content_v1::{content, AttachmentPointer};
 use crate::services::current_user::CurrentUserProvider;
 
 use super::{DmSendResult, MessageError, MessageService};
@@ -315,79 +315,29 @@ impl MessageService {
         }
         let plaintext = content.encode_to_vec();
 
-        // Self-sync copy: for the TEXT DM path, the copy we ship to our OWN other
-        // devices is NOT the byte-identical DataMessage the recipient got. That
-        // bare copy carries no record of who it was for, so a receiving device
-        // files it under a conversation with ourselves (bug F8). Instead we wrap
-        // it in a `SyncSent` that names the real recipient as `destination`,
-        // exactly as Signal's `SyncMessage.Sent.destination` does, so our other
-        // devices file it as our OUTGOING message in the right conversation.
-        //
-        // SCOPE: the self-sync copy is decided per content type. The other
-        // control types (reaction, pin, edit, delete-for-everyone,
-        // delete-for-me) are message-anchored by Signal's `(author, ns-timestamp)`
-        // key or carry their own `conversation_id`, so the bare copy files
-        // correctly on the linked device with no destination on the wire — see
-        // the receive side (dispatch_control_content / inbox_processor).
-        //
-        // `None` means: do NOT self-sync this content to our other devices.
-        let self_plaintext: Option<Vec<u8>> = match &content.content {
-            // Text/attachment DataMessage → Signal-style `SyncSent` wrapper (F8
-            // fix, V13): carries the real destination so our other devices file
-            // it as our OUTGOING message in the peer's conversation.
-            // A timer update rides the same wrapper, so our other devices adopt
-            // the new timer for the right conversation (Signal syncs it as a
-            // `Sent` transcript of the update message).
-            Some(content::Content::DataMessage(dm))
-                if (!dm.body.is_empty()
-                    || !dm.attachments.is_empty()
-                    || crate::services::disappearing::is_timer_update(dm))
-                    && dm.delete.is_none() =>
-            {
-                let sync = Content {
-                    timestamp: content.timestamp,
-                    content: Some(content::Content::SyncSent(SyncSent {
-                        destination_user_id: peer_id.to_string(),
-                        timestamp: dm.timestamp,
-                        message: Some(dm.clone()),
-                    })),
-                    ..Default::default()
-                };
-                Some(sync.encode_to_vec())
-            }
-            // Typing: never sync your OWN typing to your other devices. Signal
-            // does not, and a linked device echoing "you are typing" in a phantom
-            // self-thread is noise, not a feature. Drop the self-copy entirely.
-            Some(content::Content::Typing(_)) => None,
-            // Call signaling is for the peer's devices only: a self-synced
-            // offer would ring our other devices with a call from ourselves.
-            // The exception is answering/declining: our other devices ring for
-            // the same call and get a Signal-style ACCEPTED/DECLINED hangup.
-            Some(content::Content::CallKey(_)) | Some(content::Content::CallHangup(_)) => {
-                // The device id only labels the sync; its absence must not
-                // fail the peer send.
-                let our_device_id = self
-                    .settings_repo
-                    .get::<u32>(crate::storage::repositories::settings_repo::keys::CURRENT_DEVICE_ID)
-                    .ok()
-                    .flatten()
-                    .unwrap_or(0);
-                crate::services::gateway::build_call_self_sync(&content, our_device_id)
-                    .map(|c| c.encode_to_vec())
-            }
-            Some(content::Content::GroupCallKey(_)) => None,
-            // Receipts tell the PEER about its messages; a copy on our other
-            // devices would mis-file on the A-self thread. Our own devices learn
-            // what we read from a `ReadSync` (`MessageService::sync_read`),
-            // which is sent whether or not read receipts are on.
-            Some(content::Content::Receipt(_)) => None,
-            _ => Some(plaintext.clone()),
-        };
+        // Own-device copy: one policy for both DM transports
+        // (`super::dm::own_device_copy`) — the `SyncSent` naming the peer for
+        // a message (F8, V13), the ACCEPTED/DECLINED_ELSEWHERE hangup when we
+        // answer or decline a call. Otherwise the bare copy for the
+        // message-anchored control types (reaction, pin, edit,
+        // delete-for-everyone, delete-for-me), which file correctly on the
+        // linked device with no destination on the wire — see the receive
+        // side (dispatch_control_content / inbox_processor). `None` means not
+        // self-synced: never our own typing (Signal does not), no receipts
+        // (our devices learn what we read from `ReadSync`), no call offer or
+        // other call signaling (it would ring us with a call from ourselves).
+        let self_copy = super::dm::own_device_copy(peer_id, &content, self.current_device_id_or_zero())
+            .or_else(|| match &content.content {
+                Some(content::Content::Typing(_))
+                | Some(content::Content::Receipt(_))
+                | Some(content::Content::CallKey(_))
+                | Some(content::Content::CallHangup(_))
+                | Some(content::Content::GroupCallKey(_)) => None,
+                _ => Some(content.clone()),
+            });
 
         let mut auth_client = self.auth_client();
         let mut message_client = self.message_client();
-
-        let our_user_id = self.settings_repo.current_user_id()?;
 
         let peer_id_str = peer_id.to_string();
 
@@ -422,31 +372,19 @@ impl MessageService {
             )));
         }
 
-        // Self-sync: every one of our own devices except this one. Ships the
-        // SyncSent-wrapped copy on the text DM path (F8 fix, V13) or the bare
-        // (message-anchored) copy for other control types. `None` means this
-        // content type is deliberately not self-synced (typing, receipts).
-        let own = match self_plaintext.as_ref() {
-            Some(bytes) => {
-                self.deposit_sealed_to_all_devices(
-                    &mut auth_client,
-                    &mut message_client,
-                    &our_user_id.to_string(),
-                    bytes,
-                )
-                .await
-            }
-            None => DepositOutcome::default(),
+        // Self-sync: every one of our own devices except this one.
+        let own_delivered = match self_copy {
+            Some(copy) => self.sync_to_own_devices(&mut auth_client, copy).await,
+            None => 0,
         };
 
         // Surface degradation at the top of the send, not just at the deposit
         // site: this is the one place that knows the whole message failed to be
         // sealed, and it must not look like an ordinary successful send.
-        if peer.degraded > 0 || own.degraded > 0 {
+        if peer.degraded > 0 {
             tracing::warn!(
                 peer_id = %peer_id,
                 peer_devices_degraded = peer.degraded,
-                self_devices_degraded = own.degraded,
                 "SEALED SENDER DEGRADED: sealed DM was delivered identified on some \
                  devices — the server recorded us as the sender for those"
             );
@@ -455,7 +393,7 @@ impl MessageService {
         tracing::debug!(
             peer_id = %peer_id,
             peer_devices_delivered = peer.delivered,
-            self_devices_delivered = own.delivered,
+            self_devices_delivered = own_delivered,
             "Sealed DM delivery complete"
         );
 
@@ -586,6 +524,12 @@ impl MessageService {
             }
         };
 
+        // To our own user (self-sync, SKDM, SenderKeyRequest) the deposit is
+        // identified on the authenticated channel, never UAK on the anonymous
+        // one — see `sync_to_own_devices`. That is not a degradation.
+        let is_self = self.current_user_id().is_ok_and(|me| me.to_string() == recipient_id);
+        let recipient_uak = recipient_uak.filter(|_| !is_self);
+
         // DEGRADATION, not a normal path. The UAK rides on the recipient's
         // prekey bundle, which the server populates for every registered user,
         // so `None` means the server omitted it (missing/corrupt UAK row, or an
@@ -595,7 +539,7 @@ impl MessageService {
         // This is logged loudly and per-recipient on purpose: a silent fallback
         // here would report "sealed DM sent" while shipping the exact opposite,
         // which is the failure mode this path exists to prevent.
-        if recipient_uak.is_none() {
+        if recipient_uak.is_none() && !is_self {
             tracing::warn!(
                 recipient = recipient_id,
                 reason = "prekey bundle carried no unidentified_access_key",
@@ -604,11 +548,32 @@ impl MessageService {
             );
         }
 
+        let delivered = self
+            .deposit_sealed_ciphertexts(message_client, recipient_id, ciphertexts, recipient_uak.as_ref())
+            .await;
+        DepositOutcome {
+            delivered,
+            degraded: if recipient_uak.is_none() && !is_self { delivered } else { 0 },
+            rate_limited: false,
+        }
+    }
+
+    /// Deposit each device's sealed ciphertext via `SendSealedMessage`:
+    /// UAK-authorized on the anonymous channel with `uak`, identified on
+    /// `message_client` without. Returns how many devices it reached; a
+    /// device the server has retired gets its session archived.
+    pub(super) async fn deposit_sealed_ciphertexts(
+        &self,
+        message_client: &mut MessageClient,
+        recipient_id: &str,
+        ciphertexts: std::collections::HashMap<u32, Vec<u8>>,
+        uak: Option<&[u8; 16]>,
+    ) -> usize {
         let timestamp = crate::util::time::TimestampNanos::now().as_u64();
         let server_key_id = self.signal_service.get_server_key_id();
-        let mut anon_client = self.grpc_pool.anonymous_message_client();
+        let mut anon_client = uak.map(|_| self.grpc_pool.anonymous_message_client());
 
-        let mut outcome = DepositOutcome::default();
+        let mut delivered = 0;
         for (device_id, sealed_bytes) in ciphertexts {
             let sealed_message = SealedSenderMessage {
                 sealed_body: sealed_bytes,
@@ -627,13 +592,13 @@ impl MessageService {
             // This deliberately does NOT go through `message_client`: that
             // client is interceptor-wrapped and would attach Basic auth next to
             // the UAK, which the server rejects as multiple auth methods.
-            let result = match &recipient_uak {
-                Some(uak) => {
+            let result = match (uak, anon_client.as_mut()) {
+                (Some(uak), Some(anon_client)) => {
                     anon_client
                         .send_sealed_message_with_uak(recipient_id, device_id, sealed_message, uak)
                         .await
                 }
-                None => {
+                _ => {
                     message_client
                         .send_sealed_message(recipient_id, device_id, sealed_message)
                         .await
@@ -641,12 +606,7 @@ impl MessageService {
             };
 
             match result {
-                Ok(_) => {
-                    outcome.delivered += 1;
-                    if recipient_uak.is_none() {
-                        outcome.degraded += 1;
-                    }
-                }
+                Ok(_) => delivered += 1,
                 // The server no longer knows this device (retired by Log Out /
                 // unlink). Signal's 410 handling: archive the session so we
                 // stop encrypting to it, and treat it as gone rather than as a
@@ -682,7 +642,7 @@ impl MessageService {
             }
         }
 
-        outcome
+        delivered
     }
 }
 

@@ -323,8 +323,11 @@ enum CallCommand {
         response: oneshot::Sender<Result<(), CallError>>,
     },
     /// Disconnect locally without server notification. `reason` is what the
-    /// resulting `ActiveEnded` carries.
+    /// resulting `ActiveEnded` carries. With `call`, only if that is the
+    /// active call — a hangup names its call, and one for another call must
+    /// not end this one.
     DisconnectLocal {
+        call: Option<CallHandle>,
         reason: CallEndReason,
         response: oneshot::Sender<()>,
     },
@@ -878,7 +881,7 @@ impl CallWorkerHandle {
     /// emitted `ActiveEnded` reports, so the UI can say why the call went away.
     pub async fn disconnect_local(&self, reason: CallEndReason) {
         let (tx, rx) = oneshot::channel();
-        let _ = self.cmd_tx.try_send(CallCommand::DisconnectLocal { reason, response: tx });
+        let _ = self.cmd_tx.try_send(CallCommand::DisconnectLocal { call: None, reason, response: tx });
         let _ = rx.await;
     }
 
@@ -886,10 +889,11 @@ impl CallWorkerHandle {
     /// event handlers (e.g. `handle_domain_event`) that can't `.await`.
     /// The worker will disconnect LiveKit, clear `active_call`, clear the
     /// orchestrator slot, and emit `ActiveEnded` — same as the awaited
-    /// version, just without backpressure.
-    pub fn disconnect_local_nonblocking(&self, reason: CallEndReason) {
+    /// version, just without backpressure. With `call`, a no-op unless that
+    /// is the active call.
+    pub fn disconnect_local_nonblocking(&self, call: Option<CallHandle>, reason: CallEndReason) {
         let (tx, _rx) = oneshot::channel();
-        let _ = self.cmd_tx.try_send(CallCommand::DisconnectLocal { reason, response: tx });
+        let _ = self.cmd_tx.try_send(CallCommand::DisconnectLocal { call, reason, response: tx });
     }
 
     /// Get the currently active call.
@@ -1367,11 +1371,20 @@ fn run_call_worker(
                     let _ = response.send(result);
                 }
 
-                CallCommand::DisconnectLocal { reason, response } => {
+                CallCommand::DisconnectLocal { call, reason, response } => {
+                    let handle = active_call.borrow().as_ref().map(derive_call_handle);
+                    if call.is_some() && call != handle {
+                        tracing::info!(
+                            call = ?call.as_ref().map(CallHandle::as_str),
+                            active = ?handle.as_ref().map(CallHandle::as_str),
+                            "Hangup for a call that is not the active one; ignored"
+                        );
+                        let _ = response.send(());
+                        continue;
+                    }
+
                     // Cancel key ratchet timer
                     stop_key_ratchet_timer(&ratchet_cancel);
-
-                    let handle = active_call.borrow().as_ref().map(derive_call_handle);
 
                     room_manager.disconnect().await;
                     *active_call.borrow_mut() = None;
@@ -2455,12 +2468,10 @@ fn spawn_end_one_to_one_if_peer_gone(
 const RING_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
 
 /// Whether an offer received at `sent_ns` (ns since epoch) is past the ring
-/// timeout at `now_ns`. For a 1:1 offer that is the server's receive stamp
+/// timeout at `now_ns`. For any offer that is the server's receive stamp
 /// (Signal's rule; the inbox falls back to the caller's clock only when the
 /// server gave none). `0` means nothing was stamped: ring rather than silently
 /// drop a live call. A clock ahead of ours saturates to age 0 and rings.
-// ponytail: anon offers still carry the caller's clock — their transports
-// don't surface a server stamp on the offer event yet.
 fn offer_is_stale(sent_ns: u64, now_ns: u64) -> bool {
     sent_ns != 0 && now_ns.saturating_sub(sent_ns) > RING_TIMEOUT.as_nanos() as u64
 }
@@ -2470,12 +2481,12 @@ fn offer_is_stale_now(sent_ns: u64) -> bool {
 }
 
 /// The withdrawal reason for a hangup saying another of our devices answered
-/// or declined (`CallHangupReason`'s Debug name, as it rides the event).
-fn elsewhere_reason(reason: &str) -> Option<CallEndReason> {
+/// or declined.
+fn elsewhere_reason(reason: crate::services::gateway::CallHangupReason) -> Option<CallEndReason> {
     use crate::services::gateway::CallHangupReason as R;
     match reason {
-        r if r == format!("{:?}", R::AcceptedElsewhere) => Some(CallEndReason::AnsweredElsewhere),
-        r if r == format!("{:?}", R::DeclinedElsewhere) => Some(CallEndReason::Declined),
+        R::AcceptedElsewhere => Some(CallEndReason::AnsweredElsewhere),
+        R::DeclinedElsewhere => Some(CallEndReason::Declined),
         _ => None,
     }
 }
@@ -2530,7 +2541,7 @@ fn handle_domain_event(
             // Signal's Hangup ACCEPTED/DECLINED: another of OUR devices took
             // this call. Only our own user may say so, and it only stops the
             // ringing — it must never tear down a call this device is in.
-            if let Some(reason) = elsewhere_reason(&reason) {
+            if let Some(reason) = elsewhere_reason(reason) {
                 if signaling.is_current_user(&peer_id) {
                     worker.orch_withdraw_incoming(CallHandle::from(call_id), reason);
                     return;
@@ -2539,17 +2550,18 @@ fn handle_domain_event(
             }
             // The callee declined our outgoing call: say so, and file it as
             // declined rather than unanswered.
-            let end = if reason == format!("{:?}", crate::services::gateway::CallHangupReason::Declined) {
+            let end = if reason == crate::services::gateway::CallHangupReason::Declined {
                 CallEndReason::Declined
             } else {
                 CallEndReason::RemoteHangup
             };
             // Still ringing? The caller gave up — stop ringing. A no-op when
             // this call was never presented or was already accepted.
-            worker.orch_withdraw_incoming(CallHandle::from(call_id), end.clone());
-            // Disconnect from LiveKit + clear active_call + orchestrator.
-            // Previously only cleared orchestrator, leaving the room connected.
-            worker.disconnect_local_nonblocking(end);
+            let call = CallHandle::from(call_id);
+            worker.orch_withdraw_incoming(call.clone(), end.clone());
+            // In this call? Disconnect from LiveKit + clear active_call +
+            // orchestrator. A hangup for any other call leaves this one alone.
+            worker.disconnect_local_nonblocking(Some(call), end);
         }
 
         DomainEvent::AnonCallOfferReceived {
@@ -2617,7 +2629,7 @@ fn handle_domain_event(
             // Disconnect from LiveKit + clear active_call + orchestrator.
             // Previously only cleared orchestrator, leaving the room connected
             // and active_call set — causing "Already in a call" on retry.
-            worker.disconnect_local_nonblocking(CallEndReason::RemoteHangup);
+            worker.disconnect_local_nonblocking(None, CallEndReason::RemoteHangup);
         }
 
         DomainEvent::AnonGroupCallOfferReceived {
@@ -2681,7 +2693,7 @@ fn handle_domain_event(
         }
 
         DomainEvent::AnonGroupCallHangupReceived { .. } => {
-            worker.disconnect_local_nonblocking(CallEndReason::RemoteHangup);
+            worker.disconnect_local_nonblocking(None, CallEndReason::RemoteHangup);
         }
 
         DomainEvent::CallKeyAnswerReceived { .. }

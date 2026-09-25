@@ -662,21 +662,15 @@ impl MessageService {
             tracing::warn!("ReadSync: no runtime to send on; other devices stay unread");
             return;
         };
-        let mut sync = Content {
+        let sync = Content {
             timestamp: crate::util::time::TimestampNanos::now().as_u64(),
             content: Some(content::Content::ReadSync(ReadSync { messages })),
             ..Default::default()
         };
-        Self::pad_content_to_bucket(&mut sync);
-        let plaintext = prost::Message::encode_to_vec(&sync);
         let service = self.clone();
         runtime.spawn(async move {
-            let mut auth_client = service.auth_client();
-            let mut message_client = service.message_client();
-            let own = service
-                .deposit_sealed_to_all_devices(&mut auth_client, &mut message_client, &me.to_string(), &plaintext)
-                .await;
-            tracing::debug!(devices = own.delivered, "ReadSync sent to our other devices");
+            let devices = service.sync_to_own_devices(&mut service.auth_client(), sync).await;
+            tracing::debug!(devices, "ReadSync sent to our other devices");
         });
     }
 
@@ -837,6 +831,16 @@ impl MessageService {
         self.settings_repo
             .current_user_id()
             .map_err(|_| MessageError::NotLoggedIn)
+    }
+
+    /// This device's id; 0 when unknown. Only labels a sync copy, so its
+    /// absence must not fail a send.
+    pub(super) fn current_device_id_or_zero(&self) -> u32 {
+        self.settings_repo
+            .get::<u32>(crate::storage::repositories::settings_repo::keys::CURRENT_DEVICE_ID)
+            .ok()
+            .flatten()
+            .unwrap_or(0)
     }
 
     /// Persist a reaction received via inbox polling.

@@ -276,7 +276,7 @@ pub enum DomainEvent {
     CallHangupReceived {
         call_id: String,
         peer_id: UserId,
-        reason: String,
+        reason: crate::services::gateway::CallHangupReason,
     },
     /// Call key answer received (callee's ephemeral key for PFS).
     CallKeyAnswerReceived {

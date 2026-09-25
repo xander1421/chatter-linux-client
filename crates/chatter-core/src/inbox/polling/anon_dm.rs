@@ -453,7 +453,7 @@ pub async fn process_anon_dm_results(
             let decision = match route_anon_dm_content(content, sender_id, conversation_id) {
                 AnonDmRoute::Deliver(events) => {
                     for event in events {
-                        let _ = event_tx.send(event).await;
+                        let _ = event_tx.send(event.server_stamp_call_offer(msg.server_timestamp)).await;
                     }
                     AckDecision::Ack
                 }

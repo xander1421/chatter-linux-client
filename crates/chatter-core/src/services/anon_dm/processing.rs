@@ -323,7 +323,7 @@ impl AnonDmService {
                     call_type: offer.call_type,
                     caller_display_name: offer.caller_display_name.clone(),
                     call_encryption_key: offer.call_encryption_key.clone(),
-                    timestamp: inner_content.timestamp,
+                    timestamp: offer.timestamp,
                 });
             }
             Some(ContentType::AnonCallAnswer(answer)) => {

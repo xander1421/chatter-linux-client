@@ -125,47 +125,58 @@ impl MessageService {
             self.owe_unready_devices(auth_client, peer_id, &conversation, &plaintext, grpc_pool)
                 .await;
         }
-        self.sync_sent_to_own_devices(auth_client, peer_id, &content).await;
+        let our_device_id = self.current_device_id_or_zero();
+        if let Some(copy) = own_device_copy(peer_id, &content, our_device_id) {
+            self.sync_to_own_devices(auth_client, copy).await;
+        }
         Ok(())
     }
 
-    /// Copy a message we just delivered over the mailbox to our own other
-    /// devices as a `SyncSent` naming the peer (Signal's `SyncMessage.Sent`),
-    /// so they file it as our outgoing message in the peer's conversation —
-    /// the Shield half of what `send_sealed_dm_content` does in normal mode.
+    /// Send `sync` to our own devices other than this one — every own-device
+    /// copy (`SyncSent`, `ReadSync`, the call ACCEPTED/DECLINED_ELSEWHERE
+    /// hangup) goes through here. Returns how many devices it reached.
     ///
-    /// NDSS'21 §VI-F: nothing here names the peer to the server — the peer is
-    /// only inside the sealed payload. Every RPC names OUR OWN account, and:
-    /// - no prekey-bundle fetch: only own devices we already hold a session
-    ///   with (`session_devices`, local), so a linked device we have never
-    ///   messaged is skipped until a normal-mode send makes a session;
-    /// - deposited identified on the authenticated channel, NOT with our UAK
-    ///   on the anonymous channel: that one carries the mailbox deposit we
-    ///   just made, and a UAK deposit to our own account on the same
-    ///   connection would tie that mailbox to us.
+    /// Identified (Basic auth) on the authenticated channel, never with our
+    /// UAK on the anonymous channel: that channel carries our mailbox
+    /// deposits/polls and our sealed sends, and a deposit to our OWN account
+    /// on it would tie them to us. Signal sends sync transcripts identified
+    /// for the same reason — the sender is no secret to ourselves.
     ///
-    /// Best effort, like Signal's sync: the peer already has the message.
-    async fn sync_sent_to_own_devices(
+    /// Shield: no prekey-bundle fetch, only own devices we already hold a
+    /// session with (`session_devices`, local), so a linked device we have
+    /// never messaged is skipped until a normal-mode send makes a session.
+    /// Normal mode fetches our own bundles (identified, naming only us), which
+    /// is how a newly linked device gets its first session.
+    ///
+    /// Best effort, like Signal's sync: failures are logged.
+    pub(super) async fn sync_to_own_devices(
         &self,
         auth_client: &mut AuthClient,
-        peer_id: &UserId,
-        content: &crate::proto::content_v1::Content,
-    ) {
+        mut sync: crate::proto::content_v1::Content,
+    ) -> usize {
         use crate::storage::repositories::settings_repo::keys;
 
-        let Some(mut sync) = sync_sent_copy(peer_id, content) else { return };
-        let Ok(me) = self.current_user_id() else { return };
+        let Ok(me) = self.current_user_id() else { return 0 };
         let me = me.to_string();
-        let this_device = self.settings_repo.get::<u32>(keys::CURRENT_DEVICE_ID).ok().flatten();
-        let devices: Vec<u32> = match self.signal_service.session_devices(&me).await {
-            Ok(devices) => devices.into_iter().filter(|d| Some(*d) != this_device).collect(),
+        let devices = if self.shield_mode.load(std::sync::atomic::Ordering::Acquire) {
+            let this_device = self.settings_repo.get::<u32>(keys::CURRENT_DEVICE_ID).ok().flatten();
+            self.signal_service
+                .session_devices(&me)
+                .await
+                .map(|devices| devices.into_iter().filter(|d| Some(*d) != this_device).collect())
+        } else {
+            // Leaves out this device (`ensure_sessions_and_uak_all_devices`).
+            self.signal_service.ensure_sessions_all_devices(auth_client, &me).await
+        };
+        let devices: Vec<u32> = match devices {
+            Ok(devices) => devices,
             Err(e) => {
-                tracing::warn!(error = %e, "Shield SyncSent: own session lookup failed");
-                return;
+                tracing::warn!(error = %e, "Own-device sync: device lookup failed");
+                return 0;
             }
         };
         if devices.is_empty() {
-            return;
+            return 0;
         }
         Self::pad_content_to_bucket(&mut sync);
         let ciphertexts = match self
@@ -175,21 +186,11 @@ impl MessageService {
         {
             Ok(c) => c,
             Err(e) => {
-                tracing::warn!(error = %e, "Shield SyncSent: encrypt for own devices failed");
-                return;
+                tracing::warn!(error = %e, "Own-device sync: encrypt failed");
+                return 0;
             }
         };
-        let timestamp = crate::util::time::TimestampNanos::now().as_u64();
-        let server_key_id = self.signal_service.get_server_key_id();
-        let mut message_client = self.message_client();
-        for (device_id, sealed_body) in ciphertexts {
-            let sealed = crate::proto::chat_v1::SealedSenderMessage { sealed_body, server_key_id, timestamp };
-            // ponytail: a retired own device just logs here; the normal-mode
-            // fan-out (`deposit_sealed_to_all_devices`) archives its session.
-            if let Err(e) = message_client.send_sealed_message(&me, device_id, sealed).await {
-                tracing::warn!(device_id, error = %e, "Shield SyncSent: own device missed the copy");
-            }
-        }
+        self.deposit_sealed_ciphertexts(&mut self.message_client(), &me, ciphertexts, None).await
     }
 
     /// Seal `plaintext` for one peer device and deposit it in its mailbox.
@@ -657,6 +658,19 @@ impl MessageService {
 
         Ok(content)
     }
+}
+
+/// What our own other devices get for `content` sent to `peer_id` over
+/// either DM transport, or `None`: the `SyncSent` for a message
+/// ([`sync_sent_copy`]), or the ACCEPTED/DECLINED_ELSEWHERE hangup when this
+/// device answers or declines a call, so our other devices stop ringing.
+pub(super) fn own_device_copy(
+    peer_id: &UserId,
+    content: &crate::proto::content_v1::Content,
+    our_device_id: u32,
+) -> Option<crate::proto::content_v1::Content> {
+    sync_sent_copy(peer_id, content)
+        .or_else(|| crate::services::gateway::build_call_self_sync(content, our_device_id))
 }
 
 /// The `SyncSent` our own other devices get for `content` sent to `peer_id`,

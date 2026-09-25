@@ -50,7 +50,7 @@ pub(super) fn handle_call_hangup(
     ui_ctx: &Arc<ChatterClient>,
     call_id: String,
     peer_id: UserId,
-    reason: String,
+    reason: chatter_core::services::gateway::CallHangupReason,
 ) {
     let weak = window.clone();
     let ui_ctx = ui_ctx.clone();
