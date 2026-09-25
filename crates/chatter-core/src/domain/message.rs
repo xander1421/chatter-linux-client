@@ -567,6 +567,11 @@ pub enum SystemMessage {
     ChannelRenamed { old_name: String, new_name: String },
     UserAdded { by: UserId, added: UserId },
     UserRemoved { by: UserId, removed: UserId },
+    /// Rendered with the moderator as sender: "{by} banned a member".
+    UserBanned { by: UserId, banned: UserId },
+    /// WE were kicked or banned; rendered with the moderator as sender, so it
+    /// reads "{by} removed you" (Signal's wording for both).
+    SelfRemoved { by: UserId },
     /// A message from this peer arrived but could not be decrypted, and the
     /// ciphertext is gone (the inbox acks every polled envelope, so it is not
     /// redelivered). The session has been healed via `DecryptionErrorMessage`,
@@ -616,6 +621,8 @@ impl SystemMessage {
             }
             Self::UserAdded { .. } => "added a member".to_string(),
             Self::UserRemoved { .. } => "removed a member".to_string(),
+            Self::UserBanned { .. } => "banned a member".to_string(),
+            Self::SelfRemoved { .. } => "removed you".to_string(),
             // Rendered as "{sender_name} {description}", so this reads
             // "Alice sent a message that couldn't be delivered. ...".
             Self::DeliveryIssue => "sent a message that couldn't be delivered. The secure \

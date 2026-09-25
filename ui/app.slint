@@ -52,7 +52,7 @@ import { VideoPlayer } from "components/mod.slint";
 import { MobileBottomNav } from "components/mobile_bottom_nav.slint";
 
 // Import call UI
-import { IncomingCallModal, ActiveCallView, DevicePicker, CallHistoryScreen, IncomingCallData, ActiveCallData, CallParticipantData, AudioDeviceData, ScreenSourceData, CallHistoryRow } from "calls/mod.slint";
+import { IncomingCallModal, ActiveCallView, ReturnToCallBar, DevicePicker, CallHistoryScreen, IncomingCallData, ActiveCallData, CallParticipantData, AudioDeviceData, ScreenSourceData, CallHistoryRow } from "calls/mod.slint";
 
 // Jarvis AI: feature-gate global (the AI channel is the Jarvis surface)
 import { JarvisGlobal } from "jarvis/jarvis_global.slint";
@@ -338,7 +338,7 @@ export component App inherits Rectangle {
     in-out property <string> composer-stash: "";
     in-out property <bool> composer-stash-held: false;
     in property <string> composer-placeholder: "Type a message...";
-    in property <bool> composer-disabled: false;
+    in property <string> composer-notice: "";
     // Written by `bin_ui::features::chat::send_message` around the send await.
     in property <string> composer-send-status: "";
     in property <[PendingAttachmentData]> pending-attachments: [];
@@ -766,6 +766,18 @@ export component App inherits Rectangle {
     callback call-audio-video(bool);
     changed active-call-visible => {
         root.call-audio-session(root.active-call-visible, root.call-is-video-enabled);
+        // Fullscreen hides the sidebar and chat; left set after the call it
+        // would hide them with nothing in their place.
+        if !root.active-call-visible {
+            root.active-call-fullscreen = false;
+        }
+    }
+    // Leaving the pane (Back on a phone) leaves the call screen too; the
+    // return-to-call bar then stands in for it.
+    changed mobile-show-chat => {
+        if !root.mobile-show-chat {
+            root.active-call-fullscreen = false;
+        }
     }
     changed call-is-video-enabled => {
         if root.active-call-visible {
@@ -1612,7 +1624,7 @@ export component App inherits Rectangle {
                     audio-elapsed: root.audio-elapsed;
                     composer-text <=> root.composer-text;
                     composer-placeholder: root.composer-placeholder;
-                    composer-disabled: root.composer-disabled;
+                    composer-notice: root.composer-notice;
                     composer-send-status: root.composer-send-status;
                     pending-attachments: root.pending-attachments;
                     composer-is-editing <=> root.composer-is-editing;
@@ -3048,6 +3060,27 @@ export component App inherits Rectangle {
             root.composer-gif-picker-visible = false;
             root.composer-emoji-picker-visible = true;
             root.emoji-clicked();
+        }
+    }
+
+    // ========== Return-to-call bar ==========
+    // The call view is docked in the conversation pane, so anywhere else — the
+    // chat list, Contacts, any modal — nothing said a call was running. Declared
+    // after the modals so it sits above them; floats over the bottom tab bar.
+    if root.active-call-visible && (root.active-modal != "none"
+        || (root.compact-layout && !root.mobile-show-chat)): ReturnToCallBar {
+        call-data: root.active-call-data;
+        width: min(420px, root.width - 2 * Spacing.lg);
+        x: (root.width - self.width) / 2;
+        y: root.height - self.height - Spacing.sm - (root.bottom-nav-visible
+            ? Spacing.bottom-nav-height + Spacing.sm + root.safe-area-bottom
+            : root.safe-area-bottom + Spacing.lg);
+        clicked => {
+            root.active-modal = "none";
+            root.mobile-show-chat = true;
+            if root.compact-layout {
+                root.active-call-fullscreen = true;
+            }
         }
     }
 

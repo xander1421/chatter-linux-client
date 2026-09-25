@@ -1,0 +1,71 @@
+// "Return to call" pill — the active call's presence everywhere the docked
+// call view is not on screen (the chat list, Contacts, any modal). Tapping it
+// goes back to the call.
+
+import { Colors } from "../theme/colors.slint";
+import { Spacing } from "../theme/spacing.slint";
+import { Typography } from "../theme/typography.slint";
+import { Icons } from "../theme/icons.slint";
+import { ActiveCallData } from "types.slint";
+
+export component ReturnToCallBar inherits Rectangle {
+    in property <ActiveCallData> call-data;
+    callback clicked();
+
+    // Same rule as ActiveCallView's: dialling until someone else is in the call
+    // and the timer has started.
+    property <bool> is-connecting: call-data.participant-count <= 1
+        && call-data.duration-seconds == 0;
+
+    height: 44px;
+    border-radius: self.height / 2;
+    background: Colors.success;
+    drop-shadow-blur: 12px;
+    drop-shadow-color: #00000040;
+
+    accessible-role: button;
+    accessible-label: "Return to call with " + call-data.title;
+    accessible-action-default => { root.clicked(); }
+
+    TouchArea {
+        clicked => { root.clicked(); }
+    }
+
+    HorizontalLayout {
+        padding-left: Spacing.lg;
+        padding-right: Spacing.lg;
+        spacing: Spacing.sm;
+
+        Image {
+            source: Icons.phone;
+            width: 16px;
+            height: 16px;
+            colorize: white;
+            y: (parent.height - self.height) / 2;
+        }
+        Text {
+            horizontal-stretch: 1;
+            text: call-data.title;
+            font-size: Typography.sm;
+            font-weight: Typography.semibold;
+            color: white;
+            overflow: elide;
+            vertical-alignment: center;
+        }
+        Text {
+            text: root.is-connecting ? "Calling…" : format-duration(call-data.duration-seconds);
+            font-size: Typography.sm;
+            color: white;
+            vertical-alignment: center;
+        }
+    }
+
+    pure function format-duration(seconds: int) -> string {
+        if seconds < 3600 {
+            return Math.floor(seconds / 60) + ":" + (Math.mod(seconds, 60) < 10 ? "0" : "") + Math.mod(seconds, 60);
+        }
+        return Math.floor(seconds / 3600) + ":" +
+               (Math.mod(Math.floor(seconds / 60), 60) < 10 ? "0" : "") + Math.mod(Math.floor(seconds / 60), 60) + ":" +
+               (Math.mod(seconds, 60) < 10 ? "0" : "") + Math.mod(seconds, 60);
+    }
+}

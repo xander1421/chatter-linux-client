@@ -111,49 +111,30 @@ impl MessageService {
         // Serialize Content proto
         let plaintext = content.encode_to_vec();
 
-        // Layer 1: Signal Protocol encryption for ALL peer devices (forward secrecy)
-        let peer_id_str = peer_id.to_string();
+        // Layer 1: Signal Protocol, sealed for the ONE device that owns the
+        // peer mailbox. The mailbox conversation is one-peer-device: only that
+        // device polls this mailbox, so a copy for any other device is read by
+        // the owner and fails there as a message addressed to someone else.
+        //
+        // Never a prekey-bundle fetch: in Shield that identified RPC names the
+        // recipient at the moment we message them — the link the mailbox
+        // exists to hide. The session exists (the bootstrap made it).
+        let device_id = peer_mailbox.device_id;
+        let peer_ciphertexts = self
+            .signal_service
+            .encrypt_message_session_devices(auth_client, &peer_id.to_string(), vec![device_id], &plaintext)
+            .await
+            .map_err(|e| MessageError::from_signal_send(e, "Mailbox DM encrypt"))?;
 
-        // Shield: no prekey-bundle fetch per send. That fetch is an identified
-        // RPC naming the recipient at the moment we message them — the link
-        // the mailbox exists to hide. The sessions already exist (the
-        // bootstrap made them).
-        // A device the server has refused as retired is skipped, as in
-        // `bootstrap_devices`.
-        let peer_ciphertexts = if self.shield_mode.load(std::sync::atomic::Ordering::Acquire) {
-            let devices = self.live_session_devices(peer_id).await?;
-            self.signal_service
-                .encrypt_message_session_devices(auth_client, &peer_id_str, devices, &plaintext)
-                .await
-        } else {
-            self.signal_service
-                .encrypt_message_all_devices(auth_client, &peer_id_str, &plaintext)
-                .await
-        }
-        .map_err(|e| MessageError::from_signal_send(e, "Multi-device encrypt"))?;
-
-        tracing::info!(
-            peer_id = %peer_id,
-            device_count = peer_ciphertexts.len(),
-            "Encrypted DM for all peer devices"
-        );
-
-        // Layer 2: Mailbox encryption for each device (sender anonymity)
-        // All ciphertexts go to same mailbox - server fans out to devices
-        for (device_id, signal_ciphertext) in peer_ciphertexts {
+        // Layer 2: Mailbox encryption (sender anonymity)
+        for signal_ciphertext in peer_ciphertexts.into_values() {
             let mailbox_encrypted = encrypt_dm_bytes(&signal_ciphertext, &shared_secret)
                 .map_err(|e| MessageError::EncryptionFailed(format!("Mailbox encrypt: {}", e)))?;
-
             self.send_to_mailbox_retried(
                 mailbox_manager, &peer_mailbox.public_key, mailbox_encrypted, peer_id, device_id,
             ).await?;
-
-            tracing::debug!(
-                peer_id = %peer_id,
-                device_id,
-                "Sent DM to device via two-layer encryption"
-            );
         }
+        tracing::debug!(peer_id = %peer_id, device_id, "Sent DM to the peer mailbox's device");
 
         Ok(())
     }

@@ -8,13 +8,20 @@
 //!
 //! `request()` is fire-and-forget (the dialog is async and the user drives it);
 //! the result callback updates logging/telemetry. Call `has()` first to skip
-//! re-prompting when already granted.
+//! re-prompting when already granted. `ensure()` is the awaitable form, for an
+//! action that must not start until the user has answered (placing a call).
 
 use jni::objects::{JObject, JObjectArray, JString, JValue};
 use jni::sys::jsize;
 use jni::JNIEnv;
+use std::sync::Mutex;
 
 use super::activity;
+
+/// The `ensure()` call waiting on the dialog, woken by the result callback.
+/// One at a time: a newer request drops the older sender, which wakes that
+/// waiter too, and it then reads the grant state like any other.
+static WAITER: Mutex<Option<tokio::sync::oneshot::Sender<()>>> = Mutex::new(None);
 
 /// Common dangerous / special permissions we request.
 pub const CAMERA: &str = "android.permission.CAMERA";
@@ -44,6 +51,23 @@ pub fn request(permissions: &[&str]) {
     if let Err(e) = launch_request(&pending) {
         tracing::error!("Android permissions: request failed: {e}");
     }
+}
+
+/// Request any of `permissions` not yet granted and wait for the user's answer.
+/// True when all of them are granted afterwards.
+pub async fn ensure(permissions: &[&str]) -> bool {
+    let pending: Vec<&str> = permissions.iter().copied().filter(|p| !has(p)).collect();
+    if pending.is_empty() {
+        return true;
+    }
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    *WAITER.lock().unwrap_or_else(|e| e.into_inner()) = Some(tx);
+    if let Err(e) = launch_request(&pending) {
+        tracing::error!("Android permissions: request failed: {e}");
+        return false;
+    }
+    let _ = rx.await;
+    pending.iter().all(|p| has(p))
 }
 
 fn check(permission: &str) -> Result<bool, String> {
@@ -104,6 +128,9 @@ pub extern "system" fn Java_com_chatter_client_MainActivity_nativeOnPermissionsR
     }
     if !d.is_empty() {
         tracing::warn!("Android permissions denied: {:?}", d);
+    }
+    if let Some(waiter) = WAITER.lock().unwrap_or_else(|e| e.into_inner()).take() {
+        let _ = waiter.send(());
     }
 }
 

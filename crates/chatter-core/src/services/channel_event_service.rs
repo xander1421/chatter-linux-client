@@ -338,16 +338,17 @@ impl ChannelEventService {
                     channel_id, user_id, new_role
                 );
             }
-            Event::MemberRemovedId(user_id_str) => {
-                let user_id = match user_id_str.parse::<uuid::Uuid>() {
+            Event::MemberRemoved(removed) => {
+                let user_id = match removed.user_id.parse::<uuid::Uuid>() {
                     Ok(uuid) => UserId::from(uuid),
                     Err(e) => {
-                        tracing::error!("Invalid user ID {}: {}", user_id_str, e);
+                        tracing::error!("Invalid user ID {}: {}", removed.user_id, e);
                         return;
                     }
                 };
-                
-                if let Ok((message, display_name)) = self.handle_member_removed(&channel_id, &user_id) {
+                let reason = member_removal_reason(&removed);
+
+                if let Ok((message, display_name)) = self.handle_member_removed(&channel_id, &user_id, reason) {
                     // Emit domain event for UI consumption
                     let event = DomainEvent::ChannelMemberLeft {
                         channel_id,
@@ -619,14 +620,22 @@ impl ChannelEventService {
         &self,
         channel_id: &ChannelId,
         user_id: &UserId,
+        reason: MemberRemoval,
     ) -> Result<(Message, String), ChannelEventError> {
         let display_name = self.get_display_name(user_id);
+        let is_self = self.settings_repo.current_user_id().ok() == Some(*user_id);
 
-        let message = self.create_system_message(
-            channel_id,
-            SystemMessage::UserLeft(*user_id),
-            Some(*user_id),
-        );
+        // `sender_id` is the subject of the rendered "{sender} {description}"
+        // line: the leaver for a leave, the moderator for a removal.
+        let (content, subject) = match reason {
+            MemberRemoval::Left => (SystemMessage::UserLeft(*user_id), *user_id),
+            MemberRemoval::Kicked(by) | MemberRemoval::Banned(by) if is_self => {
+                (SystemMessage::SelfRemoved { by }, by)
+            }
+            MemberRemoval::Kicked(by) => (SystemMessage::UserRemoved { by, removed: *user_id }, by),
+            MemberRemoval::Banned(by) => (SystemMessage::UserBanned { by, banned: *user_id }, by),
+        };
+        let message = self.create_system_message(channel_id, content, Some(subject));
 
         self.message_repo.insert(&message)?;
 
@@ -701,6 +710,26 @@ impl ChannelEventService {
     }
 }
 
+/// Why a member dropped off the roster, from the server's `MemberRemoved`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MemberRemoval {
+    Left,
+    Kicked(UserId),
+    Banned(UserId),
+}
+
+/// A removal whose moderator id is missing or unparseable is reported as a
+/// leave: the roster change is still applied, only the wording is generic.
+fn member_removal_reason(removed: &crate::proto::chat_v1::MemberRemoved) -> MemberRemoval {
+    use crate::proto::chat_v1::member_removed::Reason;
+    let by = removed.moderator_id.parse::<uuid::Uuid>().ok().map(UserId::from);
+    match (Reason::try_from(removed.reason), by) {
+        (Ok(Reason::Kicked), Some(by)) => MemberRemoval::Kicked(by),
+        (Ok(Reason::Banned), Some(by)) => MemberRemoval::Banned(by),
+        _ => MemberRemoval::Left,
+    }
+}
+
 /// Proto `ChannelModeration.Action` -> stable name for the UI.
 fn proto_moderation_action_name(action: i32) -> &'static str {
     use crate::proto::chat_v1::channel_moderation::Action;
@@ -752,6 +781,22 @@ mod tests {
         // `a` answered, then re-sent: announced again.
         assert!(unannounced_invites(&mut announced, vec![(b, ())]).is_empty());
         assert_eq!(unannounced_invites(&mut announced, vec![(a, ()), (b, ())]).len(), 1);
+    }
+
+    #[test]
+    fn a_removal_keeps_its_reason_and_moderator() {
+        use crate::proto::chat_v1::{member_removed::Reason, MemberRemoved};
+        let by = UserId::new();
+        let ev = |reason: Reason, moderator_id: String| MemberRemoved {
+            user_id: UserId::new().to_string(),
+            reason: reason as i32,
+            moderator_id,
+        };
+        assert_eq!(member_removal_reason(&ev(Reason::Banned, by.to_string())), MemberRemoval::Banned(by));
+        assert_eq!(member_removal_reason(&ev(Reason::Kicked, by.to_string())), MemberRemoval::Kicked(by));
+        assert_eq!(member_removal_reason(&ev(Reason::Left, String::new())), MemberRemoval::Left);
+        // No moderator to name: fall back to the neutral wording.
+        assert_eq!(member_removal_reason(&ev(Reason::Banned, String::new())), MemberRemoval::Left);
     }
 
     fn setup() -> (Arc<ChannelEventService>, EventBus, Arc<ChannelRepository>) {

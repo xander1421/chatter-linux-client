@@ -264,8 +264,8 @@ impl ChannelService {
         while let Some(event_result) = stream.next().await {
             let event = event_result?;
             match event.event {
-                Some(channel_event::Event::MemberRemovedId(removed_user_id)) => {
-                    if removed_user_id == current_user.to_string() {
+                Some(channel_event::Event::MemberRemoved(removed)) => {
+                    if removed.user_id == current_user.to_string() {
                         left = true;
                         break;
                     }
@@ -299,10 +299,10 @@ impl ChannelService {
             let _ = self.signal_service.mark_channel_for_rotation(channel_id);
             tracing::error!(
                 channel_id = %channel_id,
-                "Leave stream ended without MemberRemovedId after key rotation — channel remains blocked, marked for re-rotation"
+                "Leave stream ended without MemberRemoved after key rotation — channel remains blocked, marked for re-rotation"
             );
             return Err(ChannelError::InvalidInput(
-                "no member_removed_id event received".to_string(),
+                "no member_removed event received".to_string(),
             ));
         }
 

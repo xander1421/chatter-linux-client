@@ -253,6 +253,44 @@ impl ChatterClient {
         self.channels().unmute_user(channel_id, user_id).await
     }
 
+    /// The notice that replaces the composer when we may not post in this
+    /// channel, or "" when we may. Read from our stored membership, which a
+    /// removal event deletes and a member fetch refreshes.
+    pub fn channel_send_notice(&self, channel_id: &crate::domain::ids::ChannelId) -> String {
+        if !self.is_moderated_channel(channel_id) {
+            return String::new();
+        }
+        let Some(me) = self.session_current_user_id() else { return String::new() };
+        let members = self.list_channel_members_local(channel_id);
+        let own = members.iter().find(|m| m.user_id == me);
+        crate::domain::channel::SendBlock::for_viewer(own, !members.is_empty())
+            .map(|b| b.notice().to_string())
+            .unwrap_or_default()
+    }
+
+    /// [`Self::channel_send_notice`] after re-reading the roster from the
+    /// server. A mute reaches the muted member by no event, so run this on
+    /// channel open and after a refused send. A failed fetch keeps the local
+    /// answer.
+    // ponytail: refetches the full roster; a "my membership" RPC if that
+    // shows up in large channels.
+    pub async fn refresh_channel_send_notice(&self, channel_id: &crate::domain::ids::ChannelId) -> String {
+        if !self.is_moderated_channel(channel_id) {
+            return String::new();
+        }
+        if let Err(e) = self.channels().get_all_channel_members(channel_id).await {
+            tracing::debug!(%channel_id, error = %e, "Roster refresh for send notice failed");
+        }
+        self.channel_send_notice(channel_id)
+    }
+
+    /// DMs and Saved Messages have no moderation (the server refuses it).
+    fn is_moderated_channel(&self, channel_id: &crate::domain::ids::ChannelId) -> bool {
+        self.get_channel_local(channel_id).is_some_and(|c| {
+            !c.is_dm() && !matches!(c.channel_type, ChannelType::SavedMessages)
+        })
+    }
+
     /// A channel's active bans shaped for display, or `None` when our role
     /// may not see them (only owner/admin can unban). Call after a member
     /// fetch so our local role is current.

@@ -189,7 +189,7 @@ fn test_dm_conversation_ready_states() {
     assert!(!conv.is_ready_to_send()); // Still need peer mailbox and key
 
     // Add peer mailbox
-    conv.peer_mailbox = Some(PeerMailbox::new([0u8; 32], None));
+    conv.peer_mailbox = Some(PeerMailbox::new([0u8; 32], 1, None));
     assert!(!conv.is_ready_to_send()); // Still need conversation key
 
     // Add conversation key without shared secret
@@ -282,7 +282,7 @@ fn test_dm_conversation_manager_save_load() {
     manager.save_our_mailbox(&peer_id, &mailbox).unwrap();
 
     // Save peer mailbox
-    let peer_mailbox = PeerMailbox::new([9u8; 32], Some(Utc::now() + Duration::days(7)));
+    let peer_mailbox = PeerMailbox::new([9u8; 32], 1, Some(Utc::now() + Duration::days(7)));
     manager.save_peer_mailbox(&peer_id, &peer_mailbox).unwrap();
 
     // Save conversation key
@@ -413,7 +413,7 @@ fn test_two_way_anonymity_can_send_receive() {
     // Add mailboxes and key
     let mailbox = create_test_mailbox(&db, &peer_id, "mb", "t");
     manager.save_our_mailbox(&peer_id, &mailbox).unwrap();
-    manager.save_peer_mailbox(&peer_id, &PeerMailbox::new([9u8; 32], None)).unwrap();
+    manager.save_peer_mailbox(&peer_id, &PeerMailbox::new([9u8; 32], 1, None)).unwrap();
 
     let mut key = ConversationKey::new();
     key.derive_shared_secret([10u8; 32]).unwrap();

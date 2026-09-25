@@ -236,6 +236,7 @@ struct OrchestratedActive {
     kind: OrchestratedCallKind,
     peer_id: UserId,
     is_video: bool,
+    connected_at: std::time::Instant,
 }
 
 /// Mutable orchestration state owned by the worker task.
@@ -308,8 +309,10 @@ enum CallCommand {
         reason: Option<String>,
         response: oneshot::Sender<Result<(), CallError>>,
     },
-    /// Disconnect locally without server notification.
+    /// Disconnect locally without server notification. `reason` is what the
+    /// resulting `ActiveEnded` carries.
     DisconnectLocal {
+        reason: CallEndReason,
         response: oneshot::Sender<()>,
     },
     /// Swap the worker's gRPC call client (anon-mode transport switch).
@@ -483,9 +486,10 @@ enum CallCommand {
     OrchIsActive {
         response: oneshot::Sender<bool>,
     },
-    /// Return the kind of the active orchestrated call, or `None` if no call.
+    /// Return the kind of the active orchestrated call and when it connected,
+    /// or `None` if no call.
     OrchActiveKind {
-        response: oneshot::Sender<Option<OrchestratedCallKind>>,
+        response: oneshot::Sender<Option<(OrchestratedCallKind, std::time::Instant)>>,
     },
 
     /// Shutdown the worker.
@@ -722,6 +726,11 @@ impl CallWorkerHandle {
 
     /// Return the kind of the active orchestrated call, or `None`.
     pub async fn orch_active_kind(&self) -> Option<OrchestratedCallKind> {
+        self.orch_active_since().await.map(|(kind, _)| kind)
+    }
+
+    /// Kind of the active orchestrated call and the moment it connected.
+    pub async fn orch_active_since(&self) -> Option<(OrchestratedCallKind, std::time::Instant)> {
         let (tx, rx) = oneshot::channel();
         self.cmd_tx
             .try_send(CallCommand::OrchActiveKind { response: tx })
@@ -832,10 +841,11 @@ impl CallWorkerHandle {
         rx.await.map_err(|_| CallError::WorkerShutdown)?
     }
 
-    /// Disconnect locally without server notification.
-    pub async fn disconnect_local(&self) {
+    /// Disconnect locally without server notification. `reason` is what the
+    /// emitted `ActiveEnded` reports, so the UI can say why the call went away.
+    pub async fn disconnect_local(&self, reason: CallEndReason) {
         let (tx, rx) = oneshot::channel();
-        let _ = self.cmd_tx.try_send(CallCommand::DisconnectLocal { response: tx });
+        let _ = self.cmd_tx.try_send(CallCommand::DisconnectLocal { reason, response: tx });
         let _ = rx.await;
     }
 
@@ -844,9 +854,9 @@ impl CallWorkerHandle {
     /// The worker will disconnect LiveKit, clear `active_call`, clear the
     /// orchestrator slot, and emit `ActiveEnded` — same as the awaited
     /// version, just without backpressure.
-    pub fn disconnect_local_nonblocking(&self) {
+    pub fn disconnect_local_nonblocking(&self, reason: CallEndReason) {
         let (tx, _rx) = oneshot::channel();
-        let _ = self.cmd_tx.try_send(CallCommand::DisconnectLocal { response: tx });
+        let _ = self.cmd_tx.try_send(CallCommand::DisconnectLocal { reason, response: tx });
     }
 
     /// Get the currently active call.
@@ -1324,7 +1334,7 @@ fn run_call_worker(
                     let _ = response.send(result);
                 }
 
-                CallCommand::DisconnectLocal { response } => {
+                CallCommand::DisconnectLocal { reason, response } => {
                     // Cancel key ratchet timer
                     stop_key_ratchet_timer(&ratchet_cancel);
 
@@ -1341,7 +1351,7 @@ fn run_call_worker(
                         orchestrator.outgoing.remove(&h);
                         let _ = call_events_tx.send(CallOrchestratorEvent::ActiveEnded {
                             call: h,
-                            reason: CallEndReason::LocalHangup,
+                            reason,
                         });
                     }
 
@@ -1608,6 +1618,7 @@ fn run_call_worker(
                         kind,
                         peer_id,
                         is_video,
+                        connected_at: std::time::Instant::now(),
                     });
                     let _ = call_events_tx.send(CallOrchestratorEvent::ActiveConnected {
                         call,
@@ -1711,7 +1722,7 @@ fn run_call_worker(
                 }
 
                 CallCommand::OrchActiveKind { response } => {
-                    let kind = orchestrator.active.as_ref().map(|a| a.kind);
+                    let kind = orchestrator.active.as_ref().map(|a| (a.kind, a.connected_at));
                     let _ = response.send(kind);
                 }
 
@@ -2301,26 +2312,108 @@ pub fn spawn_call_orchestrator_bridge(
     worker: CallWorkerHandle,
     signaling: crate::services::call_signaling::CallSignalingService,
 ) -> tokio::task::JoinHandle<()> {
+    use tokio::sync::broadcast::error::RecvError;
     let mut rx = bus.subscribe_domain();
+    let mut room_rx = worker.subscribe_room_events();
     tokio::spawn(async move {
         tracing::info!("Call orchestrator EventBus bridge started");
         loop {
-            match rx.recv().await {
-                Ok(event) => handle_domain_event(&worker, &signaling, event),
-                Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
-                    tracing::warn!(
-                        skipped = n,
-                        "Call orchestrator bridge lagged on DomainEvent channel"
-                    );
-                    continue;
-                }
-                Err(tokio::sync::broadcast::error::RecvError::Closed) => {
-                    tracing::info!("Call orchestrator bridge stopping — domain bus closed");
-                    break;
-                }
+            tokio::select! {
+                event = rx.recv() => match event {
+                    Ok(event) => handle_domain_event(&worker, &signaling, event),
+                    Err(RecvError::Lagged(n)) => {
+                        tracing::warn!(
+                            skipped = n,
+                            "Call orchestrator bridge lagged on DomainEvent channel"
+                        );
+                    }
+                    Err(RecvError::Closed) => {
+                        tracing::info!("Call orchestrator bridge stopping — domain bus closed");
+                        break;
+                    }
+                },
+                event = room_rx.recv() => match event {
+                    Ok(LiveKitRoomEvent::ParticipantLeft { identity }) => {
+                        spawn_end_one_to_one_if_peer_gone(
+                            worker.clone(),
+                            signaling.clone(),
+                            identity,
+                        );
+                    }
+                    Ok(_) | Err(RecvError::Lagged(_)) => {}
+                    Err(RecvError::Closed) => {
+                        tracing::info!("Call orchestrator bridge stopping — room bus closed");
+                        break;
+                    }
+                },
             }
         }
     })
+}
+
+/// How long a 1:1 peer may be absent from the room before the call is ended
+/// for them. Covers the peer's own hangup signal landing first (it is sent
+/// before they leave the room, and it ends the call with history) and a brief
+/// LiveKit reconnect, which reappears under the same identity.
+const PEER_LEFT_GRACE: std::time::Duration = std::time::Duration::from_secs(2);
+
+/// Whether `departed` leaving ends the call: it is 1:1 and nobody else is left
+/// in the room (`remaining` may still list `departed` — the SDK's eviction
+/// order is not something to depend on).
+fn peer_left_ends_call(
+    kind: Option<OrchestratedCallKind>,
+    remaining: &[String],
+    departed: &str,
+) -> bool {
+    matches!(kind, Some(OrchestratedCallKind::DmStandard | OrchestratedCallKind::AnonDm))
+        && remaining.iter().all(|id| id == departed)
+}
+
+/// A 1:1 call (DM or anon DM) is over when the other person leaves the room.
+///
+/// The peer's hangup signal normally ends it, but that signal is a message and
+/// can be late or lost — the room saying the peer is gone is the ground truth.
+/// Without this the caller sat alone in the room, timer running, until they
+/// hung up themselves. Group calls (channel, anon group) are untouched: people
+/// leaving is ordinary there, and the channel initiator rekeys instead.
+fn spawn_end_one_to_one_if_peer_gone(
+    worker: CallWorkerHandle,
+    signaling: crate::services::call_signaling::CallSignalingService,
+    departed: String,
+) {
+    tokio::spawn(async move {
+        let Some(call) = worker.active_call().await.map(|c| c.id) else { return };
+        let still_ends = || async {
+            peer_left_ends_call(
+                worker.orch_active_kind().await,
+                &worker.remote_participant_identities().await,
+                &departed,
+            )
+        };
+        if !still_ends().await {
+            return;
+        }
+        tokio::time::sleep(PEER_LEFT_GRACE).await;
+        // Still the same call, still alone? Otherwise the hangup signal already
+        // ended it, or the peer came back.
+        if worker.active_call().await.map(|c| c.id) != Some(call) || !still_ends().await {
+            return;
+        }
+        let Some((kind, connected_at)) = worker.orch_active_since().await else { return };
+        tracing::info!(call = %call, "1:1 call peer left the room — ending the call");
+        match kind {
+            OrchestratedCallKind::DmStandard => {
+                let duration_secs = connected_at.elapsed().as_secs() as i64;
+                if let Err(e) = signaling
+                    .handle_remote_hangup(&worker, duration_secs, Some(&call.to_string()))
+                    .await
+                {
+                    tracing::error!(error = %e, "Failed to end call after peer left");
+                }
+            }
+            _ => worker.disconnect_local(CallEndReason::RemoteHangup).await,
+        }
+    });
 }
 
 fn handle_domain_event(
@@ -2361,7 +2454,7 @@ fn handle_domain_event(
         DomainEvent::CallHangupReceived { .. } => {
             // Disconnect from LiveKit + clear active_call + orchestrator.
             // Previously only cleared orchestrator, leaving the room connected.
-            worker.disconnect_local_nonblocking();
+            worker.disconnect_local_nonblocking(CallEndReason::RemoteHangup);
         }
 
         DomainEvent::AnonCallOfferReceived {
@@ -2418,7 +2511,7 @@ fn handle_domain_event(
             // Disconnect from LiveKit + clear active_call + orchestrator.
             // Previously only cleared orchestrator, leaving the room connected
             // and active_call set — causing "Already in a call" on retry.
-            worker.disconnect_local_nonblocking();
+            worker.disconnect_local_nonblocking(CallEndReason::RemoteHangup);
         }
 
         DomainEvent::AnonGroupCallOfferReceived {
@@ -2471,7 +2564,7 @@ fn handle_domain_event(
         }
 
         DomainEvent::AnonGroupCallHangupReceived { .. } => {
-            worker.disconnect_local_nonblocking();
+            worker.disconnect_local_nonblocking(CallEndReason::RemoteHangup);
         }
 
         DomainEvent::CallKeyAnswerReceived { .. }
@@ -2567,6 +2660,23 @@ fn spawn_anon_call_answer_task(
             }
         }
     });
+}
+
+#[cfg(test)]
+mod peer_left_tests {
+    use super::{peer_left_ends_call, OrchestratedCallKind as K};
+
+    #[test]
+    fn one_to_one_ends_only_when_the_room_is_empty() {
+        let gone = vec!["peer".to_string()];
+        assert!(peer_left_ends_call(Some(K::DmStandard), &[], "peer"));
+        assert!(peer_left_ends_call(Some(K::AnonDm), &gone, "peer"));
+        assert!(!peer_left_ends_call(Some(K::DmStandard), &["other".into()], "peer"));
+        // Groups and no-call are never ended by a departure.
+        assert!(!peer_left_ends_call(Some(K::GroupChannel), &[], "peer"));
+        assert!(!peer_left_ends_call(Some(K::AnonGroup), &[], "peer"));
+        assert!(!peer_left_ends_call(None, &[], "peer"));
+    }
 }
 
 #[cfg(test)]

@@ -411,8 +411,19 @@ pub async fn handle_domain_event(
         }
 
         DomainEvent::ChannelMemberLeft { channel_id, user_id: _, display_name: _, message } => {
+            // Kicked or banned: core dropped our membership, so the composer
+            // gives way to the removal notice.
+            let removed_us = matches!(
+                message.content,
+                chatter_core::domain::message::MessageContent::System(
+                    chatter_core::domain::message::SystemMessage::SelfRemoved { .. }
+                )
+            );
             messaging::handle_message_received(window, ui_ctx, message);
             messaging::update_active_channel_member_count(window, ui_ctx, channel_id);
+            if removed_us {
+                crate::bin_ui::features::chat::refresh_send_notice(window, ui_ctx, channel_id);
+            }
         }
 
         // Channel metadata (name/icon) was changed by an admin. Core already

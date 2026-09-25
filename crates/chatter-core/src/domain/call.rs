@@ -463,10 +463,8 @@ pub struct CallSetupResult {
     pub verification_emojis: [String; 4],
     /// Whether this is a video call.
     pub is_video: bool,
-    /// Server call-creation time (Unix nanos). Both peers anchor their call
-    /// timer to this so durations match — otherwise each side counts from its
-    /// own local start (caller at initiate, callee at accept) and drifts by the
-    /// ring duration. 0 means unknown (fall back to local now).
+    /// Local time the call connected (Unix nanos), taken on each side when
+    /// the offer/answer completes, so the timer counts talk time, not ringing.
     pub started_at_ns: u64,
 }
 
@@ -654,7 +652,4 @@ pub struct PendingDmCall {
     pub call_type: String,
     /// Whether this is a video call.
     pub is_video: bool,
-    /// Server call-creation time (Unix nanos), carried from `initiate_call` so
-    /// the caller's post-answer timer anchors to the same instant as the callee.
-    pub started_at_ns: u64,
 }

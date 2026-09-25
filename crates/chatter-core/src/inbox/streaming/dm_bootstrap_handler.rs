@@ -462,7 +462,7 @@ async fn handle_bootstrap_async(
     // Process the incoming bootstrap
     tracing::info!(peer = %peer_id, "BOOTSTRAP[3/4] Calling handle_incoming_bootstrap");
     let response = match dm_bootstrap
-        .handle_incoming_bootstrap(peer_id, ephemeral_public_key, &mut anon_mailbox_client)
+        .handle_incoming_bootstrap(peer_id, peer_device_id, ephemeral_public_key, &mut anon_mailbox_client)
         .await
     {
         Ok(Some(resp)) => {

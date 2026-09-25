@@ -119,7 +119,7 @@ impl MessageService {
         // session with ourselves. Only device => empty list, nothing to sync.
         let (device_ciphertexts, _uak) = self.signal_service
             .encrypt_message_all_devices_with_uak(
-                &mut auth_client, &sender_id_str, &plaintext, Some(current_device_id),
+                &mut auth_client, &sender_id_str, &plaintext,
             )
             .await
             .map_err(|e| MessageError::EncryptionFailed(format!("SavedMessages sync encrypt: {}", e)))?;

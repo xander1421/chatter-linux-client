@@ -383,6 +383,7 @@ impl DmBootstrap {
     pub async fn handle_incoming_bootstrap(
         &self,
         sender_id: UserId,
+        sender_device_id: u32,
         ephemeral_pk: &[u8],
         anon_mailbox_client: &mut AnonymousMailboxClient,
     ) -> Result<Option<BootstrapResponse>, MailboxError> {
@@ -407,7 +408,7 @@ impl DmBootstrap {
 
         // Use inner function for cleanup
         let result = self
-            .handle_incoming_bootstrap_inner(sender_id, ephemeral_pk, anon_mailbox_client)
+            .handle_incoming_bootstrap_inner(sender_id, sender_device_id, ephemeral_pk, anon_mailbox_client)
             .await;
 
         // Release lock
@@ -423,6 +424,7 @@ impl DmBootstrap {
     async fn handle_incoming_bootstrap_inner(
         &self,
         sender_id: UserId,
+        sender_device_id: u32,
         ephemeral_pk: &[u8],
         anon_mailbox_client: &mut AnonymousMailboxClient,
     ) -> Result<Option<BootstrapResponse>, MailboxError> {
@@ -477,9 +479,11 @@ impl DmBootstrap {
             }
         }
 
-        // Save peer's mailbox address
+        // Save peer's mailbox address, owned by the device that sent this
+        // bootstrap: it made the mailbox and is the only one polling it.
         let peer_mailbox = PeerMailbox {
             public_key: peer_mailbox_pk,
+            device_id: sender_device_id,
             received_at: Utc::now(),
             expires_at: None, // Unknown - peer's mailbox TTL isn't communicated
         };

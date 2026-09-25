@@ -104,13 +104,18 @@ fn show_dialling(weak: &slint::Weak<MainWindow>, call_type: CallType, ui_ctx: &A
     w.set_active_call_visible(true);
 }
 
+pub(super) const CALL_FAILED: &str = "Call failed — couldn't connect";
+/// Shown when the microphone prompt is refused; the call cannot work without it.
+#[cfg(target_os = "android")]
+pub(super) const MIC_DENIED: &str = "Calls need microphone access — allow it to call.";
+
 /// Take the call view back down and say why.
 ///
 /// Every failure path used to be `set_active_call_visible(false)` and a log line.
 /// With the view now raised at tap time that would be a flash and nothing else,
 /// which is worse than the silence it replaced — so failing closed has to come
 /// with the reason.
-fn fail_call(weak: &slint::Weak<MainWindow>, reason: &str) {
+pub(super) fn fail_call(weak: &slint::Weak<MainWindow>, reason: &str) {
     let Some(w) = weak.upgrade() else { return };
     w.set_active_call_visible(false);
     w.set_toast_message(reason.into());
@@ -127,6 +132,26 @@ fn spawn_start(
 ) {
     show_dialling(&weak, call_type, &ui_ctx);
     slint::spawn_local(async move {
+        // Mic (+ camera for video) is asked for here, on demand, and the call
+        // waits for the answer: firing the prompt and carrying on placed the
+        // call with no microphone behind the dialog, so the first tap after
+        // "Allow" looked like it did nothing. Outside the timeout below — the
+        // user reading a system dialog is not the call failing to connect.
+        #[cfg(target_os = "android")]
+        {
+            use crate::platform::android::permissions;
+            let mut perms = vec![permissions::RECORD_AUDIO];
+            if matches!(call_type, CallType::Video) {
+                perms.push(permissions::CAMERA);
+            }
+            // Only the microphone is required: a refused camera still leaves a
+            // working call, and the video button asks again on demand.
+            permissions::ensure(&perms).await;
+            if !permissions::has(permissions::RECORD_AUDIO) {
+                fail_call(&weak, MIC_DENIED);
+                return;
+            }
+        }
         if tokio::time::timeout(
             std::time::Duration::from_secs(30),
             start_call_impl(weak.clone(), call_type, conversation, ui_ctx),
@@ -135,7 +160,7 @@ fn spawn_start(
         .is_err()
         {
             tracing::error!("Call setup timed out");
-            fail_call(&weak, "The call could not be connected in time.");
+            fail_call(&weak, CALL_FAILED);
         }
     })
     .unwrap();
@@ -147,18 +172,6 @@ async fn start_call_impl(
     conversation: ActiveConversation,
     ui_ctx: Arc<ChatterClient>,
 ) {
-    // Request mic (+ camera for video) on-demand, here at call start, rather
-    // than up front. Already-granted permissions are filtered out (no re-prompt).
-    #[cfg(target_os = "android")]
-    {
-        use crate::platform::android::permissions;
-        let mut perms = vec![permissions::RECORD_AUDIO];
-        if matches!(call_type, CallType::Video) {
-            perms.push(permissions::CAMERA);
-        }
-        permissions::request(&perms);
-    }
-
     let user_id = match ui_ctx.session_current_user_id() {
         Some(id) => id,
         None => {
@@ -186,12 +199,12 @@ async fn start_call_impl(
         Ok(Ok(s)) => s,
         Ok(Err(e)) => {
             tracing::error!(error = %e, "Failed to start call");
-            fail_call(&weak, "The call could not be started.");
+            fail_call(&weak, CALL_FAILED);
             return;
         }
         Err(join_error) => {
             tracing::error!(%join_error, "Call start task did not finish");
-            fail_call(&weak, "The call could not be started.");
+            fail_call(&weak, CALL_FAILED);
             return;
         }
     };

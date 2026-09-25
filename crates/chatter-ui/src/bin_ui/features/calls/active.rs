@@ -123,15 +123,13 @@ pub fn wire_active_call(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                         return;
                     }
                     // Android: a call that started as voice never requested the
-                    // CAMERA permission. Request on demand; if not yet granted,
-                    // bail so CameraX doesn't fail silently — the user grants via
-                    // the system dialog and taps the video button again.
+                    // CAMERA permission. Ask on demand and carry on once it is
+                    // granted; refused, bail so CameraX doesn't fail silently.
                     #[cfg(target_os = "android")]
                     {
                         use crate::platform::android::permissions;
-                        if !permissions::has(permissions::CAMERA) {
-                            permissions::request(&[permissions::CAMERA]);
-                            tracing::info!("Requested CAMERA permission — tap video again once granted");
+                        if !permissions::ensure(&[permissions::CAMERA]).await {
+                            tracing::info!("CAMERA permission refused — video stays off");
                             return;
                         }
                     }

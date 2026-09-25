@@ -51,6 +51,64 @@ pub(crate) fn dm_failure_decision(
     )
 }
 
+/// The recipient `(service id, device)` a libsignal address block names:
+/// `service_id_fixed_width_binary ++ device_id`, the second half of the
+/// 36-byte `SignalMessage.addresses` field (libsignal `protocol.rs`
+/// `serialize_addresses`).
+fn local_recipient_address(local_uuid: &UserId, local_device_id: u32) -> Option<Vec<u8>> {
+    let service_id = libsignal_core::ServiceId::parse_from_service_id_string(&local_uuid.to_string())?;
+    let mut bytes = service_id.service_id_fixed_width_binary().to_vec();
+    bytes.push(u8::try_from(local_device_id).ok()?);
+    Some(bytes)
+}
+
+/// The recipient half of the address block a failed inner ciphertext carries,
+/// or `None` when it carries none (a legacy Whisper message) or does not parse.
+///
+/// The block is inside the MAC'd body, and the MAC is one we cannot check (the
+/// session is another device's), so this is an unauthenticated hint. It is
+/// only ever used to decide that a message which ALREADY failed was never ours
+/// — the mailbox layer already restricts who can put bytes here to the peer.
+fn sealed_recipient(msg_type: u8, ciphertext: &[u8]) -> Option<Vec<u8>> {
+    use libsignal_protocol::{CiphertextMessageType, PreKeySignalMessage, SignalMessage};
+
+    #[derive(Clone, PartialEq, prost::Message)]
+    struct WireAddresses {
+        #[prost(bytes = "vec", optional, tag = "6")]
+        addresses: Option<Vec<u8>>,
+    }
+
+    let signal = if msg_type == CiphertextMessageType::PreKey as u8 {
+        PreKeySignalMessage::try_from(ciphertext).ok()?.message().clone()
+    } else if msg_type == CiphertextMessageType::Whisper as u8 {
+        SignalMessage::try_from(ciphertext).ok()?
+    } else {
+        return None;
+    };
+    // Serialized as version byte ++ protobuf ++ 8-byte MAC.
+    let serialized = signal.serialized();
+    let proto = serialized.get(1..serialized.len().checked_sub(8)?)?;
+    let addresses = <WireAddresses as prost::Message>::decode(proto).ok()?.addresses?;
+    (addresses.len() == 36).then(|| addresses[18..].to_vec())
+}
+
+/// A mailbox envelope whose inner message was sealed for a SIBLING device of
+/// ours, not this one.
+///
+/// The mailbox conversation is one-peer-device, but a sender can still put a
+/// copy for each of our devices into it (the live send once did). libsignal
+/// refuses those ("Address mismatch" / "Bad Mac!") and they surface as
+/// `SessionDesync` — which is not a failure of a message addressed to us:
+/// nothing was lost here, so there is no marker, no notice and no report.
+fn addressed_to_another_device(err: &crate::error::ServiceError, local_recipient: Option<&[u8]>) -> bool {
+    let (Some(local), crate::error::ServiceError::Crypto(crate::error::CryptoError::SessionDesync { msg_type, ciphertext, .. })) =
+        (local_recipient, err)
+    else {
+        return false;
+    };
+    sealed_recipient(*msg_type, ciphertext).is_some_and(|recipient| recipient != local)
+}
+
 /// Poll all DM mailboxes and process received messages.
 ///
 /// DM messages are decrypted through the MessageGateway which handles:
@@ -85,6 +143,10 @@ pub async fn poll_dm_mailboxes(
         .ok()
         .flatten()
         .and_then(|s| s.parse().ok());
+    let local_recipient = current_user_id.as_ref().and_then(|uuid| {
+        let device_id = settings_repo.get::<u32>(keys::CURRENT_DEVICE_ID).ok().flatten()?;
+        local_recipient_address(uuid, device_id)
+    });
     let mut client = mailbox_client.lock().await;
 
     // 1. Check for expired mailboxes and trigger healing (NDSS '21 healing path)
@@ -234,6 +296,13 @@ pub async fn poll_dm_mailboxes(
                                     }
                                 }
                                 AckDecision::Ack
+                            }
+                            Err(e) if addressed_to_another_device(&e, local_recipient.as_deref()) => {
+                                ack_policy::drop_and_ack(
+                                    "sealed for another of our devices",
+                                    &msg.message_id,
+                                    retry_budget,
+                                )
                             }
                             Err(e) => {
                                 let error_str = e.to_string();
@@ -734,7 +803,20 @@ fn dispatch_dm_content(
                     return;
                 }
             };
-            let peer_mailbox = PeerMailbox::new(pk, None);
+            // The rotating device is the one that owned the old mailbox — no
+            // other device of theirs is in this conversation.
+            let owner = match conversation_manager.load_conversation(&peer_id) {
+                Ok(Some(conv)) => conv.peer_mailbox.map(|m| m.device_id),
+                _ => None,
+            };
+            let Some(owner) = owner else {
+                tracing::warn!(
+                    peer_id = %peer_id,
+                    "MailboxRotation announce with no peer mailbox on record, ignoring"
+                );
+                return;
+            };
+            let peer_mailbox = PeerMailbox::new(pk, owner, None);
             match conversation_manager.save_peer_mailbox(&peer_id, &peer_mailbox) {
                 Ok(()) => {
                     tracing::info!(
@@ -1207,6 +1289,7 @@ async fn try_parse_bootstrap_response(
                     let result = process_bootstrap_key_exchange(
                         &ephemeral_public_key,
                         peer_id,
+                        frame.sender_device_id,
                         conversation_manager,
                     );
 
@@ -1282,6 +1365,8 @@ async fn try_parse_bootstrap_response(
 fn process_bootstrap_key_exchange(
     ephemeral_pk: &[u8],
     peer_id: UserId,
+    // The device that sent the RESPONSE: it made the mailbox it names.
+    peer_device_id: u32,
     conversation_manager: &DmConversationManager,
 ) -> Option<Vec<u8>> {
     if ephemeral_pk.len() != 64 {
@@ -1307,6 +1392,7 @@ fn process_bootstrap_key_exchange(
     // Save peer's mailbox address
     let peer_mailbox = PeerMailbox {
         public_key: peer_mailbox_pk,
+        device_id: peer_device_id,
         received_at: chrono::Utc::now(),
         expires_at: None,
     };
@@ -1409,6 +1495,48 @@ fn process_bootstrap_key_exchange(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A mailbox copy sealed for a sibling device is recognised as not ours;
+    /// one sealed for this device, or one naming no recipient, is not — those
+    /// are genuine failures and keep their marker and report.
+    #[test]
+    fn a_copy_for_a_sibling_device_is_not_a_failure_of_ours() {
+        use libsignal_protocol::{CiphertextMessageType, DeviceId, KeyPair, ProtocolAddress, SignalMessage};
+        use rand::TryRngCore;
+
+        let mut rng = rand::rngs::OsRng.unwrap_err();
+        let us: UserId = "14142135-6237-3095-0488-016887242096".parse().unwrap();
+        let address = |uuid: &str, device: u8| ProtocolAddress::new(uuid.to_owned(), DeviceId::new(device).unwrap());
+        let sender = address("16180339-8874-9894-8482-045868343656", 2);
+        let mut sealed_for = |recipient: Option<&ProtocolAddress>| {
+            let identity = KeyPair::generate(&mut rng).public_key.into();
+            SignalMessage::new(
+                4, &[7u8; 32], recipient.map(|r| (&sender, r)), KeyPair::generate(&mut rng).public_key,
+                11, 0, &[0u8; 20], &identity, &identity, b"",
+            )
+            .unwrap()
+            .serialized()
+            .to_vec()
+        };
+        let desync = |ciphertext: Vec<u8>| crate::error::ServiceError::Crypto(crate::error::CryptoError::SessionDesync {
+            sender_uuid: sender.name().to_owned(),
+            sender_device_id: 2,
+            msg_type: CiphertextMessageType::Whisper as u8,
+            ciphertext,
+            reason: "Bad Mac".into(),
+        });
+        let local = local_recipient_address(&us, 6).unwrap();
+        let local = Some(local.as_slice());
+
+        let sibling = sealed_for(Some(&address(&us.to_string(), 7)));
+        assert!(addressed_to_another_device(&desync(sibling), local));
+
+        let ours = sealed_for(Some(&address(&us.to_string(), 6)));
+        assert!(!addressed_to_another_device(&desync(ours), local));
+
+        let unaddressed = sealed_for(None);
+        assert!(!addressed_to_another_device(&desync(unaddressed), local));
+    }
 
     /// A friend's DM that arrived over the Shield mailbox is the same
     /// conversation as one that arrived over sealed sender: both come back

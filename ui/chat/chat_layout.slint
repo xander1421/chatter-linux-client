@@ -77,7 +77,9 @@ export component ChatLayout inherits Rectangle {
     // Composer properties
     in-out property <string> composer-text: "";
     in property <string> composer-placeholder: "Type a message...";
-    in property <bool> composer-disabled: false;
+    // Non-empty when the viewer may not post here (muted, removed): the
+    // composer is replaced by this text, worded by chatter-core.
+    in property <string> composer-notice: "";
     // Non-empty while a send is on the wire — see message_composer.slint.
     in property <string> composer-send-status: "";
     in property <[PendingAttachmentData]> pending-attachments: [];
@@ -343,13 +345,34 @@ export component ChatLayout inherits Rectangle {
         // explicit height drives the layout slot. A wrapping plain Rectangle
         // does not auto-size from children, which collapses the hit-test
         // region to 0 even though the composer renders via overflow.
-        MessageComposer {
+        if root.composer-notice != "": Rectangle {
+            vertical-stretch: 0;
+            height: notice-text.preferred-height + 2 * Spacing.md;
+            background: root.mobile ? Colors.background : Colors.surface;
+
+            Rectangle {
+                y: 0;
+                width: 100%;
+                height: 1px;
+                background: Colors.border;
+            }
+
+            notice-text := Text {
+                width: parent.width - 2 * Spacing.md;
+                text: root.composer-notice;
+                color: Colors.text-secondary;
+                font-size: Typography.sm;
+                horizontal-alignment: center;
+                wrap: word-wrap;
+            }
+        }
+
+        if root.composer-notice == "": MessageComposer {
             width: 100%;
             vertical-stretch: 0;
             mobile: root.mobile;
             text <=> root.composer-text;
             placeholder: root.composer-placeholder;
-            disabled: root.composer-disabled;
             send-status: root.composer-send-status;
             pending-attachments: root.pending-attachments;
             is-editing <=> root.composer-is-editing;

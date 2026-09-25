@@ -382,11 +382,6 @@ impl MessageService {
         let mut message_client = self.message_client();
 
         let our_user_id = self.settings_repo.current_user_id()?;
-        let our_device_id = self
-            .settings_repo
-            .get::<u32>(crate::storage::repositories::settings_repo::keys::CURRENT_DEVICE_ID)
-            .map_err(MessageError::Storage)?
-            .ok_or(MessageError::NotLoggedIn)?;
 
         let peer_id_str = peer_id.to_string();
 
@@ -394,7 +389,7 @@ impl MessageService {
         // if we reach zero devices (stale/mismatched session state),
         // refetch the peer's device list/prekeys and retry once.
         let mut peer = self
-            .deposit_sealed_to_all_devices(&mut auth_client, &mut message_client, &peer_id_str, &plaintext, None)
+            .deposit_sealed_to_all_devices(&mut auth_client, &mut message_client, &peer_id_str, &plaintext)
             .await;
 
         // Retry only when a refetch could plausibly change the answer. A
@@ -405,7 +400,7 @@ impl MessageService {
                 "Sealed DM send reached zero peer devices, refetching prekeys and retrying once"
             );
             peer = self
-                .deposit_sealed_to_all_devices(&mut auth_client, &mut message_client, &peer_id_str, &plaintext, None)
+                .deposit_sealed_to_all_devices(&mut auth_client, &mut message_client, &peer_id_str, &plaintext)
                 .await;
         }
 
@@ -432,7 +427,6 @@ impl MessageService {
                     &mut message_client,
                     &our_user_id.to_string(),
                     bytes,
-                    Some(our_device_id),
                 )
                 .await
             }
@@ -562,11 +556,10 @@ impl MessageService {
         message_client: &mut MessageClient,
         recipient_id: &str,
         plaintext: &[u8],
-        skip_device_id: Option<u32>,
     ) -> DepositOutcome {
         let (ciphertexts, recipient_uak) = match self
             .signal_service
-            .encrypt_message_all_devices_with_uak(auth_client, recipient_id, plaintext, skip_device_id)
+            .encrypt_message_all_devices_with_uak(auth_client, recipient_id, plaintext)
             .await
         {
             Ok(c) => c,

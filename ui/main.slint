@@ -178,7 +178,7 @@ export component MainWindow inherits Window {
     in-out property <bool> composer-stash-held <=> app.composer-stash-held;
     in property <string> composer-placeholder <=> app.composer-placeholder;
     in property <string> composer-send-status <=> app.composer-send-status;
-    in property <bool> composer-disabled <=> app.composer-disabled;
+    in property <string> composer-notice <=> app.composer-notice;
     in property <[PendingAttachmentData]> pending-attachments <=> app.pending-attachments;
     in-out property <bool> composer-is-editing <=> app.composer-is-editing;
     in-out property <string> composer-edit-message-id <=> app.composer-edit-message-id;
@@ -570,6 +570,7 @@ export component MainWindow inherits Window {
     in property <IncomingCallData> incoming-call-data <=> app.incoming-call-data;
     in-out property <bool> incoming-call-replaces-active <=> app.incoming-call-replaces-active;
     in-out property <bool> active-call-visible <=> app.active-call-visible;
+    in-out property <bool> active-call-fullscreen <=> app.active-call-fullscreen;
     in property <ActiveCallData> active-call-data <=> app.active-call-data;
     in-out property <bool> call-is-muted <=> app.call-is-muted;
     in-out property <bool> call-is-video-enabled <=> app.call-is-video-enabled;

@@ -61,7 +61,75 @@ fn report_send_failure(weak: &slint::Weak<MainWindow>, message: String) {
     });
 }
 
+/// Show `ChatterClient::channel_send_notice` in place of the composer for
+/// `channel_id`: the stored answer at once, then the server's.
+pub fn refresh_send_notice(
+    weak: &slint::Weak<MainWindow>,
+    ui_ctx: &Arc<ChatterClient>,
+    channel_id: chatter_core::domain::ids::ChannelId,
+) {
+    let weak = weak.clone();
+    let ui_ctx = ui_ctx.clone();
+    tokio::spawn(async move {
+        set_send_notice(&weak, &ui_ctx, channel_id, ui_ctx.channel_send_notice(&channel_id));
+        let notice = ui_ctx.refresh_channel_send_notice(&channel_id).await;
+        set_send_notice(&weak, &ui_ctx, channel_id, notice);
+    });
+}
+
+/// Apply a notice only while its channel is still the one on screen.
+fn set_send_notice(
+    weak: &slint::Weak<MainWindow>,
+    ui_ctx: &Arc<ChatterClient>,
+    channel_id: chatter_core::domain::ids::ChannelId,
+    notice: String,
+) {
+    if ui_ctx.chat_state().get().active_channel_id != Some(channel_id) {
+        return;
+    }
+    let weak = weak.clone();
+    let _ = slint::invoke_from_event_loop(move || {
+        if let Some(w) = weak.upgrade() {
+            w.set_composer_notice(notice.into());
+        }
+    });
+}
+
+/// Every conversation switch goes through `ChatState` (see the draft watcher
+/// in `features::composer`): clear the notice on leaving, recompute it for a
+/// channel on entering. A mute reaches the muted member by no event, so the
+/// open is where it is picked up.
+fn wire_send_notice(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
+    let mut current = ui_ctx.chat_state().get().active_channel_id;
+    let mut rx = ui_ctx.chat_state().subscribe();
+    let weak = window.as_weak();
+    let ctx = ui_ctx.clone();
+    tokio::spawn(async move {
+        loop {
+            let snapshot = match rx.recv().await {
+                Ok(snap) => snap,
+                Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+            };
+            if snapshot.active_channel_id == current {
+                continue;
+            }
+            current = snapshot.active_channel_id;
+            let weak_clear = weak.clone();
+            let _ = slint::invoke_from_event_loop(move || {
+                if let Some(w) = weak_clear.upgrade() {
+                    w.set_composer_notice("".into());
+                }
+            });
+            if let Some(channel_id) = current {
+                refresh_send_notice(&weak, &ctx, channel_id);
+            }
+        }
+    });
+}
+
 pub fn wire_send(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
+    wire_send_notice(window, ui_ctx);
     let chat_state = ui_ctx.chat_state().clone();
     let auth_state = ui_ctx.auth_state().clone();
     let ui_ctx_jarvis = ui_ctx.clone();
@@ -241,6 +309,25 @@ pub fn wire_send(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                     // send against a dead server cleared the composer and
                     // reported nothing at all.
                     report_send_failure(&weak, ui_ctx.format_send_error(&e, "send"));
+                    // The server answered no, so the message did not leave:
+                    // the composer cleared itself on tap, so the text goes
+                    // back — unless something was typed in the meantime.
+                    let weak_restore = weak.clone();
+                    let _ = slint::invoke_from_event_loop(move || {
+                        if let Some(w) = weak_restore.upgrade() {
+                            if w.get_composer_text().is_empty() {
+                                w.set_composer_text(text.into());
+                            }
+                        }
+                    });
+                    // A refusal means we are muted or were removed, and no
+                    // event told us: re-read the roster and swap the composer
+                    // for the notice.
+                    if e.is_refused() {
+                        if let ActiveConversation::Channel(channel_id) = conversation {
+                            refresh_send_notice(&weak, &ui_ctx, channel_id);
+                        }
+                    }
                     return;
                 }
                 Err(_) => {

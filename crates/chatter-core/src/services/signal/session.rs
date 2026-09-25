@@ -547,7 +547,7 @@ impl SignalService {
         recipient_id: &str,
     ) -> Result<Vec<u32>, ServiceError> {
         Ok(self
-            .ensure_sessions_and_uak_all_devices(auth_client, recipient_id, None)
+            .ensure_sessions_and_uak_all_devices(auth_client, recipient_id)
             .await?
             .0)
     }
@@ -565,14 +565,16 @@ impl SignalService {
     /// Returns `None` for the UAK only if the server omitted it, which callers
     /// must treat as a sealed-sender degradation rather than a normal outcome.
     ///
-    /// `skip_device_id` is dropped before any session work (self-sync skips
-    /// the sending device). If it was the recipient's only device the result
-    /// is an empty list — nothing to send to, which is not a failure.
+    /// When the recipient is our own user, THIS device is dropped before any
+    /// session work: there is no session with ourselves, and the server
+    /// rejects a sealed message to ourselves ("self send of a sealed sender
+    /// message"). Every own-user fan-out (self-sync, SKDM, SenderKeyRequest)
+    /// routes through here, so no caller has to remember it. If this was our
+    /// only device the result is an empty list — nothing to send, not a failure.
     pub async fn ensure_sessions_and_uak_all_devices(
         &self,
         auth_client: &mut AuthClient,
         recipient_id: &str,
-        skip_device_id: Option<u32>,
     ) -> Result<(Vec<u32>, Option<[u8; 16]>), ServiceError> {
         use crate::proto::chat_v1::get_pre_key_bundle_response;
 
@@ -596,6 +598,11 @@ impl SignalService {
             "No device bundles returned for recipient".into(),
         ))?;
 
+        let this_device = (self.settings_repo.get_string(keys::CURRENT_USER_ID).ok().flatten().as_deref()
+            == Some(recipient_id))
+            .then(|| self.settings_repo.get::<u32>(keys::CURRENT_DEVICE_ID).ok().flatten())
+            .flatten();
+
         match result {
             // Multiple devices response
             get_pre_key_bundle_response::Result::Devices(device_list) => {
@@ -614,7 +621,7 @@ impl SignalService {
                     .iter()
                     .find_map(|b| uak_from_bundle(&b.unidentified_access_key));
 
-                let bundles = without_device(device_list.bundles, skip_device_id);
+                let bundles = without_device(device_list.bundles, this_device);
                 if bundles.is_empty() {
                     return Ok((Vec::new(), recipient_uak));
                 }
@@ -714,7 +721,7 @@ impl SignalService {
             get_pre_key_bundle_response::Result::Bundle(single_bundle) => {
                 let device_id = single_bundle.device_id;
                 let recipient_uak = uak_from_bundle(&single_bundle.unidentified_access_key);
-                if skip_device_id == Some(device_id) {
+                if this_device == Some(device_id) {
                     return Ok((Vec::new(), recipient_uak));
                 }
                 self.ensure_session(auth_client, recipient_id, device_id).await?;
@@ -740,7 +747,7 @@ impl SignalService {
         plaintext: &[u8],
     ) -> Result<HashMap<u32, Vec<u8>>, ServiceError> {
         Ok(self
-            .encrypt_message_all_devices_with_uak(auth_client, recipient_id, plaintext, None)
+            .encrypt_message_all_devices_with_uak(auth_client, recipient_id, plaintext)
             .await?
             .0)
     }
@@ -753,18 +760,18 @@ impl SignalService {
     /// See [`Self::ensure_sessions_and_uak_all_devices`] for why the UAK is
     /// harvested from the bundle fetch rather than fetched separately.
     ///
-    /// `skip_device_id` is excluded before session establishment and
-    /// encryption; if it was the only device, this is an `Ok` empty map.
+    /// To our own user this device is excluded (see
+    /// `ensure_sessions_and_uak_all_devices`); if it was our only device,
+    /// this is an `Ok` empty map.
     pub async fn encrypt_message_all_devices_with_uak(
         &self,
         auth_client: &mut AuthClient,
         recipient_id: &str,
         plaintext: &[u8],
-        skip_device_id: Option<u32>,
     ) -> Result<(HashMap<u32, Vec<u8>>, Option<[u8; 16]>), ServiceError> {
         // First ensure we have sessions with all devices
         let (device_ids, recipient_uak) = self
-            .ensure_sessions_and_uak_all_devices(auth_client, recipient_id, skip_device_id)
+            .ensure_sessions_and_uak_all_devices(auth_client, recipient_id)
             .await?;
         if device_ids.is_empty() {
             return Ok((HashMap::new(), recipient_uak));

@@ -279,6 +279,41 @@ impl MemberModeration {
     }
 }
 
+/// Why the viewer may not post in a channel. The composer is replaced by
+/// [`Self::notice`], as Signal replaces it for a member who can't send.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SendBlock {
+    /// A moderator muted us; the server refuses our sends until it lapses.
+    Muted,
+    /// We were kicked or banned (our membership is gone).
+    Removed,
+}
+
+impl SendBlock {
+    /// `own` is our stored membership; `roster_known` whether any membership
+    /// is stored for the channel at all, so an unsynced roster never reads as
+    /// "removed".
+    #[must_use]
+    pub fn for_viewer(own: Option<&Membership>, roster_known: bool) -> Option<Self> {
+        match own {
+            Some(m) if m.is_muted => Some(Self::Muted),
+            Some(_) => None,
+            None if roster_known => Some(Self::Removed),
+            None => None,
+        }
+    }
+
+    // ponytail: no until-time — the member proto carries `muted` but not the
+    // mute's expiry. Add it to the notice once ChannelMember carries one.
+    #[must_use]
+    pub fn notice(self) -> &'static str {
+        match self {
+            Self::Muted => "You can't send messages in this channel while muted",
+            Self::Removed => "You were removed from this channel",
+        }
+    }
+}
+
 /// One active ban on a channel, shaped for display.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct BannedMember {
@@ -397,6 +432,31 @@ pub struct Template {
     pub channel_type: ChannelType,
     pub config: ChannelConfig,
     pub icon: Option<String>,
+}
+
+#[cfg(test)]
+mod send_block_tests {
+    use super::*;
+
+    #[test]
+    fn send_block_follows_own_membership() {
+        let mut me = Membership {
+            channel_id: ChannelId::new(),
+            user_id: UserId::new(),
+            role: MemberRole::Member,
+            joined_at: Utc::now(),
+            last_read_message_id: None,
+            is_muted: false,
+            muted_until: None,
+            notification_preference: NotificationPreference::All,
+        };
+        assert_eq!(SendBlock::for_viewer(Some(&me), true), None);
+        me.is_muted = true;
+        assert_eq!(SendBlock::for_viewer(Some(&me), true), Some(SendBlock::Muted));
+        assert_eq!(SendBlock::for_viewer(None, true), Some(SendBlock::Removed));
+        // Roster never synced: not evidence of removal.
+        assert_eq!(SendBlock::for_viewer(None, false), None);
+    }
 }
 
 #[cfg(test)]

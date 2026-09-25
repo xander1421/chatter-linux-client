@@ -76,7 +76,7 @@ export component ChannelSettingsModal inherits Rectangle {
     private property <[{label: string, minutes: int}]> mute-options: [
         { label: "Mute 1h", minutes: 60 },
         { label: "Mute 1 day", minutes: 1440 },
-        { label: "Mute", minutes: 0 },
+        { label: "Mute until unmuted", minutes: 0 },
     ];
 
     // Loading/error state
@@ -112,9 +112,14 @@ export component ChannelSettingsModal inherits Rectangle {
     // user-id whose action row (role picker + Remove) is expanded in the
     // member list ("" = none).
     property <string> role-picker-user: "";
+    // "remove" / "ban" while that member's action asks for confirmation
+    // ("" = none). Nothing leaves the UI until the second tap.
+    property <string> confirm-action: "";
+    changed role-picker-user => { self.confirm-action = ""; }
     changed show-modal => {
         self.show-delete-confirm = false;
         self.show-leave-confirm = false;
+        self.role-picker-user = "";
     }
 
     // Private group helper
@@ -857,6 +862,11 @@ export component ChannelSettingsModal inherits Rectangle {
                                                     vertical-alignment: center;
                                                     overflow: elide;
                                                 }
+
+                                                // Badges are fixed-width, so without a stretchable
+                                                // child this row caps the name column's max width:
+                                                // the name elided and the ⋮ drifted mid-row.
+                                                Rectangle { horizontal-stretch: 1; }
                                             }
                                         }
 
@@ -892,6 +902,46 @@ export component ChannelSettingsModal inherits Rectangle {
                                         }
                                     }
 
+                                    // Remove / Ban confirmation, like Block in user_profile.
+                                    if root.role-picker-user == member.user-id && root.confirm-action != "": VerticalLayout {
+                                        spacing: Spacing.sm;
+                                        padding: Spacing.xs;
+
+                                        Text {
+                                            text: root.confirm-action == "ban"
+                                                ? "Ban " + member.display-name + "? They will be removed and can't rejoin."
+                                                : "Remove " + member.display-name + " from this channel?";
+                                            color: Colors.text-primary;
+                                            font-size: Typography.sm;
+                                            wrap: word-wrap;
+                                        }
+
+                                        HorizontalLayout {
+                                            spacing: Spacing.sm;
+
+                                            Button {
+                                                text: "Cancel";
+                                                variant: "secondary";
+                                                horizontal-stretch: 1;
+                                                clicked => { root.confirm-action = ""; }
+                                            }
+
+                                            Button {
+                                                text: root.confirm-action == "ban" ? "Ban" : "Remove";
+                                                variant: "danger";
+                                                horizontal-stretch: 1;
+                                                clicked => {
+                                                    if root.confirm-action == "ban" {
+                                                        root.ban-member(member.user-id);
+                                                    } else {
+                                                        root.remove-member(member.user-id);
+                                                    }
+                                                    root.role-picker-user = "";
+                                                }
+                                            }
+                                        }
+                                    }
+
                                     // Roles are a server-channel concept (anon groups have
                                     // no role RPC), and ownership is not grantable (the
                                     // server rejects OWNER), so the picker offers only the
@@ -899,7 +949,7 @@ export component ChannelSettingsModal inherits Rectangle {
                                     // On a phone the pane is ~230px wide (360dp); the three
                                     // role buttons alone need ~270px, so the actions stack
                                     // one per line there instead of running off the card.
-                                    if root.role-picker-user == member.user-id && root.narrow: VerticalLayout {
+                                    if root.role-picker-user == member.user-id && root.confirm-action == "" && root.narrow: VerticalLayout {
                                         spacing: Spacing.xs;
                                         padding: Spacing.xs;
 
@@ -948,24 +998,18 @@ export component ChannelSettingsModal inherits Rectangle {
                                             text: "Remove";
                                             variant: "danger";
 
-                                            clicked => {
-                                                root.role-picker-user = "";
-                                                root.remove-member(member.user-id);
-                                            }
+                                            clicked => { root.confirm-action = "remove"; }
                                         }
 
                                         if member.can-ban: Button {
                                             text: "Ban";
                                             variant: "danger";
 
-                                            clicked => {
-                                                root.role-picker-user = "";
-                                                root.ban-member(member.user-id);
-                                            }
+                                            clicked => { root.confirm-action = "ban"; }
                                         }
                                     }
 
-                                    if root.role-picker-user == member.user-id && !root.narrow: HorizontalLayout {
+                                    if root.role-picker-user == member.user-id && root.confirm-action == "" && !root.narrow: HorizontalLayout {
                                         spacing: Spacing.xs;
                                         padding: Spacing.xs;
                                         alignment: end;
@@ -1015,20 +1059,14 @@ export component ChannelSettingsModal inherits Rectangle {
                                             text: "Remove";
                                             variant: "danger";
 
-                                            clicked => {
-                                                root.role-picker-user = "";
-                                                root.remove-member(member.user-id);
-                                            }
+                                            clicked => { root.confirm-action = "remove"; }
                                         }
 
                                         if member.can-ban: Button {
                                             text: "Ban";
                                             variant: "danger";
 
-                                            clicked => {
-                                                root.role-picker-user = "";
-                                                root.ban-member(member.user-id);
-                                            }
+                                            clicked => { root.confirm-action = "ban"; }
                                         }
                                     }
                                 }

@@ -975,6 +975,17 @@ impl UserService {
                 &friend_id,
                 &friend.display_name,
             )
+            // No key on this row (or the decrypt missed): keep the name we
+            // already resolved, as `UserSync::sync_friends` does, rather than
+            // write the placeholder over it.
+            .or_else(|| {
+                self.user_repo
+                    .get_profile(&friend_id)
+                    .ok()
+                    .flatten()
+                    .map(|stored| stored.display_name)
+                    .filter(|n| !n.is_empty())
+            })
             .unwrap_or_else(|| friend_display_name_placeholder(&friend_id));
             profile.status_message = decrypt_friend_status(
                 &self.user_repo,
@@ -1172,11 +1183,14 @@ impl UserService {
         let user_id_str = user_id.to_string();
         let mut stream = user_client.unblock_user(&user_id_str).await?;
 
+        // Drain to the end: the server's FIRST event is a PENDING sent before
+        // it unblocks (friend.go `UnblockUser`), and it closes the stream only
+        // once the unblock is committed (or with the error). Stopping at that
+        // first event raced the commit: the friend-list check below still saw
+        // the block, deleted the local row with the friend's profile key, and
+        // the friend came back as "User 1c242673" with no DM row.
         while let Some(event_result) = stream.next().await {
-            let event = event_result?;
-            if let Some(user_event::Event::FriendStatusChanged(ref _status)) = event.event {
-                break;
-            }
+            event_result?;
         }
 
         // The server kept the friendship through the block (Signal-style), and

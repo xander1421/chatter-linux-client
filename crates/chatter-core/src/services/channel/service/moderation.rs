@@ -56,8 +56,8 @@ impl ChannelService {
         while let Some(event_result) = stream.next().await {
             let event = event_result?;
             match event.event {
-                Some(channel_event::Event::MemberRemovedId(removed_user_id)) => {
-                    if removed_user_id == user_id.to_string() {
+                Some(channel_event::Event::MemberRemoved(removed)) => {
+                    if removed.user_id == user_id.to_string() {
                         kicked = true;
                         break;
                     }
@@ -78,7 +78,7 @@ impl ChannelService {
         if !kicked {
             let _ = self.signal_service.unblock_channel_send(channel_id);
             return Err(ChannelError::InvalidInput(
-                "no member_removed_id event received".to_string(),
+                "no member_removed event received".to_string(),
             ));
         }
 

@@ -373,9 +373,9 @@ async fn test_e2e_user_leaves_channel() {
         if let Some(payload) = event.event {
             use chatter_core::proto::chat_v1::channel_event::Event;
             match payload {
-                Event::MemberRemovedId(removed_user_id) => {
+                Event::MemberRemoved(removed) => {
                     tracing::info!(
-                        removed_user = %removed_user_id,
+                        removed_user = %removed.user_id,
                         "Member left channel"
                     );
                 }

@@ -3613,7 +3613,7 @@ async fn v12_dm_from_primary_syncs_to_senders_own_linked_device() {
          anywhere reports an error.\n\
          Signal's model is that a message you send from one device is copied to your \
          others. The code that should do this is `send_sealed_dm_content`'s self-sync \
-         `deposit_sealed_to_all_devices(.., our_user_id, .., Some(our_device_id))` \
+         `deposit_sealed_to_all_devices(.., our_user_id, ..)` \
          (server_dm.rs:233-242) — reached only after the peer deposit, and never \
          asserted until this test.",
         new_b.len(),

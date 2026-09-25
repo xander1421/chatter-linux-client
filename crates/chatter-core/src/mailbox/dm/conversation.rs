@@ -63,6 +63,9 @@ pub struct DmMailbox {
 pub struct PeerMailbox {
     /// Peer's Ed25519 public key (32 bytes) - their mailbox address.
     pub public_key: [u8; 32],
+    /// The peer device that made this mailbox and polls it — the one device
+    /// a message deposited here reaches (the conversation is one-peer-device).
+    pub device_id: u32,
     /// When we received this address.
     pub received_at: DateTime<Utc>,
     /// When they said it expires (if known).
@@ -195,9 +198,10 @@ impl DmMailbox {
 
 impl PeerMailbox {
     /// Create a new peer mailbox from received public key.
-    pub fn new(public_key: [u8; 32], expires_at: Option<DateTime<Utc>>) -> Self {
+    pub fn new(public_key: [u8; 32], device_id: u32, expires_at: Option<DateTime<Utc>>) -> Self {
         Self {
             public_key,
+            device_id,
             received_at: Utc::now(),
             expires_at,
         }
@@ -495,7 +499,7 @@ impl DmConversationManager {
     ) -> Result<Option<PeerMailbox>, MailboxError> {
         let mut stmt = conn
             .prepare(
-                "SELECT peer_mailbox_public_key, received_at, expires_at
+                "SELECT peer_mailbox_public_key, peer_device_id, received_at, expires_at
                  FROM dm_peer_mailboxes WHERE conversation_id = ?1
                  ORDER BY received_at DESC LIMIT 1",
             )
@@ -503,13 +507,14 @@ impl DmConversationManager {
 
         let result = stmt.query_row(rusqlite::params![peer_id_str], |row| {
             let public_key: Vec<u8> = row.get(0)?;
-            let received_at: String = row.get(1)?;
-            let expires_at: Option<String> = row.get(2)?;
-            Ok((public_key, received_at, expires_at))
+            let device_id: u32 = row.get(1)?;
+            let received_at: String = row.get(2)?;
+            let expires_at: Option<String> = row.get(3)?;
+            Ok((public_key, device_id, received_at, expires_at))
         });
 
         match result {
-            Ok((public_key, received_at, expires_at)) => {
+            Ok((public_key, device_id, received_at, expires_at)) => {
                 let public_key_arr: [u8; 32] = public_key
                     .try_into()
                     .map_err(|_| MailboxError::Storage("Invalid peer public key length".into()))?;
@@ -526,6 +531,7 @@ impl DmConversationManager {
 
                 Ok(Some(PeerMailbox {
                     public_key: public_key_arr,
+                    device_id,
                     received_at,
                     expires_at,
                 }))
@@ -676,12 +682,13 @@ impl DmConversationManager {
 
         conn.execute(
             "INSERT OR REPLACE INTO dm_peer_mailboxes
-             (id, conversation_id, peer_mailbox_public_key, received_at, expires_at)
-             VALUES (?1, ?2, ?3, ?4, ?5)",
+             (id, conversation_id, peer_mailbox_public_key, peer_device_id, received_at, expires_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
             rusqlite::params![
                 id,
                 peer_id_str,
                 mailbox.public_key.as_slice(),
+                mailbox.device_id,
                 mailbox.received_at.to_rfc3339(),
                 mailbox.expires_at.map(|dt| dt.to_rfc3339())
             ],
@@ -969,7 +976,7 @@ mod tests {
         let public_key = [0u8; 32];
         let expires_at = Some(Utc::now() + Duration::days(7));
 
-        let mailbox = PeerMailbox::new(public_key, expires_at);
+        let mailbox = PeerMailbox::new(public_key, 1, expires_at);
 
         assert_eq!(mailbox.public_key, public_key);
         assert!(mailbox.expires_at.is_some());
@@ -981,7 +988,7 @@ mod tests {
         let public_key = [0u8; 32];
         let expires_at = Some(Utc::now() - Duration::hours(1));
 
-        let mailbox = PeerMailbox::new(public_key, expires_at);
+        let mailbox = PeerMailbox::new(public_key, 1, expires_at);
 
         assert!(mailbox.is_possibly_expired());
     }
@@ -1082,7 +1089,7 @@ mod tests {
         assert!(!conv.is_ready_to_send()); // Still need peer mailbox and key
 
         // Add peer mailbox
-        conv.peer_mailbox = Some(PeerMailbox::new([0u8; 32], None));
+        conv.peer_mailbox = Some(PeerMailbox::new([0u8; 32], 1, None));
 
         assert!(!conv.is_ready_to_send()); // Still need conversation key
 

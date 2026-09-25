@@ -26,17 +26,6 @@ use crate::domain::call::{AnonCallAnswerOutcome, AnonCallSetupResult, CallSetupR
 use crate::domain::call::CallType;
 use crate::domain::call::PendingDmCall;
 
-/// Server call-creation time as Unix nanos, taken from the domain `Call`
-/// (worker sets `started_at` from the server's `created_at`). 0 when unknown —
-/// the UI timer then falls back to local `now`.
-#[cfg(feature = "media")]
-fn call_started_at_ns(call: &crate::domain::call::Call) -> u64 {
-    call.started_at
-        .and_then(|d| d.timestamp_nanos_opt())
-        .filter(|n| *n > 0)
-        .map(|n| n as u64)
-        .unwrap_or(0)
-}
 #[cfg(feature = "media")]
 use crate::domain::ids::CallId;
 use crate::domain::ids::{ChannelId, UserId};
@@ -45,7 +34,7 @@ use crate::services::anon_group::AnonGroupService;
 #[cfg(feature = "media")]
 use crate::services::call_verification::CallVerification;
 #[cfg(feature = "media")]
-use crate::services::call_worker::CallWorkerHandle;
+use crate::services::call_worker::{CallEndReason, CallWorkerHandle};
 use crate::services::channel::ChannelService;
 use crate::services::gateway::{
     build_call_key_offer, build_call_key_answer,
@@ -356,7 +345,9 @@ impl CallSignalingService {
             .await
         {
             tracing::error!(error = %e, call_id = %call.id, "Call offer send failed — rolling back call");
-            call_worker.disconnect_local().await;
+            call_worker
+                .disconnect_local(CallEndReason::Error(format!("call offer not sent: {e}")))
+                .await;
             return Err(e);
         }
 
@@ -366,8 +357,7 @@ impl CallSignalingService {
             "Call offer sent, storing pending state"
         );
 
-        // Store pending call state (ephemeral key kept until answer). Carry the
-        // server creation time so the post-answer timer matches the callee.
+        // Store pending call state (ephemeral key kept until answer).
         self.set_pending_dm_call(PendingDmCall {
             call_id: call.id,
             channel_id,
@@ -375,7 +365,6 @@ impl CallSignalingService {
             peer_id: *peer_id,
             call_type: call_type_str.to_string(),
             is_video,
-            started_at_ns: call_started_at_ns(&call),
         });
 
         Ok(call.id)
@@ -417,7 +406,6 @@ impl CallSignalingService {
 
         // Capture call view-data before `pending` is dropped (zeroizes the key).
         let is_video = pending.is_video;
-        let started_at_ns = pending.started_at_ns;
 
         // Delegate all crypto to the Signal service (ECDH + identity lookup + HKDF)
         let priv_key = pending.ephemeral_key.private_key_bytes();
@@ -490,7 +478,10 @@ impl CallSignalingService {
             channel_id: ChannelId::new(), // channel_id was consumed with pending
             verification_emojis: [e1, e2, e3, e4],
             is_video,
-            started_at_ns,
+            // The call connects now — the answer just arrived. Counting from
+            // the server's dial time ran the timer through the ring (and
+            // through any server/device clock skew).
+            started_at_ns: crate::util::time::TimestampNanos::now().as_u64(),
         })
     }
 
@@ -565,7 +556,9 @@ impl CallSignalingService {
             channel_id: (*caller_id).into(),
             verification_emojis: [e1, e2, e3, e4],
             is_video: false, // caller provides this info via the offer
-            started_at_ns: call_started_at_ns(&call),
+            // Connected as of the join above; the server's `started_at` is the
+            // caller's dial time, which would count the ring.
+            started_at_ns: crate::util::time::TimestampNanos::now().as_u64(),
         })
     }
 
@@ -1174,7 +1167,7 @@ impl CallSignalingService {
             None => {
                 // No active call — just ensure we're disconnected
                 tracing::warn!("end_anon_call: no active call room name, forcing disconnect");
-                call_worker.disconnect_local().await;
+                call_worker.disconnect_local(CallEndReason::LocalHangup).await;
                 return Ok(None);
             }
         };
@@ -1326,7 +1319,7 @@ impl CallSignalingService {
             );
         }
 
-        call_worker.disconnect_local().await;
+        call_worker.disconnect_local(CallEndReason::RemoteHangup).await;
         Ok(())
     }
 

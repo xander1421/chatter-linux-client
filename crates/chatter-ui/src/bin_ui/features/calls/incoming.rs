@@ -21,7 +21,7 @@ use chatter_core::services::call_worker::{
 use crate::{ActiveCallData, CallParticipantData, MainWindow};
 use crate::bin_ui::converters::{avatar_bytes_to_image, get_initials};
 
-use super::timers::{start_call_timer, start_video_frame_timer};
+use super::timers::{start_call_timer, start_video_frame_timer, stop_call_timer, stop_video_frame_timer};
 
 /// Wire incoming call accept/decline callbacks.
 pub fn wire_incoming_call(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
@@ -40,6 +40,11 @@ pub fn wire_incoming_call(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                 .upgrade()
                 .map(|w| w.get_incoming_call_replaces_active())
                 .unwrap_or(false);
+            #[cfg(target_os = "android")]
+            let is_video = weak
+                .upgrade()
+                .map(|w| w.get_incoming_call_data().is_video_call)
+                .unwrap_or(false);
 
             // Hide the modal immediately — the accept flow paints the
             // active-call view directly on success.
@@ -48,31 +53,34 @@ pub fn wire_incoming_call(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                 w.set_incoming_call_replaces_active(false);
             }
 
-            tokio::spawn(async move {
-                match ui_ctx
-                    .accept_presented_incoming_call(&call_id_str, replaces_active)
-                    .await
+            slint::spawn_local(async move {
+                // Answering without the microphone joins a call nobody can
+                // hear, so wait for the prompt's answer first (see
+                // outgoing.rs). Refused: say why and decline, rather than
+                // leave the caller ringing a modal that is already gone.
+                #[cfg(target_os = "android")]
                 {
-                    Ok(accepted) => render_accepted_call(&weak, &ui_ctx, accepted),
-                    Err(e) => {
-                        tracing::error!(error = %e, "Failed to accept incoming call");
-                        // The modal was already hidden above, on the assumption
-                        // this would succeed. Accepting a call needs the server,
-                        // so with the server gone the modal vanished and nothing
-                        // replaced it — the call appeared to be answered and then
-                        // simply stopped existing. Say what happened.
-                        let weak = weak.clone();
-                        let _ = slint::invoke_from_event_loop(move || {
-                            let Some(w) = weak.upgrade() else { return };
-                            w.set_toast_message(
-                                "Could not answer the call — the server did not respond.".into(),
-                            );
+                    use crate::platform::android::permissions;
+                    let mut perms = vec![permissions::RECORD_AUDIO];
+                    if is_video {
+                        perms.push(permissions::CAMERA);
+                    }
+                    permissions::ensure(&perms).await;
+                    if !permissions::has(permissions::RECORD_AUDIO) {
+                        if let Some(w) = weak.upgrade() {
+                            w.set_toast_message(super::outgoing::MIC_DENIED.into());
                             w.set_toast_variant("error".into());
                             w.set_toast_visible(true);
+                        }
+                        tokio::spawn(async move {
+                            let _ = ui_ctx.decline_presented_incoming_call(&call_id_str).await;
                         });
+                        return;
                     }
                 }
-            });
+                tokio::spawn(accept(weak, ui_ctx, call_id_str, replaces_active));
+            })
+            .unwrap();
         }
     });
 
@@ -97,6 +105,33 @@ pub fn wire_incoming_call(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             });
         }
     });
+}
+
+async fn accept(
+    weak: slint::Weak<MainWindow>,
+    ui_ctx: Arc<ChatterClient>,
+    call_id: String,
+    replaces_active: bool,
+) {
+    match ui_ctx.accept_presented_incoming_call(&call_id, replaces_active).await {
+        Ok(accepted) => render_accepted_call(&weak, &ui_ctx, accepted),
+        Err(e) => {
+            tracing::error!(error = %e, "Failed to accept incoming call");
+            // The modal was already hidden above, on the assumption
+            // this would succeed. Accepting a call needs the server,
+            // so with the server gone the modal vanished and nothing
+            // replaced it — the call appeared to be answered and then
+            // simply stopped existing. Say what happened.
+            let _ = slint::invoke_from_event_loop(move || {
+                let Some(w) = weak.upgrade() else { return };
+                w.set_toast_message(
+                    "Could not answer the call — the server did not respond.".into(),
+                );
+                w.set_toast_variant("error".into());
+                w.set_toast_visible(true);
+            });
+        }
+    }
 }
 
 /// Paint the Slint active-call view from the client's accept result.
@@ -174,7 +209,8 @@ fn render_accepted_call(
                 let call_data = ActiveCallData {
                     call_id: setup.call_id.to_string().into(),
                     channel_id: setup.channel_id.to_string().into(),
-                    title: "Call".into(),
+                    // Who the call is with — what the return-to-call bar shows.
+                    title: peer_name.clone().into(),
                     is_video_call: is_video,
                     is_anonymous_call: false,
                     is_encrypted: true,
@@ -198,6 +234,7 @@ fn render_accepted_call(
                 w.set_active_call_visible(true);
                 start_call_timer(&w, (setup.started_at_ns != 0).then_some(setup.started_at_ns));
                 start_video_frame_timer(&w, frames);
+                open_call_screen(&w);
             });
             // Media is auto-published by the call worker after connect.
         }
@@ -215,7 +252,27 @@ fn render_accepted_call(
                 setup.started_at_ns,
                 setup.peer_avatar,
             );
+            // Queued after the render above (the event loop runs them in order).
+            let weak = weak.clone();
+            let _ = slint::invoke_from_event_loop(move || {
+                if let Some(w) = weak.upgrade() {
+                    open_call_screen(&w);
+                }
+            });
         }
+    }
+}
+
+/// Answering lands on the call, wherever the user was. The call view is docked
+/// in the conversation pane, so from Contacts, the chat list or any modal the
+/// user answered into nothing visible. Close the modal and, on a phone, bring
+/// the pane up with the call filling it. The return-to-call bar (app.slint)
+/// covers every later departure.
+fn open_call_screen(w: &MainWindow) {
+    w.set_active_modal("none".into());
+    if w.get_compact_layout() {
+        w.set_mobile_show_chat(true);
+        w.set_active_call_fullscreen(true);
     }
 }
 
@@ -438,21 +495,30 @@ fn handle_orchestrator_event(
                 reason = ?reason,
                 "Active call ended"
             );
-            let should_clear = matches!(
-                reason,
-                CallEndReason::ReplacedByIncoming
-                    | CallEndReason::Declined
-                    | CallEndReason::Error(_)
-            );
-            if should_clear {
-                let weak = weak.clone();
-                let _ = slint::invoke_from_event_loop(move || {
-                    if let Some(w) = weak.upgrade() {
-                        w.set_active_call_visible(false);
-                        super::super::auth::initial_data::hide_incoming_call(&w);
-                    }
-                });
-            }
+            // A local hangup already took the view down. Anything else ended
+            // the call under the user, and says so — a call screen that just
+            // vanishes reads as a crash.
+            let notice = match reason {
+                CallEndReason::LocalHangup => return,
+                // The accepted call is about to be painted over this one.
+                CallEndReason::ReplacedByIncoming => None,
+                CallEndReason::RemoteHangup => Some(("Call ended", "info")),
+                CallEndReason::Declined => Some(("Call declined", "info")),
+                CallEndReason::Error(_) => Some((super::outgoing::CALL_FAILED, "error")),
+            };
+            let weak = weak.clone();
+            let _ = slint::invoke_from_event_loop(move || {
+                let Some(w) = weak.upgrade() else { return };
+                w.set_active_call_visible(false);
+                super::super::auth::initial_data::hide_incoming_call(&w);
+                if let Some((message, variant)) = notice {
+                    stop_call_timer();
+                    stop_video_frame_timer();
+                    w.set_toast_message(message.into());
+                    w.set_toast_variant(variant.into());
+                    w.set_toast_visible(true);
+                }
+            });
         }
 
         CallOrchestratorEvent::OutgoingStarted { call, .. }

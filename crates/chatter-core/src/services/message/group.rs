@@ -29,14 +29,10 @@ impl MessageService {
         use crate::proto::content_v1::{self, content};
         use prost::Message;
 
-        // Get our user ID + current device id (so we don't ship SKDM to
-        // ourselves on this same device — we already have our own sender key).
+        // Our user ID (the deposit leaves this device out of our own fan-out —
+        // it already holds our sender key).
         let our_user_id = self.settings_repo
             .get_string(keys::CURRENT_USER_ID)
-            .map_err(MessageError::Storage)?
-            .ok_or(MessageError::NotLoggedIn)?;
-        let our_device_id = self.settings_repo
-            .get::<u32>(keys::CURRENT_DEVICE_ID)
             .map_err(MessageError::Storage)?
             .ok_or(MessageError::NotLoggedIn)?;
 
@@ -95,7 +91,6 @@ impl MessageService {
                     message_client,
                     member_id,
                     &plaintext,
-                    is_self.then_some(our_device_id),
                 )
                 .await;
             success_count += outcome.delivered;
@@ -148,7 +143,7 @@ impl MessageService {
         }
     }
 
-    /// Our registered device ids, from the `own_devices` cache (refetched when
+    /// Our live device ids, from the `own_devices` cache (refetched when
     /// over a minute old). `None` when the list cannot be fetched.
     async fn own_device_ids(&self) -> Option<std::collections::HashSet<u32>> {
         const MAX_AGE: u64 = 60 * 1_000_000_000;
@@ -159,9 +154,8 @@ impl MessageService {
                 return Some(ids.clone());
             }
         }
-        match self.auth_client().list_devices().await {
-            Ok(resp) => {
-                let ids: std::collections::HashSet<u32> = resp.devices.iter().map(|d| d.device_id).collect();
+        match self.fetch_own_device_ids().await {
+            Ok(ids) => {
                 *cache = Some((now, ids.clone()));
                 Some(ids)
             }
@@ -170,6 +164,21 @@ impl MessageService {
                 None
             }
         }
+    }
+
+    /// Our devices that can still send and receive: the ones with a prekey
+    /// bundle, the same set every own-user fan-out encrypts to. Not
+    /// `ListDevices` — an identity republish drops every bundle but leaves the
+    /// old `user_devices` rows (server `republish_identity.go`), so a dead
+    /// install stays listed there forever and its channel messages were parked
+    /// and re-requested from it on every launch. The wildcard fetch pops no
+    /// one-time prekeys.
+    async fn fetch_own_device_ids(&self) -> Result<std::collections::HashSet<u32>, crate::error::NetworkError> {
+        use crate::services::current_user::CurrentUserProvider;
+        let me = self.settings_repo.current_user_id()
+            .map_err(|e| crate::error::NetworkError::InvalidRequest(e.to_string()))?;
+        let resp = self.auth_client().get_pre_key_bundles_all_devices(&me.to_string()).await?;
+        Ok(bundle_device_ids(resp))
     }
 
     /// Hand our CURRENT sender key to every channel member that does not hold
@@ -651,21 +660,16 @@ impl MessageService {
 
         let plaintext = skdm_content.encode_to_vec();
         let member_id_str = member_id.to_string();
-        // To ourselves (our other devices asking, or a newly linked one): never
-        // to this device, which already holds the key.
+        // To ourselves (our other devices asking, or a newly linked one) the
+        // deposit leaves out this device, which already holds the key.
         let is_self = self.settings_repo.get_string(keys::CURRENT_USER_ID).ok().flatten().as_deref()
             == Some(member_id_str.as_str());
-        let skip_device = if is_self {
-            self.settings_repo.get::<u32>(keys::CURRENT_DEVICE_ID).ok().flatten()
-        } else {
-            None
-        };
 
         // Per-device sealed deposit, UAK-authorized: sender keys are keyed by
         // (user, device), so each device needs its own ciphertext.
         let mut message_client = self.message_client();
         let outcome = self
-            .deposit_sealed_to_all_devices(&mut auth_client, &mut message_client, &member_id_str, &plaintext, skip_device)
+            .deposit_sealed_to_all_devices(&mut auth_client, &mut message_client, &member_id_str, &plaintext)
             .await;
 
         if outcome.delivered == 0 {
@@ -743,7 +747,7 @@ impl MessageService {
         // (user, device); we need a distinct envelope for each).
         let mut message_client = self.message_client();
         let outcome = self
-            .deposit_sealed_to_all_devices(&mut auth_client, &mut message_client, &target_id_str, &plaintext, None)
+            .deposit_sealed_to_all_devices(&mut auth_client, &mut message_client, &target_id_str, &plaintext)
             .await;
 
         if outcome.delivered == 0 {
@@ -867,9 +871,8 @@ impl MessageService {
     /// unrecoverable: asking for its SKDM or a resend only reaches a device
     /// that does not exist.
     ///
-    /// Our OWN devices are checked against the server's list (`ListDevices`).
-    /// A peer's devices have no listing that does not pop their one-time
-    /// prekeys, so a peer device counts as retired only once the server has
+    /// Our OWN devices are checked against the ones holding a prekey bundle
+    /// (`fetch_own_device_ids`). A peer device counts as retired only once the server has
     /// refused a send to it, for [`PENDING_GROUP_DECRYPT_TTL`] — the server
     /// reuses a removed device's id, so the verdict must not stick.
     /// Fails open (not retired) when the list cannot be fetched.
@@ -893,9 +896,8 @@ impl MessageService {
                 return true;
             }
         }
-        match self.auth_client().list_devices().await {
-            Ok(resp) => {
-                let ids: std::collections::HashSet<u32> = resp.devices.iter().map(|d| d.device_id).collect();
+        match self.fetch_own_device_ids().await {
+            Ok(ids) => {
                 let retired = !ids.contains(&device_id);
                 *cache = Some((now, ids));
                 retired
@@ -1152,6 +1154,17 @@ impl MessageService {
     }
 }
 
+/// Device ids in a prekey-bundle response (multi-device list or the
+/// single-bundle fallback).
+fn bundle_device_ids(resp: crate::proto::chat_v1::GetPreKeyBundleResponse) -> std::collections::HashSet<u32> {
+    use crate::proto::chat_v1::get_pre_key_bundle_response::Result;
+    match resp.result {
+        Some(Result::Devices(list)) => list.bundles.iter().map(|b| b.device_id).collect(),
+        Some(Result::Bundle(b)) => [b.device_id].into(),
+        None => Default::default(),
+    }
+}
+
 /// How long a group message parked for a missing sender key waits for its
 /// SKDM before we ask the sender to resend it instead.
 const PENDING_GROUP_DECRYPT_TTL: std::time::Duration = std::time::Duration::from_secs(300);
@@ -1210,6 +1223,24 @@ fn sender_key_request_due(
 
 #[cfg(test)]
 mod tests {
+    /// Own devices are the ones with a bundle; a response without any is none.
+    #[test]
+    fn own_devices_are_the_bundle_holders() {
+        use crate::proto::chat_v1::{get_pre_key_bundle_response::Result, GetPreKeyBundleResponse, SignalPreKeyBundle};
+        let b = |device_id| SignalPreKeyBundle { device_id, ..Default::default() };
+        let many = GetPreKeyBundleResponse {
+            result: Some(Result::Devices(crate::proto::chat_v1::PreKeyBundleDeviceList {
+                bundles: vec![b(2), b(6), b(7), b(8)],
+                ..Default::default()
+            })),
+            ..Default::default()
+        };
+        assert_eq!(super::bundle_device_ids(many), [2, 6, 7, 8].into());
+        let one = GetPreKeyBundleResponse { result: Some(Result::Bundle(b(6))), ..Default::default() };
+        assert_eq!(super::bundle_device_ids(one), [6].into());
+        assert!(super::bundle_device_ids(GetPreKeyBundleResponse::default()).is_empty());
+    }
+
     use super::*;
     use std::time::{Duration, Instant};
 

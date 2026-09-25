@@ -284,10 +284,6 @@ impl MessageService {
             .get_string(keys::CURRENT_USER_ID)
             .map_err(MessageError::Storage)?
             .ok_or(MessageError::NotLoggedIn)?;
-        let our_device_id = self.settings_repo
-            .get::<u32>(keys::CURRENT_DEVICE_ID)
-            .map_err(MessageError::Storage)?
-            .ok_or(MessageError::NotLoggedIn)?;
 
         // Find the DM peer (the other channel member).
         let members = self.channel_repo.list_members(channel_id).unwrap_or_default();
@@ -302,7 +298,7 @@ impl MessageService {
         // so live delivery for the recipient's primary device must go through
         // the device-inbox path here (the gateway decrypts + stores locally).
         if let Some(rid) = recipient_id {
-            self.deposit_sealed_to_all_devices(auth_client, message_client, &rid, plaintext, None)
+            self.deposit_sealed_to_all_devices(auth_client, message_client, &rid, plaintext)
                 .await;
         }
 
@@ -312,7 +308,6 @@ impl MessageService {
             message_client,
             &our_user_id,
             plaintext,
-            Some(our_device_id),
         )
         .await;
 
@@ -530,10 +525,6 @@ impl MessageService {
             .get_string(keys::CURRENT_USER_ID)
             .map_err(MessageError::Storage)?
             .ok_or(MessageError::NotLoggedIn)?;
-        let our_device_id = self.settings_repo
-            .get::<u32>(keys::CURRENT_DEVICE_ID)
-            .map_err(MessageError::Storage)?
-            .ok_or(MessageError::NotLoggedIn)?;
 
         // Fan out to the CURRENT server member list, not the local cache. The
         // cache (`memberships`) has an FK to `channels`, so a member who never
@@ -568,7 +559,6 @@ impl MessageService {
                     &mut message_client,
                     &member_id,
                     plaintext,
-                    is_self.then_some(our_device_id),
                 )
                 .await;
             success += outcome.delivered;

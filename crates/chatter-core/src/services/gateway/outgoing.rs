@@ -194,6 +194,14 @@ pub enum SendError {
     Upload(#[from] AttachmentError),
 }
 
+impl SendError {
+    /// The server's `send_message` check refused us: in a channel, a
+    /// moderator mute or a removal (schema.zed). Retrying cannot succeed.
+    pub fn is_refused(&self) -> bool {
+        matches!(self, Self::Message(MessageError::Network(crate::error::NetworkError::PermissionDenied)))
+    }
+}
+
 // =============================================================================
 // Router
 // =============================================================================
