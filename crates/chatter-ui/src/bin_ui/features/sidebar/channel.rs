@@ -169,6 +169,7 @@ pub async fn load_channel_into_ui(
     let mut display_messages = messages_to_display_batch(
         &messages,
         |m| ui_ctx.message_sender_display_name(m),
+        |m| ui_ctx.message_sender_avatar(m),
         |att_id| ui_ctx.get_attachment(att_id),
         |m| ui_ctx.reply_author_display_name(m),
         |m| ui_ctx.reply_parent_missing_for(m),

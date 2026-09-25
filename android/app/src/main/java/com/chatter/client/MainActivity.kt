@@ -95,6 +95,20 @@ class MainActivity : GameActivity() {
         }
     }
 
+    // --- Call audio routing (earpiece / speaker / headset) -------------------
+    // Called from Rust (JNI, platform/android/audio_route.rs); CallAudioRouter
+    // hops to the main looper itself.
+    private val callAudio by lazy { CallAudioRouter(this) }
+
+    @Suppress("unused")
+    fun startCallAudio() = callAudio.start()
+
+    @Suppress("unused")
+    fun stopCallAudio() = callAudio.stop()
+
+    @Suppress("unused")
+    fun applyAudioRoute(route: Int) = callAudio.apply(route)
+
     /** Implemented in Rust. Initializes libwebrtc with the app's JavaVM. */
     private external fun nativeInitWebrtc()
 

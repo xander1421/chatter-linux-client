@@ -7,8 +7,12 @@ use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
-use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
-use cpal::{Device, SampleRate, StreamConfig};
+#[cfg(not(target_os = "android"))]
+use cpal::traits::StreamTrait;
+use cpal::traits::{DeviceTrait, HostTrait};
+use cpal::Device;
+#[cfg(not(target_os = "android"))]
+use cpal::{SampleRate, StreamConfig};
 use futures::StreamExt;
 use livekit::track::RemoteAudioTrack;
 use livekit::webrtc::audio_stream::native::NativeAudioStream;
@@ -36,7 +40,7 @@ pub struct AudioPlayback {
     /// Active audio streams from remote participants.
     streams: Arc<RwLock<HashMap<String, ActiveAudioStream>>>,
     /// CPAL output stream handle (lazily initialized).
-    output_stream: Arc<RwLock<Option<cpal::Stream>>>,
+    output_stream: Arc<RwLock<Option<OutputStream>>>,
     /// Audio sample buffer for mixing.
     sample_buffer: Arc<RwLock<Vec<f32>>>,
     /// Sample rate for output (populated on init).
@@ -51,7 +55,61 @@ pub struct AudioPlayback {
     /// discarded before mixing so the wire still flows but nothing plays.
     muted_peers: Arc<RwLock<HashSet<String>>>,
     /// Output device chosen by the user (CPAL device name); `None` = default.
+    /// Unused on Android, where AudioManager owns the route.
+    #[cfg_attr(target_os = "android", allow(dead_code))]
     output_device: RwLock<Option<String>>,
+}
+
+/// The live output stream. Desktop plays through CPAL on the chosen device;
+/// Android opens a voice-communication stream through oboe (see
+/// `ensure_stream_initialized`).
+#[cfg(not(target_os = "android"))]
+type OutputStream = cpal::Stream;
+#[cfg(target_os = "android")]
+type OutputStream = oboe::AudioStreamAsync<oboe::Output, VoiceOutput>;
+
+/// Fill `data` from the mix buffer (silence when inactive or starved) and drop
+/// what was consumed. Shared by the CPAL and oboe callbacks.
+fn drain_mix(data: &mut [f32], buffer: &RwLock<Vec<f32>>, is_active: &AtomicBool, volume: &RwLock<f32>) {
+    if !is_active.load(Ordering::Relaxed) {
+        data.fill(0.0);
+        return;
+    }
+    let vol = *volume.read();
+    let mut buffer = buffer.write();
+    let samples_to_take = data.len().min(buffer.len());
+    for (i, sample) in data.iter_mut().enumerate() {
+        *sample = if i < samples_to_take { buffer[i] * vol } else { 0.0 };
+    }
+    if samples_to_take > 0 {
+        buffer.drain(0..samples_to_take);
+    }
+}
+
+/// oboe data callback for the Android call stream: mono f32 from the mix.
+#[cfg(target_os = "android")]
+struct VoiceOutput {
+    buffer: Arc<RwLock<Vec<f32>>>,
+    is_active: Arc<AtomicBool>,
+    volume: Arc<RwLock<f32>>,
+}
+
+#[cfg(target_os = "android")]
+impl oboe::AudioOutputCallback for VoiceOutput {
+    type FrameType = (f32, oboe::Mono);
+
+    fn on_audio_ready(
+        &mut self,
+        _stream: &mut dyn oboe::AudioOutputStreamSafe,
+        data: &mut [f32],
+    ) -> oboe::DataCallbackResult {
+        drain_mix(data, &self.buffer, &self.is_active, &self.volume);
+        oboe::DataCallbackResult::Continue
+    }
+
+    fn on_error_after_close(&mut self, _stream: &mut dyn oboe::AudioOutputStreamSafe, error: oboe::Error) {
+        tracing::error!("Audio output stream closed: {:?}", error);
+    }
 }
 
 struct ActiveAudioStream {
@@ -81,6 +139,7 @@ impl AudioPlayback {
     }
 
     /// The output device called `name`, or the host default for `None`.
+    #[cfg(not(target_os = "android"))]
     fn find_output_device(name: Option<&str>) -> Result<Device, CallError> {
         let host = cpal::default_host();
         match name {
@@ -103,6 +162,7 @@ impl AudioPlayback {
     /// count, because every running track was opened resampling to those; if
     /// the device refuses that format, the old stream is left playing and the
     /// error is returned.
+    #[cfg(not(target_os = "android"))]
     pub fn set_output_device(&self, name: &str) -> Result<(), CallError> {
         let device = Self::find_output_device(Some(name))?;
         if self.output_stream.read().is_some() {
@@ -114,7 +174,58 @@ impl AudioPlayback {
         Ok(())
     }
 
+    /// Android has no output-device list: the call route (earpiece, speaker,
+    /// headset) is AudioManager's, chosen by the platform layer.
+    #[cfg(target_os = "android")]
+    pub fn set_output_device(&self, name: &str) -> Result<(), CallError> {
+        Err(CallError::DeviceError(format!(
+            "Output device '{name}' not selectable on Android; the call route is set by AudioManager"
+        )))
+    }
+
+    /// Open the Android call stream (called lazily on first track).
+    ///
+    /// `USAGE_VOICE_COMMUNICATION` is what makes the stream follow the call
+    /// route AudioManager selects (`setCommunicationDevice` /
+    /// `setSpeakerphoneOn`); CPAL opens every stream as media, which plays on
+    /// the loudspeaker whatever the route says. OpenSL ES rather than AAudio:
+    /// an AAudio stream is DISCONNECTED whenever its routed device changes (every
+    /// speaker toggle, every headset plug), while an OpenSL ES player is moved
+    /// to the new device by the framework and keeps playing.
+    #[cfg(target_os = "android")]
+    fn ensure_stream_initialized(&self) -> Result<(), CallError> {
+        use oboe::{AudioStream as _, AudioStreamBase as _};
+
+        if self.output_stream.read().is_some() {
+            return Ok(());
+        }
+        let mut stream = oboe::AudioStreamBuilder::default()
+            .set_output()
+            .set_f32()
+            .set_mono()
+            .set_audio_api(oboe::AudioApi::OpenSLES)
+            .set_usage(oboe::Usage::VoiceCommunication)
+            .set_content_type(oboe::ContentType::Speech)
+            .set_sample_rate(48_000)
+            .set_callback(VoiceOutput {
+                buffer: self.sample_buffer.clone(),
+                is_active: self.is_active.clone(),
+                volume: self.volume.clone(),
+            })
+            .open_stream()
+            .map_err(|e| CallError::DeviceError(format!("Failed to open voice output stream: {:?}", e)))?;
+        *self.sample_rate.write() = stream.get_sample_rate() as u32;
+        *self.channels.write() = 1;
+        stream
+            .start()
+            .map_err(|e| CallError::DeviceError(format!("Failed to start audio playback: {:?}", e)))?;
+        tracing::info!("Audio playback: voice-communication stream at {}Hz mono", stream.get_sample_rate());
+        *self.output_stream.write() = Some(stream);
+        Ok(())
+    }
+
     /// Initialize the CPAL output stream (called lazily on first track).
+    #[cfg(not(target_os = "android"))]
     fn ensure_stream_initialized(&self) -> Result<(), CallError> {
         // Check if already initialized
         {
@@ -154,7 +265,8 @@ impl AudioPlayback {
 
     /// Build and start a CPAL output stream on `device` that drains the mix
     /// buffer.
-    fn build_stream(&self, device: &Device, sample_rate: u32, channels: u16) -> Result<cpal::Stream, CallError> {
+    #[cfg(not(target_os = "android"))]
+    fn build_stream(&self, device: &Device, sample_rate: u32, channels: u16) -> Result<OutputStream, CallError> {
         tracing::info!(
             "Audio playback: using device '{}' at {}Hz, {} channels",
             device.name().unwrap_or_else(|_| "unknown".to_string()),
@@ -177,28 +289,7 @@ impl AudioPlayback {
             .build_output_stream(
                 &config,
                 move |data: &mut [f32], _: &cpal::OutputCallbackInfo| {
-                    if !is_active_clone.load(Ordering::Relaxed) {
-                        data.fill(0.0);
-                        return;
-                    }
-
-                    let vol = *volume_clone.read();
-                    let mut buffer = sample_buffer_clone.write();
-
-                    // Take samples from buffer
-                    let samples_to_take = data.len().min(buffer.len());
-                    for (i, sample) in data.iter_mut().enumerate() {
-                        if i < samples_to_take {
-                            *sample = buffer[i] * vol;
-                        } else {
-                            *sample = 0.0;
-                        }
-                    }
-
-                    // Remove consumed samples
-                    if samples_to_take > 0 {
-                        buffer.drain(0..samples_to_take);
-                    }
+                    drain_mix(data, &sample_buffer_clone, &is_active_clone, &volume_clone);
                 },
                 |err| {
                     tracing::error!("Audio output error: {}", err);

@@ -15,7 +15,8 @@ use crate::proto::chat_v1::{
     ChannelEventRequest, ChannelJoinRequest, ChannelSearchRequest, ChannelSearchResponse,
     ChannelType, CreateChannelRequest, DeleteChannelRequest, GetChannelMembersRequest,
     GetChannelMembersResponse, GetChannelRequest, InviteResponse, InviteUserRequest,
-    KickUserRequest, LeaveChannelRequest, ListArchivedChannelsRequest,
+    BannedUser, KickUserRequest, LeaveChannelRequest, ListArchivedChannelsRequest,
+    ListBannedUsersRequest, MuteUserRequest, UnmuteUserRequest,
     ListArchivedChannelsResponse, ListChannelsRequest, ListChannelsResponse, UnarchiveChannelRequest,
     UnarchiveChannelResponse, UnbanUserRequest, UpdateChannelRequest, UpdateMemberRoleRequest,
     ChannelRole,
@@ -397,22 +398,19 @@ impl ChannelClient {
     ///
     /// * `channel_id` - Channel to ban from
     /// * `user_id` - User to ban
-    /// * `duration` - Optional ban duration (None = permanent)
     /// * `reason` - Optional ban reason
+    ///
+    /// Always permanent (until unbanned): no caller offers a timed ban.
     pub async fn ban_user(
         &mut self,
         channel_id: &str,
         user_id: &str,
-        duration: Option<std::time::Duration>,
         reason: Option<&str>,
     ) -> Result<(), NetworkError> {
         let request = BanUserRequest {
             channel_id: channel_id.to_string(),
             user_id: user_id.to_string(),
-            duration: duration.map(|d| prost_types::Duration {
-                seconds: d.as_secs() as i64,
-                nanos: d.subsec_nanos() as i32,
-            }),
+            duration: None,
             reason: reason.unwrap_or("").to_string(),
             request_id: uuid::Uuid::new_v4().to_string(),
         };
@@ -447,6 +445,55 @@ impl ChannelClient {
         Ok(response
             .into_inner()
             .map(|r| r.map_err(|s| NetworkError::from_status(&s))))
+    }
+
+    /// Mute a channel member for `duration`, or until unmuted when `None`.
+    /// Server-enforced: SpiceDB `send_message` excludes `muted`, and the
+    /// server's expiry sweep lifts a timed mute once it lapses.
+    pub async fn mute_user(
+        &mut self,
+        channel_id: &str,
+        user_id: &str,
+        duration: Option<std::time::Duration>,
+    ) -> Result<(), NetworkError> {
+        let request = MuteUserRequest {
+            channel_id: channel_id.to_string(),
+            user_id: user_id.to_string(),
+            duration: duration.map(|d| prost_types::Duration {
+                seconds: d.as_secs() as i64,
+                nanos: d.subsec_nanos() as i32,
+            }),
+        };
+        self.inner
+            .mute_user(request)
+            .await
+            .map(|_| ())
+            .map_err(|s| NetworkError::from_status(&s))
+    }
+
+    /// Lift a mute.
+    pub async fn unmute_user(&mut self, channel_id: &str, user_id: &str) -> Result<(), NetworkError> {
+        let request = UnmuteUserRequest {
+            channel_id: channel_id.to_string(),
+            user_id: user_id.to_string(),
+        };
+        self.inner
+            .unmute_user(request)
+            .await
+            .map(|_| ())
+            .map_err(|s| NetworkError::from_status(&s))
+    }
+
+    /// A channel's active bans (owner/admin only).
+    pub async fn list_banned_users(&mut self, channel_id: &str) -> Result<Vec<BannedUser>, NetworkError> {
+        let request = ListBannedUsersRequest {
+            channel_id: channel_id.to_string(),
+        };
+        self.inner
+            .list_banned_users(request)
+            .await
+            .map(|r| r.into_inner().bans)
+            .map_err(|s| NetworkError::from_status(&s))
     }
 
     /// Get channel members with pagination.

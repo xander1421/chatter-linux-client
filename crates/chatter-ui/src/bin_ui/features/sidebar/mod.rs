@@ -24,6 +24,7 @@ pub use private_group::add_private_group_to_sidebar;
 pub fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     channel::wire_channel_selected(window, ui_ctx);
     dm::wire_dm_selected(window, ui_ctx);
+    dm::wire_delete_conversation(window, ui_ctx);
 
     // On a phone, leaving the chat pane left its conversation "active": the
     // next message there was marked read (and receipted) unseen, and its row

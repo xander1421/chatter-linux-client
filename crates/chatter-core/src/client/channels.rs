@@ -213,15 +213,14 @@ impl ChatterClient {
     /// Ban a user from a channel (server-side) and re-distribute sender keys.
     ///
     /// Like kick, ban removes local membership and rotates the sender key.
-    /// `duration` is the ban length — `None` means permanent.
+    /// Permanent until [`Self::unban_user`] (no UI offers a timed ban).
     pub async fn ban_user(
         &self,
         channel_id: &crate::domain::ids::ChannelId,
         user_id: &crate::domain::ids::UserId,
-        duration: Option<std::time::Duration>,
         reason: Option<&str>,
     ) -> Result<(), crate::services::channel::ChannelError> {
-        self.channels().ban_user_complete(channel_id, user_id, duration, reason).await
+        self.channels().ban_user_complete(channel_id, user_id, reason).await
     }
 
     /// Unban a user — clears the server-side ban. The user can rejoin via
@@ -234,25 +233,45 @@ impl ChatterClient {
         self.channels().unban_user(channel_id, user_id).await
     }
 
-    /// Mute a user in a channel (local-only enforcement — flips the
-    /// membership's `is_muted` flag and sets `muted_until`). Server sends
-    /// channel-moderation events for peer coordination.
-    pub fn mute_user(
+    /// Mute a member for `duration`, or until unmuted when `None`.
+    /// Server-enforced: their sends are refused until it is lifted or lapses.
+    pub async fn mute_user(
         &self,
         channel_id: &crate::domain::ids::ChannelId,
         user_id: &crate::domain::ids::UserId,
-        duration: std::time::Duration,
+        duration: Option<std::time::Duration>,
     ) -> Result<(), crate::services::channel::ChannelError> {
-        self.channels().mute_user(channel_id, user_id, duration)
+        self.channels().mute_user(channel_id, user_id, duration).await
     }
 
-    /// Unmute a user — clears the local mute flag.
-    pub fn unmute_user(
+    /// Lift a mute.
+    pub async fn unmute_user(
         &self,
         channel_id: &crate::domain::ids::ChannelId,
         user_id: &crate::domain::ids::UserId,
     ) -> Result<(), crate::services::channel::ChannelError> {
-        self.channels().unmute_user(channel_id, user_id)
+        self.channels().unmute_user(channel_id, user_id).await
+    }
+
+    /// A channel's active bans shaped for display, or `None` when our role
+    /// may not see them (only owner/admin can unban). Call after a member
+    /// fetch so our local role is current.
+    pub async fn list_banned_members(
+        &self,
+        channel_id: &crate::domain::ids::ChannelId,
+    ) -> Result<Option<Vec<crate::domain::channel::BannedMember>>, crate::services::channel::ChannelError> {
+        let Some(bans) = self.channels().list_banned_users(channel_id).await? else {
+            return Ok(None);
+        };
+        Ok(Some(
+            bans.into_iter()
+                .map(|b| crate::domain::channel::BannedMember {
+                    display_name: self.display_name(&b.user_id),
+                    avatar_bytes: self.get_profile_local(&b.user_id).and_then(|p| p.avatar_bytes),
+                    ..b
+                })
+                .collect(),
+        ))
     }
 
     /// Update a channel's name, description and/or icon.

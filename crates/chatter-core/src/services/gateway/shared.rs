@@ -308,6 +308,11 @@ pub fn handle_send_error(error: &super::outgoing::SendError, context: &str) -> S
         SendError::AnonGroup(crate::services::anon_group::AnonGroupError::RateLimitExceeded(n)) => {
             format!("Slow down — {} messages per minute limit", n)
         }
+        // The server's `send_message` check refused us: in a channel that is a
+        // moderator mute or a ban (schema.zed). Retrying cannot succeed.
+        SendError::Message(crate::services::message::MessageError::Network(
+            crate::error::NetworkError::PermissionDenied,
+        )) => "You can't send messages here".to_string(),
         _ => format!("Failed to send: {}", detail),
     }
 }
@@ -325,5 +330,15 @@ mod tests {
         let preview = truncate_preview(&text);
         assert_eq!(preview, format!("{}é...", "a".repeat(96)));
         assert_eq!(truncate_preview("héllo"), "héllo");
+    }
+
+    #[test]
+    fn server_send_refusal_is_not_a_retryable_failure() {
+        // A muted/banned member's send is refused by the server's
+        // `send_message` check; say so instead of "Failed to send: ...".
+        let err = super::super::outgoing::SendError::Message(
+            crate::services::message::MessageError::Network(crate::error::NetworkError::PermissionDenied),
+        );
+        assert_eq!(handle_send_error(&err, "send"), "You can't send messages here");
     }
 }

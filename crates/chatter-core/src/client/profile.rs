@@ -326,6 +326,16 @@ impl ChatterClient {
                 id,
             })
             .collect();
+        // A chat can be blocked without its peer (a block whose second half,
+        // the peer row, failed). Still blocked, so still listed — otherwise
+        // nothing on screen could lift it.
+        for dm in self.anon_dms().anon_dm_repo().list_conversations().unwrap_or_default() {
+            if self.is_anon_dm_conversation_blocked(&dm.id) == Some(true)
+                && !out.iter().any(|c| c.id == dm.peer_id)
+            {
+                out.push(BlockedContact { id: dm.peer_id, anon: true, anon_chat: true });
+            }
+        }
         for id in self.users().blocked_local() {
             if !out.iter().any(|c| c.id == id) {
                 out.push(BlockedContact { id, anon: false, anon_chat: false });
@@ -476,13 +486,13 @@ impl ChatterClient {
         id: &crate::domain::ids::UserId,
     ) -> Result<(), super::ClientError> {
         let conv_id = if let Some(cid) = self.find_anon_dm_by_peer(id) {
-            self.anon_dms().unblock_user(id)
+            self.unblock_anon_dm_user(id)
                 .map_err(|e| super::ClientError::Inbox(e.to_string()))?;
             Some(cid)
         } else {
             let cid = crate::domain::anon_dm::AnonDmId::from_uuid(id.0);
             if let Ok(Some(dm)) = self.anon_dms().get_conversation(&cid) {
-                self.anon_dms().unblock_user(&dm.peer_id)
+                self.unblock_anon_dm_user(&dm.peer_id)
                     .map_err(|e| super::ClientError::Inbox(e.to_string()))?;
                 Some(cid)
             } else {
@@ -493,12 +503,12 @@ impl ChatterClient {
         if conv_id.is_none() && self.anon_dms().is_user_blocked(id).unwrap_or(false) {
             // An anon peer whose chat was deleted (Friends › Blocked › Delete
             // chat): only the peer block is left to lift.
-            return self.anon_dms().unblock_user(id)
+            return self.unblock_anon_dm_user(id)
                 .map_err(|e| super::ClientError::Inbox(e.to_string()));
         }
 
         if let Some(cid) = conv_id {
-            self.anon_dms().unblock_conversation(&cid)
+            self.unblock_anon_dm_conversation(&cid)
                 .map_err(|e| super::ClientError::Inbox(e.to_string()))?;
             // The local mailbox keys were preserved during block (only
             // polling was suspended). Setting status back to Active is
@@ -527,7 +537,10 @@ impl ChatterClient {
         use crate::error::NetworkError;
         use crate::services::user::UserError;
         if let Some(conv_id) = self.find_anon_dm_by_peer(id) {
-            return self.delete_anon_chat(&conv_id);
+            return self
+                .anon_dms()
+                .delete_conversation(&conv_id)
+                .map_err(|e| super::ClientError::Inbox(e.to_string()));
         }
         if !self.anon_dms().is_user_blocked(id).unwrap_or(false) {
             match self.users().remove_friend(id).await {
@@ -539,26 +552,6 @@ impl ChatterClient {
             }
         }
         self.unblock_profile_user(id).await
-    }
-
-    /// Delete an anon-DM conversation and its history locally. The peer block
-    /// (`anon_dm_blocked_users`, keyed by peer id) is a separate row and stays;
-    /// the mailbox rows go with the conversation (FK cascade).
-    fn delete_anon_chat(
-        &self,
-        conv_id: &crate::domain::anon_dm::AnonDmId,
-    ) -> Result<(), super::ClientError> {
-        let err = |e: crate::error::StorageError| super::ClientError::Inbox(e.to_string());
-        let channel_id: crate::domain::ids::ChannelId = (*conv_id).into();
-        let repo = &self.anon_dms().message_repo;
-        let ids: Vec<crate::domain::ids::MessageId> = repo
-            .list(&channel_id, &crate::domain::message::ConversationType::AnonDm, None, u32::MAX)
-            .map_err(err)?
-            .into_iter()
-            .map(|m| m.id)
-            .collect();
-        repo.delete_batch(&ids).map_err(err)?;
-        self.anon_dms().anon_dm_repo().delete_conversation(conv_id).map_err(err)
     }
 
     /// Whether this user is an accepted friend (local friendships table).
@@ -842,5 +835,23 @@ mod tests {
 
         client.unblock_profile_user(&peer).await.unwrap();
         assert!(!client.is_profile_user_blocked(&peer));
+    }
+
+    /// An anon chat blocked without its peer row (half a block) is still
+    /// listed in Friends › Blocked, and Unblock there lifts it.
+    #[tokio::test]
+    async fn chat_only_anon_block_is_listed_and_unblockable() {
+        let (client, _dir) = test_client();
+        let peer = UserId::from_uuid(uuid::Uuid::from_u128(9));
+        let dm = AnonDm::new_initiated(peer);
+        client.anon_dms().anon_dm_repo().insert_conversation(&dm).unwrap();
+        client.block_anon_dm_conversation(&dm.id).unwrap();
+
+        let row = client.blocked_users().into_iter().find(|b| b.id == peer).unwrap();
+        assert!(row.anon && row.anon_chat);
+
+        client.unblock_profile_user(&peer).await.unwrap();
+        assert_eq!(client.is_anon_dm_conversation_blocked(&dm.id), Some(false));
+        assert!(client.blocked_users().iter().all(|b| b.id != peer));
     }
 }

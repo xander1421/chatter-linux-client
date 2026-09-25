@@ -178,6 +178,34 @@ pub async fn poll_dm_mailboxes(
                                 )
                             }
                             Ok((sender_id, dm_content)) => {
+                                // Disappearing timer stated by this message
+                                // (Signal's expireTimer): (timer, sent_at,
+                                // is a timer update, is a visible message).
+                                let disappearing = match &dm_content {
+                                    DmContent::Text {
+                                        expire_timer: Some(secs),
+                                        timer_update,
+                                        body,
+                                        attachments,
+                                        timestamp,
+                                        ..
+                                    } => Some((
+                                        *secs,
+                                        if *timestamp > 0 { *timestamp } else { msg.server_timestamp },
+                                        *timer_update,
+                                        !body.is_empty() || !attachments.is_empty(),
+                                    )),
+                                    _ => None,
+                                };
+                                if let Some((secs, sent_at, update, visible)) = disappearing {
+                                    if update || visible {
+                                        let notice = message_gateway
+                                            .adopt_server_dm_timer(&peer_id, &sender_id, secs, sent_at);
+                                        if let (Some(notice), Some(tx)) = (notice, domain_tx) {
+                                            let _ = tx.send(DomainEvent::MessageReceived { message: notice });
+                                        }
+                                    }
+                                }
                                 dispatch_dm_content(
                                     dm_content,
                                     &sender_id,
@@ -193,6 +221,18 @@ pub async fn poll_dm_mailboxes(
                                     conversation_manager,
                                     domain_tx,
                                 );
+                                // Arm the copy just stored (filed under the
+                                // sender's (id, sent_at) key) so the reaper
+                                // removes it when the timer runs out.
+                                if let Some((secs, sent_at, _, true)) = disappearing {
+                                    if secs > 0 {
+                                        if let Ok(Some(stored)) =
+                                            message_repo.get_by_sender_timestamp(&sender_id, sent_at)
+                                        {
+                                            message_gateway.arm_disappearing(&stored.id, secs);
+                                        }
+                                    }
+                                }
                                 AckDecision::Ack
                             }
                             Err(e) => {
@@ -381,7 +421,7 @@ fn dispatch_dm_content(
     );
 
     match dm_content {
-        DmContent::Text { body, timestamp, attachments, profile_key, quote, thread_id } => {
+        DmContent::Text { body, timestamp, attachments, profile_key, quote, thread_id, .. } => {
             // Store sender's profile key if present (for decrypting their display_name)
             if let Some(ref key) = profile_key {
                 if key.len() == 32 {
@@ -1395,6 +1435,8 @@ mod tests {
             profile_key: None,
             quote: None,
             thread_id: None,
+            expire_timer: None,
+            timer_update: false,
         };
         for (content, id) in [(text("via mailbox", 2), "m-1"), (text("", 3), "m-2")] {
             dispatch_dm_content(

@@ -1,7 +1,7 @@
 // Chatter Linux Client - Main UI
 // Root component for the application
 
-import { App, ChannelListItemData, DMListItemData, PrivateGroupListItemData, MessageItemData, MessageAttachmentData, ForwardTarget, SessionInfo, SearchResultChannel, SearchResult, AIProviderOption, AIModelOption, CreateChannelConfig, PendingAttachmentData, EmojiData, GifData, MentionSuggestion, FriendData, FriendRequestData, BlockedUserData, IncomingCallData, ActiveCallData, CallParticipantData, CallHistoryRow, AudioDeviceData, ScreenSourceData, ChannelMemberData, PrivateGroupFriend, LocalAIProviderData, CatalogModelData, MemoryFactData, MemoryEntityData, MemoryGraphNodeData, MemoryGraphEdgeData, InviteUser, ReactionEntry, CustomSectionData, SectionConversationData, QuickSwitcherItem, SharedContentItem, SharedTab } from "app.slint";
+import { App, ChannelListItemData, DMListItemData, PrivateGroupListItemData, MessageItemData, MessageAttachmentData, ForwardTarget, SessionInfo, PendingLinkInfo, SearchResultChannel, SearchResult, AIProviderOption, AIModelOption, CreateChannelConfig, PendingAttachmentData, EmojiData, GifData, MentionSuggestion, FriendData, FriendRequestData, BlockedUserData, IncomingCallData, ActiveCallData, CallParticipantData, CallHistoryRow, AudioDeviceData, ScreenSourceData, ChannelMemberData, BannedMemberData, PrivateGroupFriend, LocalAIProviderData, CatalogModelData, MemoryFactData, MemoryEntityData, MemoryGraphNodeData, MemoryGraphEdgeData, InviteUser, ReactionEntry, CustomSectionData, SectionConversationData, QuickSwitcherItem, SharedContentItem, SharedTab } from "app.slint";
 import { JarvisGlobal } from "jarvis/jarvis_global.slint";
 import { AiIntegrationGlobal } from "ai/ai_global.slint";
 import { TextFormat } from "chat/message_composer.slint";
@@ -11,10 +11,11 @@ import { Typography } from "theme/typography.slint";
 import { Haptics } from "components/haptics.slint";
 import { AvatarText } from "components/avatar.slint";
 import { ConversationKind } from "chat/conversation_kind.slint";
+import { DisappearingGlobal, DisappearingOption } from "chat/disappearing_global.slint";
 import { VirtualKeyboard } from "components/modal_container.slint";
 
 // Re-export all types for Rust binding
-export { ChannelListItemData, DMListItemData, PrivateGroupListItemData, MessageItemData, MessageAttachmentData, ForwardTarget, SessionInfo, SearchResultChannel, SearchResult, AIProviderOption, AIModelOption, CreateChannelConfig, PendingAttachmentData, EmojiData, GifData, MentionSuggestion, FriendData, FriendRequestData, BlockedUserData, IncomingCallData, ActiveCallData, CallParticipantData, AudioDeviceData, ScreenSourceData, ChannelMemberData, PrivateGroupFriend, LocalAIProviderData, CatalogModelData, MemoryFactData, MemoryEntityData, MemoryGraphNodeData, MemoryGraphEdgeData, InviteUser, ReactionEntry, CustomSectionData, SectionConversationData, QuickSwitcherItem, SharedContentItem, SharedTab }
+export { ChannelListItemData, DMListItemData, PrivateGroupListItemData, MessageItemData, MessageAttachmentData, ForwardTarget, SessionInfo, PendingLinkInfo, SearchResultChannel, SearchResult, AIProviderOption, AIModelOption, CreateChannelConfig, PendingAttachmentData, EmojiData, GifData, MentionSuggestion, FriendData, FriendRequestData, BlockedUserData, IncomingCallData, ActiveCallData, CallParticipantData, AudioDeviceData, ScreenSourceData, ChannelMemberData, BannedMemberData, PrivateGroupFriend, LocalAIProviderData, CatalogModelData, MemoryFactData, MemoryEntityData, MemoryGraphNodeData, MemoryGraphEdgeData, InviteUser, ReactionEntry, CustomSectionData, SectionConversationData, QuickSwitcherItem, SharedContentItem, SharedTab }
 export { JarvisGlobal }
 // Server-side AI integration flags. FEAT-5: the create-channel "AI assistant"
 // template is off unless the `ai-channel-template` Cargo feature is built.
@@ -29,6 +30,7 @@ export { MeshGlobal, MeshConversationData }
 export { Haptics }
 export { AvatarText }
 export { ConversationKind }
+export { DisappearingGlobal, DisappearingOption }
 
 export component MainWindow inherits Window {
     title: "Chatter";
@@ -108,6 +110,7 @@ export component MainWindow inherits Window {
 
     // ========== Recovery codes modal properties ==========
     in property <[string]> recovery-codes <=> app.recovery-codes;
+    in-out property <bool> recovery-codes-regenerated <=> app.recovery-codes-regenerated;
     callback recovery-codes-confirmed <=> app.recovery-codes-confirmed;
     callback recovery-codes-copy-all <=> app.recovery-codes-copy-all;
     // Android: FLAG_SECURE while the codes are on screen (lib.rs binds it).
@@ -458,6 +461,7 @@ export component MainWindow inherits Window {
     in property <[SessionInfo]> sessions <=> app.sessions;
     in property <bool> sessions-loading <=> app.sessions-loading;
     in property <bool> sessions-revoking <=> app.sessions-revoking;
+    in property <[PendingLinkInfo]> sessions-pending-links <=> app.sessions-pending-links;
 
     // Unified search (top bar)
     in property <[QuickSwitcherItem]> unified-search-conversations <=> app.unified-search-conversations;
@@ -484,7 +488,6 @@ export component MainWindow inherits Window {
     in property <string> settings-display-name <=> app.settings-display-name;
     in property <string> settings-username <=> app.settings-username;
     in property <int> settings-session-count <=> app.settings-session-count;
-    in property <image> settings-avatar <=> app.settings-avatar;
     in-out property <string> settings-current-password <=> app.settings-current-password;
     in-out property <string> settings-new-password <=> app.settings-new-password;
     in-out property <string> settings-confirm-password <=> app.settings-confirm-password;
@@ -493,8 +496,12 @@ export component MainWindow inherits Window {
     in-out property <string> settings-delete-password <=> app.settings-delete-password;
     in property <bool> settings-delete-loading <=> app.settings-delete-loading;
     in property <string> settings-delete-error <=> app.settings-delete-error;
+    in-out property <string> settings-recovery-regen-password <=> app.settings-recovery-regen-password;
+    in property <bool> settings-recovery-regen-loading <=> app.settings-recovery-regen-loading;
+    in property <string> settings-recovery-regen-error <=> app.settings-recovery-regen-error;
     in-out property <bool> settings-read-receipts <=> app.settings-read-receipts;
     in-out property <bool> settings-typing-indicators <=> app.settings-typing-indicators;
+    in-out property <string> settings-notification-detail <=> app.settings-notification-detail;
     in property <string> settings-identity-fingerprint <=> app.settings-identity-fingerprint;
     in-out property <bool> settings-sealed-sender-unrestricted <=> app.settings-sealed-sender-unrestricted;
     in property <int> settings-prekey-count <=> app.settings-prekey-count;
@@ -553,6 +560,8 @@ export component MainWindow inherits Window {
     in-out property <bool> channel-settings-muted <=> app.channel-settings-muted;
     in-out property <bool> channel-settings-ai-enabled <=> app.channel-settings-ai-enabled;
     in property <[ChannelMemberData]> channel-settings-members <=> app.channel-settings-members;
+    in property <[BannedMemberData]> channel-settings-banned-members <=> app.channel-settings-banned-members;
+    in property <bool> channel-settings-can-view-bans <=> app.channel-settings-can-view-bans;
     in property <bool> channel-settings-loading <=> app.channel-settings-loading;
     in property <string> channel-settings-error <=> app.channel-settings-error;
 
@@ -564,6 +573,8 @@ export component MainWindow inherits Window {
     in property <ActiveCallData> active-call-data <=> app.active-call-data;
     in-out property <bool> call-is-muted <=> app.call-is-muted;
     in-out property <bool> call-is-video-enabled <=> app.call-is-video-enabled;
+    in property <bool> call-speaker-toggle <=> app.call-speaker-toggle;
+    in property <bool> call-speaker-on <=> app.call-speaker-on;
     in-out property <bool> call-is-screen-sharing <=> app.call-is-screen-sharing;
     in property <image> call-local-video-frame <=> app.call-local-video-frame;
     in property <[image]> call-remote-video-frames <=> app.call-remote-video-frames;
@@ -651,6 +662,7 @@ export component MainWindow inherits Window {
     callback move-to-section <=> app.move-to-section;
     callback remove-from-section <=> app.remove-from-section;
     callback set-conversation-pinned <=> app.set-conversation-pinned;
+    callback delete-conversation <=> app.delete-conversation;
     callback move-section <=> app.move-section;
     callback set-section-sort-mode <=> app.set-section-sort-mode;
     // Declared on App since the modal was written but never bridged, so the
@@ -749,6 +761,7 @@ export component MainWindow inherits Window {
     callback forward-search-changed <=> app.forward-search-changed;
     callback revoke-session <=> app.revoke-session;
     callback revoke-all-sessions <=> app.revoke-all-sessions;
+    callback cancel-pending-link <=> app.cancel-pending-link;
 
     // ========== Settings callbacks ==========
     callback settings-edit-profile <=> app.settings-edit-profile;
@@ -757,8 +770,10 @@ export component MainWindow inherits Window {
     callback settings-logout <=> app.settings-logout;
     callback settings-delete-account <=> app.settings-delete-account;
     callback settings-delete-account-confirmed <=> app.settings-delete-account-confirmed;
+    callback settings-regenerate-recovery-codes <=> app.settings-regenerate-recovery-codes;
     callback settings-read-receipts-changed <=> app.settings-read-receipts-changed;
     callback settings-typing-indicators-changed <=> app.settings-typing-indicators-changed;
+    callback settings-notification-detail-changed <=> app.settings-notification-detail-changed;
     callback settings-search-shortcut-changed <=> app.settings-search-shortcut-changed;
     callback settings-copy-fingerprint <=> app.settings-copy-fingerprint;
     callback settings-sealed-sender-changed <=> app.settings-sealed-sender-changed;
@@ -794,6 +809,9 @@ export component MainWindow inherits Window {
     callback channel-settings-toggle-ai <=> app.channel-settings-toggle-ai;
     callback channel-settings-change-member-role <=> app.channel-settings-change-member-role;
     callback channel-settings-remove-member <=> app.channel-settings-remove-member;
+    callback channel-settings-ban-member <=> app.channel-settings-ban-member;
+    callback channel-settings-set-member-muted <=> app.channel-settings-set-member-muted;
+    callback channel-settings-unban-member <=> app.channel-settings-unban-member;
     callback channel-settings-invite-members <=> app.channel-settings-invite-members;
     callback channel-settings-invite-channel-members <=> app.channel-settings-invite-channel-members;
     callback invite-member-toggle-user <=> app.invite-member-toggle-user;
@@ -816,6 +834,9 @@ export component MainWindow inherits Window {
     callback accept-incoming-call <=> app.accept-incoming-call;
     callback decline-incoming-call <=> app.decline-incoming-call;
     callback call-toggle-mute <=> app.call-toggle-mute;
+    callback call-toggle-speaker <=> app.call-toggle-speaker;
+    callback call-audio-session <=> app.call-audio-session;
+    callback call-audio-video <=> app.call-audio-video;
     callback call-toggle-video <=> app.call-toggle-video;
     callback call-toggle-screen-share <=> app.call-toggle-screen-share;
     callback call-end <=> app.call-end;

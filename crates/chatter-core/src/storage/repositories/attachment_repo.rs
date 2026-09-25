@@ -391,6 +391,21 @@ impl AttachmentRepository {
         Ok(results)
     }
 
+    /// Whether any stored message still carries this attachment. A forward
+    /// reuses the original's attachment id, so deleting one conversation's
+    /// messages does not make its attachments unreferenced. Answered from
+    /// `shared_content`, which indexes every message attachment on insert and
+    /// loses its rows with the message (FK cascade).
+    pub fn is_referenced_by_message(&self, id: &AttachmentId) -> Result<bool, StorageError> {
+        let conn = self.db.read_connection()?;
+        let found = conn.query_row(
+            "SELECT EXISTS(SELECT 1 FROM shared_content WHERE attachment_id = ?1)",
+            params![id.to_string()],
+            |row| row.get::<_, bool>(0),
+        )?;
+        Ok(found)
+    }
+
     /// Update an existing attachment.
     pub fn update(&self, attachment: &Attachment) -> Result<(), StorageError> {
         let conn = self.db.connection()?;
@@ -444,6 +459,29 @@ impl AttachmentRepository {
             )));
         }
 
+        Ok(())
+    }
+
+    /// After a conversation's messages are deleted: remove each of `ids` that
+    /// no remaining message carries (a forward shares the id), row and
+    /// encrypted file both.
+    pub fn delete_unreferenced(&self, ids: &[AttachmentId]) -> Result<(), StorageError> {
+        for id in ids {
+            if self.is_referenced_by_message(id)? {
+                continue;
+            }
+            if let Some(path) = self.get_file_path(id)? {
+                if let Err(e) = std::fs::remove_file(&path) {
+                    if e.kind() != std::io::ErrorKind::NotFound {
+                        tracing::warn!(attachment_id = %id, error = %e, "attachment file not removed");
+                    }
+                }
+            }
+            match self.delete(id) {
+                Ok(()) | Err(StorageError::NotFound(_)) => {}
+                Err(e) => return Err(e),
+            }
+        }
         Ok(())
     }
 

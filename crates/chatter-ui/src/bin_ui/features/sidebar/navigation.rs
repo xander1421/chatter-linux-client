@@ -154,6 +154,9 @@ pub(crate) fn wire_settings_clicked(window: &MainWindow, ui_ctx: &Arc<ChatterCli
                 w.set_settings_typing_indicators(
                     ui_ctx_settings.typing_indicators_enabled().unwrap_or(true),
                 );
+                w.set_settings_notification_detail(
+                    ui_ctx_settings.notification_detail_level().as_str().into(),
+                );
 
                 // Cloud AI: reflect what is actually saved, so the panel never
                 // shows a preference the core would not honour.

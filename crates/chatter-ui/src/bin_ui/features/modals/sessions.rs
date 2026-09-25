@@ -38,6 +38,34 @@ fn update_sessions_ui(weak: slint::Weak<MainWindow>, sessions: Vec<Session>) {
     });
 }
 
+/// Load the approved-but-unfinished device links into the Sessions modal.
+/// A failed fetch shows none rather than a stale list.
+fn refresh_pending_links(weak: slint::Weak<MainWindow>, ui_ctx: Arc<ChatterClient>) {
+    tokio::spawn(async move {
+        let links = ui_ctx.list_pending_links().await.unwrap_or_else(|e| {
+            tracing::warn!(error = %e, "Failed to list pending device links");
+            Vec::new()
+        });
+        let rows: Vec<crate::PendingLinkInfo> = links
+            .into_iter()
+            .map(|l| crate::PendingLinkInfo {
+                uuid: l.uuid.into(),
+                device_name: l.device_name.into(),
+                expires: chrono::DateTime::from_timestamp_nanos(l.expires_at as i64)
+                    .with_timezone(&chrono::Local)
+                    .format("%H:%M")
+                    .to_string()
+                    .into(),
+            })
+            .collect();
+        let _ = slint::invoke_from_event_loop(move || {
+            if let Some(w) = weak.upgrade() {
+                w.set_sessions_pending_links(ModelRc::new(VecModel::from(rows)));
+            }
+        });
+    });
+}
+
 pub fn wire_session_callbacks(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     // View sessions
     let weak_window = window.as_weak();
@@ -46,11 +74,28 @@ pub fn wire_session_callbacks(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) 
     window.on_settings_view_sessions(move || {
         let ui_ctx = ui_ctx_view.clone();
         run_ui!(weak_window, |w| w.set_active_modal("sessions".into()));
+        refresh_pending_links(weak_window.clone(), ui_ctx.clone());
 
         spawn_async_action!(weak_window, set_sessions_loading,
             async { ui_ctx.list_sessions().await },
             |w: &MainWindow, sessions| { update_sessions_ui(w.as_weak(), sessions); }
         );
+    });
+
+    // Cancel an approved link before its device completes it.
+    let weak_window = window.as_weak();
+    let ui_ctx_cancel = ui_ctx.clone();
+
+    window.on_cancel_pending_link(move |uuid: slint::SharedString| {
+        let ui_ctx = ui_ctx_cancel.clone();
+        let weak = weak_window.clone();
+        let uuid = uuid.to_string();
+        tokio::spawn(async move {
+            if let Err(e) = ui_ctx.cancel_pending_link(&uuid).await {
+                tracing::warn!(error = %e, "Failed to cancel pending device link");
+            }
+            refresh_pending_links(weak, ui_ctx);
+        });
     });
 
     // Revoke single session

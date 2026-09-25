@@ -10,7 +10,7 @@ use chatter_core::domain::anon_group::AnonGroupId;
 use chatter_core::domain::ids::{ChannelId, UserId};
 use chatter_core::domain::ChannelType;
 
-use crate::{ChannelMemberData, InviteUser, MainWindow, PrivateGroupFriend};
+use crate::{BannedMemberData, ChannelMemberData, InviteUser, MainWindow, PrivateGroupFriend};
 
 /// Wire channel settings modal callbacks.
 pub fn wire_channel_settings(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
@@ -18,6 +18,7 @@ pub fn wire_channel_settings(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     wire_pick_icon(window, ui_ctx);
     wire_notification_settings(window, ui_ctx);
     wire_member_management(window, ui_ctx);
+    wire_moderation(window, ui_ctx);
     wire_channel_actions(window, ui_ctx);
     wire_invite_members(window, ui_ctx);
     wire_invite_channel_members(window, ui_ctx);
@@ -72,33 +73,14 @@ pub fn open_channel_settings(
 
         let created_at = channel.created_at.with_timezone(&chrono::Local).format("%b %d, %Y").to_string();
 
-        let members: Vec<ChannelMemberData> = if !is_dm {
-            match ui_ctx.get_channel_members(&channel_id, 100, 0).await {
-                Ok(memberships) => {
-                    let mut data = Vec::new();
-                    for m in memberships {
-                        let display = ui_ctx.display_name(&m.user_id);
-                        // A peer's handle is often not known locally; show none rather
-                        // than the user id dressed up as one.
-                        let uname = ui_ctx.known_username(&m.user_id).unwrap_or_default();
-                        let role = m.role.as_str();
-                        data.push(ChannelMemberData {
-                            user_id: m.user_id.to_string().into(),
-                            display_name: display.into(),
-                            username: uname.into(),
-                            role: role.into(),
-                            joined_at: "".into(),
-                        });
-                    }
-                    data
-                }
-                Err(_) => vec![]
-            }
+        // Core shapes the rows; the images are decoded on the UI thread below
+        // (a slint::Image is not Send).
+        let (members, bans) = if !is_dm {
+            load_member_lists(&ui_ctx, &channel_id).await
         } else {
-            vec![]
+            (vec![], None)
         };
 
-        let member_count = members.len() as i32;
         let channel_type_str = match channel.channel_type {
             ChannelType::Public => "public",
             ChannelType::Private => "private",
@@ -134,15 +116,66 @@ pub fn open_channel_settings(
                 w.set_channel_settings_type(channel_type_str.into());
                 w.set_channel_settings_archived(is_archived);
                 w.set_channel_settings_created_at(created_at.into());
-                w.set_channel_settings_member_count(member_count);
                 w.set_channel_settings_can_edit(can_edit);
                 w.set_channel_settings_can_manage_members(can_manage_members);
                 w.set_channel_settings_can_archive(can_archive);
                 w.set_channel_settings_can_delete(can_delete);
                 w.set_channel_settings_is_owner(is_owner);
-                w.set_channel_settings_members(ModelRc::new(VecModel::from(members)));
+                apply_member_lists(&w, &members, bans.as_deref());
                 w.set_channel_settings_loading(false);
                 w.set_active_modal("channel-settings".into());
+            }
+        });
+    });
+}
+
+type BannedMembers = Option<Vec<chatter_core::domain::channel::BannedMember>>;
+
+/// Fetch the members pane's two lists. Bans come after members: the member
+/// fetch refreshes our local role, which decides whether core fetches bans
+/// at all (`None` = our role cannot see them).
+async fn load_member_lists(
+    ui_ctx: &ChatterClient,
+    channel_id: &ChannelId,
+) -> (Vec<chatter_core::domain::channel::MemberWithProfile>, BannedMembers) {
+    let members = ui_ctx
+        .list_members_with_profiles(channel_id, 100, 0)
+        .await
+        .unwrap_or_default();
+    let bans = ui_ctx.list_banned_members(channel_id).await.unwrap_or_else(|e| {
+        tracing::warn!(error = %e, "Failed to list channel bans");
+        None
+    });
+    (members, bans)
+}
+
+/// UI thread only (decodes avatars into `slint::Image`s).
+fn apply_member_lists(
+    w: &MainWindow,
+    members: &[chatter_core::domain::channel::MemberWithProfile],
+    bans: Option<&[chatter_core::domain::channel::BannedMember]>,
+) {
+    let rows: Vec<ChannelMemberData> =
+        members.iter().map(crate::bin_ui::converters::member_to_slint).collect();
+    w.set_channel_settings_member_count(rows.len() as i32);
+    w.set_channel_settings_members(ModelRc::new(VecModel::from(rows)));
+    w.set_channel_settings_can_view_bans(bans.is_some());
+    let banned: Vec<BannedMemberData> = bans
+        .unwrap_or_default()
+        .iter()
+        .map(crate::bin_ui::converters::banned_member_to_slint)
+        .collect();
+    w.set_channel_settings_banned_members(ModelRc::new(VecModel::from(banned)));
+}
+
+/// Re-fetch the members pane after a moderation action, leaving the rest of
+/// the modal (unsaved name/description drafts) alone.
+fn refresh_member_lists(weak: slint::Weak<MainWindow>, ui_ctx: Arc<ChatterClient>, channel_id: ChannelId) {
+    tokio::spawn(async move {
+        let (members, bans) = load_member_lists(&ui_ctx, &channel_id).await;
+        let _ = slint::invoke_from_event_loop(move || {
+            if let Some(w) = weak.upgrade() {
+                apply_member_lists(&w, &members, bans.as_deref());
             }
         });
     });
@@ -308,6 +341,11 @@ fn wire_notification_settings(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) 
                 muted,
             ) {
                 tracing::error!(error = %e, "Failed to persist channel mute");
+                // Snap the switch back so it never shows a state we did not
+                // manage to persist (same as the AI toggle above).
+                let _ = slint::invoke_from_event_loop(move || {
+                    if let Some(w) = weak.upgrade() { w.set_channel_settings_muted(!muted); }
+                });
             }
         });
     });
@@ -388,6 +426,78 @@ fn wire_member_management(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     });
 }
 
+/// A members-pane moderation action; core does the work and the server
+/// authorizes it (the buttons only appear where core's `MemberModeration`
+/// says the server will accept).
+#[derive(Clone, Copy)]
+enum ModAction {
+    Ban,
+    Unban,
+    /// `None` = until unmuted.
+    Mute(Option<std::time::Duration>),
+    Unmute,
+}
+
+fn wire_moderation(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
+    let run = {
+        let weak_window = window.as_weak();
+        let ui_ctx = ui_ctx.clone();
+        move |user_id: slint::SharedString, action: ModAction| {
+            let weak = weak_window.clone();
+            let ui_ctx = ui_ctx.clone();
+            // Read on the UI thread: a Slint Weak never upgrades inside tokio::spawn.
+            let channel_id = weak.upgrade().map(|w| w.get_channel_settings_id().to_string()).unwrap_or_default();
+            let (Ok(channel_id), Ok(user_id)) =
+                (channel_id.parse::<ChannelId>(), user_id.as_str().parse::<UserId>())
+            else {
+                return;
+            };
+            tokio::spawn(async move {
+                let result = match action {
+                    ModAction::Ban => ui_ctx.ban_user(&channel_id, &user_id, None).await,
+                    ModAction::Unban => ui_ctx.unban_user(&channel_id, &user_id).await,
+                    ModAction::Mute(duration) => ui_ctx.mute_user(&channel_id, &user_id, duration).await,
+                    ModAction::Unmute => ui_ctx.unmute_user(&channel_id, &user_id).await,
+                };
+                let error = match &result {
+                    Ok(()) => String::new(),
+                    Err(e) => {
+                        tracing::warn!(error = %e, "Channel moderation action failed");
+                        let verb = match action {
+                            ModAction::Ban => "ban",
+                            ModAction::Unban => "unban",
+                            ModAction::Mute(_) => "mute",
+                            ModAction::Unmute => "unmute",
+                        };
+                        format!("Couldn't {verb}: {e}")
+                    }
+                };
+                let weak_err = weak.clone();
+                let _ = slint::invoke_from_event_loop(move || {
+                    if let Some(w) = weak_err.upgrade() {
+                        w.set_channel_settings_error(error.into());
+                    }
+                });
+                refresh_member_lists(weak, ui_ctx, channel_id);
+            });
+        }
+    };
+
+    let r = run.clone();
+    window.on_channel_settings_ban_member(move |user_id| r(user_id, ModAction::Ban));
+    let r = run.clone();
+    window.on_channel_settings_unban_member(move |user_id| r(user_id, ModAction::Unban));
+    // minutes <= 0 = until unmuted.
+    window.on_channel_settings_set_member_muted(move |user_id, muted, minutes| {
+        let action = if !muted {
+            ModAction::Unmute
+        } else {
+            ModAction::Mute(u64::try_from(minutes).ok().filter(|&m| m > 0).map(|m| std::time::Duration::from_secs(m * 60)))
+        };
+        run(user_id, action)
+    });
+}
+
 fn wire_channel_actions(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     let weak_window = window.as_weak();
     let ui_ctx_archive = ui_ctx.clone();
@@ -432,6 +542,7 @@ fn wire_channel_actions(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                     if let Some(w) = weak.upgrade() {
                         w.set_active_modal("none".into());
                         ui_ctx_refresh.chat_state().set_active_conversation(chatter_core::state::ActiveConversation::None);
+                        w.set_channel_name("".into());
                         crate::bin_ui::features::sidebar::refresh_selection(&w, &ui_ctx_refresh);
                     }
                 });
@@ -457,6 +568,7 @@ fn wire_channel_actions(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                     if let Some(w) = weak.upgrade() {
                         w.set_active_modal("none".into());
                         ui_ctx.chat_state().set_active_conversation(chatter_core::state::ActiveConversation::None);
+                        w.set_channel_name("".into());
                         crate::bin_ui::features::sidebar::refresh_selection(&w, &ui_ctx);
                     }
                 });

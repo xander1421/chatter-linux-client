@@ -10,10 +10,9 @@ use std::sync::Arc;
 use tokio::sync::mpsc;
 
 use crate::crypto::SecretString;
-use crate::proto::provisioning_v1::ProvisioningSession;
 use crate::services::link_device_service::{
     ApprovedDevice, LinkDeviceError, LinkDeviceService, LinkProgress,
-    PendingDeviceLink,
+    PendingDeviceLink, PendingLink,
 };
 use crate::storage::repositories::settings_repo::SettingsRepository;
 use crate::storage::repositories::user_repo::UserRepository;
@@ -127,9 +126,14 @@ impl ChatterClient {
         self.link_device().approve_link(pending, secret).await
     }
 
-    pub async fn list_pending_links(
-        &self,
-    ) -> Result<Vec<ProvisioningSession>, LinkDeviceError> {
+    /// Links this account approved that the new device has not finished
+    /// (Settings › Active Sessions lists them with a Cancel).
+    pub async fn list_pending_links(&self) -> Result<Vec<PendingLink>, LinkDeviceError> {
         self.link_device().list_pending().await
+    }
+
+    /// Cancel an approved link before the new device completes it.
+    pub async fn cancel_pending_link(&self, uuid: &str) -> Result<(), LinkDeviceError> {
+        self.link_device().cancel(uuid).await
     }
 }

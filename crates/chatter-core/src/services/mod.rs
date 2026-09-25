@@ -29,7 +29,6 @@ pub mod notification_stream;
 pub mod search_service;
 pub mod semantic_search;
 pub mod sync_service;
-pub mod moderation_service;
 pub mod ai_service;
 pub mod local_ai_service;
 pub mod ai_summarize;
@@ -38,6 +37,7 @@ pub mod pin_service;
 pub mod outgoing_typing;
 pub mod presence_service;
 pub mod ephemeral_service;
+pub mod disappearing;
 // Removed - gif_service.rs file was deleted
 pub mod quick_switcher;
 pub mod search;
@@ -77,9 +77,6 @@ pub use crate::network::streaming::reaction_stream::ReactionEvent;
 
 // Re-exports for search service
 pub use search_service::{CombinedSearchResults, SearchError, SearchService};
-
-// Re-exports for moderation service
-pub use moderation_service::{ModerationError, ModerationService, proto_moderation_action_to_domain};
 
 // Re-exports for AI service
 pub use ai_service::{AIError, AIService};

@@ -7348,6 +7348,7 @@ async fn v29_disappearing_messages_arm_the_ttl() {
     // ========================================================================
     client_a
         .set_disappearing_timer(ActiveConversation::Channel(group.id.clone()), 3)
+        .await
         .expect("set_disappearing_timer failed");
     println!("  set disappearing timer = 3s on the channel");
 
@@ -8325,6 +8326,7 @@ async fn v36_disappearing_messages_expire_locally() {
     let ttl_secs: u32 = 5;
     client_a
         .set_disappearing_timer(ActiveConversation::ServerDm { peer_id: uid_b }, ttl_secs)
+        .await
         .expect("set_disappearing_timer failed");
     println!("  set disappearing timer = {ttl_secs}s on the A→B DM conversation");
 

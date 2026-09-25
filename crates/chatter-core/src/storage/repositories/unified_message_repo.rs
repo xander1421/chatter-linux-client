@@ -46,6 +46,22 @@ impl UnifiedMessageRepository {
         Self { db }
     }
 
+    /// `is_read` as written. The local user's own messages — a send from
+    /// another of their devices, a SyncSent copy, a backfill, a group message
+    /// healed after its SKDM — are never unread to them. Every writer routes
+    /// through `insert` / `insert_or_ignore` / `update`, so the rule lives here
+    /// once instead of in each receive path (F41 put it in one, and the rest
+    /// still badged the user's own messages).
+    fn stored_is_read(&self, message: &Message) -> bool {
+        use crate::services::current_user::CurrentUserProvider;
+        message.is_read
+            || message.sender_id.is_some_and(|sender| {
+                super::settings_repo::SettingsRepository::new(self.db.clone())
+                    .current_user_id()
+                    .is_ok_and(|me| me == sender)
+            })
+    }
+
     // ========================================================================
     // CRUD
     // ========================================================================
@@ -66,6 +82,7 @@ impl UnifiedMessageRepository {
 
     /// Insert a new message.
     pub fn insert(&self, message: &Message) -> Result<(), StorageError> {
+        let is_read = self.stored_is_read(message);
         let conn = self.db.connection()?;
         let content_json = serde_json::to_string(&message.content)
             .map_err(|e| StorageError::InvalidData(format!("serialize content: {}", e)))?;
@@ -105,7 +122,7 @@ impl UnifiedMessageRepository {
                 message.is_pinned as i32,
                 message.is_edited as i32,
                 message.is_deleted as i32,
-                message.is_read as i32,
+                is_read as i32,
                 message.sent_at as i64,
                 message.created_at.to_rfc3339(),
                 message.updated_at.to_rfc3339(),
@@ -129,6 +146,7 @@ impl UnifiedMessageRepository {
     ///
     /// Returns `true` if inserted, `false` if skipped.
     pub fn insert_or_ignore(&self, message: &Message) -> Result<bool, StorageError> {
+        let is_read = self.stored_is_read(message);
         let conn = self.db.connection()?;
         let content_json = serde_json::to_string(&message.content)
             .map_err(|e| StorageError::InvalidData(format!("serialize content: {}", e)))?;
@@ -168,7 +186,7 @@ impl UnifiedMessageRepository {
                 message.is_pinned as i32,
                 message.is_edited as i32,
                 message.is_deleted as i32,
-                message.is_read as i32,
+                is_read as i32,
                 message.sent_at as i64,
                 message.created_at.to_rfc3339(),
                 message.updated_at.to_rfc3339(),
@@ -297,6 +315,7 @@ impl UnifiedMessageRepository {
     /// message without it, and replacing it here wiped the quote from a
     /// stored reply after restart (OPEN-ITEMS §112l).
     pub fn update(&self, message: &Message) -> Result<(), StorageError> {
+        let is_read = self.stored_is_read(message);
         let conn = self.db.connection()?;
         let content_json = serde_json::to_string(&message.content)
             .map_err(|e| StorageError::InvalidData(format!("serialize content: {}", e)))?;
@@ -329,7 +348,7 @@ impl UnifiedMessageRepository {
                 message.is_pinned as i32,
                 message.is_edited as i32,
                 message.is_deleted as i32,
-                message.is_read as i32,
+                is_read as i32,
                 message.updated_at.to_rfc3339(),
                 message.edited_at.map(|dt| dt.to_rfc3339()),
                 reaction_counts_blob,
@@ -346,6 +365,9 @@ impl UnifiedMessageRepository {
         )?;
         if rows == 0 {
             return Err(StorageError::NotFound(format!("Message {}", message.id)));
+        }
+        if is_read {
+            super::ephemeral_repo::start_read_countdowns(&conn)?;
         }
         Ok(())
     }
@@ -546,7 +568,7 @@ impl UnifiedMessageRepository {
             "UPDATE messages SET is_read = 1, updated_at = ?1 WHERE id = ?2 AND is_read = 0",
             params![Utc::now().to_rfc3339(), id.to_string()],
         )?;
-        Ok(())
+        super::ephemeral_repo::start_read_countdowns(&conn)
     }
 
     /// Mark a single message as unread.
@@ -574,9 +596,10 @@ impl UnifiedMessageRepository {
         let anchor = self.unread_anchor(conversation_id, conversation_type)?;
         let conn = self.db.connection()?;
         conn.execute(
-            "UPDATE messages SET is_read = 1              WHERE conversation_id = ?1 AND conversation_type = ?2 AND is_read = 0",
+            "UPDATE messages SET is_read = 1 WHERE conversation_id = ?1 AND conversation_type = ?2 AND is_read = 0",
             params![conversation_id.to_string(), conversation_type.as_str()],
         )?;
+        super::ephemeral_repo::start_read_countdowns(&conn)?;
         Ok(anchor)
     }
 
@@ -1344,6 +1367,7 @@ impl UnifiedMessageRepository {
                 self_user_id.to_string(),
             ],
         )?;
+        super::ephemeral_repo::start_read_countdowns(&conn)?;
         Ok(rows > 0)
     }
 

@@ -151,7 +151,27 @@ impl SyncEngine {
             }
         }
 
-        // Step 3: Sync users/friends
+        // Step 3: Sync the block list. Separate from friends because it is a
+        // separate RPC, and run unconditionally because a failed friends pass
+        // must not stop blocks from landing — the inbound block filter reads
+        // the rows this writes, so skipping it means a blocked sender's
+        // messages are delivered on this device. Before the friends pass: a
+        // lifted block turns back into an accepted row, which that pass prunes
+        // if the person was never a friend.
+        let mut blocks_changed = false;
+        let mut blocked_synced = 0;
+        match self.user_sync.sync_blocked_users().await {
+            Ok((count, changed)) => {
+                blocked_synced = count;
+                blocks_changed = changed;
+            }
+            Err(e) => {
+                tracing::warn!(error = %e, "Blocked-user sync failed — blocks made on \
+                                           another device are not enforced here yet");
+            }
+        }
+
+        // Step 4: Sync users/friends
         match self.user_sync.sync_friends().await {
             Ok(user_result) => {
                 result.users = user_result;
@@ -160,19 +180,7 @@ impl SyncEngine {
                 tracing::warn!(error = %e, "User sync failed");
             }
         }
-
-        // Step 4: Sync the block list. Separate from friends because it is a
-        // separate RPC, and run unconditionally because a failed friends pass
-        // must not stop blocks from landing — the inbound block filter reads
-        // the rows this writes, so skipping it means a blocked sender's
-        // messages are delivered on this device.
-        match self.user_sync.sync_blocked_users().await {
-            Ok(count) => result.users.blocked_synced = count,
-            Err(e) => {
-                tracing::warn!(error = %e, "Blocked-user sync failed — blocks made on \
-                                           another device are not enforced here yet");
-            }
-        }
+        result.users.blocked_synced = blocked_synced;
 
         result.duration_ms = start.elapsed().as_millis() as u64;
 
@@ -181,6 +189,7 @@ impl SyncEngine {
             channels_synced: result.channels.synced,
             messages_synced: result.messages.total_inserted,
             duration_ms: result.duration_ms,
+            blocks_changed,
         });
 
         tracing::info!(

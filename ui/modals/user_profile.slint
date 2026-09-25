@@ -21,6 +21,7 @@ import { DismissButton } from "../components/dismiss_button.slint";
 import { Button } from "../components/button.slint";
 import { Avatar } from "../components/avatar.slint";
 import { AnonMode } from "../anon_mode/anon_mode_global.slint";
+import { DisappearingGlobal } from "../chat/disappearing_global.slint";
 
 // One tile (Media/GIFs) or row (Files/Links/Voice/Music) of the shared-content
 // tabs. Built by `chatter_core::ui::SharedContentItemData` — every string here
@@ -64,6 +65,8 @@ export component UserProfileModal inherits Rectangle {
     // Block asks first (Signal: "Block <name>? They won't be able to call or
     // message you."); reset whenever another profile is shown.
     property <bool> confirm-block: false;
+    // The disappearing-messages choices are unfolded under their row.
+    property <bool> timer-picker-open: false;
     changed display-name => { self.confirm-block = false; }
     in property <bool> is-self: false;  // viewing own profile
     in property <bool> is-muted: false;
@@ -378,6 +381,124 @@ export component UserProfileModal inherits Rectangle {
                                         root.start-call(false);
                                     } else {
                                         root.start-call(true);
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    // ── Disappearing messages ─────────────────────────
+                    // This DM's timer (Signal's "Disappearing messages" in
+                    // conversation settings). Friends only: core has no DM to
+                    // announce a timer to anyone else. The row shows the value;
+                    // tapping it opens the choices in place.
+                    if DisappearingGlobal.dm-can-set && !root.is-self && !root.is-blocked: HorizontalLayout {
+                        padding-left: Spacing.md;
+                        padding-right: Spacing.md;
+
+                        Rectangle {
+                            height: timer-card.preferred-height;
+                            background: Colors.neo-inset-bg;
+                            border-radius: Spacing.radius-lg;
+                            border-width: 1px;
+                            border-color: Colors.neo-inset-shadow;
+
+                            timer-card := VerticalLayout {
+                                padding: Spacing.md;
+                                spacing: Spacing.sm;
+
+                                timer-row := Rectangle {
+                                    height: timer-row-layout.preferred-height;
+                                    accessible-role: button;
+                                    accessible-label: "Disappearing messages: " + DisappearingGlobal.dm-label;
+                                    accessible-action-default => { root.timer-picker-open = !root.timer-picker-open; }
+
+                                    timer-row-layout := HorizontalLayout {
+                                        spacing: Spacing.sm;
+
+                                        Image {
+                                            source: Icons.clock;
+                                            width: 20px;
+                                            height: 20px;
+                                            y: (parent.height - self.height) / 2;
+                                            colorize: Colors.primary;
+                                        }
+
+                                        VerticalLayout {
+                                            horizontal-stretch: 1;
+                                            spacing: 2px;
+
+                                            Text {
+                                                text: DisappearingGlobal.dm-label;
+                                                color: Colors.text-primary;
+                                                font-size: Typography.base;
+                                            }
+
+                                            Text {
+                                                text: "Disappearing messages";
+                                                color: Colors.text-muted;
+                                                font-size: Typography.xs;
+                                            }
+                                        }
+                                    }
+
+                                    TouchArea {
+                                        mouse-cursor: pointer;
+                                        clicked => { root.timer-picker-open = !root.timer-picker-open; }
+                                    }
+                                }
+
+                                if root.timer-picker-open: Text {
+                                    text: "New messages in this chat disappear for both of you after the time you choose.";
+                                    color: Colors.text-muted;
+                                    font-size: Typography.xs;
+                                    wrap: word-wrap;
+                                }
+
+                                if root.timer-picker-open: VerticalLayout {
+                                    for opt in DisappearingGlobal.options: Rectangle {
+                                        height: root.mobile-mode ? Spacing.row-height-touch : 36px;
+                                        border-radius: Spacing.radius-sm;
+                                        background: opt-touch.has-hover ? Colors.surface-hover : transparent;
+                                        accessible-role: button;
+                                        accessible-label: opt.label;
+                                        accessible-action-default => {
+                                            root.timer-picker-open = false;
+                                            DisappearingGlobal.set-dm-timer(root.user-id, opt.seconds);
+                                        }
+
+                                        HorizontalLayout {
+                                            padding-left: Spacing.sm;
+                                            padding-right: Spacing.sm;
+                                            spacing: Spacing.sm;
+
+                                            Text {
+                                                horizontal-stretch: 1;
+                                                text: opt.label;
+                                                color: opt.seconds == DisappearingGlobal.dm-seconds
+                                                    ? Colors.primary : Colors.text-primary;
+                                                font-size: Typography.sm;
+                                                font-weight: opt.seconds == DisappearingGlobal.dm-seconds
+                                                    ? Typography.semibold : 400;
+                                                vertical-alignment: center;
+                                            }
+
+                                            if opt.seconds == DisappearingGlobal.dm-seconds: Image {
+                                                source: Icons.check;
+                                                width: 16px;
+                                                height: 16px;
+                                                y: (parent.height - self.height) / 2;
+                                                colorize: Colors.primary;
+                                            }
+                                        }
+
+                                        opt-touch := TouchArea {
+                                            mouse-cursor: pointer;
+                                            clicked => {
+                                                root.timer-picker-open = false;
+                                                DisappearingGlobal.set-dm-timer(root.user-id, opt.seconds);
+                                            }
+                                        }
                                     }
                                 }
                             }

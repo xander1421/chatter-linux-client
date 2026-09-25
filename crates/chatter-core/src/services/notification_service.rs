@@ -418,6 +418,8 @@ pub fn spawn_notification_listener(
 /// * Never for the conversation on screen (open AND the app visible — an open
 ///   chat behind the lock screen still notifies).
 /// * Never for a muted conversation.
+/// * Never for a conversation notice (a timer change and the like): it
+///   records something about the chat, it is not a message to read.
 fn should_notify_message(
     message: &crate::domain::message::Message,
     me: Option<&crate::domain::ids::UserId>,
@@ -425,7 +427,10 @@ fn should_notify_message(
     muted: bool,
 ) -> bool {
     let Some(me) = me else { return false };
-    message.sender_id.as_ref() != Some(me) && !on_screen && !muted
+    message.sender_id.as_ref() != Some(me)
+        && !on_screen
+        && !muted
+        && !message.content.is_system()
 }
 
 /// `(on_screen, muted)` for the conversation `message` belongs to. On screen
@@ -498,6 +503,35 @@ mod tests {
         assert_eq!(NotificationDetailLevel::None.as_str(), "none");
         assert_eq!(NotificationDetailLevel::NameOnly.as_str(), "name_only");
         assert_eq!(NotificationDetailLevel::NameAndMessage.as_str(), "name_and_message");
+    }
+
+    /// The level decides what reaches the platform sink (desktop notify-rust
+    /// and Android JNI both render title/body verbatim), and a sealed-sender
+    /// message never names a sender whatever the level.
+    #[test]
+    fn detail_level_shapes_what_reaches_the_sink() {
+        struct Capture(std::sync::Mutex<Vec<(String, String)>>);
+        impl NotificationSink for Capture {
+            fn show(&self, title: &str, body: &str, _: NotificationPriority) -> Result<(), SystemError> {
+                self.0.lock().unwrap().push((title.into(), body.into()));
+                Ok(())
+            }
+        }
+        let sink = Arc::new(Capture(Default::default()));
+        let service = NotificationService::new(sink.clone());
+        let shown = |level, sealed| {
+            service.set_detail_level(level);
+            service
+                .show_message_notification(Some("Alice"), Some("are you free?"), sealed, NotificationPriority::Normal)
+                .unwrap();
+            sink.0.lock().unwrap().pop().unwrap()
+        };
+        let pair = |t: &str, b: &str| (t.to_string(), b.to_string());
+
+        assert_eq!(shown(NotificationDetailLevel::NameAndMessage, false), pair("Alice", "are you free?"));
+        assert_eq!(shown(NotificationDetailLevel::NameOnly, false), pair("Alice", "New message"));
+        assert_eq!(shown(NotificationDetailLevel::None, false), pair("Chatter", "New message"));
+        assert_eq!(shown(NotificationDetailLevel::NameAndMessage, true), pair("Chatter", "New message"));
     }
 
     #[test]

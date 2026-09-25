@@ -262,8 +262,9 @@ impl ChatterClient {
     }
 
     /// Sender avatar bytes for a message, resolved per conversation type
-    /// (anon-DM own-vs-peer, anon-group member). `None` for server channels/DMs,
-    /// whose avatars come from the profile path.
+    /// (anon-DM own-vs-peer, anon-group member; everything else our own
+    /// avatar or the sender's stored profile — the source member rows and DM
+    /// rows use). `None` = initials.
     pub fn message_sender_avatar(&self, msg: &crate::domain::message::Message) -> Option<Vec<u8>> {
         use crate::domain::message::ConversationType;
         match msg.conversation_type {
@@ -285,7 +286,18 @@ impl ChatterClient {
                 let sid = msg.sender_id?;
                 self.get_anon_group_member(&group_id, &sid).and_then(|m| m.avatar)
             }
-            _ => None,
+            _ => self.user_avatar(&msg.sender_id?),
+        }
+    }
+
+    /// A user's avatar as this device knows it: ours from settings (our own
+    /// profile row carries none), anyone else's from their stored, decrypted
+    /// profile. `None` = initials.
+    pub fn user_avatar(&self, user_id: &crate::domain::ids::UserId) -> Option<Vec<u8>> {
+        if self.session_current_user_id().as_ref() == Some(user_id) {
+            self.my_avatar()
+        } else {
+            self.get_profile_local(user_id).and_then(|p| p.avatar_bytes)
         }
     }
 

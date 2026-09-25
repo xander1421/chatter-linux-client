@@ -207,6 +207,36 @@ impl MessageGateway {
                     }
                 }
 
+                // Disappearing-messages timer (Signal's expireTimer): a timer
+                // update announces it, and every visible message restates it,
+                // so adopt whatever differs from ours. An update message has
+                // nothing else to show: surface the notice in its place.
+                let timer_update = crate::services::disappearing::is_timer_update(&data_message);
+                let visible = !data_message.body.is_empty() || !data_message.attachments.is_empty();
+                if data_message.delete.is_none() && (timer_update || visible) {
+                    let notice = self.adopt_server_dm_timer(
+                        &sid,
+                        &sid,
+                        crate::services::disappearing::stated_timer(&data_message),
+                        data_message.timestamp,
+                    );
+                    if timer_update {
+                        return Ok(match notice {
+                            Some(notice) => SealedSenderResult::DataMessageReceived {
+                                sender_id: sid,
+                                channel_id: notice.conversation_id,
+                                message_id: notice.id,
+                                body: String::new(),
+                                timestamp: data_message.timestamp,
+                                attachments: vec![],
+                                profile_key_changed,
+                            },
+                            // Already our timer (a redelivery): nothing new.
+                            None => SealedSenderResult::MessageStored,
+                        });
+                    }
+                }
+
                 // Pure profile-key handshake carrier (`send_profile_key_handshake`,
                 // fired at friend-accept time): no text, no attachments, and
                 // not a delete-for-everyone (which also rides an empty-body
@@ -426,6 +456,31 @@ impl MessageGateway {
             ServiceError::Validation("SyncSent carried no inner message".into())
         })?;
 
+        // Our own timer change (or a message restating our timer) made on
+        // another device: adopt it for the conversation with the recipient,
+        // attributed to us. A timer update has nothing else to show.
+        let timer_update = crate::services::disappearing::is_timer_update(&data_message);
+        let notice = self.adopt_server_dm_timer(
+            &destination,
+            &current_user,
+            crate::services::disappearing::stated_timer(&data_message),
+            data_message.timestamp,
+        );
+        if timer_update {
+            return Ok(match notice {
+                Some(notice) => SealedSenderResult::DataMessageReceived {
+                    sender_id: current_user,
+                    channel_id: notice.conversation_id,
+                    message_id: notice.id,
+                    body: String::new(),
+                    timestamp: data_message.timestamp,
+                    attachments: vec![],
+                    profile_key_changed: false,
+                },
+                None => SealedSenderResult::MessageStored,
+            });
+        }
+
         // Empty-body carriers (profile-key handshake, delete-for-everyone) are not
         // wrapped on the send side, so a wrapped copy is always a real message.
         // Guard defensively anyway: nothing outgoing to surface.
@@ -498,6 +553,13 @@ impl MessageGateway {
 
         self.message_repo.insert(&message)?;
 
+        // Our copy on this device disappears on the same timer as the one we
+        // sent from.
+        let ttl = crate::services::disappearing::stated_timer(&data_message);
+        if ttl > 0 {
+            self.arm_disappearing(&message.id, ttl);
+        }
+
         tracing::info!(
             message_id = %message.id,
             channel_id = %message.conversation_id,
@@ -514,6 +576,51 @@ impl MessageGateway {
             attachments: data_message.attachments,
             profile_key_changed: false,
         })
+    }
+
+    /// Adopt a friend DM's disappearing timer as stated by a received message
+    /// (see `services::disappearing`). Returns the notice when the timer
+    /// changed. Best-effort: a storage failure is logged, never fatal to the
+    /// message that carried it.
+    pub(crate) fn adopt_server_dm_timer(
+        &self,
+        peer_id: &UserId,
+        author: &UserId,
+        seconds: u32,
+        sent_at: u64,
+    ) -> Option<Message> {
+        match crate::services::disappearing::adopt_server_dm_timer(
+            &self.settings_repo,
+            &self.message_repo,
+            peer_id,
+            author,
+            seconds,
+            sent_at,
+        ) {
+            Ok(notice) => {
+                if notice.is_some() {
+                    tracing::info!(peer_id = %peer_id, seconds, "adopted a new disappearing timer");
+                }
+                notice
+            }
+            Err(e) => {
+                tracing::warn!(peer_id = %peer_id, error = %e, "failed to adopt disappearing timer");
+                None
+            }
+        }
+    }
+
+    /// Track a received message's local copy for reaping `ttl_seconds` from
+    /// now. Best-effort, like the other arming paths.
+    pub(crate) fn arm_disappearing(&self, message_id: &MessageId, ttl_seconds: u32) {
+        let Some(ephemeral_repo) = self.ephemeral_repo.as_ref() else { return };
+        if let Err(e) = ephemeral_repo.insert_armed(message_id, ttl_seconds) {
+            tracing::warn!(
+                message_id = %message_id,
+                error = %e,
+                "failed to arm local disappearing timer for inbound message"
+            );
+        }
     }
 
     /// Get the local identity private key for ECIES decryption.

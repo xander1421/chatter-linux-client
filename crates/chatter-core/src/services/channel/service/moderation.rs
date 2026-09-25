@@ -143,7 +143,7 @@ impl ChannelService {
         Ok(skdm)
     }
 
-    /// Ban a user from a channel.
+    /// Ban a user from a channel, permanently until unbanned.
     ///
     /// Like kick, banning removes a member and MUST rotate the sender key
     /// to maintain forward secrecy. The caller MUST distribute the returned
@@ -152,7 +152,6 @@ impl ChannelService {
         &self,
         channel_id: &ChannelId,
         user_id: &UserId,
-        duration: Option<std::time::Duration>,
         reason: Option<&str>,
     ) -> Result<SenderKeyDistribution, ChannelError> {
         let _ = self.settings_repo.current_user_id()?;
@@ -170,7 +169,7 @@ impl ChannelService {
         let user_id_str = user_id.to_string();
         let mut channel_client = self.channel_client();
         if let Err(e) = channel_client
-            .ban_user(&channel_id_str, &user_id_str, duration, reason)
+            .ban_user(&channel_id_str, &user_id_str, reason)
             .await
         {
             let _ = self.signal_service.unblock_channel_send(channel_id);
@@ -291,53 +290,75 @@ impl ChannelService {
         Ok(())
     }
 
-    /// Mute a user in a channel (local-only — flips `is_muted` on the
-    /// channel membership). `duration` bounds the mute via `muted_until`.
-    /// Server-side enforcement happens via ChannelModeration events.
-    pub fn mute_user(
+    /// Mute a member for `duration`, or until unmuted when `None`. The server
+    /// enforces it (SpiceDB `send_message` excludes `muted`, so their sends are
+    /// refused) and lifts a timed mute when it lapses; the local membership
+    /// flag only mirrors it so the member list can mark them.
+    pub async fn mute_user(
         &self,
         channel_id: &ChannelId,
         user_id: &UserId,
-        duration: std::time::Duration,
+        duration: Option<std::time::Duration>,
     ) -> Result<(), ChannelError> {
         let _ = self.settings_repo.current_user_id()?;
-        let mut membership = self
-            .channel_repo
-            .get_membership(channel_id, user_id)?
-            .ok_or_else(|| ChannelError::InvalidInput(format!(
-                "user {} not a member of channel {}",
-                user_id, channel_id
-            )))?;
-        let chrono_duration = chrono::Duration::from_std(duration)
-            .unwrap_or(chrono::Duration::hours(1));
-        membership.is_muted = true;
-        membership.muted_until = Some(chrono::Utc::now() + chrono_duration);
-        self.channel_repo
-            .update_membership(&membership)
-            .map_err(ChannelError::Storage)?;
+        self.channel_client()
+            .mute_user(&channel_id.to_string(), &user_id.to_string(), duration)
+            .await?;
+        self.mirror_member_muted(channel_id, user_id, true)
+    }
+
+    /// Lift a mute set by [`Self::mute_user`].
+    pub async fn unmute_user(&self, channel_id: &ChannelId, user_id: &UserId) -> Result<(), ChannelError> {
+        let _ = self.settings_repo.current_user_id()?;
+        self.channel_client()
+            .unmute_user(&channel_id.to_string(), &user_id.to_string())
+            .await?;
+        self.mirror_member_muted(channel_id, user_id, false)
+    }
+
+    /// Mirror a server-confirmed mute onto the local membership row, if this
+    /// device has one (the next member fetch refreshes it anyway).
+    fn mirror_member_muted(&self, channel_id: &ChannelId, user_id: &UserId, muted: bool) -> Result<(), ChannelError> {
+        if let Some(mut membership) = self.channel_repo.get_membership(channel_id, user_id)? {
+            membership.is_muted = muted;
+            membership.muted_until = None;
+            self.channel_repo
+                .update_membership(&membership)
+                .map_err(ChannelError::Storage)?;
+        }
         Ok(())
     }
 
-    /// Unmute a user in a channel — clears `is_muted` on the membership.
-    pub fn unmute_user(
+    /// A channel's active bans, newest first, or `None` when our role may
+    /// not see them. Owner/admin only — the same roles that can unban, and
+    /// the server refuses anyone else. Display fields are left empty for the
+    /// caller to resolve.
+    pub async fn list_banned_users(
         &self,
         channel_id: &ChannelId,
-        user_id: &UserId,
-    ) -> Result<(), ChannelError> {
-        let _ = self.settings_repo.current_user_id()?;
-        let mut membership = self
+    ) -> Result<Option<Vec<crate::domain::channel::BannedMember>>, ChannelError> {
+        let me = self.settings_repo.current_user_id()?;
+        let may_unban = self
             .channel_repo
-            .get_membership(channel_id, user_id)?
-            .ok_or_else(|| ChannelError::InvalidInput(format!(
-                "user {} not a member of channel {}",
-                user_id, channel_id
-            )))?;
-        membership.is_muted = false;
-        membership.muted_until = None;
-        self.channel_repo
-            .update_membership(&membership)
-            .map_err(ChannelError::Storage)?;
-        Ok(())
+            .get_membership(channel_id, &me)?
+            .is_some_and(|m| m.role.can_unban());
+        if !may_unban {
+            return Ok(None);
+        }
+        let bans = self.channel_client().list_banned_users(&channel_id.to_string()).await?;
+        Ok(Some(
+            bans.into_iter()
+                .filter_map(|b| {
+                    let user_id = b.user_id.parse::<uuid::Uuid>().ok()?;
+                    Some(crate::domain::channel::BannedMember {
+                        user_id: UserId::from(user_id),
+                        banned_at: chrono::DateTime::from_timestamp_nanos(b.banned_at as i64),
+                        display_name: String::new(),
+                        avatar_bytes: None,
+                    })
+                })
+                .collect(),
+        ))
     }
 
     /// Ban + distribute the rotated sender key + unblock sending. Same
@@ -347,10 +368,9 @@ impl ChannelService {
         &self,
         channel_id: &ChannelId,
         user_id: &UserId,
-        duration: Option<std::time::Duration>,
         reason: Option<&str>,
     ) -> Result<(), ChannelError> {
-        let skdm = self.ban_user(channel_id, user_id, duration, reason).await?;
+        let skdm = self.ban_user(channel_id, user_id, reason).await?;
 
         if let Err(e) = self.message_service.distribute_skdm(channel_id, &skdm).await {
             tracing::error!(

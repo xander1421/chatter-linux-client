@@ -107,6 +107,7 @@ pub fn open_user_profile(
             None => w.set_profile_bio("".into()),
         }
 
+        crate::bin_ui::features::chat::disappearing::hide_for_profile(w);
         w.set_profile_is_self(true);
         w.set_profile_is_friend(false);
         w.set_profile_is_blocked(false);
@@ -177,6 +178,14 @@ pub fn open_user_profile(
             .and_then(|ctx| ctx.is_peer_verified(user_id).ok())
             .unwrap_or(false);
 
+        // The DM's disappearing-messages timer: this screen is the DM's
+        // settings (see header.rs `wire_chat_settings_clicked`).
+        match ui_ctx {
+            Some(ctx) => crate::bin_ui::features::chat::disappearing::show_for_profile(
+                w, ctx, user_id, is_friend,
+            ),
+            None => crate::bin_ui::features::chat::disappearing::hide_for_profile(w),
+        }
         w.set_profile_is_self(false);
         w.set_profile_is_friend(is_friend);
         w.set_profile_is_blocked(is_blocked);

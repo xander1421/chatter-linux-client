@@ -149,3 +149,35 @@ impl FriendRequestExt for FriendRequestSendData {
     }
 }
 
+/// Thin presentation mapping: core member → UI row. UI thread only (decodes
+/// the avatar into a `slint::Image`).
+pub fn member_to_slint(m: &chatter_core::domain::channel::MemberWithProfile) -> crate::ChannelMemberData {
+    crate::ChannelMemberData {
+        user_id: m.membership.user_id.to_string().into(),
+        display_name: m.display_name.as_str().into(),
+        username: m.username.as_str().into(),
+        role: m.membership.role.as_str().into(),
+        joined_at: "".into(),
+        avatar_source: m
+            .avatar_bytes
+            .as_deref()
+            .and_then(avatar_bytes_to_image)
+            .unwrap_or_default(),
+        muted: m.membership.is_muted,
+        can_ban: m.moderation.can_ban,
+        can_mute: m.moderation.can_mute,
+    }
+}
+
+/// Thin presentation mapping: core ban → UI row. UI thread only.
+pub fn banned_member_to_slint(b: &chatter_core::domain::channel::BannedMember) -> crate::BannedMemberData {
+    crate::BannedMemberData {
+        user_id: b.user_id.to_string().into(),
+        display_name: b.display_name.as_str().into(),
+        avatar_source: b
+            .avatar_bytes
+            .as_deref()
+            .and_then(avatar_bytes_to_image)
+            .unwrap_or_default(),
+    }
+}

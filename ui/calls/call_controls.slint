@@ -58,6 +58,11 @@ export component CallControls inherits Rectangle {
     in property <bool> is-video-enabled: true;
     in property <bool> is-screen-sharing: false;
     in property <bool> is-video-call: true;
+    // Phones: the speaker button toggles the call route (earpiece/headset vs
+    // loudspeaker) and `speaker-on` is the route actually applied. Desktop
+    // leaves it false and the button opens the output device picker.
+    in property <bool> speaker-toggle: false;
+    in property <bool> speaker-on: false;
 
     callback toggle-mute();
     callback toggle-video();
@@ -65,6 +70,7 @@ export component CallControls inherits Rectangle {
     callback end-call();
     callback show-audio-settings();
     callback show-audio-output-settings();
+    callback toggle-speaker();
 
     height: 36px;
     background: Colors.surface;
@@ -92,12 +98,18 @@ export component CallControls inherits Rectangle {
             clicked => { show-audio-settings(); }
         }
 
-        // Speaker / headphones picker (audio output device)
+        // Speaker: route toggle on phones, output device picker on desktop
         ControlButton {
             icon: Icons.volume-2;
             icon-active: Icons.volume-2;
-            active: false;
-            clicked => { show-audio-output-settings(); }
+            active: root.speaker-toggle && root.speaker-on;
+            clicked => {
+                if root.speaker-toggle {
+                    root.toggle-speaker();
+                } else {
+                    root.show-audio-output-settings();
+                }
+            }
         }
 
         // Mute button

@@ -30,9 +30,9 @@ import { CreateChannelModal, AIProviderOption, AIModelOption, CreateChannelConfi
 import { UserProfileModal, SharedContentItem, SharedTab, EditProfileModal, RecoveryCodesModal, SealedSenderIntroModal, LinkDeviceApproveModal } from "modals/mod.slint";
 import { FriendsModal, FriendData, FriendRequestData, BlockedUserData } from "modals/friends.slint";
 import { ForwardMessageModal, ForwardTarget } from "modals/forward_message.slint";
-import { SessionsModal, SessionInfo } from "modals/sessions.slint";
+import { SessionsModal, SessionInfo, PendingLinkInfo } from "modals/sessions.slint";
 import { SearchResultChannel } from "modals/join_channel.slint";
-import { ChannelSettingsModal, ChannelMemberData } from "modals/channel_settings.slint";
+import { ChannelSettingsModal, ChannelMemberData, BannedMemberData } from "modals/channel_settings.slint";
 import { InvitePrivateGroupModal } from "modals/invite_private_group.slint";
 import { InviteMemberModal, InviteUser } from "modals/invite_member.slint";
 import { CreateSectionModal } from "modals/create_section.slint";
@@ -62,7 +62,7 @@ import { AnonModePinModal } from "modals/anon_mode_pin.slint";
 import { ShieldNetworkBanner } from "anon_mode/shield_network_banner.slint";
 
 // Re-export types for Rust binding
-export { ChannelListItemData, DMListItemData, PrivateGroupListItemData, CustomSectionData, SectionConversationData, MessageItemData, MessageAttachmentData, ForwardTarget, SessionInfo, SearchResultChannel, SearchResult, AIProviderOption, AIModelOption, CreateChannelConfig, PendingAttachmentData, EmojiData, GifData, MentionSuggestion, FriendData, FriendRequestData, BlockedUserData, IncomingCallData, ActiveCallData, CallParticipantData, CallHistoryRow, AudioDeviceData, ScreenSourceData, ChannelMemberData, PrivateGroupFriend, LocalAIProviderData, CatalogModelData, MemoryFactData, MemoryEntityData, MemoryGraphNodeData, MemoryGraphEdgeData, InviteUser, ReactionEntry, QuickSwitcherItem, SharedContentItem, SharedTab }
+export { ChannelListItemData, DMListItemData, PrivateGroupListItemData, CustomSectionData, SectionConversationData, MessageItemData, MessageAttachmentData, ForwardTarget, SessionInfo, PendingLinkInfo, SearchResultChannel, SearchResult, AIProviderOption, AIModelOption, CreateChannelConfig, PendingAttachmentData, EmojiData, GifData, MentionSuggestion, FriendData, FriendRequestData, BlockedUserData, IncomingCallData, ActiveCallData, CallParticipantData, CallHistoryRow, AudioDeviceData, ScreenSourceData, ChannelMemberData, BannedMemberData, PrivateGroupFriend, LocalAIProviderData, CatalogModelData, MemoryFactData, MemoryEntityData, MemoryGraphNodeData, MemoryGraphEdgeData, InviteUser, ReactionEntry, QuickSwitcherItem, SharedContentItem, SharedTab }
 
 export component App inherits Rectangle {
     // ========== Safe area insets (set by Rust on Android) ==========
@@ -236,6 +236,9 @@ export component App inherits Rectangle {
 
     // ========== Recovery codes modal properties ==========
     in property <[string]> recovery-codes: [];
+    // Set when the codes came from Settings › Regenerate: Continue returns to
+    // Settings instead of carrying on into registration's onboarding.
+    in-out property <bool> recovery-codes-regenerated: false;
     callback recovery-codes-confirmed();
     callback recovery-codes-copy-all();
 
@@ -649,6 +652,7 @@ export component App inherits Rectangle {
     in property <[SessionInfo]> sessions: [];
     in property <bool> sessions-loading: false;
     in property <bool> sessions-revoking: false;
+    in property <[PendingLinkInfo]> sessions-pending-links: [];
 
     // Channel settings modal properties
     in property <string> channel-settings-id: "";
@@ -674,6 +678,8 @@ export component App inherits Rectangle {
     in-out property <bool> channel-settings-muted: false;
     in-out property <bool> channel-settings-ai-enabled: false;
     in property <[ChannelMemberData]> channel-settings-members: [];
+    in property <[BannedMemberData]> channel-settings-banned-members: [];
+    in property <bool> channel-settings-can-view-bans: false;
     in property <bool> channel-settings-loading: false;
     in property <string> channel-settings-error: "";
 
@@ -681,7 +687,6 @@ export component App inherits Rectangle {
     in property <string> settings-display-name: "";
     in property <string> settings-username: "";
     in property <int> settings-session-count: 0;
-    in property <image> settings-avatar;
     in-out property <string> settings-current-password: "";
     in-out property <string> settings-new-password: "";
     in-out property <string> settings-confirm-password: "";
@@ -691,8 +696,14 @@ export component App inherits Rectangle {
     in-out property <string> settings-delete-password: "";
     in property <bool> settings-delete-loading: false;
     in property <string> settings-delete-error: "";
+    // Settings › Account › Recovery Codes › Regenerate
+    in-out property <string> settings-recovery-regen-password: "";
+    in property <bool> settings-recovery-regen-loading: false;
+    in property <string> settings-recovery-regen-error: "";
     in-out property <bool> settings-read-receipts: true;
     in-out property <bool> settings-typing-indicators: true;
+    // "none" | "name_only" | "name_and_message" (NotificationDetailLevel::as_str)
+    in-out property <string> settings-notification-detail: "none";
     in property <string> settings-identity-fingerprint: "";
     in-out property <bool> settings-sealed-sender-unrestricted: false;
     in property <int> settings-prekey-count: 0;
@@ -744,6 +755,23 @@ export component App inherits Rectangle {
     in-out property <bool> call-is-muted: false;
     in-out property <bool> call-is-video-enabled: true;
     in-out property <bool> call-is-screen-sharing: false;
+    // Android call audio route (platform/android/audio_route.rs). Desktop never
+    // sets `call-speaker-toggle`, so its speaker button stays the output picker.
+    in property <bool> call-speaker-toggle: false;
+    in property <bool> call-speaker-on: false;
+    callback call-toggle-speaker();
+    // A call screen opened (true) or closed (false), and whether the local
+    // camera is on at that moment; then camera changes mid-call.
+    callback call-audio-session(bool, bool);
+    callback call-audio-video(bool);
+    changed active-call-visible => {
+        root.call-audio-session(root.active-call-visible, root.call-is-video-enabled);
+    }
+    changed call-is-video-enabled => {
+        if root.active-call-visible {
+            root.call-audio-video(root.call-is-video-enabled);
+        }
+    }
     in property <image> call-local-video-frame;
     in property <[image]> call-remote-video-frames;
 
@@ -799,6 +827,7 @@ export component App inherits Rectangle {
     callback move-to-section(/* conversation-id */ string, /* conversation-type */ ConversationKind, /* section-id */ string);
     callback remove-from-section(/* conversation-id */ string);
     callback set-conversation-pinned(/* conversation-id */ string, /* pinned */ bool);
+    callback delete-conversation(/* conversation-id */ string, /* kind */ ConversationKind);
     callback move-section(/* section-id */ string, /* delta */ int);
     callback set-section-sort-mode(/* section-id */ string, /* mode */ string);
 
@@ -923,6 +952,7 @@ export component App inherits Rectangle {
     // Sessions
     callback revoke-session(int);
     callback revoke-all-sessions();
+    callback cancel-pending-link(string);  // provisioning uuid
 
 
     // Settings
@@ -932,8 +962,10 @@ export component App inherits Rectangle {
     callback settings-logout();
     callback settings-delete-account();
     callback settings-delete-account-confirmed(string);  // password
+    callback settings-regenerate-recovery-codes(string);  // password
     callback settings-read-receipts-changed(bool);
     callback settings-typing-indicators-changed(bool);
+    callback settings-notification-detail-changed(string);
     callback settings-search-shortcut-changed(string);
     callback settings-copy-fingerprint();
     callback settings-sealed-sender-changed(bool);
@@ -971,6 +1003,9 @@ export component App inherits Rectangle {
     callback channel-settings-toggle-ai(bool);
     callback channel-settings-change-member-role(string, string);  // user-id, new-role
     callback channel-settings-remove-member(string);  // user-id
+    callback channel-settings-ban-member(string);  // user-id
+    callback channel-settings-set-member-muted(string, bool, int);  // user-id, muted, minutes (0 = until unmuted)
+    callback channel-settings-unban-member(string);  // user-id
     callback channel-settings-invite-members();  // opens invite modal for private groups
     callback channel-settings-invite-channel-members();  // opens invite modal for regular channels
     callback invite-member-toggle-user(int);  // index - toggles selection
@@ -1287,6 +1322,7 @@ export component App inherits Rectangle {
                 pending-message-requests: root.pending-message-requests;
                 pending-group-invites: root.pending-group-invites;
                 pending-channel-invites: root.pending-channel-invites;
+                missed-call-count: root.missed-call-count;
 
                 channel-selected(id) => {
                     root.mobile-show-chat = true;
@@ -1315,6 +1351,12 @@ export component App inherits Rectangle {
                 }
                 friends-clicked => {
                     root.active-modal = "friends";
+                }
+                // Wide-layout entry to the Calls screen — the same modal and
+                // the same load the phone tab bar's Calls tab raises.
+                calls-clicked => {
+                    root.active-modal = "calls";
+                    root.calls-tab-clicked();
                 }
                 friend-requests-clicked => {
                     // Open friends modal on Requests → Received. The Received tab
@@ -1394,6 +1436,9 @@ export component App inherits Rectangle {
                 set-conversation-pinned(conv-id, pinned) => {
                     root.set-conversation-pinned(conv-id, pinned);
                 }
+                delete-conversation(conv-id, kind) => {
+                    root.delete-conversation(conv-id, kind);
+                }
                 move-section(section-id, delta) => {
                     root.move-section(section-id, delta);
                 }
@@ -1462,6 +1507,9 @@ export component App inherits Rectangle {
                             is-muted: root.call-is-muted;
                             is-video-enabled: root.call-is-video-enabled;
                             is-screen-sharing: root.call-is-screen-sharing;
+                            speaker-toggle: root.call-speaker-toggle;
+                            speaker-on: root.call-speaker-on;
+                            toggle-speaker => { root.call-toggle-speaker(); }
                             local-video-frame: root.call-local-video-frame;
                             remote-video-frames: root.call-remote-video-frames;
 
@@ -1510,7 +1558,8 @@ export component App inherits Rectangle {
                     }
 
                     if !root.active-call-fullscreen
-                        && !(root.is-small-screen && root.thread-panel-visible): ChatLayout {
+                        && !(root.is-small-screen && root.thread-panel-visible)
+                        && root.channel-name != "": ChatLayout {
                     vertical-stretch: 1;
                     hide-header: root.selection-mode;
                     // No back button: the conversation list is always on
@@ -1637,6 +1686,23 @@ export component App inherits Rectangle {
                     process-text(text) => { return root.process-text(text); }
                     scroll-to-bottom-clicked => { root.scroll-to-bottom-clicked(); }
                 }
+
+                    // Nothing open (the tablet/desktop pane before the first
+                    // pick, or after the open chat was deleted or left). Every
+                    // open path names the conversation, so an empty name means
+                    // none: without this the pane read "No messages yet / Be
+                    // the first to say something! / Public channel".
+                    if !root.active-call-fullscreen && root.channel-name == "": Rectangle {
+                        vertical-stretch: 1;
+                        background: Colors.background;
+                        Text {
+                            text: "Select a conversation";
+                            color: Colors.text-muted;
+                            font-size: Typography.lg;
+                            horizontal-alignment: center;
+                            vertical-alignment: center;
+                        }
+                    }
                     } // end VerticalLayout (call dock + ChatLayout)
 
                 // Thread panel (side panel on desktop, full-screen overlay on mobile).
@@ -1939,9 +2005,14 @@ export component App inherits Rectangle {
         codes: root.recovery-codes;
 
         confirmed => {
-            // After recovery codes, show the sealed-sender explainer.
-            root.active-modal = "sealed-sender-intro";
-            root.recovery-codes-confirmed();
+            if root.recovery-codes-regenerated {
+                root.recovery-codes-regenerated = false;
+                root.active-modal = "settings";
+            } else {
+                // After recovery codes, show the sealed-sender explainer.
+                root.active-modal = "sealed-sender-intro";
+                root.recovery-codes-confirmed();
+            }
         }
         copy-all => {
             root.recovery-codes-copy-all();
@@ -2136,9 +2207,13 @@ export component App inherits Rectangle {
         sessions: root.sessions;
         loading: root.sessions-loading;
         revoking: root.sessions-revoking;
+        pending-links: root.sessions-pending-links;
 
         close => {
             root.active-modal = "none";
+        }
+        cancel-pending-link(uuid) => {
+            root.cancel-pending-link(uuid);
         }
         revoke-session(device-id) => {
             root.revoke-session(device-id);
@@ -2209,6 +2284,8 @@ export component App inherits Rectangle {
         ai-enabled <=> root.channel-settings-ai-enabled;
         toggle-ai(value) => { root.channel-settings-toggle-ai(value); }
         members: root.channel-settings-members;
+        banned-members: root.channel-settings-banned-members;
+        can-view-bans: root.channel-settings-can-view-bans;
         loading: root.channel-settings-loading;
         error-message: root.channel-settings-error;
 
@@ -2226,6 +2303,15 @@ export component App inherits Rectangle {
         }
         change-member-role(user-id, role) => {
             root.channel-settings-change-member-role(user-id, role);
+        }
+        ban-member(user-id) => {
+            root.channel-settings-ban-member(user-id);
+        }
+        set-member-muted(user-id, muted, minutes) => {
+            root.channel-settings-set-member-muted(user-id, muted, minutes);
+        }
+        unban-member(user-id) => {
+            root.channel-settings-unban-member(user-id);
         }
         remove-member(user-id) => {
             root.channel-settings-remove-member(user-id);
@@ -2416,7 +2502,7 @@ export component App inherits Rectangle {
         display-name: root.settings-display-name;
         username: root.settings-username;
         session-count: root.settings-session-count;
-        avatar: root.settings-avatar;
+        avatar: root.user-avatar-source;
         current-password <=> root.settings-current-password;
         new-password <=> root.settings-new-password;
         confirm-password <=> root.settings-confirm-password;
@@ -2424,6 +2510,7 @@ export component App inherits Rectangle {
         password-error: root.settings-password-error;
         read-receipts-enabled <=> root.settings-read-receipts;
         typing-indicators-enabled <=> root.settings-typing-indicators;
+        notification-detail <=> root.settings-notification-detail;
         search-shortcut <=> root.search-shortcut-pref;
         identity-fingerprint: root.settings-identity-fingerprint;
         sealed-sender-unrestricted <=> root.settings-sealed-sender-unrestricted;
@@ -2462,6 +2549,12 @@ export component App inherits Rectangle {
         delete-password <=> root.settings-delete-password;
         delete-loading: root.settings-delete-loading;
         delete-error: root.settings-delete-error;
+        recovery-regen-password <=> root.settings-recovery-regen-password;
+        recovery-regen-loading: root.settings-recovery-regen-loading;
+        recovery-regen-error: root.settings-recovery-regen-error;
+        regenerate-recovery-codes(password) => {
+            root.settings-regenerate-recovery-codes(password);
+        }
 
         edit-profile-clicked => {
             root.settings-edit-profile();
@@ -2490,6 +2583,9 @@ export component App inherits Rectangle {
         }
         typing-indicators-changed(value) => {
             root.settings-typing-indicators-changed(value);
+        }
+        notification-detail-changed(value) => {
+            root.settings-notification-detail-changed(value);
         }
         search-shortcut-changed(value) => {
             root.settings-search-shortcut-changed(value);

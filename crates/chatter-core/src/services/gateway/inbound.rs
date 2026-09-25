@@ -122,6 +122,14 @@ pub enum DmContent {
         /// of the main channel — mirrors the ServerDm inbound path in
         /// `gateway/mod.rs`, which already carries this through.
         thread_id: Option<String>,
+        /// The disappearing timer this message states for the conversation
+        /// (`DataMessage.ephemeral_ttl_seconds`, `0` = off). `None` when the
+        /// payload could not carry one (the legacy fallbacks), which must not
+        /// be read as "off".
+        expire_timer: Option<u32>,
+        /// A timer-update announcement (Signal's `EXPIRATION_TIMER_UPDATE`):
+        /// nothing to show but the timer change.
+        timer_update: bool,
     },
     /// Typing indicator
     Typing {

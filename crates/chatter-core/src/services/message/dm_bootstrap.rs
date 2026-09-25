@@ -357,18 +357,7 @@ impl MessageService {
                 tracing::warn!(peer_id = %peer_id, error = %e, "Bootstrap: device refresh failed; using cached sessions");
             }
         }
-        let mut live = Vec::new();
-        for device_id in self
-            .signal_service
-            .session_devices(&peer_id_str)
-            .await
-            .map_err(|e| MessageError::from_signal_send(e, "Bootstrap device lookup"))?
-        {
-            if !self.is_retired_device(*peer_id, device_id, 0).await {
-                live.push(device_id);
-            }
-        }
-        let devices = bootstrap_device_order(live);
+        let devices = bootstrap_device_order(self.live_session_devices(peer_id).await?);
         if devices.is_empty() {
             return Err(if shield {
                 MessageError::NotReachablePrivately(*peer_id)
@@ -377,6 +366,23 @@ impl MessageService {
             });
         }
         Ok(devices)
+    }
+
+    /// Devices of `peer_id` we hold a session with, less any the server has
+    /// refused as retired (`is_retired_device`). No RPC.
+    pub(super) async fn live_session_devices(&self, peer_id: &UserId) -> Result<Vec<u32>, MessageError> {
+        let mut live = Vec::new();
+        for device_id in self
+            .signal_service
+            .session_devices(&peer_id.to_string())
+            .await
+            .map_err(|e| MessageError::from_signal_send(e, "Session device lookup"))?
+        {
+            if !self.is_retired_device(*peer_id, device_id, 0).await {
+                live.push(device_id);
+            }
+        }
+        Ok(live)
     }
 
     /// Seal `payload` (bootstrap MESSAGE or REQUEST) to ONE device of
@@ -627,7 +633,7 @@ mod tests {
 
         let mut auth = ms.auth_client();
         let sealed = crate::inbox::streaming::dm_bootstrap_handler::seal_for_peer_mailbox(
-            &ms.signal_service, &mut auth, &friend, b"queued", &[7u8; 32],
+            &ms.signal_service, &mut auth, &friend, 6, b"queued", &[7u8; 32],
         )
         .await
         .expect("sealed without any RPC");

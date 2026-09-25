@@ -136,11 +136,10 @@ impl ServiceContainer {
         // 2b. Ephemeral (disappearing-message) local-expiry engine. Shared by
         // the send path (MessageService — arms the sender's copy), the receive
         // path (MessageGateway — arms the recipient's copy), and the periodic
-        // reaper (ChatterClient::start — calls cleanup_expired).
+        // reaper (ChatterClient::start — calls disappearing::reap_expired).
         let ephemeral_service = Arc::new(EphemeralService::new(
             infra.settings_repo.clone(),
             infra.ephemeral_repo.clone(),
-            infra.message_repo.clone(),
         ));
 
         // 3. Message service with group mailbox support and Sesame
@@ -209,7 +208,6 @@ impl ServiceContainer {
             infra.settings_repo.clone(),
             infra.channel_repo.clone(),
             infra.section_repo.clone(),
-            infra.user_repo.clone(),
             signal_service.clone(),
             infra.group_coordinator.clone(),
             message_service.clone(),

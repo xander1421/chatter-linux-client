@@ -179,7 +179,9 @@ impl UserSync {
                 // the same list the server just handed us. `ListFriends` only
                 // returns accepted friendships.
                 match self.user_repo.get_friendship(&current_user, &user_id) {
-                    Ok(Some(existing)) if existing.status != FriendshipStatus::Accepted => {
+                    // A Blocked row stays blocked: the server lists blocked
+                    // friends too, and the block is `sync_blocked_users`'s.
+                    Ok(Some(existing)) if existing.status == FriendshipStatus::Pending => {
                         let mut updated = existing;
                         updated.status = FriendshipStatus::Accepted;
                         if let Err(e) = self.user_repo.update_friendship(&updated) {
@@ -191,7 +193,7 @@ impl UserSync {
                             );
                         }
                     }
-                    Ok(Some(_)) => {} // already accepted, nothing to do
+                    Ok(Some(_)) => {} // accepted or blocked, nothing to do
                     Ok(None) => {
                         let mut friendship = Friendship::new_request(current_user, user_id);
                         friendship.status = FriendshipStatus::Accepted;
@@ -289,8 +291,12 @@ impl UserSync {
     /// Two-way, like the friends pass: rows the server no longer reports as
     /// blocked are cleared, so an unblock on another device also lands. Only
     /// `Blocked` rows are touched — a `Pending` or `Accepted` friendship is not
-    /// this RPC's business.
-    pub async fn sync_blocked_users(&self) -> Result<usize, SyncError> {
+    /// this RPC's business. A lifted block goes back to `Accepted` rather than
+    /// being deleted, so a friend keeps their profile key; the `sync_friends`
+    /// pass that runs after this prunes it if they were never a friend.
+    ///
+    /// Returns the server's block count and whether the local set changed.
+    pub async fn sync_blocked_users(&self) -> Result<(usize, bool), SyncError> {
         use std::collections::HashSet;
 
         let current_user = self
@@ -330,6 +336,9 @@ impl UserSync {
             offset += PAGE_SIZE;
         }
 
+        let before: HashSet<UserId> =
+            self.user_repo.list_blocked_by(&current_user).unwrap_or_default().into_iter().collect();
+
         for user_id in &server_blocked {
             // FK on users(id) — the blocked user may never have been seen on
             // this device, which is precisely the case that needs the row.
@@ -353,15 +362,17 @@ impl UserSync {
                     && friendship.requester_id == current_user
                     && !server_blocked.contains(&friendship.addressee_id)
                 {
-                    let _ = self
-                        .user_repo
-                        .delete_friendship(&friendship.requester_id, &friendship.addressee_id);
+                    let _ = self.user_repo.update_friendship(&Friendship {
+                        status: FriendshipStatus::Accepted,
+                        ..friendship
+                    });
                 }
             }
         }
 
-        tracing::info!(blocked = server_blocked.len(), "Blocked-user sync complete");
-        Ok(server_blocked.len())
+        let changed = before != server_blocked;
+        tracing::info!(blocked = server_blocked.len(), changed, "Blocked-user sync complete");
+        Ok((server_blocked.len(), changed))
     }
 
     /// Get the last sync timestamp.

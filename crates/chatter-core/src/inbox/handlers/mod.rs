@@ -653,6 +653,10 @@ pub enum DomainEvent {
         channels_synced: usize,
         messages_synced: usize,
         duration_ms: u64,
+        /// The server's block list differed from the local one (a block or
+        /// unblock made on another device): every list that hides blocked
+        /// people must be rebuilt.
+        blocks_changed: bool,
     },
 
     /// Self-hosted ntfy push wake-up received.

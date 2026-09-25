@@ -153,6 +153,9 @@ export component ActiveCallView inherits Rectangle {
     in property <bool> is-muted: false;
     in property <bool> is-video-enabled: true;
     in property <bool> is-screen-sharing: false;
+    // See CallControls: phone route toggle vs desktop output picker.
+    in property <bool> speaker-toggle: false;
+    in property <bool> speaker-on: false;
     in property <image> local-video-frame;
     in property <[image]> remote-video-frames;
     // When true, the dock expands to fill the viewport (chat panel hides at
@@ -220,6 +223,7 @@ export component ActiveCallView inherits Rectangle {
     callback end-call();
     callback show-audio-settings();
     callback show-audio-output-settings();
+    callback toggle-speaker();
     // Per-peer local controls — only the local viewer is affected.
     callback peer-audio-mute-toggle(string);
     callback peer-video-pause-toggle(string);
@@ -623,6 +627,9 @@ export component ActiveCallView inherits Rectangle {
                 is-video-enabled: is-video-enabled;
                 is-screen-sharing: is-screen-sharing;
                 is-video-call: call-data.is-video-call;
+                speaker-toggle: root.speaker-toggle;
+                speaker-on: root.speaker-on;
+                toggle-speaker => { root.toggle-speaker(); }
 
                 toggle-mute => { root.toggle-mute(); }
                 toggle-video => { root.toggle-video(); }

@@ -515,6 +515,7 @@ async fn handle_bootstrap_async(
     // without a word: announce it like the initiator-side flush does.
     let flush = send_pending_messages_after_bootstrap(
         peer_id,
+        peer_device_id,
         database,
         &signal_service,
         &mut auth_client,
@@ -538,6 +539,7 @@ async fn handle_bootstrap_async(
 /// to ensure session counters stay in sync.
 async fn send_pending_messages_after_bootstrap(
     peer_id: UserId,
+    peer_device_id: u32,
     database: Arc<Database>,
     signal_service: &SignalService,
     auth_client: &mut AuthClient,
@@ -603,7 +605,7 @@ async fn send_pending_messages_after_bootstrap(
     let mut anon_mailbox_client = AnonymousMailboxClient::new(channel);
     for (bubble, content) in queued {
         let result = async {
-            for envelope in seal_for_peer_mailbox(signal_service, auth_client, &peer_id, &content, &send_key).await? {
+            for envelope in seal_for_peer_mailbox(signal_service, auth_client, &peer_id, peer_device_id, &content, &send_key).await? {
                 anon_mailbox_client
                     .send_to_ephemeral_mailbox(peer_mailbox.public_key.to_vec(), envelope, EnvelopeType::Message as i32)
                     .await
@@ -627,23 +629,26 @@ async fn send_pending_messages_after_bootstrap(
     Some(flush)
 }
 
-/// Seal `plaintext` for every device of `peer_id` we hold a usable session
-/// with, each wrapped for the peer's mailbox under `send_key` — the same
-/// fan-out `MessageService::send_dm_content` does in Shield.
+/// Seal `plaintext` for `peer_device_id` of `peer_id`, wrapped for the peer's
+/// mailbox under `send_key`.
 ///
-/// Never a prekey fetch and never a guessed device id: this flush runs in
+/// Only that device: it sent the bootstrap MESSAGE, so it owns the mailbox
+/// this conversation delivers to (the mailbox conversation is
+/// one-peer-device) and has just left a session (the RESPONSE was encrypted
+/// under it). Sealing to every session device also sealed to retired
+/// installs that no longer exist. Never a prekey fetch: this flush runs in
 /// Shield, where naming the peer in an identified RPC is the link the mailbox
-/// exists to hide, and the device that sent the bootstrap MESSAGE has just
-/// left a session (the RESPONSE was encrypted under it).
+/// exists to hide.
 pub async fn seal_for_peer_mailbox(
     signal_service: &SignalService,
     auth_client: &mut AuthClient,
     peer_id: &UserId,
+    peer_device_id: u32,
     plaintext: &[u8],
     send_key: &[u8; 32],
 ) -> Result<Vec<Vec<u8>>, String> {
     signal_service
-        .encrypt_message_session_devices(auth_client, &peer_id.to_string(), plaintext)
+        .encrypt_message_session_devices(auth_client, &peer_id.to_string(), vec![peer_device_id], plaintext)
         .await
         .map_err(|e| format!("Signal encrypt: {e}"))?
         .into_values()

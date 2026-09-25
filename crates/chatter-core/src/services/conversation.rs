@@ -773,74 +773,115 @@ impl ConversationHandle {
         }
     }
 
-    /// Delete this conversation from the local database.
+    /// Delete a DM on this device (the sidebar's "Delete chat"). Local only;
+    /// the peer is not told, as in Signal.
     ///
-    /// Removes messages, channel/membership data, and associated state.
-    /// This is a local-only operation; the server is not notified.
+    /// A friend DM loses its history and stays listed (the friendship is what
+    /// lists it); an anon DM goes entirely, its peer block staying. Groups and
+    /// channels are refused: a membership outlives a local delete — the next
+    /// sync or group message brings it back — so those are left (Channel
+    /// Settings › Leave), never deleted here.
     pub fn delete_conversation(&self) -> ConversationResult {
         match &self.conversation {
             ActiveConversation::AnonDm(id) => {
-                self.client.anon_dms().anon_dm_repo()
-                    .delete_conversation(id)
-                    .map_err(|e| ConversationError::Other(e.to_string()))
-            }
-            ActiveConversation::AnonGroup(id) => {
-                self.client.anon_groups().anon_group_repo
-                    .delete_group(id)
-                    .map_err(|e| ConversationError::Other(e.to_string()))
+                Ok(self.client.anon_dms().delete_conversation(id)?)
             }
             ActiveConversation::ServerDm { peer_id } => {
                 // Channel-free DM: no channel/membership row to cascade —
-                // delete the local message history directly.
+                // delete the local message history directly, then the
+                // attachments only this chat carried (row and file).
                 let channel_id: ChannelId = (*peer_id).into();
                 let messages = self.client.messages()
                     .get_messages_local(&channel_id, &ConversationType::ServerDm, None, u32::MAX)
                     .map_err(ConversationError::Message)?;
-                for msg in messages {
-                    let _ = self.client.messages().delete_message_local(&msg.id);
-                }
-                Ok(())
+                let attachments: Vec<_> = messages
+                    .iter()
+                    .flat_map(|m| m.attachments.iter().copied())
+                    .collect::<std::collections::HashSet<_>>()
+                    .into_iter()
+                    .collect();
+                let ids: Vec<_> = messages.into_iter().map(|m| m.id).collect();
+                let storage = |e: crate::error::StorageError| ConversationError::Other(e.to_string());
+                self.client.messages().message_repo.delete_batch(&ids).map_err(storage)?;
+                self.client.attachments().attachment_repo()
+                    .delete_unreferenced(&attachments)
+                    .map_err(storage)
             }
-            ActiveConversation::Channel(channel_id) => {
-                self.client.channels().channel_repo
-                    .delete_channel_cascade(channel_id)
-                    .map_err(|e| ConversationError::Other(e.to_string()))
-            }
+            ActiveConversation::AnonGroup(_) | ActiveConversation::Channel(_) => Err(
+                ConversationError::Other("a group is left, not deleted".into()),
+            ),
             ActiveConversation::None => Err(ConversationError::NoConversation),
         }
     }
 
-    /// Set the disappearing message timer for this conversation.
+    /// This conversation's disappearing-messages timer in seconds (`0` = off).
     ///
-    /// `seconds` of 0 disables the timer. For channels
-    /// this updates the channel's `default_ttl_seconds`. For anon types
-    /// and channel-free server DMs it is stored in the settings repo.
-    pub fn set_disappearing_timer(&self, seconds: u32) -> ConversationResult {
-        let ttl = if seconds == 0 { None } else { Some(seconds) };
+    /// Friend DMs hold it per conversation (`services::disappearing`); a
+    /// channel's is its server-held `config.ttl`. Anonymous conversations have
+    /// no timer.
+    pub fn disappearing_timer(&self) -> u32 {
         match &self.conversation {
-            ActiveConversation::AnonDm(id) => {
-                let key = format!("conv.disappearing.anon_dm.{}", id);
-                self.client.channels().settings_repo
-                    .set(&key, &ttl)
-                    .map_err(|e| ConversationError::Other(e.to_string()))
-            }
-            ActiveConversation::AnonGroup(id) => {
-                let key = format!("conv.disappearing.anon_group.{}", id);
-                self.client.channels().settings_repo
-                    .set(&key, &ttl)
-                    .map_err(|e| ConversationError::Other(e.to_string()))
-            }
+            ActiveConversation::ServerDm { peer_id } => crate::services::disappearing::server_dm_timer(
+                &self.client.channels().settings_repo,
+                peer_id,
+            ),
+            ActiveConversation::Channel(channel_id) => self
+                .client
+                .channels()
+                .channel_repo
+                .get(channel_id)
+                .ok()
+                .flatten()
+                .and_then(|c| c.config.default_ttl_seconds)
+                .unwrap_or(0),
+            _ => 0,
+        }
+    }
+
+    /// Whether this user can change the timer here: friend DMs only. A
+    /// channel's timer is fixed when it is created (the server refuses to
+    /// change it after), and anonymous conversations do not carry one.
+    pub fn can_set_disappearing_timer(&self) -> bool {
+        matches!(self.conversation, ActiveConversation::ServerDm { .. })
+    }
+
+    /// Set this conversation's disappearing-messages timer (`0` = off).
+    ///
+    /// Friend DM: Signal semantics — adopted locally, a "You set disappearing
+    /// messages to …" notice is filed and shown, and the friend is sent a
+    /// timer-update so both sides expire messages on the same timer.
+    ///
+    /// Channel: writes the local copy of the channel's ttl only. The server
+    /// holds the real value and refuses to change it after creation, so this
+    /// exists for the V29 proof (`tests/validated.rs`), not for the UI —
+    /// `can_set_disappearing_timer` is false for channels.
+    pub async fn set_disappearing_timer(&self, seconds: u32) -> ConversationResult {
+        match &self.conversation {
             ActiveConversation::ServerDm { peer_id } => {
-                let key = format!("conv.disappearing.server_dm.{}", peer_id);
-                self.client.channels().settings_repo
-                    .set(&key, &ttl)
-                    .map_err(|e| ConversationError::Other(e.to_string()))
+                let notice = self
+                    .client
+                    .messages()
+                    .set_server_dm_disappearing_timer(peer_id, seconds)
+                    .await
+                    .map_err(ConversationError::Message)?;
+                if let Some(message) = notice {
+                    self.client.event_bus().emit_domain(
+                        crate::inbox::handlers::DomainEvent::MessageReceived { message },
+                    );
+                }
+                Ok(())
             }
             ActiveConversation::Channel(channel_id) => {
+                let ttl = if seconds == 0 { None } else { Some(seconds) };
                 self.client.channels().channel_repo
                     .set_default_ttl(channel_id, ttl)
                     .map_err(|e| ConversationError::Other(e.to_string()))
             }
+            ActiveConversation::AnonDm(_) | ActiveConversation::AnonGroup(_) => Err(
+                ConversationError::Other(
+                    "disappearing messages are not available in anonymous conversations".into(),
+                ),
+            ),
             ActiveConversation::None => Err(ConversationError::NoConversation),
         }
     }
@@ -1151,5 +1192,115 @@ mod tests {
             0,
             "our own local echo must not badge the conversation"
         );
+    }
+
+    /// Deleting an anon DM takes its whole local footprint: messages, the
+    /// attachments only it carried (row and file), the conversation row. An
+    /// attachment a forward put in another conversation stays, and a blocked
+    /// peer keeps their name in Friends › Blocked.
+    #[tokio::test]
+    async fn delete_anon_dm_removes_messages_and_files_and_keeps_blocked_name() {
+        use crate::domain::anon_dm::AnonDm;
+        use crate::domain::ids::ChannelId;
+        use crate::domain::message::{ConversationType, Message};
+
+        static MOCK_KEYRING: std::sync::Once = std::sync::Once::new();
+        MOCK_KEYRING.call_once(|| {
+            keyring::set_default_credential_builder(keyring::mock::default_credential_builder());
+        });
+        let dir = tempfile::tempdir().unwrap();
+        let client = ChatterClient::builder()
+            .server_url("http://localhost:1")
+            .data_dir(dir.path().to_str().unwrap())
+            .build()
+            .expect("build client");
+
+        let peer = UserId::from_uuid(uuid::Uuid::from_u128(7));
+        let mut dm = AnonDm::new_initiated(peer);
+        dm.peer_display_name = Some("Robin".into());
+        client.anon_dms().anon_dm_repo().insert_conversation(&dm).unwrap();
+        client.anon_dms().block_user(&peer, None).unwrap();
+
+        let attachments = client.attachments().attachment_repo();
+        let stored = |name: &str| {
+            let id = AttachmentId::new();
+            let path = dir.path().join(format!("{id}.enc"));
+            std::fs::write(&path, b"ciphertext").unwrap();
+            let att = Attachment::new(id, FileMetadata::new(name.into(), "image/jpeg".into(), 10));
+            attachments.insert_with_file_path(&att, &path).unwrap();
+            (id, path)
+        };
+        let (only_here, only_here_path) = stored("a.jpg");
+        let (forwarded, forwarded_path) = stored("b.jpg");
+
+        let conv: ChannelId = dm.id.into();
+        let mut msg = Message::new_text(conv, ConversationType::AnonDm, Some(peer), "hi".into(), 1);
+        msg.attachments = vec![only_here, forwarded];
+        client.messages().message_repo.insert(&msg).unwrap();
+        let elsewhere: ChannelId = UserId::from_uuid(uuid::Uuid::from_u128(8)).into();
+        let mut fwd = Message::new_text(elsewhere, ConversationType::ServerDm, None, String::new(), 2);
+        fwd.attachments = vec![forwarded];
+        client.messages().message_repo.insert(&fwd).unwrap();
+
+        client.delete_conversation(ActiveConversation::AnonDm(dm.id)).unwrap();
+
+        assert!(client.anon_dms().get_conversation(&dm.id).unwrap().is_none());
+        assert!(client.messages().message_repo.get(&msg.id).unwrap().is_none());
+        assert!(attachments.get(&only_here).unwrap().is_none());
+        assert!(!only_here_path.exists(), "the deleted chat's file stayed on disk");
+        assert!(attachments.get(&forwarded).unwrap().is_some());
+        assert!(forwarded_path.exists(), "a file another chat still shows was deleted");
+        assert!(client.messages().message_repo.get(&fwd.id).unwrap().is_some());
+        assert_eq!(client.display_name(&peer), "Robin");
+        assert!(client.is_profile_user_blocked(&peer));
+    }
+
+    /// Deleting a friend DM empties its history and removes the attachment
+    /// files only it carried; a file a forward shares elsewhere stays.
+    #[tokio::test]
+    async fn delete_friend_dm_removes_messages_and_own_files() {
+        use crate::domain::message::Message;
+
+        static MOCK_KEYRING: std::sync::Once = std::sync::Once::new();
+        MOCK_KEYRING.call_once(|| {
+            keyring::set_default_credential_builder(keyring::mock::default_credential_builder());
+        });
+        let dir = tempfile::tempdir().unwrap();
+        let client = ChatterClient::builder()
+            .server_url("http://localhost:1")
+            .data_dir(dir.path().to_str().unwrap())
+            .build()
+            .expect("build client");
+
+        let attachments = client.attachments().attachment_repo();
+        let stored = |name: &str| {
+            let id = AttachmentId::new();
+            let path = dir.path().join(format!("{id}.enc"));
+            std::fs::write(&path, b"ciphertext").unwrap();
+            let att = Attachment::new(id, FileMetadata::new(name.into(), "image/jpeg".into(), 10));
+            attachments.insert_with_file_path(&att, &path).unwrap();
+            (id, path)
+        };
+        let (only_here, only_here_path) = stored("a.jpg");
+        let (forwarded, forwarded_path) = stored("b.jpg");
+
+        let peer = UserId::from_uuid(uuid::Uuid::from_u128(11));
+        let conv: ChannelId = peer.into();
+        let mut msg = Message::new_text(conv, ConversationType::ServerDm, Some(peer), "hi".into(), 1);
+        msg.attachments = vec![only_here, forwarded];
+        client.messages().message_repo.insert(&msg).unwrap();
+        let elsewhere: ChannelId = UserId::from_uuid(uuid::Uuid::from_u128(12)).into();
+        let mut fwd = Message::new_text(elsewhere, ConversationType::ServerDm, None, String::new(), 2);
+        fwd.attachments = vec![forwarded];
+        client.messages().message_repo.insert(&fwd).unwrap();
+
+        client.delete_conversation(ActiveConversation::ServerDm { peer_id: peer }).unwrap();
+
+        assert!(client.messages().message_repo.get(&msg.id).unwrap().is_none());
+        assert!(attachments.get(&only_here).unwrap().is_none());
+        assert!(!only_here_path.exists(), "the deleted chat's file stayed on disk");
+        assert!(attachments.get(&forwarded).unwrap().is_some());
+        assert!(forwarded_path.exists(), "a file another chat still shows was deleted");
+        assert!(client.messages().message_repo.get(&fwd.id).unwrap().is_some());
     }
 }

@@ -471,6 +471,33 @@ impl UserRepository {
         Ok(ids)
     }
 
+    /// Record `user_id → friend_id` as accepted, leaving a block alone. The
+    /// server keeps a blocked friend in `ListFriends` (a block keeps the
+    /// friendship, Signal-style), so a friends refresh that overwrote the row
+    /// lifted every block it saw. Only the status changes, so the row's
+    /// profile key survives.
+    pub fn accept_friendship_unless_blocked(
+        &self,
+        user_id: &UserId,
+        friend_id: &UserId,
+    ) -> Result<(), StorageError> {
+        let conn = self.db.connection()?;
+        conn.execute(
+            "INSERT INTO friendships (user_id, friend_id, status, created_at)
+             VALUES (?1, ?2, ?3, ?4)
+             ON CONFLICT(user_id, friend_id) DO UPDATE SET status = excluded.status
+             WHERE friendships.status != ?5",
+            params![
+                user_id.to_string(),
+                friend_id.to_string(),
+                friendship_status_to_i32(FriendshipStatus::Accepted),
+                Utc::now().to_rfc3339(),
+                friendship_status_to_i32(FriendshipStatus::Blocked),
+            ],
+        )?;
+        Ok(())
+    }
+
     /// Update a friendship status.
     pub fn update_friendship(&self, friendship: &Friendship) -> Result<(), StorageError> {
         let conn = self.db.connection()?;
@@ -731,6 +758,27 @@ mod tests {
             status,
             created_at: Utc::now(),
         }
+    }
+
+    /// A friends refresh must neither lift a block nor drop the profile key.
+    #[test]
+    fn accept_friendship_keeps_block_and_profile_key() {
+        let (_d, repo) = setup();
+        let me = UserId::new();
+        let them = UserId::new();
+        repo.ensure_user_exists(&me).unwrap();
+        repo.ensure_user_exists(&them).unwrap();
+        repo.accept_friendship_unless_blocked(&me, &them).unwrap();
+        assert!(repo.set_friend_profile_key(&me, &them, &[7; 32]).unwrap());
+
+        repo.update_friendship(&friendship(me, them, FriendshipStatus::Blocked)).unwrap();
+        repo.accept_friendship_unless_blocked(&me, &them).unwrap();
+        assert!(repo.is_blocked(&me, &them).unwrap(), "refresh lifted the block");
+
+        // Unblock flips the status back; the key is still there.
+        repo.update_friendship(&friendship(me, them, FriendshipStatus::Accepted)).unwrap();
+        assert!(!repo.is_blocked(&me, &them).unwrap());
+        assert_eq!(repo.get_friend_profile_key(&me, &them).unwrap(), Some([7; 32]));
     }
 
     /// `set_friend_profile_key` reports a change only when the stored key

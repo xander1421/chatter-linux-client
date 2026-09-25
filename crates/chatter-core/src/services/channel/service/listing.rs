@@ -204,31 +204,6 @@ impl ChannelService {
         Ok(members)
     }
 
-    /// List channel members with profile information (display name, avatar).
-    ///
-    /// Joins membership data with user profiles from local storage.
-    /// Members without a stored profile get a fallback display name from their user ID.
-    pub fn list_members_with_profiles(
-        &self,
-        channel_id: &ChannelId,
-    ) -> Result<Vec<crate::domain::channel::MemberWithProfile>, ChannelError> {
-        let members = self.channel_repo.list_members(channel_id)?;
-        let mut result = Vec::with_capacity(members.len());
-        for membership in members {
-            let profile = self.user_repo.get_profile(&membership.user_id).ok().flatten();
-            let display_name = profile.as_ref()
-                .map(|p| p.display_name.clone())
-                .unwrap_or_else(|| format!("User {}", &membership.user_id.to_string()[..8]));
-            let avatar_bytes = profile.and_then(|p| p.avatar_bytes);
-            result.push(crate::domain::channel::MemberWithProfile {
-                membership,
-                display_name,
-                avatar_bytes,
-            });
-        }
-        Ok(result)
-    }
-
     /// Get the set of member user IDs for a channel (local query).
     ///
     /// Used for filtering invite candidates — callers can check which users

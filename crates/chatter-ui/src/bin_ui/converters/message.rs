@@ -217,7 +217,13 @@ impl MessageDisplayData {
                 (slint::Image::default(), false, 0, 0)
             };
 
-    let (content, rich_content) = body_fields(&self.content);
+    // A notice we caused reads "You set disappearing messages…", as in
+    // Signal, not our own name.
+    let own_notice = (self.is_system && is_own)
+        .then(|| self.content.strip_prefix(self.sender_name.as_str()))
+        .flatten()
+        .map(|rest| format!("You{rest}"));
+    let (content, rich_content) = body_fields(own_notice.as_deref().unwrap_or(&self.content));
 
     MessageItemData {
         // Multi-select marking is applied by features::chat::selection after
@@ -575,15 +581,22 @@ pub fn apply_reply_counts(
 pub fn messages_to_display_batch(
     messages: &[Message],
     sender_name: impl Fn(&Message) -> String,
+    sender_avatar: impl Fn(&Message) -> Option<Vec<u8>>,
     resolve_attachment: impl Fn(&chatter_core::domain::AttachmentId) -> Option<Attachment>,
     reply_author_name: impl Fn(&Message) -> String,
     reply_not_found: impl Fn(&Message) -> bool,
     reply_parent_media: impl Fn(&Message) -> chatter_core::client::ReplyParentMedia,
 ) -> Vec<MessageDisplayData> {
     let mut display_messages = Vec::with_capacity(messages.len());
+    // One profile read per sender, not per message.
+    // ponytail: each row still decodes its own copy of the avatar; share one
+    // `slint::Image` per sender if long histories make that show up.
+    let mut avatars: std::collections::HashMap<Option<chatter_core::domain::ids::UserId>, Option<Vec<u8>>> =
+        std::collections::HashMap::new();
 
     for msg in messages {
         let sender = sender_name(msg);
+        let avatar = avatars.entry(msg.sender_id).or_insert_with(|| sender_avatar(msg)).clone();
 
         let resolved_attachments: Vec<_> = msg
             .attachments
@@ -592,7 +605,7 @@ pub fn messages_to_display_batch(
             .collect();
 
         let mut display_data =
-            message_to_display_data(msg, &sender, &resolved_attachments, None);
+            message_to_display_data(msg, &sender, &resolved_attachments, avatar);
 
         if display_data.is_reply {
             display_data.reply_to_sender_name = reply_author_name(msg);

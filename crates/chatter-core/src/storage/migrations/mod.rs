@@ -66,6 +66,7 @@ mod v064_shared_content;
 mod v065_sesame_tables;
 mod v066_messages_sent_at_index;
 mod v067_deleted_messages;
+mod v068_blocked_anon_peer_name;
 
 use crate::error::StorageError;
 use chrono::Utc;
@@ -135,6 +136,7 @@ pub use v064_shared_content::V064SharedContent;
 pub use v065_sesame_tables::V065SesameTables;
 pub use v066_messages_sent_at_index::V066MessagesSentAtIndex;
 pub use v067_deleted_messages::V067DeletedMessages;
+pub use v068_blocked_anon_peer_name::V068BlockedAnonPeerName;
 
 /// Trait for database migrations.
 ///
@@ -329,4 +331,5 @@ pub fn default_migrations() -> MigrationRunner {
         .register(V065SesameTables)
         .register(V066MessagesSentAtIndex)
         .register(V067DeletedMessages)
+        .register(V068BlockedAnonPeerName)
 }

@@ -114,13 +114,10 @@ impl MessageService {
         // written by `set_disappearing_timer`) and ARM the E2E marker on the
         // DataMessage so the RECIPIENT's `store_data_message` tracks + reaps
         // their local copy — and track OUR OWN copy below. `0`/absent = off.
-        let disappearing_ttl_secs: Option<u32> = self
-            .settings_repo
-            .get::<Option<u32>>(&format!("conv.disappearing.server_dm.{}", peer_id))
-            .ok()
-            .flatten()
-            .flatten()
-            .filter(|s| *s > 0);
+        let disappearing_ttl_secs: Option<u32> = Some(
+            crate::services::disappearing::server_dm_timer(&self.settings_repo, peer_id),
+        )
+        .filter(|s| *s > 0);
         let mut content = content;
         if let Some(secs) = disappearing_ttl_secs {
             if let Some(crate::proto::content_v1::content::Content::DataMessage(dm)) =
@@ -228,6 +225,45 @@ impl MessageService {
         self.send_friend_dm_content(peer_id, content).await
     }
 
+    /// Change the disappearing-messages timer of the DM with `peer_id`
+    /// (`0` = off), Signal-style: adopt it locally, file the "You set
+    /// disappearing messages to …" notice, and announce it to the friend with
+    /// a timer-update `DataMessage` so their side adopts the same value.
+    ///
+    /// Returns the notice (for the UI to show), or `None` when the timer
+    /// already had that value — nothing is written or sent then.
+    ///
+    /// The local change stands even if the announcement fails: the timer rides
+    /// on every later message too, and the friend adopts it from the first one
+    /// that arrives.
+    pub async fn set_server_dm_disappearing_timer(
+        &self,
+        peer_id: &UserId,
+        seconds: u32,
+    ) -> Result<Option<Message>, MessageError> {
+        let me = self.settings_repo.current_user_id()?;
+        let sent_at = crate::util::time::TimestampNanos::now().as_u64();
+        let Some(notice) = crate::services::disappearing::adopt_server_dm_timer(
+            &self.settings_repo,
+            &self.message_repo,
+            peer_id,
+            &me,
+            seconds,
+            sent_at,
+        )?
+        else {
+            return Ok(None);
+        };
+
+        let content = crate::services::disappearing::timer_update_content(seconds, sent_at);
+        match self.send_friend_dm_content(peer_id, content).await {
+            // Shield without an established mailbox: queued for the bootstrap
+            // flush, which is delivery as far as this change is concerned.
+            Ok(()) | Err(MessageError::BootstrapInitiated) => Ok(Some(notice)),
+            Err(e) => Err(e),
+        }
+    }
+
     /// Deliver `content` (text, receipt, typing, reaction, edit, delete, …) to
     /// a friend over the transport the current mode allows. The ONLY place a
     /// friend DM's transport is decided.
@@ -299,8 +335,14 @@ impl MessageService {
             // Text/attachment DataMessage → Signal-style `SyncSent` wrapper (F8
             // fix, V13): carries the real destination so our other devices file
             // it as our OUTGOING message in the peer's conversation.
+            // A timer update rides the same wrapper, so our other devices adopt
+            // the new timer for the right conversation (Signal syncs it as a
+            // `Sent` transcript of the update message).
             Some(content::Content::DataMessage(dm))
-                if (!dm.body.is_empty() || !dm.attachments.is_empty()) && dm.delete.is_none() =>
+                if (!dm.body.is_empty()
+                    || !dm.attachments.is_empty()
+                    || crate::services::disappearing::is_timer_update(dm))
+                    && dm.delete.is_none() =>
             {
                 let sync = Content {
                     timestamp: content.timestamp,

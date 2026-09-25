@@ -8,7 +8,8 @@ import { Icons } from "../theme/icons.slint";
 import { Modal } from "../components/modal.slint";
 import { Button } from "../components/button.slint";
 import { Input } from "../components/input.slint";
-import { Toggle } from "../components/toggle.slint";
+import { ToggleRow } from "../components/toggle_row.slint";
+import { DisappearingGlobal } from "../chat/disappearing_global.slint";
 import { ScrollView } from "std-widgets.slint";
 
 // Member data for the member list
@@ -18,6 +19,20 @@ export struct ChannelMemberData {
     username: string,
     role: string,  // "owner", "admin", "moderator", "member"
     joined-at: string,
+    // The member's photo; an empty image falls back to initials.
+    avatar-source: image,
+    // Moderator-muted: the server refuses this member's sends.
+    muted: bool,
+    // What the viewer may do to this member, computed in core.
+    can-ban: bool,
+    can-mute: bool,
+}
+
+// A banned user in the members pane's Banned list.
+export struct BannedMemberData {
+    user-id: string,
+    display-name: string,
+    avatar-source: image,
 }
 
 export component ChannelSettingsModal inherits Rectangle {
@@ -54,6 +69,15 @@ export component ChannelSettingsModal inherits Rectangle {
 
     // Member list
     in property <[ChannelMemberData]> members: [];
+    // Active bans; only filled for roles that can unban (can-view-bans).
+    in property <[BannedMemberData]> banned-members: [];
+    in property <bool> can-view-bans: false;
+    // The members menu's mute choices.
+    private property <[{label: string, minutes: int}]> mute-options: [
+        { label: "Mute 1h", minutes: 60 },
+        { label: "Mute 1 day", minutes: 1440 },
+        { label: "Mute", minutes: 0 },
+    ];
 
     // Loading/error state
     in property <bool> loading: false;
@@ -70,6 +94,9 @@ export component ChannelSettingsModal inherits Rectangle {
     callback toggle-ai(bool);
     callback change-member-role(string, string);  // user-id, new-role
     callback remove-member(string);  // user-id
+    callback ban-member(string);  // user-id
+    callback set-member-muted(string, bool, int);  // user-id, muted, minutes (0 = until unmuted)
+    callback unban-member(string);  // user-id
     callback invite-members();  // opens invite modal (private groups)
     callback invite-channel-members();  // opens invite modal (regular channels)
     callback archive-channel();
@@ -343,6 +370,27 @@ export component ChannelSettingsModal inherits Rectangle {
                                 }
                             }
 
+                            // Disappearing messages. A channel's timer is fixed
+                            // when it is created (the server refuses to change
+                            // it), so this is information, not a control.
+                            if !root.is-private-group && DisappearingGlobal.active-label != "Off": HorizontalLayout {
+                                spacing: Spacing.sm;
+                                Image {
+                                    source: Icons.clock;
+                                    width: 16px;
+                                    height: 16px;
+                                    y: (parent.height - self.height) / 2;
+                                    colorize: Colors.text-muted;
+                                }
+                                Text {
+                                    horizontal-stretch: 1;
+                                    text: "Messages disappear after " + DisappearingGlobal.active-label + " (set when the channel was created)";
+                                    color: Colors.text-secondary;
+                                    font-size: Typography.xs;
+                                    wrap: word-wrap;
+                                }
+                            }
+
                             // Divider — Neo
                             Rectangle {
                                 height: 1px;
@@ -470,62 +518,46 @@ export component ChannelSettingsModal inherits Rectangle {
                             }
 
                             // Mute toggle
-                            HorizontalLayout {
-                                spacing: Spacing.sm;
-
-                                VerticalLayout {
-                                    horizontal-stretch: 1;
-                                    min-width: 0px;
-
-                                    Text {
-                                        text: "Mute Channel";
-                                        color: Colors.text-primary;
-                                        font-size: Typography.sm;
-                                        wrap: word-wrap;
-                                    }
-                                    Text {
-                                        text: "You won't receive any notifications from this channel";
-                                        color: Colors.text-muted;
-                                        font-size: Typography.xs;
-                                        wrap: word-wrap;
-                                    }
+                            ToggleRow {
+                                checked <=> root.is-muted;
+                                accessible-text: "Mute Channel";
+                                toggled(value) => {
+                                    root.toggle-mute(value);
                                 }
 
-                                Toggle {
-                                    checked: root.is-muted;
-                                    toggled(value) => {
-                                        root.toggle-mute(value);
-                                    }
+                                Text {
+                                    text: "Mute Channel";
+                                    color: Colors.text-primary;
+                                    font-size: Typography.sm;
+                                    wrap: word-wrap;
+                                }
+                                Text {
+                                    text: "You won't receive any notifications from this channel";
+                                    color: Colors.text-muted;
+                                    font-size: Typography.xs;
+                                    wrap: word-wrap;
                                 }
                             }
 
                             // AI assistant for this channel
-                            HorizontalLayout {
-                                spacing: Spacing.sm;
-
-                                VerticalLayout {
-                                    horizontal-stretch: 1;
-                                    min-width: 0px;
-
-                                    Text {
-                                        text: "AI assistant";
-                                        color: Colors.text-primary;
-                                        font-size: Typography.sm;
-                                        wrap: word-wrap;
-                                    }
-                                    Text {
-                                        text: "Let the AI read this channel when you ask it something here. Off by default.";
-                                        color: Colors.text-muted;
-                                        font-size: Typography.xs;
-                                        wrap: word-wrap;
-                                    }
+                            ToggleRow {
+                                checked <=> root.ai-enabled;
+                                accessible-text: "AI assistant";
+                                toggled(value) => {
+                                    root.toggle-ai(value);
                                 }
 
-                                Toggle {
-                                    checked: root.ai-enabled;
-                                    toggled(value) => {
-                                        root.toggle-ai(value);
-                                    }
+                                Text {
+                                    text: "AI assistant";
+                                    color: Colors.text-primary;
+                                    font-size: Typography.sm;
+                                    wrap: word-wrap;
+                                }
+                                Text {
+                                    text: "Let the AI read this channel when you ask it something here. Off by default.";
+                                    color: Colors.text-muted;
+                                    font-size: Typography.xs;
+                                    wrap: word-wrap;
                                 }
                             }
 
@@ -756,10 +788,10 @@ export component ChannelSettingsModal inherits Rectangle {
                                         spacing: Spacing.sm;
                                         padding: Spacing.xs;
 
-                                        // Initials in a clipped circle; the hand-rolled
-                                        // placeholder here drew the whole name, unclipped.
+                                        // Photo in a clipped circle, initials when there is none.
                                         Avatar {
                                             size: 36px;
+                                            source: member.avatar-source;
                                             name: member.display-name;
                                             fallback-text: "?";
                                         }
@@ -779,7 +811,7 @@ export component ChannelSettingsModal inherits Rectangle {
                                                 overflow: elide;
                                             }
 
-                                            if member.role != "member" || member.username != "": HorizontalLayout {
+                                            if member.role != "member" || member.username != "" || member.muted: HorizontalLayout {
                                                 spacing: Spacing.xs;
 
                                                 if member.role != "member": Rectangle {
@@ -792,6 +824,24 @@ export component ChannelSettingsModal inherits Rectangle {
                                                         x: Spacing.xs;
                                                         text: member.role;
                                                         color: root.role-color(member.role);
+                                                        font-size: Typography.xs;
+                                                        font-weight: Typography.medium;
+                                                        vertical-alignment: center;
+                                                        height: 100%;
+                                                    }
+                                                }
+
+                                                // Moderator mute: the server refuses their sends.
+                                                if member.muted: Rectangle {
+                                                    width: muted-text.preferred-width + Spacing.sm;
+                                                    height: 18px;
+                                                    background: Colors.error.with-alpha(0.15);
+                                                    border-radius: Spacing.radius-sm;
+
+                                                    muted-text := Text {
+                                                        x: Spacing.xs;
+                                                        text: "muted";
+                                                        color: Colors.error;
                                                         font-size: Typography.xs;
                                                         font-weight: Typography.medium;
                                                         vertical-alignment: center;
@@ -813,7 +863,8 @@ export component ChannelSettingsModal inherits Rectangle {
                                         // One ⋮ instead of Role + Remove, which on a phone
                                         // squeezed the name to "…". Tapping it expands the
                                         // action row below. Only if can manage and not owner.
-                                        if root.can-manage-members && member.role != "owner": Rectangle {
+                                        // Also for a moderator/admin who can only mute or ban.
+                                        if (root.can-manage-members && member.role != "owner") || member.can-ban || member.can-mute: Rectangle {
                                             width: 44px;
                                             height: 44px;
                                             border-radius: Spacing.radius-sm;
@@ -852,7 +903,7 @@ export component ChannelSettingsModal inherits Rectangle {
                                         spacing: Spacing.xs;
                                         padding: Spacing.xs;
 
-                                        if !root.is-private-group: VerticalLayout {
+                                        if !root.is-private-group && root.can-manage-members: VerticalLayout {
                                             spacing: Spacing.xs;
 
                                             for r in ["member", "moderator", "admin"]: Button {
@@ -868,13 +919,48 @@ export component ChannelSettingsModal inherits Rectangle {
                                             }
                                         }
 
-                                        Button {
+                                        if member.can-mute && member.muted: Button {
+                                            text: "Unmute";
+                                            variant: "secondary";
+
+                                            clicked => {
+                                                root.role-picker-user = "";
+                                                root.set-member-muted(member.user-id, false, 0);
+                                            }
+                                        }
+
+                                        // Timed or until unmuted (minutes 0); the server lifts a timed mute.
+                                        if member.can-mute && !member.muted: VerticalLayout {
+                                            spacing: Spacing.xs;
+
+                                            for opt in root.mute-options: Button {
+                                                text: opt.label;
+                                                variant: "secondary";
+
+                                                clicked => {
+                                                    root.role-picker-user = "";
+                                                    root.set-member-muted(member.user-id, true, opt.minutes);
+                                                }
+                                            }
+                                        }
+
+                                        if root.can-manage-members: Button {
                                             text: "Remove";
                                             variant: "danger";
 
                                             clicked => {
                                                 root.role-picker-user = "";
                                                 root.remove-member(member.user-id);
+                                            }
+                                        }
+
+                                        if member.can-ban: Button {
+                                            text: "Ban";
+                                            variant: "danger";
+
+                                            clicked => {
+                                                root.role-picker-user = "";
+                                                root.ban-member(member.user-id);
                                             }
                                         }
                                     }
@@ -884,7 +970,7 @@ export component ChannelSettingsModal inherits Rectangle {
                                         padding: Spacing.xs;
                                         alignment: end;
 
-                                        if !root.is-private-group: HorizontalLayout {
+                                        if !root.is-private-group && root.can-manage-members: HorizontalLayout {
                                             spacing: Spacing.xs;
 
                                             for r in ["member", "moderator", "admin"]: Button {
@@ -900,13 +986,48 @@ export component ChannelSettingsModal inherits Rectangle {
                                             }
                                         }
 
-                                        Button {
+                                        if member.can-mute && member.muted: Button {
+                                            text: "Unmute";
+                                            variant: "secondary";
+
+                                            clicked => {
+                                                root.role-picker-user = "";
+                                                root.set-member-muted(member.user-id, false, 0);
+                                            }
+                                        }
+
+                                        // Timed or until unmuted (minutes 0); the server lifts a timed mute.
+                                        if member.can-mute && !member.muted: HorizontalLayout {
+                                            spacing: Spacing.xs;
+
+                                            for opt in root.mute-options: Button {
+                                                text: opt.label;
+                                                variant: "secondary";
+
+                                                clicked => {
+                                                    root.role-picker-user = "";
+                                                    root.set-member-muted(member.user-id, true, opt.minutes);
+                                                }
+                                            }
+                                        }
+
+                                        if root.can-manage-members: Button {
                                             text: "Remove";
                                             variant: "danger";
 
                                             clicked => {
                                                 root.role-picker-user = "";
                                                 root.remove-member(member.user-id);
+                                            }
+                                        }
+
+                                        if member.can-ban: Button {
+                                            text: "Ban";
+                                            variant: "danger";
+
+                                            clicked => {
+                                                root.role-picker-user = "";
+                                                root.ban-member(member.user-id);
                                             }
                                         }
                                     }
@@ -917,6 +1038,44 @@ export component ChannelSettingsModal inherits Rectangle {
                                     y: parent.height - 1px;
                                     height: 1px;
                                     background: Colors.surface-hover.with-alpha(0.5);
+                                }
+                            }
+
+                            // Banned users (owner/admin only — the roles that can unban).
+                            if root.can-view-bans && root.banned-members.length > 0: Text {
+                                text: "Banned";
+                                color: Colors.text-primary;
+                                font-size: Typography.base;
+                                font-weight: Typography.semibold;
+                            }
+
+                            if root.can-view-bans: VerticalLayout {
+                                for banned in root.banned-members: HorizontalLayout {
+                                    height: 52px;
+                                    spacing: Spacing.sm;
+                                    padding: Spacing.xs;
+
+                                    Avatar {
+                                        size: 36px;
+                                        source: banned.avatar-source;
+                                        name: banned.display-name;
+                                        fallback-text: "?";
+                                    }
+
+                                    Text {
+                                        text: banned.display-name;
+                                        color: Colors.text-secondary;
+                                        font-size: Typography.sm;
+                                        vertical-alignment: center;
+                                        horizontal-stretch: 1;
+                                        overflow: elide;
+                                    }
+
+                                    Button {
+                                        text: "Unban";
+                                        variant: "secondary";
+                                        clicked => { root.unban-member(banned.user-id); }
+                                    }
                                 }
                             }
                         }

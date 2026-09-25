@@ -1274,12 +1274,12 @@ impl LinkDeviceService {
         Ok(())
     }
 
-    pub async fn list_pending(
-        &self,
-    ) -> Result<Vec<ProvisioningSession>, LinkDeviceError> {
+    /// Links this account approved that the new device has not completed yet
+    /// (see [`pending_links`]).
+    pub async fn list_pending(&self) -> Result<Vec<PendingLink>, LinkDeviceError> {
         let mut client = self.provisioning_client()?;
         let response = client.list_provisioning_sessions().await?;
-        Ok(response.sessions)
+        Ok(pending_links(response.sessions, crate::util::time::TimestampNanos::now().as_u64()))
     }
 
     /// Step 1 of the primary-side device-link flow. Pure parse + preview —
@@ -1379,6 +1379,35 @@ impl LinkDeviceService {
             server_url: req.server_url,
         })
     }
+}
+
+/// A link this account approved whose new device has not finished linking.
+/// Cancelling it ([`LinkDeviceService::cancel`]) stops the new device from
+/// completing: the server only completes a session still in `Provisioned`.
+#[derive(Debug, Clone)]
+pub struct PendingLink {
+    pub uuid: String,
+    pub device_name: String,
+    /// Unix nanoseconds.
+    pub expires_at: u64,
+}
+
+/// The server lists a session for this account only once its primary has
+/// approved it (`ProvisionDevice` is what ties it to a user), so an
+/// unapproved request never reaches this list — approval needs the new
+/// device's QR key, which the listing does not carry. Completed, cancelled
+/// and expired sessions are dropped.
+pub fn pending_links(sessions: Vec<ProvisioningSession>, now_ns: u64) -> Vec<PendingLink> {
+    use crate::proto::provisioning_v1::provisioning_session::Status;
+    sessions
+        .into_iter()
+        .filter(|s| s.status == Status::Provisioned as i32 && s.expires_at > now_ns)
+        .map(|s| PendingLink {
+            device_name: if s.device_name.is_empty() { s.device_info } else { s.device_name },
+            uuid: s.provisioning_uuid,
+            expires_at: s.expires_at,
+        })
+        .collect()
 }
 
 /// Summary of a just-approved (or previewed) link request, for UI display.
@@ -1531,6 +1560,33 @@ fn random_provisioning_code() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Only approved-and-still-open sessions are pending; the name falls
+    /// back to the device info.
+    #[test]
+    fn pending_links_keeps_only_open_approved_sessions() {
+        use crate::proto::provisioning_v1::provisioning_session::Status;
+        let s = |uuid: &str, status: Status, expires_at: u64, name: &str| ProvisioningSession {
+            provisioning_uuid: uuid.into(),
+            device_info: "android".into(),
+            device_name: name.into(),
+            status: status as i32,
+            created_at: 0,
+            expires_at,
+        };
+        let links = pending_links(
+            vec![
+                s("open", Status::Provisioned, 200, ""),
+                s("expired", Status::Provisioned, 100, "Tab"),
+                s("waiting", Status::Pending, 200, "Tab"),
+                s("done", Status::Completed, 200, "Tab"),
+            ],
+            150,
+        );
+        assert_eq!(links.len(), 1);
+        assert_eq!(links[0].uuid, "open");
+        assert_eq!(links[0].device_name, "android");
+    }
 
     #[test]
     fn parses_round_trip_link_url() {

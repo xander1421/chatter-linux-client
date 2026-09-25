@@ -67,6 +67,25 @@ pub fn wire_settings_callbacks(window: &MainWindow, ui_ctx: &Arc<ChatterClient>)
         let _ = ui_ctx_typing.set_typing_indicators_enabled(enabled);
     });
 
+    // Notification content selector (Signal's "Show: Name and message /
+    // Name only / No name or message"). Core persists and applies; the
+    // property is re-set from what core now holds so a failed save shows the
+    // level actually in force, not the one clicked.
+    let ui_ctx_detail = ui_ctx.clone();
+    let weak_detail = window.as_weak();
+    window.on_settings_notification_detail_changed(move |value: SharedString| {
+        use chatter_core::services::notification_service::NotificationDetailLevel;
+        let level = NotificationDetailLevel::from_str(value.as_str());
+        if let Err(e) = ui_ctx_detail.set_notification_detail_level(level) {
+            tracing::error!("Failed to save notification detail level: {}", e);
+        }
+        if let Some(w) = weak_detail.upgrade() {
+            w.set_settings_notification_detail(
+                ui_ctx_detail.notification_detail_level().as_str().into(),
+            );
+        }
+    });
+
     // Search shortcut selector
     let ui_ctx_shortcut = ui_ctx.clone();
     let weak_shortcut = window.as_weak();
@@ -396,6 +415,43 @@ pub fn wire_settings_callbacks(window: &MainWindow, ui_ctx: &Arc<ChatterClient>)
                 Err(e) => format!("Server restore failed: {e}"),
             };
             set_message_backup_status(&weak, status);
+        });
+    });
+
+    // Settings › Recovery Codes › Regenerate (password-confirmed). The server
+    // replaces every code; the new set is shown once in RecoveryCodesModal,
+    // whose Continue returns to Settings (`recovery-codes-regenerated`).
+    let ui_ctx_regen = ui_ctx.clone();
+    let weak_window = window.as_weak();
+    window.on_settings_regenerate_recovery_codes(move |password: SharedString| {
+        let ui_ctx = ui_ctx_regen.clone();
+        let weak = weak_window.clone();
+        let password = password.to_string();
+        if let Some(w) = weak.upgrade() {
+            w.set_settings_recovery_regen_loading(true);
+            w.set_settings_recovery_regen_error("".into());
+        }
+        tokio::spawn(async move {
+            let result = ui_ctx.regenerate_recovery_codes(&password).await;
+            let _ = slint::invoke_from_event_loop(move || {
+                let Some(w) = weak.upgrade() else { return };
+                w.set_settings_recovery_regen_loading(false);
+                match result {
+                    Ok(codes) => {
+                        let model: Vec<SharedString> = codes.iter().map(|c| c.as_str().into()).collect();
+                        w.set_recovery_codes(slint::ModelRc::new(slint::VecModel::from(model)));
+                        w.set_settings_recovery_regen_password("".into());
+                        w.set_recovery_codes_regenerated(true);
+                        w.set_active_modal("recovery-codes".into());
+                    }
+                    Err(e) => {
+                        tracing::warn!("Recovery code regeneration failed: {e}");
+                        w.set_settings_recovery_regen_error(
+                            format!("Could not regenerate codes: {e}").into(),
+                        );
+                    }
+                }
+            });
         });
     });
 

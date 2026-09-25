@@ -10,7 +10,7 @@ use crate::domain::UserId;
 use crate::error::StorageError;
 use crate::storage::Database;
 use chrono::{DateTime, Utc};
-use rusqlite::params;
+use rusqlite::{params, OptionalExtension};
 use std::sync::Arc;
 
 /// Anonymous DM data repository.
@@ -477,6 +477,31 @@ impl AnonDmRepository {
             |row| row.get(0),
         )?;
         Ok(count > 0)
+    }
+
+    /// Remember a blocked peer's name on their block row, so it outlives the
+    /// conversation row that normally holds it. No-op for an unblocked peer.
+    pub fn set_blocked_display_name(&self, user_id: &UserId, name: &str) -> Result<(), StorageError> {
+        let conn = self.db.connection()?;
+        conn.execute(
+            "UPDATE anon_dm_blocked_users SET display_name = ?2 WHERE user_id = ?1",
+            params![user_id.as_bytes().as_slice(), name],
+        )?;
+        Ok(())
+    }
+
+    /// The name stored on a blocked peer's block row, if any.
+    pub fn get_blocked_display_name(&self, user_id: &UserId) -> Result<Option<String>, StorageError> {
+        let conn = self.db.read_connection()?;
+        let name = conn
+            .query_row(
+                "SELECT display_name FROM anon_dm_blocked_users WHERE user_id = ?1",
+                params![user_id.as_bytes().as_slice()],
+                |row| row.get::<_, Option<String>>(0),
+            )
+            .optional()?
+            .flatten();
+        Ok(name)
     }
 
     /// Get all globally blocked users.

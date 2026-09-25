@@ -11,6 +11,7 @@ import { Avatar } from "../components/avatar.slint";
 import { JarvisGlobal } from "../jarvis/jarvis_global.slint";
 import { MeshGlobal } from "../mesh/mesh_global.slint";
 import { ConversationKind } from "conversation_kind.slint";
+import { DisappearingGlobal } from "disappearing_global.slint";
 
 // Data struct for chat header (mirrors Rust ChatHeaderData)
 export struct ChatHeaderData {
@@ -370,6 +371,29 @@ export component ChatHeader inherits Rectangle {
                     enabled: root.show-settings;
                     mouse-cursor: pointer;
                     clicked => { root.settings-clicked(); }
+                }
+            }
+
+            // Disappearing-messages timer (Signal draws the same clock + value
+            // beside the name). Core decides the value; "" means off.
+            if has-channel && !root.is-mesh && DisappearingGlobal.header-label != "": HorizontalLayout {
+                spacing: 2px;
+                alignment: center;
+                horizontal-stretch: 0;
+                accessible-role: text;
+                accessible-label: "Disappearing messages: " + DisappearingGlobal.active-label;
+                Image {
+                    source: Icons.clock;
+                    width: 14px;
+                    height: 14px;
+                    y: (parent.height - self.height) / 2;
+                    colorize: Colors.text-muted;
+                }
+                Text {
+                    text: DisappearingGlobal.header-label;
+                    color: Colors.text-muted;
+                    font-size: Typography.xs;
+                    vertical-alignment: center;
                 }
             }
 

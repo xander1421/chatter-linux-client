@@ -195,6 +195,7 @@ pub async fn load_initial_data(window_weak: Weak<MainWindow>, ui_ctx: &Arc<Chatt
     let ui_ctx_for_refresh = ui_ctx.clone();
     let ui_ctx_for_convert = ui_ctx.clone();
     let search_shortcut_pref = ui_ctx.get_search_shortcut().as_str();
+    let notification_detail = ui_ctx.notification_detail_level().as_str();
     let _ = slint::invoke_from_event_loop(move || {
         if let Some(w) = window_weak_ui.upgrade() {
             let channel_list: Vec<ChannelListItemData> = channel_domain_list
@@ -219,6 +220,10 @@ pub async fn load_initial_data(window_weak: Weak<MainWindow>, ui_ctx: &Arc<Chatt
             // Hydrate the persisted search-shortcut preference so the
             // FocusScope picks the right combo (Ctrl+K / Ctrl+F / Both) at startup.
             w.set_search_shortcut_pref(search_shortcut_pref.into());
+            // Same for the notification detail level, so Settings shows the
+            // persisted level even when opened without the sidebar hydration
+            // (Ctrl+, sets active-modal directly).
+            w.set_settings_notification_detail(notification_detail.into());
 
             // Set user's own avatar if available
             if let Some((pixels, width, height)) = user_avatar_decoded {
@@ -316,6 +321,7 @@ async fn load_channel_into_ui_from_services(
     let mut display_messages = messages_to_display_batch(
         &messages,
         |m| ui_ctx.message_sender_display_name(m),
+        |m| ui_ctx.message_sender_avatar(m),
         |att_id| ui_ctx.get_attachment_metadata(att_id),
         |m| ui_ctx.reply_author_display_name(m),
         |m| ui_ctx.reply_parent_missing_for(m),

@@ -15,6 +15,38 @@ use crate::bin_ui::converters::messages_to_display_batch;
 
 use super::stop_audio_playback;
 
+/// Sidebar menu › Delete chat on a DM row (confirmed in the menu). Core
+/// resolves the row and deletes (`delete_conversation`, DMs only); if it was
+/// the open conversation the chat pane is emptied, then the lists rebuild.
+pub fn wire_delete_conversation(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
+    let ui_ctx = ui_ctx.clone();
+    let weak = window.as_weak();
+    window.on_delete_conversation(move |row_id: SharedString, _kind: crate::ConversationKind| {
+        let (weak, ui_ctx) = (weak.clone(), ui_ctx.clone());
+        tokio::spawn(async move {
+            let Some(conv) = ui_ctx.resolve_dm_conversation(row_id.as_str()) else {
+                tracing::warn!(row_id = %row_id, "delete chat: row resolves to no conversation");
+                return;
+            };
+            if let Err(e) = ui_ctx.delete_conversation(conv) {
+                tracing::error!(error = %e, row_id = %row_id, "delete chat failed");
+                return;
+            }
+            let ui_ctx_ui = ui_ctx.clone();
+            run_ui!(weak, |w| {
+                if ui_ctx_ui.active_conversation() == conv {
+                    ui_ctx_ui.chat_state().set_active_conversation(chatter_core::state::ActiveConversation::None);
+                    w.set_messages(ModelRc::new(VecModel::<crate::MessageItemData>::default()));
+                    // No name = nothing open: the pane shows "Select a conversation".
+                    w.set_channel_name("".into());
+                }
+            });
+            super::sections::refresh_sections_ui(&weak, &ui_ctx);
+            super::sections::refresh_conversation_lists(&weak, &ui_ctx);
+        });
+    });
+}
+
 /// Wire DM selected callback.
 pub fn wire_dm_selected(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     let ui_ctx_clone = ui_ctx.clone();
@@ -159,6 +191,7 @@ pub fn wire_dm_selected(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                 let display_messages = messages_to_display_batch(
                     &messages,
                     |m| ui_ctx.message_sender_display_name(m),
+                    |m| ui_ctx.message_sender_avatar(m),
                     |att_id| ui_ctx.get_attachment(att_id),
                     |m| ui_ctx.reply_author_display_name(m),
                     |m| ui_ctx.reply_parent_missing_for(m),
@@ -262,6 +295,7 @@ pub fn wire_dm_selected(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             let display_messages = messages_to_display_batch(
                 &messages,
                 |m| ui_ctx.message_sender_display_name(m),
+                |m| ui_ctx.message_sender_avatar(m),
                 |att_id| ui_ctx.get_attachment(att_id),
                 |m| ui_ctx.reply_author_display_name(m),
                 |m| ui_ctx.reply_parent_missing_for(m),

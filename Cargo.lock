@@ -2022,6 +2022,7 @@ dependencies = [
  "mp4san",
  "muda 0.17.2",
  "notify-rust",
+ "oboe",
  "open",
  "parking_lot",
  "paste",

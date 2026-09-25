@@ -16,16 +16,25 @@ export struct SessionInfo {
     is-current: bool,
 }
 
+// A link this account approved that the new device has not finished yet.
+export struct PendingLinkInfo {
+    uuid: string,
+    device-name: string,
+    expires: string,  // local time, "HH:MM"
+}
+
 export component SessionsModal inherits Rectangle {
     in property <bool> show-modal: false;
     in property <[SessionInfo]> sessions: [];
     in property <bool> loading: false;
     in property <bool> revoking: false;
+    in property <[PendingLinkInfo]> pending-links: [];
 
     callback close();
     callback revoke-session(int);  // device_id
     callback revoke-all-others();
     callback link-new-device();    // open primary-side approve modal
+    callback cancel-pending-link(string);  // provisioning uuid
 
     // Phone width: the modal card is the window minus 32px.
     property <bool> narrow: root.width < 560px;
@@ -93,6 +102,50 @@ export component SessionsModal inherits Rectangle {
             Rectangle {
                 height: 1px;
                 background: Colors.text-muted.with-alpha(0.2);
+            }
+
+            // Approved links the new device has not completed. Cancel is the
+            // one way to take an approval back before that device joins.
+            for link in root.pending-links: Rectangle {
+                background: Colors.surface;
+                border-radius: Spacing.radius-md;
+
+                HorizontalLayout {
+                    padding: Spacing.md;
+                    spacing: Spacing.md;
+
+                    VerticalLayout {
+                        horizontal-stretch: 1;
+                        alignment: center;
+                        spacing: 2px;
+
+                        Text {
+                            text: link.device-name != "" ? link.device-name : "New device";
+                            color: Colors.text-primary;
+                            font-size: Typography.sm;
+                            font-weight: Typography.medium;
+                            overflow: elide;
+                        }
+
+                        Text {
+                            text: "Approved, waiting for it to finish linking (until " + link.expires + ")";
+                            color: Colors.text-muted;
+                            font-size: Typography.xs;
+                            wrap: word-wrap;
+                        }
+                    }
+
+                    HorizontalLayout {
+                        alignment: center;
+
+                        Button {
+                            text: "Cancel";
+                            variant: "ghost";
+                            disabled: root.revoking;
+                            clicked => { root.cancel-pending-link(link.uuid); }
+                        }
+                    }
+                }
             }
 
             // Session list

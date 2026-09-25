@@ -960,9 +960,12 @@ impl UserService {
                 created_at: Utc::now(),
             };
 
-            if self.user_repo.update_friendship(&friendship).is_err() {
-                let _ = self.user_repo.insert_friendship(&friendship);
-            }
+            // FK on users(id); then record the friendship without lifting a
+            // block — the server lists blocked friends too.
+            self.user_repo.ensure_user_exists(&friend_id).ok();
+            let _ = self
+                .user_repo
+                .accept_friendship_unless_blocked(&current_user, &friend_id);
 
             // Build profile from the proto UserProfile already in the response.
             let mut profile = proto_to_domain_profile(friend)?;
@@ -997,7 +1000,6 @@ impl UserService {
                         .and_then(|stored| stored.avatar_bytes)
                 });
 
-            self.user_repo.ensure_user_exists(&friend_id).ok();
             self.user_repo.upsert_profile(&profile).ok();
 
             results.push((friendship, profile));
@@ -1177,15 +1179,30 @@ impl UserService {
             }
         }
 
-        let _ = self.user_repo.delete_friendship(&current_user, user_id);
+        // The server kept the friendship through the block (Signal-style), and
+        // locally the block is only the row's status. Flip it back rather than
+        // delete the row: the row holds the friend's profile key, and deleting
+        // it is what brought an unblocked friend back as "User 1c242673".
+        let accepted = Friendship {
+            requester_id: current_user,
+            addressee_id: *user_id,
+            status: FriendshipStatus::Accepted,
+            created_at: Utc::now(),
+        };
+        let _ = self.user_repo.update_friendship(&accepted);
 
-        // The server kept the friendship through the block (Signal-style), but
-        // locally the Blocked row replaced it. Re-read the friend list so the
-        // friend and their DM come straight back.
-        // ponytail: first page only; a friend past it returns on the next
-        // `UserSync::sync_friends` cycle.
-        if let Err(e) = self.list_friends_with_profiles(100, 0).await {
-            tracing::warn!(error = %e, "unblock_user: friend list not refreshed");
+        // Someone who was never a friend has no business in the friends list.
+        // ponytail: judged on the first page only; with a full page (or
+        // offline) the next `UserSync::sync_friends` prune removes the row.
+        match self.list_friends_with_profiles(100, 0).await {
+            Ok(friends)
+                if friends.len() < 100
+                    && !friends.iter().any(|(f, _)| f.addressee_id == *user_id) =>
+            {
+                let _ = self.user_repo.delete_friendship(&current_user, user_id);
+            }
+            Ok(_) => {}
+            Err(e) => tracing::warn!(error = %e, "unblock_user: friend list not refreshed"),
         }
 
         Ok(())
@@ -1261,6 +1278,13 @@ impl UserService {
                 if !name.is_empty() {
                     return name;
                 }
+            }
+        }
+        // A blocked anon peer whose chat was deleted: the block row keeps
+        // the name the conversation row carried.
+        if let Ok(Some(name)) = self.anon_dm_repo.get_blocked_display_name(user_id) {
+            if !name.is_empty() {
+                return name;
             }
         }
         if let Ok(Some(name)) = self.anon_group_repo.find_display_name_for_user(user_id) {

@@ -239,13 +239,14 @@ fn wire_chat_settings_clicked(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) 
 
                     let role = member.role.as_str();
 
-                    slint_members.push(crate::ChannelMemberData {
-                        user_id: member.user_id.to_string().into(),
-                        display_name: display_name.into(),
-                        username: "".into(),
-                        role: role.into(),
-                        joined_at: "".into(),
-                    });
+                    // Only Send data leaves this thread; the per-group
+                    // avatar is decoded into an image on the UI thread.
+                    slint_members.push((
+                        member.user_id.to_string(),
+                        display_name,
+                        role,
+                        member.avatar,
+                    ));
                 }
 
                 // Open private group settings modal
@@ -257,7 +258,28 @@ fn wire_chat_settings_clicked(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) 
                         w.set_channel_settings_member_count(member_count);
                         w.set_channel_settings_is_owner(is_owner);
                         w.set_channel_settings_can_manage_members(can_manage_members);
-                        w.set_channel_settings_members(ModelRc::new(VecModel::from(slint_members)));
+                        let rows: Vec<crate::ChannelMemberData> = slint_members
+                            .into_iter()
+                            .map(|(user_id, display_name, role, avatar)| crate::ChannelMemberData {
+                                user_id: user_id.into(),
+                                display_name: display_name.into(),
+                                username: "".into(),
+                                role: role.into(),
+                                joined_at: "".into(),
+                                avatar_source: avatar
+                                    .as_deref()
+                                    .and_then(crate::bin_ui::converters::avatar_bytes_to_image)
+                                    .unwrap_or_default(),
+                                // Anon groups have no mute/ban RPCs.
+                                muted: false,
+                                can_ban: false,
+                                can_mute: false,
+                            })
+                            .collect();
+                        w.set_channel_settings_members(ModelRc::new(VecModel::from(rows)));
+                        // Clear a previous channel's ban list.
+                        w.set_channel_settings_can_view_bans(false);
+                        w.set_channel_settings_banned_members(ModelRc::default());
                         w.set_active_modal("channel-settings".into());
                         tracing::debug!(
                             "Opened settings for private group {} with {} members",
@@ -414,6 +436,7 @@ fn wire_load_more(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             let mut display_messages = messages_to_display_batch(
                 &older_messages,
                 |m| ui_ctx.message_sender_display_name(m),
+                |m| ui_ctx.message_sender_avatar(m),
                 |att_id| ui_ctx.get_attachment(att_id),
                 |m| ui_ctx.reply_author_display_name(m),
                 |m| ui_ctx.reply_parent_missing_for(m),

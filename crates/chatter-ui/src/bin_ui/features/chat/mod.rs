@@ -7,6 +7,7 @@ mod actions;
 pub mod emoji_loader;
 mod context_menu;
 mod delete;
+pub mod disappearing;
 pub(crate) mod edit;
 mod helpers;
 pub mod identity_change;
@@ -48,4 +49,5 @@ pub fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     selection::wire_selection(window, ui_ctx);
     identity_change::wire_accept(window, ui_ctx);
     emoji_loader::wire_emoji_loader(window, ui_ctx);
+    disappearing::wire(window, ui_ctx);
 }

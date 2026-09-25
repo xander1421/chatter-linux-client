@@ -31,7 +31,6 @@ use crate::services::current_user::CurrentUserProvider;
 use crate::storage::repositories::channel_repo::ChannelRepository;
 use crate::storage::repositories::section_repo::SectionRepository;
 use crate::storage::repositories::settings_repo::SettingsRepository;
-use crate::storage::repositories::user_repo::UserRepository;
 
 use super::converters::{
     domain_channel_type_to_proto, domain_config_to_proto,
@@ -49,7 +48,6 @@ pub struct ChannelService {
     pub(crate) settings_repo: Arc<SettingsRepository>,
     pub(crate) channel_repo: Arc<ChannelRepository>,
     pub(crate) section_repo: Arc<SectionRepository>,
-    pub(crate) user_repo: Arc<UserRepository>,
     pub(crate) signal_service: Arc<crate::services::signal_service::SignalService>,
     pub(crate) group_coordinator: Arc<GroupCoordinator>,
     /// For SKDM redistribution after kick/leave; set after MessageService
@@ -64,7 +62,6 @@ impl ChannelService {
         settings_repo: Arc<SettingsRepository>,
         channel_repo: Arc<ChannelRepository>,
         section_repo: Arc<SectionRepository>,
-        user_repo: Arc<UserRepository>,
         signal_service: Arc<crate::services::signal_service::SignalService>,
         group_coordinator: Arc<GroupCoordinator>,
         message_service: Arc<crate::services::message::MessageService>,
@@ -74,7 +71,6 @@ impl ChannelService {
             settings_repo,
             channel_repo,
             section_repo,
-            user_repo,
             signal_service,
             group_coordinator,
             message_service,

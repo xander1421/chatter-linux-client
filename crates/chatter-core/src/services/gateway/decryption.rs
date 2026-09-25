@@ -813,6 +813,8 @@ impl MessageGateway {
 
         // Fallback: try as DataMessage proto (backwards compat)
         if let Ok(data_message) = DataMessage::decode(plaintext.as_slice()) {
+            let expire_timer = Some(crate::services::disappearing::stated_timer(&data_message));
+            let timer_update = crate::services::disappearing::is_timer_update(&data_message);
             let profile_key = data_message.profile_key.filter(|k| k.len() == 32);
             tracing::debug!(
                 sender_id = %sender_id,
@@ -830,6 +832,8 @@ impl MessageGateway {
                 profile_key,
                 quote: data_message.quote,
                 thread_id,
+                expire_timer,
+                timer_update,
             }));
         }
 
@@ -857,6 +861,8 @@ impl MessageGateway {
             profile_key: None,
             quote: None,
             thread_id: None,
+            expire_timer: None,
+            timer_update: false,
         }))
     }
 
@@ -871,6 +877,8 @@ impl MessageGateway {
                     });
                 }
 
+                let expire_timer = Some(crate::services::disappearing::stated_timer(&msg));
+                let timer_update = crate::services::disappearing::is_timer_update(&msg);
                 // Extract profile key if present (32 bytes for display_name decryption)
                 let profile_key = msg.profile_key.filter(|k| k.len() == 32);
                 if profile_key.is_some() {
@@ -894,6 +902,8 @@ impl MessageGateway {
                     profile_key,
                     quote: msg.quote,
                     thread_id,
+                    expire_timer,
+                    timer_update,
                 })
             }
             Some(content::Content::Typing(msg)) => {

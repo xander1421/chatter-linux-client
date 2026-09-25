@@ -264,7 +264,16 @@ export component SectionContextMenu inherits Rectangle {
     callback remove-from-section(/* conv-id */ string);
     callback set-pinned(/* conv-id */ string, /* pinned */ bool);
     callback create-section-clicked();
+    // DM rows only: deletes the chat on this device (core
+    // `delete_conversation`). A channel is left from Channel Settings.
+    callback delete-chat(/* conv-id */ string, /* conv-type */ ConversationKind);
     callback close();
+
+    property <bool> can-delete: root.conversation-type == ConversationKind.server-dm
+        || root.conversation-type == ConversationKind.anon-dm;
+    // Delete asks once, inside the menu; reset whenever the menu closes.
+    property <bool> confirm-delete: false;
+    changed show => { root.confirm-delete = false; }
 
     visible: root.show;
     width: 100%;
@@ -371,6 +380,37 @@ export component SectionContextMenu inherits Rectangle {
                     root.remove-from-section(root.conversation-id);
                     root.close();
                 }
+            }
+
+            if root.can-delete: Rectangle {
+                height: 1px;
+                background: Colors.text-muted.with-alpha(0.15);
+            }
+
+            if root.can-delete && !root.confirm-delete: MenuItem {
+                icon: Icons.trash;
+                label: "Delete chat";
+                destructive: true;
+                mobile-mode: root.mobile-mode;
+                clicked => { root.confirm-delete = true; }
+            }
+
+            if root.can-delete && root.confirm-delete: MenuItem {
+                icon: Icons.trash;
+                label: "Delete all messages here?";
+                destructive: true;
+                mobile-mode: root.mobile-mode;
+                clicked => {
+                    root.delete-chat(root.conversation-id, root.conversation-type);
+                    root.close();
+                }
+            }
+
+            if root.can-delete && root.confirm-delete: MenuItem {
+                icon: Icons.x;
+                label: "Cancel";
+                mobile-mode: root.mobile-mode;
+                clicked => { root.confirm-delete = false; }
             }
         }
     }

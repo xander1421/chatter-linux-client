@@ -307,6 +307,11 @@ pub async fn app_init() -> AppState {
     #[cfg(target_os = "android")]
     window.on_secure_screen(crate::platform::android::activity::set_secure);
 
+    // Earpiece / speaker / headset routing for calls; the speaker button
+    // becomes a toggle bound to the real route.
+    #[cfg(all(target_os = "android", feature = "call-ui"))]
+    crate::platform::android::audio_route::install(&window);
+
     // Jarvis feature gate: flip the Slint global so jarvis surfaces render.
     // Slint can't `cfg`-gate, so we use a runtime bool driven by the Cargo feature.
     #[cfg(feature = "jarvis")]

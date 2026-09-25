@@ -137,6 +137,34 @@ fn wired_offline() -> (
     (rt, tmp, client, w)
 }
 
+/// Settings > Privacy > Notification content: the selector's callback reaches
+/// core, the level is applied to the running NotificationService, and it
+/// survives a restart (core_services.rs loads NOTIFICATION_DETAIL_LEVEL at
+/// construction). Default is the private "none".
+#[test]
+fn settings_notification_detail_level_persists_across_restart() {
+    use chatter_core::services::notification_service::NotificationDetailLevel;
+    let (rt, tmp, client, w) = wired_offline();
+    assert_eq!(client.notification_detail_level(), NotificationDetailLevel::None, "precondition");
+
+    w.invoke_settings_notification_detail_changed("name_only".into());
+    assert_eq!(client.notification_detail_level(), NotificationDetailLevel::NameOnly);
+    assert_eq!(w.get_settings_notification_detail().as_str(), "name_only");
+
+    drop(w);
+    drop(client);
+    let _guard = rt.enter();
+    let client = chatter_core::client::ChatterClient::builder()
+        .data_dir(tmp.path().to_string_lossy().to_string())
+        .build()
+        .expect("offline ChatterClient::build (restart)");
+    assert_eq!(
+        client.notification_detail_level(),
+        NotificationDetailLevel::NameOnly,
+        "detail level did not survive a restart"
+    );
+}
+
 #[test]
 fn settings_read_receipts_toggle_reaches_core() {
     require_element_queries();
@@ -2447,7 +2475,9 @@ fn folder_ui_sizes_up_for_touch() {
     let sidebar = include_str!("../../../ui/sidebar/sidebar.slint");
     let idx = sidebar.find("CustomSectionList {").expect("CustomSectionList instantiated");
     assert!(
-        sidebar[idx..idx + 600].contains("mobile-mode: root.mobile-mode"),
+        // `touch`, not `mobile-mode`: a two-pane tablet is not in mobile
+        // layout but is still driven by a finger (595b5031).
+        sidebar[idx..idx + 600].contains("mobile-mode: root.touch"),
         "the folder list must be told whether it is being touched"
     );
 
@@ -3500,4 +3530,245 @@ fn ai_assistant_channel_template_is_off_and_its_failure_is_surfaced() {
         "the ai-channel-template feature must stay OFF in the default test build: \
          nothing on that path can supply the provider API key the server requires"
     );
+}
+
+/// §124 1b: the Calls screen was reachable only from the phone tab bar, so a
+/// two-pane tablet (touch, >= 600 dp) had no way in. The sidebar now carries a
+/// Calls row on every wide layout; on a phone it stays hidden because the tab
+/// bar is the entry there.
+#[test]
+fn tablet_sidebar_opens_the_calls_screen() {
+    use slint::ComponentHandle;
+    require_element_queries();
+    let w = boot();
+    w.set_current_view("main".into());
+    w.set_is_mobile_platform(true);
+
+    // Two-pane tablet.
+    w.window().set_size(slint::LogicalSize::new(1000.0, 800.0));
+    assert!(!w.get_compact_layout(), "1000 dp must be the two-pane layout");
+    let row = testing::ElementHandle::find_by_accessible_label(&w, "Calls")
+        .next()
+        .expect("no Calls entry in the tablet sidebar");
+    row.invoke_accessible_default_action();
+    assert_eq!(
+        w.get_active_modal().as_str(),
+        "calls",
+        "the sidebar Calls row did not raise the Calls screen"
+    );
+
+    // Missed calls surface on the row itself.
+    w.set_active_modal("none".into());
+    w.set_missed_call_count(3);
+    assert!(
+        testing::ElementHandle::find_by_accessible_label(&w, "Calls, 3 missed").next().is_some(),
+        "missed-call count is not on the sidebar Calls row"
+    );
+
+    // Phone: the tab bar owns the entry; the sidebar must not duplicate it.
+    w.set_missed_call_count(0);
+    w.window().set_size(slint::LogicalSize::new(400.0, 800.0));
+    assert!(w.get_compact_layout());
+    // The tab bar's own Calls tab carries the same label, so exactly one.
+    assert_eq!(
+        testing::ElementHandle::find_by_accessible_label(&w, "Calls").count(),
+        1,
+        "phone layout shows a sidebar Calls row next to the tab bar's Calls tab"
+    );
+}
+
+// §124 1b: channel member rows showed initials even for a member with an
+// avatar — `ChannelMemberData` had no image field at all. The row converter
+// must carry the member's decoded avatar into the settings member list, and
+// leave it empty (initials fallback) when there is none.
+#[test]
+fn channel_member_row_carries_avatar() {
+    use chatter_core::domain::channel::{MemberRole, MemberWithProfile, Membership};
+    use chatter_ui::bin_ui::converters::member_to_slint;
+    use slint::{Model, ModelRc, VecModel};
+    let w = boot();
+
+    let member = |avatar: Option<Vec<u8>>| MemberWithProfile {
+        membership: Membership {
+            channel_id: uuid::Uuid::new_v4().into(),
+            user_id: uuid::Uuid::new_v4().into(),
+            role: MemberRole::Member,
+            joined_at: chrono::Utc::now(),
+            last_read_message_id: None,
+            is_muted: false,
+            muted_until: None,
+            notification_preference: Default::default(),
+        },
+        display_name: "P2".into(),
+        username: String::new(),
+        avatar_bytes: avatar,
+        moderation: Default::default(),
+    };
+
+    let with = member_to_slint(&member(Some(TINY_PNG.to_vec())));
+    let without = member_to_slint(&member(None));
+    assert_eq!(without.avatar_source.size().width, 0, "no avatar must fall back to initials");
+
+    w.set_channel_settings_members(ModelRc::new(VecModel::from(vec![with, without])));
+    let rows = w.get_channel_settings_members();
+    let bound = rows.row_data(0).expect("row 0").avatar_source;
+    assert!(
+        bound.size().width > 0,
+        "member avatar did not reach the channel-settings member row"
+    );
+}
+
+/// Tap the visible Text labelled `label` at its centre, as a finger would.
+/// Text takes no input, so the tap lands on whatever TouchArea is under it.
+fn tap_text(w: &MainWindow, label: &str) {
+    let text = testing::ElementHandle::find_by_accessible_label(w, label)
+        .find(|e| e.accessible_role() == Some(testing::AccessibleRole::Text))
+        .unwrap_or_else(|| panic!("no Text labelled {label:?} on screen"));
+    text.mock_single_click(slint::platform::PointerEventButton::Left);
+}
+
+fn tap_switch(w: &MainWindow, label: &str) {
+    let switch = testing::ElementHandle::find_by_accessible_label(w, label)
+        .find(|e| e.accessible_role() == Some(testing::AccessibleRole::Switch))
+        .unwrap_or_else(|| panic!("no switch labelled {label:?} on screen"));
+    switch.mock_single_click(slint::platform::PointerEventButton::Left);
+}
+
+/// §124: the Mute and AI toggles in Channel Settings (and the app-settings
+/// toggle rows, which share `ToggleRow`) responded only to the 44x24 switch.
+/// Tapping the row's label must flip the state, tapping the switch must flip
+/// it exactly once (not once for the switch and again for the row under it),
+/// and a state pushed from Rust after a tap must still reach the switch — a
+/// one-way `checked:` binding would have been dropped by the first tap.
+#[test]
+fn toggle_rows_flip_from_anywhere_on_the_row() {
+    use slint::ComponentHandle;
+    require_element_queries();
+    let w = boot();
+    w.set_current_view("main".into());
+    w.window().set_size(slint::LogicalSize::new(1000.0, 800.0));
+
+    // ---- Channel Settings > Notifications: Mute + AI ------------------------
+    let muted = std::rc::Rc::new(std::cell::RefCell::new(Vec::<bool>::new()));
+    let m = muted.clone();
+    w.on_channel_settings_toggle_mute(move |v| m.borrow_mut().push(v));
+    let ai = std::rc::Rc::new(std::cell::RefCell::new(Vec::<bool>::new()));
+    let a = ai.clone();
+    w.on_channel_settings_toggle_ai(move |v| a.borrow_mut().push(v));
+
+    w.set_active_modal("channel-settings".into());
+    tap_text(&w, "Notifications");
+
+    tap_text(&w, "Mute Channel");
+    assert!(w.get_channel_settings_muted(), "tapping the Mute label did not mute");
+    assert_eq!(*muted.borrow(), vec![true], "the Mute row tap did not reach the handler once");
+
+    tap_switch(&w, "Mute Channel");
+    assert!(!w.get_channel_settings_muted(), "tapping the Mute switch did not unmute");
+    assert_eq!(
+        *muted.borrow(),
+        vec![true, false],
+        "one tap on the switch fired more than one toggle (switch + row underneath)"
+    );
+
+    // Core snapping the value back (as the AI handler does on a failed save)
+    // must still reach the switch after the user has tapped it.
+    tap_text(&w, "AI assistant");
+    assert!(w.get_channel_settings_ai_enabled(), "tapping the AI label did not enable it");
+    assert_eq!(*ai.borrow(), vec![true]);
+    w.set_channel_settings_ai_enabled(false);
+    let ai_switch = testing::ElementHandle::find_by_accessible_label(&w, "AI assistant")
+        .find(|e| e.accessible_role() == Some(testing::AccessibleRole::Switch))
+        .expect("AI switch");
+    assert_eq!(
+        ai_switch.accessible_checked(),
+        Some(false),
+        "a value set from Rust after a tap no longer reaches the switch"
+    );
+
+    // ---- App settings > Privacy: a ToggleRow outside the modal --------------
+    w.set_active_modal("settings".into());
+    tap_text(&w, "Privacy");
+    let before = w.get_settings_read_receipts();
+    tap_text(&w, "Read Receipts");
+    assert_eq!(
+        w.get_settings_read_receipts(),
+        !before,
+        "tapping the Read Receipts label did not flip it"
+    );
+}
+
+/// Disappearing messages: the picker's choices come from core in Signal's
+/// order, and the DM-settings row is offered for a friend only — core announces
+/// the timer over the friend DM and has no DM to announce it on otherwise.
+#[test]
+fn disappearing_picker_offers_presets_to_friends_only() {
+    use chatter_ui::DisappearingGlobal;
+    use slint::{ComponentHandle, Model};
+    let (rt, _tmp, client, w) = wired_offline();
+    let _guard = rt.enter();
+    chatter_ui::bin_ui::features::chat::disappearing::wire(&w, &client);
+
+    let g = w.global::<DisappearingGlobal>();
+    let labels: Vec<String> = g.get_options().iter().map(|o| o.label.to_string()).collect();
+    assert_eq!(
+        labels,
+        ["Off", "30 seconds", "5 minutes", "1 hour", "8 hours", "1 day", "1 week", "4 weeks"]
+    );
+    let seconds: Vec<i32> = g.get_options().iter().map(|o| o.seconds).collect();
+    assert_eq!(seconds, [0, 30, 300, 3_600, 28_800, 86_400, 604_800, 2_419_200]);
+
+    // No conversation open: no timer beside the header's name.
+    assert_eq!(g.get_header_label().as_str(), "");
+
+    let peer = chatter_core::domain::ids::UserId::new();
+    chatter_ui::bin_ui::features::chat::disappearing::show_for_profile(&w, &client, &peer, false);
+    assert!(!g.get_dm_can_set(), "a non-friend has no DM to carry a timer");
+
+    chatter_ui::bin_ui::features::chat::disappearing::show_for_profile(&w, &client, &peer, true);
+    assert!(g.get_dm_can_set(), "a friend's DM settings offer the picker");
+    assert_eq!(g.get_dm_seconds(), 0);
+    assert_eq!(g.get_dm_label().as_str(), "Off");
+}
+
+// ============================================================================
+// F29: channel moderation (ban / unban / mute / unmute) reaches core.
+//
+//  L1 (DYNAMIC): the members-pane callbacks run their real handlers offline
+//      without panicking (the RPCs fail with no server; the wire is what runs).
+//  L2 (STATIC): each action calls its ChatterClient method, and the Slint rows
+//      gate Ban/Mute on core's per-member permission, not on a UI-side rule.
+// ============================================================================
+#[test]
+fn channel_settings_moderation_reaches_core() {
+    no_keyring();
+    let rt = test_rt();
+    let _guard = rt.enter();
+    let _tmp = tempfile::tempdir().unwrap();
+    testing::init_no_event_loop();
+    let client = chatter_core::client::ChatterClient::builder()
+        .data_dir(_tmp.path().to_string_lossy().to_string())
+        .build()
+        .expect("offline ChatterClient::build");
+    let w = MainWindow::new().expect("MainWindow::new");
+    chatter_ui::bin_ui::features::modals::wire_channel_settings(&w, &client);
+    w.set_channel_settings_id(uuid::Uuid::new_v4().to_string().into());
+    let target: slint::SharedString = uuid::Uuid::new_v4().to_string().into();
+    w.invoke_channel_settings_ban_member(target.clone());
+    w.invoke_channel_settings_unban_member(target.clone());
+    w.invoke_channel_settings_set_member_muted(target.clone(), true, 0);
+    w.invoke_channel_settings_set_member_muted(target, false, 0);
+
+    let src = include_str!("../src/bin_ui/features/modals/channel_settings.rs");
+    for call in [".ban_user(", ".unban_user(", ".mute_user(", ".unmute_user(", ".list_banned_members("] {
+        assert!(src.contains(call), "channel settings must call ChatterClient{call}");
+    }
+    let conv = include_str!("../src/bin_ui/converters/channel.rs");
+    assert!(
+        conv.contains("can_ban: m.moderation.can_ban") && conv.contains("can_mute: m.moderation.can_mute"),
+        "Ban/Mute visibility must come from core's MemberModeration"
+    );
+    let slint = include_str!("../../../ui/modals/channel_settings.slint");
+    assert!(slint.contains("if member.can-ban: Button") && slint.contains("if member.can-mute && member.muted: Button"));
+    assert!(slint.contains("root.unban-member(banned.user-id)"));
 }

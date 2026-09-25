@@ -7,8 +7,7 @@ import { Button } from "../components/button.slint";
 import { DismissButton } from "../components/dismiss_button.slint";
 import { Input } from "../components/input.slint";
 import { Avatar } from "../components/avatar.slint";
-import { Toggle } from "../components/toggle.slint";
-import { NeoActionToggle } from "../components/neo_action_toggle.slint";
+import { ToggleRow } from "../components/toggle_row.slint";
 import { JarvisGlobal } from "../jarvis/jarvis_global.slint";
 
 // A local AI provider found running on this machine.
@@ -71,6 +70,7 @@ export component SettingsScreen inherits Rectangle {
     // Privacy settings
     in-out property <bool> read-receipts-enabled: true;
     in-out property <bool> typing-indicators-enabled: true;
+    in-out property <string> notification-detail: "none";  // "none" | "name_only" | "name_and_message"
     in-out property <string> search-shortcut: "both";   // "k" | "f" | "both"
 
     // Encryption settings
@@ -107,12 +107,19 @@ export component SettingsScreen inherits Rectangle {
     in property <bool> delete-loading: false;
     in property <string> delete-error: "";
 
+    // Recovery-code regeneration (password-confirmed; the new codes open in
+    // RecoveryCodesModal, the old ones stop working)
+    in-out property <string> recovery-regen-password: "";
+    in property <bool> recovery-regen-loading: false;
+    in property <string> recovery-regen-error: "";
+
     // Navigation state
     property <string> active-section: "account";  // "account", "privacy", "encryption", "appearance"
     property <bool> show-password-form: false;
     property <bool> show-pin-form: false;
     property <bool> show-backup-retry: false;
     property <bool> show-delete-confirm: false;
+    property <bool> show-recovery-regen: false;
     // Log Out asks once: on a phone it sits one thumb-width from Delete Account.
     property <bool> show-logout-confirm: false;
 
@@ -123,11 +130,13 @@ export component SettingsScreen inherits Rectangle {
     callback logout-clicked();
     callback delete-account-clicked();
     callback delete-account-confirmed(string);  // password — fired only after explicit confirm
+    callback regenerate-recovery-codes(string);  // password — fired only after explicit confirm
     callback close-settings();
 
     // Privacy callbacks
     callback read-receipts-changed(bool);
     callback typing-indicators-changed(bool);
+    callback notification-detail-changed(string);
     callback search-shortcut-changed(string);
 
     // Encryption callbacks
@@ -624,6 +633,108 @@ export component SettingsScreen inherits Rectangle {
                                         text: "View All";
                                         variant: "secondary";
                                         clicked => { root.view-sessions-clicked(); }
+                                    }
+                                }
+                            }
+
+                            // Recovery Codes group
+                            Rectangle {
+                                background: Colors.surface;
+                                border-radius: Spacing.radius-lg;
+                                border-width: 1px;
+                                border-color: Colors.neo-highlight;
+                                drop-shadow-blur: Spacing.neo-blur-sm;
+                                drop-shadow-offset-x: Spacing.neo-offset-sm;
+                                drop-shadow-offset-y: Spacing.neo-offset-sm;
+                                drop-shadow-color: Colors.neo-shadow;
+
+                                VerticalLayout {
+                                    padding: Spacing.md;
+                                    spacing: Spacing.sm;
+
+                                    HorizontalLayout {
+                                        spacing: Spacing.md;
+
+                                        VerticalLayout {
+                                            horizontal-stretch: 1;
+                                            spacing: Spacing.xs;
+
+                                            Text {
+                                                text: "Recovery Codes";
+                                                color: Colors.text-primary;
+                                                font-size: Typography.sm;
+                                                font-weight: Typography.medium;
+                                            }
+
+                                            Text {
+                                                text: "Lost or used up your codes? Get a new set.";
+                                                color: Colors.text-muted;
+                                                font-size: Typography.xs;
+                                                wrap: word-wrap;
+                                            }
+                                        }
+
+                                        if !show-recovery-regen && !root.compact-mode: Button {
+                                            text: "Regenerate";
+                                            variant: "secondary";
+                                            clicked => { show-recovery-regen = true; }
+                                        }
+                                    }
+
+                                    // Compact: full-width button stacked below
+                                    if !show-recovery-regen && root.compact-mode: Button {
+                                        text: "Regenerate";
+                                        variant: "secondary";
+                                        clicked => { show-recovery-regen = true; }
+                                    }
+
+                                    // Inline confirm: nothing is replaced until the password is in.
+                                    if show-recovery-regen: VerticalLayout {
+                                        spacing: Spacing.sm;
+
+                                        Rectangle {
+                                            height: 1px;
+                                            background: Colors.text-muted.with-alpha(0.2);
+                                        }
+
+                                        Text {
+                                            text: "Your current recovery codes stop working and a new set is shown once. Enter your password to confirm.";
+                                            color: Colors.text-muted;
+                                            font-size: Typography.xs;
+                                            wrap: word-wrap;
+                                        }
+
+                                        Input {
+                                            placeholder: "Password";
+                                            password: true;
+                                            text <=> root.recovery-regen-password;
+                                            error: root.recovery-regen-error != "";
+                                            error-message: root.recovery-regen-error;
+                                        }
+
+                                        HorizontalLayout {
+                                            spacing: Spacing.sm;
+                                            alignment: end;
+
+                                            Button {
+                                                text: "Cancel";
+                                                variant: "ghost";
+                                                clicked => {
+                                                    show-recovery-regen = false;
+                                                    root.recovery-regen-password = "";
+                                                }
+                                            }
+
+                                            Button {
+                                                text: "Regenerate";
+                                                variant: "primary";
+                                                loading: root.recovery-regen-loading;
+                                                disabled: root.recovery-regen-password == "";
+                                                clicked => {
+                                                    root.regenerate-recovery-codes(root.recovery-regen-password);
+                                                }
+                                            }
+                                        }
                                     }
                                 }
                             }
@@ -1179,36 +1290,28 @@ export component SettingsScreen inherits Rectangle {
                                 drop-shadow-offset-y: Spacing.neo-offset-sm;
                                 drop-shadow-color: Colors.neo-shadow;
 
-                                HorizontalLayout {
-                                    padding: Spacing.md;
-                                    spacing: Spacing.md;
-
-                                    VerticalLayout {
-                                        horizontal-stretch: 1;
-                                        spacing: Spacing.sm;
-
-                                        Text {
-                                            text: "Read Receipts";
-                                            color: Colors.text-primary;
-                                            font-size: Typography.sm;
-                                            font-weight: Typography.medium;
-                                        }
-
-                                        Text {
-                                            text: "Let others know when you've read their messages";
-                                            color: Colors.text-muted;
-                                            font-size: Typography.xs;
-                                            wrap: word-wrap;
-                                        }
+                                ToggleRow {
+                                    row-padding: Spacing.md;
+                                    row-spacing: Spacing.md;
+                                    label-spacing: Spacing.sm;
+                                    accessible-text: "Read Receipts";
+                                    checked <=> root.read-receipts-enabled;
+                                    toggled(value) => {
+                                        root.read-receipts-enabled = value;
+                                        root.read-receipts-changed(value);
                                     }
 
-                                    Toggle {
-                                        accessible-text: "Read Receipts";
-                                        checked: root.read-receipts-enabled;
-                                        toggled(value) => {
-                                            root.read-receipts-enabled = value;
-                                            root.read-receipts-changed(value);
-                                        }
+                                    Text {
+                                        text: "Read Receipts";
+                                        color: Colors.text-primary;
+                                        font-size: Typography.sm;
+                                        font-weight: Typography.medium;
+                                    }
+                                    Text {
+                                        text: "Let others know when you've read their messages";
+                                        color: Colors.text-muted;
+                                        font-size: Typography.xs;
+                                        wrap: word-wrap;
                                     }
                                 }
                             }
@@ -1224,35 +1327,120 @@ export component SettingsScreen inherits Rectangle {
                                 drop-shadow-offset-y: Spacing.neo-offset-sm;
                                 drop-shadow-color: Colors.neo-shadow;
 
-                                HorizontalLayout {
-                                    padding: Spacing.md;
-                                    spacing: Spacing.md;
-
-                                    VerticalLayout {
-                                        horizontal-stretch: 1;
-                                        spacing: Spacing.sm;
-
-                                        Text {
-                                            text: "Typing Indicators";
-                                            color: Colors.text-primary;
-                                            font-size: Typography.sm;
-                                            font-weight: Typography.medium;
-                                        }
-
-                                        Text {
-                                            text: "Show when you're typing a message";
-                                            color: Colors.text-muted;
-                                            font-size: Typography.xs;
-                                            wrap: word-wrap;
-                                        }
+                                ToggleRow {
+                                    row-padding: Spacing.md;
+                                    row-spacing: Spacing.md;
+                                    label-spacing: Spacing.sm;
+                                    accessible-text: "Typing Indicators";
+                                    checked <=> root.typing-indicators-enabled;
+                                    toggled(value) => {
+                                        root.typing-indicators-enabled = value;
+                                        root.typing-indicators-changed(value);
                                     }
 
-                                    Toggle {
-                                        accessible-text: "Typing Indicators";
-                                        checked: root.typing-indicators-enabled;
-                                        toggled(value) => {
-                                            root.typing-indicators-enabled = value;
-                                            root.typing-indicators-changed(value);
+                                    Text {
+                                        text: "Typing Indicators";
+                                        color: Colors.text-primary;
+                                        font-size: Typography.sm;
+                                        font-weight: Typography.medium;
+                                    }
+                                    Text {
+                                        text: "Show when you're typing a message";
+                                        color: Colors.text-muted;
+                                        font-size: Typography.xs;
+                                        wrap: word-wrap;
+                                    }
+                                }
+                            }
+
+                            // Notification content (Signal: Settings > Notifications >
+                            // Show). Governs what reaches the OS notification shade —
+                            // enforced in core (NotificationService::show_message_notification);
+                            // sealed-sender messages never show a sender regardless.
+                            Rectangle {
+                                background: Colors.surface;
+                                border-radius: Spacing.radius-lg;
+                                border-width: 1px;
+                                border-color: Colors.neo-highlight;
+                                drop-shadow-blur: Spacing.neo-blur-sm;
+                                drop-shadow-offset-x: Spacing.neo-offset-sm;
+                                drop-shadow-offset-y: Spacing.neo-offset-sm;
+                                drop-shadow-color: Colors.neo-shadow;
+
+                                VerticalLayout {
+                                    padding: Spacing.md;
+                                    spacing: Spacing.sm;
+
+                                    Text {
+                                        text: "Notification content";
+                                        color: Colors.text-primary;
+                                        font-size: Typography.sm;
+                                        font-weight: Typography.medium;
+                                    }
+
+                                    Text {
+                                        text: "What message notifications show on this device";
+                                        color: Colors.text-muted;
+                                        font-size: Typography.xs;
+                                        wrap: word-wrap;
+                                    }
+
+                                    for opt in [
+                                        { key: "name_and_message", label: "Name and message" },
+                                        { key: "name_only", label: "Name only" },
+                                        { key: "none", label: "No name or content" },
+                                    ]: Rectangle {
+                                        property <bool> selected: root.notification-detail == opt.key;
+                                        height: Spacing.touch-target-min;
+                                        border-radius: Spacing.radius-md;
+                                        background: detail-touch.has-hover ? Colors.surface-hover : transparent;
+                                        accessible-role: button;
+                                        accessible-label: opt.label;
+                                        accessible-action-default => {
+                                            root.notification-detail = opt.key;
+                                            root.notification-detail-changed(opt.key);
+                                        }
+
+                                        HorizontalLayout {
+                                            padding-left: Spacing.sm;
+                                            padding-right: Spacing.sm;
+                                            spacing: Spacing.md;
+                                            alignment: start;
+
+                                            // Radio indicator
+                                            VerticalLayout {
+                                                alignment: center;
+                                                Rectangle {
+                                                    width: 18px;
+                                                    height: 18px;
+                                                    border-radius: 9px;
+                                                    border-width: 2px;
+                                                    border-color: selected ? Colors.primary : Colors.text-muted;
+
+                                                    Rectangle {
+                                                        width: 8px;
+                                                        height: 8px;
+                                                        border-radius: 4px;
+                                                        background: selected ? Colors.primary : transparent;
+                                                    }
+                                                }
+                                            }
+
+                                            Text {
+                                                text: opt.label;
+                                                vertical-alignment: center;
+                                                color: selected ? Colors.text-primary : Colors.text-secondary;
+                                                font-size: Typography.sm;
+                                                font-weight: selected ? Typography.medium : Typography.normal;
+                                            }
+                                        }
+
+                                        detail-touch := TouchArea {
+                                            mouse-cursor: pointer;
+                                            clicked => {
+                                                root.notification-detail = opt.key;
+                                                root.notification-detail-changed(opt.key);
+                                            }
                                         }
                                     }
                                 }
@@ -1473,35 +1661,28 @@ export component SettingsScreen inherits Rectangle {
                                 drop-shadow-offset-y: Spacing.neo-offset-sm;
                                 drop-shadow-color: Colors.neo-shadow;
 
-                                HorizontalLayout {
-                                    padding: Spacing.md;
-                                    spacing: Spacing.md;
-
-                                    VerticalLayout {
-                                        horizontal-stretch: 1;
-                                        spacing: Spacing.sm;
-
-                                        Text {
-                                            text: "Allow sealed sender from anyone";
-                                            color: Colors.text-primary;
-                                            font-size: Typography.sm;
-                                            font-weight: Typography.medium;
-                                        }
-
-                                        Text {
-                                            text: "Accept messages from unknown senders without revealing your identity";
-                                            color: Colors.text-muted;
-                                            font-size: Typography.xs;
-                                            wrap: word-wrap;
-                                        }
+                                ToggleRow {
+                                    row-padding: Spacing.md;
+                                    row-spacing: Spacing.md;
+                                    label-spacing: Spacing.sm;
+                                    accessible-text: "Allow sealed sender from anyone";
+                                    checked <=> root.sealed-sender-unrestricted;
+                                    toggled(value) => {
+                                        root.sealed-sender-unrestricted = value;
+                                        root.sealed-sender-changed(value);
                                     }
 
-                                    Toggle {
-                                        checked: root.sealed-sender-unrestricted;
-                                        toggled(value) => {
-                                            root.sealed-sender-unrestricted = value;
-                                            root.sealed-sender-changed(value);
-                                        }
+                                    Text {
+                                        text: "Allow sealed sender from anyone";
+                                        color: Colors.text-primary;
+                                        font-size: Typography.sm;
+                                        font-weight: Typography.medium;
+                                    }
+                                    Text {
+                                        text: "Accept messages from unknown senders without revealing your identity";
+                                        color: Colors.text-muted;
+                                        font-size: Typography.xs;
+                                        wrap: word-wrap;
                                     }
                                 }
                             }
@@ -1622,36 +1803,29 @@ export component SettingsScreen inherits Rectangle {
                                 drop-shadow-offset-y: Spacing.neo-offset-sm;
                                 drop-shadow-color: Colors.neo-shadow;
 
-                                HorizontalLayout {
-                                    padding: Spacing.md;
-                                    spacing: Spacing.md;
-
-                                    VerticalLayout {
-                                        horizontal-stretch: 1;
-                                        spacing: Spacing.sm;
-
-                                        Text {
-                                            text: "Enable Local AI";
-                                            color: Colors.text-primary;
-                                            font-size: Typography.sm;
-                                            font-weight: Typography.medium;
-                                        }
-
-                                        Text {
-                                            text: "Run AI models locally on your GPU for privacy";
-                                            color: Colors.text-muted;
-                                            font-size: Typography.xs;
-                                            wrap: word-wrap;
-                                        }
+                                ToggleRow {
+                                    row-padding: Spacing.md;
+                                    row-spacing: Spacing.md;
+                                    label-spacing: Spacing.sm;
+                                    accessible-text: "Enable Local AI";
+                                    checked <=> root.local-ai-enabled;
+                                    glow-mode: "cyan";
+                                    toggled(value) => {
+                                        root.local-ai-enabled = value;
+                                        root.local-ai-enabled-changed(value);
                                     }
 
-                                    NeoActionToggle {
-                                        checked: root.local-ai-enabled;
-                                        glow-mode: "cyan";
-                                        toggled(value) => {
-                                            root.local-ai-enabled = value;
-                                            root.local-ai-enabled-changed(value);
-                                        }
+                                    Text {
+                                        text: "Enable Local AI";
+                                        color: Colors.text-primary;
+                                        font-size: Typography.sm;
+                                        font-weight: Typography.medium;
+                                    }
+                                    Text {
+                                        text: "Run AI models locally on your GPU for privacy";
+                                        color: Colors.text-muted;
+                                        font-size: Typography.xs;
+                                        wrap: word-wrap;
                                     }
                                 }
                             }
@@ -1671,35 +1845,28 @@ export component SettingsScreen inherits Rectangle {
                                     padding: Spacing.md;
                                     spacing: Spacing.md;
 
-                                    HorizontalLayout {
-                                        spacing: Spacing.md;
-
-                                        VerticalLayout {
-                                            horizontal-stretch: 1;
-                                            spacing: Spacing.sm;
-
-                                            Text {
-                                                text: "Use cloud AI";
-                                                color: Colors.text-primary;
-                                                font-size: Typography.sm;
-                                                font-weight: Typography.medium;
-                                            }
-
-                                            Text {
-                                                text: "Send prompts to a cloud model for better answers. Only in channels — direct messages always stay on this device.";
-                                                color: Colors.text-muted;
-                                                font-size: Typography.xs;
-                                                wrap: word-wrap;
-                                            }
+                                    ToggleRow {
+                                        row-spacing: Spacing.md;
+                                        label-spacing: Spacing.sm;
+                                        accessible-text: "Use cloud AI";
+                                        checked <=> root.ai-prefer-cloud;
+                                        glow-mode: "cyan";
+                                        toggled(value) => {
+                                            root.ai-prefer-cloud = value;
+                                            root.ai-prefer-cloud-changed(value);
                                         }
 
-                                        NeoActionToggle {
-                                            checked: root.ai-prefer-cloud;
-                                            glow-mode: "cyan";
-                                            toggled(value) => {
-                                                root.ai-prefer-cloud = value;
-                                                root.ai-prefer-cloud-changed(value);
-                                            }
+                                        Text {
+                                            text: "Use cloud AI";
+                                            color: Colors.text-primary;
+                                            font-size: Typography.sm;
+                                            font-weight: Typography.medium;
+                                        }
+                                        Text {
+                                            text: "Send prompts to a cloud model for better answers. Only in channels — direct messages always stay on this device.";
+                                            color: Colors.text-muted;
+                                            font-size: Typography.xs;
+                                            wrap: word-wrap;
                                         }
                                     }
 

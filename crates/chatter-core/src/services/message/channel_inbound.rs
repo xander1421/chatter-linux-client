@@ -351,11 +351,8 @@ impl ChannelInbound {
             inbound_quote.as_ref(),
             &self.messages.message_repo,
         );
-        // Our own message (another device's send, or a backfill after link or
-        // reinstall) is never unread to us.
-        if is_own_user {
-            message.is_read = true;
-        }
+        // Our own message is stored read by the repository
+        // (`UnifiedMessageRepository::stored_is_read`), on this path and every other.
 
         Ok(message)
     }
@@ -455,6 +452,63 @@ mod tests {
         client.mark_conversation_read(&channel_id, &ConversationType::Channel).unwrap();
         assert_eq!(inbound.ingest(&proto, channel_id, false).await, Ingested::Stored);
         assert_eq!(unread(), 0);
+    }
+
+    /// Our own message from another device reaches storage by paths that skip
+    /// `ingest` (the SKDM retry, a DM or SyncSent copy); whichever path writes
+    /// it, it must not count as unread.
+    #[tokio::test]
+    async fn own_message_is_stored_read_on_any_path() {
+        use crate::services::message::conversion::proto_to_domain_message_with_sender;
+        static MOCK_KEYRING: std::sync::Once = std::sync::Once::new();
+        MOCK_KEYRING.call_once(|| {
+            keyring::set_default_credential_builder(keyring::mock::default_credential_builder());
+        });
+        let dir = tempfile::tempdir().unwrap();
+        let client = ChatterClient::builder()
+            .server_url("http://localhost:1")
+            .data_dir(dir.path().to_str().unwrap())
+            .build()
+            .expect("build client");
+        let me = UserId::new();
+        client
+            .messages()
+            .settings_repo
+            .set_string(
+                crate::storage::repositories::settings_repo::keys::CURRENT_USER_ID,
+                &me.to_string(),
+            )
+            .unwrap();
+
+        let channel_id = ChannelId::new();
+        let store = |sender: UserId| {
+            let proto = chat_v1::Message {
+                id: crate::domain::ids::MessageId::new().to_string(),
+                channel_id: channel_id.to_string(),
+                author_id: sender.to_string(),
+                timestamp: 1_000,
+                content: Some(chat_v1::message::Content {
+                    r#type: Some(chat_v1::message::content::Type::Text("hi".into())),
+                }),
+                ..Default::default()
+            };
+            let m = proto_to_domain_message_with_sender(&proto, Some(sender), ConversationType::Channel)
+                .unwrap();
+            assert!(!m.is_read);
+            client.messages().store_message_local(&m).unwrap();
+        };
+        let unread = || {
+            client
+                .messages()
+                .message_repo
+                .get_unread_count(&channel_id, &ConversationType::Channel)
+                .unwrap()
+        };
+
+        store(UserId::new());
+        assert_eq!(unread(), 1, "positive control: someone else's message is unread");
+        store(me);
+        assert_eq!(unread(), 1, "our own message counted as unread");
     }
 
     /// Delete-for-me (and a peer's delete-for-everyone) removes the local row,

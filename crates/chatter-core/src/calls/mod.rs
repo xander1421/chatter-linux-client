@@ -5,6 +5,7 @@
 mod room_manager;
 mod audio_capture;
 mod audio_playback;
+pub mod audio_route;
 mod video_capture;
 mod video_playback;
 #[cfg(target_os = "android")]

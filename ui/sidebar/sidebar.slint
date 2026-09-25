@@ -66,6 +66,8 @@ export component Sidebar inherits Rectangle {
     in property <int> pending-message-requests: 0;
     in property <int> pending-group-invites: 0;
     in property <int> pending-channel-invites: 0;
+    // Badge on the Calls quick-link; same count the phone tab bar shows.
+    in property <int> missed-call-count: 0;
     property <int> total-pending-requests: root.pending-friend-requests
         + root.pending-message-requests + root.pending-group-invites + root.pending-channel-invites;
 
@@ -78,6 +80,7 @@ export component Sidebar inherits Rectangle {
     callback create-channel-clicked();
     callback join-channel-clicked();
     callback friends-clicked();
+    callback calls-clicked();
     callback profile-clicked();
     callback friend-requests-clicked();
     callback message-requests-clicked();
@@ -94,6 +97,7 @@ export component Sidebar inherits Rectangle {
     callback move-to-section(/* conversation-id */ string, /* conversation-type */ ConversationKind, /* section-id */ string);
     callback remove-from-section(/* conversation-id */ string);
     callback set-conversation-pinned(/* conversation-id */ string, /* pinned */ bool);
+    callback delete-conversation(/* conversation-id */ string, /* kind */ ConversationKind);
     callback move-section(/* section-id */ string, /* delta */ int);
     callback set-section-sort-mode(/* section-id */ string, /* mode */ string);
 
@@ -310,6 +314,58 @@ export component Sidebar inherits Rectangle {
                         HorizontalLayout { alignment: center; VerticalLayout { alignment: center; Rectangle { width: root.rail-slot-size; height: root.rail-slot-size; border-radius: root.rail-slot-radius; background: root.rail-slot-bg; Image { source: AnonMode.enabled ? Icons.user-plus : Icons.users; width: 18px; height: 18px; x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2; colorize: Colors.text-secondary; } } } }
                     }
                     friends-touch := TouchArea { clicked => { root.friends-clicked(); } }
+                }
+
+                // Calls — the call history screen. On a phone the tab bar's
+                // Calls tab is the entry (hidden here for the same reason as
+                // Friends); on a two-pane tablet or desktop there is no tab
+                // bar, and this row is the only way in.
+                if !root.mobile-mode: Rectangle {
+                    height: root.quick-link-height;
+                    background: calls-touch.has-hover ? Colors.surface-hover : transparent;
+                    accessible-role: button;
+                    accessible-label: root.missed-call-count > 0 ? "Calls, " + root.missed-call-count + " missed" : "Calls";
+                    accessible-action-default => { root.calls-clicked(); }
+                    if !root.collapsed: HorizontalLayout {
+                        padding-left: Spacing.sm; padding-right: Spacing.sm; spacing: Spacing.sm; alignment: start;
+                        VerticalLayout { alignment: center; horizontal-stretch: 0;
+                            Image { source: Icons.phone; width: root.quick-link-icon-size; height: root.quick-link-icon-size; colorize: Colors.text-secondary; }
+                        }
+                        Text { text: "Calls"; color: root.quick-link-text-color; font-size: root.quick-link-text-size; vertical-alignment: center; horizontal-stretch: 1; }
+                        if root.missed-call-count > 0: VerticalLayout { alignment: center; horizontal-stretch: 0;
+                            Rectangle {
+                                width: root.missed-call-count > 9 ? 22px : 18px;
+                                height: 18px;
+                                border-radius: 9px;
+                                background: Colors.error;
+                                Text {
+                                    text: root.missed-call-count > 9 ? "9+" : root.missed-call-count;
+                                    color: Colors.text-primary;
+                                    font-size: Typography.xs2;
+                                    font-weight: 700;
+                                    horizontal-alignment: center;
+                                    vertical-alignment: center;
+                                    width: 100%;
+                                    height: 100%;
+                                }
+                            }
+                        }
+                    }
+                    if root.collapsed: TooltipArea {
+                        width: 44px; x: (parent.width - self.width) / 2; height: 100%;
+                        tooltip-text: "Calls"; tooltip-enabled: true; placement: "right";
+                        HorizontalLayout { alignment: center; VerticalLayout { alignment: center; Rectangle {
+                            width: root.rail-slot-size; height: root.rail-slot-size; border-radius: root.rail-slot-radius; background: root.rail-slot-bg;
+                            Image { source: Icons.phone; width: 18px; height: 18px; x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2; colorize: Colors.text-secondary; }
+                            if root.missed-call-count > 0: Rectangle {
+                                x: parent.width - 8px; y: -2px;
+                                width: 12px; height: 12px; border-radius: 6px;
+                                border-width: 1px; border-color: Colors.surface;
+                                background: Colors.error;
+                            }
+                        } } }
+                    }
+                    calls-touch := TouchArea { mouse-cursor: pointer; clicked => { root.calls-clicked(); } }
                 }
 
                 // REQUESTS entry point — one calm row, not four competing
@@ -1006,6 +1062,9 @@ export component Sidebar inherits Rectangle {
         }
         set-pinned(conv-id, pinned) => {
             root.set-conversation-pinned(conv-id, pinned);
+        }
+        delete-chat(conv-id, conv-type) => {
+            root.delete-conversation(conv-id, conv-type);
         }
     }
 

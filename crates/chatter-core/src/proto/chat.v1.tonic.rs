@@ -1731,6 +1731,75 @@ pub mod channel_service_client {
             self.inner.server_streaming(req, path, codec).await
         }
         ///
+        pub async fn mute_user(
+            &mut self,
+            request: impl tonic::IntoRequest<super::MuteUserRequest>,
+        ) -> std::result::Result<tonic::Response<()>, tonic::Status> {
+            self.inner
+                .ready()
+                .await
+                .map_err(|e| {
+                    tonic::Status::unknown(
+                        format!("Service was not ready: {}", e.into()),
+                    )
+                })?;
+            let codec = tonic_prost::ProstCodec::default();
+            let path = http::uri::PathAndQuery::from_static(
+                "/chat.v1.ChannelService/MuteUser",
+            );
+            let mut req = request.into_request();
+            req.extensions_mut()
+                .insert(GrpcMethod::new("chat.v1.ChannelService", "MuteUser"));
+            self.inner.unary(req, path, codec).await
+        }
+        ///
+        pub async fn unmute_user(
+            &mut self,
+            request: impl tonic::IntoRequest<super::UnmuteUserRequest>,
+        ) -> std::result::Result<tonic::Response<()>, tonic::Status> {
+            self.inner
+                .ready()
+                .await
+                .map_err(|e| {
+                    tonic::Status::unknown(
+                        format!("Service was not ready: {}", e.into()),
+                    )
+                })?;
+            let codec = tonic_prost::ProstCodec::default();
+            let path = http::uri::PathAndQuery::from_static(
+                "/chat.v1.ChannelService/UnmuteUser",
+            );
+            let mut req = request.into_request();
+            req.extensions_mut()
+                .insert(GrpcMethod::new("chat.v1.ChannelService", "UnmuteUser"));
+            self.inner.unary(req, path, codec).await
+        }
+        ///
+        pub async fn list_banned_users(
+            &mut self,
+            request: impl tonic::IntoRequest<super::ListBannedUsersRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::ListBannedUsersResponse>,
+            tonic::Status,
+        > {
+            self.inner
+                .ready()
+                .await
+                .map_err(|e| {
+                    tonic::Status::unknown(
+                        format!("Service was not ready: {}", e.into()),
+                    )
+                })?;
+            let codec = tonic_prost::ProstCodec::default();
+            let path = http::uri::PathAndQuery::from_static(
+                "/chat.v1.ChannelService/ListBannedUsers",
+            );
+            let mut req = request.into_request();
+            req.extensions_mut()
+                .insert(GrpcMethod::new("chat.v1.ChannelService", "ListBannedUsers"));
+            self.inner.unary(req, path, codec).await
+        }
+        ///
         pub async fn get_channel_members(
             &mut self,
             request: impl tonic::IntoRequest<super::GetChannelMembersRequest>,

@@ -200,6 +200,7 @@ impl ClientBuilder {
             transport_switch_lock: tokio::sync::Mutex::new(()),
             server_monitor_started: AtomicBool::new(false),
             composer_drafts: Mutex::new(std::collections::HashMap::new()),
+            expired_messages: tokio::sync::broadcast::channel(16).0,
         }))
     }
 }
@@ -392,6 +393,9 @@ pub struct ChatterClient {
     // ponytail: in-memory, lost on restart. DraftService persists but its
     // table FKs `channels(id)`, which DM / saved / anon ids are not in.
     composer_drafts: Mutex<std::collections::HashMap<String, String>>,
+    /// Messages the disappearing-messages reaper just deleted. See
+    /// `subscribe_expired_messages`.
+    expired_messages: tokio::sync::broadcast::Sender<Vec<crate::domain::message::Message>>,
 }
 
 pub use crate::services::user::ReceivedFriendRequestProfile;
@@ -2378,19 +2382,16 @@ impl ChatterClient {
         let h_token_refill = self.services.spawn_token_refill();
 
         // ── Disappearing-messages local reaper ───────────────────────
-        // The local-expiry engine only matters if something drives it: this
-        // bounded periodic task calls `cleanup_expired`, which HARD-deletes
-        // every locally-tracked message whose armed timer has elapsed (both
-        // our own sent copies and received copies — content + FTS index purged,
-        // not a tombstone that leaves plaintext on disk). The first tick fires
-        // immediately, so a message that expired while the app was closed is
-        // reaped on the next boot too (expiry timestamps persist — v015).
-        // Interval is bounded and overridable via `CHATTER_EPHEMERAL_REAP_SECS`;
-        // default 10s — a single indexed query (idx_ephemeral_expires), cheap
-        // enough to run often so a "disappeared" message doesn't linger locally
-        // for long after its timer, sane enough not to spin.
+        // Hard-deletes every message whose timer has run out, with the
+        // attachments only it carried (`services::disappearing::reap_expired`),
+        // and tells the UI. The first tick fires immediately, so a message that
+        // expired while the app was closed goes on the next boot (expiry times
+        // persist — v015). Interval overridable via
+        // `CHATTER_EPHEMERAL_REAP_SECS`; default 10s — one indexed query
+        // (idx_ephemeral_expires).
         let h_ephemeral_reaper = {
-            let ephemeral = self.services.ephemeral_service.clone();
+            let db = self.services.database.clone();
+            let expired = self.expired_messages.clone();
             let interval_secs = std::env::var("CHATTER_EPHEMERAL_REAP_SECS")
                 .ok()
                 .and_then(|s| s.parse::<u64>().ok())
@@ -2401,14 +2402,13 @@ impl ChatterClient {
                     tokio::time::interval(std::time::Duration::from_secs(interval_secs));
                 loop {
                     ticker.tick().await;
-                    match ephemeral.cleanup_expired() {
-                        Ok(ids) if !ids.is_empty() => tracing::info!(
-                            count = ids.len(),
-                            "ephemeral reaper: removed expired local messages"
-                        ),
+                    match crate::services::disappearing::reap_expired(&db) {
+                        Ok(gone) if !gone.is_empty() => {
+                            tracing::info!(count = gone.len(), "ephemeral reaper: removed expired local messages");
+                            let _ = expired.send(gone);
+                        }
                         Ok(_) => {}
-                        // NotLoggedIn is expected before login completes — quiet.
-                        Err(e) => tracing::debug!(error = %e, "ephemeral reaper: cleanup skipped"),
+                        Err(e) => tracing::warn!(error = %e, "ephemeral reaper: cleanup failed"),
                     }
                 }
             })
@@ -2601,13 +2601,71 @@ impl ChatterClient {
 
     /// Set the disappearing message timer for a conversation.
     ///
-    /// Pass `0` to disable. The value is in seconds.
-    pub fn set_disappearing_timer(
+    /// Pass `0` to disable. The value is in seconds. See
+    /// `ConversationHandle::set_disappearing_timer`.
+    pub async fn set_disappearing_timer(
         self: &Arc<Self>,
         conv: ActiveConversation,
         seconds: u32,
     ) -> Result<(), crate::services::conversation::ConversationError> {
-        self.conversation(conv).set_disappearing_timer(seconds)
+        self.conversation(conv).set_disappearing_timer(seconds).await
+    }
+
+    /// A conversation's disappearing-messages timer in seconds (`0` = off).
+    pub fn disappearing_timer(self: &Arc<Self>, conv: ActiveConversation) -> u32 {
+        self.conversation(conv).disappearing_timer()
+    }
+
+    /// Whether the user can change `conv`'s timer (friend DMs only).
+    pub fn can_set_disappearing_timer(self: &Arc<Self>, conv: ActiveConversation) -> bool {
+        self.conversation(conv).can_set_disappearing_timer()
+    }
+
+    /// Conversations (by storage key) whose disappearing timer just changed,
+    /// from either side: fires when the change's notice is filed, and when a
+    /// friend-DM message arrives stating a timer that differs from the last one
+    /// seen here (a lost update healed by the next message — its notice is
+    /// filed by the gateway, which has no event bus to announce it on).
+    pub fn subscribe_disappearing_timer_changes(
+        &self,
+    ) -> tokio::sync::broadcast::Receiver<crate::domain::ids::ChannelId> {
+        use crate::domain::message::{ConversationType, MessageContent, SystemMessage};
+        let (tx, rx) = tokio::sync::broadcast::channel(16);
+        let mut src = self.services.event_bus.subscribe_domain();
+        let settings = self.channels().settings_repo.clone();
+        tokio::spawn(async move {
+            let mut seen: std::collections::HashMap<crate::domain::ids::ChannelId, u32> =
+                std::collections::HashMap::new();
+            loop {
+                match src.recv().await {
+                    Ok(DomainEvent::MessageReceived { message })
+                        if message.conversation_type == ConversationType::ServerDm =>
+                    {
+                        let peer = crate::domain::ids::UserId::from_uuid(*message.conversation_id.as_uuid());
+                        let now = crate::services::disappearing::server_dm_timer(&settings, &peer);
+                        let notice = matches!(
+                            message.content,
+                            MessageContent::System(SystemMessage::DisappearingTimerChanged { .. })
+                        );
+                        let changed = seen.insert(message.conversation_id, now) != Some(now);
+                        if (notice || changed) && tx.send(message.conversation_id).is_err() {
+                            break;
+                        }
+                    }
+                    Ok(_) | Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {}
+                    Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                }
+            }
+        });
+        rx
+    }
+
+    /// Messages the disappearing-messages reaper has just deleted from this
+    /// device, one batch per sweep, for the open chat to drop.
+    pub fn subscribe_expired_messages(
+        &self,
+    ) -> tokio::sync::broadcast::Receiver<Vec<crate::domain::message::Message>> {
+        self.expired_messages.subscribe()
     }
 
     // ── Drafts (façade) ─────────────────────────────────────────────
@@ -2719,12 +2777,74 @@ impl ChatterClient {
             .is_for_channel(conversation_id)
     }
 
-    /// List channel members with profile information.
-    pub fn list_members_with_profiles(
+    /// A page of channel members (fetched from the server, which also
+    /// refreshes local membership) shaped for display: resolved name, known
+    /// handle and avatar. The avatar comes from the member's stored profile —
+    /// the same source DM rows use, refreshed when stale — so a member shows
+    /// their photo wherever this device can decrypt it (friends: the profile
+    /// key only travels with friendship), and initials only when it cannot.
+    pub async fn list_members_with_profiles(
         &self,
         channel_id: &crate::domain::ids::ChannelId,
+        limit: u32,
+        offset: u32,
     ) -> Result<Vec<crate::domain::channel::MemberWithProfile>, crate::services::channel::ChannelError> {
-        self.channels().list_members_with_profiles(channel_id)
+        let members = self.channels().get_channel_members(channel_id, limit, offset).await?;
+        let me = self.session_current_user_id();
+        // Refetch stale member profiles first, as a DM open does for its peer
+        // (Signal-Desktop fetches every member's profile on conversation
+        // open). Only friends: theirs are the avatars this device can decrypt.
+        // Throttled per user; a no-op in Shield mode.
+        futures::future::join_all(
+            members
+                .iter()
+                .filter(|m| me.as_ref() != Some(&m.user_id) && self.is_friend(&m.user_id))
+                .map(|m| self.refresh_profile_if_stale(&m.user_id)),
+        )
+        .await;
+        // Our own role, for what we may do to each row. DMs and Saved
+        // Messages have no moderation (the server refuses it).
+        let actor = self.get_channel_local(channel_id).and_then(|c| {
+            if c.is_dm() || matches!(c.channel_type, crate::domain::ChannelType::SavedMessages) {
+                return None;
+            }
+            let me = me.as_ref()?;
+            if c.is_owner(me) {
+                return Some(crate::domain::channel::MemberRole::Owner);
+            }
+            members.iter().find(|m| &m.user_id == me).map(|m| m.role)
+        });
+        Ok(members
+            .into_iter()
+            .map(|membership| {
+                let moderation = crate::domain::channel::MemberModeration::for_target(
+                    actor,
+                    me.as_ref() == Some(&membership.user_id),
+                    membership.role,
+                );
+                crate::domain::channel::MemberWithProfile {
+                    moderation,
+                    ..self.member_with_profile(membership)
+                }
+            })
+            .collect())
+    }
+
+    /// Resolve one membership's display data from local state.
+    pub fn member_with_profile(
+        &self,
+        membership: crate::domain::channel::Membership,
+    ) -> crate::domain::channel::MemberWithProfile {
+        let uid = membership.user_id;
+        crate::domain::channel::MemberWithProfile {
+            display_name: self.display_name(&uid),
+            // A peer's handle is often not known locally; none rather than
+            // the user id dressed up as one.
+            username: self.known_username(&uid).unwrap_or_default(),
+            avatar_bytes: self.user_avatar(&uid),
+            moderation: crate::domain::channel::MemberModeration::default(),
+            membership,
+        }
     }
 
     /// List all anonymous DM conversations.
@@ -3489,11 +3609,22 @@ impl ChatterClient {
         self.services.message_service.get_pinned_messages_local(channel_id, conversation_type)
     }
 
+    /// Persist the notification detail level (Signal's "Show: Name and
+    /// message / Name only / No name or message") and apply it now.
+    ///
+    /// Persist first: a level that takes effect but does not survive a restart
+    /// silently reverts to the private default, and one that is saved but not
+    /// applied leaks until the next launch. Startup reads the same key
+    /// (`app/core_services.rs`, `NOTIFICATION_DETAIL_LEVEL`).
     pub fn set_notification_detail_level(
         &self,
         level: crate::services::notification_service::NotificationDetailLevel,
-    ) {
-        self.services.notification_service.set_detail_level(level)
+    ) -> Result<(), crate::error::StorageError> {
+        use crate::storage::repositories::settings_repo::{keys, SettingsRepository};
+        SettingsRepository::new(self.services.database.clone())
+            .set_string(keys::NOTIFICATION_DETAIL_LEVEL, level.as_str())?;
+        self.services.notification_service.set_detail_level(level);
+        Ok(())
     }
 
     pub fn notification_detail_level(
@@ -3964,5 +4095,48 @@ mod unread_badge_tests {
             UnreadBadges { row: 1, total: 1 },
         );
         assert_eq!(client.unread_conversation_count(), 1);
+    }
+
+    /// A lost timer update healed by the next visible message: the gateway
+    /// adopts the new timer with no event bus, so the subscriber notices the
+    /// changed value on that message and the header refreshes. A message that
+    /// restates the same timer does not fire.
+    #[tokio::test]
+    async fn timer_changes_fire_when_a_message_heals_the_timer() {
+        use std::time::Duration;
+        let client = build_test_client();
+        let mut changes = client.subscribe_disappearing_timer_changes();
+        let peer = UserId::new();
+        let dm = |sent_at| DomainEvent::MessageReceived {
+            message: Message::new_text(
+                ChannelId::from(peer),
+                ConversationType::ServerDm,
+                Some(peer),
+                "hi".into(),
+                sent_at,
+            ),
+        };
+        let bus = &client.services.event_bus;
+
+        bus.emit_domain(dm(1)); // first sight: fires
+        bus.emit_domain(dm(2)); // same timer: silent
+        client
+            .channels()
+            .settings_repo
+            .set(&format!("conv.disappearing.server_dm.{peer}"), &3_600u32)
+            .expect("set timer");
+        bus.emit_domain(dm(3)); // healed to 1 hour: fires
+
+        for _ in 0..2 {
+            let id = tokio::time::timeout(Duration::from_secs(2), changes.recv())
+                .await
+                .expect("a change")
+                .expect("open");
+            assert_eq!(id, ChannelId::from(peer));
+        }
+        assert!(
+            tokio::time::timeout(Duration::from_millis(200), changes.recv()).await.is_err(),
+            "a message restating the same timer is not a change"
+        );
     }
 }

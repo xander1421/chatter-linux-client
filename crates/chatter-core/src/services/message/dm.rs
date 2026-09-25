@@ -118,9 +118,12 @@ impl MessageService {
         // RPC naming the recipient at the moment we message them — the link
         // the mailbox exists to hide. The sessions already exist (the
         // bootstrap made them).
+        // A device the server has refused as retired is skipped, as in
+        // `bootstrap_devices`.
         let peer_ciphertexts = if self.shield_mode.load(std::sync::atomic::Ordering::Acquire) {
+            let devices = self.live_session_devices(peer_id).await?;
             self.signal_service
-                .encrypt_message_session_devices(auth_client, &peer_id_str, &plaintext)
+                .encrypt_message_session_devices(auth_client, &peer_id_str, devices, &plaintext)
                 .await
         } else {
             self.signal_service

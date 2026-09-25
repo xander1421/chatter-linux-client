@@ -76,6 +76,8 @@ pub fn open(window: &MainWindow, ui_ctx: &Arc<ChatterClient>, id: &str) {
             &messages,
             // Mesh senders, not chatter accounts — see `core_api::sender_display_name`.
             |m| core_api::sender_display_name(&ui_ctx, m),
+            // No chatter profile behind a mesh sender.
+            |_| None,
             |att_id| ui_ctx.get_attachment(att_id),
             |m| ui_ctx.reply_author_display_name(m),
             |m| ui_ctx.reply_parent_missing_for(m),
@@ -187,6 +189,7 @@ pub(super) fn append_incoming(
         // identity — and it is still the best name we have for a peer that has
         // no chatter account.
         |_| nickname.clone(),
+        |_| None,
         |att_id| ui_ctx.get_attachment(att_id),
         |m| ui_ctx.reply_author_display_name(m),
         |m| ui_ctx.reply_parent_missing_for(m),

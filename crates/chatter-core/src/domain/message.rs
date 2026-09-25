@@ -597,6 +597,10 @@ pub enum SystemMessage {
     /// `sent_at` is the undelivered message's timestamp; `preview` a short
     /// excerpt so the line says which message.
     Undelivered { sent_at: u64, preview: String },
+    /// The system message's sender changed this conversation's
+    /// disappearing-messages timer (Signal's timer-update notice). `seconds`
+    /// is the new value; `0` = turned off.
+    DisappearingTimerChanged { seconds: u32 },
 }
 
 impl SystemMessage {
@@ -634,6 +638,14 @@ impl SystemMessage {
             Self::Undelivered { preview, .. } => format!(
                 "did not get your message \"{preview}\" — it could not be sent after several \
                  tries. Send it again if it mattered."
+            ),
+            // Rendered as "{sender_name} {description}".
+            Self::DisappearingTimerChanged { seconds: 0 } => {
+                "turned off disappearing messages".to_string()
+            }
+            Self::DisappearingTimerChanged { seconds } => format!(
+                "set disappearing messages to {}",
+                crate::services::disappearing::timer_label(*seconds)
             ),
         }
     }

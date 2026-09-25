@@ -106,17 +106,16 @@ export component LinkDevicePage inherits Rectangle {
                         }
                     }
 
-                    // Status + spinner
-                    HorizontalLayout {
-                        alignment: center;
-                        spacing: Spacing.sm;
-                        Text {
-                            text: root.status-text;
-                            color: root.linking ? Colors.primary : Colors.text-secondary;
-                            font-size: Typography.sm;
-                            horizontal-alignment: center;
-                            wrap: word-wrap;
-                        }
+                    // Status (two lines once the verification code is shown).
+                    // A direct child of the column so it gets the column's width
+                    // and its full wrapped height; centred inside a
+                    // HorizontalLayout it overflowed its row onto "Copy link".
+                    Text {
+                        text: root.status-text;
+                        color: root.linking ? Colors.primary : Colors.text-secondary;
+                        font-size: Typography.sm;
+                        horizontal-alignment: center;
+                        wrap: word-wrap;
                     }
 
                     if error != "": Text {

@@ -488,8 +488,16 @@ pub async fn handle_domain_event(
         // missed while the stream was down — app backgrounded — reached the
         // conversation but never its row. Rebuild the rows from storage, the
         // way every DM receive already does (`refresh_dm_list`).
-        DomainEvent::SyncComplete { messages_synced, .. } => {
-            if messages_synced > 0 {
+        DomainEvent::SyncComplete { messages_synced, blocks_changed, .. } => {
+            // A block or unblock from another device: the sidebar was built
+            // from the old block list, so rebuild it and the two Friends tabs.
+            if blocks_changed {
+                crate::bin_ui::features::auth::initial_data::refresh_friends_list(
+                    window.clone(), ui_ctx.clone(),
+                );
+                crate::bin_ui::features::modals::friends::refresh_blocked_users(window.clone(), ui_ctx);
+            }
+            if messages_synced > 0 || blocks_changed {
                 crate::bin_ui::features::sidebar::sections::refresh_conversation_lists(window, ui_ctx);
                 let ui_ctx = ui_ctx.clone();
                 crate::run_ui!(window, |w| {

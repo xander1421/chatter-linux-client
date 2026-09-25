@@ -191,6 +191,23 @@ impl MemberRole {
         }
     }
 
+    /// Position in the server's role order (`ChannelRole` in common.proto).
+    fn rank(self) -> u8 {
+        match self {
+            Self::Member => 1,
+            Self::Moderator => 2,
+            Self::Admin => 3,
+            Self::Owner => 4,
+        }
+    }
+
+    /// Whether this role may ban, unban and see the ban list (owner+admin,
+    /// `ban_user`/`unban_user` in schema.zed).
+    #[must_use]
+    pub fn can_unban(self) -> bool {
+        matches!(self, Self::Owner | Self::Admin)
+    }
+
     /// Inverse of [`Self::as_str`].
     #[must_use]
     pub fn parse(token: &str) -> Option<Self> {
@@ -225,7 +242,50 @@ pub struct Membership {
 pub struct MemberWithProfile {
     pub membership: Membership,
     pub display_name: String,
+    /// The member's handle, empty when this device does not know it.
+    pub username: String,
     /// Decrypted avatar bytes from the member's server profile, if known.
+    pub avatar_bytes: Option<Vec<u8>>,
+    /// What the viewing user may do to this member.
+    pub moderation: MemberModeration,
+}
+
+/// What the viewing user may do to one channel member.
+///
+/// Mirrors the server's checks so the UI never offers an action the server
+/// refuses: `ban_user` is owner+admin and `mute_user` owner+admin+moderator
+/// (`internal/utils/authz/schema.zed`), nobody acts on themselves or the
+/// owner, and a non-owner must strictly outrank the target
+/// (`internal/services/channel/service/moderation.go`).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct MemberModeration {
+    pub can_ban: bool,
+    pub can_mute: bool,
+}
+
+impl MemberModeration {
+    /// `actor` is the viewer's role in the channel (`None` = not a member).
+    #[must_use]
+    pub fn for_target(actor: Option<MemberRole>, actor_is_target: bool, target: MemberRole) -> Self {
+        let Some(actor) = actor else { return Self::default() };
+        if actor_is_target || target == MemberRole::Owner {
+            return Self::default();
+        }
+        let outranks = actor == MemberRole::Owner || actor.rank() > target.rank();
+        Self {
+            can_ban: outranks && actor.can_unban(),
+            can_mute: outranks && actor.rank() >= MemberRole::Moderator.rank(),
+        }
+    }
+}
+
+/// One active ban on a channel, shaped for display.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct BannedMember {
+    pub user_id: UserId,
+    pub banned_at: DateTime<Utc>,
+    pub display_name: String,
+    /// Decrypted avatar bytes from the user's stored profile, if known.
     pub avatar_bytes: Option<Vec<u8>>,
 }
 
@@ -337,4 +397,27 @@ pub struct Template {
     pub channel_type: ChannelType,
     pub config: ChannelConfig,
     pub icon: Option<String>,
+}
+
+#[cfg(test)]
+mod moderation_tests {
+    use super::{MemberModeration, MemberRole::*};
+
+    #[test]
+    fn moderation_mirrors_server_role_rules() {
+        let m = |actor, is_self, target| MemberModeration::for_target(actor, is_self, target);
+        // Owner acts on anyone but themselves; nobody acts on the owner.
+        assert_eq!(m(Some(Owner), false, Admin), MemberModeration { can_ban: true, can_mute: true });
+        assert_eq!(m(Some(Owner), true, Owner), MemberModeration::default());
+        assert_eq!(m(Some(Admin), false, Owner), MemberModeration::default());
+        // Admin outranks moderator/member; peers do not act on each other.
+        assert_eq!(m(Some(Admin), false, Moderator), MemberModeration { can_ban: true, can_mute: true });
+        assert_eq!(m(Some(Admin), false, Admin), MemberModeration::default());
+        // Moderator may mute a member but never ban.
+        assert_eq!(m(Some(Moderator), false, Member), MemberModeration { can_ban: false, can_mute: true });
+        assert_eq!(m(Some(Moderator), false, Moderator), MemberModeration::default());
+        // Members and non-members get nothing.
+        assert_eq!(m(Some(Member), false, Member), MemberModeration::default());
+        assert_eq!(m(None, false, Member), MemberModeration::default());
+    }
 }

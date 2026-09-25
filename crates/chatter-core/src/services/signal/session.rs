@@ -854,17 +854,18 @@ impl SignalService {
         Ok(usable)
     }
 
-    /// Encrypt for every device of `recipient_id` we already hold a usable
-    /// session with — no prekey-bundle fetch, so no RPC that names the
-    /// recipient. Errors when there is no such device.
+    /// Encrypt for `device_ids` of `recipient_id` — devices we already hold a
+    /// usable session with (from [`Self::session_devices`], filtered by the
+    /// caller) — with no prekey-bundle fetch, so no RPC that names the
+    /// recipient. Errors when none of them encrypts.
     pub async fn encrypt_message_session_devices(
         &self,
         auth_client: &mut AuthClient,
         recipient_id: &str,
+        device_ids: Vec<u32>,
         plaintext: &[u8],
     ) -> Result<HashMap<u32, Vec<u8>>, ServiceError> {
         self.refuse_pending_identity_change(recipient_id)?;
-        let device_ids = self.session_devices(recipient_id).await?;
         let sender_cert = self.get_or_request_sender_certificate(auth_client).await?;
 
         let mut ciphertexts = HashMap::with_capacity(device_ids.len());
