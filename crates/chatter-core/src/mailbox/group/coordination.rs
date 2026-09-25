@@ -19,7 +19,7 @@ use crate::domain::{ChannelId, UserId};
 use crate::error::MailboxError;
 use crate::mailbox::group::{GroupMailbox, GroupMailboxManager, MemberMailbox};
 use crate::mailbox::{MailboxToken, TokenManager};
-use crate::network::grpc::{AnonymousMailboxClient, MailboxClient};
+use crate::network::grpc::AnonymousMailboxClient;
 use crate::proto::content_v1::{GroupMailboxAddress, SenderKeyDistribution};
 use crate::storage::Database;
 use crate::util::time::TimestampNanos;
@@ -82,7 +82,6 @@ impl GroupCoordinator {
     /// # Arguments
     ///
     /// * `channel_id` - The channel to setup mailbox for
-    /// * `mailbox_client` - For server communication
     ///
     /// # Returns
     ///
@@ -90,7 +89,6 @@ impl GroupCoordinator {
     pub async fn setup_group_mailbox(
         &self,
         channel_id: &ChannelId,
-        mailbox_client: &mut MailboxClient,
         anon_mailbox_client: &mut AnonymousMailboxClient,
     ) -> Result<GroupMailboxSetupResult, MailboxError> {
         tracing::info!(channel_id = %channel_id, "Starting group mailbox setup");
@@ -112,10 +110,8 @@ impl GroupCoordinator {
             }
         }
 
-        // Get available token or request new ones (authenticated — rate limited per user)
-        tracing::info!(channel_id = %channel_id, "Ensuring token...");
-        let token = self.ensure_token(mailbox_client).await?;
-        tracing::info!(channel_id = %channel_id, "Token obtained");
+        // Spend only from the pre-fetched batch (NDSS'21 §VI-F)
+        let token = self.token_manager.claim_prefetched_token()?;
 
         // Create ephemeral mailbox on server (with retry for transient transport errors)
         // Uses anonymous client to avoid leaking device identity alongside blind signature
@@ -160,7 +156,7 @@ impl GroupCoordinator {
         // Build announcement
         let announcement = self.build_announcement(channel_id, &mailbox);
 
-        // Persist state (token already marked used by claim_available_token in ensure_token)
+        // Persist state (token already marked used by claim_prefetched_token)
         self.mailbox_manager.save_our_mailbox(&mailbox)?;
         let _ = token;
 
@@ -282,33 +278,6 @@ impl GroupCoordinator {
             }
             _ => Ok(None),
         }
-    }
-
-    /// Atomically claim a token, requesting more if needed.
-    ///
-    /// Uses `claim_available_token` (UPDATE ... RETURNING) so the credential
-    /// is marked used in the same SQL statement — the server rejects any
-    /// credential it has seen before.
-    async fn ensure_token(
-        &self,
-        client: &mut MailboxClient,
-    ) -> Result<MailboxToken, MailboxError> {
-        tracing::info!("Claiming available token locally");
-        if let Some(token) = self.token_manager.claim_available_token()? {
-            tracing::info!("Claimed existing local token");
-            return Ok(token);
-        }
-
-        tracing::info!("No local token, requesting from server...");
-        let count = self.token_manager.request_tokens(client, 5).await?;
-        tracing::info!(count = count, "Requested tokens from server");
-        if count == 0 {
-            return Err(MailboxError::NoTokensAvailable);
-        }
-
-        self.token_manager
-            .claim_available_token()?
-            .ok_or(MailboxError::NoTokensAvailable)
     }
 
     /// Build GroupMailbox from token and server response.

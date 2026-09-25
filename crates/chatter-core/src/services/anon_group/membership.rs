@@ -100,7 +100,7 @@ impl AnonGroupService {
                 .ensure_sender_certificate()
                 .await
                 .map_err(|e| AnonGroupError::CryptoError(e.to_string()))?;
-            let token = self.get_or_request_token().await?;
+            let token = self.claim_token()?;
             self.pairwise_service
                 .encrypt_anonymous(peer_id, &plaintext, &token)
                 .await
@@ -116,33 +116,18 @@ impl AnonGroupService {
         Ok(())
     }
 
-    /// Atomically claim a blind-signature token, requesting a fresh batch if
-    /// none are available.
+    /// Claim a blind-signature token from the pre-fetched batch.
     ///
-    /// Mirrors `AnonDmService::get_or_request_token`. Used to fetch a member's
-    /// prekey bundle anonymously on first contact so the server never learns
-    /// the group membership graph from session establishment. `claim` is an
-    /// atomic UPDATE ... RETURNING, so concurrent fan-out sends never reuse a
-    /// credential.
-    pub(crate) async fn get_or_request_token(
+    /// Mirrors `AnonDmService::claim_token`. Used to fetch a member's prekey
+    /// bundle anonymously on first contact so the server never learns the
+    /// group membership graph from session establishment. Never requests
+    /// tokens (NDSS'21 §VI-F); an empty batch fails this member's send.
+    pub(crate) fn claim_token(
         &self,
     ) -> Result<crate::mailbox::token_manager::MailboxToken, AnonGroupError> {
-        match self.token_manager.claim_available_token() {
-            Ok(Some(token)) => Ok(token),
-            Ok(None) => {
-                let mut mailbox_client = self.grpc_pool.mailbox_client();
-                self.token_manager
-                    .request_tokens(&mut mailbox_client, 5)
-                    .await
-                    .map_err(|e| AnonGroupError::CryptoError(e.to_string()))?;
-
-                self.token_manager
-                    .claim_available_token()
-                    .map_err(|e| AnonGroupError::CryptoError(e.to_string()))?
-                    .ok_or_else(|| AnonGroupError::CryptoError("No tokens available".to_string()))
-            }
-            Err(e) => Err(AnonGroupError::CryptoError(e.to_string())),
-        }
+        self.token_manager
+            .claim_prefetched_token()
+            .map_err(|e| AnonGroupError::CryptoError(e.to_string()))
     }
 
     /// Send an invite message to a user via their existing DM session.

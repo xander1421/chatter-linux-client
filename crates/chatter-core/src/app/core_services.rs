@@ -345,9 +345,16 @@ impl CoreServices {
         use std::time::Duration;
 
         /// Refill to this many claimable tokens…
-        const BATCH: u32 = 10;
+        ///
+        /// Sized for the largest burst a send makes: an anon-group post
+        /// spends one token per member it has no session with yet (first
+        /// contact), so a fresh join of an N-member group spends N at once.
+        // ponytail: fixed batch; a first post to more than BATCH new members
+        // fails for the overflow until the next refill. Size to the group
+        // roster if that bites. Server daily budget is 48 + 2/conversation.
+        const BATCH: u32 = 20;
         /// …once fewer than this remain.
-        const LOW_WATER: u32 = 5;
+        const LOW_WATER: u32 = 10;
         /// Wait between checks: `BASE` plus up to `JITTER`, uniformly random.
         const BASE_SECS: u64 = 5 * 60;
         const JITTER_SECS: u64 = 10 * 60;
@@ -369,11 +376,20 @@ impl CoreServices {
                 if current >= LOW_WATER {
                     continue;
                 }
+                // The server grants at most 10 per request, so top up in rounds.
                 let mut mailbox_client = grpc_pool.mailbox_client();
-                match token_manager.request_tokens(&mut mailbox_client, BATCH - current).await {
-                    Ok(n) => tracing::info!(fetched = n, had = current, "Token refill: batch topped up"),
-                    Err(e) => tracing::warn!("Token refill failed: {}", e),
+                let mut have = current;
+                while have < BATCH {
+                    match token_manager.request_tokens(&mut mailbox_client, BATCH - have).await {
+                        Ok(0) => break,
+                        Ok(n) => have += n,
+                        Err(e) => {
+                            tracing::warn!("Token refill failed: {}", e);
+                            break;
+                        }
+                    }
                 }
+                tracing::info!(had = current, now = have, "Token refill: batch topped up");
             }
         })
     }

@@ -222,7 +222,7 @@ impl AnonDmService {
             .map_err(|e| AnonDmError::CryptoError(e.to_string()))?;
 
         // Get blind signature token for anonymous delivery
-        let token = self.get_or_request_token().await?;
+        let token = self.claim_token()?;
 
         // Send to recipient's device inbox using anonymous credential
         // The ECIES ciphertext goes in the sealed_body, but we're NOT using

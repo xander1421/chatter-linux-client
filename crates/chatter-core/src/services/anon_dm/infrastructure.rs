@@ -24,7 +24,7 @@ impl AnonDmService {
         let plaintext = content.encode_to_vec();
 
         // Get token #1 for anonymous prekey fetch (claim = fetch + mark used atomically)
-        let prekey_token = self.get_or_request_token().await?;
+        let prekey_token = self.claim_token()?;
 
         // Encrypt with Signal Protocol ANONYMOUSLY
         let ciphertext = self
@@ -34,7 +34,7 @@ impl AnonDmService {
             .map_err(|e| AnonDmError::CryptoError(e.to_string()))?;
 
         // Get token #2 for anonymous message send (claim = fetch + mark used atomically)
-        let send_token = self.get_or_request_token().await?;
+        let send_token = self.claim_token()?;
 
         // Build SealedSenderMessage
         let server_key_id = self.settings_repo
@@ -75,27 +75,15 @@ impl AnonDmService {
         Ok(())
     }
 
-    /// Atomically claim a token or request new ones.
+    /// Claim a token from the pre-fetched batch (`claim_prefetched_token`).
     ///
-    /// Uses `claim_available_token` (UPDATE ... RETURNING) so two concurrent
-    /// sends never see the same credential — the server rejects any repeat.
-    pub(crate) async fn get_or_request_token(&self) -> Result<crate::mailbox::token_manager::MailboxToken, AnonDmError> {
-        match self.token_manager.claim_available_token() {
-            Ok(Some(token)) => Ok(token),
-            Ok(None) => {
-                let mut mailbox_client = self.grpc_pool.mailbox_client();
-                self.token_manager
-                    .request_tokens(&mut mailbox_client, 5)
-                    .await
-                    .map_err(|e| AnonDmError::CryptoError(e.to_string()))?;
-
-                self.token_manager
-                    .claim_available_token()
-                    .map_err(|e| AnonDmError::CryptoError(e.to_string()))?
-                    .ok_or_else(|| AnonDmError::CryptoError("No tokens available".to_string()))
-            }
-            Err(e) => Err(AnonDmError::CryptoError(e.to_string())),
-        }
+    /// Never requests tokens: an empty batch fails the send rather than
+    /// linking an authenticated token request to this anonymous spend
+    /// (NDSS'21 §VI-F).
+    pub(crate) fn claim_token(&self) -> Result<crate::mailbox::token_manager::MailboxToken, AnonDmError> {
+        self.token_manager
+            .claim_prefetched_token()
+            .map_err(|e| AnonDmError::CryptoError(e.to_string()))
     }
 
     /// Send content to a peer's anonymous mailbox.
@@ -138,7 +126,7 @@ impl AnonDmService {
                 .ensure_sender_certificate()
                 .await
                 .map_err(|e| AnonDmError::CryptoError(e.to_string()))?;
-            let token = self.get_or_request_token().await?;
+            let token = self.claim_token()?;
             self.pairwise_service
                 .encrypt_anonymous(peer_id, &plaintext, &token)
                 .await
@@ -180,22 +168,7 @@ impl AnonDmService {
         conversation_id: &AnonDmId,
     ) -> Result<AnonDmMailbox, AnonDmError> {
         // Atomically claim a blind-signed token (marks used in same SQL stmt)
-        let token = match self.token_manager.claim_available_token() {
-            Ok(Some(token)) => token,
-            Ok(None) => {
-                let mut mailbox_client = self.grpc_pool.mailbox_client();
-                self.token_manager
-                    .request_tokens(&mut mailbox_client, 5)
-                    .await
-                    .map_err(|e| AnonDmError::CryptoError(e.to_string()))?;
-
-                self.token_manager
-                    .claim_available_token()
-                    .map_err(|e| AnonDmError::CryptoError(e.to_string()))?
-                    .ok_or_else(|| AnonDmError::CryptoError("No tokens available".to_string()))?
-            }
-            Err(e) => return Err(AnonDmError::CryptoError(e.to_string())),
-        };
+        let token = self.claim_token()?;
 
         // Use the token's Ed25519 keypair for the mailbox
         let public_key: [u8; 32] = token

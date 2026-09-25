@@ -28,10 +28,6 @@ pub enum SealedSenderError {
     #[error("no anonymous credential available")]
     NoToken,
 
-    /// Token request failed.
-    #[error("token request failed: {0}")]
-    TokenRequestFailed(String),
-
     /// Send failed.
     #[error("send failed: {0}")]
     SendFailed(String),
@@ -89,11 +85,10 @@ impl SealedSenderService {
             .await
             .map_err(|e| SealedSenderError::EncryptionFailed(e.to_string()))?;
 
-        // 2. Get anonymous credential
-        let token: MailboxToken = self
-            .get_or_request_token(token_manager)
-            .await
-            .ok_or(SealedSenderError::NoToken)?;
+        // 2. Anonymous credential, from the pre-fetched batch only (NDSS'21 §VI-F)
+        let token: MailboxToken = token_manager
+            .claim_prefetched_token()
+            .map_err(|_| SealedSenderError::NoToken)?;
 
         // 3. Build sealed sender message
         let sealed_message = SealedSenderMessage {
@@ -119,42 +114,5 @@ impl SealedSenderService {
             .map_err(|e| SealedSenderError::SendFailed(e.to_string()))?;
 
         Ok(())
-    }
-
-    /// Atomically claim a token or request new ones if the local cache is empty.
-    ///
-    /// Uses `claim_available_token` so the token is marked used in the same
-    /// SQL statement — concurrent sends can never present the same credential
-    /// to the server.
-    pub async fn get_or_request_token(
-        &self,
-        token_manager: &TokenManager,
-    ) -> Option<MailboxToken> {
-        match token_manager.claim_available_token() {
-            Ok(Some(token)) => Some(token),
-            Ok(None) => {
-                let mut mailbox_client = self.grpc_pool.mailbox_client();
-
-                match token_manager.request_tokens(&mut mailbox_client, 5).await {
-                    Ok(count) if count > 0 => {
-                        tracing::debug!("Requested {} new anonymous tokens", count);
-                    }
-                    Ok(_) => {
-                        tracing::warn!("Token request returned 0 tokens");
-                        return None;
-                    }
-                    Err(e) => {
-                        tracing::error!("Failed to request tokens: {}", e);
-                        return None;
-                    }
-                }
-
-                token_manager.claim_available_token().ok().flatten()
-            }
-            Err(e) => {
-                tracing::error!("Failed to claim available token: {}", e);
-                None
-            }
-        }
     }
 }
