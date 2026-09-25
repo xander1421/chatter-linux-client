@@ -749,9 +749,17 @@ impl EventHandlers {
                 trace!(?call_id, ?peer_id, "CallKeyOfferReceived: handled by UI thread");
             }
 
-            DomainEvent::DmBootstrapCompleted { peer_id } => {
-                // DM bootstrap complete - handled by UI thread to enable composer.
-                trace!(?peer_id, "DmBootstrapCompleted: handled by UI thread");
+            DomainEvent::DmBootstrapCompleted { peer_id, sent_timestamps } => {
+                // The queued bubbles went out: "sending" → "sent". The UI
+                // thread also re-enables the composer.
+                trace!(?peer_id, count = sent_timestamps.len(), "DmBootstrapCompleted");
+                self.message_state
+                    .update_delivery_status_by_timestamps(&sent_timestamps, "sent");
+                if let Some(ref svc) = self.message_service {
+                    if let Err(e) = svc.set_friend_dm_delivery_status(&peer_id.into(), &sent_timestamps, "sent") {
+                        tracing::warn!(?peer_id, error = %e, "Failed to persist sent status");
+                    }
+                }
             }
 
             DomainEvent::FriendRequestsUpdated { ref received, ref sent } => {
@@ -772,9 +780,16 @@ impl EventHandlers {
             // ================================================================
             // Local Send Events
             // ================================================================
-            DomainEvent::MessageSendFailed { channel_id, error } => {
-                // Message send failed - UI should show error
+            DomainEvent::MessageSendFailed { channel_id, error, message_timestamps } => {
+                // Recorded as failed so the bubble says so after a reload too.
                 trace!(?channel_id, ?error, "Message send failed");
+                self.message_state
+                    .update_delivery_status_by_timestamps(&message_timestamps, "failed");
+                if let Some(ref svc) = self.message_service {
+                    if let Err(e) = svc.set_friend_dm_delivery_status(&channel_id, &message_timestamps, "failed") {
+                        tracing::warn!(?channel_id, error = %e, "Failed to persist failed status");
+                    }
+                }
             }
 
             // ================================================================

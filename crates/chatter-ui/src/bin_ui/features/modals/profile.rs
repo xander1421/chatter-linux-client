@@ -749,6 +749,9 @@ pub fn wire_profile_actions(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                             w.set_profile_loading(false);
                             w.set_profile_is_blocked(true);
                             w.set_profile_is_friend(false);
+                            // Their DM leaves the sidebar (core hides blocked
+                            // contacts); history stays for an unblock.
+                            crate::bin_ui::features::auth::initial_data::refresh_dm_list(&w, &ui_ctx);
                             tracing::info!("Blocked user: {}", user_id);
                         }
                     });
@@ -815,6 +818,8 @@ pub fn wire_profile_actions(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                         if let Some(w) = weak.upgrade() {
                             w.set_profile_loading(false);
                             w.set_profile_is_blocked(false);
+                            w.set_profile_is_friend(ui_ctx.is_friend(&user_id));
+                            crate::bin_ui::features::auth::initial_data::refresh_dm_list(&w, &ui_ctx);
                             tracing::info!("Unblocked user: {}", user_id);
                         }
                     });

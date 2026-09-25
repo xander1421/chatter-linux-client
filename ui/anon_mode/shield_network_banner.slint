@@ -1,0 +1,39 @@
+// Shield is on but its transport switch to Tor failed (TorStatus.state == 4,
+// set by chatter-core `set_anon_mode_enabled`): traffic is going DIRECT, so
+// the network location is NOT hidden. Shield must not look fully active while
+// that is true, so this is persistent — no close button — and lasts until Tor
+// is up or Shield is turned off. Messaging still works; this only says what
+// Shield is not doing.
+
+import { Colors } from "../theme/colors.slint";
+import { Spacing } from "../theme/spacing.slint";
+import { Typography } from "../theme/typography.slint";
+import { AnonMode, TorStatus } from "anon_mode_global.slint";
+
+export component ShieldNetworkBanner inherits Rectangle {
+    property <bool> show: AnonMode.enabled && TorStatus.state == 4;
+    property <string> message: "Shield can't hide your network location right now (Tor unavailable). Your messages are still end-to-end encrypted and routed through anonymous mailboxes.";
+
+    visible: root.show;
+    height: root.show ? content.preferred-height : 0px;
+    background: Colors.warning.with-alpha(0.15);
+    border-width: 1px;
+    border-color: Colors.warning.with-alpha(0.3);
+    accessible-role: text;
+    accessible-label: root.message;
+
+    content := HorizontalLayout {
+        padding-left: Spacing.md;
+        padding-right: Spacing.md;
+        padding-top: 6px;
+        padding-bottom: 6px;
+        Text {
+            text: root.message;
+            color: Colors.warning;
+            font-size: Typography.xs;
+            font-weight: Typography.medium;
+            wrap: word-wrap;
+            horizontal-alignment: center;
+        }
+    }
+}

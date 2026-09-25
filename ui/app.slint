@@ -59,6 +59,7 @@ import { JarvisGlobal } from "jarvis/jarvis_global.slint";
 
 // Import anon mode global + PIN modal
 import { AnonModePinModal } from "modals/anon_mode_pin.slint";
+import { ShieldNetworkBanner } from "anon_mode/shield_network_banner.slint";
 
 // Re-export types for Rust binding
 export { ChannelListItemData, DMListItemData, PrivateGroupListItemData, CustomSectionData, SectionConversationData, MessageItemData, MessageAttachmentData, ForwardTarget, SessionInfo, SearchResultChannel, SearchResult, AIProviderOption, AIModelOption, CreateChannelConfig, PendingAttachmentData, EmojiData, GifData, MentionSuggestion, FriendData, FriendRequestData, BlockedUserData, IncomingCallData, ActiveCallData, CallParticipantData, CallHistoryRow, AudioDeviceData, ScreenSourceData, ChannelMemberData, PrivateGroupFriend, LocalAIProviderData, CatalogModelData, MemoryFactData, MemoryEntityData, MemoryGraphNodeData, MemoryGraphEdgeData, InviteUser, ReactionEntry, QuickSwitcherItem, SharedContentItem, SharedTab }
@@ -888,6 +889,7 @@ export component App inherits Rectangle {
     callback friends-decline-request(string);
     callback friends-cancel-request(string);
     callback friends-unblock-user(string);
+    callback friends-remove-blocked-user(string);
     // Friend code callbacks (privacy-first discovery)
     callback friends-generate-code(bool);   // bool = private mode
     callback friends-generate-qr(bool);     // bool = private mode
@@ -1223,6 +1225,9 @@ export component App inherits Rectangle {
                 queue-count: root.connection-queue-count;
                 dismissed => { root.connection-banner-dismissed = true; }
             }
+
+            // Shield on, Tor unavailable: not dismissible (see the component).
+            ShieldNetworkBanner {}
 
             // Only for a session-less main view (mesh-only entry). Auto-hides the
             // moment there is an account, and is the only route back to sign-in
@@ -2059,6 +2064,9 @@ export component App inherits Rectangle {
         }
         unblock-user(user-id) => {
             root.friends-unblock-user(user-id);
+        }
+        remove-blocked-user(user-id) => {
+            root.friends-remove-blocked-user(user-id);
         }
         generate-code(private-mode) => {
             root.friends-generate-code(private-mode);

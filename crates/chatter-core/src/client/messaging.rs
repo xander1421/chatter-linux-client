@@ -446,26 +446,11 @@ impl ChatterClient {
     /// the UI never iterates channels to find DMs.
     pub fn list_regular_dm_sidebar(&self) -> Vec<crate::ui::sidebar_data::DMListItemSendData> {
         use crate::domain::message::ConversationType;
-        use crate::domain::user::FriendshipStatus;
         use crate::ui::chat_data::initials_from_name;
         use crate::ui::sidebar_data::DMListItemSendData;
 
-        let Some(current_user_id) = self.auth_state().get().current_user_id else {
-            return Vec::new();
-        };
-
         let mut out: Vec<DMListItemSendData> = Vec::new();
-        let friends = self.users().get_friends_local().unwrap_or_default();
-        for friendship in friends {
-            if friendship.status != FriendshipStatus::Accepted {
-                continue;
-            }
-            // The peer is whichever party isn't us.
-            let peer_id = if friendship.requester_id == current_user_id {
-                friendship.addressee_id
-            } else {
-                friendship.requester_id
-            };
+        for peer_id in self.listed_friends() {
             // Local storage key for a channel-free DM = the peer's user_id
             // wrapped as a ChannelId (same UUID).
             let conversation_id: crate::domain::ids::ChannelId = peer_id.into();
@@ -828,6 +813,11 @@ impl ChatterClient {
         match self.list_friends_with_profiles().await {
             Ok(pairs) => {
                 for (friendship, profile) in pairs {
+                    // The server already leaves out its own blocks; this also
+                    // drops a friend blocked through their anon DM.
+                    if self.is_profile_user_blocked(&friendship.addressee_id) {
+                        continue;
+                    }
                     out.push(FriendDataSendData {
                         user_id: friendship.addressee_id.to_string(),
                         display_name: profile.display_name.clone(),
@@ -859,7 +849,10 @@ impl ChatterClient {
         };
         hits.iter()
             .filter_map(|hit| self.get_message_local(&hit.message_id))
-            .filter(|msg| self.visible_in_mode(&msg.conversation_type))
+            .filter(|msg| {
+                self.visible_in_mode(&msg.conversation_type)
+                    && !self.is_blocked_conversation(&msg.conversation_type, &msg.conversation_id.to_string())
+            })
             .collect()
     }
 
@@ -1170,20 +1163,9 @@ impl ChatterClient {
         // peer user_id). Skip in anon mode — they carry a server identity
         // link the sidebar also suppresses there.
         if !self.anon_mode_enabled() {
-            if let Some(current_user_id) = self.auth_state().get().current_user_id {
-                let friends = self.users().get_friends_local().unwrap_or_default();
-                for friendship in friends {
-                    if friendship.status != crate::domain::user::FriendshipStatus::Accepted {
-                        continue;
-                    }
-                    let peer_id = if friendship.requester_id == current_user_id {
-                        friendship.addressee_id
-                    } else {
-                        friendship.requester_id
-                    };
-                    let display_name = self.display_name(&peer_id);
-                    push(&mut out, &mut seen, peer_id, display_name);
-                }
+            for peer_id in self.listed_friends() {
+                let display_name = self.display_name(&peer_id);
+                push(&mut out, &mut seen, peer_id, display_name);
             }
         }
 

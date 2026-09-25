@@ -1,7 +1,8 @@
 // Anon mode runtime flag — Slint global mirroring `JarvisGlobal`.
 //
-// When `enabled = true`, the sidebar hides server-friend DMs and public
-// channels and shows only anon DMs + anon groups. Default-off; PIN-gated
+// When `enabled = true`, the sidebar hides channels and Saved Messages and
+// shows anon DMs; friend DMs stay (sent via mailbox) — see chatter-core
+// `ChatterClient::visible_in_mode`. Default-off; PIN-gated
 // on enable from the Rust side. In-memory only — resets to off on every
 // fresh window (lib.rs forces this after login bring-up).
 
@@ -25,7 +26,9 @@ export global AnonMode {
 
 // Tor onion transport status, pushed from Rust (see connection.rs `tor_status`).
 // 0 = Off (not on onion), 1 = Connecting, 2 = Connected (onion RPC round-tripped),
-// 3 = Error (connect/poll timed out). Drives the sidebar dot + the connection banner.
+// 3 = Error (connect/poll timed out), 4 = Unavailable (Shield on, onion switch
+// failed — traffic is DIRECT). Drives the sidebar dot, the connection banner and
+// the Shield network banner.
 //
 // STUB-1: state 0 is OFF — traffic is going direct. It is NOT "connecting", and
 // the sidebar dot must not render it amber; the dot's fallback colour used to do

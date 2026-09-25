@@ -227,28 +227,30 @@ pub(super) fn handle_dm_bootstrap_completed(
     window: &Weak<MainWindow>,
     ui_ctx: &Arc<ChatterClient>,
     peer_id: UserId,
+    sent_timestamps: Vec<u64>,
 ) {
     let is_active = ui_ctx.active_conversation().matches_dm_peer(&peer_id);
     crate::run_ui!(window, |w| {
         w.set_composer_placeholder("Type a message...".into());
-
         if is_active {
-            let messages = w.get_messages();
-            for i in 0..messages.row_count() {
-                if let Some(msg) = messages.row_data(i) {
-                    if msg.is_own && msg.delivery_status.as_str() == "sending" {
-                        let mut updated_msg = msg.clone();
-                        updated_msg.delivery_status = "sent".into();
-                        if let Some(model) = messages.as_any().downcast_ref::<slint::VecModel<MessageItemData>>() {
-                            model.set_row_data(i, updated_msg);
-                        }
-                    }
-                }
-            }
+            set_own_status_at(&w, &sent_timestamps, "sent");
         }
-
         tracing::debug!(peer_id = %peer_id, "DM bootstrap complete - composer enabled");
     });
+}
+
+/// Set the status of our own bubbles sent at `timestamps` (`timestamp_ns`) in
+/// the open message list. Core has already stored the same status.
+fn set_own_status_at(w: &MainWindow, timestamps: &[u64], status: &str) {
+    let messages = w.get_messages();
+    let Some(model) = messages.as_any().downcast_ref::<VecModel<MessageItemData>>() else { return };
+    for i in 0..model.row_count() {
+        let Some(mut msg) = model.row_data(i) else { continue };
+        if msg.is_own && msg.timestamp_ns.parse::<u64>().is_ok_and(|ts| timestamps.contains(&ts)) {
+            msg.delivery_status = status.into();
+            model.set_row_data(i, msg);
+        }
+    }
 }
 
 /// Update delivery status checkmarks (✓ → ✓✓) in the active message list.
@@ -423,6 +425,7 @@ pub(super) fn handle_message_send_failed(
     window: &Weak<MainWindow>,
     channel_id: ChannelId,
     error: String,
+    message_timestamps: Vec<u64>,
 ) {
     tracing::error!(
         channel_id = %channel_id,
@@ -436,6 +439,10 @@ pub(super) fn handle_message_send_failed(
         // The only background send is the post-bootstrap flush; its
         // "Setting up secure channel…" placeholder ends here too.
         w.set_composer_placeholder("Type a message...".into());
+        // The bubble says it too: "not sent", never the ticks of a delivery.
+        // Only our own bubbles at these timestamps, so another open chat is
+        // untouched.
+        set_own_status_at(&w, &message_timestamps, "failed");
         w.set_toast_message("Failed to send message. Please try again.".into());
         w.set_toast_variant("error".into());
         w.set_toast_visible(true);

@@ -34,16 +34,22 @@ pub enum TorStatus {
     Connected,
     /// Onion connect or poll timed out / failed.
     Error,
+    /// Shield is on but the switch to onion failed outright (no `.onion`
+    /// pinned, no `onion` feature): traffic is going DIRECT, so the network
+    /// location is NOT hidden. Persists until Shield is toggled — no retry
+    /// will change it.
+    Unavailable,
 }
 
 impl TorStatus {
-    /// Stable integer for the Slint global (0=Off,1=Connecting,2=Connected,3=Error).
+    /// Stable integer for the Slint global (0=Off,1=Connecting,2=Connected,3=Error,4=Unavailable).
     pub fn as_i32(self) -> i32 {
         match self {
             Self::Off => 0,
             Self::Connecting => 1,
             Self::Connected => 2,
             Self::Error => 3,
+            Self::Unavailable => 4,
         }
     }
 
@@ -52,6 +58,7 @@ impl TorStatus {
             1 => Self::Connecting,
             2 => Self::Connected,
             3 => Self::Error,
+            4 => Self::Unavailable,
             _ => Self::Off,
         }
     }

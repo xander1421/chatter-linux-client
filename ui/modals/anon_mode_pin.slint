@@ -24,7 +24,7 @@ export component AnonModePinModal inherits Rectangle {
 
     Modal {
         show: root.show-modal;
-        title: "Enter PIN to enable Anon Mode";
+        title: "Enter PIN to enable Shield";
         modal-width: 420px;
 
         close => { root.close(); }
@@ -33,7 +33,7 @@ export component AnonModePinModal inherits Rectangle {
             spacing: Spacing.md;
 
             Text {
-                text: "Anon Mode hides server-friend DMs and public channels — only your anonymous DMs and groups remain visible. Enter your PIN to enable.";
+                text: "Shield hides your channels and Saved Messages and shows your anonymous DMs. Your DMs with friends stay, and are sent through anonymous mailboxes instead of the server. Your network location is hidden behind Tor — if Tor can't be reached you will be told. Enter your PIN to enable.";
                 color: Colors.text-secondary;
                 font-size: Typography.sm;
                 wrap: word-wrap;

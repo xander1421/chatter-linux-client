@@ -473,9 +473,66 @@ impl ChatterClient {
             .map_err(|e| super::ClientError::Inbox(e.to_string()))
     }
 
+    /// Friends › Blocked › Remove: end the friendship, then lift the block, so
+    /// they become a stranger. Friendship first, while still blocked, so there
+    /// is no moment where they are an unblocked friend. Not being friends
+    /// (a stranger we blocked, or an anon-DM peer) is not an error.
+    pub async fn remove_blocked_contact(
+        &self,
+        id: &crate::domain::ids::UserId,
+    ) -> Result<(), super::ClientError> {
+        use crate::error::NetworkError;
+        use crate::services::user::UserError;
+        if self.find_anon_dm_by_peer(id).is_none() {
+            match self.users().remove_friend(id).await {
+                Ok(()) => {}
+                // RemoveFriend's only FailedPrecondition is ErrNotFriends.
+                Err(UserError::Network(NetworkError::InvalidRequest(m)))
+                    if m.starts_with("precondition failed") => {}
+                Err(e) => return Err(super::ClientError::Inbox(e.to_string())),
+            }
+        }
+        self.unblock_profile_user(id).await
+    }
+
     /// Whether this user is an accepted friend (local friendships table).
     pub fn is_friend(&self, id: &crate::domain::ids::UserId) -> bool {
         self.users().is_friend_local(id)
+    }
+
+    /// Accepted friends to list as contacts — every place a friend is shown
+    /// (DM sidebar, invite pickers) reads this. Blocking keeps the friendship,
+    /// Signal-style, so this is where a blocked friend drops out; unblocking
+    /// brings them back with their history. Friends › Blocked
+    /// (`blocked_users`) is the only list that still shows them.
+    pub fn listed_friends(&self) -> Vec<crate::domain::ids::UserId> {
+        use crate::domain::user::FriendshipStatus;
+        let Some(me) = self.auth_state().get().current_user_id else { return Vec::new() };
+        let mut out = Vec::new();
+        for f in self.users().get_friends_local().unwrap_or_default() {
+            if f.status != FriendshipStatus::Accepted {
+                continue;
+            }
+            // The row may be stored in either direction; the peer is whichever
+            // party isn't us.
+            let peer = if f.requester_id == me { f.addressee_id } else { f.requester_id };
+            if !out.contains(&peer) && !self.is_profile_user_blocked(&peer) {
+                out.push(peer);
+            }
+        }
+        out
+    }
+
+    /// Whether a conversation is a DM with someone we blocked, so it is left
+    /// out of folders and search like the sidebar leaves it out
+    /// (`listed_friends`). A friend DM's id is the peer's user id.
+    pub fn is_blocked_conversation(
+        &self,
+        kind: &crate::domain::message::ConversationType,
+        id: &str,
+    ) -> bool {
+        *kind == crate::domain::message::ConversationType::ServerDm
+            && id.parse().is_ok_and(|peer| self.is_profile_user_blocked(&peer))
     }
 
     /// Check if a profile identifier is blocked (anon or server-side).

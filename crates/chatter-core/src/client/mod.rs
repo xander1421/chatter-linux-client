@@ -1464,7 +1464,10 @@ impl ChatterClient {
     {
         let mut sections = self.sections().list_sections_with_conversations()?;
         for section in sections.iter_mut() {
-            section.conversations.retain(|c| self.visible_in_mode(&c.conversation_type));
+            section.conversations.retain(|c| {
+                self.visible_in_mode(&c.conversation_type)
+                    && !self.is_blocked_conversation(&c.conversation_type, &c.conversation_id)
+            });
             // The aggregate badge counts what the folder actually shows.
             section.unread_count = section.conversations.iter().map(|c| c.unread_count).sum();
         }
@@ -1876,9 +1879,10 @@ impl ChatterClient {
 
     // ── Anon Mode (in-memory UI filter) ────────────────────────────────
     //
-    // Pure presentation flag: when true, the UI hides server-friend DMs,
-    // public/private channels, and the Friends/Saved entry points; only
-    // anon DMs and anon groups remain visible. Not persisted by design —
+    // Shield flag: when true the UI hides channels and Saved Messages
+    // (`visible_in_mode`), friend DMs go through the mailbox
+    // (`send_friend_dm_content`), and the transport switches to onion. Not
+    // persisted by design —
     // every fresh client starts with anon_mode = false so privacy
     // properties auto-revert on restart.
 
@@ -1937,11 +1941,16 @@ impl ChatterClient {
 
         // Drive the Tor UI indicator: entering onion = Connecting (until the
         // first onion RPC round-trips, when the poller flips it to Connected);
-        // leaving onion = Off.
+        // leaving onion = Off; Shield on but still direct = Unavailable, which
+        // the UI must show as "network location NOT hidden" for as long as it
+        // lasts — Shield is not allowed to look fully active.
+        use crate::network::connection::TorStatus;
         crate::network::connection::set_tor_status(if on_onion {
-            crate::network::connection::TorStatus::Connecting
+            TorStatus::Connecting
+        } else if enabled {
+            TorStatus::Unavailable
         } else {
-            crate::network::connection::TorStatus::Off
+            TorStatus::Off
         });
 
         if let Err(e) = switch_result {

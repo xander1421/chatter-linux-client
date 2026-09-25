@@ -266,12 +266,13 @@ impl MessageState {
     /// Update delivery status for messages matching the given timestamps.
     ///
     /// Searches all cached channels for messages with matching `sent_at` timestamps.
-    /// Only upgrades status: "" → "sent" → "delivered" → "read" (never downgrades).
+    /// Only upgrades status: "" / "sending" → "sent" or "failed" → "delivered"
+    /// → "read" (never downgrades).
     pub fn update_delivery_status_by_timestamps(&self, timestamps: &[u64], new_status: &str) {
         let status_rank = |s: &str| match s {
             "read" => 3,
             "delivered" => 2,
-            "sent" => 1,
+            "sent" | "failed" => 1,
             _ => 0,
         };
         let new_rank = status_rank(new_status);

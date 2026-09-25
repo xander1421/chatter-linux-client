@@ -185,6 +185,62 @@ pub struct DmSendResult {
     pub bootstrap_initiated: bool,
 }
 
+/// What a post-bootstrap flush did with the queue it drained (either side:
+/// `MessageService::send_pending_messages`, the responder's flush in
+/// `dm_bootstrap_handler`).
+#[derive(Debug, Default)]
+pub struct PendingFlush {
+    /// Bubble timestamps (`DataMessage.timestamp`) of the messages that went out.
+    pub sent: Vec<u64>,
+    /// Bubble timestamps of the messages that did not.
+    pub failed: Vec<u64>,
+    /// Why, when anything failed. The queue is drained either way, so this is
+    /// a message lost unless it is announced.
+    pub error: Option<String>,
+}
+
+impl PendingFlush {
+    /// Announce the outcome: `DmBootstrapCompleted` for what went out (it also
+    /// ends the UI's "Setting up secure channel…"), `MessageSendFailed` for
+    /// what did not — each bubble ends as "sent" or "failed", never "sending".
+    pub fn emit(self, peer_id: UserId, event_bus: &crate::events::EventBus) {
+        if self.error.is_none() || !self.sent.is_empty() {
+            event_bus.emit_domain(crate::events::DomainEvent::DmBootstrapCompleted {
+                peer_id,
+                sent_timestamps: self.sent,
+            });
+        }
+        if let Some(error) = self.error {
+            event_bus.emit_domain(crate::events::DomainEvent::MessageSendFailed {
+                channel_id: ChannelId::from(peer_id),
+                error,
+                message_timestamps: self.failed,
+            });
+        }
+    }
+
+    /// Record one queued message's outcome. `bubble` is its
+    /// `DataMessage.timestamp`; control content (receipts, profile-key
+    /// handshakes) has no bubble and only contributes to `error`.
+    pub(crate) fn record(&mut self, bubble: Option<u64>, result: Result<(), String>) {
+        match result {
+            Ok(()) => self.sent.extend(bubble),
+            Err(e) => {
+                self.failed.extend(bubble);
+                self.error = Some(e);
+            }
+        }
+    }
+}
+
+/// The bubble a queued `Content` belongs to: its `DataMessage.timestamp`.
+pub(crate) fn queued_bubble_timestamp(content: &crate::proto::content_v1::Content) -> Option<u64> {
+    match &content.content {
+        Some(crate::proto::content_v1::content::Content::DataMessage(dm)) => Some(dm.timestamp),
+        _ => None,
+    }
+}
+
 /// Message service for all message operations.
 ///
 /// Orchestrates message sending, editing, and deletion by coordinating
@@ -671,6 +727,26 @@ impl MessageService {
     ) -> Result<bool, MessageError> {
         self.message_repo
             .update_delivery_status_by_timestamp_with_lookup(sent_at, status)
+            .map_err(MessageError::from)
+    }
+
+    /// Set the stored delivery status of our friend-DM messages in
+    /// `conversation_id` sent at `timestamps` — how a background send (the
+    /// post-bootstrap flush) records `"sent"` or `"failed"` for bubbles it
+    /// stored as `"sending"`.
+    pub fn set_friend_dm_delivery_status(
+        &self,
+        conversation_id: &ChannelId,
+        timestamps: &[u64],
+        status: &str,
+    ) -> Result<usize, MessageError> {
+        self.message_repo
+            .update_delivery_status_by_timestamps(
+                conversation_id,
+                &ConversationType::ServerDm,
+                timestamps,
+                status,
+            )
             .map_err(MessageError::from)
     }
 

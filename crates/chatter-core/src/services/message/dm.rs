@@ -13,7 +13,7 @@ use crate::proto::mailbox_v1::EnvelopeType;
 use crate::services::current_user::CurrentUserProvider;
 use crate::services::mailbox_manager::MailboxManager;
 
-use super::{MessageError, MessageService, SendDmContentParams};
+use super::{queued_bubble_timestamp, MessageError, MessageService, PendingFlush, SendDmContentParams};
 
 impl MessageService {
     /// Send a Content proto to a DM peer via two-layer encryption.
@@ -178,80 +178,40 @@ impl MessageService {
 
     /// Send pending messages after bootstrap completes.
     ///
-    /// Every queued message is attempted; if any could not be sent the whole
-    /// flush is an error (the queue is already drained, so a swallowed failure
-    /// was a message lost without a word — the caller turns this into
-    /// `MessageSendFailed`). `Ok(n)` means all `n` went out.
+    /// Every queued message is attempted, and the outcome of each is in the
+    /// returned [`PendingFlush`] — the queue is already drained, so the caller
+    /// must announce it (`PendingFlush::emit`) or a failure is a message lost
+    /// without a word.
     pub async fn send_pending_messages(
         &self,
         auth_client: &mut AuthClient,
         peer_id: &UserId,
         mailbox_manager: &MailboxManager,
-    ) -> Result<usize, MessageError> {
-        tracing::info!(
-            peer_id = %peer_id,
-            "PENDING_MESSAGES: Draining Sesame queue for peer"
-        );
-
-        // Drain pending messages from Sesame queue
-        let pending = self
-            .sesame_manager
-            .drain_pending_messages(peer_id)
-            .map_err(|e| {
-                tracing::error!(
-                    peer_id = %peer_id,
-                    error = %e,
-                    "PENDING_MESSAGES: Failed to drain pending messages"
-                );
-                MessageError::Storage(e)
-            })?;
-
-        if pending.is_empty() {
-            tracing::info!(
-                peer_id = %peer_id,
-                "PENDING_MESSAGES: Queue empty - no messages to send"
-            );
-            return Ok(0);
-        }
-
+    ) -> PendingFlush {
+        let mut flush = PendingFlush::default();
+        let pending = match self.sesame_manager.drain_pending_messages(peer_id) {
+            Ok(pending) => pending,
+            Err(e) => {
+                tracing::error!(peer_id = %peer_id, error = %e, "PENDING_MESSAGES: Failed to drain pending messages");
+                flush.error = Some(format!("queued messages could not be read: {e}"));
+                return flush;
+            }
+        };
         let pending_count = pending.len();
-        tracing::info!(
-            peer_id = %peer_id,
-            count = pending_count,
-            "PENDING_MESSAGES: Found {} message(s) to send",
-            pending_count
-        );
-
-        let mut sent_count = 0;
-        let mut last_error = None;
+        tracing::info!(peer_id = %peer_id, count = pending_count, "PENDING_MESSAGES: draining Sesame queue");
 
         for msg in pending {
-            // Deserialize the content
             let content = match crate::proto::content_v1::Content::decode(msg.content.as_slice()) {
                 Ok(c) => c,
                 Err(e) => {
-                    tracing::error!(
-                        peer_id = %peer_id,
-                        error = %e,
-                        "Failed to deserialize pending message content"
-                    );
-                    last_error = Some(format!("undecodable queued message: {e}"));
+                    tracing::error!(peer_id = %peer_id, error = %e, "Failed to deserialize pending message content");
+                    flush.record(None, Err(format!("undecodable queued message: {e}")));
                     continue;
                 }
             };
+            let bubble = queued_bubble_timestamp(&content);
 
-            let original_sent_at = content.timestamp;
-
-            tracing::debug!(
-                peer_id = %peer_id,
-                msg_index = sent_count + 1,
-                timestamp = content.timestamp,
-                has_channel_id = msg.channel_id.is_some(),
-                attachment_count = msg.attachment_ids.len(),
-                "PENDING_MESSAGES: Sending message via send_dm_content"
-            );
-
-            match self
+            let result = match self
                 .send_dm_content(SendDmContentParams {
                     auth_client,
                     peer_id,
@@ -263,44 +223,25 @@ impl MessageService {
                 })
                 .await
             {
-                Ok(()) => {
-                    sent_count += 1;
-                    tracing::info!(
-                        peer_id = %peer_id,
-                        sent = sent_count,
-                        timestamp = original_sent_at,
-                        channel_id = ?msg.channel_id,
-                        "PENDING_MESSAGES: Successfully sent message #{}", sent_count
-                    );
-                }
+                // Re-queued behind a bootstrap still in progress: still "sending".
+                Err(MessageError::BootstrapInitiated) => continue,
                 Err(e) => {
-                    tracing::error!(
-                        peer_id = %peer_id,
-                        error = %e,
-                        "PENDING_MESSAGES: FAILED to send message"
-                    );
-                    last_error = Some(e.to_string());
+                    tracing::error!(peer_id = %peer_id, error = %e, "PENDING_MESSAGES: FAILED to send message");
+                    Err(e.to_string())
                 }
-            }
+                Ok(()) => Ok(()),
+            };
+            flush.record(bubble, result);
         }
 
         tracing::info!(
             peer_id = %peer_id,
-            sent = sent_count,
+            sent = flush.sent.len(),
+            failed = flush.failed.len(),
             total = pending_count,
-            "PENDING_MESSAGES: Complete - sent {}/{} messages",
-            sent_count,
-            pending_count
+            "PENDING_MESSAGES: Complete"
         );
-
-        match last_error {
-            None => Ok(sent_count),
-            Some(e) => Err(MessageError::DmError(format!(
-                "{} of {} queued message(s) failed to send: {e}",
-                pending_count - sent_count,
-                pending_count
-            ))),
-        }
+        flush
     }
 
     /// Reset session with a peer and attempt to re-establish.

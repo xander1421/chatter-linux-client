@@ -1179,6 +1179,15 @@ impl UserService {
 
         let _ = self.user_repo.delete_friendship(&current_user, user_id);
 
+        // The server kept the friendship through the block (Signal-style), but
+        // locally the Blocked row replaced it. Re-read the friend list so the
+        // friend and their DM come straight back.
+        // ponytail: first page only; a friend past it returns on the next
+        // `UserSync::sync_friends` cycle.
+        if let Err(e) = self.list_friends_with_profiles(100, 0).await {
+            tracing::warn!(error = %e, "unblock_user: friend list not refreshed");
+        }
+
         Ok(())
     }
 

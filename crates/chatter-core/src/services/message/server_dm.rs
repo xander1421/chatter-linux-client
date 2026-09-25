@@ -149,6 +149,11 @@ impl MessageService {
             text.to_string(),
             sent_at,
         );
+        // Queued, not sent: the flush's outcome later makes it "sent" or
+        // "failed" (`DmBootstrapCompleted` / `MessageSendFailed`).
+        if bootstrap_initiated {
+            message.delivery_status = "sending".into();
+        }
 
         if !attachment_ids.is_empty() {
             message.attachments = attachment_ids.clone();

@@ -225,6 +225,50 @@ mod tests {
         );
     }
 
+    /// F40: a block keeps the friendship but hides the contact everywhere a
+    /// friend is listed (`listed_friends`), and a DM with them drops out of
+    /// folders and search (`is_blocked_conversation`). Server blocks and
+    /// anon-DM blocks both count; either row direction resolves the peer.
+    #[tokio::test]
+    async fn blocked_friends_are_not_listed() {
+        use crate::client::ChatterClient;
+        use crate::domain::message::ConversationType;
+        use crate::domain::user::Friendship;
+        use crate::storage::repositories::settings_repo::keys;
+
+        static MOCK_KEYRING: std::sync::Once = std::sync::Once::new();
+        MOCK_KEYRING.call_once(|| {
+            keyring::set_default_credential_builder(keyring::mock::default_credential_builder());
+        });
+        let dir = tempfile::tempdir().unwrap();
+        let client = ChatterClient::builder()
+            .server_url("http://localhost:1")
+            .data_dir(dir.path().to_str().unwrap())
+            .build()
+            .expect("build client");
+
+        let (me, kept, blocked, anon_blocked) = (UserId::new(), UserId::new(), UserId::new(), UserId::new());
+        let users = client.users();
+        users.settings_repo.set_string(keys::CURRENT_USER_ID, &me.to_string()).unwrap();
+        client.auth_state().set_logged_in(me, 1, "me".into());
+        let row = |from, to, status| Friendship { requester_id: from, addressee_id: to, status, created_at: chrono::Utc::now() };
+        for u in [me, kept, blocked, anon_blocked] {
+            users.user_repo.ensure_user_exists(&u).unwrap();
+        }
+        users.user_repo.insert_friendship(&row(me, kept, FriendshipStatus::Accepted)).unwrap();
+        // Friend who sent the request, then was blocked by us: the Accepted row
+        // is theirs, the Blocked row ours.
+        users.user_repo.insert_friendship(&row(blocked, me, FriendshipStatus::Accepted)).unwrap();
+        users.user_repo.insert_friendship(&row(me, blocked, FriendshipStatus::Blocked)).unwrap();
+        users.user_repo.insert_friendship(&row(anon_blocked, me, FriendshipStatus::Accepted)).unwrap();
+        users.anon_dm_repo.block_user(&anon_blocked, None).unwrap();
+
+        assert_eq!(client.listed_friends(), vec![kept]);
+        assert!(client.is_blocked_conversation(&ConversationType::ServerDm, &blocked.to_string()));
+        assert!(!client.is_blocked_conversation(&ConversationType::ServerDm, &kept.to_string()));
+        assert!(!client.is_blocked_conversation(&ConversationType::Channel, &blocked.to_string()));
+    }
+
     #[test]
     fn test_user_service_construction() {
         fn _verify_types(

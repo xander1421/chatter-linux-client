@@ -41,7 +41,7 @@ export component MessageItem inherits Rectangle {
     in property <bool> is-pinned: false;
     in property <bool> show-sender: true;
     in property <bool> is-dm: false;  // When true, hide avatar/name - just bubbles
-    in property <string> delivery-status: "";  // "sent", "delivered", "read" for own messages
+    in property <string> delivery-status: "";  // "sending", "sent", "failed", "delivered", "read" for own messages
     /// Whether this message went over the mesh. Set by the caller rather than
     /// inferred from the status string: "sent" is a mesh state too — in fact the
     /// most common one, since every room and cell message is a broadcast — so a
@@ -1168,7 +1168,20 @@ export component MessageItem inherits Rectangle {
                                 // font and rendered as a tofu box on every
                                 // message. Fixed 12px so the row — and the
                                 // bubble — keeps the height the text tick had.
-                                if !root.mesh-delivery: ticks := Rectangle {
+                                // Queued behind a Shield mailbox bootstrap, or
+                                // that queue's flush failed: a word, not a tick —
+                                // neither has reached the server, and "failed"
+                                // must never read as delivered.
+                                if !root.mesh-delivery && (root.delivery-status == "sending" || root.delivery-status == "failed"): Text {
+                                    text: root.delivery-status == "failed" ? "not sent" : "sending";
+                                    color: root.delivery-status == "failed" ? Colors.error : Colors.text-muted;
+                                    font-size: Typography.xs;
+                                    font-italic: true;
+                                    accessible-role: text;
+                                    accessible-label: root.delivery-status == "failed" ? "Not sent" : "Sending";
+                                }
+
+                                if !root.mesh-delivery && root.delivery-status != "sending" && root.delivery-status != "failed": ticks := Rectangle {
                                     property <bool> double-tick: root.delivery-status != "sent";
                                     property <color> tick-color: root.delivery-status == "read" ? Colors.primary : Colors.text-muted;
                                     width: self.double-tick ? 17px : 12px;

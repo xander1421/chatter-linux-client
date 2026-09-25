@@ -1,4 +1,5 @@
-//! Friends list actions: view profile, start DM, remove friend, unblock user.
+//! Friends list actions: view profile, start DM, remove friend, and the
+//! Blocked tab's unblock / remove.
 
 use std::sync::Arc;
 
@@ -126,55 +127,55 @@ pub(crate) fn wire_remove_friend(window: &MainWindow, ui_ctx: &Arc<ChatterClient
 pub(crate) fn wire_unblock_user(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     let weak_window = window.as_weak();
     let ui_ctx = ui_ctx.clone();
-
     window.on_friends_unblock_user(move |user_id: SharedString| {
-        let weak = weak_window.clone();
-        let ui_ctx = ui_ctx.clone();
-        let user_id_str = user_id.to_string();
+        run_blocked_action(weak_window.clone(), ui_ctx.clone(), user_id.to_string(), false);
+    });
+}
 
-        tokio::spawn(async move {
-            let weak_loading = weak.clone();
-            let _ = slint::invoke_from_event_loop(move || {
-                if let Some(w) = weak_loading.upgrade() {
-                    w.set_friends_loading(true);
-                }
-            });
+pub(crate) fn wire_remove_blocked_user(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
+    let weak_window = window.as_weak();
+    let ui_ctx = ui_ctx.clone();
+    window.on_friends_remove_blocked_user(move |user_id: SharedString| {
+        run_blocked_action(weak_window.clone(), ui_ctx.clone(), user_id.to_string(), true);
+    });
+}
 
-            // Parse user ID
-            let blocked_user_id = match user_id_str.parse() {
-                Ok(id) => id,
-                Err(_) => {
-                    tracing::error!("Invalid user ID: {}", user_id_str);
-                    let _ = slint::invoke_from_event_loop(move || {
-                        if let Some(w) = weak.upgrade() {
-                            w.set_friends_loading(false);
-                        }
-                    });
-                    return;
+/// Unblock (or, with `remove`, unfriend and unblock) from Friends › Blocked,
+/// then refresh every list a block changes: the Blocked tab, the Friends tab
+/// and the DM sidebar (an unblocked friend's DM comes back with its history).
+fn run_blocked_action(
+    weak: slint::Weak<MainWindow>,
+    ui_ctx: Arc<ChatterClient>,
+    user_id_str: String,
+    remove: bool,
+) {
+    if let Some(w) = weak.upgrade() {
+        w.set_friends_loading(true);
+    }
+    tokio::spawn(async move {
+        match user_id_str.parse() {
+            Ok(id) => {
+                let result = if remove {
+                    ui_ctx.remove_blocked_contact(&id).await
+                } else {
+                    ui_ctx.unblock_profile_user(&id).await
+                };
+                match result {
+                    Ok(()) => {
+                        crate::bin_ui::features::auth::initial_data::refresh_friends_list(
+                            weak.clone(), ui_ctx.clone(),
+                        );
+                        super::refresh_blocked_users(weak.clone(), &ui_ctx);
+                    }
+                    Err(e) => tracing::error!("Blocked-user action failed: {}", e),
                 }
-            };
-
-            match ui_ctx.unblock_profile_user(&blocked_user_id).await {
-                Ok(()) => {
-                    tracing::info!("Unblocked user {}", user_id_str);
-                    crate::bin_ui::features::auth::initial_data::refresh_friends_list(
-                        weak.clone(), ui_ctx.clone(),
-                    );
-                    super::refresh_blocked_users(weak.clone(), &ui_ctx);
-                    let _ = slint::invoke_from_event_loop(move || {
-                        if let Some(w) = weak.upgrade() {
-                            w.set_friends_loading(false);
-                        }
-                    });
-                }
-                Err(e) => {
-                    tracing::error!("Failed to unblock user: {}", e);
-                    let _ = slint::invoke_from_event_loop(move || {
-                        if let Some(w) = weak.upgrade() {
-                            w.set_friends_loading(false);
-                        }
-                    });
-                }
+            }
+            Err(_) => tracing::error!("Invalid user ID: {}", user_id_str),
+        }
+        let _ = slint::invoke_from_event_loop(move || {
+            if let Some(w) = weak.upgrade() {
+                w.set_friends_loading(false);
+                crate::bin_ui::features::auth::initial_data::refresh_dm_list(&w, &ui_ctx);
             }
         });
     });

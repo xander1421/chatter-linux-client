@@ -38,6 +38,7 @@ pub fn wire_friends_modal(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     friends_list::wire_start_dm(window, ui_ctx);
     friends_list::wire_remove_friend(window, ui_ctx);
     friends_list::wire_unblock_user(window, ui_ctx);
+    friends_list::wire_remove_blocked_user(window, ui_ctx);
 
     // Privacy-first friend discovery
     friend_code::wire_generate_friend_code(window, ui_ctx);

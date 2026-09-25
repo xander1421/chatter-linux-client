@@ -815,7 +815,7 @@ export component Sidebar inherits Rectangle {
                             x: parent.width - self.width; y: 0;
                             border-width: 1px; border-color: Colors.surface;
                             background: TorStatus.state == 2 ? Colors.success
-                                : TorStatus.state == 3 ? Colors.error
+                                : TorStatus.state >= 3 ? Colors.error
                                 : TorStatus.state == 1 ? Colors.warning
                                 : Colors.text-muted;
                         }
@@ -879,7 +879,7 @@ export component Sidebar inherits Rectangle {
                             x: parent.width - self.width - 2px; y: 2px;
                             border-width: 1px; border-color: Colors.surface;
                             background: TorStatus.state == 2 ? Colors.success
-                                : TorStatus.state == 3 ? Colors.error
+                                : TorStatus.state >= 3 ? Colors.error
                                 : TorStatus.state == 1 ? Colors.warning
                                 : Colors.text-muted;
                         }

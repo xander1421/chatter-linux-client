@@ -209,12 +209,8 @@ impl ChatterClient {
         }
 
         let mut out = Vec::new();
-        if let Some(me) = me.filter(|_| !self.anon_mode_enabled()) {
-            for f in self.users().get_friends_local().unwrap_or_default() {
-                if f.status != crate::domain::user::FriendshipStatus::Accepted {
-                    continue;
-                }
-                let peer = if f.requester_id == me { f.addressee_id } else { f.requester_id };
+        if !self.anon_mode_enabled() {
+            for peer in self.listed_friends() {
                 if seen.insert(peer) {
                     out.push(AnonGroupInviteCandidate {
                         user_id: peer,

@@ -483,11 +483,13 @@ pub enum DomainEvent {
         timestamp: u64,
     },
 
-    /// DM bootstrap completed and the messages queued behind it were sent
-    /// (`DmBootstrapService::handle_bootstrap_completed`). A failed flush
-    /// emits `MessageSendFailed` instead.
+    /// DM bootstrap completed and the queued messages in `sent_timestamps`
+    /// went out (the post-bootstrap flush, either side). What did not go out
+    /// is reported by `MessageSendFailed`.
     DmBootstrapCompleted {
         peer_id: UserId,
+        /// `DataMessage.timestamp` (= the bubble's `sent_at`) of each sent one.
+        sent_timestamps: Vec<u64>,
     },
 
     FriendRequestsUpdated {
@@ -517,6 +519,9 @@ pub enum DomainEvent {
     MessageSendFailed {
         channel_id: ChannelId,
         error: String,
+        /// `DataMessage.timestamp` (= the bubble's `sent_at`) of each message
+        /// that did not go out — their status becomes `"failed"`.
+        message_timestamps: Vec<u64>,
     },
 
     ChannelMemberJoined {

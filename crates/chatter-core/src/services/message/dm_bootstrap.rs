@@ -590,6 +590,50 @@ mod tests {
         assert_eq!(ms.bootstrap_devices(&mut auth, &friend).await.unwrap(), vec![3, 1]);
     }
 
+    /// Cache a sender certificate for `me` (device 1) that chains to the dev
+    /// trust root this test build pins — its private key is committed in
+    /// `deploy/vault/init-and-unseal.sh` — so sealing needs no RPC.
+    fn cache_sender_certificate(ms: &MessageService, me: &UserId) {
+        use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
+        use libsignal_protocol::{PrivateKey, SenderCertificate, ServerCertificate, Timestamp};
+        let rng = &mut StdRng::seed_from_u64(0xCE27);
+        let root = PrivateKey::deserialize(&BASE64.decode("ELMk0o1RlhsHCk8vQ/bWbtRDeQvcC4PuN8+U1Xg90Ek=").unwrap()).unwrap();
+        let server = KeyPair::generate(rng);
+        let server_cert = ServerCertificate::new(1, server.public_key, &root, rng).unwrap();
+        let identity = IdentityKeyPair::generate(&mut StdRng::seed_from_u64(7));
+        let far_future = Timestamp::from_epoch_millis(u64::MAX / 2);
+        let cert = SenderCertificate::new(
+            me.to_string(), None, *identity.public_key(), DeviceId::new(1).unwrap(),
+            far_future, server_cert, &server.private_key, rng,
+        )
+        .unwrap();
+        ms.settings_repo.set_string(keys::SENDER_CERTIFICATE, &BASE64.encode(cert.serialized().unwrap())).unwrap();
+        ms.settings_repo.set(keys::SENDER_CERTIFICATE_REFRESH_AFTER, &(u64::MAX / 2)).unwrap();
+    }
+
+    /// F39: the responder's post-bootstrap flush sealed every queued message
+    /// to device 1 — a guess, and an identified prekey fetch naming the peer
+    /// when device 1 had no session. With the peer on device 6 only, the flush
+    /// now seals to 6 with no RPC at all (nothing is behind the server URL, so
+    /// any fetch would fail the call).
+    #[tokio::test]
+    async fn shield_flush_seals_to_the_session_device_without_a_prekey_fetch() {
+        let me = UserId::from_uuid(uuid::Uuid::max());
+        let friend = UserId::from_uuid(uuid::Uuid::from_u128(1));
+        let (client, _dir) = shield_client(me);
+        let ms = client.messages();
+        cache_sender_certificate(ms, &me);
+        cache_device(ms, &friend, 6, &mut StdRng::seed_from_u64(6)).await;
+
+        let mut auth = ms.auth_client();
+        let sealed = crate::inbox::streaming::dm_bootstrap_handler::seal_for_peer_mailbox(
+            &ms.signal_service, &mut auth, &friend, b"queued", &[7u8; 32],
+        )
+        .await
+        .expect("sealed without any RPC");
+        assert_eq!(sealed.len(), 1, "one envelope, for device 6");
+    }
+
     /// A send spends only the pre-fetched batch: with it empty, the send fails
     /// on the empty batch itself — not on a network error from a token
     /// request made in the same call — and makes no mailbox.

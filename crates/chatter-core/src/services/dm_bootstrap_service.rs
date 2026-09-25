@@ -167,9 +167,8 @@ impl DmBootstrapService {
     /// Handle DM bootstrap completion by sending any pending messages.
     ///
     /// The flush runs in the background, so its outcome is announced on the
-    /// bus: `DmBootstrapCompleted` once the queue went out (the UI clears
-    /// "Setting up secure channel…" and flips the queued bubbles to sent),
-    /// `MessageSendFailed` when it did not.
+    /// bus (`PendingFlush::emit`): `DmBootstrapCompleted` for the messages
+    /// that went out, `MessageSendFailed` for those that did not.
     pub fn handle_bootstrap_completed(&self, peer_id: UserId, event_bus: crate::events::EventBus) {
         let message_service = self.message_service.clone();
         let mailbox_manager = self.mailbox_manager.clone();
@@ -196,38 +195,17 @@ impl DmBootstrapService {
                 "BOOTSTRAP[4/4] Calling send_pending_messages (initiator side)"
             );
 
-            match message_service
+            let flush = message_service
                 .send_pending_messages(&mut auth_client, &peer_id, &mailbox_manager)
-                .await
-            {
-                Ok(count) => {
-                    if count > 0 {
-                        tracing::info!(
-                            peer_id = %peer_id,
-                            count = count,
-                            "BOOTSTRAP[4/4] SUCCESS - Sent {} pending message(s) after bootstrap!",
-                            count
-                        );
-                    } else {
-                        tracing::info!(
-                            peer_id = %peer_id,
-                            "BOOTSTRAP[4/4] No pending messages to send (initiator side)"
-                        );
-                    }
-                    event_bus.emit_domain(crate::events::DomainEvent::DmBootstrapCompleted { peer_id });
-                }
-                Err(e) => {
-                    tracing::error!(
-                        peer_id = %peer_id,
-                        error = %e,
-                        "BOOTSTRAP[4/4] FAILED - Could not send pending messages"
-                    );
-                    event_bus.emit_domain(crate::events::DomainEvent::MessageSendFailed {
-                        channel_id: crate::domain::ids::ChannelId::from(peer_id),
-                        error: e.to_string(),
-                    });
-                }
-            }
+                .await;
+            tracing::info!(
+                peer_id = %peer_id,
+                sent = flush.sent.len(),
+                failed = flush.failed.len(),
+                error = ?flush.error,
+                "BOOTSTRAP[4/4] pending messages flushed (initiator side)"
+            );
+            flush.emit(peer_id, &event_bus);
         });
     }
 

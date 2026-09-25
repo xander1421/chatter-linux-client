@@ -130,8 +130,13 @@ export component FriendsModal inherits Rectangle {
     callback accept-channel-invite(string);    // channel_id
     callback decline-channel-invite(string);   // channel_id
 
-    // Blocked actions
+    // Blocked actions. Unblock restores the friend and their DM with its
+    // history (blocking never removed them); Remove, after a confirm, ends the
+    // friendship and lifts the block, leaving them a stranger.
     callback unblock-user(string);    // user_id
+    callback remove-blocked-user(string);  // user_id
+    // Row whose Remove is awaiting confirmation ("" = none).
+    property <string> confirm-remove-id: "";
 
     Modal {
         show: root.show-modal;
@@ -1531,15 +1536,23 @@ export component FriendsModal inherits Rectangle {
                                             overflow: elide;
                                         }
 
-                                        if user.blocked-at != "": Text {
+                                        if root.confirm-remove-id == user.user-id: Text {
+                                            text: "Remove from friends and unblock?";
+                                            color: Colors.text-secondary;
+                                            font-size: Typography.xs;
+                                            overflow: elide;
+                                        }
+
+                                        if root.confirm-remove-id != user.user-id && user.blocked-at != "": Text {
                                             text: "Blocked " + user.blocked-at;
                                             color: Colors.text-muted;
                                             font-size: Typography.xs;
                                         }
                                     }
 
-                                    HorizontalLayout {
+                                    if root.confirm-remove-id != user.user-id: HorizontalLayout {
                                         alignment: center;
+                                        spacing: Spacing.xs;
 
                                         Button {
                                             text: "Unblock";
@@ -1547,6 +1560,39 @@ export component FriendsModal inherits Rectangle {
 
                                             clicked => {
                                                 root.unblock-user(user.user-id);
+                                            }
+                                        }
+
+                                        Button {
+                                            text: "Remove";
+                                            variant: "ghost";
+
+                                            clicked => {
+                                                root.confirm-remove-id = user.user-id;
+                                            }
+                                        }
+                                    }
+
+                                    if root.confirm-remove-id == user.user-id: HorizontalLayout {
+                                        alignment: center;
+                                        spacing: Spacing.xs;
+
+                                        Button {
+                                            text: "Cancel";
+                                            variant: "ghost";
+
+                                            clicked => {
+                                                root.confirm-remove-id = "";
+                                            }
+                                        }
+
+                                        Button {
+                                            text: "Remove";
+                                            variant: "danger";
+
+                                            clicked => {
+                                                root.confirm-remove-id = "";
+                                                root.remove-blocked-user(user.user-id);
                                             }
                                         }
                                     }

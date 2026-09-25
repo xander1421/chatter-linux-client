@@ -40,8 +40,8 @@ pub async fn handle_domain_event(
         // =========================================================================
         // DM Bootstrap Completed
         // =========================================================================
-        DomainEvent::DmBootstrapCompleted { peer_id } => {
-            messaging::handle_dm_bootstrap_completed(window, ui_ctx, peer_id);
+        DomainEvent::DmBootstrapCompleted { peer_id, sent_timestamps } => {
+            messaging::handle_dm_bootstrap_completed(window, ui_ctx, peer_id, sent_timestamps);
         }
 
         // =========================================================================
@@ -398,8 +398,8 @@ pub async fn handle_domain_event(
         // =========================================================================
         // Message Send Events
         // =========================================================================
-        DomainEvent::MessageSendFailed { channel_id, error } => {
-            messaging::handle_message_send_failed(window, channel_id, error);
+        DomainEvent::MessageSendFailed { channel_id, error, message_timestamps } => {
+            messaging::handle_message_send_failed(window, channel_id, error, message_timestamps);
         }
 
         // =========================================================================

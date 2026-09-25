@@ -32,6 +32,7 @@ use crate::network::grpc::auth_client::AuthClient;
 use crate::network::grpc::client_pool::GrpcClientPool;
 use crate::network::grpc::AnonymousMailboxClient;
 use crate::proto::mailbox_v1::EnvelopeType;
+use crate::services::message::{queued_bubble_timestamp, PendingFlush};
 use crate::services::SignalService;
 use crate::storage::{Database, KeyStore, SettingsRepository};
 use crate::util::time::TimestampNanos;
@@ -512,19 +513,16 @@ async fn handle_bootstrap_async(
 
     // The queue was drained, so a failed send is otherwise a message lost
     // without a word: announce it like the initiator-side flush does.
-    if let Err(error) = send_pending_messages_after_bootstrap(
+    let flush = send_pending_messages_after_bootstrap(
         peer_id,
         database,
         &signal_service,
         &mut auth_client,
         channel,
     )
-    .await
-    {
-        event_bus.emit_domain(DomainEvent::MessageSendFailed {
-            channel_id: crate::domain::ids::ChannelId::from(peer_id),
-            error,
-        });
+    .await;
+    if let Some(flush) = flush {
+        flush.emit(peer_id, event_bus);
     }
 
     Ok(())
@@ -534,6 +532,7 @@ async fn handle_bootstrap_async(
 ///
 /// This is called after the higher UUID user responds to a bootstrap request.
 /// At this point, the shared secret is established and queued messages can be sent.
+/// `None` when nothing was queued; otherwise the outcome of every message.
 ///
 /// IMPORTANT: Uses the same SignalService instance as the bootstrap response
 /// to ensure session counters stay in sync.
@@ -543,190 +542,116 @@ async fn send_pending_messages_after_bootstrap(
     signal_service: &SignalService,
     auth_client: &mut AuthClient,
     channel: crate::network::grpc::transport::GrpcTransport,
-) -> Result<(), String> {
+) -> Option<PendingFlush> {
     use prost::Message as ProstMessage;
     use crate::crypto::signal::sesame::{SesameManager, SqliteSesameStore};
     use crate::mailbox::dm::DmConversationManager;
 
-    tracing::info!(
-        peer = %peer_id,
-        "BOOTSTRAP[3/4] Checking for pending messages to send (responder side)"
-    );
-
-    // Create Sesame manager to drain pending messages
-    let sesame_store = SqliteSesameStore::new(database.clone());
-    let sesame_manager = SesameManager::new(sesame_store);
-
-    // Drain pending messages for this peer
+    let sesame_manager = SesameManager::new(SqliteSesameStore::new(database.clone()));
     let pending = match sesame_manager.drain_pending_messages(&peer_id) {
         Ok(msgs) => msgs,
         Err(e) => {
-            tracing::error!(
-                peer = %peer_id,
-                error = %e,
-                "BOOTSTRAP[3/4] Failed to drain pending messages"
-            );
-            return Ok(());
+            tracing::error!(peer = %peer_id, error = %e, "BOOTSTRAP[3/4] Failed to drain pending messages");
+            return None;
+        }
+    };
+    if pending.is_empty() {
+        tracing::info!(peer = %peer_id, "BOOTSTRAP[3/4] No pending messages queued - nothing to send");
+        return None;
+    }
+    tracing::info!(peer = %peer_id, count = pending.len(), "BOOTSTRAP[3/4] Sending pending messages (responder side)");
+
+    // From here the queue is drained: every failure loses messages, so each
+    // one is reported to the caller rather than only logged.
+    let queued: Vec<_> = pending
+        .into_iter()
+        .map(|msg| {
+            let bubble = crate::proto::content_v1::Content::decode(msg.content.as_slice())
+                .ok()
+                .as_ref()
+                .and_then(queued_bubble_timestamp);
+            (bubble, msg.content)
+        })
+        .collect();
+    let mut flush = PendingFlush::default();
+
+    let conversation = DmConversationManager::new(database.clone()).load_conversation(&peer_id);
+    let (send_key, peer_mailbox) = match conversation {
+        Ok(Some(conv)) => match (conv.conversation_key.as_ref().and_then(|k| k.send_key()), conv.peer_mailbox) {
+            (Some(key), Some(mailbox)) => (key, mailbox),
+            _ => {
+                for (bubble, _) in queued {
+                    flush.record(bubble, Err("no mailbox keys after bootstrap".into()));
+                }
+                return Some(flush);
+            }
+        },
+        Ok(None) => {
+            for (bubble, _) in queued {
+                flush.record(bubble, Err("no conversation state after bootstrap".into()));
+            }
+            return Some(flush);
+        }
+        Err(e) => {
+            for (bubble, _) in queued {
+                flush.record(bubble, Err(e.to_string()));
+            }
+            return Some(flush);
         }
     };
 
-    if pending.is_empty() {
-        tracing::info!(
-            peer = %peer_id,
-            "BOOTSTRAP[3/4] No pending messages queued - nothing to send"
-        );
-        return Ok(());
+    let mut anon_mailbox_client = AnonymousMailboxClient::new(channel);
+    for (bubble, content) in queued {
+        let result = async {
+            for envelope in seal_for_peer_mailbox(signal_service, auth_client, &peer_id, &content, &send_key).await? {
+                anon_mailbox_client
+                    .send_to_ephemeral_mailbox(peer_mailbox.public_key.to_vec(), envelope, EnvelopeType::Message as i32)
+                    .await
+                    .map_err(|e| format!("mailbox send: {e}"))?;
+            }
+            Ok::<(), String>(())
+        }
+        .await;
+        if let Err(e) = &result {
+            tracing::error!(peer = %peer_id, error = %e, "Failed to send pending message");
+        }
+        flush.record(bubble, result);
     }
 
     tracing::info!(
         peer = %peer_id,
-        count = pending.len(),
-        "BOOTSTRAP[3/4] Found {} pending message(s) - sending now",
-        pending.len()
+        sent = flush.sent.len(),
+        failed = flush.failed.len(),
+        "Finished sending pending messages after bootstrap"
     );
+    Some(flush)
+}
 
-    // Use shared signal_service (passed in) to keep session counters in sync
-    let conversation_manager = DmConversationManager::new(database.clone());
-    let mut anon_mailbox_client = AnonymousMailboxClient::new(channel.clone());
-
-    // From here the queue is drained: every failure loses messages, so each
-    // one is reported to the caller rather than only logged.
-    let pending_count = pending.len();
-
-    // Get conversation state for sending
-    let conversation = match conversation_manager.load_conversation(&peer_id) {
-        Ok(Some(conv)) => conv,
-        Ok(None) => {
-            tracing::error!(peer = %peer_id, "No conversation state after bootstrap");
-            return Err(format!("{pending_count} queued message(s) lost: no conversation state after bootstrap"));
-        }
-        Err(e) => {
-            tracing::error!(peer = %peer_id, error = %e, "Failed to load conversation");
-            return Err(format!("{pending_count} queued message(s) lost: {e}"));
-        }
-    };
-
-    // Encrypting outbound pending messages → use send_key for per-direction
-    // separation.
-    let shared_secret = match conversation
-        .conversation_key
-        .as_ref()
-        .and_then(|k| k.send_key())
-    {
-        Some(s) => s,
-        None => {
-            tracing::error!(peer = %peer_id, "No shared secret after bootstrap");
-            return Err(format!("{pending_count} queued message(s) lost: no shared secret after bootstrap"));
-        }
-    };
-
-    let peer_mailbox = match conversation.peer_mailbox {
-        Some(m) => m,
-        None => {
-            tracing::error!(peer = %peer_id, "No peer mailbox after bootstrap");
-            return Err(format!("{pending_count} queued message(s) lost: no peer mailbox after bootstrap"));
-        }
-    };
-
-    let mut sent_count = 0;
-    let mut last_error = None;
-
-    for msg in pending {
-        // Parse content for timestamp and DataMessage.timestamp
-        let (content_ts, dm_ts) = match crate::proto::content_v1::Content::decode(msg.content.as_slice()) {
-            Ok(c) => {
-                let dm_timestamp = match &c.content {
-                    Some(crate::proto::content_v1::content::Content::DataMessage(dm)) => dm.timestamp,
-                    _ => 0,
-                };
-                (c.timestamp, dm_timestamp)
-            }
-            Err(_) => (TimestampNanos::now().as_u64(), 0),
-        };
-        let timestamp = content_ts;
-        tracing::debug!(
-            peer = %peer_id,
-            content_timestamp = content_ts,
-            data_message_timestamp = dm_ts,
-            content_bytes_len = msg.content.len(),
-            "send_pending_messages_after_bootstrap: sending pending message"
-        );
-
-        // Encrypt with Signal Protocol
-        let signal_ciphertext = match signal_service
-            .encrypt_message(auth_client, &peer_id.to_string(), 1, &msg.content)
-            .await
-        {
-            Ok(ct) => ct,
-            Err(e) => {
-                tracing::error!(
-                    peer = %peer_id,
-                    error = %e,
-                    "Failed to encrypt pending message with Signal"
-                );
-                last_error = Some(e.to_string());
-                continue;
-            }
-        };
-
-        // Encrypt with DM crypto (shared secret)
-        let dm_encrypted = match crate::crypto::dm_crypto::encrypt_dm_bytes(
-            &signal_ciphertext,
-            &shared_secret,
-        ) {
-            Ok(enc) => enc,
-            Err(e) => {
-                tracing::error!(
-                    peer = %peer_id,
-                    error = %e,
-                    "Failed to encrypt with DM shared secret"
-                );
-                last_error = Some(e.to_string());
-                continue;
-            }
-        };
-
-        // Send to peer's mailbox (anonymous — no auth headers)
-        if let Err(e) = anon_mailbox_client
-            .send_to_ephemeral_mailbox(
-                peer_mailbox.public_key.to_vec(),
-                dm_encrypted,
-                crate::proto::mailbox_v1::EnvelopeType::Message as i32,
-            )
-            .await
-        {
-            tracing::error!(
-                peer = %peer_id,
-                error = %e,
-                "Failed to send pending message to mailbox"
-            );
-            last_error = Some(e.to_string());
-            continue;
-        }
-
-        sent_count += 1;
-        tracing::debug!(
-            peer = %peer_id,
-            timestamp,
-            "Sent pending message"
-        );
-    }
-
-    if sent_count > 0 {
-        tracing::info!(
-            peer = %peer_id,
-            sent = sent_count,
-            "Finished sending pending messages after bootstrap"
-        );
-    }
-
-    match last_error {
-        None => Ok(()),
-        Some(e) => Err(format!(
-            "{} of {pending_count} queued message(s) failed to send: {e}",
-            pending_count - sent_count
-        )),
-    }
+/// Seal `plaintext` for every device of `peer_id` we hold a usable session
+/// with, each wrapped for the peer's mailbox under `send_key` — the same
+/// fan-out `MessageService::send_dm_content` does in Shield.
+///
+/// Never a prekey fetch and never a guessed device id: this flush runs in
+/// Shield, where naming the peer in an identified RPC is the link the mailbox
+/// exists to hide, and the device that sent the bootstrap MESSAGE has just
+/// left a session (the RESPONSE was encrypted under it).
+pub async fn seal_for_peer_mailbox(
+    signal_service: &SignalService,
+    auth_client: &mut AuthClient,
+    peer_id: &UserId,
+    plaintext: &[u8],
+    send_key: &[u8; 32],
+) -> Result<Vec<Vec<u8>>, String> {
+    signal_service
+        .encrypt_message_session_devices(auth_client, &peer_id.to_string(), plaintext)
+        .await
+        .map_err(|e| format!("Signal encrypt: {e}"))?
+        .into_values()
+        .map(|ciphertext| {
+            crate::crypto::dm_crypto::encrypt_dm_bytes(&ciphertext, send_key)
+                .map_err(|e| format!("mailbox encrypt: {e}"))
+        })
+        .collect()
 }
 
 /// Send bootstrap response with proper two-layer encryption.
