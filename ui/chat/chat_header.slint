@@ -200,7 +200,8 @@ export component ChatHeader inherits Rectangle {
         // Left section: Back button + Icon + Name
         HorizontalLayout {
             spacing: Spacing.sm;
-            alignment: start;
+            horizontal-stretch: 1;
+            min-width: 0px;
 
             // Mobile back button (returns to chat list)
             if root.show-back-button: HeaderButton {
@@ -313,17 +314,29 @@ export component ChatHeader inherits Rectangle {
                 horizontal-stretch: 1;
                 min-width: 0px;
                 VerticalLayout {
+                    width: 100%;
                     alignment: center;
                     Text {
                         text: root.channel-name;
                         color: name-touch.has-hover ? Colors.primary : Colors.text-primary;
                         font-size: root.header-title-size;
                         font-weight: Typography.semibold;
+                        min-width: 0px;
+                        overflow: elide;
+                    }
+                    // Typing shares the title's bounded column, so long peer
+                    // names yield to the call buttons instead of drawing over them.
+                    if root.typing-indicator != "" && !(JarvisGlobal.enabled && root.jarvis-thinking): Text {
+                        text: root.typing-indicator;
+                        color: Colors.text-secondary;
+                        font-size: Typography.xs;
+                        font-italic: true;
+                        min-width: 0px;
                         overflow: elide;
                     }
                     // On a phone the inline count below has no room; it goes
                     // under the name instead, as Signal/Telegram groups do.
-                    if root.tight && has-channel && !root.read-only && (is-channel || is-private-group) && member-count > 0: Text {
+                    if root.typing-indicator == "" && root.tight && has-channel && !root.read-only && (is-channel || is-private-group) && member-count > 0: Text {
                         text: root.member-count == 1 ? "1 member" : "\{root.member-count} members";
                         color: Colors.text-muted;
                         font-size: Typography.xs;
@@ -427,13 +440,13 @@ export component ChatHeader inherits Rectangle {
             }
         }
 
-        // Center section: Topic / Typing — only when there is something to put
+        // Center section: Topic / Jarvis — only when there is something to put
         // in it. An unconditional centre claimed width in the middle of the row
         // and then drew nothing, which is the gap the name beside it was eliding
         // to make room for.
         // A phone has no width for the topic beside the name: it elided to a lone
-        // muted "…". Typing and Jarvis still show there.
-        if (root.topic != "" && !root.mobile) || root.typing-indicator != "" || (JarvisGlobal.enabled && root.jarvis-thinking): Rectangle {
+        // muted "…". Typing lives under the title; Jarvis still shows here.
+        if (root.topic != "" && !root.mobile && root.typing-indicator == "") || (JarvisGlobal.enabled && root.jarvis-thinking): Rectangle {
             horizontal-stretch: 1;
             // Topic text
             if root.topic != "" && !root.mobile && root.typing-indicator == "" && !(JarvisGlobal.enabled && root.jarvis-thinking): Text {
@@ -444,18 +457,6 @@ export component ChatHeader inherits Rectangle {
                 overflow: elide;
                 vertical-alignment: center;
                 horizontal-alignment: center;
-            }
-
-            // Typing indicator
-            if root.typing-indicator != "" && !(JarvisGlobal.enabled && root.jarvis-thinking): HorizontalLayout {
-                alignment: center;
-                Text {
-                    text: root.typing-indicator;
-                    color: Colors.text-secondary;
-                    font-size: Typography.sm;
-                    font-italic: true;
-                    vertical-alignment: center;
-                }
             }
 
             // Jarvis thinking
