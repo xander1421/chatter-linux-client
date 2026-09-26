@@ -15,6 +15,7 @@
 //! * `jarvis` — Jarvis AI assistant façade
 
 mod anon_group;
+mod appearance;
 mod auth;
 pub mod calls;
 pub mod channels;
@@ -25,7 +26,7 @@ mod jarvis;
 pub use jarvis::{is_jarvis_channel, jarvis_channel_id, JARVIS_CHANNEL_NAME};
 mod link_device;
 mod messaging;
-pub use messaging::{InviteCandidate, ReplyParentMedia};
+pub use messaging::{InviteCandidate, ReplyParentMedia, SectionRowExtras};
 pub use anon_group::AnonGroupInviteCandidate;
 
 /// A user-search hit surfaced to the UI (friends modal search).
@@ -53,6 +54,7 @@ pub struct UnreadBadges {
 mod notification;
 mod pin;
 mod profile;
+mod profile_visibility;
 mod shared_content;
 
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -1410,6 +1412,27 @@ impl ChatterClient {
         Ok(persisted)
     }
 
+    /// Read "Who can find me by my username" from the SERVER
+    /// (user_profiles.username_discoverable): `true` = Everyone, `false` =
+    /// Nobody. The server enforces it in LookupUsername, so it holds on every
+    /// device.
+    pub async fn get_username_discoverability(
+        &self,
+    ) -> Result<bool, crate::services::user::UserError> {
+        self.users().get_username_discoverability().await
+    }
+
+    /// Set "Who can find me by my username" on the SERVER. With `false`,
+    /// everyone else's username lookup for this account answers "no match";
+    /// friend codes and username links still reach it. Returns the value the
+    /// server persisted.
+    pub async fn set_username_discoverability(
+        &self,
+        discoverable: bool,
+    ) -> Result<bool, crate::services::user::UserError> {
+        self.users().set_username_discoverability(discoverable).await
+    }
+
     /// Session-level current user id (None when logged out).
     pub fn session_current_user_id(&self) -> Option<crate::domain::ids::UserId> {
         self.sessions().current_user_id()
@@ -1600,22 +1623,32 @@ impl ChatterClient {
         self.sections().remove_conversation_from_section(conv_id)
     }
 
-    pub fn get_conversation_metadata(
+    /// The name a conversation is shown under — the chat list's name, so a
+    /// search hit and its sidebar row agree. A friend DM is channel-free
+    /// (keyed by the peer, no `channels` row), so it resolves through the
+    /// peer's display name; everything else through its stored metadata.
+    pub fn conversation_display_name(
         &self,
-        conversation_id: &str,
+        conversation_id: &crate::domain::ids::ChannelId,
         conversation_type: &crate::domain::message::ConversationType,
-    ) -> Option<crate::domain::UnifiedConversation> {
-        let mut conv = self
-            .sections()
-            .get_conversation_metadata(conversation_id, conversation_type)
-            .ok()
-            .flatten()?;
-        // The stored name of the note-to-self channel is its internal
-        // `saved_messages_<uuid>` id, not something to show a person.
-        if *conversation_type == crate::domain::message::ConversationType::SavedMessages {
-            conv.name = "Saved Messages".to_string();
+    ) -> String {
+        use crate::domain::message::ConversationType;
+        match conversation_type {
+            ConversationType::ServerDm => {
+                self.display_name(&crate::domain::ids::UserId::from_uuid(*conversation_id.as_uuid()))
+            }
+            // The stored name of the note-to-self channel is its internal
+            // `saved_messages_<uuid>` id, not something to show a person.
+            ConversationType::SavedMessages => "Saved Messages".to_string(),
+            _ => self
+                .sections()
+                .get_conversation_metadata(&conversation_id.to_string(), conversation_type)
+                .ok()
+                .flatten()
+                .map(|c| c.name)
+                .filter(|n| !n.is_empty())
+                .unwrap_or_else(|| "Unknown".to_string()),
         }
-        Some(conv)
     }
 
     /// Preview text for a pinned message, resolved per conversation flavor
@@ -2113,11 +2146,6 @@ impl ChatterClient {
         self.services.start_inbox_provider().await
     }
 
-    /// Refresh prekeys and return the new available count.
-    pub async fn refresh_prekeys(&self, count: u32) -> Result<u32, crate::error::ServiceError> {
-        self.services.refresh_prekeys(count).await
-    }
-
     /// Pre-fetch anonymous tokens for sealed sender messaging.
     pub async fn prefetch_tokens(
         &self,
@@ -2315,6 +2343,16 @@ impl ChatterClient {
                 }
             }
         });
+
+        // ── Finish an interrupted profile-key rotation ──────────────
+        {
+            let client = self.clone();
+            tokio::spawn(async move {
+                if let Err(e) = client.finish_profile_key_rotation().await {
+                    tracing::warn!(error = %e, "profile key rotation still pending");
+                }
+            });
+        }
 
         // ── Channel + DM services ───────────────────────────────────
         let h_channel_stream = self.ctx.start_channel_event_stream();
@@ -2786,7 +2824,7 @@ impl ChatterClient {
     /// inclusion rules as those builders, without their previews.
     fn sidebar_row_keys(&self) -> std::collections::HashSet<(String, ConversationType)> {
         let mut rows = std::collections::HashSet::new();
-        for peer in self.listed_friends() {
+        for peer in self.dm_peers() {
             rows.insert((peer.to_string(), ConversationType::ServerDm));
         }
         if self.anon_mode_enabled() {
@@ -2873,15 +2911,19 @@ impl ChatterClient {
         Ok(members
             .into_iter()
             .map(|membership| {
+                let is_me = me.as_ref() == Some(&membership.user_id);
                 let moderation = crate::domain::channel::MemberModeration::for_target(
                     actor,
-                    me.as_ref() == Some(&membership.user_id),
+                    is_me,
                     membership.role,
                 );
-                crate::domain::channel::MemberWithProfile {
-                    moderation,
-                    ..self.member_with_profile(membership)
+                let mut row = self.member_with_profile(membership);
+                row.moderation = moderation;
+                // Our own row reads "You", as in Signal's member list.
+                if is_me {
+                    row.display_name = "You".into();
                 }
+                row
             })
             .collect())
     }
@@ -3241,13 +3283,14 @@ impl ChatterClient {
 
     /// Resolve someone's username link to their (decrypted username, account
     /// id). The decryption happens locally with the URL-fragment entropy —
-    /// the server never learns the username.
+    /// the server never learns the username. The account id is the link
+    /// owner's, so a link reaches them even with username discovery off.
     pub async fn resolve_username_link(
         &self,
         url: &str,
-    ) -> Result<(String, Option<crate::domain::ids::UserId>), crate::services::user::UserError>
+    ) -> Result<(String, crate::domain::ids::UserId), crate::services::user::UserError>
     {
-        // Ends in the same identified lookup as `lookup_by_username`.
+        // An identified server request, like `lookup_by_username`.
         if self.anon_mode_enabled() {
             return Err(crate::services::user::UserError::HandleLookupForbiddenInAnonMode);
         }
@@ -3290,6 +3333,32 @@ impl ChatterClient {
             }
             Ok(None) => {}
             Err(e) => tracing::warn!(peer_id = %user_id, error = %e, "profile refresh failed"),
+        }
+    }
+
+    /// Refetch OUR profile (throttled) and restore the local copies the UI
+    /// reads — name, bio, avatar — decrypted with our own profile key
+    /// (`UserService::restore_own_profile`). Only login did this, so a LINKED
+    /// device, or one signed in before that fix, showed initials and a
+    /// fallback name while every peer saw the photo. `Some` when refetched.
+    /// Not in Shield: it is an identified fetch.
+    pub async fn refresh_own_profile(&self) -> Option<crate::domain::user::Profile> {
+        if self.anon_mode_enabled() {
+            return None;
+        }
+        let me = self.session_current_user_id()?;
+        match self.users().refresh_profile_if_stale(&me).await {
+            Ok(Some(profile)) => {
+                if let Some(device_id) = self.auth_state().get().device_id {
+                    self.auth_state().set_logged_in(me, device_id, profile.display_name.clone());
+                }
+                Some(profile)
+            }
+            Ok(None) => None,
+            Err(e) => {
+                tracing::warn!(error = %e, "own profile refresh failed");
+                None
+            }
         }
     }
 

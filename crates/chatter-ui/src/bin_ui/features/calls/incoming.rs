@@ -46,9 +46,10 @@ pub fn wire_incoming_call(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                 .map(|w| w.get_incoming_call_data().is_video_call)
                 .unwrap_or(false);
 
-            // Hide the modal immediately — the accept flow paints the
-            // active-call view directly on success.
+            // Swap the modal for the call view now; the accept flow repaints
+            // it with the real call on success.
             if let Some(w) = weak.upgrade() {
+                show_answering(&w);
                 w.set_incoming_call_visible(false);
                 w.set_incoming_call_replaces_active(false);
             }
@@ -67,11 +68,7 @@ pub fn wire_incoming_call(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                     }
                     permissions::ensure(&perms).await;
                     if !permissions::has(permissions::RECORD_AUDIO) {
-                        if let Some(w) = weak.upgrade() {
-                            w.set_toast_message(super::outgoing::MIC_DENIED.into());
-                            w.set_toast_variant("error".into());
-                            w.set_toast_visible(true);
-                        }
+                        super::outgoing::fail_call(&weak, super::outgoing::MIC_DENIED);
                         tokio::spawn(async move {
                             let _ = ui_ctx.decline_presented_incoming_call(&call_id_str).await;
                         });
@@ -117,18 +114,9 @@ async fn accept(
         Ok(accepted) => render_accepted_call(&weak, &ui_ctx, accepted),
         Err(e) => {
             tracing::error!(error = %e, "Failed to accept incoming call");
-            // The modal was already hidden above, on the assumption
-            // this would succeed. Accepting a call needs the server,
-            // so with the server gone the modal vanished and nothing
-            // replaced it — the call appeared to be answered and then
-            // simply stopped existing. Say what happened.
+            // The answering view went up on the tap; take it down and say why.
             let _ = slint::invoke_from_event_loop(move || {
-                let Some(w) = weak.upgrade() else { return };
-                w.set_toast_message(
-                    "Could not answer the call — the server did not respond.".into(),
-                );
-                w.set_toast_variant("error".into());
-                w.set_toast_visible(true);
+                super::outgoing::fail_call(&weak, super::outgoing::CALL_FAILED);
             });
         }
     }
@@ -263,13 +251,79 @@ fn render_accepted_call(
     }
 }
 
+/// Put the call view up the moment Accept is tapped, from the modal's own
+/// data. Answering waits on the mic prompt, the answer send and the LiveKit
+/// join — seconds on a good network, the 10 s connect timeout on a bad one —
+/// and until now all of it rendered as the chat list, which read as the call
+/// having been dropped. `render_accepted_call` / `render_active_anon_call`
+/// overwrite this with the real call; a failure takes it down (`fail_call`).
+fn show_answering(w: &MainWindow) {
+    let incoming = w.get_incoming_call_data();
+    let is_video = incoming.is_video_call;
+    let my_display_name = w.get_user_display_name();
+    let participant = |user_id: slint::SharedString,
+                       display_name: slint::SharedString,
+                       initials: slint::SharedString,
+                       avatar_source: slint::Image| CallParticipantData {
+        user_id,
+        display_name,
+        initials,
+        avatar_source,
+        is_muted: false,
+        is_video_enabled: is_video,
+        is_screen_sharing: false,
+        is_speaking: false,
+        is_audio_muted_locally: false,
+        is_video_paused_locally: false,
+    };
+    // An anon peer's room identity is unknown until it joins; an empty id is
+    // the slot `ParticipantJoined` adopts (see `render_active_anon_call`).
+    let remote_id = if incoming.is_anonymous_call { "".into() } else { incoming.caller_id.clone() };
+    let remote = participant(
+        remote_id,
+        incoming.caller_name.clone(),
+        incoming.caller_initials.clone(),
+        incoming.caller_avatar_source.clone(),
+    );
+    let local = participant(
+        "You".into(),
+        my_display_name.clone(),
+        get_initials(&my_display_name).into(),
+        w.get_user_avatar_source(),
+    );
+    w.set_active_call_data(ActiveCallData {
+        call_id: incoming.call_id.clone(),
+        channel_id: "".into(),
+        title: incoming.caller_name.clone(),
+        is_video_call: is_video,
+        is_anonymous_call: incoming.is_anonymous_call,
+        is_encrypted: true,
+        is_identity_verified: false,
+        identity_warning: "".into(),
+        participant_count: 2,
+        duration_seconds: 0,
+        participants: ModelRc::new(VecModel::from(vec![remote, local])),
+        // No key agreed yet: show nothing (the plain lock) until the SAS
+        // emoji arrive, as the dialling view does.
+        verification_emoji_1: "".into(),
+        verification_emoji_2: "".into(),
+        verification_emoji_3: "".into(),
+        verification_emoji_4: "".into(),
+    });
+    w.set_call_is_muted(false);
+    w.set_call_is_video_enabled(is_video);
+    w.set_call_is_screen_sharing(false);
+    w.set_active_call_visible(true);
+    open_call_screen(w);
+}
+
 /// Answering lands on the call, wherever the user was. The call view is docked
 /// in the conversation pane, so from Contacts, the chat list or any modal the
 /// user answered into nothing visible. Close the modal and, on a phone, bring
 /// the pane up with the call filling it. The return-to-call bar (app.slint)
 /// covers every later departure.
 fn open_call_screen(w: &MainWindow) {
-    w.set_active_modal("none".into());
+    crate::bin_ui::features::back::reset_to_chats(&w);
     if w.get_compact_layout() {
         w.set_mobile_show_chat(true);
         w.set_active_call_fullscreen(true);

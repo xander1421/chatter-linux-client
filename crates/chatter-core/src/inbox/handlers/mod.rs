@@ -556,10 +556,6 @@ pub enum DomainEvent {
     // serious one — `OperationFailed`, the saga-compensation signal, was
     // discarded, leaving optimistic client state wrong forever.
 
-    /// A channel this user could see was deleted server-side. Core has already
-    /// removed the local rows.
-    ChannelDeleted { channel_id: ChannelId },
-
     /// A channel appeared for this user (created by them elsewhere, or an
     /// admin added them). Core has upserted the local row.
     ChannelCreated {
@@ -740,7 +736,6 @@ impl DomainEvent {
             DomainEvent::ChannelMemberLeft { channel_id, .. } => Some(*channel_id),
             DomainEvent::ChannelUpdated { channel_id, .. } => Some(*channel_id),
             DomainEvent::ChannelMemberUpdated { channel_id, .. } => Some(*channel_id),
-            DomainEvent::ChannelDeleted { channel_id } => Some(*channel_id),
             DomainEvent::ChannelCreated { channel_id, .. } => Some(*channel_id),
             DomainEvent::ChannelArchivedChanged { channel_id, .. } => Some(*channel_id),
             DomainEvent::ChannelModerationAction { channel_id, .. } => Some(*channel_id),

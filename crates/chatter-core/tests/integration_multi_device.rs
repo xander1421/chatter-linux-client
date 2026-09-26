@@ -38,7 +38,6 @@ async fn test_register_second_device() {
             "second-test-device",
             identity_public_key.as_ref(),
             &random_device_auth_token(),
-            &random_uak(),
             None, // New device ID
         )
         .await;
@@ -206,7 +205,6 @@ async fn test_upload_prekeys_for_device() {
                 .unwrap()
                 .as_nanos() as u64,
         }),
-        unidentified_access_key: Some(random_uak().to_vec()),
         unrestricted_unidentified_access: Some(false),
     };
 

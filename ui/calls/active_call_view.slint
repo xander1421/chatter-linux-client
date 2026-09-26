@@ -133,7 +133,7 @@ component ParticipantTile inherits Rectangle {
         x: (parent.width - self.width) / 2;
         y: parent.height - self.height - Spacing.xs;
         width: name-text.preferred-width + Spacing.md;
-        height: 18px;
+        height: Spacing.badge-md;
         border-radius: Spacing.radius-sm;
         background: Colors.overlay-heavy;
 
@@ -207,8 +207,10 @@ export component ActiveCallView inherits Rectangle {
     // array eagerly and a negative index aborts the per-frame property
     // re-eval, which silently drops the binding update path for the grid
     // tiles too).
+    // The local tile is pinned last in the list; the count can lag it (a
+    // ringing 1:1 call lists the callee ahead of us while only we are in).
     property <bool> maximized-is-local: maximized-index >= 0
-        && maximized-index == call-data.participant-count - 1;
+        && maximized-index == call-data.participants.length - 1;
     property <image> maximized-video-frame: maximized-index < 0
         ? local-video-frame
         : (maximized-is-local
@@ -240,9 +242,12 @@ export component ActiveCallView inherits Rectangle {
     // ignored the viewport).
     // Voice-only calls (no camera, no screen share anywhere) collapse to a
     // compact strip — a tall grid of empty avatar tiles wastes the chat area.
+    // Phones (`speaker-toggle`) get 48dp touch targets on the control row.
+    property <length> button-size: speaker-toggle ? 48px : 34px;
+    property <length> controls-height: button-size + 6px;
     property <length> dock-height: any-video
         ? clamp(viewport-height * 0.45, 240px, 560px)
-        : 140px;
+        : 100px + controls-height + Spacing.sm;
     visible: show;
     min-height: show ? (fullscreen ? 0px : dock-height) : 0px;
     max-height: show ? (fullscreen ? 100000px : dock-height) : 0px;
@@ -260,6 +265,9 @@ export component ActiveCallView inherits Rectangle {
             vertical-stretch: 1;
             background: transparent;
 
+            // Alone in the room: either a group call nobody else has joined,
+            // or a 1:1 call still ringing — then the callee's tile is listed
+            // first and shown instead of our own.
             if maximized-index < 0 && call-data.participant-count == 1: ParticipantTile {
                 x: Spacing.sm;
                 y: Spacing.sm;
@@ -267,14 +275,14 @@ export component ActiveCallView inherits Rectangle {
                 height: parent.height - 2 * Spacing.sm;
                 participant: call-data.participants[0];
                 video-frame: local-video-frame;
-                is-local: true;
+                is-local: call-data.participants.length == 1;
                 clicked => { root.user-focus = 0; }
             }
 
             // 1:1 call — remote party dominates the stage, self is a small
             // picture-in-picture thumbnail (messenger convention: you watch
-            // them, not yourself). Voice-only compact dock keeps the side-by-
-            // side split since there's no video to prioritize.
+            // them, not yourself). A voice-only 1:1 shows just the remote: a
+            // "You" tile with no video says nothing.
             if maximized-index < 0 && call-data.participant-count == 2 && any-video: Rectangle {
                 x: Spacing.sm;
                 y: Spacing.sm;
@@ -295,8 +303,7 @@ export component ActiveCallView inherits Rectangle {
                     width: pip-width;
                     height: pip-width * 0.62;
                     x: parent.width - self.width - Spacing.sm;
-                    // Clear of the floating control pill (40px + margin).
-                    y: parent.height - self.height - 40px - Spacing.md - Spacing.sm;
+                    y: parent.height - self.height - Spacing.sm;
                     participant: call-data.participants.length > 1 ? call-data.participants[1] : call-data.participants[0];
                     video-frame: local-video-frame;
                     is-local: true;
@@ -304,24 +311,14 @@ export component ActiveCallView inherits Rectangle {
                 }
             }
 
-            if maximized-index < 0 && call-data.participant-count == 2 && !any-video: HorizontalLayout {
-                padding: Spacing.sm;
-                spacing: Spacing.sm;
-
-                ParticipantTile {
-                    horizontal-stretch: 1;
-                    participant: call-data.participants[0];
-                    video-frame: remote-video-frames.length > 0 ? remote-video-frames[0] : local-video-frame;
-                    clicked => { root.user-focus = 0; }
-                }
-
-                ParticipantTile {
-                    horizontal-stretch: 1;
-                    participant: call-data.participants.length > 1 ? call-data.participants[1] : call-data.participants[0];
-                    video-frame: local-video-frame;
-                    is-local: true;
-                    clicked => { root.user-focus = 1; }
-                }
+            if maximized-index < 0 && call-data.participant-count == 2 && !any-video: ParticipantTile {
+                x: Spacing.sm;
+                y: Spacing.sm;
+                width: parent.width - 2 * Spacing.sm;
+                height: parent.height - 2 * Spacing.sm;
+                participant: call-data.participants[0];
+                video-frame: remote-video-frames.length > 0 ? remote-video-frames[0] : local-video-frame;
+                clicked => { root.user-focus = 0; }
             }
 
             if maximized-index < 0 && call-data.participant-count >= 3 && call-data.participant-count <= 4: VerticalLayout {
@@ -558,12 +555,12 @@ export component ActiveCallView inherits Rectangle {
                 }
             }
 
-            // Persistent "you are sharing" banner — sits just above the control
-            // pill. The toggled toolbar icon alone is too easy to forget; a
-            // live share needs an always-visible state + one-click stop.
+            // Persistent "you are sharing" banner — bottom of the stage, just
+            // above the control row. The toggled toolbar icon alone is too easy
+            // to forget; a live share needs an always-visible state + one-click stop.
             if root.is-screen-sharing: Rectangle {
                 x: (parent.width - self.width) / 2;
-                y: parent.height - 40px - Spacing.md - Spacing.sm - self.height;
+                y: parent.height - Spacing.sm - self.height;
                 width: share-banner-row.preferred-width + Spacing.md * 2;
                 height: 28px;
                 border-radius: 14px;
@@ -615,14 +612,18 @@ export component ActiveCallView inherits Rectangle {
                     }
                 }
             }
+        }
 
-            // Floating control pill overlay — centered horizontally, floats
-            // over the bottom edge of the tiles instead of reserving a band.
+        // Control pill in its own row under the stage, so it never covers a
+        // tile (it used to float over them and hide the names).
+        HorizontalLayout {
+            alignment: center;
+            padding-bottom: Spacing.sm;
+
             CallControls {
-                x: (parent.width - self.width) / 2;
-                y: parent.height - self.height - Spacing.md;
-                width: min(296px, parent.width - 2 * Spacing.md);
-                height: 40px;
+                width: min(296px, root.width - 2 * Spacing.md);
+                height: controls-height;
+                button-size: root.button-size;
                 is-muted: is-muted;
                 is-video-enabled: is-video-enabled;
                 is-screen-sharing: is-screen-sharing;

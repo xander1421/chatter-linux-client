@@ -95,6 +95,21 @@ class MainActivity : GameActivity() {
         }
     }
 
+    /**
+     * Called from Rust (JNI) whenever the app's palette changes. The app draws
+     * edge-to-edge, so the status/nav bar icons sit on Slint's background: they
+     * must be dark on the light palette or they vanish. WindowCompat handles
+     * the pre-API-30 flags (the S9 is API 29).
+     */
+    @Suppress("unused")
+    fun setLightSystemBars(light: Boolean) {
+        runOnUiThread {
+            val controller = WindowCompat.getInsetsController(window, window.decorView)
+            controller.isAppearanceLightStatusBars = light
+            controller.isAppearanceLightNavigationBars = light
+        }
+    }
+
     // --- Call audio routing (earpiece / speaker / headset) -------------------
     // Called from Rust (JNI, platform/android/audio_route.rs); CallAudioRouter
     // hops to the main looper itself.
@@ -271,6 +286,12 @@ class MainActivity : GameActivity() {
 
     /** Implemented in Rust (libchatter_ui.so). Delivers grant results. */
     private external fun nativeOnPermissionsResult(granted: Array<String>, denied: Array<String>)
+
+    /** Called from Rust (JNI, platform/android/qr_scanner.rs). See QrScanner. */
+    @Suppress("unused")
+    fun scanQrCode() {
+        runOnUiThread { QrScanner(this).show() }
+    }
 
     // --- Camera capture (CameraX → I420 → Rust/LiveKit) ------------------------
     private var cameraProvider: ProcessCameraProvider? = null

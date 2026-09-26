@@ -144,8 +144,43 @@ impl SvrBackupService {
         pin: &str,
         username: &str,
     ) -> Result<u32, SvrBackupError> {
-        use crate::crypto::svr::derive_svr_secret_async;
         use crate::storage::repositories::settings_repo::keys;
+        use zeroize::Zeroize;
+
+        let mut profile_key = match self.signal_service.settings_repo.get_bytes(keys::PROFILE_KEY) {
+            Ok(Some(bytes)) if bytes.len() == 32 => {
+                let mut pk = [0u8; 32];
+                pk.copy_from_slice(&bytes);
+                pk
+            }
+            Ok(_) => {
+                return Err(SvrBackupError::Generic(
+                    "profile key not found or invalid length".into(),
+                ));
+            }
+            Err(e) => {
+                return Err(SvrBackupError::Generic(format!(
+                    "failed to read profile key: {e}"
+                )));
+            }
+        };
+        let result = self.backup_with_profile_key(pin, username, &profile_key).await;
+        profile_key.zeroize();
+        result
+    }
+
+    /// [`Self::backup_from_pin`] for an explicit profile key — a rotation
+    /// backs up the NEW key before it becomes the local one, so a restore can
+    /// never bring back a key the server profile is no longer encrypted under.
+    /// The caller must have verified `pin`: a wrong one would replace the
+    /// account's backup with one the real PIN cannot open.
+    pub async fn backup_with_profile_key(
+        &self,
+        pin: &str,
+        username: &str,
+        profile_key: &[u8; 32],
+    ) -> Result<u32, SvrBackupError> {
+        use crate::crypto::svr::derive_svr_secret_async;
         use zeroize::Zeroize;
 
         // CORRECTNESS: off the async worker — see `derive_svr_secret_async`.
@@ -172,41 +207,52 @@ impl SvrBackupService {
         identity_keypair[32..].copy_from_slice(&public_bytes_33[1..]);
         private_bytes.zeroize();
 
-        let mut profile_key = match self.signal_service.settings_repo.get_bytes(keys::PROFILE_KEY) {
-            Ok(Some(bytes)) if bytes.len() == 32 => {
-                let mut pk = [0u8; 32];
-                pk.copy_from_slice(&bytes);
-                pk
-            }
-            Ok(_) => {
-                svr_secret.zeroize();
-                identity_keypair.zeroize();
-                return Err(SvrBackupError::Generic(
-                    "profile key not found or invalid length".into(),
-                ));
-            }
-            Err(e) => {
-                svr_secret.zeroize();
-                identity_keypair.zeroize();
-                return Err(SvrBackupError::Generic(format!(
-                    "failed to read profile key: {e}"
-                )));
-            }
-        };
-
         let result = match self.local_full_username() {
             Ok(full_username) => {
-                self.create_and_upload_backup(&svr_secret, &identity_keypair, &profile_key, &full_username)
-                    .await
+                store_retrying_version_conflict(
+                    || self.create_and_upload_backup(&svr_secret, &identity_keypair, profile_key, &full_username),
+                    || self.refresh_backup_version(&svr_secret),
+                )
+                .await
             }
             Err(e) => Err(e),
         };
 
         svr_secret.zeroize();
         identity_keypair.zeroize();
-        profile_key.zeroize();
 
         result
+    }
+
+    /// Prove `pin` opens the account's backup by fetching and decrypting it,
+    /// for a device with no local PIN fingerprint (a linked one). Nothing is
+    /// written, so a wrong PIN leaves the backup as it was. Costs one of the
+    /// server's metered attempts, which the backup write that follows resets.
+    ///
+    /// Returns the local PIN fingerprint, derived from the same secret, for the
+    /// caller to persist so later checks stay local. Also syncs the local
+    /// version counter to the server's.
+    pub async fn verify_pin_against_backup(
+        &self,
+        pin: &str,
+        username: &str,
+    ) -> Result<[u8; 32], SvrBackupError> {
+        use crate::crypto::svr::{derive_svr_secret_async, pin_fingerprint_from_secret};
+
+        let mut svr_secret = derive_svr_secret_async(pin, username).await?;
+        let result = self.refresh_backup_version(&svr_secret).await;
+        let fingerprint = pin_fingerprint_from_secret(&svr_secret);
+        svr_secret.zeroize();
+        result.map(|()| fingerprint)
+    }
+
+    /// Fetch + decrypt the backup only to learn the server's version, zeroizing
+    /// the recovered keys.
+    async fn refresh_backup_version(&self, svr_secret: &[u8; 32]) -> Result<(), SvrBackupError> {
+        let mut restored = self.fetch_and_restore_backup(svr_secret).await?;
+        restored.identity_keypair.zeroize();
+        restored.profile_key.zeroize();
+        Ok(())
     }
 
     /// Public retry: load profile_key from local settings, then run the same
@@ -537,6 +583,95 @@ impl SvrBackupService {
         tracing::info!("SVR backup deleted successfully");
 
         Ok(())
+    }
+}
+
+/// `StoreBackup` accepts exactly stored+1, and the local counter only tracks
+/// what THIS device last wrote or read — another device's write leaves it
+/// behind. On that conflict, `refresh` re-reads the server's version and the
+/// store runs once more. The caller must have verified the PIN: `refresh`
+/// fetches under it, a metered attempt.
+async fn store_retrying_version_conflict<S, SF, R, RF>(mut store: S, refresh: R) -> Result<u32, SvrBackupError>
+where
+    S: FnMut() -> SF,
+    SF: std::future::Future<Output = Result<u32, SvrBackupError>>,
+    R: FnOnce() -> RF,
+    RF: std::future::Future<Output = Result<(), SvrBackupError>>,
+{
+    match store().await {
+        Err(e) if is_version_conflict(&e) => {
+            tracing::info!("SVR backup version was stale; re-reading it and retrying once");
+            refresh().await?;
+            store().await
+        }
+        r => r,
+    }
+}
+
+/// The server's `ErrVersionConflict` is its only `FailedPrecondition` on the
+/// backup RPCs (svr/handlers `mapError`), which `NetworkError::from_status`
+/// turns into this prefix.
+fn is_version_conflict(e: &SvrBackupError) -> bool {
+    matches!(e, SvrBackupError::Network(NetworkError::InvalidRequest(m)) if m.starts_with("precondition failed"))
+}
+
+#[cfg(test)]
+mod conflict_tests {
+    use super::*;
+    use std::cell::Cell;
+
+    fn conflict() -> SvrBackupError {
+        SvrBackupError::Network(NetworkError::InvalidRequest("precondition failed: backup version conflict".into()))
+    }
+
+    #[tokio::test]
+    async fn a_stale_version_is_refreshed_and_the_store_retried_once() {
+        let stores = Cell::new(0);
+        let refreshes = Cell::new(0);
+        let v = store_retrying_version_conflict(
+            || {
+                stores.set(stores.get() + 1);
+                let n = stores.get();
+                async move { if n == 1 { Err(conflict()) } else { Ok(8) } }
+            },
+            || {
+                refreshes.set(refreshes.get() + 1);
+                async { Ok(()) }
+            },
+        )
+        .await
+        .expect("the retry after a refresh must succeed");
+        assert_eq!((v, stores.get(), refreshes.get()), (8, 2, 1));
+    }
+
+    #[tokio::test]
+    async fn a_second_conflict_is_returned_not_looped() {
+        let stores = Cell::new(0);
+        let r = store_retrying_version_conflict(
+            || {
+                stores.set(stores.get() + 1);
+                async { Err::<u32, _>(conflict()) }
+            },
+            || async { Ok(()) },
+        )
+        .await;
+        assert!(r.is_err_and(|e| is_version_conflict(&e)));
+        assert_eq!(stores.get(), 2, "exactly one retry");
+    }
+
+    #[tokio::test]
+    async fn other_failures_neither_refresh_nor_retry() {
+        let stores = Cell::new(0);
+        let r = store_retrying_version_conflict(
+            || {
+                stores.set(stores.get() + 1);
+                async { Err::<u32, _>(SvrBackupError::Network(NetworkError::Unavailable)) }
+            },
+            || async { panic!("refresh is a metered PIN attempt; only a conflict earns it") },
+        )
+        .await;
+        assert!(r.is_err());
+        assert_eq!(stores.get(), 1);
     }
 }
 

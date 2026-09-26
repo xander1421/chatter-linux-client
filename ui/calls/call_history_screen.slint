@@ -6,6 +6,7 @@
 // buttons redial it as voice or video.
 
 import { Colors } from "../theme/colors.slint";
+import { Appearance } from "../theme/appearance.slint";
 import { Spacing } from "../theme/spacing.slint";
 import { Typography } from "../theme/typography.slint";
 import { Icons } from "../theme/icons.slint";
@@ -21,11 +22,13 @@ export component CallHistoryScreen inherits Rectangle {
     // rows read the shared touch geometry rather than desktop density.
     in property <bool> mobile-mode: false;
     in property <length> bottom-inset: 0px;
+    // A tab's root screen (see Modal): no back chevron, the tab bar navigates.
+    in property <bool> root-screen: false;
     in property <[CallHistoryRow]> rows: [];
     in property <bool> loading: false;
     in property <string> active-filter: "all";  // "all" or "missed"
 
-    property <length> row-height: root.mobile-mode ? Spacing.row-height-touch : 56px;
+    property <length> row-height: root.mobile-mode ? Spacing.row-height-touch : 56px * Appearance.text-grow;
     property <length> row-avatar: root.mobile-mode ? Spacing.row-avatar-touch : 40px;
     property <length> row-name-size: root.mobile-mode ? Typography.base : Typography.sm;
     property <length> row-sub-size: root.mobile-mode ? Typography.sm : Typography.xs;
@@ -50,6 +53,7 @@ export component CallHistoryScreen inherits Rectangle {
         modal-width: 560px;
         max-modal-height: 800px;
         full-screen: root.mobile-mode;
+        root-screen: root.root-screen;
         bottom-inset: root.bottom-inset;
         fill-height: root.mobile-mode;
 
@@ -159,6 +163,15 @@ export component CallHistoryScreen inherits Rectangle {
                         border-width: row-touch.has-hover ? 1px : 0px;
                         border-color: Colors.neo-highlight;
 
+                        // Under the row's content, not over it: declared last it
+                        // sat on top and took the redial buttons' taps, so
+                        // "call back" opened the DM instead of calling.
+                        row-touch := TouchArea {
+                            clicked => {
+                                root.open-conversation(row.conversation-id, row.conversation-type);
+                            }
+                        }
+
                         HorizontalLayout {
                             padding: Spacing.sm;
                             spacing: Spacing.sm;
@@ -197,13 +210,22 @@ export component CallHistoryScreen inherits Rectangle {
                                         y: (parent.height - self.height) / 2;
                                     }
 
+                                    // The outcome may elide; the time never
+                                    // does — it was the part being cut off.
                                     Text {
-                                        text: row.detail + " · " + row.timestamp;
+                                        text: row.detail + " ·";
                                         color: Colors.text-muted;
                                         font-size: root.row-sub-size;
                                         overflow: elide;
-                                        horizontal-stretch: 1;
                                     }
+
+                                    Text {
+                                        text: row.timestamp;
+                                        color: Colors.text-muted;
+                                        font-size: root.row-sub-size;
+                                    }
+
+                                    Rectangle { horizontal-stretch: 1; }
                                 }
                             }
 
@@ -259,12 +281,6 @@ export component CallHistoryScreen inherits Rectangle {
                                         }
                                     }
                                 }
-                            }
-                        }
-
-                        row-touch := TouchArea {
-                            clicked => {
-                                root.open-conversation(row.conversation-id, row.conversation-type);
                             }
                         }
                     }

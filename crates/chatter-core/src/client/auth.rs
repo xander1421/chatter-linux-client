@@ -453,7 +453,7 @@ impl ChatterClient {
     /// typed at register/login (`keys::SVR_SALT_USERNAME`). Not the display
     /// name and not the `.discriminator` handle — a different salt derives a
     /// different secret, and a backup written under it cannot be restored.
-    fn svr_salt_username(&self) -> Result<String, ClientError> {
+    pub(super) fn svr_salt_username(&self) -> Result<String, ClientError> {
         self.signal()
             .settings_repo
             .get_string(keys::SVR_SALT_USERNAME)

@@ -27,6 +27,8 @@ struct SectionConvSendData {
     unread_count: i32,
     is_pinned: bool,
     can_leave: bool,
+    can_delete: bool,
+    extras: chatter_core::client::SectionRowExtras,
 }
 
 impl SectionConvSendData {
@@ -48,11 +50,14 @@ impl SectionConvSendData {
             avatar_source,
             has_avatar,
             initials: self.initials.into(),
-            last_message: SharedString::new(),
-            timestamp: SharedString::new(),
+            last_message: self.extras.last_message.into(),
+            timestamp: self.extras.timestamp.into(),
+            presence_status: self.extras.presence_status.into(),
+            private_channel: self.extras.private_channel,
             unread_count: self.unread_count,
             is_pinned: self.is_pinned,
             can_leave: self.can_leave,
+            can_delete: self.can_delete,
             is_selected: false,
         }
     }
@@ -132,7 +137,7 @@ fn wire_create_section(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                     tracing::info!(section_id = %section.id, name = %name_str, "Created custom section");
                     run_ui!(weak_clone, |w| {
                         w.set_create_section_loading(false);
-                        w.set_active_modal("none".into());
+                        crate::bin_ui::features::back::close(&w, "create-section");
                     });
                     refresh_sections_ui(&weak_clone, &ui_ctx);
                 }
@@ -218,7 +223,7 @@ fn wire_rename_section(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                 return;
             }
 
-            run_ui!(weak_clone, |w| w.set_active_modal("none".into()));
+            run_ui!(weak_clone, |w| crate::bin_ui::features::back::close(&w, "create-section"));
             refresh_sections_ui(&weak_clone, &ui_ctx);
         });
     });
@@ -434,6 +439,10 @@ pub(crate) fn refresh_conversation_lists(
         w.set_dm_conversations(ModelRc::new(VecModel::from(dm_list)));
         w.set_private_groups(ModelRc::new(VecModel::from(groups)));
         crate::bin_ui::features::sidebar::refresh_selection(&w, &ui_ctx_convert);
+        // The rows just took fresh counts; the Chats tab badge counts the
+        // same rows, so it is recomputed with them or it goes stale (a
+        // badge of 1 over two unread rows).
+        crate::bin_ui::features::auth::inbox::domain_handler::recompute_total_unread(&w, &ui_ctx_convert);
     });
 }
 
@@ -493,19 +502,25 @@ fn enrich_conversation_send(
         is_pinned: conv.is_pinned,
         can_leave: matches!(conv.conversation_type, ConversationType::Channel)
             && conv.conversation_id.parse().is_ok_and(|id| ui_ctx.can_leave_channel(&id)),
+        can_delete: matches!(conv.conversation_type, ConversationType::Channel)
+            && conv.conversation_id.parse().is_ok_and(|id| ui_ctx.is_former_channel(&id)),
+        // Preview, time, avatar, presence: the loose row's, from core.
+        extras: ui_ctx.section_row_extras(conv),
     };
 
-    // Channels carry their icon as raw bytes on the Channel record, not a URL.
-    if matches!(conv.conversation_type, ConversationType::Channel) {
-        data.avatar_decoded = channel_icons
-            .get(&conv.conversation_id)
-            .and_then(|bytes| image::load_from_memory(bytes).ok())
-            .map(|img| {
-                let rgba = img.to_rgba8();
-                let (w, h) = rgba.dimensions();
-                DecodedImagePixels { width: w, height: h, rgba: rgba.into_raw() }
-            });
-    }
+    // Channels carry their icon as raw bytes on the Channel record, not a URL;
+    // a friend DM's avatar comes with the row's extras.
+    let avatar_bytes = match conv.conversation_type {
+        ConversationType::Channel => channel_icons.get(&conv.conversation_id).map(Vec::as_slice),
+        _ => data.extras.avatar_bytes.as_deref(),
+    };
+    data.avatar_decoded = avatar_bytes
+        .and_then(|bytes| image::load_from_memory(bytes).ok())
+        .map(|img| {
+            let rgba = img.to_rgba8();
+            let (w, h) = rgba.dimensions();
+            DecodedImagePixels { width: w, height: h, rgba: rgba.into_raw() }
+        });
 
     data
 }

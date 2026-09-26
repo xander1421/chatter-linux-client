@@ -9,6 +9,10 @@ import { Input } from "../components/input.slint";
 import { Avatar } from "../components/avatar.slint";
 import { ToggleRow } from "../components/toggle_row.slint";
 import { JarvisGlobal } from "../jarvis/jarvis_global.slint";
+import { Appearance } from "../theme/appearance.slint";
+import { Icons } from "../theme/icons.slint";
+import { NotificationSound } from "notification_sound.slint";
+import { AnonMode } from "../anon_mode/anon_mode_global.slint";
 
 // A local AI provider found running on this machine.
 export struct LocalAIProviderData {
@@ -72,11 +76,20 @@ export component SettingsScreen inherits Rectangle {
     in-out property <bool> typing-indicators-enabled: true;
     in-out property <string> notification-detail: "none";  // "none" | "name_only" | "name_and_message"
     in-out property <string> search-shortcut: "both";   // "k" | "f" | "both"
+    // "Who can see my photo and name": "everyone" | "contacts" | "nobody".
+    // A restricting choice that needs the PIN parks in
+    // profile-visibility-pending until confirmed (Rust sets it).
+    in property <string> profile-visibility: "everyone";
+    in property <string> profile-visibility-pending: "";
+    in property <bool> profile-visibility-busy: false;
+    in property <string> profile-visibility-error: "";
+    in-out property <string> profile-visibility-pin: "";
 
     // Encryption settings
     in property <string> identity-fingerprint: "";
     in-out property <bool> sealed-sender-unrestricted: false;
-    in property <int> prekey-count: 0;
+    // "Who can find me by my username": true = Everyone, false = Nobody.
+    in-out property <bool> username-discoverable: true;
 
     // AI settings
     in-out property <bool> local-ai-enabled: true;
@@ -114,7 +127,12 @@ export component SettingsScreen inherits Rectangle {
     in property <string> recovery-regen-error: "";
 
     // Navigation state
-    property <string> active-section: "account";  // "account", "privacy", "encryption", "appearance"
+    // Mirror of AnonMode.enabled for the Privacy pane's Shield switch; the
+    // switch writes it, so it is re-synced from the global on every change.
+    property <bool> shield-switch: AnonMode.enabled;
+    property <bool> shield-on: AnonMode.enabled;
+    changed shield-on => { root.shield-switch = root.shield-on; }
+    property <string> active-section: "account";  // "account", "devices", "privacy", "notifications", "encryption", "ai", "appearance"
     property <bool> show-password-form: false;
     property <bool> show-pin-form: false;
     property <bool> show-backup-retry: false;
@@ -138,11 +156,17 @@ export component SettingsScreen inherits Rectangle {
     callback typing-indicators-changed(bool);
     callback notification-detail-changed(string);
     callback search-shortcut-changed(string);
+    callback profile-visibility-selected(string);           // option key
+    callback profile-visibility-confirmed(string, string);  // option key, PIN
+    callback profile-visibility-cancelled();
+    // Shield switch — the same toggle as the chat-list header's shield: ON
+    // opens the PIN gate, OFF leaves directly (sidebar/anon_mode.rs).
+    callback shield-toggled();
 
     // Encryption callbacks
     callback copy-fingerprint-clicked();
     callback sealed-sender-changed(bool);
-    callback refresh-keys-clicked();
+    callback username-discoverable-changed(bool);  // true = Everyone, false = Nobody
 
     // Security callbacks
     callback change-pin(string, string);  // current_pin, new_pin
@@ -217,10 +241,12 @@ export component SettingsScreen inherits Rectangle {
 
                         for item in [
                             { id: "account", label: "Account", enabled: true },
+                            { id: "devices", label: "Linked devices", enabled: true },
                             { id: "privacy", label: "Privacy", enabled: true },
-                            { id: "encryption", label: "Encrypt", enabled: true },
+                            { id: "notifications", label: "Notifications", enabled: true },
+                            { id: "encryption", label: "Encryption", enabled: true },
                             { id: "ai", label: "AI", enabled: true },
-                            { id: "appearance", label: "Theme", enabled: true }
+                            { id: "appearance", label: "Appearance", enabled: true }
                         ]: Rectangle {
                             width: compact-tab-text.preferred-width + Spacing.md * 2;
                             height: Spacing.touch-target-min;
@@ -296,7 +322,9 @@ export component SettingsScreen inherits Rectangle {
                 // Navigation items
                 for item[index] in [
                     { id: "account", label: "Account", enabled: true },
+                    { id: "devices", label: "Linked devices", enabled: true },
                     { id: "privacy", label: "Privacy", enabled: true },
+                    { id: "notifications", label: "Notifications", enabled: true },
                     { id: "encryption", label: "Encryption", enabled: true },
                     { id: "ai", label: "AI Assistant", enabled: true },
                     { id: "appearance", label: "Appearance", enabled: true }
@@ -511,7 +539,9 @@ export component SettingsScreen inherits Rectangle {
                                             text <=> root.current-password;
                                         }
 
-                                        HorizontalLayout {
+                                        // Stacked: side by side on a phone the
+                                        // placeholders clipped ("Confirm new pa…").
+                                        VerticalLayout {
                                             spacing: Spacing.md;
 
                                             Input {
@@ -558,81 +588,6 @@ export component SettingsScreen inherits Rectangle {
                                                 }
                                             }
                                         }
-                                    }
-                                }
-                            }
-
-                            // Active Sessions group
-                            Rectangle {
-                                background: Colors.surface;
-                                border-radius: Spacing.radius-lg;
-                                border-width: 1px;
-                                border-color: Colors.neo-highlight;
-                                drop-shadow-blur: Spacing.neo-blur-sm;
-                                drop-shadow-offset-x: Spacing.neo-offset-sm;
-                                drop-shadow-offset-y: Spacing.neo-offset-sm;
-                                drop-shadow-color: Colors.neo-shadow;
-
-                                VerticalLayout {
-                                    padding: Spacing.md;
-                                    spacing: Spacing.md;
-
-                                    HorizontalLayout {
-                                        spacing: Spacing.md;
-
-                                        VerticalLayout {
-                                            horizontal-stretch: 1;
-                                            spacing: Spacing.xs;
-
-                                            HorizontalLayout {
-                                                spacing: Spacing.sm;
-
-                                                Text {
-                                                    text: "Active Sessions";
-                                                    color: Colors.text-primary;
-                                                    font-size: Typography.sm;
-                                                    font-weight: Typography.medium;
-                                                }
-
-                                                // Count badge
-                                                Rectangle {
-                                                    width: 24px;
-                                                    height: 20px;
-                                                    border-radius: Spacing.radius-sm;
-                                                    background: Colors.primary;
-
-                                                    Text {
-                                                        text: root.session-count;
-                                                        color: Colors.text-primary;
-                                                        font-size: Typography.xs;
-                                                        horizontal-alignment: center;
-                                                        vertical-alignment: center;
-                                                        width: 100%;
-                                                        height: 100%;
-                                                    }
-                                                }
-                                            }
-
-                                            Text {
-                                                text: "Manage devices that are signed in to your account.";
-                                                color: Colors.text-muted;
-                                                font-size: Typography.xs;
-                                                wrap: word-wrap;
-                                            }
-                                        }
-
-                                        if !root.compact-mode: Button {
-                                            text: "View All";
-                                            variant: "secondary";
-                                            clicked => { root.view-sessions-clicked(); }
-                                        }
-                                    }
-
-                                    // Compact: full-width button stacked below
-                                    if root.compact-mode: Button {
-                                        text: "View All";
-                                        variant: "secondary";
-                                        clicked => { root.view-sessions-clicked(); }
                                     }
                                 }
                             }
@@ -1261,6 +1216,95 @@ export component SettingsScreen inherits Rectangle {
                             }
                         }
 
+                        // Linked devices section. The device list and "Link
+                        // new device" live in the sessions pane this opens, so
+                        // there is one place for both, not two.
+                        if active-section == "devices": VerticalLayout {
+                            spacing: Spacing.lg;
+
+                            // Section header
+                            Text {
+                                text: "Linked devices";
+                                color: Colors.text-primary;
+                                font-size: Typography.xl;
+                                font-weight: Typography.semibold;
+                            }
+
+                            Rectangle {
+                                background: Colors.surface;
+                                border-radius: Spacing.radius-lg;
+                                border-width: 1px;
+                                border-color: Colors.neo-highlight;
+                                drop-shadow-blur: Spacing.neo-blur-sm;
+                                drop-shadow-offset-x: Spacing.neo-offset-sm;
+                                drop-shadow-offset-y: Spacing.neo-offset-sm;
+                                drop-shadow-color: Colors.neo-shadow;
+
+                                VerticalLayout {
+                                    padding: Spacing.md;
+                                    spacing: Spacing.md;
+
+                                    HorizontalLayout {
+                                        spacing: Spacing.md;
+
+                                        VerticalLayout {
+                                            horizontal-stretch: 1;
+                                            spacing: Spacing.xs;
+
+                                            HorizontalLayout {
+                                                spacing: Spacing.sm;
+
+                                                Text {
+                                                    text: "Devices";
+                                                    color: Colors.text-primary;
+                                                    font-size: Typography.sm;
+                                                    font-weight: Typography.medium;
+                                                }
+
+                                                // Count badge
+                                                Rectangle {
+                                                    width: 24px;
+                                                    height: 20px;
+                                                    border-radius: Spacing.radius-sm;
+                                                    background: Colors.primary;
+
+                                                    Text {
+                                                        text: root.session-count;
+                                                        color: Colors.text-primary;
+                                                        font-size: Typography.xs;
+                                                        horizontal-alignment: center;
+                                                        vertical-alignment: center;
+                                                        width: 100%;
+                                                        height: 100%;
+                                                    }
+                                                }
+                                            }
+
+                                            Text {
+                                                text: "Phones and computers signed in to your account. Link a new device or sign one out.";
+                                                color: Colors.text-muted;
+                                                font-size: Typography.xs;
+                                                wrap: word-wrap;
+                                            }
+                                        }
+
+                                        if !root.compact-mode: Button {
+                                            text: "Manage devices";
+                                            variant: "secondary";
+                                            clicked => { root.view-sessions-clicked(); }
+                                        }
+                                    }
+
+                                    // Compact: full-width button stacked below
+                                    if root.compact-mode: Button {
+                                        text: "Manage devices";
+                                        variant: "secondary";
+                                        clicked => { root.view-sessions-clicked(); }
+                                    }
+                                }
+                            }
+                        }
+
                         // Privacy section
                         if active-section == "privacy": VerticalLayout {
                             spacing: Spacing.lg;
@@ -1277,6 +1321,242 @@ export component SettingsScreen inherits Rectangle {
                                 text: "Control what information you share with others";
                                 color: Colors.text-muted;
                                 font-size: Typography.sm;
+                            }
+
+                            // Who can see my photo and name. Enforced by who
+                            // receives our profile key (core profile_visibility);
+                            // restricting rotates the key, so it may ask for the PIN.
+                            Rectangle {
+                                background: Colors.surface;
+                                border-radius: Spacing.radius-lg;
+                                border-width: 1px;
+                                border-color: Colors.neo-highlight;
+                                drop-shadow-blur: Spacing.neo-blur-sm;
+                                drop-shadow-offset-x: Spacing.neo-offset-sm;
+                                drop-shadow-offset-y: Spacing.neo-offset-sm;
+                                drop-shadow-color: Colors.neo-shadow;
+
+                                VerticalLayout {
+                                    padding: Spacing.md;
+                                    spacing: Spacing.sm;
+
+                                    Text {
+                                        text: "Who can see my photo and name";
+                                        color: Colors.text-primary;
+                                        font-size: Typography.sm;
+                                        font-weight: Typography.medium;
+                                    }
+
+                                    Text {
+                                        text: "Everyone else sees your initials. Narrowing this gives your profile a new key, so people who could see it before can't.";
+                                        color: Colors.text-muted;
+                                        font-size: Typography.xs;
+                                        wrap: word-wrap;
+                                    }
+
+                                    for opt in [
+                                        { key: "everyone", label: "Everyone" },
+                                        { key: "contacts", label: "My contacts" },
+                                        { key: "nobody", label: "Nobody" },
+                                    ]: Rectangle {
+                                        property <bool> selected: (root.profile-visibility-pending != "" ? root.profile-visibility-pending : root.profile-visibility) == opt.key;
+                                        height: Spacing.touch-target-min;
+                                        border-radius: Spacing.radius-md;
+                                        background: visibility-touch.has-hover ? Colors.surface-hover : transparent;
+                                        accessible-role: button;
+                                        accessible-label: opt.label;
+                                        accessible-action-default => {
+                                            if !root.profile-visibility-busy { root.profile-visibility-selected(opt.key); }
+                                        }
+
+                                        HorizontalLayout {
+                                            padding-left: Spacing.sm;
+                                            padding-right: Spacing.sm;
+                                            spacing: Spacing.md;
+                                            alignment: start;
+
+                                            // Radio indicator
+                                            VerticalLayout {
+                                                alignment: center;
+                                                Rectangle {
+                                                    width: 18px;
+                                                    height: 18px;
+                                                    border-radius: 9px;
+                                                    border-width: 2px;
+                                                    border-color: selected ? Colors.primary : Colors.text-muted;
+
+                                                    Rectangle {
+                                                        width: 8px;
+                                                        height: 8px;
+                                                        border-radius: 4px;
+                                                        background: selected ? Colors.primary : transparent;
+                                                    }
+                                                }
+                                            }
+
+                                            Text {
+                                                text: opt.label;
+                                                vertical-alignment: center;
+                                                color: selected ? Colors.text-primary : Colors.text-secondary;
+                                                font-size: Typography.sm;
+                                                font-weight: selected ? Typography.medium : Typography.normal;
+                                            }
+                                        }
+
+                                        visibility-touch := TouchArea {
+                                            enabled: !root.profile-visibility-busy;
+                                            mouse-cursor: pointer;
+                                            clicked => { root.profile-visibility-selected(opt.key); }
+                                        }
+                                    }
+
+                                    if root.profile-visibility-pending != "": VerticalLayout {
+                                        spacing: Spacing.sm;
+
+                                        Text {
+                                            text: "Enter your PIN to change this";
+                                            color: Colors.text-secondary;
+                                            font-size: Typography.xs;
+                                            wrap: word-wrap;
+                                        }
+
+                                        Input {
+                                            placeholder: "PIN";
+                                            password: true;
+                                            text <=> root.profile-visibility-pin;
+                                        }
+
+                                        HorizontalLayout {
+                                            spacing: Spacing.sm;
+                                            alignment: end;
+
+                                            Button {
+                                                text: "Cancel";
+                                                variant: "secondary";
+                                                disabled: root.profile-visibility-busy;
+                                                clicked => { root.profile-visibility-cancelled(); }
+                                            }
+
+                                            Button {
+                                                text: "Confirm";
+                                                loading: root.profile-visibility-busy;
+                                                disabled: root.profile-visibility-busy || root.profile-visibility-pin == "";
+                                                clicked => {
+                                                    root.profile-visibility-confirmed(root.profile-visibility-pending, root.profile-visibility-pin);
+                                                }
+                                            }
+                                        }
+                                    }
+
+                                    if root.profile-visibility-error != "": Text {
+                                        text: root.profile-visibility-error;
+                                        color: Colors.error;
+                                        font-size: Typography.xs;
+                                        wrap: word-wrap;
+                                    }
+                                }
+                            }
+
+                            // Shield setting. The switch shows AnonMode, never
+                            // its own guess: turning ON only asks for the PIN
+                            // and may be cancelled, so a tap snaps the switch
+                            // back to the truth and `changed shield-on` below
+                            // moves it once the mode actually flips.
+                            // STUB-1: no Tor in the build, no Shield control.
+                            if AnonMode.onion-built: Rectangle {
+                                background: Colors.surface;
+                                border-radius: Spacing.radius-lg;
+                                border-width: 1px;
+                                border-color: Colors.neo-highlight;
+                                drop-shadow-blur: Spacing.neo-blur-sm;
+                                drop-shadow-offset-x: Spacing.neo-offset-sm;
+                                drop-shadow-offset-y: Spacing.neo-offset-sm;
+                                drop-shadow-color: Colors.neo-shadow;
+
+                                ToggleRow {
+                                    row-padding: Spacing.md;
+                                    row-spacing: Spacing.md;
+                                    label-spacing: Spacing.sm;
+                                    accessible-text: "Shield";
+                                    checked <=> root.shield-switch;
+                                    toggled(value) => {
+                                        root.shield-switch = AnonMode.enabled;
+                                        root.shield-toggled();
+                                    }
+
+                                    Text {
+                                        text: "Shield";
+                                        color: Colors.text-primary;
+                                        font-size: Typography.sm;
+                                        font-weight: Typography.medium;
+                                    }
+                                    Text {
+                                        text: "Show only anonymous conversations and route traffic over Tor. Turning it on asks for your PIN";
+                                        color: Colors.text-muted;
+                                        font-size: Typography.xs;
+                                        wrap: word-wrap;
+                                    }
+                                }
+                            }
+
+                            // Who can find me by my username. The server
+                            // enforces it; the choice shows the persisted value.
+                            Rectangle {
+                                background: Colors.surface;
+                                border-radius: Spacing.radius-lg;
+                                border-width: 1px;
+                                border-color: Colors.neo-highlight;
+                                drop-shadow-blur: Spacing.neo-blur-sm;
+                                drop-shadow-offset-x: Spacing.neo-offset-sm;
+                                drop-shadow-offset-y: Spacing.neo-offset-sm;
+                                drop-shadow-color: Colors.neo-shadow;
+
+                                VerticalLayout {
+                                    padding: Spacing.md;
+                                    spacing: Spacing.sm;
+
+                                    Text {
+                                        text: "Who can find me by my username";
+                                        color: Colors.text-primary;
+                                        font-size: Typography.sm;
+                                        font-weight: Typography.medium;
+                                    }
+                                    Text {
+                                        text: root.username-discoverable
+                                            ? "Anyone who types your exact username can find you"
+                                            : "Only people with your friend code or username link can find you";
+                                        color: Colors.text-muted;
+                                        font-size: Typography.xs;
+                                        wrap: word-wrap;
+                                    }
+
+                                    HorizontalLayout {
+                                        spacing: Spacing.sm;
+                                        alignment: start;
+
+                                        Button {
+                                            text: "Everyone";
+                                            variant: root.username-discoverable ? "primary" : "secondary";
+                                            clicked => {
+                                                if !root.username-discoverable {
+                                                    root.username-discoverable = true;
+                                                    root.username-discoverable-changed(true);
+                                                }
+                                            }
+                                        }
+
+                                        Button {
+                                            text: "Nobody";
+                                            variant: root.username-discoverable ? "secondary" : "primary";
+                                            clicked => {
+                                                if root.username-discoverable {
+                                                    root.username-discoverable = false;
+                                                    root.username-discoverable-changed(false);
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
                             }
 
                             // Read Receipts setting
@@ -1351,6 +1631,97 @@ export component SettingsScreen inherits Rectangle {
                                         wrap: word-wrap;
                                     }
                                 }
+                            }
+
+                            // Search shortcut setting (3-way segmented selector).
+                            // Keyboard shortcuts mean nothing on a phone.
+                            if !root.mobile-platform: Rectangle {
+                                background: Colors.surface;
+                                border-radius: Spacing.radius-lg;
+                                border-width: 1px;
+                                border-color: Colors.neo-highlight;
+                                drop-shadow-blur: Spacing.neo-blur-sm;
+                                drop-shadow-offset-x: Spacing.neo-offset-sm;
+                                drop-shadow-offset-y: Spacing.neo-offset-sm;
+                                drop-shadow-color: Colors.neo-shadow;
+
+                                HorizontalLayout {
+                                    padding: Spacing.md;
+                                    spacing: Spacing.md;
+
+                                    VerticalLayout {
+                                        horizontal-stretch: 1;
+                                        spacing: Spacing.sm;
+
+                                        Text {
+                                            text: "Search shortcut";
+                                            color: Colors.text-primary;
+                                            font-size: Typography.sm;
+                                            font-weight: Typography.medium;
+                                        }
+
+                                        Text {
+                                            text: "Which keys open search";
+                                            color: Colors.text-muted;
+                                            font-size: Typography.xs;
+                                            wrap: word-wrap;
+                                        }
+                                    }
+
+                                    HorizontalLayout {
+                                        spacing: Spacing.xs;
+                                        vertical-stretch: 0;
+                                        alignment: center;
+
+                                        for opt[idx] in [
+                                            { key: "k", label: "Ctrl+K" },
+                                            { key: "f", label: "Ctrl+F" },
+                                            { key: "both", label: "Both" },
+                                        ]: Rectangle {
+                                            property <bool> selected: root.search-shortcut == opt.key;
+                                            height: 32px;
+                                            min-width: 56px;
+                                            border-radius: Spacing.radius-md;
+                                            background: selected ? Colors.primary : Colors.surface-hover;
+                                            border-width: 1px;
+                                            border-color: selected ? Colors.primary : Colors.neo-highlight;
+
+                                            HorizontalLayout {
+                                                padding-left: Spacing.sm;
+                                                padding-right: Spacing.sm;
+                                                Text {
+                                                    text: opt.label;
+                                                    vertical-alignment: center;
+                                                    horizontal-alignment: center;
+                                                    color: selected ? Colors.text-primary : Colors.text-secondary;
+                                                    font-size: Typography.xs;
+                                                    font-weight: selected ? Typography.semibold : Typography.medium;
+                                                }
+                                            }
+
+                                            TouchArea {
+                                                mouse-cursor: pointer;
+                                                clicked => {
+                                                    root.search-shortcut = opt.key;
+                                                    root.search-shortcut-changed(opt.key);
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        // Notifications section
+                        if active-section == "notifications": VerticalLayout {
+                            spacing: Spacing.lg;
+
+                            // Section header
+                            Text {
+                                text: "Notifications";
+                                color: Colors.text-primary;
+                                font-size: Typography.xl;
+                                font-weight: Typography.semibold;
                             }
 
                             // Notification content (Signal: Settings > Notifications >
@@ -1446,10 +1817,10 @@ export component SettingsScreen inherits Rectangle {
                                 }
                             }
 
-                            // Search shortcut setting (3-way segmented selector).
-                            // Keyboard shortcuts mean nothing on a phone.
-                            if !root.mobile-platform: Rectangle {
-                                background: Colors.surface;
+                            // Sound and vibration. On Android both belong to the
+                            // OS notification channel, so the row opens its page;
+                            // on desktop it is a switch the notifier honours.
+                            if NotificationSound.mode == "system": Rectangle {
                                 border-radius: Spacing.radius-lg;
                                 border-width: 1px;
                                 border-color: Colors.neo-highlight;
@@ -1457,75 +1828,52 @@ export component SettingsScreen inherits Rectangle {
                                 drop-shadow-offset-x: Spacing.neo-offset-sm;
                                 drop-shadow-offset-y: Spacing.neo-offset-sm;
                                 drop-shadow-color: Colors.neo-shadow;
+                                min-height: Spacing.touch-target-min;
+                                background: sound-touch.has-hover ? Colors.surface-hover : Colors.surface;
+                                accessible-role: button;
+                                accessible-label: "Sound and vibration";
+                                accessible-action-default => { NotificationSound.open-system-settings(); }
 
                                 HorizontalLayout {
                                     padding: Spacing.md;
                                     spacing: Spacing.md;
 
                                     VerticalLayout {
-                                        horizontal-stretch: 1;
-                                        spacing: Spacing.sm;
+                                        alignment: center;
+                                        spacing: Spacing.xxs;
 
                                         Text {
-                                            text: "Search shortcut";
+                                            text: "Sound and vibration";
                                             color: Colors.text-primary;
                                             font-size: Typography.sm;
                                             font-weight: Typography.medium;
                                         }
-
                                         Text {
-                                            text: "Which keys open search";
+                                            text: "Opens this device's settings for message notifications";
                                             color: Colors.text-muted;
                                             font-size: Typography.xs;
                                             wrap: word-wrap;
                                         }
                                     }
 
-                                    HorizontalLayout {
-                                        spacing: Spacing.xs;
-                                        vertical-stretch: 0;
+                                    VerticalLayout {
                                         alignment: center;
-
-                                        for opt[idx] in [
-                                            { key: "k", label: "Ctrl+K" },
-                                            { key: "f", label: "Ctrl+F" },
-                                            { key: "both", label: "Both" },
-                                        ]: Rectangle {
-                                            property <bool> selected: root.search-shortcut == opt.key;
-                                            height: 32px;
-                                            min-width: 56px;
-                                            border-radius: Spacing.radius-md;
-                                            background: selected ? Colors.primary : Colors.surface-hover;
-                                            border-width: 1px;
-                                            border-color: selected ? Colors.primary : Colors.neo-highlight;
-
-                                            HorizontalLayout {
-                                                padding-left: Spacing.sm;
-                                                padding-right: Spacing.sm;
-                                                Text {
-                                                    text: opt.label;
-                                                    vertical-alignment: center;
-                                                    horizontal-alignment: center;
-                                                    color: selected ? Colors.text-primary : Colors.text-secondary;
-                                                    font-size: Typography.xs;
-                                                    font-weight: selected ? Typography.semibold : Typography.medium;
-                                                }
-                                            }
-
-                                            TouchArea {
-                                                mouse-cursor: pointer;
-                                                clicked => {
-                                                    root.search-shortcut = opt.key;
-                                                    root.search-shortcut-changed(opt.key);
-                                                }
-                                            }
+                                        Image {
+                                            width: 18px;
+                                            height: 18px;
+                                            source: Icons.chevron-right;
+                                            colorize: Colors.text-muted;
                                         }
                                     }
                                 }
+
+                                sound-touch := TouchArea {
+                                    mouse-cursor: pointer;
+                                    clicked => { NotificationSound.open-system-settings(); }
+                                }
                             }
 
-                            // Profile Visibility placeholder (coming soon)
-                            Rectangle {
+                            if NotificationSound.mode == "toggle": Rectangle {
                                 background: Colors.surface;
                                 border-radius: Spacing.radius-lg;
                                 border-width: 1px;
@@ -1534,29 +1882,26 @@ export component SettingsScreen inherits Rectangle {
                                 drop-shadow-offset-x: Spacing.neo-offset-sm;
                                 drop-shadow-offset-y: Spacing.neo-offset-sm;
                                 drop-shadow-color: Colors.neo-shadow;
-                                opacity: 0.5;
 
-                                HorizontalLayout {
-                                    padding: Spacing.md;
-                                    spacing: Spacing.md;
+                                ToggleRow {
+                                    row-padding: Spacing.md;
+                                    row-spacing: Spacing.md;
+                                    label-spacing: Spacing.sm;
+                                    accessible-text: "Notification sound";
+                                    checked <=> NotificationSound.enabled;
+                                    toggled(value) => { NotificationSound.enabled-changed(value); }
 
-                                    VerticalLayout {
-                                        horizontal-stretch: 1;
-                                        spacing: Spacing.sm;
-
-                                        Text {
-                                            text: "Profile Visibility";
-                                            color: Colors.text-secondary;
-                                            font-size: Typography.sm;
-                                            font-weight: Typography.medium;
-                                        }
-
-                                        Text {
-                                            text: "Coming soon";
-                                            color: Colors.text-muted;
-                                            font-size: Typography.xs;
-                                            font-italic: true;
-                                        }
+                                    Text {
+                                        text: "Notification sound";
+                                        color: Colors.text-primary;
+                                        font-size: Typography.sm;
+                                        font-weight: Typography.medium;
+                                    }
+                                    Text {
+                                        text: "Play a sound when a message notification arrives";
+                                        color: Colors.text-muted;
+                                        font-size: Typography.xs;
+                                        wrap: word-wrap;
                                     }
                                 }
                             }
@@ -1597,7 +1942,10 @@ export component SettingsScreen inherits Rectangle {
                                     spacing: Spacing.sm;
 
                                     Text {
-                                        text: "Your Safety Number";
+                                        // Our identity key's fingerprint. A safety
+                                        // number is per conversation (Signal) and
+                                        // lives on the contact's profile.
+                                        text: "Your identity key";
                                         color: Colors.text-primary;
                                         font-size: Typography.lg;
                                         font-weight: Typography.medium;
@@ -1627,7 +1975,7 @@ export component SettingsScreen inherits Rectangle {
                                         alignment: space-between;
 
                                         Text {
-                                            text: "Share this with your contacts to verify encryption";
+                                            text: "To verify a contact, compare safety numbers from their profile";
                                             color: Colors.text-muted;
                                             font-size: Typography.xs;
                                             wrap: word-wrap;
@@ -1686,90 +2034,6 @@ export component SettingsScreen inherits Rectangle {
                                     }
                                 }
                             }
-
-                            // Key Status group
-                            Rectangle {
-                                background: Colors.surface;
-                                border-radius: Spacing.radius-lg;
-                                border-width: 1px;
-                                border-color: Colors.neo-highlight;
-                                drop-shadow-blur: Spacing.neo-blur-sm;
-                                drop-shadow-offset-x: Spacing.neo-offset-sm;
-                                drop-shadow-offset-y: Spacing.neo-offset-sm;
-                                drop-shadow-color: Colors.neo-shadow;
-
-                                VerticalLayout {
-                                    padding: Spacing.md;
-                                    spacing: Spacing.sm;
-
-                                    Text {
-                                        text: "Encryption Keys";
-                                        color: Colors.text-primary;
-                                        font-size: Typography.lg;
-                                        font-weight: Typography.medium;
-                                    }
-
-                                    HorizontalLayout {
-                                        spacing: Spacing.md;
-
-                                        VerticalLayout {
-                                            horizontal-stretch: 1;
-                                            spacing: Spacing.xs;
-
-                                            HorizontalLayout {
-                                                spacing: Spacing.sm;
-
-                                                Text {
-                                                    text: "Prekeys available";
-                                                    color: Colors.text-secondary;
-                                                    font-size: Typography.sm;
-                                                    vertical-alignment: center;
-                                                }
-
-                                                // Prekey count badge with color indicator
-                                                Rectangle {
-                                                    width: 32px;
-                                                    height: 22px;
-                                                    border-radius: Spacing.radius-sm;
-                                                    background: root.prekey-count >= 10 ? Colors.success :
-                                                               (root.prekey-count >= 5 ? Colors.warning : Colors.error);
-
-                                                    Text {
-                                                        text: root.prekey-count;
-                                                        color: Colors.text-primary;
-                                                        font-size: Typography.xs;
-                                                        font-weight: Typography.medium;
-                                                        horizontal-alignment: center;
-                                                        vertical-alignment: center;
-                                                        width: 100%;
-                                                        height: 100%;
-                                                    }
-                                                }
-                                            }
-
-                                            Text {
-                                                text: root.prekey-count >= 10 ? "Keys are healthy" :
-                                                      (root.prekey-count >= 5 ? "Consider refreshing soon" : "Keys are low, refresh recommended");
-                                                color: Colors.text-muted;
-                                                font-size: Typography.xs;
-                                            }
-                                        }
-
-                                        if !root.compact-mode: Button {
-                                            text: "Refresh";
-                                            variant: "secondary";
-                                            clicked => { root.refresh-keys-clicked(); }
-                                        }
-                                    }
-
-                                    // Compact: full-width button stacked below
-                                    if root.compact-mode: Button {
-                                        text: "Refresh";
-                                        variant: "secondary";
-                                        clicked => { root.refresh-keys-clicked(); }
-                                    }
-                                }
-                            }
                         }
 
                         // AI Assistant section
@@ -1822,7 +2086,7 @@ export component SettingsScreen inherits Rectangle {
                                         font-weight: Typography.medium;
                                     }
                                     Text {
-                                        text: "Run AI models locally on your GPU for privacy";
+                                        text: "Run AI models on this device for privacy";
                                         color: Colors.text-muted;
                                         font-size: Typography.xs;
                                         wrap: word-wrap;
@@ -2023,7 +2287,7 @@ export component SettingsScreen inherits Rectangle {
                                     }
 
                                     for provider in root.local-ai-providers: Rectangle {
-                                        height: 44px;
+                                        height: 44px * Appearance.text-grow;
                                         border-radius: Spacing.radius-md;
                                         background: provider.is-active ? Colors.surface-hover : transparent;
                                         provider-touch := TouchArea {
@@ -2317,13 +2581,8 @@ export component SettingsScreen inherits Rectangle {
                                 font-weight: Typography.semibold;
                             }
 
-                            Text {
-                                text: "Dark theme is the only theme for v1.";
-                                color: Colors.text-muted;
-                                font-size: Typography.sm;
-                            }
-
-                            // Theme selector (grayed out for v1)
+                            // Theme. Kept on this device (core: `ThemeMode`),
+                            // applied live through the `Appearance` global.
                             Rectangle {
                                 background: Colors.surface;
                                 border-radius: Spacing.radius-lg;
@@ -2333,61 +2592,92 @@ export component SettingsScreen inherits Rectangle {
                                 drop-shadow-offset-x: Spacing.neo-offset-sm;
                                 drop-shadow-offset-y: Spacing.neo-offset-sm;
                                 drop-shadow-color: Colors.neo-shadow;
-                                opacity: 0.5;
 
-                                HorizontalLayout {
+                                VerticalLayout {
                                     padding: Spacing.md;
-                                    spacing: Spacing.md;
+                                    spacing: Spacing.sm;
 
-                                    VerticalLayout {
-                                        horizontal-stretch: 1;
-                                        spacing: Spacing.sm;
-
-                                        Text {
-                                            text: "Theme";
-                                            color: Colors.text-secondary;
-                                            font-size: Typography.sm;
-                                            font-weight: Typography.medium;
-                                        }
-
-                                        Text {
-                                            text: "Choose your preferred color theme";
-                                            color: Colors.text-muted;
-                                            font-size: Typography.xs;
-                                        }
+                                    Text {
+                                        text: "Theme";
+                                        color: Colors.text-primary;
+                                        font-size: Typography.sm;
+                                        font-weight: Typography.medium;
                                     }
 
-                                    // Disabled dropdown indicator
-                                    Rectangle {
-                                        width: 100px;
-                                        height: 36px;
+                                    for opt in [
+                                        { key: "system", label: "System", hint: "Match this device's light or dark setting" },
+                                        { key: "light", label: "Light", hint: "" },
+                                        { key: "dark", label: "Dark", hint: "" },
+                                    ]: Rectangle {
+                                        property <bool> selected: Appearance.theme == opt.key;
+                                        min-height: Spacing.touch-target-min;
                                         border-radius: Spacing.radius-md;
-                                        background: Colors.background;
+                                        background: theme-touch.has-hover ? Colors.surface-hover : transparent;
+                                        accessible-role: button;
+                                        accessible-label: opt.label;
+                                        accessible-action-default => {
+                                            Appearance.theme = opt.key;
+                                            Appearance.theme-changed(opt.key);
+                                        }
 
                                         HorizontalLayout {
                                             padding-left: Spacing.sm;
                                             padding-right: Spacing.sm;
-                                            alignment: space-between;
+                                            spacing: Spacing.md;
+                                            alignment: start;
 
-                                            Text {
-                                                text: "Dark";
-                                                color: Colors.text-secondary;
-                                                font-size: Typography.sm;
-                                                vertical-alignment: center;
+                                            // Radio indicator
+                                            VerticalLayout {
+                                                alignment: center;
+                                                Rectangle {
+                                                    width: 18px;
+                                                    height: 18px;
+                                                    border-radius: 9px;
+                                                    border-width: 2px;
+                                                    border-color: selected ? Colors.primary : Colors.text-muted;
+
+                                                    Rectangle {
+                                                        width: 8px;
+                                                        height: 8px;
+                                                        border-radius: 4px;
+                                                        background: selected ? Colors.primary : transparent;
+                                                    }
+                                                }
                                             }
 
-                                            Text {
-                                                text: "v";
-                                                color: Colors.text-muted;
-                                                font-size: Typography.xs;
-                                                vertical-alignment: center;
+                                            VerticalLayout {
+                                                alignment: center;
+                                                spacing: 2px;
+
+                                                Text {
+                                                    text: opt.label;
+                                                    color: selected ? Colors.text-primary : Colors.text-secondary;
+                                                    font-size: Typography.sm;
+                                                    font-weight: selected ? Typography.medium : Typography.normal;
+                                                }
+
+                                                if opt.hint != "": Text {
+                                                    text: opt.hint;
+                                                    color: Colors.text-muted;
+                                                    font-size: Typography.xs;
+                                                    wrap: word-wrap;
+                                                }
+                                            }
+                                        }
+
+                                        theme-touch := TouchArea {
+                                            mouse-cursor: pointer;
+                                            clicked => {
+                                                Appearance.theme = opt.key;
+                                                Appearance.theme-changed(opt.key);
                                             }
                                         }
                                     }
                                 }
                             }
 
-                            // Font Size placeholder (grayed out)
+                            // Text size. Kept on this device (core: `TextSize`); every
+                            // Typography step is drawn at `Appearance.text-scale`.
                             Rectangle {
                                 background: Colors.surface;
                                 border-radius: Spacing.radius-lg;
@@ -2397,34 +2687,93 @@ export component SettingsScreen inherits Rectangle {
                                 drop-shadow-offset-x: Spacing.neo-offset-sm;
                                 drop-shadow-offset-y: Spacing.neo-offset-sm;
                                 drop-shadow-color: Colors.neo-shadow;
-                                opacity: 0.5;
 
-                                HorizontalLayout {
+                                VerticalLayout {
                                     padding: Spacing.md;
-                                    spacing: Spacing.md;
+                                    spacing: Spacing.sm;
 
-                                    VerticalLayout {
-                                        horizontal-stretch: 1;
-                                        spacing: Spacing.sm;
+                                    Text {
+                                        text: "Text size";
+                                        color: Colors.text-primary;
+                                        font-size: Typography.sm;
+                                        font-weight: Typography.medium;
+                                    }
 
-                                        Text {
-                                            text: "Font Size";
-                                            color: Colors.text-secondary;
-                                            font-size: Typography.sm;
-                                            font-weight: Typography.medium;
+                                    for opt in [
+                                        { key: "small", label: "Small", hint: "" },
+                                        { key: "default", label: "Default", hint: "Match this device's font size" },
+                                        { key: "large", label: "Large", hint: "" },
+                                        { key: "largest", label: "Largest", hint: "" },
+                                    ]: Rectangle {
+                                        property <bool> selected: Appearance.text-size == opt.key;
+                                        min-height: Spacing.touch-target-min;
+                                        border-radius: Spacing.radius-md;
+                                        background: text-size-touch.has-hover ? Colors.surface-hover : transparent;
+                                        accessible-role: button;
+                                        accessible-label: opt.label;
+                                        accessible-action-default => {
+                                            Appearance.text-size = opt.key;
+                                            Appearance.text-size-changed(opt.key);
                                         }
 
-                                        Text {
-                                            text: "Coming soon";
-                                            color: Colors.text-muted;
-                                            font-size: Typography.xs;
-                                            font-italic: true;
+                                        HorizontalLayout {
+                                            padding-left: Spacing.sm;
+                                            padding-right: Spacing.sm;
+                                            spacing: Spacing.md;
+                                            alignment: start;
+
+                                            // Radio indicator
+                                            VerticalLayout {
+                                                alignment: center;
+                                                Rectangle {
+                                                    width: 18px;
+                                                    height: 18px;
+                                                    border-radius: 9px;
+                                                    border-width: 2px;
+                                                    border-color: selected ? Colors.primary : Colors.text-muted;
+
+                                                    Rectangle {
+                                                        width: 8px;
+                                                        height: 8px;
+                                                        border-radius: 4px;
+                                                        background: selected ? Colors.primary : transparent;
+                                                    }
+                                                }
+                                            }
+
+                                            VerticalLayout {
+                                                alignment: center;
+                                                spacing: 2px;
+
+                                                Text {
+                                                    text: opt.label;
+                                                    color: selected ? Colors.text-primary : Colors.text-secondary;
+                                                    font-size: Typography.sm;
+                                                    font-weight: selected ? Typography.medium : Typography.normal;
+                                                }
+
+                                                if opt.hint != "": Text {
+                                                    text: opt.hint;
+                                                    color: Colors.text-muted;
+                                                    font-size: Typography.xs;
+                                                    wrap: word-wrap;
+                                                }
+                                            }
+                                        }
+
+                                        text-size-touch := TouchArea {
+                                            mouse-cursor: pointer;
+                                            clicked => {
+                                                Appearance.text-size = opt.key;
+                                                Appearance.text-size-changed(opt.key);
+                                            }
                                         }
                                     }
                                 }
                             }
 
-                            // Message Density placeholder (grayed out)
+                            // Message spacing. Kept on this device (core: `MessageDensity`);
+                            // read through the density tokens in `Spacing`.
                             Rectangle {
                                 background: Colors.surface;
                                 border-radius: Spacing.radius-lg;
@@ -2434,28 +2783,84 @@ export component SettingsScreen inherits Rectangle {
                                 drop-shadow-offset-x: Spacing.neo-offset-sm;
                                 drop-shadow-offset-y: Spacing.neo-offset-sm;
                                 drop-shadow-color: Colors.neo-shadow;
-                                opacity: 0.5;
 
-                                HorizontalLayout {
+                                VerticalLayout {
                                     padding: Spacing.md;
-                                    spacing: Spacing.md;
+                                    spacing: Spacing.sm;
 
-                                    VerticalLayout {
-                                        horizontal-stretch: 1;
-                                        spacing: Spacing.sm;
+                                    Text {
+                                        text: "Message spacing";
+                                        color: Colors.text-primary;
+                                        font-size: Typography.sm;
+                                        font-weight: Typography.medium;
+                                    }
 
-                                        Text {
-                                            text: "Message Density";
-                                            color: Colors.text-secondary;
-                                            font-size: Typography.sm;
-                                            font-weight: Typography.medium;
+                                    for opt in [
+                                        { key: "comfortable", label: "Comfortable", hint: "" },
+                                        { key: "compact", label: "Compact", hint: "Fit more messages and conversations on screen" },
+                                    ]: Rectangle {
+                                        property <bool> selected: Appearance.density == opt.key;
+                                        min-height: Spacing.touch-target-min;
+                                        border-radius: Spacing.radius-md;
+                                        background: density-touch.has-hover ? Colors.surface-hover : transparent;
+                                        accessible-role: button;
+                                        accessible-label: opt.label;
+                                        accessible-action-default => {
+                                            Appearance.density = opt.key;
+                                            Appearance.density-changed(opt.key);
                                         }
 
-                                        Text {
-                                            text: "Coming soon";
-                                            color: Colors.text-muted;
-                                            font-size: Typography.xs;
-                                            font-italic: true;
+                                        HorizontalLayout {
+                                            padding-left: Spacing.sm;
+                                            padding-right: Spacing.sm;
+                                            spacing: Spacing.md;
+                                            alignment: start;
+
+                                            // Radio indicator
+                                            VerticalLayout {
+                                                alignment: center;
+                                                Rectangle {
+                                                    width: 18px;
+                                                    height: 18px;
+                                                    border-radius: 9px;
+                                                    border-width: 2px;
+                                                    border-color: selected ? Colors.primary : Colors.text-muted;
+
+                                                    Rectangle {
+                                                        width: 8px;
+                                                        height: 8px;
+                                                        border-radius: 4px;
+                                                        background: selected ? Colors.primary : transparent;
+                                                    }
+                                                }
+                                            }
+
+                                            VerticalLayout {
+                                                alignment: center;
+                                                spacing: 2px;
+
+                                                Text {
+                                                    text: opt.label;
+                                                    color: selected ? Colors.text-primary : Colors.text-secondary;
+                                                    font-size: Typography.sm;
+                                                    font-weight: selected ? Typography.medium : Typography.normal;
+                                                }
+
+                                                if opt.hint != "": Text {
+                                                    text: opt.hint;
+                                                    color: Colors.text-muted;
+                                                    font-size: Typography.xs;
+                                                    wrap: word-wrap;
+                                                }
+                                            }
+                                        }
+
+                                        density-touch := TouchArea {
+                                            mouse-cursor: pointer;
+                                            clicked => {
+                                                Appearance.density = opt.key;
+                                                Appearance.density-changed(opt.key);
+                                            }
                                         }
                                     }
                                 }

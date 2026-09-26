@@ -2,6 +2,13 @@
 //
 // Shared structs used by message_list and message_item components.
 
+// The six one-tap reactions (Signal's default set), shared by the message
+// context menu and the reaction picker so the row never changes between the
+// two. Not configurable by design.
+export global QuickReactions {
+    out property <[string]> emojis: ["\u{1F44D}", "\u{2764}\u{FE0F}", "\u{1F602}", "\u{1F62E}", "\u{1F622}", "\u{1F64F}"];
+}
+
 // Data struct for individual reaction entries (emoji + count pill)
 export struct ReactionEntry {
     emoji: string,

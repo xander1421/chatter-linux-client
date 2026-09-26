@@ -1,6 +1,7 @@
 // Account Recovery page for entering recovery code and new credentials
 
 import { Colors } from "../theme/colors.slint";
+import { Appearance } from "../theme/appearance.slint";
 import { Spacing } from "../theme/spacing.slint";
 import { Typography } from "../theme/typography.slint";
 import { Button } from "../components/button.slint";
@@ -259,7 +260,7 @@ export component AccountRecoveryPage inherits Rectangle {
                     spacing: Spacing.xs;
 
                     Rectangle {
-                        height: 20px;
+                        height: 20px * Appearance.text-grow;
 
                         Text {
                             text: "Back to Login";

@@ -25,6 +25,15 @@ pub struct Session {
     pub last_used: DateTime<Utc>,
     /// Whether this is the current session.
     pub is_current: bool,
+    /// Phone or tablet (named "Android …" / "iOS …" by
+    /// `LinkDeviceService::current_device_name`), for the row's icon.
+    pub is_mobile: bool,
+}
+
+/// Phone or tablet, from the name `LinkDeviceService::current_device_name`
+/// gives it ("Android (0.1.0)", "iOS (0.1.0)"). Picks the Active Sessions icon.
+fn is_mobile_device_name(name: &str) -> bool {
+    name.starts_with("Android") || name.starts_with("iOS")
 }
 
 /// Session management errors.
@@ -98,26 +107,40 @@ impl SessionService {
         let mut auth_client = self.auth_client();
         let response = auth_client.list_sessions().await?;
 
-        let sessions = response
+        let mut sessions: Vec<Session> = response
             .sessions
             .into_iter()
-            .map(|s| Session {
-                device_id: s.device_id,
-                device_info: s.device_info,
-                ip_address: s.ip_address,
-                // NANOSECONDS, not millis. auth.proto:371-372 says so
-                // ("Unix timestamp in nanoseconds") and the server sends
-                // UnixNano() (active_sessions.go:51-52). Parsing nanos as millis
-                // puts the value far outside chrono's range, so
-                // from_timestamp_millis returned None and the unwrap_or below
-                // turned every session's times into 1970-01-01 — a plausible
-                // date, which is why it read as "no timestamps" rather than as a
-                // parse failure (OPEN-ITEMS §112d).
-                created_at: DateTime::from_timestamp_nanos(s.created_at as i64),
-                last_used: DateTime::from_timestamp_nanos(s.last_used as i64),
-                is_current: s.is_current_session,
+            .map(|s| {
+                // This device's own row is named from what this build IS, not
+                // what the server stored: sessions created before login sent
+                // `current_device_name` still say "linux-client" on a phone.
+                let device_info = if s.is_current_session {
+                    crate::services::link_device_service::LinkDeviceService::current_device_name()
+                } else {
+                    s.device_info
+                };
+                Session {
+                    device_id: s.device_id,
+                    is_mobile: is_mobile_device_name(&device_info),
+                    device_info,
+                    ip_address: s.ip_address,
+                    // NANOSECONDS, not millis. auth.proto:371-372 says so
+                    // ("Unix timestamp in nanoseconds") and the server sends
+                    // UnixNano() (active_sessions.go:51-52). Parsing nanos as millis
+                    // puts the value far outside chrono's range, so
+                    // from_timestamp_millis returned None and the unwrap_or below
+                    // turned every session's times into 1970-01-01 — a plausible
+                    // date, which is why it read as "no timestamps" rather than as a
+                    // parse failure (OPEN-ITEMS §112d).
+                    created_at: DateTime::from_timestamp_nanos(s.created_at as i64),
+                    last_used: DateTime::from_timestamp_nanos(s.last_used as i64),
+                    is_current: s.is_current_session,
+                }
             })
             .collect();
+        // This device first: it is the one row the user must never mistake
+        // for another (REVIEW-R4 P0-4).
+        sessions.sort_by_key(|s| !s.is_current);
 
         Ok(sessions)
     }
@@ -142,5 +165,18 @@ impl SessionService {
     /// Get a string setting.
     pub fn get_string_setting(&self, key: &str) -> Result<Option<String>, SessionError> {
         self.settings_repo.get_string(key).map_err(SessionError::from)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_mobile_device_name;
+
+    #[test]
+    fn mobile_names_get_the_phone_icon() {
+        assert!(is_mobile_device_name("Android (0.1.0)"));
+        assert!(is_mobile_device_name("iOS (0.1.0)"));
+        assert!(!is_mobile_device_name("Linux Desktop (0.1.0)"));
+        assert!(!is_mobile_device_name("linux-client"));
     }
 }

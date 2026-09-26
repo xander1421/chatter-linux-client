@@ -262,7 +262,7 @@ impl SignalService {
     ///
     /// Lives on its own because there are TWO send-side entry points and only
     /// one of them used to check: `ensure_session` (single device) and
-    /// `ensure_sessions_and_uak_all_devices` (every device — the path a real DM
+    /// `ensure_sessions_and_access_policy_all_devices` (every device — the path a real DM
     /// send actually takes, via `encrypt_message_all_devices`). Guarding only
     /// the first left the hot path free to encrypt under the dead ratchet, so
     /// the user was never told anything and the message left undeliverable.
@@ -547,23 +547,18 @@ impl SignalService {
         recipient_id: &str,
     ) -> Result<Vec<u32>, ServiceError> {
         Ok(self
-            .ensure_sessions_and_uak_all_devices(auth_client, recipient_id)
+            .ensure_sessions_and_access_policy_all_devices(auth_client, recipient_id)
             .await?
             .0)
     }
 
-    /// Same as [`Self::ensure_sessions_all_devices`], but also returns the
-    /// recipient's Unidentified Access Key as carried on their prekey bundle.
-    ///
-    /// The UAK rides along on the bundle the server already returns
-    /// (`SignalPreKeyBundle.unidentified_access_key`, set server-side in
-    /// `internal/services/auth/service/signal_protocol.go`). Harvesting it from
-    /// the fetch we are already making is deliberate: a second bundle fetch
-    /// purely to read the UAK would burn one of the recipient's one-time
-    /// prekeys per message and drain their OPK pool.
-    ///
-    /// Returns `None` for the UAK only if the server omitted it, which callers
-    /// must treat as a sealed-sender degradation rather than a normal outcome.
+    /// Same as [`Self::ensure_sessions_all_devices`], but also returns whether
+    /// the recipient accepts sealed sender from anyone
+    /// (`SignalPreKeyBundle.unrestricted_unidentified_access`, Signal's
+    /// `unrestrictedUnidentifiedAccess`). Read from the fetch we are already
+    /// making: a second bundle fetch would burn one of the recipient's one-time
+    /// prekeys. The server never serves the UAK itself — a sender derives it
+    /// from the recipient's profile key (`MessageService::sealed_access_key`).
     ///
     /// When the recipient is our own user, THIS device is dropped before any
     /// session work: there is no session with ourselves, and the server
@@ -571,11 +566,11 @@ impl SignalService {
     /// message"). Every own-user fan-out (self-sync, SKDM, SenderKeyRequest)
     /// routes through here, so no caller has to remember it. If this was our
     /// only device the result is an empty list — nothing to send, not a failure.
-    pub async fn ensure_sessions_and_uak_all_devices(
+    pub async fn ensure_sessions_and_access_policy_all_devices(
         &self,
         auth_client: &mut AuthClient,
         recipient_id: &str,
-    ) -> Result<(Vec<u32>, Option<[u8; 16]>), ServiceError> {
+    ) -> Result<(Vec<u32>, bool), ServiceError> {
         use crate::proto::chat_v1::get_pre_key_bundle_response;
 
         // Same refusal as `ensure_session`, and it matters MORE here: this is
@@ -584,12 +579,6 @@ impl SignalService {
         // `has_session` per device exactly like the single-device path, so
         // without this the stale post-reinstall session is reused silently.
         self.refuse_pending_identity_change(recipient_id)?;
-
-        /// The UAK is a fixed 16 bytes (`uakSize` in internal/middleware/auth.go).
-        /// Anything else is a malformed bundle, not a usable key.
-        fn uak_from_bundle(uak: &Option<Vec<u8>>) -> Option<[u8; 16]> {
-            uak.as_ref()?.as_slice().try_into().ok()
-        }
 
         // Fetch prekey bundles for ALL devices using wildcard
         let response = auth_client.get_pre_key_bundles_all_devices(recipient_id).await?;
@@ -614,16 +603,15 @@ impl SignalService {
 
                 let mut established_device_ids = Vec::with_capacity(device_list.bundles.len());
 
-                // Every bundle carries the same per-user UAK; take the first
-                // well-formed one.
-                let recipient_uak = device_list
+                // The policy is per user; every bundle carries the same flag.
+                let unrestricted = device_list
                     .bundles
                     .iter()
-                    .find_map(|b| uak_from_bundle(&b.unidentified_access_key));
+                    .any(|b| b.unrestricted_unidentified_access == Some(true));
 
                 let bundles = without_device(device_list.bundles, this_device);
                 if bundles.is_empty() {
-                    return Ok((Vec::new(), recipient_uak));
+                    return Ok((Vec::new(), unrestricted));
                 }
 
                 for proto_bundle in bundles {
@@ -714,18 +702,18 @@ impl SignalService {
                     "Established sessions with all devices"
                 );
 
-                Ok((established_device_ids, recipient_uak))
+                Ok((established_device_ids, unrestricted))
             }
 
             // Single device fallback (server doesn't support multi-device query)
             get_pre_key_bundle_response::Result::Bundle(single_bundle) => {
                 let device_id = single_bundle.device_id;
-                let recipient_uak = uak_from_bundle(&single_bundle.unidentified_access_key);
+                let unrestricted = single_bundle.unrestricted_unidentified_access == Some(true);
                 if this_device == Some(device_id) {
-                    return Ok((Vec::new(), recipient_uak));
+                    return Ok((Vec::new(), unrestricted));
                 }
                 self.ensure_session(auth_client, recipient_id, device_id).await?;
-                Ok((vec![device_id], recipient_uak))
+                Ok((vec![device_id], unrestricted))
             }
         }
     }
@@ -747,34 +735,30 @@ impl SignalService {
         plaintext: &[u8],
     ) -> Result<HashMap<u32, Vec<u8>>, ServiceError> {
         Ok(self
-            .encrypt_message_all_devices_with_uak(auth_client, recipient_id, plaintext)
+            .encrypt_message_all_devices_with_access_policy(auth_client, recipient_id, plaintext)
             .await?
             .0)
     }
 
-    /// Same as [`Self::encrypt_message_all_devices`], but also returns the
-    /// recipient's UAK from their prekey bundle so the caller can authorize the
-    /// deposit with `Unidentified-Access-Key` instead of Basic auth — which is
-    /// what actually keeps the sender out of the server's delivery log.
+    /// Same as [`Self::encrypt_message_all_devices`], but also returns whether
+    /// the recipient accepts sealed sender from anyone (see
+    /// [`Self::ensure_sessions_and_access_policy_all_devices`]), which the
+    /// caller needs to pick the `Unidentified-Access-Key` for the deposit.
     ///
-    /// See [`Self::ensure_sessions_and_uak_all_devices`] for why the UAK is
-    /// harvested from the bundle fetch rather than fetched separately.
-    ///
-    /// To our own user this device is excluded (see
-    /// `ensure_sessions_and_uak_all_devices`); if it was our only device,
+    /// To our own user this device is excluded; if it was our only device,
     /// this is an `Ok` empty map.
-    pub async fn encrypt_message_all_devices_with_uak(
+    pub async fn encrypt_message_all_devices_with_access_policy(
         &self,
         auth_client: &mut AuthClient,
         recipient_id: &str,
         plaintext: &[u8],
-    ) -> Result<(HashMap<u32, Vec<u8>>, Option<[u8; 16]>), ServiceError> {
+    ) -> Result<(HashMap<u32, Vec<u8>>, bool), ServiceError> {
         // First ensure we have sessions with all devices
-        let (device_ids, recipient_uak) = self
-            .ensure_sessions_and_uak_all_devices(auth_client, recipient_id)
+        let (device_ids, unrestricted) = self
+            .ensure_sessions_and_access_policy_all_devices(auth_client, recipient_id)
             .await?;
         if device_ids.is_empty() {
-            return Ok((HashMap::new(), recipient_uak));
+            return Ok((HashMap::new(), unrestricted));
         }
 
         // Get sender certificate once (used for all encryptions). The
@@ -830,13 +814,13 @@ impl SignalService {
             "Encrypted message for recipient's devices"
         );
 
-        Ok((ciphertexts, recipient_uak))
+        Ok((ciphertexts, unrestricted))
     }
 
     /// Devices of `recipient_id` we hold a usable session with, ascending.
     /// Local only — no RPC. The session store doubles as our cache of a
     /// peer's device list: every normal-mode DM send's all-devices bundle
-    /// fetch (`ensure_sessions_and_uak_all_devices`) leaves a session per
+    /// fetch (`ensure_sessions_and_access_policy_all_devices`) leaves a session per
     /// current device, which is what Shield may use without naming the peer.
     pub async fn session_devices(&self, recipient_id: &str) -> Result<Vec<u32>, ServiceError> {
         let ids = session_device_ids(

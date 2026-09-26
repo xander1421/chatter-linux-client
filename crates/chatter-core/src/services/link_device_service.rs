@@ -352,16 +352,13 @@ impl LinkDeviceService {
         crate::crypto::svr::validate_pin_shape(pin)
             .map_err(|e| LinkDeviceError::Invalid(e.to_string()))?;
 
-        let user_id_str = self
+        // The salt every fingerprint writer derived with (login, register,
+        // PIN change, the SVR check on a linked device) — not the user row,
+        // which a linked device need not have.
+        let salt = self
             .settings_repo
-            .get_string(keys::CURRENT_USER_ID)?
-            .ok_or(LinkDeviceError::NotLoggedIn)?;
-        let user_id: crate::domain::ids::UserId = user_id_str
-            .parse()
-            .map_err(|e| LinkDeviceError::Invalid(format!("stored user_id parse: {e}")))?;
-        let user = self
-            .user_repo
-            .get(&user_id)?
+            .get_string(keys::SVR_SALT_USERNAME)?
+            .filter(|s| !s.is_empty())
             .ok_or(LinkDeviceError::NotLoggedIn)?;
 
         let stored = self
@@ -378,7 +375,7 @@ impl LinkDeviceService {
             ));
         }
 
-        let derived = crate::crypto::svr::derive_pin_fingerprint(pin, &user.username)?;
+        let derived = crate::crypto::svr::derive_pin_fingerprint(pin, &salt)?;
         Ok(derived.ct_eq(stored.as_slice()).unwrap_u8() == 1)
     }
 
@@ -552,6 +549,13 @@ impl LinkDeviceService {
                 "ProvisionMessage.aci is required".into(),
             ));
         }
+        // Without the salt this device can never derive the PIN's SVR secret
+        // (check the PIN, rewrite the backup); without the handle it shows none.
+        if provision.svr_salt_username.is_empty() || provision.full_username.is_empty() {
+            return Err(LinkDeviceError::Invalid(
+                "ProvisionMessage.svr_salt_username and full_username are required".into(),
+            ));
+        }
 
         let user_id: crate::domain::ids::UserId = provision
             .aci
@@ -658,7 +662,6 @@ impl LinkDeviceService {
         profile_key.copy_from_slice(&provision.profile_key);
         let credentials = DeviceCredentials::generate(/* placeholder */ 1, &profile_key);
         let device_auth_token = credentials.auth_token().as_bytes();
-        let uak = crate::crypto::device_credentials::derive_uak(&profile_key);
 
         use crate::proto::chat_v1::signal_pre_key_bundle::{
             KyberPreKeyRecord as ProtoKyberPreKey, PreKeyRecord as ProtoPreKey,
@@ -755,7 +758,6 @@ impl LinkDeviceService {
                     .map(|d| d.as_nanos() as u64)
                     .unwrap_or_default(),
             }),
-            unidentified_access_key: Some(uak.to_vec()),
             unrestricted_unidentified_access: Some(false),
         };
 
@@ -815,7 +817,6 @@ impl LinkDeviceService {
             .complete_device_linking(
                 &provision.provisioning_code,
                 device_auth_token,
-                &uak,
                 &session.device_info,
                 &session.device_name,
                 prekey_bundle,
@@ -841,6 +842,10 @@ impl LinkDeviceService {
             .set_bytes(keys::DEVICE_AUTH_TOKEN, device_auth_token)?;
         self.settings_repo
             .set_bytes(keys::IDENTITY_KEY_PUBLIC, &identity_pub_full)?;
+        self.settings_repo
+            .set_string(keys::SVR_SALT_USERNAME, &provision.svr_salt_username)?;
+        self.settings_repo
+            .set_string(keys::FULL_USERNAME, &provision.full_username)?;
 
         // The server sends our display_name ENCRYPTED with our profile key.
         // Decrypt with the key we just provisioned (line above) before
@@ -878,7 +883,7 @@ impl LinkDeviceService {
         let credentials = DeviceCredentials::from_stored(
             device_id,
             *credentials.auth_token().as_bytes(),
-            uak,
+            *credentials.unidentified_access_key(),
         );
         self.grpc_pool.auth().set_basic(
             credentials.auth_username(&user_id.to_string()),
@@ -1145,6 +1150,18 @@ impl LinkDeviceService {
         // we treat it as a freshness marker and put a random value here.
         let provisioning_code = random_provisioning_code();
 
+        // What the new device needs for PIN-derived flows and to show our
+        // handle. Both are set on every device that registered, logged in or
+        // was itself linked.
+        let required = |key: &str| -> Result<String, LinkDeviceError> {
+            self.settings_repo
+                .get_string(key)?
+                .filter(|s| !s.is_empty())
+                .ok_or_else(|| LinkDeviceError::Invalid(format!("{key} missing — log out and in once, then link")))
+        };
+        let svr_salt_username = required(keys::SVR_SALT_USERNAME)?;
+        let full_username = required(keys::FULL_USERNAME)?;
+
         // Mint the single-use Link'n'Sync archive key (§30). It rides ONLY
         // inside the E2E envelope; the server never sees it. The new device
         // derives the same KEK from it and decrypts the transfer archive we
@@ -1178,6 +1195,8 @@ impl LinkDeviceService {
             ),
             primary_device_registration_id: registration_id,
             ephemeral_backup_key: Some(ephemeral_backup_key.to_vec()),
+            svr_salt_username,
+            full_username,
         };
 
         let envelope: ProvisionEnvelope = encrypt_envelope(&req.peer_pub, &message)?;
@@ -1734,6 +1753,9 @@ mod tests {
                 .set_bytes(keys::AUTH_LOOKUP_HASH, &auth_hash)
                 .unwrap();
         }
+        settings_repo
+            .set_string(keys::SVR_SALT_USERNAME, username)
+            .unwrap();
         if let Some(p) = pin {
             let fp = derive_pin_fingerprint(p, username).unwrap();
             settings_repo

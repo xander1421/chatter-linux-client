@@ -94,6 +94,7 @@ export component ChatHeader inherits Rectangle {
 
     // Whether there are pinned messages (even if bar is dismissed)
     in property <bool> has-any-pinned: false;
+    in property <bool> pinned-bar-shown: false;
 
     // Mobile back button (returns to chat list)
     in property <bool> show-back-button: false;
@@ -106,8 +107,7 @@ export component ChatHeader inherits Rectangle {
     callback video-call-clicked();
     callback invite-clicked();
 
-    // Presence dot colour. Defined once because two things draw it: the `@`
-    // glyph row, and the peer avatar that replaces the glyph.
+    // Presence dot colour, drawn by the DM avatar (picture or initials).
     property <color> presence-dot:
         root.presence-status == "online" ? Colors.online
       : root.presence-status == "away" ? Colors.away
@@ -144,7 +144,11 @@ export component ChatHeader inherits Rectangle {
     // `if`s on that group exactly; used by the mesh divider above it, which
     // otherwise hangs off the right edge with nothing to separate.
     property <bool> has-utility-actions:
-        root.show-invite || (has-channel && root.has-any-pinned) || root.show-settings;
+        root.show-invite || root.show-pin || root.show-settings;
+    // The pin only brings back a dismissed pinned bar (`pinned-show-clicked`),
+    // so it exists only while that bar is hidden. Always-on, it duplicated the
+    // bar and its extra box cut a phone title to five characters.
+    property <bool> show-pin: has-channel && root.has-any-pinned && !root.pinned-bar-shown;
 
     // Mesh status wording. Kept here rather than in the strip below because this
     // is where it is now shown; the strip's remaining line is the one that has to
@@ -202,7 +206,8 @@ export component ChatHeader inherits Rectangle {
     // different vertical centres.
     property <length> header-glyph: root.mobile ? Spacing.header-glyph-touch : Spacing.header-glyph;
     property <length> header-action-box: root.mobile ? Spacing.header-action-box-touch : Spacing.header-action-box;
-    property <length> header-title-size: root.mobile ? Typography.xl : Typography.lg;
+    // Signal's ~20sp title; xl elided "Carol Sweep" to "Carol …" on a phone.
+    property <length> header-title-size: Typography.lg;
 
     // Leading clearance for the macOS traffic lights, from app.slint. Nonzero
     // only when the sidebar beside this is too narrow to cover them itself
@@ -260,7 +265,7 @@ export component ChatHeader inherits Rectangle {
             //   has-avatar     → channel icon (overrides the type glyph)
             //   public         → `#`          (muted)
             //   private        → lock         (muted) — invite-only channel
-            //   dm             → `@` + dot    (peer presence)
+            //   dm             → initials avatar + dot (peer presence)
             //   anon-dm        → purple shield
             //   private-group  → purple shield
             //   saved          → bookmark
@@ -289,31 +294,29 @@ export component ChatHeader inherits Rectangle {
                 vertical-alignment: center;
             }
 
-            // Private channels: purple dot in place of a lock icon.
+            // Private channels: muted lock. A teal dot here read as presence.
             if has-channel && !root.has-avatar && is-private: Rectangle {
-                width: 10px;
-                height: 10px;
-                border-radius: 5px;
-                background: Colors.primary;
+                width: 20px;
+                height: 20px;
                 y: (parent.height - self.height) / 2;
+                Image {
+                    source: Icons.lock;
+                    width: 16px;
+                    height: 16px;
+                    x: (parent.width - self.width) / 2;
+                    y: (parent.height - self.height) / 2;
+                    colorize: Colors.text-muted;
+                }
             }
 
-            if has-channel && !root.has-avatar && is-dm: HorizontalLayout {
-                spacing: 4px;
-                alignment: center;
-                Text {
-                    text: "@";
-                    color: Colors.text-muted;
-                    font-size: root.header-title-size;
-                    vertical-alignment: center;
-                }
-                Rectangle {
-                    width: 8px;
-                    height: 8px;
-                    border-radius: 4px;
-                    y: (parent.height - self.height) / 2;
-                    background: root.presence-dot;
-                }
+            // No picture: the peer's initials, as the chat list draws them —
+            // a bare `@` read as "unknown account".
+            if has-channel && !root.has-avatar && is-dm: Avatar {
+                size: root.header-avatar;
+                name: root.channel-name;
+                y: (parent.height - self.height) / 2;
+                show-presence: true;
+                presence-color: root.presence-dot;
             }
 
             if has-channel && !root.has-avatar && (is-anon-dm || is-private-group): Rectangle {
@@ -357,15 +360,23 @@ export component ChatHeader inherits Rectangle {
             Rectangle {
                 horizontal-stretch: 1;
                 min-width: 0px;
-                Text {
-                    width: 100%;
-                    height: 100%;
-                    text: root.channel-name;
-                    color: name-touch.has-hover ? Colors.primary : Colors.text-primary;
-                    font-size: root.header-title-size;
-                    font-weight: Typography.semibold;
-                    vertical-alignment: center;
-                    overflow: elide;
+                VerticalLayout {
+                    alignment: center;
+                    Text {
+                        text: root.channel-name;
+                        color: name-touch.has-hover ? Colors.primary : Colors.text-primary;
+                        font-size: root.header-title-size;
+                        font-weight: Typography.semibold;
+                        overflow: elide;
+                    }
+                    // On a phone the inline count below has no room; it goes
+                    // under the name instead, as Signal/Telegram groups do.
+                    if root.tight && has-channel && (is-channel || is-private-group) && member-count > 0: Text {
+                        text: root.member-count == 1 ? "1 member" : "\{root.member-count} members";
+                        color: Colors.text-muted;
+                        font-size: Typography.xs;
+                        overflow: elide;
+                    }
                 }
                 name-touch := TouchArea {
                     enabled: root.show-settings;
@@ -610,11 +621,10 @@ export component ChatHeader inherits Rectangle {
                     icon: Icons.user-plus;
                     clicked => { root.invite-clicked(); }
                 }
-                if has-channel && root.has-any-pinned: IconButton {
+                if root.show-pin: IconButton {
                     glyph-size: root.header-glyph;
                     box-size: root.header-action-box;
                     icon: Icons.pin;
-                    icon-color: Colors.primary;
                     clicked => { root.pin-clicked(); }
                 }
                 if root.show-settings: IconButton {

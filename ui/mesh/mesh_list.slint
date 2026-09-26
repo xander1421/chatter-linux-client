@@ -10,6 +10,7 @@
 // peers reads as "none nearby", never as an error.
 
 import { Colors } from "../theme/colors.slint";
+import { Appearance } from "../theme/appearance.slint";
 import { Spacing } from "../theme/spacing.slint";
 import { Typography } from "../theme/typography.slint";
 import { Icons } from "../theme/icons.slint";
@@ -99,7 +100,7 @@ export component MeshList inherits Rectangle {
 
         // ── The standing claim: serverless, and a peer count for connectivity ──
         if !root.collapsed && root.expanded: Rectangle {
-            height: 20px;
+            height: 20px * Appearance.text-grow;
             HorizontalLayout {
                 padding-left: 10px;
                 padding-right: Spacing.sm;

@@ -326,7 +326,7 @@ impl MessageService {
         if !shield {
             if let Err(e) = self
                 .signal_service
-                .ensure_sessions_and_uak_all_devices(auth_client, &peer_id_str)
+                .ensure_sessions_all_devices(auth_client, &peer_id_str)
                 .await
             {
                 tracing::warn!(peer_id = %peer_id, error = %e, "Bootstrap: device refresh failed; using cached sessions");

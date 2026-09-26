@@ -159,7 +159,6 @@ async fn test_login_callback_flow() {
             "test-device",
             &user.public_key,
             &user.device_auth_token,
-            &random_uak(),
             None,
         )
         .await;
@@ -211,7 +210,6 @@ async fn test_login_wrong_password_flow() {
             "test-device",
             &user.public_key,
             &user.device_auth_token,
-            &random_uak(),
             None,
         )
         .await;

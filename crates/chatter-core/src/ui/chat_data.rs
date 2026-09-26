@@ -437,6 +437,26 @@ pub fn format_timestamp(datetime: DateTime<Utc>) -> String {
     local.format("%b %-d, %Y").to_string()
 }
 
+/// The date chip between messages from different days: "Today",
+/// "Yesterday", a weekday within the last week, then "Sep 25" this year and
+/// "Sep 25, 2025" before it. Each label names exactly one local day in any
+/// run of messages, so the list draws a chip wherever the label changes.
+#[must_use]
+pub fn day_label(datetime: DateTime<Utc>) -> String {
+    day_label_at(datetime.with_timezone(&Local).date_naive(), Local::now().date_naive())
+}
+
+fn day_label_at(day: chrono::NaiveDate, today: chrono::NaiveDate) -> String {
+    let days_ago = (today - day).num_days();
+    match days_ago {
+        0 => "Today".to_string(),
+        1 => "Yesterday".to_string(),
+        2..=6 => day.format("%A").to_string(),
+        _ if day.year() == today.year() => day.format("%b %-d").to_string(),
+        _ => day.format("%b %-d, %Y").to_string(),
+    }
+}
+
 /// The line under a contact's name on the profile screen.
 ///
 /// A live presence outranks any stamp — someone who is online now is not
@@ -581,6 +601,18 @@ pub fn initials_from_name(name: &str) -> String {
 mod tests {
     use super::*;
     use crate::domain::ids::{ChannelId, UserId};
+
+    #[test]
+    fn day_label_names_one_day() {
+        let d = |y, m, dd| chrono::NaiveDate::from_ymd_opt(y, m, dd).unwrap();
+        let today = d(2026, 9, 26);
+        assert_eq!(day_label_at(d(2026, 9, 26), today), "Today");
+        assert_eq!(day_label_at(d(2026, 9, 25), today), "Yesterday");
+        assert_eq!(day_label_at(d(2026, 9, 21), today), "Monday");
+        // A week back is a date, never a weekday that repeats.
+        assert_eq!(day_label_at(d(2026, 9, 19), today), "Sep 19");
+        assert_eq!(day_label_at(d(2025, 12, 31), today), "Dec 31, 2025");
+    }
     use crate::domain::message::{ConversationType, Message, MessageContent, ReactionCount};
     use crate::domain::SystemMessage;
 

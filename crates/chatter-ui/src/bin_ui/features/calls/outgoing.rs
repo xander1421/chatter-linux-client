@@ -14,7 +14,7 @@ use chatter_core::client::ChatterClient;
 use chatter_core::client::calls::OutgoingCallStart;
 use chatter_core::domain::call::CallType;
 use chatter_core::state::ActiveConversation;
-use crate::bin_ui::converters::get_initials;
+use crate::bin_ui::converters::{avatar_bytes_to_image, get_initials};
 use crate::{ActiveCallData, CallParticipantData, MainWindow};
 
 use super::timers::{start_call_timer, start_video_frame_timer};
@@ -86,14 +86,14 @@ fn show_dialling(weak: &slint::Weak<MainWindow>, call_type: CallType, ui_ctx: &A
         is_video_call: is_video,
         is_anonymous_call: false,
         is_encrypted: true,
-        // Nothing has been verified yet and nothing may claim otherwise. The
-        // hourglass is the same placeholder the real dialling state uses.
+        // Nothing has been verified yet and nothing may claim otherwise. No
+        // emoji until keyed: the view shows its plain lock in their place.
         is_identity_verified: false,
         identity_warning: "".into(),
         participant_count: 1,
         duration_seconds: 0,
         participants: ModelRc::new(VecModel::from(vec![local_participant])),
-        verification_emoji_1: "\u{23F3}".into(),
+        verification_emoji_1: "".into(),
         verification_emoji_2: "".into(),
         verification_emoji_3: "".into(),
         verification_emoji_4: "".into(),
@@ -239,21 +239,37 @@ fn render_calling_placeholder(
     };
 
     // Pre-known verification emojis (channel group calls) — show them at dial
-    // time. For DM + anon, fall back to a "dialling" placeholder glyph until
-    // the answer arrives.
-    let (e1, e2, e3, e4) = match &setup.verification_emojis {
-        Some(v) => (v[0].clone(), v[1].clone(), v[2].clone(), v[3].clone()),
-        None if setup.is_anonymous => ("\u{1F512}".into(), "".into(), "".into(), "".into()),
-        None => ("\u{23F3}".into(), "".into(), "".into(), "".into()),
-    };
+    // time. For DM + anon they stay empty until the answer arrives, and the
+    // view shows its plain lock in their place.
+    let [e1, e2, e3, e4] = setup.verification_emojis.clone().unwrap_or_default();
 
-    let title = if setup.title.is_empty() && !channel_name.is_empty() {
-        channel_name
-    } else if setup.title.is_empty() {
-        "Calling...".into()
-    } else {
-        setup.title.clone()
-    };
+    // A 1:1 call pre-renders the callee's tile, so ringing shows who is being
+    // called rather than the caller. It is a remote placed before the local
+    // tile (local is pinned last), which the join handler matches by user_id —
+    // or, for an anon DM's empty id, fills in (see room_events.rs).
+    let mut participants = Vec::with_capacity(2);
+    if let Some(peer) = &setup.peer {
+        participants.push(CallParticipantData {
+            user_id: peer.user_id.clone().into(),
+            display_name: peer.info.display_name.clone().into(),
+            initials: peer.info.initials.clone().into(),
+            avatar_source: peer
+                .info
+                .avatar_bytes
+                .as_deref()
+                .and_then(avatar_bytes_to_image)
+                .unwrap_or_default(),
+            is_muted: false,
+            is_video_enabled: false,
+            is_screen_sharing: false,
+            is_speaking: false,
+            is_audio_muted_locally: false,
+            is_video_paused_locally: false,
+        });
+    }
+    participants.push(local_participant);
+
+    let title = if setup.title.is_empty() { channel_name } else { setup.title.clone() };
 
     let call_data = ActiveCallData {
         call_id: setup.call_id.clone().into(),
@@ -265,9 +281,11 @@ fn render_calling_placeholder(
         // Nothing is verified when the call starts; an anon peer never is.
         is_identity_verified: false,
         identity_warning: "".into(),
+        // Only we are in the room until the callee joins; the pre-rendered
+        // callee tile does not count, which keeps the view in its ringing state.
         participant_count: 1,
         duration_seconds: 0,
-        participants: ModelRc::new(VecModel::from(vec![local_participant])),
+        participants: ModelRc::new(VecModel::from(participants)),
         verification_emoji_1: e1.into(),
         verification_emoji_2: e2.into(),
         verification_emoji_3: e3.into(),

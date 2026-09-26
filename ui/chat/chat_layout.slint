@@ -173,6 +173,7 @@ export component ChatLayout inherits Rectangle {
         // dock already shows channel name/encryption/timer.
         if !root.hide-header: ChatHeader {
             mobile: root.mobile;
+            pinned-bar-shown: root.has-pinned-messages;
             channel-id: root.channel-id;
             channel-name: root.channel-name;
             conversation-kind: root.conversation-kind;
@@ -266,6 +267,7 @@ export component ChatLayout inherits Rectangle {
             selection-mode: root.selection-mode;
             mobile: root.mobile;
             is-dm: root.is-dm;
+            can-thread: root.conversation-kind == ConversationKind.channel;
             is-mesh: MeshGlobal.active-id != "";
             // A mesh room and a geohash cell are plaintext broadcasts. Only a
             // mesh DM runs over Noise, so only it keeps the lock.
@@ -367,7 +369,9 @@ export component ChatLayout inherits Rectangle {
             }
         }
 
-        if root.composer-notice == "": MessageComposer {
+        // Hidden while selecting messages: the selection bar owns the screen
+        // then, and a live composer invited typing into a mode that ignores it.
+        if root.composer-notice == "" && !root.selection-mode: MessageComposer {
             width: 100%;
             vertical-stretch: 0;
             mobile: root.mobile;
@@ -410,6 +414,10 @@ export component ChatLayout inherits Rectangle {
                 root.gif-picker-visible = !root.gif-picker-visible;
                 root.emoji-picker-visible = false;
                 root.gif-clicked();
+            }
+            input-focused => {
+                root.emoji-picker-visible = false;
+                root.gif-picker-visible = false;
             }
             mention-triggered(query) => {
                 root.mention-triggered(query);

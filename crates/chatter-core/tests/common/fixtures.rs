@@ -255,7 +255,6 @@ pub async fn register_test_user(pool: &GrpcClientPool) -> Result<TestUser, Netwo
             signature: kyber_prekey.signature().expect("sig"),
             timestamp: signed_prekey_timestamp,
         }),
-        unidentified_access_key: Some(random_uak().to_vec()),
         unrestricted_unidentified_access: Some(false),
     };
 
@@ -269,7 +268,7 @@ pub async fn register_test_user(pool: &GrpcClientPool) -> Result<TestUser, Netwo
     .expect("Display name encryption should succeed");
 
     // Generate unidentified access key (16 bytes) for sealed sender
-    let uak = random_uak();
+    let uak = chatter_core::crypto::derive_uak(&profile_key);
 
     // Server now requires a registration challenge proving identity-key
     // possession. Mirror what `AuthService::register` does in the SDK:
@@ -473,7 +472,6 @@ pub fn generate_prekey_bundle() -> (SignalPreKeyBundle, Vec<u8>) {
             signature: kyber_prekey.signature().expect("sig"),
             timestamp: signed_prekey_timestamp,
         }),
-        unidentified_access_key: Some(random_uak().to_vec()),
         unrestricted_unidentified_access: Some(false),
     };
 

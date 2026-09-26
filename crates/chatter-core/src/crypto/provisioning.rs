@@ -285,6 +285,8 @@ mod tests {
             provisioning_user_agent: "linux-client/0.1".into(),
             primary_device_registration_id: 1234,
             ephemeral_backup_key: None,
+            svr_salt_username: "alice".into(),
+            full_username: "alice.1234".into(),
         }
     }
 

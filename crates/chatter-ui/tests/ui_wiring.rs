@@ -165,6 +165,33 @@ fn settings_notification_detail_level_persists_across_restart() {
     );
 }
 
+/// Settings > Appearance > Theme: a pick reaches core, flips the palette the
+/// whole UI reads (`Appearance.dark` drives every `Colors` token), and survives
+/// a restart.
+#[test]
+fn settings_theme_pick_persists_and_flips_palette() {
+    use chatter_core::services::appearance::ThemeMode;
+    use slint::ComponentHandle;
+    let (rt, tmp, client, w) = wired_offline();
+    let appearance = w.global::<chatter_ui::Appearance>();
+    assert_eq!(client.theme_mode(), ThemeMode::System, "precondition");
+
+    appearance.invoke_theme_changed("light".into());
+    assert_eq!(client.theme_mode(), ThemeMode::Light);
+    assert!(!appearance.get_dark(), "light pick left the dark palette in force");
+    appearance.invoke_theme_changed("dark".into());
+    assert!(appearance.get_dark());
+
+    drop(w);
+    drop(client);
+    let _guard = rt.enter();
+    let client = chatter_core::client::ChatterClient::builder()
+        .data_dir(tmp.path().to_string_lossy().to_string())
+        .build()
+        .expect("offline ChatterClient::build (restart)");
+    assert_eq!(client.theme_mode(), ThemeMode::Dark, "theme did not survive a restart");
+}
+
 #[test]
 fn settings_read_receipts_toggle_reaches_core() {
     require_element_queries();
@@ -191,7 +218,7 @@ fn settings_read_receipts_toggle_reaches_core() {
 
 /// Crown-jewel end-to-end proof. Uses the INTEGRATION testing backend (has an
 /// event-loop provider) and pumps the loop once so the conditional SettingsScreen
-/// child (gated by active-modal=="settings") actually MATERIALIZES — a plain
+/// child (gated by settings-open) actually MATERIALIZES — a plain
 /// `init_no_event_loop` never renders, so conditional/repeated sub-trees never
 /// instantiate and the toggle can't be found. Then:
 ///   1. the accessible-label we added resolves to exactly one `switch` element,
@@ -200,10 +227,10 @@ fn settings_read_receipts_toggle_reaches_core() {
 ///      (Toggle.toggled → SettingsScreen.read-receipts-changed → App →
 ///       MainWindow → Rust on_settings_read_receipts_changed) into chatter-core.
 ///
-/// Modal-routing wire, proven dynamically. Setting the `active-modal` property
-/// to "settings" must instantiate the conditional `SettingsScreen` sub-tree
-/// (`ui/app.slint:2038  if active-modal == "settings": SettingsScreen`); clearing
-/// it must tear the sub-tree down. If that `if`-binding were dead, the element
+/// Routing wire, proven dynamically. Pushing "settings" on the modal stack
+/// must instantiate the conditional `SettingsScreen` sub-tree
+/// (`ui/app.slint  if root.settings-open: SettingsScreen`); closing it must
+/// tear the sub-tree down. If that `if`-binding were dead, the element
 /// count would never change. The built-in negative control is the pre-set state
 /// (count 0).
 ///
@@ -243,20 +270,25 @@ fn settings_modal_routing_wire_instantiates_conditional() {
     pump(&w);
     assert_eq!(count_settings(), 0, "SettingsScreen present before the modal was opened");
 
-    // Open the settings modal via the routing property → conditional must appear.
-    w.set_active_modal("settings".into());
+    // Push Settings → conditional must appear.
+    chatter_ui::bin_ui::features::back::push(&w, "settings");
     pump(&w);
     assert_eq!(
         count_settings(),
         1,
-        "setting active-modal='settings' did NOT instantiate SettingsScreen — the \
-         `if active-modal == \"settings\"` routing wire is dead"
+        "pushing 'settings' did NOT instantiate SettingsScreen — the \
+         `if root.settings-open` routing wire is dead"
     );
 
-    // Close it → conditional must tear down.
-    w.set_active_modal("none".into());
+    // Something Settings opens keeps it mounted underneath.
+    chatter_ui::bin_ui::features::back::push(&w, "sessions");
     pump(&w);
-    assert_eq!(count_settings(), 0, "clearing active-modal did NOT remove SettingsScreen");
+    assert_eq!(count_settings(), 1, "Sessions over Settings unmounted Settings");
+
+    // Close it → conditional must tear down (with what it opened).
+    chatter_ui::bin_ui::features::back::close(&w, "settings");
+    pump(&w);
+    assert_eq!(count_settings(), 0, "closing Settings did NOT remove SettingsScreen");
 }
 
 // ============================================================================
@@ -1537,10 +1569,10 @@ fn welcome_page_buttons_are_wired() {
     w.set_current_view("welcome".into());
     w.invoke_welcome_add_friends();
     assert_eq!(w.get_current_view().as_str(), "main", "add-friends did not reach main view");
-    assert_eq!(w.get_active_modal().as_str(), "friends", "add-friends did not open friends modal");
+    assert_eq!(w.get_active_tab().as_str(), "contacts", "add-friends did not open the Contacts tab");
     assert_eq!(w.get_friends_modal_tab().as_str(), "find", "add-friends did not land on find tab");
 
-    w.set_active_modal("none".into());
+    w.set_active_tab("chats".into());
     w.set_current_view("welcome".into());
     w.invoke_welcome_browse_channels();
     assert_eq!(w.get_current_view().as_str(), "main", "browse-channels did not reach main view");
@@ -1680,7 +1712,7 @@ fn forward_message_confirm_is_wired_to_core() {
     w.set_forward_sources(ModelRc::new(VecModel::from(vec![slint::SharedString::from(
         format!("{peer}:123456789"),
     )])));
-    w.set_active_modal("forward-message".into());
+    chatter_ui::bin_ui::features::back::push(&w, "forward-message");
     w.invoke_forward_message(peer.into());
     assert_eq!(
         w.get_active_modal().as_str(),
@@ -1772,7 +1804,7 @@ fn back_press_closes_the_open_modal() {
     let w = boot();
     chatter_ui::bin_ui::features::back::wire(&w);
 
-    w.set_active_modal("settings".into());
+    chatter_ui::bin_ui::features::back::push(&w, "sessions");
     assert!(
         chatter_ui::bin_ui::features::back::handle_back(&w),
         "back with a modal open must report the press as consumed in-app"
@@ -1780,11 +1812,11 @@ fn back_press_closes_the_open_modal() {
     assert_eq!(
         w.get_active_modal().as_str(),
         "none",
-        "back did NOT close the open modal — the Settings trap is still live"
+        "back did NOT close the open modal"
     );
 
     // Through the Slint callback too (that is what the FocusScope invokes).
-    w.set_active_modal("create-channel".into());
+    chatter_ui::bin_ui::features::back::push(&w, "create-channel");
     w.invoke_back_pressed();
     assert_eq!(
         w.get_active_modal().as_str(),
@@ -1848,7 +1880,7 @@ fn back_press_pops_the_mobile_conversation_pane() {
     // A modal over a conversation pops the MODAL first — the conversation is
     // the layer underneath and must survive that press.
     w.set_mobile_show_chat(true);
-    w.set_active_modal("settings".into());
+    chatter_ui::bin_ui::features::back::push(&w, "forward-message");
     assert!(chatter_ui::bin_ui::features::back::handle_back(&w));
     assert_eq!(w.get_active_modal().as_str(), "none");
     assert!(
@@ -1877,7 +1909,7 @@ fn back_press_closes_the_composer_emoji_picker() {
     assert!(!w.get_composer_gif_picker_visible(), "back did NOT close the GIF picker");
 }
 
-/// The unified search palette is an overlay, not an `active-modal` value, so
+/// The unified search palette is an overlay, not a stacked screen, so
 /// Back fell through it and backgrounded the app with the palette still up
 /// (§112u).
 #[test]
@@ -1933,7 +1965,7 @@ fn back_key_event_reaches_the_handler() {
     use slint::ComponentHandle;
     let w = boot();
     chatter_ui::bin_ui::features::back::wire(&w);
-    w.set_active_modal("settings".into());
+    chatter_ui::bin_ui::features::back::push(&w, "sessions");
 
     // Give the window a real geometry first. `process_key_input` drops the
     // focus item when `ItemRc::is_visible()` is false, and an unshown headless
@@ -2004,7 +2036,7 @@ fn back_scope_ignores_ordinary_typing() {
     use slint::ComponentHandle;
     let w = boot();
     chatter_ui::bin_ui::features::back::wire(&w);
-    w.set_active_modal("settings".into());
+    chatter_ui::bin_ui::features::back::push(&w, "sessions");
 
     let scale = w.window().scale_factor();
     w.window().dispatch_event(slint::platform::WindowEvent::Resized {
@@ -2019,7 +2051,7 @@ fn back_scope_ignores_ordinary_typing() {
 
     assert_eq!(
         w.get_active_modal().as_str(),
-        "settings",
+        "sessions",
         "an ordinary key press was treated as Back — back-scope is over-matching"
     );
 }
@@ -2035,7 +2067,7 @@ fn back_pops_selection_mode_before_the_modal() {
     chatter_ui::bin_ui::features::back::wire(&w);
 
     w.set_selection_mode(true);
-    w.set_active_modal("settings".into());
+    chatter_ui::bin_ui::features::back::push(&w, "sessions");
 
     w.invoke_back_pressed();
 
@@ -2046,7 +2078,7 @@ fn back_pops_selection_mode_before_the_modal() {
     );
     assert_eq!(
         w.get_active_modal().as_str(),
-        "settings",
+        "sessions",
         "back popped TWO layers at once: selection mode AND the modal. One press, \
          one layer"
     );
@@ -2054,6 +2086,107 @@ fn back_pops_selection_mode_before_the_modal() {
     // Second press now takes the modal.
     w.invoke_back_pressed();
     assert_eq!(w.get_active_modal().as_str(), "none", "the second back press did not close the modal");
+}
+
+/// UX1 (R4 P0-1): the current tab and the screens pushed over it are separate
+/// state. With one `active-modal` slot for both, Back always landed on Chats,
+/// Sessions/Link device replaced Settings instead of stacking on it, and
+/// someone else's profile lit the Profile tab.
+#[test]
+fn back_pops_the_modal_stack_before_leaving_the_tab() {
+    use chatter_ui::bin_ui::features::back;
+    let w = boot();
+    back::wire(&w);
+    let tab = |w: &MainWindow| w.get_active_tab().to_string();
+    let top = |w: &MainWindow| w.get_active_modal().to_string();
+
+    // Profile menu › Settings › Sessions › Link device, pushed through the
+    // Slint callback. Settings is pushed, not a tab (UX3).
+    w.set_active_tab("profile".into());
+    w.invoke_nav_push("settings".into());
+    assert!(w.get_settings_open(), "pushing Settings did not raise settings-open");
+    w.invoke_nav_push("sessions".into());
+    w.invoke_nav_push("link-device-approve".into());
+    assert_eq!(top(&w), "link-device-approve");
+    assert!(back::handle_back(&w));
+    assert_eq!(top(&w), "sessions", "Back from Link device must return to Sessions");
+    assert!(w.get_settings_open(), "Settings must stay mounted under Sessions");
+    assert!(back::handle_back(&w));
+    assert_eq!(top(&w), "settings", "Back from Sessions must return to Settings, not Chats");
+    assert!(back::handle_back(&w));
+    assert_eq!((tab(&w), top(&w)), ("profile".into(), "none".into()), "Back from Settings must return to the account menu");
+    assert!(!w.get_settings_open(), "popping Settings left settings-open set");
+    assert!(back::handle_back(&w), "Back on a non-Chats tab must be consumed");
+    assert_eq!(tab(&w), "chats", "Back from a root tab must go to Chats");
+    assert!(!back::handle_back(&w), "Back on Chats with nothing open backgrounds the app");
+
+    // A profile opened from Contacts is pushed over Contacts, never the Profile tab.
+    w.set_active_tab("contacts".into());
+    back::push(&w, "user-profile");
+    assert_eq!(tab(&w), "contacts", "opening a profile changed the tab");
+    assert!(back::handle_back(&w));
+    assert_eq!((tab(&w), top(&w)), ("contacts".into(), "none".into()), "Back from a profile must land on Contacts");
+
+    // close() takes what the closed screen opened with it; closing a screen
+    // that is not open (a late async completion) changes nothing.
+    back::push(&w, "sessions");
+    back::push(&w, "link-device-approve");
+    back::close(&w, "forward-message");
+    assert_eq!(top(&w), "link-device-approve");
+    w.invoke_nav_close("sessions".into());
+    assert_eq!(top(&w), "none");
+
+    // Re-pushing an open screen moves it to the top instead of stacking a copy.
+    back::push(&w, "sessions");
+    back::push(&w, "jarvis-memory");
+    back::push(&w, "sessions");
+    assert_eq!(slint::Model::row_count(&w.get_modal_stack()), 2);
+    w.invoke_nav_pop();
+    assert_eq!(top(&w), "jarvis-memory");
+
+    // Opening a conversation / logout: nothing stays over the Chats tab.
+    back::reset_to_chats(&w);
+    assert_eq!((tab(&w), top(&w)), ("chats".into(), "none".into()));
+}
+
+/// The bottom tab bar and the return-to-call bar are layered UNDER every
+/// pushed modal (z -1, with the chat column at -2), so a dialog's backdrop
+/// dims them and takes their taps; the tab screens sit at the same layer,
+/// declared before the bar, so they never cover it. And the bar highlights
+/// `active-tab`, not something derived from whichever modal is open.
+#[test]
+fn tab_bar_and_call_bar_sit_under_pushed_modals() {
+    let app = include_str!("../../../ui/app.slint");
+    for header in [
+        "if root.bottom-nav-visible: MobileBottomNav {",
+        "|| (root.compact-layout && !root.mobile-show-chat)): ReturnToCallBar {",
+        r#"if root.active-tab == "calls": CallHistoryScreen {"#,
+        r#"if root.active-tab == "contacts": FriendsModal {"#,
+        r#"if root.active-tab == "profile": AccountMenu {"#,
+        r#"if root.settings-open: SettingsScreen {"#,
+        "if root.fab-visible: Rectangle {",
+        r#"if current-view == "main": VerticalLayout {"#,
+    ] {
+        let at = app.find(header).unwrap_or_else(|| panic!("app.slint lost `{header}`"));
+        let body = &app[at..at + 400];
+        assert!(
+            body.contains("z: -1;") || body.contains("z: -2;"),
+            "`{header}` is no longer layered under the modals"
+        );
+    }
+    let bar = app.find("if root.bottom-nav-visible: MobileBottomNav {").unwrap();
+    assert!(app[bar..bar + 300].contains("active-tab: root.active-tab;"));
+    for screen in [
+        r#"if root.active-tab == "calls": CallHistoryScreen {"#,
+        r#"if root.active-tab == "contacts": FriendsModal {"#,
+        r#"if root.active-tab == "profile": AccountMenu {"#,
+        r#"if root.settings-open: SettingsScreen {"#,
+    ] {
+        assert!(
+            app.find(screen).unwrap() < bar,
+            "{screen} is declared after the tab bar, so it would cover it"
+        );
+    }
 }
 
 // ============================================================================
@@ -2218,7 +2351,7 @@ fn pin_conversation_reaches_core_from_the_sidebar_menu() {
     let channels = include_str!("../../../ui/sidebar/channel_list.slint");
     let dms = include_str!("../../../ui/sidebar/dm_list.slint");
     assert!(
-        channels.contains("root.channel-context-menu-requested(item.channel-id, item.is-pinned, x, y)"),
+        channels.contains("root.channel-context-menu-requested(item.channel-id, item.is-pinned, "),
         "the channel row must carry its pin state into the menu"
     );
     assert!(
@@ -3198,13 +3331,19 @@ fn dismissal_glyph_and_edge_follow_the_screen_shape() {
     // header row: chevron before the title, X after it. `full-screen` is the
     // only thing that selects between them, and the two are mutually exclusive
     // `if`s so no screen can ever show both.
+    // A tab's root screen (`root-screen`) drops the chevron — it was not
+    // pushed, so there is nothing to pop — and a confirm dialog with its own
+    // Cancel drops the X (`show-close`). Neither ever swaps one for the other.
     let modal = include_str!("../../../ui/components/modal.slint");
-    let leading = modal.find("if root.full-screen: DismissButton").expect(
-        "Modal must place a back chevron on the LEADING edge when full-screen",
-    );
+    let leading = modal
+        .find("if root.full-screen && !root.root-screen: DismissButton")
+        .expect(
+            "Modal must place a back chevron on the LEADING edge when full-screen, \
+             except on a tab's root screen",
+        );
     let title = modal.find("text: root.title;").expect("Modal must render a title");
     let trailing = modal
-        .find("if !root.full-screen: DismissButton")
+        .find("if !root.full-screen && root.show-close: DismissButton")
         .expect("Modal must place an X on the TRAILING edge when not full-screen");
     assert!(
         leading < title && title < trailing,
@@ -3364,7 +3503,7 @@ fn sidebar_empty_state_join_cta_is_wired_end_to_end() {
     let tail = &app_src[handler..handler + 220];
     assert!(
         tail.contains(r#"root.create-channel-initial-tab = 1"#)
-            && tail.contains(r#"root.active-modal = "create-channel""#),
+            && tail.contains(r#"root.nav-push("create-channel")"#),
         "join-channel-clicked must open the JOIN tab of CreateChannelModal"
     );
 }
@@ -3552,13 +3691,13 @@ fn tablet_sidebar_opens_the_calls_screen() {
         .expect("no Calls entry in the tablet sidebar");
     row.invoke_accessible_default_action();
     assert_eq!(
-        w.get_active_modal().as_str(),
+        w.get_active_tab().as_str(),
         "calls",
         "the sidebar Calls row did not raise the Calls screen"
     );
 
     // Missed calls surface on the row itself.
-    w.set_active_modal("none".into());
+    w.set_active_tab("chats".into());
     w.set_missed_call_count(3);
     assert!(
         testing::ElementHandle::find_by_accessible_label(&w, "Calls, 3 missed").next().is_some(),
@@ -3656,7 +3795,7 @@ fn toggle_rows_flip_from_anywhere_on_the_row() {
     let a = ai.clone();
     w.on_channel_settings_toggle_ai(move |v| a.borrow_mut().push(v));
 
-    w.set_active_modal("channel-settings".into());
+    chatter_ui::bin_ui::features::back::push(&w, "channel-settings");
     tap_text(&w, "Notifications");
 
     tap_text(&w, "Mute Channel");
@@ -3687,7 +3826,8 @@ fn toggle_rows_flip_from_anywhere_on_the_row() {
     );
 
     // ---- App settings > Privacy: a ToggleRow outside the modal --------------
-    w.set_active_modal("settings".into());
+    chatter_ui::bin_ui::features::back::close(&w, "channel-settings");
+    chatter_ui::bin_ui::features::back::push(&w, "settings");
     tap_text(&w, "Privacy");
     let before = w.get_settings_read_receipts();
     tap_text(&w, "Read Receipts");
@@ -3771,4 +3911,70 @@ fn channel_settings_moderation_reaches_core() {
     let slint = include_str!("../../../ui/modals/channel_settings.slint");
     assert!(slint.contains("if member.can-ban: Button") && slint.contains("if member.can-mute && member.muted: Button"));
     assert!(slint.contains("root.unban-member(banned.user-id)"));
+}
+
+/// UX3 (owner decisions 2026-09-26): Settings left the tab bar for the
+/// Profile tab's account menu, and the chat list's create actions moved from
+/// in-list rows to a '+' (a FAB on a phone).
+#[test]
+fn ux3_account_menu_pushes_settings_and_fab_opens_create_menu() {
+    use chatter_ui::bin_ui::features::back;
+    use chatter_ui::Appearance;
+    use slint::ComponentHandle;
+    require_element_queries();
+    let w = boot();
+    back::wire(&w);
+    w.set_current_view("main".into());
+
+    // The bar is Chats, Calls, Contacts, Profile; nothing routes to a
+    // Settings tab any more.
+    let nav = include_str!("../../../ui/components/mobile_bottom_nav.slint");
+    assert!(!nav.contains(r#"tab-selected("settings")"#), "Settings is back in the tab bar");
+    assert_eq!(nav.matches("\n    NavTab {").count(), 4, "the tab bar is not four tabs");
+    let app = include_str!("../../../ui/app.slint");
+    assert!(!app.contains(r#"active-tab = "settings""#), "something still opens Settings as a tab");
+
+    // Account menu › Settings pushes Settings over the Profile tab.
+    let opened = std::rc::Rc::new(std::cell::Cell::new(0));
+    let o = opened.clone();
+    w.on_settings_clicked(move || o.set(o.get() + 1));
+    w.window().set_size(slint::LogicalSize::new(1000.0, 800.0));
+    w.set_active_tab("profile".into());
+    let settings_row = testing::ElementHandle::find_by_accessible_label(&w, "Settings")
+        .find(|e| e.accessible_role() == Some(testing::AccessibleRole::Button))
+        .expect("the account menu has no Settings row");
+    settings_row.mock_single_click(slint::platform::PointerEventButton::Left);
+    assert_eq!(w.get_active_modal().as_str(), "settings", "the Settings row did not push Settings");
+    assert!(w.get_settings_open());
+    assert_eq!(opened.get(), 1, "Settings opened without hydrating (settings-clicked)");
+    assert!(back::handle_back(&w));
+    assert_eq!((w.get_active_tab().as_str(), w.get_active_modal().as_str()), ("profile", "none"));
+
+    // Night Mode shows the palette in force and pins the opposite one.
+    let appearance = w.global::<Appearance>();
+    appearance.set_theme("dark".into());
+    tap_switch(&w, "Night Mode");
+    assert_eq!(appearance.get_theme().as_str(), "light", "Night Mode off did not pick Light");
+    tap_switch(&w, "Night Mode");
+    assert_eq!(appearance.get_theme().as_str(), "dark", "Night Mode on did not pick Dark");
+
+    // Phone: the FAB is on the Chats list and opens the create menu, and is
+    // gone while anything is pushed over the list.
+    w.set_is_mobile_platform(true);
+    w.window().set_size(slint::LogicalSize::new(400.0, 800.0));
+    w.set_active_tab("chats".into());
+    let fab = || {
+        testing::ElementHandle::find_by_accessible_label(&w, "Create")
+            .find(|e| e.accessible_role() == Some(testing::AccessibleRole::Button))
+    };
+    fab().expect("no create FAB on the phone Chats list")
+        .mock_single_click(slint::platform::PointerEventButton::Left);
+    assert_eq!(w.get_active_modal().as_str(), "create-menu");
+    assert!(fab().is_none(), "the FAB stayed up over its own menu");
+    assert!(
+        testing::ElementHandle::find_by_accessible_label(&w, "New Section").next().is_some(),
+        "the create menu has no New Section"
+    );
+    assert!(back::handle_back(&w));
+    assert_eq!(w.get_active_modal().as_str(), "none");
 }

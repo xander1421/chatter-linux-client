@@ -69,7 +69,12 @@ impl AnonGroupService {
                 CallType::Voice.into()
             },
             timestamp,
-            caller_display_name: display_name.unwrap_or_default().to_string(),
+            // Our real name only when visibility lets anon peers hold our
+            // profile key; otherwise they see "Anonymous", as for any stranger.
+            caller_display_name: display_name
+                .filter(|_| self.get_my_profile_key().is_some())
+                .unwrap_or_default()
+                .to_string(),
             call_encryption_key: call_encryption_key.clone(),
         };
 
@@ -129,7 +134,12 @@ impl AnonGroupService {
                 None
             },
             timestamp,
-            callee_display_name: display_name.unwrap_or_default().to_string(),
+            // Our real name only when visibility lets anon peers hold our
+            // profile key; otherwise they see "Anonymous", as for any stranger.
+            callee_display_name: display_name
+                .filter(|_| self.get_my_profile_key().is_some())
+                .unwrap_or_default()
+                .to_string(),
             decline_reason: 0,
         };
 

@@ -28,14 +28,17 @@ export component LinkDeviceApproveModal inherits Rectangle {
     in property <string> error: "";
     in property <string> status: "";
     in property <bool> approving: false;
+    // In-app camera scanner exists (Android).
+    in property <bool> can-scan: false;
 
     callback close();
+    callback scan();                  // camera → link-url, then paste-changed
     callback paste-changed(string);   // URL textbox changed → core re-parses
     callback approve(string);         // password (pending link is held in core)
 
     Modal {
         show: root.show-modal;
-        title: "Link a New Device";
+        title: "Link a new device";
         modal-width: 520px;
 
         close => { root.close(); }
@@ -44,10 +47,19 @@ export component LinkDeviceApproveModal inherits Rectangle {
             spacing: Spacing.md;
 
             Text {
-                text: "Paste the link from your new device. You'll be asked to confirm with your password or PIN to authorize.";
+                text: root.can-scan
+                    ? "Scan the QR code on your new device, or paste its link. You'll be asked to confirm with your password or PIN to authorize."
+                    : "Paste the link from your new device. You'll be asked to confirm with your password or PIN to authorize.";
                 color: Colors.text-secondary;
                 font-size: Typography.sm;
                 wrap: word-wrap;
+            }
+
+            if root.can-scan: Button {
+                text: "Scan QR code";
+                variant: "secondary";
+                disabled: root.approving;
+                clicked => { root.scan(); }
             }
 
             Input {

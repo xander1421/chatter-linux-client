@@ -587,9 +587,24 @@ pub enum SystemMessage {
     UserRemoved { by: UserId, removed: UserId, removed_name: Option<String> },
     /// Rendered with the moderator as sender: "{by} banned {banned_name}".
     UserBanned { by: UserId, banned: UserId, banned_name: Option<String> },
-    /// WE were kicked or banned; rendered with the moderator as sender, so it
-    /// reads "{by} removed you" (Signal's wording for both).
+    /// Rendered with the former owner as sender: "{from} made {to_name} the
+    /// owner". Name snapshotted like [`Self::UserRemoved`]'s.
+    OwnershipTransferred { to: UserId, to_name: Option<String> },
+    /// WE were made the owner; rendered with the former owner as sender:
+    /// "{from} made you the owner".
+    MadeYouOwner,
+    /// WE were kicked; rendered with the moderator as sender, so it reads
+    /// "{by} removed you" (Signal's wording).
     SelfRemoved { by: UserId },
+    /// WE were banned; rendered with the moderator as sender: "{by} banned you".
+    SelfBanned { by: UserId },
+    /// We are no longer in this channel and the server kept no reason: a kick
+    /// that a sync found after the fact (a kick leaves no record) or a leave
+    /// from another of our devices. Rendered with us as sender: "You are no
+    /// longer a member of this channel".
+    NoLongerMember,
+    /// The channel was deleted; rendered with its owner as sender.
+    ChannelDeleted,
     /// A message from this peer arrived but could not be decrypted, and the
     /// ciphertext is gone (the inbox acks every polled envelope, so it is not
     /// redelivered). The session has been healed via `DecryptionErrorMessage`,
@@ -644,7 +659,14 @@ impl SystemMessage {
             Self::UserBanned { banned_name, .. } => {
                 format!("banned {}", banned_name.as_deref().unwrap_or("a member"))
             }
+            Self::OwnershipTransferred { to_name, .. } => {
+                format!("made {} the owner", to_name.as_deref().unwrap_or("a member"))
+            }
+            Self::MadeYouOwner => "made you the owner".to_string(),
             Self::SelfRemoved { .. } => "removed you".to_string(),
+            Self::SelfBanned { .. } => "banned you".to_string(),
+            Self::NoLongerMember => "are no longer a member of this channel".to_string(),
+            Self::ChannelDeleted => "deleted the channel".to_string(),
             // Rendered as "{sender_name} {description}", so this reads
             // "Alice sent a message that couldn't be delivered. ...".
             Self::DeliveryIssue => "sent a message that couldn't be delivered. The secure \
@@ -1057,6 +1079,12 @@ mod tests {
         };
         assert_eq!(removed(Some("Bob Tester")).description(), "removed Bob Tester");
         assert_eq!(removed(None).description(), "removed a member");
+        let owner = |to_name: Option<&str>| SystemMessage::OwnershipTransferred {
+            to: UserId::new(),
+            to_name: to_name.map(str::to_string),
+        };
+        assert_eq!(owner(Some("Bob")).description(), "made Bob the owner");
+        assert_eq!(owner(None).description(), "made a member the owner");
         let banned = SystemMessage::UserBanned { by: user_id, banned: UserId::new(), banned_name: None };
         assert_eq!(banned.description(), "banned a member");
     }

@@ -3,6 +3,7 @@
 //! Service layer orchestrating domain, storage, network, and crypto.
 
 pub mod ai;
+pub mod appearance;
 pub mod call_signaling;
 pub mod conversation;
 pub mod conversation_pins;
@@ -34,6 +35,7 @@ pub mod local_ai_service;
 pub mod ai_summarize;
 pub mod draft_service;
 pub mod pin_service;
+pub mod profile_visibility;
 pub mod outgoing_typing;
 pub mod presence_service;
 pub mod ephemeral_service;

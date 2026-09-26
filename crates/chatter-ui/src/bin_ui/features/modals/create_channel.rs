@@ -205,7 +205,7 @@ pub fn wire_create_channel(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                                 w.set_create_channel_description("".into());
                                 w.set_create_channel_icon_url("".into());
                                 w.set_create_channel_has_icon_preview(false);
-                                w.set_active_modal("none".into());
+                                crate::bin_ui::features::back::close(&w, "create-channel");
                                 let current_channels = w.get_channels();
                                 let mut channels: Vec<ChannelListItemData> = (0..current_channels.row_count()).filter_map(|i| current_channels.row_data(i)).collect();
                                 channels.push(slint_channel);
@@ -362,7 +362,7 @@ pub fn wire_create_channel(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                     let _ = slint::invoke_from_event_loop(move || {
                         if let Some(w) = weak_success.upgrade() {
                             w.set_create_channel_loading(false);
-                            w.set_active_modal("none".into());
+                            crate::bin_ui::features::back::close(&w, "create-channel");
                             crate::bin_ui::features::sidebar::add_private_group_to_sidebar(&w, &group_id, &group_name, member_count);
                         }
                     });
@@ -515,7 +515,7 @@ pub fn wire_invite_to_private_group(window: &MainWindow, ui_ctx: &Arc<ChatterCli
                     let _ = slint::invoke_from_event_loop(move || {
                         if let Some(w) = weak.upgrade() {
                             w.set_invite_private_group_loading(false);
-                            w.set_active_modal("none".into());
+                            crate::bin_ui::features::back::close(&w, "create-channel");
                         }
                     });
                 }

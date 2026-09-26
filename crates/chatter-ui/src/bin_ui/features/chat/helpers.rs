@@ -109,7 +109,8 @@ pub fn build_own_message_item(
         is_call: false,
         call_type: "".into(),
         call_duration: "".into(),
-        date_separator_text: Default::default(),
+        // Just sent, so today's chip.
+        date_separator_text: chatter_core::ui::chat_data::day_label(chrono::Utc::now()).into(),
         is_continuation: false,
         show_date_separator: false,
     }

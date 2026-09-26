@@ -68,6 +68,25 @@ impl ChatterClient {
         self.users().get_display_name(user_id)
     }
 
+    /// Name for a friend-request row. The server's display_name for the
+    /// peer is ciphertext without their profile key, so resolve locally, and
+    /// when nothing local knows them use the plaintext username the server
+    /// sends with the request rather than the `User <id8>` placeholder.
+    pub fn friend_request_peer_name(
+        &self,
+        user_id: &crate::domain::ids::UserId,
+        username: &str,
+    ) -> String {
+        let name = self.display_name(user_id);
+        if !username.is_empty()
+            && name == crate::services::user::friend_display_name_placeholder(user_id)
+        {
+            username.to_string()
+        } else {
+            name
+        }
+    }
+
     /// Resolve a display name *within a conversation*, so anonymous channels
     /// never leak the global profile name. In an anon group the per-group
     /// member name wins; everywhere else this is just `display_name`.
@@ -576,6 +595,33 @@ impl ChatterClient {
             // party isn't us.
             let peer = if f.requester_id == me { f.addressee_id } else { f.requester_id };
             if !out.contains(&peer) && !self.is_profile_user_blocked(&peer) {
+                out.push(peer);
+            }
+        }
+        out
+    }
+
+    /// Peers that get a friend-DM row: every listed friend, then — outside
+    /// Shield — anyone we have written to in a DM that still has history.
+    /// Removing a contact never deletes the conversation (Signal): unfriending
+    /// used to drop the row on BOTH sides, because only the friendship listed
+    /// it. A DM we never replied to stays unlisted (a stranger's cold message
+    /// is not a chat). "Delete chat" (hard-deletes the history) removes a
+    /// non-friend's row. Shield lists friends only: a non-friend DM does not
+    /// open there (`resolve_dm_conversation`).
+    pub fn dm_peers(&self) -> Vec<crate::domain::ids::UserId> {
+        let mut out = self.listed_friends();
+        let Some(me) = self.auth_state().get().current_user_id else { return out };
+        if self.anon_mode_enabled() {
+            return out;
+        }
+        let accepted = self
+            .services
+            .conversation_repo
+            .dm_conversations_sent_in(&me.to_string())
+            .unwrap_or_default();
+        for peer in accepted.iter().filter_map(|id| id.parse::<crate::domain::ids::UserId>().ok()) {
+            if peer != me && !out.contains(&peer) && !self.is_profile_user_blocked(&peer) {
                 out.push(peer);
             }
         }

@@ -5,6 +5,7 @@ import { Spacing } from "../theme/spacing.slint";
 import { Typography } from "../theme/typography.slint";
 import { Icons } from "../theme/icons.slint";
 import { Skeleton } from "skeleton.slint";
+import { Button } from "button.slint";
 
 // GIF data struct for the picker
 export struct GifData {
@@ -357,17 +358,27 @@ export component GifPicker inherits Rectangle {
                     // trending means the service is not reachable — say that
                     // rather than implying there is nothing popular today.
                     Text {
-                        text: show-search-results ? "No GIFs found" : "GIFs are unavailable";
+                        text: show-search-results ? "No GIFs found" : "Couldn't load GIFs";
                         color: Colors.text-secondary;
                         font-size: Typography.sm;
                         horizontal-alignment: center;
                     }
 
-                    if show-search-results: Text {
-                        text: "Try a different search term";
+                    Text {
+                        text: show-search-results ? "Try a different search term" : "Check your connection and try again.";
                         color: Colors.text-muted;
                         font-size: Typography.xs;
                         horizontal-alignment: center;
+                    }
+
+                    // An empty query refetches trending.
+                    if !show-search-results: HorizontalLayout {
+                        alignment: center;
+                        Button {
+                            text: "Retry";
+                            variant: "secondary";
+                            clicked => { root.search(""); }
+                        }
                     }
                 }
             }
@@ -421,7 +432,7 @@ export component GifPicker inherits Rectangle {
 
         // Klipy attribution
         HorizontalLayout {
-            height: 16px;
+            min-height: 16px;
             alignment: center;
 
             Text {

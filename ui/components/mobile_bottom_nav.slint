@@ -1,13 +1,12 @@
 // Mobile bottom navigation bar
 //
-// Shows tab bar with Chats, Calls, Contacts, Settings on mobile screens.
+// Shows tab bar with Chats, Calls, Contacts, Profile on mobile screens.
 // Hidden when keyboard is open (safe-area-bottom > nav bar threshold).
 
 import { Colors } from "../theme/colors.slint";
 import { Spacing } from "../theme/spacing.slint";
 import { Typography } from "../theme/typography.slint";
 import { Icons } from "../theme/icons.slint";
-import { AnonMode } from "../anon_mode/anon_mode_global.slint";
 
 component NavTab inherits Rectangle {
     in property <image> icon;
@@ -65,12 +64,12 @@ component NavTab inherits Rectangle {
             if root.badge-count > 0: Rectangle {
                 x: 16px;
                 y: -2px;
-                width: root.badge-count > 9 ? 18px : 16px;
-                height: 16px;
-                border-radius: 8px;
+                width: max(self.height, nav-badge-text.preferred-width + 6px);
+                height: Spacing.badge-sm;
+                border-radius: self.height / 2;
                 background: Colors.error;
 
-                Text {
+                nav-badge-text := Text {
                     text: root.badge-count > 99 ? "99+" : root.badge-count;
                     font-size: Typography.xxs;
                     font-weight: 700;
@@ -146,7 +145,10 @@ export component MobileBottomNav inherits Rectangle {
     // here — with or without an explicit width on the layout they stay packed
     // against the left edge — so the widths are computed directly. Four tabs
     // is a fixed set, so there is nothing a layout would buy us anyway.
-    property <length> tab-width: (root.width - root.side-inset * 2) / 6;
+    // No Shield tab: Shield is a mode of the chat list, toggled from its
+    // header (sidebar.slint), not a destination. No Settings tab: it is
+    // pushed from the Profile tab's account menu (owner decisions 2026-09-26).
+    property <length> tab-width: (root.width - root.side-inset * 2) / 4;
 
     NavTab {
         x: root.side-inset;
@@ -170,22 +172,8 @@ export component MobileBottomNav inherits Rectangle {
         clicked => { root.tab-selected("calls"); }
     }
 
-    // Shield in the middle slot. Anon mode is a MODE, not a destination, so
-    // it reads its active state from AnonMode rather than `active-tab` — the
-    // tab highlight follows where you are, this follows what you have switched
-    // on, and both can be true at once.
     NavTab {
         x: root.side-inset + root.tab-width * 2;
-        y: 0;
-        width: root.tab-width;
-        icon: Icons.shield;
-        label: "Shield";
-        active: AnonMode.enabled;
-        clicked => { root.tab-selected("shield"); }
-    }
-
-    NavTab {
-        x: root.side-inset + root.tab-width * 3;
         y: 0;
         width: root.tab-width;
         icon: Icons.users;
@@ -196,22 +184,15 @@ export component MobileBottomNav inherits Rectangle {
     }
 
     NavTab {
-        x: root.side-inset + root.tab-width * 4;
-        y: 0;
-        width: root.tab-width;
-        icon: Icons.settings;
-        label: "Settings";
-        active: root.active-tab == "settings";
-        clicked => { root.tab-selected("settings"); }
-    }
-
-    NavTab {
-        x: root.side-inset + root.tab-width * 5;
+        x: root.side-inset + root.tab-width * 3;
         y: 0;
         width: root.tab-width;
         label: "Profile";
         avatar: root.user-avatar;
-        use-avatar: true;
+        // No photo (none set, or not loaded yet): the person glyph, not an
+        // empty ring (REVIEW-R4 P1-4).
+        use-avatar: root.user-avatar.width > 0;
+        icon: Icons.user;
         active: root.active-tab == "profile";
         clicked => { root.tab-selected("profile"); }
     }

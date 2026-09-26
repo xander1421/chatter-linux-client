@@ -75,7 +75,8 @@ impl From<&CallHistoryEntry> for CallHistoryRowData {
     }
 }
 
-/// The second line of a row: outcome, plus duration when there was one.
+/// The second line of a row: outcome, plus duration for a call that
+/// connected. An unanswered call's ring time is not a call length.
 fn detail_line(entry: &CallHistoryEntry, is_incoming: bool) -> String {
     let outcome = match entry.result {
         CallResult::Missed if is_incoming => "Missed",
@@ -86,7 +87,7 @@ fn detail_line(entry: &CallHistoryEntry, is_incoming: bool) -> String {
         CallResult::Completed => "Outgoing",
     };
     match entry.duration_secs {
-        Some(secs) if secs > 0 => format!("{} \u{00B7} {}", outcome, format_call_duration(secs)),
+        Some(secs) if secs > 0 && entry.result == CallResult::Completed => format!("{} \u{00B7} {}", outcome, format_call_duration(secs)),
         _ => outcome.to_string(),
     }
 }
@@ -140,6 +141,14 @@ mod tests {
 
         let outgoing = entry(CallResult::Missed, CallDirection::Outgoing, None);
         assert_eq!(CallHistoryRowData::from(&outgoing).detail, "No answer");
+    }
+
+    #[test]
+    fn unconnected_rows_never_show_a_duration() {
+        let missed = entry(CallResult::Missed, CallDirection::Incoming, Some(30));
+        assert_eq!(CallHistoryRowData::from(&missed).detail, "Missed");
+        let no_answer = entry(CallResult::Missed, CallDirection::Outgoing, Some(28));
+        assert_eq!(CallHistoryRowData::from(&no_answer).detail, "No answer");
     }
 
     #[test]

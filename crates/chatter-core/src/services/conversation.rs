@@ -687,7 +687,14 @@ impl ConversationHandle {
             .filter(|m| m.sender_id != my_user_id)
             .map(|m| m.sent_at)
             .collect();
-        let _ = self.send_read_receipt(&timestamps).await;
+        // Off the caller's path: opening a conversation awaits this call for
+        // its anchor, and a receipt is a network send (session, sealed
+        // sender, or the Shield mailbox). Awaited here, a slow peer held the
+        // previous conversation on screen until it finished.
+        let handle = self.clone();
+        tokio::spawn(async move {
+            let _ = handle.send_read_receipt(&timestamps).await;
+        });
         Ok(anchor)
     }
 
@@ -777,10 +784,11 @@ impl ConversationHandle {
     /// the peer is not told, as in Signal.
     ///
     /// A friend DM loses its history and stays listed (the friendship is what
-    /// lists it); an anon DM goes entirely, its peer block staying. Groups and
-    /// channels are refused: a membership outlives a local delete — the next
-    /// sync or group message brings it back — so those are left (Channel
-    /// Settings › Leave), never deleted here.
+    /// lists it); an anon DM goes entirely, its peer block staying; a channel
+    /// we are no longer in goes entirely. Groups and live channels are
+    /// refused: a membership outlives a local delete — the next sync or group
+    /// message brings it back — so those are left (Channel Settings › Leave),
+    /// never deleted here.
     pub fn delete_conversation(&self) -> ConversationResult {
         match &self.conversation {
             ActiveConversation::AnonDm(id) => {
@@ -806,6 +814,25 @@ impl ConversationHandle {
                 self.client.attachments().attachment_repo()
                     .delete_unreferenced(&attachments)
                     .map_err(storage)
+            }
+            // A channel we are no longer in: its history, then the channel.
+            ActiveConversation::Channel(channel_id) if self.client.is_former_channel(channel_id) => {
+                let storage = |e: crate::error::StorageError| ConversationError::Other(e.to_string());
+                let messages = self.client.messages()
+                    .get_messages_local(channel_id, &ConversationType::Channel, None, u32::MAX)
+                    .map_err(ConversationError::Message)?;
+                let attachments: Vec<_> = messages
+                    .iter()
+                    .flat_map(|m| m.attachments.iter().copied())
+                    .collect::<std::collections::HashSet<_>>()
+                    .into_iter()
+                    .collect();
+                let ids: Vec<_> = messages.into_iter().map(|m| m.id).collect();
+                self.client.messages().message_repo.delete_batch(&ids).map_err(storage)?;
+                self.client.attachments().attachment_repo()
+                    .delete_unreferenced(&attachments)
+                    .map_err(storage)?;
+                self.client.channels().channel_repo.delete_channel_cascade(channel_id).map_err(storage)
             }
             ActiveConversation::AnonGroup(_) | ActiveConversation::Channel(_) => Err(
                 ConversationError::Other("a group is left, not deleted".into()),

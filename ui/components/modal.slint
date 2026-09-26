@@ -15,6 +15,13 @@ export component Modal inherits Rectangle {
     in property <bool> fill-height: false;
     in property <bool> full-screen: false;
     in property <length> bottom-inset: 0px;
+    // A confirm dialog with its own Cancel needs no second way out in the header.
+    in property <bool> show-close: true;
+    // A tab's root screen (Contacts, Calls, Profile) is where you ARE, not
+    // somewhere you were pushed to, so it has nothing to pop back out of: the
+    // tab bar is its navigation. Hides the leading chevron; pushed screens
+    // keep it.
+    in property <bool> root-screen: false;
 
     callback close();
 
@@ -53,7 +60,7 @@ export component Modal inherits Rectangle {
                 // share a vertical centre at both densities.
                 height: root.full-screen ? Spacing.header-action-box-touch : Spacing.header-action-box;
 
-                if root.full-screen: DismissButton {
+                if root.full-screen && !root.root-screen: DismissButton {
                     back: true;
                     clicked => { root.close(); }
                 }
@@ -69,7 +76,7 @@ export component Modal inherits Rectangle {
                     overflow: elide;
                 }
 
-                if !root.full-screen: DismissButton {
+                if !root.full-screen && root.show-close: DismissButton {
                     back: false;
                     clicked => { root.close(); }
                 }

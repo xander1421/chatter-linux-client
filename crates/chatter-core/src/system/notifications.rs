@@ -22,6 +22,9 @@ use notify_rust::Urgency;
 /// and a read closes it; Windows/macOS handles here cannot close by key, so
 /// there each notification is independent.
 pub struct DesktopNotifications {
+    /// Settings › Notifications › Sound. Set through
+    /// `NotificationSink::set_sound`; on until the persisted value arrives.
+    sound: std::sync::atomic::AtomicBool,
     #[cfg(target_os = "linux")]
     conversations: std::sync::Mutex<std::collections::HashMap<String, notify_rust::NotificationHandle>>,
 }
@@ -31,8 +34,31 @@ impl DesktopNotifications {
     #[must_use]
     pub fn new() -> Self {
         Self {
+            sound: std::sync::atomic::AtomicBool::new(true),
             #[cfg(target_os = "linux")]
             conversations: Default::default(),
+        }
+    }
+
+    /// Ask for the platform's default notification sound, or for silence.
+    /// Each backend's default differs, so both halves are explicit: a
+    /// freedesktop daemon decides on its own unless told, and a Windows toast
+    /// with no sound name is silent.
+    fn apply_sound(&self, notif: &mut DesktopNotif) {
+        let on = self.sound.load(std::sync::atomic::Ordering::Relaxed);
+        #[cfg(all(unix, not(target_os = "macos")))]
+        if on {
+            notif.sound_name("message-new-instant");
+        } else {
+            notif.hint(notify_rust::Hint::SuppressSound(true));
+        }
+        #[cfg(target_os = "windows")]
+        if on {
+            notif.sound_name("Default");
+        }
+        #[cfg(target_os = "macos")]
+        if on {
+            notif.sound_name("NSUserNotificationDefaultSoundName");
         }
     }
 
@@ -52,6 +78,7 @@ impl DesktopNotifications {
             notif.urgency(self.priority_to_urgency(priority));
         }
 
+        self.apply_sound(&mut notif);
         notif
             .show()
             .map_err(|e| SystemError::NotificationSend(e.to_string()))?;
@@ -82,6 +109,7 @@ impl DesktopNotifications {
         #[cfg(not(target_os = "linux"))]
         let _ = priority;
 
+        self.apply_sound(&mut notif);
         notif
             .show()
             .map_err(|e| SystemError::NotificationSend(e.to_string()))?;
@@ -107,6 +135,7 @@ impl DesktopNotifications {
         for (action_id, action_label) in actions {
             notif.action(action_id, action_label);
         }
+        self.apply_sound(&mut notif);
 
         notif
             .show()
@@ -177,6 +206,10 @@ impl super::notification_sink::NotificationSink for DesktopNotifications {
         DesktopNotifications::show(self, notification)
     }
 
+    fn set_sound(&self, enabled: bool) {
+        self.sound.store(enabled, std::sync::atomic::Ordering::Relaxed);
+    }
+
     #[cfg(target_os = "linux")]
     fn show_conversation(
         &self,
@@ -197,6 +230,7 @@ impl super::notification_sink::NotificationSink for DesktopNotifications {
         if let Some(previous) = conversations.get(conversation) {
             notif.id(previous.id());
         }
+        self.apply_sound(&mut notif);
         let handle = notif
             .show()
             .map_err(|e| SystemError::NotificationSend(e.to_string()))?;

@@ -1,6 +1,7 @@
 // Mention autocomplete popup for @user, #channel, @here, @all suggestions
 
 import { Colors } from "../theme/colors.slint";
+import { Appearance } from "../theme/appearance.slint";
 import { Spacing } from "../theme/spacing.slint";
 import { Typography } from "../theme/typography.slint";
 
@@ -54,7 +55,7 @@ export component MentionAutocomplete inherits Rectangle {
         spacing: 0;
 
         for suggestion[index] in root.suggestions: Rectangle {
-            height: 40px;
+            height: 40px * Appearance.text-grow;
             border-radius: Spacing.radius-sm;
             background: index == root.selected-index ? Colors.primary.with-alpha(0.2) : (item-area.has-hover ? Colors.surface-hover : transparent);
 

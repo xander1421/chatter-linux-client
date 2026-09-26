@@ -4,6 +4,7 @@
 import { Colors } from "theme/colors.slint";
 import { Spacing } from "theme/spacing.slint";
 import { Typography } from "theme/typography.slint";
+import { Icons } from "theme/icons.slint";
 
 // Import auth screens
 import { LoginPage } from "pages/login.slint";
@@ -41,6 +42,8 @@ import { UnifiedSearch, QuickSwitcherItem, SearchResult } from "components/unifi
 
 // Import settings
 import { SettingsScreen, LocalAIProviderData, CatalogModelData } from "settings/settings_screen.slint";
+import { AccountMenu } from "settings/account_menu.slint";
+import { CreateMenu, NewChatPicker } from "sidebar/create_menu.slint";
 import { JarvisMemoryModal, MemoryFactData, MemoryEntityData, MemoryGraphNodeData, MemoryGraphEdgeData } from "modals/jarvis_memory.slint";
 
 // Import components
@@ -106,8 +109,19 @@ export component App inherits Rectangle {
     // a strip for it (bottom-inset) must use this same condition: they used to
     // omit `mobile-show-chat`, so over an open chat the strip showed the chat
     // composer through the page instead of the (hidden) tab bar.
+    // Settings is a pushed full-screen page, not a tab, so it covers the bar
+    // the same way a pushed conversation does.
     property <bool> bottom-nav-visible: root.compact-layout && root.current-view == "main"
-        && !root.keyboard-open && !root.mobile-show-chat;
+        && !root.keyboard-open && !root.mobile-show-chat && !root.settings-open;
+    // The Chats tab's floating create button: only on the list itself, never
+    // over a pushed screen, a dialog, the search palette or selection mode.
+    property <bool> fab-visible: root.bottom-nav-visible && root.active-tab == "chats"
+        && root.active-modal == "none" && !root.unified-search-open && !root.selection-mode;
+    // Its top edge: above the dock and, during a call, the return-to-call
+    // bar stacked on it — the same strip the main column reserves for them.
+    property <length> fab-y: root.height - Spacing.fab-size - Spacing.md
+        - (Spacing.bottom-nav-height + Spacing.sm + root.safe-area-bottom)
+        - (root.active-call-visible ? 44px + Spacing.sm : 0px);
 
     // ========== View routing ==========
     // Views: "loading", "login", "register", "recovery", "main"
@@ -234,6 +248,7 @@ export component App inherits Rectangle {
                                             // already stashed on paste)
     callback link-approve-open();
     callback link-approve-close();
+    callback link-approve-scan();
 
     // ========== Recovery codes modal properties ==========
     in property <[string]> recovery-codes: [];
@@ -280,29 +295,14 @@ export component App inherits Rectangle {
     // the entire chat column and left a blank screen.
     property <bool> sidebar-is-rail: root.is-small-screen || root.sidebar-collapsed;
     in-out property <bool> sidebar-hidden: false;
-    // Which mobile bottom-nav tab reads as current. Purely the bar's own
-    // highlight — the destinations it opens are modals and panels that already
-    // own their state, so nothing else reads this.
-    property <string> mobile-nav-tab: "chats";
-    // What the bar actually highlights. Derived, not stored: the destinations
-    // are modals and panes that can be left by their own X or back button
-    // without the bar hearing about it, and a stored value went stale every
-    // time that happened — sitting on "Contacts" while you were back in a chat.
-    property <string> mobile-nav-tab-effective:
-          root.active-modal == "friends" ? "contacts"
-        : root.active-modal == "settings" ? "settings"
-        : root.active-modal == "calls" ? "calls"
-        : root.active-modal == "user-profile" || root.active-modal == "edit-profile" ? "profile"
-        : root.mobile-show-chat ? "chats"
-        // Contacts, Settings, Calls and Profile exist ONLY as modals. Once the
-        // modal is gone — closed with Back, say — the user is on the chat list,
-        // but `mobile-nav-tab` still named the modal and the highlight stayed
-        // on a tab whose screen was no longer up (§112u). Fall back to the
-        // screen that is actually showing.
-        : (root.mobile-nav-tab == "contacts" || root.mobile-nav-tab == "settings"
-           || root.mobile-nav-tab == "calls" || root.mobile-nav-tab == "profile")
-            ? "chats"
-        : root.mobile-nav-tab;
+    // The current top-level destination: "chats", "calls", "contacts" or
+    // "profile" (the account menu). Separate from `modal-stack` below — a
+    // screen pushed over a tab (someone's profile, Settings, Sessions) never
+    // changes which tab you are on, so the bar's highlight and Back both stay
+    // truthful. On a two-pane layout the sidebar's Calls / Contacts / avatar
+    // select it.
+    // Navigation rules: crates/chatter-ui/src/bin_ui/features/back.rs.
+    in-out property <string> active-tab: "chats";
     // Single-pane routing on mobile: false = conversation list, true = the
     // conversation itself. The two are mutually exclusive and each takes the
     // whole width — there is no rail beside them, because the bottom tab bar
@@ -522,8 +522,36 @@ export component App inherits Rectangle {
     callback load-more-thread-replies();
 
     // ========== Modal state ==========
-    // Modals: "none", "settings", "create-channel", "join-channel", "user-profile", "friend-requests", "friends", "forward-message", "sessions", "search", "create-section"
-    in-out property <string> active-modal: "none";
+    // Screens and dialogs pushed over the current tab, top last. Changed only
+    // through nav-push / nav-close / nav-pop (Rust: features/back.rs), so
+    // closing one reveals the one it was pushed over.
+    in-out property <[string]> modal-stack: [];
+    // The top of the stack, or "none". Each modal's `if` reads this.
+    out property <string> active-modal: root.modal-stack.length > 0
+        ? root.modal-stack[root.modal-stack.length - 1] : "none";
+    // "settings" is anywhere on the stack. Settings stays mounted under what
+    // it opens (Sessions, Link device, ...), so it cannot key off
+    // `active-modal`; written by back.rs alongside the stack.
+    in-out property <bool> settings-open: false;
+    callback nav-push(string);
+
+    // Shared by every entry to Create Channel / New Section (sidebar, the
+    // create menu, the account menu), so they cannot open it differently.
+    function start-create-channel() {
+        root.create-channel-initial-tab = 0;
+        root.nav-push("create-channel");
+        root.open-create-channel();
+    }
+    function start-create-section() {
+        root.create-section-rename-mode = false;
+        root.create-section-name = "";
+        root.create-section-emoji = "📁";
+        root.create-section-id = "";
+        root.nav-push("create-section");
+    }
+    // Close that screen and everything pushed above it.
+    callback nav-close(string);
+    callback nav-pop();
 
     // Create channel modal properties
     in-out property <string> create-channel-name: "";
@@ -711,9 +739,15 @@ export component App inherits Rectangle {
     in-out property <bool> settings-typing-indicators: true;
     // "none" | "name_only" | "name_and_message" (NotificationDetailLevel::as_str)
     in-out property <string> settings-notification-detail: "none";
+    // "everyone" | "contacts" | "nobody" (core ProfileVisibility::as_str)
+    in property <string> settings-profile-visibility: "everyone";
+    in property <string> settings-profile-visibility-pending: "";
+    in property <bool> settings-profile-visibility-busy: false;
+    in property <string> settings-profile-visibility-error: "";
+    in-out property <string> settings-profile-visibility-pin: "";
     in property <string> settings-identity-fingerprint: "";
     in-out property <bool> settings-sealed-sender-unrestricted: false;
-    in property <int> settings-prekey-count: 0;
+    in-out property <bool> settings-username-discoverable: true;
 
     // Settings security (Change PIN / Key Backup)
     in-out property <string> settings-change-pin-current: "";
@@ -932,7 +966,6 @@ export component App inherits Rectangle {
     callback friends-modal-switch-tab(string);
     callback friends-view-profile(string);
     callback friends-start-dm(string);
-    callback friends-remove-friend(string);
     callback friends-accept-request(string);
     callback friends-decline-request(string);
     callback friends-cancel-request(string);
@@ -949,6 +982,7 @@ export component App inherits Rectangle {
     // returns empty on most Wayland compositors. This callback routes
     // through chatter-ui's arboard handle to bypass the mismatch.
     callback friends-paste-code();
+    callback friends-scan-code();
     callback friends-connect-via-code(string);
     callback friends-connect-private(string);  // Private anon DM (no server)
     callback friends-accept-private-request(string);   // Accept anon DM request
@@ -986,10 +1020,13 @@ export component App inherits Rectangle {
     callback settings-read-receipts-changed(bool);
     callback settings-typing-indicators-changed(bool);
     callback settings-notification-detail-changed(string);
+    callback settings-profile-visibility-selected(string);
+    callback settings-profile-visibility-confirmed(string, string);  // key, PIN
+    callback settings-profile-visibility-cancelled();
     callback settings-search-shortcut-changed(string);
     callback settings-copy-fingerprint();
     callback settings-sealed-sender-changed(bool);
-    callback settings-refresh-keys();
+    callback settings-username-discoverable-changed(bool);
     callback settings-change-pin(string, string);  // current_pin, new_pin
     callback settings-retry-backup(string);  // pin
 
@@ -1026,6 +1063,7 @@ export component App inherits Rectangle {
     callback channel-settings-ban-member(string);  // user-id
     callback channel-settings-set-member-muted(string, bool, int);  // user-id, muted, minutes (0 = until unmuted)
     callback channel-settings-unban-member(string);  // user-id
+    callback channel-settings-transfer-ownership(string);  // new owner's user-id
     callback channel-settings-invite-members();  // opens invite modal for private groups
     callback channel-settings-invite-channel-members();  // opens invite modal for regular channels
     callback invite-member-toggle-user(int);  // index - toggles selection
@@ -1117,18 +1155,27 @@ export component App inherits Rectangle {
             }
             // Ctrl+,: Open settings
             if (event.modifiers.control && event.text == ",") {
-                root.active-modal = "settings";
+                root.nav-push("settings");
+                root.settings-clicked();
                 return accept;
             }
             // Ctrl+/: Toggle keyboard shortcuts help
             if (event.modifiers.control && event.text == "/") {
-                root.active-modal = root.active-modal == "keyboard-shortcuts" ? "none" : "keyboard-shortcuts";
+                if (root.active-modal == "keyboard-shortcuts") {
+                    root.nav-close("keyboard-shortcuts");
+                } else {
+                    root.nav-push("keyboard-shortcuts");
+                }
                 return accept;
             }
-            // Escape: Close active modal or overlay
+            // Escape: close the top modal, else leave a non-Chats tab
             if (event.text == Key.Escape) {
                 if (root.active-modal != "none") {
-                    root.active-modal = "none";
+                    root.nav-pop();
+                    return accept;
+                }
+                if (root.active-tab != "chats") {
+                    root.active-tab = "chats";
                     return accept;
                 }
             }
@@ -1267,6 +1314,10 @@ export component App inherits Rectangle {
 
         // Main chat layout — parent Rectangle already accounts for all insets.
         if current-view == "main": VerticalLayout {
+            // Layer order in this rectangle: chat column (-2), tab screens,
+            // the bottom bar and the return-to-call bar (-1), then pushed
+            // modals (0) — so a dialog's backdrop covers the tab bar too.
+            z: -2;
             width: 100%;
             height: parent.height;
 
@@ -1370,55 +1421,53 @@ export component App inherits Rectangle {
                     root.saved-messages-clicked();
                 }
                 friends-clicked => {
-                    root.active-modal = "friends";
+                    root.active-tab = "contacts";
                 }
                 // Wide-layout entry to the Calls screen — the same modal and
                 // the same load the phone tab bar's Calls tab raises.
                 calls-clicked => {
-                    root.active-modal = "calls";
+                    root.active-tab = "calls";
                     root.calls-tab-clicked();
                 }
+                // The sidebar's one Requests row fires all four below, in this
+                // order. The first opens Contacts › Requests on the first
+                // sub-tab that has something in it (Received when none); the
+                // other three only refresh their lists. Each used to select its
+                // own sub-tab, so the last — Channels — always won, even with
+                // a friend request waiting (REVIEW-R4 P1-11).
                 friend-requests-clicked => {
-                    // Open friends modal on Requests → Received. The Received tab
-                    // is populated by the FriendRequestsUpdated event path (with
-                    // decrypted sender name/avatar/note), so no refresh callback
-                    // is needed here — just reveal it.
                     root.friends-modal-tab = "requests";
-                    root.friends-requests-sub-tab = "received";
-                    root.active-modal = "friends";
+                    root.friends-requests-sub-tab =
+                        root.friends-received-requests.length > 0 ? "received"
+                        : root.pending-message-requests > 0 ? "private"
+                        : root.pending-group-invites > 0 ? "groups"
+                        : root.pending-channel-invites > 0 ? "channels"
+                        : "received";
+                    root.active-tab = "contacts";
                 }
                 message-requests-clicked => {
-                    // Open friends modal with requests tab and private sub-tab selected
-                    root.friends-modal-tab = "requests";
-                    root.friends-requests-sub-tab = "private";
-                    root.active-modal = "friends";
                     root.message-requests-clicked();
                 }
                 group-invites-clicked => {
-                    // Open friends modal with requests tab and groups sub-tab selected
-                    root.friends-modal-tab = "requests";
-                    root.friends-requests-sub-tab = "groups";
-                    root.active-modal = "friends";
                     root.group-invites-clicked();
                 }
                 channel-invites-clicked => {
-                    // Open friends modal with requests tab and channels sub-tab selected
-                    root.friends-modal-tab = "requests";
-                    root.friends-requests-sub-tab = "channels";
-                    root.active-modal = "friends";
                     root.channel-invites-clicked();
                 }
+                // The avatar and the gear both open the account menu, which
+                // is where Settings lives now.
                 profile-clicked => {
-                    root.profile-clicked();
+                    root.active-tab = "profile";
                 }
                 create-channel-clicked => {
-                    root.create-channel-initial-tab = 0;
-                    root.active-modal = "create-channel";
-                    root.open-create-channel();
+                    root.start-create-channel();
+                }
+                create-clicked => {
+                    root.nav-push("create-menu");
                 }
                 join-channel-clicked => {
                     root.create-channel-initial-tab = 1;
-                    root.active-modal = "create-channel";
+                    root.nav-push("create-channel");
                     root.open-join-channel();
                 }
                 toggle-collapsed => {
@@ -1427,11 +1476,7 @@ export component App inherits Rectangle {
                     root.toggle-sidebar();
                 }
                 create-section-clicked => {
-                    root.create-section-rename-mode = false;
-                    root.create-section-name = "";
-                    root.create-section-emoji = "📁";
-                    root.create-section-id = "";
-                    root.active-modal = "create-section";
+                    root.start-create-section();
                 }
                 section-toggle-expanded(id) => {
                     root.section-toggle-expanded(id);
@@ -1448,7 +1493,7 @@ export component App inherits Rectangle {
                     root.create-section-id = id;
                     // Rust side should set name/emoji before opening
                     root.rename-section-clicked(id);
-                    root.active-modal = "create-section";
+                    root.nav-push("create-section");
                 }
                 move-to-section(conv-id, conv-type, section-id) => {
                     root.move-to-section(conv-id, conv-type, section-id);
@@ -1472,8 +1517,7 @@ export component App inherits Rectangle {
                     root.remove-from-section(conv-id);
                 }
                 settings-clicked => {
-                    root.active-modal = "settings";
-                    root.settings-clicked();
+                    root.active-tab = "profile";
                 }
                 anon-mode-clicked => {
                     root.toggle-anon-mode();
@@ -1794,7 +1838,9 @@ export component App inherits Rectangle {
         } // end VerticalLayout (banner + chat area)
 
     // ========== Modal overlay layer ==========
-    // Semi-transparent backdrop when any modal is active
+    // Semi-transparent backdrop when any modal is active. Not under Settings:
+    // it is a full-screen page drawn at z -1 (see SettingsScreen below), so a
+    // backdrop here would sit over it and turn every tap into a close.
     if active-modal != "none" && active-modal != "settings": Rectangle {
         background: Colors.background.with-alpha(0.5);
 
@@ -1802,7 +1848,7 @@ export component App inherits Rectangle {
         TouchArea {
             clicked => {
                 // Close modal when clicking backdrop
-                root.active-modal = "none";
+                root.nav-pop();
             }
         }
     }
@@ -1836,7 +1882,7 @@ export component App inherits Rectangle {
         join-joining: root.join-channel-joining;
 
         close => {
-            root.active-modal = "none";
+            root.nav-close("create-channel");
         }
         join-search(q) => {
             root.search-channels(q);
@@ -1875,7 +1921,7 @@ export component App inherits Rectangle {
         loading: root.invite-private-group-loading;
 
         close => {
-            root.active-modal = "none";
+            root.nav-close("invite-private-group");
         }
         invite(friends) => {
             root.invite-to-private-group(friends);
@@ -1897,7 +1943,7 @@ export component App inherits Rectangle {
         loading: root.invite-member-loading;
 
         close => {
-            root.active-modal = "none";
+            root.nav-close("invite-member");
         }
         toggle-user(idx) => {
             root.invite-member-toggle-user(idx);
@@ -1910,9 +1956,11 @@ export component App inherits Rectangle {
         }
     }
 
-    // User Profile Modal. Stays mounted under Edit Profile — the only way into
-    // that modal is this page's Edit button — so its backdrop dims the profile
-    // it edits rather than the chat list (§112u).
+    // User Profile — a pushed screen (anyone's profile, or your own from the
+    // account menu's My Profile), over whatever tab it was opened from; Back
+    // returns there. Stays mounted under Edit Profile — the only way into
+    // that modal is this page's Edit button — so its backdrop dims the
+    // profile it edits (§112u).
     if root.active-modal == "user-profile" || root.active-modal == "edit-profile": UserProfileModal {
         show-modal: true;
         user-id: root.profile-user-id;
@@ -1941,13 +1989,9 @@ export component App inherits Rectangle {
         shared-items: root.profile-shared-items;
         shared-loading: root.profile-shared-loading;
         mobile-mode: root.compact-layout;
-        // Keep the tab bar visible under the profile page — unless the
-        // keyboard has replaced it, in which case there is nothing to leave
-        // room for. Same expression the Contacts screen uses.
-        bottom-inset: root.bottom-nav-visible ? Spacing.bottom-nav-height + Spacing.sm + root.safe-area-bottom : 0px;
 
         close => {
-            root.active-modal = "none";
+            root.nav-close("user-profile");
             root.profile-show-safety-number = false;
         }
         toggle-mute => {
@@ -1994,7 +2038,8 @@ export component App inherits Rectangle {
         // Unblocking lives only in Friends › Blocked.
         manage-blocked => {
             root.friends-modal-tab = "blocked";
-            root.active-modal = "friends";
+            root.nav-close("user-profile");
+            root.active-tab = "contacts";
             root.friends-modal-switch-tab("blocked");
         }
         edit-profile => {
@@ -2018,7 +2063,7 @@ export component App inherits Rectangle {
         error-message: root.edit-profile-error;
 
         close => {
-            root.active-modal = "user-profile";
+            root.nav-close("edit-profile");
         }
         save(display-name, bio) => {
             root.edit-profile-save(display-name, bio);
@@ -2036,10 +2081,11 @@ export component App inherits Rectangle {
         confirmed => {
             if root.recovery-codes-regenerated {
                 root.recovery-codes-regenerated = false;
-                root.active-modal = "settings";
+                root.nav-close("recovery-codes");
             } else {
                 // After recovery codes, show the sealed-sender explainer.
-                root.active-modal = "sealed-sender-intro";
+                root.nav-close("recovery-codes");
+                root.nav-push("sealed-sender-intro");
                 root.recovery-codes-confirmed();
             }
         }
@@ -2054,7 +2100,7 @@ export component App inherits Rectangle {
         allow-from-anyone <=> root.settings-sealed-sender-unrestricted;
 
         confirmed => {
-            root.active-modal = "none";
+            root.nav-close("sealed-sender-intro");
             root.sealed-sender-intro-confirmed(root.settings-sealed-sender-unrestricted);
         }
     }
@@ -2073,18 +2119,58 @@ export component App inherits Rectangle {
         approving: root.link-approve-busy;
 
         close => {
-            root.active-modal = "none";
+            root.nav-close("link-device-approve");
             root.link-approve-close();
         }
+        can-scan: root.is-mobile-platform;
+        scan => { root.link-approve-scan(); }
         paste-changed(t) => { root.link-approve-paste-changed(t); }
         approve(p) => { root.link-approve-submit(p); }
     }
 
-    // Calls screen — the bottom nav's "Calls" tab. A modal for the same
-    // reason Contacts and Settings are: on a phone it is a full-screen page
-    // reached from the tab bar, and the bar keeps its strip at the bottom.
-    if root.active-modal == "calls": CallHistoryScreen {
+    // Account menu — the "Profile" tab. A tab screen like Calls and Contacts:
+    // z -1, under anything pushed over it and under the bottom bar. Settings
+    // and My Profile are pushed from here, so Back returns to it.
+    if root.active-tab == "profile": AccountMenu {
+        z: -1;
+        show-modal: true;
         mobile-mode: root.compact-layout;
+        root-screen: true;
+        bottom-inset: root.bottom-nav-visible ? Spacing.bottom-nav-height + Spacing.sm + root.safe-area-bottom : 0px;
+        display-name: root.user-display-name;
+        username: root.settings-username;
+        avatar: root.user-avatar-source;
+        initials: root.user-initials;
+
+        close => {
+            root.active-tab = "chats";
+        }
+        my-profile => {
+            root.nav-push("user-profile");
+            root.profile-clicked();
+        }
+        saved-messages => {
+            root.active-tab = "chats";
+            root.mobile-show-chat = true;
+            root.saved-messages-clicked();
+        }
+        new-channel => {
+            root.start-create-channel();
+        }
+        settings => {
+            root.nav-push("settings");
+            root.settings-clicked();
+        }
+    }
+
+    // Calls screen — the "Calls" tab. Like Contacts it is a tab
+    // screen, not a modal: z -1 keeps it under anything pushed over it and
+    // under the bottom bar, whose strip it leaves free.
+    if root.active-tab == "calls": CallHistoryScreen {
+        z: -1;
+        mobile-mode: root.compact-layout;
+        // A tab's root screen: the tab bar navigates, no back chevron.
+        root-screen: true;
         bottom-inset: root.bottom-nav-visible ? Spacing.bottom-nav-height + Spacing.sm + root.safe-area-bottom : 0px;
         show-modal: true;
         rows: root.call-history-rows;
@@ -2092,19 +2178,19 @@ export component App inherits Rectangle {
         active-filter: root.call-history-filter;
 
         close => {
-            root.active-modal = "none";
+            root.active-tab = "chats";
         }
         filter-changed(f) => {
             root.call-history-filter = f;
             root.call-history-filter-changed(f);
         }
         open-conversation(id, kind) => {
-            root.active-modal = "none";
+            root.active-tab = "chats";
             root.mobile-show-chat = true;
             root.call-history-open(id, kind);
         }
         call-back(id, kind, video) => {
-            root.active-modal = "none";
+            root.active-tab = "chats";
             root.mobile-show-chat = true;
             root.call-history-redial(id, kind, video);
         }
@@ -2115,8 +2201,11 @@ export component App inherits Rectangle {
 
     // Friend Requests Modal (legacy)
     // Friends Modal (comprehensive)
-    if root.active-modal == "friends": FriendsModal {
+    if root.active-tab == "contacts": FriendsModal {
+        z: -1;
         mobile-mode: root.compact-layout;
+        // A tab's root screen: the tab bar navigates, no back chevron.
+        root-screen: true;
         // Keep the tab bar visible under the Contacts screen — unless the
         // keyboard has replaced it, in which case there is nothing to leave
         // room for.
@@ -2141,7 +2230,7 @@ export component App inherits Rectangle {
         show-qr <=> root.friends-show-qr;
 
         close => {
-            root.active-modal = "none";
+            root.active-tab = "chats";
         }
         switch-tab(tab) => {
             root.friends-modal-switch-tab(tab);
@@ -2151,9 +2240,6 @@ export component App inherits Rectangle {
         }
         start-dm(user-id) => {
             root.friends-start-dm(user-id);
-        }
-        remove-friend(user-id) => {
-            root.friends-remove-friend(user-id);
         }
         accept-request(user-id) => {
             root.friends-accept-request(user-id);
@@ -2179,8 +2265,12 @@ export component App inherits Rectangle {
         copy-code => {
             root.friends-copy-code();
         }
+        can-scan: root.is-mobile-platform;
         paste-code => {
             root.friends-paste-code();
+        }
+        scan-code => {
+            root.friends-scan-code();
         }
         connect-via-code(code) => {
             root.friends-connect-via-code(code);
@@ -2220,7 +2310,7 @@ export component App inherits Rectangle {
         loading: root.forward-loading;
 
         close => {
-            root.active-modal = "none";
+            root.nav-close("forward-message");
         }
         forward(target-id) => {
             root.forward-message(target-id);
@@ -2239,7 +2329,7 @@ export component App inherits Rectangle {
         pending-links: root.sessions-pending-links;
 
         close => {
-            root.active-modal = "none";
+            root.nav-close("sessions");
         }
         cancel-pending-link(uuid) => {
             root.cancel-pending-link(uuid);
@@ -2320,7 +2410,7 @@ export component App inherits Rectangle {
         error-message: root.channel-settings-error;
 
         close => {
-            root.active-modal = "none";
+            root.nav-close("channel-settings");
         }
         save-settings(name, description) => {
             root.channel-settings-save(name, description);
@@ -2342,6 +2432,9 @@ export component App inherits Rectangle {
         }
         unban-member(user-id) => {
             root.channel-settings-unban-member(user-id);
+        }
+        transfer-ownership(user-id) => {
+            root.channel-settings-transfer-ownership(user-id);
         }
         remove-member(user-id) => {
             root.channel-settings-remove-member(user-id);
@@ -2371,7 +2464,7 @@ export component App inherits Rectangle {
         verifying: root.anon-mode-verifying;
 
         close => {
-            root.active-modal = "none";
+            root.nav-close("anon-mode-pin");
         }
         submit(pin) => {
             root.submit-anon-mode-pin(pin);
@@ -2379,6 +2472,40 @@ export component App inherits Rectangle {
     }
 
     // Create/Rename Section Modal
+    // The '+' create menu: from the Chats tab's floating button on a phone,
+    // from the sidebar header's '+' on two-pane. Replaces the in-list
+    // "+ New Channel" / "+ New Section" rows (owner decision 2026-09-26).
+    if root.active-modal == "create-menu": CreateMenu {
+        card-x: root.compact-layout
+            ? root.width - self.card-width - Spacing.md
+            : Spacing.sidebar-width - self.card-width - Spacing.sm;
+        card-y: root.compact-layout
+            ? root.fab-y - self.card-height - Spacing.sm
+            : root.safe-area-top + (root.is-mobile-platform ? Spacing.header-height-touch : Spacing.header-height);
+        close => { root.nav-close("create-menu"); }
+        new-chat => {
+            root.nav-close("create-menu");
+            root.nav-push("new-chat");
+        }
+        new-channel => {
+            root.nav-close("create-menu");
+            root.start-create-channel();
+        }
+        new-section => {
+            root.nav-close("create-menu");
+            root.start-create-section();
+        }
+    }
+
+    if root.active-modal == "new-chat": NewChatPicker {
+        mobile-mode: root.compact-layout;
+        friends: root.friends-list;
+        close => { root.nav-close("new-chat"); }
+        // Same path as Contacts' Message button: core opens the DM and
+        // returns to Chats with the conversation showing.
+        pick(user-id) => { root.friends-start-dm(user-id); }
+    }
+
     if root.active-modal == "create-section": CreateSectionModal {
         show-modal: true;
         rename-mode: root.create-section-rename-mode;
@@ -2388,7 +2515,7 @@ export component App inherits Rectangle {
         loading: root.create-section-loading;
 
         close => {
-            root.active-modal = "none";
+            root.nav-close("create-section");
         }
         create-section(name, emoji) => {
             root.create-section(name, emoji);
@@ -2405,7 +2532,7 @@ export component App inherits Rectangle {
         background: Colors.overlay;
 
         TouchArea {
-            clicked => { root.active-modal = "none"; }
+            clicked => { root.nav-close("keyboard-shortcuts"); }
         }
 
         Rectangle {
@@ -2452,7 +2579,7 @@ export component App inherits Rectangle {
                         }
 
                         shortcut-close := TouchArea {
-                            clicked => { root.active-modal = "none"; }
+                            clicked => { root.nav-close("keyboard-shortcuts"); }
                         }
                     }
                 }
@@ -2520,15 +2647,19 @@ export component App inherits Rectangle {
         graph-nodes: root.jarvis-memory-graph-nodes;
         graph-edges: root.jarvis-memory-graph-edges;
         stats-label: root.jarvis-memory-stats;
-        close => { root.active-modal = "none"; }
+        close => { root.nav-close("jarvis-memory"); }
         select-entity(id) => { root.jarvis-memory-select-entity(id); }
         refresh => { root.jarvis-memory-refresh(); }
     }
 
-    // Settings screen (full screen overlay)
-    if active-modal == "settings": SettingsScreen {
+    // Settings screen — pushed from the account menu (full-screen page, the
+    // tab bar hidden under it). z -1 rather than 0 because what Settings
+    // opens (Sessions, Link device, Recovery codes, ...) is declared above
+    // and has to draw over it.
+    if root.settings-open: SettingsScreen {
+        z: -1;
         mobile-platform: root.is-mobile-platform;
-        bottom-inset: root.bottom-nav-visible ? Spacing.bottom-nav-height + Spacing.sm + root.safe-area-bottom : 0px;
+        shield-toggled => { root.toggle-anon-mode(); }
         display-name: root.settings-display-name;
         username: root.settings-username;
         session-count: root.settings-session-count;
@@ -2541,10 +2672,15 @@ export component App inherits Rectangle {
         read-receipts-enabled <=> root.settings-read-receipts;
         typing-indicators-enabled <=> root.settings-typing-indicators;
         notification-detail <=> root.settings-notification-detail;
+        profile-visibility: root.settings-profile-visibility;
+        profile-visibility-pending: root.settings-profile-visibility-pending;
+        profile-visibility-busy: root.settings-profile-visibility-busy;
+        profile-visibility-error: root.settings-profile-visibility-error;
+        profile-visibility-pin <=> root.settings-profile-visibility-pin;
         search-shortcut <=> root.search-shortcut-pref;
         identity-fingerprint: root.settings-identity-fingerprint;
         sealed-sender-unrestricted <=> root.settings-sealed-sender-unrestricted;
-        prekey-count: root.settings-prekey-count;
+        username-discoverable <=> root.settings-username-discoverable;
         // Security (PIN / Backup)
         change-pin-current <=> root.settings-change-pin-current;
         change-pin-new <=> root.settings-change-pin-new;
@@ -2593,7 +2729,7 @@ export component App inherits Rectangle {
             root.settings-change-password(current, new);
         }
         view-sessions-clicked => {
-            root.active-modal = "sessions";
+            root.nav-push("sessions");
             root.settings-view-sessions();
         }
         logout-clicked => {
@@ -2606,7 +2742,7 @@ export component App inherits Rectangle {
             root.settings-delete-account-confirmed(password);
         }
         close-settings => {
-            root.active-modal = "none";
+            root.nav-close("settings");
         }
         read-receipts-changed(value) => {
             root.settings-read-receipts-changed(value);
@@ -2617,6 +2753,15 @@ export component App inherits Rectangle {
         notification-detail-changed(value) => {
             root.settings-notification-detail-changed(value);
         }
+        profile-visibility-selected(key) => {
+            root.settings-profile-visibility-selected(key);
+        }
+        profile-visibility-confirmed(key, pin) => {
+            root.settings-profile-visibility-confirmed(key, pin);
+        }
+        profile-visibility-cancelled => {
+            root.settings-profile-visibility-cancelled();
+        }
         search-shortcut-changed(value) => {
             root.settings-search-shortcut-changed(value);
         }
@@ -2626,8 +2771,8 @@ export component App inherits Rectangle {
         sealed-sender-changed(value) => {
             root.settings-sealed-sender-changed(value);
         }
-        refresh-keys-clicked => {
-            root.settings-refresh-keys();
+        username-discoverable-changed(value) => {
+            root.settings-username-discoverable-changed(value);
         }
         change-pin(current, new) => {
             root.settings-change-pin(current, new);
@@ -2674,7 +2819,7 @@ export component App inherits Rectangle {
             root.settings-local-ai-refresh();
         }
         local-ai-open-memory => {
-            root.active-modal = "jarvis-memory";
+            root.nav-push("jarvis-memory");
             root.jarvis-memory-refresh();
         }
         local-ai-select-provider(kind) => {
@@ -2949,6 +3094,7 @@ export component App inherits Rectangle {
         can-delete-for-everyone: root.context-menu-can-delete-for-everyone;
         is-pinned: root.context-menu-is-pinned;
         has-attachments: root.context-menu-has-attachments;
+        can-thread: root.conversation-kind == ConversationKind.channel;
 
         close => {
             root.context-menu-visible = false;
@@ -3106,8 +3252,12 @@ export component App inherits Rectangle {
     // Positioned against `parent` (the inset content layer), like the tab bar:
     // `root.height` counted both system insets a second time and dropped the
     // bar under the tabs.
-    if root.active-call-visible && (root.active-modal != "none"
+    // Layered with the tab bar (z -1), under every pushed modal: a dialog's
+    // backdrop dims it and takes its taps, so it is live only when no dialog
+    // is open — the same rule Signal's in-call bar follows.
+    if root.active-call-visible && (root.active-tab != "chats" || root.active-modal != "none"
         || (root.compact-layout && !root.mobile-show-chat)): ReturnToCallBar {
+        z: -1;
         call-data: root.active-call-data;
         width: min(420px, parent.width - 2 * Spacing.lg);
         x: (parent.width - self.width) / 2;
@@ -3115,7 +3265,7 @@ export component App inherits Rectangle {
             ? Spacing.bottom-nav-height + Spacing.sm + root.safe-area-bottom
             : Spacing.lg);
         clicked => {
-            root.active-modal = "none";
+            root.active-tab = "chats";
             root.mobile-show-chat = true;
             if root.compact-layout {
                 root.active-call-fullscreen = true;
@@ -3170,12 +3320,11 @@ export component App inherits Rectangle {
     // all existed already, just buried in the rail's bottom cluster
     // where they cost an expand-collapse round trip to reach.
     //
-    // Declared last so it paints AND receives input above the full-screen
-    // modals (Contacts, Settings). Those carve a strip out of themselves so
-    // the bar stays visible, but z-order is what decides who gets the tap,
-    // and as a child of the main column the bar lost it every time — visible,
-    // undimmed, and completely inert. A matching spacer up in that column
-    // reserves its height, so nothing above is overlapped.
+    // Layered at z -1: above the chat column and the tab screens (Contacts,
+    // Settings, Calls — which carve a strip out of themselves for it), below
+    // every pushed modal, so a dialog's backdrop dims the bar and takes its
+    // taps instead of letting the user switch tabs out from under the dialog.
+    // A matching spacer up in the main column reserves its height.
     // Hidden while the IME is up, where it would otherwise sit on the keyboard.
     // Not inside a conversation: a chat is a pushed screen, and the tab bar
     // belongs to the level you pushed FROM. Keeping it there costs a row of
@@ -3183,40 +3332,54 @@ export component App inherits Rectangle {
     // covers — Telegram drops it on the same transition.
     // Only in the app proper: on login / register / recovery it offered
     // Chats, Settings and Profile to someone who is not signed in.
+    // Compose FAB (Signal / Telegram): bottom-right of the Chats tab. z -1
+    // like the bar, so a pushed dialog's backdrop covers it.
+    if root.fab-visible: Rectangle {
+        z: -1;
+        width: Spacing.fab-size;
+        height: Spacing.fab-size;
+        x: parent.width - self.width - Spacing.md;
+        y: root.fab-y;
+        border-radius: self.width / 2;
+        background: fab-touch.pressed ? Colors.primary-hover : Colors.primary;
+        drop-shadow-blur: Spacing.neo-blur-lg;
+        drop-shadow-offset-y: Spacing.neo-offset-md;
+        drop-shadow-color: Colors.neo-shadow-strong;
+        accessible-role: button;
+        accessible-label: "Create";
+        accessible-action-default => { root.nav-push("create-menu"); }
+        Image {
+            source: Icons.plus;
+            width: 24px;
+            height: 24px;
+            x: (parent.width - self.width) / 2;
+            y: (parent.height - self.height) / 2;
+            // Same glyph colour as the composer's send button on primary.
+            colorize: Colors.text-primary;
+        }
+        fab-touch := TouchArea { mouse-cursor: pointer; clicked => { root.nav-push("create-menu"); } }
+    }
+
     if root.bottom-nav-visible: MobileBottomNav {
+        z: -1;
         width: parent.width;
         y: parent.height - self.height;
-        active-tab: root.mobile-nav-tab-effective;
+        active-tab: root.active-tab;
         user-avatar: root.user-avatar-source;
         chats-badge: root.total-unread-count;
         calls-badge: root.missed-call-count;
         contacts-badge: root.friends-received-requests.length;
         safe-area-bottom: root.safe-area-bottom;
         tab-selected(tab) => {
-            // Shield is a MODE, not a destination (see mobile_bottom_nav.slint):
-            // it toggles anon mode and leaves you where you are. It had no
-            // branch at all here, so pressing it set `mobile-nav-tab` to a
-            // value no screen answers to and nothing happened — the dead tab of
-            // §112a. It must not touch `mobile-nav-tab` either, or the
-            // highlight moves off the screen you are actually on.
-            if (tab == "shield") {
-                root.toggle-anon-mode();
-                return;
-            }
-            root.mobile-nav-tab = tab;
             if (tab == "chats") {
                 // Back to the list from wherever you are — this tab is
                 // what replaced the rail as always-available navigation.
-                // That includes leaving a full-screen modal: Contacts
-                // and Settings ARE modals here, so without dismissing
-                // one the tab press lands correctly and then stays
-                // hidden behind the screen you were trying to leave.
-                root.active-modal = "none";
+                root.active-tab = "chats";
                 root.mobile-show-chat = false;
                 root.sidebar-user-collapsed = false;
                 root.sidebar-collapsed = false;
             } else if (tab == "calls") {
-                root.active-modal = "calls";
+                root.active-tab = "calls";
                 root.calls-tab-clicked();
             } else if (tab == "contacts") {
                 // Land on the contacts list. The default tab is the
@@ -3224,13 +3387,9 @@ export component App inherits Rectangle {
                 // a "Friends" dialog opened deliberately, and the wrong
                 // one for a Contacts tab you press to see your contacts.
                 root.friends-modal-tab = "friends";
-                root.active-modal = "friends";
-            } else if (tab == "settings") {
-                root.active-modal = "settings";
-                root.settings-clicked();
+                root.active-tab = "contacts";
             } else if (tab == "profile") {
-                root.active-modal = "none";
-                root.profile-clicked();
+                root.active-tab = "profile";
             }
         }
     }

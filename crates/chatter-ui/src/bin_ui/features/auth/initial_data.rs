@@ -78,6 +78,11 @@ pub async fn load_initial_data(window_weak: Weak<MainWindow>, ui_ctx: &Arc<Chatt
         Err(e) => tracing::warn!("Failed to refresh anon group mailboxes: {}", e),
     }
 
+    // Our own name/avatar: restored from the server under our profile key
+    // (throttled in core). Only login used to do this, so a linked device
+    // showed initials and no photo while peers saw it.
+    ui_ctx.refresh_own_profile().await;
+
     // Get current user ID for DM peer detection
     let current_user_id = ui_ctx.auth_state().get().current_user_id;
 
@@ -196,6 +201,7 @@ pub async fn load_initial_data(window_weak: Weak<MainWindow>, ui_ctx: &Arc<Chatt
     let ui_ctx_for_convert = ui_ctx.clone();
     let search_shortcut_pref = ui_ctx.get_search_shortcut().as_str();
     let notification_detail = ui_ctx.notification_detail_level().as_str();
+    let own_username = ui_ctx.full_username().unwrap_or_default();
     let _ = slint::invoke_from_event_loop(move || {
         if let Some(w) = window_weak_ui.upgrade() {
             let channel_list: Vec<ChannelListItemData> = channel_domain_list
@@ -216,13 +222,15 @@ pub async fn load_initial_data(window_weak: Weak<MainWindow>, ui_ctx: &Arc<Chatt
 
             w.set_user_display_name(user_display_name.into());
             w.set_user_initials(user_initials.into());
+            // The account menu's @username line (Profile tab) reads this.
+            w.set_settings_username(own_username.into());
 
             // Hydrate the persisted search-shortcut preference so the
             // FocusScope picks the right combo (Ctrl+K / Ctrl+F / Both) at startup.
             w.set_search_shortcut_pref(search_shortcut_pref.into());
             // Same for the notification detail level, so Settings shows the
             // persisted level even when opened without the sidebar hydration
-            // (Ctrl+, sets active-modal directly).
+            // (Ctrl+, opens the Settings tab directly).
             w.set_settings_notification_detail(notification_detail.into());
 
             // Set user's own avatar if available

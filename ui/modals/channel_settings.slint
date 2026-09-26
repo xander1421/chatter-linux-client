@@ -26,6 +26,8 @@ export struct ChannelMemberData {
     // What the viewer may do to this member, computed in core.
     can-ban: bool,
     can-mute: bool,
+    // Only the owner may hand the channel to this member.
+    can-make-owner: bool,
 }
 
 // A banned user in the members pane's Banned list.
@@ -80,6 +82,12 @@ export component ChannelSettingsModal inherits Rectangle {
         { label: "Mute 1 day", minutes: 1440 },
         { label: "Mute until unmuted", minutes: 0 },
     ];
+    // The assignable roles (ownership moves only by transfer), with labels.
+    private property <[{role: string, label: string}]> role-options: [
+        { role: "member", label: "Member" },
+        { role: "moderator", label: "Moderator" },
+        { role: "admin", label: "Admin" },
+    ];
 
     // Loading/error state
     in property <bool> loading: false;
@@ -99,6 +107,7 @@ export component ChannelSettingsModal inherits Rectangle {
     callback ban-member(string);  // user-id
     callback set-member-muted(string, bool, int);  // user-id, muted, minutes (0 = until unmuted)
     callback unban-member(string);  // user-id
+    callback transfer-ownership(string);  // user-id of the new owner
     callback invite-members();  // opens invite modal (private groups)
     callback invite-channel-members();  // opens invite modal (regular channels)
     callback archive-channel();
@@ -191,7 +200,7 @@ export component ChannelSettingsModal inherits Rectangle {
 
                     // General section — Neo nav item
                     Rectangle {
-                        height: 36px;
+                        height: root.narrow ? 48px : 36px;
                         background: root.active-section == "general" ? Colors.surface-hover : transparent;
                         border-radius: Spacing.radius-sm;
                         border-width: root.active-section == "general" ? 1px : 0px;
@@ -227,7 +236,7 @@ export component ChannelSettingsModal inherits Rectangle {
 
                     // Notifications section — Neo nav item
                     Rectangle {
-                        height: 36px;
+                        height: root.narrow ? 48px : 36px;
                         background: root.active-section == "notifications" ? Colors.surface-hover : transparent;
                         border-radius: Spacing.radius-sm;
                         border-width: root.active-section == "notifications" ? 1px : 0px;
@@ -260,7 +269,7 @@ export component ChannelSettingsModal inherits Rectangle {
 
                     // Members section — Neo nav item
                     if root.can-manage-members: Rectangle {
-                        height: 36px;
+                        height: root.narrow ? 48px : 36px;
                         background: root.active-section == "members" ? Colors.surface-hover : transparent;
                         border-radius: Spacing.radius-sm;
                         border-width: root.active-section == "members" ? 1px : 0px;
@@ -294,7 +303,7 @@ export component ChannelSettingsModal inherits Rectangle {
 
                     // Danger zone section: every member can at least leave.
                     if root.can-archive || root.can-delete || root.can-leave: Rectangle {
-                        height: 36px;
+                        height: root.narrow ? 48px : 36px;
                         background: root.active-section == "danger" ? Colors.error.with-alpha(0.1) : transparent;
                         border-radius: Spacing.radius-sm;
 
@@ -586,7 +595,7 @@ export component ChannelSettingsModal inherits Rectangle {
                                 background: root.notification-preference == "all" ? Colors.neo-inset-bg : transparent;
                                 border-radius: Spacing.radius-sm;
                                 border-width: root.notification-preference == "all" ? 1px : 0;
-                                border-color: Colors.glow-cyan.with-alpha(0.4);
+                                border-color: Colors.primary.with-alpha(0.4);
 
                                 HorizontalLayout {
                                     padding: Spacing.sm;
@@ -597,8 +606,8 @@ export component ChannelSettingsModal inherits Rectangle {
                                         height: 20px;
                                         border-radius: 10px;
                                         border-width: 2px;
-                                        border-color: root.notification-preference == "all" ? Colors.glow-cyan : Colors.neo-inset-shadow;
-                                        background: root.notification-preference == "all" ? Colors.glow-cyan : transparent;
+                                        border-color: root.notification-preference == "all" ? Colors.primary : Colors.text-muted;
+                                        background: root.notification-preference == "all" ? Colors.primary : transparent;
                                     }
 
                                     VerticalLayout {
@@ -631,7 +640,7 @@ export component ChannelSettingsModal inherits Rectangle {
                                 background: root.notification-preference == "mentions" ? Colors.neo-inset-bg : transparent;
                                 border-radius: Spacing.radius-sm;
                                 border-width: root.notification-preference == "mentions" ? 1px : 0;
-                                border-color: Colors.glow-cyan.with-alpha(0.4);
+                                border-color: Colors.primary.with-alpha(0.4);
 
                                 HorizontalLayout {
                                     padding: Spacing.sm;
@@ -642,8 +651,8 @@ export component ChannelSettingsModal inherits Rectangle {
                                         height: 20px;
                                         border-radius: 10px;
                                         border-width: 2px;
-                                        border-color: root.notification-preference == "mentions" ? Colors.glow-cyan : Colors.neo-inset-shadow;
-                                        background: root.notification-preference == "mentions" ? Colors.glow-cyan : transparent;
+                                        border-color: root.notification-preference == "mentions" ? Colors.primary : Colors.text-muted;
+                                        background: root.notification-preference == "mentions" ? Colors.primary : transparent;
                                     }
 
                                     VerticalLayout {
@@ -676,7 +685,7 @@ export component ChannelSettingsModal inherits Rectangle {
                                 background: root.notification-preference == "none" ? Colors.neo-inset-bg : transparent;
                                 border-radius: Spacing.radius-sm;
                                 border-width: root.notification-preference == "none" ? 1px : 0;
-                                border-color: Colors.glow-cyan.with-alpha(0.4);
+                                border-color: Colors.primary.with-alpha(0.4);
 
                                 HorizontalLayout {
                                     padding: Spacing.sm;
@@ -687,8 +696,8 @@ export component ChannelSettingsModal inherits Rectangle {
                                         height: 20px;
                                         border-radius: 10px;
                                         border-width: 2px;
-                                        border-color: root.notification-preference == "none" ? Colors.glow-cyan : Colors.neo-inset-shadow;
-                                        background: root.notification-preference == "none" ? Colors.glow-cyan : transparent;
+                                        border-color: root.notification-preference == "none" ? Colors.primary : Colors.text-muted;
+                                        background: root.notification-preference == "none" ? Colors.primary : transparent;
                                     }
 
                                     VerticalLayout {
@@ -823,7 +832,7 @@ export component ChannelSettingsModal inherits Rectangle {
 
                                                 if member.role != "member": Rectangle {
                                                     width: role-text.preferred-width + Spacing.sm;
-                                                    height: 18px;
+                                                    height: Spacing.badge-md;
                                                     background: root.role-color(member.role).with-alpha(0.15);
                                                     border-radius: Spacing.radius-sm;
 
@@ -841,7 +850,7 @@ export component ChannelSettingsModal inherits Rectangle {
                                                 // Moderator mute: the server refuses their sends.
                                                 if member.muted: Rectangle {
                                                     width: muted-text.preferred-width + Spacing.sm;
-                                                    height: 18px;
+                                                    height: Spacing.badge-md;
                                                     background: Colors.error.with-alpha(0.15);
                                                     border-radius: Spacing.radius-sm;
 
@@ -876,7 +885,7 @@ export component ChannelSettingsModal inherits Rectangle {
                                         // squeezed the name to "…". Tapping it expands the
                                         // action row below. Only if can manage and not owner.
                                         // Also for a moderator/admin who can only mute or ban.
-                                        if (root.can-manage-members && member.role != "owner") || member.can-ban || member.can-mute: Rectangle {
+                                        if (root.can-manage-members && member.role != "owner") || member.can-ban || member.can-mute || member.can-make-owner: Rectangle {
                                             width: 44px;
                                             height: 44px;
                                             border-radius: Spacing.radius-sm;
@@ -904,7 +913,7 @@ export component ChannelSettingsModal inherits Rectangle {
                                         }
                                     }
 
-                                    // Remove / Ban confirmation, like Block in user_profile.
+                                    // Remove / Ban / Make owner confirmation, like Block in user_profile.
                                     if root.role-picker-user == member.user-id && root.confirm-action != "": VerticalLayout {
                                         spacing: Spacing.sm;
                                         padding: Spacing.xs;
@@ -912,6 +921,8 @@ export component ChannelSettingsModal inherits Rectangle {
                                         Text {
                                             text: root.confirm-action == "ban"
                                                 ? "Ban " + member.display-name + "? They will be removed and can't rejoin."
+                                                : root.confirm-action == "owner"
+                                                ? "Make " + member.display-name + " the owner of #" + root.channel-name + "? You'll become an admin."
                                                 : "Remove " + member.display-name + " from this channel?";
                                             color: Colors.text-primary;
                                             font-size: Typography.sm;
@@ -929,12 +940,14 @@ export component ChannelSettingsModal inherits Rectangle {
                                             }
 
                                             Button {
-                                                text: root.confirm-action == "ban" ? "Ban" : "Remove";
-                                                variant: "danger";
+                                                text: root.confirm-action == "ban" ? "Ban" : root.confirm-action == "owner" ? "Make owner" : "Remove";
+                                                variant: root.confirm-action == "owner" ? "primary" : "danger";
                                                 horizontal-stretch: 1;
                                                 clicked => {
                                                     if root.confirm-action == "ban" {
                                                         root.ban-member(member.user-id);
+                                                    } else if root.confirm-action == "owner" {
+                                                        root.transfer-ownership(member.user-id);
                                                     } else {
                                                         root.remove-member(member.user-id);
                                                     }
@@ -945,9 +958,9 @@ export component ChannelSettingsModal inherits Rectangle {
                                     }
 
                                     // Roles are a server-channel concept (anon groups have
-                                    // no role RPC), and ownership is not grantable (the
-                                    // server rejects OWNER), so the picker offers only the
-                                    // three assignable roles.
+                                    // no role RPC), and ownership moves only by transfer
+                                    // ("Make owner…"; the role RPC rejects OWNER), so the
+                                    // picker offers only the three assignable roles.
                                     // On a phone the pane is ~230px wide (360dp); the three
                                     // role buttons alone need ~270px, so the actions stack
                                     // one per line there instead of running off the card.
@@ -958,14 +971,20 @@ export component ChannelSettingsModal inherits Rectangle {
                                         if !root.is-private-group && root.can-manage-members: VerticalLayout {
                                             spacing: Spacing.xs;
 
-                                            for r in ["member", "moderator", "admin"]: Button {
-                                                text: r;
-                                                variant: r == member.role ? "primary" : "secondary";
+                                            Text {
+                                                text: "Role";
+                                                color: Colors.text-muted;
+                                                font-size: Typography.xs;
+                                            }
+
+                                            for r in root.role-options: Button {
+                                                text: r.label;
+                                                variant: r.role == member.role ? "primary" : "secondary";
 
                                                 clicked => {
                                                     root.role-picker-user = "";
-                                                    if r != member.role {
-                                                        root.change-member-role(member.user-id, r);
+                                                    if r.role != member.role {
+                                                        root.change-member-role(member.user-id, r.role);
                                                     }
                                                 }
                                             }
@@ -985,6 +1004,12 @@ export component ChannelSettingsModal inherits Rectangle {
                                         if member.can-mute && !member.muted: VerticalLayout {
                                             spacing: Spacing.xs;
 
+                                            Text {
+                                                text: "Mute in channel";
+                                                color: Colors.text-muted;
+                                                font-size: Typography.xs;
+                                            }
+
                                             for opt in root.mute-options: Button {
                                                 text: opt.label;
                                                 variant: "secondary";
@@ -996,15 +1021,22 @@ export component ChannelSettingsModal inherits Rectangle {
                                             }
                                         }
 
+                                        if member.can-make-owner: Button {
+                                            text: "Make owner…";
+                                            variant: "secondary";
+
+                                            clicked => { root.confirm-action = "owner"; }
+                                        }
+
                                         if root.can-manage-members: Button {
-                                            text: "Remove";
+                                            text: "Remove from channel";
                                             variant: "danger";
 
                                             clicked => { root.confirm-action = "remove"; }
                                         }
 
                                         if member.can-ban: Button {
-                                            text: "Ban";
+                                            text: "Ban (can't rejoin)";
                                             variant: "danger";
 
                                             clicked => { root.confirm-action = "ban"; }
@@ -1021,14 +1053,14 @@ export component ChannelSettingsModal inherits Rectangle {
                                             spacing: Spacing.xs;
                                             alignment: end;
 
-                                            for r in ["member", "moderator", "admin"]: Button {
-                                                text: r;
-                                                variant: r == member.role ? "primary" : "secondary";
+                                            for r in root.role-options: Button {
+                                                text: r.label;
+                                                variant: r.role == member.role ? "primary" : "secondary";
 
                                                 clicked => {
                                                     root.role-picker-user = "";
-                                                    if r != member.role {
-                                                        root.change-member-role(member.user-id, r);
+                                                    if r.role != member.role {
+                                                        root.change-member-role(member.user-id, r.role);
                                                     }
                                                 }
                                             }
@@ -1061,6 +1093,17 @@ export component ChannelSettingsModal inherits Rectangle {
                                                     root.role-picker-user = "";
                                                     root.set-member-muted(member.user-id, true, opt.minutes);
                                                 }
+                                            }
+                                        }
+
+                                        if member.can-make-owner: HorizontalLayout {
+                                            alignment: end;
+
+                                            Button {
+                                                text: "Make owner…";
+                                                variant: "secondary";
+
+                                                clicked => { root.confirm-action = "owner"; }
                                             }
                                         }
 
@@ -1143,13 +1186,6 @@ export component ChannelSettingsModal inherits Rectangle {
                                 font-weight: Typography.semibold;
                             }
 
-                            Text {
-                                text: "These actions are irreversible. Please be certain.";
-                                color: Colors.text-muted;
-                                font-size: Typography.sm;
-                                wrap: word-wrap;
-                            }
-
                             Rectangle {
                                 height: 1px;
                                 background: Colors.error.with-alpha(0.3);
@@ -1224,13 +1260,37 @@ export component ChannelSettingsModal inherits Rectangle {
                             }
 
                             // The server refuses an owner's leave while others
-                            // remain and there is no ownership transfer, so say
-                            // why the Leave row is missing.
-                            if root.is-owner && root.can-delete: Text {
-                                text: "As the owner you can't leave this channel. Delete it instead.";
-                                color: Colors.text-muted;
-                                font-size: Typography.xs;
-                                wrap: word-wrap;
+                            // remain, so say why the Leave row is missing and
+                            // point at the way out: Members › ⋮ › Make owner.
+                            if root.is-owner && root.can-delete: HorizontalLayout {
+                                spacing: Spacing.sm;
+
+                                VerticalLayout {
+                                    horizontal-stretch: 1;
+                                    min-width: 0px;
+
+                                    Text {
+                                        text: "Transfer Ownership";
+                                        color: Colors.text-primary;
+                                        font-size: Typography.sm;
+                                        wrap: word-wrap;
+                                    }
+                                    Text {
+                                        text: "Transfer ownership to leave, or delete the channel.";
+                                        color: Colors.text-muted;
+                                        font-size: Typography.xs;
+                                        wrap: word-wrap;
+                                    }
+                                }
+
+                                Button {
+                                    text: "Transfer…";
+                                    variant: "secondary";
+
+                                    clicked => {
+                                        root.active-section = "members";
+                                    }
+                                }
                             }
 
                             // Archive channel
@@ -1288,7 +1348,7 @@ export component ChannelSettingsModal inherits Rectangle {
                                         wrap: word-wrap;
                                     }
                                     Text {
-                                        text: "Permanently delete this channel and all messages";
+                                        text: "Deletes the channel and all its messages. Can't be undone.";
                                         color: Colors.text-muted;
                                         font-size: Typography.xs;
                                         wrap: word-wrap;

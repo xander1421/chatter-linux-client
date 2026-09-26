@@ -111,8 +111,9 @@ pub fn wire_quote_clicked(window: &MainWindow) {
 ///
 /// Gets sender name and preview text directly from the UI message model,
 /// which works for all message types (channels, DMs, anon DMs, anon groups).
-pub fn wire_reply_clicked(window: &MainWindow, _ui_ctx: &Arc<ChatterClient>) {
+pub fn wire_reply_clicked(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     let weak_window = window.as_weak();
+    let ui_ctx = ui_ctx.clone();
 
     window.on_reply_clicked(move |sender_id: SharedString, timestamp_ns: SharedString| {
         let sender_id_str = sender_id.to_string();
@@ -210,6 +211,9 @@ pub fn wire_reply_clicked(window: &MainWindow, _ui_ctx: &Arc<ChatterClient>) {
 
         if sender_name.is_empty() {
             sender_name = sender_id_str.clone();
+        }
+        if let Ok(author) = sender_id_str.parse::<chatter_core::domain::UserId>() {
+            sender_name = ui_ctx.quote_author_name(&author, || sender_name);
         }
 
         w.set_composer_is_replying(true);
@@ -329,10 +333,13 @@ pub fn wire_thread_clicked(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             }
         };
 
-        let channel_id = match chat_state.get().active_channel_id {
-            Some(id) => id,
-            None => {
-                tracing::warn!("Cannot open thread: no active channel");
+        // Threads are a channel feature (Signal has none in 1:1 chats). The
+        // thread send path is the channel send; anywhere else a reply was
+        // accepted by the panel and then lost.
+        let channel_id = match chat_state.active_conversation() {
+            chatter_core::state::ActiveConversation::Channel(id) => id,
+            _ => {
+                tracing::warn!("Cannot open thread: active conversation is not a channel");
                 return;
             }
         };

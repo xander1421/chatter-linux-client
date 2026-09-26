@@ -24,7 +24,7 @@ use crate::proto::chat_v1::{
     GetConsistencyProofRequest, GetConsistencyProofResponse, GetPreKeyBundleResponse,
     GetPreKeyStatsRequest, GetPreKeyStatsResponse, GetProofRequest,
     GetProofResponse, GetSealedSenderPolicyRequest, GetSealedSenderPolicyResponse,
-    SetSealedSenderPolicyRequest, SetSealedSenderPolicyResponse,
+    SetSealedSenderPolicyRequest, SetSealedSenderPolicyResponse, SetUnidentifiedAccessKeyRequest,
     InvalidateAllSessionsRequest,
     InvalidateSessionRequest, ListDevicesRequest, ListDevicesResponse, LoginRequest, LogoutRequest,
     RefreshPreKeysRequest, RegenerateRecoveryCodesRequest, RegisterRequest, RegistrationResult,
@@ -123,7 +123,6 @@ impl AuthClient {
         device_info: &str,
         svr_public_key: &[u8],
         device_auth_token: &[u8],
-        unidentified_access_key: &[u8; 16],
         device_id: Option<u32>,
     ) -> Result<AuthResponse, NetworkError> {
         let request = LoginRequest {
@@ -134,7 +133,6 @@ impl AuthClient {
             device_info: device_info.to_string(),
             request_id: uuid::Uuid::new_v4().to_string(),
             device_auth_token: device_auth_token.to_vec(),
-            unidentified_access_key: unidentified_access_key.to_vec(),
             device_id: device_id.unwrap_or(0), // 0 = new device assignment
         };
 
@@ -204,6 +202,18 @@ impl AuthClient {
             .map_err(|s| NetworkError::from_status(&s))
     }
 
+    /// Replace our UAK after a profile-key rotation (the receiving policy
+    /// flag is kept server-side).
+    pub async fn set_unidentified_access_key(&mut self, uak: &[u8; 16]) -> Result<(), NetworkError> {
+        let request = SetUnidentifiedAccessKeyRequest { unidentified_access_key: uak.to_vec() };
+
+        self.inner
+            .set_unidentified_access_key(request)
+            .await
+            .map(|_| ())
+            .map_err(|s| NetworkError::from_status(&s))
+    }
+
     /// Request a registration challenge nonce from the server.
     ///
     /// # Arguments
@@ -269,7 +279,7 @@ impl AuthClient {
         svr_public_key: &[u8],
         device_info: &str,
         device_auth_token: &[u8],
-        _unidentified_access_key: &[u8; 16],
+        unidentified_access_key: &[u8; 16],
         prekey_bundle: Option<crate::proto::chat_v1::SignalPreKeyBundle>,
         initial_one_time_prekeys: Vec<crate::proto::chat_v1::signal_pre_key_bundle::PreKeyRecord>,
         challenge_id: &str,
@@ -298,6 +308,7 @@ impl AuthClient {
             challenge_response: challenge_response.to_vec(),
             challenge_id: challenge_id.to_string(),
             username_lookup_hash: username_lookup_hash.to_vec(),
+            unidentified_access_key: unidentified_access_key.to_vec(),
         };
 
         let response = self
@@ -903,7 +914,6 @@ mod tests {
                 public_key: vec![0u8; 32],
             }),
             kyber_prekey: None,
-            unidentified_access_key: Some(vec![0u8; 16]),
             unrestricted_unidentified_access: Some(false),
         };
 

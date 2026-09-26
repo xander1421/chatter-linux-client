@@ -10,7 +10,7 @@ use crate::domain::ids::{ChannelId, MessageId, UserId};
 use crate::error::StorageError;
 use crate::storage::Database;
 use chrono::{DateTime, Utc};
-use rusqlite::params;
+use rusqlite::{params, OptionalExtension};
 use std::sync::Arc;
 
 /// Channel data repository.
@@ -19,6 +19,16 @@ use std::sync::Arc;
 pub struct ChannelRepository {
     db: Arc<Database>,
 }
+
+/// The columns [`row_to_channel`] reads, for the queries that list channels.
+const LISTED_CHANNEL_SELECT: &str = "SELECT c.id, c.channel_type, c.name, c.description, c.icon, c.owner_id,
+        c.persistence, c.max_members, c.default_ttl_seconds,
+        c.allow_reactions, c.allow_threads, c.allow_attachments, c.require_encryption,
+        c.created_at, c.updated_at, c.archived,
+        (SELECT COUNT(*) FROM messages WHERE conversation_id = c.id AND conversation_type = 'channel' AND is_read = 0 AND is_deleted = 0) as unread_count,
+        (SELECT MAX(created_at) FROM messages WHERE conversation_id = c.id AND conversation_type = 'channel' AND is_deleted = 0) as last_message_at,
+        (SELECT COUNT(*) FROM memberships WHERE channel_id = c.id) as member_count
+     FROM channels c";
 
 impl ChannelRepository {
     /// Create a new ChannelRepository with the given database.
@@ -240,20 +250,13 @@ impl ChannelRepository {
         offset: u32,
     ) -> Result<Vec<Channel>, StorageError> {
         let conn = self.db.read_connection()?;
-        let mut stmt = conn.prepare(
-            "SELECT c.id, c.channel_type, c.name, c.description, c.icon, c.owner_id,
-                    c.persistence, c.max_members, c.default_ttl_seconds,
-                    c.allow_reactions, c.allow_threads, c.allow_attachments, c.require_encryption,
-                    c.created_at, c.updated_at, c.archived,
-                    (SELECT COUNT(*) FROM messages WHERE conversation_id = c.id AND conversation_type = 'channel' AND is_read = 0 AND is_deleted = 0) as unread_count,
-                    (SELECT MAX(created_at) FROM messages WHERE conversation_id = c.id AND conversation_type = 'channel' AND is_deleted = 0) as last_message_at,
-                    (SELECT COUNT(*) FROM memberships WHERE channel_id = c.id) as member_count
-             FROM channels c
+        let mut stmt = conn.prepare(&format!(
+            "{LISTED_CHANNEL_SELECT}
              INNER JOIN memberships m ON c.id = m.channel_id
              WHERE m.user_id = ?1
              ORDER BY last_message_at DESC NULLS LAST
-             LIMIT ?2 OFFSET ?3",
-        )?;
+             LIMIT ?2 OFFSET ?3"
+        ))?;
 
         let mut rows = stmt.query(params![user_id.to_string(), limit, offset])?;
         let mut channels = Vec::new();
@@ -263,6 +266,50 @@ impl ChannelRepository {
         }
 
         Ok(channels)
+    }
+
+    /// Channels `user_id` used to be in: left, removed, banned or deleted
+    /// ([`Self::mark_former`]). They stay listed read-only until the chat is
+    /// deleted; a rejoin (our membership back) takes one off this list.
+    pub fn list_former_for_user(&self, user_id: &UserId) -> Result<Vec<Channel>, StorageError> {
+        let conn = self.db.read_connection()?;
+        let mut stmt = conn.prepare(&format!(
+            "{LISTED_CHANNEL_SELECT}
+             INNER JOIN former_channels f ON c.id = f.channel_id
+             WHERE NOT EXISTS (SELECT 1 FROM memberships m WHERE m.channel_id = c.id AND m.user_id = ?1)
+             ORDER BY last_message_at DESC NULLS LAST"
+        ))?;
+        let mut rows = stmt.query(params![user_id.to_string()])?;
+        let mut channels = Vec::new();
+        while let Some(row) = rows.next()? {
+            channels.push(row_to_channel(row)?);
+        }
+        Ok(channels)
+    }
+
+    /// Remember that we are no longer in `channel_id`. Once deleted it stays
+    /// deleted: a later "left" for the same channel does not undo that. A
+    /// channel not stored here has nothing to keep listed and is skipped.
+    pub fn mark_former(&self, channel_id: &ChannelId, deleted: bool) -> Result<(), StorageError> {
+        let conn = self.db.connection()?;
+        conn.execute(
+            "INSERT INTO former_channels (channel_id, deleted) SELECT id, ?2 FROM channels WHERE id = ?1
+             ON CONFLICT(channel_id) DO UPDATE SET deleted = deleted OR excluded.deleted",
+            params![channel_id.to_string(), deleted],
+        )?;
+        Ok(())
+    }
+
+    /// `Some(deleted)` for a channel we used to be in, `None` otherwise.
+    pub fn former_state(&self, channel_id: &ChannelId) -> Result<Option<bool>, StorageError> {
+        let conn = self.db.read_connection()?;
+        Ok(conn
+            .query_row(
+                "SELECT deleted FROM former_channels WHERE channel_id = ?1",
+                params![channel_id.to_string()],
+                |row| row.get(0),
+            )
+            .optional()?)
     }
 
     /// Get DM channel by peer user ID.

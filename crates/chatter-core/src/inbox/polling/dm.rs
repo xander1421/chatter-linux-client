@@ -1097,7 +1097,6 @@ fn dispatch_dm_content(
                 conversation_id,
                 responder_mailbox_pk,
                 profile_key,
-                responder_display_name: None, // Will be decrypted in handler
                 encrypted_display_name,
                 encrypted_avatar,
                 timestamp,

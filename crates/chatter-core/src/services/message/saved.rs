@@ -117,8 +117,8 @@ impl MessageService {
         let sender_id_str = sender_id.to_string();
         // This device is skipped before encryption: no ratchet step on a
         // session with ourselves. Only device => empty list, nothing to sync.
-        let (device_ciphertexts, _uak) = self.signal_service
-            .encrypt_message_all_devices_with_uak(
+        let device_ciphertexts = self.signal_service
+            .encrypt_message_all_devices(
                 &mut auth_client, &sender_id_str, &plaintext,
             )
             .await

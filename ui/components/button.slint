@@ -51,7 +51,9 @@ export component Button inherits Rectangle {
     vertical-stretch: 0;
     border-radius: Spacing.radius-md;
     background: bg-color;
-    opacity: disabled ? 0.5 : 1.0;
+    // 38%: Material's disabled level. At 50% a disabled primary read as
+    // merely dimmed, so a dead Create looked like a live one.
+    opacity: disabled ? 0.38 : 1.0;
 
     // Content layout
     HorizontalLayout {

@@ -34,24 +34,7 @@ pub(super) fn handle_device_linked(
             Ok(sessions) => {
                 let slint_sessions: Vec<crate::SessionInfo> = sessions
                     .into_iter()
-                    .map(|s| crate::SessionInfo {
-                        device_id: s.device_id as i32,
-                        device_info: s.device_info.into(),
-                        ip_address: s.ip_address.into(),
-                        last_used: s
-                            .last_used
-                            .with_timezone(&chrono::Local)
-                            .format("%Y-%m-%d %H:%M")
-                            .to_string()
-                            .into(),
-                        created_at: s
-                            .created_at
-                            .with_timezone(&chrono::Local)
-                            .format("%Y-%m-%d")
-                            .to_string()
-                            .into(),
-                        is_current: s.is_current,
-                    })
+                    .map(crate::bin_ui::features::modals::session_to_slint)
                     .collect();
                 let count = slint_sessions.len() as i32;
                 let _ = slint::invoke_from_event_loop(move || {

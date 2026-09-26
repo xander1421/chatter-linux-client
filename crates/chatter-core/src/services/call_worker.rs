@@ -2978,3 +2978,43 @@ mod ratchet_align_tests {
         assert!((delay - 30.0).abs() < 1e-6);
     }
 }
+
+#[cfg(test)]
+mod failed_accept_tests {
+    use super::{CallEndReason, CallHandle, CallOrchestratorEvent, CallWorkerHandle, OrchestratedCallKind, UserId};
+
+    /// An accept takes the call out of the ringing set before it connects, so
+    /// a failed connect leaves it in no slot. `accept_presented_incoming_call`
+    /// ends it with `orch_mark_ended(Error)`, which must still reach the
+    /// history recorder (else the answered call stays "missed") and the UI
+    /// (else the answering view never comes down).
+    #[tokio::test]
+    async fn ending_an_accepted_call_that_never_connected_emits_active_ended() {
+        let channel = tonic::transport::Endpoint::from_static("http://127.0.0.1:9").connect_lazy();
+        let worker = CallWorkerHandle::spawn(crate::network::grpc::CallClient::new(
+            channel.into(),
+            crate::network::grpc::interceptors::AuthInterceptor::new(),
+        ));
+        let mut events = worker.subscribe_call_events();
+        let call = CallHandle::from("accepted-then-failed");
+
+        worker.orch_present_incoming(
+            call.clone(), OrchestratedCallKind::DmStandard, UserId::new(), "Peer".into(),
+            false, true, String::new(), Some([0; 32]), None, String::new(),
+        );
+        worker.orch_accept_incoming(call.clone()).await.expect("presented call accepts");
+        worker.orch_mark_ended(call.clone(), CallEndReason::Error("connect timed out".into()));
+
+        loop {
+            match tokio::time::timeout(std::time::Duration::from_secs(5), events.recv()).await {
+                Ok(Ok(CallOrchestratorEvent::ActiveEnded { call: ended, reason })) => {
+                    assert_eq!(ended, call);
+                    assert!(matches!(reason, CallEndReason::Error(_)));
+                    break;
+                }
+                Ok(Ok(CallOrchestratorEvent::IncomingPresented { .. })) => continue,
+                other => panic!("expected ActiveEnded, got {other:?}"),
+            }
+        }
+    }
+}

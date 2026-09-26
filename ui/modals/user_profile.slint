@@ -13,12 +13,14 @@
 // `ModalContainer`, so nothing is reimplemented here except the top bar.
 
 import { Colors } from "../theme/colors.slint";
+import { Appearance } from "../theme/appearance.slint";
 import { Spacing } from "../theme/spacing.slint";
 import { Typography } from "../theme/typography.slint";
 import { Icons } from "../theme/icons.slint";
 import { ModalContainer } from "../components/modal_container.slint";
 import { DismissButton } from "../components/dismiss_button.slint";
 import { Button } from "../components/button.slint";
+import { Modal } from "../components/modal.slint";
 import { Avatar } from "../components/avatar.slint";
 import { AnonMode } from "../anon_mode/anon_mode_global.slint";
 import { DisappearingGlobal } from "../chat/disappearing_global.slint";
@@ -65,9 +67,11 @@ export component UserProfileModal inherits Rectangle {
     // Block asks first (Signal: "Block <name>? They won't be able to call or
     // message you."); reset whenever another profile is shown.
     property <bool> confirm-block: false;
+    // Remove Friend asks too — it is destructive and was instant.
+    property <bool> confirm-remove: false;
     // The disappearing-messages choices are unfolded under their row.
     property <bool> timer-picker-open: false;
-    changed display-name => { self.confirm-block = false; }
+    changed display-name => { self.confirm-block = false; self.confirm-remove = false; }
     in property <bool> is-self: false;  // viewing own profile
     in property <bool> is-muted: false;
     in property <bool> loading: false;
@@ -90,6 +94,8 @@ export component UserProfileModal inherits Rectangle {
     // desktop density.
     in property <bool> mobile-mode: false;
     in property <length> bottom-inset: 0px;
+    // A tab's root screen (see Modal): no back chevron, the tab bar navigates.
+    in property <bool> root-screen: false;
 
     // ── Shared content ────────────────────────────────────────────────
     in property <[SharedTab]> shared-tabs: [];
@@ -97,7 +103,7 @@ export component UserProfileModal inherits Rectangle {
     in property <[SharedContentItem]> shared-items: [];
     in property <bool> shared-loading: false;
 
-    property <length> row-height: root.mobile-mode ? Spacing.row-height-touch : 56px;
+    property <length> row-height: root.mobile-mode ? Spacing.row-height-touch : 56px * Appearance.text-grow;
     property <length> avatar-size: root.mobile-mode ? 112px : 96px;
     property <length> name-size: root.mobile-mode ? Typography.xxxl : Typography.xxl;
 
@@ -196,7 +202,7 @@ export component UserProfileModal inherits Rectangle {
                 // X, trailing. The bar carries no title on purpose; the name
                 // below is the title. (No kebab: every action it would hold is
                 // already a tile or a row on this page.)
-                if root.mobile-mode: DismissButton {
+                if root.mobile-mode && !root.root-screen: DismissButton {
                     back: true;
                     clicked => { root.close(); }
                 }
@@ -254,19 +260,34 @@ export component UserProfileModal inherits Rectangle {
                             overflow: elide;
                         }
 
-                        if !root.is-self: Rectangle {
+                        // Signal shows a badge only once verified; an
+                        // unverified "?" read as "suspicious person".
+                        if !root.is-self && root.is-verified: Rectangle {
                             width: 22px;
                             height: 22px;
+                            y: (parent.height - self.height) / 2;
                             border-radius: 11px;
-                            background: root.is-verified ? Colors.online.with-alpha(0.15) : Colors.text-muted.with-alpha(0.1);
+                            background: Colors.online.with-alpha(0.15);
+                            accessible-role: button;
+                            accessible-label: "Verified — show safety number";
 
                             Text {
-                                text: root.is-verified ? "\u{2713}" : "?";
-                                color: root.is-verified ? Colors.online : Colors.text-muted;
+                                text: "\u{2713}";
+                                color: Colors.online;
                                 font-size: Typography.xs2;
                                 font-weight: Typography.bold;
                                 horizontal-alignment: center;
                                 vertical-alignment: center;
+                            }
+
+                            TouchArea {
+                                mouse-cursor: pointer;
+                                clicked => {
+                                    if root.safety-number == "" {
+                                        root.view-safety-number();
+                                    }
+                                    root.show-safety-number = true;
+                                }
                             }
                         }
                     }
@@ -329,12 +350,12 @@ export component UserProfileModal inherits Rectangle {
                         // DM goes over the mailbox there; core has no DM to
                         // open with anyone else (resolve_dm_conversation).
                         for act in AnonMode.enabled && !root.is-friend ? [
-                            { id: "mute", label: root.is-muted ? "Unmute" : "Mute", icon: Icons.mic-off },
+                            { id: "mute", label: root.is-muted ? "Unmute" : "Mute", icon: root.is-muted ? Icons.bell-off : Icons.bell },
                             { id: "call", label: "Call", icon: Icons.phone },
                             { id: "video", label: "Video", icon: Icons.video },
                         ] : [
                             { id: "message", label: "Message", icon: Icons.message-circle },
-                            { id: "mute", label: root.is-muted ? "Unmute" : "Mute", icon: Icons.mic-off },
+                            { id: "mute", label: root.is-muted ? "Unmute" : "Mute", icon: root.is-muted ? Icons.bell-off : Icons.bell },
                             { id: "call", label: "Call", icon: Icons.phone },
                             { id: "video", label: "Video", icon: Icons.video },
                         ]: Rectangle {
@@ -429,13 +450,13 @@ export component UserProfileModal inherits Rectangle {
                                             spacing: 2px;
 
                                             Text {
-                                                text: DisappearingGlobal.dm-label;
+                                                text: "Disappearing messages";
                                                 color: Colors.text-primary;
                                                 font-size: Typography.base;
                                             }
 
                                             Text {
-                                                text: "Disappearing messages";
+                                                text: DisappearingGlobal.dm-label;
                                                 color: Colors.text-muted;
                                                 font-size: Typography.xs;
                                             }
@@ -457,7 +478,9 @@ export component UserProfileModal inherits Rectangle {
 
                                 if root.timer-picker-open: VerticalLayout {
                                     for opt in DisappearingGlobal.options: Rectangle {
-                                        height: root.mobile-mode ? Spacing.row-height-touch : 36px;
+                                        // A radio row, not a list row: 48dp is the touch floor
+                                        // (72dp let only five options fit a phone screen).
+                                        height: root.mobile-mode ? Spacing.touch-target-min : 36px;
                                         border-radius: Spacing.radius-sm;
                                         background: opt-touch.has-hover ? Colors.surface-hover : transparent;
                                         accessible-role: button;
@@ -522,7 +545,7 @@ export component UserProfileModal inherits Rectangle {
                         spacing: Spacing.sm;
 
                         Text {
-                            text: "You blocked this person. Manage in Friends › Blocked.";
+                            text: "You blocked this person. Manage in Contacts › Blocked.";
                             color: Colors.text-secondary;
                             font-size: Typography.sm;
                             wrap: word-wrap;
@@ -541,7 +564,7 @@ export component UserProfileModal inherits Rectangle {
                     // domain model nor the schema, and a faked row is worse
                     // than a missing one. Nothing to show (a peer with no
                     // known handle and no bio) means no card, not an empty one.
-                    if root.username != "" || root.is-self || root.bio != "": HorizontalLayout {
+                    if root.username != "" || root.bio != "": HorizontalLayout {
                         padding-left: Spacing.md;
                         padding-right: Spacing.md;
 
@@ -558,8 +581,10 @@ export component UserProfileModal inherits Rectangle {
 
                                 // Username, with the QR behind a glyph on the row
                                 // rather than a permanently-open 150px image.
-                                // No row for a peer whose handle is unknown here.
-                                if root.username != "" || root.is-self: HorizontalLayout {
+                                // No row when the handle is unknown here — for a
+                                // peer, or for us on a device that never stored
+                                // it (a link can't be made without it).
+                                if root.username != "": HorizontalLayout {
                                     spacing: Spacing.sm;
 
                                     VerticalLayout {
@@ -567,7 +592,7 @@ export component UserProfileModal inherits Rectangle {
                                         spacing: 2px;
 
                                         Text {
-                                            text: root.username != "" ? "@" + root.username : "Not stored on this device";
+                                            text: "@" + root.username;
                                             color: Colors.text-primary;
                                             font-size: Typography.base;
                                             overflow: elide;
@@ -633,7 +658,7 @@ export component UserProfileModal inherits Rectangle {
                                 }
 
                                 // Expanded QR + link (self view, on demand)
-                                if root.is-self && root.show-share-qr: VerticalLayout {
+                                if root.is-self && root.username != "" && root.show-share-qr: VerticalLayout {
                                     spacing: Spacing.sm;
 
                                     if root.share-link != "": HorizontalLayout {
@@ -818,55 +843,36 @@ export component UserProfileModal inherits Rectangle {
                                 wrap: word-wrap;
                             }
 
+                            // A padded layout, not an absolutely placed Text: the
+                            // box was sized from the unwrapped text height, so the
+                            // wrapped number ran out of it over the buttons below.
                             Rectangle {
                                 background: Colors.neo-inset-bg;
                                 border-radius: Spacing.radius-md;
                                 border-width: 1px;
                                 border-color: Colors.neo-inset-shadow;
-                                height: safety-number-text.preferred-height + Spacing.md * 2;
 
-                                safety-number-text := Text {
-                                    x: Spacing.md;
-                                    y: Spacing.md;
-                                    width: parent.width - Spacing.md * 2;
-                                    text: root.safety-number;
-                                    color: Colors.text-primary;
-                                    font-size: Typography.sm2;
-                                    font-weight: Typography.medium;
-                                    horizontal-alignment: center;
-                                    wrap: word-wrap;
-                                    letter-spacing: 1px;
+                                VerticalLayout {
+                                    padding: Spacing.md;
+
+                                    safety-number-text := Text {
+                                        text: root.safety-number;
+                                        color: Colors.text-primary;
+                                        font-size: Typography.sm2;
+                                        font-family: Typography.font-family-mono;
+                                        font-weight: Typography.medium;
+                                        horizontal-alignment: center;
+                                        wrap: word-wrap;
+                                        letter-spacing: 1px;
+                                    }
                                 }
                             }
 
-                            HorizontalLayout {
-                                alignment: center;
-
-                                verify-touch := TouchArea {
-                                    mouse-cursor: pointer;
-                                    width: verify-btn-rect.width;
-                                    height: 32px;
-
-                                    clicked => { root.toggle-verified(); }
-
-                                    verify-btn-rect := Rectangle {
-                                        width: verify-btn-text.width + Spacing.lg * 2;
-                                        height: 32px;
-                                        border-radius: Spacing.radius-md;
-                                        background: root.is-verified
-                                            ? (verify-touch.has-hover ? Colors.error.with-alpha(0.15) : Colors.text-muted.with-alpha(0.1))
-                                            : (verify-touch.has-hover ? Colors.online.with-alpha(0.2) : Colors.online.with-alpha(0.1));
-
-                                        verify-btn-text := Text {
-                                            text: root.is-verified ? "Mark as Unverified" : "Mark as Verified";
-                                            color: root.is-verified ? Colors.error : Colors.online;
-                                            font-size: Typography.sm;
-                                            font-weight: Typography.medium;
-                                            horizontal-alignment: center;
-                                            vertical-alignment: center;
-                                        }
-                                    }
-                                }
+                            Button {
+                                text: root.is-verified ? "Clear verification" : "Mark as verified";
+                                variant: root.is-verified ? "secondary" : "primary";
+                                height: Spacing.touch-target-min;
+                                clicked => { root.toggle-verified(); }
                             }
                         }
                     }
@@ -875,15 +881,16 @@ export component UserProfileModal inherits Rectangle {
                     if !root.is-self && !root.is-blocked: HorizontalLayout {
                         padding-left: Spacing.md;
                         padding-right: Spacing.md;
+                        padding-top: Spacing.lg;
                         spacing: Spacing.sm;
 
                         if root.is-friend: Button {
                             text: root.loading ? "" : "Remove Friend";
-                            variant: "secondary";
+                            variant: "danger";
                             horizontal-stretch: 1;
                             loading: root.loading;
                             clicked => {
-                                if !root.loading { root.remove-friend(); }
+                                if !root.loading { root.confirm-block = false; root.confirm-remove = true; }
                             }
                         }
 
@@ -901,43 +908,9 @@ export component UserProfileModal inherits Rectangle {
 
                         Button {
                             text: "Block";
-                            variant: "secondary";
+                            variant: "danger";
                             horizontal-stretch: 1;
-                            clicked => { root.confirm-block = true; }
-                        }
-                    }
-
-                    if root.confirm-block && !root.is-self && !root.is-blocked: VerticalLayout {
-                        padding-left: Spacing.md;
-                        padding-right: Spacing.md;
-                        spacing: Spacing.sm;
-
-                        Text {
-                            text: "Block " + root.display-name + "? They won't be able to call or message you. You can unblock them from Friends › Blocked.";
-                            color: Colors.text-primary;
-                            font-size: Typography.sm;
-                            wrap: word-wrap;
-                        }
-
-                        HorizontalLayout {
-                            spacing: Spacing.sm;
-
-                            Button {
-                                text: "Cancel";
-                                variant: "secondary";
-                                horizontal-stretch: 1;
-                                clicked => { root.confirm-block = false; }
-                            }
-
-                            Button {
-                                text: "Block";
-                                variant: "danger";
-                                horizontal-stretch: 1;
-                                clicked => {
-                                    root.confirm-block = false;
-                                    root.block-user();
-                                }
-                            }
+                            clicked => { root.confirm-remove = false; root.confirm-block = true; }
                         }
                     }
 
@@ -951,7 +924,24 @@ export component UserProfileModal inherits Rectangle {
                     // each chip exactly at the 48px-token-derived 44px touch
                     // floor. At the old 40px/3px it was 34px, which is a
                     // failed target dressed as a style choice.
-                    if root.shared-tabs.length > 0: HorizontalLayout {
+                    //
+                    // One tab is not a choice: a lone pill looked like a button.
+                    // Then — and for the empty state — a plain section header.
+                    if !root.is-self && root.shared-tabs.length <= 1 && !root.shared-loading: HorizontalLayout {
+                        padding-left: Spacing.md;
+                        padding-right: Spacing.md;
+                        padding-top: Spacing.sm;
+
+                        Text {
+                            text: root.shared-tabs.length == 1 ? root.shared-tabs[0].label : "Shared media";
+                            color: Colors.text-muted;
+                            font-size: Typography.xs2;
+                            font-weight: Typography.bold;
+                            letter-spacing: 0.5px;
+                        }
+                    }
+
+                    if root.shared-tabs.length > 1: HorizontalLayout {
                         padding-left: Spacing.md;
                         padding-right: Spacing.md;
 
@@ -1161,6 +1151,85 @@ export component UserProfileModal inherits Rectangle {
                     // Breathing room so the last grid row clears the bottom
                     // edge (and, full-screen, the floating dock).
                     Rectangle { height: Spacing.xl; }
+                }
+            }
+        }
+    }
+    // Confirms are real dialogs, like "Delete message?": inline in the page
+    // they collided with the Media strip below.
+    Modal {
+        show: root.confirm-remove && root.is-friend && !root.is-self && !root.is-blocked;
+        title: "Remove " + root.display-name + "?";
+        modal-width: 400px;
+        show-close: false;
+        close => { root.confirm-remove = false; }
+
+        VerticalLayout {
+            spacing: Spacing.md;
+
+            Text {
+                text: "They'll be removed from your friends. Your chat history stays.";
+                color: Colors.text-secondary;
+                font-size: Typography.sm;
+                wrap: word-wrap;
+            }
+
+            HorizontalLayout {
+                spacing: Spacing.sm;
+                alignment: end;
+
+                Button {
+                    text: "Cancel";
+                    variant: "secondary";
+                    clicked => { root.confirm-remove = false; }
+                }
+
+                Button {
+                    text: "Remove";
+                    variant: "danger";
+                    clicked => {
+                        root.confirm-remove = false;
+                        root.remove-friend();
+                    }
+                }
+            }
+        }
+    }
+
+    Modal {
+        show: root.confirm-block && !root.is-self && !root.is-blocked;
+        title: "Block " + root.display-name + "?";
+        modal-width: 400px;
+        show-close: false;
+        close => { root.confirm-block = false; }
+
+        VerticalLayout {
+            spacing: Spacing.md;
+
+            Text {
+                text: "Blocked people can't call or message you. You can unblock them in Contacts › Blocked.";
+                color: Colors.text-secondary;
+                font-size: Typography.sm;
+                wrap: word-wrap;
+            }
+
+            HorizontalLayout {
+                spacing: Spacing.sm;
+                alignment: end;
+
+                Button {
+                    text: "Cancel";
+                    variant: "secondary";
+                    clicked => { root.confirm-block = false; }
+                }
+
+                Button {
+                    text: "Block";
+                    variant: "danger";
+                    clicked => {
+                        root.confirm-block = false;
+                        root.block-user();
+                    }
                 }
             }
         }

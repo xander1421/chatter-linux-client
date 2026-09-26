@@ -22,7 +22,7 @@ use chatter_core::system::notification_sink::NotificationSink;
 use jni::objects::{JObject, JString, JValue};
 use jni::JNIEnv;
 
-const CHANNEL_ID: &str = "chatter_messages";
+pub(crate) const CHANNEL_ID: &str = "chatter_messages";
 const CHANNEL_NAME: &str = "Messages";
 
 /// Dedicated channel for incoming calls — high importance, ringtone + vibration

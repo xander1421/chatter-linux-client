@@ -13,6 +13,7 @@ import { Colors } from "../theme/colors.slint";
 import { Spacing } from "../theme/spacing.slint";
 import { Typography } from "../theme/typography.slint";
 import { Icons } from "../theme/icons.slint";
+import { QuickReactions } from "types.slint";
 
 // One tap-to-react emoji in the quick row. 48px so it is a real touch target.
 component QuickReaction inherits Rectangle {
@@ -50,7 +51,7 @@ component MenuItem inherits Rectangle {
     in property <bool> destructive: false;
     callback clicked();
 
-    height: 44px;
+    height: Spacing.touch-target-min;
     background: touch.has-hover ? Colors.surface-hover : transparent;
     border-radius: Spacing.radius-sm;
 
@@ -106,10 +107,7 @@ export component MessageContextMenu inherits Rectangle {
     in property <bool> can-delete-for-everyone: false;  // Derived from permissions
     in property <bool> is-pinned: false;
     in property <bool> has-attachments: false;  // Show download option when true
-
-    // The six one-tap reactions. Not configurable by design — this is the quick
-    // row; anything else is a tap away behind "More reactions".
-    property <[string]> quick-reactions: ["\u{1F44D}", "\u{2764}\u{FE0F}", "\u{1F602}", "\u{1F62E}", "\u{1F622}", "\u{1F64F}"];
+    in property <bool> can-thread: false;  // Threads are a channel feature (none in 1:1, as in Signal)
 
     // Callbacks - use (sender_id, timestamp_ns) for Signal-style lookups
     callback close();
@@ -134,10 +132,11 @@ export component MessageContextMenu inherits Rectangle {
     opacity: root.show ? 1 : 0;
     animate opacity { duration: 120ms; easing: ease-out; }
 
-    // Full screen backdrop
+    // Full screen backdrop, dimmed like every other modal surface so the menu
+    // reads as a modal choice over the chat, not a stray card on top of it.
     width: 100%;
     height: 100%;
-    background: transparent;
+    background: Colors.overlay;
 
     // Backdrop touch area to close menu
     TouchArea {
@@ -163,7 +162,9 @@ export component MessageContextMenu inherits Rectangle {
     //     keyboard (§112i) — the own-message menu (~575px) cannot fit a ~610px
     //     chat area on a Galaxy S9 once the keyboard is up.
     menu-container := Rectangle {
-        property <length> menu-h: menu-layout.preferred-height + Spacing.sm * 2;
+        // The layout carries its own padding; adding it again here left an
+        // empty band under "Delete for Me".
+        property <length> menu-h: menu-layout.preferred-height;
         property <length> top-limit: max(root.safe-area-top, root.content-top) + Spacing.sm;
         property <length> bottom-limit: parent.height - root.safe-area-bottom - Spacing.sm;
         // Does the preferred (below-the-anchor) placement fit?
@@ -211,7 +212,7 @@ export component MessageContextMenu inherits Rectangle {
                     alignment: space-between;
                     padding-bottom: Spacing.xs;
 
-                    for emoji in root.quick-reactions: QuickReaction {
+                    for emoji in QuickReactions.emojis: QuickReaction {
                         emoji: emoji;
                         clicked => {
                             root.quick-react(root.sender-id, root.timestamp-ns, emoji);
@@ -243,7 +244,7 @@ export component MessageContextMenu inherits Rectangle {
                     }
                 }
 
-                MenuItem {
+                if root.can-thread: MenuItem {
                     icon: Icons.message-circle;
                     label: "Reply in Thread";
                     clicked => {

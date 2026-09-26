@@ -1,0 +1,123 @@
+// Create menu — what the chat list's '+' opens (owner decision 2026-09-26).
+//
+// CreateMenu: the small popup of New Chat / New Channel / New Section. On a
+// phone it rises from the Chats tab's floating button, on a two-pane layout
+// it drops from the '+' in the sidebar header; `card-x` / `card-y` place it.
+//
+// NewChatPicker: New Chat's friend list. Picking a friend opens the DM.
+//
+// Both are pushed on the modal stack (app.slint), so Back and the backdrop
+// close them like any other layer.
+
+import { Colors } from "../theme/colors.slint";
+import { Spacing } from "../theme/spacing.slint";
+import { Typography } from "../theme/typography.slint";
+import { Icons } from "../theme/icons.slint";
+import { Modal } from "../components/modal.slint";
+import { Avatar } from "../components/avatar.slint";
+import { MenuRow } from "../settings/account_menu.slint";
+import { FriendData } from "../modals/friends.slint";
+import { AnonMode } from "../anon_mode/anon_mode_global.slint";
+
+export component CreateMenu inherits Rectangle {
+    in property <length> card-x;
+    in property <length> card-y;
+    out property <length> card-width: 240px;
+    out property <length> card-height: menu.preferred-height;
+
+    callback close();
+    callback new-chat();
+    callback new-channel();
+    callback new-section();
+
+    // The backdrop is app.slint's shared modal backdrop; this only has to
+    // keep taps outside the card from reaching the list under it.
+    TouchArea { clicked => { root.close(); } }
+
+    Rectangle {
+        x: root.card-x;
+        y: root.card-y;
+        width: root.card-width;
+        height: root.card-height;
+        border-radius: Spacing.radius-lg;
+        background: Colors.surface;
+        border-width: 1px;
+        border-color: Colors.neo-highlight-strong;
+        drop-shadow-blur: Spacing.neo-blur-lg;
+        drop-shadow-offset-y: Spacing.neo-offset-md;
+        drop-shadow-color: Colors.neo-shadow-strong;
+        clip: true;
+        // Eat taps on the card's own padding.
+        TouchArea { }
+
+        menu := VerticalLayout {
+            padding-top: Spacing.xs;
+            padding-bottom: Spacing.xs;
+            MenuRow { icon: Icons.message-circle; label: "New Chat"; clicked => { root.new-chat(); } }
+            // Channels do not exist in Shield mode (sidebar.slint hides them).
+            if !AnonMode.enabled: MenuRow { icon: Icons.megaphone; label: "New Channel"; clicked => { root.new-channel(); } }
+            MenuRow { icon: Icons.folder; label: "New Section"; clicked => { root.new-section(); } }
+        }
+    }
+}
+
+export component NewChatPicker inherits Rectangle {
+    in property <bool> mobile-mode: false;
+    in property <[FriendData]> friends: [];
+
+    callback close();
+    callback pick(/* user-id */ string);
+
+    Modal {
+        show: true;
+        title: "New Chat";
+        modal-width: 420px;
+        max-modal-height: 640px;
+        full-screen: root.mobile-mode;
+        fill-height: root.mobile-mode;
+        close => { root.close(); }
+
+        if root.friends.length == 0: Text {
+            text: "No friends yet. Add one from Contacts.";
+            color: Colors.text-muted;
+            font-size: Typography.base;
+            horizontal-alignment: center;
+            vertical-alignment: center;
+            wrap: word-wrap;
+        }
+
+        if root.friends.length > 0: Flickable {
+            viewport-height: list.preferred-height;
+            list := VerticalLayout {
+                alignment: start;
+                for friend in root.friends: Rectangle {
+                    height: root.mobile-mode ? Spacing.row-height-touch : 48px;
+                    background: row-touch.has-hover ? Colors.surface-hover : transparent;
+                    border-radius: Spacing.radius-md;
+                    accessible-role: button;
+                    accessible-label: friend.display-name;
+                    accessible-action-default => { root.pick(friend.user-id); }
+                    HorizontalLayout {
+                        padding: Spacing.sm;
+                        spacing: Spacing.sm;
+                        Avatar {
+                            size: root.mobile-mode ? Spacing.row-avatar-touch : 32px;
+                            source: friend.avatar-source;
+                            fallback-text: friend.initials;
+                            name: friend.display-name;
+                        }
+                        Text {
+                            text: friend.display-name;
+                            color: Colors.text-primary;
+                            font-size: Typography.base;
+                            vertical-alignment: center;
+                            horizontal-stretch: 1;
+                            overflow: elide;
+                        }
+                    }
+                    row-touch := TouchArea { mouse-cursor: pointer; clicked => { root.pick(friend.user-id); } }
+                }
+            }
+        }
+    }
+}

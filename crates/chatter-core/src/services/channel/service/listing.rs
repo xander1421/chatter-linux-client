@@ -160,10 +160,14 @@ impl ChannelService {
         Ok(channels)
     }
 
-    /// Get channels for the current user, excluding any that belong to a
-    /// custom sidebar section.
+    /// The channels the sidebar lists, excluding any that belong to a custom
+    /// sidebar section: the ones we are in, and the ones we used to be in
+    /// (left, removed, banned, deleted), which stay listed read-only until
+    /// their chat is deleted, as Signal keeps an ended group.
     pub fn get_unsectioned_channels_for_user(&self) -> Result<Vec<Channel>, ChannelError> {
-        let channels = self.get_channels_for_user()?;
+        let current_user = self.settings_repo.current_user_id()?;
+        let mut channels = self.channel_repo.list_for_user(&current_user)?;
+        channels.extend(self.channel_repo.list_former_for_user(&current_user)?);
         let sectioned = self.section_repo.all_conversation_ids()
             .map_err(ChannelError::Storage)?;
         Ok(channels.into_iter().filter(|ch| !sectioned.contains(&ch.id.to_string())).collect())

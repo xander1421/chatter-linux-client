@@ -563,7 +563,6 @@ impl InboxEventProcessor {
                 conversation_id,
                 responder_mailbox_pk,
                 profile_key,
-                responder_display_name: _,
                 encrypted_display_name,
                 encrypted_avatar,
                 timestamp: _,
@@ -921,6 +920,19 @@ impl InboxEventProcessor {
                     }
                     Ok(_) => {}
                     Err(e) => tracing::warn!(error = %e, "ReadSync: marking messages read failed"),
+                }
+            }
+
+            InboxEvent::ProfileKeySync { sender_id, sync } => {
+                // A peer must never set our profile key: only our own
+                // devices send a ProfileKeySync.
+                if self.message_service.current_user_id().ok().as_ref() != Some(sender_id) {
+                    tracing::warn!(sender_id = %sender_id, "ProfileKeySync from another user dropped");
+                    return;
+                }
+                match crate::services::profile_visibility::apply_sync(&self.message_service.settings_repo, sync) {
+                    Ok(changed) => tracing::info!(key_changed = changed, "ProfileKeySync applied"),
+                    Err(e) => tracing::warn!(error = %e, "ProfileKeySync: storing the key failed"),
                 }
             }
 

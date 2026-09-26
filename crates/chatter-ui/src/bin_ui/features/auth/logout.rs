@@ -27,7 +27,7 @@ pub fn wire_logout(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                 if let Some(w) = weak.upgrade() {
                     w.set_is_signed_in(false);
                     w.set_current_view("login".into());
-                    w.set_active_modal("none".into());
+                    crate::bin_ui::features::back::reset_to_chats(&w);
                     w.set_login_username("".into());
                     w.set_login_password("".into());
                     w.set_login_error("".into());

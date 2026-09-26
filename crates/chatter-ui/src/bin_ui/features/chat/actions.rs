@@ -12,12 +12,14 @@ use crate::{ForwardTarget, MainWindow, run_ui};
 
 /// Wire reply-message callback from context menu.
 /// Gets sender name and preview from the UI message model directly.
-pub fn wire_reply_message(window: &MainWindow, _ui_ctx: &Arc<ChatterClient>) {
+pub fn wire_reply_message(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     let weak_window = window.as_weak();
+    let ui_ctx = ui_ctx.clone();
 
     window.on_reply_message(move |sender_id: SharedString, timestamp_ns: SharedString| {
         let sender_id_str = sender_id.to_string();
         let timestamp_ns_str = timestamp_ns.to_string();
+        let ui_ctx = ui_ctx.clone();
 
         // Get reply info directly from UI message model (works for all message types)
         run_ui!(weak_window, |w| {
@@ -42,6 +44,9 @@ pub fn wire_reply_message(window: &MainWindow, _ui_ctx: &Arc<ChatterClient>) {
             }
             if display_name.is_empty() {
                 display_name = sender_id_str.clone();
+            }
+            if let Ok(author) = sender_id_str.parse::<UserId>() {
+                display_name = ui_ctx.quote_author_name(&author, || display_name);
             }
 
             w.set_composer_is_replying(true);
@@ -132,7 +137,7 @@ pub(super) fn open_forward_modal(
     w.set_forward_sources(ModelRc::from(std::rc::Rc::new(VecModel::from(sources))));
     w.set_forward_search_text("".into());
     w.set_forward_targets(ModelRc::from(std::rc::Rc::new(VecModel::from(targets))));
-    w.set_active_modal("forward-message".into());
+    crate::bin_ui::features::back::push(&w, "forward-message");
 }
 
 /// Wire the forward picker's search box. The filter itself is core's — this

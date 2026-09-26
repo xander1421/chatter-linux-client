@@ -276,7 +276,7 @@ pub fn wire_register(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                                     // logged in.
                                     w.set_is_signed_in(true);
                                     w.set_current_view("welcome".into());
-                                    w.set_active_modal("recovery-codes".into());
+                                    crate::bin_ui::features::back::push(&w, "recovery-codes");
                                 }
                             });
                         } else {

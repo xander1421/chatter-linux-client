@@ -13,11 +13,13 @@ use crate::proto::chat_v1::{
     friend_requests_filter, user_service_client::UserServiceClient, BlockUserRequest,
     ClearNavigationHistoryRequest, FriendRequest, FriendRequestsFilter, FriendResponse,
     FriendStatus, GetNavigationHistoryRequest, GetNavigationHistoryResponse,
-    DeleteUsernameLinkRequest, GetUserProfileRequest, GetUsernameLinkRequest,
+    DeleteUsernameLinkRequest, GetUserProfileRequest, GetUsernameDiscoverabilityRequest,
+    GetUsernameDiscoverabilityResponse, GetUsernameLinkRequest,
     GetUsernameLinkResponse, ListBlockedUsersRequest, ListBlockedUsersResponse,
     ListFriendRequestsRequest, ListFriendRequestsResponse, ListFriendsRequest, ListFriendsResponse,
     LookupUsernameRequest, LookupUsernameResponse, PinChannelRequest, PinChannelResponse,
-    RemoveFriendRequest, ReorderPinnedChannelsRequest, SetUsernameLinkRequest,
+    RemoveFriendRequest, ReorderPinnedChannelsRequest, SetUsernameDiscoverabilityRequest,
+    SetUsernameDiscoverabilityResponse, SetUsernameLinkRequest,
     SetUsernameLinkResponse,
     TrackChannelVisitRequest, UnblockUserRequest, UnpinChannelRequest, UnpinChannelResponse,
     UpdatePresenceRequest, UpdateUserProfileRequest, UserEvent, UserEventRequest, UserPresence,
@@ -112,6 +114,35 @@ impl UserClient {
         }
     }
 
+    /// Read the caller's "Who can find me by my username" setting from the
+    /// server (user_profiles.username_discoverable). `true` = Everyone,
+    /// `false` = Nobody.
+    pub async fn get_username_discoverability(&mut self) -> Result<bool, NetworkError> {
+        let GetUsernameDiscoverabilityResponse { discoverable } = self
+            .inner
+            .get_username_discoverability(GetUsernameDiscoverabilityRequest {})
+            .await
+            .map(|r| r.into_inner())
+            .map_err(|s| NetworkError::from_status(&s))?;
+        Ok(discoverable)
+    }
+
+    /// Set the caller's "Who can find me by my username" setting on the
+    /// server. With `false` the server's LookupUsername answers "no match"
+    /// for this account to everyone else. Returns the persisted value.
+    pub async fn set_username_discoverability(
+        &mut self,
+        discoverable: bool,
+    ) -> Result<bool, NetworkError> {
+        let SetUsernameDiscoverabilityResponse { discoverable } = self
+            .inner
+            .set_username_discoverability(SetUsernameDiscoverabilityRequest { discoverable })
+            .await
+            .map(|r| r.into_inner())
+            .map_err(|s| NetworkError::from_status(&s))?;
+        Ok(discoverable)
+    }
+
     // ==================== Username-link RPCs ====================
 
     /// Upload (or rotate) the caller's username-link ciphertext blob. Returns
@@ -131,19 +162,20 @@ impl UserClient {
         Ok(link_id)
     }
 
-    /// Fetch the ciphertext blob stored under a link id. `Ok(None)` when the
-    /// link doesn't exist (deleted or rotated away).
+    /// Fetch the ciphertext blob stored under a link id, with the link
+    /// owner's user id. `Ok(None)` when the link doesn't exist (deleted or
+    /// rotated away).
     pub async fn get_username_link(
         &mut self,
         link_id: &str,
-    ) -> Result<Option<Vec<u8>>, NetworkError> {
+    ) -> Result<Option<(String, Vec<u8>)>, NetworkError> {
         let request = GetUsernameLinkRequest {
             link_id: link_id.to_string(),
         };
         match self.inner.get_username_link(request).await {
             Ok(r) => {
-                let GetUsernameLinkResponse { encrypted_username } = r.into_inner();
-                Ok(Some(encrypted_username))
+                let GetUsernameLinkResponse { encrypted_username, user_id } = r.into_inner();
+                Ok(Some((user_id, encrypted_username)))
             }
             Err(s) if s.code() == tonic::Code::NotFound => Ok(None),
             Err(s) => Err(NetworkError::from_status(&s)),

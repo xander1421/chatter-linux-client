@@ -102,7 +102,6 @@ impl AnonDmService {
             responder_mailbox_pk: our_mailbox_pk.to_vec(),
             profile_key: profile_key.map(|k| k.to_vec()),
             timestamp: TimestampNanos::now().as_u64(),
-            responder_display_name: display_name.to_string(),
             encrypted_display_name,
             encrypted_avatar,
         };

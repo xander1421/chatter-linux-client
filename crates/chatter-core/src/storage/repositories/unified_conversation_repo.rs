@@ -201,6 +201,27 @@ impl UnifiedConversationRepository {
         }
     }
 
+    /// Friend-DM conversations `me` has sent in, newest activity first — the
+    /// conversations we accepted, as Signal counts a reply. Ids are the peer's
+    /// user id (a friend DM is keyed by the peer).
+    pub fn dm_conversations_sent_in(&self, me: &str) -> Result<Vec<String>, StorageError> {
+        let conn = self.db.read_connection()?;
+        let mut stmt = conn.prepare(
+            r#"
+            SELECT conversation_id
+            FROM messages
+            WHERE conversation_type = 'server_dm'
+            GROUP BY conversation_id
+            HAVING SUM(CASE WHEN sender_id = ?1 THEN 1 ELSE 0 END) > 0
+            ORDER BY MAX(created_at) DESC
+            "#,
+        )?;
+        let ids = stmt
+            .query_map(params![me], |row| row.get::<_, String>(0))?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(ids)
+    }
+
     /// Unread count and last-message time for EVERY conversation, in one query.
     ///
     /// This is `list_all`'s `conv_stats` CTE on its own. It reads the messages

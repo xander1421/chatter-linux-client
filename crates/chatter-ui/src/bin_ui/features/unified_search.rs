@@ -9,7 +9,7 @@ use slint::{ComponentHandle, Model, ModelRc, SharedString, VecModel};
 
 use chatter_core::client::ChatterClient;
 
-use crate::{MainWindow, QuickSwitcherItem, SearchResult};
+use crate::{MainWindow, QuickSwitcherItem, SearchResult, run_ui};
 
 /// Wire all unified-search callbacks.
 pub fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
@@ -100,7 +100,7 @@ fn wire_changed(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
 /// On Enter over a `nickname.discriminator` query or a pasted
 /// `chatter://u/…` username link: exact resolution to a single account.
 /// Privacy: exact-match only (no enumeration); a username link decrypts
-/// LOCALLY (core `resolve_username_link`) before the hashed lookup.
+/// LOCALLY (core `resolve_username_link`) and names its owner directly.
 fn wire_resolve(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     let weak = window.as_weak();
     let ui_ctx = ui_ctx.clone();
@@ -116,12 +116,12 @@ fn wire_resolve(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
         let weak_bg = weak.clone();
         let ui_ctx = ui_ctx.clone();
         tokio::spawn(async move {
-            // Username link → (decrypted handle, maybe account); plain handle
-            // → hashed lookup directly. Both end at the same lookup path.
+            // Username link → (decrypted handle, owner account); plain handle
+            // → hashed lookup, which a Nobody account answers as "no match".
             let is_link = chatter_core::domain::UsernameLink::is_username_link(&handle);
             let (shown_handle, looked_up) = if is_link {
                 match ui_ctx.resolve_username_link(&handle).await {
-                    Ok((username, uid)) => (username, Ok(uid)),
+                    Ok((username, uid)) => (username, Ok(Some(uid))),
                     Err(e) => (handle.clone(), Err(e)),
                 }
             } else {
@@ -176,6 +176,7 @@ fn wire_person_selected(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                 ui_ctx.user_state(),
                 Some(&ui_ctx),
             );
+            crate::bin_ui::features::back::push(&w, "user-profile");
         }
     });
 }
@@ -185,19 +186,28 @@ fn wire_conversation_selected(window: &MainWindow) {
     let weak = window.as_weak();
     window.on_unified_search_conversation_selected(move |id: SharedString, conv_type: SharedString| {
         if let Some(w) = weak.upgrade() {
-            match conv_type.as_str() {
-                "channel" => w.invoke_channel_selected(id),
-                "dm" | "anon_dm" => w.invoke_dm_selected(id),
-                "private_group" => w.invoke_private_group_selected(id),
-                "saved_messages" => w.invoke_saved_messages_clicked(),
-                // Mesh rows open through the same global callback the sidebar
-                // uses, so there is one way into a mesh conversation.
-                #[cfg(feature = "mesh")]
-                "mesh" => w.global::<crate::MeshGlobal>().invoke_conversation_selected(id),
-                _ => {}
-            }
+            open_conversation(&w, id, conv_type.as_str());
         }
     });
+}
+
+/// Open a conversation by its palette `(id, conv_type)` — the one way a
+/// jump-to row and a message hit (core `search_hit_target`) navigate.
+fn open_conversation(w: &MainWindow, id: SharedString, conv_type: &str) {
+    match conv_type {
+        "channel" => w.invoke_channel_selected(id),
+        "dm" | "anon_dm" => w.invoke_dm_selected(id),
+        "private_group" => w.invoke_private_group_selected(id),
+        "saved_messages" => w.invoke_saved_messages_clicked(),
+        // Mesh rows open through the same global callback the sidebar
+        // uses, so there is one way into a mesh conversation.
+        #[cfg(feature = "mesh")]
+        "mesh" => w.global::<crate::MeshGlobal>().invoke_conversation_selected(id),
+        // No mesh in this build: the row cannot exist, but a stored message
+        // from a mesh-enabled run can. Clearing the spinner is the honest
+        // outcome — any view left open would be the wrong conversation.
+        _ => w.set_loading_messages(false),
+    }
 }
 
 /// On message pick: navigate to the message (port of header.rs search_result_clicked).
@@ -214,47 +224,22 @@ fn wire_message_selected(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
         tokio::spawn(async move {
             let msg_id = match message_id_str.parse::<chatter_core::domain::ids::MessageId>() {
                 Ok(id) => id,
-                Err(e) => { tracing::error!("Invalid message ID: {}", e); return; }
+                Err(e) => {
+                    tracing::error!("Invalid message ID: {}", e);
+                    run_ui!(weak, |w| w.set_loading_messages(false));
+                    return;
+                }
             };
             let message = match ui_ctx.get_message_local(&msg_id) {
                 Some(m) => m,
-                None => { tracing::error!("Message {} not found locally", msg_id); return; }
-            };
-            let conv_id_str = message.conversation_id.to_string();
-            let conv_type = message.conversation_type;
-            let weak_dispatch = weak.clone();
-            let _ = slint::invoke_from_event_loop(move || {
-                if let Some(w) = weak_dispatch.upgrade() {
-                    let id_slint: SharedString = conv_id_str.into();
-                    use chatter_core::domain::message::ConversationType as CT;
-                    match conv_type {
-                        CT::Channel => w.invoke_channel_selected(id_slint),
-                        CT::ServerDm | CT::AnonDm => w.invoke_dm_selected(id_slint),
-                        CT::AnonGroup => w.invoke_private_group_selected(id_slint),
-                        CT::SavedMessages => w.set_loading_messages(false),
-                        // Mesh conversations open through their own global
-                        // callback — same entry point as the sidebar row, so a
-                        // search hit and a click land in the same place.
-                        CT::Mesh | CT::MeshDm => {
-                            #[cfg(feature = "mesh")]
-                            {
-                                w.global::<crate::MeshGlobal>()
-                                    .invoke_conversation_selected(id_slint);
-                            }
-                            #[cfg(not(feature = "mesh"))]
-                            {
-                                // No mesh in this build: the row cannot exist,
-                                // but a stored message from a mesh-enabled run
-                                // can. Clearing the spinner is the honest
-                                // outcome — opening a channel view would show
-                                // the wrong conversation rather than none.
-                                let _ = id_slint;
-                                w.set_loading_messages(false);
-                            }
-                        }
-                    }
+                None => {
+                    tracing::error!("Message {} not found locally", msg_id);
+                    run_ui!(weak, |w| w.set_loading_messages(false));
+                    return;
                 }
-            });
+            };
+            let (conv_type, conv_id) = ui_ctx.search_hit_target(&message);
+            run_ui!(weak, |w| open_conversation(&w, conv_id.into(), conv_type));
             // Scroll-to-message once the loader populates the model.
             let weak_scroll = weak.clone();
             let target_id = message_id_str.clone();
@@ -316,11 +301,8 @@ fn search_messages(ui_ctx: &Arc<ChatterClient>, query: &str) -> Vec<SearchResult
     let mut out: Vec<SearchResult> = Vec::with_capacity(results.len());
     for msg in &results {
         // Conversation name + sender name resolution both live in core.
-        let channel_name = ui_ctx
-            .get_conversation_metadata(&msg.conversation_id.to_string(), &msg.conversation_type)
-            .map(|c| c.name)
-            .filter(|n| !n.is_empty())
-            .unwrap_or_else(|| "Unknown".to_string());
+        let channel_name =
+            ui_ctx.conversation_display_name(&msg.conversation_id, &msg.conversation_type);
         let sender_name = match msg.sender_id {
             Some(_) => ui_ctx.message_sender_display_name(&msg),
             None => "Unknown".to_string(),

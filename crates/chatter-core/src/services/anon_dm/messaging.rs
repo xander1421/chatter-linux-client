@@ -317,9 +317,11 @@ impl AnonDmService {
 
         let peer_mailbox_pk = dm.peer_mailbox_pk.unwrap();
 
-        // Encrypt avatar and display name with our own profile key
+        // Name and avatar travel only under our profile key, which
+        // `get_my_profile_key` withholds from anon peers unless our visibility
+        // is "everyone": a stranger never reads our real name otherwise.
         let profile_key = self.get_my_profile_key();
-        let (_encrypted_display_name, encrypted_avatar, pk_bytes) = if let Some(pk) = &profile_key {
+        let (encrypted_display_name, encrypted_avatar, pk_bytes) = if let Some(pk) = &profile_key {
             let enc_name = display_name.as_deref().and_then(|name| {
                 crate::crypto::profile_crypto::encrypt_display_name(pk, name).ok()
             });
@@ -332,7 +334,7 @@ impl AnonDmService {
         // Build profile update message
         let profile_update = AnonDmProfileUpdate {
             conversation_id: conversation_id.as_bytes().to_vec(),
-            display_name,
+            encrypted_display_name,
             avatar_url,
             bio,
             timestamp: std::time::SystemTime::now()

@@ -71,6 +71,7 @@ mod v069_peer_mailbox_device;
 mod v070_peer_device_mailboxes;
 mod v071_peer_device_asked;
 mod v072_peer_profile_keys;
+mod v073_former_channels;
 
 use crate::error::StorageError;
 use chrono::Utc;
@@ -145,6 +146,7 @@ pub use v069_peer_mailbox_device::V069PeerMailboxDevice;
 pub use v070_peer_device_mailboxes::V070PeerDeviceMailboxes;
 pub use v071_peer_device_asked::V071PeerDeviceAsked;
 pub use v072_peer_profile_keys::V072PeerProfileKeys;
+pub use v073_former_channels::V073FormerChannels;
 
 /// Trait for database migrations.
 ///
@@ -344,4 +346,5 @@ pub fn default_migrations() -> MigrationRunner {
         .register(V070PeerDeviceMailboxes)
         .register(V071PeerDeviceAsked)
         .register(V072PeerProfileKeys)
+        .register(V073FormerChannels)
 }

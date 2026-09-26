@@ -7,6 +7,7 @@
 // cell — that the scope is public and location-bound (a globe).
 
 import { Colors } from "../theme/colors.slint";
+import { Appearance } from "../theme/appearance.slint";
 import { Spacing } from "../theme/spacing.slint";
 import { Icons } from "../theme/icons.slint";
 import { Typography } from "../theme/typography.slint";
@@ -38,7 +39,7 @@ export component MeshListItem inherits Rectangle {
                           : root.kind == "dm" ? Icons.message-circle
                           : Icons.radio;
 
-    height: 48px;
+    height: 48px * Appearance.text-grow;
     border-radius: Spacing.radius-sm;
     background: root.selected ? Colors.neo-inset-bg
               : touch.has-hover ? Colors.surface-hover
@@ -189,8 +190,8 @@ export component MeshListItem inherits Rectangle {
         if root.unread-count > 0: Rectangle {
             x: parent.width / 2 + 4px;
             y: parent.height / 2 - 16px;
-            width: max(16px, collapsed-badge.preferred-width + 8px);
-            height: 16px;
+            width: max(self.height, collapsed-badge.preferred-width + 8px);
+            height: Spacing.badge-sm;
             border-radius: Spacing.radius-full;
             background: Colors.primary;
             collapsed-badge := Text {

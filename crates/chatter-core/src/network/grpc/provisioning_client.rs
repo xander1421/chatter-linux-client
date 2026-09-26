@@ -179,7 +179,6 @@ impl ProvisioningClient {
     /// # Arguments
     /// * `provisioning_code` - Code from decrypted ProvisionMessage
     /// * `device_auth_token` - 32-byte client-generated auth token
-    /// * `uak` - 16-byte Unidentified Access Key (derived from profile key)
     /// * `device_info` - Platform/model info
     /// * `device_name` - User-friendly device name
     /// * `prekey_bundle` - Signal Protocol prekey bundle for this device
@@ -189,7 +188,6 @@ impl ProvisioningClient {
         &mut self,
         provisioning_code: &str,
         device_auth_token: &[u8; 32],
-        uak: &[u8; 16],
         device_info: &str,
         device_name: &str,
         prekey_bundle: SignalPreKeyBundle,
@@ -198,7 +196,6 @@ impl ProvisioningClient {
         let request = CompleteDeviceLinkingRequest {
             provisioning_code: provisioning_code.to_string(),
             device_auth_token: device_auth_token.to_vec(),
-            unidentified_access_key: uak.to_vec(),
             device_info: device_info.to_string(),
             device_name: device_name.to_string(),
             prekey_bundle: Some(prekey_bundle),

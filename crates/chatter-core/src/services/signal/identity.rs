@@ -142,17 +142,6 @@ impl SignalService {
         let one_time_prekeys = self.actor.refresh_prekeys(100).await?;
         let kyber_one_time_prekeys = self.actor.refresh_kyber_prekeys(100).await?;
 
-        // The UAK is derived from the profile key, which an SVR restore brings
-        // back alongside the identity key. Omitting it would silently disable
-        // sealed sender for the recovered account.
-        let unidentified_access_key = self
-            .settings_repo
-            .get_bytes(keys::PROFILE_KEY)
-            .ok()
-            .flatten()
-            .and_then(|pk| <[u8; 32]>::try_from(pk.as_slice()).ok())
-            .map(|pk| crate::crypto::device_credentials::derive_uak(&pk).to_vec());
-
         let device_id: u32 = self
             .settings_repo
             .get(keys::CURRENT_DEVICE_ID)
@@ -170,7 +159,6 @@ impl SignalService {
             // here would hand the same OPK out twice.
             one_time_prekey: None,
             kyber_prekey: Some(kyber_prekey),
-            unidentified_access_key,
             // Per NDSS '21, first contact goes through blind-signed anonymous
             // credentials rather than unrestricted sealed sender.
             unrestricted_unidentified_access: Some(false),

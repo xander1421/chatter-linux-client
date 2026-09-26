@@ -43,10 +43,24 @@ fn wire_send_thread_reply(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
         let ui_ctx = ui_ctx.clone();
         tokio::spawn(async move {
             let thread = match chat_state.active_thread() { Some(t) => t, None => return };
-            if let Ok(msg) = ui_ctx
+            let sent = ui_ctx
                 .send_channel_message(None, &thread.channel_id, &text, vec![], vec![], Some(&thread.root_message_id), vec![], false)
-                .await
-            {
+                .await;
+            if let Err(e) = &sent {
+                // The panel cleared its composer on tap. A reply that did not
+                // leave must say so and give the text back — it used to vanish.
+                tracing::error!(error = %e, "thread reply send failed");
+                let _ = slint::invoke_from_event_loop(move || { if let Some(w) = weak.upgrade() {
+                    if w.get_thread_composer_text().is_empty() {
+                        w.set_thread_composer_text(text.into());
+                    }
+                    w.set_toast_message("Couldn't send your reply. Try again.".into());
+                    w.set_toast_variant("error".into());
+                    w.set_toast_visible(true);
+                }});
+                return;
+            }
+            if let Ok(msg) = sent {
                 chat_state.update_thread_reply_count(thread.root_message_id, thread.reply_count + 1);
                 // Show our own reply in the panel immediately — the send path
                 // stores it locally but emits no MessageReceived event, so

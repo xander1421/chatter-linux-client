@@ -8,23 +8,24 @@ use slint::{ComponentHandle, ModelRc, SharedString, VecModel};
 
 use chatter_core::client::ChatterClient;
 use chatter_core::domain::ids::{ChannelId, UserId};
-use chatter_core::domain::AnonDmId;
 
 use crate::{MainWindow, run_ui};
 use crate::bin_ui::converters::messages_to_display_batch;
 
 use super::stop_audio_playback;
 
-/// Sidebar menu › Delete chat on a DM row (confirmed in the menu). Core
-/// resolves the row and deletes (`delete_conversation`, DMs only); if it was
-/// the open conversation the chat pane is emptied, then the lists rebuild.
+/// Sidebar menu › Delete chat on a DM row, or a channel we are no longer in
+/// (confirmed in the menu). Core resolves the row and deletes
+/// (`delete_conversation`); if it was the open conversation the chat pane is
+/// emptied, then the lists rebuild.
 pub fn wire_delete_conversation(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     let ui_ctx = ui_ctx.clone();
     let weak = window.as_weak();
-    window.on_delete_conversation(move |row_id: SharedString, _kind: crate::ConversationKind| {
+    window.on_delete_conversation(move |row_id: SharedString, kind: crate::ConversationKind| {
         let (weak, ui_ctx) = (weak.clone(), ui_ctx.clone());
         tokio::spawn(async move {
-            let Some(conv) = ui_ctx.resolve_dm_conversation(row_id.as_str()) else {
+            let kind = crate::bin_ui::converters::conversation_type(kind);
+            let Some(conv) = ui_ctx.resolve_row_conversation(row_id.as_str(), &kind) else {
                 tracing::warn!(row_id = %row_id, "delete chat: row resolves to no conversation");
                 return;
             };
@@ -60,25 +61,34 @@ pub fn wire_dm_selected(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
 
         let ui_ctx = ui_ctx_clone.clone();
         let weak = weak_window.clone();
-        super::show_chat_pane(&weak);
-        
-        // Stop any playing audio
-        stop_audio_playback();
-
-        // Clear inline GIF animations
-        crate::bin_ui::gif_state::clear_inline_gifs();
 
         // What kind of DM is this? Core answers from storage, not from the
         // sidebar model: a DM filed into a custom folder is deliberately absent
         // from that model, and scanning it here made every foldered DM
         // unopenable.
         let active_pre_spawn = ui_ctx.resolve_dm_conversation(&dm_id_str);
-        let is_anon_dm = matches!(
-            active_pre_spawn,
-            Some(chatter_core::state::ActiveConversation::AnonDm(_))
-        );
-        let peer_id_for_dm: Option<UserId> = match active_pre_spawn {
-            Some(chatter_core::state::ActiveConversation::ServerDm { peer_id }) => Some(peer_id),
+        let Some(active) = active_pre_spawn else {
+            // Nothing to open. Showing the chat pane anyway put the PREVIOUS
+            // conversation on screen as if it were this one, so stay on the
+            // list (the sidebar row already asked for the pane).
+            tracing::warn!(dm_id = %dm_id_str, "[UI_OPEN_DM] resolves to no conversation");
+            if let Some(w) = weak.upgrade() {
+                w.set_mobile_show_chat(false);
+                w.set_loading_messages(false);
+            }
+            return;
+        };
+        super::show_chat_pane(&weak);
+
+        // Stop any playing audio
+        stop_audio_playback();
+
+        // Clear inline GIF animations
+        crate::bin_ui::gif_state::clear_inline_gifs();
+
+        let is_anon_dm = matches!(active, chatter_core::state::ActiveConversation::AnonDm(_));
+        let peer_id_for_dm: Option<UserId> = match active {
+            chatter_core::state::ActiveConversation::ServerDm { peer_id } => Some(peer_id),
             _ => None,
         };
 
@@ -93,12 +103,8 @@ pub fn wire_dm_selected(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             tokio::spawn(async move { refresh_ctx.refresh_profile_if_stale(&peer).await });
         }
 
-        if let Some(active) = active_pre_spawn {
-            tracing::info!(?active, dm_id = %dm_id_str, is_anon = is_anon_dm, "[UI_OPEN_DM] committing active conversation pre-spawn");
-            ui_ctx.chat_state().set_active_conversation(active);
-        } else {
-            tracing::warn!(dm_id = %dm_id_str, is_anon = is_anon_dm, "[UI_OPEN_DM] no active conversation computed; sends will silently drop");
-        }
+        tracing::info!(?active, dm_id = %dm_id_str, is_anon = is_anon_dm, "[UI_OPEN_DM] committing active conversation pre-spawn");
+        ui_ctx.chat_state().set_active_conversation(active);
 
         let dm_id_str_for_ui = dm_id_str.clone();
         let ui_ctx_for_ui = ui_ctx.clone();
@@ -138,25 +144,16 @@ pub fn wire_dm_selected(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             // path makes; covers anon and server DMs alike.
             // Where the user left off. This is the only moment it exists:
             // the call that returns it is the call that clears `is_read`.
-            let anchor = match active_pre_spawn {
-                Some(active) => ui_ctx
-                    .conversation(active)
-                    .mark_as_read()
-                    .await
-                    .unwrap_or_default(),
-                None => Default::default(),
-            };
+            let anchor = ui_ctx
+                .conversation(active)
+                .mark_as_read()
+                .await
+                .unwrap_or_default();
 
             // 1. Handle Anon DM selection
-            if is_anon_dm {
-                let anon_dm_id: AnonDmId = match dm_id_str.parse() {
-                    Ok(id) => id,
-                    Err(e) => {
-                        tracing::error!("Invalid anon DM ID: {}", e);
-                        run_ui!(weak, |w| w.set_loading_messages(false));
-                        return;
-                    }
-                };
+            // The resolved conversation, not the row id: a peer's row can
+            // resolve to the anon DM we share with them.
+            if let chatter_core::state::ActiveConversation::AnonDm(anon_dm_id) = active {
 
                 let ui_ctx_for_sel = ui_ctx.clone();
                 run_ui!(weak, |w| {

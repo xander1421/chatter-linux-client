@@ -19,6 +19,7 @@ pub fn wire_channel_settings(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     wire_notification_settings(window, ui_ctx);
     wire_member_management(window, ui_ctx);
     wire_moderation(window, ui_ctx);
+    wire_transfer_ownership(window, ui_ctx);
     wire_channel_actions(window, ui_ctx);
     wire_invite_members(window, ui_ctx);
     wire_invite_channel_members(window, ui_ctx);
@@ -126,7 +127,7 @@ pub fn open_channel_settings(
                 w.set_channel_settings_can_leave(can_leave);
                 apply_member_lists(&w, &members, bans.as_deref());
                 w.set_channel_settings_loading(false);
-                w.set_active_modal("channel-settings".into());
+                crate::bin_ui::features::back::push(&w, "channel-settings");
             }
         });
     });
@@ -225,7 +226,7 @@ fn wire_save_settings(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             match ui_ctx.update_channel(&channel_uuid, Some(&name_str), desc_opt, icon_bytes.as_deref()).await {
                 Ok(_) => {
                     let _ = slint::invoke_from_event_loop(move || {
-                        if let Some(w) = weak.upgrade() { w.set_active_modal("none".into()); }
+                        if let Some(w) = weak.upgrade() { crate::bin_ui::features::back::close(&w, "channel-settings"); }
                     });
                 }
                 Err(e) => {
@@ -501,6 +502,45 @@ fn wire_moderation(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     });
 }
 
+/// Members › ⋮ › "Make owner…" (confirmed in the pane). On success we are an
+/// admin, so the whole modal is reloaded: the owner-only controls go and
+/// Leave appears.
+fn wire_transfer_ownership(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
+    let weak_window = window.as_weak();
+    let ui_ctx = ui_ctx.clone();
+    window.on_channel_settings_transfer_ownership(move |user_id| {
+        let weak = weak_window.clone();
+        let ui_ctx = ui_ctx.clone();
+        // Read on the UI thread: a Slint Weak never upgrades inside tokio::spawn.
+        let channel_id = weak.upgrade().map(|w| w.get_channel_settings_id().to_string()).unwrap_or_default();
+        let (Ok(channel_uuid), Ok(new_owner)) =
+            (channel_id.parse::<ChannelId>(), user_id.as_str().parse::<UserId>())
+        else {
+            return;
+        };
+        tokio::spawn(async move {
+            let result = ui_ctx.transfer_channel_ownership(&channel_uuid, &new_owner).await;
+            let _ = slint::invoke_from_event_loop(move || {
+                let Some(w) = weak.upgrade() else { return };
+                match result {
+                    Ok(()) => {
+                        w.set_channel_settings_error("".into());
+                        let still_open = w.get_channel_settings_id() == channel_id.as_str()
+                            && w.get_modal_stack().iter().any(|s| s == "channel-settings");
+                        if still_open {
+                            open_channel_settings(weak.clone(), ui_ctx, channel_uuid);
+                        }
+                    }
+                    Err(e) => {
+                        tracing::warn!(%channel_uuid, error = %e, "Ownership transfer failed");
+                        w.set_channel_settings_error(format!("Couldn't transfer ownership: {e}").into());
+                    }
+                }
+            });
+        });
+    });
+}
+
 fn wire_channel_actions(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     let weak_window = window.as_weak();
     let ui_ctx_archive = ui_ctx.clone();
@@ -520,7 +560,7 @@ fn wire_channel_actions(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             let result = ui_ctx.archive_channel(&channel_uuid, !currently_archived).await;
             if result.is_ok() {
                 let _ = slint::invoke_from_event_loop(move || {
-                    if let Some(w) = weak.upgrade() { w.set_active_modal("none".into()); }
+                    if let Some(w) = weak.upgrade() { crate::bin_ui::features::back::close(&w, "channel-settings"); }
                 });
             }
         });
@@ -557,7 +597,7 @@ fn wire_channel_actions(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             if ui_ctx.delete_channel(&channel_uuid).await.is_ok() {
                 let _ = slint::invoke_from_event_loop(move || {
                     if let Some(w) = weak.upgrade() {
-                        w.set_active_modal("none".into());
+                        crate::bin_ui::features::back::close(&w, "channel-settings");
                         ui_ctx.chat_state().set_active_conversation(chatter_core::state::ActiveConversation::None);
                         w.set_channel_name("".into());
                         crate::bin_ui::features::sidebar::refresh_selection(&w, &ui_ctx);
@@ -579,12 +619,10 @@ fn leave_channel(weak: slint::Weak<MainWindow>, ui_ctx: Arc<ChatterClient>, chan
             match result {
                 Ok(()) => {
                     if w.get_channel_settings_id() == channel_id.as_str() {
-                        w.set_active_modal("none".into());
+                        crate::bin_ui::features::back::close(&w, "channel-settings");
                     }
-                    if ui_ctx.chat_state().get().active_channel_id == Some(channel_uuid) {
-                        ui_ctx.chat_state().set_active_conversation(chatter_core::state::ActiveConversation::None);
-                        w.set_channel_name("".into());
-                    }
+                    // An open chat stays open, read-only: the leave's
+                    // ChannelMemberLeft swaps its composer for the notice.
                     crate::bin_ui::features::sidebar::refresh_selection(&w, &ui_ctx);
                 }
                 Err(e) => {
@@ -646,7 +684,7 @@ fn wire_invite_members(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                     w.set_invite_private_group_id(group_id_str.into());
                     w.set_invite_private_group_friends(ModelRc::new(VecModel::from(friend_data)));
                     w.set_invite_private_group_selected_count(0);
-                    w.set_active_modal("invite-private-group".into());
+                    crate::bin_ui::features::back::push(&w, "invite-private-group");
                 }
             });
         });
@@ -682,7 +720,7 @@ pub fn open_invite_member_modal(weak: slint::Weak<MainWindow>, ui_ctx: Arc<Chatt
                 w.set_invite_member_channel_name(channel_name.into());
                 w.set_invite_member_users(ModelRc::new(VecModel::from(user_data)));
                 w.set_invite_member_selected_count(0);
-                w.set_active_modal("invite-member".into());
+                crate::bin_ui::features::back::push(&w, "invite-member");
             }
         });
     });
@@ -886,7 +924,7 @@ fn wire_invite_channel_members(window: &MainWindow, ui_ctx: &Arc<ChatterClient>)
                     w.set_toast_variant("success".into());
                 }
                 w.set_toast_visible(true);
-                w.set_active_modal("none".into());
+                crate::bin_ui::features::back::close(&w, "invite-member");
             });
         });
     });

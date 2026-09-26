@@ -300,7 +300,6 @@ fn create_test_bundle(device_id: u32) -> SignalPreKeyBundle {
             signature: random_bytes(64),
             timestamp: chrono::Utc::now().timestamp_millis() as u64,
         }),
-        unidentified_access_key: Some(random_uak().to_vec()),
         unrestricted_unidentified_access: Some(false),
     }
 }

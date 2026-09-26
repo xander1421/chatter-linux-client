@@ -217,7 +217,7 @@ export component SectionHeaderContextMenu inherits Rectangle {
             // does not exist on touch.
             MenuItem {
                 icon: Icons.edit;
-                label: "Rename folder";
+                label: "Rename section";
                 mobile-mode: root.mobile-mode;
                 clicked => {
                     root.rename-section(root.section-id);
@@ -257,6 +257,8 @@ export component SectionContextMenu inherits Rectangle {
     in property <bool> can-pin: true;
     // Channel rows: core's `can_leave_channel` (a member, not the owner).
     in property <bool> can-leave: false;
+    // Channel rows: core's `is_former_channel` (we are no longer in it).
+    in property <bool> can-delete-channel: false;
 
     // Available sections
     in property <[CustomSectionData]> sections: [];
@@ -266,15 +268,16 @@ export component SectionContextMenu inherits Rectangle {
     callback remove-from-section(/* conv-id */ string);
     callback set-pinned(/* conv-id */ string, /* pinned */ bool);
     callback create-section-clicked();
-    // DM rows only: deletes the chat on this device (core
-    // `delete_conversation`).
+    // DM rows, and channels we are no longer in: deletes the chat on this
+    // device (core `delete_conversation`).
     callback delete-chat(/* conv-id */ string, /* conv-type */ ConversationKind);
     // Channel rows: same leave as Channel Settings' Danger Zone.
     callback leave-channel(/* channel-id */ string);
     callback close();
 
     property <bool> can-delete: root.conversation-type == ConversationKind.server-dm
-        || root.conversation-type == ConversationKind.anon-dm;
+        || root.conversation-type == ConversationKind.anon-dm
+        || root.can-delete-channel;
     // Delete asks once, inside the menu; reset whenever the menu closes.
     property <bool> confirm-delete: false;
     property <bool> confirm-leave: false;
@@ -354,6 +357,8 @@ export component SectionContextMenu inherits Rectangle {
                 emoji: section.icon-emoji;
                 icon: Icons.folder;
                 label: section.name;
+                // ✓ on the section the chat is already in.
+                selected: section.section-id == root.current-section-id;
                 mobile-mode: root.mobile-mode;
                 clicked => {
                     root.move-to-section(root.conversation-id, root.conversation-type, section.section-id);
@@ -370,7 +375,7 @@ export component SectionContextMenu inherits Rectangle {
             // New section
             MenuItem {
                 icon: Icons.plus;
-                label: "New section...";
+                label: "New Section…";
                 mobile-mode: root.mobile-mode;
                 clicked => {
                     root.create-section-clicked();
@@ -381,8 +386,8 @@ export component SectionContextMenu inherits Rectangle {
             // Remove from section (only if already in one)
             if root.current-section-id != "": MenuItem {
                 icon: Icons.x;
+                // Not destructive: the chat goes back to the main list.
                 label: "Remove from section";
-                destructive: true;
                 mobile-mode: root.mobile-mode;
                 clicked => {
                     root.remove-from-section(root.conversation-id);

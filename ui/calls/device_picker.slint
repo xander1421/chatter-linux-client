@@ -1,6 +1,7 @@
 // Device picker modal for audio/video/screen selection
 
 import { Colors } from "../theme/colors.slint";
+import { Appearance } from "../theme/appearance.slint";
 import { Spacing } from "../theme/spacing.slint";
 import { Typography } from "../theme/typography.slint";
 import { DismissButton } from "../components/dismiss_button.slint";
@@ -14,7 +15,7 @@ component DeviceItem inherits Rectangle {
 
     callback clicked();
 
-    height: 48px;
+    height: 48px * Appearance.text-grow;
     background: is-selected ? Colors.primary.with-alpha(0.2) :
                 touch.has-hover ? Colors.surface-hover : Colors.surface;
     border-radius: Spacing.radius-md;

@@ -36,25 +36,9 @@ async fn test_send_sealed_message_to_user() {
     // Create recipient (need a second user)
     let recipient = assert_ok(register_test_user(&pool).await);
 
-    // Get recipient's prekey bundle to obtain their UAK
-    let mut auth_client = AuthClient::new(pool.channel(), pool.auth_clone());
-    let bundle_response = assert_ok(
-        auth_client.get_pre_key_bundle(&recipient.user_id, "1").await
-    );
-
-    // Extract UAK from bundle
-    let uak = match bundle_response.result {
-        Some(chatter_core::proto::get_pre_key_bundle_response::Result::Bundle(bundle)) => {
-            bundle.unidentified_access_key.unwrap_or_default()
-        }
-        _ => panic!("Expected single bundle result"),
-    };
-
-    // Skip if recipient has no UAK configured
-    if uak.is_empty() {
-        println!("Recipient has no UAK configured, skipping test");
-        return;
-    }
+    // Signal model: the sender derives the recipient's UAK from the profile
+    // key the recipient shared; the server never serves it.
+    let uak = chatter_core::crypto::derive_uak(&recipient.profile_key).to_vec();
 
     // Sealed sender is mutually exclusive with Basic auth — server now
     // returns "provide exactly one auth method (anonymous credential, UAK,

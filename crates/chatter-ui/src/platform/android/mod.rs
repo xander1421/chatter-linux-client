@@ -15,5 +15,7 @@ pub mod file_picker;
 pub mod haptics;
 pub mod notifications;
 pub mod permissions;
+pub mod qr_scanner;
+pub mod system_settings;
 
 pub use notifications::AndroidNotifications;

@@ -201,7 +201,7 @@ pub fn wire_join_channel(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                             w.set_join_channel_results(ModelRc::new(VecModel::from(
                                 Vec::<SearchResultChannel>::new(),
                             )));
-                            w.set_active_modal("none".into());
+                            crate::bin_ui::features::back::close(&w, "create-channel");
 
                             // Add joined channel to sidebar list
                             let current_channels = w.get_channels();

@@ -1,0 +1,15 @@
+// Settings › Notifications › Sound and vibration.
+//
+// Where a message notification's sound lives differs by platform, so the
+// settings row does too. Written from Rust in
+// `bin_ui::features::modals::settings`:
+//   "system" — Android: sound and vibration belong to the OS notification
+//              channel; the row opens its system settings page.
+//   "toggle" — desktop: an on/off switch the notifier honours.
+//   "none"   — nowhere to put it; the row is hidden.
+export global NotificationSound {
+    in property <string> mode: "none";
+    in-out property <bool> enabled: true;
+    callback enabled-changed(bool);
+    callback open-system-settings();
+}

@@ -134,8 +134,8 @@ export component PrivateGroupListItem inherits Rectangle {
                 // Member count badge
                 if root.member-count > 0: Rectangle {
                     width: member-text.preferred-width + 8px;
-                    height: 16px;
-                    border-radius: 8px;
+                    height: Spacing.badge-sm;
+                    border-radius: self.height / 2;
                     background: Colors.text-muted.with-alpha(0.2);
 
                     member-text := Text {
@@ -208,9 +208,9 @@ export component PrivateGroupListItem inherits Rectangle {
                 alignment: end;
 
                 Rectangle {
-                    width: max(18px, unread-text.preferred-width + 8px);
-                    height: 18px;
-                    border-radius: 9px;
+                    width: max(self.height, unread-text.preferred-width + 8px);
+                    height: Spacing.badge-md;
+                    border-radius: self.height / 2;
                     background: accent-color;
 
                     unread-text := Text {
@@ -283,9 +283,9 @@ export component PrivateGroupListItem inherits Rectangle {
             if root.unread-count > 0: Rectangle {
                 x: parent.width - self.width + 4px;
                 y: -4px;
-                width: max(16px, collapsed-unread-text.preferred-width + 10px);
-                height: 16px;
-                border-radius: 8px;
+                width: max(self.height, collapsed-unread-text.preferred-width + 10px);
+                height: Spacing.badge-sm;
+                border-radius: self.height / 2;
                 border-width: 2px;
                 border-color: Colors.surface;
                 background: accent-color;

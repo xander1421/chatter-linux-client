@@ -114,19 +114,11 @@ pub(crate) fn route_anon_dm_content(
                 "Received anonymous DM acceptance from mailbox poll"
             );
 
-            // Use plaintext display name if non-empty, otherwise None
-            let display_name = if accept.responder_display_name.is_empty() {
-                None
-            } else {
-                Some(accept.responder_display_name)
-            };
-
             AnonDmRoute::Deliver(vec![InboxEvent::AnonDmAccept {
                 peer_id: sender_id,
                 conversation_id: conversation_bytes,
                 responder_mailbox_pk: accept.responder_mailbox_pk,
                 profile_key: accept.profile_key,
-                responder_display_name: display_name,
                 encrypted_display_name: accept.encrypted_display_name,
                 encrypted_avatar: accept.encrypted_avatar,
                 timestamp: accept.timestamp,
@@ -248,7 +240,7 @@ pub(crate) fn route_anon_dm_content(
             tracing::info!(
                 sender_id = %sender_id,
                 conversation_id = %conversation_id,
-                has_display_name = profile_update.display_name.is_some(),
+                has_encrypted_display_name = profile_update.encrypted_display_name.is_some(),
                 has_avatar = profile_update.encrypted_avatar.is_some(),
                 has_avatar_url = profile_update.avatar_url.is_some(),
                 has_bio = profile_update.bio.is_some(),

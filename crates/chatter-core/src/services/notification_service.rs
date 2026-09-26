@@ -85,6 +85,11 @@ impl NotificationService {
         *self.detail_level.write().unwrap() = level;
     }
 
+    /// Apply the notification-sound preference to the platform sink.
+    pub fn set_sound_enabled(&self, enabled: bool) {
+        self.sink.set_sound(enabled);
+    }
+
     /// Get the current detail level.
     pub fn detail_level(&self) -> NotificationDetailLevel {
         *self.detail_level.read().unwrap()

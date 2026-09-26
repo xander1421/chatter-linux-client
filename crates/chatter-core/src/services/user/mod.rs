@@ -344,14 +344,22 @@ impl UserService {
             return Ok(profile);
         }
 
-        // Decrypt with their profile key; no key → placeholder. The server
-        // value is always ciphertext, so we never fall back to it.
+        // Decrypt with their profile key. The server value is always
+        // ciphertext, so we never fall back to it. A miss (no key on this
+        // device, or a stale one) keeps what we already resolved — this is the
+        // on-open refresh (`refresh_profile_if_stale`), and writing the
+        // placeholder here turned a known name into "User 1c242673" mid-session
+        // everywhere the stored profile is read. Same rule as `list_friends`.
+        let stored = self.user_repo.get_profile(user_id).ok().flatten();
         profile.display_name = decrypt_friend_display_name(
             &self.user_repo,
             &current_user,
             user_id,
             &proto_profile.display_name,
         )
+        .or_else(|| {
+            stored.as_ref().map(|p| p.display_name.clone()).filter(|n| !n.is_empty())
+        })
         .unwrap_or_else(|| friend_display_name_placeholder(user_id));
 
         // Decrypt status the same way; proto now carries ciphertext.
@@ -361,14 +369,22 @@ impl UserService {
             user_id,
             &proto_profile.status_message,
         )
-        .map(StatusMessage::new);
+        .map(StatusMessage::new)
+        .or_else(|| {
+            // Only a decrypt miss keeps the old one; an empty value is a clear.
+            (!proto_profile.status_message.is_empty())
+                .then(|| stored.as_ref().and_then(|p| p.status_message.clone()))
+                .flatten()
+        });
 
         // Decrypt the avatar with the friend's profile key (if we have it).
-        profile.avatar_bytes = self.try_decrypt_avatar(
-            &current_user,
-            user_id,
-            &proto_profile.encrypted_avatar,
-        );
+        profile.avatar_bytes = self
+            .try_decrypt_avatar(&current_user, user_id, &proto_profile.encrypted_avatar)
+            .or_else(|| {
+                (!proto_profile.encrypted_avatar.is_empty())
+                    .then(|| stored.and_then(|p| p.avatar_bytes))
+                    .flatten()
+            });
 
         self.user_repo.ensure_user_exists(user_id)?;
         self.user_repo.upsert_profile(&profile)?;
@@ -717,22 +733,25 @@ impl UserService {
     /// long-term identity key. Reuses the anon-DM init ECIES primitive; server
     /// never sees plaintext.
     ///
-    /// Plaintext layout: `profile_key (32 bytes) || note (UTF-8, may be empty)`.
-    /// The profile key lets the recipient decrypt our display name + avatar
-    /// before accepting (Signal-style first-contact profile reveal).
+    /// Plaintext layout: `has_key (1) || [profile_key (32)] || note (UTF-8,
+    /// may be empty)`. The profile key lets the recipient decrypt our display
+    /// name + avatar before accepting (Signal-style first-contact profile
+    /// reveal); it rides only when the visibility setting lets a non-friend
+    /// hold it ([`profile_visibility::shareable_profile_key`]).
+    ///
+    /// [`profile_visibility::shareable_profile_key`]: crate::services::profile_visibility::shareable_profile_key
     async fn encrypt_friend_request_envelope(
         &self,
         recipient: &UserId,
         note: &str,
     ) -> Result<Vec<u8>, UserError> {
         use crate::crypto::ecies;
-        use crate::storage::repositories::settings_repo::keys;
 
-        let profile_key = self
-            .settings_repo
-            .get_bytes(keys::PROFILE_KEY)?
-            .filter(|k| k.len() == 32)
-            .ok_or_else(|| UserError::InvalidInput("missing profile key".to_string()))?;
+        let profile_key = crate::services::profile_visibility::shareable_profile_key(
+            &self.settings_repo,
+            &self.user_repo,
+            recipient,
+        );
 
         // All-devices fetch: the identity key is account-wide, but a peer's
         // live device ids are unknown here (device 1 may be a retired
@@ -747,8 +766,11 @@ impl UserService {
         let x25519_pub = ecies::signal_identity_to_x25519(&identity_key)
             .map_err(|e| UserError::InvalidInput(format!("identity key convert failed: {e}")))?;
 
-        let mut plaintext = Vec::with_capacity(32 + note.len());
-        plaintext.extend_from_slice(&profile_key);
+        let mut plaintext = Vec::with_capacity(1 + 32 + note.len());
+        plaintext.push(u8::from(profile_key.is_some()));
+        if let Some(key) = profile_key.as_ref() {
+            plaintext.extend_from_slice(key);
+        }
         plaintext.extend_from_slice(note.as_bytes());
 
         let msg = ecies::encrypt(&x25519_pub, &plaintext)
@@ -762,7 +784,8 @@ impl UserService {
     /// extraction, key persistence, profile decrypt) lives here in the service;
     /// the facade only fetches `identity_secret` and delegates.
     ///
-    /// Envelope plaintext = `profile_key (32 bytes) || note (UTF-8)`. Everything
+    /// Envelope plaintext = `has_key (1) || [profile_key (32)] || note (UTF-8)`
+    /// (see `encrypt_friend_request_envelope`). Everything
     /// is best-effort: undecryptable/empty → all-`None` (never surface
     /// ciphertext). The caller owns zeroizing `identity_secret`.
     pub async fn ingest_received_friend_request(
@@ -785,16 +808,21 @@ impl UserService {
         else {
             return out;
         };
-        if plaintext.len() < 32 {
-            return out; // malformed — must at least carry the profile key
-        }
-
-        let mut profile_key = [0u8; 32];
-        profile_key.copy_from_slice(&plaintext[..32]);
-        out.note = String::from_utf8(plaintext[32..].to_vec())
+        let (profile_key, note) = match plaintext.split_first() {
+            Some((1, rest)) if rest.len() >= 32 => {
+                let (key, note) = rest.split_at(32);
+                (Some(<[u8; 32]>::try_from(key).expect("32 bytes")), note)
+            }
+            Some((0, note)) => (None, note), // their visibility setting withheld it
+            _ => return out, // malformed
+        };
+        out.note = String::from_utf8(note.to_vec())
             .ok()
             .map(|s| s.trim().to_string())
             .filter(|s| !s.is_empty());
+        let Some(mut profile_key) = profile_key else {
+            return out;
+        };
 
         // Persist the sender's key, then decrypt their real name + avatar.
         if self.store_friend_request_sender_key(sender_id, &profile_key).is_ok() {
@@ -1275,8 +1303,14 @@ impl UserService {
     /// 4. Anon group member (stored on the group's member row in any group)
     /// 5. The `User <id8>` placeholder every other screen shows
     pub fn get_display_name(&self, user_id: &UserId) -> String {
+        // A profile row written while we had no profile key holds the
+        // placeholder itself; that is not a name, so keep resolving (a known
+        // username beats `User 1c242673` in Contacts).
+        let placeholder = friend_display_name_placeholder(user_id);
         if let Ok(Some(profile)) = self.user_repo.get_profile(user_id) {
-            return profile.display_name;
+            if !profile.display_name.is_empty() && profile.display_name != placeholder {
+                return profile.display_name;
+            }
         }
         if let Ok(Some(user)) = self.user_repo.get(user_id) {
             // `ensure_user_exists` stores the id itself as a placeholder
@@ -1304,7 +1338,7 @@ impl UserService {
                 return name;
             }
         }
-        friend_display_name_placeholder(user_id)
+        placeholder
     }
 
     /// Get the current user's ID.
@@ -1340,6 +1374,24 @@ impl UserService {
             Some(id_str) => Ok(id_str.parse().ok()),
             None => Ok(None),
         }
+    }
+
+    /// Read this account's "Who can find me by my username" setting from the
+    /// server. `true` = Everyone, `false` = Nobody.
+    pub async fn get_username_discoverability(&self) -> Result<bool, UserError> {
+        let _ = self.settings_repo.current_user_id()?;
+        let mut user_client = self.user_client();
+        Ok(user_client.get_username_discoverability().await?)
+    }
+
+    /// Set this account's "Who can find me by my username" setting on the
+    /// server. With `false` the server answers "no match" to everyone else's
+    /// username lookup for this account; friend codes and username links
+    /// still reach it. Returns the value the server persisted.
+    pub async fn set_username_discoverability(&self, discoverable: bool) -> Result<bool, UserError> {
+        let _ = self.settings_repo.current_user_id()?;
+        let mut user_client = self.user_client();
+        Ok(user_client.set_username_discoverability(discoverable).await?)
     }
 
     // ========================================================================
@@ -1554,8 +1606,9 @@ impl UserService {
             .get_string(keys::FULL_USERNAME)?
             .filter(|u| !u.is_empty())
             .ok_or_else(|| {
+                // Shown to the person as-is (`user_message`), so it is copy.
                 UserError::InvalidInput(
-                    "No username registered on this device — cannot create a username link"
+                    "your username isn't stored on this device, so a link can't be made here"
                         .to_string(),
                 )
             })?;
@@ -1604,19 +1657,23 @@ impl UserService {
     }
 
     /// Resolve someone else's username link: parse the URL, fetch the
-    /// ciphertext blob by link id, decrypt it locally with the fragment
-    /// entropy, then discover the account through the existing hashed
-    /// `LookupUsername` path. Returns the decrypted username and the account
-    /// id (`None` when the username no longer maps to an account).
+    /// ciphertext blob and the link owner's id by link id, and decrypt the
+    /// blob locally with the fragment entropy. Returns the decrypted username
+    /// and the owner's account id.
+    ///
+    /// The owner id comes from the link row, NOT from `LookupUsername`: a link
+    /// is a capability like a friend code, so it must still reach an owner
+    /// who set "Who can find me by my username" to Nobody. Decryption still
+    /// runs first, so a URL with the wrong fragment fails as before.
     pub async fn resolve_username_link(
         &self,
         url: &str,
-    ) -> Result<(String, Option<UserId>), UserError> {
+    ) -> Result<(String, UserId), UserError> {
         let link = crate::domain::UsernameLink::parse(url)
             .map_err(|e| UserError::InvalidInput(format!("Invalid username link: {e}")))?;
 
         let mut user_client = self.user_client();
-        let blob = user_client
+        let (owner_id, blob) = user_client
             .get_username_link(&link.link_id)
             .await?
             .ok_or_else(|| {
@@ -1631,7 +1688,9 @@ impl UserService {
             )
         })?;
 
-        let user_id = self.lookup_by_username(&username).await?;
+        let user_id = owner_id.parse::<UserId>().map_err(|_| {
+            UserError::InvalidInput(format!("Invalid user ID in username link: {owner_id}"))
+        })?;
         Ok((username, user_id))
     }
 
@@ -1679,14 +1738,11 @@ impl UserService {
         code: &str,
         message: Option<&str>,
     ) -> Result<Friendship, UserError> {
-        // Username links (`chatter://u/…#…`) resolve to an account via
-        // fetch-blob → local decrypt → hashed lookup; plain friend codes
-        // carry the user id directly.
+        // Username links (`chatter://u/…#…`) resolve to their owner via
+        // fetch-link → local decrypt; plain friend codes carry the user id
+        // directly. Neither goes through the discoverability-gated lookup.
         let friend_id = if crate::domain::UsernameLink::is_username_link(code) {
-            let (username, id) = self.resolve_username_link(code).await?;
-            id.ok_or_else(|| {
-                UserError::InvalidInput(format!("No account found for @{username}"))
-            })?
+            self.resolve_username_link(code).await?.1
         } else {
             Self::parse_friend_code(code)?
         };

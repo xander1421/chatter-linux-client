@@ -14,7 +14,7 @@ mod tests {
         domain_presence_to_proto, presence_from_proto,
         proto_friend_status_to_domain, proto_to_domain_profile,
     };
-    use super::super::{FriendRequestFilter, UserError, UserService};
+    use super::super::{friend_display_name_placeholder, FriendRequestFilter, UserError, UserService};
 
     /// F30: a peer whose only live device is 6 (device 1 retired) must still
     /// yield the account identity key — the friend request asks for all
@@ -267,6 +267,81 @@ mod tests {
         assert!(client.is_blocked_conversation(&ConversationType::ServerDm, &blocked.to_string()));
         assert!(!client.is_blocked_conversation(&ConversationType::ServerDm, &kept.to_string()));
         assert!(!client.is_blocked_conversation(&ConversationType::Channel, &blocked.to_string()));
+    }
+
+    /// F82: removing a contact never deletes the conversation (Signal). A
+    /// peer we wrote to keeps a row after the friendship goes; a blocked one
+    /// still drops out, and a stranger's unanswered message is not a chat.
+    #[tokio::test]
+    async fn dm_history_outlives_the_friendship() {
+        use crate::client::ChatterClient;
+        use crate::domain::ids::ChannelId;
+        use crate::domain::message::{ConversationType, Message};
+        use crate::domain::user::Friendship;
+        use crate::storage::repositories::settings_repo::keys;
+
+        static MOCK_KEYRING: std::sync::Once = std::sync::Once::new();
+        MOCK_KEYRING.call_once(|| {
+            keyring::set_default_credential_builder(keyring::mock::default_credential_builder());
+        });
+        let dir = tempfile::tempdir().unwrap();
+        let client = ChatterClient::builder()
+            .server_url("http://localhost:1")
+            .data_dir(dir.path().to_str().unwrap())
+            .build()
+            .expect("build client");
+
+        let (me, friend, former, blocked, stranger) =
+            (UserId::new(), UserId::new(), UserId::new(), UserId::new(), UserId::new());
+        let users = client.users();
+        users.settings_repo.set_string(keys::CURRENT_USER_ID, &me.to_string()).unwrap();
+        client.auth_state().set_logged_in(me, 1, "me".into());
+        for u in [me, friend, former, blocked, stranger] {
+            users.user_repo.ensure_user_exists(&u).unwrap();
+        }
+        users.user_repo.insert_friendship(&Friendship {
+            requester_id: me, addressee_id: friend,
+            status: FriendshipStatus::Accepted, created_at: chrono::Utc::now(),
+        }).unwrap();
+        users.user_repo.insert_friendship(&Friendship {
+            requester_id: me, addressee_id: blocked,
+            status: FriendshipStatus::Blocked, created_at: chrono::Utc::now(),
+        }).unwrap();
+        for (peer, sender) in [(former, me), (blocked, me), (stranger, stranger)] {
+            let m = Message::new_text(ChannelId::from(peer), ConversationType::ServerDm, Some(sender), "hi".into(), 1);
+            client.messages().message_repo.insert(&m).unwrap();
+        }
+
+        assert_eq!(client.dm_peers(), vec![friend, former]);
+    }
+
+    /// REVIEW-R4 P0-3: a profile row stored without the profile key holds
+    /// the `User <id8>` placeholder; Contacts and request rows must fall
+    /// through to a known username instead of showing it.
+    #[tokio::test]
+    async fn placeholder_profile_does_not_hide_a_username() {
+        use crate::client::ChatterClient;
+        use crate::domain::user::{Profile, User};
+
+        static MOCK_KEYRING: std::sync::Once = std::sync::Once::new();
+        MOCK_KEYRING.call_once(|| {
+            keyring::set_default_credential_builder(keyring::mock::default_credential_builder());
+        });
+        let dir = tempfile::tempdir().unwrap();
+        let client = ChatterClient::builder()
+            .server_url("http://localhost:1")
+            .data_dir(dir.path().to_str().unwrap())
+            .build()
+            .expect("build client");
+
+        let (bob, stranger) = (UserId::new(), UserId::new());
+        let users = client.users();
+        users.user_repo.insert(&User::new(bob, "bob".into(), Vec::new())).unwrap();
+        users.user_repo.upsert_profile(&Profile::new(bob, friend_display_name_placeholder(&bob))).unwrap();
+
+        assert_eq!(client.display_name(&bob), "bob");
+        assert_eq!(client.friend_request_peer_name(&stranger, "carol"), "carol");
+        assert_eq!(client.friend_request_peer_name(&stranger, ""), friend_display_name_placeholder(&stranger));
     }
 
     #[test]

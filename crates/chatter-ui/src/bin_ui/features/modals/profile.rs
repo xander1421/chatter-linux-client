@@ -56,6 +56,8 @@ struct SharedPage {
 ///
 /// Handles both "self" (own profile) and "other user" paths, ensuring
 /// consistent data regardless of which entry point triggered the modal.
+/// Only fills the page: the caller decides whether it shows as the Profile
+/// tab or as a screen pushed over the current one (`back::push`).
 pub fn open_user_profile(
     w: &MainWindow,
     user_id: &UserId,
@@ -142,7 +144,11 @@ pub fn open_user_profile(
 
         let initials = get_initials(&display_name);
 
-        let presence = profile.as_ref()
+        // Same source as core's `peer_last_seen_label` (the local user
+        // directory): `user_state` is not populated for peers, so the dot read
+        // grey next to the words "online".
+        let presence = ui_ctx
+            .and_then(|ctx| ctx.get_profile_local(user_id))
             .map(|p| p.presence.as_str())
             .unwrap_or("offline");
 
@@ -219,8 +225,6 @@ pub fn open_user_profile(
             load_shared_tabs(w.as_weak(), ctx.clone(), *user_id);
         }
     }
-
-    w.set_active_modal("user-profile".into());
 }
 
 /// The conversation whose shared content a contact's profile shows: the DM
@@ -402,7 +406,7 @@ fn wire_shared_content(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             return;
         }
         let Some(peer) = SHARED_PAGE.with(|p| p.borrow().peer) else { return };
-        w.set_active_modal("none".into());
+        crate::bin_ui::features::back::reset_to_chats(&w);
         w.invoke_dm_selected(peer.to_string().into());
         w.invoke_quote_clicked(message_id);
     });
@@ -478,6 +482,16 @@ fn wire_share_link(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
 
 /// Create (or rotate) the username link in the background and push URL + QR
 /// into the modal. `rotate=false` reuses an existing local link if present.
+const REMOVE_FAILED: &str = "Not removed — you are still friends. Try again.";
+
+/// Say how a relationship change on the profile went: the button flipping
+/// label alone was the only feedback (REVIEW-R4 P1-12). UI thread only.
+fn show_toast(w: &MainWindow, (message, variant): (&str, &str)) {
+    w.set_toast_message(message.into());
+    w.set_toast_variant(variant.into());
+    w.set_toast_visible(true);
+}
+
 fn spawn_create_link(
     weak: slint::Weak<MainWindow>,
     ui_ctx: Arc<ChatterClient>,
@@ -514,8 +528,9 @@ fn spawn_create_link(
                 });
             }
             Err(e) => {
-                let msg = format!("{}", e);
-                tracing::error!("Failed to create username link: {}", msg);
+                tracing::error!("Failed to create username link: {}", e);
+                // Never the Display chain ("invalid input: ...") — that is for logs.
+                let msg = e.user_message();
                 let _ = slint::invoke_from_event_loop(move || {
                     if let Some(w) = weak.upgrade() {
                         w.set_profile_share_status(msg.into());
@@ -561,7 +576,7 @@ pub fn wire_profile_actions(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
         if peer_id.is_empty() {
             return;
         }
-        w.set_active_modal("none".into());
+        crate::bin_ui::features::back::reset_to_chats(&w);
         // Opening first commits `ActiveConversation`, which is what
         // `start_*_call` dispatches on — same ordering the Calls screen's
         // redial uses.
@@ -611,7 +626,7 @@ pub fn wire_profile_actions(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                 }
             };
 
-            match tokio::time::timeout(
+            let notice = match tokio::time::timeout(
                 crate::bin_ui::ui_helpers::UI_SERVICE_TIMEOUT,
                 ui_ctx.send_friend_request(&friend_id, None),
             ).await {
@@ -620,17 +635,21 @@ pub fn wire_profile_actions(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                     // Core emits `FriendRequestsUpdated` after send — the
                     // domain-handler dispatcher refreshes the list. No
                     // manual list_friend_requests + reshape here.
+                    ("Friend request sent", "success")
                 }
                 Ok(Err(e)) => {
                     tracing::error!("Failed to send friend request: {}", e);
+                    ("The friend request was not sent. Try again.", "error")
                 }
                 Err(_) => {
                     tracing::error!("Friend request timed out");
+                    ("The friend request was not sent. Try again.", "error")
                 }
-            }
+            };
             let _ = slint::invoke_from_event_loop(move || {
                 if let Some(w) = weak.upgrade() {
                     w.set_profile_loading(false);
+                    show_toast(&w, notice);
                 }
             });
         });
@@ -683,6 +702,7 @@ pub fn wire_profile_actions(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                         if let Some(w) = weak.upgrade() {
                             w.set_profile_loading(false);
                             w.set_profile_is_friend(false);
+                            show_toast(&w, ("Removed from friends", "success"));
                             tracing::info!("Removed friend: {}", friend_id);
                         }
                     });
@@ -692,6 +712,7 @@ pub fn wire_profile_actions(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                     let _ = slint::invoke_from_event_loop(move || {
                         if let Some(w) = weak.upgrade() {
                             w.set_profile_loading(false);
+                            show_toast(&w, (REMOVE_FAILED, "error"));
                         }
                     });
                 }
@@ -700,6 +721,7 @@ pub fn wire_profile_actions(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                     let _ = slint::invoke_from_event_loop(move || {
                         if let Some(w) = weak.upgrade() {
                             w.set_profile_loading(false);
+                            show_toast(&w, (REMOVE_FAILED, "error"));
                         }
                     });
                 }
@@ -793,7 +815,7 @@ pub fn wire_profile_actions(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             tracing::warn!("profile: no conversation with this peer is available in the current mode");
             return;
         };
-        w.set_active_modal("none".into());
+        crate::bin_ui::features::back::reset_to_chats(&w);
         w.invoke_dm_selected(dm_id.into());
     });
 
@@ -811,7 +833,7 @@ pub fn wire_profile_actions(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                 PENDING_AVATAR_PATH.with(|p| *p.borrow_mut() = None);
                 *PENDING_AVATAR_BYTES.lock().unwrap() = None;
                 
-                w.set_active_modal("edit-profile".into());
+                crate::bin_ui::features::back::push(&w, "edit-profile");
             }
         });
     });
@@ -870,7 +892,7 @@ pub fn wire_profile_actions(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                             w.set_edit_profile_loading(false);
                             // Back to the profile page it was opened from (its
                             // only entry point), like Cancel — not the chat list.
-                            w.set_active_modal("user-profile".into());
+                            crate::bin_ui::features::back::close(&w, "edit-profile");
 
                             // Update UI with new profile info
                             w.set_profile_display_name(profile.display_name.clone().into());
@@ -988,14 +1010,19 @@ pub fn wire_profile_actions(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
 
             match ui_ctx.get_safety_number(&peer_id).await {
                 Ok(safety_number) => {
-                    // Format as 12 groups of 5 digits
-                    let formatted: String = safety_number
+                    // 12 groups of 5 digits as Signal lays them out: three
+                    // rows of four, so the number never wraps 7 + 5.
+                    let groups: Vec<String> = safety_number
                         .chars()
                         .collect::<Vec<_>>()
                         .chunks(5)
                         .map(|chunk| chunk.iter().collect::<String>())
+                        .collect();
+                    let formatted = groups
+                        .chunks(4)
+                        .map(|row| row.join(" "))
                         .collect::<Vec<_>>()
-                        .join(" ");
+                        .join("\n");
 
                     let _ = slint::invoke_from_event_loop(move || {
                         if let Some(w) = weak.upgrade() {

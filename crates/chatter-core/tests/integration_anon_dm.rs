@@ -290,7 +290,6 @@ async fn test_anon_dm_accept_serialization() {
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
             .as_millis() as u64,
-        responder_display_name: String::new(),
         profile_key: Some(vec![0u8; 32]),
         encrypted_display_name: None,
         encrypted_avatar: None,

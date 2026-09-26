@@ -5,6 +5,7 @@ import { Spacing } from "../theme/spacing.slint";
 import { Typography } from "../theme/typography.slint";
 import { Modal } from "../components/modal.slint";
 import { Button } from "../components/button.slint";
+import { Icons } from "../theme/icons.slint";
 
 // Session information struct
 export struct SessionInfo {
@@ -14,6 +15,7 @@ export struct SessionInfo {
     last-used: string,
     created-at: string,
     is-current: bool,
+    is-mobile: bool,  // phone/tablet icon instead of the laptop one
 }
 
 // A link this account approved that the new device has not finished yet.
@@ -38,10 +40,12 @@ export component SessionsModal inherits Rectangle {
 
     // Phone width: the modal card is the window minus 32px.
     property <bool> narrow: root.width < 560px;
+    // Revoke-all asks first: it logs out every other device at once.
+    property <bool> confirm-revoke-all: false;
 
     Modal {
         show: root.show-modal;
-        title: "Active Sessions";
+        title: "Active sessions";
         modal-width: 520px;
 
         close => {
@@ -72,30 +76,13 @@ export component SessionsModal inherits Rectangle {
                     clicked => { root.link-new-device(); }
                 }
 
-                if !root.narrow && root.sessions.length > 1: Button {
-                    text: "Revoke All Others";
-                    variant: "danger";
-                    disabled: root.revoking;
-                    clicked => { root.revoke-all-others(); }
-                }
             }
 
-            if root.narrow: VerticalLayout {
-                spacing: Spacing.sm;
-
-                Button {
-                    text: "Link new device";
-                    variant: "primary";
-                    disabled: root.revoking;
-                    clicked => { root.link-new-device(); }
-                }
-
-                if root.sessions.length > 1: Button {
-                    text: "Revoke All Others";
-                    variant: "danger";
-                    disabled: root.revoking;
-                    clicked => { root.revoke-all-others(); }
-                }
+            if root.narrow: Button {
+                text: "Link new device";
+                variant: "primary";
+                disabled: root.revoking;
+                clicked => { root.link-new-device(); }
             }
 
             // Divider
@@ -202,21 +189,18 @@ export component SessionsModal inherits Rectangle {
                                 padding: Spacing.md;
                                 spacing: Spacing.md;
 
-                                // Device icon (device type detection done in Rust if needed)
+                                // Device icon: phone or computer (is-mobile set in core)
                                 Rectangle {
                                     width: 40px;
                                     height: 40px;
                                     border-radius: Spacing.radius-md;
                                     background: Colors.surface-hover;
 
-                                    // Default desktop icon
-                                    Text {
-                                        text: "💻";
-                                        font-size: Typography.lg;
-                                        horizontal-alignment: center;
-                                        vertical-alignment: center;
-                                        width: 100%;
-                                        height: 100%;
+                                    Image {
+                                        source: session.is-mobile ? Icons.smartphone : Icons.monitor;
+                                        colorize: Colors.text-secondary;
+                                        width: 20px;
+                                        height: 20px;
                                     }
                                 }
 
@@ -246,7 +230,7 @@ export component SessionsModal inherits Rectangle {
                                             background: Colors.success.with-alpha(0.2);
 
                                             current-text := Text {
-                                                text: "Current";
+                                                text: "This device";
                                                 color: Colors.success;
                                                 font-size: Typography.xs;
                                                 font-weight: Typography.medium;
@@ -267,8 +251,10 @@ export component SessionsModal inherits Rectangle {
                                     }
 
                                     // One per line: side by side they clipped on a phone.
+                                    // The server stamps last-active at login, so for
+                                    // the device in hand it reads stale; it is in use now.
                                     Text {
-                                        text: "Last active: " + session.last-used;
+                                        text: session.is-current ? "Active now" : "Last active: " + session.last-used;
                                         color: Colors.text-muted;
                                         font-size: Typography.xs;
                                         wrap: word-wrap;
@@ -298,6 +284,47 @@ export component SessionsModal inherits Rectangle {
                             }
 
                             session-touch := TouchArea {}
+                        }
+                    }
+                }
+            }
+
+            // Revoke-all sits under the list, away from the primary
+            // button, and asks first (REVIEW-R4 P1-9).
+            if root.sessions.length > 1 && !root.confirm-revoke-all: Button {
+                text: "Revoke all other sessions";
+                variant: "ghost";
+                disabled: root.revoking;
+                clicked => { root.confirm-revoke-all = true; }
+            }
+
+            if root.confirm-revoke-all: VerticalLayout {
+                spacing: Spacing.sm;
+
+                Text {
+                    text: "Log out every other device? Each one has to be linked again to use this account.";
+                    color: Colors.text-secondary;
+                    font-size: Typography.sm;
+                    wrap: word-wrap;
+                }
+
+                HorizontalLayout {
+                    spacing: Spacing.sm;
+                    alignment: end;
+
+                    Button {
+                        text: "Cancel";
+                        variant: "secondary";
+                        clicked => { root.confirm-revoke-all = false; }
+                    }
+
+                    Button {
+                        text: "Revoke all";
+                        variant: "danger";
+                        disabled: root.revoking;
+                        clicked => {
+                            root.confirm-revoke-all = false;
+                            root.revoke-all-others();
                         }
                     }
                 }

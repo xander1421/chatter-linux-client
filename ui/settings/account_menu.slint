@@ -1,0 +1,168 @@
+// AccountMenu — the Profile tab (owner decision 2026-09-26).
+//
+// An account menu in the Telegram drawer shape: who you are at the top, then
+// the places that belong to your account. Settings is reached from here, not
+// from the tab bar. On a two-pane layout the sidebar's avatar and gear open
+// the same menu as a card.
+//
+// Presentation only: every row fires a callback and app.slint routes it.
+
+import { Colors } from "../theme/colors.slint";
+import { Appearance } from "../theme/appearance.slint";
+import { Spacing } from "../theme/spacing.slint";
+import { Typography } from "../theme/typography.slint";
+import { Icons } from "../theme/icons.slint";
+import { Modal } from "../components/modal.slint";
+import { Avatar } from "../components/avatar.slint";
+import { Toggle } from "../components/toggle.slint";
+import { AnonMode } from "../anon_mode/anon_mode_global.slint";
+
+export component MenuRow inherits Rectangle {
+    in property <image> icon;
+    in property <string> label;
+    callback clicked();
+
+    height: Spacing.list-row-height-touch;
+    background: touch.has-hover ? Colors.surface-hover : transparent;
+    accessible-role: button;
+    accessible-label: root.label;
+    accessible-action-default => { root.clicked(); }
+
+    HorizontalLayout {
+        padding-left: Spacing.md;
+        padding-right: Spacing.md;
+        spacing: Spacing.lg;
+        VerticalLayout { alignment: center; horizontal-stretch: 0;
+            Image { source: root.icon; width: 24px; height: 24px; colorize: Colors.text-secondary; }
+        }
+        Text {
+            text: root.label;
+            color: Colors.text-primary;
+            font-size: Typography.base;
+            vertical-alignment: center;
+            horizontal-stretch: 1;
+            overflow: elide;
+        }
+        @children
+    }
+
+    touch := TouchArea { mouse-cursor: pointer; clicked => { root.clicked(); } }
+}
+
+component Divider inherits Rectangle {
+    height: 1px;
+    background: Colors.border;
+}
+
+export component AccountMenu inherits Rectangle {
+    in property <bool> show-modal: false;
+    in property <bool> mobile-mode: false;
+    in property <bool> root-screen: false;
+    in property <length> bottom-inset: 0px;
+    in property <string> display-name: "";
+    in property <string> username: "";
+    in property <image> avatar;
+    in property <string> initials: "";
+
+    callback close();
+    callback my-profile();
+    callback saved-messages();
+    callback new-channel();
+    callback settings();
+
+    function toggle-night() {
+        Appearance.theme = Appearance.dark ? "light" : "dark";
+        Appearance.theme-changed(Appearance.theme);
+    }
+
+    Modal {
+        show: root.show-modal;
+        title: "";
+        modal-width: 360px;
+        max-modal-height: 640px;
+        full-screen: root.mobile-mode;
+        root-screen: root.root-screen;
+        bottom-inset: root.bottom-inset;
+        fill-height: root.mobile-mode;
+
+        close => { root.close(); }
+
+        Flickable {
+            viewport-height: menu.preferred-height;
+
+            menu := VerticalLayout {
+                alignment: start;
+
+                // Header: who is signed in.
+                VerticalLayout {
+                    padding-left: Spacing.md;
+                    padding-right: Spacing.md;
+                    padding-bottom: Spacing.md;
+                    spacing: Spacing.sm;
+                    Avatar { size: 64px; source: root.avatar; fallback-text: root.initials; name: root.display-name; }
+                    Text {
+                        text: root.display-name;
+                        color: Colors.text-primary;
+                        font-size: Typography.lg;
+                        font-weight: Typography.semibold;
+                        overflow: elide;
+                    }
+                    if root.username != "": Text {
+                        text: "@" + root.username;
+                        color: Colors.text-secondary;
+                        font-size: Typography.sm;
+                        overflow: elide;
+                    }
+                }
+                Divider { }
+
+                MenuRow { icon: Icons.user; label: "My Profile"; clicked => { root.my-profile(); } }
+                Divider { }
+
+                // Shield mode has no Saved Messages and no channels
+                // (sidebar.slint hides both), so neither is offered here.
+                if !AnonMode.enabled: MenuRow { icon: Icons.bookmark; label: "Saved Messages"; clicked => { root.saved-messages(); } }
+                if !AnonMode.enabled: MenuRow { icon: Icons.megaphone; label: "New Channel"; clicked => { root.new-channel(); } }
+                MenuRow { icon: Icons.settings; label: "Settings"; clicked => { root.settings(); } }
+                Divider { }
+
+                // Night Mode reads the palette actually in force, so on
+                // "system" it shows what the OS picked; flipping it pins an
+                // explicit Light or Dark. The row's TouchArea is declared
+                // after the switch so it takes every tap: the switch's own
+                // would write `checked` and cut its binding to the palette.
+                Rectangle {
+                    height: Spacing.list-row-height-touch;
+                    accessible-role: switch;
+                    accessible-label: "Night Mode";
+                    accessible-checkable: true;
+                    accessible-checked: Appearance.dark;
+                    accessible-action-default => { root.toggle-night(); }
+                    background: night-touch.has-hover ? Colors.surface-hover : transparent;
+                    HorizontalLayout {
+                        padding-left: Spacing.md;
+                        padding-right: Spacing.md;
+                        spacing: Spacing.lg;
+                        VerticalLayout { alignment: center; horizontal-stretch: 0;
+                            Image { source: Icons.moon; width: 24px; height: 24px; colorize: Colors.text-secondary; }
+                        }
+                        Text {
+                            text: "Night Mode";
+                            color: Colors.text-primary;
+                            font-size: Typography.base;
+                            vertical-alignment: center;
+                            horizontal-stretch: 1;
+                        }
+                        VerticalLayout { alignment: center; horizontal-stretch: 0;
+                            Toggle { checked: Appearance.dark; }
+                        }
+                    }
+                    night-touch := TouchArea {
+                        mouse-cursor: pointer;
+                        clicked => { root.toggle-night(); }
+                    }
+                }
+            }
+        }
+    }
+}

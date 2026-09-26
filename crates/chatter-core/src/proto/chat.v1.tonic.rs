@@ -682,6 +682,30 @@ pub mod auth_service_client {
                 .insert(GrpcMethod::new("chat.v1.AuthService", "SetSealedSenderPolicy"));
             self.inner.unary(req, path, codec).await
         }
+        ///
+        pub async fn set_unidentified_access_key(
+            &mut self,
+            request: impl tonic::IntoRequest<super::SetUnidentifiedAccessKeyRequest>,
+        ) -> std::result::Result<tonic::Response<()>, tonic::Status> {
+            self.inner
+                .ready()
+                .await
+                .map_err(|e| {
+                    tonic::Status::unknown(
+                        format!("Service was not ready: {}", e.into()),
+                    )
+                })?;
+            let codec = tonic_prost::ProstCodec::default();
+            let path = http::uri::PathAndQuery::from_static(
+                "/chat.v1.AuthService/SetUnidentifiedAccessKey",
+            );
+            let mut req = request.into_request();
+            req.extensions_mut()
+                .insert(
+                    GrpcMethod::new("chat.v1.AuthService", "SetUnidentifiedAccessKey"),
+                );
+            self.inner.unary(req, path, codec).await
+        }
         /** Signal Protocol Key Management
 */
         pub async fn upload_pre_key_bundle(
@@ -1799,6 +1823,31 @@ pub mod channel_service_client {
                 .insert(GrpcMethod::new("chat.v1.ChannelService", "ListBannedUsers"));
             self.inner.unary(req, path, codec).await
         }
+        /** Why a user is no longer in a channel, as far as the server recorded it:
+ how a sync that missed the live event tells a ban or a deletion from a
+ leave. See Departure for who may ask.
+*/
+        pub async fn get_departure(
+            &mut self,
+            request: impl tonic::IntoRequest<super::GetDepartureRequest>,
+        ) -> std::result::Result<tonic::Response<super::Departure>, tonic::Status> {
+            self.inner
+                .ready()
+                .await
+                .map_err(|e| {
+                    tonic::Status::unknown(
+                        format!("Service was not ready: {}", e.into()),
+                    )
+                })?;
+            let codec = tonic_prost::ProstCodec::default();
+            let path = http::uri::PathAndQuery::from_static(
+                "/chat.v1.ChannelService/GetDeparture",
+            );
+            let mut req = request.into_request();
+            req.extensions_mut()
+                .insert(GrpcMethod::new("chat.v1.ChannelService", "GetDeparture"));
+            self.inner.unary(req, path, codec).await
+        }
         ///
         pub async fn get_channel_members(
             &mut self,
@@ -1848,6 +1897,28 @@ pub mod channel_service_client {
             req.extensions_mut()
                 .insert(GrpcMethod::new("chat.v1.ChannelService", "UpdateMemberRole"));
             self.inner.server_streaming(req, path, codec).await
+        }
+        ///
+        pub async fn transfer_ownership(
+            &mut self,
+            request: impl tonic::IntoRequest<super::TransferOwnershipRequest>,
+        ) -> std::result::Result<tonic::Response<()>, tonic::Status> {
+            self.inner
+                .ready()
+                .await
+                .map_err(|e| {
+                    tonic::Status::unknown(
+                        format!("Service was not ready: {}", e.into()),
+                    )
+                })?;
+            let codec = tonic_prost::ProstCodec::default();
+            let path = http::uri::PathAndQuery::from_static(
+                "/chat.v1.ChannelService/TransferOwnership",
+            );
+            let mut req = request.into_request();
+            req.extensions_mut()
+                .insert(GrpcMethod::new("chat.v1.ChannelService", "TransferOwnership"));
+            self.inner.unary(req, path, codec).await
         }
         /** Event streaming
 */
@@ -4566,6 +4637,62 @@ pub mod user_service_client {
                 .insert(GrpcMethod::new("chat.v1.UserService", "LookupUsername"));
             self.inner.unary(req, path, codec).await
         }
+        /** Username discoverability ("Who can find me by my username"). Both act on
+ the authenticated caller only.
+*/
+        pub async fn get_username_discoverability(
+            &mut self,
+            request: impl tonic::IntoRequest<super::GetUsernameDiscoverabilityRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::GetUsernameDiscoverabilityResponse>,
+            tonic::Status,
+        > {
+            self.inner
+                .ready()
+                .await
+                .map_err(|e| {
+                    tonic::Status::unknown(
+                        format!("Service was not ready: {}", e.into()),
+                    )
+                })?;
+            let codec = tonic_prost::ProstCodec::default();
+            let path = http::uri::PathAndQuery::from_static(
+                "/chat.v1.UserService/GetUsernameDiscoverability",
+            );
+            let mut req = request.into_request();
+            req.extensions_mut()
+                .insert(
+                    GrpcMethod::new("chat.v1.UserService", "GetUsernameDiscoverability"),
+                );
+            self.inner.unary(req, path, codec).await
+        }
+        ///
+        pub async fn set_username_discoverability(
+            &mut self,
+            request: impl tonic::IntoRequest<super::SetUsernameDiscoverabilityRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::SetUsernameDiscoverabilityResponse>,
+            tonic::Status,
+        > {
+            self.inner
+                .ready()
+                .await
+                .map_err(|e| {
+                    tonic::Status::unknown(
+                        format!("Service was not ready: {}", e.into()),
+                    )
+                })?;
+            let codec = tonic_prost::ProstCodec::default();
+            let path = http::uri::PathAndQuery::from_static(
+                "/chat.v1.UserService/SetUsernameDiscoverability",
+            );
+            let mut req = request.into_request();
+            req.extensions_mut()
+                .insert(
+                    GrpcMethod::new("chat.v1.UserService", "SetUsernameDiscoverability"),
+                );
+            self.inner.unary(req, path, codec).await
+        }
         /** Username links (see the Username Links section above). All authenticated.
  SetUsernameLink upserts the caller's single active link (rotation);
  GetUsernameLink resolves anyone's link id to its ciphertext blob;
@@ -4892,8 +5019,6 @@ pub mod user_service_client {
                 .insert(GrpcMethod::new("chat.v1.UserService", "StreamUserEvents"));
             self.inner.server_streaming(req, path, codec).await
         }
-        /** Channel Navigation History
-*/
         pub async fn track_channel_visit(
             &mut self,
             request: impl tonic::IntoRequest<super::TrackChannelVisitRequest>,

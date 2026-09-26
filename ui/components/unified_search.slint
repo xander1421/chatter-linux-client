@@ -7,6 +7,7 @@
 // shortcut + click-outside + Escape reliable.
 
 import { Colors } from "../theme/colors.slint";
+import { Appearance } from "../theme/appearance.slint";
 import { Spacing } from "../theme/spacing.slint";
 import { Typography } from "../theme/typography.slint";
 import { Icons } from "../theme/icons.slint";
@@ -43,7 +44,7 @@ component ConvRow inherits Rectangle {
     // 48px, matching every other tappable row in the app. Search is opened by
     // someone who already knows where they are going, so mis-tapping here costs
     // them the whole trip — and at 40px this was the shortest target on screen.
-    height: Spacing.touch-target-min;
+    height: Spacing.touch-target-min * Appearance.text-grow;
     border-radius: Spacing.radius-sm;
     background: root.selected ? Colors.neo-inset-bg : touch.has-hover ? Colors.surface-hover : transparent;
 
@@ -56,11 +57,27 @@ component ConvRow inherits Rectangle {
         padding-left: Spacing.md;
         padding-right: Spacing.md;
         spacing: Spacing.sm;
-        Text {
-            // "))" is the mesh mark: radio waves, matching the sidebar glyph —
-            // a jump target that reaches no server looks different from one
-            // that does.
-            text: root.conv-type == "saved_messages" ? "🔖" : root.conv-type == "channel" ? "#" : root.conv-type == "private_group" ? "🔒" : root.conv-type == "anon_dm" ? "👤" : root.conv-type == "mesh" ? "))" : "@";
+        // The sidebar's line glyphs, not emoji: a colour 🔖 beside grey
+        // text read as a different app, and emoji need a colour font Android
+        // 10 may not have.
+        if root.conv-type != "mesh": VerticalLayout {
+            alignment: center;
+            width: 20px;
+            Image {
+                source: root.conv-type == "saved_messages" ? Icons.bookmark
+                      : root.conv-type == "channel" ? Icons.hash
+                      : root.conv-type == "private_group" ? Icons.shield
+                      : Icons.user;
+                width: 16px;
+                height: 16px;
+                colorize: root.selected ? Colors.primary : Colors.text-muted;
+            }
+        }
+        // "))" is the mesh mark: radio waves, matching the sidebar glyph —
+        // a jump target that reaches no server looks different from one
+        // that does.
+        if root.conv-type == "mesh": Text {
+            text: "))";
             color: root.selected ? Colors.primary : Colors.text-muted;
             font-size: Typography.sm;
             font-weight: Typography.semibold;
@@ -99,7 +116,7 @@ component MsgRow inherits Rectangle {
     in property <bool> selected: false;
     callback clicked(string);
 
-    height: 56px;
+    height: 56px * Appearance.text-grow;
     border-radius: Spacing.radius-sm;
     background: root.selected ? Colors.neo-inset-bg : touch.has-hover ? Colors.surface-hover : transparent;
 
@@ -150,7 +167,7 @@ component PersonRow inherits Rectangle {
     in property <string> handle;
     callback clicked();
 
-    height: Spacing.touch-target-min;
+    height: Spacing.touch-target-min * Appearance.text-grow;
     border-radius: Spacing.radius-sm;
     background: touch.has-hover ? Colors.surface-hover : transparent;
 
@@ -319,7 +336,9 @@ export component UnifiedSearch inherits Rectangle {
                             return reject;
                         }
                     }
-                    if root.query == "" && !search-input.has-focus: Text {
+                    // Shown whenever the field is empty: on a phone it has
+                    // focus the whole time, so hiding it on focus meant never.
+                    if root.query == "" && search-input.preedit-text == "": Text {
                         text: "Search…";
                         color: Colors.text-muted;
                         font-size: Typography.sm;

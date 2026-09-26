@@ -21,13 +21,37 @@ const SKIN_TONE_MODIFIERS: [&str; 5] = [
     "\u{1F3FF}", // Dark
 ];
 
+/// SMP code points with Emoji_Presentation=No (Unicode `emoji-data.txt`).
+/// Being ≥ U+1F000 does not make an emoji colour-default: these are text-style
+/// even with VS16 on older fonts, and rendered as tofu on Android 10 (🛡️).
+const SMP_TEXT_DEFAULT: &[(u32, u32)] = &[
+    (0x1F170, 0x1F171), (0x1F17E, 0x1F17F), (0x1F202, 0x1F202), (0x1F237, 0x1F237),
+    (0x1F321, 0x1F321), (0x1F324, 0x1F32C), (0x1F336, 0x1F336), (0x1F37D, 0x1F37D),
+    (0x1F396, 0x1F397), (0x1F399, 0x1F39B), (0x1F39E, 0x1F39F), (0x1F3CB, 0x1F3CE),
+    (0x1F3D4, 0x1F3DF), (0x1F3F3, 0x1F3F3), (0x1F3F5, 0x1F3F5), (0x1F3F7, 0x1F3F7),
+    (0x1F43F, 0x1F43F), (0x1F441, 0x1F441), (0x1F4FD, 0x1F4FD), (0x1F549, 0x1F54A),
+    (0x1F56F, 0x1F570), (0x1F573, 0x1F579), (0x1F587, 0x1F587), (0x1F58A, 0x1F58D),
+    (0x1F590, 0x1F590), (0x1F5A5, 0x1F5A5), (0x1F5A8, 0x1F5A8), (0x1F5B1, 0x1F5B2),
+    (0x1F5BC, 0x1F5BC), (0x1F5C2, 0x1F5C4), (0x1F5D1, 0x1F5D3), (0x1F5DC, 0x1F5DE),
+    (0x1F5E1, 0x1F5E1), (0x1F5E3, 0x1F5E3), (0x1F5E8, 0x1F5E8), (0x1F5EF, 0x1F5EF),
+    (0x1F5F3, 0x1F5F3), (0x1F5FA, 0x1F5FA), (0x1F6CB, 0x1F6CB), (0x1F6CD, 0x1F6CF),
+    (0x1F6E0, 0x1F6E5), (0x1F6E9, 0x1F6E9), (0x1F6F0, 0x1F6F0), (0x1F6F3, 0x1F6F3),
+];
+
 /// True if emoji renders in color by default (Emoji_Presentation=Yes).
 ///
-/// Heuristic: first char must be in SMP emoji range (≥ U+1F000). BMP emoji
-/// (e.g. ✈, ⚽, ❤, ☝) default to monochrome text presentation and render grey
-/// without VS16 — we exclude them entirely for visual consistency.
+/// First char must be in the SMP emoji range (≥ U+1F000) and not one of the
+/// SMP text-default exceptions. BMP emoji (e.g. ✈, ⚽, ❤, ☝) default to
+/// monochrome text presentation and render grey without VS16 — we exclude
+/// them entirely for visual consistency. A ZWJ sequence (🏳️‍🌈) is its own
+/// colour glyph in the emoji font, so the exception list does not apply.
 fn is_color_default(emoji: &str) -> bool {
-    emoji.chars().next().is_some_and(|c| (c as u32) >= 0x1F000)
+    let zwj_sequence = emoji.contains('\u{200D}');
+    emoji.chars().next().is_some_and(|c| {
+        let c = c as u32;
+        c >= 0x1F000
+            && (zwj_sequence || !SMP_TEXT_DEFAULT.iter().any(|&(lo, hi)| (lo..=hi).contains(&c)))
+    })
 }
 
 /// Apply a skin tone modifier to an emoji if it supports it (People & Body category).
@@ -172,6 +196,8 @@ fn recent_to_emoji_data(store: &RecentEmojiStore) -> Vec<EmojiData> {
     store
         .get_recent()
         .into_iter()
+        // Picks saved before the text-default filter must not bring tofu back.
+        .filter(|emoji| is_color_default(emoji))
         .map(|emoji| EmojiData {
             emoji: emoji.into(),
             name: "recent".into(),
@@ -316,4 +342,20 @@ pub fn search_emojis(query: &str) -> Vec<EmojiData> {
     }
     results.truncate(50); // Limit results
     results
+}
+
+#[cfg(test)]
+mod color_default_tests {
+    use super::is_color_default;
+
+    #[test]
+    fn smp_text_default_emoji_are_excluded() {
+        assert!(is_color_default("\u{1F600}")); // 😀
+        assert!(is_color_default("\u{1F3C1}")); // 🏁
+        assert!(!is_color_default("\u{1F6E1}\u{FE0F}")); // 🛡️
+        assert!(!is_color_default("\u{1F3F3}\u{FE0F}")); // 🏳️
+        assert!(!is_color_default("\u{1F441}")); // 👁
+        assert!(!is_color_default("\u{2708}\u{FE0F}")); // ✈️ (BMP)
+        assert!(is_color_default("\u{1F3F3}\u{FE0F}\u{200D}\u{1F308}")); // 🏳️‍🌈
+    }
 }

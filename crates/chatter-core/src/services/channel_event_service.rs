@@ -341,6 +341,16 @@ impl ChannelEventService {
                 let reason = member_removal_reason(&removed);
                 self.publish_member_removed(&channel_id, &user_id, reason, timestamp);
             }
+            Event::OwnershipTransferred(transfer) => {
+                let (Ok(from), Ok(to)) = (
+                    transfer.from_user_id.parse::<uuid::Uuid>(),
+                    transfer.to_user_id.parse::<uuid::Uuid>(),
+                ) else {
+                    tracing::error!(?transfer, "Invalid user ID in OwnershipTransferred");
+                    return;
+                };
+                self.record_ownership_transferred(&channel_id, &UserId::from(from), &UserId::from(to), timestamp);
+            }
             // ── INFRA-29: the arms that used to fall into a silent
             // `_ => debug!("Unhandled channel event type")`.
 
@@ -371,14 +381,7 @@ impl ChannelEventService {
                     .parse::<uuid::Uuid>()
                     .map(ChannelId::from)
                     .unwrap_or(channel_id);
-                if let Err(e) = self.channel_repo.delete_channel_cascade(&target) {
-                    tracing::warn!("Failed to delete channel locally: {}", e);
-                }
-                let _ = self
-                    .event_bus
-                    .domain_sender()
-                    .send(DomainEvent::ChannelDeleted { channel_id: target });
-                tracing::info!("Channel deleted: channel={}", target);
+                self.record_channel_deleted(&target);
             }
 
             Event::ChannelArchived(id) => self.apply_archive_state(&id, channel_id, true),
@@ -605,16 +608,84 @@ impl ChannelEventService {
         self.publish_member_joined(membership, membership_ts(membership));
     }
 
-    /// A roster sync found `membership` gone from the server: the
-    /// `MemberRemoved` event was missed. The roster carries no reason, so it
-    /// reads as a leave. Keyed on the membership that ended.
-    pub fn record_synced_departure(&self, membership: &Membership) {
+    /// A sync found `membership` gone from the server: the `MemberRemoved`
+    /// event was missed. `reason` is what the server still records
+    /// (`GetDeparture`: a ban, else [`MemberRemoval::Unexplained`]). Keyed on
+    /// the membership that ended, so every sync that sees it files it once.
+    pub fn record_synced_departure(&self, membership: &Membership, reason: MemberRemoval) {
         self.publish_member_removed(
             &membership.channel_id,
             &membership.user_id,
-            MemberRemoval::Left,
+            reason,
             membership_ts(membership),
         );
+    }
+
+    /// The channel was deleted, heard live or found by a sync: we are out of
+    /// it, but it stays listed read-only with its history and "{owner} deleted
+    /// the channel", as Signal keeps an ended group. One notice per channel
+    /// however many times it is heard. A channel never stored here is ignored.
+    pub fn record_channel_deleted(&self, channel_id: &ChannelId) {
+        let (Ok(Some(channel)), Ok(me)) = (self.channel_repo.get(channel_id), self.settings_repo.current_user_id())
+        else {
+            return;
+        };
+        if let Err(e) = self.apply_channel_deleted(&channel, &me) {
+            tracing::warn!(%channel_id, error = %e, "Failed to record channel deletion");
+        }
+    }
+
+    fn apply_channel_deleted(&self, channel: &crate::domain::channel::Channel, me: &UserId) -> Result<(), ChannelEventError> {
+        match self.channel_repo.delete_membership(&channel.id, me) {
+            Ok(()) | Err(StorageError::NotFound(_)) => {}
+            Err(e) => return Err(e.into()),
+        }
+        self.channel_repo.mark_former(&channel.id, true)?;
+        let id = MessageId(uuid::Uuid::new_v5(
+            &uuid::Uuid::nil(),
+            format!("channel_deleted_notice:{}", channel.id).as_bytes(),
+        ));
+        let message = self.create_system_message(id, &channel.id, SystemMessage::ChannelDeleted, Some(channel.owner_id));
+        if !self.message_repo.insert_or_ignore(&message)? {
+            return Ok(());
+        }
+        tracing::info!(channel_id = %channel.id, "Channel deleted");
+        let event = DomainEvent::ChannelMemberLeft {
+            channel_id: channel.id,
+            user_id: *me,
+            display_name: self.get_display_name(me),
+            message,
+        };
+        if let Err(e) = self.event_bus.domain_sender().send(event) {
+            tracing::warn!("Failed to publish channel deletion: {}", e);
+        }
+        Ok(())
+    }
+
+    /// The owner handed the channel to `to`: record the new owner and roles
+    /// (the two `MemberUpdated` events carry the roles too, but not
+    /// `owner_id`) and file "{from} made {to} the owner" once per event.
+    fn record_ownership_transferred(&self, channel_id: &ChannelId, from: &UserId, to: &UserId, event_ts: u64) {
+        if let Err(e) = crate::services::channel::apply_ownership_transfer(&self.channel_repo, channel_id, from, to) {
+            tracing::warn!(%channel_id, error = %e, "Failed to record ownership transfer");
+            return;
+        }
+        let content = if self.settings_repo.current_user_id().ok() == Some(*to) {
+            SystemMessage::MadeYouOwner
+        } else {
+            SystemMessage::OwnershipTransferred { to: *to, to_name: self.known_name(to) }
+        };
+        let id = member_notice_id(channel_id, to, "owner", event_ts);
+        let message = self.create_system_message(id, channel_id, content, Some(*from));
+        match self.message_repo.insert_or_ignore(&message) {
+            Ok(true) => {
+                if let Err(e) = self.event_bus.domain_sender().send(DomainEvent::MessageReceived { message }) {
+                    tracing::warn!("Failed to publish ownership notice: {}", e);
+                }
+            }
+            Ok(false) => {}
+            Err(e) => tracing::warn!(%channel_id, error = %e, "Failed to file ownership notice"),
+        }
     }
 
     /// Handle a member leaving/being removed from a channel.
@@ -636,9 +707,10 @@ impl ChannelEventService {
         // line: the leaver for a leave, the moderator for a removal.
         let (content, subject) = match reason {
             MemberRemoval::Left => (SystemMessage::UserLeft(*user_id), *user_id),
-            MemberRemoval::Kicked(by) | MemberRemoval::Banned(by) if is_self => {
-                (SystemMessage::SelfRemoved { by }, by)
-            }
+            MemberRemoval::Kicked(by) if is_self => (SystemMessage::SelfRemoved { by }, by),
+            MemberRemoval::Banned(by) if is_self => (SystemMessage::SelfBanned { by }, by),
+            MemberRemoval::Unexplained if is_self => (SystemMessage::NoLongerMember, *user_id),
+            MemberRemoval::Unexplained => (SystemMessage::UserLeft(*user_id), *user_id),
             MemberRemoval::Kicked(by) => (
                 SystemMessage::UserRemoved { by, removed: *user_id, removed_name: self.known_name(user_id) },
                 by,
@@ -656,6 +728,11 @@ impl ChannelEventService {
         match self.channel_repo.delete_membership(channel_id, user_id) {
             Ok(()) | Err(StorageError::NotFound(_)) => {}
             Err(e) => return Err(e.into()),
+        }
+        // Ours: the channel stays listed, read-only, as Signal keeps a group
+        // you left or were removed from.
+        if is_self {
+            self.channel_repo.mark_former(channel_id, false)?;
         }
 
         // Our own leave reaches us twice with unrelated timestamps: the leave
@@ -824,6 +901,10 @@ pub enum MemberRemoval {
     Left,
     Kicked(UserId),
     Banned(UserId),
+    /// Gone from the roster with no reason on record: what a sync that missed
+    /// the event is left with after a kick (the server keeps none) or a leave.
+    /// Another member's reads as a leave; ours as "no longer a member".
+    Unexplained,
 }
 
 /// A removal whose moderator id is missing or unparseable is reported as a
@@ -979,38 +1060,54 @@ mod tests {
         }
     }
 
-    /// A deleted channel must actually disappear: local rows gone and the UI
-    /// told. This arm was silently discarded too.
+    /// A deleted channel stays listed read-only (Signal keeps an ended group):
+    /// our membership goes, the channel is marked deleted, one "{owner}
+    /// deleted the channel" is filed however often the deletion is heard, and
+    /// the UI is told as for any departure of ours.
     #[tokio::test]
-    async fn channel_deleted_removes_local_channel_and_notifies() {
+    async fn channel_deleted_keeps_the_channel_read_only_with_one_notice() {
         let (service, bus, channel_repo) = setup();
         let mut rx = bus.domain_sender().subscribe();
+        let me = as_me(&service);
+        let channel_id = private_channel(&channel_repo);
+        let own = Membership {
+            channel_id,
+            user_id: me,
+            role: crate::domain::channel::MemberRole::Member,
+            notification_preference: crate::domain::channel::NotificationPreference::All,
+            joined_at: Utc::now(),
+            last_read_message_id: None,
+            is_muted: false,
+            muted_until: None,
+        };
+        channel_repo.insert_or_ignore_membership(&own).unwrap();
 
-        let channel = crate::domain::channel::Channel::new(
-            ChannelId::from(uuid::Uuid::new_v4()),
-            "doomed".to_string(),
-            crate::domain::channel::ChannelType::Public,
-            UserId::from(uuid::Uuid::new_v4()),
-        );
-        let channel_id = channel.id;
-        channel_repo.upsert(&channel).unwrap();
+        let deleted = || channel_event::Event::ChannelDeleted(channel_id.to_string());
+        service.handle_stream_event(deleted(), &channel_id.to_string(), 0).await;
+        service.record_channel_deleted(&channel_id); // the sync finding it too
 
-        service
-            .handle_stream_event(
-                channel_event::Event::ChannelDeleted(channel_id.to_string()),
-                &channel_id.to_string(),
-                0,
-            )
-            .await;
-
-        assert!(
-            channel_repo.get(&channel_id).unwrap().is_none(),
-            "deleted channel still present locally"
-        );
+        assert!(channel_repo.get(&channel_id).unwrap().is_some(), "history must stay");
+        assert!(channel_repo.get_membership(&channel_id, &me).unwrap().is_none());
+        assert_eq!(channel_repo.former_state(&channel_id).unwrap(), Some(true));
+        assert_eq!(channel_repo.list_former_for_user(&me).unwrap().len(), 1, "not listed read-only");
+        assert_eq!(service.message_repo.count(&channel_id, &ConversationType::Channel).unwrap(), 1);
         match rx.try_recv() {
-            Ok(DomainEvent::ChannelDeleted { channel_id: got }) => assert_eq!(got, channel_id),
-            other => panic!("ChannelDeleted did not reach the domain bus: {:?}", other),
+            Ok(DomainEvent::ChannelMemberLeft { user_id, message, .. }) => {
+                assert_eq!(user_id, me);
+                assert!(matches!(message.content, MessageContent::System(SystemMessage::ChannelDeleted)));
+            }
+            other => panic!("expected ChannelMemberLeft, got {other:?}"),
         }
+        assert!(rx.try_recv().is_err(), "the second hearing reached the UI");
+
+        // A later leave notice for the same channel does not undo "deleted".
+        channel_repo.mark_former(&channel_id, false).unwrap();
+        assert_eq!(channel_repo.former_state(&channel_id).unwrap(), Some(true));
+
+        // A channel never stored here has nothing to keep listed.
+        let unknown = ChannelId::from(uuid::Uuid::new_v4());
+        channel_repo.mark_former(&unknown, false).unwrap();
+        assert_eq!(channel_repo.former_state(&unknown).unwrap(), None);
     }
 
     /// F77: the server delivers one membership event on two paths (channel
@@ -1170,8 +1267,8 @@ mod tests {
         assert!(matches!(rx.try_recv(), Ok(DomainEvent::ChannelMemberJoined { .. })));
         assert!(rx.try_recv().is_err());
 
-        service.record_synced_departure(&member);
-        service.record_synced_departure(&member);
+        service.record_synced_departure(&member, MemberRemoval::Unexplained);
+        service.record_synced_departure(&member, MemberRemoval::Unexplained);
         assert_eq!(count(), 2);
         match rx.try_recv() {
             Ok(DomainEvent::ChannelMemberLeft { user_id, message, .. }) => {
@@ -1182,6 +1279,42 @@ mod tests {
         }
         assert!(rx.try_recv().is_err());
         assert!(channel_repo.get_membership(&channel_id, &member.user_id).unwrap().is_none());
+    }
+
+    /// F80: our own removal found by a sync reads as what the server still
+    /// records — "{mod} banned you" for a ban, "You are no longer a member"
+    /// with no record — and the channel stays listed read-only.
+    #[tokio::test]
+    async fn synced_own_departure_keeps_the_channel_with_its_reason() {
+        let (service, _bus, channel_repo) = setup();
+        let me = as_me(&service);
+        let moderator = UserId::from(uuid::Uuid::new_v4());
+        for (reason, expect) in [
+            (MemberRemoval::Banned(moderator), SystemMessage::SelfBanned { by: moderator }),
+            (MemberRemoval::Unexplained, SystemMessage::NoLongerMember),
+        ] {
+            let channel_id = private_channel(&channel_repo);
+            let own = Membership {
+                channel_id,
+                user_id: me,
+                role: crate::domain::channel::MemberRole::Member,
+                notification_preference: crate::domain::channel::NotificationPreference::All,
+                joined_at: Utc::now(),
+                last_read_message_id: None,
+                is_muted: false,
+                muted_until: None,
+            };
+            channel_repo.insert_or_ignore_membership(&own).unwrap();
+
+            service.record_synced_departure(&own, reason);
+
+            assert!(channel_repo.get_membership(&channel_id, &me).unwrap().is_none());
+            assert_eq!(channel_repo.former_state(&channel_id).unwrap(), Some(false));
+            let notices = service.message_repo.list(&channel_id, &ConversationType::Channel, None, 10).unwrap();
+            assert_eq!(notices.len(), 1);
+            assert_eq!(notices[0].content, MessageContent::System(expect));
+        }
+        assert_eq!(channel_repo.list_former_for_user(&me).unwrap().len(), 2);
     }
 
     /// A ban on the local user drops our own membership and surfaces to the UI.

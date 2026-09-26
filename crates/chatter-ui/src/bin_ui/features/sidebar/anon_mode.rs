@@ -49,7 +49,7 @@ fn wire_toggle(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                 w.set_anon_mode_pin("".into());
                 w.set_anon_mode_pin_error("".into());
                 w.set_anon_mode_verifying(false);
-                w.set_active_modal("anon-mode-pin".into());
+                crate::bin_ui::features::back::push(&w, "anon-mode-pin");
             }
         });
     });
@@ -78,7 +78,7 @@ fn wire_submit_pin(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             if ok {
                 ui_ctx.set_anon_mode_enabled(true);
                 w.global::<AnonMode>().set_enabled(true);
-                w.set_active_modal("none".into());
+                crate::bin_ui::features::back::close(&w, "anon-mode-pin");
                 w.set_anon_mode_pin("".into());
                 refresh_sidebar(&w, &ui_ctx);
                 tracing::info!("Anon Mode enabled");

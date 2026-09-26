@@ -142,26 +142,19 @@ impl MessageService {
     /// Our profile key for a channel member's SKDM, so they can decrypt our
     /// name and avatar without being our friend — Signal shares every group
     /// member's profile key with the group. The SKDM is pairwise-encrypted,
-    /// so it reaches only this member; `None` for ourselves (our own devices
-    /// hold it already), for a member we blocked, and for anyone this device
-    /// does not hold as a member of `channel_id` — an SKDM also answers a
-    /// `SenderKeyRequest`, which anyone can send. Fails closed: a lookup error
-    /// shares nothing.
+    /// so it reaches only this member; `None` for anyone this device does not
+    /// hold as a member of `channel_id` — an SKDM also answers a
+    /// `SenderKeyRequest`, which anyone can send — and for whoever the
+    /// visibility setting keeps it from (ourselves, a member we blocked, a
+    /// non-friend under "my contacts", everyone under "nobody"). Fails
+    /// closed: a lookup error shares nothing.
     fn skdm_profile_key(&self, channel_id: &ChannelId, recipient: &str) -> Option<Vec<u8>> {
-        use crate::services::current_user::CurrentUserProvider;
-        let us = self.settings_repo.current_user_id().ok()?;
         let recipient: UserId = recipient.parse().ok()?;
-        if recipient == us
-            || self.user_repo.is_blocked(&us, &recipient).unwrap_or(true)
-            || !matches!(self.channel_repo.get_membership(channel_id, &recipient), Ok(Some(_)))
-        {
+        if !matches!(self.channel_repo.get_membership(channel_id, &recipient), Ok(Some(_))) {
             return None;
         }
-        self.settings_repo
-            .get_bytes(keys::PROFILE_KEY)
-            .ok()
-            .flatten()
-            .filter(|k| k.len() == 32)
+        crate::services::profile_visibility::shareable_profile_key(&self.settings_repo, &self.user_repo, &recipient)
+            .map(|k| k.to_vec())
     }
 
     fn record_sender_key_delivered(&self, channel_id: &ChannelId, member_id: &str) {
@@ -1136,28 +1129,29 @@ impl MessageService {
         device_id: u32,
         sealed_body: Vec<u8>,
     ) -> Result<(), MessageError> {
-        use crate::services::current_user::CurrentUserProvider;
-
         let sealed_message = crate::proto::chat_v1::SealedSenderMessage {
             sealed_body,
             server_key_id: self.signal_service.get_server_key_id(),
             timestamp: TimestampNanos::now().as_u64(),
         };
-        let us = self.settings_repo.current_user_id()?;
-        let uak = self
-            .user_repo
-            .get_friend_profile_key(&us, peer_id)
-            .ok()
-            .flatten()
-            .map(|pk| crate::crypto::derive_uak(&pk));
         let peer = peer_id.to_string();
-        match uak {
-            Some(uak) => {
-                self.grpc_pool
-                    .anonymous_message_client()
-                    .send_sealed_message_with_uak(&peer, device_id, sealed_message, &uak)
-                    .await?;
-            }
+        let uak = self.sealed_access_key(&peer, false);
+        let identified = match uak {
+            Some(uak) => match self
+                .grpc_pool
+                .anonymous_message_client()
+                .send_sealed_message_with_uak(&peer, device_id, sealed_message.clone(), &uak)
+                .await
+            {
+                Ok(_) => false,
+                // Our stored key is stale: the peer rotated it
+                // (`profile_visibility`), so its UAK moved with it.
+                Err(e) if e.is_auth_error() => {
+                    tracing::warn!(%peer_id, reason = "UAK from our stored profile key rejected", "SEALED SENDER DEGRADED: group resend delivered identified");
+                    true
+                }
+                Err(e) => return Err(e.into()),
+            },
             None => {
                 tracing::warn!(
                     %peer_id,
@@ -1165,10 +1159,13 @@ impl MessageService {
                     "SEALED SENDER DEGRADED: group resend delivered identified \
                      (Basic auth) — the server WILL record us as the sender"
                 );
-                self.message_client()
-                    .send_sealed_message(&peer, device_id, sealed_message)
-                    .await?;
+                true
             }
+        };
+        if identified {
+            self.message_client()
+                .send_sealed_message(&peer, device_id, sealed_message)
+                .await?;
         }
         Ok(())
     }
@@ -1557,6 +1554,12 @@ mod tests {
         assert_eq!(key, vec![9; 32]);
         assert!(carried(&UserId::new()).is_none(), "a non-member who asked gets none");
         assert!(carried(&t.alice_id).is_none(), "our own devices already hold it");
+
+        // "My contacts": a co-member who is not Alice's friend gets none.
+        use crate::services::profile_visibility::ProfileVisibility;
+        ProfileVisibility::Contacts.store(&alice.messages().settings_repo).unwrap();
+        assert!(carried(&t.bob_id).is_none(), "a non-friend co-member under my contacts gets none");
+        ProfileVisibility::Everyone.store(&alice.messages().settings_repo).unwrap();
 
         // Bob is not Alice's friend: the key still lands, once.
         let m = bob.messages();

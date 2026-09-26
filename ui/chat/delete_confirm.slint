@@ -20,6 +20,7 @@ export component DeleteForMeConfirm inherits Rectangle {
         show: root.count > 0;
         title: root.count > 1 ? "Delete " + root.count + " messages?" : "Delete message?";
         modal-width: 400px;
+        show-close: false;
 
         close => { root.cancelled(); }
 

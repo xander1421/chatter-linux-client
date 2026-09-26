@@ -73,7 +73,7 @@ pub fn wire_forward_message(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                     w.set_forward_loading(false);
                     if failed < total {
                         tracing::info!(?target, sent = total - failed, "forward sent");
-                        w.set_active_modal("none".into());
+                        crate::bin_ui::features::back::close(&w, "forward-message");
                         // Core persisted the copy, but the open list is a
                         // Slint model only the composer's send path appends
                         // to — so a forward into the conversation on screen

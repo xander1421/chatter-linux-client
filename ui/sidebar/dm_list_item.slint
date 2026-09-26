@@ -294,8 +294,8 @@ export component DMListItem inherits Rectangle {
             if root.unread-count > 0: Rectangle {
                 x: parent.width - self.width + 4px;
                 y: -4px;
-                width: max(16px, collapsed-badge-text.preferred-width + 10px);
-                height: 16px;
+                width: max(self.height, collapsed-badge-text.preferred-width + 10px);
+                height: Spacing.badge-sm;
                 border-radius: Spacing.radius-full;
                 border-width: 2px;
                 border-color: Colors.surface;

@@ -41,6 +41,7 @@ export component MessageItem inherits Rectangle {
     in property <bool> is-pinned: false;
     in property <bool> show-sender: true;
     in property <bool> is-dm: false;  // When true, hide avatar/name - just bubbles
+    in property <bool> can-thread: true;  // Threads are a channel feature
     in property <string> delivery-status: "";  // "sending", "sent", "failed", "delivered", "read" for own messages
     /// Whether this message went over the mesh. Set by the caller rather than
     /// inferred from the status string: "sent" is a mesh state too — in fact the
@@ -212,7 +213,7 @@ export component MessageItem inherits Rectangle {
 
     main-layout := VerticalLayout {
         width: 100%;
-        padding: root.is-continuation ? Spacing.xxs : Spacing.xs;
+        padding: root.is-continuation ? Spacing.message-padding-continuation : Spacing.message-padding;
         padding-left: Spacing.sm;
         padding-right: Spacing.sm;
         spacing: root.is-continuation ? Spacing.xxs : Spacing.xs;
@@ -283,21 +284,12 @@ export component MessageItem inherits Rectangle {
                             }
                         }
 
-                        HorizontalLayout {
-                            spacing: Spacing.xs;
-                            alignment: start;
-
-                            Text {
-                                text: root.timestamp;
-                                color: Colors.text-muted;
-                                font-size: Typography.xs;
-                            }
-
-                            if root.call-duration != "": Text {
-                                text: ", " + root.call-duration;
-                                color: Colors.text-muted;
-                                font-size: Typography.xs;
-                            }
+                        // One Text: two laid out side by side put the layout
+                        // spacing before the separator ("01:36 , 17s").
+                        Text {
+                            text: root.call-duration != "" ? root.timestamp + " · " + root.call-duration : root.timestamp;
+                            color: Colors.text-muted;
+                            font-size: Typography.xs;
                         }
                     }
 
@@ -483,7 +475,7 @@ export component MessageItem inherits Rectangle {
                             }
 
                             if root.is-ai: Rectangle {
-                                height: 16px;
+                                height: Spacing.badge-sm;
                                 width: ai-text.preferred-width + 8px;
                                 background: Colors.info;
                                 border-radius: 4px;
@@ -1115,17 +1107,18 @@ export component MessageItem inherits Rectangle {
                                     colorize: Colors.primary;
                                 }
 
-                                Text {
-                                    text: root.timestamp;
-                                    color: Colors.text-muted;
-                                    font-size: Typography.xs;
-                                }
-
+                                // "edited" before the time on both sides (Signal's order).
                                 if root.is-edited: Text {
                                     text: "edited";
                                     color: Colors.text-muted;
                                     font-size: Typography.xs;
                                     font-italic: true;
+                                }
+
+                                Text {
+                                    text: root.timestamp;
+                                    color: Colors.text-muted;
+                                    font-size: Typography.xs;
                                 }
 
                                 // Delivery status. Mesh states get a word rather
@@ -1401,7 +1394,7 @@ export component MessageItem inherits Rectangle {
                             // this message. Previously the ONLY thread entry was
                             // the "N replies" badge (rendered `if reply-count > 0`),
                             // so a message with no replies could never START a thread.
-                            thread-btn := Rectangle {
+                            if root.can-thread: thread-btn := Rectangle {
                                 height: 24px;
                                 width: 24px;
                                 background: thread-btn-touch.has-hover ? Colors.surface-hover : transparent;

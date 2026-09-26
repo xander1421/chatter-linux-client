@@ -202,7 +202,9 @@ impl MessageService {
                 return 0;
             }
         };
-        self.deposit_sealed_ciphertexts(&mut self.message_client(), &me, ciphertexts, None).await
+        self.deposit_sealed_ciphertexts(&mut self.message_client(), &me, ciphertexts, None)
+            .await
+            .delivered
     }
 
     /// Seal `plaintext` for one peer device and deposit it in its mailbox.
@@ -567,7 +569,6 @@ impl MessageService {
     ) -> Result<crate::proto::content_v1::Content, MessageError> {
         use crate::domain::user::FriendshipStatus;
         use crate::proto::content_v1::content;
-        use crate::storage::repositories::settings_repo::keys;
 
         // Get current user ID
         let our_user_id = self.settings_repo.current_user_id()?;
@@ -615,21 +616,17 @@ impl MessageService {
             );
         }
 
-        // Get our profile key from settings
-        let profile_key = match self.settings_repo.get_bytes(keys::PROFILE_KEY)? {
-            Some(key) if key.len() == 32 => key,
-            Some(key) => {
-                tracing::warn!(
-                    key_len = key.len(),
-                    "Profile key has unexpected length, skipping injection"
-                );
-                return Ok(content);
-            }
-            None => {
-                tracing::trace!("No profile key in settings, skipping injection");
-                return Ok(content);
-            }
+        // Whether this friend may hold it is the visibility setting's call
+        // ("nobody", a block, a rotation in flight).
+        let Some(profile_key) = crate::services::profile_visibility::shareable_profile_key(
+            &self.settings_repo,
+            &self.user_repo,
+            peer_id,
+        ) else {
+            tracing::trace!(peer_id = %peer_id, "Profile key not shareable, skipping injection");
+            return Ok(content);
         };
+        let profile_key = profile_key.to_vec();
 
         // Inject profile key into DataMessage or EditMessage
         match &mut content.content {

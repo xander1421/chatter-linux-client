@@ -6,6 +6,7 @@ import { Colors } from "../theme/colors.slint";
 import { Spacing } from "../theme/spacing.slint";
 import { Typography } from "../theme/typography.slint";
 import { EmojiPicker, EmojiData } from "../components/emoji_picker.slint";
+import { QuickReactions } from "types.slint";
 
 export component ReactionPicker inherits Rectangle {
     // Visibility
@@ -33,18 +34,14 @@ export component ReactionPicker inherits Rectangle {
     callback category-changed(int);
     callback search-changed(string);
 
-    // Quick reaction emoji (with emoji variant selectors for colorful rendering)
-    property <[string]> quick-reactions: ["\u{1F44D}\u{FE0F}", "\u{2764}\u{FE0F}", "\u{1F602}\u{FE0F}", "\u{1F62E}\u{FE0F}", "\u{1F622}\u{FE0F}", "\u{1F621}\u{FE0F}"];
-    // thumbs up, heart, joy, surprised, crying, angry
-
     // Only render when visible
     opacity: root.show ? 1 : 0;
     visible: root.show;
 
-    // Full screen backdrop
+    // Full screen backdrop, dimmed like the message menu it replaces.
     width: 100%;
     height: 100%;
-    background: transparent;
+    background: Colors.overlay;
 
     // Backdrop touch area (click outside to close)
     backdrop := TouchArea {
@@ -79,7 +76,7 @@ export component ReactionPicker inherits Rectangle {
         VerticalLayout {
             // Quick reactions bar — Neo inset tray
             Rectangle {
-                height: 32px;
+                height: Spacing.touch-target-min;
                 background: Colors.neo-inset-bg;
                 border-radius: Spacing.radius-xl;
                 border-width: 1px;
@@ -90,13 +87,13 @@ export component ReactionPicker inherits Rectangle {
                     padding-right: Spacing.sm;
                     spacing: 0;
 
-                    for emoji in root.quick-reactions: Rectangle {
+                    for emoji in QuickReactions.emojis: Rectangle {
                         horizontal-stretch: 1;
-                        height: 32px;
+                        height: Spacing.touch-target-min;
 
                         Rectangle {
-                            width: 28px;
-                            height: 28px;
+                            width: 40px;
+                            height: 40px;
                             x: (parent.width - self.width) / 2;
                             y: (parent.height - self.height) / 2;
                             border-radius: Spacing.radius-sm;
@@ -132,6 +129,7 @@ export component ReactionPicker inherits Rectangle {
             // EmojiPicker
             EmojiPicker {
                 show: true;
+                show-gif-tab: false;
                 emoji-list: root.emoji-list;
                 selected-category <=> root.selected-category;
                 search-query <=> root.search-query;

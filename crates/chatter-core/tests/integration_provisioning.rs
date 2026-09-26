@@ -193,7 +193,6 @@ async fn test_complete_provisioning_flow() {
     // Step 5: New device completes linking with its prekey bundle
     let (prekey_bundle, _identity_key) = generate_prekey_bundle();
     let device_auth_token: [u8; 32] = rand::random();
-    let uak: [u8; 16] = rand::random();
 
     // Server validates the provisioning code via strict equality against the
     // value the primary device passed to `provision_device`. In production
@@ -205,7 +204,6 @@ async fn test_complete_provisioning_flow() {
             .complete_device_linking(
                 "test-code-1234567890",
                 &device_auth_token,
-                &uak,
                 "Linux x86_64",
                 "Work Laptop",
                 prekey_bundle,
@@ -520,6 +518,8 @@ fn test_provision_envelope_roundtrip_with_real_proto() {
         provisioning_user_agent: "chatter-test/0.0".into(),
         primary_device_registration_id: 1234,
         ephemeral_backup_key: None,
+        svr_salt_username: "alice".into(),
+        full_username: "alice.1234".into(),
     };
 
     // Primary encrypts to new device's pub.
@@ -600,6 +600,8 @@ async fn test_full_link_flow_with_real_envelope_crypto() {
         provisioning_user_agent: "primary-test/0.0".into(),
         primary_device_registration_id: 42,
         ephemeral_backup_key: None,
+        svr_salt_username: "alice".into(),
+        full_username: "alice.1234".into(),
     };
     let envelope = encrypt_provision_envelope(&new_device_kp.public_bytes(), &provision_msg)
         .expect("encrypt envelope");
@@ -628,13 +630,11 @@ async fn test_full_link_flow_with_real_envelope_crypto() {
     // bundle.
     let (prekey_bundle, _) = generate_prekey_bundle();
     let device_auth_token: [u8; 32] = rand::random();
-    let uak: [u8; 16] = rand::random();
     let complete = assert_ok(
         new_device_client
             .complete_device_linking(
                 &decoded.provisioning_code,
                 &device_auth_token,
-                &uak,
                 "Linux x86_64",
                 "Real-Crypto Test",
                 prekey_bundle,
@@ -684,7 +684,6 @@ fn generate_prekey_bundle() -> (SignalPreKeyBundle, Vec<u8>) {
             public_key: one_time_prekey_pair.public_key.serialize().to_vec(),
         }),
         kyber_prekey: None,
-        unidentified_access_key: Some(random_uak().to_vec()),
         unrestricted_unidentified_access: Some(false),
     };
 

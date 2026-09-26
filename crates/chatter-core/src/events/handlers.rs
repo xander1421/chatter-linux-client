@@ -842,10 +842,6 @@ impl EventHandlers {
             // Channel lifecycle (INFRA-29). ChannelEventService has already
             // written the authoritative repo state; only in-memory caches are
             // touched here.
-            DomainEvent::ChannelDeleted { channel_id } => {
-                tracing::info!(%channel_id, "Channel deleted; dropping cached messages");
-                self.message_state.clear_channel(&channel_id);
-            }
             DomainEvent::ChannelCreated { channel_id, ref name } => {
                 trace!(?channel_id, %name, "Channel created");
             }
@@ -855,14 +851,9 @@ impl EventHandlers {
             DomainEvent::ChannelModerationAction {
                 channel_id, user_id, ref action, is_self, ..
             } => {
-                if is_self && matches!(action.as_str(), "KICK" | "BAN") {
-                    // We are out of this channel: stop serving its cached
-                    // messages from memory.
-                    tracing::info!(%channel_id, %action, "Removed from channel by moderation");
-                    self.message_state.clear_channel(&channel_id);
-                } else {
-                    trace!(?channel_id, ?user_id, %action, "Channel moderation action");
-                }
+                // A removal keeps the channel's history (it stays listed
+                // read-only), so its cached messages stay too.
+                trace!(?channel_id, ?user_id, %action, is_self, "Channel moderation action");
             }
             DomainEvent::ChannelInviteReceived { channel_id, inviter_id, .. } => {
                 trace!(?channel_id, ?inviter_id, "Channel invitation received");

@@ -58,11 +58,17 @@ fn sidebar_time_at(
     at: chrono::DateTime<chrono::Utc>,
     now: chrono::DateTime<chrono::Local>,
 ) -> String {
+    // Signal's chat-list rule: a time only for today; older rows get the
+    // day, which is what the eye scans for there.
+    use chrono::Datelike;
     let local = at.with_timezone(&chrono::Local);
-    if local.date_naive() == now.date_naive() {
-        local.format("%H:%M").to_string()
-    } else {
-        local.format("%b %d, %H:%M").to_string()
+    let days = (now.date_naive() - local.date_naive()).num_days();
+    match days {
+        ..=0 => local.format("%H:%M").to_string(),
+        1 => "Yesterday".to_string(),
+        2..=6 => local.format("%a").to_string(),
+        _ if local.year() == now.year() => local.format("%b %-d").to_string(),
+        _ => local.format("%b %-d, %Y").to_string(),
     }
 }
 
@@ -73,9 +79,15 @@ mod sidebar_time_tests {
         let now = chrono::Local::now();
         let today = super::sidebar_time_at(now.with_timezone(&chrono::Utc), now);
         assert_eq!(today, now.format("%H:%M").to_string());
-        let old = now - chrono::Duration::days(3);
-        let older = super::sidebar_time_at(old.with_timezone(&chrono::Utc), now);
-        assert_eq!(older, old.format("%b %d, %H:%M").to_string());
+        let at = |days: i64| {
+            let t = now - chrono::Duration::days(days);
+            (t, super::sidebar_time_at(t.with_timezone(&chrono::Utc), now))
+        };
+        assert_eq!(at(1).1, "Yesterday");
+        let (t, s) = at(3);
+        assert_eq!(s, t.format("%a").to_string());
+        let (t, s) = at(400);
+        assert_eq!(s, t.format("%b %-d, %Y").to_string());
     }
 }
 
@@ -186,8 +198,25 @@ impl ChatterClient {
     /// message is not a reply or carries no quoted author.
     pub fn reply_author_display_name(&self, msg: &crate::domain::message::Message) -> String {
         match msg.reply_to_author_id {
-            Some(ref id) => self.display_name_in(&msg.conversation_type, &msg.conversation_id, id),
+            Some(ref id) => self.quote_author_name(id, || {
+                self.display_name_in(&msg.conversation_type, &msg.conversation_id, id)
+            }),
             None => String::new(),
+        }
+    }
+
+    /// Who a quote or the composer's reply bar names: "You" for our own
+    /// message, as every messenger does — our public name there read as if
+    /// someone else wrote it. Otherwise the name `resolve` gives.
+    pub fn quote_author_name(
+        &self,
+        author: &crate::domain::ids::UserId,
+        resolve: impl FnOnce() -> String,
+    ) -> String {
+        if self.session_current_user_id().as_ref() == Some(author) {
+            "You".to_string()
+        } else {
+            resolve()
         }
     }
 
@@ -391,10 +420,16 @@ impl ChatterClient {
     /// storage handle for.
     pub fn message_sidebar_preview(&self, message: &crate::domain::message::Message) -> String {
         let label = self.attachment_preview_label(message);
-        message.sidebar_preview(
+        let preview = message.sidebar_preview(
             self.auth_state().get().current_user_id.as_ref(),
             label.as_deref(),
-        )
+        );
+        // A notice is worded to follow its actor ("left the channel"), as the
+        // message list renders it; alone in a preview it named nobody.
+        if matches!(message.content, crate::domain::message::MessageContent::System(_)) {
+            return format!("{} {}", self.message_sender_display_name(message), preview);
+        }
+        preview
     }
 
     /// Preview + local-time stamp of a conversation's latest activity: the
@@ -449,6 +484,46 @@ impl ChatterClient {
         )
     }
 
+    /// What a folder row shows beyond its name and badge: the preview, time,
+    /// avatar and presence the loose row for the same conversation shows, so
+    /// a chat looks the same filed or not. Filled for the kinds a folder
+    /// renders with the main list's rows (friend DMs and channels); other
+    /// kinds get the default.
+    pub fn section_row_extras(
+        &self,
+        conv: &crate::domain::section::SectionConversation,
+    ) -> SectionRowExtras {
+        use crate::domain::message::ConversationType as CT;
+        let Ok(id) = conv.conversation_id.parse::<crate::domain::ids::ChannelId>() else {
+            return SectionRowExtras::default();
+        };
+        let (last_message, timestamp) = match conv.conversation_type {
+            CT::ServerDm | CT::Channel => {
+                self.sidebar_activity(self.latest_message(&id, &conv.conversation_type).as_ref())
+            }
+            _ => return SectionRowExtras::default(),
+        };
+        let mut extras = SectionRowExtras { last_message, timestamp, ..Default::default() };
+        match conv.conversation_type {
+            CT::ServerDm => {
+                let profile = self.get_profile_local(&crate::domain::ids::UserId::from_uuid(*id.as_uuid()));
+                extras.presence_status =
+                    profile.as_ref().map_or("offline", |p| p.presence.as_str()).to_string();
+                extras.avatar_bytes = profile.and_then(|p| p.avatar_bytes);
+            }
+            _ => {
+                extras.private_channel = self
+                    .channels()
+                    .channel_repo
+                    .get(&id)
+                    .ok()
+                    .flatten()
+                    .is_some_and(|c| c.channel_type == crate::domain::channel::ChannelType::Private);
+            }
+        }
+        extras
+    }
+
     /// Build the complete DM sidebar list — regular server DMs plus anon DMs
     /// (active conversations first, then incoming requests) — as one ordered,
     /// fully-shaped vector the UI renders directly. Regular DMs are dropped when
@@ -469,7 +544,7 @@ impl ChatterClient {
         use crate::ui::sidebar_data::DMListItemSendData;
 
         let mut out: Vec<DMListItemSendData> = Vec::new();
-        for peer_id in self.listed_friends() {
+        for peer_id in self.dm_peers() {
             // Local storage key for a channel-free DM = the peer's user_id
             // wrapped as a ChannelId (same UUID).
             let conversation_id: crate::domain::ids::ChannelId = peer_id.into();
@@ -688,6 +763,21 @@ impl ChatterClient {
     /// that model on purpose — they render inside the folder — so the lookup
     /// came back empty and a foldered DM opened into nothing: no active
     /// conversation, no messages, and every send silently dropped.
+    /// The conversation a sidebar row's "Delete chat" acts on: a channel row
+    /// is its channel, a DM row resolves as [`Self::resolve_dm_conversation`].
+    pub fn resolve_row_conversation(
+        &self,
+        row_id: &str,
+        kind: &crate::domain::message::ConversationType,
+    ) -> Option<crate::state::ActiveConversation> {
+        match kind {
+            crate::domain::message::ConversationType::Channel => {
+                row_id.parse().ok().map(crate::state::ActiveConversation::Channel)
+            }
+            _ => self.resolve_dm_conversation(row_id),
+        }
+    }
+
     pub fn resolve_dm_conversation(&self, dm_id: &str) -> Option<crate::state::ActiveConversation> {
         use crate::state::ActiveConversation;
 
@@ -752,7 +842,7 @@ impl ChatterClient {
                 name: dm.display_name,
             });
         }
-        for channel in self.sidebar_channels() {
+        for channel in self.sidebar_channels().into_iter().filter(|c| !self.is_former_channel(&c.id)) {
             out.push(ForwardDestination {
                 kind: CT::Channel,
                 id: channel.id.to_string(),
@@ -839,7 +929,10 @@ impl ChatterClient {
                     }
                     out.push(FriendDataSendData {
                         user_id: friendship.addressee_id.to_string(),
-                        display_name: profile.display_name.clone(),
+                        // The resolver, not the raw row: a row written
+                        // without the profile key holds `User <id8>`, and a
+                        // known username reads better (REVIEW-R4 P0-3).
+                        display_name: self.display_name(&friendship.addressee_id),
                         username: String::new(),
                         avatar_bytes: profile.avatar_bytes.clone(),
                         avatar_decoded: None,
@@ -956,6 +1049,24 @@ impl ChatterClient {
         }
 
         crate::services::search::filter_conversations(query, entries)
+    }
+
+    /// Where a message search hit opens, as the `(conv_type, id)` pair a
+    /// [`Self::quick_switcher_entries`] row for its conversation carries — so
+    /// a message hit and a conversation hit open through one path. A friend
+    /// DM's `conversation_id` is the peer (the DM row's id); Saved Messages
+    /// opens by its sentinel.
+    pub fn search_hit_target(&self, msg: &crate::domain::message::Message) -> (&'static str, String) {
+        use crate::domain::message::ConversationType as CT;
+        let kind = match msg.conversation_type {
+            CT::Channel => "channel",
+            CT::ServerDm => "dm",
+            CT::AnonDm => "anon_dm",
+            CT::AnonGroup => "private_group",
+            CT::SavedMessages => return ("saved_messages", "saved-messages".to_string()),
+            CT::Mesh | CT::MeshDm => "mesh",
+        };
+        (kind, msg.conversation_id.to_string())
     }
 
     /// Enriched mention suggestion — everything the composer autocomplete
@@ -1335,6 +1446,19 @@ pub struct ReplyParentMedia {
     pub waveform: Vec<i32>,
 }
 
+/// A folder row's display extras — see [`ChatterClient::section_row_extras`].
+#[derive(Debug, Clone, Default)]
+pub struct SectionRowExtras {
+    pub last_message: String,
+    pub timestamp: String,
+    /// A friend DM's avatar (raw bytes; the UI decodes).
+    pub avatar_bytes: Option<Vec<u8>>,
+    /// A friend DM's presence word, as the DM row takes it.
+    pub presence_status: String,
+    /// An invite-only channel (sender-key encrypted; its glyph is the lock).
+    pub private_channel: bool,
+}
+
 /// One destination row in the forward picker, shaped by
 /// [`ChatterClient::forward_destinations`].
 ///
@@ -1548,6 +1672,48 @@ mod shield_mode_tests {
         assert_eq!(
             client.resolve_dm_conversation(&stranger.to_string()),
             Some(ActiveConversation::ServerDm { peer_id: stranger })
+        );
+    }
+}
+
+#[cfg(test)]
+mod search_hit_tests {
+    use crate::client::ChatterClient;
+    use crate::domain::ids::{ChannelId, UserId};
+    use crate::domain::message::{ConversationType, Message};
+
+    /// A message hit opens the conversation its row opens: a friend DM by its
+    /// peer (the DM row's id), Saved Messages by its sentinel. A DM hit once
+    /// left the previous chat on screen and a Saved hit opened nothing.
+    #[tokio::test]
+    async fn dm_and_saved_hits_open_their_own_conversation() {
+        static MOCK_KEYRING: std::sync::Once = std::sync::Once::new();
+        MOCK_KEYRING.call_once(|| {
+            keyring::set_default_credential_builder(keyring::mock::default_credential_builder());
+        });
+        let dir = tempfile::tempdir().unwrap();
+        let client = ChatterClient::builder()
+            .server_url("http://localhost:1")
+            .data_dir(dir.path().to_str().unwrap())
+            .build()
+            .expect("build client");
+        let peer = UserId::new();
+        let store = |id: ChannelId, kind: ConversationType, text: &str, n: u64| {
+            let m = Message::new_text(id, kind, Some(peer), text.to_string(), n);
+            client.messages().message_repo.insert(&m).expect("store message");
+        };
+        store(peer.into(), ConversationType::ServerDm, "badge two", 1);
+        store(ChannelId::new(), ConversationType::SavedMessages, "badge note", 2);
+
+        let mut targets: Vec<_> = client
+            .search_messages_visible("badge", 10)
+            .iter()
+            .map(|m| client.search_hit_target(m))
+            .collect();
+        targets.sort();
+        assert_eq!(
+            targets,
+            vec![("dm", peer.to_string()), ("saved_messages", "saved-messages".to_string())]
         );
     }
 }

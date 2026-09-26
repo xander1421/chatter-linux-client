@@ -541,6 +541,7 @@ impl MessageGateway {
                     | Some(content::Content::Receipt(_))
                     | Some(content::Content::DeleteForMeSync(_))
                     | Some(content::Content::ReadSync(_))
+                    | Some(content::Content::ProfileKeySync(_))
                     | Some(content::Content::SavedMessageSync(_))
                     | Some(content::Content::CallKey(_))
                     | Some(content::Content::CallHangup(_))

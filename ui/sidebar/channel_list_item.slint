@@ -119,19 +119,15 @@ export component ChannelListItem inherits Rectangle {
                 }
             }
 
-            // Private channels render as a purple dot instead of an icon —
-            // visual encryption marker without taking up icon space.
-            if !root.has-avatar && root.channel-type == "private": Rectangle {
-                width: 8px;
-                height: 8px;
-                border-radius: 4px;
-                background: Colors.primary;
-                x: (parent.width - self.width) / 2;
-                y: (parent.height - self.height) / 2;
-            }
-
-            if !root.has-avatar && root.channel-type != "private": Image {
-                source: root.channel-type == "public" ? Icons.hash : Icons.users;
+            // Type glyph. A private (invite-only) channel is sender-key
+            // encrypted — core refuses to send it in cleartext
+            // (message/core.rs, F14a) — so its glyph is the lock; a public
+            // channel is plaintext by design and gets '#'. It used to be an
+            // 8px dot, which read as presence/unread, plus a second green
+            // lock at the row's far right.
+            if !root.has-avatar: Image {
+                source: root.channel-type == "public" ? Icons.hash
+                      : root.channel-type == "private" ? Icons.lock : Icons.users;
                 width: root.glyph-size;
                 height: root.glyph-size;
                 x: (parent.width - self.width) / 2;
@@ -256,18 +252,6 @@ export component ChannelListItem inherits Rectangle {
             }
         }
 
-        // Invite-only indicator on the far-right — green lock marks a
-        // private (gated) channel. Placed after the unread badge so it's
-        // visible regardless of unread state.
-        if root.channel-type == "private": VerticalLayout {
-            alignment: center;
-            Image {
-                source: Icons.lock;
-                width: 12px;
-                height: 12px;
-                colorize: Colors.success;
-            }
-        }
     }
 
     // Collapsed content layout — one rail slot, self-contained tooltip
@@ -312,18 +296,10 @@ export component ChannelListItem inherits Rectangle {
                 }
             }
 
-            // Collapsed view: private → purple dot, others → type icon.
-            if !root.has-avatar && root.channel-type == "private": Rectangle {
-                width: 12px;
-                height: 12px;
-                border-radius: 6px;
-                background: root.selected ? Colors.text-primary : Colors.primary;
-                x: (parent.width - self.width) / 2;
-                y: (parent.height - self.height) / 2;
-            }
-
-            if !root.has-avatar && root.channel-type != "private": Image {
-                source: root.channel-type == "public" ? Icons.hash : Icons.users;
+            // Collapsed view: the same type glyph as the expanded row.
+            if !root.has-avatar: Image {
+                source: root.channel-type == "public" ? Icons.hash
+                      : root.channel-type == "private" ? Icons.lock : Icons.users;
                 width: root.slot-glyph;
                 height: root.slot-glyph;
                 x: (parent.width - self.width) / 2;
@@ -336,8 +312,8 @@ export component ChannelListItem inherits Rectangle {
             if root.unread-count > 0: Rectangle {
                 x: parent.width - self.width + 4px;
                 y: -4px;
-                width: max(16px, collapsed-badge-text.preferred-width + 10px);
-                height: 16px;
+                width: max(self.height, collapsed-badge-text.preferred-width + 10px);
+                height: Spacing.badge-sm;
                 border-radius: Spacing.radius-full;
                 border-width: 2px;
                 border-color: Colors.surface;

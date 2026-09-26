@@ -60,6 +60,10 @@ dependencies {
     implementation("androidx.camera:camera-core:1.4.1")
     implementation("androidx.camera:camera-camera2:1.4.1")
     implementation("androidx.camera:camera-lifecycle:1.4.1")
+    // In-app QR scanner (QrScanner.kt): the preview view, and ZXing core to
+    // decode — Apache-2.0, pure Java, no Google Play services.
+    implementation("androidx.camera:camera-view:1.4.1")
+    implementation("com.google.zxing:core:3.5.3")
     // LiveKit webrtc Java classes (livekit.org.webrtc / jni_zero). Sourced
     // in-place from the webrtc-sys download under target/ (version-locked to the
     // native side compiled into libchatter_ui.so), so the jar always matches the

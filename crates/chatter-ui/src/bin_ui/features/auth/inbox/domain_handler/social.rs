@@ -36,12 +36,15 @@ pub(super) async fn handle_friend_requests_updated(
         avatar: Option<(u32, u32, Vec<u8>)>,
         note: String,
     }
-    // Core's `User <id8>` placeholder — never the server display_name, which
-    // is ciphertext without the peer's profile key.
-    let placeholder = |id: &str| {
-        id.parse::<UserId>().map(|u| ui_ctx.fallback_display_name(&u)).unwrap_or_default()
+    // Core resolves the name — never the server display_name, which is
+    // ciphertext without the peer's profile key.
+    let peer_name = |r: &chatter_core::inbox::events::FriendRequestInfo| {
+        r.user_id
+            .parse::<UserId>()
+            .map(|u| ui_ctx.friend_request_peer_name(&u, &r.username))
+            .unwrap_or_default()
     };
-    let sent_names: Vec<String> = sent.iter().map(|r| placeholder(&r.user_id)).collect();
+    let sent_names: Vec<String> = sent.iter().map(peer_name).collect();
     let mut prepped: Vec<Prepped> = Vec::with_capacity(received.len());
     for r in &received {
         let p = match r.user_id.parse::<UserId>() {
@@ -52,13 +55,13 @@ pub(super) async fn handle_friend_requests_updated(
                 Prepped {
                     display_name: profile
                         .display_name
-                        .unwrap_or_else(|| ui_ctx.fallback_display_name(&sender_id)),
+                        .unwrap_or_else(|| ui_ctx.friend_request_peer_name(&sender_id, &r.username)),
                     avatar: profile.avatar_bytes.as_deref().and_then(decode_avatar_rgba),
                     note: profile.note.unwrap_or_default(),
                 }
             }
             Err(_) => Prepped {
-                display_name: placeholder(&r.user_id),
+                display_name: peer_name(r),
                 avatar: None,
                 note: String::new(),
             },
@@ -98,9 +101,7 @@ pub(super) async fn handle_friend_requests_updated(
                 .into_iter()
                 .zip(sent_names)
                 .map(|(r, display_name)| {
-                    // We don't hold the recipient's profile key, so their
-                    // server display_name is ciphertext — show a stable
-                    // fallback rather than garbage.
+                    // Name resolved by core (`friend_request_peer_name`).
                     crate::FriendRequestData {
                         user_id: r.user_id.into(),
                         display_name: display_name.into(),

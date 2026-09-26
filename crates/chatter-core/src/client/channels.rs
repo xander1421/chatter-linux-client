@@ -233,6 +233,16 @@ impl ChatterClient {
         self.channels().unban_user(channel_id, user_id).await
     }
 
+    /// Make `new_owner` the channel's owner; we become an admin and may then
+    /// leave. Only the owner may (the server checks it too).
+    pub async fn transfer_channel_ownership(
+        &self,
+        channel_id: &crate::domain::ids::ChannelId,
+        new_owner: &crate::domain::ids::UserId,
+    ) -> Result<(), crate::services::channel::ChannelError> {
+        self.channels().transfer_ownership(channel_id, new_owner).await
+    }
+
     /// Mute a member for `duration`, or until unmuted when `None`.
     /// Server-enforced: their sends are refused until it is lifted or lapses.
     pub async fn mute_user(
@@ -263,9 +273,25 @@ impl ChatterClient {
         let Some(me) = self.session_current_user_id() else { return String::new() };
         let members = self.list_channel_members_local(channel_id);
         let own = members.iter().find(|m| m.user_id == me);
-        crate::domain::channel::SendBlock::for_viewer(own, !members.is_empty())
+        crate::domain::channel::SendBlock::for_viewer(own, !members.is_empty(), self.former_channel_state(channel_id))
             .map(|b| b.notice())
             .unwrap_or_default()
+    }
+
+    /// `Some(deleted)` for a channel we are no longer in (left, removed,
+    /// banned, deleted), which stays listed read-only; `None` otherwise.
+    fn former_channel_state(&self, channel_id: &crate::domain::ids::ChannelId) -> Option<bool> {
+        self.channels().channel_repo.former_state(channel_id).ok().flatten()
+    }
+
+    /// A channel we are no longer in, listed read-only: its row offers
+    /// "Delete chat" (a live channel is left, not deleted — a membership
+    /// outlives a local delete, the next sync brings it back) and it is no
+    /// forward destination.
+    pub fn is_former_channel(&self, channel_id: &crate::domain::ids::ChannelId) -> bool {
+        let Some(me) = self.session_current_user_id() else { return false };
+        self.former_channel_state(channel_id).is_some()
+            && self.channels().channel_repo.get_membership(channel_id, &me).ok().flatten().is_none()
     }
 
     /// Whether to offer "Leave channel": we are still a member and not the
@@ -277,8 +303,10 @@ impl ChatterClient {
         };
         let members = self.list_channel_members_local(channel_id);
         let own = members.iter().find(|m| m.user_id == me);
-        let still_member = crate::domain::channel::SendBlock::for_viewer(own, !members.is_empty())
-            != Some(crate::domain::channel::SendBlock::Removed);
+        let still_member = !matches!(
+            crate::domain::channel::SendBlock::for_viewer(own, !members.is_empty(), self.former_channel_state(channel_id)),
+            Some(crate::domain::channel::SendBlock::Removed | crate::domain::channel::SendBlock::Deleted)
+        );
         channel.can_user_leave(&me, still_member)
     }
 

@@ -169,8 +169,9 @@ impl Channel {
 
     /// Whether `user_id` may leave this channel. Every member but the owner:
     /// the server refuses an owner's leave while others remain
-    /// (`channels.go` Leave, "cannot leave without transferring ownership")
-    /// and there is no transfer RPC, so the owner's way out is Delete.
+    /// (`channels.go` Leave, "cannot leave without transferring ownership"),
+    /// so the owner transfers ownership first (then leaves as an admin) or
+    /// deletes the channel.
     /// `still_member` is false once we left or were removed.
     #[must_use]
     pub fn can_user_leave(&self, user_id: &UserId, still_member: bool) -> bool {
@@ -268,11 +269,13 @@ pub struct MemberWithProfile {
 /// refuses: `ban_user` is owner+admin and `mute_user` owner+admin+moderator
 /// (`internal/utils/authz/schema.zed`), nobody acts on themselves or the
 /// owner, and a non-owner must strictly outrank the target
-/// (`internal/services/channel/service/moderation.go`).
+/// (`internal/services/channel/service/moderation.go`). Only the owner may
+/// hand the channel to another member (`TransferOwnership`, `members.go`).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct MemberModeration {
     pub can_ban: bool,
     pub can_mute: bool,
+    pub can_make_owner: bool,
 }
 
 impl MemberModeration {
@@ -287,6 +290,7 @@ impl MemberModeration {
         Self {
             can_ban: outranks && actor.can_unban(),
             can_mute: outranks && actor.rank() >= MemberRole::Moderator.rank(),
+            can_make_owner: actor == MemberRole::Owner,
         }
     }
 }
@@ -300,18 +304,22 @@ pub enum SendBlock {
     Muted { until: Option<DateTime<Utc>> },
     /// We left, or were kicked or banned (our membership is gone).
     Removed,
+    /// The channel was deleted.
+    Deleted,
 }
 
 impl SendBlock {
     /// `own` is our stored membership; `roster_known` whether any membership
     /// is stored for the channel at all, so an unsynced roster never reads as
-    /// "removed".
+    /// "removed"; `former` the channel's former-channel state (`Some(deleted)`
+    /// once we are out of it, see `ChannelRepository::mark_former`).
     #[must_use]
-    pub fn for_viewer(own: Option<&Membership>, roster_known: bool) -> Option<Self> {
+    pub fn for_viewer(own: Option<&Membership>, roster_known: bool, former: Option<bool>) -> Option<Self> {
         match own {
             Some(m) if m.is_muted => Some(Self::Muted { until: m.muted_until }),
             Some(_) => None,
-            None if roster_known => Some(Self::Removed),
+            None if former == Some(true) => Some(Self::Deleted),
+            None if roster_known || former.is_some() => Some(Self::Removed),
             None => None,
         }
     }
@@ -345,6 +353,7 @@ impl SendBlock {
             }
             // Signal's wording, true whether we left or were removed.
             Self::Removed => "You're no longer a member of this channel".to_string(),
+            Self::Deleted => "This channel was deleted".to_string(),
         }
     }
 }
@@ -485,12 +494,18 @@ mod send_block_tests {
             muted_until: None,
             notification_preference: NotificationPreference::All,
         };
-        assert_eq!(SendBlock::for_viewer(Some(&me), true), None);
+        assert_eq!(SendBlock::for_viewer(Some(&me), true, None), None);
         me.is_muted = true;
-        assert_eq!(SendBlock::for_viewer(Some(&me), true), Some(SendBlock::Muted { until: None }));
-        assert_eq!(SendBlock::for_viewer(None, true), Some(SendBlock::Removed));
+        assert_eq!(SendBlock::for_viewer(Some(&me), true, None), Some(SendBlock::Muted { until: None }));
+        assert_eq!(SendBlock::for_viewer(None, true, None), Some(SendBlock::Removed));
         // Roster never synced: not evidence of removal.
-        assert_eq!(SendBlock::for_viewer(None, false), None);
+        assert_eq!(SendBlock::for_viewer(None, false, None), None);
+        // A former channel is read-only even with no roster stored; a rejoin
+        // (our membership back) lifts it.
+        assert_eq!(SendBlock::for_viewer(None, false, Some(false)), Some(SendBlock::Removed));
+        assert_eq!(SendBlock::for_viewer(None, true, Some(true)), Some(SendBlock::Deleted));
+        me.is_muted = false;
+        assert_eq!(SendBlock::for_viewer(Some(&me), true, Some(true)), None);
     }
 
     #[test]
@@ -525,14 +540,16 @@ mod moderation_tests {
     fn moderation_mirrors_server_role_rules() {
         let m = |actor, is_self, target| MemberModeration::for_target(actor, is_self, target);
         // Owner acts on anyone but themselves; nobody acts on the owner.
-        assert_eq!(m(Some(Owner), false, Admin), MemberModeration { can_ban: true, can_mute: true });
+        assert_eq!(m(Some(Owner), false, Admin), MemberModeration { can_ban: true, can_mute: true, can_make_owner: true });
+        assert_eq!(m(Some(Owner), false, Member), MemberModeration { can_ban: true, can_mute: true, can_make_owner: true });
         assert_eq!(m(Some(Owner), true, Owner), MemberModeration::default());
         assert_eq!(m(Some(Admin), false, Owner), MemberModeration::default());
         // Admin outranks moderator/member; peers do not act on each other.
-        assert_eq!(m(Some(Admin), false, Moderator), MemberModeration { can_ban: true, can_mute: true });
+        // Only the owner hands over ownership: an admin who may ban may not.
+        assert_eq!(m(Some(Admin), false, Moderator), MemberModeration { can_ban: true, can_mute: true, can_make_owner: false });
         assert_eq!(m(Some(Admin), false, Admin), MemberModeration::default());
         // Moderator may mute a member but never ban.
-        assert_eq!(m(Some(Moderator), false, Member), MemberModeration { can_ban: false, can_mute: true });
+        assert_eq!(m(Some(Moderator), false, Member), MemberModeration { can_ban: false, can_mute: true, can_make_owner: false });
         assert_eq!(m(Some(Moderator), false, Moderator), MemberModeration::default());
         // Members and non-members get nothing.
         assert_eq!(m(Some(Member), false, Member), MemberModeration::default());

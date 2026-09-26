@@ -28,6 +28,7 @@ export component MessageList inherits Rectangle {
     /// so this component never has to know what a geohash cell is.
     in property <string> privacy-line: "Messages are end-to-end encrypted";
     in property <bool> is-dm: false;  // When true, messages show minimal UI (no avatars/names in DMs)
+    in property <bool> can-thread: true;
     in-out property <length> scroll-position: 0;
     in property <int> scroll-to-index: -1;  // Set to message index to scroll to it
     in property <string> highlighted-message-id: "";  // Message id to briefly flash (quote jump)
@@ -298,9 +299,17 @@ export component MessageList inherits Rectangle {
 
             // The view itself shrinking (soft keyboard opening) must keep the
             // newest message in sight too, not just content growing.
+            // Without animation: Android 16 animates the IME inset over many
+            // frames, and a 300ms glide lagging behind each step reported an
+            // intermediate y as "not at bottom" — the next step then stopped
+            // re-pinning, the last messages slid under the keyboard and the
+            // scroll-to-bottom button appeared over them. Android 10 resizes in
+            // one step, which is why only the S25 showed it.
             changed height => {
                 if (root.is-at-bottom) {
+                    root.jump-without-animation = true;
                     self.viewport-y = min(0px, self.height - self.viewport-height);
+                    root.jump-without-animation = false;
                 }
             }
 
@@ -355,7 +364,7 @@ export component MessageList inherits Rectangle {
             // Extra bottom clearance so the scroll-to-bottom FAB (44px, docked
             // bottom-right) never covers the last message's corner.
             padding-bottom: Spacing.md + 48px;
-            spacing: 2px;
+            spacing: Spacing.message-gap;
 
             // Load more trigger at top (for infinite scroll)
             Rectangle {
@@ -422,8 +431,11 @@ export component MessageList inherits Rectangle {
                     }
                 }
 
-                // Date separator bar
-                if item.show-date-separator: HorizontalLayout {
+                // Date separator: wherever core's day label changes from the
+                // row above. Derived here from the neighbour rather than stored
+                // per row, so no insert/prepend/delete path can leave it stale.
+                if item.date-separator-text != ""
+                    && (idx == 0 || root.messages[idx - 1].date-separator-text != item.date-separator-text): HorizontalLayout {
                     width: 100%;
                     height: 32px;
                     spacing: Spacing.md;
@@ -472,6 +484,7 @@ export component MessageList inherits Rectangle {
                 is-system: item.is-system;
                 is-ai: item.is-ai;
                 is-dm: root.is-dm;
+                can-thread: root.can-thread;
                 is-mesh: root.is-mesh;
                 is-call: item.is-call;
                 call-type: item.call-type;

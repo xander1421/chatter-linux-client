@@ -100,6 +100,7 @@ export component InviteMemberModal inherits Rectangle {
                                 // Avatar
                                 Avatar {
                                     size: 36px;
+                                    y: (parent.height - self.height) / 2;
                                     source: user.has-avatar ? user.avatar-source : @image-url("");
                                     name: user.display-name;
                                 }
@@ -130,6 +131,7 @@ export component InviteMemberModal inherits Rectangle {
                                 if unavailable: Rectangle {
                                     width: member-text.width + Spacing.sm * 2;
                                     height: 20px;
+                                    y: (parent.height - self.height) / 2;
                                     background: Colors.text-muted.with-alpha(0.2);
                                     border-radius: Spacing.radius-sm;
 
@@ -147,6 +149,7 @@ export component InviteMemberModal inherits Rectangle {
                                 if !unavailable: Rectangle {
                                     width: 20px;
                                     height: 20px;
+                                    y: (parent.height - self.height) / 2;
                                     border-radius: Spacing.radius-sm;
                                     border-width: user.selected ? 0 : 2px;
                                     border-color: Colors.text-muted;

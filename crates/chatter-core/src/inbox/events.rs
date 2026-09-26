@@ -255,6 +255,12 @@ pub enum InboxEvent {
         sender_id: UserId,
         sync: crate::proto::content_v1::ReadSync,
     },
+    /// Our profile key and its visibility from another of our devices
+    /// (`ProfileKeySync`). Only our own user may send one.
+    ProfileKeySync {
+        sender_id: UserId,
+        sync: crate::proto::content_v1::ProfileKeySync,
+    },
     /// Delete-for-me from another of our devices (DM or channel).
     /// `sender_id` is the sealed sender: only our own user may send one.
     ChannelDeleteForMe {
@@ -559,8 +565,6 @@ pub enum InboxEvent {
         responder_mailbox_pk: Vec<u8>,
         /// Optional profile key for decrypting their profile.
         profile_key: Option<Vec<u8>>,
-        /// Responder's display name (plaintext, revealed upon acceptance).
-        responder_display_name: Option<String>,
         /// Encrypted display name (AES-256-GCM with profile_key).
         encrypted_display_name: Option<Vec<u8>>,
         /// Encrypted avatar (AES-256-GCM with profile_key).

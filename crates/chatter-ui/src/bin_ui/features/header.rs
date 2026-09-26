@@ -274,13 +274,14 @@ fn wire_chat_settings_clicked(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) 
                                 muted: false,
                                 can_ban: false,
                                 can_mute: false,
+                                can_make_owner: false,
                             })
                             .collect();
                         w.set_channel_settings_members(ModelRc::new(VecModel::from(rows)));
                         // Clear a previous channel's ban list.
                         w.set_channel_settings_can_view_bans(false);
                         w.set_channel_settings_banned_members(ModelRc::default());
-                        w.set_active_modal("channel-settings".into());
+                        crate::bin_ui::features::back::push(&w, "channel-settings");
                         tracing::debug!(
                             "Opened settings for private group {} with {} members",
                             group_id,
@@ -308,6 +309,7 @@ fn wire_chat_settings_clicked(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) 
                     super::modals::open_user_profile(
                         &w, &peer_id, &auth_state, &user_state, Some(&ui_ctx),
                     );
+                    crate::bin_ui::features::back::push(&w, "user-profile");
                 }
             });
             return;
@@ -345,7 +347,7 @@ fn wire_invite_member(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                 let _ = slint::invoke_from_event_loop(move || {
                     if let Some(w) = weak.upgrade() {
                         w.set_invite_private_group_id(group_id.to_string().into());
-                        w.set_active_modal("invite-private-group".into());
+                        crate::bin_ui::features::back::push(&w, "invite-private-group");
                     }
                 });
             }

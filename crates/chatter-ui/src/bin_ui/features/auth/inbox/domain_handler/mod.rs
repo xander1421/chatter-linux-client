@@ -599,37 +599,15 @@ pub async fn handle_domain_event(
         // Core has already written the authoritative local state for each of
         // these; the UI's job is to stop showing what is no longer true.
 
-        DomainEvent::ChannelDeleted { channel_id } => {
-            // If the deleted channel is the one on screen, leave it before the
-            // sidebar rebuild removes the row underneath the view.
-            if ui_ctx.chat_state().get().active_channel_id == Some(channel_id) {
-                ui_ctx
-                    .chat_state()
-                    .set_active_conversation(chatter_core::state::ActiveConversation::None);
-                let weak = window.clone();
-                let _ = slint::invoke_from_event_loop(move || {
-                    if let Some(w) = weak.upgrade() {
-                        w.set_toast_message("This channel was deleted.".into());
-                        w.set_toast_variant("error".into());
-                        w.set_toast_visible(true);
-                    }
-                });
-            }
-            crate::bin_ui::features::auth::load_initial_data(window.clone(), ui_ctx).await;
-        }
-
         DomainEvent::ChannelCreated { .. } | DomainEvent::ChannelArchivedChanged { .. } => {
             crate::bin_ui::features::auth::load_initial_data(window.clone(), ui_ctx).await;
         }
 
         DomainEvent::ChannelModerationAction { channel_id, action, reason, is_self, .. } => {
             if is_self {
+                // An open chat stays open: it is read-only now, its composer
+                // replaced by the notice (ChannelMemberLeft refreshes both).
                 let removed = matches!(action.as_str(), "KICK" | "BAN");
-                if removed && ui_ctx.chat_state().get().active_channel_id == Some(channel_id) {
-                    ui_ctx
-                        .chat_state()
-                        .set_active_conversation(chatter_core::state::ActiveConversation::None);
-                }
                 let text = match (action.as_str(), reason.as_deref()) {
                     ("BAN", Some(r)) => format!("You were banned from this channel: {r}"),
                     ("BAN", None) => "You were banned from this channel.".to_string(),

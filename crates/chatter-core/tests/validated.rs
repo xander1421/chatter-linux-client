@@ -2707,7 +2707,7 @@ async fn v9_linked_device_receives_and_decrypts_dm() {
 //
 // That is not a hypothetical distinction. The client-side fan-out
 // (`deposit_sealed_to_all_devices`, server_dm.rs:322) loops over whatever
-// `encrypt_message_all_devices_with_uak` returns, which in turn loops over the
+// `encrypt_message_all_devices_with_access_policy` returns, which in turn loops over the
 // server's wildcard bundle list. Every one of those loops is a place where a
 // device can be dropped, and a 2-device test passes for any bug that drops
 // everything past the second entry.
@@ -6539,7 +6539,6 @@ async fn v24_anon_dm_forged_identity_key_is_rejected_via_key_transparency() {
                 signature: kyber_sig.to_vec(),
                 timestamp: 0,
             }),
-            unidentified_access_key: None,
             unrestricted_unidentified_access: None,
         };
 
@@ -10173,8 +10172,8 @@ async fn v48_username_link_resolves_privately_end_to_end() {
         "SERVER LEARNED THE USERNAME: user_username_links row contains it in cleartext"
     );
 
-    // THE FIX: B resolves A's URL end-to-end — fetch blob, decrypt with the
-    // fragment entropy, hashed-lookup to the account.
+    // THE FIX: B resolves A's URL end-to-end — fetch blob + owner id,
+    // decrypt with the fragment entropy.
     let (resolved_username, resolved_id) = client_b
         .resolve_username_link(&url)
         .await
@@ -10184,9 +10183,8 @@ async fn v48_username_link_resolves_privately_end_to_end() {
         "B decrypted a DIFFERENT username than A encrypted"
     );
     assert_eq!(
-        resolved_id,
-        Some(uid_a),
-        "resolved username did not discover A's account id"
+        resolved_id, uid_a,
+        "resolved link did not name A's account id"
     );
     println!("  the fix: B resolved the link to @{resolved_username} = {uid_a}");
 
@@ -10220,7 +10218,7 @@ async fn v48_username_link_resolves_privately_end_to_end() {
         .resolve_username_link(&url2)
         .await
         .expect("rotated link must resolve");
-    assert_eq!((u2, id2), (full_username.clone(), Some(uid_a)));
+    assert_eq!((u2, id2), (full_username.clone(), uid_a));
     let n_rows = psql(&format!(
         "SELECT COUNT(*) FROM user_username_links WHERE user_id = '{uid_a}'"
     ));
@@ -11193,4 +11191,66 @@ async fn v55_accepting_an_invite_is_enough_to_get_the_channel() {
 
     client_a.shutdown().await;
     client_b.shutdown().await;
+}
+
+// ============================================================================
+// V56 — a LINKED device can restrict profile visibility with the PIN.
+//
+// A linked device has no local PIN fingerprint, so it proves the PIN against
+// the SVR backup itself before rewriting it. Asserted against the server row:
+//   1. wrong PIN on the linked device -> error, backup row byte-identical;
+//   2. right PIN -> backup rewritten (version +1), fingerprint now stored here;
+//   3. the PRIMARY's version counter is now stale (it last wrote version 1):
+//      its next restriction conflicts, re-reads the version, and succeeds.
+// SABOTAGE: drop the conflict retry in `backup_with_profile_key` -> step 3
+// fails "precondition failed"; skip the SVR check -> step 1 rewrites the row.
+// ============================================================================
+#[tokio::test]
+async fn v56_linked_device_restricts_profile_visibility_with_pin() {
+    use chatter_core::services::profile_visibility::ProfileVisibility;
+    skip_if_no_server!();
+    no_keyring_prompts();
+
+    let dir_p = tempfile::tempdir().unwrap();
+    let client_p = build_client(dir_p.path());
+    let uid = register_and_start(&client_p, &unique_user("v56p"), "V56 Primary").await;
+    let dir_s = tempfile::tempdir().unwrap();
+    let client_s = build_client(dir_s.path());
+    link_secondary_device(&client_p, &client_s, uid).await;
+    start_linked(&client_s, "V56 linked").await;
+
+    let row = || psql(&format!("select version || '|' || md5(encrypted_backup) from svr_backups where user_id = '{uid}'"));
+    let before = row();
+    assert!(before.starts_with("1|"), "POSITIVE CONTROL FAILED: registration left no v1 backup: {before:?}");
+    // True only against a stored fingerprint (`LinkDeviceService::verify_pin`).
+    let local_pin_ok = |c: &Arc<ChatterClient>| c.verify_pin_for_anon_mode(PIN);
+    assert!(!local_pin_ok(&client_s), "POSITIVE CONTROL FAILED: the linked device already has a fingerprint");
+
+    // 1. wrong PIN: refused, nothing written.
+    let err = client_s
+        .set_profile_visibility(ProfileVisibility::Contacts, Some("Wr0ngPin!zz"))
+        .await
+        .expect_err("a wrong PIN must be refused");
+    println!("  wrong PIN -> {err}");
+    assert_eq!(row(), before, "a wrong PIN rewrote the backup");
+    assert!(!local_pin_ok(&client_s), "a wrong PIN stored a fingerprint");
+
+    // 2. right PIN: rotation goes through from the linked device.
+    client_s
+        .set_profile_visibility(ProfileVisibility::Contacts, Some(PIN))
+        .await
+        .expect("the right PIN must let the linked device restrict");
+    let after = row();
+    assert!(after.starts_with("2|") && after != before, "backup not rewritten: {after:?}");
+    assert!(local_pin_ok(&client_s), "the verified PIN's fingerprint was not stored");
+
+    // 3. the primary's counter says 1; the server says 2.
+    client_p
+        .set_profile_visibility(ProfileVisibility::Nobody, Some(PIN))
+        .await
+        .expect("a stale version counter must be recovered, not fail the rotation");
+    assert!(row().starts_with("3|"), "primary's rotation did not land as version 3: {}", row());
+
+    client_s.shutdown().await;
+    client_p.shutdown().await;
 }

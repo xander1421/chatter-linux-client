@@ -2,14 +2,15 @@
 //!
 //! Syncs the channel list and membership from the server to local storage.
 
+use std::collections::HashSet;
 use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
 
 use crate::domain::channel::Channel;
-use crate::domain::ids::UserId;
+use crate::domain::ids::{ChannelId, UserId};
 use crate::network::grpc::client_pool::GrpcClientPool;
-use crate::services::channel_event_service::ChannelEventService;
+use crate::services::channel_event_service::{ChannelEventService, MemberRemoval};
 use crate::services::current_user::CurrentUserProvider;
 use crate::services::channel::converters::{proto_to_domain_channel, proto_to_domain_membership};
 use crate::storage::repositories::channel_repo::ChannelRepository;
@@ -116,6 +117,17 @@ impl ChannelSync {
             offset += PAGE_SIZE;
         }
 
+        // A channel we are in locally that the server stopped listing is one
+        // we lost while not looking. Only on a clean listing: a channel that
+        // failed to parse would look lost too.
+        if !had_failure {
+            let listed: HashSet<ChannelId> = all_channels.iter().map(|c| c.id).collect();
+            if let Err(e) = self.reconcile_lost_channels(&listed).await {
+                had_failure = true;
+                tracing::warn!(error = %e, "Failed to reconcile channels we are no longer in");
+            }
+        }
+
         // Sync memberships for each channel so local member queries reflect
         // server state (join/leave/role changes that happened while offline).
         for channel in &all_channels {
@@ -159,6 +171,80 @@ impl ChannelSync {
         Ok((all_channels, result))
     }
 
+    /// Channels we still hold our membership in but the server no longer
+    /// lists for us: we were removed, banned or the channel was deleted while
+    /// the live event could not reach us. Ask the server what it recorded and
+    /// file the notice that event would have; the channel stays listed,
+    /// read-only (Signal keeps an ended group).
+    async fn reconcile_lost_channels(&self, listed: &HashSet<ChannelId>) -> Result<(), SyncError> {
+        use crate::domain::channel::ChannelType;
+        use crate::proto::chat_v1::departure::Reason;
+
+        let Ok(me) = self.settings_repo.current_user_id() else { return Ok(()) };
+        let local = self
+            .channel_repo
+            .list_for_user(&me)
+            .map_err(|e| SyncError::Storage(e.to_string()))?;
+        let lost = local.into_iter().filter(|c| {
+            // DMs and Saved Messages have no removal.
+            matches!(c.channel_type, ChannelType::Public | ChannelType::Private) && !listed.contains(&c.id)
+        });
+        for channel in lost {
+            let Some(own) = self
+                .channel_repo
+                .get_membership(&channel.id, &me)
+                .map_err(|e| SyncError::Storage(e.to_string()))?
+            else {
+                continue;
+            };
+            let departure = self
+                .grpc_pool
+                .channel_client()
+                .get_departure(&channel.id.to_string(), &me.to_string())
+                .await
+                .map_err(|e| SyncError::Network(e.to_string()))?;
+            match Reason::try_from(departure.reason) {
+                // The listing moved under our paging; nothing was lost.
+                Ok(Reason::Member) => {}
+                Ok(Reason::ChannelDeleted) => self.channel_events.record_channel_deleted(&channel.id),
+                reason => {
+                    let by = departure.moderator_id.parse::<uuid::Uuid>().ok().map(UserId::from);
+                    let removal = match (reason, by) {
+                        (Ok(Reason::Banned), Some(by)) => MemberRemoval::Banned(by),
+                        _ => MemberRemoval::Unexplained,
+                    };
+                    tracing::info!(channel_id = %channel.id, ?removal, "No longer in a channel the sync missed the removal of");
+                    self.channel_events.record_synced_departure(&own, removal);
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Why `member` left `channel_id`, as far as the server recorded it: a
+    /// ban we would have heard live, else unexplained (reads as a leave). A
+    /// failed ask is unexplained too; the departure itself is certain.
+    async fn departure_reason(&self, channel_id: &ChannelId, member: &UserId) -> MemberRemoval {
+        use crate::proto::chat_v1::departure::Reason;
+        let departure = self
+            .grpc_pool
+            .channel_client()
+            .get_departure(&channel_id.to_string(), &member.to_string())
+            .await;
+        match departure {
+            Ok(d) if d.reason == Reason::Banned as i32 => d
+                .moderator_id
+                .parse::<uuid::Uuid>()
+                .map(|by| MemberRemoval::Banned(UserId::from(by)))
+                .unwrap_or(MemberRemoval::Unexplained),
+            Ok(_) => MemberRemoval::Unexplained,
+            Err(e) => {
+                tracing::debug!(%channel_id, %member, error = %e, "Departure reason unavailable");
+                MemberRemoval::Unexplained
+            }
+        }
+    }
+
     /// Fetch the server-side member list for a channel and reconcile it with
     /// the local memberships table. Returns (added_or_updated, removed).
     ///
@@ -166,11 +252,9 @@ impl ChannelSync {
     /// same "X left/joined the channel" notice the event would have.
     async fn sync_channel_members(
         &self,
-        channel_id: &crate::domain::ids::ChannelId,
+        channel_id: &ChannelId,
         last_sync: Option<DateTime<Utc>>,
     ) -> Result<(usize, usize), SyncError> {
-        use std::collections::HashSet;
-
         let mut client = self.grpc_pool.channel_client();
         // The one paginated fetch, shared with every other "everyone" caller.
         // This function used to carry its own page loop — correct, but a local
@@ -200,7 +284,8 @@ impl ChannelSync {
                     Ok(()) => {
                         removed += 1;
                         if Some(member.user_id) != me {
-                            self.channel_events.record_synced_departure(member);
+                            let reason = self.departure_reason(channel_id, &member.user_id).await;
+                            self.channel_events.record_synced_departure(member, reason);
                         }
                     }
                     Err(e) => tracing::warn!(

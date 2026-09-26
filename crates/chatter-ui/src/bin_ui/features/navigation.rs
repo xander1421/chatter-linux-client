@@ -35,7 +35,7 @@ fn wire_welcome(window: &MainWindow) {
         if let Some(w) = weak.upgrade() {
             w.set_current_view("main".into());
             w.set_friends_modal_tab("find".into());
-            w.set_active_modal("friends".into());
+            w.set_active_tab("contacts".into());
         }
     });
 
@@ -43,7 +43,7 @@ fn wire_welcome(window: &MainWindow) {
     window.on_welcome_browse_channels(move || {
         if let Some(w) = weak.upgrade() {
             w.set_current_view("main".into());
-            w.set_active_modal("create-channel".into());
+            crate::bin_ui::features::back::push(&w, "create-channel");
         }
     });
 }

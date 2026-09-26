@@ -3,6 +3,7 @@
 // Full-screen lightbox for viewing images within the app.
 
 import { Colors } from "../theme/colors.slint";
+import { Appearance } from "../theme/appearance.slint";
 import { Spacing } from "../theme/spacing.slint";
 import { Typography } from "../theme/typography.slint";
 
@@ -34,7 +35,7 @@ export component ImageViewer inherits Rectangle {
 
         // Header with filename and close button
         HorizontalLayout {
-            height: 48px;
+            height: 48px * Appearance.text-grow;
             padding-left: Spacing.md;
             padding-right: Spacing.md;
             alignment: space-between;

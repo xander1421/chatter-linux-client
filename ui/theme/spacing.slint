@@ -1,5 +1,7 @@
 // Spacing and sizing tokens for Chatter — Neomorphism 2.0
 
+import { Appearance } from "appearance.slint";
+
 export global Spacing {
     // Base spacing
     out property <length> xxs: 2px;
@@ -38,9 +40,16 @@ export global Spacing {
     // were each carrying their own numbers (52px/32px here, 56px/40px there)
     // and read as three different apps stacked together. Anything that lists
     // people reads these, so they cannot drift apart again.
-    out property <length> row-height-touch: 72px;
-    out property <length> row-avatar-touch: 52px;
-    out property <length> bottom-nav-height: 56px;
+    //
+    // Rows that hold text grow with the text size (`text-grow`), and the
+    // list rows tighten under Settings › Appearance › Message spacing: Compact.
+    out property <length> row-height-touch: (Appearance.compact ? 60px : 72px) * Appearance.text-grow;
+    out property <length> row-avatar-touch: Appearance.compact ? 44px : 52px;
+    out property <length> bottom-nav-height: 56px * Appearance.text-grow;
+    // The chat list's compose button (Signal / Telegram FAB) and the plain
+    // one-line list row (menus, Search, Saved Messages).
+    out property <length> fab-size: 56px;
+    out property <length> list-row-height-touch: 56px * Appearance.text-grow;
 
     // The same two roles at mouse density. Desktop was hardcoding them per
     // component — 52px/32px in the DM row, 44px in the channel and private-
@@ -48,14 +57,14 @@ export global Spacing {
     // in two heights depending on what kind of conversation each row was.
     // Same rule as the touch pair: one number per role, read by everything
     // that lists a conversation.
-    out property <length> row-height-desktop: 52px;
+    out property <length> row-height-desktop: (Appearance.compact ? 44px : 52px) * Appearance.text-grow;
     out property <length> row-avatar-desktop: 32px;
 
     // The app's top row: the sidebar's first row and the conversation header
     // are the same row across the seam between the two panes, and on macOS
     // the native traffic lights sit inside it. One number, or the seam shows.
-    out property <length> header-height: 52px;
-    out property <length> header-height-touch: 64px;
+    out property <length> header-height: 52px * Appearance.text-grow;
+    out property <length> header-height-touch: 64px * Appearance.text-grow;
     // Every control in a header/toolbar row — back, close, call, video, pin,
     // kebab — is ONE glyph size in ONE box size, so the row sits on a single
     // vertical centre. Screens were each picking their own (24-in-48 next to
@@ -67,6 +76,19 @@ export global Spacing {
     out property <length> header-glyph-touch: 26px;
     out property <length> header-action-box: 44px;
     out property <length> header-action-box-touch: 48px;
+
+    // Count and label badges (unread, missed calls, member counts, role
+    // tags). They hold Typography.xs/xxs text, so they grow with it; pills
+    // take `self.height / 2` as their radius so the ends stay round.
+    out property <length> badge-sm: 16px * Appearance.text-grow;
+    out property <length> badge-md: 18px * Appearance.text-grow;
+
+    // Message list density (Settings › Appearance › Message spacing). The
+    // vertical padding around a message row — a group's first message and a
+    // same-sender continuation — and the gap between rows.
+    out property <length> message-padding: Appearance.compact ? xxs : xs;
+    out property <length> message-padding-continuation: Appearance.compact ? 0px : xxs;
+    out property <length> message-gap: Appearance.compact ? 0px : 2px;
 
     // Neo 2.0 shadow offsets — 145° light angle
     out property <length> neo-offset-sm: 3px;          // Small elements (toggles, chips)

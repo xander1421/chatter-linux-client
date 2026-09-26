@@ -224,6 +224,14 @@ impl CoreServices {
                         crate::services::notification_service::NotificationDetailLevel::from_str(&level_str),
                     );
                 }
+                svc.set_sound_enabled(
+                    infra
+                        .settings_repo
+                        .get_bool(crate::storage::repositories::settings_repo::keys::NOTIFICATION_SOUND)
+                        .ok()
+                        .flatten()
+                        .unwrap_or(true),
+                );
                 Arc::new(svc)
             },
             section_service: services.section_service.clone(),
@@ -422,31 +430,6 @@ impl CoreServices {
     pub async fn decline_call(&self, call_id: &str) -> Result<(), crate::error::NetworkError> {
         let mut call_client = self.grpc_pool.call_client();
         call_client.leave_call(call_id).await
-    }
-
-    /// Refresh prekeys and return the new available count.
-    ///
-    /// Generates and uploads new one-time prekeys, then queries for the updated count.
-    /// Returns the number of prekeys now available on the server.
-    pub async fn refresh_prekeys(&self, count: u32) -> Result<u32, crate::error::ServiceError> {
-        let mut auth_client = self.grpc_pool.auth_client();
-
-        let uploaded = self.signal_service.refresh_prekeys(&mut auth_client, count).await?;
-        tracing::info!("Uploaded {} new prekeys", uploaded);
-
-        // Get updated count from server
-        match auth_client.get_pre_key_stats(0).await {
-            Ok(stats) => {
-                let count = stats.available_count as u32;
-                tracing::info!("Now have {} prekeys available on server", count);
-                Ok(count)
-            }
-            Err(e) => {
-                tracing::warn!("Failed to get prekey stats after refresh: {}", e);
-                // Return an estimate based on what we uploaded
-                Ok(uploaded)
-            }
-        }
     }
 
     /// Spawn the prekey replenishment background task.

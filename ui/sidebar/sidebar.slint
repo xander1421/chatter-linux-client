@@ -10,6 +10,7 @@
 // inset (search, selected items) and glass (bottom bar) surfaces.
 
 import { Colors } from "../theme/colors.slint";
+import { Appearance } from "../theme/appearance.slint";
 import { Spacing } from "../theme/spacing.slint";
 import { Icons } from "../theme/icons.slint";
 import { Typography } from "../theme/typography.slint";
@@ -33,6 +34,12 @@ export component Sidebar inherits Rectangle {
     in property <[DMListItemData]> dm-conversations: [];
     in property <[PrivateGroupListItemData]> private-groups: [];
     in property <[CustomSectionData]> custom-sections: [];
+    // One empty-state rule for the whole chat list: a list's "nothing here"
+    // shows only when there is nothing anywhere. Scoped per list, "No
+    // conversations" sat directly above a channel (and "No channels yet"
+    // under a DM) and read as global.
+    property <bool> chat-list-empty: root.dm-conversations.length == 0 && root.channels.length == 0
+        && root.private-groups.length == 0 && root.custom-sections.length == 0;
 
     // ── Properties: User profile ──
     in property <string> user-display-name: "User";
@@ -44,7 +51,7 @@ export component Sidebar inherits Rectangle {
     in-out property <bool> collapsed: false;
     in-out property <bool> hidden: false;
     // Compact (phone-width) layout: the panel IS the screen and the bottom tab
-    // bar carries Friends, Profile and Settings. Not "is a phone": a tablet
+    // bar carries Contacts, Calls and Profile. Not "is a phone": a tablet
     // shows this panel beside the chat, with its own footer, like desktop.
     in property <bool> mobile-mode: false;
     // Touch input: sizes the targets. Independent of `mobile-mode`, so a
@@ -90,6 +97,9 @@ export component Sidebar inherits Rectangle {
     callback settings-clicked();
     callback anon-mode-clicked();
     callback create-section-clicked();
+    // The two-pane '+' in the header row: opens New Chat / New Channel /
+    // New Section. On a phone the Chats tab's floating button does (app.slint).
+    callback create-clicked();
     callback section-toggle-expanded(/* section-id */ string);
     callback section-conversation-selected(/* conversation-id */ string, /* conversation-type */ ConversationKind);
     callback delete-section-clicked(/* section-id */ string);
@@ -117,14 +127,16 @@ export component Sidebar inherits Rectangle {
     // a hole punched between them, which is the "huge space from Search to
     // Saved" complaint. 56px is the standard list row: same type, same tap
     // target, no cavern.
-    property <length> quick-link-height: root.touch ? 56px : 34px;
+    property <length> quick-link-height: (root.touch ? 56px : 34px) * Appearance.text-grow;
     // The panel's first row, pinned above the scroll. On desktop it takes the
     // shared header height so it and the conversation header beside it read as
     // one row across the seam — and on macOS that is the row the traffic
-    // lights are in. Mobile keeps the conversation-row geometry: there the
-    // panel IS the screen, so its first row belongs to the list.
+    // lights are in. Mobile takes the quick-link height: there the panel IS
+    // the screen, and Search and Saved Messages read as two rows of one list
+    // (Signal: search bar, then Note to Self). At the conversation-row height
+    // plus the scroll's top padding they sat ~80dp apart (owner, 2026-09-26).
     // A two-pane tablet sits beside a touch-height conversation header.
-    property <length> top-row-height: root.mobile-mode ? Spacing.row-height-touch
+    property <length> top-row-height: root.mobile-mode ? root.quick-link-height
         : root.touch ? Spacing.header-height-touch : Spacing.header-height;
     property <length> quick-link-text-size: root.touch ? Typography.base : Typography.sm2;
     property <brush> quick-link-text-color: root.touch ? Colors.text-primary : Colors.text-secondary;
@@ -164,6 +176,7 @@ export component Sidebar inherits Rectangle {
     property <bool> ctx-menu-can-pin: true;
     // Channel rows only, as core decided it for the row.
     property <bool> ctx-menu-can-leave: false;
+    property <bool> ctx-menu-can-delete-channel: false;
 
     // Section header context menu state
     property <bool> section-header-ctx-menu-show: false;
@@ -235,6 +248,57 @@ export component Sidebar inherits Rectangle {
                 Text { text: "Search"; color: root.quick-link-text-color; font-size: root.quick-link-text-size; vertical-alignment: center; }
             }
             search-touch := TouchArea { mouse-cursor: pointer; clicked => { root.search-clicked(); } }
+            // Create — New Chat / New Channel / New Section. Two-pane only; a
+            // phone has the floating button on the Chats tab instead. Left of
+            // the Shield toggle when that is built in.
+            if !root.mobile-mode: Rectangle {
+                width: root.touch ? Spacing.touch-target-min : 24px; height: self.width;
+                x: parent.width - self.width - Spacing.sm
+                    - (AnonMode.onion-built ? self.width + Spacing.xs : 0px);
+                y: (parent.height - self.height) / 2;
+                border-radius: 4px;
+                accessible-role: button;
+                accessible-label: "Create";
+                background: create-touch.has-hover ? Colors.surface-hover : transparent;
+                Image { source: Icons.plus; width: root.quick-link-icon-size; height: root.quick-link-icon-size; x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2;
+                    colorize: Colors.text-secondary; }
+                create-touch := TouchArea { mouse-cursor: pointer; clicked => { root.create-clicked(); } }
+            }
+            // Shield toggle — the chat list's own header control (owner decision
+            // 2026-09-26: Shield is a mode of this list, not a tab). Declared
+            // after `search-touch` so it sits above the row's search target.
+            // Glows when on; the dot is Tor status.
+            //
+            // STUB-1: gated on the `onion` Cargo feature (mirrored into
+            // AnonMode.onion-built from lib.rs). A build without it cannot
+            // put traffic on the onion, so it must not offer a control that
+            // says it will.
+            if AnonMode.onion-built: Rectangle {
+                width: root.touch ? Spacing.touch-target-min : 24px; height: self.width;
+                x: parent.width - self.width - Spacing.sm; y: (parent.height - self.height) / 2;
+                border-radius: 4px;
+                accessible-role: button;
+                accessible-label: AnonMode.enabled ? "Shield on - tap to turn off" : "Shield off - tap to turn on";
+                background: anon-touch.has-hover ? Colors.surface-hover : (AnonMode.enabled ? Colors.primary.with-alpha(0.15) : transparent);
+                Image { source: Icons.shield; width: root.quick-link-icon-size; height: root.quick-link-icon-size; x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2;
+                    colorize: AnonMode.enabled ? Colors.primary : Colors.text-muted; }
+                // Tor status dot: green=connected, amber=CONNECTING ONLY,
+                // red=error, muted=off. State 0 is Off — traffic is going
+                // direct — and it used to fall through to amber, i.e. the
+                // dot claimed "connecting" forever on a build with no Tor
+                // in it. Shield mode only.
+                Rectangle {
+                    visible: AnonMode.enabled;
+                    width: 8px; height: 8px; border-radius: 4px;
+                    x: parent.width - self.width; y: 0;
+                    border-width: 1px; border-color: Colors.surface;
+                    background: TorStatus.state == 2 ? Colors.success
+                        : TorStatus.state >= 3 ? Colors.error
+                        : TorStatus.state == 1 ? Colors.warning
+                        : Colors.text-muted;
+                }
+                anon-touch := TouchArea { mouse-cursor: pointer; clicked => { root.anon-mode-clicked(); } }
+            }
         }
         // Collapsed to the rail, the panel is narrower than the traffic lights
         // are wide, so nothing can share their row — the rail's slots start
@@ -251,8 +315,13 @@ export component Sidebar inherits Rectangle {
             viewport-height: central-layout.preferred-height;
 
             central-layout := VerticalLayout {
-                padding-top: Spacing.sm;
-                padding-bottom: Spacing.md;
+                // No gap under the pinned Search row on a phone: it and Saved
+                // Messages are one list.
+                padding-top: root.mobile-mode ? 0px : Spacing.sm;
+                // On a phone the Chats tab's floating create button sits over
+                // the foot of this list; room for it, so it never covers the
+                // last row.
+                padding-bottom: root.mobile-mode ? Spacing.fab-size + Spacing.md * 2 : Spacing.md;
 
                 // QUICK LINKS (top navigation)
 
@@ -337,9 +406,9 @@ export component Sidebar inherits Rectangle {
                         Text { text: "Calls"; color: root.quick-link-text-color; font-size: root.quick-link-text-size; vertical-alignment: center; horizontal-stretch: 1; }
                         if root.missed-call-count > 0: VerticalLayout { alignment: center; horizontal-stretch: 0;
                             Rectangle {
-                                width: root.missed-call-count > 9 ? 22px : 18px;
-                                height: 18px;
-                                border-radius: 9px;
+                                width: self.height + (root.missed-call-count > 9 ? 4px : 0px);
+                                height: Spacing.badge-md;
+                                border-radius: self.height / 2;
                                 background: Colors.error;
                                 Text {
                                     text: root.missed-call-count > 9 ? "9+" : root.missed-call-count;
@@ -398,9 +467,9 @@ export component Sidebar inherits Rectangle {
                         }
                         Text { text: "Requests"; color: root.quick-link-text-color; font-size: root.quick-link-text-size; vertical-alignment: center; horizontal-stretch: 1; }
                         Rectangle {
-                            width: root.total-pending-requests > 9 ? 22px : 18px;
-                            height: 18px;
-                            border-radius: 9px;
+                            width: self.height + (root.total-pending-requests > 9 ? 4px : 0px);
+                            height: Spacing.badge-md;
+                            border-radius: self.height / 2;
                             background: Colors.error;
                             Text {
                                 text: root.total-pending-requests > 9 ? "9+" : root.total-pending-requests;
@@ -437,10 +506,30 @@ export component Sidebar inherits Rectangle {
                             // count) still happens exactly as before — this
                             // consolidates the SIDEBAR ROW, not the
                             // underlying refresh logic. See navigation.rs.
-                            root.friend-requests-clicked();
-                            root.message-requests-clicked();
-                            root.group-invites-clicked();
-                            root.channel-invites-clicked();
+                            // Each also selects its own sub-tab, so the last
+                            // one fired wins: fire the first kind that has
+                            // something pending (received → private → groups
+                            // → channels) last. Always firing channels last
+                            // opened an empty Channels tab over a pending
+                            // friend request.
+                            if root.pending-friend-requests > 0 {
+                                root.channel-invites-clicked();
+                                root.group-invites-clicked();
+                                root.message-requests-clicked();
+                                root.friend-requests-clicked();
+                            } else if root.pending-message-requests > 0 {
+                                root.channel-invites-clicked();
+                                root.group-invites-clicked();
+                                root.message-requests-clicked();
+                            } else if root.pending-group-invites > 0 {
+                                root.channel-invites-clicked();
+                                root.message-requests-clicked();
+                                root.group-invites-clicked();
+                            } else {
+                                root.message-requests-clicked();
+                                root.group-invites-clicked();
+                                root.channel-invites-clicked();
+                            }
                         }
                     }
                 }
@@ -530,6 +619,7 @@ export component Sidebar inherits Rectangle {
                     collapsed: root.collapsed;
                     mobile-mode: root.touch;
                     show-header: false;
+                    has-sibling-content: !root.chat-list-empty;
                     conversation-selected(id) => { root.dm-selected(id); }
                     add-friend-clicked => { root.friends-clicked(); }
                     dm-context-menu-requested(id, is-anon, pinned, x, y) => {
@@ -537,6 +627,7 @@ export component Sidebar inherits Rectangle {
                         root.ctx-menu-is-pinned = pinned;
                         root.ctx-menu-can-pin = true;
                         root.ctx-menu-can-leave = false;
+                        root.ctx-menu-can-delete-channel = false;
                         // The row's own kind, as core built it — not the
                         // current mode, which a row need not share.
                         root.ctx-menu-conv-type = is-anon ? ConversationKind.anon-dm : ConversationKind.server-dm;
@@ -637,7 +728,7 @@ export component Sidebar inherits Rectangle {
 
                     TooltipArea {
                         height: root.rail-icon-size; width: 44px; x: (parent.width - self.width) / 2;
-                        tooltip-text: "New channel"; tooltip-enabled: true; placement: "right";
+                        tooltip-text: "New Channel"; tooltip-enabled: true; placement: "right";
                         HorizontalLayout { alignment: center; Rectangle {
                             width: root.rail-slot-size; height: root.rail-slot-size; border-radius: root.rail-slot-radius;
                             background: c-new-touch.has-hover ? Colors.surface-hover.brighter(0.6) : root.rail-slot-bg;
@@ -649,7 +740,7 @@ export component Sidebar inherits Rectangle {
 
                     TooltipArea {
                         height: root.rail-icon-size; width: 44px; x: (parent.width - self.width) / 2;
-                        tooltip-text: "New section"; tooltip-enabled: true; placement: "right";
+                        tooltip-text: "New Section"; tooltip-enabled: true; placement: "right";
                         HorizontalLayout { alignment: center; Rectangle {
                             width: root.rail-slot-size; height: root.rail-slot-size; border-radius: root.rail-slot-radius;
                             background: c-sec-touch.has-hover ? Colors.surface-hover.brighter(0.6) : root.rail-slot-bg;
@@ -666,7 +757,7 @@ export component Sidebar inherits Rectangle {
                     collapsed: root.collapsed;
                     mobile-mode: root.touch;
                     show-header: false;
-                    has-sibling-content: root.private-groups.length > 0;
+                    has-sibling-content: !root.chat-list-empty;
                     channel-selected(id) => { root.channel-selected(id); }
                     // FEAT-8: ChannelList emits this from its header search
                     // button AND from the empty-state CTA, which is the FIRST
@@ -675,9 +766,10 @@ export component Sidebar inherits Rectangle {
                     // was missing, so that button did nothing at all. app.slint
                     // turns it into the join tab of CreateChannelModal.
                     join-channel-clicked() => { root.join-channel-clicked(); }
-                    channel-context-menu-requested(id, pinned, can-leave, x, y) => {
+                    channel-context-menu-requested(id, pinned, can-leave, can-delete, x, y) => {
                         root.ctx-menu-conv-id = id;
                         root.ctx-menu-can-leave = can-leave;
+                        root.ctx-menu-can-delete-channel = can-delete;
                         root.ctx-menu-conv-type = ConversationKind.channel;
                         root.ctx-menu-x = x;
                         root.ctx-menu-y = y;
@@ -699,6 +791,7 @@ export component Sidebar inherits Rectangle {
                         root.ctx-menu-is-pinned = false;
                         root.ctx-menu-can-pin = false;
                         root.ctx-menu-can-leave = false;
+                        root.ctx-menu-can-delete-channel = false;
                         // A private group is an anon group in core.
                         root.ctx-menu-conv-type = ConversationKind.anon-group;
                         root.ctx-menu-x = x;
@@ -718,62 +811,20 @@ export component Sidebar inherits Rectangle {
                     collapsed: root.collapsed;
                 }
 
-                // A phone hides the Channels header, and with it the "+" that
-                // opens Create | Join channel — so once any conversation exists
-                // there was no way to make or join a channel. Same ghost row as
-                // "New Section" below.
-                if root.mobile-mode && !AnonMode.enabled: Rectangle {
-                    height: Spacing.touch-target-min;
-                    background: new-ch-touch.has-hover ? Colors.surface-hover : transparent;
-                    border-radius: Spacing.radius-sm;
-                    border-width: 1px;
-                    border-color: new-ch-touch.has-hover ? Colors.border : transparent;
-                    accessible-role: button;
-                    accessible-label: "New Channel";
-
-                    HorizontalLayout {
-                        padding-left: Spacing.sm;
-                        spacing: 6px;
-                        alignment: start;
-                        VerticalLayout {
-                            alignment: center;
-                            horizontal-stretch: 0;
-                            Image {
-                                source: Icons.plus;
-                                width: 16px;
-                                height: 16px;
-                                colorize: new-ch-touch.has-hover ? Colors.primary : Colors.text-muted;
-                            }
-                        }
-                        Text {
-                            text: "New Channel";
-                            color: new-ch-touch.has-hover ? Colors.text-secondary : Colors.text-muted;
-                            font-size: Typography.sm2;
-                            font-weight: 500;
-                            vertical-alignment: center;
-                        }
-                    }
-
-                    new-ch-touch := TouchArea {
-                        mouse-cursor: pointer;
-                        clicked => { root.create-channel-clicked(); }
-                    }
-                }
-
                 // 4b. CUSTOM SECTIONS (user-created, between Messages and Channels)
                 CustomSectionList {
                     vertical-stretch: 0;
                     sections: root.custom-sections;
                     collapsed: root.collapsed;
                     mobile-mode: root.touch;
-                    create-section-clicked => { root.create-section-clicked(); }
                     section-toggle-expanded(id) => { root.section-toggle-expanded(id); }
                     section-conversation-selected(conv-id, conv-type) => { root.section-conversation-selected(conv-id, conv-type); }
                     delete-section-clicked(id) => { root.delete-section-clicked(id); }
                     rename-section-clicked(id) => { root.rename-section-clicked(id); }
-                    section-conversation-context-menu-requested(conv-id, conv-type, section-id, pinned, can-leave, x, y) => {
+                    section-conversation-context-menu-requested(conv-id, conv-type, section-id, pinned, can-leave, can-delete, x, y) => {
                         root.ctx-menu-conv-id = conv-id;
                         root.ctx-menu-can-leave = can-leave;
+                        root.ctx-menu-can-delete-channel = can-delete;
                         root.ctx-menu-conv-type = conv-type;
                         root.ctx-menu-x = x;
                         root.ctx-menu-y = y;
@@ -853,40 +904,9 @@ export component Sidebar inherits Rectangle {
                         Text { text: root.user-display-name; color: Colors.text-secondary; font-size: Typography.xs; font-weight: 600; vertical-alignment: center; overflow: elide; horizontal-stretch: 1; }
                     }
                 }
-                // Keeps the shield on the right edge now that nothing precedes it.
-                if root.mobile-mode: Rectangle { horizontal-stretch: 1; }
-                // Anon mode toggle — shield icon, glows when active.
-                //
-                // STUB-1: gated on the `onion` Cargo feature (mirrored into
-                // AnonMode.onion-built from lib.rs). A build without it cannot
-                // put traffic on the onion, so it must not offer a control that
-                // says it will.
-                if AnonMode.onion-built: VerticalLayout { alignment: center; horizontal-stretch: 0;
-                    Rectangle {
-                        width: root.footer-icon-size; height: root.footer-icon-size; border-radius: 4px;
-                        background: anon-touch.has-hover ? Colors.surface-hover : (AnonMode.enabled ? Colors.primary.with-alpha(0.15) : transparent);
-                        Image { source: Icons.shield; width: 16px; height: 16px; x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2;
-                            colorize: AnonMode.enabled ? Colors.primary : Colors.text-muted; }
-                        // Tor status dot: green=connected, amber=CONNECTING ONLY,
-                        // red=error, muted=off. State 0 is Off — traffic is going
-                        // direct — and it used to fall through to amber, i.e. the
-                        // dot claimed "connecting" forever on a build with no Tor
-                        // in it. Shield mode only.
-                        Rectangle {
-                            visible: AnonMode.enabled;
-                            width: 8px; height: 8px; border-radius: 4px;
-                            x: parent.width - self.width; y: 0;
-                            border-width: 1px; border-color: Colors.surface;
-                            background: TorStatus.state == 2 ? Colors.success
-                                : TorStatus.state >= 3 ? Colors.error
-                                : TorStatus.state == 1 ? Colors.warning
-                                : Colors.text-muted;
-                        }
-                        anon-touch := TouchArea { clicked => { root.anon-mode-clicked(); } }
-                    }
-                }
-                // Settings lives in the bottom tab bar on mobile — this is the
-                // same destination, so keeping both is the duplication again.
+                // The gear opens the account menu (Settings is pushed from
+                // there, app.slint), like the avatar beside it. Not on mobile:
+                // the tab bar's Profile tab is the same menu.
                 if !root.mobile-mode: VerticalLayout { alignment: center; horizontal-stretch: 0;
                     Rectangle {
                         width: root.footer-icon-size; height: root.footer-icon-size; border-radius: 4px;
@@ -1053,6 +1073,7 @@ export component Sidebar inherits Rectangle {
         is-pinned: root.ctx-menu-is-pinned;
         can-pin: root.ctx-menu-can-pin;
         can-leave: root.ctx-menu-can-leave;
+        can-delete-channel: root.ctx-menu-can-delete-channel;
         mobile-mode: root.touch;
         sections: root.custom-sections;
 

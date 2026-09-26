@@ -96,3 +96,26 @@ pub fn set_secure(secure: bool) {
         tracing::error!("Android: setSecure({secure}) failed: {e}");
     }
 }
+
+/// Dark status/nav-bar icons for the light palette, light ones for the dark
+/// (`MainActivity.setLightSystemBars`). The app draws edge-to-edge, so the
+/// icons sit on Slint's own background.
+pub fn set_light_system_bars(light: bool) {
+    let result = (|| -> Result<(), String> {
+        let act = activity()?;
+        let mut env = jni_env()?;
+        let res = env.call_method(
+            act,
+            "setLightSystemBars",
+            "(Z)V",
+            &[jni::objects::JValue::Bool(light.into())],
+        );
+        if res.is_err() {
+            clear_exception(&mut env);
+        }
+        res.map(|_| ()).map_err(|e| e.to_string())
+    })();
+    if let Err(e) = result {
+        tracing::error!("Android: setLightSystemBars({light}) failed: {e}");
+    }
+}

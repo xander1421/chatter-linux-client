@@ -68,7 +68,6 @@ async fn test_register_user_stream() {
             public_key: one_time_prekey_pair.public_key.serialize().to_vec(),
         }),
         kyber_prekey: None,
-        unidentified_access_key: Some(random_uak().to_vec()),
         unrestricted_unidentified_access: Some(false),
     };
 
@@ -194,7 +193,6 @@ async fn test_register_duplicate_username() {
             public_key: one_time_prekey_pair.public_key.serialize().to_vec(),
         }),
         kyber_prekey: None,
-        unidentified_access_key: Some(random_uak().to_vec()),
         unrestricted_unidentified_access: Some(false),
     };
 
@@ -299,7 +297,6 @@ async fn test_login_success() {
                 "test-device-login",
                 &user.public_key,
                 &user.device_auth_token,
-                &random_uak(),
                 Some(user.device_id),
             )
             .await,
@@ -329,7 +326,6 @@ async fn test_login_wrong_password() {
             "test-device",
             &user.public_key,
             &user.device_auth_token,
-            &random_uak(),
             None,
         )
         .await;
@@ -352,7 +348,6 @@ async fn test_login_nonexistent_user() {
             "test-device",
             &random_public_key(),
             &random_device_auth_token(),
-            &random_uak(),
             None,
         )
         .await;
@@ -585,7 +580,6 @@ async fn test_upload_and_get_prekey_bundle() {
             public_key: one_time_prekey_pair.public_key.serialize().to_vec(),
         }),
         kyber_prekey: None,
-        unidentified_access_key: Some(random_uak().to_vec()),
         unrestricted_unidentified_access: Some(false),
     };
 

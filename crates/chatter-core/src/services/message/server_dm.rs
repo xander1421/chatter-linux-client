@@ -416,22 +416,25 @@ impl MessageService {
             timestamp: crate::util::time::TimestampNanos::now().as_u64(),
         };
 
-        let current_user_id = self.settings_repo.current_user_id()?;
-        let peer_uak = self
-            .user_repo
-            .get_friend_profile_key(&current_user_id, peer_id)
-            .ok()
-            .flatten()
-            .map(|pk| crate::crypto::derive_uak(&pk));
-
         let peer_id_str = peer_id.to_string();
-        match peer_uak {
+        let peer_uak = self.sealed_access_key(&peer_id_str, false);
+
+        let identified = match peer_uak {
             Some(uak) => {
                 let mut anon_client = self.grpc_pool.anonymous_message_client();
-                anon_client
-                    .send_sealed_message_with_uak(&peer_id_str, peer_device_id, sealed_message, &uak)
+                match anon_client
+                    .send_sealed_message_with_uak(&peer_id_str, peer_device_id, sealed_message.clone(), &uak)
                     .await
-                    .map_err(MessageError::Network)?;
+                {
+                    Ok(_) => false,
+                    // Our stored key is stale: the peer rotated it
+                    // (`profile_visibility`), so its UAK moved with it.
+                    Err(e) if e.is_auth_error() => {
+                        tracing::warn!(peer_id = %peer_id, reason = "UAK from our stored profile key rejected", "SEALED SENDER DEGRADED: DecryptionErrorMessage delivered identified");
+                        true
+                    }
+                    Err(e) => return Err(MessageError::Network(e)),
+                }
             }
             None => {
                 tracing::warn!(
@@ -440,12 +443,15 @@ impl MessageService {
                     "SEALED SENDER DEGRADED: DecryptionErrorMessage delivered identified \
                      (Basic auth) — the server WILL record us as the sender"
                 );
-                let mut message_client = self.message_client();
-                message_client
-                    .send_sealed_message(&peer_id_str, peer_device_id, sealed_message)
-                    .await
-                    .map_err(MessageError::Network)?;
+                true
             }
+        };
+        if identified {
+            let mut message_client = self.message_client();
+            message_client
+                .send_sealed_message(&peer_id_str, peer_device_id, sealed_message)
+                .await
+                .map_err(MessageError::Network)?;
         }
 
         tracing::info!(
@@ -478,9 +484,9 @@ impl MessageService {
         recipient_id: &str,
         plaintext: &[u8],
     ) -> DepositOutcome {
-        let (ciphertexts, recipient_uak) = match self
+        let (ciphertexts, unrestricted) = match self
             .signal_service
-            .encrypt_message_all_devices_with_uak(auth_client, recipient_id, plaintext)
+            .encrypt_message_all_devices_with_access_policy(auth_client, recipient_id, plaintext)
             .await
         {
             Ok(c) => c,
@@ -505,39 +511,52 @@ impl MessageService {
         // identified on the authenticated channel, never UAK on the anonymous
         // one — see `sync_to_own_devices`. That is not a degradation.
         let is_self = self.current_user_id().is_ok_and(|me| me.to_string() == recipient_id);
-        let recipient_uak = recipient_uak.filter(|_| !is_self);
+        let recipient_uak = if is_self { None } else { self.sealed_access_key(recipient_id, unrestricted) };
 
-        // DEGRADATION, not a normal path. The UAK rides on the recipient's
-        // prekey bundle, which the server populates for every registered user,
-        // so `None` means the server omitted it (missing/corrupt UAK row, or an
-        // old server). We can still deliver — but only over Basic auth, which
-        // makes the server stamp our user id into
-        // `device_messages.source_user_id` and defeats sealed sender entirely.
-        // This is logged loudly and per-recipient on purpose: a silent fallback
-        // here would report "sealed DM sent" while shipping the exact opposite,
-        // which is the failure mode this path exists to prevent.
+        // DEGRADATION, not a normal path: we hold no profile key for this
+        // recipient and they do not accept sealed sender from anyone. We can
+        // still deliver — but only over Basic auth, which makes the server
+        // stamp our user id into `device_messages.source_user_id` and defeats
+        // sealed sender entirely. Logged loudly and per-recipient on purpose:
+        // a silent fallback here would report "sealed DM sent" while shipping
+        // the exact opposite.
         if recipient_uak.is_none() && !is_self {
             tracing::warn!(
                 recipient = recipient_id,
-                reason = "prekey bundle carried no unidentified_access_key",
+                reason = "no profile key held for the recipient to derive their UAK",
                 "SEALED SENDER DEGRADED: falling back to identified (Basic auth) \
                  delivery — the server WILL record us as the sender of this message"
             );
         }
 
-        let delivered = self
+        let mut outcome = self
             .deposit_sealed_ciphertexts(message_client, recipient_id, ciphertexts, recipient_uak.as_ref())
             .await;
-        DepositOutcome {
-            delivered,
-            degraded: if recipient_uak.is_none() && !is_self { delivered } else { 0 },
-            rate_limited: false,
+        if recipient_uak.is_none() && !is_self {
+            outcome.degraded = outcome.delivered;
         }
+        outcome
+    }
+
+    /// The `Unidentified-Access-Key` to seal a deposit to `recipient_id` with,
+    /// as Signal's `UnidentifiedAccessUtil` picks it: derived from the profile
+    /// key they shared with us; else, when they accept sealed sender from
+    /// anyone, random bytes the server does not check; else `None` (deliver
+    /// identified). The server never serves a UAK — holding the profile key is
+    /// what authorizes a sealed sender.
+    pub(super) fn sealed_access_key(&self, recipient_id: &str, unrestricted: bool) -> Option<[u8; 16]> {
+        let profile_key = recipient_id.parse::<UserId>().ok().and_then(|peer| {
+            let me = self.settings_repo.current_user_id().ok()?;
+            self.user_repo.get_friend_profile_key(&me, &peer).ok().flatten()
+        });
+        pick_sealed_access_key(profile_key.as_ref(), unrestricted)
     }
 
     /// Deposit each device's sealed ciphertext via `SendSealedMessage`:
     /// UAK-authorized on the anonymous channel with `uak`, identified on
-    /// `message_client` without. Returns how many devices it reached; a
+    /// `message_client` without — or when the server rejects the UAK (our
+    /// copy of the recipient's profile key is stale: they rotated it). Returns
+    /// how many devices it reached and how many of those went identified; a
     /// device the server has retired gets its session archived.
     pub(super) async fn deposit_sealed_ciphertexts(
         &self,
@@ -545,12 +564,13 @@ impl MessageService {
         recipient_id: &str,
         ciphertexts: std::collections::HashMap<u32, Vec<u8>>,
         uak: Option<&[u8; 16]>,
-    ) -> usize {
+    ) -> DepositOutcome {
         let timestamp = crate::util::time::TimestampNanos::now().as_u64();
         let server_key_id = self.signal_service.get_server_key_id();
         let mut anon_client = uak.map(|_| self.grpc_pool.anonymous_message_client());
 
         let mut delivered = 0;
+        let mut degraded = 0;
         for (device_id, sealed_bytes) in ciphertexts {
             let sealed_message = SealedSenderMessage {
                 sealed_body: sealed_bytes,
@@ -569,11 +589,27 @@ impl MessageService {
             // This deliberately does NOT go through `message_client`: that
             // client is interceptor-wrapped and would attach Basic auth next to
             // the UAK, which the server rejects as multiple auth methods.
+            let mut fell_back = false;
             let result = match (uak, anon_client.as_mut()) {
                 (Some(uak), Some(anon_client)) => {
-                    anon_client
-                        .send_sealed_message_with_uak(recipient_id, device_id, sealed_message, uak)
+                    match anon_client
+                        .send_sealed_message_with_uak(recipient_id, device_id, sealed_message.clone(), uak)
                         .await
+                    {
+                        Err(e) if e.is_auth_error() => {
+                            tracing::warn!(
+                                recipient = recipient_id,
+                                device_id,
+                                reason = "UAK from our stored profile key rejected",
+                                "SEALED SENDER DEGRADED: delivering identified (Basic auth)"
+                            );
+                            fell_back = true;
+                            message_client
+                                .send_sealed_message(recipient_id, device_id, sealed_message)
+                                .await
+                        }
+                        other => other,
+                    }
                 }
                 _ => {
                     message_client
@@ -583,7 +619,10 @@ impl MessageService {
             };
 
             match result {
-                Ok(_) => delivered += 1,
+                Ok(_) => {
+                    delivered += 1;
+                    degraded += usize::from(fell_back);
+                }
                 // The server no longer knows this device (retired by Log Out /
                 // unlink). Signal's 410 handling: archive the session so we
                 // stop encrypting to it, and treat it as gone rather than as a
@@ -619,7 +658,20 @@ impl MessageService {
             }
         }
 
-        delivered
+        DepositOutcome { delivered, degraded, rate_limited: false }
+    }
+}
+
+/// See [`MessageService::sealed_access_key`].
+fn pick_sealed_access_key(profile_key: Option<&[u8; 32]>, unrestricted: bool) -> Option<[u8; 16]> {
+    match profile_key {
+        Some(pk) => Some(crate::crypto::derive_uak(pk)),
+        None if unrestricted => {
+            let mut key = [0u8; 16];
+            rand::RngCore::fill_bytes(&mut rand::rng(), &mut key);
+            Some(key)
+        }
+        None => None,
     }
 }
 
@@ -643,4 +695,22 @@ pub(super) struct DepositOutcome {
     /// Of those, how many were sent identified (Basic auth) because no UAK was
     /// available — i.e. sealed sender did NOT engage and the server recorded us.
     pub(super) degraded: usize,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::pick_sealed_access_key;
+
+    #[test]
+    fn sealed_access_key_comes_from_the_profile_key_we_hold() {
+        let pk = [7u8; 32];
+        let want = crate::crypto::derive_uak(&pk);
+        // Held key wins even when the recipient is unrestricted.
+        assert_eq!(pick_sealed_access_key(Some(&pk), false), Some(want));
+        assert_eq!(pick_sealed_access_key(Some(&pk), true), Some(want));
+        // Unrestricted and no key: any key is accepted, so seal anyway.
+        assert!(pick_sealed_access_key(None, true).is_some());
+        // Neither: no key to present — the caller delivers identified.
+        assert_eq!(pick_sealed_access_key(None, false), None);
+    }
 }

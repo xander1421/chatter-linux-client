@@ -42,6 +42,47 @@ pub fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     wire_paste(window, ui_ctx, pending.clone());
     wire_close(window, pending.clone());
     wire_submit(window, ui_ctx, pending);
+    #[cfg(target_os = "android")]
+    wire_scan(window);
+}
+
+/// "Scan QR code": the decoded text goes into the link field and through
+/// `link-approve-paste-changed`, the same parse → preview → verification-code
+/// → password gate as a pasted link. Nothing is approved by the scan itself.
+#[cfg(target_os = "android")]
+fn wire_scan(window: &MainWindow) {
+    use crate::platform::android::{permissions, qr_scanner};
+
+    let weak = window.as_weak();
+    window.on_link_approve_scan(move || {
+        if let Some(w) = weak.upgrade() {
+            w.set_link_approve_error("".into());
+            if !permissions::has(permissions::CAMERA) {
+                w.set_link_approve_status(
+                    "Chatter uses the camera only to read the QR code on your new device.".into(),
+                );
+            }
+        }
+        let weak = weak.clone();
+        crate::rt_handle().spawn(async move {
+            let outcome = qr_scanner::scan().await;
+            let _ = slint::invoke_from_event_loop(move || {
+                let Some(w) = weak.upgrade() else { return };
+                w.set_link_approve_status("".into());
+                match outcome {
+                    qr_scanner::ScanOutcome::Scanned(text) => {
+                        w.set_link_approve_url(text.clone().into());
+                        w.invoke_link_approve_paste_changed(text.into());
+                    }
+                    qr_scanner::ScanOutcome::Cancelled => {}
+                    qr_scanner::ScanOutcome::CameraDenied => w.set_link_approve_error(
+                        "Camera access is off. Paste the link instead, or allow the camera for Chatter in system settings."
+                            .into(),
+                    ),
+                }
+            });
+        });
+    });
 }
 
 fn wire_open(window: &MainWindow, pending: PendingSlot) {
@@ -49,7 +90,7 @@ fn wire_open(window: &MainWindow, pending: PendingSlot) {
     window.on_link_approve_open(move || {
         if let Some(w) = weak.upgrade() {
             reset(&w, &pending);
-            w.set_active_modal("link-device-approve".into());
+            crate::bin_ui::features::back::push(&w, "link-device-approve");
         }
     });
 }

@@ -2050,6 +2050,10 @@ pub fn dispatch_control_content(
             let _ = event_tx.send(InboxEvent::ReadSync { sender_id: *sender_id, sync });
             stats.write().messages_processed += 1;
         }
+        content::Content::ProfileKeySync(sync) => {
+            let _ = event_tx.send(InboxEvent::ProfileKeySync { sender_id: *sender_id, sync });
+            stats.write().messages_processed += 1;
+        }
         content::Content::SavedMessageSync(msg) => {
             let _ = event_tx.send(InboxEvent::SavedMessageSync {
                 sender_id: *sender_id,

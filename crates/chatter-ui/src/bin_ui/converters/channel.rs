@@ -41,6 +41,7 @@ pub fn channel_to_slint(channel: &Channel, ui_ctx: &ChatterClient) -> crate::Cha
         // thousands.
         is_pinned: ui_ctx.is_conversation_pinned(&channel.id.to_string()),
         can_leave: ui_ctx.can_leave_channel(&channel.id),
+        can_delete: ui_ctx.is_former_channel(&channel.id),
         is_selected: false,
     }
 }
@@ -167,6 +168,7 @@ pub fn member_to_slint(m: &chatter_core::domain::channel::MemberWithProfile) -> 
         muted: m.membership.is_muted,
         can_ban: m.moderation.can_ban,
         can_mute: m.moderation.can_mute,
+        can_make_owner: m.moderation.can_make_owner,
     }
 }
 

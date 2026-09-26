@@ -12,6 +12,8 @@ import { Typography } from "../theme/typography.slint";
 import { Avatar } from "../components/avatar.slint";
 import { TooltipArea } from "../components/tooltip.slint";
 import { ConversationKind } from "../chat/conversation_kind.slint";
+import { DMListItem } from "dm_list_item.slint";
+import { ChannelListItem } from "channel_list_item.slint";
 
 // ── Data structs ────────────────────────────────────────────────
 
@@ -24,9 +26,12 @@ export struct SectionConversationData {
     initials: string,
     last-message: string,
     timestamp: string,
+    presence-status: string,     // friend DM rows
+    private-channel: bool,       // channel rows: invite-only (lock glyph)
     unread-count: int,
     is-pinned: bool,             // local-only pin; core sorts these first
     can-leave: bool,             // channel rows: core's `can_leave_channel`
+    can-delete: bool,            // channel rows: core's `is_former_channel`
     is-selected: bool,           // Rust-computed selection flag; drives highlight
 }
 
@@ -149,8 +154,8 @@ component SectionConversationItem inherits Rectangle {
         if root.unread-count > 0: VerticalLayout {
             alignment: center;
             Rectangle {
-                width: max(18px, sec-badge-text.preferred-width + 10px);
-                height: 18px;
+                width: max(self.height, sec-badge-text.preferred-width + 10px);
+                height: Spacing.badge-md;
                 border-radius: Spacing.radius-full;
                 background: Colors.primary;
                 sec-badge-text := Text {
@@ -301,11 +306,11 @@ component CustomSectionHeader inherits Rectangle {
 
                 // Aggregate unread badge (hidden when the desktop action buttons show)
                 if root.unread-count > 0 && (root.mobile-mode || !header-hover.has-hover): Rectangle {
-                    width: root.unread-count > 9 ? 22px : 18px;
-                    height: 18px;
-                    border-radius: 9px;
+                    width: max(self.height, header-badge-text.preferred-width + 8px);
+                    height: Spacing.badge-md;
+                    border-radius: self.height / 2;
                     background: Colors.primary;
-                    Text {
+                    header-badge-text := Text {
                         text: root.unread-count > 99 ? "99+" : root.unread-count;
                         color: Colors.text-primary;
                         font-size: Typography.xxs;
@@ -411,58 +416,15 @@ export component CustomSectionList inherits Rectangle {
     in property <bool> collapsed: false;
     in property <bool> mobile-mode: false;
 
-    callback create-section-clicked();
     callback section-toggle-expanded(/* section-id */ string);
     callback section-conversation-selected(/* conversation-id */ string, /* conversation-type */ ConversationKind);
-    callback section-conversation-context-menu-requested(/* conversation-id */ string, /* conversation-type */ ConversationKind, /* section-id */ string, /* is-pinned */ bool, /* can-leave */ bool, /* x */ length, /* y */ length);
+    callback section-conversation-context-menu-requested(/* conversation-id */ string, /* conversation-type */ ConversationKind, /* section-id */ string, /* is-pinned */ bool, /* can-leave */ bool, /* can-delete */ bool, /* x */ length, /* y */ length);
     callback section-header-context-menu-requested(/* section-id */ string, /* sort-mode */ string, /* x */ length, /* y */ length);
     callback delete-section-clicked(/* section-id */ string);
     callback rename-section-clicked(/* section-id */ string);
 
     VerticalLayout {
         spacing: 0px;
-
-        // "+ New Section" button — hidden in collapsed mode to avoid duplicate + icons
-        if !root.collapsed: Rectangle {
-            height: root.mobile-mode ? Spacing.touch-target-min : 28px;
-            background: new-sec-touch.has-hover ? Colors.surface-hover : transparent;
-            border-radius: Spacing.radius-sm;
-            // Ghost-button affordance — a bare text row reads as a list item,
-            // not an action; the border on hover marks it clickable.
-            border-width: 1px;
-            border-color: new-sec-touch.has-hover ? Colors.border : transparent;
-            accessible-role: button;
-            accessible-label: "New Section";
-
-            HorizontalLayout {
-                padding-left: Spacing.sm;
-                spacing: 6px;
-                alignment: start;
-
-                VerticalLayout {
-                    alignment: center;
-                    horizontal-stretch: 0;
-                    Image {
-                        source: Icons.plus;
-                        width: root.mobile-mode ? 16px : 12px;
-                        height: root.mobile-mode ? 16px : 12px;
-                        colorize: new-sec-touch.has-hover ? Colors.primary : Colors.text-muted;
-                    }
-                }
-                Text {
-                    text: "New Section";
-                    color: new-sec-touch.has-hover ? Colors.text-secondary : Colors.text-muted;
-                    font-size: root.mobile-mode ? Typography.sm2 : Typography.xs2;
-                    font-weight: 500;
-                    vertical-alignment: center;
-                }
-            }
-
-            new-sec-touch := TouchArea {
-                mouse-cursor: pointer;
-                clicked => { root.create-section-clicked(); }
-            }
-        }
 
         // Render each section
         for section in root.sections: VerticalLayout {
@@ -492,22 +454,62 @@ export component CustomSectionList inherits Rectangle {
                 padding-right: Spacing.xs;
                 spacing: 2px;
 
-                for conv in section.conversations: SectionConversationItem {
-                    conversation-id: conv.conversation-id;
-                    conversation-type: conv.conversation-type;
-                    display-name: conv.display-name;
-                    avatar-source: conv.avatar-source;
-                    has-avatar: conv.has-avatar;
-                    initials: conv.initials;
-                    unread-count: conv.unread-count;
-                    is-pinned: conv.is-pinned;
-                    selected: conv.is-selected;
-                    collapsed: root.collapsed;
-                    mobile-mode: root.mobile-mode;
+                // A friend DM and a channel render with the main list's own
+                // rows, so a chat looks the same filed or not; filing one used
+                // to shrink it to a one-line row with no photo, preview, time
+                // or presence.
+                for conv in section.conversations: VerticalLayout {
+                    if conv.conversation-type == ConversationKind.server-dm: DMListItem {
+                        display-name: conv.display-name;
+                        avatar-source: conv.avatar-source;
+                        initials: conv.initials;
+                        presence-status: conv.presence-status;
+                        is-pinned: conv.is-pinned;
+                        last-message: conv.last-message;
+                        timestamp: conv.timestamp;
+                        unread-count: conv.unread-count;
+                        selected: conv.is-selected;
+                        collapsed: root.collapsed;
+                        mobile-mode: root.mobile-mode;
+                        clicked => { root.section-conversation-selected(conv.conversation-id, conv.conversation-type); }
+                        context-menu-requested(x, y) => {
+                            root.section-conversation-context-menu-requested(conv.conversation-id, conv.conversation-type, section.section-id, conv.is-pinned, conv.can-leave, conv.can-delete, x, y);
+                        }
+                    }
+                    if conv.conversation-type == ConversationKind.channel: ChannelListItem {
+                        name: conv.display-name;
+                        channel-type: conv.private-channel ? "private" : "public";
+                        unread-count: conv.unread-count;
+                        last-message: conv.last-message;
+                        timestamp: conv.timestamp;
+                        selected: conv.is-selected;
+                        collapsed: root.collapsed;
+                        avatar-source: conv.avatar-source;
+                        has-avatar: conv.has-avatar;
+                        is-pinned: conv.is-pinned;
+                        mobile-mode: root.mobile-mode;
+                        clicked => { root.section-conversation-selected(conv.conversation-id, conv.conversation-type); }
+                        context-menu-requested(x, y) => {
+                            root.section-conversation-context-menu-requested(conv.conversation-id, conv.conversation-type, section.section-id, conv.is-pinned, conv.can-leave, conv.can-delete, x, y);
+                        }
+                    }
+                    if conv.conversation-type != ConversationKind.server-dm && conv.conversation-type != ConversationKind.channel: SectionConversationItem {
+                        conversation-id: conv.conversation-id;
+                        conversation-type: conv.conversation-type;
+                        display-name: conv.display-name;
+                        avatar-source: conv.avatar-source;
+                        has-avatar: conv.has-avatar;
+                        initials: conv.initials;
+                        unread-count: conv.unread-count;
+                        is-pinned: conv.is-pinned;
+                        selected: conv.is-selected;
+                        collapsed: root.collapsed;
+                        mobile-mode: root.mobile-mode;
 
-                    clicked => { root.section-conversation-selected(conv.conversation-id, conv.conversation-type); }
-                    context-menu-requested(x, y) => {
-                        root.section-conversation-context-menu-requested(conv.conversation-id, conv.conversation-type, section.section-id, conv.is-pinned, conv.can-leave, x, y);
+                        clicked => { root.section-conversation-selected(conv.conversation-id, conv.conversation-type); }
+                        context-menu-requested(x, y) => {
+                            root.section-conversation-context-menu-requested(conv.conversation-id, conv.conversation-type, section.section-id, conv.is-pinned, conv.can-leave, conv.can-delete, x, y);
+                        }
                     }
                 }
             }

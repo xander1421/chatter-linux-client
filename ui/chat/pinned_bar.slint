@@ -4,8 +4,10 @@
 // Shows between header and message list when there are pinned messages.
 
 import { Colors } from "../theme/colors.slint";
+import { Appearance } from "../theme/appearance.slint";
 import { Spacing } from "../theme/spacing.slint";
 import { Typography } from "../theme/typography.slint";
+import { Icons } from "../theme/icons.slint";
 
 export component PinnedBar inherits Rectangle {
     // Properties
@@ -24,7 +26,7 @@ export component PinnedBar inherits Rectangle {
     property <string> position-text: has-multiple ? "Pinned message \{current-index} of \{total-count}" : "Pinned message";
 
     // Layout — Neo floating bar: raised surface with shadow
-    height: 40px;
+    height: Spacing.touch-target-min * Appearance.text-grow;
     background: Colors.surface;
     border-width: 1px;
     border-color: Colors.neo-highlight;
@@ -36,9 +38,10 @@ export component PinnedBar inherits Rectangle {
     // Main content
     HorizontalLayout {
         padding-left: Spacing.sm;
-        padding-right: Spacing.sm;
+        padding-right: 0px;
         spacing: Spacing.sm;
-        alignment: start;
+        // No `alignment`: under `start` Slint ignores horizontal-stretch, so
+        // the preview never grew and the close button floated mid-row.
 
         // Navigation buttons on LEFT (only if multiple pinned)
         if root.has-multiple: HorizontalLayout {
@@ -47,8 +50,8 @@ export component PinnedBar inherits Rectangle {
 
             // Up/prev button
             Rectangle {
-                width: 28px;
-                height: 28px;
+                width: 36px;
+                height: 36px;
                 background: prev-touch.has-hover ? Colors.surface-hover : transparent;
                 border-radius: Spacing.radius-sm;
 
@@ -70,8 +73,8 @@ export component PinnedBar inherits Rectangle {
 
             // Down/next button
             Rectangle {
-                width: 28px;
-                height: 28px;
+                width: 36px;
+                height: 36px;
                 background: next-touch.has-hover ? Colors.surface-hover : transparent;
                 border-radius: Spacing.radius-sm;
 
@@ -96,6 +99,7 @@ export component PinnedBar inherits Rectangle {
         Rectangle {
             width: 3px;
             height: 24px;
+            y: (parent.height - self.height) / 2;
             background: Colors.primary;
             border-radius: 1.5px;
             drop-shadow-blur: 4px;
@@ -137,19 +141,22 @@ export component PinnedBar inherits Rectangle {
             }
         }
 
-        // Close/dismiss button on RIGHT
+        // Close/dismiss button on RIGHT — a full 48dp box flush with the edge
         Rectangle {
-            width: 28px;
-            height: 28px;
+            width: Spacing.touch-target-min;
+            height: Spacing.touch-target-min;
             background: dismiss-touch.has-hover ? Colors.surface-hover : transparent;
             border-radius: Spacing.radius-sm;
+            accessible-role: button;
+            accessible-label: "Hide pinned messages";
 
-            Text {
-                text: "\u{00D7}";  // X mark
-                font-size: Typography.xs;
-                color: Colors.text-muted;
-                horizontal-alignment: center;
-                vertical-alignment: center;
+            Image {
+                source: Icons.x;
+                width: 16px;
+                height: 16px;
+                x: (parent.width - self.width) / 2;
+                y: (parent.height - self.height) / 2;
+                colorize: Colors.text-muted;
             }
 
             dismiss-touch := TouchArea {

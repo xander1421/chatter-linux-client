@@ -29,6 +29,7 @@ pub(crate) fn wire_view_profile(window: &MainWindow, ui_ctx: &Arc<ChatterClient>
                         crate::bin_ui::features::modals::open_user_profile(
                             &w, &uid, &auth_state, &user_state, Some(&ui_ctx),
                         );
+                        crate::bin_ui::features::back::push(&w, "user-profile");
                     }
                     Err(e) => {
                         tracing::error!("Invalid user ID in view profile: {}", e);
@@ -52,73 +53,9 @@ pub(crate) fn wire_start_dm(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
 
         let _ = slint::invoke_from_event_loop(move || {
             if let Some(w) = weak.upgrade() {
-                w.set_active_modal("none".into());
+                crate::bin_ui::features::back::reset_to_chats(&w);
                 w.invoke_dm_selected(dm_id.clone().into());
                 tracing::debug!("Starting DM with user {}", user_id_str);
-            }
-        });
-    });
-}
-
-pub(crate) fn wire_remove_friend(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
-    let weak_window = window.as_weak();
-    let ui_ctx = ui_ctx.clone();
-
-    window.on_friends_remove_friend(move |user_id: SharedString| {
-        let weak = weak_window.clone();
-        let ui_ctx = ui_ctx.clone();
-        let user_id_str = user_id.to_string();
-
-        tokio::spawn(async move {
-            let weak_loading = weak.clone();
-            let _ = slint::invoke_from_event_loop(move || {
-                if let Some(w) = weak_loading.upgrade() {
-                    w.set_friends_loading(true);
-                }
-            });
-
-            // Parse user ID
-            let friend_id = match user_id_str.parse() {
-                Ok(id) => id,
-                Err(_) => {
-                    tracing::error!("Invalid user ID: {}", user_id_str);
-                    let _ = slint::invoke_from_event_loop(move || {
-                        if let Some(w) = weak.upgrade() {
-                            w.set_friends_loading(false);
-                        }
-                    });
-                    return;
-                }
-            };
-
-            match tokio::time::timeout(
-                crate::bin_ui::ui_helpers::UI_SERVICE_TIMEOUT,
-                ui_ctx.remove_friend(&friend_id),
-            ).await {
-                Ok(Ok(_)) => {
-                    tracing::info!("Removed friend {}", user_id_str);
-                    let _ = slint::invoke_from_event_loop(move || {
-                        if let Some(w) = weak.upgrade() {
-                            w.set_friends_loading(false);
-                        }
-                    });
-                }
-                Ok(Err(e)) => {
-                    tracing::error!("Failed to remove friend: {}", e);
-                    let _ = slint::invoke_from_event_loop(move || {
-                        if let Some(w) = weak.upgrade() {
-                            w.set_friends_loading(false);
-                        }
-                    });
-                }
-                Err(_) => {
-                    tracing::error!("Remove friend timed out");
-                    let _ = slint::invoke_from_event_loop(move || {
-                        if let Some(w) = weak.upgrade() {
-                            w.set_friends_loading(false);
-                        }
-                    });
-                }
             }
         });
     });

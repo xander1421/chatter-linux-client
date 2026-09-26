@@ -110,4 +110,27 @@ impl ChatterClient {
         self.spawn_notification_stream(user_id);
         tracing::info!("notification stream re-dialed over new transport");
     }
+
+    /// Whether message notifications make a sound (desktop; default on).
+    pub fn notification_sound_enabled(&self) -> bool {
+        use crate::storage::repositories::settings_repo::{keys, SettingsRepository};
+        SettingsRepository::new(self.services.database.clone())
+            .get_bool(keys::NOTIFICATION_SOUND)
+            .ok()
+            .flatten()
+            .unwrap_or(true)
+    }
+
+    /// Persist the notification-sound preference and apply it now. Startup
+    /// reads the same key (`app/core_services.rs`, `NOTIFICATION_SOUND`).
+    pub fn set_notification_sound_enabled(
+        &self,
+        enabled: bool,
+    ) -> Result<(), crate::error::StorageError> {
+        use crate::storage::repositories::settings_repo::{keys, SettingsRepository};
+        SettingsRepository::new(self.services.database.clone())
+            .set_bool(keys::NOTIFICATION_SOUND, enabled)?;
+        self.services.notification_service.set_sound_enabled(enabled);
+        Ok(())
+    }
 }

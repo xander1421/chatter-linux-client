@@ -162,16 +162,19 @@ impl AnonDmService {
 
                 // Validate sender is part of the conversation (double-check already done above but keep for consistency)
                 if let Ok(Some(mut conv)) = self.anon_dm_repo.get_conversation(conversation_id) {
-                    // Update display name
-                    if let Some(name) = &profile_update.display_name {
-                        conv.peer_display_name = Some(name.clone());
-                    }
-
-                    // Parse profile key and decrypt avatar
                     let mut decrypted_avatar = None;
                     let profile_key: Option<[u8; 32]> = profile_update.profile_key.as_ref().and_then(|pk| {
                         if pk.len() == 32 { Some(pk.as_slice().try_into().unwrap()) } else { None }
                     });
+
+                    // The name only ever arrives under the peer's profile key.
+                    let display_name = profile_key
+                        .zip(profile_update.encrypted_display_name.as_ref())
+                        .and_then(|(pk, enc)| profile_crypto::decrypt_display_name(&pk, enc).ok())
+                        .filter(|n| !n.is_empty());
+                    if let Some(name) = &display_name {
+                        conv.peer_display_name = Some(name.clone());
+                    }
 
                     if let (Some(pk), Some(encrypted)) = (&profile_key, &profile_update.encrypted_avatar) {
                         if !encrypted.is_empty() {
@@ -200,7 +203,7 @@ impl AnonDmService {
                     events.push(DomainEvent::AnonDmProfileUpdated {
                         conversation_id: *conversation_id,
                         user_id: *sender_id,
-                        display_name: profile_update.display_name.clone(),
+                        display_name,
                         avatar: decrypted_avatar,
                         avatar_url: profile_update.avatar_url.clone(),
                         bio: profile_update.bio.clone(),

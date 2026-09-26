@@ -9,33 +9,53 @@
 //!   1. Message multi-select exits. Selection mode is the shallowest, most
 //!      recently entered state, so it pops first.
 //!   2. The unified search palette closes. It is an overlay of its own rather
-//!      than an `active-modal` value, so it needs its own branch.
-//!   3. An open modal closes. A Back press must never leave or background the
-//!      app while a modal is up — the Settings screen's only other exit is a
-//!      glyph that renders as a tofu box, so "Back does nothing" strands the
-//!      user there.
-//!   4. An open thread panel closes, returning to its conversation. On a
+//!      than a screen on the modal stack, so it needs its own branch.
+//!   3. The top of the modal stack pops, revealing whatever it was pushed
+//!      over — Settings › Sessions › Back is Settings again, not the chat
+//!      list.
+//!   4. A tab other than Chats returns to Chats (Android's bottom-nav
+//!      convention: Chats is the start destination).
+//!   5. An open thread panel closes, returning to its conversation. On a
 //!      phone the thread covers the chat pane, so it is a layer above it.
-//!   5. The mobile conversation pane returns to the conversation list. On a
+//!   6. The mobile conversation pane returns to the conversation list. On a
 //!      phone the two are separate screens, so Back out of a chat means "up to
 //!      the list" — going straight to backgrounding the app there is the single
 //!      most jarring thing Back can do in a messenger. Only in the compact
 //!      layout: on a two-pane tablet the list is already beside the chat, so
 //!      there is nothing to go up to.
-//!   6. Otherwise the task is backgrounded, which is Android's normal
+//!   7. Otherwise the task is backgrounded, which is Android's normal
 //!      back-out-of-app. `moveTaskToBack(true)`, NOT `finish()`: finishing
 //!      destroys the Activity and with it the whole in-memory session, which is
 //!      wrong for a messaging app the user expects to come back to.
 //!
-//! On desktop steps 5 and 6 are no-ops: the layout is never compact there
+//! On desktop steps 6 and 7 are no-ops: the layout is never compact there
 //! (both panes are on screen at once), and — popping in-app layers is the only meaningful
 //! part, and nothing should try to "background" a desktop window.
 
-use slint::ComponentHandle;
+//!
+//! # Navigation model
+//!
+//! Two separate pieces of state, both on the window (`ui/app.slint`):
+//!
+//! - `active-tab` — the top-level destination: `chats`, `calls`, `contacts`,
+//!   `profile` (the account menu). The bottom bar highlights it; on a two-pane
+//!   layout the sidebar's Calls / Contacts entries and its avatar / gear
+//!   select it. Settings is not a tab: the account menu pushes it.
+//! - `modal-stack` — screens and dialogs pushed over the tab, top last.
+//!   `active-modal` is derived from it (the top, or `"none"`), so each modal's
+//!   `if active-modal == ...` keeps working, and closing the top reveals the
+//!   one below instead of dropping the user on the chat list.
+//!
+//! The stack is only ever changed through [`push`], [`close`], [`pop`] and
+//! [`reset_to_chats`] (Slint reaches them via `nav-push` / `nav-close` /
+//! `nav-pop`), so the rules live here.
+
+use slint::{ComponentHandle, Model, ModelRc, SharedString, VecModel};
 
 use crate::MainWindow;
 
-/// Wire the Back key. No core access: this is pure UI-shell navigation state.
+/// Wire the Back key and the Slint-side stack operations. No core access:
+/// this is pure UI-shell navigation state.
 pub fn wire(window: &MainWindow) {
     let weak = window.as_weak();
     window.on_back_pressed(move || {
@@ -43,6 +63,73 @@ pub fn wire(window: &MainWindow) {
             handle_back(&w);
         }
     });
+    let weak = window.as_weak();
+    window.on_nav_push(move |screen| {
+        if let Some(w) = weak.upgrade() {
+            push(&w, &screen);
+        }
+    });
+    let weak = window.as_weak();
+    window.on_nav_close(move |screen| {
+        if let Some(w) = weak.upgrade() {
+            close(&w, &screen);
+        }
+    });
+    let weak = window.as_weak();
+    window.on_nav_pop(move || {
+        if let Some(w) = weak.upgrade() {
+            pop(&w);
+        }
+    });
+}
+
+fn stack(w: &MainWindow) -> Vec<SharedString> {
+    w.get_modal_stack().iter().collect()
+}
+
+fn set_stack(w: &MainWindow, stack: Vec<SharedString>) {
+    // Settings stays mounted under what it opens, so Slint needs "anywhere on
+    // the stack", which it cannot compute from an array itself.
+    w.set_settings_open(stack.iter().any(|x| x.as_str() == "settings"));
+    w.set_modal_stack(ModelRc::new(VecModel::from(stack)));
+}
+
+/// Push `screen` over whatever is showing. A screen already on the stack is
+/// moved to the top rather than stacked twice, so a Back never reveals a
+/// second copy of the same page.
+pub fn push(w: &MainWindow, screen: &str) {
+    let mut s = stack(w);
+    s.retain(|x| x.as_str() != screen);
+    s.push(screen.into());
+    set_stack(w, s);
+}
+
+/// Close `screen` and everything pushed on top of it — what it opened goes
+/// with it. A no-op if it is not open, so an async completion that arrives
+/// after the user already left cannot close something else.
+pub fn close(w: &MainWindow, screen: &str) {
+    let mut s = stack(w);
+    if let Some(i) = s.iter().rposition(|x| x.as_str() == screen) {
+        s.truncate(i);
+        set_stack(w, s);
+    }
+}
+
+/// Close the top of the stack. `false` if the stack was empty.
+pub fn pop(w: &MainWindow) -> bool {
+    let mut s = stack(w);
+    if s.pop().is_none() {
+        return false;
+    }
+    set_stack(w, s);
+    true
+}
+
+/// Drop every pushed screen and return to the Chats tab: the landing for
+/// "open this conversation" from anywhere, answering a call, and logout.
+pub fn reset_to_chats(w: &MainWindow) {
+    set_stack(w, Vec::new());
+    w.set_active_tab("chats".into());
 }
 
 /// Apply one Back press. Returns `true` if it was consumed by in-app state
@@ -85,16 +172,20 @@ pub fn handle_back(window: &MainWindow) -> bool {
         return true;
     }
 
-    // The unified search palette is its own overlay, not an `active-modal`
-    // value, so Back fell straight through it and backgrounded the app with
-    // the palette still on screen (§112u).
+    // The unified search palette is its own overlay, not a stacked screen,
+    // so Back fell straight through it and backgrounded the app with the
+    // palette still on screen (§112u).
     if window.get_unified_search_open() {
         window.set_unified_search_open(false);
         return true;
     }
 
-    if window.get_active_modal().as_str() != "none" {
-        window.set_active_modal("none".into());
+    if pop(window) {
+        return true;
+    }
+
+    if window.get_active_tab().as_str() != "chats" {
+        window.set_active_tab("chats".into());
         return true;
     }
 
@@ -146,7 +237,7 @@ fn background_app() {
     }
 }
 
-/// Desktop: Back has no OS meaning. Closing a modal (handled above) is all it
+/// Desktop: Back has no OS meaning. Popping in-app state (handled above) is all it
 /// does; never quit the window out from under the user.
 #[cfg(not(target_os = "android"))]
 fn background_app() {}

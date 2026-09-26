@@ -19,6 +19,9 @@ export component EmojiPicker inherits Rectangle {
     // Emoji list from Rust (filtered by category or search)
     in property <[EmojiData]> emoji-list: [];
 
+    // The composer picker offers GIFs; the reaction picker cannot (a GIF is not a reaction).
+    in property <bool> show-gif-tab: true;
+
     // Currently selected category (-1=Recent, 0=Smileys, 1=People, etc.)
     in-out property <int> selected-category: 0;
 
@@ -40,8 +43,9 @@ export component EmojiPicker inherits Rectangle {
     property <bool> search-focused: search-input.has-focus;
 
     // Category icons: Recent (-1), Smileys (0), People (1), etc.
-    // Only SMP color-default emoji (code point ≥ U+1F000) to guarantee color presentation.
-    property <[string]> category-icons: ["\u{1F550}", "\u{1F600}", "\u{1F44B}", "\u{1F431}", "\u{1F34E}", "\u{1F680}", "\u{1F3C0}", "\u{1F4A1}", "\u{1F49C}", "\u{1F3F3}"];
+    // Only SMP Emoji_Presentation=Yes code points: 🏳 (U+1F3F3) is ≥ U+1F000 but
+    // text-default, and was tofu on Android 10 — flags use 🏁.
+    property <[string]> category-icons: ["\u{1F550}", "\u{1F600}", "\u{1F44B}", "\u{1F431}", "\u{1F34E}", "\u{1F680}", "\u{1F3C0}", "\u{1F4A1}", "\u{1F49C}", "\u{1F3C1}"];
     // Map icon index to category value: index 0 → -1 (Recent), index 1 → 0 (Smileys), etc.
     pure function icon-index-to-category(idx: int) -> int { idx - 1; }
     pure function category-to-icon-index(cat: int) -> int { cat + 1; }
@@ -93,25 +97,39 @@ export component EmojiPicker inherits Rectangle {
                 padding-right: Spacing.sm;
                 spacing: Spacing.sm;
 
-                // Search icon
-                Text {
-                    text: "🔍";
-                    font-family: Typography.font-family-emoji;
-                    font-size: Typography.sm;
-                    vertical-alignment: center;
+                // Search icon — a line icon like every other search field
+                Image {
+                    source: Icons.search;
+                    colorize: Colors.text-secondary;
+                    width: 16px;
+                    height: 16px;
+                    y: (parent.height - self.height) / 2;
                 }
 
-                // Search text input
-                search-input := TextInput {
+                // Search text input, with a placeholder while empty
+                Rectangle {
                     horizontal-stretch: 1;
-                    height: parent.height;
-                    color: Colors.text-primary;
-                    font-size: Typography.sm;
-                    vertical-alignment: center;
-                    text <=> root.search-query;
 
-                    edited => {
-                        root.search-changed(self.text);
+                    if root.search-query == "": Text {
+                        width: 100%;
+                        height: 100%;
+                        text: "Search emoji";
+                        color: Colors.text-muted;
+                        font-size: Typography.sm;
+                        vertical-alignment: center;
+                    }
+
+                    search-input := TextInput {
+                        width: 100%;
+                        height: 100%;
+                        color: Colors.text-primary;
+                        font-size: Typography.sm;
+                        vertical-alignment: center;
+                        text <=> root.search-query;
+
+                        edited => {
+                            root.search-changed(self.text);
+                        }
                     }
                 }
 
@@ -146,7 +164,7 @@ export component EmojiPicker inherits Rectangle {
 
         // Category tabs (only show when not searching)
         if root.search-query == "": Rectangle {
-            height: 36px;
+            height: 44px;
             background: Colors.background;
             border-radius: Spacing.radius-md;
 
@@ -157,7 +175,7 @@ export component EmojiPicker inherits Rectangle {
                 for icon[index] in root.category-icons: Rectangle {
                     property <int> cat: root.icon-index-to-category(index);
                     horizontal-stretch: 1;
-                    height: 28px;
+                    height: 36px;
                     border-radius: Spacing.radius-sm;
                     background: cat == root.selected-category ? Colors.primary.with-alpha(0.2) : (tab-area.has-hover ? Colors.surface-hover : transparent);
 
@@ -190,9 +208,9 @@ export component EmojiPicker inherits Rectangle {
                 }
 
                 // GIF tab — switches to GIF picker
-                Rectangle {
+                if root.show-gif-tab: Rectangle {
                     horizontal-stretch: 1;
-                    height: 28px;
+                    height: 36px;
                     border-radius: Spacing.radius-sm;
                     background: gif-tab-area.has-hover ? Colors.surface-hover : transparent;
 

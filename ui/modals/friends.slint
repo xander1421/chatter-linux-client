@@ -2,6 +2,7 @@
 // Tabs: Add Friend, Friends, Requests, Blocked
 
 import { Colors } from "../theme/colors.slint";
+import { Appearance } from "../theme/appearance.slint";
 import { Spacing } from "../theme/spacing.slint";
 import { Typography } from "../theme/typography.slint";
 import { Icons } from "../theme/icons.slint";
@@ -61,8 +62,12 @@ export component FriendsModal inherits Rectangle {
     // 56px mouse density that leaves a whole screen looking like a dense
     // desktop table.
     in property <bool> mobile-mode: false;
+    // A tab's root screen (see Modal): no back chevron, the tab bar navigates.
+    in property <bool> root-screen: false;
+    // In-app camera scanner exists (Android).
+    in property <bool> can-scan: false;
     in property <length> bottom-inset: 0px;
-    property <length> row-height: root.mobile-mode ? Spacing.row-height-touch : 56px;
+    property <length> row-height: root.mobile-mode ? Spacing.row-height-touch : 56px * Appearance.text-grow;
     property <length> row-avatar: root.mobile-mode ? Spacing.row-avatar-touch : 40px;
     property <length> row-name-size: root.mobile-mode ? Typography.base : Typography.sm;
     property <length> row-sub-size: root.mobile-mode ? Typography.sm : Typography.xs;
@@ -105,6 +110,7 @@ export component FriendsModal inherits Rectangle {
     callback generate-qr(bool);    // bool = private mode
     callback copy-code();
     callback paste-code();                   // System clipboard → code-input
+    callback scan-code();                    // Camera QR → code-input
     callback connect-via-code(string);       // Server-managed friend request
     callback connect-private(string);        // Private anon DM (no server involvement)
     callback switch-tab(string);
@@ -112,7 +118,6 @@ export component FriendsModal inherits Rectangle {
     // Friends actions
     callback view-profile(string);    // user_id
     callback start-dm(string);        // user_id
-    callback remove-friend(string);   // user_id
 
     // Request actions
     callback accept-request(string);  // user_id
@@ -143,13 +148,14 @@ export component FriendsModal inherits Rectangle {
 
     Modal {
         show: root.show-modal;
-        title: "Friends";
+        title: "Contacts";
         modal-width: 680px;
         max-modal-height: 800px;
         // On a phone this is the Contacts screen, not a dialog over the chat
         // list — the bottom tab bar navigates to it the same way Telegram's
         // does, so it gets the whole viewport.
         full-screen: root.mobile-mode;
+        root-screen: root.root-screen;
         bottom-inset: root.bottom-inset;
         fill-height: root.mobile-mode;
 
@@ -360,7 +366,8 @@ export component FriendsModal inherits Rectangle {
                                             }
                                         }
 
-                                        // More options (remove friend)
+                                        // More options: the profile, where Remove
+                                        // Friend and Block live behind a confirm.
                                         Rectangle {
                                             width: 44px;
                                             height: 44px;
@@ -382,7 +389,7 @@ export component FriendsModal inherits Rectangle {
                                             more-touch := TouchArea {
                                                 mouse-cursor: pointer;
                                                 clicked => {
-                                                    root.remove-friend(friend.user-id);
+                                                    root.view-profile(friend.user-id);
                                                 }
                                             }
                                         }
@@ -541,6 +548,14 @@ export component FriendsModal inherits Rectangle {
                                 }
                             }
 
+                            if root.can-scan: Button {
+                                text: "Scan friend's QR code";
+                                variant: "secondary";
+                                clicked => {
+                                    root.scan-code();
+                                }
+                            }
+
                             // Enter friend's code
                             HorizontalLayout {
                                 spacing: Spacing.sm;
@@ -634,7 +649,9 @@ export component FriendsModal inherits Rectangle {
                             if root.code-status != "": Text {
                                 text: root.code-status;
                                 color: (root.code-status == "Friend request sent!" || root.code-status == "Private conversation started!") ? Colors.success : 
-                                       (root.code-status == "Copied to clipboard!" || root.code-status == "Pasted from clipboard") ? Colors.accent-purple : Colors.error;
+                                       (root.code-status == "Copied to clipboard!" || root.code-status == "Pasted from clipboard"
+                                        || root.code-status == "Code scanned — tap Connect to send the request"
+                                        || root.code-status == "Chatter uses the camera only to read your friend's QR code.") ? Colors.text-secondary : Colors.error;
                                 font-size: Typography.xs;
                             }
                         }
@@ -700,7 +717,7 @@ export component FriendsModal inherits Rectangle {
 
                     // Sub-tab bar
                     HorizontalLayout {
-                        height: 36px;
+                        height: 36px * Appearance.text-grow;
 
                         Rectangle {
                             horizontal-stretch: 1;
@@ -1460,8 +1477,9 @@ export component FriendsModal inherits Rectangle {
                     vertical-stretch: 1;
                     spacing: Spacing.sm;
 
-                    Text {
-                        text: root.blocked-users.length + (root.blocked-users.length == 1 ? " Blocked User" : " Blocked Users");
+                    // No "0 blocked users" over the empty state saying the same.
+                    if root.blocked-users.length > 0: Text {
+                        text: root.blocked-users.length + (root.blocked-users.length == 1 ? " blocked user" : " blocked users");
                         color: Colors.text-secondary;
                         font-size: Typography.xs;
                         font-weight: Typography.medium;

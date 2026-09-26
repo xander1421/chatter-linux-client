@@ -157,6 +157,9 @@ pub(crate) fn wire_settings_clicked(window: &MainWindow, ui_ctx: &Arc<ChatterCli
                 w.set_settings_notification_detail(
                     ui_ctx_settings.notification_detail_level().as_str().into(),
                 );
+                w.set_settings_profile_visibility(ui_ctx_settings.profile_visibility().as_str().into());
+                w.set_settings_profile_visibility_pending("".into());
+                w.set_settings_profile_visibility_error("".into());
 
                 // Cloud AI: reflect what is actually saved, so the panel never
                 // shows a preference the core would not honour.
@@ -169,8 +172,6 @@ pub(crate) fn wire_settings_clicked(window: &MainWindow, ui_ctx: &Arc<ChatterCli
                 w.set_settings_cloud_ai_configured(cloud.is_available());
                 // Never echo the stored key back into the field.
                 w.set_settings_cloud_ai_api_key("".into());
-
-                w.set_active_modal("settings".into());
             }
         });
 
@@ -178,6 +179,8 @@ pub(crate) fn wire_settings_clicked(window: &MainWindow, ui_ctx: &Arc<ChatterCli
         let weak_fp = weak_window.clone();
         let ui_ctx_policy = ui_ctx_fp.clone();
         let weak_policy = weak_window.clone();
+        let ui_ctx_discover = ui_ctx_fp.clone();
+        let weak_discover = weak_window.clone();
         tokio::spawn(async move {
             match ui_ctx_fp.my_identity_fingerprint().await {
                 Ok(fingerprint) => {
@@ -206,6 +209,23 @@ pub(crate) fn wire_settings_clicked(window: &MainWindow, ui_ctx: &Arc<ChatterCli
                 }
                 Err(e) => {
                     tracing::error!("Failed to load sealed sender policy for settings: {}", e);
+                }
+            }
+        });
+
+        // Fetch "Who can find me by my username" from the server — it is
+        // stored there (user_profiles.username_discoverable), not locally.
+        tokio::spawn(async move {
+            match ui_ctx_discover.get_username_discoverability().await {
+                Ok(discoverable) => {
+                    let _ = slint::invoke_from_event_loop(move || {
+                        if let Some(w) = weak_discover.upgrade() {
+                            w.set_settings_username_discoverable(discoverable);
+                        }
+                    });
+                }
+                Err(e) => {
+                    tracing::error!("Failed to load username discoverability for settings: {}", e);
                 }
             }
         });

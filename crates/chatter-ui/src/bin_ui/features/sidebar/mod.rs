@@ -502,6 +502,9 @@ pub(crate) fn create_dm_sidebar_entry(
 /// Runs on the UI thread, from the selection callbacks.
 pub(crate) fn show_chat_pane(weak: &slint::Weak<MainWindow>) {
     if let Some(w) = weak.upgrade() {
+        // A conversation lives on the Chats tab: opened from Contacts, Calls
+        // or a pushed profile, it must not stay hidden behind them.
+        crate::bin_ui::features::back::reset_to_chats(&w);
         if w.get_is_mobile_platform() {
             w.set_mobile_show_chat(true);
         }

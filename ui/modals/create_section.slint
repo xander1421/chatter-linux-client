@@ -11,14 +11,16 @@ import { Modal } from "../components/modal.slint";
 import { Button } from "../components/button.slint";
 import { Input } from "../components/input.slint";
 
-// Common section emoji icons (~50 items)
+// Common section emoji icons (~50 items). Only emoji that are colour by
+// default (Emoji_Presentation=Yes): a symbol that needs U+FE0F to turn colour
+// (⚙️ 🛡️ 🏗️ 🏷️ ☁️ ❤️) drew as a NO GLYPH box or a grey glyph on Android 10.
 global SectionEmojis {
     out property <[string]> icons: [
         "📁", "📂", "⭐", "🏠", "💼", "🎯", "🔥", "💡", "🎨", "🎮",
-        "🎵", "📚", "🔧", "⚙️", "🛡️", "🔒", "💬", "📢", "🌍", "🚀",
-        "💰", "📊", "📈", "🧪", "🔬", "🏗️", "🎓", "📝", "✅", "❤️",
-        "💎", "🌟", "🏆", "👥", "🤝", "📌", "🔖", "🏷️", "📎", "✨",
-        "🌈", "☁️", "⚡", "🎲", "🧩", "🎪", "🌱", "🍀", "🔔", "🎁",
+        "🎵", "📚", "🔧", "🔩", "🔐", "🔒", "💬", "📢", "🌍", "🚀",
+        "💰", "📊", "📈", "🧪", "🔬", "🧱", "🎓", "📝", "✅", "💖",
+        "💎", "🌟", "🏆", "👥", "🤝", "📌", "🔖", "📛", "📎", "✨",
+        "🌈", "🌙", "⚡", "🎲", "🧩", "🎪", "🌱", "🍀", "🔔", "🎁",
     ];
 }
 
@@ -92,7 +94,7 @@ export component CreateSectionModal inherits Rectangle {
                 }
 
                 // Name input
-                Input {
+                name-input := Input {
                     horizontal-stretch: 1;
                     placeholder: "Section name";
                     text <=> root.section-name;
@@ -175,15 +177,15 @@ export component CreateSectionModal inherits Rectangle {
                     text: root.loading ? "" :
                         (root.rename-mode ? "Save" : "Create");
                     variant: "primary";
-                    disabled: root.section-name == "" || root.loading;
+                    disabled: name-input.composed-text == "" || root.loading;
                     loading: root.loading;
 
                     clicked => {
-                        if root.section-name != "" && !root.loading {
+                        if name-input.composed-text != "" && !root.loading {
                             if root.rename-mode {
-                                root.rename-section(root.section-id, root.section-name, root.selected-emoji);
+                                root.rename-section(root.section-id, name-input.composed-text, root.selected-emoji);
                             } else {
-                                root.create-section(root.section-name, root.selected-emoji);
+                                root.create-section(name-input.composed-text, root.selected-emoji);
                             }
                         }
                     }

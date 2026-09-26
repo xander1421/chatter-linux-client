@@ -63,6 +63,47 @@ pub(crate) fn wire_generate_friend_code(window: &MainWindow, ui_ctx: &Arc<Chatte
     // because it reads via a different selection protocol than what
     // wl-copy and arboard-with-wayland-data-control write to).
     wire_paste_friend_code(window, ui_ctx);
+
+    #[cfg(target_os = "android")]
+    wire_scan_friend_code(window);
+}
+
+/// "Scan QR code": the decoded text lands in the friend-code input exactly
+/// as Paste would put it there. Connect still has to be tapped, and goes
+/// through the same `connect-via-code` / `connect-private` parsers.
+#[cfg(target_os = "android")]
+fn wire_scan_friend_code(window: &MainWindow) {
+    use crate::platform::android::{permissions, qr_scanner};
+
+    let weak_window = window.as_weak();
+    window.on_friends_scan_code(move || {
+        if let Some(w) = weak_window.upgrade() {
+            let rationale = if permissions::has(permissions::CAMERA) {
+                ""
+            } else {
+                "Chatter uses the camera only to read your friend's QR code."
+            };
+            w.set_friends_code_status(rationale.into());
+        }
+        let weak = weak_window.clone();
+        crate::rt_handle().spawn(async move {
+            let outcome = qr_scanner::scan().await;
+            let _ = slint::invoke_from_event_loop(move || {
+                let Some(w) = weak.upgrade() else { return };
+                match outcome {
+                    qr_scanner::ScanOutcome::Scanned(text) => {
+                        w.set_friends_code_input(text.trim().into());
+                        w.set_friends_code_status("Code scanned — tap Connect to send the request".into());
+                    }
+                    qr_scanner::ScanOutcome::Cancelled => w.set_friends_code_status("".into()),
+                    qr_scanner::ScanOutcome::CameraDenied => w.set_friends_code_status(
+                        "Camera access is off. Paste the code instead, or allow the camera for Chatter in system settings."
+                            .into(),
+                    ),
+                }
+            });
+        });
+    });
 }
 
 /// Read the system clipboard via arboard and push the contents into the

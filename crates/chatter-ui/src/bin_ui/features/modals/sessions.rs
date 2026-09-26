@@ -9,17 +9,19 @@ use slint::{ComponentHandle, ModelRc, VecModel};
 use chatter_core::client::ChatterClient;
 use chatter_core::services::session_service::Session;
 
-use crate::{MainWindow, SessionInfo, spawn_async_action, run_ui};
+use crate::{MainWindow, SessionInfo, spawn_async_action};
 
-/// Convert domain Session to Slint SessionInfo.
-fn session_to_slint(s: Session) -> SessionInfo {
+/// Convert domain Session to Slint SessionInfo. Times use the app's one
+/// formatter ("Yesterday 2:01 PM"), not ISO.
+pub(crate) fn session_to_slint(s: Session) -> SessionInfo {
     SessionInfo {
         device_id: s.device_id as i32,
         device_info: s.device_info.into(),
         ip_address: s.ip_address.into(),
-        last_used: s.last_used.with_timezone(&chrono::Local).format("%Y-%m-%d %H:%M").to_string().into(),
-        created_at: s.created_at.with_timezone(&chrono::Local).format("%Y-%m-%d").to_string().into(),
+        last_used: chatter_core::ui::format_timestamp(s.last_used).into(),
+        created_at: chatter_core::ui::format_timestamp(s.created_at).into(),
         is_current: s.is_current,
+        is_mobile: s.is_mobile,
     }
 }
 
@@ -73,7 +75,6 @@ pub fn wire_session_callbacks(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) 
 
     window.on_settings_view_sessions(move || {
         let ui_ctx = ui_ctx_view.clone();
-        run_ui!(weak_window, |w| w.set_active_modal("sessions".into()));
         refresh_pending_links(weak_window.clone(), ui_ctx.clone());
 
         spawn_async_action!(weak_window, set_sessions_loading,

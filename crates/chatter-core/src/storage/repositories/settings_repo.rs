@@ -14,6 +14,10 @@ use std::sync::Arc;
 pub mod keys {
     // App settings
     pub const THEME: &str = "app.theme";
+    /// Settings › Appearance › Text size — `services::appearance::TextSize`.
+    pub const TEXT_SIZE: &str = "app.text_size";
+    /// Settings › Appearance › Message spacing — `services::appearance::MessageDensity`.
+    pub const MESSAGE_DENSITY: &str = "app.message_density";
     pub const NOTIFICATION_SOUND: &str = "app.notification_sound";
     pub const NOTIFICATION_ENABLED: &str = "app.notification_enabled";
     /// Opaque ntfy push topic issued by the server in AuthResponse. The client
@@ -74,6 +78,17 @@ pub mod keys {
     /// prekeys nobody can complete a handshake with: the original bug, reached
     /// by a different road. This flag is what makes the retry happen.
     pub const KEY_REPUBLISH_PENDING: &str = "crypto.key_republish_pending";
+    /// Who receives our profile key ("everyone" | "contacts" | "nobody"),
+    /// see `services::profile_visibility`. Absent = everyone.
+    pub const PROFILE_VISIBILITY: &str = "privacy.profile_visibility";
+    /// A rotated profile key not yet committed: generated and being written
+    /// to the SVR backup. Reused by a retry so the backup and the local key
+    /// can never name two different fresh keys.
+    pub const PROFILE_KEY_NEXT: &str = "crypto.profile_key_next";
+    /// Set while a committed profile-key rotation still owes our other
+    /// devices, the server UAK and the server profile the new key; nothing is
+    /// shared with anyone until it clears.
+    pub const PROFILE_KEY_ROTATION_PENDING: &str = "crypto.profile_key_rotation_pending";
     /// Cached sender certificate (serialized bytes, base64 encoded)
     pub const SENDER_CERTIFICATE: &str = "crypto.sender_certificate";
     /// When to refresh sender certificate (Unix timestamp ms)

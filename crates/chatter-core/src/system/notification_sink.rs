@@ -62,6 +62,12 @@ pub trait NotificationSink: Send + Sync {
         Ok(())
     }
 
+    /// Whether message notifications should make a sound (Settings ›
+    /// Notifications › Sound). Only desktop sinks honour it; Android's sound
+    /// and vibration belong to the OS notification channel, which the user
+    /// edits in the system settings instead. No-op by default.
+    fn set_sound(&self, _enabled: bool) {}
+
     fn init(&self) -> Result<(), SystemError> {
         Ok(())
     }

@@ -526,6 +526,18 @@ impl ChannelService {
         Ok(memberships)
     }
 
+    /// Hand the channel to `new_owner`, a current member; we become an admin.
+    /// Applied locally at once, so the settings pane and our permissions
+    /// reflect it before the server's events arrive.
+    pub async fn transfer_ownership(&self, channel_id: &ChannelId, new_owner: &UserId) -> Result<(), ChannelError> {
+        let me = self.settings_repo.current_user_id()?;
+        self.channel_client()
+            .transfer_ownership(&channel_id.to_string(), &new_owner.to_string())
+            .await?;
+        crate::services::channel::apply_ownership_transfer(&self.channel_repo, channel_id, &me, new_owner)?;
+        Ok(())
+    }
+
     /// Update a member's role.
     pub async fn update_member_role(
         &self,

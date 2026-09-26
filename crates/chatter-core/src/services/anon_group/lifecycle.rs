@@ -38,21 +38,10 @@ impl AnonGroupService {
         Ok(self.settings_repo.current_user_id()?)
     }
 
-    /// Get our profile key if available.
+    /// Our profile key, when the visibility setting shares it with anon
+    /// peers (`profile_visibility::anon_shareable_profile_key`).
     pub(crate) fn get_my_profile_key(&self) -> Option<[u8; 32]> {
-        self.settings_repo
-            .get_bytes(settings_keys::PROFILE_KEY)
-            .ok()
-            .flatten()
-            .and_then(|v| {
-                if v.len() == 32 {
-                    let mut arr = [0u8; 32];
-                    arr.copy_from_slice(&v);
-                    Some(arr)
-                } else {
-                    None
-                }
-            })
+        crate::services::profile_visibility::anon_shareable_profile_key(&self.settings_repo)
     }
 
     /// Get our display name from settings.

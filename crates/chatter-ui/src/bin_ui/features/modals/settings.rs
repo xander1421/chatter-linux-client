@@ -86,6 +86,12 @@ pub fn wire_settings_callbacks(window: &MainWindow, ui_ctx: &Arc<ChatterClient>)
         }
     });
 
+    // "Who can see my photo and name". Core decides everything: whether the
+    // choice needs the PIN (it restricts, so the key rotates, and the account
+    // has a key backup) and the change itself. The radio always shows what
+    // core holds afterwards.
+    wire_profile_visibility(window, ui_ctx);
+
     // Search shortcut selector
     let ui_ctx_shortcut = ui_ctx.clone();
     let weak_shortcut = window.as_weak();
@@ -99,6 +105,91 @@ pub fn wire_settings_callbacks(window: &MainWindow, ui_ctx: &Arc<ChatterClient>)
             w.set_search_shortcut_pref(shortcut.as_str().into());
         }
     });
+
+    // Theme (Settings › Appearance). Applied before the first frame from what
+    // core persisted; a pick is saved, then re-read so a failed save shows the
+    // theme actually in force.
+    let appearance = window.global::<crate::Appearance>();
+    appearance.set_theme(ui_ctx.theme_mode().as_str().into());
+    appearance.on_dark_changed(apply_system_bars);
+    apply_system_bars(appearance.get_dark());
+    let ui_ctx_theme = ui_ctx.clone();
+    let weak_theme = window.as_weak();
+    appearance.on_theme_changed(move |value: SharedString| {
+        let mode = chatter_core::services::appearance::ThemeMode::from_str(value.as_str());
+        if let Err(e) = ui_ctx_theme.set_theme_mode(mode) {
+            tracing::error!("Failed to save theme: {}", e);
+        }
+        if let Some(w) = weak_theme.upgrade() {
+            w.global::<crate::Appearance>()
+                .set_theme(ui_ctx_theme.theme_mode().as_str().into());
+        }
+    });
+
+    // Text size and message spacing (Settings › Appearance) — the theme's
+    // shape: applied before the first frame, a pick saved then re-read.
+    let system_font_scale = system_font_scale();
+    let text_size = ui_ctx.text_size();
+    appearance.set_text_size(text_size.as_str().into());
+    appearance.set_text_scale(text_size.scale(system_font_scale));
+    let ui_ctx_text = ui_ctx.clone();
+    let weak_text = window.as_weak();
+    appearance.on_text_size_changed(move |value: SharedString| {
+        let size = chatter_core::services::appearance::TextSize::from_str(value.as_str());
+        if let Err(e) = ui_ctx_text.set_text_size(size) {
+            tracing::error!("Failed to save text size: {}", e);
+        }
+        if let Some(w) = weak_text.upgrade() {
+            let size = ui_ctx_text.text_size();
+            let appearance = w.global::<crate::Appearance>();
+            appearance.set_text_size(size.as_str().into());
+            appearance.set_text_scale(size.scale(system_font_scale));
+        }
+    });
+
+    appearance.set_density(ui_ctx.message_density().as_str().into());
+    let ui_ctx_density = ui_ctx.clone();
+    let weak_density = window.as_weak();
+    appearance.on_density_changed(move |value: SharedString| {
+        let density = chatter_core::services::appearance::MessageDensity::from_str(value.as_str());
+        if let Err(e) = ui_ctx_density.set_message_density(density) {
+            tracing::error!("Failed to save message spacing: {}", e);
+        }
+        if let Some(w) = weak_density.upgrade() {
+            w.global::<crate::Appearance>()
+                .set_density(ui_ctx_density.message_density().as_str().into());
+        }
+    });
+
+    // Sound and vibration (Settings › Notifications). Android keeps both on
+    // the OS notification channel, so the row opens its page; desktop
+    // notifiers take a sound flag; iOS has neither, so the row is hidden.
+    let sound = window.global::<crate::NotificationSound>();
+    #[cfg(target_os = "android")]
+    {
+        sound.set_mode("system".into());
+        sound.on_open_system_settings(
+            crate::platform::android::system_settings::open_message_notification_settings,
+        );
+    }
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    {
+        sound.set_mode("toggle".into());
+        sound.set_enabled(ui_ctx.notification_sound_enabled());
+        let ui_ctx_sound = ui_ctx.clone();
+        let weak_sound = window.as_weak();
+        sound.on_enabled_changed(move |enabled| {
+            if let Err(e) = ui_ctx_sound.set_notification_sound_enabled(enabled) {
+                tracing::error!("Failed to save notification sound: {}", e);
+            }
+            if let Some(w) = weak_sound.upgrade() {
+                w.global::<crate::NotificationSound>()
+                    .set_enabled(ui_ctx_sound.notification_sound_enabled());
+            }
+        });
+    }
+    #[cfg(target_os = "ios")]
+    let _ = sound;
 
     // Copy fingerprint
     let ui_ctx_fp = ui_ctx.clone();
@@ -178,28 +269,27 @@ pub fn wire_settings_callbacks(window: &MainWindow, ui_ctx: &Arc<ChatterClient>)
         });
     });
 
-    // Refresh prekeys
-    let weak_window = window.as_weak();
-    let ui_ctx_keys = ui_ctx.clone();
-
-    window.on_settings_refresh_keys(move || {
-        let weak = weak_window.clone();
-        let ui_ctx = ui_ctx_keys.clone();
-
+    // "Who can find me by my username" (Everyone / Nobody). Persisted and
+    // enforced by the SERVER (SetUsernameDiscoverability), so it holds on
+    // every device. On failure the choice reverts to the previous value.
+    let ui_ctx_discover = ui_ctx.clone();
+    let weak_discover = window.as_weak();
+    window.on_settings_username_discoverable_changed(move |discoverable: bool| {
+        let ui_ctx = ui_ctx_discover.clone();
+        let weak = weak_discover.clone();
         tokio::spawn(async move {
-            match ui_ctx.refresh_prekeys(100).await {
-                Ok(count) => {
-                    let count = count as i32;
-                    let _ = slint::invoke_from_event_loop(move || {
-                        if let Some(w) = weak.upgrade() {
-                            w.set_settings_prekey_count(count);
-                        }
-                    });
-                }
+            let shown = match ui_ctx.set_username_discoverability(discoverable).await {
+                Ok(persisted) => persisted,
                 Err(e) => {
-                    tracing::error!("Failed to refresh prekeys: {}", e);
+                    tracing::error!("Failed to set username discoverability on server: {}", e);
+                    !discoverable
                 }
-            }
+            };
+            let _ = slint::invoke_from_event_loop(move || {
+                if let Some(w) = weak.upgrade() {
+                    w.set_settings_username_discoverable(shown);
+                }
+            });
         });
     });
 
@@ -442,7 +532,7 @@ pub fn wire_settings_callbacks(window: &MainWindow, ui_ctx: &Arc<ChatterClient>)
                         w.set_recovery_codes(slint::ModelRc::new(slint::VecModel::from(model)));
                         w.set_settings_recovery_regen_password("".into());
                         w.set_recovery_codes_regenerated(true);
-                        w.set_active_modal("recovery-codes".into());
+                        crate::bin_ui::features::back::push(&w, "recovery-codes");
                     }
                     Err(e) => {
                         tracing::warn!("Recovery code regeneration failed: {e}");
@@ -585,6 +675,12 @@ pub fn wire_settings_callbacks(window: &MainWindow, ui_ctx: &Arc<ChatterClient>)
                     crate::bin_ui::features::modals::open_user_profile(
                         &w, &user_id, &auth_state, &user_state, Some(&ui_ctx),
                     );
+                    crate::bin_ui::features::back::push(&w, "user-profile");
+                    // The button says Edit, so open the editor, over the
+                    // profile it edits (REVIEW-R4 P2-24). open_user_profile
+                    // sets the own name and bio synchronously, which the
+                    // editor copies.
+                    w.invoke_profile_edit_profile();
                 }
             }
         });
@@ -639,7 +735,7 @@ pub fn wire_settings_callbacks(window: &MainWindow, ui_ctx: &Arc<ChatterClient>)
                             w.set_settings_delete_error("".into());
                             w.set_is_signed_in(false);
                             w.set_current_view("login".into());
-                            w.set_active_modal("none".into());
+                            crate::bin_ui::features::back::reset_to_chats(&w);
                             w.set_login_username("".into());
                             w.set_login_password("".into());
                             w.set_login_error("".into());
@@ -872,5 +968,102 @@ pub fn wire_settings_callbacks(window: &MainWindow, ui_ctx: &Arc<ChatterClient>)
             }
         })
         .ok();
+    });
+}
+
+/// Status/nav-bar icon colour for the palette in force: the app draws
+/// edge-to-edge on Android, so light icons vanish on the light palette.
+/// The OS font scale "Default" text size follows (Android's Settings ›
+/// Display › Font size); desktop has no such setting.
+fn system_font_scale() -> f32 {
+    #[cfg(target_os = "android")]
+    return crate::platform::android::system_settings::font_scale();
+    #[cfg(not(target_os = "android"))]
+    1.0
+}
+
+fn apply_system_bars(dark: bool) {
+    #[cfg(target_os = "android")]
+    crate::platform::android::activity::set_light_system_bars(!dark);
+    #[cfg(not(target_os = "android"))]
+    let _ = dark;
+}
+
+fn wire_profile_visibility(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
+    use chatter_core::services::profile_visibility::ProfileVisibility;
+
+    /// Run the change off the UI thread, then show the outcome.
+    fn apply(weak: slint::Weak<MainWindow>, ui_ctx: Arc<ChatterClient>, visibility: ProfileVisibility, pin: Option<String>) {
+        if let Some(w) = weak.upgrade() {
+            w.set_settings_profile_visibility_busy(true);
+            w.set_settings_profile_visibility_error("".into());
+        }
+        tokio::spawn(async move {
+            let result = ui_ctx.set_profile_visibility(visibility, pin.as_deref()).await;
+            let now = ui_ctx.profile_visibility().as_str();
+            let _ = slint::invoke_from_event_loop(move || {
+                let Some(w) = weak.upgrade() else { return };
+                w.set_settings_profile_visibility_busy(false);
+                w.set_settings_profile_visibility(now.into());
+                match result {
+                    Ok(()) => {
+                        w.set_settings_profile_visibility_pending("".into());
+                        w.set_settings_profile_visibility_pin("".into());
+                    }
+                    Err(e) => {
+                        tracing::warn!(error = %e, "profile visibility change failed");
+                        w.set_settings_profile_visibility_error(e.to_string().into());
+                    }
+                }
+            });
+        });
+    }
+
+    let ui_ctx_sel = ui_ctx.clone();
+    let weak_sel = window.as_weak();
+    window.on_settings_profile_visibility_selected(move |key: SharedString| {
+        let Some(visibility) = ProfileVisibility::parse(key.as_str()) else { return };
+        let (ui_ctx, weak) = (ui_ctx_sel.clone(), weak_sel.clone());
+        tokio::spawn(async move {
+            match ui_ctx.profile_visibility_needs_pin(visibility).await {
+                Ok(true) => {
+                    let _ = slint::invoke_from_event_loop(move || {
+                        if let Some(w) = weak.upgrade() {
+                            w.set_settings_profile_visibility_error("".into());
+                            w.set_settings_profile_visibility_pin("".into());
+                            w.set_settings_profile_visibility_pending(visibility.as_str().into());
+                        }
+                    });
+                }
+                Ok(false) => {
+                    let _ = slint::invoke_from_event_loop(move || {
+                        apply(weak, ui_ctx, visibility, None);
+                    });
+                }
+                Err(e) => {
+                    let _ = slint::invoke_from_event_loop(move || {
+                        if let Some(w) = weak.upgrade() {
+                            w.set_settings_profile_visibility_error(e.to_string().into());
+                        }
+                    });
+                }
+            }
+        });
+    });
+
+    let ui_ctx_conf = ui_ctx.clone();
+    let weak_conf = window.as_weak();
+    window.on_settings_profile_visibility_confirmed(move |key: SharedString, pin: SharedString| {
+        let Some(visibility) = ProfileVisibility::parse(key.as_str()) else { return };
+        apply(weak_conf.clone(), ui_ctx_conf.clone(), visibility, Some(pin.to_string()));
+    });
+
+    let weak_cancel = window.as_weak();
+    window.on_settings_profile_visibility_cancelled(move || {
+        if let Some(w) = weak_cancel.upgrade() {
+            w.set_settings_profile_visibility_pending("".into());
+            w.set_settings_profile_visibility_pin("".into());
+            w.set_settings_profile_visibility_error("".into());
+        }
     });
 }

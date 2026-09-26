@@ -1,6 +1,7 @@
 // ForwardMessageModal - Modal for forwarding messages to channels or DMs
 
 import { Colors } from "../theme/colors.slint";
+import { Appearance } from "../theme/appearance.slint";
 import { Spacing } from "../theme/spacing.slint";
 import { Typography } from "../theme/typography.slint";
 import { Modal } from "../components/modal.slint";
@@ -106,7 +107,7 @@ export component ForwardMessageModal inherits Rectangle {
                             // Note: Search filtering is done in Rust before passing to UI
                             property <bool> is-selected: root.selected-target-id == target.id;
 
-                            height: 48px;
+                            height: 48px * Appearance.text-grow;
                             background: is-selected ? Colors.primary.with-alpha(0.2) : target-touch.has-hover ? Colors.surface-hover : transparent;
                             border-radius: Spacing.radius-md;
 

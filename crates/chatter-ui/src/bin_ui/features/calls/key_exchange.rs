@@ -77,10 +77,6 @@ pub async fn handle_call_key_answer(
         call_data.verification_emoji_2 = setup.verification_emojis[1].clone().into();
         call_data.verification_emoji_3 = setup.verification_emojis[2].clone().into();
         call_data.verification_emoji_4 = setup.verification_emojis[3].clone().into();
-        let current_title = call_data.title.to_string();
-        if current_title == "Calling..." {
-            call_data.title = "Call".into();
-        }
         w.set_active_call_data(call_data);
 
         start_call_timer(&w, (setup.started_at_ns != 0).then_some(setup.started_at_ns));

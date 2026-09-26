@@ -5,6 +5,7 @@
 // path swaps the main form area in place for the friend picker.
 
 import { Colors } from "../theme/colors.slint";
+import { Appearance } from "../theme/appearance.slint";
 import { Spacing } from "../theme/spacing.slint";
 import { Typography } from "../theme/typography.slint";
 import { Icons } from "../theme/icons.slint";
@@ -146,7 +147,7 @@ export component CreateChannelModal inherits Rectangle {
 
     Modal {
         show: root.show-modal;
-        title: "New channel";
+        title: "New Channel";
         modal-width: 620px;
         max-modal-height: 720px;
 
@@ -286,8 +287,8 @@ export component CreateChannelModal inherits Rectangle {
                     horizontal-stretch: 1;
                     spacing: Spacing.sm;
 
-                    Input {
-                        placeholder: root.is-private-group ? "Group name" : "Channel name (e.g. team-updates)";
+                    name-input := Input {
+                        placeholder: root.is-private-group ? "Group name" : "Channel name";
                         text <=> root.channel-name;
                         error: root.error-message != "" && root.channel-name == "";
                         error-message: root.error-message != "" && root.channel-name == "" ? "Name is required" : "";
@@ -301,7 +302,8 @@ export component CreateChannelModal inherits Rectangle {
             }
 
             // ============================================================
-            // Access model — 3 pills
+            // Access model — 3 options, stacked as full-width rows. Side by
+            // side at a fixed height their descriptions overflowed on a phone.
             // ============================================================
             VerticalLayout {
                 spacing: Spacing.xs;
@@ -313,13 +315,11 @@ export component CreateChannelModal inherits Rectangle {
                     font-weight: Typography.medium;
                 }
 
-                HorizontalLayout {
+                VerticalLayout {
                     spacing: Spacing.sm;
 
                     // Open
                     Rectangle {
-                        height: 80px;
-                        horizontal-stretch: 1;
                         border-radius: Spacing.radius-md;
                         border-width: 1px;
                         border-color: root.is-open ? Colors.glow-cyan.with-alpha(0.5) : Colors.neo-inset-shadow;
@@ -363,8 +363,6 @@ export component CreateChannelModal inherits Rectangle {
 
                     // Invite-only
                     Rectangle {
-                        height: 80px;
-                        horizontal-stretch: 1;
                         border-radius: Spacing.radius-md;
                         border-width: 1px;
                         border-color: root.is-invite ? Colors.glow-cyan.with-alpha(0.5) : Colors.neo-inset-shadow;
@@ -408,8 +406,6 @@ export component CreateChannelModal inherits Rectangle {
 
                     // Private group
                     Rectangle {
-                        height: 80px;
-                        horizontal-stretch: 1;
                         border-radius: Spacing.radius-md;
                         border-width: 1px;
                         border-color: root.is-private-group ? Colors.group-accent.with-alpha(0.6) : Colors.neo-inset-shadow;
@@ -547,7 +543,7 @@ export component CreateChannelModal inherits Rectangle {
                             spacing: 2px;
 
                             for friend[idx] in root.available-friends: Rectangle {
-                                height: 48px;
+                                height: 48px * Appearance.text-grow;
                                 border-radius: Spacing.radius-sm;
                                 background: friend.selected ? Colors.neo-inset-bg :
                                             (friend-touch.has-hover ? Colors.surface-hover : transparent);
@@ -965,11 +961,11 @@ export component CreateChannelModal inherits Rectangle {
                 if root.is-private-group: Button {
                     text: root.loading ? "" : "Create group";
                     variant: "primary";
-                    disabled: root.channel-name == "" || root.selected-friend-count == 0 || root.loading;
+                    disabled: name-input.composed-text == "" || root.selected-friend-count == 0 || root.loading;
                     loading: root.loading;
                     clicked => {
-                        if root.channel-name != "" && root.selected-friend-count > 0 && !root.loading {
-                            root.create-private-group(root.channel-name, root.available-friends);
+                        if name-input.composed-text != "" && root.selected-friend-count > 0 && !root.loading {
+                            root.create-private-group(name-input.composed-text, root.available-friends);
                         }
                     }
                 }
@@ -978,12 +974,12 @@ export component CreateChannelModal inherits Rectangle {
                 if !root.is-private-group: Button {
                     text: root.loading ? "" : "Create";
                     variant: "primary";
-                    disabled: root.channel-name == "" || root.loading || (root.use-ai && (root.ai-provider == "" || root.ai-model == ""));
+                    disabled: name-input.composed-text == "" || root.loading || (root.use-ai && (root.ai-provider == "" || root.ai-model == ""));
                     loading: root.loading;
                     clicked => {
-                        if root.channel-name != "" && !root.loading && !(root.use-ai && (root.ai-provider == "" || root.ai-model == "")) {
+                        if name-input.composed-text != "" && !root.loading && !(root.use-ai && (root.ai-provider == "" || root.ai-model == "")) {
                             root.create(
-                                root.channel-name,
+                                name-input.composed-text,
                                 root.channel-description,
                                 root.use-ai ? "ai-assistant" : (root.use-ephemeral ? "ephemeral" : "general"),
                                 {

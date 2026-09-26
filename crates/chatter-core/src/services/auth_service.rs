@@ -330,6 +330,15 @@ impl AuthService {
 
     /// Set the sealed-sender RECEIVING policy on the server. Returns the value
     /// the server persisted (echoed back).
+    /// Point the server's UAK at `profile_key` after a rotation.
+    pub async fn set_unidentified_access_key(&self, profile_key: &[u8; 32]) -> Result<(), AuthError> {
+        let mut client = self.try_auth_client().ok_or(AuthError::NotLoggedIn)?;
+        client
+            .set_unidentified_access_key(&crate::crypto::derive_uak(profile_key))
+            .await
+            .map_err(AuthError::Network)
+    }
+
     pub async fn set_sealed_sender_policy(&self, allow_from_anyone: bool) -> Result<bool, AuthError> {
         let mut client = self.try_auth_client().ok_or(AuthError::NotLoggedIn)?;
         client
@@ -408,19 +417,19 @@ impl AuthService {
         // A missing identity is now carried out of here as a fact for the
         // caller to resolve (`ChatterClient::login` runs the SVR restore, and
         // only mints on an explicit user decision once recovery is ruled out).
-        // Login itself needs no identity key: the request carries a device auth
-        // token and a UAK, both derived from the profile key, not from this.
+        // Login itself needs no identity key: the request carries only a
+        // device auth token.
         let identity_key_pair = self.identity_manager.get_identity()?.map(|(_, kp)| kp);
 
         // For login, device_id might come from settings (re-auth) or be assigned by server
         let stored_device_id: Option<u32> = self.settings_repo.get(keys::CURRENT_DEVICE_ID).ok().flatten();
         let device_id_for_creds = stored_device_id.unwrap_or(1);
 
-        // Generate device credentials. UAK is derived from profile_key when
-        // available (existing device); on a fresh device with no local
-        // profile_key we send a transient random UAK and the post-login SVR
-        // restore + the next session bootstrap will derive the correct UAK
-        // from the recovered profile_key.
+        // Generate device credentials. Login never sends a UAK: the server's
+        // copy is account-level and moves only at registration and via
+        // SetUnidentifiedAccessKey, so a fresh device (no local profile_key
+        // yet, so a throwaway key here) or one that missed a ProfileKeySync
+        // cannot overwrite it.
         let credentials = match &stored_profile_key {
             Some(pk) => DeviceCredentials::generate(device_id_for_creds, pk),
             None => {
@@ -439,7 +448,6 @@ impl AuthService {
                 device_info,
                 &svr_public_key, // Derived from PIN
                 credentials.auth_token().as_bytes(),
-                credentials.unidentified_access_key(),
                 stored_device_id,
             )
             .await
@@ -857,7 +865,6 @@ impl AuthService {
                     .expect("Time should move forward")
                     .as_nanos() as u64,
             }),
-            unidentified_access_key: Some(uak.to_vec()), // Client-derived UAK (16 bytes)
             // Per NDSS '21: Do NOT enable unrestricted access by default.
             // Initial contact uses anonymous credentials (blind-signed tokens) instead.
             // This prevents spam while preserving sender anonymity.

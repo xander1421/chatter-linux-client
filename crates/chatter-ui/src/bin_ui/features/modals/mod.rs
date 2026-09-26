@@ -37,6 +37,7 @@ pub use channel_settings::{open_channel_settings, open_invite_member_modal, wire
 pub use friends::wire_friends_modal;
 pub use forward::wire_forward_message;
 pub use profile::open_user_profile;
+pub(crate) use sessions::session_to_slint;
 
 /// Wire modal callbacks.
 pub fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {

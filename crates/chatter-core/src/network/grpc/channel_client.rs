@@ -18,7 +18,7 @@ use crate::proto::chat_v1::{
     BannedUser, KickUserRequest, LeaveChannelRequest, ListArchivedChannelsRequest,
     ListBannedUsersRequest, MuteUserRequest, UnmuteUserRequest,
     ListArchivedChannelsResponse, ListChannelsRequest, ListChannelsResponse, UnarchiveChannelRequest,
-    UnarchiveChannelResponse, UnbanUserRequest, UpdateChannelRequest, UpdateMemberRoleRequest,
+    TransferOwnershipRequest, UnarchiveChannelResponse, UnbanUserRequest, UpdateChannelRequest, UpdateMemberRoleRequest,
     ChannelRole,
 };
 
@@ -422,6 +422,20 @@ impl ChannelClient {
             .map_err(|s| NetworkError::from_status(&s))
     }
 
+    /// Hand the channel to `new_owner_id`; the caller (the owner) becomes an
+    /// admin. The role changes arrive as `MemberUpdated` + `OwnershipTransferred`.
+    pub async fn transfer_ownership(&mut self, channel_id: &str, new_owner_id: &str) -> Result<(), NetworkError> {
+        let request = TransferOwnershipRequest {
+            channel_id: channel_id.to_string(),
+            new_owner_id: new_owner_id.to_string(),
+        };
+        self.inner
+            .transfer_ownership(request)
+            .await
+            .map(|_| ())
+            .map_err(|s| NetworkError::from_status(&s))
+    }
+
     /// Unban a user from a channel (streaming response).
     ///
     /// Returns stream of ChannelEvent with unban progress.
@@ -493,6 +507,24 @@ impl ChannelClient {
             .list_banned_users(request)
             .await
             .map(|r| r.into_inner().bans)
+            .map_err(|s| NetworkError::from_status(&s))
+    }
+
+    /// Why `user_id` is no longer in the channel, as far as the server
+    /// recorded it (ban, deletion); see the proto for who may ask.
+    pub async fn get_departure(
+        &mut self,
+        channel_id: &str,
+        user_id: &str,
+    ) -> Result<crate::proto::chat_v1::Departure, NetworkError> {
+        let request = crate::proto::chat_v1::GetDepartureRequest {
+            channel_id: channel_id.to_string(),
+            user_id: user_id.to_string(),
+        };
+        self.inner
+            .get_departure(request)
+            .await
+            .map(|r| r.into_inner())
             .map_err(|s| NetworkError::from_status(&s))
     }
 

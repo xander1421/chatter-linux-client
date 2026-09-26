@@ -59,9 +59,12 @@ pub(super) fn handle_message_received(
         .map(|id| id.to_string())
         .unwrap_or_else(|| ui_ctx.session_current_user_id().map(|id| id.to_string()).unwrap_or_default());
 
-    // Build sidebar preview + time via the shared core helpers.
-    let preview = ui_ctx.message_sidebar_preview(&message);
-    let timestamp_str = ui_ctx.sidebar_time(message.created_at);
+    // Build sidebar preview + time via the shared core helpers, from the
+    // conversation's NEWEST message rather than this one: a late-delivered
+    // older message (a resend, an offline backlog) flipped the row's preview
+    // and time backwards until the next rebuild put them right again.
+    let latest = ui_ctx.latest_message(&conversation_id, &conv_type);
+    let (preview, timestamp_str) = ui_ctx.sidebar_activity(Some(latest.as_ref().unwrap_or(&message)));
 
     // Core's one "is this message on screen" rule (mailbox DMs included).
     let is_active = ui_ctx.is_showing(&message);

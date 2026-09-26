@@ -210,13 +210,28 @@ impl ChatterClient {
                 let offer = self
                     .start_anon_dm_call(&anon_dm_id, is_video, display_name)
                     .await?;
+                let title = self.conversation_display_name(
+                    &crate::domain::ids::ChannelId::from_uuid(*anon_dm_id.as_uuid()),
+                    &crate::domain::message::ConversationType::AnonDm,
+                );
+                // The anon peer's call identity is an ephemeral key, learned
+                // only when they join — so the tile carries no id yet.
+                let peer = RingingPeer {
+                    user_id: String::new(),
+                    info: crate::ui::chat_data::CallParticipantInfo {
+                        initials: crate::ui::chat_data::initials_from_name(&title),
+                        display_name: title.clone(),
+                        avatar_bytes: None,
+                    },
+                };
                 Ok(OutgoingCallStart {
                     call_id: offer.room_name.clone(),
                     channel_id: anon_dm_id.to_string(),
                     is_video,
                     is_anonymous: true,
                     verification_emojis: None,
-                    title: "Calling...".into(),
+                    title,
+                    peer: Some(peer),
                 })
             }
 
@@ -230,7 +245,11 @@ impl ChatterClient {
                     is_video,
                     is_anonymous: true,
                     verification_emojis: None,
-                    title: "Calling...".into(),
+                    title: self.conversation_display_name(
+                        &crate::domain::ids::ChannelId::from_uuid(*group_id.as_uuid()),
+                        &crate::domain::message::ConversationType::AnonGroup,
+                    ),
+                    peer: None,
                 })
             }
 
@@ -241,13 +260,18 @@ impl ChatterClient {
                 let call_id = self
                     .start_dm_call(&peer_id, channel_id, call_type, user_id)
                     .await?;
+                let peer = RingingPeer {
+                    user_id: peer_id.to_string(),
+                    info: self.resolve_call_participant(&peer_id.to_string()),
+                };
                 Ok(OutgoingCallStart {
                     call_id: call_id.to_string(),
                     channel_id: channel_id.to_string(),
                     is_video,
                     is_anonymous: false,
                     verification_emojis: None,
-                    title: "Calling...".into(),
+                    title: peer.info.display_name.clone(),
+                    peer: Some(peer),
                 })
             }
 
@@ -257,13 +281,18 @@ impl ChatterClient {
                     let call_id = self
                         .start_dm_call(&peer_id, channel_id, call_type, user_id)
                         .await?;
+                    let peer = RingingPeer {
+                        user_id: peer_id.to_string(),
+                        info: self.resolve_call_participant(&peer_id.to_string()),
+                    };
                     Ok(OutgoingCallStart {
                         call_id: call_id.to_string(),
                         channel_id: channel_id.to_string(),
                         is_video,
                         is_anonymous: false,
                         verification_emojis: None,
-                        title: "Calling...".into(),
+                        title: peer.info.display_name.clone(),
+                        peer: Some(peer),
                     })
                 } else {
                     let setup = self
@@ -276,6 +305,7 @@ impl ChatterClient {
                         is_anonymous: false,
                         verification_emojis: Some(setup.verification_emojis),
                         title: String::new(), // UI substitutes channel name.
+                        peer: None,
                     })
                 }
             }
@@ -447,7 +477,7 @@ impl ChatterClient {
         call_id: &str,
         replaces_active: bool,
     ) -> Result<AcceptedIncomingCall, ClientError> {
-        use crate::services::call_worker::{CallHandle, OrchestratedCallKind};
+        use crate::services::call_worker::{CallEndReason, CallHandle, OrchestratedCallKind};
 
         let worker = self.call_service().get()
             .ok_or_else(|| ClientError::Inbox("Call service not initialized".into()))?
@@ -480,7 +510,7 @@ impl ChatterClient {
         let peer_id = snapshot.peer_id;
         let is_video = snapshot.is_video;
 
-        let accepted = match kind {
+        let accepted = async { Ok::<_, ClientError>(match kind {
             OrchestratedCallKind::DmStandard => {
                 let ephemeral = snapshot.ephemeral_public_key.ok_or_else(|| {
                     ClientError::Inbox(
@@ -521,9 +551,31 @@ impl ChatterClient {
                     "Group channel incoming accept not supported".into(),
                 ));
             }
-        };
+        }) }
+        .await;
 
-        Ok(accepted)
+        // The call left the ringing set above, so nothing else will ever end
+        // it: the history row stayed "missed" and the caller — told we
+        // answered, since the answer goes out before the join — sat in a room
+        // nobody joins. End it here: `ActiveEnded(Error)` files the row as
+        // failed and takes down the call view, and the hangup ends the caller's.
+        if let Err(e) = &accepted {
+            worker.orch_mark_ended(handle, CallEndReason::Error(e.to_string()));
+            if kind == OrchestratedCallKind::DmStandard {
+                if let Err(e) = self
+                    .call_signaling()
+                    .send_call_hangup(
+                        &crate::domain::ids::ChannelId::from(peer_id),
+                        call_id,
+                        crate::services::gateway::CallHangupReason::NetworkError,
+                    )
+                    .await
+                {
+                    tracing::warn!(error = %e, call_id, "Failed-accept hangup not delivered");
+                }
+            }
+        }
+        accepted
     }
 
     // ── Media / encryption pass-throughs ─────────────────────────────
@@ -1144,6 +1196,20 @@ pub struct OutgoingCallStart {
     /// calls). `None` for DM + anon calls — those populate after the peer's
     /// answer arrives.
     pub verification_emojis: Option<[String; 4]>,
-    /// Title hint. Empty string means "let the UI use the channel name".
+    /// Who is being called: the peer's display name for a DM, the
+    /// conversation name for an anon group. Empty for a channel group call,
+    /// where the UI uses the channel name it already shows.
     pub title: String,
+    /// The person being rung in a 1:1 call, so the ringing screen shows them
+    /// rather than the caller. `None` for group calls.
+    pub peer: Option<RingingPeer>,
+}
+
+/// The callee of a 1:1 outgoing call, resolved for display at dial time.
+#[derive(Debug, Clone)]
+pub struct RingingPeer {
+    /// The peer's call identity; empty for an anon DM, whose identity is an
+    /// ephemeral key only learned when they join.
+    pub user_id: String,
+    pub info: crate::ui::chat_data::CallParticipantInfo,
 }

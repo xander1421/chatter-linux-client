@@ -95,7 +95,10 @@ export component ThreadPanel inherits Rectangle {
             background: Colors.surface;
 
             HorizontalLayout {
-                padding: Spacing.sm;
+                // Horizontal padding only: vertical padding squeezed the 48dp
+                // chevron below its box and pulled the title off its centre.
+                padding-left: Spacing.xs;
+                padding-right: Spacing.sm;
                 spacing: Spacing.sm;
 
                 // Full-screen on a phone → back chevron, leading edge.
@@ -125,9 +128,10 @@ export component ThreadPanel inherits Rectangle {
                         // Reply count badge
                         if root.reply-count > 0: Rectangle {
                             width: badge-text.preferred-width + Spacing.sm;
-                            height: 18px;
+                            height: Spacing.badge-md;
+                            y: (parent.height - self.height) / 2;
                             background: Colors.primary.with-alpha(0.15);
-                            border-radius: 9px;
+                            border-radius: self.height / 2;
 
                             badge-text := Text {
                                 text: root.reply-count;
@@ -250,11 +254,15 @@ export component ThreadPanel inherits Rectangle {
                     alignment: center;
                     spacing: Spacing.sm;
 
-                    Text {
-                        text: "\u{1F4AC}\u{FE0F}"; // Speech bubble emoji (with emoji variant selector)
-                        font-family: Typography.font-family-emoji;
-                        font-size: 32px;
-                        horizontal-alignment: center;
+                    // A line icon, like every other empty state in the app.
+                    HorizontalLayout {
+                        alignment: center;
+                        Image {
+                            source: Icons.message-circle;
+                            width: 32px;
+                            height: 32px;
+                            colorize: Colors.text-muted;
+                        }
                     }
 
                     Text {
