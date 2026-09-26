@@ -277,7 +277,9 @@ export component MessageItem inherits Rectangle {
                             }
 
                             Text {
-                                text: is-missed ? "Missed call" : (is-outgoing ? "Outgoing call" : "Incoming call");
+                                text: is-missed ? "Missed call"
+                                    : root.call-type == "declined" ? "Declined call"
+                                    : is-outgoing ? "Outgoing call" : "Incoming call";
                                 color: is-missed ? Colors.error : Colors.text-primary;
                                 font-size: Typography.sm;
                                 font-weight: Typography.medium;

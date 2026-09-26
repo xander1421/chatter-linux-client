@@ -113,6 +113,8 @@ fn android_main(app: i_slint_backend_android_activity::AndroidApp) {
     // publish camera video (chatter-core drives capture, this feeds it frames).
     crate::platform::android::camera::init();
 
+    crate::platform::android::activity::clear_launch_cover_after_first_frame(slint::ComponentHandle::window(&app_state.window));
+
     app_run(app_state);
 }
 

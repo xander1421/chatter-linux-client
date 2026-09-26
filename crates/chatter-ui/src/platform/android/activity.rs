@@ -143,3 +143,32 @@ pub fn set_light_system_bars(light: bool) {
         tracing::error!("Android: setLightSystemBars({light}) failed: {e}");
     }
 }
+
+/// Lift `MainActivity`'s launch cover (the theme colour painted over the
+/// SurfaceView until Slint has drawn into it) once the first frame is rendered.
+/// Kotlin also lifts it on a timeout, so a frame that never reports here
+/// cannot leave the app covered.
+pub fn clear_launch_cover_after_first_frame(window: &slint::Window) {
+    let mut done = false;
+    let res = window.set_rendering_notifier(move |state, _| {
+        if done || !matches!(state, slint::RenderingState::AfterRendering) {
+            return;
+        }
+        done = true;
+        let result = (|| -> Result<(), String> {
+            let act = activity()?;
+            let mut env = jni_env()?;
+            let res = env.call_method(act, "firstFrameDrawn", "()V", &[]);
+            if res.is_err() {
+                clear_exception(&mut env);
+            }
+            res.map(|_| ()).map_err(|e| e.to_string())
+        })();
+        if let Err(e) = result {
+            tracing::error!("Android: firstFrameDrawn failed: {e}");
+        }
+    });
+    if let Err(e) = res {
+        tracing::error!("Android: no rendering notifier for the launch cover: {e:?}");
+    }
+}

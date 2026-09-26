@@ -80,6 +80,7 @@ export component ChatLayout inherits Rectangle {
     // Non-empty when the viewer may not post here (muted, removed): the
     // composer is replaced by this text, worded by chatter-core.
     in property <string> composer-notice: "";
+    in property <bool> conversation-read-only: false;
     // Non-empty while a send is on the wire — see message_composer.slint.
     in property <string> composer-send-status: "";
     in property <[PendingAttachmentData]> pending-attachments: [];
@@ -179,6 +180,7 @@ export component ChatLayout inherits Rectangle {
             conversation-kind: root.conversation-kind;
             private-channel: root.private-channel;
             member-count: root.member-count;
+            read-only: root.conversation-read-only;
             topic: root.topic;
             typing-indicator: root.typing-indicator;
             presence-status: root.presence-status;

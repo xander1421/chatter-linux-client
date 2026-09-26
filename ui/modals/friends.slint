@@ -338,9 +338,14 @@ export component FriendsModal inherits Rectangle {
                                         }
                                     }
 
+                                    // No stretch: sharing the row's slack with
+                                    // the name, the centred icons drifted with
+                                    // the name's length. Fixed, they form one
+                                    // right-hand column.
                                     HorizontalLayout {
                                         spacing: Spacing.xs;
                                         alignment: center;
+                                        horizontal-stretch: 0;
 
                                         // Message button
                                         Rectangle {

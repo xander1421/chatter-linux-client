@@ -4102,3 +4102,34 @@ fn ux3_account_menu_pushes_settings_and_fab_opens_create_menu() {
     assert!(back::handle_back(&w));
     assert_eq!(w.get_active_modal().as_str(), "none");
 }
+
+/// D1: a call answered from the phone's chat list raises the pane with no chat
+/// behind it; when the call ends the phone must fall back to the list, not to
+/// the empty "Select a conversation" pane. A call over an open chat returns to
+/// that chat.
+#[test]
+fn phone_call_end_without_chat_returns_to_list() {
+    use slint::ComponentHandle;
+    let w = boot();
+    w.set_current_view("main".into());
+    w.set_is_mobile_platform(true);
+    w.window().set_size(slint::LogicalSize::new(400.0, 800.0));
+    assert!(w.get_compact_layout());
+
+    w.set_channel_name("".into());
+    w.set_mobile_show_chat(true);
+    // `changed` handlers run on the next tick, not inside the setter.
+    w.set_active_call_visible(true);
+    slint::platform::update_timers_and_animations();
+    w.set_active_call_visible(false);
+    slint::platform::update_timers_and_animations();
+    assert!(!w.get_mobile_show_chat(), "call end left the phone on the empty pane");
+
+    w.set_channel_name("Bob".into());
+    w.set_mobile_show_chat(true);
+    w.set_active_call_visible(true);
+    slint::platform::update_timers_and_animations();
+    w.set_active_call_visible(false);
+    slint::platform::update_timers_and_animations();
+    assert!(w.get_mobile_show_chat(), "call end closed the chat it was placed from");
+}

@@ -410,7 +410,9 @@ export component SectionContextMenu inherits Rectangle {
 
             if root.can-delete && root.confirm-delete: MenuItem {
                 icon: Icons.trash;
-                label: "Delete all messages here?";
+                // Short enough for the phone menu's width: "Delete all
+                // messages here?" was clipped to "Delete all messages ...".
+                label: "Yes, delete chat";
                 destructive: true;
                 mobile-mode: root.mobile-mode;
                 clicked => {

@@ -98,7 +98,7 @@ export struct MessageItemData {
     is-pinned: bool,          // Whether message is pinned
     // Call message fields
     is-call: bool,            // Whether this is a call event message
-    call-type: string,        // "outgoing", "incoming", "missed"
+    call-type: string,        // "outgoing", "incoming", "missed", "declined"
     call-duration: string,    // Formatted duration "1 min 30 s" or empty for missed
     // Message grouping (set by Rust when preparing message list)
     show-date-separator: bool,     // Show date separator bar before this message

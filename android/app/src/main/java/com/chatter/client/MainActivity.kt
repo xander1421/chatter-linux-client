@@ -1,5 +1,6 @@
 package com.chatter.client
 
+import android.app.UiModeManager
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.content.res.Configuration
@@ -7,6 +8,8 @@ import android.graphics.drawable.ColorDrawable
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.provider.OpenableColumns
 import android.util.Log
 import android.view.KeyEvent
@@ -43,8 +46,17 @@ class MainActivity : GameActivity() {
         // themes.xml resolves it from the SYSTEM night mode, so a Light app on
         // a dark phone launched on ~1.4 s of black. Paint the app's own theme,
         // mirrored here by setThemeMode, before anything draws.
-        window.setBackgroundDrawable(ColorDrawable(themeBackground()))
+        val background = themeBackground()
+        window.setBackgroundDrawable(ColorDrawable(background))
         super.onCreate(savedInstanceState)
+        // The window background never shows over GameActivity's SurfaceView:
+        // it punches a hole in the window, and the empty surface behind it is
+        // black until Slint's first frame (~1.7 s on the S9, after app_init).
+        // Cover it in the theme colour until Rust reports that frame
+        // (firstFrameDrawn); the timeout guarantees a missed report can never
+        // leave the app hidden behind the cover.
+        launchCover?.setBackgroundColor(background)
+        Handler(Looper.getMainLooper()).postDelayed({ firstFrameDrawn() }, LAUNCH_COVER_TIMEOUT_MS)
         // Slint paints the theme background under the system bars, which
         // themes.xml makes transparent. Android 10+ would lay a grey contrast
         // scrim over a transparent bar; the theme background is the contrast.
@@ -133,6 +145,30 @@ class MainActivity : GameActivity() {
     @Suppress("unused")
     fun setThemeMode(mode: String) {
         getSharedPreferences(THEME_PREFS, MODE_PRIVATE).edit().putString(THEME_MODE, mode).apply()
+        // API 31+: the system draws its starting window from the app's night
+        // mode, before onCreate runs at all. Persisted by the system; uiMode is
+        // in the manifest's configChanges, so this does not recreate us.
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            getSystemService(UiModeManager::class.java).setApplicationNightMode(
+                when (mode) {
+                    "light" -> UiModeManager.MODE_NIGHT_NO
+                    "dark" -> UiModeManager.MODE_NIGHT_YES
+                    else -> UiModeManager.MODE_NIGHT_AUTO
+                }
+            )
+        }
+    }
+
+    /** The SurfaceView Slint draws into, covered until its first frame. */
+    private var launchCover: View? = null
+
+    /** Called from Rust (JNI) after Slint's first frame; idempotent. */
+    @Suppress("unused")
+    fun firstFrameDrawn() {
+        runOnUiThread {
+            launchCover?.background = null
+            launchCover = null
+        }
     }
 
     /** colors.xml's window_background for the mirrored theme; System = uiMode. */
@@ -218,7 +254,8 @@ class MainActivity : GameActivity() {
      * layer: the first Back hides the keyboard, the next one navigates — what
      * the S9 already did. With no keyboard up, Back is untouched.
      */
-    override fun createSurfaceView(): InputEnabledSurfaceView = BackHidesImeSurfaceView()
+    override fun createSurfaceView(): InputEnabledSurfaceView =
+        BackHidesImeSurfaceView().also { launchCover = it }
 
     private inner class BackHidesImeSurfaceView : InputEnabledSurfaceView(this@MainActivity) {
         /** The current Back press started while the keyboard was up. */
@@ -448,5 +485,6 @@ class MainActivity : GameActivity() {
         const val TAG = "ChatterFilePicker"
         const val THEME_PREFS = "chatter_theme"
         const val THEME_MODE = "mode"
+        const val LAUNCH_COVER_TIMEOUT_MS = 5_000L
     }
 }

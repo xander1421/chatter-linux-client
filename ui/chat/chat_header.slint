@@ -80,6 +80,9 @@ export component ChatHeader inherits Rectangle {
     // Only meaningful for `ConversationKind.channel`: an invite-only channel.
     in property <bool> private-channel: false;
     in property <int> member-count: 0;
+    // A channel we left or were removed from: we no longer see its roster
+    // (Channel Settings lists no one) and, as in Signal, cannot call it.
+    in property <bool> read-only: false;
     in property <string> topic: "";
     in property <string> typing-indicator: "";
     in property <string> presence-status: "offline";
@@ -130,7 +133,7 @@ export component ChatHeader inherits Rectangle {
     property <bool> has-channel: channel-name != "";
 
     // Show member count for channels and private groups (not DMs)
-    property <bool> show-member-count: has-channel && !tight && (is-channel || is-private-group) && member-count > 0;
+    property <bool> show-member-count: has-channel && !tight && !read-only && (is-channel || is-private-group) && member-count > 0;
 
     // Show settings for regular channels and private groups, not for anon DMs or saved messages
     property <bool> show-settings: has-channel && ((!is-anon-dm && !is-saved) || is-private-group) && !is-mesh;
@@ -188,7 +191,7 @@ export component ChatHeader inherits Rectangle {
     property <bool> show-invite: has-channel && !tight && !is-dm && !is-anon-dm && !is-saved && !is-mesh;
 
     // Show call buttons for everything except saved messages
-    property <bool> show-calls: has-channel && !is-saved && !is-mesh;
+    property <bool> show-calls: has-channel && !is-saved && !is-mesh && !read-only;
 
     // "Touch input", plumbed from ChatLayout. The 52px/28px/18px set below is
     // mouse density; on a phone this is the bar you navigate the whole app from
@@ -371,7 +374,7 @@ export component ChatHeader inherits Rectangle {
                     }
                     // On a phone the inline count below has no room; it goes
                     // under the name instead, as Signal/Telegram groups do.
-                    if root.tight && has-channel && (is-channel || is-private-group) && member-count > 0: Text {
+                    if root.tight && has-channel && !root.read-only && (is-channel || is-private-group) && member-count > 0: Text {
                         text: root.member-count == 1 ? "1 member" : "\{root.member-count} members";
                         color: Colors.text-muted;
                         font-size: Typography.xs;

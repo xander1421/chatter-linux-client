@@ -97,10 +97,12 @@ fn set_send_notice(
     if ui_ctx.chat_state().get().active_channel_id != Some(channel_id) {
         return;
     }
+    let read_only = ui_ctx.is_former_channel(&channel_id);
     let weak = weak.clone();
     let _ = slint::invoke_from_event_loop(move || {
         if let Some(w) = weak.upgrade() {
             w.set_composer_notice(notice.into());
+            w.set_conversation_read_only(read_only);
         }
     });
 }
@@ -129,6 +131,7 @@ fn wire_send_notice(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             let _ = slint::invoke_from_event_loop(move || {
                 if let Some(w) = weak_clear.upgrade() {
                     w.set_composer_notice("".into());
+                    w.set_conversation_read_only(false);
                 }
             });
             if let Some(channel_id) = current {

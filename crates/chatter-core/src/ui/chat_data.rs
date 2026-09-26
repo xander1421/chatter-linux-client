@@ -522,6 +522,9 @@ pub fn extract_content_text(content: &MessageContent) -> String {
                 crate::domain::message::CallMessageType::Missed => {
                     format!("Missed call from {}", call.initiator_name)
                 }
+                crate::domain::message::CallMessageType::Declined => {
+                    format!("Declined call from {}", call.initiator_name)
+                }
             }
         }
         MessageContent::Encrypted(_) => "[Encrypted message]".to_string(),

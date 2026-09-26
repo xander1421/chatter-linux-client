@@ -253,10 +253,10 @@ fn dm_call_bubble(entry: &CallHistoryEntry, me: UserId) -> Option<Message> {
         _ => return None,
     };
     let incoming = entry.direction == CallDirection::Incoming;
-    let call_type = if incoming && entry.result == CallResult::Missed {
-        CallMessageType::Missed
-    } else {
-        CallMessageType::Ended
+    let call_type = match entry.result {
+        CallResult::Missed if incoming => CallMessageType::Missed,
+        CallResult::Declined if incoming => CallMessageType::Declined,
+        _ => CallMessageType::Ended,
     };
     let now = chrono::Utc::now();
     let mut bubble = Message::new_text(
@@ -337,11 +337,11 @@ mod dm_call_bubble_tests {
     }
 
     #[test]
-    fn only_an_unanswered_incoming_call_reads_as_missed() {
+    fn only_an_incoming_call_reads_as_missed_or_declined() {
         let (me, peer) = (UserId::new(), UserId::new());
         let kind = |d, r| call(&dm_call_bubble(&row(peer, d, r, None), me).unwrap()).call_type.clone();
         assert_eq!(kind(CallDirection::Incoming, CallResult::Missed), CallMessageType::Missed);
-        assert_eq!(kind(CallDirection::Incoming, CallResult::Declined), CallMessageType::Ended);
+        assert_eq!(kind(CallDirection::Incoming, CallResult::Declined), CallMessageType::Declined);
         // Our call nobody picked up is still an outgoing call.
         assert_eq!(kind(CallDirection::Outgoing, CallResult::Missed), CallMessageType::Ended);
         assert_eq!(kind(CallDirection::Outgoing, CallResult::Declined), CallMessageType::Ended);

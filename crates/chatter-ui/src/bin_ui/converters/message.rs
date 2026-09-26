@@ -113,7 +113,7 @@ pub struct MessageDisplayData {
     // Call message fields
     pub is_pinned: bool,
     pub is_call: bool,
-    pub call_message_type: String,  // "started", "ended", "missed" (raw from domain)
+    pub call_message_type: String,  // "started", "ended", "missed", "declined" (raw from domain)
     pub call_initiator_id: String,  // User ID of who initiated the call
     pub call_duration: String,      // "1 min 30 s" or empty
 }
@@ -166,6 +166,7 @@ impl MessageDisplayData {
         let call_type = if self.is_call {
             match self.call_message_type.as_str() {
                 "missed" => "missed".to_string(),
+                "declined" => "declined".to_string(),
                 _ => {
                     // If we initiated, it's outgoing; otherwise incoming
                     if self.call_initiator_id == current_user_id {
@@ -324,6 +325,7 @@ pub fn message_to_display_data_with_replies(
                 CallMessageType::Started => "started",
                 CallMessageType::Ended => "ended",
                 CallMessageType::Missed => "missed",
+                CallMessageType::Declined => "declined",
             };
             let duration = call_msg.duration_display().unwrap_or_default();
             (

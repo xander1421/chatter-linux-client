@@ -210,17 +210,18 @@ export component CallHistoryScreen inherits Rectangle {
                                         y: (parent.height - self.height) / 2;
                                     }
 
-                                    // The outcome may elide; the time never
-                                    // does — it was the part being cut off.
-                                    // Neither stretches: sharing the slack
-                                    // with the spacer elided "Incoming · 0:16"
-                                    // to "0…" with room to spare.
+                                    // The outcome takes all the slack and may
+                                    // elide; the time keeps its natural width
+                                    // and never does. Sizing the outcome to
+                                    // exactly its preferred width (FX4) still
+                                    // elided "Incoming · 0:16" to "0…" on the
+                                    // phone with the row half empty.
                                     Text {
-                                        text: row.detail + " ·";
+                                        text: row.detail;
                                         color: Colors.text-muted;
                                         font-size: root.row-sub-size;
                                         overflow: elide;
-                                        horizontal-stretch: 0;
+                                        horizontal-stretch: 1;
                                     }
 
                                     Text {
@@ -229,8 +230,6 @@ export component CallHistoryScreen inherits Rectangle {
                                         font-size: root.row-sub-size;
                                         horizontal-stretch: 0;
                                     }
-
-                                    Rectangle { horizontal-stretch: 1; }
                                 }
                             }
 

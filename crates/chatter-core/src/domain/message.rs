@@ -368,6 +368,7 @@ impl Message {
             MessageContent::Call(call) => {
                 let what = match call.call_type {
                     CallMessageType::Missed => "Missed call",
+                    CallMessageType::Declined => "Declined call",
                     _ if current_user_id == Some(&call.initiator_id) => "Outgoing call",
                     _ => "Incoming call",
                 };
@@ -762,6 +763,8 @@ pub enum CallMessageType {
     Started,
     Ended,
     Missed,
+    /// An incoming call we declined (the Calls tab's "Declined").
+    Declined,
 }
 
 // ============================================================================
@@ -1122,6 +1125,7 @@ mod tests {
         assert_eq!(call(them, CallMessageType::Missed).sidebar_preview(Some(&me), None), "\u{1F4DE} Missed call");
         assert_eq!(call(them, CallMessageType::Ended).sidebar_preview(Some(&me), None), "\u{1F4DE} Incoming call");
         assert_eq!(call(me, CallMessageType::Ended).sidebar_preview(Some(&me), None), "\u{1F4DE} Outgoing call");
+        assert_eq!(call(them, CallMessageType::Declined).sidebar_preview(Some(&me), None), "\u{1F4DE} Declined call");
     }
 
     #[test]

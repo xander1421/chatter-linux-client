@@ -338,6 +338,8 @@ export component App inherits Rectangle {
     in-out property <bool> composer-stash-held: false;
     in property <string> composer-placeholder: "Type a message...";
     in property <string> composer-notice: "";
+    // A channel we are no longer in (core's `is_former_channel`): read-only.
+    in property <bool> conversation-read-only: false;
     // Written by `bin_ui::features::chat::send_message` around the send await.
     in property <string> composer-send-status: "";
     in property <[PendingAttachmentData]> pending-attachments: [];
@@ -813,6 +815,12 @@ export component App inherits Rectangle {
         // would hide them with nothing in their place.
         if !root.active-call-visible {
             root.active-call-fullscreen = false;
+            // A call answered from the list raised the phone pane with no chat
+            // behind it (`open_call_screen`); every end path lands here, so
+            // drop back to the list rather than onto "Select a conversation".
+            if root.compact-layout && root.channel-name == "" {
+                root.mobile-show-chat = false;
+            }
         }
     }
     // Leaving the pane (Back on a phone) leaves the call screen too; the
@@ -1681,6 +1689,7 @@ export component App inherits Rectangle {
                     composer-text <=> root.composer-text;
                     composer-placeholder: root.composer-placeholder;
                     composer-notice: root.composer-notice;
+                    conversation-read-only: root.conversation-read-only;
                     composer-send-status: root.composer-send-status;
                     pending-attachments: root.pending-attachments;
                     composer-is-editing <=> root.composer-is-editing;
