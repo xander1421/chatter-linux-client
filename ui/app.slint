@@ -3335,11 +3335,11 @@ export component App inherits Rectangle {
     // Only in the app proper: on login / register / recovery it offered
     // Chats, Settings and Profile to someone who is not signed in.
     // Compose FAB (Signal / Telegram): bottom-right of the Chats tab, inset
-    // from the dock's edge and clear above it. On top of the list and the
-    // dock; nothing can be above it because fab-visible already hides it
-    // whenever a dialog, search or selection is open.
+    // from the dock's edge and clear above it. Above the list (-2) and the
+    // dock (-1), under every modal and overlay (0) — the incoming-call screen
+    // and toasts are not covered by fab-visible, so they must stay on top.
     if root.fab-visible: Rectangle {
-        z: 10;
+        z: -0.5;
         width: Spacing.fab-size;
         height: Spacing.fab-size;
         x: parent.width - self.width - Spacing.xl;

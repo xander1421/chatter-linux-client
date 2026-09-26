@@ -2220,7 +2220,8 @@ fn back_pops_the_modal_stack_before_leaving_the_tab() {
 }
 
 /// The bottom tab bar and the return-to-call bar are layered UNDER every
-/// pushed modal (z -1, with the chat column at -2), so a dialog's backdrop
+/// pushed modal (z -1, with the chat column at -2, the Chats FAB at -0.5
+/// between the dock and the modals), so a dialog's backdrop
 /// dims them and takes their taps; the tab screens sit at the same layer,
 /// declared before the bar, so they never cover it. And the bar highlights
 /// `active-tab`, not something derived from whichever modal is open.
@@ -2240,7 +2241,7 @@ fn tab_bar_and_call_bar_sit_under_pushed_modals() {
         let at = app.find(header).unwrap_or_else(|| panic!("app.slint lost `{header}`"));
         let body = &app[at..at + 400];
         assert!(
-            body.contains("z: -1;") || body.contains("z: -2;"),
+            body.contains("z: -1;") || body.contains("z: -2;") || body.contains("z: -0.5;"),
             "`{header}` is no longer layered under the modals"
         );
     }
