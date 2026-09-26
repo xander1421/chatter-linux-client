@@ -20,6 +20,11 @@ export global Colors {
     out property <color> background: Appearance.dark ? #000000 : #f2f3f5;
     out property <color> surface: Appearance.dark ? #0a0a0b : #ffffff;
     out property <color> surface-hover: Appearance.dark ? #141416 : #e7e9ec;
+    // Secondary-button fill. Its own step, not `surface`: a secondary button
+    // sits on the page AND on cards (which are `surface`), and with no stroke
+    // a surface-filled button on a card was a bare label (RC24 D2).
+    out property <color> fill-secondary: Appearance.dark ? #232326 : #e2e4e8;
+    out property <color> fill-secondary-hover: Appearance.dark ? #2e2e32 : #d5d8dd;
 
     // Text colors (4.5:1 contrast minimum on black)
     out property <color> text-primary: Appearance.dark ? #f0f0f2 : #111418;

@@ -242,7 +242,11 @@ export component MessageItem inherits Rectangle {
 
             Rectangle {
                 property <bool> is-missed: root.call-type == "missed";
-                property <bool> is-outgoing: root.call-type == "outgoing";
+                // Direction is who PLACED the call — `is-own` is exactly that
+                // for a call message (converters/message.rs, initiator ==
+                // current user). call-type only says outgoing/incoming for
+                // answered calls, so a caller's "declined" drew ↙ (RC24 D4).
+                property <bool> is-outgoing: root.is-own;
 
                 width: call-content.preferred-width + Spacing.lg * 2;
                 height: call-content.preferred-height + Spacing.md * 2;

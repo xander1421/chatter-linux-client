@@ -31,19 +31,10 @@ export component Toast inherits Rectangle {
     background: Colors.surface;
     border-radius: Spacing.radius-md;
 
-    // Left accent border
-    Rectangle {
-        x: 0;
-        y: 0;
-        width: 4px;
-        height: parent.height;
-        background: variant-color;
-        border-radius: Spacing.radius-md;
-    }
-
     content-layout := HorizontalLayout {
+        // No left accent bar: a flat toast, Signal-style. The variant dot
+        // already carries success/error/warning/info.
         padding: Spacing.md;
-        padding-left: Spacing.lg;  // Extra padding for accent border
         spacing: Spacing.md;
 
         // Variant indicator circle
@@ -69,32 +60,38 @@ export component Toast inherits Rectangle {
             vertical-alignment: center;
         }
 
-        // Dismiss button
-        Rectangle {
-            // 32px was under the touch minimum, on a control whose whole job is
-            // to be tapped by someone who wants the message gone.
-            width: Spacing.touch-target-min;
-            height: Spacing.touch-target-min;
-            border-radius: Spacing.radius-sm;
-            background: dismiss-area.has-hover ? Colors.surface-hover : transparent;
+        // Dismiss button. Centred like the dot: the toast is taller than
+        // this row's fixed-size box, which a layout leaves at the top — the
+        // ✕ sat above the text axis (RC24 D3).
+        VerticalLayout {
+            alignment: center;
 
-            // The bundled SVG, not U+2715. Inter has no glyph for that codepoint
-            // and Slint's fallback drew a tofu box — so the only way to dismiss a
-            // toast was labelled with a missing-character rectangle.
-            Image {
-                source: Icons.x;
-                width: 16px;
-                height: 16px;
-                colorize: Colors.text-muted;
-                x: (parent.width - self.width) / 2;
-                y: (parent.height - self.height) / 2;
-            }
+            Rectangle {
+                // 32px was under the touch minimum, on a control whose whole job is
+                // to be tapped by someone who wants the message gone.
+                width: Spacing.touch-target-min;
+                height: Spacing.touch-target-min;
+                border-radius: Spacing.radius-sm;
+                background: dismiss-area.has-hover ? Colors.surface-hover : transparent;
 
-            dismiss-area := TouchArea {
-                width: 100%;
-                height: 100%;
-                clicked => {
-                    root.dismissed();
+                // The bundled SVG, not U+2715. Inter has no glyph for that codepoint
+                // and Slint's fallback drew a tofu box — so the only way to dismiss a
+                // toast was labelled with a missing-character rectangle.
+                Image {
+                    source: Icons.x;
+                    width: 16px;
+                    height: 16px;
+                    colorize: Colors.text-muted;
+                    x: (parent.width - self.width) / 2;
+                    y: (parent.height - self.height) / 2;
+                }
+
+                dismiss-area := TouchArea {
+                    width: 100%;
+                    height: 100%;
+                    clicked => {
+                        root.dismissed();
+                    }
                 }
             }
         }

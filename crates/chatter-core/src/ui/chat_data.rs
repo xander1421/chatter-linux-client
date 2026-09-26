@@ -437,6 +437,29 @@ pub fn format_timestamp(datetime: DateTime<Utc>) -> String {
     local.format("%b %-d, %Y").to_string()
 }
 
+/// A sidebar row's right-hand time, in local time: "14:03" today,
+/// "Sep 24, 14:03" before. The live update and the rebuild both go through
+/// here — the live path used the sender's clock and a different format, so a
+/// row's time changed shape on the next rebuild. The Calls tab uses it too:
+/// "Yesterday 10:07 PM" left no room for the outcome on a phone row.
+pub fn sidebar_time_at(
+    at: chrono::DateTime<chrono::Utc>,
+    now: chrono::DateTime<chrono::Local>,
+) -> String {
+    // Signal's chat-list rule: a time only for today; older rows get the
+    // day, which is what the eye scans for there.
+    use chrono::Datelike;
+    let local = at.with_timezone(&chrono::Local);
+    let days = (now.date_naive() - local.date_naive()).num_days();
+    match days {
+        ..=0 => local.format("%H:%M").to_string(),
+        1 => "Yesterday".to_string(),
+        2..=6 => local.format("%a").to_string(),
+        _ if local.year() == now.year() => local.format("%b %-d").to_string(),
+        _ => local.format("%b %-d, %Y").to_string(),
+    }
+}
+
 /// The date chip between messages from different days: "Today",
 /// "Yesterday", a weekday within the last week, then "Sep 25" this year and
 /// "Sep 25, 2025" before it. Each label names exactly one local day in any

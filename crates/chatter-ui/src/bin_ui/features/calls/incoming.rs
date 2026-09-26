@@ -325,6 +325,12 @@ fn show_answering(w: &MainWindow) {
 fn open_call_screen(w: &MainWindow) {
     crate::bin_ui::features::back::reset_to_chats(&w);
     if w.get_compact_layout() {
+        // Answered from the list: the call's end drops back to it (app.slint
+        // `changed active-call-visible`). Only ever set here — this runs twice
+        // per answer, and the second time the pane is already up.
+        if !w.get_mobile_show_chat() {
+            w.set_call_raised_pane(true);
+        }
         w.set_mobile_show_chat(true);
         w.set_active_call_fullscreen(true);
     }

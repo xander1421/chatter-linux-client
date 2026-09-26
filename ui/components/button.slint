@@ -25,22 +25,22 @@ export component Button inherits Rectangle {
     property <color> bg-color: {
         if disabled {
             variant == "primary" ? Colors.primary :
-            variant == "secondary" ? Colors.surface :
+            variant == "secondary" ? Colors.fill-secondary :
             variant == "danger" ? Colors.error :
             transparent
         } else if pressed {
             variant == "primary" ? Colors.primary-active :
-            variant == "secondary" ? Colors.surface-hover :
+            variant == "secondary" ? Colors.fill-secondary-hover :
             variant == "danger" ? Colors.error-hover :
             Colors.surface-hover.with-alpha(0.2)
         } else if hover {
             variant == "primary" ? Colors.primary-hover :
-            variant == "secondary" ? Colors.surface-hover :
+            variant == "secondary" ? Colors.fill-secondary-hover :
             variant == "danger" ? Colors.error-hover :
             Colors.surface.with-alpha(0.1)
         } else {
             variant == "primary" ? Colors.primary :
-            variant == "secondary" ? Colors.surface :
+            variant == "secondary" ? Colors.fill-secondary :
             variant == "danger" ? Colors.error :
             transparent
         }

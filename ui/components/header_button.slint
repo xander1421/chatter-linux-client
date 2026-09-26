@@ -3,9 +3,15 @@
 // Back, close, ⋮, search, call, video, +, Shield, settings: every icon control
 // in every title row of the app is this component, so they all share one box
 // (Spacing.header-action-box / -touch), one glyph size (Spacing.header-glyph /
-// -touch), one hover/pressed treatment and no stroke. The box is square and
-// the same in every row, so a HorizontalLayout whose height is that box puts
-// each button and the title (vertical-alignment: center) on one axis.
+// -touch), one hover/pressed treatment and no stroke.
+//
+// The ROOT has no fixed height: in a layout it stretches to the row (never
+// shorter than the box) and draws the square box vertically centred, so the
+// button sits on the row's axis however tall the row is. A fixed-height child
+// is left at the TOP of a taller HorizontalLayout — that put every chat-header
+// and selection-bar button above its title (RC24 D1). Outside a layout the
+// root fills its parent, so a caller that positions it absolutely centres the
+// box in the parent too.
 // Adjacent header buttons sit Spacing.header-action-gap apart.
 //
 // The test `headers_use_the_shared_header_button` in ui_wiring.rs fails if a
@@ -34,29 +40,36 @@ export component HeaderButton inherits Rectangle {
     accessible-action-default => { if root.enabled { root.clicked(); } }
 
     width: root.touch ? Spacing.header-action-box-touch : Spacing.header-action-box;
-    height: self.width;
-    border-radius: Spacing.radius-md;
-    background: touch-area.has-hover || touch-area.pressed ? Colors.surface-hover
-        : (root.active ? Colors.primary.with-alpha(0.15) : transparent);
+    min-height: self.width;
     opacity: root.enabled ? 1.0 : 0.4;
 
-    Image {
-        source: root.icon;
-        width: root.touch ? Spacing.header-glyph-touch : Spacing.header-glyph;
+    box := Rectangle {
+        width: parent.width;
         height: self.width;
-        x: (parent.width - self.width) / 2;
         y: (parent.height - self.height) / 2;
-        colorize: root.destructive ? Colors.error
-            : root.active ? Colors.primary
-            : touch-area.pressed ? Colors.text-muted
-            : (touch-area.has-hover ? Colors.text-primary : Colors.text-secondary);
-    }
+        border-radius: Spacing.radius-md;
+        background: touch-area.has-hover || touch-area.pressed ? Colors.surface-hover
+            : (root.active ? Colors.primary.with-alpha(0.15) : transparent);
 
-    touch-area := TouchArea {
-        mouse-cursor: root.enabled ? pointer : default;
-        clicked => { if root.enabled { root.clicked(); } }
-    }
+        Image {
+            source: root.icon;
+            width: root.touch ? Spacing.header-glyph-touch : Spacing.header-glyph;
+            height: self.width;
+            x: (parent.width - self.width) / 2;
+            y: (parent.height - self.height) / 2;
+            colorize: root.destructive ? Colors.error
+                : root.active ? Colors.primary
+                : touch-area.pressed ? Colors.text-muted
+                : (touch-area.has-hover ? Colors.text-primary : Colors.text-secondary);
+        }
 
-    // Status marks drawn over the glyph (Shield's Tor dot).
-    @children
+        touch-area := TouchArea {
+            mouse-cursor: root.enabled ? pointer : default;
+            clicked => { if root.enabled { root.clicked(); } }
+        }
+
+        // Status marks drawn over the glyph (Shield's Tor dot), relative to
+        // the box.
+        @children
+    }
 }

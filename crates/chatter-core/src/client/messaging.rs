@@ -50,27 +50,7 @@ use crate::storage::settings_keys;
 use crate::system::Directories;
 use super::{ChatterClient, ClientError};
 
-/// A sidebar row's right-hand time, in local time: "14:03" today,
-/// "Sep 24, 14:03" before. The live update and the rebuild both go through
-/// here — the live path used the sender's clock and a different format, so a
-/// row's time changed shape on the next rebuild.
-fn sidebar_time_at(
-    at: chrono::DateTime<chrono::Utc>,
-    now: chrono::DateTime<chrono::Local>,
-) -> String {
-    // Signal's chat-list rule: a time only for today; older rows get the
-    // day, which is what the eye scans for there.
-    use chrono::Datelike;
-    let local = at.with_timezone(&chrono::Local);
-    let days = (now.date_naive() - local.date_naive()).num_days();
-    match days {
-        ..=0 => local.format("%H:%M").to_string(),
-        1 => "Yesterday".to_string(),
-        2..=6 => local.format("%a").to_string(),
-        _ if local.year() == now.year() => local.format("%b %-d").to_string(),
-        _ => local.format("%b %-d, %Y").to_string(),
-    }
-}
+use crate::ui::chat_data::sidebar_time_at;
 
 #[cfg(test)]
 mod sidebar_time_tests {

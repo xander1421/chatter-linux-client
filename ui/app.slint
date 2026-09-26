@@ -124,7 +124,7 @@ export component App inherits Rectangle {
     // there, below the status bar), not the window's: measuring from
     // root.height put it a status bar's height low, over the dock.
     property <length> fab-y: root.height - root.safe-area-top - root.safe-area-bottom
-        - Spacing.fab-size - Spacing.md
+        - Spacing.fab-size - Spacing.xl
         - (Spacing.bottom-nav-height + Spacing.sm + root.safe-area-bottom)
         - (root.active-call-visible ? 44px + Spacing.sm : 0px);
 
@@ -820,19 +820,26 @@ export component App inherits Rectangle {
         // would hide them with nothing in their place.
         if !root.active-call-visible {
             root.active-call-fullscreen = false;
-            // A call answered from the list raised the phone pane with no chat
-            // behind it (`open_call_screen`); every end path lands here, so
-            // drop back to the list rather than onto "Select a conversation".
-            if root.compact-layout && root.channel-name == "" {
+            // Back to where the user was before the call (Signal): if answering
+            // raised the phone pane (`open_call_screen`), drop it again —
+            // whatever chat was left behind it is stale, not where they were.
+            // Every end path lands here.
+            if root.call-raised-pane {
+                root.call-raised-pane = false;
                 root.mobile-show-chat = false;
             }
         }
     }
+    // Set by `open_call_screen` (calls/incoming.rs) when answering raised the
+    // phone pane over the list; the call's end lowers it again.
+    in-out property <bool> call-raised-pane: false;
     // Leaving the pane (Back on a phone) leaves the call screen too; the
-    // return-to-call bar then stands in for it.
+    // return-to-call bar then stands in for it. The user has navigated for
+    // themselves, so the call's end no longer owes them a trip to the list.
     changed mobile-show-chat => {
         if !root.mobile-show-chat {
             root.active-call-fullscreen = false;
+            root.call-raised-pane = false;
         }
     }
     changed call-is-video-enabled => {
@@ -2490,7 +2497,7 @@ export component App inherits Rectangle {
     // "+ New Channel" / "+ New Section" rows (owner decision 2026-09-26).
     if root.active-modal == "create-menu": CreateMenu {
         card-x: root.compact-layout
-            ? root.width - self.card-width - Spacing.md
+            ? root.width - self.card-width - Spacing.xl
             : Spacing.sidebar-width - self.card-width - Spacing.sm;
         card-y: root.compact-layout
             ? root.fab-y - self.card-height - Spacing.sm
@@ -3327,13 +3334,15 @@ export component App inherits Rectangle {
     // covers — Telegram drops it on the same transition.
     // Only in the app proper: on login / register / recovery it offered
     // Chats, Settings and Profile to someone who is not signed in.
-    // Compose FAB (Signal / Telegram): bottom-right of the Chats tab. z -1
-    // like the bar, so a pushed dialog's backdrop covers it.
+    // Compose FAB (Signal / Telegram): bottom-right of the Chats tab, inset
+    // from the dock's edge and clear above it. On top of the list and the
+    // dock; nothing can be above it because fab-visible already hides it
+    // whenever a dialog, search or selection is open.
     if root.fab-visible: Rectangle {
-        z: -1;
+        z: 10;
         width: Spacing.fab-size;
         height: Spacing.fab-size;
-        x: parent.width - self.width - Spacing.md;
+        x: parent.width - self.width - Spacing.xl;
         y: root.fab-y;
         border-radius: self.width / 2;
         background: fab-touch.pressed ? Colors.primary-hover : Colors.primary;

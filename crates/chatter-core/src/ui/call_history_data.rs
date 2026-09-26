@@ -6,7 +6,7 @@
 
 use crate::domain::call::{CallDirection, CallHistoryEntry, CallResult};
 use crate::state::ActiveConversation;
-use crate::ui::chat_data::{format_timestamp, initials_from_name};
+use crate::ui::chat_data::{initials_from_name, sidebar_time_at};
 
 /// One row of the Calls screen.
 ///
@@ -29,7 +29,8 @@ pub struct CallHistoryRowData {
     /// `None` = initials. Filled by `ChatterClient::call_history_page`, which
     /// has the stores — the `From` conversion leaves it empty.
     pub avatar_bytes: Option<Vec<u8>>,
-    /// When the call happened, relative-formatted ("Yesterday 4:12 PM").
+    /// When the call happened, in the chat list's short form ("14:03",
+    /// "Yesterday", "Mon", "Sep 24").
     pub timestamp: String,
     /// Outcome line: "Outgoing · 3:42", "Missed", "Declined".
     pub detail: String,
@@ -60,7 +61,7 @@ impl From<&CallHistoryEntry> for CallHistoryRowData {
             initials: initials_from_name(&name),
             avatar_bytes: None,
             name,
-            timestamp: format_timestamp(entry.started_at),
+            timestamp: sidebar_time_at(entry.started_at, chrono::Local::now()),
             detail: detail_line(entry, is_incoming),
             // An unanswered call we placed reads "No answer", not red.
             is_missed: is_incoming && entry.result == CallResult::Missed,

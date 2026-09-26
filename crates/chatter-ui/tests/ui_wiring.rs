@@ -3652,6 +3652,20 @@ fn headers_use_the_shared_header_button() {
     if button.contains("border-width") {
         findings.push("HeaderButton draws a stroke — header buttons are flat".into());
     }
+    // 5. It centres itself on the row's axis (RC24 D1). A fixed root height
+    // leaves the button at the TOP of any taller HorizontalLayout; the root
+    // must stretch to the row (floor: the box) and centre the box inside.
+    let root_body = &button[button.find("export component HeaderButton").unwrap()..];
+    let root_body = &root_body[..root_body.find("box := Rectangle").expect("HeaderButton lost its inner box")];
+    if root_body.lines().any(|l| l.starts_with("    height:")) {
+        findings.push("HeaderButton's root fixes its height — it will ride the top of a taller row".into());
+    }
+    if !root_body.contains("min-height: self.width;") {
+        findings.push("HeaderButton's root lost `min-height: self.width;`".into());
+    }
+    if !button.contains("y: (parent.height - self.height) / 2;") {
+        findings.push("HeaderButton no longer centres its box vertically".into());
+    }
 
     assert!(findings.is_empty(), "header buttons drifted:\n  {}", findings.join("\n  "));
 }
@@ -4319,10 +4333,12 @@ fn ux3_account_menu_pushes_settings_and_fab_opens_create_menu() {
     assert_eq!(w.get_active_modal().as_str(), "none");
 }
 
-/// D1: a call answered from the phone's chat list raises the pane with no chat
-/// behind it; when the call ends the phone must fall back to the list, not to
-/// the empty "Select a conversation" pane. A call over an open chat returns to
-/// that chat.
+/// D1 / RC24 D5: a call answered from the phone's chat list raises the pane;
+/// when the call ends the phone falls back to the list — whether or not a chat
+/// was left behind the pane (opening a DM then Back leaves `channel-name` set,
+/// which is what defeated the old `channel-name == ""` guard). A call over an
+/// open chat returns to that chat. The steps below mirror `open_call_screen`
+/// (calls/incoming.rs), which is private to its module.
 #[test]
 fn phone_call_end_without_chat_returns_to_list() {
     use slint::ComponentHandle;
@@ -4331,21 +4347,43 @@ fn phone_call_end_without_chat_returns_to_list() {
     w.set_is_mobile_platform(true);
     w.window().set_size(slint::LogicalSize::new(400.0, 800.0));
     assert!(w.get_compact_layout());
+    let tick = slint::platform::update_timers_and_animations;
+    let answer = |w: &MainWindow| {
+        // `changed` handlers run on the next tick, not inside the setter.
+        w.set_active_call_visible(true);
+        if !w.get_mobile_show_chat() {
+            w.set_call_raised_pane(true);
+        }
+        w.set_mobile_show_chat(true);
+        tick();
+    };
 
+    // Answered from the list, no chat ever opened.
     w.set_channel_name("".into());
-    w.set_mobile_show_chat(true);
-    // `changed` handlers run on the next tick, not inside the setter.
-    w.set_active_call_visible(true);
-    slint::platform::update_timers_and_animations();
+    w.set_mobile_show_chat(false);
+    tick();
+    answer(&w);
     w.set_active_call_visible(false);
-    slint::platform::update_timers_and_animations();
+    tick();
     assert!(!w.get_mobile_show_chat(), "call end left the phone on the empty pane");
 
+    // Opened a DM, went Back, then answered from the list.
     w.set_channel_name("Bob".into());
     w.set_mobile_show_chat(true);
-    w.set_active_call_visible(true);
-    slint::platform::update_timers_and_animations();
+    tick();
+    assert!(chatter_ui::bin_ui::features::back::handle_back(&w));
+    tick();
+    assert!(!w.get_mobile_show_chat());
+    answer(&w);
     w.set_active_call_visible(false);
-    slint::platform::update_timers_and_animations();
+    tick();
+    assert!(!w.get_mobile_show_chat(), "call end opened the last DM instead of the list");
+
+    // Answered over an open chat: stays in it.
+    w.set_mobile_show_chat(true);
+    tick();
+    answer(&w);
+    w.set_active_call_visible(false);
+    tick();
     assert!(w.get_mobile_show_chat(), "call end closed the chat it was placed from");
 }
