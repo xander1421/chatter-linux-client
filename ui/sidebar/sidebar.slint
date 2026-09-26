@@ -133,6 +133,13 @@ export component Sidebar inherits Rectangle {
     property <length> quick-link-text-size: root.touch ? Typography.base : Typography.sm2;
     property <brush> quick-link-text-color: root.touch ? Colors.text-primary : Colors.text-secondary;
     property <length> quick-link-icon-size: root.touch ? 24px : 14px;
+    // Quick-link icons sit in the conversation rows' avatar column: the same
+    // leading inset (ChatList's xs + the row's sm) and a slot as wide as a
+    // row's avatar ring, icon centred in it — so the lens, bookmark and the
+    // rest line up with the avatars and channel icons below, and the labels
+    // with the names.
+    property <length> quick-link-inset: Spacing.xs + Spacing.sm;
+    property <length> quick-link-slot: (root.touch ? Spacing.row-avatar-touch : Spacing.row-avatar-desktop) + 4px;
     // The expanded panel's footer row. 36px on touch, not the full 48px
     // minimum: the panel is capped at 45% of a phone's width, and three 48px
     // buttons plus the avatar and name overflowed it — which silently pushed
@@ -229,10 +236,10 @@ export component Sidebar inherits Rectangle {
             HorizontalLayout {
                 // The traffic lights own the leading edge of this row on macOS
                 // (0px elsewhere), so the search entry starts after them.
-                padding-left: Spacing.sm + root.traffic-lights-width;
+                padding-left: root.quick-link-inset + root.traffic-lights-width;
                 padding-right: Spacing.sm; spacing: Spacing.sm; alignment: start;
-                VerticalLayout { alignment: center; horizontal-stretch: 0;
-                    Image { source: Icons.search; width: root.quick-link-icon-size; height: root.quick-link-icon-size; colorize: Colors.text-secondary; }
+                VerticalLayout { alignment: center; horizontal-stretch: 0; width: root.quick-link-slot;
+                    HorizontalLayout { alignment: center; Image { source: Icons.search; width: root.quick-link-icon-size; height: root.quick-link-icon-size; colorize: Colors.text-secondary; } }
                 }
                 Text { text: "Search"; color: root.quick-link-text-color; font-size: root.quick-link-text-size; vertical-alignment: center; }
             }
@@ -330,9 +337,9 @@ export component Sidebar inherits Rectangle {
                     accessible-role: button;
                     accessible-label: "Saved Messages";
                     if !root.collapsed: HorizontalLayout {
-                        padding-left: Spacing.sm; padding-right: Spacing.sm; spacing: Spacing.sm; alignment: start;
-                        VerticalLayout { alignment: center; horizontal-stretch: 0;
-                            Image { source: Icons.bookmark; width: root.quick-link-icon-size; height: root.quick-link-icon-size; colorize: Colors.text-secondary; }
+                        padding-left: root.quick-link-inset; padding-right: Spacing.sm; spacing: Spacing.sm; alignment: start;
+                        VerticalLayout { alignment: center; horizontal-stretch: 0; width: root.quick-link-slot;
+                            HorizontalLayout { alignment: center; Image { source: Icons.bookmark; width: root.quick-link-icon-size; height: root.quick-link-icon-size; colorize: Colors.text-secondary; } }
                         }
                         Text { text: "Saved Messages"; color: root.quick-link-text-color; font-size: root.quick-link-text-size; vertical-alignment: center; }
                     }
@@ -358,9 +365,9 @@ export component Sidebar inherits Rectangle {
                     accessible-role: button;
                     accessible-label: AnonMode.enabled ? "Add Contact" : "Friends";
                     if !root.collapsed: HorizontalLayout {
-                        padding-left: Spacing.sm; padding-right: Spacing.sm; spacing: Spacing.sm; alignment: start;
-                        VerticalLayout { alignment: center; horizontal-stretch: 0;
-                            Image { source: AnonMode.enabled ? Icons.user-plus : Icons.users; width: root.quick-link-icon-size; height: root.quick-link-icon-size; colorize: Colors.text-secondary; }
+                        padding-left: root.quick-link-inset; padding-right: Spacing.sm; spacing: Spacing.sm; alignment: start;
+                        VerticalLayout { alignment: center; horizontal-stretch: 0; width: root.quick-link-slot;
+                            HorizontalLayout { alignment: center; Image { source: AnonMode.enabled ? Icons.user-plus : Icons.users; width: root.quick-link-icon-size; height: root.quick-link-icon-size; colorize: Colors.text-secondary; } }
                         }
                         Text { text: AnonMode.enabled ? "Add Contact" : "Friends"; color: root.quick-link-text-color; font-size: root.quick-link-text-size; vertical-alignment: center; }
                     }
@@ -383,9 +390,9 @@ export component Sidebar inherits Rectangle {
                     accessible-label: root.missed-call-count > 0 ? "Calls, " + root.missed-call-count + " missed" : "Calls";
                     accessible-action-default => { root.calls-clicked(); }
                     if !root.collapsed: HorizontalLayout {
-                        padding-left: Spacing.sm; padding-right: Spacing.sm; spacing: Spacing.sm; alignment: start;
-                        VerticalLayout { alignment: center; horizontal-stretch: 0;
-                            Image { source: Icons.phone; width: root.quick-link-icon-size; height: root.quick-link-icon-size; colorize: Colors.text-secondary; }
+                        padding-left: root.quick-link-inset; padding-right: Spacing.sm; spacing: Spacing.sm; alignment: start;
+                        VerticalLayout { alignment: center; horizontal-stretch: 0; width: root.quick-link-slot;
+                            HorizontalLayout { alignment: center; Image { source: Icons.phone; width: root.quick-link-icon-size; height: root.quick-link-icon-size; colorize: Colors.text-secondary; } }
                         }
                         Text { text: "Calls"; color: root.quick-link-text-color; font-size: root.quick-link-text-size; vertical-alignment: center; horizontal-stretch: 1; }
                         if root.missed-call-count > 0: VerticalLayout { alignment: center; horizontal-stretch: 0;
@@ -445,9 +452,9 @@ export component Sidebar inherits Rectangle {
                     background: requests-touch.has-hover ? Colors.surface-hover : transparent;
 
                     if !root.collapsed: HorizontalLayout {
-                        padding-left: Spacing.sm; padding-right: Spacing.sm; spacing: Spacing.sm; alignment: start;
-                        VerticalLayout { alignment: center; horizontal-stretch: 0;
-                            Image { source: Icons.user-plus; width: 14px; height: 14px; colorize: Colors.text-secondary; }
+                        padding-left: root.quick-link-inset; padding-right: Spacing.sm; spacing: Spacing.sm; alignment: start;
+                        VerticalLayout { alignment: center; horizontal-stretch: 0; width: root.quick-link-slot;
+                            HorizontalLayout { alignment: center; Image { source: Icons.user-plus; width: 14px; height: 14px; colorize: Colors.text-secondary; } }
                         }
                         Text { text: "Requests"; color: root.quick-link-text-color; font-size: root.quick-link-text-size; vertical-alignment: center; horizontal-stretch: 1; }
                         // Centred on the label's line; a fixed-height child of a
