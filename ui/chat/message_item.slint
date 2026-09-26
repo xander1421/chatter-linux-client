@@ -32,6 +32,13 @@ export component MessageItem inherits Rectangle {
     in property <[RichTextSpan]> rich-content: [];
     in property <string> timestamp: "";
 
+    // Ordinary messages have one span, even when they contain no markdown.
+    // Keep that common case out of the nested rich-text layout/repeater.
+    property <bool> single-text-span: root.rich-content.length == 1
+        && !root.rich-content[0].code && !root.rich-content[0].code-block
+        && !root.rich-content[0].strikethrough;
+    property <length> text-max-width: root.width * 0.7 - Spacing.sm * 2;
+
     // Flags
     in property <bool> is-own: false;
     in property <bool> is-edited: false;
@@ -88,6 +95,9 @@ export component MessageItem inherits Rectangle {
     in property <bool> reply-to-not-found: false;  // Quoted parent missing/deleted
     in property <string> reply-to-message-id: "";  // Parent MessageId — tap-to-jump target
     in property <bool> highlighted: false;          // Brief green flash when this is a jump target
+    // Animate outside the conditional overlay so it survives until fade-out ends.
+    property <float> highlight-progress: root.highlighted ? 1.0 : 0.0;
+    animate highlight-progress { duration: 400ms; easing: ease-out; }
     in property <string> reply-to-sender-name: "";
     in property <string> reply-to-preview: "";
     in property <string> reply-to-category: "";        // Quoted parent media category ("audio"/"image"/"video"/"")
@@ -190,8 +200,7 @@ export component MessageItem inherits Rectangle {
 
     // Styling
     min-height: main-layout.preferred-height;
-    // Selected rows tint rather than outline: the bubbles already carry Neo
-    // borders, and a second border on top read as a rendering artefact.
+    // Selected rows tint rather than outline the flat bubbles.
     background: root.selected ? Colors.primary.with-alpha(0.18) : transparent;
     animate background { duration: 150ms; easing: ease-out; }
 
@@ -252,10 +261,6 @@ export component MessageItem inherits Rectangle {
                 height: call-content.preferred-height + Spacing.md * 2;
                 background: is-missed ? Colors.error.transparentize(0.9) : Colors.surface;
                 border-radius: Spacing.radius-lg;
-                drop-shadow-blur: Spacing.neo-blur-sm;
-                drop-shadow-offset-x: Spacing.neo-offset-sm;
-                drop-shadow-offset-y: Spacing.neo-offset-sm;
-                drop-shadow-color: Colors.neo-shadow;
 
                 call-content := HorizontalLayout {
                     padding: Spacing.md;
@@ -365,20 +370,13 @@ export component MessageItem inherits Rectangle {
                     accessible-role: text;
                     accessible-label: root.is-own ? "Your message: " + root.content : root.sender-name + " says: " + root.content;
 
-                    // Neo 2.0: Own = convex (raised), Others = concave (inset)
-                    // AI messages get distinct primary-tinted neo surface
+                    // Flat bubbles use tone to distinguish sender and AI messages.
                     background: root.is-ai
                         ? (bubble-hovered ? Colors.primary.with-alpha(0.12) : Colors.primary.with-alpha(0.08))
                         : (bubble-hovered
                             ? (root.is-own ? Colors.bubble-own-hover : Colors.bubble-other-hover)
                             : (root.is-own ? Colors.bubble-own : Colors.bubble-other));
                     border-radius: Spacing.radius-md;
-
-                    // Outgoing bubbles lift with a drop shadow; neither has an outline.
-                    drop-shadow-blur: root.is-own ? Spacing.neo-blur-md : 0px;
-                    drop-shadow-offset-x: root.is-own ? Spacing.neo-offset-md : 0px;
-                    drop-shadow-offset-y: root.is-own ? Spacing.neo-offset-md : 0px;
-                    drop-shadow-color: root.is-own ? Colors.neo-shadow : transparent;
 
                     // Calculate height based on content
                     height: bubble-content.preferred-height;
@@ -519,7 +517,7 @@ export component MessageItem inherits Rectangle {
                         if root.is-reply: Rectangle {
                             background: root.is-own ? Colors.background.with-alpha(0.08) : Colors.background.with-alpha(0.06);
                             border-radius: 6px;
-                            max-width: root.width * 0.7 - Spacing.sm * 2;
+                            max-width: root.text-max-width;
                             height: quote-row.preferred-height + Spacing.xs;
 
                             // Tap the quote to jump to the original message.
@@ -674,9 +672,9 @@ export component MessageItem inherits Rectangle {
 
                         // Message content — rich text rendering
                         // Uses parsed markdown spans when available, falls back to plain text
-                        if root.content != "" && root.rich-content.length > 0: VerticalLayout {
+                        if root.content != "" && root.rich-content.length > 0 && !root.single-text-span: VerticalLayout {
                             spacing: 4px;
-                            max-width: root.width * 0.7 - Spacing.sm * 2;
+                            max-width: root.text-max-width;
 
                             for span in root.rich-content: VerticalLayout {
                                 // Code block: monospace + dark background
@@ -693,7 +691,7 @@ export component MessageItem inherits Rectangle {
                                             font-family: Typography.font-family-mono;
                                             font-size: Typography.xs;
                                             wrap: word-wrap;
-                                            max-width: root.width * 0.7 - Spacing.sm * 2 - 16px;
+                                            max-width: root.text-max-width - 16px;
                                         }
                                     }
                                 }
@@ -729,7 +727,7 @@ export component MessageItem inherits Rectangle {
                                         color: Colors.text-secondary;
                                         font-size: Typography.sm;
                                         wrap: word-wrap;
-                                        max-width: root.width * 0.7 - Spacing.sm * 2;
+                                        max-width: root.text-max-width;
                                     }
 
                                     Rectangle {
@@ -748,18 +746,20 @@ export component MessageItem inherits Rectangle {
                                     font-weight: span.bold ? 700 : 400;
                                     font-italic: span.italic;
                                     wrap: word-wrap;
-                                    max-width: root.width * 0.7 - Spacing.sm * 2;
+                                    max-width: root.text-max-width;
                                 }
                             }
                         }
 
-                        // Fallback: plain text when rich-content is empty
-                        if root.content != "" && root.rich-content.length == 0: Text {
-                            text: root.content;
+                        // Plain text and a single normal/bold/italic span share one Text.
+                        if root.content != "" && (root.rich-content.length == 0 || root.single-text-span): Text {
+                            text: root.single-text-span ? root.rich-content[0].text : root.content;
+                            font-weight: root.single-text-span && root.rich-content[0].bold ? 700 : 400;
+                            font-italic: root.single-text-span && root.rich-content[0].italic;
                             color: Colors.text-primary;
                             font-size: Typography.sm;
                             wrap: word-wrap;
-                            max-width: root.width * 0.7 - Spacing.sm * 2;
+                            max-width: root.text-max-width;
                         }
 
                         // Attachments
@@ -994,10 +994,6 @@ export component MessageItem inherits Rectangle {
                                     height: 52px;
                                     background: Colors.surface;
                                     border-radius: Spacing.radius-md;
-                                    drop-shadow-blur: Spacing.neo-blur-sm;
-                                    drop-shadow-offset-x: Spacing.neo-offset-sm;
-                                    drop-shadow-offset-y: Spacing.neo-offset-sm;
-                                    drop-shadow-color: Colors.neo-shadow;
 
                                     HorizontalLayout {
                                         padding: Spacing.sm;
@@ -1094,139 +1090,108 @@ export component MessageItem inherits Rectangle {
                             spacing: 4px;
                             alignment: end;
 
-                            // Own messages: timestamp+status
-                            if root.is-own: HorizontalLayout {
-                                spacing: 4px;
-                                alignment: end;
-
-                                if root.is-pinned: Image {
-                                    source: Icons.pin;
-                                    width: 12px;
-                                    height: 12px;
-                                    colorize: Colors.primary;
-                                }
-
-                                // "edited" before the time on both sides (Signal's order).
-                                if root.is-edited: Text {
-                                    text: "edited";
-                                    color: Colors.text-muted;
-                                    font-size: Typography.xs;
-                                    font-italic: true;
-                                }
-
-                                Text {
-                                    text: root.timestamp;
-                                    color: Colors.text-muted;
-                                    font-size: Typography.xs;
-                                }
-
-                                // Delivery status. Mesh states get a word rather
-                                // than a tick: over couriers "sent" and
-                                // "delivered" are hours apart, and two ticks
-                                // would claim an arrival nobody has confirmed.
-                                if root.mesh-delivery: Text {
-                                    // "sent" is deliberately not reused for a
-                                    // broadcast: a room or cell message has no
-                                    // recipient to acknowledge it, so there is
-                                    // never anything to upgrade it to.
-                                    text: root.delivery-status == "carried" ? "carried"
-                                        : root.delivery-status == "waiting" ? "waiting"
-                                        : root.delivery-status == "undelivered" ? "not delivered"
-                                        : root.delivery-status == "delivered" ? "delivered"
-                                        : root.delivery-status == "read" ? "read"
-                                        : root.delivery-status == "broadcast" ? "broadcast"
-                                        : "sent";
-                                    color: root.delivery-status == "undelivered" ? Colors.text-secondary : Colors.text-muted;
-                                    font-size: Typography.xs;
-                                    font-italic: true;
-                                    accessible-role: text;
-                                    accessible-label: root.delivery-status == "carried"
-                                            ? "Handed to a passing device; may arrive later"
-                                        : root.delivery-status == "waiting"
-                                            ? "Held on this device until something can carry it"
-                                        : root.delivery-status == "undelivered"
-                                            ? "Left the outbox without ever being acknowledged"
-                                        : root.delivery-status == "delivered"
-                                            ? "The peer's device acknowledged it"
-                                        : root.delivery-status == "read"
-                                            ? "Read by the peer"
-                                        : root.delivery-status == "broadcast"
-                                            ? "Went out to whoever is in range; nobody acknowledges a broadcast"
-                                        : "Handed to a live link; not yet acknowledged";
-                                }
-
-                                // Delivery status checkmarks. SVG, not "✓": the
-                                // glyph has no coverage in the Android system
-                                // font and rendered as a tofu box on every
-                                // message. Fixed 12px so the row — and the
-                                // bubble — keeps the height the text tick had.
-                                // Queued behind a Shield mailbox bootstrap, or
-                                // that queue's flush failed: a word, not a tick —
-                                // neither has reached the server, and "failed"
-                                // must never read as delivered.
-                                if !root.mesh-delivery && (root.delivery-status == "sending" || root.delivery-status == "failed"): Text {
-                                    text: root.delivery-status == "failed" ? "not sent" : "sending";
-                                    color: root.delivery-status == "failed" ? Colors.error : Colors.text-muted;
-                                    font-size: Typography.xs;
-                                    font-italic: true;
-                                    accessible-role: text;
-                                    accessible-label: root.delivery-status == "failed" ? "Not sent" : "Sending";
-                                }
-
-                                if !root.mesh-delivery && root.delivery-status != "sending" && root.delivery-status != "failed": ticks := Rectangle {
-                                    property <bool> double-tick: root.delivery-status != "sent";
-                                    property <color> tick-color: root.delivery-status == "read" ? Colors.primary : Colors.text-muted;
-                                    width: self.double-tick ? 17px : 12px;
-                                    height: 12px;
-                                    accessible-role: text;
-                                    accessible-label: root.delivery-status == "sent" ? "Sent"
-                                        : root.delivery-status == "delivered" ? "Delivered"
-                                        : root.delivery-status == "read" ? "Read" : "";
-
-                                    // Second tick behind, offset left, so the
-                                    // pair reads as the usual overlapping ✓✓.
-                                    if ticks.double-tick: Image {
-                                        source: Icons.check;
-                                        width: 12px;
-                                        height: 12px;
-                                        x: 0px;
-                                        y: 0px;
-                                        colorize: ticks.tick-color;
-                                    }
-
-                                    Image {
-                                        source: Icons.check;
-                                        width: 12px;
-                                        height: 12px;
-                                        x: parent.width - self.width;
-                                        y: 0px;
-                                        colorize: ticks.tick-color;
-                                    }
-                                }
+                            if root.is-pinned: Image {
+                                source: Icons.pin;
+                                width: 12px;
+                                height: 12px;
+                                colorize: Colors.primary;
                             }
 
-                            // Others' messages: timestamp
-                            if !root.is-own: HorizontalLayout {
-                                spacing: 4px;
+                            // "edited" before the time on both sides (Signal's order).
+                            if root.is-edited: Text {
+                                text: "edited";
+                                color: Colors.text-muted;
+                                font-size: Typography.xs;
+                                font-italic: true;
+                            }
 
-                                if root.is-pinned: Image {
-                                    source: Icons.pin;
+                            Text {
+                                text: root.timestamp;
+                                color: Colors.text-muted;
+                                font-size: Typography.xs;
+                            }
+
+                            // Delivery status. Mesh states get a word rather
+                            // than a tick: over couriers "sent" and
+                            // "delivered" are hours apart, and two ticks
+                            // would claim an arrival nobody has confirmed.
+                            if root.is-own && root.mesh-delivery: Text {
+                                // "sent" is deliberately not reused for a
+                                // broadcast: a room or cell message has no
+                                // recipient to acknowledge it, so there is
+                                // never anything to upgrade it to.
+                                text: root.delivery-status == "carried" ? "carried"
+                                    : root.delivery-status == "waiting" ? "waiting"
+                                    : root.delivery-status == "undelivered" ? "not delivered"
+                                    : root.delivery-status == "delivered" ? "delivered"
+                                    : root.delivery-status == "read" ? "read"
+                                    : root.delivery-status == "broadcast" ? "broadcast"
+                                    : "sent";
+                                color: root.delivery-status == "undelivered" ? Colors.text-secondary : Colors.text-muted;
+                                font-size: Typography.xs;
+                                font-italic: true;
+                                accessible-role: text;
+                                accessible-label: root.delivery-status == "carried"
+                                        ? "Handed to a passing device; may arrive later"
+                                    : root.delivery-status == "waiting"
+                                        ? "Held on this device until something can carry it"
+                                    : root.delivery-status == "undelivered"
+                                        ? "Left the outbox without ever being acknowledged"
+                                    : root.delivery-status == "delivered"
+                                        ? "The peer's device acknowledged it"
+                                    : root.delivery-status == "read"
+                                        ? "Read by the peer"
+                                    : root.delivery-status == "broadcast"
+                                        ? "Went out to whoever is in range; nobody acknowledges a broadcast"
+                                    : "Handed to a live link; not yet acknowledged";
+                            }
+
+                            // Delivery status checkmarks. SVG, not "✓": the
+                            // glyph has no coverage in the Android system
+                            // font and rendered as a tofu box on every
+                            // message. Fixed 12px so the row — and the
+                            // bubble — keeps the height the text tick had.
+                            // Queued behind a Shield mailbox bootstrap, or
+                            // that queue's flush failed: a word, not a tick —
+                            // neither has reached the server, and "failed"
+                            // must never read as delivered.
+                            if root.is-own && !root.mesh-delivery && (root.delivery-status == "sending" || root.delivery-status == "failed"): Text {
+                                text: root.delivery-status == "failed" ? "not sent" : "sending";
+                                color: root.delivery-status == "failed" ? Colors.error : Colors.text-muted;
+                                font-size: Typography.xs;
+                                font-italic: true;
+                                accessible-role: text;
+                                accessible-label: root.delivery-status == "failed" ? "Not sent" : "Sending";
+                            }
+
+                            if root.is-own && !root.mesh-delivery && root.delivery-status != "sending" && root.delivery-status != "failed": ticks := Rectangle {
+                                property <bool> double-tick: root.delivery-status != "sent";
+                                property <color> tick-color: root.delivery-status == "read" ? Colors.primary : Colors.text-muted;
+                                width: self.double-tick ? 17px : 12px;
+                                height: 12px;
+                                accessible-role: text;
+                                accessible-label: root.delivery-status == "sent" ? "Sent"
+                                    : root.delivery-status == "delivered" ? "Delivered"
+                                    : root.delivery-status == "read" ? "Read" : "";
+
+                                // Second tick behind, offset left, so the
+                                // pair reads as the usual overlapping ✓✓.
+                                if ticks.double-tick: Image {
+                                    source: Icons.check;
                                     width: 12px;
                                     height: 12px;
-                                    colorize: Colors.primary;
+                                    x: 0px;
+                                    y: 0px;
+                                    colorize: ticks.tick-color;
                                 }
 
-                                if root.is-edited: Text {
-                                    text: "edited";
-                                    color: Colors.text-muted;
-                                    font-size: Typography.xs;
-                                    font-italic: true;
-                                }
-
-                                Text {
-                                    text: root.timestamp;
-                                    color: Colors.text-muted;
-                                    font-size: Typography.xs;
+                                Image {
+                                    source: Icons.check;
+                                    width: 12px;
+                                    height: 12px;
+                                    x: parent.width - self.width;
+                                    y: 0px;
+                                    colorize: ticks.tick-color;
                                 }
                             }
                         }
@@ -1235,18 +1200,14 @@ export component MessageItem inherits Rectangle {
 
                     // Tap-to-jump flash — brief green highlight when this bubble
                     // is the scroll target of a quote click. Plain Rectangle
-                    // (no TouchArea) so it never blocks input; fades via animate.
-                    Rectangle {
+                    // (no TouchArea) so it never blocks input. Absent on idle rows.
+                    if root.highlight-progress > 0: Rectangle {
                         width: 100%;
                         height: 100%;
                         border-radius: bubble.border-radius;
-                        background: Colors.primary.with-alpha(root.highlighted ? 0.22 : 0.0);
-                        border-width: root.highlighted ? Spacing.stroke : 0px;
+                        background: Colors.primary.with-alpha(root.highlight-progress * 0.22);
+                        border-width: root.highlight-progress * Spacing.stroke;
                         border-color: Colors.primary;
-                        animate background, border-color, border-width {
-                            duration: 400ms;
-                            easing: ease-out;
-                        }
                     }
                 }
 
@@ -1257,10 +1218,7 @@ export component MessageItem inherits Rectangle {
                     width: reactions-row.preferred-width + 8px;
                     background: Colors.surface;
                     border-radius: 11px;
-                    drop-shadow-blur: Spacing.neo-blur-sm;
-                    drop-shadow-offset-x: Spacing.neo-offset-sm;
-                    drop-shadow-offset-y: Spacing.neo-offset-sm;
-                    drop-shadow-color: Colors.neo-shadow;
+
                     x: root.is-own ? -self.width + 8px : bubble.width - 8px;
                     y: bubble.height - 4px;
                     accessible-role: button;
@@ -1308,8 +1266,9 @@ export component MessageItem inherits Rectangle {
                         }
                     }
                 }
-                // Action buttons — float above top corner of bubble on opposed side
-                Rectangle {
+                // Action buttons — float above top corner of bubble on opposed side.
+                // Do not allocate hidden controls for every row (or any mobile row).
+                if root.is-hovered: Rectangle {
                     x: root.is-own ? -action-btns.width + 8px : bubble.width - 8px;
                     y: -14px; // Float halfway above the top edge
                     width: action-btns.width;
@@ -1321,10 +1280,6 @@ export component MessageItem inherits Rectangle {
                         width: 106px;
                         background: Colors.surface;
                         border-radius: Spacing.radius-md;
-                        drop-shadow-blur: Spacing.neo-blur-sm;
-                        drop-shadow-offset-x: Spacing.neo-offset-sm;
-                        drop-shadow-offset-y: Spacing.neo-offset-sm;
-                        drop-shadow-color: Colors.neo-shadow;
 
                         HorizontalLayout {
                             padding: 2px;
