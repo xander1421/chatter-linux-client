@@ -97,25 +97,17 @@ fn wire_pinned_navigation(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                 let messages = w.get_messages();
                 let message_count = messages.row_count();
 
-                // Find the index of the pinned message
+                // Find the index of the pinned message and let the list
+                // land on it (it measures rows; a pixel guess from here
+                // cannot).
                 for i in 0..message_count {
                     if let Some(msg) = messages.row_data(i) {
                         if msg.message_id.as_str() == message_id_str.as_str() {
-                            // Calculate scroll position: negative offset from top
-                            // Estimated message height: 80px, plus some padding
-                            let estimated_height = 80.0f32;
-                            let padding = 16.0f32; // Spacing.md
-                            let scroll_pos = -((i as f32 * estimated_height) + padding);
-
-                            // Set scroll position directly
-                            w.set_message_scroll_position(scroll_pos);
-                            // Mark as not at bottom since we're scrolling to a specific message
-                            w.set_is_at_bottom(false);
-
+                            w.set_scroll_to_message_index(i as i32);
+                            w.set_highlighted_message_id(message_id_str.as_str().into());
                             tracing::info!(
                                 message_id = %message_id_str,
                                 index = i,
-                                scroll_position = scroll_pos,
                                 "Scrolling to pinned message"
                             );
                             return;
@@ -467,18 +459,20 @@ fn wire_load_more(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                         .map(|msg| msg.message_id.to_string())
                         .collect();
 
-                    // Prepend older messages to current (older go at top), skipping duplicates
-                    let mut combined: Vec<_> = slint_messages
+                    // Prepend older messages (older go at top), skipping
+                    // duplicates. Inserted in place: rows added above the
+                    // first visible one shift the list's index without
+                    // moving what is on screen, so history loads without
+                    // a jump.
+                    let older: Vec<_> = slint_messages
                         .into_iter()
                         .filter(|msg| !current_ids.contains(msg.message_id.as_str()))
                         .collect();
-                    for i in 0..current_count {
-                        if let Some(msg) = current_model.row_data(i) {
-                            combined.push(msg);
+                    crate::bin_ui::features::chat::edit_messages(&w, |model| {
+                        for (i, msg) in older.into_iter().enumerate() {
+                            model.insert(i, msg);
                         }
-                    }
-
-                    w.set_messages(ModelRc::new(VecModel::from(combined)));
+                    });
                     tracing::debug!("Loaded {} older messages for channel", msg_count);
                 }
             });

@@ -381,14 +381,7 @@ pub(super) fn handle_message_delete(
         return;
     }
     crate::run_ui!(window, |w| {
-        let messages = w.get_messages();
-        let kept: Vec<MessageItemData> = (0..messages.row_count())
-            .filter_map(|i| messages.row_data(i))
-            .filter(|msg| !target.matches(msg))
-            .collect();
-        if kept.len() < messages.row_count() {
-            w.set_messages(ModelRc::new(VecModel::from(kept)));
-        }
+        crate::bin_ui::features::chat::remove_messages_where(&w, |msg| target.matches(msg));
     });
 }
 

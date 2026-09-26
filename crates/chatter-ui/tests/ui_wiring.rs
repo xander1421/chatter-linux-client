@@ -3318,6 +3318,23 @@ fn conversation_open_anchors_on_the_unread_boundary() {
         list.contains("new messages"),
         "MessageList must offer the jump-to-newest pill with its count"
     );
+    // Rows are created on demand by Slint's ListView runtime, which the
+    // compiler enables only for a `for` whose parent element is named
+    // `ListView` with the visible-*/viewport-* length properties. Lose that
+    // name and every row of the conversation is instantiated and walked on
+    // every frame again (the 10-20 fps phone scroll this replaced).
+    assert!(
+        list.contains("component ListView inherits Flickable")
+            && list.contains("out property <length> visible-height")
+            && list.contains("list := ListView {"),
+        "MessageList must keep its rows behind the ListView runtime"
+    );
+    // That runtime rewrites viewport-y after every layout pass; an animation
+    // on it would be cancelled mid-flight and fight the fling.
+    assert!(
+        !list.contains("animate viewport-y"),
+        "MessageList must not animate viewport-y"
+    );
     let layout = include_str!("../../../ui/chat/chat_layout.slint");
     assert!(
         layout.contains("unread-index <=> root.unread-index"),

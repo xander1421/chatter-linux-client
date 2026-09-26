@@ -116,21 +116,31 @@ pub fn build_own_message_item(
     }
 }
 
-/// Append a message to the UI message list, sort by timestamp, and scroll to bottom.
+/// Append a message to the UI message list and scroll to bottom.
 ///
-/// This is the common pattern after a message is sent: add to model,
-/// sort for correct ordering, clear composer, and auto-scroll.
+/// This is the common pattern after a message is sent: push onto the model
+/// in place (the list only ever holds the rows on screen, and a fresh model
+/// would make it re-measure and re-seek), clear composer, and auto-scroll.
 pub fn append_message_to_ui(window: &crate::MainWindow, msg_item: crate::MessageItemData) {
-    use slint::{Model, ModelRc, VecModel};
-
-    let model = window.get_messages();
-    let mut messages: Vec<_> = (0..model.row_count())
-        .filter_map(|i| model.row_data(i))
-        .collect();
-    messages.push(msg_item);
     window.set_is_at_bottom(true);
-    window.set_messages(ModelRc::new(VecModel::from(messages)));
+    edit_messages(window, |model| model.push(msg_item));
     window.set_composer_text("".into());
+}
+
+/// Edit the open message list in place. Every path that changes one row
+/// funnels through here so none of them swaps the model out from under the
+/// list: a swap costs a full re-measure and can drift the scroll position by
+/// a row. The model is always the `VecModel` the open installed; the fallback
+/// only guards a test that installed something else.
+pub(crate) fn edit_messages(
+    window: &crate::MainWindow,
+    f: impl FnOnce(&slint::VecModel<crate::MessageItemData>),
+) {
+    let model = window.get_messages();
+    match model.as_any().downcast_ref::<slint::VecModel<crate::MessageItemData>>() {
+        Some(vec) => f(vec),
+        None => tracing::warn!("message list model is not a VecModel; edit dropped"),
+    }
 }
 
 // ============================================================================
@@ -139,9 +149,8 @@ pub fn append_message_to_ui(window: &crate::MainWindow, msg_item: crate::Message
 
 /// Update a message's reaction summary in the UI model.
 ///
-/// Finds the message by sender_id + timestamp_ns, updates its reaction
-/// fields, and replaces the model. Used by all 4 reaction paths
-/// (anon DM, anon group, regular DM, channel).
+/// Finds the message by sender_id + timestamp_ns and rewrites that one row.
+/// Used by all 4 reaction paths (anon DM, anon group, regular DM, channel).
 pub(crate) fn update_reaction_in_ui(
     window: &MainWindow,
     sender_id: &str,
@@ -152,23 +161,20 @@ pub(crate) fn update_reaction_in_ui(
     use chatter_core::domain::message::ReactionCount;
     use crate::bin_ui::converters::{reaction_counts_to_entries, reactions_model_to_counts};
 
-    let current_model = window.get_messages();
-    let messages: Vec<_> = (0..current_model.row_count())
-        .filter_map(|i| current_model.row_data(i))
-        .map(|mut m| {
-            if m.sender_id.as_str() == sender_id
-                && m.timestamp_ns.as_str() == timestamp_ns
-            {
-                let mut counts = reactions_model_to_counts(&m.reactions);
-                ReactionCount::apply(&mut counts, emoji, remove);
-                m.has_reactions = !counts.is_empty();
-                m.reaction_summary = ReactionCount::summary_string(&counts).into();
-                m.reactions = slint::ModelRc::new(slint::VecModel::from(reaction_counts_to_entries(&counts)));
+    edit_messages(window, |model| {
+        for i in 0..model.row_count() {
+            let Some(mut m) = model.row_data(i) else { continue };
+            if m.sender_id.as_str() != sender_id || m.timestamp_ns.as_str() != timestamp_ns {
+                continue;
             }
-            m
-        })
-        .collect();
-    window.set_messages(slint::ModelRc::new(slint::VecModel::from(messages)));
+            let mut counts = reactions_model_to_counts(&m.reactions);
+            ReactionCount::apply(&mut counts, emoji, remove);
+            m.has_reactions = !counts.is_empty();
+            m.reaction_summary = ReactionCount::summary_string(&counts).into();
+            m.reactions = slint::ModelRc::new(slint::VecModel::from(reaction_counts_to_entries(&counts)));
+            model.set_row_data(i, m);
+        }
+    });
 }
 
 /// Remove a message from the UI model by sender_id + timestamp_ns.
@@ -182,18 +188,26 @@ pub(crate) fn remove_message_from_ui(
     timestamp_ns: &str,
     unregister_gifs: impl Fn(&crate::MessageItemData),
 ) {
-    let current_model = window.get_messages();
-    let mut messages = Vec::new();
-    for i in 0..current_model.row_count() {
-        if let Some(m) = current_model.row_data(i) {
-            if m.sender_id.as_str() == sender_id
-                && m.timestamp_ns.as_str() == timestamp_ns
-            {
-                unregister_gifs(&m);
-            } else {
-                messages.push(m);
+    remove_messages_where(window, |m| {
+        let hit = m.sender_id.as_str() == sender_id && m.timestamp_ns.as_str() == timestamp_ns;
+        if hit {
+            unregister_gifs(m);
+        }
+        hit
+    });
+}
+
+/// Remove every row `gone` matches, in place, back to front so the indices
+/// stay valid.
+pub(crate) fn remove_messages_where(
+    window: &MainWindow,
+    gone: impl Fn(&crate::MessageItemData) -> bool,
+) {
+    edit_messages(window, |model| {
+        for i in (0..model.row_count()).rev() {
+            if model.row_data(i).is_some_and(|m| gone(&m)) {
+                model.remove(i);
             }
         }
-    }
-    window.set_messages(slint::ModelRc::new(slint::VecModel::from(messages)));
+    });
 }

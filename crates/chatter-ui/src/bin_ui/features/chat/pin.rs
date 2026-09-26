@@ -2,7 +2,7 @@
 
 use std::sync::Arc;
 
-use slint::{ComponentHandle, Model, ModelRc, SharedString, VecModel};
+use slint::{ComponentHandle, Model, SharedString};
 
 use chatter_core::client::ChatterClient;
 use chatter_core::domain::{Attachment, FileCategory, Message};
@@ -131,19 +131,17 @@ pub fn wire_pin_message(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             // Update UI (unified across all conversation types)
             let _ = slint::invoke_from_event_loop(move || {
                 if let Some(w) = weak.upgrade() {
-                    let model = w.get_messages();
-                    let messages: Vec<_> = (0..model.row_count())
-                        .filter_map(|i| model.row_data(i))
-                        .map(|mut m| {
+                    super::edit_messages(&w, |model| {
+                        for i in 0..model.row_count() {
+                            let Some(mut m) = model.row_data(i) else { continue };
                             if m.sender_id.as_str() == sender_id_str.as_str()
                                 && m.timestamp_ns.as_str() == timestamp_ns_str.as_str()
                             {
                                 m.is_pinned = new_pinned_state;
+                                model.set_row_data(i, m);
                             }
-                            m
-                        })
-                        .collect();
-                    w.set_messages(ModelRc::new(VecModel::from(messages)));
+                        }
+                    });
                     w.set_has_pinned_messages(pinned_count > 0);
                     if new_pinned_state {
                         w.set_pinned_message_preview(preview_text.into());

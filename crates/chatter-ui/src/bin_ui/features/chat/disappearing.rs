@@ -11,7 +11,7 @@ use chatter_core::client::ChatterClient;
 use chatter_core::domain::ids::UserId;
 use chatter_core::services::disappearing;
 use chatter_core::state::ActiveConversation;
-use slint::{ComponentHandle, Model, ModelRc, VecModel};
+use slint::{ComponentHandle, ModelRc, VecModel};
 
 use crate::{DisappearingGlobal, DisappearingOption, MainWindow};
 
@@ -40,14 +40,7 @@ fn wire_expired(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             let weak = weak.clone();
             let _ = slint::invoke_from_event_loop(move || {
                 let Some(w) = weak.upgrade() else { return };
-                let messages = w.get_messages();
-                let kept: Vec<_> = messages
-                    .iter()
-                    .filter(|m| !gone.contains(m.message_id.as_str()))
-                    .collect();
-                if kept.len() < messages.row_count() {
-                    w.set_messages(ModelRc::new(VecModel::from(kept)));
-                }
+                super::remove_messages_where(&w, |m| gone.contains(m.message_id.as_str()));
             });
         }
     });

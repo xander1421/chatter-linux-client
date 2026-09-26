@@ -1,7 +1,9 @@
 // Virtualized message list component
 //
 // Displays a scrollable list of messages with loading and empty states.
-// Features: animated scrolling, scroll-to-bottom button, auto-scroll on new messages.
+// Only the rows that fit on screen exist at any time (see the list below);
+// features: scroll-to-bottom / "N new messages" pill, open on the unread
+// divider, auto-follow of new messages, older history on reaching the top.
 
 import { Colors } from "../theme/colors.slint";
 import { Spacing } from "../theme/spacing.slint";
@@ -13,6 +15,17 @@ import { MessageAttachmentData, MessageItemData, ReactionEntry } from "types.sli
 
 // Re-export types for parent components
 export { MessageAttachmentData, MessageItemData, ReactionEntry }
+
+// The bare Flickable with Slint's lazy row runtime enabled. The compiler turns
+// a `for` into a virtualized one when its parent element is named `ListView`
+// and carries these length properties (i-slint-compiler object_tree.rs,
+// "Custom ListView is OK"); defining it here rather than importing the
+// std-widgets one keeps out the ScrollView chrome and its scrollbars.
+component ListView inherits Flickable {
+    out property <length> visible-height: self.height;
+    out property <length> visible-width: self.width;
+    @children
+}
 
 export component MessageList inherits Rectangle {
     // Properties
@@ -29,6 +42,11 @@ export component MessageList inherits Rectangle {
     in property <string> privacy-line: "Messages are end-to-end encrypted";
     in property <bool> is-dm: false;  // When true, messages show minimal UI (no avatars/names in DMs)
     in property <bool> can-thread: true;
+    // No longer the list's viewport: a binding on `viewport-y` disables both
+    // clamps that keep a short conversation from opening pushed down from the
+    // top (the ListView runtime's and the Flickable's own — each checks
+    // `has_binding` first). Kept declared only because chat_layout / app /
+    // main still alias it; nothing reads or writes it any more.
     in-out property <length> scroll-position: 0;
     in property <int> scroll-to-index: -1;  // Set to message index to scroll to it
     in property <string> highlighted-message-id: "";  // Message id to briefly flash (quote jump)
@@ -54,14 +72,6 @@ export component MessageList inherits Rectangle {
     // Unread total behind that boundary — the pill's number. May exceed the
     // loaded page.
     in-out property <int> unread-count: 0;
-    // y of the unread row within the message layout. 0 until that row has been
-    // laid out; learned from the row itself so the open lands on the real
-    // boundary rather than an index-proportional guess.
-    private property <length> unread-divider-y: 0px;
-    // Anchoring is a once-per-open event. After it, the viewport belongs to the
-    // user — otherwise every later content resize (a GIF registering, a
-    // thumbnail swapping in) would yank them back to the divider.
-    private property <bool> anchor-consumed: false;
 
     // Every conversation open raises `loading` before it installs a model, and
     // only the server-backed opens then supply an anchor. Clearing on that one
@@ -71,21 +81,54 @@ export component MessageList inherits Rectangle {
         if (root.loading) {
             root.unread-index = -1;
             root.unread-count = 0;
-            root.unread-divider-y = 0px;
-            root.anchor-consumed = false;
+            root.end-pending = false;
+            root.jump-row = -1;
+            // Root state, so it outlives the list: left true from a previous
+            // conversation, it would drag the next one to its end on the
+            // first layout pass, over its unread divider.
+            root.at-end = false;
+            root.load-more-armed = true;
         }
     }
 
-    // Internal animated scroll target
-    property <length> scroll-target: 0px;
-    // Opening a conversation fills the viewport in one step, and animating that
-    // snap is what made a channel appear to load from the top and then scroll
-    // itself down to the newest message. An append (a message arriving, or a
-    // page of history) grows the viewport by less than a screen and still
-    // animates. So: no animation when the growth is bigger than the screen.
-    property <length> previous-viewport-height: 0px;
-    property <bool> jump-without-animation: false;
-    property <bool> animating: false;
+    // ── Navigation targets ──────────────────────────────────────────────────
+    // Row positions are the runtime's estimates until a row is live, so a
+    // target is re-issued over a few layout passes (bounded) until it holds.
+    private property <bool> end-pending: false;
+    private property <int> end-passes: 0;
+    // Sitting exactly on the newest message, as of the last layout pass.
+    private property <bool> at-end: false;
+    // Row to land at the top edge, until the list has an estimate to seek by.
+    private property <int> jump-row: -1;
+    // Older history is requested once per approach to the top.
+    private property <bool> load-more-armed: true;
+    // A mirror `changed` can watch: a message arriving, or a page of history.
+    property <int> row-count: root.messages.length;
+    changed row-count => {
+        root.load-more-armed = true;
+        if (root.is-at-bottom && root.should-auto-scroll && root.jump-row < 0) {
+            root.go-to-end();
+        }
+    }
+
+    // The list lives under `!loading`, out of reach of root functions, so a
+    // target is recorded here and the list pursues it on `changed nav-serial`.
+    private property <int> nav-serial: 0;
+
+    // Newest message flush with the bottom edge, and stay there.
+    function go-to-end() {
+        root.jump-row = -1;
+        root.end-pending = true;
+        root.end-passes = 0;
+        root.nav-serial += 1;
+    }
+
+    // Row `i` at the top edge.
+    function go-to-row(i: int) {
+        root.end-pending = false;
+        root.jump-row = i;
+        root.nav-serial += 1;
+    }
 
     // Callbacks - Signal-style identification (sender_id, timestamp_ns)
     // Multi-select: while on, a plain tap toggles selection instead of opening
@@ -222,38 +265,38 @@ export component MessageList inherits Rectangle {
         }
     }
 
-    // Message list with animated scrolling
+    // ── The list ─────────────────────────────────────────────────────────────
+    // Rows exist only while they fit the viewport: the Slint runtime creates
+    // and destroys them as the user scrolls, measures each one for real, and
+    // estimates the total height from their average. Two consequences:
+    //   - `viewport-y` is a scrollbar-grade estimate, rewritten by the runtime
+    //     after every layout pass. Nothing here animates it — the next pass
+    //     would cancel the animation anyway — and every navigation is a target
+    //     the runtime is asked to refine (`go-to-end`, `go-to-row`), not a
+    //     pixel offset. Those passes all run inside one frame's instantiation
+    //     loop, so an open is drawn already sitting on the newest message or
+    //     the unread divider.
+    //   - rows inserted above the first live row shift its index without
+    //     moving anything on screen, which is what lets older history load at
+    //     the top without a jump.
     if !root.loading && root.messages.length > 0: Rectangle {
         width: 100%;
         height: 100%;
 
-        flickable := Flickable {
-            // Explicit width constraints for proper text wrapping
+        list := ListView {
             width: 100%;
             height: 100%;
-            // Constrain horizontal viewport to prevent content from expanding beyond visible width
-            viewport-width: self.width;
-            viewport-height: messages-layout.preferred-height;
-            viewport-y <=> root.scroll-position;
 
-            // Animate scroll position for smooth scrolling — except when the
-            // content arrived all at once, see `jump-without-animation`.
-            animate viewport-y {
-                duration: root.jump-without-animation ? 0ms : 300ms;
-                easing: ease-out;
+            // How far the content extends below the bottom edge. Exact once the
+            // last row is live (the runtime's estimate then closes on the real
+            // bottom edge), and at least one average row while any row is
+            // still below — so "at bottom" cannot be claimed early.
+            pure function bottom-gap() -> length {
+                return self.viewport-height + self.viewport-y - self.height;
             }
 
-            // Update is-at-bottom when scroll position changes
-            changed viewport-y => {
-                self.update-at-bottom(self.viewport-y);
-            }
-
-            function update-at-bottom(y: length) {
-                // Calculate if we're at bottom (within 50px threshold)
-                // viewport-y is negative, so at bottom means:
-                // viewport-y >= -(viewport-height - self.height)
-                // Rearranged: viewport-height + viewport-y <= self.height + threshold
-                root.is-at-bottom = (self.viewport-height + y) <= (self.height + 50px);
+            function update-at-bottom() {
+                root.is-at-bottom = self.bottom-gap() <= 50px;
                 // Reaching the newest message is what "caught up" means; the
                 // pill must stop claiming N new messages after that, including
                 // when the user scrolls back up later in the same session.
@@ -262,140 +305,144 @@ export component MessageList inherits Rectangle {
                 }
             }
 
-            // Auto-snap to bottom when content grows AND user is currently at bottom.
-            // Slint 1.16 does not clamp programmatic viewport-y writes, so the prior
-            // approach (Rust setting scroll-position = -99999 sentinel) parked the
-            // viewport offscreen and content only re-appeared after a manual drag.
-            // Reacting to viewport-height changes lets Slint own the math inside
-            // Flickable scope, where `self.height` and `self.viewport-height` are
-            // both concrete.
-            // One place decides where the viewport sits after the content
-            // resizes: the unread boundary if this open has one, otherwise the
-            // bottom. Two callers (content grew; the divider row reported its
-            // position) so the two cannot race each other to a different answer.
-            function settle() {
-                if (root.unread-index >= 0 && !root.anchor-consumed) {
-                    // Wait for the divider row to report a real y, unless it is
-                    // the very first row (y == 0 is its correct answer).
-                    if (root.unread-divider-y > 0px || root.unread-index == 0) {
-                        // Telegram parity: the divider sits just under the top
-                        // edge, so you read forward from where you stopped with
-                        // a sliver of the last-read message still above it.
-                        let target = min(0px,
-                            max(self.height - self.viewport-height,
-                                -root.unread-divider-y + Spacing.xl));
-                        self.viewport-y = target;
-                        root.anchor-consumed = true;
-                        // The open cleared is-at-bottom for the anchor. When the
-                        // unread tail fits on screen the target is the viewport's
-                        // current y, `changed viewport-y` never fires, and the
-                        // pill claimed "1 new message" over the message itself.
-                        self.update-at-bottom(target);
-                    }
-                } else if (root.should-auto-scroll && root.is-at-bottom) {
-                    self.viewport-y = min(0px, self.height - self.viewport-height);
+            function seek-end() {
+                self.viewport-y = self.height - self.viewport-height;
+            }
+
+            // True once the runtime has written its first estimate. Before
+            // that `viewport-height` still holds the Flickable default (the
+            // list's own height), and a row seek computed from it lands on
+            // row 0.
+            property <bool> measured: false;
+
+            // Carry out whatever root just recorded.
+            property <int> nav: root.nav-serial;
+            changed nav => {
+                self.pursue();
+            }
+            function pursue() {
+                if (root.end-pending) {
+                    self.seek-end();
+                } else if (root.jump-row >= 0) {
+                    self.seek-row(root.jump-row);
                 }
+            }
+
+            // Land row `i` at the top edge. The runtime seeks by its average
+            // row height: more than 1.5 screens from the live rows (every
+            // open, since a fresh list has measured one row) it places row
+            // `i` at exactly y = 0; nearer, it walks measured rows from the
+            // current anchor, and the row lands within about a row of the
+            // top — the highlight flash pins which one it is. Needs an
+            // estimate to seek by, so before the first layout this waits.
+            function seek-row(i: int) {
+                if (root.messages.length > 0 && self.measured) {
+                    // 1px past the row's estimated top so the runtime's
+                    // floor() picks `i`, not `i - 1`.
+                    self.viewport-y = -(i * self.viewport-height / root.messages.length) - 1px;
+                    root.jump-row = -1;
+                }
+            }
+
+            // Every layout pass ends with the runtime rewriting viewport-y
+            // and/or viewport-height; this is where pending targets are
+            // re-issued until they hold, and where load-more fires.
+            function settle() {
+                // The runtime's "content shorter than the view" fix-up can
+                // leave viewport-y positive (rows pushed down from the top,
+                // blank above them); the Flickable's own clamp does not
+                // always catch it. Rows start at the top edge, always.
+                if (self.viewport-y > 0px) {
+                    self.viewport-y = 0px;
+                    return;
+                }
+                self.update-at-bottom();
+                root.at-end = self.bottom-gap() <= 1px;
+                if (root.end-pending) {
+                    if (root.at-end || root.end-passes >= 6) {
+                        root.end-pending = false;
+                    } else {
+                        root.end-passes += 1;
+                        self.seek-end();
+                    }
+                } else if (root.jump-row >= 0) {
+                    self.seek-row(root.jump-row);
+                } else if (root.load-more-armed && self.viewport-y > -Spacing.xl * 4) {
+                    // Near the true top (the estimate is exact once row 0 is
+                    // live). Once per approach; re-armed when the model grows.
+                    root.load-more-armed = false;
+                    root.load-more();
+                }
+            }
+
+            changed viewport-y => {
+                self.settle();
+            }
+            // A content re-estimate (a row measured, a thumbnail grown) while
+            // sitting exactly on the end keeps the end in place. A finger
+            // moves viewport-y first, which clears `at-end` before any
+            // re-estimate its scrolling causes — so this never fights a drag.
+            changed viewport-height => {
+                self.measured = true;
+                if (root.at-end && !root.end-pending) {
+                    self.seek-end();
+                }
+                self.settle();
             }
 
             // The view itself shrinking (soft keyboard opening) must keep the
-            // newest message in sight too, not just content growing.
-            // Without animation: Android 16 animates the IME inset over many
-            // frames, and a 300ms glide lagging behind each step reported an
-            // intermediate y as "not at bottom" — the next step then stopped
-            // re-pinning, the last messages slid under the keyboard and the
-            // scroll-to-bottom button appeared over them. Android 10 resizes in
-            // one step, which is why only the S25 showed it.
+            // newest message in sight too, not just content growing. Decided
+            // on the pre-resize `is-at-bottom`, then settled against the new
+            // height (which alone can change how far the end is).
             changed height => {
                 if (root.is-at-bottom) {
-                    root.jump-without-animation = true;
-                    self.viewport-y = min(0px, self.height - self.viewport-height);
-                    root.jump-without-animation = false;
+                    root.go-to-end();
                 }
-            }
-
-            changed viewport-height => {
-                // Decide before writing viewport-y: the animation reads its
-                // duration at the moment the property changes.
-                root.jump-without-animation =
-                    (self.viewport-height - root.previous-viewport-height) > self.height;
-                root.previous-viewport-height = self.viewport-height;
                 self.settle();
             }
 
             // Mirror the root properties locally so `changed` fires inside
-            // Flickable scope (same trick as `jump-index` below).
-            property <length> anchor-y: root.unread-divider-y;
-            changed anchor-y => {
-                self.settle();
-            }
+            // list scope.
             property <int> open-index: root.unread-index;
             changed open-index => {
-                root.anchor-consumed = false;
-                self.settle();
+                if (self.open-index >= 0) {
+                    root.go-to-row(self.open-index);
+                }
             }
 
-            // The Flickable is created fresh on every open (it lives under
-            // `!loading`), and a fresh element's `changed` handlers do not fire
-            // for their first values. Without this nothing settled a short
-            // conversation, `is-at-bottom` stayed false from the open, and the
-            // "1 new message" pill floated over the message it pointed at.
-            init => {
-                self.settle();
-            }
-
-            // Jump-to-message (quote click, search result): move the viewport to
-            // the target index. Item heights vary and we can't measure each one
-            // here, so approximate proportionally — the target lands in view and
-            // the green highlight pins exactly which message it is. `animate
-            // viewport-y` (below the fold) makes it a smooth glide. Mirror the
-            // root property locally so `changed` fires inside Flickable scope.
+            // Jump-to-message (quote click, search result, pinned bar).
             property <int> jump-index: root.scroll-to-index;
             changed jump-index => {
-                if (self.jump-index >= 0 && root.messages.length > 1) {
-                    self.viewport-y = (self.jump-index / (root.messages.length - 1))
-                        * min(0px, self.height - self.viewport-height);
+                if (self.jump-index >= 0) {
+                    root.go-to-row(self.jump-index);
                 }
             }
 
-            messages-layout := VerticalLayout {
-            // Explicit width from parent for proper text wrapping
-            width: parent.width;
-            padding: Spacing.md;
-            // Extra bottom clearance so the scroll-to-bottom FAB (44px, docked
-            // bottom-right) never covers the last message's corner.
-            padding-bottom: Spacing.md + 48px;
-            spacing: Spacing.message-gap;
-
-            // Load more trigger at top (for infinite scroll)
-            Rectangle {
-                height: Spacing.lg;
-
-                load-trigger := TouchArea {
-                    // This area triggers load-more when scrolled to top
-                    // In practice, you'd detect scroll position
+            // The list is created fresh on every open (it lives under
+            // `!loading`), before any row is laid out: record the intent and
+            // let the first layout pass, inside this same frame, carry it out.
+            init => {
+                if (root.unread-index >= 0) {
+                    root.go-to-row(root.unread-index);
+                } else {
+                    root.go-to-end();
                 }
+                self.pursue();
             }
 
             for item[idx] in root.messages: VerticalLayout {
-                width: parent.width - Spacing.md * 2;
+                width: root.width;
+                height: self.preferred-height;
+                padding-left: Spacing.md;
+                padding-right: Spacing.md;
+                padding-top: idx == 0 ? Spacing.md : 0px;
+                // Extra bottom clearance under the last row so the
+                // scroll-to-bottom FAB (44px, docked bottom-right) never
+                // covers its corner.
+                padding-bottom: idx == root.messages.length - 1
+                    ? Spacing.md + 48px
+                    : Spacing.message-gap;
                 spacing: 2px;
-
-                // Report where the unread boundary actually ended up, so the
-                // open scrolls to the real row instead of guessing from the
-                // index (an image bubble is ten times a text bubble tall).
-                // `changed` never fires for a row whose first laid-out y is
-                // already final (every row of a text-only open), so the row
-                // also reports once when it is created.
-                init => {
-                    if (idx == root.unread-index) {
-                        root.unread-divider-y = self.y;
-                    }
-                }
-                changed y => {
-                    if (idx == root.unread-index) {
-                        root.unread-divider-y = self.y;
-                    }
-                }
 
                 // Unread divider — everything below this line arrived while
                 // the user was away.
@@ -465,107 +512,106 @@ export component MessageList inherits Rectangle {
                     }
                 }
 
-            MessageItem {
-                width: 100%;
-                message-id: item.message-id;
-                sender-id: item.sender-id;
-                timestamp-ns: item.timestamp-ns;
-                sender-name: item.sender-name;
-                sender-initials: item.sender-initials;
-                sender-avatar-source: item.sender-avatar-source;
-                has-avatar: item.has-avatar;
-                content: item.content;
-                rich-content: item.rich-content;
-                timestamp: item.timestamp;
-                is-own: item.is-own;
-                is-edited: item.is-edited;
-                is-pinned: item.is-pinned;
-                is-deleted: item.is-deleted;
-                is-system: item.is-system;
-                is-ai: item.is-ai;
-                is-dm: root.is-dm;
-                can-thread: root.can-thread;
-                is-mesh: root.is-mesh;
-                is-call: item.is-call;
-                call-type: item.call-type;
-                call-duration: item.call-duration;
-                has-attachments: item.has-attachments;
-                attachment-count: item.attachment-count;
-                attachments: item.attachments;
-                current-playing-attachment-id: root.current-playing-attachment-id;
-                is-media-playing: root.is-media-playing;
-                audio-progress: root.audio-progress;
-                audio-elapsed: root.audio-elapsed;
-                has-reactions: item.has-reactions;
-                reaction-summary: item.reaction-summary;
-                reactions: item.reactions;
-                reply-count: item.reply-count;
-                reply-count-text: item.reply-count-text;
-                is-thread-reply: item.is-thread-reply;
-                is-reply: item.is-reply;
-                reply-to-not-found: item.reply-to-not-found;
-                reply-to-message-id: item.reply-to-message-id;
-                highlighted: item.message-id == root.highlighted-message-id;
-                reply-to-sender-name: item.reply-to-sender-name;
-                reply-to-preview: item.reply-to-preview;
-                reply-to-category: item.reply-to-category;
-                reply-to-attachment-id: item.reply-to-attachment-id;
-                reply-to-duration: item.reply-to-duration;
-                reply-to-filename: item.reply-to-filename;
-                reply-to-waveform: item.reply-to-waveform;
-                reply-to-has-thumbnail: item.reply-to-has-thumbnail;
-                reply-to-thumbnail: item.reply-to-thumbnail;
-                reply-to-thumbnail-width: item.reply-to-thumbnail-width;
-                reply-to-thumbnail-height: item.reply-to-thumbnail-height;
-                show-sender: item.show-sender;
-                delivery-status: item.delivery-status;
-                is-continuation: item.is-continuation;
-                selected: item.selected;
-                selection-mode: root.selection-mode;
-                mobile: root.mobile;
+                MessageItem {
+                    width: 100%;
+                    message-id: item.message-id;
+                    sender-id: item.sender-id;
+                    timestamp-ns: item.timestamp-ns;
+                    sender-name: item.sender-name;
+                    sender-initials: item.sender-initials;
+                    sender-avatar-source: item.sender-avatar-source;
+                    has-avatar: item.has-avatar;
+                    content: item.content;
+                    rich-content: item.rich-content;
+                    timestamp: item.timestamp;
+                    is-own: item.is-own;
+                    is-edited: item.is-edited;
+                    is-pinned: item.is-pinned;
+                    is-deleted: item.is-deleted;
+                    is-system: item.is-system;
+                    is-ai: item.is-ai;
+                    is-dm: root.is-dm;
+                    can-thread: root.can-thread;
+                    is-mesh: root.is-mesh;
+                    is-call: item.is-call;
+                    call-type: item.call-type;
+                    call-duration: item.call-duration;
+                    has-attachments: item.has-attachments;
+                    attachment-count: item.attachment-count;
+                    attachments: item.attachments;
+                    current-playing-attachment-id: root.current-playing-attachment-id;
+                    is-media-playing: root.is-media-playing;
+                    audio-progress: root.audio-progress;
+                    audio-elapsed: root.audio-elapsed;
+                    has-reactions: item.has-reactions;
+                    reaction-summary: item.reaction-summary;
+                    reactions: item.reactions;
+                    reply-count: item.reply-count;
+                    reply-count-text: item.reply-count-text;
+                    is-thread-reply: item.is-thread-reply;
+                    is-reply: item.is-reply;
+                    reply-to-not-found: item.reply-to-not-found;
+                    reply-to-message-id: item.reply-to-message-id;
+                    highlighted: item.message-id == root.highlighted-message-id;
+                    reply-to-sender-name: item.reply-to-sender-name;
+                    reply-to-preview: item.reply-to-preview;
+                    reply-to-category: item.reply-to-category;
+                    reply-to-attachment-id: item.reply-to-attachment-id;
+                    reply-to-duration: item.reply-to-duration;
+                    reply-to-filename: item.reply-to-filename;
+                    reply-to-waveform: item.reply-to-waveform;
+                    reply-to-has-thumbnail: item.reply-to-has-thumbnail;
+                    reply-to-thumbnail: item.reply-to-thumbnail;
+                    reply-to-thumbnail-width: item.reply-to-thumbnail-width;
+                    reply-to-thumbnail-height: item.reply-to-thumbnail-height;
+                    show-sender: item.show-sender;
+                    delivery-status: item.delivery-status;
+                    is-continuation: item.is-continuation;
+                    selected: item.selected;
+                    selection-mode: root.selection-mode;
+                    mobile: root.mobile;
 
-                selection-toggled(id) => {
-                    root.selection-toggled(id);
-                }
+                    selection-toggled(id) => {
+                        root.selection-toggled(id);
+                    }
 
-                message-clicked(id) => {
-                    root.message-clicked(id);
-                }
+                    message-clicked(id) => {
+                        root.message-clicked(id);
+                    }
 
-                reply-clicked(sender-id, timestamp-ns) => {
-                    root.reply-clicked(sender-id, timestamp-ns);
-                }
+                    reply-clicked(sender-id, timestamp-ns) => {
+                        root.reply-clicked(sender-id, timestamp-ns);
+                    }
 
-                react-clicked(sender-id, timestamp-ns, x, y) => {
-                    root.react-clicked(sender-id, timestamp-ns, x, y);
-                }
+                    react-clicked(sender-id, timestamp-ns, x, y) => {
+                        root.react-clicked(sender-id, timestamp-ns, x, y);
+                    }
 
-                reaction-toggled(sender-id, timestamp-ns, emoji) => {
-                    root.reaction-toggled(sender-id, timestamp-ns, emoji);
-                }
+                    reaction-toggled(sender-id, timestamp-ns, emoji) => {
+                        root.reaction-toggled(sender-id, timestamp-ns, emoji);
+                    }
 
-                thread-clicked(id) => {
-                    root.thread-clicked(id);
-                }
+                    thread-clicked(id) => {
+                        root.thread-clicked(id);
+                    }
 
-                more-clicked(sender-id, timestamp-ns, x, y) => {
-                    root.more-clicked(sender-id, timestamp-ns, x, y);
-                }
+                    more-clicked(sender-id, timestamp-ns, x, y) => {
+                        root.more-clicked(sender-id, timestamp-ns, x, y);
+                    }
 
-                quote-clicked(id) => {
-                    root.quote-clicked(id);
-                }
+                    quote-clicked(id) => {
+                        root.quote-clicked(id);
+                    }
 
-                attachment-clicked(id) => {
-                    root.attachment-clicked(id);
-                }
+                    attachment-clicked(id) => {
+                        root.attachment-clicked(id);
+                    }
 
-                audio-seek(id, pos) => {
-                    root.audio-seek(id, pos);
+                    audio-seek(id, pos) => {
+                        root.audio-seek(id, pos);
+                    }
                 }
             }
-            } // end VerticalLayout wrapper (date separator + message)
-        }
         }
 
         // Scroll-to-bottom floating button
@@ -623,13 +669,12 @@ export component MessageList inherits Rectangle {
 
             scroll-btn := TouchArea {
                 clicked => {
-                    // Scroll to bottom: viewport-y = -(viewport-height - visible-height)
-                    root.scroll-position = -(flickable.viewport-height - flickable.height);
-                    root.is-at-bottom = true;
                     // Consume the anchor: the user has chosen the newest
                     // message, so no later relayout may drag them back up.
                     root.unread-index = -1;
                     root.unread-count = 0;
+                    root.is-at-bottom = true;
+                    root.go-to-end();
                     root.scroll-to-bottom-clicked();
                 }
             }

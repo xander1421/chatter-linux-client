@@ -19,6 +19,17 @@ fn pump(w: &MainWindow) {
     w.run().unwrap();
 }
 
+/// The testing backend never draws, and the message list lays its rows out
+/// only inside the window's instantiation pass (what a frame, an input event
+/// or an element query triggers). A pointer move is that pass: it loops
+/// instantiation and change handlers until nothing moves, which is the same
+/// loop a real frame runs before it is drawn.
+fn lay_out(w: &MainWindow) {
+    w.window().dispatch_event(slint::platform::WindowEvent::PointerMoved {
+        position: slint::LogicalPosition::new(1.0, 1.0),
+    });
+}
+
 fn msgs(n: usize) -> ModelRc<MessageItemData> {
     ModelRc::new(VecModel::from(
         (0..n)
@@ -45,6 +56,7 @@ fn open(w: &MainWindow, n: usize, unread_index: i32) {
     w.set_is_at_bottom(false);
     w.set_messages(msgs(n));
     w.set_loading_messages(false);
+    lay_out(w);
     pump(w);
 }
 
@@ -53,6 +65,10 @@ fn pill_only_when_unread_is_below_the_viewport() {
     testing::init_integration_test_with_system_time();
     let w = MainWindow::new().expect("MainWindow::new");
     w.set_current_view("main".into());
+    // The chat panel exists only for an open conversation (app.slint gates
+    // ChatLayout on a non-empty channel name); without one, no list is ever
+    // created and nothing here is tested.
+    w.set_channel_name("dev".into());
     w.show().unwrap();
     pump(&w);
 
