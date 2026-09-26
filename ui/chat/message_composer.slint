@@ -216,18 +216,12 @@ export component MessageComposer inherits Rectangle {
     // "Touch input", plumbed from ChatLayout.
     in property <bool> mobile: false;
 
-    // On a phone the composer spans the full width against a black page, so a
-    // lifted fill with a border on all four sides draws a visible rectangle
-    // with seams down the left and right edges of the screen. Edge-to-edge it
-    // takes the page colour and keeps only the top hairline below, which is
-    // the one edge that actually separates it from the messages. Desktop keeps
-    // the bordered card — there it sits inside a column and the border is what
-    // gives it its shape.
+    // Flat, no outline (Spacing.stroke): on a phone it takes the page colour,
+    // on desktop the raised surface tone. The top hairline below is the one
+    // edge that separates it from the messages.
     background: root.mobile ? Colors.background : Colors.surface;
-    border-width: root.mobile ? 0px : 1px;
-    border-color: Colors.neo-highlight;
 
-    // Neo top edge — highlight border replaces flat divider
+    // Top hairline divider
     Rectangle {
         y: 0;
         width: 100%;
@@ -611,8 +605,6 @@ export component MessageComposer inherits Rectangle {
                         height: 56px * Appearance.text-grow;
                         background: Colors.surface;
                         border-radius: Spacing.radius-md;
-                        border-width: 1px;
-                        border-color: Colors.neo-highlight;
                         drop-shadow-blur: Spacing.neo-blur-sm;
                         drop-shadow-offset-x: Spacing.neo-offset-sm;
                         drop-shadow-offset-y: Spacing.neo-offset-sm;
@@ -734,8 +726,6 @@ export component MessageComposer inherits Rectangle {
                         width: 56px;
                         height: 56px;
                         background: add-more-touch.has-hover ? Colors.surface-hover : Colors.neo-inset-bg;
-                        border-width: 1px;
-                        border-color: add-more-touch.has-hover ? Colors.neo-highlight-strong : Colors.neo-inset-shadow;
                         border-radius: Spacing.radius-md;
                         accessible-role: button;
                         accessible-label: "Add attachment";
@@ -786,8 +776,8 @@ export component MessageComposer inherits Rectangle {
                 height: root.content-height;
                 background: Colors.neo-inset-bg;
                 border-radius: Spacing.radius-lg;
-                border-width: 1px;
-                border-color: text-input.has-focus ? Colors.glow-cyan.with-alpha(0.4) : Colors.neo-inset-shadow;
+                border-width: Spacing.stroke;
+                border-color: text-input.has-focus ? Colors.primary : Colors.border;
                 opacity: root.disabled ? 0.5 : 1.0;
                 clip: true;
                 accessible-role: AccessibleRole.text-input;
@@ -951,8 +941,6 @@ export component MessageComposer inherits Rectangle {
                 height: Spacing.touch-target-min;
                 background: send-touch.has-hover ? Colors.primary-hover : Colors.primary;
                 border-radius: Spacing.radius-md;
-                border-width: 1px;
-                border-color: Colors.neo-highlight-strong;
                 drop-shadow-blur: send-touch.has-hover ? Spacing.neo-blur-md : Spacing.neo-blur-sm;
                 drop-shadow-offset-x: Spacing.neo-offset-sm;
                 drop-shadow-offset-y: Spacing.neo-offset-sm;

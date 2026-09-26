@@ -55,12 +55,10 @@ export component NeoActionToggle inherits Rectangle {
         y: -2px;
         border-radius: 14px;
         background: transparent;
-        border-width: root.checked ? 1px : 0px;
-        border-color: root.checked ? root.glow-soft : transparent;
         drop-shadow-blur: root.checked ? Spacing.neo-blur-sm : 0px;
         drop-shadow-color: root.checked ? root.glow-soft : transparent;
 
-        animate border-width, border-color, drop-shadow-blur, drop-shadow-color {
+        animate drop-shadow-blur, drop-shadow-color {
             duration: 250ms;
             easing: ease-in-out;
         }

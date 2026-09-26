@@ -372,8 +372,8 @@ export component ThreadPanel inherits Rectangle {
                     height: 40px;
                     background: Colors.background;
                     border-radius: Spacing.radius-md;
-                    border-width: 1px;
-                    border-color: composer-input.has-focus ? Colors.primary : Colors.text-muted.with-alpha(0.3);
+                    border-width: Spacing.stroke;
+                    border-color: composer-input.has-focus ? Colors.primary : Colors.border;
 
                     HorizontalLayout {
                         padding-left: Spacing.sm;

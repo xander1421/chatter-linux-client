@@ -4,6 +4,8 @@ import { Colors } from "../theme/colors.slint";
 import { Spacing } from "../theme/spacing.slint";
 import { Typography } from "../theme/typography.slint";
 import { Icons } from "../theme/icons.slint";
+import { HeaderButton } from "header_button.slint";
+import { DismissButton } from "dismiss_button.slint";
 import { Skeleton } from "skeleton.slint";
 import { Button } from "button.slint";
 
@@ -54,10 +56,6 @@ export component GifPicker inherits Rectangle {
     background: Colors.surface;
     border-radius: Spacing.radius-lg;
 
-    // Drop shadow effect via border
-    border-width: 1px;
-    border-color: Colors.text-muted.with-alpha(0.2);
-
     // Block clicks from passing through
     TouchArea {
         width: 100%;
@@ -70,32 +68,14 @@ export component GifPicker inherits Rectangle {
 
         // Header with emoji toggle, title, and close button
         HorizontalLayout {
-            height: 24px;
-            spacing: Spacing.sm;
+            height: Spacing.header-action-box;
+            spacing: Spacing.header-action-gap;
 
             // Emoji toggle — switches back to emoji picker
-            Rectangle {
-                width: 28px;
-                height: 24px;
-                border-radius: Spacing.radius-sm;
-                background: emoji-tab-area.has-hover ? Colors.surface-hover : transparent;
-
-                Image {
-                    source: Icons.smile;
-                    colorize: Colors.text-secondary;
-                    width: 16px;
-                    height: 16px;
-                    x: (parent.width - self.width) / 2;
-                    y: (parent.height - self.height) / 2;
-                }
-
-                emoji-tab-area := TouchArea {
-                    width: 100%;
-                    height: 100%;
-                    clicked => {
-                        root.emoji-mode-requested();
-                    }
-                }
+            HeaderButton {
+                icon: Icons.smile;
+                label: "Emoji";
+                clicked => { root.emoji-mode-requested(); }
             }
 
             Text {
@@ -108,29 +88,8 @@ export component GifPicker inherits Rectangle {
             }
 
             // Close button
-            Rectangle {
-                width: 24px;
-                height: 24px;
-                border-radius: Spacing.radius-sm;
-                background: close-area.has-hover ? Colors.surface-hover : transparent;
-
-                Text {
-                    text: "\u{00D7}";
-                    color: Colors.text-secondary;
-                    font-size: Typography.sm;
-                    horizontal-alignment: center;
-                    vertical-alignment: center;
-                    width: 100%;
-                    height: 100%;
-                }
-
-                close-area := TouchArea {
-                    width: 100%;
-                    height: 100%;
-                    clicked => {
-                        root.close();
-                    }
-                }
+            DismissButton {
+                clicked => { root.close(); }
             }
         }
 
@@ -139,8 +98,8 @@ export component GifPicker inherits Rectangle {
             height: 36px;
             border-radius: Spacing.radius-md;
             background: Colors.background;
-            border-width: 1px;
-            border-color: search-focused ? Colors.primary : Colors.text-muted.with-alpha(0.3);
+            border-width: Spacing.stroke;
+            border-color: search-focused ? Colors.primary : Colors.border;
 
             HorizontalLayout {
                 padding-left: Spacing.sm;
@@ -407,8 +366,6 @@ export component GifPicker inherits Rectangle {
                         clip: true;
 
                         // Hover glow effect
-                        border-width: gif-area.has-hover ? 2px : 0px;
-                        border-color: Colors.primary.with-alpha(0.5);
 
                         // GIF preview image (loaded from Rust)
                         Image {

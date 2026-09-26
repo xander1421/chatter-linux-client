@@ -190,8 +190,6 @@ export component ChannelSettingsModal inherits Rectangle {
                 width: root.narrow ? 44px : 160px;
                 background: Colors.neo-inset-bg;
                 border-radius: Spacing.radius-md;
-                border-width: 1px;
-                border-color: Colors.neo-inset-shadow;
 
                 VerticalLayout {
                     padding: Spacing.sm;
@@ -203,8 +201,6 @@ export component ChannelSettingsModal inherits Rectangle {
                         height: root.narrow ? 48px : 36px;
                         background: root.active-section == "general" ? Colors.surface-hover : transparent;
                         border-radius: Spacing.radius-sm;
-                        border-width: root.active-section == "general" ? 1px : 0px;
-                        border-color: Colors.neo-highlight;
 
                         TouchArea {
                             clicked => { root.active-section = "general"; }
@@ -239,8 +235,6 @@ export component ChannelSettingsModal inherits Rectangle {
                         height: root.narrow ? 48px : 36px;
                         background: root.active-section == "notifications" ? Colors.surface-hover : transparent;
                         border-radius: Spacing.radius-sm;
-                        border-width: root.active-section == "notifications" ? 1px : 0px;
-                        border-color: Colors.neo-highlight;
 
                         TouchArea {
                             clicked => { root.active-section = "notifications"; }
@@ -272,8 +266,6 @@ export component ChannelSettingsModal inherits Rectangle {
                         height: root.narrow ? 48px : 36px;
                         background: root.active-section == "members" ? Colors.surface-hover : transparent;
                         border-radius: Spacing.radius-sm;
-                        border-width: root.active-section == "members" ? 1px : 0px;
-                        border-color: Colors.neo-highlight;
 
                         TouchArea {
                             clicked => { root.active-section = "members"; }
@@ -596,8 +588,6 @@ export component ChannelSettingsModal inherits Rectangle {
                                 min-height: 44px;
                                 background: root.notification-preference == "all" ? Colors.neo-inset-bg : transparent;
                                 border-radius: Spacing.radius-sm;
-                                border-width: root.notification-preference == "all" ? 1px : 0;
-                                border-color: Colors.primary.with-alpha(0.4);
 
                                 HorizontalLayout {
                                     padding: Spacing.sm;
@@ -607,7 +597,7 @@ export component ChannelSettingsModal inherits Rectangle {
                                         width: 20px;
                                         height: 20px;
                                         border-radius: 10px;
-                                        border-width: 2px;
+                                        border-width: Spacing.stroke;
                                         border-color: root.notification-preference == "all" ? Colors.primary : Colors.text-muted;
                                         background: root.notification-preference == "all" ? Colors.primary : transparent;
                                     }
@@ -641,8 +631,6 @@ export component ChannelSettingsModal inherits Rectangle {
                                 min-height: 44px;
                                 background: root.notification-preference == "mentions" ? Colors.neo-inset-bg : transparent;
                                 border-radius: Spacing.radius-sm;
-                                border-width: root.notification-preference == "mentions" ? 1px : 0;
-                                border-color: Colors.primary.with-alpha(0.4);
 
                                 HorizontalLayout {
                                     padding: Spacing.sm;
@@ -652,7 +640,7 @@ export component ChannelSettingsModal inherits Rectangle {
                                         width: 20px;
                                         height: 20px;
                                         border-radius: 10px;
-                                        border-width: 2px;
+                                        border-width: Spacing.stroke;
                                         border-color: root.notification-preference == "mentions" ? Colors.primary : Colors.text-muted;
                                         background: root.notification-preference == "mentions" ? Colors.primary : transparent;
                                     }
@@ -686,8 +674,6 @@ export component ChannelSettingsModal inherits Rectangle {
                                 min-height: 44px;
                                 background: root.notification-preference == "none" ? Colors.neo-inset-bg : transparent;
                                 border-radius: Spacing.radius-sm;
-                                border-width: root.notification-preference == "none" ? 1px : 0;
-                                border-color: Colors.primary.with-alpha(0.4);
 
                                 HorizontalLayout {
                                     padding: Spacing.sm;
@@ -697,7 +683,7 @@ export component ChannelSettingsModal inherits Rectangle {
                                         width: 20px;
                                         height: 20px;
                                         border-radius: 10px;
-                                        border-width: 2px;
+                                        border-width: Spacing.stroke;
                                         border-color: root.notification-preference == "none" ? Colors.primary : Colors.text-muted;
                                         background: root.notification-preference == "none" ? Colors.primary : transparent;
                                     }

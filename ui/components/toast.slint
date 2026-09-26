@@ -41,22 +41,22 @@ export component Toast inherits Rectangle {
         border-radius: Spacing.radius-md;
     }
 
-    // Subtle shadow effect via border
-    border-color: Colors.overlay-light;
-    border-width: 1px;
-
     content-layout := HorizontalLayout {
         padding: Spacing.md;
         padding-left: Spacing.lg;  // Extra padding for accent border
         spacing: Spacing.md;
 
         // Variant indicator circle
-        Rectangle {
-            width: 8px;
-            height: 8px;
-            border-radius: 4px;
-            background: variant-color;
-            y: (parent.height - self.height) / 2;
+        // A layout ignores `y`, so centre the dot with one of its own.
+        VerticalLayout {
+            alignment: center;
+
+            Rectangle {
+                width: 8px;
+                height: 8px;
+                border-radius: 4px;
+                background: variant-color;
+            }
         }
 
         // Message text

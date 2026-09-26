@@ -1,0 +1,62 @@
+// HeaderButton — the ONE control that sits in a header or title row.
+//
+// Back, close, ⋮, search, call, video, +, Shield, settings: every icon control
+// in every title row of the app is this component, so they all share one box
+// (Spacing.header-action-box / -touch), one glyph size (Spacing.header-glyph /
+// -touch), one hover/pressed treatment and no stroke. The box is square and
+// the same in every row, so a HorizontalLayout whose height is that box puts
+// each button and the title (vertical-alignment: center) on one axis.
+// Adjacent header buttons sit Spacing.header-action-gap apart.
+//
+// The test `headers_use_the_shared_header_button` in ui_wiring.rs fails if a
+// header draws its own icon button.
+
+import { Colors } from "../theme/colors.slint";
+import { Spacing } from "../theme/spacing.slint";
+
+export component HeaderButton inherits Rectangle {
+    in property <image> icon;
+    // Required in practice: an icon-only control has no other name for a
+    // screen reader.
+    in property <string> label;
+    // Density: the touch box and glyph, or the mouse ones.
+    in property <bool> touch: false;
+    // The on-state of a header toggle (Shield): tinted, not outlined.
+    in property <bool> active: false;
+    in property <bool> destructive: false;
+    in property <bool> enabled: true;
+
+    callback clicked();
+
+    accessible-role: button;
+    accessible-label: root.label;
+    accessible-enabled: root.enabled;
+    accessible-action-default => { if root.enabled { root.clicked(); } }
+
+    width: root.touch ? Spacing.header-action-box-touch : Spacing.header-action-box;
+    height: self.width;
+    border-radius: Spacing.radius-md;
+    background: touch-area.has-hover || touch-area.pressed ? Colors.surface-hover
+        : (root.active ? Colors.primary.with-alpha(0.15) : transparent);
+    opacity: root.enabled ? 1.0 : 0.4;
+
+    Image {
+        source: root.icon;
+        width: root.touch ? Spacing.header-glyph-touch : Spacing.header-glyph;
+        height: self.width;
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        colorize: root.destructive ? Colors.error
+            : root.active ? Colors.primary
+            : touch-area.pressed ? Colors.text-muted
+            : (touch-area.has-hover ? Colors.text-primary : Colors.text-secondary);
+    }
+
+    touch-area := TouchArea {
+        mouse-cursor: root.enabled ? pointer : default;
+        clicked => { if root.enabled { root.clicked(); } }
+    }
+
+    // Status marks drawn over the glyph (Shield's Tor dot).
+    @children
+}

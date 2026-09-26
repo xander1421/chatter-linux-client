@@ -3436,22 +3436,15 @@ fn dismissal_glyph_and_edge_follow_the_screen_shape() {
     let dismiss = include_str!("../../../ui/components/dismiss_button.slint");
     // The glyph is chosen by shape, in one expression, in one place.
     assert!(
-        dismiss.contains("source: root.back ? Icons.chevron-left : Icons.x;"),
+        dismiss.contains("icon: root.back ? Icons.chevron-left : Icons.x;"),
         "DismissButton must pick chevron for a pushed page and X for a dialog"
     );
-    // Both densities come from the shared header tokens, so a dismissal
-    // control is never a different size from the rest of its header row.
-    for token in [
-        "Spacing.header-action-box-touch",
-        "Spacing.header-action-box",
-        "Spacing.header-glyph-touch",
-        "Spacing.header-glyph",
-    ] {
-        assert!(
-            dismiss.contains(token),
-            "DismissButton must size itself from {token}, not a literal"
-        );
-    }
+    // Its geometry is HeaderButton's, so a dismissal control is never a
+    // different size from the rest of its header row.
+    assert!(
+        dismiss.contains("inherits HeaderButton"),
+        "DismissButton must be a HeaderButton, not a second header geometry"
+    );
 
     // The EDGE is a layout position, so it is pinned by ORDER inside Modal's
     // header row: chevron before the title, X after it. `full-screen` is the
@@ -3476,10 +3469,191 @@ fn dismissal_glyph_and_edge_follow_the_screen_shape() {
         "Modal's dismissal edges are reversed: the chevron must precede the \
          title and the X must follow it"
     );
-    assert!(
-        !modal.contains("Icons."),
-        "Modal must not name a glyph itself — DismissButton owns that"
-    );
+    for glyph in ["Icons.x", "Icons.chevron-left", "Icons.arrow-left"] {
+        assert!(
+            !modal.contains(glyph),
+            "Modal must not name a dismissal glyph ({glyph}) — DismissButton owns that"
+        );
+    }
+}
+
+// FX6 (owner, 2026-09-26): "buttons in headers must be aligned on axis and be
+// of same size. This must be applied to all places." Every icon control in a
+// title row — back, close, ⋮, search, call, video, +, Shield, fullscreen — is
+// `ui/components/header_button.slint` (DismissButton is one), so one box, one
+// glyph, one hover and no stroke. Screens had grown their own: chat_header's
+// `IconButton`, selection_bar's `BarButton`, a 24px "+" and Shield in the chat
+// list, a 32px fullscreen toggle on calls, 40px "×" text glyphs in the media
+// viewers, 32px emoji buttons in the file previews.
+
+/// Every `.slint` file under ui/, as (path relative to ui/, source).
+fn all_slint_sources() -> Vec<(String, String)> {
+    fn walk(dir: &std::path::Path, base: &std::path::Path, out: &mut Vec<(String, String)>) {
+        for entry in std::fs::read_dir(dir).unwrap_or_else(|e| panic!("read {dir:?}: {e}")) {
+            let path = entry.expect("dir entry").path();
+            if path.is_dir() {
+                walk(&path, base, out);
+            } else if path.extension().is_some_and(|x| x == "slint") {
+                let rel = path.strip_prefix(base).expect("under ui/").to_string_lossy().into_owned();
+                out.push((rel, std::fs::read_to_string(&path).expect("read slint source")));
+            }
+        }
+    }
+    let ui = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../ui");
+    let mut out = Vec::new();
+    walk(&ui, &ui, &mut out);
+    out.sort();
+    out
+}
+
+/// The element block (`{ … }`) that is `levels` braces out from `pos`.
+fn block_around(src: &str, pos: usize, levels: usize) -> &str {
+    let bytes = src.as_bytes();
+    let mut open = pos;
+    for _ in 0..levels {
+        let mut depth = 0usize;
+        loop {
+            if open == 0 {
+                return src;
+            }
+            open -= 1;
+            match bytes[open] {
+                b'}' => depth += 1,
+                b'{' if depth > 0 => depth -= 1,
+                b'{' => break,
+                _ => {}
+            }
+        }
+    }
+    let mut depth = 0usize;
+    for (i, b) in bytes.iter().enumerate().skip(open) {
+        match b {
+            b'{' => depth += 1,
+            b'}' => {
+                depth -= 1;
+                if depth == 0 {
+                    return &src[open..=i];
+                }
+            }
+            _ => {}
+        }
+    }
+    &src[open..]
+}
+
+#[test]
+fn headers_use_the_shared_header_button() {
+    let sources = all_slint_sources();
+    let mut findings = Vec::new();
+
+    // 1. No screen keeps a private header-button component.
+    for (name, src) in &sources {
+        for local in ["component IconButton", "component BarButton"] {
+            if src.contains(local) {
+                findings.push(format!("{name} defines `{local}` — use HeaderButton"));
+            }
+        }
+    }
+
+    // 2. A back / close / ⋮ / fullscreen glyph drawn next to its own TouchArea
+    //    is a hand-rolled header button. The allowlist is the uses that are
+    //    NOT in a title row, each with where it lives.
+    const HEADER_GLYPHS: [&str; 9] = [
+        "Icons.chevron-left",
+        "Icons.arrow-left",
+        "Icons.x",
+        "Icons.more-vertical",
+        "Icons.maximize",
+        "Icons.minimize",
+        "\\u{00D7}",
+        "\\u{2715}",
+        "\\u{22EE}",
+    ];
+    const NOT_A_HEADER: [(&str, &str); 10] = [
+        ("chat/message_composer.slint", "Icons.x"),       // cancel reply / edit strip
+        ("chat/message_composer.slint", "\\u{00D7}"),     // remove a pending attachment
+        ("chat/pinned_bar.slint", "Icons.x"),             // dismiss the pinned banner
+        ("components/connection_banner.slint", "Icons.x"), // dismiss the banner
+        ("components/toast.slint", "Icons.x"),            // dismiss a toast
+        ("components/emoji_picker.slint", "Icons.x"),     // clear the search field
+        ("components/gif_picker.slint", "Icons.x"),       // clear the search field
+        ("modals/channel_settings.slint", "Icons.more-vertical"), // a member row's menu
+        ("modals/friends.slint", "Icons.more-vertical"),  // a friend row's menu
+        ("sidebar/sidebar.slint", "Icons.chevron-left"),  // the rail's collapse control
+    ];
+    for (name, src) in &sources {
+        if name.ends_with("header_button.slint") || name.ends_with("dismiss_button.slint") {
+            continue;
+        }
+        for line_start in src.match_indices("source:").chain(src.match_indices("text:")).map(|(at, _)| at) {
+            let line = &src[line_start..src[line_start..].find(['\n', ';']).map_or(src.len(), |n| line_start + n)];
+            for glyph in HEADER_GLYPHS {
+                // `Icons.x` must not match a longer icon name.
+                let hit = line.match_indices(glyph).any(|(at, _)| {
+                    !line[at + glyph.len()..].starts_with(|c: char| c.is_ascii_alphanumeric() || c == '-')
+                });
+                if !hit || NOT_A_HEADER.contains(&(name.as_str(), glyph)) {
+                    continue;
+                }
+                // The glyph's element is one brace out; its button two.
+                if block_around(src, line_start, 2).contains("TouchArea") {
+                    findings.push(format!(
+                        "{name} hand-rolls a header button around {glyph} — use HeaderButton \
+                         (or DismissButton for back/close) from ui/components/"
+                    ));
+                }
+            }
+        }
+    }
+
+    // 3. Every title row with an icon control goes through the shared one.
+    for header in [
+        "components/modal.slint",
+        "chat/chat_header.slint",
+        "chat/selection_bar.slint",
+        "chat/thread_panel.slint",
+        "sidebar/sidebar.slint",
+        "calls/device_picker.slint",
+        "calls/active_call_view.slint",
+        "modals/user_profile.slint",
+        "modals/jarvis_memory.slint",
+        "settings/settings_screen.slint",
+        "components/code_preview_panel.slint",
+        "components/pdf_preview_panel.slint",
+        "components/image_viewer.slint",
+        "components/video_player.slint",
+        "components/gif_picker.slint",
+        "pages/register.slint",
+        "app.slint",
+    ] {
+        let src = &sources
+            .iter()
+            .find(|(n, _)| n == header)
+            .unwrap_or_else(|| panic!("ui/{header} is gone — update this list"))
+            .1;
+        if !src.contains("HeaderButton {") && !src.contains("DismissButton {") {
+            findings.push(format!("ui/{header} has a header with no HeaderButton in it"));
+        }
+    }
+
+    // 4. The shared control owns the geometry and draws no stroke.
+    let button = include_str!("../../../ui/components/header_button.slint");
+    for token in [
+        "Spacing.header-action-box-touch",
+        "Spacing.header-action-box",
+        "Spacing.header-glyph-touch",
+        "Spacing.header-glyph",
+        "accessible-label: root.label;",
+    ] {
+        if !button.contains(token) {
+            findings.push(format!("HeaderButton lost `{token}`"));
+        }
+    }
+    if button.contains("border-width") {
+        findings.push("HeaderButton draws a stroke — header buttons are flat".into());
+    }
+
+    assert!(findings.is_empty(), "header buttons drifted:\n  {}", findings.join("\n  "));
 }
 
 /// H3 (User Control and Freedom): every irreversible action in the app sat one
@@ -3522,17 +3696,26 @@ fn destructive_actions_need_a_second_click() {
             src.contains(&format!("property <bool> {flag}: false;")),
             "{name}: must gate the destructive action behind an explicit confirm reveal"
         );
-        // The FIRST button may only reveal the confirm — never fire.
+        // The FIRST button may only reveal the confirm — never fire. Where the
+        // reveal lives is the screen's business (call history's is in a header
+        // ⋮ menu at the end of the file), so this is not a source-order check:
+        // every place the action fires must sit inside a conditional that
+        // tests the flag, and the reveal must not be inside one.
         let reveal = src
             .find(&format!("root.{flag} = true;"))
             .unwrap_or_else(|| panic!("{name}: the button must reveal the confirm step"));
-        let fire = src
-            .find(callback)
-            .unwrap_or_else(|| panic!("{name}: the confirm step must still be able to act"));
         assert!(
-            reveal < fire,
-            "{name}: {callback} is reachable before the confirm reveal — the gate is bypassed"
+            !gated_on(&enclosing_if(src, reveal), flag),
+            "{name}: the reveal is itself behind the confirm — nothing can open it"
         );
+        let fires: Vec<usize> = src.match_indices(callback).map(|(at, _)| at).collect();
+        assert!(!fires.is_empty(), "{name}: the confirm step must still be able to act");
+        for fire in fires {
+            assert!(
+                gated_on(&enclosing_if(src, fire), flag),
+                "{name}: {callback} is reachable without the confirm reveal — the gate is bypassed"
+            );
+        }
         // Reopening must not land on the confirm step (possibly for a
         // different channel), so the reveal resets whenever the screen is
         // shown or hidden.
@@ -3545,6 +3728,39 @@ fn destructive_actions_need_a_second_click() {
              reopens already asking to do the irreversible thing"
         );
     }
+}
+
+/// The conditions of every `if …:` element enclosing `pos`, innermost first,
+/// joined with ` && ` — the text between `if` and the end of each element
+/// header, found by walking out through the unmatched `{` braces. Empty when
+/// no conditional encloses it.
+fn enclosing_if(src: &str, pos: usize) -> String {
+    let bytes = src.as_bytes();
+    let mut conds = Vec::new();
+    let mut depth = 0usize;
+    let mut i = pos;
+    while i > 0 {
+        i -= 1;
+        match bytes[i] {
+            b'}' => depth += 1,
+            b'{' if depth > 0 => depth -= 1,
+            b'{' => {
+                let line_start = src[..i].rfind('\n').map_or(0, |n| n + 1);
+                if let Some(cond) = src[line_start..i].trim().strip_prefix("if ") {
+                    conds.push(cond);
+                }
+            }
+            _ => {}
+        }
+    }
+    conds.join(" && ")
+}
+
+/// `cond` requires `root.{flag}` to be TRUE — a `!root.{flag}` does not count.
+fn gated_on(cond: &str, flag: &str) -> bool {
+    let needle = format!("root.{flag}");
+    cond.match_indices(&needle)
+        .any(|(at, _)| at == 0 || cond.as_bytes()[at - 1] != b'!')
 }
 
 /// Touch-target minimums are an accessibility floor, not a style preference.

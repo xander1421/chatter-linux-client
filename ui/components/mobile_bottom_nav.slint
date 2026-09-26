@@ -50,7 +50,7 @@ component NavTab inherits Rectangle {
                 clip: true;
                 // Ringed when active, so it reads as selected the same way a
                 // colorized glyph does.
-                border-width: root.active ? 2px : 0px;
+                border-width: root.active ? Spacing.stroke : 0px;
                 border-color: Colors.primary;
                 Image {
                     source: root.avatar;
@@ -132,8 +132,6 @@ export component MobileBottomNav inherits Rectangle {
         height: Spacing.bottom-nav-height;
         border-radius: Spacing.radius-xl;
         background: Colors.surface.with-alpha(0.85);
-        border-width: 1px;
-        border-color: Colors.neo-highlight-strong;
         drop-shadow-blur: Spacing.neo-blur-lg;
         drop-shadow-offset-y: Spacing.neo-offset-md;
         drop-shadow-color: Colors.neo-shadow-strong;

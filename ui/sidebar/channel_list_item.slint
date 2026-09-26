@@ -87,8 +87,6 @@ export component ChannelListItem inherits Rectangle {
               : root.selected ? Colors.neo-inset-bg
               : touch.has-hover ? Colors.surface-hover
               : transparent;
-    border-width: !root.collapsed && (root.selected || touch.has-hover) ? 1px : 0px;
-    border-color: root.selected ? Colors.glow-primary : Colors.neo-highlight;
 
     // Expanded content layout
     if !root.collapsed: HorizontalLayout {

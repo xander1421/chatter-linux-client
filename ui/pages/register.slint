@@ -3,11 +3,11 @@
 import { Colors } from "../theme/colors.slint";
 import { Spacing } from "../theme/spacing.slint";
 import { Typography } from "../theme/typography.slint";
-import { Icons } from "../theme/icons.slint";
 import { Button } from "../components/button.slint";
 import { Input } from "../components/input.slint";
 import { Avatar } from "../components/avatar.slint";
 import { OfflineMeshNotice } from "../components/offline_mesh_notice.slint";
+import { DismissButton } from "../components/dismiss_button.slint";
 
 export component RegisterPage inherits Rectangle {
     in-out property <string> display-name: "";
@@ -74,31 +74,12 @@ export component RegisterPage inherits Rectangle {
                 spacing: Spacing.md;
                 
                 // Back button (shown after step 1)
-                if current-step > 1: Rectangle {
-                    width: 40px;
-                    height: 40px;
-                    y: (parent.height - self.height) / 2;
-                    border-radius: 20px;
-                    background: back-touch.has-hover ? Colors.surface-hover : transparent;
-                    
-                    Image {
-                        source: Icons.arrow-left;
-                        width: 20px;
-                        height: 20px;
-                        colorize: Colors.text-primary;
-                        x: (parent.width - self.width) / 2;
-                        y: (parent.height - self.height) / 2;
-                    }
-                    
-                    back-touch := TouchArea {
-                        mouse-cursor: pointer;
-                        clicked => {
-                            current-step -= 1;
-                        }
-                    }
+                if current-step > 1: DismissButton {
+                    back: true;
+                    clicked => { current-step -= 1; }
                 }
                 
-                if current-step == 1: Rectangle { width: 40px; } // Spacer
+                if current-step == 1: Rectangle { width: Spacing.header-action-box-touch; } // Spacer
                 
                 Text {
                     text: "Create Account";
@@ -223,8 +204,10 @@ export component RegisterPage inherits Rectangle {
                                     height: 44px;
                                     border-radius: 22px;
                                     background: preset.color;
-                                    border-width: 2px;
-                                    border-color: root.selected-default-idx == i ? Colors.text-primary : transparent;
+                                    // Selected state. text-primary, not the usual
+                                    // Colors.primary: preset A IS primary.
+                                    border-width: root.selected-default-idx == i ? Spacing.stroke : 0px;
+                                    border-color: Colors.text-primary;
 
                                     Text {
                                         text: preset.letter;

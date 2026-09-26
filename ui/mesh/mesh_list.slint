@@ -156,8 +156,8 @@ export component MeshList inherits Rectangle {
                     height: 28px;
                     background: Colors.neo-inset-bg;
                     border-radius: Spacing.radius-sm;
-                    border-width: 1px;
-                    border-color: cell-input.has-focus ? Colors.glow-cyan.with-alpha(0.4) : Colors.neo-inset-shadow;
+                    border-width: Spacing.stroke;
+                    border-color: cell-input.has-focus ? Colors.primary : Colors.border;
 
                     HorizontalLayout {
                         padding-left: Spacing.sm;

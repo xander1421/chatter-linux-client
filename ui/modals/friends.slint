@@ -293,8 +293,6 @@ export component FriendsModal inherits Rectangle {
                                 height: root.row-height;
                                 background: friend-touch.has-hover ? Colors.surface-hover : transparent;
                                 border-radius: Spacing.radius-md;
-                                border-width: friend-touch.has-hover ? 1px : 0px;
-                                border-color: Colors.neo-highlight;
 
                                 HorizontalLayout {
                                     padding: Spacing.sm;
@@ -342,59 +340,65 @@ export component FriendsModal inherits Rectangle {
                                     // the name, the centred icons drifted with
                                     // the name's length. Fixed, they form one
                                     // right-hand column.
-                                    HorizontalLayout {
-                                        spacing: Spacing.xs;
+                                    // Centred on the name: fixed 44px buttons in
+                                    // a HorizontalLayout otherwise sit at its top.
+                                    VerticalLayout {
                                         alignment: center;
                                         horizontal-stretch: 0;
+                                        HorizontalLayout {
+                                            spacing: Spacing.xs;
+                                            alignment: center;
+                                            horizontal-stretch: 0;
 
-                                        // Message button
-                                        Rectangle {
-                                            width: 44px;
-                                            height: 44px;
-                                            border-radius: Spacing.radius-sm;
-                                            background: msg-touch.has-hover ? Colors.surface : transparent;
+                                            // Message button
+                                            Rectangle {
+                                                width: 44px;
+                                                height: 44px;
+                                                border-radius: Spacing.radius-sm;
+                                                background: msg-touch.has-hover ? Colors.surface : transparent;
 
-                                            Image {
-                                                source: Icons.message-circle;
-                                                colorize: Colors.text-secondary;
-                                                width: 18px;
-                                                height: 18px;
-                                                x: (parent.width - self.width) / 2;
-                                                y: (parent.height - self.height) / 2;
-                                            }
+                                                Image {
+                                                    source: Icons.message-circle;
+                                                    colorize: Colors.text-secondary;
+                                                    width: 18px;
+                                                    height: 18px;
+                                                    x: (parent.width - self.width) / 2;
+                                                    y: (parent.height - self.height) / 2;
+                                                }
 
-                                            msg-touch := TouchArea {
-                                                mouse-cursor: pointer;
-                                                clicked => {
-                                                    root.start-dm(friend.user-id);
+                                                msg-touch := TouchArea {
+                                                    mouse-cursor: pointer;
+                                                    clicked => {
+                                                        root.start-dm(friend.user-id);
+                                                    }
                                                 }
                                             }
-                                        }
 
-                                        // More options: the profile, where Remove
-                                        // Friend and Block live behind a confirm.
-                                        Rectangle {
-                                            width: 44px;
-                                            height: 44px;
-                                            border-radius: Spacing.radius-sm;
-                                            background: more-touch.has-hover ? Colors.surface : transparent;
+                                            // More options: the profile, where Remove
+                                            // Friend and Block live behind a confirm.
+                                            Rectangle {
+                                                width: 44px;
+                                                height: 44px;
+                                                border-radius: Spacing.radius-sm;
+                                                background: more-touch.has-hover ? Colors.surface : transparent;
 
-                                            // Icons.more-vertical, not U+22EE:
-                                            // Inter has no vertical-ellipsis glyph
-                                            // and the fallback drew a notdef box.
-                                            Image {
-                                                source: Icons.more-vertical;
-                                                colorize: Colors.text-secondary;
-                                                width: 16px;
-                                                height: 16px;
-                                                x: (parent.width - self.width) / 2;
-                                                y: (parent.height - self.height) / 2;
-                                            }
+                                                // Icons.more-vertical, not U+22EE:
+                                                // Inter has no vertical-ellipsis glyph
+                                                // and the fallback drew a notdef box.
+                                                Image {
+                                                    source: Icons.more-vertical;
+                                                    colorize: Colors.text-secondary;
+                                                    width: 16px;
+                                                    height: 16px;
+                                                    x: (parent.width - self.width) / 2;
+                                                    y: (parent.height - self.height) / 2;
+                                                }
 
-                                            more-touch := TouchArea {
-                                                mouse-cursor: pointer;
-                                                clicked => {
-                                                    root.view-profile(friend.user-id);
+                                                more-touch := TouchArea {
+                                                    mouse-cursor: pointer;
+                                                    clicked => {
+                                                        root.view-profile(friend.user-id);
+                                                    }
                                                 }
                                             }
                                         }
@@ -420,8 +424,6 @@ export component FriendsModal inherits Rectangle {
                     Rectangle {
                         background: Colors.surface;
                         border-radius: Spacing.radius-md;
-                        border-width: 1px;
-                        border-color: Colors.neo-highlight;
                         drop-shadow-blur: Spacing.neo-blur-sm;
                         drop-shadow-offset-x: Spacing.neo-offset-sm;
                         drop-shadow-offset-y: Spacing.neo-offset-sm;
@@ -452,8 +454,6 @@ export component FriendsModal inherits Rectangle {
                                     height: 36px;
                                     background: Colors.neo-inset-bg;
                                     border-radius: Spacing.radius-sm;
-                                    border-width: 1px;
-                                    border-color: Colors.neo-inset-shadow;
 
                                     HorizontalLayout {
                                         padding-left: Spacing.sm;
@@ -516,8 +516,6 @@ export component FriendsModal inherits Rectangle {
                             if root.show-qr && root.my-code != "": Rectangle {
                                 background: Colors.neo-inset-bg;
                                 border-radius: Spacing.radius-md;
-                                border-width: 1px;
-                                border-color: Colors.neo-inset-shadow;
 
                                 VerticalLayout {
                                     alignment: center;
@@ -931,8 +929,6 @@ export component FriendsModal inherits Rectangle {
                                     min-height: 64px;
                                     background: recv-touch.has-hover ? Colors.surface-hover : transparent;
                                     border-radius: Spacing.radius-md;
-                                    border-width: recv-touch.has-hover ? 1px : 0px;
-                                    border-color: Colors.neo-highlight;
 
                                     // TouchArea first (behind) for hover detection
                                     recv-touch := TouchArea {}
@@ -1029,8 +1025,6 @@ export component FriendsModal inherits Rectangle {
                                     height: 56px;
                                     background: sent-touch.has-hover ? Colors.surface-hover : transparent;
                                     border-radius: Spacing.radius-md;
-                                    border-width: sent-touch.has-hover ? 1px : 0px;
-                                    border-color: Colors.neo-highlight;
 
                                     // TouchArea first (behind) for hover detection
                                     sent-touch := TouchArea {}
@@ -1119,8 +1113,6 @@ export component FriendsModal inherits Rectangle {
                                     height: 72px;
                                     background: priv-touch.has-hover ? Colors.surface-hover : transparent;
                                     border-radius: Spacing.radius-md;
-                                    border-width: priv-touch.has-hover ? 1px : 0px;
-                                    border-color: Colors.neo-highlight;
 
                                     // TouchArea first (behind) for hover detection
                                     priv-touch := TouchArea {}
@@ -1265,8 +1257,6 @@ export component FriendsModal inherits Rectangle {
                                     height: 72px;
                                     background: gi-touch.has-hover ? Colors.surface-hover : transparent;
                                     border-radius: Spacing.radius-md;
-                                    border-width: gi-touch.has-hover ? 1px : 0px;
-                                    border-color: Colors.neo-highlight;
 
                                     gi-touch := TouchArea {}
 
@@ -1401,8 +1391,6 @@ export component FriendsModal inherits Rectangle {
                                     height: 72px;
                                     background: ci-touch.has-hover ? Colors.surface-hover : transparent;
                                     border-radius: Spacing.radius-md;
-                                    border-width: ci-touch.has-hover ? 1px : 0px;
-                                    border-color: Colors.neo-highlight;
 
                                     ci-touch := TouchArea {}
 
@@ -1543,8 +1531,6 @@ export component FriendsModal inherits Rectangle {
                                 height: 56px;
                                 background: blocked-touch.has-hover ? Colors.surface-hover : transparent;
                                 border-radius: Spacing.radius-md;
-                                border-width: blocked-touch.has-hover ? 1px : 0px;
-                                border-color: Colors.neo-highlight;
 
                                 // TouchArea first (behind) for hover detection
                                 blocked-touch := TouchArea {}

@@ -26,8 +26,6 @@ component MenuItem inherits Rectangle {
     height: root.mobile-mode ? Spacing.touch-target-min : 36px;
     background: touch.has-hover ? Colors.surface-hover : transparent;
     border-radius: Spacing.radius-sm;
-    border-width: touch.has-hover ? 1px : 0px;
-    border-color: Colors.neo-highlight;
 
     HorizontalLayout {
         padding-left: Spacing.md;
@@ -121,8 +119,6 @@ export component SectionHeaderContextMenu inherits Rectangle {
         height: header-menu-layout.preferred-height + Spacing.sm * 2;
         background: Colors.surface;
         border-radius: Spacing.radius-md;
-        border-width: 1px;
-        border-color: Colors.neo-highlight-strong;
         drop-shadow-blur: Spacing.neo-blur-lg;
         drop-shadow-offset-x: Spacing.neo-offset-lg;
         drop-shadow-offset-y: Spacing.neo-offset-lg;
@@ -306,8 +302,6 @@ export component SectionContextMenu inherits Rectangle {
         height: menu-layout.preferred-height + Spacing.sm * 2;
         background: Colors.surface;
         border-radius: Spacing.radius-md;
-        border-width: 1px;
-        border-color: Colors.neo-highlight-strong;
         drop-shadow-blur: Spacing.neo-blur-lg;
         drop-shadow-offset-x: Spacing.neo-offset-lg;
         drop-shadow-offset-y: Spacing.neo-offset-lg;
@@ -425,7 +419,11 @@ export component SectionContextMenu inherits Rectangle {
                 icon: Icons.x;
                 label: "Cancel";
                 mobile-mode: root.mobile-mode;
-                clicked => { root.confirm-delete = false; }
+                // Cancel ends the whole menu, not just the confirm step.
+                clicked => {
+                    root.confirm-delete = false;
+                    root.close();
+                }
             }
 
             if root.can-leave: Rectangle {
@@ -468,7 +466,11 @@ export component SectionContextMenu inherits Rectangle {
                 icon: Icons.x;
                 label: "Cancel";
                 mobile-mode: root.mobile-mode;
-                clicked => { root.confirm-leave = false; }
+                // Cancel ends the whole menu, not just the confirm step.
+                clicked => {
+                    root.confirm-leave = false;
+                    root.close();
+                }
             }
         }
     }

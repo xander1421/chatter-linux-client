@@ -73,8 +73,8 @@ export component CreateSectionModal inherits Rectangle {
                     width: 44px;
                     height: 44px;
                     border-radius: Spacing.radius-md;
-                    border-width: 1px;
-                    border-color: root.picker-open ? Colors.primary : Colors.text-muted.with-alpha(0.3);
+                    border-width: root.picker-open ? Spacing.stroke : 0px;
+                    border-color: Colors.primary;
                     background: emoji-touch.has-hover ? Colors.surface-hover : Colors.surface;
 
                     Text {
@@ -106,8 +106,6 @@ export component CreateSectionModal inherits Rectangle {
                 height: 200px;
                 background: Colors.background;
                 border-radius: Spacing.radius-md;
-                border-width: 1px;
-                border-color: Colors.text-muted.with-alpha(0.2);
 
                 // Columns are derived, not fixed at seven. Seven columns is a
                 // 324px row: fine inside the 400px card on a desktop, off the

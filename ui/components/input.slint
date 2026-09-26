@@ -41,7 +41,7 @@ export component Input inherits Rectangle {
         } else if focused {
             Colors.primary
         } else {
-            Colors.text-muted
+            Colors.border
         }
     };
 
@@ -57,7 +57,7 @@ export component Input inherits Rectangle {
             height: 44px;
             border-radius: Spacing.radius-md;
             background: Colors.surface;
-            border-width: 1px;
+            border-width: Spacing.stroke;
             border-color: border-col;
             opacity: disabled ? 0.5 : 1.0;
 

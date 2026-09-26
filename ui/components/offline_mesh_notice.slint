@@ -46,8 +46,6 @@ export component OfflineMeshNotice inherits Rectangle {
 
     background: Colors.warning.with-alpha(0.08);
     border-radius: Spacing.radius-sm;
-    border-width: 1px;
-    border-color: Colors.warning.with-alpha(0.25);
 
     body := VerticalLayout {
         padding: Spacing.md;
@@ -113,8 +111,6 @@ export component OfflineMeshNotice inherits Rectangle {
             background: continue-touch.has-hover
                 ? Colors.warning.with-alpha(0.22)
                 : Colors.warning.with-alpha(0.14);
-            border-width: 1px;
-            border-color: Colors.warning.with-alpha(0.35);
 
             HorizontalLayout {
                 padding-left: Spacing.sm;

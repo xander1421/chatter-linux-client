@@ -6,7 +6,7 @@
 //   3. Bottom bar — glass surface
 //
 // Neo depth separation: sidebar surface is raised from background,
-// with right-edge highlight border. Internal elements use
+// with an explicit right-edge highlight. Internal elements use
 // inset (search, selected items) and glass (bottom bar) surfaces.
 
 import { Colors } from "../theme/colors.slint";
@@ -18,6 +18,7 @@ import { ChatList, ChatRowData } from "chat_list.slint";
 import { CustomSectionList, CustomSectionData } from "custom_section_list.slint";
 import { SectionContextMenu, SectionHeaderContextMenu } from "section_context_menu.slint";
 import { Avatar } from "../components/avatar.slint";
+import { HeaderButton } from "../components/header_button.slint";
 import { TooltipArea } from "../components/tooltip.slint";
 import { AnonMode, TorStatus } from "../anon_mode/anon_mode_global.slint";
 import { MeshGlobal } from "../mesh/mesh_global.slint";
@@ -207,7 +208,9 @@ export component Sidebar inherits Rectangle {
     drop-shadow-offset-x: root.mobile-mode ? 0px : Spacing.neo-offset-md;
     drop-shadow-color: Colors.neo-shadow;
 
-    animate width { duration: 200ms; easing: ease-out; }
+    // No animation on a phone: the list is full width there, and animating
+    // from the pre-resize width drew a half-width first frame at launch.
+    animate width { duration: root.mobile-mode ? 0ms : 200ms; easing: ease-out; }
 
     VerticalLayout {
         // ════════════════════════════════════════
@@ -237,37 +240,31 @@ export component Sidebar inherits Rectangle {
             // Create — New Chat / New Channel / New Section. Two-pane only; a
             // phone has the floating button on the Chats tab instead. Left of
             // the Shield toggle.
-            if !root.mobile-mode: Rectangle {
-                width: root.touch ? Spacing.touch-target-min : 24px; height: self.width;
-                x: parent.width - self.width - Spacing.sm - self.width - Spacing.xs;
+            if !root.mobile-mode: HeaderButton {
+                touch: root.touch;
+                x: parent.width - self.width - Spacing.sm - self.width - Spacing.header-action-gap;
                 y: (parent.height - self.height) / 2;
-                border-radius: 4px;
-                accessible-role: button;
-                accessible-label: "Create";
-                background: create-touch.has-hover ? Colors.surface-hover : transparent;
-                Image { source: Icons.plus; width: root.quick-link-icon-size; height: root.quick-link-icon-size; x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2;
-                    colorize: Colors.text-secondary; }
-                create-touch := TouchArea { mouse-cursor: pointer; clicked => { root.create-clicked(); } }
+                icon: Icons.plus;
+                label: "Create";
+                clicked => { root.create-clicked(); }
             }
             // Shield toggle — the chat list's own header control (owner decision
             // 2026-09-26: Shield is a mode of this list, not a tab). Declared
             // after `search-touch` so it sits above the row's search target.
-            // Glows when on; the dot is Tor status.
+            // Tinted when on; the dot is Tor status.
             //
             // Offered in every build: Shield is the anonymous-mailbox mode and
             // works without Tor. A build without the `onion` feature stays
             // direct, core reports TorStatus Unavailable and the
             // ShieldNetworkBanner says so. Only the Tor dot is gated on
             // AnonMode.onion-built — without Tor it would be a permanent red.
-            Rectangle {
-                width: root.touch ? Spacing.touch-target-min : 24px; height: self.width;
+            HeaderButton {
+                touch: root.touch;
                 x: parent.width - self.width - Spacing.sm; y: (parent.height - self.height) / 2;
-                border-radius: 4px;
-                accessible-role: button;
-                accessible-label: AnonMode.enabled ? "Shield on - tap to turn off" : "Shield off - tap to turn on";
-                background: anon-touch.has-hover ? Colors.surface-hover : (AnonMode.enabled ? Colors.primary.with-alpha(0.15) : transparent);
-                Image { source: Icons.shield; width: root.quick-link-icon-size; height: root.quick-link-icon-size; x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2;
-                    colorize: AnonMode.enabled ? Colors.primary : Colors.text-muted; }
+                icon: Icons.shield;
+                label: AnonMode.enabled ? "Shield on - tap to turn off" : "Shield off - tap to turn on";
+                active: AnonMode.enabled;
+                clicked => { root.anon-mode-clicked(); }
                 // Tor status dot: green=connected, amber=CONNECTING ONLY,
                 // red=error, muted=off. State 0 is Off — traffic is going
                 // direct — and it used to fall through to amber, i.e. the
@@ -276,14 +273,15 @@ export component Sidebar inherits Rectangle {
                 Rectangle {
                     visible: AnonMode.enabled && AnonMode.onion-built;
                     width: 8px; height: 8px; border-radius: 4px;
-                    x: parent.width - self.width; y: 0;
+                    // On the glyph's top-right corner, not the box's.
+                    x: (parent.width + (root.touch ? Spacing.header-glyph-touch : Spacing.header-glyph)) / 2 - self.width * 0.75;
+                    y: (parent.height - (root.touch ? Spacing.header-glyph-touch : Spacing.header-glyph)) / 2 - self.height * 0.25;
                     border-width: 1px; border-color: Colors.surface;
                     background: TorStatus.state == 2 ? Colors.success
                         : TorStatus.state >= 3 ? Colors.error
                         : TorStatus.state == 1 ? Colors.warning
                         : Colors.text-muted;
                 }
-                anon-touch := TouchArea { mouse-cursor: pointer; clicked => { root.anon-mode-clicked(); } }
             }
         }
         // Collapsed to the rail, the panel is narrower than the traffic lights
@@ -452,20 +450,26 @@ export component Sidebar inherits Rectangle {
                             Image { source: Icons.user-plus; width: 14px; height: 14px; colorize: Colors.text-secondary; }
                         }
                         Text { text: "Requests"; color: root.quick-link-text-color; font-size: root.quick-link-text-size; vertical-alignment: center; horizontal-stretch: 1; }
-                        Rectangle {
-                            width: self.height + (root.total-pending-requests > 9 ? 4px : 0px);
-                            height: Spacing.badge-md;
-                            border-radius: self.height / 2;
-                            background: Colors.error;
-                            Text {
-                                text: root.total-pending-requests > 9 ? "9+" : root.total-pending-requests;
-                                color: Colors.text-primary;
-                                font-size: Typography.xs2;
-                                font-weight: 700;
-                                horizontal-alignment: center;
-                                vertical-alignment: center;
-                                width: 100%;
-                                height: 100%;
+                        // Centred on the label's line; a fixed-height child of a
+                        // HorizontalLayout otherwise sits at the row's top.
+                        VerticalLayout {
+                            alignment: center;
+                            horizontal-stretch: 0;
+                            Rectangle {
+                                width: self.height + (root.total-pending-requests > 9 ? 4px : 0px);
+                                height: Spacing.badge-md;
+                                border-radius: self.height / 2;
+                                background: Colors.error;
+                                Text {
+                                    text: root.total-pending-requests > 9 ? "9+" : root.total-pending-requests;
+                                    color: Colors.text-primary;
+                                    font-size: Typography.xs2;
+                                    font-weight: 700;
+                                    horizontal-alignment: center;
+                                    vertical-alignment: center;
+                                    width: 100%;
+                                    height: 100%;
+                                }
                             }
                         }
                     }

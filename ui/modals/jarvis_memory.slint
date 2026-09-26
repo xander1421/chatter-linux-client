@@ -58,8 +58,6 @@ export component JarvisMemoryModal inherits Rectangle {
     height: 560px;
     background: Colors.surface;
     border-radius: Spacing.radius-lg;
-    border-width: 1px;
-    border-color: Colors.neo-highlight;
     drop-shadow-blur: 24px;
     drop-shadow-color: Colors.background.with-alpha(0.6);
 
@@ -67,15 +65,17 @@ export component JarvisMemoryModal inherits Rectangle {
         padding: Spacing.lg;
         spacing: Spacing.md;
 
-        // Header
+        // Header — as tall as its header button, title on the same axis.
         HorizontalLayout {
             spacing: Spacing.sm;
+            height: Spacing.header-action-box;
             Text {
                 horizontal-stretch: 1;
                 text: "Jarvis Memory";
                 color: Colors.text-primary;
                 font-size: Typography.xl;
                 font-weight: Typography.semibold;
+                vertical-alignment: center;
             }
             Text {
                 text: root.stats-label;
@@ -244,8 +244,8 @@ export component JarvisMemoryModal inherits Rectangle {
                             height: 24px;
                             border-radius: 12px;
                             background: node.is-center ? Colors.primary : Colors.background;
-                            border-width: 1px;
-                            border-color: node.is-center ? Colors.primary : Colors.neo-highlight;
+                            border-width: node.is-center ? Spacing.stroke : 0px;
+                            border-color: Colors.primary;
                             Text {
                                 width: parent.width - 8px;
                                 x: 4px;

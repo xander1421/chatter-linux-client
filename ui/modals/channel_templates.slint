@@ -21,8 +21,8 @@ component TemplateCard inherits Rectangle {
     height: 110px;
     border-radius: Spacing.radius-lg;
     background: Colors.surface;
-    border-width: selected ? 2px : 1px;
-    border-color: selected ? accent-color : Colors.text-muted.with-alpha(0.2);
+    border-width: selected ? Spacing.stroke : 0px;
+    border-color: Colors.primary;
 
     // Subtle gradient overlay on hover
     Rectangle {

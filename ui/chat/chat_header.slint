@@ -8,6 +8,7 @@ import { Typography } from "../theme/typography.slint";
 import { Icons } from "../theme/icons.slint";
 import { NeoActionToggle } from "../components/neo_action_toggle.slint";
 import { Avatar } from "../components/avatar.slint";
+import { HeaderButton } from "../components/header_button.slint";
 import { JarvisGlobal } from "../jarvis/jarvis_global.slint";
 import { MeshGlobal } from "../mesh/mesh_global.slint";
 import { ConversationKind } from "conversation_kind.slint";
@@ -23,53 +24,6 @@ export struct ChatHeaderData {
     topic: string,
     typing-indicator: string,
     presence-status: string,  // "online", "away", "dnd", "offline" — shown for DMs only
-}
-
-// Reusable icon button component — 44px touch target, the accessibility floor.
-// It was 48px, which is the floor plus margin the header does not have: four of
-// these in a row is a fifth of a 411dp screen, and the extra width read as the
-// icons being loosely spaced rather than as a bigger target.
-component IconButton inherits Rectangle {
-    in property <image> icon;
-    // Vertical centring comes from the box size being identical across every
-    // button in the row: a fixed-size child is centred in a HorizontalLayout's
-    // cross axis, so equal sizes put them all on one line. (A `y:` binding here
-    // cannot work — a component's root cannot see `parent`.)
-    // Touch wants a bigger glyph, not just a bigger box — the box was already
-    // 44px and the chevron inside it still read as tiny next to a 20px title.
-    in property <length> glyph-size: 18px;
-    in property <length> box-size: 44px;
-    in property <color> icon-color: Colors.text-secondary;
-    in property <color> hover-color: Colors.text-primary;
-    callback clicked();
-
-    width: root.box-size;
-    height: root.box-size;
-    background: touch.has-hover ? Colors.surface-hover : transparent;
-    border-radius: Spacing.radius-md;
-    border-width: touch.has-hover ? 1px : 0px;
-    border-color: Colors.neo-highlight;
-    drop-shadow-blur: touch.has-hover ? Spacing.neo-blur-sm : 0px;
-    drop-shadow-offset-x: touch.has-hover ? 1px : 0px;
-    drop-shadow-offset-y: touch.has-hover ? 1px : 0px;
-    drop-shadow-color: touch.has-hover ? Colors.neo-shadow : transparent;
-
-    // 18px glyph in a 44px box. The target is what has to be big; the glyph is
-    // what has to be legible, and at 20px it was neither more legible nor less
-    // shouty than the channel name beside it.
-    Image {
-        source: icon;
-        width: root.glyph-size;
-        height: root.glyph-size;
-        x: (parent.width - self.width) / 2;
-        y: (parent.height - self.height) / 2;
-        colorize: touch.has-hover ? hover-color : icon-color;
-    }
-
-    touch := TouchArea {
-        mouse-cursor: pointer;
-        clicked => { root.clicked(); }
-    }
 }
 
 export component ChatHeader inherits Rectangle {
@@ -202,13 +156,8 @@ export component ChatHeader inherits Rectangle {
     // it are the same row across the seam, so they read one number.
     property <length> header-height: root.mobile ? Spacing.header-height-touch : Spacing.header-height;
     property <length> header-avatar: root.mobile ? 40px : 28px;
-    // One glyph size and one box size for EVERY button in this row — back,
-    // call, video, pin, kebab. They were two sets: the back button was given
-    // 24px-in-48px while the rest kept IconButton's 18px-in-44px defaults, so
-    // the row read as one big control and four small ones, sitting on two
-    // different vertical centres.
-    property <length> header-glyph: root.mobile ? Spacing.header-glyph-touch : Spacing.header-glyph;
-    property <length> header-action-box: root.mobile ? Spacing.header-action-box-touch : Spacing.header-action-box;
+    // Every button in this row is the shared HeaderButton (touch: mobile), so
+    // back, call, video, pin and kebab are one box and one glyph on one axis.
     // Signal's ~20sp title; xl elided "Carol Sweep" to "Carol …" on a phone.
     property <length> header-title-size: Typography.lg;
 
@@ -254,10 +203,10 @@ export component ChatHeader inherits Rectangle {
             alignment: start;
 
             // Mobile back button (returns to chat list)
-            if root.show-back-button: IconButton {
-                glyph-size: root.header-glyph;
-                box-size: root.header-action-box;
+            if root.show-back-button: HeaderButton {
+                touch: root.mobile;
                 icon: Icons.chevron-left;
+                label: "Back";
                 clicked => { root.back-clicked(); }
             }
 
@@ -534,27 +483,25 @@ export component ChatHeader inherits Rectangle {
         // to the name rather than being split with a group of fixed-size icons;
         // being the last child, it still ends flush with the right edge.
         HorizontalLayout {
-            // Groups sit 4px apart, buttons inside a group flush against each
-            // other: with the divider gone on a phone, that gap is the only
-            // thing left saying "calls" and "everything else" are two things.
-            spacing: Spacing.xs;
+            // One gap between every pair of header buttons, in every header.
+            spacing: Spacing.header-action-gap;
             alignment: end;
             horizontal-stretch: 0;
 
             // Call buttons group
             if root.show-calls: HorizontalLayout {
-                spacing: 0px;
+                spacing: Spacing.header-action-gap;
                 alignment: center;
-                IconButton {
-                    glyph-size: root.header-glyph;
-                    box-size: root.header-action-box;
+                HeaderButton {
+                    touch: root.mobile;
                     icon: Icons.phone;
+                    label: "Voice call";
                     clicked => { root.voice-call-clicked(); }
                 }
-                IconButton {
-                    glyph-size: root.header-glyph;
-                    box-size: root.header-action-box;
+                HeaderButton {
+                    touch: root.mobile;
                     icon: Icons.video;
+                    label: "Video call";
                     clicked => { root.video-call-clicked(); }
                 }
                 // Divider — wide screens only. At 411dp it draws a line between
@@ -563,7 +510,7 @@ export component ChatHeader inherits Rectangle {
                 if !root.tight: Rectangle {
                     width: 1px;
                     height: 20px;
-                    background: Colors.text-muted.with-alpha(0.3);
+                    background: Colors.border;
                     y: (parent.height - self.height) / 2;
                 }
             }
@@ -609,42 +556,42 @@ export component ChatHeader inherits Rectangle {
                 if root.has-utility-actions: Rectangle {
                     width: 1px;
                     height: 20px;
-                    background: Colors.text-muted.with-alpha(0.3);
+                    background: Colors.border;
                     y: (parent.height - self.height) / 2;
                 }
             }
 
             // Utility buttons group
             HorizontalLayout {
-                spacing: 0px;
+                spacing: Spacing.header-action-gap;
                 alignment: center;
-                if root.show-invite: IconButton {
-                    glyph-size: root.header-glyph;
-                    box-size: root.header-action-box;
+                if root.show-invite: HeaderButton {
+                    touch: root.mobile;
                     icon: Icons.user-plus;
+                    label: "Invite";
                     clicked => { root.invite-clicked(); }
                 }
-                if root.show-pin: IconButton {
-                    glyph-size: root.header-glyph;
-                    box-size: root.header-action-box;
+                if root.show-pin: HeaderButton {
+                    touch: root.mobile;
                     icon: Icons.pin;
+                    label: "Pinned messages";
                     clicked => { root.pin-clicked(); }
                 }
-                if root.show-settings: IconButton {
-                    glyph-size: root.header-glyph;
-                    box-size: root.header-action-box;
+                if root.show-settings: HeaderButton {
+                    touch: root.mobile;
                     icon: Icons.more-vertical;
+                    label: "Conversation settings";
                     clicked => { root.settings-clicked(); }
                 }
             }
         }
     }
 
-    // Bottom edge — neo highlight creates glass edge
+    // Bottom edge — the header's hairline divider
     Rectangle {
         y: parent.height - 1px;
         width: 100%;
         height: 1px;
-        background: Colors.neo-highlight;
+        background: Colors.border;
     }
 }

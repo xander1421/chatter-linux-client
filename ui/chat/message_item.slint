@@ -248,8 +248,6 @@ export component MessageItem inherits Rectangle {
                 height: call-content.preferred-height + Spacing.md * 2;
                 background: is-missed ? Colors.error.transparentize(0.9) : Colors.surface;
                 border-radius: Spacing.radius-lg;
-                border-width: 1px;
-                border-color: is-missed ? Colors.error.transparentize(0.7) : Colors.neo-highlight;
                 drop-shadow-blur: Spacing.neo-blur-sm;
                 drop-shadow-offset-x: Spacing.neo-offset-sm;
                 drop-shadow-offset-y: Spacing.neo-offset-sm;
@@ -372,10 +370,7 @@ export component MessageItem inherits Rectangle {
                             : (root.is-own ? Colors.bubble-own : Colors.bubble-other));
                     border-radius: Spacing.radius-md;
 
-                    // Neo convex: outgoing bubbles get highlight border + drop shadow
-                    // Neo concave: incoming bubbles get inset border
-                    border-width: 1px;
-                    border-color: root.is-own ? Colors.neo-highlight : Colors.neo-inset-shadow;
+                    // Outgoing bubbles lift with a drop shadow; neither has an outline.
                     drop-shadow-blur: root.is-own ? Spacing.neo-blur-md : 0px;
                     drop-shadow-offset-x: root.is-own ? Spacing.neo-offset-md : 0px;
                     drop-shadow-offset-y: root.is-own ? Spacing.neo-offset-md : 0px;
@@ -995,8 +990,6 @@ export component MessageItem inherits Rectangle {
                                     height: 52px;
                                     background: Colors.surface;
                                     border-radius: Spacing.radius-md;
-                                    border-width: 1px;
-                                    border-color: Colors.neo-highlight;
                                     drop-shadow-blur: Spacing.neo-blur-sm;
                                     drop-shadow-offset-x: Spacing.neo-offset-sm;
                                     drop-shadow-offset-y: Spacing.neo-offset-sm;
@@ -1244,8 +1237,8 @@ export component MessageItem inherits Rectangle {
                         height: 100%;
                         border-radius: bubble.border-radius;
                         background: Colors.primary.with-alpha(root.highlighted ? 0.22 : 0.0);
-                        border-width: root.highlighted ? 1.5px : 0px;
-                        border-color: Colors.primary.with-alpha(root.highlighted ? 0.85 : 0.0);
+                        border-width: root.highlighted ? Spacing.stroke : 0px;
+                        border-color: Colors.primary;
                         animate background, border-color, border-width {
                             duration: 400ms;
                             easing: ease-out;
@@ -1260,8 +1253,6 @@ export component MessageItem inherits Rectangle {
                     width: reactions-row.preferred-width + 8px;
                     background: Colors.surface;
                     border-radius: 11px;
-                    border-width: 1px;
-                    border-color: Colors.neo-highlight;
                     drop-shadow-blur: Spacing.neo-blur-sm;
                     drop-shadow-offset-x: Spacing.neo-offset-sm;
                     drop-shadow-offset-y: Spacing.neo-offset-sm;
@@ -1326,8 +1317,6 @@ export component MessageItem inherits Rectangle {
                         width: 106px;
                         background: Colors.surface;
                         border-radius: Spacing.radius-md;
-                        border-width: 1px;
-                        border-color: Colors.neo-highlight-strong;
                         drop-shadow-blur: Spacing.neo-blur-sm;
                         drop-shadow-offset-x: Spacing.neo-offset-sm;
                         drop-shadow-offset-y: Spacing.neo-offset-sm;
@@ -1469,8 +1458,6 @@ export component MessageItem inherits Rectangle {
                         background: thread-touch.has-hover
                             ? Colors.primary.transparentize(0.75)
                             : Colors.primary.transparentize(0.9);
-                        border-width: 1px;
-                        border-color: Colors.primary.with-alpha(0.35);
                         accessible-role: button;
                         accessible-label: "Open thread: " + root.reply-count-text;
 

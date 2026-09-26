@@ -20,41 +20,15 @@ import { Colors } from "../theme/colors.slint";
 import { Spacing } from "../theme/spacing.slint";
 import { Typography } from "../theme/typography.slint";
 import { Icons } from "../theme/icons.slint";
-
-component BarButton inherits Rectangle {
-    in property <image> icon;
-    in property <string> label;
-    in property <bool> destructive: false;
-    in property <bool> enabled: true;
-    callback clicked();
-
-    width: Spacing.touch-target-min;
-    height: Spacing.touch-target-min;
-    border-radius: Spacing.radius-sm;
-    background: touch.has-hover ? Colors.surface-hover : transparent;
-    opacity: root.enabled ? 1.0 : 0.4;
-    accessible-role: button;
-    accessible-label: root.label;
-
-    Image {
-        source: root.icon;
-        width: 20px;
-        height: 20px;
-        x: (parent.width - self.width) / 2;
-        y: (parent.height - self.height) / 2;
-        colorize: root.destructive ? Colors.error : Colors.text-primary;
-    }
-
-    touch := TouchArea {
-        mouse-cursor: pointer;
-        clicked => { if (root.enabled) { root.clicked(); } }
-    }
-}
+import { HeaderButton } from "../components/header_button.slint";
 
 export component SelectionBar inherits Rectangle {
     in property <bool> show: false;
     in property <int> count: 0;
     in property <length> safe-area-top: 0px;
+    // Same density input as the ChatHeader this bar replaces, so the two rows
+    // are one height and their buttons one box.
+    in property <bool> touch: false;
 
     callback cleared();
     callback delete-clicked();
@@ -62,10 +36,8 @@ export component SelectionBar inherits Rectangle {
     callback forward-clicked();
 
     visible: root.show;
-    height: Spacing.touch-target-min + Spacing.sm * 2 + root.safe-area-top;
+    height: (root.touch ? Spacing.header-height-touch : Spacing.header-height) + root.safe-area-top;
     background: Colors.surface;
-    border-width: 1px;
-    border-color: Colors.neo-highlight;
     drop-shadow-blur: Spacing.neo-blur-md;
     drop-shadow-offset-y: Spacing.neo-offset-md;
     drop-shadow-color: Colors.neo-shadow;
@@ -75,10 +47,11 @@ export component SelectionBar inherits Rectangle {
         height: parent.height - root.safe-area-top;
         padding-left: Spacing.sm;
         padding-right: Spacing.sm;
-        spacing: Spacing.xs;
+        spacing: Spacing.header-action-gap;
 
         // Exit selection mode. Mirrors what Android Back does.
-        BarButton {
+        HeaderButton {
+            touch: root.touch;
             icon: Icons.x;
             label: "Exit selection";
             clicked => { root.cleared(); }
@@ -94,21 +67,24 @@ export component SelectionBar inherits Rectangle {
             overflow: elide;
         }
 
-        BarButton {
+        HeaderButton {
+            touch: root.touch;
             icon: Icons.copy;
             label: "Copy selected";
             enabled: root.count > 0;
             clicked => { root.copy-clicked(); }
         }
 
-        BarButton {
+        HeaderButton {
+            touch: root.touch;
             icon: Icons.send;
             label: "Forward selected";
             enabled: root.count > 0;
             clicked => { root.forward-clicked(); }
         }
 
-        BarButton {
+        HeaderButton {
+            touch: root.touch;
             icon: Icons.trash;
             label: "Delete selected";
             destructive: true;

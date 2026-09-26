@@ -264,8 +264,6 @@ export component UnifiedSearch inherits Rectangle {
         height: min(content.preferred-height, parent.height - 160px);
         background: Colors.surface;
         border-radius: Spacing.radius-lg;
-        border-width: 1px;
-        border-color: Colors.neo-highlight-strong;
         drop-shadow-blur: Spacing.neo-blur-lg;
         drop-shadow-color: Colors.neo-shadow-strong;
 
@@ -285,8 +283,8 @@ export component UnifiedSearch inherits Rectangle {
                 height: Spacing.touch-target-min;
                 border-radius: Spacing.radius-md;
                 background: Colors.neo-inset-bg;
-                border-width: 1px;
-                border-color: search-input.has-focus ? Colors.glow-cyan.with-alpha(0.4) : Colors.neo-inset-shadow;
+                border-width: Spacing.stroke;
+                border-color: search-input.has-focus ? Colors.primary : Colors.border;
 
                 HorizontalLayout {
                     padding-left: Spacing.md;

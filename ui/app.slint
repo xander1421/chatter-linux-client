@@ -5,6 +5,7 @@ import { Colors } from "theme/colors.slint";
 import { Spacing } from "theme/spacing.slint";
 import { Typography } from "theme/typography.slint";
 import { Icons } from "theme/icons.slint";
+import { DismissButton } from "components/dismiss_button.slint";
 
 // Import auth screens
 import { LoginPage } from "pages/login.slint";
@@ -119,7 +120,11 @@ export component App inherits Rectangle {
         && root.active-modal == "none" && !root.unified-search-open && !root.selection-mode;
     // Its top edge: above the dock and, during a call, the return-to-call
     // bar stacked on it — the same strip the main column reserves for them.
-    property <length> fab-y: root.height - Spacing.fab-size - Spacing.md
+    // In the main content layer's coordinates (it and the dock both live
+    // there, below the status bar), not the window's: measuring from
+    // root.height put it a status bar's height low, over the dock.
+    property <length> fab-y: root.height - root.safe-area-top - root.safe-area-bottom
+        - Spacing.fab-size - Spacing.md
         - (Spacing.bottom-nav-height + Spacing.sm + root.safe-area-bottom)
         - (root.active-call-visible ? 44px + Spacing.sm : 0px);
 
@@ -1620,6 +1625,7 @@ export component App inherits Rectangle {
                         && !root.active-call-fullscreen
                         && !(root.is-small-screen && root.thread-panel-visible): SelectionBar {
                         show: true;
+                        touch: root.is-mobile-platform;
                         count: root.selected-message-count;
                         cleared => {
                             root.selection-mode = false;
@@ -2488,7 +2494,7 @@ export component App inherits Rectangle {
             : Spacing.sidebar-width - self.card-width - Spacing.sm;
         card-y: root.compact-layout
             ? root.fab-y - self.card-height - Spacing.sm
-            : root.safe-area-top + (root.is-mobile-platform ? Spacing.header-height-touch : Spacing.header-height);
+            : (root.is-mobile-platform ? Spacing.header-height-touch : Spacing.header-height);
         close => { root.nav-close("create-menu"); }
         new-chat => {
             root.nav-close("create-menu");
@@ -2560,34 +2566,18 @@ export component App inherits Rectangle {
 
                 // Header
                 HorizontalLayout {
+                    height: Spacing.header-action-box;
                     Text {
                         text: "Keyboard Shortcuts";
                         color: Colors.text-primary;
                         font-size: Typography.lg;
                         font-weight: Typography.semibold;
+                        vertical-alignment: center;
                         horizontal-stretch: 1;
                     }
 
-                    Rectangle {
-                        width: 24px;
-                        height: 24px;
-                        border-radius: Spacing.radius-sm;
-                        background: shortcut-close.has-hover ? Colors.surface-hover : transparent;
-                        accessible-role: button;
-                        accessible-label: "Close";
-
-                        Text {
-                            text: "\u{00D7}";
-                            color: Colors.text-secondary;
-                            font-size: Typography.base;
-                            horizontal-alignment: center;
-                            vertical-alignment: center;
-                            width: 100%; height: 100%;
-                        }
-
-                        shortcut-close := TouchArea {
-                            clicked => { root.nav-close("keyboard-shortcuts"); }
-                        }
+                    DismissButton {
+                        clicked => { root.nav-close("keyboard-shortcuts"); }
                     }
                 }
 
@@ -2624,8 +2614,6 @@ export component App inherits Rectangle {
                         height: 24px;
                         border-radius: Spacing.radius-sm;
                         background: Colors.surface-hover;
-                        border-width: 1px;
-                        border-color: Colors.text-muted.with-alpha(0.2);
 
                         key-text := Text {
                             text: shortcut.key;

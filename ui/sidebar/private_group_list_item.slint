@@ -82,8 +82,6 @@ export component PrivateGroupListItem inherits Rectangle {
               : root.selected ? Colors.neo-inset-bg
               : touch.has-hover ? Colors.surface-hover
               : transparent;
-    border-width: !root.collapsed && (root.selected || touch.has-hover) ? 1px : 0px;
-    border-color: root.selected ? accent-color.with-alpha(0.2) : Colors.neo-highlight;
 
     // Expanded layout
     if !root.collapsed: HorizontalLayout {

@@ -45,8 +45,6 @@ export component InvitePrivateGroupModal inherits Rectangle {
                 vertical-stretch: 1;
                 background: Colors.surface;
                 border-radius: Spacing.radius-md;
-                border-width: 1px;
-                border-color: Colors.text-muted.with-alpha(0.2);
 
                 if root.available-friends.length == 0: Rectangle {
                     Text {
@@ -108,8 +106,6 @@ export component InvitePrivateGroupModal inherits Rectangle {
                                     height: 24px;
                                     border-radius: Spacing.radius-sm;
                                     background: friend.role == "admin" ? Colors.warning.with-alpha(0.2) : Colors.surface-hover;
-                                    border-width: 1px;
-                                    border-color: friend.role == "admin" ? Colors.warning.with-alpha(0.5) : Colors.text-muted.with-alpha(0.3);
 
                                     invite-role-text := Text {
                                         text: friend.role == "admin" ? "Admin" : "Member";
@@ -133,7 +129,7 @@ export component InvitePrivateGroupModal inherits Rectangle {
                                     width: 20px;
                                     height: 20px;
                                     border-radius: Spacing.radius-sm;
-                                    border-width: friend.selected ? 0 : 2px;
+                                    border-width: friend.selected ? 0px : Spacing.stroke;
                                     border-color: Colors.text-muted;
                                     background: friend.selected ? Colors.primary : transparent;
 

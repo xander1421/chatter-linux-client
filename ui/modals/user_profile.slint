@@ -324,8 +324,6 @@ export component UserProfileModal inherits Rectangle {
                             height: 28px;
                             background: Colors.neo-inset-bg;
                             border-radius: Spacing.radius-full;
-                            border-width: 1px;
-                            border-color: Colors.neo-inset-shadow;
 
                             status-pill-text := Text {
                                 x: Spacing.md;
@@ -363,8 +361,6 @@ export component UserProfileModal inherits Rectangle {
                             height: 62px;
                             border-radius: Spacing.radius-md;
                             background: act-touch.has-hover ? Colors.surface-hover : Colors.neo-inset-bg;
-                            border-width: 1px;
-                            border-color: Colors.neo-inset-shadow;
                             accessible-role: button;
                             accessible-label: act.label;
 
@@ -421,8 +417,6 @@ export component UserProfileModal inherits Rectangle {
                             height: timer-card.preferred-height;
                             background: Colors.neo-inset-bg;
                             border-radius: Spacing.radius-lg;
-                            border-width: 1px;
-                            border-color: Colors.neo-inset-shadow;
 
                             timer-card := VerticalLayout {
                                 padding: Spacing.md;
@@ -572,8 +566,6 @@ export component UserProfileModal inherits Rectangle {
                             height: info-card.preferred-height;
                             background: Colors.neo-inset-bg;
                             border-radius: Spacing.radius-lg;
-                            border-width: 1px;
-                            border-color: Colors.neo-inset-shadow;
 
                             info-card := VerticalLayout {
                                 padding: Spacing.md;
@@ -768,8 +760,8 @@ export component UserProfileModal inherits Rectangle {
                                 height: 32px;
                                 horizontal-stretch: 1;
                                 border-radius: 6px;
-                                border-width: root.status-mode == opt.mode ? 1.5px : 1px;
-                                border-color: root.status-mode == opt.mode ? Colors.primary : Colors.neo-inset-shadow;
+                                border-width: root.status-mode == opt.mode ? Spacing.stroke : 0px;
+                                border-color: Colors.primary;
                                 background: status-touch.has-hover ? Colors.surface-hover : transparent;
                                 accessible-role: button;
                                 accessible-label: "status-" + opt.mode;
@@ -849,8 +841,6 @@ export component UserProfileModal inherits Rectangle {
                             Rectangle {
                                 background: Colors.neo-inset-bg;
                                 border-radius: Spacing.radius-md;
-                                border-width: 1px;
-                                border-color: Colors.neo-inset-shadow;
 
                                 VerticalLayout {
                                     padding: Spacing.md;
@@ -949,8 +939,6 @@ export component UserProfileModal inherits Rectangle {
                             height: Spacing.touch-target-min;
                             border-radius: Spacing.radius-full;
                             background: Colors.neo-inset-bg;
-                            border-width: 1px;
-                            border-color: Colors.neo-inset-shadow;
 
                             HorizontalLayout {
                                 padding: 2px;

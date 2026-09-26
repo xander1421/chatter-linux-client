@@ -44,8 +44,6 @@ export component MeshListItem inherits Rectangle {
     background: root.selected ? Colors.neo-inset-bg
               : touch.has-hover ? Colors.surface-hover
               : transparent;
-    border-width: root.selected || touch.has-hover ? 1px : 0px;
-    border-color: root.selected ? Colors.glow-primary : Colors.neo-highlight;
 
     accessible-role: button;
     accessible-label: root.kind == "geohash"

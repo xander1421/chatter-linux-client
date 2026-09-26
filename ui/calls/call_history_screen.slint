@@ -45,7 +45,12 @@ export component CallHistoryScreen inherits Rectangle {
     // leaves the UI until the second click. Reset on every open, or a screen
     // closed mid-confirm reopens already asking to wipe the list.
     property <bool> show-clear-confirm: false;
-    changed show-modal => { self.show-clear-confirm = false; }
+    // The header ⋮ menu, which holds Clear call history.
+    property <bool> show-more-menu: false;
+    changed show-modal => {
+        self.show-clear-confirm = false;
+        self.show-more-menu = false;
+    }
 
     Modal {
         show: root.show-modal;
@@ -56,6 +61,8 @@ export component CallHistoryScreen inherits Rectangle {
         root-screen: root.root-screen;
         bottom-inset: root.bottom-inset;
         fill-height: root.mobile-mode;
+        show-more: !root.loading && root.rows.length > 0;
+        more-clicked => { root.show-more-menu = !root.show-more-menu; }
 
         close => {
             root.close();
@@ -160,8 +167,6 @@ export component CallHistoryScreen inherits Rectangle {
                         height: root.row-height;
                         background: row-touch.has-hover ? Colors.surface-hover : transparent;
                         border-radius: Spacing.radius-md;
-                        border-width: row-touch.has-hover ? 1px : 0px;
-                        border-color: Colors.neo-highlight;
 
                         // Under the row's content, not over it: declared last it
                         // sat on top and took the redial buttons' taps, so
@@ -296,36 +301,8 @@ export component CallHistoryScreen inherits Rectangle {
 
             // Clearing is irreversible, so it takes the same two-step reveal
             // Channel Settings uses for Leave and Delete — one destructive
-            // vocabulary across the app, not one per screen.
-            if !root.loading && root.rows.length > 0 && !root.show-clear-confirm: HorizontalLayout {
-                alignment: center;
-                padding-bottom: Spacing.sm;
-
-                Rectangle {
-                    height: Spacing.touch-target-min;
-                    width: clear-label.preferred-width + 2 * Spacing.md;
-                    border-radius: Spacing.radius-sm;
-                    background: clear-touch.has-hover ? Colors.surface-hover : transparent;
-
-                    clear-label := Text {
-                        text: "Clear call history";
-                        color: Colors.error;
-                        font-size: Typography.sm;
-                        horizontal-alignment: center;
-                        vertical-alignment: center;
-                        width: 100%;
-                        height: 100%;
-                    }
-
-                    clear-touch := TouchArea {
-                        mouse-cursor: pointer;
-                        clicked => {
-                            root.show-clear-confirm = true;
-                        }
-                    }
-                }
-            }
-
+            // vocabulary across the app, not one per screen. Reached from the
+            // header ⋮ menu below.
             if !root.loading && root.show-clear-confirm: VerticalLayout {
                 spacing: Spacing.sm;
                 padding-bottom: Spacing.sm;
@@ -358,6 +335,45 @@ export component CallHistoryScreen inherits Rectangle {
                             root.clear-history();
                         }
                     }
+                }
+            }
+        }
+    }
+
+    // Header ⋮ menu. A scrim closes it; the card sits under the header's
+    // trailing edge, where the ⋮ is.
+    if root.show-modal && root.show-more-menu: Rectangle {
+        background: Colors.overlay;
+
+        TouchArea {
+            clicked => { root.show-more-menu = false; }
+        }
+
+        Rectangle {
+            x: parent.width - self.width - Spacing.lg;
+            y: Spacing.lg + (root.mobile-mode ? Spacing.header-action-box-touch : Spacing.header-action-box);
+            width: menu-label.preferred-width + 2 * Spacing.lg;
+            height: Spacing.touch-target-min;
+            border-radius: Spacing.radius-sm;
+            background: menu-touch.has-hover ? Colors.surface-hover : Colors.surface;
+            drop-shadow-blur: 12px;
+            drop-shadow-color: #00000040;
+
+            menu-label := Text {
+                text: "Clear call history";
+                color: Colors.error;
+                font-size: Typography.base;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+                width: 100%;
+                height: 100%;
+            }
+
+            menu-touch := TouchArea {
+                mouse-cursor: pointer;
+                clicked => {
+                    root.show-more-menu = false;
+                    root.show-clear-confirm = true;
                 }
             }
         }

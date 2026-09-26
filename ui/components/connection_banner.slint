@@ -141,8 +141,6 @@ export component ConnectionBanner inherits Rectangle {
         Colors.error;  // disconnected
 
     background: root.banner-color.with-alpha(0.15);
-    border-width: 1px;
-    border-color: root.banner-color.with-alpha(0.2);
     // Neo 2.0: glow bloom on connecting/reconnecting states
     drop-shadow-blur: connection-state == "connecting" || connection-state == "reconnecting"
         ? Spacing.neo-blur-md : 0px;

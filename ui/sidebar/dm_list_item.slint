@@ -92,8 +92,6 @@ export component DMListItem inherits Rectangle {
               : root.selected ? Colors.neo-inset-bg
               : touch.has-hover ? Colors.surface-hover
               : transparent;
-    border-width: !root.collapsed && (root.selected || touch.has-hover) ? 1px : 0px;
-    border-color: root.selected ? Colors.glow-primary : Colors.neo-highlight;
 
     // Expanded content layout
     if !root.collapsed: HorizontalLayout {
@@ -110,8 +108,6 @@ export component DMListItem inherits Rectangle {
                 width: root.avatar-ring;
                 height: root.avatar-ring;
                 border-radius: root.avatar-ring / 2;
-                border-width: root.selected ? 2px : 0px;
-                border-color: Colors.primary;
 
                 Avatar {
                     size: root.avatar-size;

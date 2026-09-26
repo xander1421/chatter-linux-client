@@ -44,8 +44,6 @@ export component IncomingCallModal inherits Rectangle {
         height: min(380px, parent.height - 48px);
         background: Colors.surface;
         border-radius: Spacing.radius-lg;
-        border-width: 1px;
-        border-color: Colors.neo-highlight-strong;
         drop-shadow-blur: Spacing.neo-blur-lg;
         drop-shadow-offset-x: Spacing.neo-offset-lg;
         drop-shadow-offset-y: Spacing.neo-offset-lg;
@@ -71,8 +69,10 @@ export component IncomingCallModal inherits Rectangle {
                         height: 96px;
                         border-radius: 48px;
                         background: transparent;
-                        border-width: 2px;
-                        border-color: Colors.glow-cyan.with-alpha(pulse-opacity);
+                        // The ringing state itself, not decoration: the pulse is
+                        // the only thing on this card that moves.
+                        border-width: Spacing.stroke;
+                        border-color: Colors.primary.with-alpha(pulse-opacity);
                         drop-shadow-blur: Spacing.neo-blur-md;
                         drop-shadow-color: Colors.glow-cyan-soft;
 

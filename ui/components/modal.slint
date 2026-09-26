@@ -6,6 +6,8 @@ import { Spacing } from "../theme/spacing.slint";
 import { Typography } from "../theme/typography.slint";
 import { ModalContainer } from "modal_container.slint";
 import { DismissButton } from "dismiss_button.slint";
+import { HeaderButton } from "header_button.slint";
+import { Icons } from "../theme/icons.slint";
 
 export component Modal inherits Rectangle {
     in property <bool> show: false;
@@ -22,8 +24,11 @@ export component Modal inherits Rectangle {
     // tab bar is its navigation. Hides the leading chevron; pushed screens
     // keep it.
     in property <bool> root-screen: false;
+    // A trailing ⋮ in the header for the screen's overflow actions.
+    in property <bool> show-more: false;
 
     callback close();
+    callback more-clicked();
 
     // The backdrop always covers the whole window, so root.height is the
     // viewport height. Safe-area insets are not plumbed down to modals, so a
@@ -55,7 +60,7 @@ export component Modal inherits Rectangle {
             // floating dialog they close (X, TRAILING edge). Exactly one of
             // the two exists at a time — never both.
             HorizontalLayout {
-                spacing: Spacing.md;
+                spacing: Spacing.header-action-gap;
                 // The row is as tall as its one control, so title and glyph
                 // share a vertical centre at both densities.
                 height: root.full-screen ? Spacing.header-action-box-touch : Spacing.header-action-box;
@@ -74,6 +79,13 @@ export component Modal inherits Rectangle {
                     vertical-alignment: center;
                     horizontal-stretch: 1;
                     overflow: elide;
+                }
+
+                if root.show-more: HeaderButton {
+                    touch: root.full-screen;
+                    icon: Icons.more-vertical;
+                    label: "More options";
+                    clicked => { root.more-clicked(); }
                 }
 
                 if !root.full-screen && root.show-close: DismissButton {

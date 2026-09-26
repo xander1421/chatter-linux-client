@@ -76,6 +76,15 @@ export global Spacing {
     out property <length> header-glyph-touch: 26px;
     out property <length> header-action-box: 44px;
     out property <length> header-action-box-touch: 48px;
+    // Between two adjacent header buttons, in every header.
+    out property <length> header-action-gap: 4px;
+
+    // The ONE stroke width. A stroke carries meaning or it is not drawn: a
+    // text input's edge (Colors.border, Colors.primary when focused), a
+    // selected/checked state (Colors.primary), an unchecked checkbox or radio
+    // (Colors.text-muted). Cards, rows, sheets, menus, chips, avatars and
+    // buttons are flat — separated by background tone, not outlines.
+    out property <length> stroke: 1.5px;
 
     // Count and label badges (unread, missed calls, member counts, role
     // tags). They hold Typography.xs/xxs text, so they grow with it; pills

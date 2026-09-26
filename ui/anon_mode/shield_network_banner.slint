@@ -17,8 +17,6 @@ export component ShieldNetworkBanner inherits Rectangle {
     visible: root.show;
     height: root.show ? content.preferred-height : 0px;
     background: Colors.warning.with-alpha(0.15);
-    border-width: 1px;
-    border-color: Colors.warning.with-alpha(0.3);
     accessible-role: text;
     accessible-label: root.message;
 

@@ -16,8 +16,6 @@ export component NeoSurface inherits Rectangle {
 
     background: surface-color;
     border-radius: surface-radius;
-    border-width: 1px;
-    border-color: strong ? Colors.neo-highlight-strong : Colors.neo-highlight;
     drop-shadow-blur: strong ? Spacing.neo-blur-lg : Spacing.neo-blur-md;
     drop-shadow-offset-x: strong ? Spacing.neo-offset-lg : Spacing.neo-offset-md;
     drop-shadow-offset-y: strong ? Spacing.neo-offset-lg : Spacing.neo-offset-md;
@@ -32,8 +30,6 @@ export component NeoInsetSurface inherits Rectangle {
 
     background: surface-color;
     border-radius: surface-radius;
-    border-width: 1px;
-    border-color: Colors.neo-inset-shadow;
 
     // Subtle inner highlight at bottom-right edge (simulated via overlay)
     Rectangle {
@@ -43,20 +39,16 @@ export component NeoInsetSurface inherits Rectangle {
         height: 100%;
         border-radius: parent.border-radius;
         background: transparent;
-        border-width: 1px;
-        border-color: Colors.neo-inset-highlight;
     }
 }
 
-// Glassmorphism surface — semi-transparent with strong edge definition.
+// Glassmorphism surface — semi-transparent, no outline.
 // Use for: headers, toolbars, overlays that need backdrop distinction.
 export component NeoGlassSurface inherits Rectangle {
     in property <length> surface-radius: 0px;
 
     background: Colors.surface.with-alpha(0.85);
     border-radius: surface-radius;
-    border-width: 1px;
-    border-color: Colors.neo-highlight;
     drop-shadow-blur: Spacing.neo-blur-sm;
     drop-shadow-offset-y: Spacing.neo-offset-sm;
     drop-shadow-color: Colors.neo-shadow;

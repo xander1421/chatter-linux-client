@@ -73,8 +73,6 @@ export component InviteMemberModal inherits Rectangle {
                 vertical-stretch: 1;
                 background: Colors.surface;
                 border-radius: Spacing.radius-md;
-                border-width: 1px;
-                border-color: Colors.text-muted.with-alpha(0.2);
 
                 Flickable {
                     viewport-height: user-list.preferred-height;
@@ -151,7 +149,7 @@ export component InviteMemberModal inherits Rectangle {
                                     height: 20px;
                                     y: (parent.height - self.height) / 2;
                                     border-radius: Spacing.radius-sm;
-                                    border-width: user.selected ? 0 : 2px;
+                                    border-width: user.selected ? 0px : Spacing.stroke;
                                     border-color: Colors.text-muted;
                                     background: user.selected ? Colors.primary : transparent;
 

@@ -81,10 +81,10 @@ export component EditProfileModal inherits Rectangle {
                     height: 80px;
                     border-radius: Spacing.radius-md;
                     background: Colors.neo-inset-bg;
-                    border-width: 1px;
-                    border-color: Colors.neo-inset-shadow;
+                    border-width: Spacing.stroke;
+                    border-color: bio-input.has-focus ? Colors.primary : Colors.border;
 
-                    TextInput {
+                    bio-input := TextInput {
                         x: Spacing.md;
                         y: Spacing.sm;
                         width: parent.width - Spacing.md * 2;

@@ -9,6 +9,7 @@
 import { Colors } from "../theme/colors.slint";
 import { Spacing } from "../theme/spacing.slint";
 import { Typography } from "../theme/typography.slint";
+import { HeaderButton } from "../components/header_button.slint";
 import { Icons } from "../theme/icons.slint";
 import { Avatar } from "../components/avatar.slint";
 import { CallControls } from "call_controls.slint";
@@ -31,8 +32,8 @@ component ParticipantTile inherits Rectangle {
     // between idle and active so the transition feels alive rather than a
     // hard on/off flip. Uses the sidebar accent teal so "talking" matches the
     // rest of the app's green instead of a one-off neon.
-    border-width: participant.is-speaking ? 3px : 1px;
-    border-color: participant.is-speaking ? Colors.primary : Colors.neo-highlight;
+    border-width: participant.is-speaking ? Spacing.stroke : 0px;
+    border-color: Colors.primary;
     drop-shadow-blur: participant.is-speaking ? 18px : 0px;
     drop-shadow-color: participant.is-speaking ? Colors.primary.with-alpha(0.6) : transparent;
     drop-shadow-offset-x: 0px;
@@ -253,8 +254,6 @@ export component ActiveCallView inherits Rectangle {
     max-height: show ? (fullscreen ? 100000px : dock-height) : 0px;
     preferred-height: show ? dock-height : 0px;
     background: Colors.surface.with-alpha(0.6);
-    border-width: 1px;
-    border-color: Colors.neo-inset-shadow;
     drop-shadow-blur: Spacing.neo-blur-md;
     drop-shadow-offset-y: Spacing.neo-offset-sm;
     drop-shadow-color: Colors.neo-shadow;
@@ -533,25 +532,19 @@ export component ActiveCallView inherits Rectangle {
             // Fullscreen toggle — top-right of the call dock. Visible in both
             // grid and maximized modes. Asks the parent layout to expand the
             // dock to cover the chat area.
+            // The shared header control on a scrim, so it reads over video.
             Rectangle {
                 x: parent.width - self.width - Spacing.sm;
                 y: Spacing.sm;
-                width: 32px;
-                height: 32px;
-                border-radius: 16px;
+                width: fullscreen-button.width;
+                height: fullscreen-button.height;
+                border-radius: Spacing.radius-md;
                 background: Colors.overlay-heavy;
 
-                fullscreen-touch := TouchArea {
+                fullscreen-button := HeaderButton {
+                    icon: fullscreen ? Icons.minimize : Icons.maximize;
+                    label: fullscreen ? "Exit full screen" : "Full screen";
                     clicked => { root.fullscreen-toggle(); }
-                }
-
-                Image {
-                    source: fullscreen ? Icons.minimize : Icons.maximize;
-                    width: 16px;
-                    height: 16px;
-                    x: (parent.width - self.width) / 2;
-                    y: (parent.height - self.height) / 2;
-                    colorize: Colors.text-primary;
                 }
             }
 
@@ -565,8 +558,6 @@ export component ActiveCallView inherits Rectangle {
                 height: 28px;
                 border-radius: 14px;
                 background: Colors.overlay-heavy;
-                border-width: 1px;
-                border-color: Colors.glow-cyan.with-alpha(0.6);
 
                 share-banner-row := HorizontalLayout {
                     padding-left: Spacing.md;
