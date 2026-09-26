@@ -532,7 +532,15 @@ fn callback_update_text<'local>(
                 InternalKeyEvent {
                     event_type: KeyEventType::UpdateComposition,
                     preedit_text: text[preedit_start..preedit_end].into(),
-                    preedit_selection: Some(0..(preedit_end - preedit_start) as i32),
+                    // PATCHED: an empty range at the IME caret, not the whole
+                    // preedit. Slint core draws preedit_selection as a text
+                    // selection, so `0..len` painted every word being typed as
+                    // selected until a space committed it.
+                    preedit_selection: {
+                        let caret = (cursor_position.clamp(preedit_start, preedit_end)
+                            - preedit_start) as i32;
+                        Some(caret..caret)
+                    },
                     replacement_range: Some(i32::MIN..i32::MAX),
                     cursor_position: Some(adjust(cursor_position)),
                     anchor_position: Some(adjust(anchor_position)),
