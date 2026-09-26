@@ -231,8 +231,9 @@ fn file_dm_bubble(history: &CallHistoryRepository, messages: &MessageService, ca
 ///   bucket its own messages use: `ChannelId::from(peer)` for a friend DM,
 ///   the anon DM's id for an anon one.
 /// * `initiator_id` decides "Incoming" / "Outgoing" in the chat; only an
-///   incoming call nobody answered reads as missed. Our own unanswered or
-///   declined call is still an outgoing call, as in Signal.
+///   incoming call nobody answered reads as missed. Our own unanswered call
+///   is still an outgoing call, as in Signal. A declined call reads
+///   "Declined" on both sides, as the Calls screen says.
 /// * `sender_id` is the peer, as for the DM's failure markers: the chat and
 ///   sidebar route a `ServerDm` message by its sender. An anon peer has no
 ///   `UserId` (the orchestrator rings it as nil too) and the anon chat routes
@@ -255,7 +256,7 @@ fn dm_call_bubble(entry: &CallHistoryEntry, me: UserId) -> Option<Message> {
     let incoming = entry.direction == CallDirection::Incoming;
     let call_type = match entry.result {
         CallResult::Missed if incoming => CallMessageType::Missed,
-        CallResult::Declined if incoming => CallMessageType::Declined,
+        CallResult::Declined => CallMessageType::Declined,
         _ => CallMessageType::Ended,
     };
     let now = chrono::Utc::now();
@@ -337,14 +338,15 @@ mod dm_call_bubble_tests {
     }
 
     #[test]
-    fn only_an_incoming_call_reads_as_missed_or_declined() {
+    fn only_an_incoming_call_reads_as_missed_but_both_sides_read_declined() {
         let (me, peer) = (UserId::new(), UserId::new());
         let kind = |d, r| call(&dm_call_bubble(&row(peer, d, r, None), me).unwrap()).call_type.clone();
         assert_eq!(kind(CallDirection::Incoming, CallResult::Missed), CallMessageType::Missed);
         assert_eq!(kind(CallDirection::Incoming, CallResult::Declined), CallMessageType::Declined);
         // Our call nobody picked up is still an outgoing call.
         assert_eq!(kind(CallDirection::Outgoing, CallResult::Missed), CallMessageType::Ended);
-        assert_eq!(kind(CallDirection::Outgoing, CallResult::Declined), CallMessageType::Ended);
+        // The peer said no: the bubble agrees with the Calls screen's "Declined".
+        assert_eq!(kind(CallDirection::Outgoing, CallResult::Declined), CallMessageType::Declined);
     }
 
     #[test]

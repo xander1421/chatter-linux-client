@@ -148,6 +148,8 @@ class MainActivity : GameActivity() {
         // API 31+: the system draws its starting window from the app's night
         // mode, before onCreate runs at all. Persisted by the system; uiMode is
         // in the manifest's configChanges, so this does not recreate us.
+        // Below 31 the starting window follows the SYSTEM night mode and no
+        // app setting can reach it; accepted, as Signal does (OPEN-ITEMS §124).
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             getSystemService(UiModeManager::class.java).setApplicationNightMode(
                 when (mode) {

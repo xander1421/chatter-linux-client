@@ -763,7 +763,8 @@ pub enum CallMessageType {
     Started,
     Ended,
     Missed,
-    /// An incoming call we declined (the Calls tab's "Declined").
+    /// A call declined before it connected, by either side (the Calls tab's
+    /// "Declined").
     Declined,
 }
 
@@ -1126,6 +1127,8 @@ mod tests {
         assert_eq!(call(them, CallMessageType::Ended).sidebar_preview(Some(&me), None), "\u{1F4DE} Incoming call");
         assert_eq!(call(me, CallMessageType::Ended).sidebar_preview(Some(&me), None), "\u{1F4DE} Outgoing call");
         assert_eq!(call(them, CallMessageType::Declined).sidebar_preview(Some(&me), None), "\u{1F4DE} Declined call");
+        // The caller's side of a declined call says so too, as its Calls tab does.
+        assert_eq!(call(me, CallMessageType::Declined).sidebar_preview(Some(&me), None), "\u{1F4DE} Declined call");
     }
 
     #[test]
