@@ -47,10 +47,16 @@ pub fn spawn_call_notification_bridge(
                         _ => format!("{} is calling", peer_name),
                     };
                     tracing::info!(call_id = %call.as_str(), is_video, "IncomingPresented → ringing call notification");
-                    let _ = notifications.show_incoming_call(call.as_str(), title, &body);
+                    // A failure (NotificationService turns a sink panic into
+                    // one) is this call's; the loop serves the next.
+                    if let Err(e) = notifications.show_incoming_call(call.as_str(), title, &body) {
+                        tracing::error!(call_id = %call.as_str(), error = %e, "ring notification failed");
+                    }
                 }
                 Ok(CallOrchestratorEvent::IncomingWithdrawn { call, .. }) => {
-                    let _ = notifications.cancel_incoming_call(call.as_str());
+                    if let Err(e) = notifications.cancel_incoming_call(call.as_str()) {
+                        tracing::error!(call_id = %call.as_str(), error = %e, "ring notification cancel failed");
+                    }
                 }
                 // Other orchestrator events don't touch the ring
                 // notification — UI handles in-app state directly.

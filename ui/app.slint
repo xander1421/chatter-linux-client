@@ -1429,12 +1429,10 @@ export component App inherits Rectangle {
                     root.active-tab = "calls";
                     root.calls-tab-clicked();
                 }
-                // The sidebar's one Requests row fires all four below, in this
-                // order. The first opens Contacts › Requests on the first
-                // sub-tab that has something in it (Received when none); the
-                // other three only refresh their lists. Each used to select its
-                // own sub-tab, so the last — Channels — always won, even with
-                // a friend request waiting (REVIEW-R4 P1-11).
+                // The sidebar's one Requests row fires all four below on every
+                // tap: the other three refresh their lists, and this one opens
+                // Contacts › Requests on the first sub-tab that has something
+                // in it (Received when none).
                 friend-requests-clicked => {
                     root.friends-modal-tab = "requests";
                     root.friends-requests-sub-tab =

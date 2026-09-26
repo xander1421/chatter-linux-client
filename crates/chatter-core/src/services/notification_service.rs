@@ -126,12 +126,12 @@ impl NotificationService {
             ),
         };
 
-        self.sink.show_conversation(&notification_key(conversation_id), &title, &body, priority)
+        self.deliver(|sink| sink.show_conversation(&notification_key(conversation_id), &title, &body, priority))
     }
 
     /// Dismiss `conversation_id`'s notification (it was read).
     pub fn cancel_conversation(&self, conversation_id: &crate::domain::ids::ChannelId) -> Result<(), SystemError> {
-        self.sink.cancel_conversation(&notification_key(conversation_id))
+        self.deliver(|sink| sink.cancel_conversation(&notification_key(conversation_id)))
     }
 
     /// Show a notification from a domain Notification object.
@@ -142,7 +142,7 @@ impl NotificationService {
             NotificationDetailLevel::None => {
                 self.show_platform_notification("Chatter", "New notification", NotificationPriority::Normal)
             }
-            _ => self.sink.show_domain(notification),
+            _ => self.deliver(|sink| sink.show_domain(notification)),
         }
     }
 
@@ -172,13 +172,13 @@ impl NotificationService {
         title: &str,
         body: &str,
     ) -> Result<(), SystemError> {
-        self.sink.show_incoming_call(call_id, title, body)
+        self.deliver(|sink| sink.show_incoming_call(call_id, title, body))
     }
 
     /// Dismiss the incoming-call notification for `call_id` (accepted,
     /// declined, withdrawn, or ended).
     pub fn cancel_incoming_call(&self, call_id: &str) -> Result<(), SystemError> {
-        self.sink.cancel_incoming_call(call_id)
+        self.deliver(|sink| sink.cancel_incoming_call(call_id))
     }
 
     /// Platform-neutral notification display via the injected sink.
@@ -188,7 +188,20 @@ impl NotificationService {
         body: &str,
         priority: NotificationPriority,
     ) -> Result<(), SystemError> {
-        self.sink.show(title, body, priority)
+        self.deliver(|sink| sink.show(title, body, priority))
+    }
+
+    /// Every sink call goes through here. The sinks are long-lived event
+    /// loops' only contact with platform code (JNI on Android), and a panic
+    /// there used to end the loop: one call whose id overflowed a request-code
+    /// multiply killed the ring-notification bridge, so every later call rang
+    /// silently. A panic is one failed notification, reported as an error.
+    fn deliver(
+        &self,
+        f: impl FnOnce(&dyn NotificationSink) -> Result<(), SystemError>,
+    ) -> Result<(), SystemError> {
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| f(self.sink.as_ref())))
+            .unwrap_or_else(|_| Err(SystemError::NotificationSend("notification sink panicked".into())))
     }
 }
 
@@ -560,6 +573,23 @@ mod tests {
         assert_eq!(shown(NotificationDetailLevel::NameOnly, false), pair("Alice", "New message"));
         assert_eq!(shown(NotificationDetailLevel::None, false), pair("Chatter", "New message"));
         assert_eq!(shown(NotificationDetailLevel::NameAndMessage, true), pair("Chatter", "New message"));
+    }
+
+    /// A panicking sink is one failed notification, not a dead caller loop.
+    #[test]
+    fn a_panicking_sink_is_an_error_not_a_panic() {
+        struct Panics;
+        impl NotificationSink for Panics {
+            fn show(&self, _: &str, _: &str, _: NotificationPriority) -> Result<(), SystemError> {
+                Ok(())
+            }
+            fn show_incoming_call(&self, _: &str, _: &str, _: &str) -> Result<(), SystemError> {
+                panic!("attempt to multiply with overflow")
+            }
+        }
+        let service = NotificationService::new(Arc::new(Panics));
+        assert!(service.show_incoming_call("c", "t", "b").is_err());
+        assert!(service.show_message("t", "b", NotificationPriority::Normal).is_ok());
     }
 
     #[test]

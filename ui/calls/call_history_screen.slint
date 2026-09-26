@@ -212,17 +212,22 @@ export component CallHistoryScreen inherits Rectangle {
 
                                     // The outcome may elide; the time never
                                     // does — it was the part being cut off.
+                                    // Neither stretches: sharing the slack
+                                    // with the spacer elided "Incoming · 0:16"
+                                    // to "0…" with room to spare.
                                     Text {
                                         text: row.detail + " ·";
                                         color: Colors.text-muted;
                                         font-size: root.row-sub-size;
                                         overflow: elide;
+                                        horizontal-stretch: 0;
                                     }
 
                                     Text {
                                         text: row.timestamp;
                                         color: Colors.text-muted;
                                         font-size: root.row-sub-size;
+                                        horizontal-stretch: 0;
                                     }
 
                                     Rectangle { horizontal-stretch: 1; }
@@ -232,9 +237,12 @@ export component CallHistoryScreen inherits Rectangle {
                             // Redial. Both types are offered rather than
                             // repeating the original call's type: wanting to
                             // switch is exactly why you'd come back to a row.
+                            // Fixed width, no stretch, so the two buttons
+                            // sit at the same x on every row.
                             if row.can-call-back: HorizontalLayout {
                                 spacing: Spacing.xs;
                                 alignment: center;
+                                horizontal-stretch: 0;
 
                                 Rectangle {
                                     width: 44px;

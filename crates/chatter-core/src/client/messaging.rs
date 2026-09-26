@@ -771,17 +771,24 @@ impl ChatterClient {
         use crate::ui::sidebar_data::ChatRowSendData;
         let id = channel.id.to_string();
         let latest = self.latest_message(&channel.id, &channel.conversation_type());
-        let (last_message, timestamp) = self.sidebar_activity(latest.as_ref());
+        let (last_message, _) = self.sidebar_activity(latest.as_ref());
+        // A channel with no messages yet orders (and is dated) by when it was
+        // created, so a just-created channel leads the list instead of sinking
+        // below every dated row.
+        let last_activity = latest
+            .map(|m| m.created_at)
+            .or(channel.last_message_at)
+            .unwrap_or(channel.created_at);
         ChatRowSendData {
             avatar_bytes: channel.icon.clone().filter(|b| !b.is_empty()),
             last_message,
-            timestamp,
+            timestamp: self.sidebar_time(last_activity),
             unread_count: channel.unread_count,
             is_pinned: self.is_conversation_pinned(&id),
             private_channel: channel.channel_type == crate::domain::channel::ChannelType::Private,
             can_leave: self.can_leave_channel(&channel.id),
             can_delete: self.is_former_channel(&channel.id),
-            last_activity: latest.map(|m| m.created_at).or(channel.last_message_at),
+            last_activity: Some(last_activity),
             ..ChatRowSendData::new(crate::domain::message::ConversationType::Channel, id, channel.name.clone())
         }
     }
@@ -790,14 +797,16 @@ impl ChatterClient {
     fn private_group_row(&self, group: &crate::domain::anon_group::AnonGroup) -> crate::ui::sidebar_data::ChatRowSendData {
         use crate::ui::sidebar_data::ChatRowSendData;
         let latest = self.get_latest_anon_group_message(&group.id);
-        let (last_message, timestamp) = self.sidebar_activity(latest.as_ref());
+        let (last_message, _) = self.sidebar_activity(latest.as_ref());
+        // As for channels: no messages yet = ordered by creation.
+        let last_activity = latest.map_or(group.created_at, |m| m.created_at);
         ChatRowSendData {
             last_message,
-            timestamp,
+            timestamp: self.sidebar_time(last_activity),
             unread_count: self.anon_group_unread_count(&group.id),
             member_count: self.get_anon_group_members(&group.id).len() as u32,
             is_pinned: self.is_conversation_pinned(&group.id.to_string()),
-            last_activity: latest.map(|m| m.created_at),
+            last_activity: Some(last_activity),
             ..ChatRowSendData::new(crate::domain::message::ConversationType::AnonGroup, group.id.to_string(), group.name.clone())
         }
     }
@@ -1765,5 +1774,60 @@ mod search_hit_tests {
             targets,
             vec![("dm", peer.to_string()), ("saved_messages", "saved-messages".to_string())]
         );
+    }
+}
+
+#[cfg(test)]
+mod new_channel_row_tests {
+    use crate::client::ChatterClient;
+    use crate::domain::channel::{Channel, ChannelType, MemberRole, Membership, NotificationPreference};
+    use crate::domain::ids::{ChannelId, UserId};
+
+    /// A just-created channel has no messages. It used to sort below every
+    /// dated row with no time; it orders and is dated by its creation.
+    #[tokio::test]
+    async fn a_new_channel_with_no_messages_leads_by_creation_time() {
+        static MOCK_KEYRING: std::sync::Once = std::sync::Once::new();
+        MOCK_KEYRING.call_once(|| {
+            keyring::set_default_credential_builder(keyring::mock::default_credential_builder());
+        });
+        let dir = tempfile::tempdir().unwrap();
+        let client = ChatterClient::builder()
+            .server_url("http://localhost:1")
+            .data_dir(dir.path().to_str().unwrap())
+            .build()
+            .expect("build client");
+        let me = UserId::new();
+        client
+            .messages()
+            .settings_repo
+            .set_string(crate::storage::repositories::settings_repo::keys::CURRENT_USER_ID, &me.to_string())
+            .unwrap();
+        client.messages().user_repo.ensure_user_exists(&me).unwrap();
+        let repo = &client.services.channel_repo;
+        let join = |name: &str, last: Option<chrono::DateTime<chrono::Utc>>| {
+            let mut c = Channel::new(ChannelId::new(), name.into(), ChannelType::Public, me);
+            c.last_message_at = last;
+            repo.insert(&c).unwrap();
+            repo.insert_membership(&Membership {
+                channel_id: c.id,
+                user_id: me,
+                role: MemberRole::Owner,
+                joined_at: chrono::Utc::now(),
+                last_read_message_id: None,
+                is_muted: false,
+                muted_until: None,
+                notification_preference: NotificationPreference::All,
+            })
+            .unwrap();
+            c.id.to_string()
+        };
+        let old = join("old", Some(chrono::Utc::now() - chrono::Duration::hours(1)));
+        let new = join("new", None);
+
+        let rows = client.sidebar_rows();
+        let ids: Vec<_> = rows.iter().map(|r| r.id.clone()).collect();
+        assert_eq!(ids, [new, old], "the new channel leads the list");
+        assert!(!rows[0].timestamp.is_empty(), "the new channel shows its creation time");
     }
 }

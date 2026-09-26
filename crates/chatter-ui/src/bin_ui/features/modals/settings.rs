@@ -111,6 +111,7 @@ pub fn wire_settings_callbacks(window: &MainWindow, ui_ctx: &Arc<ChatterClient>)
     // theme actually in force.
     let appearance = window.global::<crate::Appearance>();
     appearance.set_theme(ui_ctx.theme_mode().as_str().into());
+    mirror_theme_mode(ui_ctx.theme_mode().as_str());
     appearance.on_dark_changed(apply_system_bars);
     apply_system_bars(appearance.get_dark());
     let ui_ctx_theme = ui_ctx.clone();
@@ -120,9 +121,10 @@ pub fn wire_settings_callbacks(window: &MainWindow, ui_ctx: &Arc<ChatterClient>)
         if let Err(e) = ui_ctx_theme.set_theme_mode(mode) {
             tracing::error!("Failed to save theme: {}", e);
         }
+        let saved = ui_ctx_theme.theme_mode().as_str();
+        mirror_theme_mode(saved);
         if let Some(w) = weak_theme.upgrade() {
-            w.global::<crate::Appearance>()
-                .set_theme(ui_ctx_theme.theme_mode().as_str().into());
+            w.global::<crate::Appearance>().set_theme(saved.into());
         }
     });
 
@@ -976,6 +978,14 @@ fn system_font_scale() -> f32 {
     return crate::platform::android::system_settings::font_scale();
     #[cfg(not(target_os = "android"))]
     1.0
+}
+
+/// The saved theme, for Android's pre-first-frame window background.
+fn mirror_theme_mode(mode: &str) {
+    #[cfg(target_os = "android")]
+    crate::platform::android::activity::set_theme_mode(mode);
+    #[cfg(not(target_os = "android"))]
+    let _ = mode;
 }
 
 fn apply_system_bars(dark: bool) {

@@ -150,6 +150,12 @@ export component CreateChannelModal inherits Rectangle {
         title: "New Channel";
         modal-width: 620px;
         max-modal-height: 720px;
+        // The Create tab brings its own scrolling body with the footer pinned
+        // below it, which only works when the card lays the content out to
+        // the card's height. Content-sized, a capped card scrolled the whole
+        // tab instead, so with the keyboard up (the window shrinks to its top
+        // edge) Create sat clipped below the card, unreachable.
+        fill-height: root.active-tab == 0;
 
         close => { root.close(); }
 

@@ -97,6 +97,30 @@ pub fn set_secure(secure: bool) {
     }
 }
 
+/// Mirror Settings › Appearance › Theme into `MainActivity`
+/// (`setThemeMode`), whose `onCreate` paints the pre-first-frame window
+/// background from it — it runs before the native side can say anything.
+pub fn set_theme_mode(mode: &str) {
+    let result = (|| -> Result<(), String> {
+        let act = activity()?;
+        let mut env = jni_env()?;
+        let jmode = env.new_string(mode).map_err(|e| e.to_string())?;
+        let res = env.call_method(
+            act,
+            "setThemeMode",
+            "(Ljava/lang/String;)V",
+            &[jni::objects::JValue::Object(&jmode)],
+        );
+        if res.is_err() {
+            clear_exception(&mut env);
+        }
+        res.map(|_| ()).map_err(|e| e.to_string())
+    })();
+    if let Err(e) = result {
+        tracing::error!("Android: setThemeMode({mode}) failed: {e}");
+    }
+}
+
 /// Dark status/nav-bar icons for the light palette, light ones for the dark
 /// (`MainActivity.setLightSystemBars`). The app draws edge-to-edge, so the
 /// icons sit on Slint's own background.

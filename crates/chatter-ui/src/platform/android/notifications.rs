@@ -239,9 +239,13 @@ impl AndroidNotifications {
         // Accept = activity intent: foregrounds the app (a broadcast receiver
         // can't reliably start an activity on Android 14+) and auto-accepts.
         // Decline = headless broadcast.
-        let accept_pi = build_activity_intent(&mut env, &context, call_id, id * 2, true)?;
+        // PendingIntent request codes only need to differ from each other and
+        // from the content intent's; `id` is any positive i32, so `id * 2`
+        // overflowed (a panic that killed the notification bridge for every
+        // later call). Wrapping keeps them distinct without overflow.
+        let accept_pi = build_activity_intent(&mut env, &context, call_id, id.wrapping_mul(2), true)?;
         let accept = make_action(&mut env, IC_CALL, "Accept", &accept_pi)?;
-        let decline = build_action(&mut env, &context, "com.chatter.client.CALL_DECLINE", "Decline", call_id, IC_CLOSE, id * 2 + 1)?;
+        let decline = build_action(&mut env, &context, "com.chatter.client.CALL_DECLINE", "Decline", call_id, IC_CLOSE, id.wrapping_mul(2).wrapping_add(1))?;
         env.call_method(&builder, "addAction", "(Landroid/app/Notification$Action;)Landroid/app/Notification$Builder;", &[JValue::Object(&accept)]).map_err(nerr)?;
         env.call_method(&builder, "addAction", "(Landroid/app/Notification$Action;)Landroid/app/Notification$Builder;", &[JValue::Object(&decline)]).map_err(nerr)?;
 

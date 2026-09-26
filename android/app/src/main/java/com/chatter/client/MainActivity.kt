@@ -2,6 +2,8 @@ package com.chatter.client
 
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.content.res.Configuration
+import android.graphics.drawable.ColorDrawable
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
@@ -37,6 +39,11 @@ import java.util.concurrent.Executors
 class MainActivity : GameActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
+        // Until Slint's first frame the window background is all there is.
+        // themes.xml resolves it from the SYSTEM night mode, so a Light app on
+        // a dark phone launched on ~1.4 s of black. Paint the app's own theme,
+        // mirrored here by setThemeMode, before anything draws.
+        window.setBackgroundDrawable(ColorDrawable(themeBackground()))
         super.onCreate(savedInstanceState)
         // Slint paints the theme background under the system bars, which
         // themes.xml makes transparent. Android 10+ would lay a grey contrast
@@ -116,6 +123,28 @@ class MainActivity : GameActivity() {
             controller.isAppearanceLightStatusBars = light
             controller.isAppearanceLightNavigationBars = light
         }
+    }
+
+    /**
+     * Called from Rust (JNI) with Settings › Appearance › Theme ("system",
+     * "light", "dark") at startup and on every change. Only onCreate reads it,
+     * before the native side is up.
+     */
+    @Suppress("unused")
+    fun setThemeMode(mode: String) {
+        getSharedPreferences(THEME_PREFS, MODE_PRIVATE).edit().putString(THEME_MODE, mode).apply()
+    }
+
+    /** colors.xml's window_background for the mirrored theme; System = uiMode. */
+    private fun themeBackground(): Int {
+        val night = when (getSharedPreferences(THEME_PREFS, MODE_PRIVATE).getString(THEME_MODE, "system")) {
+            "light" -> Configuration.UI_MODE_NIGHT_NO
+            "dark" -> Configuration.UI_MODE_NIGHT_YES
+            else -> resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK
+        }
+        val config = Configuration(resources.configuration)
+        config.uiMode = (config.uiMode and Configuration.UI_MODE_NIGHT_MASK.inv()) or night
+        return createConfigurationContext(config).getColor(R.color.window_background)
     }
 
     // --- Call audio routing (earpiece / speaker / headset) -------------------
@@ -417,5 +446,7 @@ class MainActivity : GameActivity() {
 
     private companion object {
         const val TAG = "ChatterFilePicker"
+        const val THEME_PREFS = "chatter_theme"
+        const val THEME_MODE = "mode"
     }
 }

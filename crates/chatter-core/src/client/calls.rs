@@ -949,8 +949,28 @@ impl ChatterClient {
         .map_err(|e| ClientError::Inbox(format!("call history join: {}", e)))??;
         for row in &mut page.rows {
             row.avatar_bytes = self.call_peer_avatar(&row.conversation_type, &row.conversation_id);
+            if let Some(name) = self.call_peer_name(&row.conversation_type, &row.conversation_id) {
+                row.initials = crate::ui::chat_data::initials_from_name(&name);
+                row.name = name;
+            }
         }
         Ok(page)
+    }
+
+    /// A 1:1 call row's peer, named as the chat list names them. The name
+    /// stored with the entry is whatever was known when the call happened —
+    /// empty for most outgoing calls, which then read "Unknown" forever.
+    /// Group and channel calls keep the stored conversation name → `None`.
+    fn call_peer_name(&self, conversation_type: &str, conversation_id: &str) -> Option<String> {
+        use crate::domain::message::ConversationType as CT;
+        match CT::from_str_value(conversation_type).ok()? {
+            CT::ServerDm => Some(self.display_name(&conversation_id.parse().ok()?)),
+            CT::AnonDm => {
+                let dm = self.get_anon_dm_conversation(&conversation_id.parse().ok()?)?;
+                Some(dm.peer_display_name.unwrap_or_else(|| self.fallback_display_name(&dm.peer_id)))
+            }
+            _ => None,
+        }
     }
 
     /// Avatar for a call-history row's peer, from the stores the chat list

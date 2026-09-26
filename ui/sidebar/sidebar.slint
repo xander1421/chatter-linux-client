@@ -487,35 +487,16 @@ export component Sidebar inherits Rectangle {
                     requests-touch := TouchArea {
                         mouse-cursor: pointer;
                         clicked => {
-                            // Fire every original callback so each request
-                            // type's own data refresh (its list, its badge
-                            // count) still happens exactly as before — this
-                            // consolidates the SIDEBAR ROW, not the
-                            // underlying refresh logic. See navigation.rs.
-                            // Each also selects its own sub-tab, so the last
-                            // one fired wins: fire the first kind that has
-                            // something pending (received → private → groups
-                            // → channels) last. Always firing channels last
-                            // opened an empty Channels tab over a pending
-                            // friend request.
-                            if root.pending-friend-requests > 0 {
-                                root.channel-invites-clicked();
-                                root.group-invites-clicked();
-                                root.message-requests-clicked();
-                                root.friend-requests-clicked();
-                            } else if root.pending-message-requests > 0 {
-                                root.channel-invites-clicked();
-                                root.group-invites-clicked();
-                                root.message-requests-clicked();
-                            } else if root.pending-group-invites > 0 {
-                                root.channel-invites-clicked();
-                                root.message-requests-clicked();
-                                root.group-invites-clicked();
-                            } else {
-                                root.message-requests-clicked();
-                                root.group-invites-clicked();
-                                root.channel-invites-clicked();
-                            }
+                            // Refresh every request kind's list and badge,
+                            // then open Contacts › Requests. Only
+                            // friend-requests-clicked opens it (app.slint
+                            // picks the first non-empty sub-tab), so it must
+                            // fire on every tap — skipping it when only a
+                            // channel invite was pending made the row dead.
+                            root.message-requests-clicked();
+                            root.group-invites-clicked();
+                            root.channel-invites-clicked();
+                            root.friend-requests-clicked();
                         }
                     }
                 }

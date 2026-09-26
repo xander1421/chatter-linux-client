@@ -562,7 +562,11 @@ export component FriendsModal inherits Rectangle {
 
                                 Input {
                                     horizontal-stretch: 1;
-                                    placeholder: root.effective-private-mode ? "Enter private friend code..." : "Enter friend's code or ID...";
+                                    // Short enough for the phone-width field
+                                    // beside Paste and Connect (it clipped to
+                                    // "Enter friend's cod"); the mode line
+                                    // below says private vs server-managed.
+                                    placeholder: "Friend code";
                                     text <=> root.code-input;
 
                                     accepted(code) => {
