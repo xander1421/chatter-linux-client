@@ -64,6 +64,32 @@ pub extern "system" fn Java_com_chatter_client_MainActivity_nativeAcceptIncoming
     });
 }
 
+/// JNI entry point: `MainActivity.onNewIntent` when the ringing notification's
+/// body (not Accept/Decline) is tapped: show the ring screen again if Back hid
+/// it. A call that is no longer ringing (or another call) changes nothing.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_com_chatter_client_MainActivity_nativeShowIncomingCall(
+    mut env: JNIEnv,
+    _class: JClass,
+    call_id: JString,
+) {
+    let call_id: String = match env.get_string(&call_id) {
+        Ok(s) => s.into(),
+        Err(e) => {
+            tracing::warn!(error = %e, "nativeShowIncomingCall: bad call_id");
+            return;
+        }
+    };
+    let Some(weak) = MAIN_WINDOW.get().cloned() else { return };
+    let _ = slint::invoke_from_event_loop(move || {
+        if let Some(w) = weak.upgrade() {
+            if w.get_incoming_call_visible() && w.get_incoming_call_data().call_id == call_id.as_str() {
+                w.set_incoming_call_minimized(false);
+            }
+        }
+    });
+}
+
 /// JNI entry point: `CallActionReceiver` calls this with the call_id and whether
 /// the user tapped Accept (`true`) or Decline (`false`).
 #[unsafe(no_mangle)]

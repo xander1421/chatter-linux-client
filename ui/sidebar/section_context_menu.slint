@@ -251,10 +251,6 @@ export component SectionContextMenu inherits Rectangle {
     in property <ConversationKind> conversation-type;
     in property <string> current-section-id: "";   // non-empty => already in a section
     in property <bool> is-pinned: false;
-    // Pinning reorders the list core builds. Private groups are built without
-    // a core ordering pass, so the entry is hidden there rather than shipping a
-    // control that toggles a flag nothing reads.
-    in property <bool> can-pin: true;
     // Channel rows: core's `can_leave_channel` (a member, not the owner).
     in property <bool> can-leave: false;
     // Channel rows: core's `is_former_channel` (we are no longer in it).
@@ -321,7 +317,7 @@ export component SectionContextMenu inherits Rectangle {
             spacing: 2px;
 
             // Pin / Unpin — local-only, never synced to the server.
-            if root.can-pin: MenuItem {
+            MenuItem {
                 icon: Icons.pin;
                 label: root.is-pinned ? "Unpin" : "Pin to top";
                 mobile-mode: root.mobile-mode;
@@ -331,7 +327,7 @@ export component SectionContextMenu inherits Rectangle {
                 }
             }
 
-            if root.can-pin: Rectangle {
+            Rectangle {
                 height: 1px;
                 background: Colors.text-muted.with-alpha(0.15);
             }

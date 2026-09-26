@@ -13,8 +13,7 @@ use slint::{Model, ModelRc, VecModel, Weak};
 
 use chatter_core::client::ChatterClient;
 use chatter_core::client::events::AnonDmRequestEvent;
-use crate::{DMListItemData, FriendRequestData, MainWindow};
-use crate::bin_ui::converters::get_initials;
+use crate::{FriendRequestData, MainWindow};
 use crate::bin_ui::features::auth::inbox::unified_actions::{self, EventSource};
 
 /// Spawn anonymous DM request handler to process incoming request events.
@@ -186,86 +185,9 @@ fn spawn_request_stream(
                         "Our anonymous DM request was accepted"
                     );
 
-                    // Get the full conversation to add to sidebar
-                    let dm = match ui_ctx.get_anon_dm_conversation(&conversation_id) {
-                        Some(dm) => dm,
-                        None => {
-                            tracing::warn!(
-                                conversation_id = %conversation_id,
-                                "Conversation not found after acceptance"
-                            );
-                            continue;
-                        }
-                    };
-
-                    let dm_id = dm.id;
-                    let weak = weak_window.clone();
-                    let peer_name_for_ui = peer_name.clone();
-
-                    // Decode avatar BEFORE invoke_from_event_loop to avoid blocking UI thread
-                    let avatar_bytes = peer_avatar.as_ref().or(dm.peer_avatar.as_ref());
-                    let avatar_pixels: Option<(Vec<u8>, u32, u32)> = avatar_bytes.and_then(|bytes| {
-                        image::load_from_memory(bytes).ok().map(|img| {
-                            let rgba = img.to_rgba8();
-                            let (w, h) = rgba.dimensions();
-                            (rgba.into_raw(), w, h)
-                        })
-                    });
-
-                    let _ = slint::invoke_from_event_loop(move || {
-                        if let Some(w) = weak.upgrade() {
-                            // Create Slint Image from pre-decoded pixels (fast)
-                            let (avatar_source, has_avatar) = match avatar_pixels {
-                                Some((pixels, width, height)) => {
-                                    let buffer = slint::SharedPixelBuffer::<slint::Rgba8Pixel>::clone_from_slice(
-                                        &pixels, width, height,
-                                    );
-                                    (slint::Image::from_rgba8(buffer), true)
-                                }
-                                None => (slint::Image::default(), false),
-                            };
-
-                            // Update existing pending DM or add new active DM
-                            let current_dms = w.get_dm_conversations();
-                            let mut dm_vec: Vec<DMListItemData> = Vec::new();
-                            let channel_id_str = dm_id.to_string();
-
-                            // Filter out old pending version and collect others
-                            for i in 0..current_dms.row_count() {
-                                if let Some(existing_dm) = current_dms.row_data(i) {
-                                    if existing_dm.channel_id.as_str() != channel_id_str {
-                                        dm_vec.push(existing_dm);
-                                    }
-                                }
-                            }
-
-                            // Add active conversation
-                            dm_vec.push(DMListItemData {
-                                channel_id: channel_id_str.into(),
-                                user_id: peer_id.to_string().into(),
-                                display_name: peer_name_for_ui.clone().into(),
-                                avatar_source,
-                                has_avatar,
-                                initials: get_initials(&peer_name_for_ui).into(),
-                                presence_status: "online".into(),
-                                last_message: "Conversation started".into(),
-                                timestamp: chrono::Local::now().format("%H:%M").to_string().into(),
-                                unread_count: 0,
-                                is_typing: false,
-                                is_anon: true,
-        is_pinned: false,
-                                is_selected: false,
-                            });
-
-                            w.set_dm_conversations(ModelRc::new(VecModel::from(dm_vec)));
-
-                            tracing::info!(
-                                conversation_id = %dm_id,
-                                peer_name = %peer_name_for_ui,
-                                "Updated sidebar with active anonymous DM"
-                            );
-                        }
-                    });
+                    // Core stored the acceptance (name, avatar) before it
+                    // emitted this; the row is core's like every row.
+                    crate::bin_ui::features::sidebar::rebuild_chat_list(&weak_window, &ui_ctx);
 
                     // Profile (avatar + display name) is sent back to the
                     // responder by core's inbox processor as soon as the

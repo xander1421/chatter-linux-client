@@ -4,12 +4,12 @@
 
 use std::sync::Arc;
 
-use slint::{ComponentHandle, Model, ModelRc, SharedString, VecModel};
+use slint::{ComponentHandle, ModelRc, SharedString, VecModel};
 
 use chatter_core::client::ChatterClient;
 
-use crate::bin_ui::converters::{get_initials, DMListItemExt, DMListItemSendData, FriendRequestExt, FriendRequestSendData};
-use crate::{DMListItemData, FriendRequestData, MainWindow};
+use crate::bin_ui::converters::{FriendRequestExt, FriendRequestSendData};
+use crate::{FriendRequestData, MainWindow};
 
 /// Wire callback to accept an anonymous DM request.
 ///
@@ -62,11 +62,9 @@ pub(crate) fn wire_accept_private_request(window: &MainWindow, ui_ctx: &Arc<Chat
                         dm_id
                     );
 
-                    // Refresh private requests and add to DM sidebar
+                    // Refresh private requests; the accepted DM's row is core's.
                     refresh_private_requests(weak.clone(), &ui_ctx).await;
-
-                    // Add to DM sidebar
-                    add_anon_dm_to_sidebar(weak.clone(), &dm, &peer_name);
+                    crate::bin_ui::features::sidebar::rebuild_chat_list(&weak, &ui_ctx);
 
                     let _ = slint::invoke_from_event_loop(move || {
                         if let Some(w) = weak.upgrade() {
@@ -128,11 +126,10 @@ pub(crate) fn wire_decline_private_request(window: &MainWindow, ui_ctx: &Arc<Cha
                     // Refresh private requests list
                     refresh_private_requests(weak.clone(), &ui_ctx).await;
 
-                    // Remove from DM sidebar (raw uuid — no "anon_dm:" prefix)
-                    let channel_id = conv_id_str.clone();
+                    // The request's row leaves the chat list with it.
+                    crate::bin_ui::features::sidebar::rebuild_chat_list(&weak, &ui_ctx);
                     let _ = slint::invoke_from_event_loop(move || {
                         if let Some(w) = weak.upgrade() {
-                            remove_dm_from_sidebar(&w, &channel_id);
                             w.set_friends_loading(false);
                         }
                     });
@@ -206,11 +203,10 @@ pub(crate) fn wire_block_private_request(window: &MainWindow, ui_ctx: &Arc<Chatt
                     refresh_private_requests(weak.clone(), &ui_ctx).await;
                     refresh_blocked_users(weak.clone(), &ui_ctx);
 
-                    // Remove from DM sidebar (raw uuid — no "anon_dm:" prefix)
-                    let channel_id = conv_id_str.clone();
+                    // The request's row leaves the chat list with it.
+                    crate::bin_ui::features::sidebar::rebuild_chat_list(&weak, &ui_ctx);
                     let _ = slint::invoke_from_event_loop(move || {
                         if let Some(w) = weak.upgrade() {
-                            remove_dm_from_sidebar(&w, &channel_id);
                             w.set_friends_loading(false);
                         }
                     });
@@ -266,81 +262,6 @@ async fn refresh_private_requests(
             w.set_pending_message_requests(request_count);
         }
     });
-}
-
-/// Add an accepted anonymous DM to the sidebar.
-fn add_anon_dm_to_sidebar(
-    weak_window: slint::Weak<MainWindow>,
-    dm: &chatter_core::domain::anon_dm::AnonDm,
-    peer_name: &str,
-) {
-    // Use Send-safe type to pass across thread boundary
-    let mut dm_send_data = DMListItemSendData {
-        channel_id: dm.id.to_string(),
-        user_id: dm.peer_id.to_string(),
-        display_name: peer_name.to_string(),
-        avatar_bytes: dm.peer_avatar.clone(),
-        avatar_decoded: None,
-        initials: get_initials(peer_name),
-        presence_status: "online".to_string(),
-        // Placeholder until the first message — matches the requester side
-        // (anon_dm_request.rs) so a freshly-accepted DM isn't blank.
-        last_message: "Conversation started".to_string(),
-        timestamp: dm.updated_at
-            .with_timezone(&chrono::Local)
-            .format("%H:%M")
-            .to_string(),
-        unread_count: 0,
-        is_typing: false,
-        is_anon: true,
-        is_pinned: false,
-    };
-
-    // Pre-decode avatar before entering UI thread to avoid blocking
-    dm_send_data.pre_decode_avatar();
-
-    let _ = slint::invoke_from_event_loop(move || {
-        if let Some(w) = weak_window.upgrade() {
-            // Convert Send-safe data to Slint type inside event loop
-            let dm_item = dm_send_data.to_slint();
-
-            // Get existing DM list and append new DM
-            let current_dms = w.get_dm_conversations();
-            let mut dm_vec: Vec<DMListItemData> = Vec::new();
-
-            // Copy existing DMs (excluding any duplicate)
-            let new_channel_id = dm_item.channel_id.as_str();
-            for i in 0..current_dms.row_count() {
-                if let Some(existing_dm) = current_dms.row_data(i) {
-                    if existing_dm.channel_id.as_str() != new_channel_id {
-                        dm_vec.push(existing_dm);
-                    }
-                }
-            }
-
-            // Add new DM
-            dm_vec.push(dm_item);
-
-            // Update UI
-            w.set_dm_conversations(ModelRc::new(VecModel::from(dm_vec)));
-        }
-    });
-}
-
-/// Remove a DM from the sidebar by channel_id.
-fn remove_dm_from_sidebar(window: &MainWindow, channel_id: &str) {
-    let current_dms = window.get_dm_conversations();
-    let mut dm_vec: Vec<DMListItemData> = Vec::new();
-
-    for i in 0..current_dms.row_count() {
-        if let Some(dm) = current_dms.row_data(i) {
-            if dm.channel_id.as_str() != channel_id {
-                dm_vec.push(dm);
-            }
-        }
-    }
-
-    window.set_dm_conversations(ModelRc::new(VecModel::from(dm_vec)));
 }
 
 /// Friends › Blocked rows, as core lists them (`blocked_users`).

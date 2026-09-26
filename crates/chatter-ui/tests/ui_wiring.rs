@@ -1925,6 +1925,76 @@ fn back_press_closes_the_unified_search_palette() {
     assert!(!w.get_unified_search_open(), "back did NOT close the palette");
 }
 
+/// Back while a call rang popped the chat UNDER the full-screen ring (FX3).
+/// The ring is drawn over everything, so Back is its: it hides the ring
+/// (Signal) and the call keeps ringing — `incoming-call-visible` is what the
+/// call code reads, so it must stay set — with nothing underneath popped.
+#[test]
+fn back_while_ringing_hides_the_ring_and_pops_nothing_under_it() {
+    use slint::ComponentHandle;
+    let w = boot();
+    chatter_ui::bin_ui::features::back::wire(&w);
+    w.set_is_mobile_platform(true);
+    w.window().set_size(slint::LogicalSize::new(400.0, 800.0));
+    assert!(w.get_compact_layout(), "precondition: a phone-width window");
+    w.set_mobile_show_chat(true);
+    w.set_incoming_call_visible(true);
+
+    assert!(chatter_ui::bin_ui::features::back::handle_back(&w), "Back while ringing must be consumed");
+    assert!(w.get_incoming_call_minimized(), "Back must hide the ring");
+    assert!(w.get_incoming_call_visible(), "the call must keep ringing");
+    assert!(w.get_mobile_show_chat(), "Back while ringing popped the chat underneath");
+
+    // With the ring hidden, the next Back is the chat's again.
+    assert!(chatter_ui::bin_ui::features::back::handle_back(&w));
+    assert!(!w.get_mobile_show_chat());
+}
+
+/// The palette's query field takes focus on open; picking a result closes the
+/// palette and destroys that field, leaving NOTHING focused — so the next Back
+/// key reached no FocusScope and did nothing (RC20: search → open chat → Back
+/// dead, 3/3). The real key event must still reach `back-pressed`.
+#[test]
+fn back_key_still_arrives_after_the_search_palette_closes() {
+    use slint::ComponentHandle;
+    let w = boot();
+    chatter_ui::bin_ui::features::back::wire(&w);
+    let scale = w.window().scale_factor();
+    w.window().dispatch_event(slint::platform::WindowEvent::Resized {
+        size: slint::LogicalSize::new(1000.0, 800.0).to_physical(scale).to_logical(scale),
+    });
+
+    w.set_unified_search_open(true);
+    // A redraw instantiates the palette, whose field focuses itself on init.
+    w.window().request_redraw();
+    w.window().dispatch_event(slint::platform::WindowEvent::Resized {
+        size: slint::LogicalSize::new(1000.0, 801.0).to_physical(scale).to_logical(scale),
+    });
+    slint::platform::update_timers_and_animations();
+    w.window().dispatch_event(slint::platform::WindowEvent::KeyPressed { text: "r".into() });
+    assert_eq!(
+        w.get_unified_search_query().as_str(),
+        "r",
+        "precondition: the palette's field must hold focus, or this test proves nothing"
+    );
+    // A result was picked: the palette closes itself (app.slint's
+    // `conversation-selected` handler).
+    w.set_unified_search_open(false);
+    slint::platform::update_timers_and_animations();
+
+    // Any Back-consuming layer will do as the witness; selection mode needs
+    // no core.
+    w.set_selection_mode(true);
+    w.window().dispatch_event(slint::platform::WindowEvent::KeyPressed {
+        text: slint::platform::Key::Back.into(),
+    });
+    assert!(
+        !w.get_selection_mode(),
+        "Back after closing the search palette never reached back-pressed — the \
+         palette's field took focus with it"
+    );
+}
+
 /// Back inside a thread returns to the conversation, not to the chat list.
 /// The thread panel covers the chat pane on a phone, so skipping this layer
 /// jumped two levels up (§112s).
@@ -2348,15 +2418,16 @@ fn pin_conversation_reaches_core_from_the_sidebar_menu() {
         "the entry must name the action it will actually perform"
     );
 
-    let channels = include_str!("../../../ui/sidebar/channel_list.slint");
-    let dms = include_str!("../../../ui/sidebar/dm_list.slint");
+    // Every chat-list row hands itself to the menu, pin state included.
+    let list = include_str!("../../../ui/sidebar/chat_list.slint");
     assert!(
-        channels.contains("root.channel-context-menu-requested(item.channel-id, item.is-pinned, "),
-        "the channel row must carry its pin state into the menu"
+        list.contains("root.row-context-menu-requested(row, x, y)"),
+        "the chat-list row must carry itself into the menu"
     );
+    let sidebar = include_str!("../../../ui/sidebar/sidebar.slint");
     assert!(
-        dms.contains("root.dm-context-menu-requested(item.channel-id, item.is-anon, item.is-pinned, x, y)"),
-        "the DM row must carry its pin state into the menu"
+        sidebar.contains("root.ctx-menu-is-pinned = row.is-pinned;"),
+        "the menu must read the row's pin state"
     );
 }
 
@@ -2580,7 +2651,7 @@ fn folder_badges_refresh_on_message_arrival_and_on_read() {
 fn folder_rows_are_pre_grouped_per_section() {
     let list = include_str!("../../../ui/sidebar/custom_section_list.slint");
     assert!(
-        list.contains("conversations: [SectionConversationData]"),
+        list.contains("conversations: [ChatRowData]"),
         "each section must own its rows"
     );
     assert!(
@@ -2615,8 +2686,10 @@ fn folder_ui_sizes_up_for_touch() {
     );
 
     let list = include_str!("../../../ui/sidebar/custom_section_list.slint");
+    // Folder rows are the chat list's own rows, sized by the same flag.
+    let rows = &list[list.find("for conv in section.conversations: ChatRow {").expect("folder rows are ChatRows")..];
     assert!(
-        list.contains("height: root.mobile-mode ? Spacing.touch-target-min : 36px"),
+        rows[..200].contains("mobile-mode: root.mobile-mode;"),
         "folder conversation rows must meet the touch minimum"
     );
     assert!(
@@ -2702,7 +2775,7 @@ fn a_foldered_dm_still_resolves_to_its_conversation() {
 
     // The loose DM list drops the row ...
     assert!(
-        client.list_dm_sidebar().iter().all(|d| d.channel_id.as_str() != peer),
+        client.sidebar_rows().iter().all(|d| d.id.as_str() != peer),
         "a foldered DM must not also render loose"
     );
     // ... and opening it must still work.
@@ -2720,7 +2793,7 @@ fn a_foldered_dm_still_resolves_to_its_conversation() {
         "DM selection must resolve the conversation through core"
     );
     assert!(
-        !src.contains("get_dm_conversations()"),
+        !src.contains("get_chat_rows()"),
         "DM selection must not scan the sidebar model — foldered rows are not in it"
     );
 }
@@ -2782,20 +2855,84 @@ fn foldered_private_groups_leave_the_loose_list() {
         "the loose private-group list must drop groups that live in a folder"
     );
 
-    let ui = include_str!("../src/bin_ui/features/sidebar/private_group.rs");
+    let rows = include_str!("../../chatter-core/src/client/messaging.rs");
+    let idx = rows.find("pub fn sidebar_rows").expect("sidebar_rows present");
     assert!(
-        ui.contains("sidebar_private_groups()"),
-        "the private-group row builder must use the folder-aware core list"
+        rows[idx..idx + 1500].contains("sidebar_private_groups()"),
+        "the chat list's group rows must come from the folder-aware core list"
     );
 
+    // Every folder mutation rebuilds the whole chat list, groups included.
     let sections = include_str!("../src/bin_ui/features/sidebar/sections.rs");
-    let refresh = sections
-        .find("fn refresh_conversation_lists")
-        .expect("refresh_conversation_lists present");
     assert!(
-        sections[refresh..].contains("set_private_groups"),
-        "filing a group into a folder must redraw the loose group list too"
+        sections.contains("super::rebuild_chat_list("),
+        "filing a group into a folder must redraw the chat list too"
     );
+}
+
+/// FX3 (owner 2026-09-26): the chat list is ONE list — DMs, channels and
+/// private groups interleaved by activity, pinned first (Signal/Telegram). It
+/// used to be a DM block above a channel block, so a channel with newer
+/// activity never rose above a DM. Core orders it; a live message moves its
+/// row to the top of the unpinned rows — never above a pin, which the old
+/// per-list `insert(0, ..)` did — and every other row keeps its badge.
+#[test]
+fn chat_list_is_one_list_by_activity_with_pins_first() {
+    use chatter_core::domain::message::ConversationType as CT;
+    use chatter_core::ui::sidebar_data::{order_chat_rows, ChatRowSendData};
+    use chatter_ui::bin_ui::converters::ChatRowExt;
+    use slint::Model;
+
+    const DM: &str = "11111111-1111-1111-1111-111111111111";
+    const PINNED: &str = "22222222-2222-2222-2222-222222222222";
+    const CHANNEL: &str = "33333333-3333-3333-3333-333333333333";
+    const OLD: &str = "44444444-4444-4444-4444-444444444444";
+    let row = |id: &str, kind: CT, at: i64, pinned: bool, unread: u32| {
+        let mut r = ChatRowSendData::new(kind, id, id);
+        r.last_activity = chrono::DateTime::from_timestamp(at, 0);
+        r.is_pinned = pinned;
+        r.unread_count = unread;
+        r
+    };
+    let mut rows = vec![
+        row(DM, CT::ServerDm, 20, false, 2),
+        row(OLD, CT::AnonGroup, 5, false, 0),
+        row(PINNED, CT::ServerDm, 1, true, 0),
+        row(CHANNEL, CT::Channel, 30, false, 0),
+    ];
+    order_chat_rows(&mut rows);
+    let ids: Vec<_> = rows.iter().map(|r| r.id.clone()).collect();
+    assert_eq!(ids, [PINNED, CHANNEL, DM, OLD], "pinned first, then a newer channel above an older DM");
+
+    no_keyring();
+    let rt = tokio::runtime::Runtime::new().unwrap();
+    let _guard = rt.enter();
+    let tmp = tempfile::tempdir().unwrap();
+    let client = std::sync::Arc::new(
+        chatter_core::client::ChatterClient::builder()
+            .data_dir(tmp.path().to_string_lossy().to_string())
+            .build()
+            .expect("offline ChatterClient::build"),
+    );
+    let w = boot();
+    let slint_rows: Vec<_> = rows.into_iter().map(|r| r.to_slint()).collect();
+    w.set_chat_rows(slint::ModelRc::new(slint::VecModel::from(slint_rows)));
+
+    // A message lands in the oldest conversation, a private group.
+    chatter_ui::bin_ui::features::sidebar::apply_received_to_sidebar(
+        &w,
+        &client,
+        chatter_core::state::ActiveConversation::AnonGroup(OLD.parse().unwrap()),
+        "hello",
+        "12:00",
+        chatter_core::client::UnreadBadges { row: 1, total: 2 },
+    );
+    let model = w.get_chat_rows();
+    let ids: Vec<String> = model.iter().map(|r| r.conversation_id.to_string()).collect();
+    assert_eq!(ids, [PINNED, OLD, CHANNEL, DM], "the row moves to the top of the unpinned rows, not above the pin");
+    let moved = model.row_data(1).unwrap();
+    assert_eq!((moved.last_message.as_str(), moved.unread_count), ("hello", 1));
+    assert_eq!(model.row_data(3).unwrap().unread_count, 2, "other rows keep their unread counts");
 }
 
 /// A channel row in the sidebar showed the channel name and nothing else, while
@@ -2806,40 +2943,28 @@ fn foldered_private_groups_leave_the_loose_list() {
 /// row had the last of those three (`timestamp` in, never rendered).
 #[test]
 fn channel_and_group_rows_show_their_latest_activity() {
-    // 1. Population — core composes it, the converter no longer blanks it.
-    let conv = include_str!("../src/bin_ui/converters/channel.rs");
-    let idx = conv.find("pub fn channel_to_slint").expect("channel_to_slint present");
-    let body = &conv[idx..];
-    assert!(
-        body.contains("channel_sidebar_activity(channel)"),
-        "a channel row's preview and stamp must come from core, not be hardcoded empty"
-    );
-    assert!(
-        !body.contains("last_message: SharedString::default()"),
-        "the hardcoded-empty preview must not come back"
-    );
-    // The converter must NOT name a conversation type. A channel's messages
-    // live under `Channel::conversation_type()` — `AnonGroup` for an encrypted
-    // channel, which is the default — so hardcoding `ConversationType::Channel`
-    // here queries an empty bucket and the row renders as a bare name. Core
-    // derives it from the channel; see `channel_sidebar_activity`, and
+    // 1. Population — core composes it, for every row kind, so they cannot
+    // drift. A channel's messages live under `Channel::conversation_type()` —
+    // `AnonGroup` for an encrypted channel, which is the default — so the
+    // bucket is derived from the channel, never hardcoded `Channel` (an empty
+    // bucket renders the row as a bare name). See
     // `integration_message_storage.rs` for the storage-level proof.
+    let core = include_str!("../../chatter-core/src/client/messaging.rs");
+    let idx = core.find("fn channel_row(").expect("channel_row present");
     assert!(
-        !body.contains("ConversationType::"),
-        "the converter must not pick the storage bucket — core derives it from the channel"
+        core[idx..idx + 900].contains("&channel.conversation_type()"),
+        "a channel row's preview must come from the channel's own bucket"
+    );
+    let idx = core.find("fn private_group_row(").expect("private_group_row present");
+    assert!(
+        core[idx..idx + 700].contains("sidebar_activity("),
+        "private-group rows must take core's preview wording"
     );
 
-    // Preview wording is core's for every row kind, so the three cannot drift.
-    let group = include_str!("../src/bin_ui/features/sidebar/private_group.rs");
-    assert!(
-        group.contains("sidebar_activity(") && !group.contains("truncate_preview_text"),
-        "private-group rows must take core's preview, not re-derive it in the UI crate"
-    );
-
-    // 2. Forwarding — the list must hand the row what it was given.
-    let list = include_str!("../../../ui/sidebar/channel_list.slint");
-    for prop in ["last-message: item.last-message", "timestamp: item.timestamp", "is-typing: item.is-typing"] {
-        assert!(list.contains(prop), "ChannelList must forward `{prop}`");
+    // 2. Forwarding — the row must hand each visual what it was given.
+    let list = include_str!("../../../ui/sidebar/chat_list.slint");
+    for prop in ["last-message: root.data.last-message", "timestamp: root.data.timestamp", "is-typing: root.data.is-typing"] {
+        assert_eq!(list.matches(prop).count(), 3, "ChatRow must forward `{prop}` to all three row visuals");
     }
 
     // 3. Markup — the second line and the right-hand column exist on both rows.
@@ -2858,12 +2983,13 @@ fn channel_and_group_rows_show_their_latest_activity() {
         "the private-group row declared `timestamp` but never rendered it"
     );
 
-    // 4. Typing reaches all three lists, not just DMs.
+    // 4. Typing reaches every row kind, not just DMs: one model, matched on
+    // the conversation id or (DMs) the peer.
     let typing = include_str!("../src/bin_ui/features/auth/initial_data.rs");
     let t_idx = typing.find("pub fn update_sidebar_typing").expect("update_sidebar_typing present");
-    let t_body = &typing[t_idx..t_idx + 900];
+    let t_body = &typing[t_idx..t_idx + 700];
     assert!(
-        t_body.contains("get_channels()") && t_body.contains("get_private_groups()"),
+        t_body.contains("row.conversation_id.as_str() == id"),
         "a typing event must animate a channel or group row too, not only a DM row"
     );
 }
@@ -3451,43 +3577,43 @@ fn shared_content_pill_tabs_clear_the_touch_floor() {
 /// FEAT-8: the empty-state "Browse channels" CTA — the first control a
 /// brand-new account ever sees — was dead.
 ///
-/// `ChannelList` emits `join-channel-clicked` from its empty-state CTA
-/// (`ui/sidebar/channel_list.slint`), and the empty state renders exactly when
+/// `ChannelList` (now `ChatList`, `ui/sidebar/chat_list.slint`) emitted
+/// `join-channel-clicked` from its empty-state CTA, and the empty state rendered exactly when
 /// `channels.length == 0`. Its ONLY instantiation, in
 /// `ui/sidebar/sidebar.slint`, bound `channel-selected` and
 /// `channel-context-menu-requested` and not this one, and no Rust `on_*`
 /// existed either — so the button did nothing at all.
 ///
-/// This pins the whole chain: emitter -> ChannelList instantiation -> sidebar
+/// This pins the whole chain: emitter -> ChatList instantiation -> sidebar
 /// root callback -> app.slint, which opens the join tab of CreateChannelModal.
 #[test]
 fn sidebar_empty_state_join_cta_is_wired_end_to_end() {
-    let list_src = include_str!("../../../ui/sidebar/channel_list.slint");
+    let list_src = include_str!("../../../ui/sidebar/chat_list.slint");
     let sidebar_src = include_str!("../../../ui/sidebar/sidebar.slint");
     let app_src = include_str!("../../../ui/app.slint");
 
-    // The emitter still exists and the empty-state CTA still fires it.
+    // The emitter exists and the empty state's "Browse channels" fires it.
     assert!(
         list_src.contains("callback join-channel-clicked();"),
-        "ChannelList must still declare join-channel-clicked"
+        "ChatList must declare join-channel-clicked"
     );
     let cta = list_src
-        .find("cta-clicked =>")
-        .expect("the empty state must still have a CTA");
+        .find("text: \"Browse channels\";")
+        .expect("the empty state must still offer Browse channels");
     assert!(
-        list_src[cta..cta + 120].contains("root.join-channel-clicked()"),
-        "the empty-state CTA must emit join-channel-clicked"
+        list_src[cta..cta + 400].contains("root.join-channel-clicked()"),
+        "the empty state's Browse channels must emit join-channel-clicked"
     );
 
     // The instantiation binds it. This is the assertion that was missing.
     let inst = sidebar_src
-        .find(": ChannelList {")
-        .expect("sidebar must instantiate ChannelList");
+        .find("ChatList {")
+        .expect("sidebar must instantiate ChatList");
     let block = &sidebar_src[inst..];
-    let block_end = block.find("\n                }").unwrap_or(block.len());
+    let block_end = block.find("\n                }\n").unwrap_or(block.len());
     assert!(
         block[..block_end].contains("join-channel-clicked() => { root.join-channel-clicked(); }"),
-        "the ChannelList instantiation in sidebar.slint must bind \
+        "the ChatList instantiation in sidebar.slint must bind \
          join-channel-clicked — without it the empty-state CTA a brand-new \
          account sees first is dead (FEAT-8)"
     );
@@ -3552,35 +3678,33 @@ fn tor_status_dot_does_not_report_off_as_connecting() {
     }
 }
 
-/// STUB-1b: Anon Mode must not be offered by a build that has no Tor in it.
+/// Shield is offered in every build; only the Tor promise is gated.
 ///
-/// The default build does NOT include the `onion` feature
-/// (`crates/chatter-ui/Cargo.toml`, `default = ["desktop", "jarvis"]`), and no
-/// anon surface was gated on it — unlike `jarvis` and `mesh`, which mirror
-/// their Cargo feature into a Slint global and render nothing when off. The
-/// user passed a PIN gate, the shield glowed, and traffic went direct.
-///
-/// The dynamic half is the point: with the default features this test builds
-/// under, `AnonMode.onion-built` must be false at runtime.
+/// STUB-1b once hid every Shield control in a build without the `onion`
+/// feature, so the Android build (no onion) had no Shield entry point at all
+/// (RC20). Shield is the anonymous-mailbox mode and works without Tor: core
+/// sets TorStatus Unavailable and ShieldNetworkBanner says the network
+/// location is not hidden. What must stay gated is the Tor status dot, which
+/// without Tor would be a permanent red.
 #[test]
-fn anon_mode_shield_is_gated_on_the_onion_feature() {
+fn shield_toggle_is_offered_without_tor_but_the_tor_dot_is_not() {
     let global_src = include_str!("../../../ui/anon_mode/anon_mode_global.slint");
     assert!(
         global_src.contains("in-out property <bool> onion-built"),
         "AnonMode must carry the mirrored `onion` Cargo feature flag"
     );
 
-    // Every shield entry point is behind the gate.
     let sidebar_src = include_str!("../../../ui/sidebar/sidebar.slint");
-    let shields = sidebar_src.matches("root.anon-mode-clicked()").count();
-    let gates = sidebar_src.matches("if AnonMode.onion-built:").count();
-    assert_eq!(
-        gates, shields,
-        "every anon-mode entry point ({shields}) must sit behind \
-         `if AnonMode.onion-built:` ({gates} gates found) — a build that cannot \
-         put traffic on the onion must not offer a control that says it will \
-         (STUB-1)"
+    let settings_src = include_str!("../../../ui/settings/settings_screen.slint");
+    assert!(
+        !sidebar_src.contains("if AnonMode.onion-built:")
+            && !settings_src.contains("if AnonMode.onion-built:"),
+        "a Shield entry point is gated on the `onion` feature again — the \
+         Android build has no onion, so it would have no Shield toggle"
     );
+    let shields = sidebar_src.matches("root.anon-mode-clicked()").count();
+    let dots = sidebar_src.matches("visible: AnonMode.enabled && AnonMode.onion-built;").count();
+    assert_eq!(dots, shields, "every shield's Tor dot must be gated on onion-built");
 
     // Rust mirrors the Cargo feature, exactly as it does for jarvis.
     let lib_src = include_str!("../src/lib.rs");

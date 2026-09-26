@@ -66,12 +66,6 @@ impl ConversationType {
         matches!(self, Self::Mesh | Self::MeshDm)
     }
 
-    /// Whether an inbound message in this conversation should create a DM
-    /// sidebar entry for a new peer. Only the friend DM does.
-    pub fn creates_dm_sidebar_entry(&self) -> bool {
-        matches!(self, Self::ServerDm)
-    }
-
     /// Anonymous conversations (NDSS'21 style, client-managed). Replies here
     /// carry a self-contained quote snapshot and reference their parent via a
     /// synthetic timestamp-derived `MessageId` that never matches the parent's

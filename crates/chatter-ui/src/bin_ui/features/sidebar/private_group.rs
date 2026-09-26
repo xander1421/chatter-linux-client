@@ -2,12 +2,12 @@
 
 use std::sync::Arc;
 
-use slint::{ComponentHandle, Model, ModelRc, SharedString, VecModel};
+use slint::{ComponentHandle, ModelRc, SharedString, VecModel};
 
 use chatter_core::client::ChatterClient;
 use chatter_core::domain::anon_group::AnonGroupId;
 
-use crate::{MainWindow, PrivateGroupListItemData, run_ui};
+use crate::{MainWindow, run_ui};
 
 use super::stop_audio_playback;
 use std::str::FromStr;
@@ -278,63 +278,5 @@ async fn load_private_group_messages_internal(
         w.set_loading_messages(false);
         
         crate::bin_ui::gif_state::auto_register_gifs_from_messages(w.as_weak(), ui_ctx_gifs);
-    });
-}
-
-/// Build the loose private-group sidebar rows.
-///
-/// The one builder for every path that writes `private_groups` — initial load,
-/// the anon-group refresh, and folder mutations — so the folder exclusion
-/// (`sidebar_private_groups`) and the row shape cannot drift between them.
-/// The rows carry only `SharedString`s, so they cross a thread boundary fine.
-pub fn private_group_rows(ui_ctx: &Arc<ChatterClient>) -> Vec<PrivateGroupListItemData> {
-    ui_ctx
-        .sidebar_private_groups()
-        .into_iter()
-        .map(|group| {
-            // Preview wording is core's — this used to hand-roll the text-only
-            // case here, so a group whose last post was a file rendered blank.
-            let (last_message, timestamp) =
-                ui_ctx.sidebar_activity(ui_ctx.get_latest_anon_group_message(&group.id).as_ref());
-            PrivateGroupListItemData {
-                group_id: group.id.to_string().into(),
-                name: group.name.into(),
-                member_count: ui_ctx.get_anon_group_members(&group.id).len() as i32,
-                unread_count: ui_ctx.anon_group_unread_count(&group.id) as i32,
-                last_message: last_message.into(),
-                timestamp: timestamp.into(),
-                is_typing: false,
-                is_selected: false,
-            }
-        })
-        .collect()
-}
-
-pub fn add_private_group_to_sidebar(window: &MainWindow, group_id: &str, name: &str, member_count: i32) {
-    let group_id = group_id.to_string();
-    let name = name.to_string();
-
-    run_ui!(window.as_weak(), |w| {
-        let existing = w.get_private_groups();
-        let mut groups: Vec<PrivateGroupListItemData> = (0..existing.row_count())
-            .filter_map(|i| existing.row_data(i))
-            .collect();
-
-        if groups.iter().any(|g| g.group_id.as_str() == group_id) {
-            return;
-        }
-
-        groups.insert(0, PrivateGroupListItemData {
-            group_id: group_id.into(),
-            name: name.into(),
-            member_count,
-            unread_count: 0,
-            last_message: SharedString::default(),
-            timestamp: SharedString::default(),
-            is_typing: false,
-            is_selected: false,
-        });
-
-        w.set_private_groups(ModelRc::new(VecModel::from(groups)));
     });
 }

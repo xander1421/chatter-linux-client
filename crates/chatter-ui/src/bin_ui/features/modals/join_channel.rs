@@ -5,16 +5,16 @@
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
-use slint::{ComponentHandle, Model, ModelRc, SharedString, VecModel};
+use slint::{ComponentHandle, ModelRc, SharedString, VecModel};
 use tokio::time::{sleep, Duration};
 
 use chatter_core::client::ChatterClient;
 use chatter_core::domain::channel::ChannelType;
 use chatter_core::domain::ids::ChannelId;
 
-use crate::bin_ui::converters::{avatar_bytes_to_image, channel_to_slint};
+use crate::bin_ui::converters::avatar_bytes_to_image;
 use crate::bin_ui::features::sidebar::load_channel_into_ui;
-use crate::{ChannelListItemData, MainWindow, SearchResultChannel};
+use crate::{MainWindow, SearchResultChannel};
 
 pub fn wire_join_channel(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     let search_counter = Arc::new(AtomicU64::new(0));
@@ -186,14 +186,12 @@ pub fn wire_join_channel(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                     // Set the joined channel as active
                     chat_state.set_active_channel(channel_id);
 
-                    // Move domain Channel to UI thread; convert there (slint::Image is !Send).
-                    let channel_for_ui = channel.clone();
-                    let ui_ctx_convert = ui_ctx.clone();
+                    // The joined channel's row comes from core, like every row.
+                    crate::bin_ui::features::sidebar::rebuild_chat_list(&weak, &ui_ctx);
                     let weak_modal = weak.clone();
                     let channel_id_for_ui = channel_id_str.clone();
                     let _ = slint::invoke_from_event_loop(move || {
                         if let Some(w) = weak_modal.upgrade() {
-                            let slint_channel = channel_to_slint(&channel_for_ui, &ui_ctx_convert);
                             // Close modal and clear form
                             w.set_join_channel_joining(false);
                             w.set_join_channel_search_query("".into());
@@ -202,14 +200,6 @@ pub fn wire_join_channel(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                                 Vec::<SearchResultChannel>::new(),
                             )));
                             crate::bin_ui::features::back::close(&w, "create-channel");
-
-                            // Add joined channel to sidebar list
-                            let current_channels = w.get_channels();
-                            let mut channels: Vec<ChannelListItemData> = (0..current_channels.row_count())
-                                .filter_map(|i| current_channels.row_data(i))
-                                .collect();
-                            channels.push(slint_channel);
-                            w.set_channels(ModelRc::new(VecModel::from(channels)));
 
                             // Set loading state for channel switch
                             w.set_loading_messages(true);

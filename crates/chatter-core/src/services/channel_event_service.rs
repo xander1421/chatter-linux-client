@@ -1241,6 +1241,43 @@ mod tests {
         assert_eq!(count(), 3, "join + second leave, the RPC-first order deduped");
     }
 
+    /// F80: our own Leave (the RPC path: `leave_channel` deletes our
+    /// membership, then `record_own_leave`) keeps the channel listed
+    /// read-only — former, not deleted — with our "left the channel" notice.
+    /// RC20 saw a left channel vanish, but that channel was left before F80.
+    #[tokio::test]
+    async fn own_leave_keeps_the_channel_listed_read_only() {
+        let (service, _bus, channel_repo) = setup();
+        let me = as_me(&service);
+        let channel_id = private_channel(&channel_repo);
+        let own = Membership {
+            channel_id,
+            user_id: me,
+            role: crate::domain::channel::MemberRole::Member,
+            notification_preference: crate::domain::channel::NotificationPreference::All,
+            joined_at: Utc::now(),
+            last_read_message_id: None,
+            is_muted: false,
+            muted_until: None,
+        };
+        channel_repo.insert_or_ignore_membership(&own).unwrap();
+
+        channel_repo.delete_membership(&channel_id, &me).unwrap();
+        service.record_own_leave(&channel_id);
+
+        assert_eq!(channel_repo.former_state(&channel_id).unwrap(), Some(false));
+        let listed = channel_repo.list_former_for_user(&me).unwrap();
+        assert_eq!(listed.iter().map(|c| c.id).collect::<Vec<_>>(), [channel_id], "the left channel vanished");
+        let notices = service.message_repo.list(&channel_id, &ConversationType::Channel, None, 10).unwrap();
+        assert_eq!(notices.len(), 1);
+        assert_eq!(notices[0].content, MessageContent::System(SystemMessage::UserLeft(me)));
+        assert_eq!(
+            crate::domain::channel::SendBlock::for_viewer(None, false, Some(false)),
+            Some(crate::domain::channel::SendBlock::Removed),
+            "a left channel must replace the composer, not accept sends"
+        );
+    }
+
     /// F79: a roster sync that finds a member gone (or new) files the notice
     /// the missed live event would have, once however many syncs see it.
     #[tokio::test]

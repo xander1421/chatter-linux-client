@@ -14,10 +14,10 @@ use chatter_core::domain::section::SectionSortMode;
 
 use chatter_core::services::attachment::DecodedImagePixels;
 
-use crate::bin_ui::converters::{DMListItemExt, channel_to_slint, get_initials};
-use crate::{CustomSectionData, MainWindow, SectionConversationData, run_ui};
+use crate::bin_ui::converters::get_initials;
+use crate::{ChatRowData, CustomSectionData, MainWindow, run_ui};
 
-/// Send-safe intermediate for `SectionConversationData`.
+/// Send-safe intermediate for a folder's `ChatRowData`.
 struct SectionConvSendData {
     conversation_id: String,
     conversation_type: ConversationType,
@@ -32,7 +32,7 @@ struct SectionConvSendData {
 }
 
 impl SectionConvSendData {
-    fn to_slint(self) -> SectionConversationData {
+    fn to_slint(self) -> ChatRowData {
         let (avatar_source, has_avatar) = match self.avatar_decoded {
             Some(pixels) => {
                 let buffer = slint::SharedPixelBuffer::<slint::Rgba8Pixel>::clone_from_slice(
@@ -43,9 +43,10 @@ impl SectionConvSendData {
             None => (slint::Image::default(), false),
         };
 
-        SectionConversationData {
+        ChatRowData {
             conversation_id: self.conversation_id.into(),
             conversation_type: crate::bin_ui::converters::conversation_kind(&self.conversation_type),
+            user_id: SharedString::default(),
             display_name: self.display_name.into(),
             avatar_source,
             has_avatar,
@@ -54,7 +55,9 @@ impl SectionConvSendData {
             timestamp: self.extras.timestamp.into(),
             presence_status: self.extras.presence_status.into(),
             private_channel: self.extras.private_channel,
+            member_count: 0,
             unread_count: self.unread_count,
+            is_typing: false,
             is_pinned: self.is_pinned,
             can_leave: self.can_leave,
             can_delete: self.can_delete,
@@ -76,7 +79,7 @@ struct SectionSendData {
 
 impl SectionSendData {
     fn to_slint(self) -> CustomSectionData {
-        let rows: Vec<SectionConversationData> =
+        let rows: Vec<ChatRowData> =
             self.conversations.into_iter().map(|c| c.to_slint()).collect();
         CustomSectionData {
             section_id: self.section_id.into(),
@@ -170,7 +173,7 @@ fn wire_delete_section(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                     tracing::info!(section_id = %section_id_str, "Deleted custom section");
                     refresh_sections_ui(&weak_clone, &ui_ctx);
                     // The folder's conversations become loose again.
-                    refresh_conversation_lists(&weak_clone, &ui_ctx);
+                    super::rebuild_chat_list(&weak_clone, &ui_ctx);
                 }
                 Err(e) => {
                     tracing::error!(error = %e, section_id = %section_id_str, "Failed to delete section");
@@ -318,7 +321,7 @@ fn wire_set_conversation_pinned(window: &MainWindow, ui_ctx: &Arc<ChatterClient>
             tracing::info!(conversation_id = %conv_id_str, pinned, "conversation pin toggled (local only)");
             // Pin order is core's; every list that renders it has to be rebuilt.
             refresh_sections_ui(&weak_clone, &ui_ctx);
-            refresh_conversation_lists(&weak_clone, &ui_ctx);
+            super::rebuild_chat_list(&weak_clone, &ui_ctx);
         });
     });
 }
@@ -342,7 +345,7 @@ fn wire_move_to_section(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             match ui_ctx.move_conversation_to_section(&conv_id_str, conv_type, &sid) {
                 Ok(()) => {
                     refresh_sections_ui(&weak_clone, &ui_ctx);
-                    refresh_conversation_lists(&weak_clone, &ui_ctx);
+                    super::rebuild_chat_list(&weak_clone, &ui_ctx);
                 }
                 Err(e) => tracing::error!(
                     error = %e, conversation_id = %conv_id_str, section_id = %section_id_str,
@@ -366,7 +369,7 @@ fn wire_remove_from_section(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             match ui_ctx.remove_conversation_from_section(&conv_id_str) {
                 Ok(()) => {
                     refresh_sections_ui(&weak_clone, &ui_ctx);
-                    refresh_conversation_lists(&weak_clone, &ui_ctx);
+                    super::rebuild_chat_list(&weak_clone, &ui_ctx);
                 }
                 Err(e) => tracing::error!(
                     error = %e, conversation_id = %conv_id_str,
@@ -411,39 +414,6 @@ pub(crate) fn refresh_sections_ui(
             super::refresh_section_selection(&w, &ui_ctx);
         });
     }
-}
-
-/// Rebuild the loose Channels, Messages and Private-group lists.
-///
-/// All three exclude anything that lives in a folder and the first two put
-/// pinned rows first, so any change to folder membership or to a pin has to
-/// redraw them. Private groups were left out of this rebuild, so filing one
-/// into a folder left the loose row on screen next to its copy in the folder.
-pub(crate) fn refresh_conversation_lists(
-    weak: &slint::Weak<MainWindow>,
-    ui_ctx: &Arc<ChatterClient>,
-) {
-    // Sidebar-inclusion rules (Public/Private, anon-mode aware, folder-aware,
-    // pinned-first) live in core.
-    let filtered = ui_ctx.sidebar_channels();
-    let mut dms = ui_ctx.list_dm_sidebar();
-    for dm in dms.iter_mut() {
-        dm.pre_decode_avatar();
-    }
-    let groups = super::private_group::private_group_rows(ui_ctx);
-    let ui_ctx_convert = ui_ctx.clone();
-    run_ui!(weak, |w| {
-        let channel_list: Vec<_> = filtered.iter().map(|c| channel_to_slint(c, &ui_ctx_convert)).collect();
-        w.set_channels(ModelRc::new(VecModel::from(channel_list)));
-        let dm_list: Vec<_> = dms.into_iter().map(|d| d.to_slint()).collect();
-        w.set_dm_conversations(ModelRc::new(VecModel::from(dm_list)));
-        w.set_private_groups(ModelRc::new(VecModel::from(groups)));
-        crate::bin_ui::features::sidebar::refresh_selection(&w, &ui_ctx_convert);
-        // The rows just took fresh counts; the Chats tab badge counts the
-        // same rows, so it is recomputed with them or it goes stale (a
-        // badge of 1 over two unread rows).
-        crate::bin_ui::features::auth::inbox::domain_handler::recompute_total_unread(&w, &ui_ctx_convert);
-    });
 }
 
 fn build_section_data(

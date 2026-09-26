@@ -18,7 +18,6 @@ use crate::{MainWindow, run_ui};
 
 // Re-export public functions
 pub use channel::load_channel_into_ui;
-pub use private_group::add_private_group_to_sidebar;
 
 /// Wire sidebar callbacks (channel/DM selection, settings, profile).
 pub fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
@@ -95,61 +94,19 @@ pub(crate) fn refresh_selection(window: &MainWindow, ui_ctx: &Arc<ChatterClient>
         crate::bin_ui::features::mesh::clear_active(window);
     }
 
-    // Channels (regular server channels only — DMs live in a separate model).
+    // The chat list: one model, every kind. Rows are edited in place, so no
+    // model swap and no scroll reset.
     {
-        let model = window.get_channels();
-        let rows: Vec<_> = (0..model.row_count())
-            .filter_map(|i| model.row_data(i))
-            .map(|mut item| {
-                item.is_selected = item
-                    .channel_id
-                    .parse()
-                    .map(|id| active.matches_channel(&id))
-                    .unwrap_or(false);
-                item
-            })
-            .collect();
-        window.set_channels(slint::ModelRc::new(slint::VecModel::from(rows)));
-    }
-
-    // DM conversations (regular + anon, disambiguated via is_anon).
-    {
-        let model = window.get_dm_conversations();
-        let rows: Vec<_> = (0..model.row_count())
-            .filter_map(|i| model.row_data(i))
-            .map(|mut item| {
-                item.is_selected = if item.is_anon {
-                    item.channel_id
-                        .parse()
-                        .map(|id| active.matches_anon_dm(&id))
-                        .unwrap_or(false)
-                } else {
-                    match (item.channel_id.parse(), item.user_id.parse()) {
-                        (Ok(cid), Ok(pid)) => active.matches_dm(&cid, &pid),
-                        _ => false,
-                    }
-                };
-                item
-            })
-            .collect();
-        window.set_dm_conversations(slint::ModelRc::new(slint::VecModel::from(rows)));
-    }
-
-    // Private (anonymous) groups.
-    {
-        let model = window.get_private_groups();
-        let rows: Vec<_> = (0..model.row_count())
-            .filter_map(|i| model.row_data(i))
-            .map(|mut item| {
-                item.is_selected = item
-                    .group_id
-                    .parse()
-                    .map(|id| active.matches_anon_group(&id))
-                    .unwrap_or(false);
-                item
-            })
-            .collect();
-        window.set_private_groups(slint::ModelRc::new(slint::VecModel::from(rows)));
+        let model = window.get_chat_rows();
+        for i in 0..model.row_count() {
+            if let Some(mut item) = model.row_data(i) {
+                let selected = row_is_active(&active, item.conversation_type, item.conversation_id.as_str());
+                if item.is_selected != selected {
+                    item.is_selected = selected;
+                    model.set_row_data(i, item);
+                }
+            }
+        }
     }
 
     // Custom-section conversations mirror the above across all kinds.
@@ -174,7 +131,7 @@ pub(crate) fn refresh_section_selection(window: &MainWindow, ui_ctx: &Arc<Chatte
             let marked: Vec<_> = (0..rows.row_count())
                 .filter_map(|j| rows.row_data(j))
                 .map(|mut item| {
-                    item.is_selected = section_row_is_active(
+                    item.is_selected = row_is_active(
                         &active,
                         item.conversation_type,
                         item.conversation_id.as_str(),
@@ -189,10 +146,10 @@ pub(crate) fn refresh_section_selection(window: &MainWindow, ui_ctx: &Arc<Chatte
     window.set_custom_sections(slint::ModelRc::new(slint::VecModel::from(updated)));
 }
 
-/// Does this folder row point at the currently open conversation?
+/// Does this chat-list or folder row point at the currently open conversation?
 ///
 /// `kind` is core's `ConversationType`, typed (`converters::conversation_kind`).
-fn section_row_is_active(
+fn row_is_active(
     active: &chatter_core::state::ActiveConversation,
     kind: crate::ConversationKind,
     conv_id: &str,
@@ -204,8 +161,8 @@ fn section_row_is_active(
             .map(|id| active.matches_channel(&id))
             .unwrap_or(false),
         K::ServerDm | K::AnonDm => {
-            // Folder rows may carry an anon_dm_id, a channel_id, or a peer_id
-            // in `conversation_id`. Match against all shapes.
+            // Rows may carry an anon_dm_id, a channel_id, or a peer_id in
+            // `conversation_id`. Match against all shapes.
             let anon = conv_id.parse().map(|id| active.matches_anon_dm(&id)).unwrap_or(false);
             let peer = conv_id.parse().map(|p| active.matches_dm_peer(&p)).unwrap_or(false);
             let chan = match (conv_id.parse(), conv_id.parse()) {
@@ -293,7 +250,11 @@ pub(crate) fn update_sidebar_preview(
 /// unread badge and the total to the absolute values core computed
 /// (`ChatterClient::unread_badges`, read off the UI thread). The UI never
 /// counts: its old `+1` disagreed with every rebuild.
-pub(crate) fn apply_received_to_sidebar(
+///
+/// A conversation with no row yet (a first message from a new peer) is not
+/// hand-built here: core decides whether it gets one — a DM filed into a
+/// folder does not — so the list is rebuilt from core instead.
+pub fn apply_received_to_sidebar(
     window: &MainWindow,
     ui_ctx: &Arc<ChatterClient>,
     conversation: chatter_core::state::ActiveConversation,
@@ -301,12 +262,17 @@ pub(crate) fn apply_received_to_sidebar(
     timestamp: &str,
     badges: chatter_core::client::UnreadBadges,
 ) {
-    update_sidebar_row(window, ui_ctx, conversation, preview, timestamp, Some(badges.row as i32));
+    if !update_sidebar_row(window, ui_ctx, conversation, preview, timestamp, Some(badges.row as i32)) {
+        let (weak, ui_ctx) = (slint::ComponentHandle::as_weak(window), ui_ctx.clone());
+        tokio::spawn(async move { rebuild_chat_list(&weak, &ui_ctx) });
+    }
     window.set_total_unread_count(badges.total as i32);
 }
 
 /// Move the row for `conversation` to the top with a new preview line, and
-/// set its unread badge when `unread` is given.
+/// set its unread badge when `unread` is given. "The top" is core's rule
+/// (`chat_row_top_slot`): pinned rows stay first, so an unpinned row lands
+/// just below them. False when the list has no row for it.
 fn update_sidebar_row(
     window: &MainWindow,
     ui_ctx: &Arc<ChatterClient>,
@@ -314,7 +280,7 @@ fn update_sidebar_row(
     preview: &str,
     timestamp: &str,
     unread: Option<i32>,
-) {
+) -> bool {
     use chatter_core::state::ActiveConversation;
     use slint::Model;
 
@@ -322,179 +288,66 @@ fn update_sidebar_row(
     // a foldered conversation's badge gets a chance to move.
     refresh_section_badges(window, ui_ctx);
 
-    match conversation {
-        ActiveConversation::ServerDm { peer_id } => {
-            let peer_id_str = peer_id.to_string();
-            let model = window.get_dm_conversations();
-            let mut others = Vec::new();
-            let mut updated = None;
-
-            for i in 0..model.row_count() {
-                if let Some(item) = model.row_data(i) {
-                    if item.user_id.as_str() == peer_id_str {
-                        let mut u = item.clone();
-                        u.last_message = preview.into();
-                        u.timestamp = timestamp.into();
-                        if let Some(n) = unread { u.unread_count = n; }
-                        updated = Some(u);
-                    } else {
-                        others.push(item);
-                    }
-                }
-            }
-            if let Some(item) = updated {
-                others.insert(0, item);
-                window.set_dm_conversations(slint::ModelRc::new(slint::VecModel::from(others)));
-            }
-        }
-        ActiveConversation::Channel(channel_id) => {
-            let channel_id_str = channel_id.to_string();
-            let model = window.get_channels();
-            let mut others = Vec::new();
-            let mut updated = None;
-
-            for i in 0..model.row_count() {
-                if let Some(item) = model.row_data(i) {
-                    if item.channel_id.as_str() == channel_id_str {
-                        let mut u = item.clone();
-                        u.last_message = preview.into();
-                        u.timestamp = timestamp.into();
-                        if let Some(n) = unread { u.unread_count = n; }
-                        updated = Some(u);
-                    } else {
-                        others.push(item);
-                    }
-                }
-            }
-            if let Some(item) = updated {
-                others.insert(0, item);
-                window.set_channels(slint::ModelRc::new(slint::VecModel::from(others)));
-            }
-        }
-        ActiveConversation::AnonGroup(group_id) => {
-            let group_id_str = group_id.to_string();
-            let model = window.get_private_groups();
-            let mut others = Vec::new();
-            let mut updated = None;
-
-            for i in 0..model.row_count() {
-                if let Some(item) = model.row_data(i) {
-                    if item.group_id.as_str() == group_id_str {
-                        let mut u = item.clone();
-                        u.last_message = preview.into();
-                        u.timestamp = timestamp.into();
-                        if let Some(n) = unread { u.unread_count = n; }
-                        updated = Some(u);
-                    } else {
-                        others.push(item);
-                    }
-                }
-            }
-            if let Some(item) = updated {
-                others.insert(0, item);
-                window.set_private_groups(slint::ModelRc::new(slint::VecModel::from(others)));
-            }
-        }
-        ActiveConversation::AnonDm(anon_dm_id) => {
-            let channel_id_str = anon_dm_id.to_string();
-            let model = window.get_dm_conversations();
-            let mut others = Vec::new();
-            let mut updated = None;
-
-            for i in 0..model.row_count() {
-                if let Some(item) = model.row_data(i) {
-                    if item.is_anon && item.channel_id.as_str() == channel_id_str {
-                        let mut u = item.clone();
-                        u.last_message = preview.into();
-                        u.timestamp = timestamp.into();
-                        if let Some(n) = unread { u.unread_count = n; }
-                        updated = Some(u);
-                    } else {
-                        others.push(item);
-                    }
-                }
-            }
-            if let Some(item) = updated {
-                others.insert(0, item);
-                window.set_dm_conversations(slint::ModelRc::new(slint::VecModel::from(others)));
-            }
-        }
-        ActiveConversation::None => {
-            // None is a no-op
-        }
-    }
-}
-
-/// Check if a DM row for a peer is already in the sidebar model.
-///
-/// DMs are channel-free (keyed by peer user_id), so this checks the Slint
-/// DM model directly rather than a local channel row.
-pub(crate) fn sidebar_has_dm(
-    window: &MainWindow,
-    peer_id: &chatter_core::domain::UserId,
-) -> bool {
-    use slint::Model;
-    let peer_id_str = peer_id.to_string();
-    let model = window.get_dm_conversations();
-    (0..model.row_count())
-        .filter_map(|i| model.row_data(i))
-        .any(|dm| dm.user_id == peer_id_str)
-}
-
-/// Create a new DM sidebar entry for a peer not yet in the list.
-///
-/// Used when receiving the first message from a new peer. Channel-free —
-/// the row is keyed by the peer's user_id. Inserted at position 0 (MRU)
-/// with core's absolute unread count.
-pub(crate) fn create_dm_sidebar_entry(
-    window: &MainWindow,
-    ui_ctx: &std::sync::Arc<chatter_core::client::ChatterClient>,
-    peer_id: &chatter_core::domain::UserId,
-    sender_name: &str,
-    preview: &str,
-    timestamp: &str,
-    badges: chatter_core::client::UnreadBadges,
-) {
-    use slint::Model;
-
-    let peer_id_str = peer_id.to_string();
-    let avatar = ui_ctx
-        .get_profile_local(peer_id)
-        .and_then(|p| p.avatar_bytes)
-        .and_then(|bytes| crate::bin_ui::converters::avatar_bytes_to_image(&bytes));
-
-    let new_dm = crate::DMListItemData {
-        channel_id: peer_id_str.clone().into(), // peer_id is the conversation key
-        user_id: peer_id_str.clone().into(),
-        display_name: sender_name.into(),
-        avatar_source: avatar.clone().unwrap_or_default(),
-        has_avatar: avatar.is_some(),
-        initials: crate::bin_ui::converters::get_initials(sender_name).into(),
-        presence_status: "offline".into(),
-        last_message: preview.into(),
-        timestamp: timestamp.into(),
-        unread_count: badges.row as i32,
-        is_typing: false,
-        is_anon: false,
-        is_pinned: false,
-        is_selected: false,
+    let key = match conversation {
+        ActiveConversation::ServerDm { peer_id } => peer_id.to_string(),
+        ActiveConversation::Channel(id) => id.to_string(),
+        ActiveConversation::AnonGroup(id) => id.to_string(),
+        ActiveConversation::AnonDm(id) => id.to_string(),
+        ActiveConversation::None => return true,
     };
-
-    let model = window.get_dm_conversations();
-    let mut items: Vec<_> = (0..model.row_count())
-        .filter_map(|i| model.row_data(i))
-        .collect();
-    items.insert(0, new_dm);
-    window.set_dm_conversations(slint::ModelRc::new(slint::VecModel::from(items)));
-    window.set_total_unread_count(badges.total as i32);
-
-    tracing::info!(
-        peer_id = %peer_id_str,
-        "Added missing DM conversation to sidebar (channel-free)"
+    let model = window.get_chat_rows();
+    let mut rows: Vec<_> = model.iter().collect();
+    let Some(i) = rows.iter().position(|r| r.conversation_id.as_str() == key) else {
+        return false;
+    };
+    let mut row = rows.remove(i);
+    row.last_message = preview.into();
+    row.timestamp = timestamp.into();
+    if let Some(n) = unread {
+        row.unread_count = n;
+    }
+    let slot = chatter_core::ui::sidebar_data::chat_row_top_slot(
+        row.is_pinned,
+        rows.iter().map(|r| r.is_pinned),
     );
+    rows.insert(slot, row);
+    window.set_chat_rows(slint::ModelRc::new(slint::VecModel::from(rows)));
+    true
 }
 
-/// Stop any currently playing audio and clear state.
+/// Rebuild the chat list from core (`ChatterClient::sidebar_rows`) — the one
+/// writer of the `chat-rows` model. Core's queries run on the calling
+/// thread, so call this from the runtime, never the UI thread
+/// ([`refresh_chat_list`] is the UI-thread entry). Every rebuild re-marks the
+/// open conversation and recomputes the Chats-tab badge, which counts the
+/// same rows.
+pub(crate) fn rebuild_chat_list(weak: &slint::Weak<MainWindow>, ui_ctx: &Arc<ChatterClient>) {
+    use crate::bin_ui::converters::ChatRowExt;
+    let mut rows = ui_ctx.sidebar_rows();
+    for row in rows.iter_mut() {
+        row.pre_decode_avatar();
+    }
+    let ui_ctx = ui_ctx.clone();
+    run_ui!(weak, |w| {
+        let rows: Vec<_> = rows.into_iter().map(|r| r.to_slint()).collect();
+        w.set_chat_rows(slint::ModelRc::new(slint::VecModel::from(rows)));
+        refresh_selection(&w, &ui_ctx);
+        crate::bin_ui::features::auth::inbox::domain_handler::recompute_total_unread(&w, &ui_ctx);
+    });
+}
+
+/// [`rebuild_chat_list`] from the UI thread. Friends are synced from the
+/// server first — `list_friends_with_profiles` persists each accepted friend
+/// locally — so a friendship accepted on another device shows up too.
+pub fn refresh_chat_list(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
+    let weak = slint::ComponentHandle::as_weak(window);
+    let ui_ctx = ui_ctx.clone();
+    tokio::spawn(async move {
+        let _ = ui_ctx.list_friends_with_profiles().await;
+        rebuild_chat_list(&weak, &ui_ctx);
+    });
+}
+
 /// Opening a conversation shows it. On a phone the chat pane is a separate
 /// screen, and only the sidebar's own row taps used to raise it: every other
 /// opener (Friends and Profile "Message", search, call history, sections)
@@ -513,6 +366,7 @@ pub(crate) fn show_chat_pane(weak: &slint::Weak<MainWindow>) {
     }
 }
 
+/// Stop any currently playing audio and clear state.
 pub(crate) fn stop_audio_playback() {
     // Stop the audio player
     if let Ok(mut guard) = audio_state::get_audio_player().lock() {

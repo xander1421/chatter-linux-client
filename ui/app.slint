@@ -15,7 +15,7 @@ import { LoadingPage } from "pages/loading.slint";
 import { WelcomePage } from "pages/welcome.slint";
 
 // Import main layout components
-import { Sidebar, ChannelListItemData, DMListItemData, PrivateGroupListItemData, CustomSectionData, SectionConversationData } from "sidebar/sidebar.slint";
+import { Sidebar, ChatRowData, CustomSectionData } from "sidebar/sidebar.slint";
 import { ChatLayout, MessageItemData, MessageAttachmentData, PendingAttachmentData, ReactionEntry } from "chat/chat_layout.slint";
 import { ThreadPanel } from "chat/thread_panel.slint";
 import { ConversationKind } from "chat/conversation_kind.slint";
@@ -66,7 +66,7 @@ import { AnonModePinModal } from "modals/anon_mode_pin.slint";
 import { ShieldNetworkBanner } from "anon_mode/shield_network_banner.slint";
 
 // Re-export types for Rust binding
-export { ChannelListItemData, DMListItemData, PrivateGroupListItemData, CustomSectionData, SectionConversationData, MessageItemData, MessageAttachmentData, ForwardTarget, SessionInfo, PendingLinkInfo, SearchResultChannel, SearchResult, AIProviderOption, AIModelOption, CreateChannelConfig, PendingAttachmentData, EmojiData, GifData, MentionSuggestion, FriendData, FriendRequestData, BlockedUserData, IncomingCallData, ActiveCallData, CallParticipantData, CallHistoryRow, AudioDeviceData, ScreenSourceData, ChannelMemberData, BannedMemberData, PrivateGroupFriend, LocalAIProviderData, CatalogModelData, MemoryFactData, MemoryEntityData, MemoryGraphNodeData, MemoryGraphEdgeData, InviteUser, ReactionEntry, QuickSwitcherItem, SharedContentItem, SharedTab }
+export { ChatRowData, CustomSectionData, MessageItemData, MessageAttachmentData, ForwardTarget, SessionInfo, PendingLinkInfo, SearchResultChannel, SearchResult, AIProviderOption, AIModelOption, CreateChannelConfig, PendingAttachmentData, EmojiData, GifData, MentionSuggestion, FriendData, FriendRequestData, BlockedUserData, IncomingCallData, ActiveCallData, CallParticipantData, CallHistoryRow, AudioDeviceData, ScreenSourceData, ChannelMemberData, BannedMemberData, PrivateGroupFriend, LocalAIProviderData, CatalogModelData, MemoryFactData, MemoryEntityData, MemoryGraphNodeData, MemoryGraphEdgeData, InviteUser, ReactionEntry, QuickSwitcherItem, SharedContentItem, SharedTab }
 
 export component App inherits Rectangle {
     // ========== Safe area insets (set by Rust on Android) ==========
@@ -275,9 +275,7 @@ export component App inherits Rectangle {
     callback recover-account(string, string, string, string);  // username, recovery_code, new_password, new_pin
 
     // ========== Sidebar properties ==========
-    in property <[ChannelListItemData]> channels: [];
-    in property <[DMListItemData]> dm-conversations: [];
-    in property <[PrivateGroupListItemData]> private-groups: [];
+    in property <[ChatRowData]> chat-rows: [];
     in property <[CustomSectionData]> custom-sections: [];
     in property <int> total-unread-count: 0;
     in property <string> user-display-name: "User";
@@ -784,6 +782,10 @@ export component App inherits Rectangle {
 
     // ========== Call properties ==========
     in-out property <bool> incoming-call-visible: false;
+    // Back while ringing hides the full-screen ring (Signal): the call keeps
+    // ringing and the notification keeps Accept / Decline. Separate from
+    // `incoming-call-visible`, which is "a call is ringing" to the call code.
+    in-out property <bool> incoming-call-minimized: false;
     in property <IncomingCallData> incoming-call-data;
     /// True when a newly arrived incoming call will replace the active call
     /// if accepted — driven by the call orchestrator.
@@ -1374,9 +1376,7 @@ export component App inherits Rectangle {
                 // that has to keep the macOS traffic lights clear.
                 traffic-lights-width: root.macos-traffic-lights-width;
                 titlebar-height: root.macos-titlebar-height;
-                channels: root.channels;
-                dm-conversations: root.dm-conversations;
-                private-groups: root.private-groups;
+                chat-rows: root.chat-rows;
                 custom-sections: root.custom-sections;
                 user-display-name: root.user-display-name;
                 user-avatar-source: root.user-avatar-source;
@@ -2835,7 +2835,7 @@ export component App inherits Rectangle {
 
     // ========== Call overlays (rendered above modals) ==========
     // Incoming call modal
-    if root.incoming-call-visible: IncomingCallModal {
+    if root.incoming-call-visible && !root.incoming-call-minimized: IncomingCallModal {
         show: true;
         call-data: root.incoming-call-data;
         replaces-active: root.incoming-call-replaces-active;

@@ -112,7 +112,7 @@ fn run_blocked_action(
         let _ = slint::invoke_from_event_loop(move || {
             if let Some(w) = weak.upgrade() {
                 w.set_friends_loading(false);
-                crate::bin_ui::features::auth::initial_data::refresh_dm_list(&w, &ui_ctx);
+                crate::bin_ui::features::sidebar::refresh_chat_list(&w, &ui_ctx);
             }
         });
     });

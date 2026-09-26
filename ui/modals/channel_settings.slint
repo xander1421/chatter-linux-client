@@ -1191,6 +1191,13 @@ export component ChannelSettingsModal inherits Rectangle {
                                 background: Colors.error.with-alpha(0.3);
                             }
 
+                            // Every wrapped Text in these rows pins
+                            // `height: self.preferred-height`: a HorizontalLayout
+                            // (Slint 1.17) sizes the text column's height as if
+                            // it had the whole row, so a description that wraps
+                            // beside its button ran under the next row's title.
+                            // The pin reads the height at the width it really got.
+
                             // Leave channel. Gated unconditionally, not just
                             // for private channels: leaving a private one has
                             // no rejoin path, and a control that is sometimes
@@ -1208,12 +1215,14 @@ export component ChannelSettingsModal inherits Rectangle {
                                         color: Colors.text-primary;
                                         font-size: Typography.sm;
                                         wrap: word-wrap;
+                                        height: self.preferred-height;
                                     }
                                     Text {
                                         text: "You will lose access to this channel's messages";
                                         color: Colors.text-muted;
                                         font-size: Typography.xs;
                                         wrap: word-wrap;
+                                        height: self.preferred-height;
                                     }
                                 }
 
@@ -1274,12 +1283,14 @@ export component ChannelSettingsModal inherits Rectangle {
                                         color: Colors.text-primary;
                                         font-size: Typography.sm;
                                         wrap: word-wrap;
+                                        height: self.preferred-height;
                                     }
                                     Text {
                                         text: "Transfer ownership to leave, or delete the channel.";
                                         color: Colors.text-muted;
                                         font-size: Typography.xs;
                                         wrap: word-wrap;
+                                        height: self.preferred-height;
                                     }
                                 }
 
@@ -1306,12 +1317,14 @@ export component ChannelSettingsModal inherits Rectangle {
                                         color: Colors.text-primary;
                                         font-size: Typography.sm;
                                         wrap: word-wrap;
+                                        height: self.preferred-height;
                                     }
                                     Text {
                                         text: root.is-archived ? "Make channel active again" : "Archive to hide from active channels";
                                         color: Colors.text-muted;
                                         font-size: Typography.xs;
                                         wrap: word-wrap;
+                                        height: self.preferred-height;
                                     }
                                 }
 
@@ -1346,12 +1359,14 @@ export component ChannelSettingsModal inherits Rectangle {
                                         font-size: Typography.sm;
                                         font-weight: Typography.medium;
                                         wrap: word-wrap;
+                                        height: self.preferred-height;
                                     }
                                     Text {
                                         text: "Deletes the channel and all its messages. Can't be undone.";
                                         color: Colors.text-muted;
                                         font-size: Typography.xs;
                                         wrap: word-wrap;
+                                        height: self.preferred-height;
                                     }
                                 }
 

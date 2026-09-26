@@ -1,7 +1,7 @@
 // Chatter Linux Client - Main UI
 // Root component for the application
 
-import { App, ChannelListItemData, DMListItemData, PrivateGroupListItemData, MessageItemData, MessageAttachmentData, ForwardTarget, SessionInfo, PendingLinkInfo, SearchResultChannel, SearchResult, AIProviderOption, AIModelOption, CreateChannelConfig, PendingAttachmentData, EmojiData, GifData, MentionSuggestion, FriendData, FriendRequestData, BlockedUserData, IncomingCallData, ActiveCallData, CallParticipantData, CallHistoryRow, AudioDeviceData, ScreenSourceData, ChannelMemberData, BannedMemberData, PrivateGroupFriend, LocalAIProviderData, CatalogModelData, MemoryFactData, MemoryEntityData, MemoryGraphNodeData, MemoryGraphEdgeData, InviteUser, ReactionEntry, CustomSectionData, SectionConversationData, QuickSwitcherItem, SharedContentItem, SharedTab } from "app.slint";
+import { App, ChatRowData, MessageItemData, MessageAttachmentData, ForwardTarget, SessionInfo, PendingLinkInfo, SearchResultChannel, SearchResult, AIProviderOption, AIModelOption, CreateChannelConfig, PendingAttachmentData, EmojiData, GifData, MentionSuggestion, FriendData, FriendRequestData, BlockedUserData, IncomingCallData, ActiveCallData, CallParticipantData, CallHistoryRow, AudioDeviceData, ScreenSourceData, ChannelMemberData, BannedMemberData, PrivateGroupFriend, LocalAIProviderData, CatalogModelData, MemoryFactData, MemoryEntityData, MemoryGraphNodeData, MemoryGraphEdgeData, InviteUser, ReactionEntry, CustomSectionData, QuickSwitcherItem, SharedContentItem, SharedTab } from "app.slint";
 import { JarvisGlobal } from "jarvis/jarvis_global.slint";
 import { AiIntegrationGlobal } from "ai/ai_global.slint";
 import { TextFormat } from "chat/message_composer.slint";
@@ -17,7 +17,7 @@ import { DisappearingGlobal, DisappearingOption } from "chat/disappearing_global
 import { VirtualKeyboard } from "components/modal_container.slint";
 
 // Re-export all types for Rust binding
-export { ChannelListItemData, DMListItemData, PrivateGroupListItemData, MessageItemData, MessageAttachmentData, ForwardTarget, SessionInfo, PendingLinkInfo, SearchResultChannel, SearchResult, AIProviderOption, AIModelOption, CreateChannelConfig, PendingAttachmentData, EmojiData, GifData, MentionSuggestion, FriendData, FriendRequestData, BlockedUserData, IncomingCallData, ActiveCallData, CallParticipantData, AudioDeviceData, ScreenSourceData, ChannelMemberData, BannedMemberData, PrivateGroupFriend, LocalAIProviderData, CatalogModelData, MemoryFactData, MemoryEntityData, MemoryGraphNodeData, MemoryGraphEdgeData, InviteUser, ReactionEntry, CustomSectionData, SectionConversationData, QuickSwitcherItem, SharedContentItem, SharedTab }
+export { ChatRowData, MessageItemData, MessageAttachmentData, ForwardTarget, SessionInfo, PendingLinkInfo, SearchResultChannel, SearchResult, AIProviderOption, AIModelOption, CreateChannelConfig, PendingAttachmentData, EmojiData, GifData, MentionSuggestion, FriendData, FriendRequestData, BlockedUserData, IncomingCallData, ActiveCallData, CallParticipantData, AudioDeviceData, ScreenSourceData, ChannelMemberData, BannedMemberData, PrivateGroupFriend, LocalAIProviderData, CatalogModelData, MemoryFactData, MemoryEntityData, MemoryGraphNodeData, MemoryGraphEdgeData, InviteUser, ReactionEntry, CustomSectionData, QuickSwitcherItem, SharedContentItem, SharedTab }
 export { JarvisGlobal }
 // Server-side AI integration flags. FEAT-5: the create-channel "AI assistant"
 // template is off unless the `ai-channel-template` Cargo feature is built.
@@ -140,9 +140,7 @@ export component MainWindow inherits Window {
     callback recover-account <=> app.recover-account;
 
     // ========== Sidebar properties ==========
-    in property <[ChannelListItemData]> channels <=> app.channels;
-    in property <[DMListItemData]> dm-conversations <=> app.dm-conversations;
-    in property <[PrivateGroupListItemData]> private-groups <=> app.private-groups;
+    in property <[ChatRowData]> chat-rows <=> app.chat-rows;
     in property <int> total-unread-count <=> app.total-unread-count;
     in property <string> user-display-name <=> app.user-display-name;
     in property <image> user-avatar-source <=> app.user-avatar-source;
@@ -585,6 +583,7 @@ export component MainWindow inherits Window {
 
     // ========== Call properties ==========
     in-out property <bool> incoming-call-visible <=> app.incoming-call-visible;
+    in-out property <bool> incoming-call-minimized <=> app.incoming-call-minimized;
     in property <IncomingCallData> incoming-call-data <=> app.incoming-call-data;
     in-out property <bool> incoming-call-replaces-active <=> app.incoming-call-replaces-active;
     in-out property <bool> active-call-visible <=> app.active-call-visible;
@@ -913,6 +912,14 @@ export component MainWindow inherits Window {
             root.composer-gif-picker-visible = false;
             root.composer-emoji-picker-visible = false;
             root.chat-pane-closed();
+        }
+    }
+    // Same hole for the search palette: its field holds focus, and picking a
+    // result closes the palette, so Back from the chat it opened did nothing
+    // (RC20, 3/3). Back from that chat returns to the list, like the header ←.
+    changed unified-search-open => {
+        if (!root.unified-search-open) {
+            back-scope.focus();
         }
     }
     changed active-modal => {

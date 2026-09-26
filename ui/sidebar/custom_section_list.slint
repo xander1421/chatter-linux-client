@@ -1,39 +1,18 @@
 // Custom section list component
 //
 // Renders user-created sidebar sections (e.g. "Work", "Gaming") with collapsible
-// conversation lists. Conversations inside sections reuse existing list-item
-// components (channels, DMs, private groups) based on conversation_type.
+// conversation lists. A folder's rows are the chat list's own rows (ChatRow).
 
 import { Colors } from "../theme/colors.slint";
 import { HoldArea } from "../components/hold_area.slint";
 import { Spacing } from "../theme/spacing.slint";
 import { Icons } from "../theme/icons.slint";
 import { Typography } from "../theme/typography.slint";
-import { Avatar } from "../components/avatar.slint";
 import { TooltipArea } from "../components/tooltip.slint";
 import { ConversationKind } from "../chat/conversation_kind.slint";
-import { DMListItem } from "dm_list_item.slint";
-import { ChannelListItem } from "channel_list_item.slint";
+import { ChatRow, ChatRowData } from "chat_list.slint";
 
 // ── Data structs ────────────────────────────────────────────────
-
-export struct SectionConversationData {
-    conversation-id: string,
-    conversation-type: ConversationKind,
-    display-name: string,
-    avatar-source: image,
-    has-avatar: bool,
-    initials: string,
-    last-message: string,
-    timestamp: string,
-    presence-status: string,     // friend DM rows
-    private-channel: bool,       // channel rows: invite-only (lock glyph)
-    unread-count: int,
-    is-pinned: bool,             // local-only pin; core sorts these first
-    can-leave: bool,             // channel rows: core's `can_leave_channel`
-    can-delete: bool,            // channel rows: core's `is_former_channel`
-    is-selected: bool,           // Rust-computed selection flag; drives highlight
-}
 
 export struct CustomSectionData {
     section-id: string,
@@ -46,179 +25,7 @@ export struct CustomSectionData {
     // looped the whole flat list and hid non-matches with `visible` +
     // `height: 0px`, which instantiated sections × conversations elements
     // (ten folders over two hundred conversations = two thousand rows).
-    conversations: [SectionConversationData],
-}
-
-// ── Single conversation item inside a section ───────────────────
-
-component SectionConversationItem inherits Rectangle {
-    in property <string> conversation-id;
-    in property <ConversationKind> conversation-type;
-    in property <string> display-name;
-    in property <image> avatar-source;
-    in property <bool> has-avatar: false;
-    in property <string> initials;
-    in property <int> unread-count: 0;
-    in property <bool> is-pinned: false;
-    in property <bool> selected: false;
-    in property <bool> collapsed: false;
-    in property <bool> mobile-mode: false;
-
-    callback clicked();
-    callback context-menu-requested(/* x */ length, /* y */ length);
-
-    // A finger needs the 48px minimum; a mouse does not, and 36px keeps the
-    // desktop sidebar dense.
-    height: root.mobile-mode ? Spacing.touch-target-min : 36px;
-    border-radius: Spacing.radius-sm;
-    background: root.selected ? Colors.primary.with-alpha(0.2)
-              : touch.has-hover ? Colors.surface-hover
-              : transparent;
-
-    // Three glyph families: channels (#), DMs (avatar), anon groups (shield).
-    property <bool> is-dm: root.conversation-type == ConversationKind.server-dm
-                        || root.conversation-type == ConversationKind.anon-dm;
-    property <bool> is-group: root.conversation-type == ConversationKind.anon-group;
-    property <bool> is-channel: root.conversation-type == ConversationKind.channel
-                             || root.conversation-type == ConversationKind.saved-messages;
-
-    if !root.collapsed: HorizontalLayout {
-        padding-left: Spacing.md;
-        padding-right: Spacing.sm;
-        spacing: Spacing.sm;
-        alignment: stretch;
-
-        // Icon or avatar based on type
-        Rectangle {
-            width: 20px;
-            height: parent.height;
-
-            if root.is-channel && root.has-avatar: Image {
-                source: root.avatar-source;
-                width: 18px;
-                height: 18px;
-                x: (parent.width - self.width) / 2;
-                y: (parent.height - self.height) / 2;
-            }
-            if root.is-channel && !root.has-avatar: Image {
-                source: Icons.hash;
-                width: 14px;
-                height: 14px;
-                x: (parent.width - self.width) / 2;
-                y: (parent.height - self.height) / 2;
-                colorize: root.selected ? Colors.primary : Colors.text-secondary;
-            }
-            if root.is-dm: Avatar {
-                size: 20px;
-                source: root.avatar-source;
-                fallback-text: root.initials;
-                show-presence: false;
-                x: (parent.width - self.width) / 2;
-                y: (parent.height - self.height) / 2;
-            }
-            if root.is-group: Image {
-                source: Icons.shield;
-                width: 14px;
-                height: 14px;
-                x: (parent.width - self.width) / 2;
-                y: (parent.height - self.height) / 2;
-                colorize: root.selected ? Colors.group-accent : Colors.group-accent.with-alpha(0.7);
-            }
-        }
-
-        // Name
-        Text {
-            text: root.display-name;
-            color: root.selected ? Colors.text-primary : Colors.text-secondary;
-            font-size: Typography.sm2;
-            font-weight: root.unread-count > 0 ? 600 : 400;
-            vertical-alignment: center;
-            overflow: elide;
-            horizontal-stretch: 1;
-        }
-
-        // Pin marker — why this row is above the others.
-        if root.is-pinned: VerticalLayout {
-            alignment: center;
-            Image {
-                source: Icons.pin;
-                width: 11px;
-                height: 11px;
-                colorize: Colors.text-muted;
-                accessible-role: text;
-                accessible-label: "Pinned";
-            }
-        }
-
-        // Unread badge
-        if root.unread-count > 0: VerticalLayout {
-            alignment: center;
-            Rectangle {
-                width: max(self.height, sec-badge-text.preferred-width + 10px);
-                height: Spacing.badge-md;
-                border-radius: Spacing.radius-full;
-                background: Colors.primary;
-                sec-badge-text := Text {
-                    text: root.unread-count > 99 ? "99+" : root.unread-count;
-                    color: Colors.text-primary;
-                    font-size: Typography.xxs;
-                    font-weight: 600;
-                    horizontal-alignment: center;
-                    vertical-alignment: center;
-                    width: 100%;
-                    height: 100%;
-                }
-            }
-        }
-    }
-
-    if root.collapsed: TooltipArea {
-        width: 100%;
-        height: 100%;
-        tooltip-text: root.display-name;
-        tooltip-enabled: true;
-        placement: "right";
-
-        if root.is-channel && root.has-avatar: Image {
-            source: root.avatar-source;
-            width: 20px;
-            height: 20px;
-            x: (parent.width - self.width) / 2;
-            y: (parent.height - self.height) / 2;
-        }
-        if root.is-channel && !root.has-avatar: Image {
-            source: Icons.hash;
-            width: 16px;
-            height: 16px;
-            x: (parent.width - self.width) / 2;
-            y: (parent.height - self.height) / 2;
-            colorize: root.selected ? Colors.primary : Colors.text-secondary;
-        }
-        if root.is-dm: Avatar {
-            size: 22px;
-            source: root.avatar-source;
-            fallback-text: root.initials;
-            show-presence: false;
-            x: (parent.width - self.width) / 2;
-            y: (parent.height - self.height) / 2;
-        }
-        if root.is-group: Image {
-            source: Icons.shield;
-            width: 16px;
-            height: 16px;
-            x: (parent.width - self.width) / 2;
-            y: (parent.height - self.height) / 2;
-            colorize: Colors.group-accent;
-        }
-    }
-
-    touch := HoldArea {
-        mouse-cursor: pointer;
-        clicked => {
-            if (!self.hold-fired) { root.clicked(); }
-        }
-        held => { root.context-menu-requested(self.anchor-x, self.anchor-y); }
-    }
+    conversations: [ChatRowData],
 }
 
 // ── Section header ──────────────────────────────────────────────
@@ -454,62 +261,16 @@ export component CustomSectionList inherits Rectangle {
                 padding-right: Spacing.xs;
                 spacing: 2px;
 
-                // A friend DM and a channel render with the main list's own
-                // rows, so a chat looks the same filed or not; filing one used
-                // to shrink it to a one-line row with no photo, preview, time
-                // or presence.
-                for conv in section.conversations: VerticalLayout {
-                    if conv.conversation-type == ConversationKind.server-dm: DMListItem {
-                        display-name: conv.display-name;
-                        avatar-source: conv.avatar-source;
-                        initials: conv.initials;
-                        presence-status: conv.presence-status;
-                        is-pinned: conv.is-pinned;
-                        last-message: conv.last-message;
-                        timestamp: conv.timestamp;
-                        unread-count: conv.unread-count;
-                        selected: conv.is-selected;
-                        collapsed: root.collapsed;
-                        mobile-mode: root.mobile-mode;
-                        clicked => { root.section-conversation-selected(conv.conversation-id, conv.conversation-type); }
-                        context-menu-requested(x, y) => {
-                            root.section-conversation-context-menu-requested(conv.conversation-id, conv.conversation-type, section.section-id, conv.is-pinned, conv.can-leave, conv.can-delete, x, y);
-                        }
-                    }
-                    if conv.conversation-type == ConversationKind.channel: ChannelListItem {
-                        name: conv.display-name;
-                        channel-type: conv.private-channel ? "private" : "public";
-                        unread-count: conv.unread-count;
-                        last-message: conv.last-message;
-                        timestamp: conv.timestamp;
-                        selected: conv.is-selected;
-                        collapsed: root.collapsed;
-                        avatar-source: conv.avatar-source;
-                        has-avatar: conv.has-avatar;
-                        is-pinned: conv.is-pinned;
-                        mobile-mode: root.mobile-mode;
-                        clicked => { root.section-conversation-selected(conv.conversation-id, conv.conversation-type); }
-                        context-menu-requested(x, y) => {
-                            root.section-conversation-context-menu-requested(conv.conversation-id, conv.conversation-type, section.section-id, conv.is-pinned, conv.can-leave, conv.can-delete, x, y);
-                        }
-                    }
-                    if conv.conversation-type != ConversationKind.server-dm && conv.conversation-type != ConversationKind.channel: SectionConversationItem {
-                        conversation-id: conv.conversation-id;
-                        conversation-type: conv.conversation-type;
-                        display-name: conv.display-name;
-                        avatar-source: conv.avatar-source;
-                        has-avatar: conv.has-avatar;
-                        initials: conv.initials;
-                        unread-count: conv.unread-count;
-                        is-pinned: conv.is-pinned;
-                        selected: conv.is-selected;
-                        collapsed: root.collapsed;
-                        mobile-mode: root.mobile-mode;
-
-                        clicked => { root.section-conversation-selected(conv.conversation-id, conv.conversation-type); }
-                        context-menu-requested(x, y) => {
-                            root.section-conversation-context-menu-requested(conv.conversation-id, conv.conversation-type, section.section-id, conv.is-pinned, conv.can-leave, conv.can-delete, x, y);
-                        }
+                // A folder row is the main list's own row, so a chat looks
+                // the same filed or not; filing one used to shrink it to a
+                // one-line row with no photo, preview, time or presence.
+                for conv in section.conversations: ChatRow {
+                    data: conv;
+                    collapsed: root.collapsed;
+                    mobile-mode: root.mobile-mode;
+                    clicked => { root.section-conversation-selected(conv.conversation-id, conv.conversation-type); }
+                    context-menu-requested(x, y) => {
+                        root.section-conversation-context-menu-requested(conv.conversation-id, conv.conversation-type, section.section-id, conv.is-pinned, conv.can-leave, conv.can-delete, x, y);
                     }
                 }
             }

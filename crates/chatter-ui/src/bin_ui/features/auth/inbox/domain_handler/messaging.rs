@@ -118,7 +118,6 @@ pub(super) fn handle_message_received(
 
     let weak = window.clone();
     let ui_ctx_ui = ui_ctx.clone();
-    let peer_id_opt = sender_id;
 
     // A thread reply belongs to the thread panel, not the main message list.
     // Route it there (and bump the root bubble's reply pill) instead of
@@ -208,16 +207,6 @@ pub(super) fn handle_message_received(
             &w, &ui_ctx_ui, sidebar_conversation, &preview, &timestamp_str, badges,
         );
 
-        // Create DM sidebar entry if new peer (non-anon only)
-        if conv_type.creates_dm_sidebar_entry() {
-            if let Some(peer_id) = peer_id_opt {
-                if !crate::bin_ui::features::sidebar::sidebar_has_dm(&w, &peer_id) {
-                    crate::bin_ui::features::sidebar::create_dm_sidebar_entry(
-                        &w, &ui_ctx_ui, &peer_id, &sender_name, &preview, &timestamp_str, badges,
-                    );
-                }
-            }
-        }
     });
 }
 

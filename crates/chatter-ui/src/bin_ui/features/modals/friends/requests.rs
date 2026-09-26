@@ -55,7 +55,7 @@ pub(crate) fn wire_accept_request(window: &MainWindow, ui_ctx: &Arc<ChatterClien
                     });
 
                     // DMs are channel-free — the sidebar is built from the local
-                    // friends list (refresh_dm_list). The Friends modal is
+                    // friends list (refresh_chat_list). The Friends modal is
                     // server-backed, so re-fetch it too or the accepter's modal
                     // stays stale until reload.
                     crate::bin_ui::features::auth::initial_data::refresh_friends_list(
@@ -66,7 +66,7 @@ pub(crate) fn wire_accept_request(window: &MainWindow, ui_ctx: &Arc<ChatterClien
                     let ui_ctx_refresh = ui_ctx.clone();
                     let _ = slint::invoke_from_event_loop(move || {
                         if let Some(w) = weak_refresh.upgrade() {
-                            crate::bin_ui::features::auth::initial_data::refresh_dm_list(&w, &ui_ctx_refresh);
+                            crate::bin_ui::features::sidebar::refresh_chat_list(&w, &ui_ctx_refresh);
                         }
                     });
                 }

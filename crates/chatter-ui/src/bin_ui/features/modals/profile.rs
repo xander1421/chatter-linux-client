@@ -782,7 +782,7 @@ pub fn wire_profile_actions(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                             w.set_profile_is_friend(false);
                             // Their DM leaves the sidebar (core hides blocked
                             // contacts); history stays for an unblock.
-                            crate::bin_ui::features::auth::initial_data::refresh_dm_list(&w, &ui_ctx);
+                            crate::bin_ui::features::sidebar::refresh_chat_list(&w, &ui_ctx);
                             tracing::info!("Blocked user: {}", user_id);
                         }
                     });

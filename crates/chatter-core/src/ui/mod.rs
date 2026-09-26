@@ -31,7 +31,7 @@ pub use shared_content_data::{shared_tabs, SharedContentItemData, SharedTabData}
 
 // Re-export sidebar data types
 pub use sidebar_data::{
-    presence_color, ChannelListItemData, DMListItemData, UserProfileBarData,
+    presence_color, UserProfileBarData,
 };
 
 // Re-export file data types

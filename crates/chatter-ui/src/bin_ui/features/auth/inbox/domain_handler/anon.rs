@@ -26,7 +26,7 @@ pub(super) fn handle_dm_request_received(
     let ui_ctx = ui_ctx.clone();
     let _ = slint::invoke_from_event_loop(move || {
         if let Some(w) = weak.upgrade() {
-            super::super::super::initial_data::refresh_dm_list(&w, &ui_ctx);
+            crate::bin_ui::features::sidebar::refresh_chat_list(&w, &ui_ctx);
             let requests = ui_ctx.list_anon_dm_message_requests();
             w.set_pending_message_requests(requests.len() as i32);
         }
@@ -43,7 +43,7 @@ pub(super) fn handle_dm_request_accepted(
     let ui_ctx = ui_ctx.clone();
     let _ = slint::invoke_from_event_loop(move || {
         if let Some(w) = weak.upgrade() {
-            super::super::super::initial_data::refresh_dm_list(&w, &ui_ctx);
+            crate::bin_ui::features::sidebar::refresh_chat_list(&w, &ui_ctx);
             tracing::info!(
                 conversation_id = %conversation_id,
                 peer_id = %peer_id,
@@ -61,7 +61,7 @@ pub(super) fn handle_dm_init_received(
     let ui_ctx = ui_ctx.clone();
     let _ = slint::invoke_from_event_loop(move || {
         if let Some(w) = weak.upgrade() {
-            super::super::super::initial_data::refresh_dm_list(&w, &ui_ctx);
+            crate::bin_ui::features::sidebar::refresh_chat_list(&w, &ui_ctx);
         }
     });
 }
@@ -81,7 +81,7 @@ pub(super) fn handle_group_invite_received(
     let ui_ctx = ui_ctx.clone();
     let _ = slint::invoke_from_event_loop(move || {
         if let Some(w) = weak.upgrade() {
-            super::super::super::initial_data::refresh_anon_groups(&w, &ui_ctx);
+            crate::bin_ui::features::sidebar::refresh_chat_list(&w, &ui_ctx);
         }
     });
 }
@@ -95,7 +95,7 @@ pub(super) fn handle_group_joined(
     let ui_ctx = ui_ctx.clone();
     let _ = slint::invoke_from_event_loop(move || {
         if let Some(w) = weak.upgrade() {
-            super::super::super::initial_data::refresh_anon_groups(&w, &ui_ctx);
+            crate::bin_ui::features::sidebar::refresh_chat_list(&w, &ui_ctx);
             tracing::info!(group_id = %group_id, "Joined anon group - refreshed sidebar");
         }
     });
@@ -145,8 +145,7 @@ pub(super) fn handle_group_updated(
     let ui_ctx = ui_ctx.clone();
     let _ = slint::invoke_from_event_loop(move || {
         if let Some(w) = weak.upgrade() {
-            super::super::super::initial_data::refresh_dm_list(&w, &ui_ctx);
-            super::super::super::initial_data::refresh_anon_groups(&w, &ui_ctx);
+            crate::bin_ui::features::sidebar::refresh_chat_list(&w, &ui_ctx);
             tracing::info!(
                 group_id = %group_id,
                 updated_by = %updated_by,

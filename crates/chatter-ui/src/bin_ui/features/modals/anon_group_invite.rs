@@ -203,17 +203,7 @@ pub fn wire_group_invite_callbacks(window: &MainWindow, ui_ctx: &Arc<ChatterClie
                         }
                         refresh_group_invites_ui(&weak);
 
-                        // Add to sidebar
-                        let gid = gid_str.clone();
-                        let gname = invite.group_name.clone();
-                        let weak_sidebar = weak.clone();
-                        let _ = slint::invoke_from_event_loop(move || {
-                            if let Some(w) = weak_sidebar.upgrade() {
-                                crate::bin_ui::features::sidebar::add_private_group_to_sidebar(
-                                    &w, &gid, &gname, 1,
-                                );
-                            }
-                        });
+                        crate::bin_ui::features::sidebar::rebuild_chat_list(&weak, &ui_ctx);
                     }
                     Err(e) => {
                         tracing::error!(

@@ -154,7 +154,7 @@ pub async fn handle_domain_event(
             if is_server_dm {
                 let ui_ctx = ui_ctx.clone();
                 crate::run_ui!(window, |w| {
-                    crate::bin_ui::features::auth::initial_data::refresh_dm_list(&w, &ui_ctx);
+                    crate::bin_ui::features::sidebar::refresh_chat_list(&w, &ui_ctx);
                 });
             }
         }
@@ -234,7 +234,7 @@ pub async fn handle_domain_event(
         // Read on another of our devices: core marked the messages read;
         // rows and badges are rebuilt from storage (a sync can read only some).
         DomainEvent::ConversationsRead { from_other_device: true, .. } => {
-            crate::bin_ui::features::sidebar::sections::refresh_conversation_lists(window, ui_ctx);
+            crate::bin_ui::features::sidebar::rebuild_chat_list(window, ui_ctx);
             let ui_ctx = ui_ctx.clone();
             crate::run_ui!(window, |w| {
                 crate::bin_ui::features::sidebar::refresh_section_badges(&w, &ui_ctx);
@@ -432,7 +432,7 @@ pub async fn handle_domain_event(
             messaging::update_active_channel_member_count(window, ui_ctx, channel_id);
             if we_left {
                 crate::bin_ui::features::chat::refresh_send_notice(window, ui_ctx, channel_id);
-                crate::bin_ui::features::sidebar::sections::refresh_conversation_lists(window, ui_ctx);
+                crate::bin_ui::features::sidebar::rebuild_chat_list(window, ui_ctx);
                 crate::bin_ui::features::sidebar::sections::refresh_sections_ui(window, ui_ctx);
             }
         }
@@ -511,7 +511,7 @@ pub async fn handle_domain_event(
         // each (a backfill must not fire a toast per message), so a message
         // missed while the stream was down — app backgrounded — reached the
         // conversation but never its row. Rebuild the rows from storage, the
-        // way every DM receive already does (`refresh_dm_list`).
+        // way every DM receive already does (`refresh_chat_list`).
         DomainEvent::SyncComplete { messages_synced, blocks_changed, .. } => {
             // A block or unblock from another device: the sidebar was built
             // from the old block list, so rebuild it and the two Friends tabs.
@@ -522,7 +522,7 @@ pub async fn handle_domain_event(
                 crate::bin_ui::features::modals::friends::refresh_blocked_users(window.clone(), ui_ctx);
             }
             if messages_synced > 0 || blocks_changed {
-                crate::bin_ui::features::sidebar::sections::refresh_conversation_lists(window, ui_ctx);
+                crate::bin_ui::features::sidebar::rebuild_chat_list(window, ui_ctx);
                 let ui_ctx = ui_ctx.clone();
                 crate::run_ui!(window, |w| {
                     crate::bin_ui::features::sidebar::refresh_section_badges(&w, &ui_ctx);
@@ -576,7 +576,7 @@ pub async fn handle_domain_event(
             timestamp,
         } => {
             social::handle_user_profile_updated(
-                window, user_id, display_name, status_message, avatar_bytes, timestamp,
+                window, ui_ctx, user_id, display_name, status_message, avatar_bytes, timestamp,
             );
             crate::bin_ui::features::auth::initial_data::refresh_friends_list(
                 window.clone(),
@@ -590,7 +590,7 @@ pub async fn handle_domain_event(
             // never upgrades on the runtime this handler runs on.
             let ui_ctx = ui_ctx.clone();
             crate::run_ui!(window, |w| {
-                crate::bin_ui::features::auth::initial_data::refresh_dm_list(&w, &ui_ctx);
+                crate::bin_ui::features::sidebar::refresh_chat_list(&w, &ui_ctx);
             });
         }
         // =========================================================================

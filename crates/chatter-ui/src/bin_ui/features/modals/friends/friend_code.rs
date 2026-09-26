@@ -469,7 +469,7 @@ pub(crate) fn wire_connect_private(window: &MainWindow, ui_ctx: &Arc<ChatterClie
                         let ui_ctx = ui_ctx.clone();
                         let _ = slint::invoke_from_event_loop(move || {
                             if let Some(w) = weak.upgrade() {
-                                crate::bin_ui::features::auth::initial_data::refresh_dm_list(&w, &ui_ctx);
+                                crate::bin_ui::features::sidebar::refresh_chat_list(&w, &ui_ctx);
 
                                 w.set_friends_loading(false);
                                 w.set_friends_code_input("".into());

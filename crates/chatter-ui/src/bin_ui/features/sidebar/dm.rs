@@ -43,7 +43,7 @@ pub fn wire_delete_conversation(window: &MainWindow, ui_ctx: &Arc<ChatterClient>
                 }
             });
             super::sections::refresh_sections_ui(&weak, &ui_ctx);
-            super::sections::refresh_conversation_lists(&weak, &ui_ctx);
+            super::rebuild_chat_list(&weak, &ui_ctx);
         });
     });
 }
@@ -280,11 +280,15 @@ pub fn wire_dm_selected(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                 }
             };
 
-            let peer_profile = ui_ctx.get_user_profile(&peer_id).await.ok();
-            let title = peer_profile.as_ref()
-                .map(|p| p.display_name.clone())
-                .unwrap_or_else(|| peer_id.to_string());
-            
+            // The fetch refreshes the stored profile; when it fails (offline,
+            // server error) the stored one stands. The name is the chat list's
+            // resolution (profile → username → placeholder), never the raw id.
+            let peer_profile = match ui_ctx.get_user_profile(&peer_id).await {
+                Ok(p) => Some(p),
+                Err(_) => ui_ctx.get_profile_local(&peer_id),
+            };
+            let title = ui_ctx.display_name(&peer_id);
+
             let status_str = peer_profile.as_ref()
                 .map(|p| p.presence.as_str())
                 .unwrap_or("offline");

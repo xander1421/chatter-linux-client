@@ -6,6 +6,9 @@
 //!
 //! Order matters and is the whole point of this module — innermost layer first:
 //!
+//!   0. A ringing call's full-screen ring is hidden (Signal): it is drawn over
+//!      everything, so Back is its. The call keeps ringing and its
+//!      notification keeps Accept / Decline; nothing underneath is popped.
 //!   1. Message multi-select exits. Selection mode is the shallowest, most
 //!      recently entered state, so it pops first.
 //!   2. The unified search palette closes. It is an overlay of its own rather
@@ -137,6 +140,13 @@ pub fn reset_to_chats(w: &MainWindow) {
 ///
 /// Split out from the callback so tests can drive it directly.
 pub fn handle_back(window: &MainWindow) -> bool {
+    // The ring covers everything, so Back belonged to it — and fell through
+    // it, popping the chat underneath while the call rang on (FX3).
+    if window.get_incoming_call_visible() && !window.get_incoming_call_minimized() {
+        window.set_incoming_call_minimized(true);
+        return true;
+    }
+
     if window.get_selection_mode() {
         // Both halves are required, and this is the same pair the selection
         // bar's own close button fires (ui/app.slint:2579-2580). The flag drives

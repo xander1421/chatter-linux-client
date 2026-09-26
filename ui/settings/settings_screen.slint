@@ -1462,8 +1462,9 @@ export component SettingsScreen inherits Rectangle {
                             // and may be cancelled, so a tap snaps the switch
                             // back to the truth and `changed shield-on` below
                             // moves it once the mode actually flips.
-                            // STUB-1: no Tor in the build, no Shield control.
-                            if AnonMode.onion-built: Rectangle {
+                            // Offered without Tor too (see the chat-list
+                            // header shield); only the Tor promise is gated.
+                            Rectangle {
                                 background: Colors.surface;
                                 border-radius: Spacing.radius-lg;
                                 border-width: 1px;
@@ -1491,7 +1492,9 @@ export component SettingsScreen inherits Rectangle {
                                         font-weight: Typography.medium;
                                     }
                                     Text {
-                                        text: "Show only anonymous conversations and route traffic over Tor. Turning it on asks for your PIN";
+                                        text: AnonMode.onion-built
+                                            ? "Show only anonymous conversations and route traffic over Tor. Turning it on asks for your PIN"
+                                            : "Show only anonymous conversations. Turning it on asks for your PIN";
                                         color: Colors.text-muted;
                                         font-size: Typography.xs;
                                         wrap: word-wrap;

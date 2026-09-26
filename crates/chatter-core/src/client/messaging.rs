@@ -538,12 +538,16 @@ impl ChatterClient {
     /// This is the single source of truth for regular DM rows — both
     /// `list_dm_sidebar` and the initial-load sidebar builder use it, so
     /// the UI never iterates channels to find DMs.
-    pub fn list_regular_dm_sidebar(&self) -> Vec<crate::ui::sidebar_data::DMListItemSendData> {
+    pub fn list_regular_dm_sidebar(&self) -> Vec<crate::ui::sidebar_data::ChatRowSendData> {
         use crate::domain::message::ConversationType;
         use crate::ui::chat_data::initials_from_name;
-        use crate::ui::sidebar_data::DMListItemSendData;
+        use crate::ui::sidebar_data::ChatRowSendData;
 
-        let mut out: Vec<DMListItemSendData> = Vec::new();
+        // Each row carries its last activity, so the list is ordered newest
+        // first. The friend list's order used to leak through, so every
+        // rebuild (opening a profile, a pin) undid the move-to-top a live
+        // message had made.
+        let mut out: Vec<ChatRowSendData> = Vec::new();
         for peer_id in self.dm_peers() {
             // Local storage key for a channel-free DM = the peer's user_id
             // wrapped as a ChannelId (same UUID).
@@ -564,10 +568,8 @@ impl ChatterClient {
             // Preview + timestamp from local DM history (empty if none). This
             // used to hand-roll the text-only case, so a DM whose last message
             // was a file rendered blank until the next live message arrived.
-            let (last_message, timestamp) = self.sidebar_activity(
-                self.latest_message(&conversation_id, &ConversationType::ServerDm)
-                    .as_ref(),
-            );
+            let latest = self.latest_message(&conversation_id, &ConversationType::ServerDm);
+            let (last_message, timestamp) = self.sidebar_activity(latest.as_ref());
 
             let unread_count = self
                 .messages()
@@ -575,20 +577,16 @@ impl ChatterClient {
                 .get_unread_count(&conversation_id, &ConversationType::ServerDm)
                 .unwrap_or(0) as u32;
 
-            out.push(DMListItemSendData {
-                channel_id: peer_id.to_string(),
+            out.push(ChatRowSendData {
                 user_id: peer_id.to_string(),
                 initials: initials_from_name(&display_name),
-                display_name,
                 avatar_bytes,
-                avatar_decoded: None,
                 presence_status,
                 last_message,
                 timestamp,
                 unread_count,
-                is_typing: false,
-                is_anon: false,
-                is_pinned: false,
+                last_activity: latest.map(|m| m.created_at),
+                ..ChatRowSendData::new(ConversationType::ServerDm, peer_id.to_string(), display_name)
             });
         }
         self.finish_dm_sidebar(out)
@@ -596,23 +594,24 @@ impl ChatterClient {
 
     /// Final pass every DM sidebar list goes through: drop rows that live in a
     /// custom section (they render inside that folder — showing them here too
-    /// rendered the same conversation twice) and float pinned rows to the top.
-    /// Idempotent, so the anon and non-anon paths can both call it.
+    /// rendered the same conversation twice), mark pins, and order the rows
+    /// as the chat list does. Idempotent, so the anon and non-anon paths can
+    /// both call it.
     fn finish_dm_sidebar(
         &self,
-        mut rows: Vec<crate::ui::sidebar_data::DMListItemSendData>,
-    ) -> Vec<crate::ui::sidebar_data::DMListItemSendData> {
+        mut rows: Vec<crate::ui::sidebar_data::ChatRowSendData>,
+    ) -> Vec<crate::ui::sidebar_data::ChatRowSendData> {
         let sectioned = self
             .sections()
             .all_sectioned_conversation_ids()
             .unwrap_or_default();
-        rows.retain(|r| !sectioned.contains(&r.channel_id));
+        rows.retain(|r| !sectioned.contains(&r.id));
 
         let pinned = self.conversation_pins().pinned_ids();
         for row in rows.iter_mut() {
-            row.is_pinned = pinned.contains(&row.channel_id);
+            row.is_pinned = pinned.contains(&row.id);
         }
-        rows.sort_by_key(|r| !r.is_pinned);
+        crate::ui::sidebar_data::order_chat_rows(&mut rows);
         rows
     }
 
@@ -621,18 +620,18 @@ impl ChatterClient {
     /// fully-shaped vector the UI renders directly. Regular DMs are dropped when
     /// anon mode is on. This is the single source of truth for the sidebar; the
     /// UI must not merge two separate lists (that races and drops fresh DMs).
-    pub fn list_dm_sidebar(&self) -> Vec<crate::ui::sidebar_data::DMListItemSendData> {
+    pub fn list_dm_sidebar(&self) -> Vec<crate::ui::sidebar_data::ChatRowSendData> {
         use crate::domain::anon_dm::AnonDmStatus;
-        use crate::domain::message::truncate_preview_text;
+        use crate::domain::message::{truncate_preview_text, ConversationType};
         use crate::ui::chat_data::initials_from_name;
-        use crate::ui::sidebar_data::DMListItemSendData;
+        use crate::ui::sidebar_data::ChatRowSendData;
 
         // Friend DMs show in both modes — one conversation per friend, whose
         // transport follows the mode. Anon DMs show ONLY in Shield: an anon
         // conversation must not surface — or be operable — in the identified
         // UI. This is the reactive filter behind the sidebar refresh on toggle.
         if self.anon_mode_enabled() {
-            let mut out: Vec<DMListItemSendData> = self.list_regular_dm_sidebar();
+            let mut out: Vec<ChatRowSendData> = self.list_regular_dm_sidebar();
 
         // Anon DMs — active conversations.
         for dm in self.list_anon_dm_conversations() {
@@ -643,7 +642,8 @@ impl ChatterClient {
                 .peer_display_name
                 .clone()
                 .unwrap_or_else(|| self.fallback_display_name(&dm.peer_id));
-            let (last_message, timestamp) = match self.get_latest_anon_dm_message(&dm.id) {
+            let latest = self.get_latest_anon_dm_message(&dm.id);
+            let (last_message, timestamp) = match &latest {
                 Some(msg) => {
                     let preview = msg
                         .as_text()
@@ -656,13 +656,10 @@ impl ChatterClient {
                 }
                 None => (String::new(), String::new()),
             };
-            out.push(DMListItemSendData {
-                channel_id: dm.id.to_string(),
+            out.push(ChatRowSendData {
                 user_id: dm.peer_id.to_string(),
                 initials: initials_from_name(&display_name),
-                display_name,
                 avatar_bytes: dm.peer_avatar.clone(),
-                avatar_decoded: None,
                 presence_status: if dm.status == AnonDmStatus::Active {
                     "online".to_string()
                 } else {
@@ -671,9 +668,8 @@ impl ChatterClient {
                 last_message,
                 timestamp,
                 unread_count: dm.unread_count,
-                is_typing: false,
-                is_anon: true,
-                is_pinned: false,
+                last_activity: latest.map(|m| m.created_at),
+                ..ChatRowSendData::new(ConversationType::AnonDm, dm.id.to_string(), display_name)
             });
         }
 
@@ -683,26 +679,23 @@ impl ChatterClient {
                 .peer_display_name
                 .clone()
                 .unwrap_or_else(|| self.fallback_display_name(&dm.peer_id));
-            let last_message = match self.get_latest_anon_dm_message(&dm.id) {
+            let latest = self.get_latest_anon_dm_message(&dm.id);
+            let last_message = match &latest {
                 Some(msg) => msg.as_text().unwrap_or_default().to_string(),
                 None => "Message request".to_string(),
             };
-            out.push(DMListItemSendData {
-                channel_id: dm.id.to_string(),
+            out.push(ChatRowSendData {
                 user_id: dm.peer_id.to_string(),
                 initials: initials_from_name(&peer_name),
-                // Envelope marker distinguishes a pending request from an
-                // active conversation in the sidebar.
-                display_name: format!("\u{1F4E9} {}", peer_name),
                 avatar_bytes: dm.peer_avatar.clone(),
-                avatar_decoded: None,
                 presence_status: "pending".to_string(),
                 last_message,
                 timestamp: self.sidebar_time(dm.created_at),
                 unread_count: 1,
-                is_typing: false,
-                is_anon: true,
-                is_pinned: false,
+                last_activity: Some(latest.map_or(dm.created_at, |m| m.created_at)),
+                // Envelope marker distinguishes a pending request from an
+                // active conversation in the sidebar.
+                ..ChatRowSendData::new(ConversationType::AnonDm, dm.id.to_string(), format!("\u{1F4E9} {}", peer_name))
             });
         }
 
@@ -712,7 +705,8 @@ impl ChatterClient {
                 .peer_display_name
                 .clone()
                 .unwrap_or_else(|| self.fallback_display_name(&dm.peer_id));
-            let (last_message, timestamp) = match self.get_latest_anon_dm_message(&dm.id) {
+            let latest = self.get_latest_anon_dm_message(&dm.id);
+            let (last_message, timestamp) = match &latest {
                 Some(msg) => {
                     let preview = msg
                         .as_text()
@@ -728,27 +722,83 @@ impl ChatterClient {
                     self.sidebar_time(dm.created_at),
                 ),
             };
-            out.push(DMListItemSendData {
-                channel_id: dm.id.to_string(),
+            out.push(ChatRowSendData {
                 user_id: dm.peer_id.to_string(),
                 initials: initials_from_name(&peer_name),
-                // Postbox marker distinguishes an outgoing pending request.
-                display_name: format!("\u{1F4EE} {} (pending)", peer_name),
                 avatar_bytes: dm.peer_avatar.clone(),
-                avatar_decoded: None,
                 presence_status: "offline".to_string(),
                 last_message,
                 timestamp,
-                unread_count: 0,
-                is_typing: false,
-                is_anon: true,
-                is_pinned: false,
+                last_activity: Some(latest.map_or(dm.created_at, |m| m.created_at)),
+                // Postbox marker distinguishes an outgoing pending request.
+                ..ChatRowSendData::new(ConversationType::AnonDm, dm.id.to_string(), format!("\u{1F4EE} {} (pending)", peer_name))
             });
         }
 
             self.finish_dm_sidebar(out)
         } else {
             self.list_regular_dm_sidebar()
+        }
+    }
+
+    /// The chat list: every loose conversation the current mode shows — DMs
+    /// (and, in Shield, anon DMs and requests), channels (current and former),
+    /// private groups — as ONE list, pinned first, then newest activity first
+    /// (Signal/Telegram). It used to be a DM block above a channel block, so a
+    /// channel with newer activity never rose above a DM. Folders render their
+    /// own rows (`list_sections_with_conversations`); every builder here drops
+    /// what lives in one.
+    pub fn sidebar_rows(&self) -> Vec<crate::ui::sidebar_data::ChatRowSendData> {
+        let mut rows = self.list_dm_sidebar();
+        rows.extend(self.sidebar_channels().iter().map(|c| self.channel_row(c)));
+        rows.extend(self.sidebar_private_groups().iter().map(|g| self.private_group_row(g)));
+        crate::ui::sidebar_data::order_chat_rows(&mut rows);
+        // The local AI channel leads the list while it is on; it cannot be
+        // pinned, so no activity order may bury it.
+        #[cfg(feature = "jarvis")]
+        {
+            let jarvis = super::jarvis_channel_id().to_string();
+            if let Some(i) = rows.iter().position(|r| r.id == jarvis) {
+                let row = rows.remove(i);
+                rows.insert(0, row);
+            }
+        }
+        rows
+    }
+
+    /// A channel's chat-list row.
+    fn channel_row(&self, channel: &crate::domain::channel::Channel) -> crate::ui::sidebar_data::ChatRowSendData {
+        use crate::ui::sidebar_data::ChatRowSendData;
+        let id = channel.id.to_string();
+        let latest = self.latest_message(&channel.id, &channel.conversation_type());
+        let (last_message, timestamp) = self.sidebar_activity(latest.as_ref());
+        ChatRowSendData {
+            avatar_bytes: channel.icon.clone().filter(|b| !b.is_empty()),
+            last_message,
+            timestamp,
+            unread_count: channel.unread_count,
+            is_pinned: self.is_conversation_pinned(&id),
+            private_channel: channel.channel_type == crate::domain::channel::ChannelType::Private,
+            can_leave: self.can_leave_channel(&channel.id),
+            can_delete: self.is_former_channel(&channel.id),
+            last_activity: latest.map(|m| m.created_at).or(channel.last_message_at),
+            ..ChatRowSendData::new(crate::domain::message::ConversationType::Channel, id, channel.name.clone())
+        }
+    }
+
+    /// A private (anon) group's chat-list row.
+    fn private_group_row(&self, group: &crate::domain::anon_group::AnonGroup) -> crate::ui::sidebar_data::ChatRowSendData {
+        use crate::ui::sidebar_data::ChatRowSendData;
+        let latest = self.get_latest_anon_group_message(&group.id);
+        let (last_message, timestamp) = self.sidebar_activity(latest.as_ref());
+        ChatRowSendData {
+            last_message,
+            timestamp,
+            unread_count: self.anon_group_unread_count(&group.id),
+            member_count: self.get_anon_group_members(&group.id).len() as u32,
+            is_pinned: self.is_conversation_pinned(&group.id.to_string()),
+            last_activity: latest.map(|m| m.created_at),
+            ..ChatRowSendData::new(crate::domain::message::ConversationType::AnonGroup, group.id.to_string(), group.name.clone())
         }
     }
 
@@ -837,8 +887,8 @@ impl ChatterClient {
 
         for dm in self.list_dm_sidebar() {
             out.push(ForwardDestination {
-                kind: if dm.is_anon { CT::AnonDm } else { CT::ServerDm },
-                id: dm.channel_id,
+                kind: dm.kind,
+                id: dm.id,
                 name: dm.display_name,
             });
         }
@@ -1009,8 +1059,8 @@ impl ChatterClient {
             ));
         }
         for dm in self.list_dm_sidebar() {
-            let kind = if dm.is_anon { "anon_dm" } else { "dm" };
-            entries.push(entry(dm.channel_id, dm.display_name, kind, dm.presence_status, dm.unread_count));
+            let kind = if dm.is_anon_dm() { "anon_dm" } else { "dm" };
+            entries.push(entry(dm.id, dm.display_name, kind, dm.presence_status, dm.unread_count));
         }
         for channel in self.sidebar_channels() {
             let id = channel.id.to_string();

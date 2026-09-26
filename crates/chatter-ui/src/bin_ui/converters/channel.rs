@@ -2,56 +2,17 @@
 
 use super::get_initials;
 
-use chatter_core::client::ChatterClient;
-use chatter_core::domain::channel::Channel;
-use chatter_core::ui::sidebar_data::{DMListItemSendData, FriendRequestSendData};
+use chatter_core::ui::sidebar_data::{ChatRowSendData, FriendRequestSendData};
 
-use super::utils::{avatar_bytes_to_image, channel_type_to_string};
+use super::utils::avatar_bytes_to_image;
 
-/// Convert a domain Channel to Slint ChannelListItemData.
-///
-/// Decodes `channel.icon` (raw image bytes) into a `slint::Image` at the
-/// UI-thread boundary only — no image-decode or caching logic lives here.
-pub fn channel_to_slint(channel: &Channel, ui_ctx: &ChatterClient) -> crate::ChannelListItemData {
-    let (avatar_source, has_avatar) = match channel.icon.as_deref() {
-        Some(bytes) if !bytes.is_empty() => match avatar_bytes_to_image(bytes) {
-            Some(img) => (img, true),
-            None => (slint::Image::default(), false),
-        },
-        _ => (slint::Image::default(), false),
-    };
-
-    // Latest-activity preview + stamp, composed by core. Core takes the whole
-    // channel because the storage bucket depends on it — see
-    // `channel_sidebar_activity`.
-    let (last_message, timestamp) = ui_ctx.channel_sidebar_activity(channel);
-
-    crate::ChannelListItemData {
-        channel_id: channel.id.to_string().into(),
-        name: channel.name.clone().into(),
-        channel_type: channel_type_to_string(channel.channel_type).into(),
-        unread_count: channel.unread_count as i32,
-        last_message: last_message.into(),
-        timestamp: timestamp.into(),
-        is_typing: false,
-        avatar_source,
-        has_avatar,
-        // Pin state is core's (settings-backed, local-only). One indexed
-        // lookup per row; the sidebar channel list is tens of rows, not
-        // thousands.
-        is_pinned: ui_ctx.is_conversation_pinned(&channel.id.to_string()),
-        can_leave: ui_ctx.can_leave_channel(&channel.id),
-        can_delete: ui_ctx.is_former_channel(&channel.id),
-        is_selected: false,
-    }
+pub trait ChatRowExt {
+    fn to_slint(self) -> crate::ChatRowData;
 }
 
-pub trait DMListItemExt {
-    fn to_slint(self) -> crate::DMListItemData;
-}
-
-impl DMListItemExt for DMListItemSendData {
-    fn to_slint(self) -> crate::DMListItemData {
+impl ChatRowExt for ChatRowSendData {
+    /// UI thread only: builds the row's `slint::Image`.
+    fn to_slint(self) -> crate::ChatRowData {
         let (avatar_source, has_avatar) = if let Some((w, h, pixels)) = self.avatar_decoded {
             let buffer = slint::SharedPixelBuffer::<slint::Rgba8Pixel>::clone_from_slice(
                 &pixels, w, h
@@ -66,20 +27,24 @@ impl DMListItemExt for DMListItemSendData {
             (slint::Image::default(), false)
         };
 
-        crate::DMListItemData {
-            channel_id: self.channel_id.into(),
+        crate::ChatRowData {
+            conversation_id: self.id.into(),
+            conversation_type: super::conversation_kind(&self.kind),
             user_id: self.user_id.into(),
             display_name: self.display_name.into(),
             avatar_source,
             has_avatar,
             initials: self.initials.into(),
-            presence_status: self.presence_status.into(),
             last_message: self.last_message.into(),
             timestamp: self.timestamp.into(),
+            presence_status: self.presence_status.into(),
+            private_channel: self.private_channel,
+            member_count: self.member_count as i32,
             unread_count: self.unread_count as i32,
             is_typing: self.is_typing,
-            is_anon: self.is_anon,
             is_pinned: self.is_pinned,
+            can_leave: self.can_leave,
+            can_delete: self.can_delete,
             is_selected: false,
         }
     }

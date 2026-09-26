@@ -14,10 +14,8 @@ import { Appearance } from "../theme/appearance.slint";
 import { Spacing } from "../theme/spacing.slint";
 import { Icons } from "../theme/icons.slint";
 import { Typography } from "../theme/typography.slint";
-import { ChannelList, ChannelListItemData } from "channel_list.slint";
-import { DMList, DMListItemData } from "dm_list.slint";
-import { PrivateGroupList, PrivateGroupListItemData } from "private_group_list.slint";
-import { CustomSectionList, CustomSectionData, SectionConversationData } from "custom_section_list.slint";
+import { ChatList, ChatRowData } from "chat_list.slint";
+import { CustomSectionList, CustomSectionData } from "custom_section_list.slint";
 import { SectionContextMenu, SectionHeaderContextMenu } from "section_context_menu.slint";
 import { Avatar } from "../components/avatar.slint";
 import { TooltipArea } from "../components/tooltip.slint";
@@ -26,20 +24,13 @@ import { MeshGlobal } from "../mesh/mesh_global.slint";
 import { MeshList } from "../mesh/mesh_list.slint";
 import { ConversationKind } from "../chat/conversation_kind.slint";
 
-export { ChannelListItemData, DMListItemData, PrivateGroupListItemData, CustomSectionData, SectionConversationData }
+export { ChatRowData, CustomSectionData }
 
 export component Sidebar inherits Rectangle {
     // ── Properties: Data ──
-    in property <[ChannelListItemData]> channels: [];
-    in property <[DMListItemData]> dm-conversations: [];
-    in property <[PrivateGroupListItemData]> private-groups: [];
+    // The chat list, ordered by core (`ChatterClient::sidebar_rows`).
+    in property <[ChatRowData]> chat-rows: [];
     in property <[CustomSectionData]> custom-sections: [];
-    // One empty-state rule for the whole chat list: a list's "nothing here"
-    // shows only when there is nothing anywhere. Scoped per list, "No
-    // conversations" sat directly above a channel (and "No channels yet"
-    // under a DM) and read as global.
-    property <bool> chat-list-empty: root.dm-conversations.length == 0 && root.channels.length == 0
-        && root.private-groups.length == 0 && root.custom-sections.length == 0;
 
     // ── Properties: User profile ──
     in property <string> user-display-name: "User";
@@ -160,8 +151,6 @@ export component Sidebar inherits Rectangle {
     property <bool> rail-has-mesh: MeshGlobal.enabled && MeshGlobal.conversations.length > 0;
     // AI, Mesh (conditional), expand, Settings, anon shield, profile.
     property <int> rail-button-count: root.rail-has-mesh ? 6 : 5;
-    property <bool> channels-expanded: true;
-    property <bool> messages-expanded: true;
 
     // Context menu state
     property <bool> ctx-menu-show: false;
@@ -171,9 +160,6 @@ export component Sidebar inherits Rectangle {
     property <ConversationKind> ctx-menu-conv-type;
     property <string> ctx-menu-current-section-id: "";
     property <bool> ctx-menu-is-pinned: false;
-    // Private groups are the one list core does not order, so a pin there
-    // would set a flag nothing reads. Hide the entry rather than lie.
-    property <bool> ctx-menu-can-pin: true;
     // Channel rows only, as core decided it for the row.
     property <bool> ctx-menu-can-leave: false;
     property <bool> ctx-menu-can-delete-channel: false;
@@ -250,11 +236,10 @@ export component Sidebar inherits Rectangle {
             search-touch := TouchArea { mouse-cursor: pointer; clicked => { root.search-clicked(); } }
             // Create — New Chat / New Channel / New Section. Two-pane only; a
             // phone has the floating button on the Chats tab instead. Left of
-            // the Shield toggle when that is built in.
+            // the Shield toggle.
             if !root.mobile-mode: Rectangle {
                 width: root.touch ? Spacing.touch-target-min : 24px; height: self.width;
-                x: parent.width - self.width - Spacing.sm
-                    - (AnonMode.onion-built ? self.width + Spacing.xs : 0px);
+                x: parent.width - self.width - Spacing.sm - self.width - Spacing.xs;
                 y: (parent.height - self.height) / 2;
                 border-radius: 4px;
                 accessible-role: button;
@@ -269,11 +254,12 @@ export component Sidebar inherits Rectangle {
             // after `search-touch` so it sits above the row's search target.
             // Glows when on; the dot is Tor status.
             //
-            // STUB-1: gated on the `onion` Cargo feature (mirrored into
-            // AnonMode.onion-built from lib.rs). A build without it cannot
-            // put traffic on the onion, so it must not offer a control that
-            // says it will.
-            if AnonMode.onion-built: Rectangle {
+            // Offered in every build: Shield is the anonymous-mailbox mode and
+            // works without Tor. A build without the `onion` feature stays
+            // direct, core reports TorStatus Unavailable and the
+            // ShieldNetworkBanner says so. Only the Tor dot is gated on
+            // AnonMode.onion-built — without Tor it would be a permanent red.
+            Rectangle {
                 width: root.touch ? Spacing.touch-target-min : 24px; height: self.width;
                 x: parent.width - self.width - Spacing.sm; y: (parent.height - self.height) / 2;
                 border-radius: 4px;
@@ -286,9 +272,9 @@ export component Sidebar inherits Rectangle {
                 // red=error, muted=off. State 0 is Off — traffic is going
                 // direct — and it used to fall through to amber, i.e. the
                 // dot claimed "connecting" forever on a build with no Tor
-                // in it. Shield mode only.
+                // in it. Shield mode only, and only where Tor exists.
                 Rectangle {
-                    visible: AnonMode.enabled;
+                    visible: AnonMode.enabled && AnonMode.onion-built;
                     width: 8px; height: 8px; border-radius: 4px;
                     x: parent.width - self.width; y: 0;
                     border-width: 1px; border-color: Colors.surface;
@@ -534,192 +520,12 @@ export component Sidebar inherits Rectangle {
                     }
                 }
 
-                // 4. MESSAGES SECTION — header label/expander only meaningful when expanded.
-                // In collapsed mode the row would render as 32px of empty space, so zero it.
-                Rectangle {
-                    // 42px, not 32, with the label pushed to the bottom of it.
-                    // A section header centred in its own box sits the same
-                    // distance from the group above as from the group it names,
-                    // so it binds to neither and the list reads as one long run
-                    // of rows. The extra space goes above the label only.
-                    // Telegram has no section headers — one flat run of
-                    // conversations, newest first. Grouping DMs apart from
-                    // channels is a desktop convenience that on a phone just
-                    // spends a row telling you what the next rows obviously
-                    // are, and the collapse chevrons hide conversations behind
-                    // a tap for no gain. Desktop keeps them.
-                    height: root.collapsed || root.mobile-mode ? 0px : 42px;
-                    if !root.collapsed && !root.mobile-mode: HorizontalLayout {
-                        padding-top: 10px;
-                        padding-left: 6px;
-                        padding-right: 4px;
-                        TouchArea {
-                            horizontal-stretch: 1;
-                            mouse-cursor: pointer;
-                            clicked => { root.messages-expanded = !root.messages-expanded; }
-                            HorizontalLayout {
-                                padding-left: 2px;
-                                spacing: 4px;
-                                alignment: start;
-                                VerticalLayout {
-                                    alignment: center;
-                                    horizontal-stretch: 0;
-                                    Image {
-                                        source: Icons.chevron-right;
-                                        width: 10px;
-                                        height: 10px;
-                                        colorize: Colors.text-muted;
-                                        transform-rotation: root.messages-expanded ? 90deg : 0deg;
-                                        animate transform-rotation { duration: 150ms; easing: ease-out; }
-                                    }
-                                }
-                                Text {
-                                    text: "Messages";
-                                    color: Colors.text-muted;
-                                    font-size: Typography.xs2;
-                                    font-weight: 600;
-                                    letter-spacing: 0.5px;
-                                    vertical-alignment: center;
-                                }
-                            }
-                        }
-                        Rectangle {
-                            width: 28px;
-                            horizontal-stretch: 0;
-
-                            Rectangle {
-                                width: 24px;
-                                height: 24px;
-                                x: (parent.width - self.width) / 2;
-                                y: (parent.height - self.height) / 2;
-                                border-radius: Spacing.radius-sm;
-                                background: add-dm-touch.has-hover ? Colors.surface-hover : transparent;
-
-                                Image {
-                                    source: Icons.user-plus;
-                                    width: 14px;
-                                    height: 14px;
-                                    x: (parent.width - self.width) / 2;
-                                    y: (parent.height - self.height) / 2;
-                                    colorize: add-dm-touch.has-hover ? Colors.text-primary : Colors.text-muted;
-                                }
-                            }
-
-                            add-dm-touch := TouchArea {
-                                mouse-cursor: pointer;
-                                clicked => { root.friends-clicked(); }
-                            }
-                        }
-                    }
-                }
-
-                if root.messages-expanded: DMList {
-                    vertical-stretch: 0;
-                    conversations: root.dm-conversations;
-                    collapsed: root.collapsed;
-                    mobile-mode: root.touch;
-                    show-header: false;
-                    has-sibling-content: !root.chat-list-empty;
-                    conversation-selected(id) => { root.dm-selected(id); }
-                    add-friend-clicked => { root.friends-clicked(); }
-                    dm-context-menu-requested(id, is-anon, pinned, x, y) => {
-                        root.ctx-menu-conv-id = id;
-                        root.ctx-menu-is-pinned = pinned;
-                        root.ctx-menu-can-pin = true;
-                        root.ctx-menu-can-leave = false;
-                        root.ctx-menu-can-delete-channel = false;
-                        // The row's own kind, as core built it — not the
-                        // current mode, which a row need not share.
-                        root.ctx-menu-conv-type = is-anon ? ConversationKind.anon-dm : ConversationKind.server-dm;
-                        root.ctx-menu-x = x;
-                        root.ctx-menu-y = y;
-                        root.ctx-menu-current-section-id = "";
-                        root.ctx-menu-show = true;
-                    }
-                }
-
-                // 5. CHANNELS SECTION — header zeroed in collapsed mode (collapsed action rail
-                // below at line 593+ provides the find/new/section buttons).
-                // Hidden entirely in Anon Mode — anon groups live below in a
-                // separate model so this filter only kills server channels.
-                if !AnonMode.enabled : Rectangle {
-                    // 42px, not 32, with the label pushed to the bottom of it.
-                    // A section header centred in its own box sits the same
-                    // distance from the group above as from the group it names,
-                    // so it binds to neither and the list reads as one long run
-                    // of rows. The extra space goes above the label only.
-                    // Telegram has no section headers — one flat run of
-                    // conversations, newest first. Grouping DMs apart from
-                    // channels is a desktop convenience that on a phone just
-                    // spends a row telling you what the next rows obviously
-                    // are, and the collapse chevrons hide conversations behind
-                    // a tap for no gain. Desktop keeps them.
-                    height: root.collapsed || root.mobile-mode ? 0px : 42px;
-                    if !root.collapsed && !root.mobile-mode: HorizontalLayout {
-                        padding-top: 10px;
-                        padding-left: 6px;
-                        padding-right: 4px;
-                        TouchArea {
-                            horizontal-stretch: 1;
-                            mouse-cursor: pointer;
-                            clicked => { root.channels-expanded = !root.channels-expanded; }
-                            HorizontalLayout {
-                                padding-left: 2px;
-                                spacing: 4px;
-                                alignment: start;
-                                VerticalLayout {
-                                    alignment: center;
-                                    horizontal-stretch: 0;
-                                    Image {
-                                        source: Icons.chevron-right;
-                                        width: 10px;
-                                        height: 10px;
-                                        colorize: Colors.text-muted;
-                                        transform-rotation: root.channels-expanded ? 90deg : 0deg;
-                                        animate transform-rotation { duration: 150ms; easing: ease-out; }
-                                    }
-                                }
-                                Text {
-                                    text: "Channels";
-                                    color: Colors.text-muted;
-                                    font-size: Typography.xs2;
-                                    font-weight: 600;
-                                    letter-spacing: 0.5px;
-                                    vertical-alignment: center;
-                                }
-                            }
-                        }
-                        // "+" opens the Create-Channel modal (Create | Join tabs).
-                        Rectangle {
-                            width: 28px;
-                            horizontal-stretch: 0;
-
-                            Rectangle {
-                                width: 24px;
-                                height: 24px;
-                                x: (parent.width - self.width) / 2;
-                                y: (parent.height - self.height) / 2;
-                                border-radius: Spacing.radius-sm;
-                                background: create-ch-touch.has-hover ? Colors.surface-hover : transparent;
-
-                                Image {
-                                    source: Icons.plus;
-                                    width: 14px;
-                                    height: 14px;
-                                    x: (parent.width - self.width) / 2;
-                                    y: (parent.height - self.height) / 2;
-                                    colorize: create-ch-touch.has-hover ? Colors.text-primary : Colors.text-muted;
-                                }
-                            }
-
-                            create-ch-touch := TouchArea {
-                                mouse-cursor: pointer;
-                                clicked => { root.create-channel-clicked(); }
-                            }
-                        }
-                    }
-                }
-
+                // 4. CHATS — one list of every loose conversation, newest
+                // activity first, pinned first (Signal/Telegram). It used to be
+                // a "Messages" block above a "Channels" block, so a channel with
+                // newer activity never rose above a DM; creating a chat or a
+                // channel lives in the top row's Create menu (and the phone's
+                // floating button), not in per-block headers.
                 // Collapsed channel-action rail: find / new-channel / new-section
                 if root.collapsed && !AnonMode.enabled : VerticalLayout {
                     spacing: 4px;
@@ -751,49 +557,33 @@ export component Sidebar inherits Rectangle {
                     }
                 }
 
-                if root.channels-expanded && !AnonMode.enabled : ChannelList {
+                ChatList {
                     vertical-stretch: 0;
-                    channels: root.channels;
+                    rows: root.chat-rows;
                     collapsed: root.collapsed;
                     mobile-mode: root.touch;
-                    show-header: false;
-                    has-sibling-content: !root.chat-list-empty;
-                    channel-selected(id) => { root.channel-selected(id); }
-                    // FEAT-8: ChannelList emits this from its header search
-                    // button AND from the empty-state CTA, which is the FIRST
-                    // control a brand-new account ever sees (the empty state
-                    // renders exactly when channels.length == 0). This binding
-                    // was missing, so that button did nothing at all. app.slint
-                    // turns it into the join tab of CreateChannelModal.
-                    join-channel-clicked() => { root.join-channel-clicked(); }
-                    channel-context-menu-requested(id, pinned, can-leave, can-delete, x, y) => {
-                        root.ctx-menu-conv-id = id;
-                        root.ctx-menu-can-leave = can-leave;
-                        root.ctx-menu-can-delete-channel = can-delete;
-                        root.ctx-menu-conv-type = ConversationKind.channel;
-                        root.ctx-menu-x = x;
-                        root.ctx-menu-y = y;
-                        root.ctx-menu-current-section-id = "";
-                        root.ctx-menu-is-pinned = pinned;
-                        root.ctx-menu-can-pin = true;
-                        root.ctx-menu-show = true;
+                    has-sibling-content: root.custom-sections.length > 0;
+                    row-selected(id, kind) => {
+                        if kind == ConversationKind.channel || kind == ConversationKind.saved-messages {
+                            root.channel-selected(id);
+                        } else if kind == ConversationKind.anon-group {
+                            root.private-group-selected(id);
+                        } else {
+                            root.dm-selected(id);
+                        }
                     }
-                }
-
-                if root.channels-expanded && root.private-groups.length > 0: PrivateGroupList {
-                    vertical-stretch: 0;
-                    mobile-mode: root.touch;
-                    groups: root.private-groups;
-                    collapsed: root.collapsed;
-                    group-selected(id) => { root.private-group-selected(id); }
-                    group-context-menu-requested(id, x, y) => {
-                        root.ctx-menu-conv-id = id;
-                        root.ctx-menu-is-pinned = false;
-                        root.ctx-menu-can-pin = false;
-                        root.ctx-menu-can-leave = false;
-                        root.ctx-menu-can-delete-channel = false;
-                        // A private group is an anon group in core.
-                        root.ctx-menu-conv-type = ConversationKind.anon-group;
+                    add-friend-clicked => { root.friends-clicked(); }
+                    // FEAT-8: app.slint turns this into the join tab of
+                    // CreateChannelModal.
+                    join-channel-clicked() => { root.join-channel-clicked(); }
+                    row-context-menu-requested(row, x, y) => {
+                        root.ctx-menu-conv-id = row.conversation-id;
+                        // The row's own kind, as core built it — not the
+                        // current mode, which a row need not share.
+                        root.ctx-menu-conv-type = row.conversation-type;
+                        root.ctx-menu-is-pinned = row.is-pinned;
+                        root.ctx-menu-can-leave = row.can-leave;
+                        root.ctx-menu-can-delete-channel = row.can-delete;
                         root.ctx-menu-x = x;
                         root.ctx-menu-y = y;
                         root.ctx-menu-current-section-id = "";
@@ -811,7 +601,7 @@ export component Sidebar inherits Rectangle {
                     collapsed: root.collapsed;
                 }
 
-                // 4b. CUSTOM SECTIONS (user-created, between Messages and Channels)
+                // 6b. CUSTOM SECTIONS — user-created folders, below the chat list and mesh
                 CustomSectionList {
                     vertical-stretch: 0;
                     sections: root.custom-sections;
@@ -830,7 +620,6 @@ export component Sidebar inherits Rectangle {
                         root.ctx-menu-y = y;
                         root.ctx-menu-current-section-id = section-id;
                         root.ctx-menu-is-pinned = pinned;
-                        root.ctx-menu-can-pin = conv-type != ConversationKind.anon-group;
                         root.ctx-menu-show = true;
                     }
                     section-header-context-menu-requested(section-id, sort-mode, x, y) => {
@@ -945,8 +734,8 @@ export component Sidebar inherits Rectangle {
             // Collapsed view: Vertical stack of icons
             if root.collapsed: VerticalLayout {
                 alignment: end; spacing: 8px; padding-bottom: 8px;
-                // STUB-1: same gate as the expanded footer shield.
-                if AnonMode.onion-built: TooltipArea {
+                // Ungated, like the expanded header shield.
+                TooltipArea {
                     height: root.rail-icon-size; width: 44px; x: (parent.width - self.width) / 2;
                     tooltip-text: AnonMode.enabled ? "Anon Mode (active) - tap to disable" : "Anon Mode";
                     tooltip-enabled: true; placement: "right";
@@ -957,7 +746,7 @@ export component Sidebar inherits Rectangle {
                         // Tor status dot: green=connected, amber=CONNECTING ONLY,
                         // red=error, muted=off. See the expanded shield above.
                         Rectangle {
-                            visible: AnonMode.enabled;
+                            visible: AnonMode.enabled && AnonMode.onion-built;
                             width: 10px; height: 10px; border-radius: 5px;
                             x: parent.width - self.width - 2px; y: 2px;
                             border-width: 1px; border-color: Colors.surface;
@@ -1071,7 +860,6 @@ export component Sidebar inherits Rectangle {
         conversation-type: root.ctx-menu-conv-type;
         current-section-id: root.ctx-menu-current-section-id;
         is-pinned: root.ctx-menu-is-pinned;
-        can-pin: root.ctx-menu-can-pin;
         can-leave: root.ctx-menu-can-leave;
         can-delete-channel: root.ctx-menu-can-delete-channel;
         mobile-mode: root.touch;

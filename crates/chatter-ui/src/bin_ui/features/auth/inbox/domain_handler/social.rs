@@ -151,9 +151,9 @@ pub(super) fn handle_friend_accepted(
 
     let _ = slint::invoke_from_event_loop(move || {
         if let Some(w) = weak.upgrade() {
-            // Single source of truth: refresh_dm_list rebuilds regular + anon
-            // DMs from core in one pass.
-            super::super::super::initial_data::refresh_dm_list(&w, &ui_ctx);
+            // Single source of truth: the chat list is rebuilt from core in
+            // one pass.
+            crate::bin_ui::features::sidebar::refresh_chat_list(&w, &ui_ctx);
             tracing::info!(
                 friend_id = %friend_id,
                 "Friend accepted - refreshed DM sidebar"
@@ -194,15 +194,12 @@ pub(super) fn handle_presence_changed(
         }
 
         // 1. Update sidebar DM presence dots
-        let dms = w.get_dm_conversations();
+        let dms = w.get_chat_rows();
         for i in 0..dms.row_count() {
-            if let Some(dm) = dms.row_data(i) {
+            if let Some(mut dm) = dms.row_data(i) {
                 if dm.user_id == user_id_str {
-                    let mut updated = dm.clone();
-                    updated.presence_status = presence_slint.clone();
-                    if let Some(model) = dms.as_any().downcast_ref::<slint::VecModel<crate::DMListItemData>>() {
-                        model.set_row_data(i, updated);
-                    }
+                    dm.presence_status = presence_slint.clone();
+                    dms.set_row_data(i, dm);
                     break;
                 }
             }
@@ -281,10 +278,10 @@ pub(super) fn handle_anon_dm_profile_updated(
     let name_for_ui = display_name_clone.clone();
     let _ = slint::invoke_from_event_loop(move || {
         if let Some(w) = weak_for_name.upgrade() {
-            let dms = w.get_dm_conversations();
+            let dms = w.get_chat_rows();
             for i in 0..dms.row_count() {
                 if let Some(mut dm) = dms.row_data(i) {
-                    if dm.channel_id == conv_id_for_name {
+                    if dm.conversation_id == conv_id_for_name {
                         if let Some(name) = &name_for_ui {
                             dm.display_name = name.clone().into();
                         }
@@ -347,10 +344,10 @@ pub(super) fn handle_anon_dm_profile_updated(
 
 /// Update a DM's avatar in the sidebar. Must be called on the UI thread.
 fn update_dm_avatar(w: &MainWindow, channel_id: &str, bytes: &[u8]) {
-    let dms = w.get_dm_conversations();
+    let dms = w.get_chat_rows();
     for i in 0..dms.row_count() {
         if let Some(mut dm) = dms.row_data(i) {
-            if dm.channel_id == channel_id {
+            if dm.conversation_id == channel_id {
                 if let Some(img) = crate::bin_ui::converters::avatar_bytes_to_image(bytes) {
                     dm.avatar_source = img;
                     dm.has_avatar = true;
@@ -370,6 +367,7 @@ fn update_dm_avatar(w: &MainWindow, channel_id: &str, bytes: &[u8]) {
 /// header, and profile modal in real-time.
 pub(super) fn handle_user_profile_updated(
     window: &Weak<MainWindow>,
+    ui_ctx: &ChatterClient,
     user_id: UserId,
     display_name: String,
     status_message: Option<String>,
@@ -385,6 +383,10 @@ pub(super) fn handle_user_profile_updated(
     );
 
     let weak = window.clone();
+    // Same resolution the DM open path uses (core already stored the profile).
+    let header_name: Option<slint::SharedString> = (ui_ctx.active_conversation()
+        == chatter_core::state::ActiveConversation::ServerDm { peer_id: user_id })
+        .then(|| ui_ctx.display_name(&user_id).into());
     let user_id_str = user_id.to_string();
     let display_name_slint: slint::SharedString = display_name.clone().into();
     let initials = chatter_core::ui::chat_data::initials_from_name(&display_name);
@@ -392,7 +394,7 @@ pub(super) fn handle_user_profile_updated(
     // Decode the avatar to raw RGBA now (Send-safe); the non-Send `slint::Image`
     // is built inside the event-loop closure below. This is the same in-place
     // patch path the name already uses — the DM sidebar's own rebuild
-    // (refresh_dm_list) races the pre-decrypt build, so we set the avatar here
+    // (refresh_chat_list) races the pre-decrypt build, so we set the avatar here
     // where we know the decrypted bytes just arrived.
     let avatar_decoded: Option<(u32, u32, Vec<u8>)> = avatar_bytes.as_ref().and_then(|b| {
         image::load_from_memory(b).ok().map(|img| {
@@ -412,7 +414,7 @@ pub(super) fn handle_user_profile_updated(
         });
 
         // 1. Sidebar DM rows — update display name + initials + avatar for matching peer.
-        let dms = w.get_dm_conversations();
+        let dms = w.get_chat_rows();
         for i in 0..dms.row_count() {
             if let Some(mut dm) = dms.row_data(i) {
                 if dm.user_id == user_id_str {
@@ -428,19 +430,14 @@ pub(super) fn handle_user_profile_updated(
             }
         }
 
-        // 2. Chat header for active server DM.
-        if w.get_is_dm() {
-            for i in 0..dms.row_count() {
-                if let Some(dm) = dms.row_data(i) {
-                    if dm.is_selected && dm.user_id == user_id_str {
-                        w.set_channel_name(display_name_slint.clone());
-                        if let Some(img) = &avatar_img {
-                            w.set_channel_avatar_source(img.clone());
-                            w.set_channel_has_avatar(true);
-                        }
-                        break;
-                    }
-                }
+        // 2. Chat header, when this peer's DM is the open conversation. Asked
+        // of core, not the sidebar model: a DM filed into a folder has no row
+        // there, and its header kept the name it opened with.
+        if let Some(name) = header_name {
+            w.set_channel_name(name);
+            if let Some(img) = &avatar_img {
+                w.set_channel_avatar_source(img.clone());
+                w.set_channel_has_avatar(true);
             }
         }
 

@@ -766,15 +766,11 @@ pub fn wire_settings_callbacks(window: &MainWindow, ui_ctx: &Arc<ChatterClient>)
         }
         tracing::debug!("Local AI enabled setting changed to: {}", enabled);
         // The AI channel's sidebar visibility follows this setting — rebuild
-        // the channel list live.
+        // the chat list live.
         #[cfg(feature = "jarvis")]
-        if let Some(w) = weak_ai_toggle.upgrade() {
-            let channels: Vec<_> = ui_ctx_ai
-                .sidebar_channels()
-                .iter()
-                .map(|c| crate::bin_ui::converters::channel_to_slint(c, &ui_ctx_ai))
-                .collect();
-            w.set_channels(slint::ModelRc::new(slint::VecModel::from(channels)));
+        {
+            let (weak, ui_ctx) = (weak_ai_toggle.clone(), ui_ctx_ai.clone());
+            tokio::spawn(async move { crate::bin_ui::features::sidebar::rebuild_chat_list(&weak, &ui_ctx) });
         }
     });
 

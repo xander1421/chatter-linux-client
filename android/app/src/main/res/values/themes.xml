@@ -4,8 +4,14 @@
          descend from Theme.AppCompat or it crashes at onCreate. NoActionBar
          because Slint draws the whole surface itself. -->
     <style name="Theme.Chatter" parent="Theme.AppCompat.NoActionBar">
-        <item name="android:statusBarColor">@android:color/black</item>
-        <item name="android:navigationBarColor">@android:color/black</item>
-        <item name="android:windowBackground">@android:color/black</item>
+        <!-- Slint draws edge-to-edge (safe-area insets) and paints its
+             own theme background under both bars. An opaque bar colour is
+             drawn OVER that on API <= 34 (35+ ignores it): the light theme's
+             status bar was a black strip hiding its dark icons. -->
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:navigationBarColor">@android:color/transparent</item>
+        <!-- Shown before Slint's first frame; values-night overrides it so a
+             light-mode launch doesn't flash black. Matches Colors.background. -->
+        <item name="android:windowBackground">@color/window_background</item>
     </style>
 </resources>

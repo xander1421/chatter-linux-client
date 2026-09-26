@@ -91,31 +91,8 @@ fn wire_submit_pin(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     });
 }
 
-/// Rebuild sidebar models so the anon-mode filter takes effect.
-///
-/// `refresh_dm_list` rebuilds the full DM model from core, which applies the
-/// `anon_mode_enabled()` filter internally.
+/// Rebuild the chat list so the anon-mode filter takes effect: core's
+/// `sidebar_rows` applies `anon_mode_enabled()` to every kind.
 fn refresh_sidebar(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
-    crate::bin_ui::features::auth::initial_data::refresh_dm_list(window, ui_ctx);
-
-    // Channels: rebuild from local cache. When anon mode is on, we want
-    // an empty list. When it flips back off, we want the cached server
-    // channels back. The cheapest path that handles both: call the same
-    // builder used at login.
-    rebuild_channels(window, ui_ctx);
-
-    crate::bin_ui::features::sidebar::refresh_selection(window, ui_ctx);
-}
-
-/// Mirror the channel-list build logic from `load_initial_data`, but
-/// synchronous on the UI thread (the data already lives in local
-/// storage). Anon Mode short-circuits to an empty list.
-fn rebuild_channels(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
-    // Sidebar-inclusion rule (Public/Private, anon-mode aware) lives in core.
-    let channel_list: Vec<crate::ChannelListItemData> = ui_ctx
-        .sidebar_channels()
-        .iter()
-        .map(|c| crate::bin_ui::converters::channel_to_slint(c, ui_ctx))
-        .collect();
-    window.set_channels(slint::ModelRc::new(slint::VecModel::from(channel_list)));
+    crate::bin_ui::features::sidebar::refresh_chat_list(window, ui_ctx);
 }

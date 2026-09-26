@@ -9,9 +9,8 @@ use chatter_core::client::ChatterClient;
 use chatter_core::domain::channel::{ChannelConfig, ChannelType, MessagePersistence};
 use chatter_core::domain::ids::UserId;
 
-use crate::bin_ui::converters::channel_to_slint;
 use crate::bin_ui::features::sidebar::load_channel_into_ui;
-use crate::{AIModelOption, ChannelListItemData, CreateChannelConfig, MainWindow, PrivateGroupFriend};
+use crate::{AIModelOption, CreateChannelConfig, MainWindow, PrivateGroupFriend};
 
 pub fn wire_create_channel(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     let weak_window = window.as_weak();
@@ -193,12 +192,9 @@ pub fn wire_create_channel(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
 
                         let weak_modal = weak.clone();
                         let channel_id_for_ui = channel_id_str.clone();
-                        // Move Channel (Send) + ChatterClient to UI thread;
-                        // slint::Image is !Send so conversion happens there.
-                        let channel_for_ui = channel.clone();
-                        let ui_ctx_convert = ui_ctx.clone();
+                        // The new channel's row comes from core, like every row.
+                        crate::bin_ui::features::sidebar::rebuild_chat_list(&weak, &ui_ctx);
                         let _ = slint::invoke_from_event_loop(move || {
-                            let slint_channel = channel_to_slint(&channel_for_ui, &ui_ctx_convert);
                             if let Some(w) = weak_modal.upgrade() {
                                 w.set_create_channel_loading(false);
                                 w.set_create_channel_name("".into());
@@ -206,10 +202,6 @@ pub fn wire_create_channel(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                                 w.set_create_channel_icon_url("".into());
                                 w.set_create_channel_has_icon_preview(false);
                                 crate::bin_ui::features::back::close(&w, "create-channel");
-                                let current_channels = w.get_channels();
-                                let mut channels: Vec<ChannelListItemData> = (0..current_channels.row_count()).filter_map(|i| current_channels.row_data(i)).collect();
-                                channels.push(slint_channel);
-                                w.set_channels(ModelRc::new(VecModel::from(channels)));
                                 w.invoke_channel_selected(channel_id_for_ui);
                             }
                         });
@@ -341,8 +333,6 @@ pub fn wire_create_channel(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             })
             .collect();
 
-        let member_count = selected_friends.len() as i32 + 1; // +1 for self
-
         if selected_friends.is_empty() { return; }
 
         let weak_loading = weak.clone();
@@ -355,15 +345,13 @@ pub fn wire_create_channel(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
 
         tokio::spawn(async move {
             match ui_ctx.create_anon_group(name.clone(), selected_friends).await {
-                Ok(group) => {
+                Ok(_group) => {
+                    crate::bin_ui::features::sidebar::rebuild_chat_list(&weak, &ui_ctx);
                     let weak_success = weak.clone();
-                    let group_id = group.id.to_string();
-                    let group_name = group.name.clone();
                     let _ = slint::invoke_from_event_loop(move || {
                         if let Some(w) = weak_success.upgrade() {
                             w.set_create_channel_loading(false);
                             crate::bin_ui::features::back::close(&w, "create-channel");
-                            crate::bin_ui::features::sidebar::add_private_group_to_sidebar(&w, &group_id, &group_name, member_count);
                         }
                     });
                 }

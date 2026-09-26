@@ -10,11 +10,10 @@ use chatter_core::client::ChatterClient;
 use chatter_core::domain::ids::ChannelId;
 
 use crate::bin_ui::converters::{
-    channel_to_slint, get_initials, messages_to_display_batch,
-    DMListItemExt, DMListItemSendData, FriendDataExt,
+    get_initials, messages_to_display_batch, ChatRowExt, FriendDataExt,
     FriendRequestExt, FriendRequestSendData,
 };
-use crate::{ChannelListItemData, DMListItemData, FriendData, FriendRequestData, MainWindow};
+use crate::{ChatRowData, FriendData, FriendRequestData, MainWindow};
 
 /// Rebuild the FriendsModal "Friends" tab list — core's mode-filtered rows
 /// (`friends_tab_entries`) — and push it into the UI. Cheap enough to
@@ -86,16 +85,11 @@ pub async fn load_initial_data(window_weak: Weak<MainWindow>, ui_ctx: &Arc<Chatt
     // Get current user ID for DM peer detection
     let current_user_id = ui_ctx.auth_state().get().current_user_id;
 
-    // Separate channels and DMs (using Send-safe types for DMs).
-    // ChannelListItemData contains a slint::Image (not Send) — hold domain
-    // Channels here and convert inside the UI-thread closure below.
-    // The DM sidebar is built ENTIRELY in core: mode-exclusive (regular vs anon),
-    // active + incoming requests + outgoing, with all previews/markers/presence.
-    // Same source of truth as refresh_dm_list — the UI never hand-rolls it.
-    let dm_list: Vec<DMListItemSendData> = ui_ctx.list_dm_sidebar();
-
-    // Sidebar-inclusion rule (Public/Private, anon-mode aware) lives in core.
-    let channel_domain_list = ui_ctx.sidebar_channels();
+    // The chat list is built ENTIRELY in core: one list of every loose
+    // conversation, mode-exclusive, ordered by activity with pins first,
+    // previews/markers/presence included. Same source as every later
+    // rebuild (`sidebar::rebuild_chat_list`) — the UI never hand-rolls it.
+    let mut chat_rows = ui_ctx.sidebar_rows();
 
     // Get user profile info
     let user_display_name = ui_ctx
@@ -168,20 +162,13 @@ pub async fn load_initial_data(window_weak: Weak<MainWindow>, ui_ctx: &Arc<Chatt
         }
     }
 
-    // Load private groups from local storage (folder-aware — see
-    // `private_group::private_group_rows`).
-    let private_groups = crate::bin_ui::features::sidebar::private_group::private_group_rows(&ui_ctx);
-
-    tracing::info!("Loaded {} private groups", private_groups.len());
-
     // Load blocked users for the Blocked tab
     let blocked_users_slint = crate::bin_ui::features::modals::friends::blocked_user_rows(&ui_ctx);
     tracing::info!("Loaded {} blocked users", blocked_users_slint.len());
 
     // Pre-decode avatars before entering UI thread to avoid blocking
-    let mut dm_list = dm_list;
-    for dm in &mut dm_list {
-        dm.pre_decode_avatar();
+    for row in &mut chat_rows {
+        row.pre_decode_avatar();
     }
     let mut private_requests_ui = private_requests_ui;
     for req in &mut private_requests_ui {
@@ -198,21 +185,14 @@ pub async fn load_initial_data(window_weak: Weak<MainWindow>, ui_ctx: &Arc<Chatt
     let window_weak_ui = window_weak.clone();
     let pending_message_requests_count = private_requests_ui.len() as i32;
     let ui_ctx_for_refresh = ui_ctx.clone();
-    let ui_ctx_for_convert = ui_ctx.clone();
     let search_shortcut_pref = ui_ctx.get_search_shortcut().as_str();
     let notification_detail = ui_ctx.notification_detail_level().as_str();
     let own_username = ui_ctx.full_username().unwrap_or_default();
     let _ = slint::invoke_from_event_loop(move || {
         if let Some(w) = window_weak_ui.upgrade() {
-            let channel_list: Vec<ChannelListItemData> = channel_domain_list
-                .iter()
-                .map(|c| channel_to_slint(c, &ui_ctx_for_convert))
-                .collect();
-            w.set_channels(ModelRc::new(VecModel::from(channel_list)));
-            // Convert Send-safe DM data to Slint types inside event loop
-            let dm_list_slint: Vec<DMListItemData> = dm_list.into_iter().map(|d| d.to_slint()).collect();
-            w.set_dm_conversations(ModelRc::new(VecModel::from(dm_list_slint)));
-            w.set_private_groups(ModelRc::new(VecModel::from(private_groups)));
+            // Convert Send-safe rows to Slint types inside the event loop.
+            let chat_rows: Vec<ChatRowData> = chat_rows.into_iter().map(|r| r.to_slint()).collect();
+            w.set_chat_rows(ModelRc::new(VecModel::from(chat_rows)));
 
             // Apply selection flags on newly-loaded models.
             crate::bin_ui::features::sidebar::refresh_selection(&w, &ui_ctx_for_refresh);
@@ -371,94 +351,23 @@ async fn load_channel_into_ui_from_services(
     });
 }
 
-/// Refresh the DM list in the UI from core.
+/// Flip the typing flag on whichever chat-list row a typing event names.
 ///
-/// Core's `list_dm_sidebar` is the single source of truth — it builds regular
-/// DMs *and* anon DMs, applies the anon-mode filter, and orders them. The UI
-/// just renders. Do not pair this with a second list-writer on the same event;
-/// two writers race and one clobbers a freshly-accepted DM.
-pub fn refresh_dm_list(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
-    let ui_ctx = ui_ctx.clone();
-    let window_weak = window.as_weak();
-
-    tokio::spawn(async move {
-        // The channel-free DM sidebar is built from the LOCAL friends table.
-        // Sync friends from the server first — `list_friends_with_profiles`
-        // persists each accepted friend into local storage — so the sidebar
-        // reflects server truth even when a friendship was just accepted on the
-        // other device (whose local row we'd otherwise never have written).
-        let _ = ui_ctx.list_friends_with_profiles().await;
-
-        // DB work off the UI thread.
-        let dm_list = ui_ctx.list_dm_sidebar();
-
-        // Marshal the model mutation back onto the UI thread. Slint models must
-        // only be mutated from the event loop; an off-thread `set_*` is silently
-        // dropped, which is why a refreshed DM never rendered. `to_slint`
-        // (builds a non-Send `Image`) also has to run inside the closure.
-        let _ = slint::invoke_from_event_loop(move || {
-            if let Some(w) = window_weak.upgrade() {
-                let dm_list_slint: Vec<DMListItemData> = dm_list.into_iter()
-                    .map(|mut d| {
-                        // Decode avatar bytes → RGBA so to_slint builds an
-                        // Image; without this the sidebar shows initials only.
-                        d.pre_decode_avatar();
-                        d.to_slint()
-                    })
-                    .collect();
-                w.set_dm_conversations(ModelRc::new(VecModel::from(dm_list_slint)));
-                crate::bin_ui::features::sidebar::refresh_selection(&w, &ui_ctx);
-            }
-        });
-    });
-}
-
-/// Refresh the anonymous groups list in the UI.
-pub fn refresh_anon_groups(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
-    let ui_ctx = ui_ctx.clone();
-    let window_weak = window.as_weak();
-
-    tokio::spawn(async move {
-        // DB work off the UI thread; the rows are plain SharedStrings so they
-        // cross the boundary. The old body built a degraded row here (no member
-        // count, no preview) AND upgraded the weak handle off the event loop,
-        // where Slint hands back None — so this refresh wrote nothing at all.
-        let private_group_list = crate::bin_ui::features::sidebar::private_group::private_group_rows(&ui_ctx);
-
-        let _ = slint::invoke_from_event_loop(move || {
-            if let Some(w) = window_weak.upgrade() {
-                w.set_private_groups(ModelRc::new(VecModel::from(private_group_list)));
-                crate::bin_ui::features::sidebar::refresh_selection(&w, &ui_ctx);
-            }
-        });
-    });
-}
-
-/// Flip the typing flag on whichever sidebar row a typing event names.
-///
-/// `id` is the key `typing_key` produced: a peer user-id for a DM, a channel-id
-/// for a channel, a group-id for a private group. All three lists are scanned
-/// because to the user they are the same kind of row — only the DM one used to
-/// animate, so a channel that someone was typing in sat there looking idle.
-/// Rows are edited in place, so no model swap and no scroll reset.
+/// `id` is the key `typing_key` produced: a peer user-id for a DM (friend or
+/// anon — matched on the row's peer), a channel-id for a channel, a group-id
+/// for a private group. Rows are edited in place, so no model swap and no
+/// scroll reset.
 pub fn update_sidebar_typing(window: &MainWindow, id: &str, is_typing: bool) {
-    macro_rules! flip {
-        ($model:expr, $id_field:ident) => {{
-            let model = $model;
-            for i in 0..model.row_count() {
-                if let Some(mut row) = model.row_data(i) {
-                    if row.$id_field.as_str() == id && row.is_typing != is_typing {
-                        row.is_typing = is_typing;
-                        model.set_row_data(i, row);
-                    }
-                }
+    let model = window.get_chat_rows();
+    for i in 0..model.row_count() {
+        if let Some(mut row) = model.row_data(i) {
+            let named = row.conversation_id.as_str() == id || row.user_id.as_str() == id;
+            if named && row.is_typing != is_typing {
+                row.is_typing = is_typing;
+                model.set_row_data(i, row);
             }
-        }};
+        }
     }
-
-    flip!(window.get_dm_conversations(), user_id);
-    flip!(window.get_channels(), channel_id);
-    flip!(window.get_private_groups(), group_id);
 }
 
 /// Show incoming call modal with caller information.
@@ -500,6 +409,7 @@ pub fn show_incoming_call(
     
     // Set call data and show modal
     window.set_incoming_call_data(call_data);
+    window.set_incoming_call_minimized(false);
     window.set_incoming_call_visible(true);
 }
 

@@ -7,41 +7,19 @@ use slint::{Model, Weak};
 use chatter_core::client::ChatterClient;
 use crate::MainWindow;
 
-/// Update unread count badge in sidebar (DM + channel models).
+/// Update a chat-list row's unread badge.
 pub(crate) fn update_unread_count(
     window: &MainWindow,
     ui_ctx: &Arc<ChatterClient>,
     channel_id: &str,
     count: u32,
 ) {
-    let count_i32 = count as i32;
-
-    // Try DM sidebar first (match by channel_id field)
-    let dms = window.get_dm_conversations();
-    for i in 0..dms.row_count() {
-        if let Some(dm) = dms.row_data(i) {
-            if dm.channel_id.as_str() == channel_id {
-                let mut updated = dm.clone();
-                updated.unread_count = count_i32;
-                if let Some(model) = dms.as_any().downcast_ref::<slint::VecModel<crate::DMListItemData>>() {
-                    model.set_row_data(i, updated);
-                }
-                recompute_total_unread(window, ui_ctx);
-                return;
-            }
-        }
-    }
-
-    // Try channel sidebar
-    let channels = window.get_channels();
-    for i in 0..channels.row_count() {
-        if let Some(ch) = channels.row_data(i) {
-            if ch.channel_id.as_str() == channel_id {
-                let mut updated = ch.clone();
-                updated.unread_count = count_i32;
-                if let Some(model) = channels.as_any().downcast_ref::<slint::VecModel<crate::ChannelListItemData>>() {
-                    model.set_row_data(i, updated);
-                }
+    let rows = window.get_chat_rows();
+    for i in 0..rows.row_count() {
+        if let Some(mut row) = rows.row_data(i) {
+            if row.conversation_id.as_str() == channel_id {
+                row.unread_count = count as i32;
+                rows.set_row_data(i, row);
                 recompute_total_unread(window, ui_ctx);
                 return;
             }

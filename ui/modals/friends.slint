@@ -653,6 +653,11 @@ export component FriendsModal inherits Rectangle {
                                         || root.code-status == "Code scanned — tap Connect to send the request"
                                         || root.code-status == "Chatter uses the camera only to read your friend's QR code.") ? Colors.text-secondary : Colors.error;
                                 font-size: Typography.xs;
+                                // The camera-denied and rationale lines are a
+                                // sentence long; unwrapped they were cut off at
+                                // the card edge on a phone.
+                                wrap: word-wrap;
+                                height: self.preferred-height;
                             }
                         }
                     }

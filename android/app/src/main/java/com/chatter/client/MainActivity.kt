@@ -3,6 +3,7 @@ package com.chatter.client
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.Uri
+import android.os.Build
 import android.os.Bundle
 import android.provider.OpenableColumns
 import android.util.Log
@@ -37,6 +38,13 @@ class MainActivity : GameActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        // Slint paints the theme background under the system bars, which
+        // themes.xml makes transparent. Android 10+ would lay a grey contrast
+        // scrim over a transparent bar; the theme background is the contrast.
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            window.isStatusBarContrastEnforced = false
+            window.isNavigationBarContrastEnforced = false
+        }
         // Hand the Activity to Rust. ndk-context only exposes the Application,
         // which lacks our Activity methods (launchFilePicker, requestPermissions),
         // so Rust holds a GlobalRef to `this` for JNI callbacks. super.onCreate
@@ -138,12 +146,14 @@ class MainActivity : GameActivity() {
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         setIntent(intent)
+        val callId = intent.getStringExtra("incoming_call_id")
+        if (callId.isNullOrEmpty()) return
         if (intent.getBooleanExtra("auto_accept", false)) {
-            val callId = intent.getStringExtra("incoming_call_id")
-            if (!callId.isNullOrEmpty()) {
-                Log.i(TAG, "accept-from-notification call_id=$callId")
-                nativeAcceptIncomingCall(callId)
-            }
+            Log.i(TAG, "accept-from-notification call_id=$callId")
+            nativeAcceptIncomingCall(callId)
+        } else {
+            // The notification body: bring the ring screen back if Back hid it.
+            nativeShowIncomingCall(callId)
         }
     }
 
@@ -152,6 +162,9 @@ class MainActivity : GameActivity() {
 
     /** Implemented in Rust. Runs the in-app accept flow for an incoming call. */
     private external fun nativeAcceptIncomingCall(callId: String)
+
+    /** Implemented in Rust. Re-shows a ringing call's screen that Back hid. */
+    private external fun nativeShowIncomingCall(callId: String)
 
     // --- Back key --------------------------------------------------------------
     /**

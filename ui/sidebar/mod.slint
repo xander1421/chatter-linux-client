@@ -1,20 +1,15 @@
 // Sidebar module - exports all sidebar UI components
 //
-// Usage: import { Sidebar, ChannelList, DMList } from "sidebar/mod.slint";
+// Usage: import { Sidebar, ChatList } from "sidebar/mod.slint";
 
 // Main container
 export { Sidebar } from "sidebar.slint";
 
-// Channel components
-export { ChannelList, ChannelListItemData } from "channel_list.slint";
-export { ChannelListItem } from "channel_list_item.slint";
-
-// DM components
-export { DMList, DMListItemData } from "dm_list.slint";
-export { DMListItem } from "dm_list_item.slint";
+// The chat list and its row
+export { ChatList, ChatRow, ChatRowData } from "chat_list.slint";
 
 // Custom sections
-export { CustomSectionList, CustomSectionData, SectionConversationData } from "custom_section_list.slint";
+export { CustomSectionList, CustomSectionData } from "custom_section_list.slint";
 
 // Context menus
 export { SectionContextMenu } from "section_context_menu.slint";

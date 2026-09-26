@@ -1,6 +1,5 @@
 //! Utility functions for domain-to-Slint conversions.
 
-use chatter_core::domain::channel::ChannelType;
 
 use crate::ReactionEntry;
 
@@ -63,16 +62,6 @@ pub fn reactions_model_to_counts(
             entry.count.max(0) as u32,
         ))
         .collect()
-}
-
-/// Convert ChannelType enum to string for Slint.
-pub fn channel_type_to_string(ct: ChannelType) -> &'static str {
-    match ct {
-        ChannelType::Public => "public",
-        ChannelType::Private => "private",
-        ChannelType::DirectMessage => "dm",
-        ChannelType::SavedMessages => "saved",
-    }
 }
 
 /// Extract initials from a display name (first letter of each word, max 2).

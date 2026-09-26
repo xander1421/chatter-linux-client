@@ -26,6 +26,16 @@ export component IncomingCallModal inherits Rectangle {
 
     animate opacity { duration: 200ms; }
 
+    // Swallow every tap on the scrim and on the card's background: without it
+    // a tap beside the card opened the chat underneath while the call kept
+    // ringing (RC20). It deliberately does NOT decline — unlike a modal's
+    // tap-outside-to-close, a stray tap must not reject a call.
+    TouchArea {
+        width: 100%;
+        height: 100%;
+        enabled: root.show;
+    }
+
     if show: Rectangle {
         // Center card — Neo strong surface
         x: (parent.width - self.width) / 2;

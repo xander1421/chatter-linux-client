@@ -3,206 +3,28 @@
 //! Provides Rust structs that map to Slint struct definitions for
 //! sidebar components like channel list items.
 
-use crate::domain::channel::{Channel, ChannelType};
+use crate::domain::message::ConversationType;
 
 // ============================================================================
-// Channel List Item Data
+// Chat list row
 // ============================================================================
 
-/// Channel list item data for Slint model binding.
+/// One row of the chat list — a friend DM, an anon DM, a channel (current or
+/// former) or a private group — Send-safe, so it is built off the UI thread
+/// and turned into a `slint::Image`-carrying row on it.
 ///
-/// Maps to the properties of `ChannelListItem` component in Slint.
-#[derive(Clone, Debug, Default)]
-pub struct ChannelListItemData {
-    /// Channel ID for identification.
-    pub channel_id: String,
-    /// Display name of the channel.
-    pub name: String,
-    /// Channel type: "public", "private", or "dm".
-    pub channel_type: String,
-    /// Number of unread messages.
-    pub unread_count: u32,
-    /// Last message preview text.
-    pub last_message: String,
-    /// Timestamp string (e.g., "2h", "Mon").
-    pub timestamp: String,
-}
-
-impl ChannelListItemData {
-    /// Create a new channel list item data entry.
-    #[must_use]
-    pub fn new(
-        channel_id: impl Into<String>,
-        name: impl Into<String>,
-        channel_type: impl Into<String>,
-        unread_count: u32,
-    ) -> Self {
-        Self {
-            channel_id: channel_id.into(),
-            name: name.into(),
-            channel_type: channel_type.into(),
-            unread_count,
-            last_message: String::new(),
-            timestamp: String::new(),
-        }
-    }
-
-    /// Create a public channel item.
-    #[must_use]
-    pub fn public(channel_id: impl Into<String>, name: impl Into<String>, unread_count: u32) -> Self {
-        Self::new(channel_id, name, "public", unread_count)
-    }
-
-    /// Create a private channel item.
-    #[must_use]
-    pub fn private(channel_id: impl Into<String>, name: impl Into<String>, unread_count: u32) -> Self {
-        Self::new(channel_id, name, "private", unread_count)
-    }
-
-    /// Create a DM channel item.
-    #[must_use]
-    pub fn dm(channel_id: impl Into<String>, name: impl Into<String>, unread_count: u32) -> Self {
-        Self::new(channel_id, name, "dm", unread_count)
-    }
-
-    /// Set last message preview.
-    #[must_use]
-    pub fn with_last_message(mut self, message: impl Into<String>) -> Self {
-        self.last_message = message.into();
-        self
-    }
-
-    /// Set timestamp.
-    #[must_use]
-    pub fn with_timestamp(mut self, timestamp: impl Into<String>) -> Self {
-        self.timestamp = timestamp.into();
-        self
-    }
-}
-
-impl From<&Channel> for ChannelListItemData {
-    fn from(channel: &Channel) -> Self {
-        let channel_type = match channel.channel_type {
-            ChannelType::Public => "public",
-            ChannelType::Private => "private",
-            ChannelType::DirectMessage => "dm",
-            ChannelType::SavedMessages => "saved",
-        };
-
-        Self {
-            channel_id: channel.id.to_string(),
-            name: channel.name.clone(),
-            channel_type: channel_type.to_string(),
-            unread_count: channel.unread_count,
-            last_message: String::new(),
-            timestamp: String::new(),
-        }
-    }
-}
-
-impl From<Channel> for ChannelListItemData {
-    fn from(channel: Channel) -> Self {
-        Self::from(&channel)
-    }
-}
-
-// ============================================================================
-// DM List Item Data
-// ============================================================================
-
-/// DM list item data for Slint model binding.
-///
-/// Maps to the properties of `DMListItem` component in Slint.
-#[derive(Clone, Debug, Default)]
-pub struct DMListItemData {
-    /// DM channel ID for identification.
-    pub channel_id: String,
-    /// User ID of the peer.
-    pub user_id: String,
-    /// Display name of the user.
-    pub display_name: String,
-    /// Initials for avatar fallback.
-    pub initials: String,
-    /// Presence status: "online", "away", "dnd", "offline".
-    pub presence_status: String,
-    /// Last message preview text.
-    pub last_message: String,
-    /// Timestamp string (e.g., "2h", "Mon").
-    pub timestamp: String,
-    /// Number of unread messages.
-    pub unread_count: u32,
-    /// Whether the user is currently typing.
-    pub is_typing: bool,
-}
-
-impl DMListItemData {
-    /// Create a new DM list item data entry.
-    #[must_use]
-    pub fn new(
-        channel_id: impl Into<String>,
-        user_id: impl Into<String>,
-        display_name: impl Into<String>,
-        initials: impl Into<String>,
-    ) -> Self {
-        Self {
-            channel_id: channel_id.into(),
-            user_id: user_id.into(),
-            display_name: display_name.into(),
-            initials: initials.into(),
-            presence_status: "offline".to_string(),
-            last_message: String::new(),
-            timestamp: String::new(),
-            unread_count: 0,
-            is_typing: false,
-        }
-    }
-
-    /// Set presence status.
-    #[must_use]
-    pub fn with_presence(mut self, status: impl Into<String>) -> Self {
-        self.presence_status = status.into();
-        self
-    }
-
-    /// Set last message preview.
-    #[must_use]
-    pub fn with_last_message(mut self, message: impl Into<String>) -> Self {
-        self.last_message = message.into();
-        self
-    }
-
-    /// Set timestamp.
-    #[must_use]
-    pub fn with_timestamp(mut self, timestamp: impl Into<String>) -> Self {
-        self.timestamp = timestamp.into();
-        self
-    }
-
-    /// Set unread count.
-    #[must_use]
-    pub fn with_unread(mut self, count: u32) -> Self {
-        self.unread_count = count;
-        self
-    }
-
-    /// Set typing status.
-    #[must_use]
-    pub fn with_typing(mut self, is_typing: bool) -> Self {
-        self.is_typing = is_typing;
-        self
-    }
-}
-
-/// Send-safe intermediate struct for DMListItemData.
-///
-/// Contains raw pixel data or bytes that can be passed across thread boundaries
-/// before being converted into `slint::Image` in the UI thread.
+/// The chat list is ONE list ordered by activity (Signal/Telegram), so every
+/// kind shares this shape; fields a kind does not use stay at their default.
 #[derive(Clone, Debug)]
-pub struct DMListItemSendData {
-    pub channel_id: String,
+pub struct ChatRowSendData {
+    pub kind: ConversationType,
+    /// The conversation key: the peer's user id for a friend DM, the anon DM
+    /// id, the channel id, the group id.
+    pub id: String,
+    /// DM rows: the peer. Empty otherwise.
     pub user_id: String,
     pub display_name: String,
-    /// Raw avatar bytes.
+    /// Raw avatar bytes (a DM peer's photo, a channel's icon).
     pub avatar_bytes: Option<Vec<u8>>,
     /// Pre-decoded RGBA pixels (width, height, data).
     pub avatar_decoded: Option<(u32, u32, Vec<u8>)>,
@@ -212,13 +34,53 @@ pub struct DMListItemSendData {
     pub timestamp: String,
     pub unread_count: u32,
     pub is_typing: bool,
-    /// True for anonymous (ephemeral) DMs, false for regular server DMs.
-    pub is_anon: bool,
-    /// Local-only pin flag. Set by `list_dm_sidebar`; pinned rows lead the list.
+    /// Local-only pin flag; pinned rows lead the list.
     pub is_pinned: bool,
+    /// Channel rows: invite-only (lock glyph rather than #).
+    pub private_channel: bool,
+    /// Private-group rows.
+    pub member_count: u32,
+    /// Channel rows: core's `can_leave_channel`.
+    pub can_leave: bool,
+    /// Channel rows: core's `is_former_channel` — read-only, offer "Delete chat".
+    pub can_delete: bool,
+    /// When the conversation last saw activity: the order key. `None` (no
+    /// messages yet) sinks below every dated row.
+    pub last_activity: Option<chrono::DateTime<chrono::Utc>>,
 }
 
-impl DMListItemSendData {
+impl ChatRowSendData {
+    /// A row of `kind` with everything else empty; builders fill what they know.
+    #[must_use]
+    pub fn new(kind: ConversationType, id: impl Into<String>, display_name: impl Into<String>) -> Self {
+        Self {
+            kind,
+            id: id.into(),
+            user_id: String::new(),
+            display_name: display_name.into(),
+            avatar_bytes: None,
+            avatar_decoded: None,
+            initials: String::new(),
+            presence_status: String::new(),
+            last_message: String::new(),
+            timestamp: String::new(),
+            unread_count: 0,
+            is_typing: false,
+            is_pinned: false,
+            private_channel: false,
+            member_count: 0,
+            can_leave: false,
+            can_delete: false,
+            last_activity: None,
+        }
+    }
+
+    /// True for anonymous (ephemeral) DMs.
+    #[must_use]
+    pub fn is_anon_dm(&self) -> bool {
+        self.kind == ConversationType::AnonDm
+    }
+
     /// Pre-decode avatar bytes to RGBA.
     pub fn pre_decode_avatar(&mut self) {
         if self.avatar_decoded.is_some() {
@@ -231,6 +93,26 @@ impl DMListItemSendData {
                 self.avatar_decoded = Some((w, h, rgba.into_raw()));
             }
         }
+    }
+}
+
+/// The chat list's order: pinned first, then newest activity first, rows with
+/// no activity last. Stable, so rows that tie keep the order they were built in.
+pub fn order_chat_rows(rows: &mut [ChatRowSendData]) {
+    rows.sort_by(|a, b| b.last_activity.cmp(&a.last_activity));
+    rows.sort_by_key(|r| !r.is_pinned);
+}
+
+/// Where a row with new activity goes, in a list already in
+/// [`order_chat_rows`] order (`others` = every other row's pin flag, top
+/// down): an unpinned row just below the last pinned one, never above a pin;
+/// a pinned row to the top of the pinned block.
+pub fn chat_row_top_slot(is_pinned: bool, others: impl IntoIterator<Item = bool>) -> usize {
+    let pins: Vec<bool> = others.into_iter().collect();
+    if is_pinned {
+        pins.iter().position(|&p| p).unwrap_or(0)
+    } else {
+        pins.iter().rposition(|&p| p).map_or(0, |i| i + 1)
     }
 }
 
@@ -356,72 +238,34 @@ impl UserProfileBarData {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::ids::{ChannelId, UserId};
 
     #[test]
-    fn test_channel_list_item_data_new() {
-        let item = ChannelListItemData::new("chan123", "general", "public", 5);
-
-        assert_eq!(item.channel_id, "chan123");
-        assert_eq!(item.name, "general");
-        assert_eq!(item.channel_type, "public");
-        assert_eq!(item.unread_count, 5);
+    fn chat_rows_pinned_first_then_newest_activity() {
+        let row = |id: &str, kind: ConversationType, at: Option<i64>, pinned: bool| {
+            let mut r = ChatRowSendData::new(kind, id, id);
+            r.last_activity = at.map(|s| chrono::DateTime::from_timestamp(s, 0).unwrap());
+            r.is_pinned = pinned;
+            r
+        };
+        let mut rows = vec![
+            row("old-dm", ConversationType::ServerDm, Some(10), false),
+            row("silent-channel", ConversationType::Channel, None, false),
+            row("new-channel", ConversationType::Channel, Some(30), false),
+            row("pinned-old", ConversationType::ServerDm, Some(1), true),
+            row("group", ConversationType::AnonGroup, Some(20), false),
+        ];
+        order_chat_rows(&mut rows);
+        let ids: Vec<_> = rows.iter().map(|r| r.id.as_str()).collect();
+        assert_eq!(ids, ["pinned-old", "new-channel", "group", "old-dm", "silent-channel"]);
     }
 
     #[test]
-    fn test_channel_list_item_factories() {
-        let public = ChannelListItemData::public("c1", "announcements", 0);
-        assert_eq!(public.channel_type, "public");
-
-        let private = ChannelListItemData::private("c2", "secret", 3);
-        assert_eq!(private.channel_type, "private");
-
-        let dm = ChannelListItemData::dm("c3", "Alice", 1);
-        assert_eq!(dm.channel_type, "dm");
-    }
-
-    #[test]
-    fn test_from_channel() {
-        let channel_id = ChannelId::new();
-        let owner_id = UserId::new();
-        let mut channel = Channel::new(channel_id, "test-channel".to_string(), ChannelType::Private, owner_id);
-        channel.unread_count = 7;
-
-        let item: ChannelListItemData = (&channel).into();
-
-        assert_eq!(item.channel_id, channel_id.to_string());
-        assert_eq!(item.name, "test-channel");
-        assert_eq!(item.channel_type, "private");
-        assert_eq!(item.unread_count, 7);
-    }
-
-    #[test]
-    fn test_from_dm_channel() {
-        let channel_id = ChannelId::new();
-        let owner_id = UserId::new();
-        let channel = Channel::new(channel_id, "Bob".to_string(), ChannelType::DirectMessage, owner_id);
-
-        let item: ChannelListItemData = channel.into();
-
-        assert_eq!(item.channel_type, "dm");
-    }
-
-    #[test]
-    fn test_dm_list_item_data() {
-        let item = DMListItemData::new("channel123", "user123", "Alice", "AL")
-            .with_presence("online")
-            .with_last_message("Hey there!")
-            .with_timestamp("2h")
-            .with_unread(5);
-
-        assert_eq!(item.channel_id, "channel123");
-        assert_eq!(item.user_id, "user123");
-        assert_eq!(item.display_name, "Alice");
-        assert_eq!(item.initials, "AL");
-        assert_eq!(item.presence_status, "online");
-        assert_eq!(item.last_message, "Hey there!");
-        assert_eq!(item.timestamp, "2h");
-        assert_eq!(item.unread_count, 5);
+    fn live_activity_never_lands_above_a_pin() {
+        assert_eq!(chat_row_top_slot(false, [true, true, false, false]), 2);
+        assert_eq!(chat_row_top_slot(false, [false, false]), 0);
+        assert_eq!(chat_row_top_slot(false, []), 0);
+        assert_eq!(chat_row_top_slot(true, [true, false]), 0);
+        assert_eq!(chat_row_top_slot(true, [false, false]), 0);
     }
 
     #[test]
