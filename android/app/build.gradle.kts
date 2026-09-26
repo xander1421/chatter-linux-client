@@ -17,14 +17,28 @@ android {
         ndk { abiFilters += "arm64-v8a" }
     }
 
+    // Release signing comes from the environment (build-android.sh RELEASE=1);
+    // the keystore lives outside the repository. Without it, assembleRelease
+    // yields only an unsigned APK, which build-android.sh refuses to ship.
+    val releaseKeystore = System.getenv("CHATTER_KEYSTORE")
+    signingConfigs {
+        if (releaseKeystore != null) {
+            create("release") {
+                storeFile = file(releaseKeystore)
+                storePassword = System.getenv("CHATTER_KEYSTORE_PASSWORD")
+                keyAlias = System.getenv("CHATTER_KEY_ALIAS")
+                keyPassword = System.getenv("CHATTER_KEY_PASSWORD")
+            }
+        }
+    }
+
     buildTypes {
         getByName("debug") {
             isMinifyEnabled = false
         }
         getByName("release") {
-            // Local dev: reuse the Android debug keystore (matches cargo-apk
-            // history) so reinstalls don't wipe data. Replace for production.
             isMinifyEnabled = false
+            if (releaseKeystore != null) signingConfig = signingConfigs.getByName("release")
         }
     }
 

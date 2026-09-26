@@ -74,7 +74,7 @@ export CARGO_TARGET_AARCH64_LINUX_ANDROID_RANLIB="$NDK_BIN/llvm-ranlib"
 export RUSTFLAGS="${RUSTFLAGS:-} -C link-arg=-Wl,-z,max-page-size=16384"
 
 # ── 1. Build the cdylib ─────────────────────────────────────────────────────
-echo ">> cargo-ndk: building libchatter_ui.so (arm64-v8a, debug)…"
+echo ">> cargo-ndk: building libchatter_ui.so (arm64-v8a)…"
 # MESH=1 adds the bitchat mesh (BLE radio over the JNI bridge). Off by default,
 # matching the desktop build: the radio stack is opt-in until it has been shown
 # to talk to another device.
@@ -164,13 +164,32 @@ if [ "${DEV_AUTO_REGISTER:-1}" = "1" ]; then
     echo ">> !! dev auto-register enabled — first launch self-registers with public credentials"
 fi
 
-( cd "$PROJECT_ROOT" && cargo ndk -t arm64-v8a build -p chatter-ui \
+# RELEASE=1: optimized Rust (profile.release), a signed assembleRelease, and a
+# refusal to ship any dev key or the dev auto-register credentials. Signing
+# needs CHATTER_KEYSTORE, CHATTER_KEYSTORE_PASSWORD, CHATTER_KEY_ALIAS and
+# CHATTER_KEY_PASSWORD (read by app/build.gradle.kts).
+RUST_PROFILE=debug; CARGO_PROFILE_FLAG=""; GRADLE_TASK=assembleDebug; APK="app/build/outputs/apk/debug/app-debug.apk"
+if [ "${RELEASE:-0}" = "1" ]; then
+    if [ -n "$TRUST_ROOT_FEATURE" ] || [ -n "$DEV_AUTO_REGISTER_FEATURE" ]; then
+        echo "FATAL: RELEASE=1 needs DEV_TRUST_ROOT=0 and DEV_AUTO_REGISTER=0"
+        exit 1
+    fi
+    [ -z "${CHATTER_KT_VRF_PUBLIC_KEY_HEX:-}" ] && { echo "FATAL: RELEASE=1 needs CHATTER_KT_VRF_PUBLIC_KEY_HEX"; exit 1; }
+    for v in CHATTER_KEYSTORE CHATTER_KEYSTORE_PASSWORD CHATTER_KEY_ALIAS CHATTER_KEY_PASSWORD; do
+        [ -z "${!v:-}" ] && { echo "FATAL: RELEASE=1 needs $v"; exit 1; }
+    done
+    RUST_PROFILE=release; CARGO_PROFILE_FLAG="--release"; GRADLE_TASK=assembleRelease
+    APK="app/build/outputs/apk/release/app-release.apk"
+    echo ">> RELEASE build: production keys, signed"
+fi
+
+( cd "$PROJECT_ROOT" && cargo ndk -t arm64-v8a build -p chatter-ui $CARGO_PROFILE_FLAG \
     --no-default-features --features "mobile${MESH_FEATURE}${TRUST_ROOT_FEATURE}${QUIC_FEATURE}${DEV_AUTO_REGISTER_FEATURE}" --lib )
 
 # ── 2. Stage the .so into the Gradle module ─────────────────────────────────
 JNI_DIR="app/src/main/jniLibs/arm64-v8a"
 mkdir -p "$JNI_DIR"
-cp "$PROJECT_ROOT/target/aarch64-linux-android/debug/libchatter_ui.so" "$JNI_DIR/"
+cp "$PROJECT_ROOT/target/aarch64-linux-android/$RUST_PROFILE/libchatter_ui.so" "$JNI_DIR/"
 echo ">> staged $(du -h "$JNI_DIR/libchatter_ui.so" | cut -f1) cdylib"
 
 # Note: LiveKit's webrtc Java classes (livekit.org.webrtc / jni_zero) are pulled
@@ -178,10 +197,9 @@ echo ">> staged $(du -h "$JNI_DIR/libchatter_ui.so" | cut -f1) cdylib"
 # (fileTree) — produced by the cargo-ndk step above, so no copy step is needed.
 
 # ── 3. Assemble the APK ─────────────────────────────────────────────────────
-echo ">> gradle: assembleDebug…"
-JAVA_HOME="${JAVA_HOME:-/opt/android-studio/jbr}" ./gradlew :app:assembleDebug --no-daemon
-
-APK="app/build/outputs/apk/debug/app-debug.apk"
+echo ">> gradle: $GRADLE_TASK…"
+JAVA_HOME="${JAVA_HOME:-/opt/android-studio/jbr}" ./gradlew :app:$GRADLE_TASK --no-daemon
+[ -f "$APK" ] || { echo "FATAL: $APK missing (unsigned release?)"; exit 1; }
 echo "------------------------------------------------------------"
 echo "Build complete: $APK"
 echo "------------------------------------------------------------"
