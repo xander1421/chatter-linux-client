@@ -931,96 +931,48 @@ impl AndroidWindowAdapter {
                     // the dedupe guards return before setting it (§112o).
                     self.had_compose.set(state.compose_region.is_some());
                     let runtime_window = WindowInner::from_pub(&self.window);
-                    // Chatter patch: a composition that is not at the END of
-                    // the text cannot be represented.
+                    // Chatter patch: hand Slint the IME's text as plain
+                    // committed text, never as a pre-edit — the composing word
+                    // must look like normal text with a caret.
                     //
-                    // Slint takes a pre-edit plus an OFFSET, and it pins that
-                    // offset to the end of the committed text — so a compose
-                    // region in the middle comes back merged in the wrong
-                    // place. Tapping after the "a" of "abc def" makes Samsung
-                    // recompose "abc" at (0,3); the field then read " defabc".
-                    // There is no arrangement of the values Slint accepts that
-                    // says "the pre-edit is at offset 0 and the committed tail
-                    // follows it" (§112o).
+                    // i-slint-core 1.17.1 paints a TextInput's whole pre-edit
+                    // range with the selection colours whatever
+                    // `preedit_selection` says (textlayout/sharedparley.rs:1417
+                    // prefers `preedit_range` over `selection_range`), so ANY
+                    // composition Slint holds is drawn as a teal selection until
+                    // the IME commits it. Samsung Keyboard (S9, Android 10)
+                    // composes every word, re-marking already-committed text with
+                    // `setComposingRegion` (logcat `gti.InputConnection:
+                    // setComposingRegion: 6:12` beside `setSelection: n:n`, a
+                    // collapsed caret) — a composition, not a selection — which is
+                    // the reported S9 highlight. The S25/Gboard "pass" was typed with
+                    // `adb input text`, which commits without composing, so it
+                    // never exercised this path.
                     //
-                    // So when the IME composes anywhere but the end, take the
-                    // text as plain committed text and tell the IME to stop
-                    // composing. Mid-word predictive suggestions are lost for
-                    // that edit; the text stays correct, which matters more.
-                    let compose_region = state.compose_region.filter(|r| {
-                        let at_end = r.end == state.text.len();
-                        if !at_end {
-                            self.app.set_text_input_state(
-                                android_activity::input::TextInputState {
-                                    text: state.text.clone(),
-                                    selection: state.selection,
-                                    compose_region: None,
-                                },
-                            );
-                        }
-                        at_end
-                    });
-                    // remove the pre_edit
-                    let event = if let Some(r) = compose_region {
-                        // Map an offset in the IME's MERGED text to the
-                        // committed text Slint is about to receive (the merged
-                        // string with the compose region cut out).
-                        //
-                        // Upstream computed `pos - r.start + r.end`, which is
-                        // wrong in both directions: an offset INSIDE the region
-                        // lands past the end of the committed text (cursor 1 in
-                        // "abc def" composing (0,3) mapped to 4, so Slint put
-                        // the pre-edit after " def" and the field read
-                        // " defabc"), and an offset after the region is pushed
-                        // further right rather than left. It only ever looked
-                        // right because Slint clamps. Offsets inside the region
-                        // belong at its start; offsets past it shift left by
-                        // the region's length (§112o).
-                        let adjust = |pos: usize| -> i32 {
-                            if pos <= r.start {
-                                pos as i32
-                            } else if pos <= r.end {
-                                r.start as i32
-                            } else {
-                                (pos - (r.end - r.start)) as i32
-                            }
-                        };
-                        let mut key_event = KeyEvent::default();
-                        key_event.text = i_slint_core::format!(
-                            "{}{}",
-                            &state.text[..r.start],
-                            &state.text[r.end..]
-                        );
-
-                        InternalKeyEvent {
-                            event_type: KeyEventType::UpdateComposition,
-                            preedit_text: state.text[r.start..r.end].into(),
-// Upstream's value, deliberately kept. Setting this to
-                            // None does NOT remove the highlight on composing
-                            // text — i-slint-core paints the whole preedit
-                            // range with the selection styling regardless
-                            // (textlayout/sharedparley.rs:1417 prefers
-                            // preedit_range over selection_range) — and it also
-                            // makes core return cursor_position: None, which
-                            // removes the caret while composing. See §112n.
-                            preedit_selection: Some(0..(r.end - r.start) as i32),
-                            replacement_range: Some(i32::MIN..i32::MAX),
-                            cursor_position: Some(adjust(state.selection.end)),
-                            anchor_position: Some(adjust(state.selection.start)),
-                            key_event,
-                            ..Default::default()
-                        }
-                    } else {
-                        let mut key_event = KeyEvent::default();
-                        key_event.text = state.text.as_str().into();
-                        InternalKeyEvent {
-                            event_type: KeyEventType::CommitComposition,
-                            replacement_range: Some(i32::MIN..i32::MAX),
-                            cursor_position: Some(state.selection.end as _),
-                            anchor_position: Some(state.selection.start as _),
-                            key_event,
-                            ..Default::default()
-                        }
+                    // This also removes the old reasons to reject a mid-text
+                    // composition: Slint pinned the pre-edit offset to the end of
+                    // the committed text ("abc def" recomposing (0,3) read
+                    // " defabc", §112o). With no pre-edit there is nothing to
+                    // misplace, so the IME may keep composing anywhere.
+                    //
+                    // The IME keeps its composition: the outbound path pushes
+                    // nothing back while Slint's text and selection equal what
+                    // the IME just reported (the `last_ime_text` guard), and any
+                    // real app-side change (send, clear) is pushed with no compose
+                    // region, which ends the composition as it should.
+                    //
+                    // A real user selection (long-press) is a non-empty
+                    // `state.selection` with no composition and still reaches
+                    // Slint as anchor..cursor below.
+                    let mut key_event = KeyEvent::default();
+                    key_event.text = state.text.as_str().into();
+                    let event = InternalKeyEvent {
+                        event_type: KeyEventType::CommitComposition,
+                        replacement_range: Some(i32::MIN..i32::MAX),
+                        cursor_position: Some(state.selection.end as _),
+                        anchor_position: Some(state.selection.start as _),
+                        key_event,
+                        ..Default::default()
                     };
                     self.ime_dispatching.set(true);
                     runtime_window.process_key_input(event);

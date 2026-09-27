@@ -91,7 +91,9 @@ lto = "thin"
 
 # Vendored + patched Slint Android backend: dedupe GameTextInput state pushes so
 # the IME isn't restarted on every keystroke (fixes dropped keystrokes / input
-# lag, slint-ui/slint #9240), and show the composing word as composing text,
-# not as a selection (javahelper.rs). See vendor/i-slint-backend-android-activity/.
+# lag, slint-ui/slint #9240), and send the IME's text as a committed state
+# with its caret instead of a Slint pre-edit, which core 1.17 paints in
+# selection colours (androidwindowadapter.rs, game-activity path — the one
+# chatter-ui builds). See vendor/i-slint-backend-android-activity/.
 [patch.crates-io]
 i-slint-backend-android-activity = { path = "vendor/i-slint-backend-android-activity" }
