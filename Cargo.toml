@@ -70,6 +70,157 @@ panic = "abort"
 strip = true
 opt-level = "z"
 
+# Crypto and attachment processing favour throughput; the rest retains "z".
+# Include chatter-core: generic AES-CBC / HMAC code is instantiated there.
+# Unversioned package names apply to every locked version of each crate.
+[profile.release.package.chatter-core]
+opt-level = 3
+
+[profile.release.package.aes]
+opt-level = 3
+
+[profile.release.package.aes-gcm]
+opt-level = 3
+
+[profile.release.package.cbc]
+opt-level = 3
+
+[profile.release.package.cipher]
+opt-level = 3
+
+[profile.release.package.block-padding]
+opt-level = 3
+
+[profile.release.package.block-buffer]
+opt-level = 3
+
+[profile.release.package.crypto-common]
+opt-level = 3
+
+[profile.release.package.digest]
+opt-level = 3
+
+[profile.release.package.sha2]
+opt-level = 3
+
+[profile.release.package.sha3]
+opt-level = 3
+
+[profile.release.package.hmac]
+opt-level = 3
+
+[profile.release.package.hkdf]
+opt-level = 3
+
+[profile.release.package.ctr]
+opt-level = 3
+
+[profile.release.package.ghash]
+opt-level = 3
+
+[profile.release.package.polyval]
+opt-level = 3
+
+[profile.release.package.aead]
+opt-level = 3
+
+[profile.release.package.chacha20]
+opt-level = 3
+
+[profile.release.package.chacha20poly1305]
+opt-level = 3
+
+[profile.release.package.poly1305]
+opt-level = 3
+
+[profile.release.package.universal-hash]
+opt-level = 3
+
+[profile.release.package.curve25519-dalek]
+opt-level = 3
+
+[profile.release.package.ed25519-dalek]
+opt-level = 3
+
+[profile.release.package.x25519-dalek]
+opt-level = 3
+
+[profile.release.package.hpke]
+opt-level = 3
+
+[profile.release.package.argon2]
+opt-level = 3
+
+[profile.release.package.blake2]
+opt-level = 3
+
+[profile.release.package.rsa]
+opt-level = 3
+
+[profile.release.package.blind-rsa-signatures]
+opt-level = 3
+
+[profile.release.package.signal-crypto]
+opt-level = 3
+
+[profile.release.package.libsignal-core]
+opt-level = 3
+
+[profile.release.package.libsignal-protocol]
+opt-level = 3
+
+[profile.release.package.libcrux-ml-kem]
+opt-level = 3
+
+[profile.release.package.libcrux-sha3]
+opt-level = 3
+
+[profile.release.package.libcrux-sha2]
+opt-level = 3
+
+[profile.release.package.libcrux-hmac]
+opt-level = 3
+
+[profile.release.package.libcrux-hacl-rs]
+opt-level = 3
+
+[profile.release.package.libcrux-intrinsics]
+opt-level = 3
+
+[profile.release.package.libcrux-secrets]
+opt-level = 3
+
+[profile.release.package.libcrux-platform]
+opt-level = 3
+
+[profile.release.package.libcrux-traits]
+opt-level = 3
+
+[profile.release.package.subtle]
+opt-level = 3
+
+[profile.release.package.zeroize]
+opt-level = 3
+
+[profile.release.package.rand]
+opt-level = 3
+
+[profile.release.package.rand_core]
+opt-level = 3
+
+[profile.release.package.getrandom]
+opt-level = 3
+
+[profile.release.package.rayon]
+opt-level = 3
+
+[profile.release.package.rayon-core]
+opt-level = 3
+
+[profile.release.package.memmap2]
+opt-level = 3
+
+
 # =============================================================================
 # Release-Dev Profile — Optimized binary for perf/RSS testing against the local
 # docker-compose dev server.

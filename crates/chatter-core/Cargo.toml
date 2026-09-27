@@ -136,7 +136,7 @@ rodio = "0.21.1"
 cpal = "0.15"
 hound = "3.5"
 image = { version = "0.25.9", default-features = false, features = ["png", "jpeg", "gif", "webp"] }
-ringbuf = "0.4"
+ringbuf = "0.5.2"
 # smol removed — was unused
 
 # ============================================================================
