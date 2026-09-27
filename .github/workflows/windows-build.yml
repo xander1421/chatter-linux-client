@@ -8,6 +8,8 @@ on:
 env:
   CARGO_TERM_COLOR: always
   GSTREAMER_VERSION: "1.24.13"
+  # Skia source paths can exceed MAX_PATH under the runner workspace.
+  CARGO_TARGET_DIR: C:\t
 
 jobs:
   build-windows:
@@ -19,10 +21,46 @@ jobs:
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
 
+      - name: Import MSVC environment
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
+      - name: Native build tools
+        shell: pwsh
+        run: |
+          Set-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\FileSystem' -Name LongPathsEnabled -Value 1 -Type DWord
+          git config --global core.longpaths true
+          choco install nasm -y
+          "C:\Program Files\NASM" >> $env:GITHUB_PATH
+          "LIBCLANG_PATH=C:\Program Files\LLVM\bin" >> $env:GITHUB_ENV
+          if (!(Test-Path "C:\Program Files\LLVM\bin\libclang.dll")) {
+            throw "The Windows runner must provide LLVM/libclang for bindgen"
+          }
+
+      # These are PUBLIC pins, but must match the target deployment. Never
+      # replace them with testing/dev features in an uploaded release artifact.
+      - name: Validate deployment trust anchors
+        shell: pwsh
+        env:
+          CHATTER_TRUST_ROOT_PUBLIC_KEY_HEX: ${{ secrets.CHATTER_TRUST_ROOT_PUBLIC_KEY_HEX }}
+          CHATTER_KT_TREE_HEAD_PUBLIC_KEY_HEX: ${{ secrets.CHATTER_KT_TREE_HEAD_PUBLIC_KEY_HEX }}
+          CHATTER_KT_VRF_PUBLIC_KEY_HEX: ${{ secrets.CHATTER_KT_VRF_PUBLIC_KEY_HEX }}
+          CHATTER_TLS_ROOT_CA_PEM: ${{ secrets.CHATTER_TLS_ROOT_CA_PEM }}
+        run: |
+          foreach ($name in @('CHATTER_TRUST_ROOT_PUBLIC_KEY_HEX', 'CHATTER_KT_TREE_HEAD_PUBLIC_KEY_HEX', 'CHATTER_KT_VRF_PUBLIC_KEY_HEX')) {
+            $value = [Environment]::GetEnvironmentVariable($name)
+            if ($value -cnotmatch '^[0-9a-fA-F]{64}$') { throw "Configure repository secret $name with the provisioned public key" }
+          }
+          if ($env:CHATTER_TLS_ROOT_CA_PEM -notmatch '-----BEGIN CERTIFICATE-----') {
+            throw "Configure CHATTER_TLS_ROOT_CA_PEM with the provisioned CA PEM"
+          }
+
       - name: Rust cache
         uses: Swatinem/rust-cache@v2
         with:
-          key: crt-static-v1
+          key: crt-static-boringssl-v2
+          workspaces: ". -> C:/t"
 
       - name: Cache GStreamer install
         id: cache-gstreamer
@@ -56,7 +94,7 @@ jobs:
           if (!$gstRoot) {
             Write-Host "Searching for GStreamer installation..."
             Get-ChildItem "C:\gstreamer" -Recurse -Depth 2 -ErrorAction SilentlyContinue | Select-Object FullName
-            $gstRoot = "C:\gstreamer\1.0\msvc_x86_64"
+            throw "GStreamer development installation was not found"
           }
 
           Write-Host "GStreamer root: $gstRoot"
@@ -93,12 +131,12 @@ jobs:
           # exists before we point SQLCipher at it. webrtc-sys does NOT pull
           # rusqlite, so SQLCipher is not compiled here — it compiles in the main
           # build below, against BoringSSL.
-          cargo build --release -p webrtc-sys
+          cargo build --locked --release -p webrtc-sys
 
       - name: Point SQLCipher at webrtc's BoringSSL
         shell: pwsh
         run: |
-          $target = "$PWD\target"
+          $target = $env:CARGO_TARGET_DIR
           $webrtcLib = Get-ChildItem -Path $target -Recurse -Filter webrtc.lib -ErrorAction SilentlyContinue |
             Where-Object FullName -match 'win-x64-release' | Select-Object -First 1
           $bsslInc = Get-ChildItem -Path $target -Recurse -Directory -ErrorAction SilentlyContinue |
@@ -121,14 +159,15 @@ jobs:
           echo "LIBSQLITE3_FLAGS=-DNOCRYPT" >> $env:GITHUB_ENV
           Write-Host "SQLCipher -> BoringSSL: $stage\lib\libcrypto.lib  inc=$($bsslInc.FullName)"
 
-      - name: Build (no local-ai)
+      - name: Build release client (desktop and jarvis)
         env:
           RUSTC_WRAPPER: ""
-          # rustflags (crt-static + /FORCE:MULTIPLE) come from
-          # .cargo/config.toml under [target.x86_64-pc-windows-msvc]. Do NOT
-          # set RUSTFLAGS here — env-level rustflags fully replace the config
-          # file rustflags, dropping /FORCE:MULTIPLE and re-breaking the link.
-        run: cargo build --release
+          CHATTER_TRUST_ROOT_PUBLIC_KEY_HEX: ${{ secrets.CHATTER_TRUST_ROOT_PUBLIC_KEY_HEX }}
+          CHATTER_KT_TREE_HEAD_PUBLIC_KEY_HEX: ${{ secrets.CHATTER_KT_TREE_HEAD_PUBLIC_KEY_HEX }}
+          CHATTER_KT_VRF_PUBLIC_KEY_HEX: ${{ secrets.CHATTER_KT_VRF_PUBLIC_KEY_HEX }}
+          CHATTER_TLS_ROOT_CA_PEM: ${{ secrets.CHATTER_TLS_ROOT_CA_PEM }}
+          # Keep target CRT/linker settings from .cargo/config.toml.
+        run: cargo build --locked --release -p chatter-ui --no-default-features --features desktop,jarvis
 
       - name: Bundle release artifact
         shell: pwsh
@@ -142,7 +181,7 @@ jobs:
           # The chatter-ui crate produces `chatter-ui.exe` on Windows (crate name
           # from `[[bin]] name = "chatter-ui"` in Cargo.toml). Rename to the
           # customer-facing `chatter-windows.exe` for the release artifact.
-          $exePath = "target/release/chatter-ui.exe"
+          $exePath = "$env:CARGO_TARGET_DIR/release/chatter-ui.exe"
           if (-not (Test-Path $exePath)) {
             Write-Error "Release binary not found at $exePath — did the build step succeed?"
             exit 1

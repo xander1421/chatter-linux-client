@@ -17,21 +17,10 @@ rustflags = [
 ]
 
 [target.x86_64-pc-windows-msvc]
-# `/FORCE:MULTIPLE`: MSVC equivalent of `--allow-multiple-definition`. Same
-# BoringSSL (webrtc-sys) vs. OpenSSL (openssl-sys + sqlcipher-vendored-openssl)
-# symbol collision as Linux. `link.exe` aborts with LNK1169 otherwise. Linker
-# keeps the first definition; BoringSSL paths only run inside WebRTC DTLS/SRTP
-# and don't share runtime state with OpenSSL paths, so the duplicates are
-# benign. Removing the collision entirely would require either (a) prefixing
-# BoringSSL symbols (needs source rebuild of webrtc — webrtc-sys ships
-# unprefixed prebuilts), or (b) dropping sqlcipher's vendored-openssl. Both
-# are out of scope; `/FORCE:MULTIPLE` is the same trade-off Signal-Desktop /
-# Slack / every Electron-WebRTC app makes.
-# `+crt-static` matches the libwebrtc_sys prebuilts (compiled with /MT).
-rustflags = [
-    "-C", "target-feature=+crt-static",
-    "-C", "link-arg=/FORCE:MULTIPLE",
-]
+# Match libwebrtc's /MT CRT. SQLCipher must use the same bundled BoringSSL
+# (the Windows workflow stages it as libcrypto.lib), not a second OpenSSL.
+# Do not suppress duplicate-symbol errors: that can hide incompatible crypto ABIs.
+rustflags = ["-C", "target-feature=+crt-static"]
 
 [build]
 # Use sccache for compilation caching
