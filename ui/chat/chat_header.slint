@@ -30,7 +30,7 @@ export struct ChatHeaderData {
 export component ChatHeader inherits GlassSurface {
     material-level: 2;
     elevation: 1;
-    border-radius: 0px;
+    border-radius: self.height / 2;
 
     // Properties from ChatHeaderData
     in property <string> channel-id: "";

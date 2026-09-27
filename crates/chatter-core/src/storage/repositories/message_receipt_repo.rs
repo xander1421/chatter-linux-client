@@ -3,7 +3,7 @@ use crate::domain::ids::{ChannelId, DeviceId, MessageId, UserId};
 use crate::domain::message::ConversationType;
 use crate::error::StorageError;
 use crate::storage::Database;
-use rusqlite::{params, OptionalExtension};
+use rusqlite::{OptionalExtension, params};
 use std::sync::Arc;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -21,6 +21,40 @@ pub struct MessageReceiptRepository {
 impl MessageReceiptRepository {
     pub fn new(db: Arc<Database>) -> Self {
         Self { db }
+    }
+
+    pub fn targets_for_send(
+        &self,
+        conversation: ChannelId,
+        kind: ConversationType,
+        author: UserId,
+        sent_at: u64,
+    ) -> Result<Vec<(UserId, DeviceId)>, StorageError> {
+        let conn = self.db.connection()?;
+        let mut stmt = conn.prepare(
+            "SELECT recipient_id, device_id FROM message_receipt_targets
+            WHERE conversation_id=?1 AND conversation_type=?2 AND author_id=?3 AND sent_at=?4
+            ORDER BY recipient_id, device_id",
+        )?;
+        let rows = stmt.query_map(
+            params![
+                conversation.to_string(),
+                kind.as_str(),
+                author.to_string(),
+                sent_at as i64
+            ],
+            |row| Ok((row.get::<_, String>(0)?, row.get::<_, u32>(1)?)),
+        )?;
+        rows.map(|row| {
+            let (user, device) = row?;
+            Ok((
+                user.parse().map_err(|_| {
+                    StorageError::InvalidData("invalid receipt recipient ID".into())
+                })?,
+                DeviceId(device),
+            ))
+        })
+        .collect()
     }
 
     /// Convenience for an already-stored outgoing message.
@@ -87,7 +121,10 @@ impl MessageReceiptRepository {
             }
         }
         tx.commit()?;
-        Ok(())
+        drop(conn);
+        // An authenticated peer receipt can beat the own-device transcript.
+        // Only evidence matching the now-known snapshot is materialized.
+        self.bind_send_timestamp(conversation, kind, author, sent_at as u64, sent_at as u64)
     }
 
     /// Replace a public-channel send's provisional clock with the server clock.
@@ -172,11 +209,13 @@ impl MessageReceiptRepository {
                 )?;
                 tx.execute("INSERT INTO pending_message_receipts
                     SELECT ?1, ?2, ?3, ?4, ?5, ?6, ?7, CASE WHEN ?8 THEN ?7 ELSE NULL END
-                    WHERE EXISTS(SELECT 1 FROM message_receipt_targets WHERE conversation_id=?1 AND conversation_type=?2 AND author_id=?3 AND recipient_id=?5 AND device_id=?6 AND message_id IS NULL)
+                    WHERE (EXISTS(SELECT 1 FROM message_receipt_targets WHERE conversation_id=?1 AND conversation_type=?2 AND author_id=?3 AND recipient_id=?5 AND device_id=?6 AND message_id IS NULL)
+                        OR (?9 AND NOT EXISTS(SELECT 1 FROM message_receipt_targets WHERE conversation_id=?1 AND conversation_type=?2 AND author_id=?3 AND sent_at=?4)))
                     AND (SELECT COUNT(*) FROM pending_message_receipts) < 4096
                     ON CONFLICT(conversation_id, conversation_type, author_id, sent_at, recipient_id, device_id)
                     DO UPDATE SET read_at=COALESCE(pending_message_receipts.read_at, excluded.read_at)",
-                    params![conversation.to_string(), kind.as_str(), author.to_string(), timestamp, recipient.to_string(), device.0, received_at, read])?;
+                    params![conversation.to_string(), kind.as_str(), author.to_string(), timestamp, recipient.to_string(), device.0, received_at, read,
+                        kind == ConversationType::ServerDm && conversation == ChannelId::from(recipient)])?;
                 continue;
             }
             let id: Option<String> = tx.query_row(

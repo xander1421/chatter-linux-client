@@ -206,73 +206,7 @@ export component SettingsScreen inherits Rectangle {
 
     VerticalLayout {
 
-        // Compact mode: horizontal tab bar at top — Neo glass
-        // Tall enough for 48px touch targets (close button + tab chips) plus
-        // the 4px padding the tab strip carries.
-        if compact-mode: GlassSurface {
-            material-level: 2;
-            elevation: 1;
 
-            height: Spacing.touch-target-min + Spacing.sm;
-
-            HorizontalLayout {
-                padding-left: Spacing.sm;
-                padding-right: Spacing.sm;
-
-                // The only way out of Settings in compact mode — and Settings
-                // is a full-screen page, so it is a back chevron on the
-                // leading edge, not an X. Was an X here and a "Close Settings"
-                // text button at the bottom of the desktop rail: three
-                // spellings of one action across two breakpoints.
-                DismissButton {
-                    back: true;
-                    clicked => { root.close-settings(); }
-                }
-
-                // Tab bar (scrollable)
-                Flickable {
-                    horizontal-stretch: 1;
-                    viewport-width: tab-layout.preferred-width;
-
-                    tab-layout := HorizontalLayout {
-                        spacing: 2px;
-                        padding: Spacing.xs;
-
-                        for item in [
-                            { id: "account", label: "Account", enabled: true },
-                            { id: "devices", label: "Linked devices", enabled: true },
-                            { id: "privacy", label: "Privacy", enabled: true },
-                            { id: "notifications", label: "Notifications", enabled: true },
-                            { id: "encryption", label: "Encryption", enabled: true },
-                            { id: "ai", label: "AI", enabled: true },
-                            { id: "appearance", label: "Appearance", enabled: true }
-                        ]: Rectangle {
-                            width: compact-tab-text.preferred-width + Spacing.md * 2;
-                            height: Spacing.touch-target-min;
-                            border-radius: Spacing.radius-sm;
-                            background: active-section == item.id ? Colors.primary :
-                                       (compact-tab-touch.has-hover ? Colors.surface-hover : transparent);
-
-                            compact-tab-text := Text {
-                                text: item.label;
-                                color: active-section == item.id ? Colors.text-primary : Colors.text-secondary;
-                                font-size: Typography.xs;
-                                font-weight: active-section == item.id ? Typography.medium : Typography.normal;
-                                horizontal-alignment: center;
-                                vertical-alignment: center;
-                            }
-
-                            compact-tab-touch := TouchArea {
-                                mouse-cursor: pointer;
-                                clicked => {
-                                    if item.enabled { active-section = item.id; }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
 
         HorizontalLayout {
 
@@ -372,6 +306,7 @@ export component SettingsScreen inherits Rectangle {
 
                 content-layout := VerticalLayout {
                     padding: root.content-padding;
+                    padding-top: root.content-padding + (root.compact-mode ? Spacing.touch-target-min + Spacing.sm : 0px);
                     spacing: root.compact-mode ? Spacing.md : Spacing.lg;
                     alignment: start;
 
@@ -2881,4 +2816,71 @@ export component SettingsScreen inherits Rectangle {
         }
         } // HorizontalLayout
     } // VerticalLayout
+
+    // Compact navigation floats over the full-height content scroll.
+    if compact-mode: GlassSurface {
+        width: root.width;
+        material-level: 2;
+        elevation: 1;
+
+        height: Spacing.touch-target-min + Spacing.sm;
+
+        HorizontalLayout {
+            padding-left: Spacing.sm;
+            padding-right: Spacing.sm;
+
+            // The only way out of Settings in compact mode — and Settings
+            // is a full-screen page, so it is a back chevron on the
+            // leading edge, not an X. Was an X here and a "Close Settings"
+            // text button at the bottom of the desktop rail: three
+            // spellings of one action across two breakpoints.
+            DismissButton {
+                back: true;
+                clicked => { root.close-settings(); }
+            }
+
+            // Tab bar (scrollable)
+            Flickable {
+                horizontal-stretch: 1;
+                viewport-width: tab-layout.preferred-width;
+
+                tab-layout := HorizontalLayout {
+                    spacing: 2px;
+                    padding: Spacing.xs;
+
+                    for item in [
+                        { id: "account", label: "Account", enabled: true },
+                        { id: "devices", label: "Linked devices", enabled: true },
+                        { id: "privacy", label: "Privacy", enabled: true },
+                        { id: "notifications", label: "Notifications", enabled: true },
+                        { id: "encryption", label: "Encryption", enabled: true },
+                        { id: "ai", label: "AI", enabled: true },
+                        { id: "appearance", label: "Appearance", enabled: true }
+                    ]: Rectangle {
+                        width: compact-tab-text.preferred-width + Spacing.md * 2;
+                        height: Spacing.touch-target-min;
+                        border-radius: Spacing.radius-sm;
+                        background: active-section == item.id ? Colors.primary :
+                                   (compact-tab-touch.has-hover ? Colors.surface-hover : transparent);
+
+                        compact-tab-text := Text {
+                            text: item.label;
+                            color: active-section == item.id ? Colors.text-primary : Colors.text-secondary;
+                            font-size: Typography.xs;
+                            font-weight: active-section == item.id ? Typography.medium : Typography.normal;
+                            horizontal-alignment: center;
+                            vertical-alignment: center;
+                        }
+
+                        compact-tab-touch := TouchArea {
+                            mouse-cursor: pointer;
+                            clicked => {
+                                if item.enabled { active-section = item.id; }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
 }

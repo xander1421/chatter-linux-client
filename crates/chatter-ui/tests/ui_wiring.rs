@@ -44,20 +44,19 @@ fn boot() -> MainWindow {
 /// Fail with the cause, not the symptom, when the element-query API is inert.
 ///
 /// `ElementHandle` needs debug info that the Slint compiler only emits when
-/// `SLINT_EMIT_DEBUG_INFO=1` is set at build time. Without it every query
+/// the `ui-test-debug` feature is enabled at build time. Without it every query
 /// returns nothing, and the assertions here then report a UI that looks
 /// structurally broken -- "ThreadPanel was never instantiated", "there are no
 /// Rectangles" -- when the only thing wrong is the command line. Check the real
 /// precondition first.
 fn require_element_queries() {
-    assert_eq!(
-        env!("CHATTER_UI_SLINT_DEBUG_INFO"),
-        "1",
+    assert!(
+        chatter_ui::SLINT_DEBUG_INFO_ENABLED,
         "the ElementHandle query API is inert: chatter-ui was built without \
-         SLINT_EMIT_DEBUG_INFO=1, so every element query returns nothing and \
+         the ui-test-debug feature, so every element query returns nothing and \
          nothing asserted below can mean anything. Run the UI suites with:\n\n    \
          ./scripts/test-ui.sh\n\n  or directly:\n\n    \
-         SLINT_EMIT_DEBUG_INFO=1 cargo test -p chatter-ui --test ui_wiring --test ui_layout"
+         cargo test -p chatter-ui --features ui-test-debug --test ui_wiring --test ui_layout"
     );
 }
 
@@ -3682,7 +3681,7 @@ fn headers_use_the_shared_header_button() {
         }
     }
 
-    // 4. The shared control owns the geometry and draws no stroke.
+    // 4. The shared control owns geometry; GlassSurface owns its optical edge.
     let button = include_str!("../../../ui/components/header_button.slint");
     for token in [
         "Spacing.header-action-box-touch",
@@ -3696,13 +3695,13 @@ fn headers_use_the_shared_header_button() {
         }
     }
     if button.contains("border-width") {
-        findings.push("HeaderButton draws a stroke — header buttons are flat".into());
+        findings.push("HeaderButton draws its own stroke instead of using the shared material".into());
     }
     // 5. It centres itself on the row's axis (RC24 D1). A fixed root height
     // leaves the button at the TOP of any taller HorizontalLayout; the root
     // must stretch to the row (floor: the box) and centre the box inside.
     let root_body = &button[button.find("export component HeaderButton").unwrap()..];
-    let root_body = &root_body[..root_body.find("box := Rectangle").expect("HeaderButton lost its inner box")];
+    let root_body = &root_body[..root_body.find("box := GlassSurface").expect("HeaderButton lost its inner box")];
     if root_body.lines().any(|l| l.starts_with("    height:")) {
         findings.push("HeaderButton's root fixes its height — it will ride the top of a taller row".into());
     }
@@ -4460,4 +4459,36 @@ fn glass_material_is_chrome_only_with_one_optical_edge() {
     assert!(!glass.contains("iteration-count"), "glass must settle without an idle animation loop");
     let modal = sources.iter().find(|(name, _)| name == "components/modal_container.slint").unwrap().1.as_str();
     assert!(modal.contains("material-enabled: !root.full-screen;"), "full-screen content is not a glass sheet");
+}
+
+
+/// Chrome must sample scrolling content, with clearance inside the scroll range.
+#[test]
+fn floating_chrome_keeps_content_insets_and_clear_materials() {
+    let chat = include_str!("../../../ui/chat/chat_layout.slint");
+    let list = include_str!("../../../ui/chat/message_list.slint");
+    let sidebar = include_str!("../../../ui/sidebar/sidebar.slint");
+    let app = include_str!("../../../ui/app.slint");
+    let material = include_str!("../../../ui/theme/materials.slint");
+    let nav = include_str!("../../../ui/components/mobile_bottom_nav.slint");
+    assert!(chat.find("message-list := MessageList").unwrap() < chat.find("top-chrome := VerticalLayout").unwrap());
+    assert!(chat.contains("top-inset: top-chrome.height;") && chat.contains("bottom-inset: bottom-chrome.height;"));
+    assert!(chat.contains("y: root.height - self.height;"));
+    assert!(list.contains("padding-top: idx == 0 ? root.top-inset + Spacing.md : 0px;"));
+    assert!(list.contains("? root.bottom-inset + Spacing.md + 48px"));
+    assert!(list.contains("(self.viewport-height - root.bottom-inset) + self.viewport-y"));
+    assert!(list.contains("changed bottom-inset =>") && list.contains("root.is-at-bottom && !root.scrolling && root.jump-row < 0"));
+    assert!(list.contains("y: root.height - root.bottom-inset - 60px;"));
+    assert!(sidebar.find("Flickable {").unwrap() < sidebar.find("if !root.collapsed: GlassSurface {").unwrap());
+    assert!(sidebar.contains("root.bottom-inset + Spacing.fab-size"));
+    assert!(!app.contains("// Space held for the bottom tab bar."));
+    for src in [include_str!("../../../ui/modals/friends.slint"), include_str!("../../../ui/calls/call_history_screen.slint")] {
+        assert!(src.contains("floating-content: root.mobile-mode;"));
+        assert!(src.contains("height: root.mobile-mode ? root.height : parent.height;"));
+        assert!(src.contains("padding-bottom: root.mobile-mode ? root.bottom-inset + Spacing.md : 0px;"));
+    }
+    assert!(material.contains("#00000029 : #ffffff29"));
+    assert!(material.contains("blur-regular: 14px") && material.contains("blur-thick: 18px"));
+    assert!(material.contains("glass-edge-width: 1.75px") && material.contains("refraction: 0.15"));
+    assert!(nav.contains("background: root.active ? Colors.text-primary.with-alpha(0.12) : transparent;"));
 }

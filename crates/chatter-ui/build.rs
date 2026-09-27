@@ -1,19 +1,5 @@
 fn main() {
     let target_os = std::env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
-    let profile = std::env::var("PROFILE").unwrap_or_default();
-    // ElementHandle queries need debug info. Keep it on for every host debug
-    // build so cargo check and UI tests use the same generated Slint code.
-    let debug_info = profile == "debug" && target_os != "android";
-    slint_build::compile_with_config(
-        "../../ui/main.slint",
-        slint_build::CompilerConfiguration::new().with_debug_info(debug_info),
-    )
-    .unwrap();
-    println!(
-        "cargo:rustc-env=CHATTER_UI_SLINT_DEBUG_INFO={}",
-        u8::from(debug_info)
-    );
-
     if target_os == "macos" {
         // webrtc-sys links a static WebRTC lib containing Objective-C
         // categories (e.g. NSString+AbslStringView, adding

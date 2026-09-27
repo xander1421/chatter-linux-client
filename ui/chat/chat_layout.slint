@@ -164,11 +164,99 @@ export component ChatLayout inherits Rectangle {
     // Layout — Neo 2.0 surface continuity: deepest background as base plane
     background: Colors.background;
 
-    // 100% width enables text wrapping to work throughout the chain
-    VerticalLayout {
+    message-list := MessageList {
         width: 100%;
         height: 100%;
+        top-inset: top-chrome.height;
+        bottom-inset: bottom-chrome.height;
+        messages: root.messages;
+        loading: root.loading-messages;
+        selection-mode: root.selection-mode;
+        mobile: root.mobile;
+        is-dm: root.is-dm;
+        can-thread: root.conversation-kind == ConversationKind.channel;
+        is-mesh: MeshGlobal.active-id != "";
+        // A mesh room and a geohash cell are plaintext broadcasts. Only a
+        // mesh DM runs over Noise, so only it keeps the lock.
+        //
+        // A PUBLIC channel is plaintext too: the server creates it with
+        // Encrypted:false and this client ships cleartext to it on purpose
+        // (services/message/core.rs — "plaintext is the intended, visible
+        // property"). It must not claim end-to-end encryption. The
+        // default kind is a public channel, so a conversation whose kind
+        // has not loaded yet understates privacy rather than overstating it.
+        public-broadcast: root.privacy-line-override != ""
+            ? root.privacy-line-exposed
+          : MeshGlobal.active-kind == "room"
+            || MeshGlobal.active-kind == "geohash"
+            || (root.conversation-kind == ConversationKind.channel && !root.private-channel);
+        privacy-line: root.privacy-line-override != ""
+            ? root.privacy-line-override
+          : MeshGlobal.active-kind == "room"
+            ? "Anyone in radio range can read this"
+          : MeshGlobal.active-kind == "geohash"
+            ? "Anyone in this cell can read this"
+          : root.conversation-kind == ConversationKind.channel && !root.private-channel
+            ? "Public channel — anyone can read this"
+            : "Messages are end-to-end encrypted";
+        current-playing-attachment-id: root.current-playing-attachment-id;
+        is-media-playing: root.is-media-playing;
+        audio-progress: root.audio-progress;
+        audio-elapsed: root.audio-elapsed;
+        scroll-to-index: root.scroll-to-message-index;
+        highlighted-message-id: root.highlighted-message-id;
+        scroll-position <=> root.message-scroll-position;
+        should-auto-scroll: root.should-auto-scroll;
+        unread-index <=> root.unread-index;
+        unread-count <=> root.unread-count;
 
+        selection-toggled(id) => {
+            root.selection-toggled(id);
+        }
+
+        message-clicked(id) => {
+            root.message-clicked(id);
+        }
+        reply-clicked(sender-id, timestamp-ns) => {
+            root.reply-clicked(sender-id, timestamp-ns);
+        }
+        reaction-toggled(sender-id, timestamp-ns, emoji) => {
+            root.reaction-toggled(sender-id, timestamp-ns, emoji);
+        }
+
+        react-clicked(sender-id, timestamp-ns, x, y) => {
+            root.react-clicked(sender-id, timestamp-ns, x, y);
+        }
+        thread-clicked(id) => {
+            root.thread-clicked(id);
+        }
+        more-clicked(sender-id, timestamp-ns, x, y) => {
+            root.more-clicked(sender-id, timestamp-ns, x, y);
+        }
+        quote-clicked(id) => {
+            root.quote-clicked(id);
+        }
+        load-more => {
+            root.load-more();
+        }
+        attachment-clicked(id) => {
+            root.view-attachment(id);
+        }
+        audio-seek(id, pos) => {
+            root.audio-seek(id, pos);
+        }
+        scroll-to-bottom-clicked => {
+            root.scroll-to-bottom-clicked();
+        }
+    }
+
+    // Floating chrome is positioned explicitly: a sized element without x/y
+    // is centred in its parent, which put the header mid-screen.
+    top-chrome := VerticalLayout {
+        x: 0;
+        y: 0;
+        width: root.width;
+        height: self.preferred-height;
         // Header at top (fixed 56px). Hidden during active calls — the call
         // dock already shows channel name/encryption/timer.
         if !root.hide-header: ChatHeader {
@@ -260,91 +348,15 @@ export component ChatLayout inherits Rectangle {
 
         // Message list in middle (fills remaining space)
         // Width 100% flows to children for text wrapping
-        message-list := MessageList {
-            width: 100%;
-            vertical-stretch: 1;
-            messages: root.messages;
-            loading: root.loading-messages;
-            selection-mode: root.selection-mode;
-            mobile: root.mobile;
-            is-dm: root.is-dm;
-            can-thread: root.conversation-kind == ConversationKind.channel;
-            is-mesh: MeshGlobal.active-id != "";
-            // A mesh room and a geohash cell are plaintext broadcasts. Only a
-            // mesh DM runs over Noise, so only it keeps the lock.
-            //
-            // A PUBLIC channel is plaintext too: the server creates it with
-            // Encrypted:false and this client ships cleartext to it on purpose
-            // (services/message/core.rs — "plaintext is the intended, visible
-            // property"). It must not claim end-to-end encryption. The
-            // default kind is a public channel, so a conversation whose kind
-            // has not loaded yet understates privacy rather than overstating it.
-            public-broadcast: root.privacy-line-override != ""
-                ? root.privacy-line-exposed
-              : MeshGlobal.active-kind == "room"
-                || MeshGlobal.active-kind == "geohash"
-                || (root.conversation-kind == ConversationKind.channel && !root.private-channel);
-            privacy-line: root.privacy-line-override != ""
-                ? root.privacy-line-override
-              : MeshGlobal.active-kind == "room"
-                ? "Anyone in radio range can read this"
-              : MeshGlobal.active-kind == "geohash"
-                ? "Anyone in this cell can read this"
-              : root.conversation-kind == ConversationKind.channel && !root.private-channel
-                ? "Public channel — anyone can read this"
-                : "Messages are end-to-end encrypted";
-            current-playing-attachment-id: root.current-playing-attachment-id;
-            is-media-playing: root.is-media-playing;
-            audio-progress: root.audio-progress;
-            audio-elapsed: root.audio-elapsed;
-            scroll-to-index: root.scroll-to-message-index;
-            highlighted-message-id: root.highlighted-message-id;
-            scroll-position <=> root.message-scroll-position;
-            should-auto-scroll: root.should-auto-scroll;
-            unread-index <=> root.unread-index;
-            unread-count <=> root.unread-count;
 
-            selection-toggled(id) => {
-                root.selection-toggled(id);
-            }
 
-            message-clicked(id) => {
-                root.message-clicked(id);
-            }
-            reply-clicked(sender-id, timestamp-ns) => {
-                root.reply-clicked(sender-id, timestamp-ns);
-            }
-            reaction-toggled(sender-id, timestamp-ns, emoji) => {
-                root.reaction-toggled(sender-id, timestamp-ns, emoji);
-            }
+    }
 
-            react-clicked(sender-id, timestamp-ns, x, y) => {
-                root.react-clicked(sender-id, timestamp-ns, x, y);
-            }
-            thread-clicked(id) => {
-                root.thread-clicked(id);
-            }
-            more-clicked(sender-id, timestamp-ns, x, y) => {
-                root.more-clicked(sender-id, timestamp-ns, x, y);
-            }
-            quote-clicked(id) => {
-                root.quote-clicked(id);
-            }
-            load-more => {
-                root.load-more();
-            }
-            attachment-clicked(id) => {
-                root.view-attachment(id);
-            }
-            audio-seek(id, pos) => {
-                root.audio-seek(id, pos);
-            }
-            scroll-to-bottom-clicked => {
-                root.scroll-to-bottom-clicked();
-            }
-        }
-
-        // Composer at bottom — placed directly in VerticalLayout so its
+    bottom-chrome := VerticalLayout {
+        width: root.width;
+        height: self.preferred-height;
+        y: root.height - self.height;
+        // Floating composer — placed directly in VerticalLayout so its
         // explicit height drives the layout slot. A wrapping plain Rectangle
         // does not auto-size from children, which collapses the hit-test
         // region to 0 even though the composer renders via overflow.

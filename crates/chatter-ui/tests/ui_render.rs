@@ -33,15 +33,14 @@ use slint::ComponentHandle;
 
 /// Fail with the cause, not the symptom, when the element-query API is inert.
 ///
-/// Without `SLINT_EMIT_DEBUG_INFO=1` every query returns nothing, and a
+/// Without `ui-test-debug` every query returns nothing, and a
 /// render-smoke test then reports a totally blank UI — the exact thing it is
 /// hunting — when the only thing wrong is the command line.
 fn require_element_queries() {
-    assert_eq!(
-        env!("CHATTER_UI_SLINT_DEBUG_INFO"),
-        "1",
+    assert!(
+        chatter_ui::SLINT_DEBUG_INFO_ENABLED,
         "the ElementHandle query API is inert: chatter-ui was built without \
-         SLINT_EMIT_DEBUG_INFO=1, so every element query returns nothing and \
+         the ui-test-debug feature, so every element query returns nothing and \
          this suite would report a blank screen no matter what renders. Run:\n\n    \
          ./scripts/test-ui.sh"
     );

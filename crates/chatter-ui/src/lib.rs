@@ -6,8 +6,9 @@
 use chatter_core::system::{init_antidebug, antidebug_check};
 use tokio_util::sync::CancellationToken;
 
-// Include Slint-generated code in the library crate
-slint::include_modules!();
+// Keep the public UI types at the crate root for app wiring and consumers.
+// The generated component tree compiles once in its own dependency.
+pub use chatter_ui_slint::*;
 
 // UI modules (require Slint types)
 pub mod bin_ui;

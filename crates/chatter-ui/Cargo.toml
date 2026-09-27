@@ -28,7 +28,21 @@ name = "video_present_bench"
 path = "examples/video_present_bench.rs"
 required-features = ["desktop"]
 
+# These suites query Slint elements by type/label and need compiler metadata.
+[[test]]
+name = "ui_wiring"
+required-features = ["ui-test-debug"]
+
+[[test]]
+name = "ui_layout"
+required-features = ["ui-test-debug"]
+
+[[test]]
+name = "ui_render"
+required-features = ["ui-test-debug"]
+
 [dependencies]
+chatter-ui-slint = { path = "../chatter-ui-slint" }
 chatter-core = { path = "../chatter-core", default-features = false }
 
 # ============================================================================
@@ -113,7 +127,6 @@ tempfile = "3"
 i-slint-backend-testing = { version = "=1.17.1", default-features = false }
 
 [build-dependencies]
-slint-build = "1.17.1"
 # Android calls: force-keep + export the libwebrtc Java_* JNI symbols so the
 # bundled livekit.org.webrtc Java classes resolve their native methods (else the
 # linker dead-strips them and calls abort with UnsatisfiedLinkError on join).
@@ -122,6 +135,8 @@ webrtc-sys-build = "0.3.16"
 
 [features]
 default = ["desktop", "jarvis"]
+# Emit Slint element metadata for the headless UI query suites.
+ui-test-debug = ["chatter-ui-slint/ui-test-debug"]
 # The bitchat mesh. Off by default while the radio stack is unproven against a
 # second device. `mesh` alone gives BLE; add `onion` for geohash channels and
 # Nostr DMs, which are Tor-only on purpose.

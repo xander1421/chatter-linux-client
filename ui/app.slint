@@ -1378,6 +1378,8 @@ export component App inherits Rectangle {
             // window width — a landscape viewport for a landscape screen share.
             if !root.active-call-fullscreen
                 && !(root.compact-layout && root.mobile-show-chat): Sidebar {
+                bottom-inset: root.bottom-nav-visible ? Spacing.bottom-nav-height + Spacing.sm + root.safe-area-bottom
+                    + (root.active-call-visible ? 44px + Spacing.sm : 0px) : 0px;
                 // Survives dismissing the connection banner: the dot on the
                 // settings button is what keeps saying the server is down.
                 server-unreachable: root.server-unreachable;
@@ -1848,22 +1850,6 @@ export component App inherits Rectangle {
             } // end chat-panel-area Rectangle
         } // end inner HorizontalLayout (sidebar + chat)
 
-            // Space held for the bottom tab bar. The bar ITSELF is drawn
-            // further down, after the modals, so that it sits above them in
-            // z-order and keeps taking taps while a full-screen Contacts or
-            // Settings is open — as a child here it rendered under them and
-            // went inert. Reserving the height here (rather than overlaying
-            // the bar on the chat) keeps the original property that nothing
-            // above is clipped by it.
-            if root.bottom-nav-visible: Rectangle {
-                // Must match MobileBottomNav's own `occupied-height` — the dock
-                // floats with a gap under it, so reserving only the bar height
-                // would let the last row slide beneath the glass.
-                // Plus the return-to-call bar stacked on it (its 44px height +
-                // gap), which shows whenever a call runs on this screen.
-                height: Spacing.bottom-nav-height + Spacing.sm + root.safe-area-bottom
-                    + (root.active-call-visible ? 44px + Spacing.sm : 0px);
-            }
         } // end VerticalLayout (banner + chat area)
 
     // ========== Modal overlay layer ==========

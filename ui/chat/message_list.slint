@@ -29,6 +29,10 @@ component ListView inherits Flickable {
 }
 
 export component MessageList inherits Rectangle {
+    // Insets are part of the first/last virtual row, so the runtime includes
+    // them in viewport-height and its bottom clamp. Chrome overlays the view.
+    in property <length> top-inset: 0px;
+    in property <length> bottom-inset: 0px;
     // Properties
     in property <[MessageItemData]> messages: [];
     in property <bool> loading: false;
@@ -187,6 +191,10 @@ export component MessageList inherits Rectangle {
     callback audio-seek(string, float);  // attachment ID, position 0.0-1.0
     callback scroll-to-bottom-clicked();  // Emitted when scroll-to-bottom button clicked
 
+    changed bottom-inset => {
+        if (root.is-at-bottom && !root.scrolling && root.jump-row < 0) { root.go-to-end(); }
+    }
+
     // Layout — flat background to avoid neomorphic fatigue in scrolling content.
     // The messages themselves carry the depth; the list stays neutral.
     background: Colors.background;
@@ -194,6 +202,8 @@ export component MessageList inherits Rectangle {
     // Loading state: skeleton placeholders
     if root.loading: VerticalLayout {
         padding: Spacing.md;
+        padding-top: root.top-inset + Spacing.md;
+        padding-bottom: root.bottom-inset + Spacing.md;
         spacing: Spacing.lg;
 
         for _ in [1, 2, 3, 4, 5]: HorizontalLayout {
@@ -245,6 +255,8 @@ export component MessageList inherits Rectangle {
 
     // Empty state
     if !root.loading && root.messages.length == 0: Rectangle {
+        y: root.top-inset;
+        height: max(0px, root.height - root.top-inset - root.bottom-inset);
         VerticalLayout {
             alignment: center;
             spacing: Spacing.md;
@@ -340,7 +352,10 @@ export component MessageList inherits Rectangle {
             // bottom edge), and at least one average row while any row is
             // still below — so "at bottom" cannot be claimed early.
             pure function bottom-gap() -> length {
-                return self.viewport-height + self.viewport-y - self.height;
+                // viewport-height includes bottom-inset in the last row: subtract
+                // it from both content and visible bottom to compare message edges.
+                return (self.viewport-height - root.bottom-inset) + self.viewport-y
+                    - (self.height - root.bottom-inset);
             }
 
             // Where the viewport came to rest.
@@ -367,7 +382,7 @@ export component MessageList inherits Rectangle {
 
             // Row `i` starts below the bottom edge.
             pure function is-below(i: int) -> bool {
-                return i * self.viewport-height / root.messages.length > self.height - self.viewport-y;
+                return i * self.viewport-height / root.messages.length > self.height - root.bottom-inset - self.viewport-y;
             }
 
             function seek-end() {
@@ -403,9 +418,9 @@ export component MessageList inherits Rectangle {
                 }
             }
 
-            // Land row `i` at the top edge. The runtime seeks by its average
+            // Land row `i` below the floating header. The runtime seeks by its average
             // row height: more than 1.5 screens from the live rows it places
-            // row `i` at exactly y = 0; nearer, it walks measured rows from
+            // row `i` at the requested top inset; nearer, it walks measured rows from
             // the current anchor and lands within a row — so the seek is
             // issued again from there, where the walk is a row long and
             // exact. Needs an estimate to seek by, so before the first
@@ -420,7 +435,7 @@ export component MessageList inherits Rectangle {
                     // never reached.
                     self.row-y = Math.min(0px, Math.max(
                         Math.min(0px, self.height - self.viewport-height),
-                        -(i * self.viewport-height / root.messages.length) - 1px));
+                        -(i * self.viewport-height / root.messages.length) + (i == 0 ? 0px : root.top-inset) - 1px));
                     if (root.jump-passes >= 3 || Math.abs((self.row-y - self.viewport-y) / 1px) < 1) {
                         root.jump-row = -1;
                         self.read-position();
@@ -560,12 +575,12 @@ export component MessageList inherits Rectangle {
                 height: self.preferred-height;
                 padding-left: Spacing.md;
                 padding-right: Spacing.md;
-                padding-top: idx == 0 ? Spacing.md : 0px;
+                padding-top: idx == 0 ? root.top-inset + Spacing.md : 0px;
                 // Extra bottom clearance under the last row so the
                 // scroll-to-bottom FAB (44px, docked bottom-right) never
                 // covers its corner.
                 padding-bottom: idx == root.messages.length - 1
-                    ? Spacing.md + 48px
+                    ? root.bottom-inset + Spacing.md + 48px
                     : Spacing.message-gap;
                 spacing: 2px;
 
@@ -748,7 +763,7 @@ export component MessageList inherits Rectangle {
         if !root.is-at-bottom: GlassSurface {
             elevation: 0;
             x: root.width - self.width - 16px;
-            y: root.height - 60px;
+            y: root.height - root.bottom-inset - 60px;
             width: pill-content.preferred-width + Spacing.lg * 2;
             height: 44px;
             border-radius: 22px;

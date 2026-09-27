@@ -8,7 +8,7 @@ impl AttachmentService {
     /// Download encrypted content from CDN and store on filesystem.
     ///
     /// Downloads the ciphertext and stores it on the filesystem
-    /// without writing plaintext to disk. Missing audio waveforms are extracted
+    /// without writing plaintext to disk. Missing or degenerate audio waveforms are extracted
     /// from decrypted memory before the download completes.
     ///
     /// This is the secure flow: encrypted content stored on filesystem,
@@ -75,7 +75,7 @@ impl AttachmentService {
             .map_err(|e| AttachmentError::StorageError(e.to_string()))?;
 
         if attachment.metadata.is_audio()
-            && attachment.metadata.waveform_samples.as_ref().is_none_or(Vec::is_empty)
+            && crate::media::waveform::needs_waveform_repair(attachment.metadata.waveform_samples.as_deref())
         {
             // ponytail: inline, voice notes are small (seconds of audio); move
             // to spawn_blocking with an owned service if long audio shows up here.
@@ -97,14 +97,14 @@ impl AttachmentService {
         Ok(())
     }
 
-    /// Repair only missing waveform metadata, preserving the latest transfer state.
+    /// Repair missing or degenerate waveform metadata, preserving the latest transfer state.
     fn repair_waveform(&self, id: &AttachmentId, audio: &[u8]) -> Result<(), AttachmentError> {
         let waveform = crate::media::extract_waveform_from_memory(audio)
             .map_err(|e| AttachmentError::InvalidAttachment(e.to_string()))?;
         let mut attachment = self.get(id)?.ok_or_else(|| {
             AttachmentError::InvalidAttachment(format!("Attachment {} not found", id))
         })?;
-        if attachment.metadata.waveform_samples.as_ref().is_none_or(Vec::is_empty) {
+        if crate::media::waveform::needs_waveform_repair(attachment.metadata.waveform_samples.as_deref()) {
             attachment.metadata.waveform_samples = Some(waveform);
             self.update(&attachment)?;
         }
@@ -146,6 +146,16 @@ mod tests {
         assert_eq!(bars[31], 255);
         assert!(bars[0] < bars[16]);
         assert_eq!(stored.content_location, crate::domain::attachment::ContentLocation::NotDownloaded);
+        for old in [vec![0; 32], vec![80; 32], vec![0, 1, 3, 13]] {
+            stored.metadata.waveform_samples = Some(old);
+            service.update(&stored).unwrap();
+            service.repair_waveform(&ids[0], audio.get_ref()).unwrap();
+            let repaired = service.get(&ids[0]).unwrap().unwrap();
+            let bars = repaired.metadata.waveform_samples.unwrap();
+            assert_eq!(bars.len(), 32);
+            assert_eq!(bars[31], 255);
+            assert!(bars[0] < bars[16]);
+        }
         stored.metadata.waveform_samples = Some(vec![13, 255]);
         service.update(&stored).unwrap();
         service.repair_waveform(&ids[0], audio.get_ref()).unwrap();

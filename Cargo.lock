@@ -2186,6 +2186,7 @@ dependencies = [
  "arboard",
  "base64 0.22.1",
  "chatter-core",
+ "chatter-ui-slint",
  "chrono",
  "dirs 5.0.1",
  "glutin_egl_sys",
@@ -2212,7 +2213,6 @@ dependencies = [
  "raw-window-handle",
  "serde_json",
  "slint",
- "slint-build",
  "tempfile",
  "tokio",
  "tokio-util",
@@ -2222,6 +2222,14 @@ dependencies = [
  "webrtc-sys-build",
  "winit",
  "zeroize",
+]
+
+[[package]]
+name = "chatter-ui-slint"
+version = "0.1.0"
+dependencies = [
+ "slint",
+ "slint-build",
 ]
 
 [[package]]

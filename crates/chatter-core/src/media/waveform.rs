@@ -20,6 +20,16 @@ use crate::error::MediaError;
 /// Number of bars in waveform visualization.
 pub const WAVEFORM_BAR_COUNT: usize = 32;
 
+/// Missing, constant, or floor-level bars cannot represent the note's dynamics.
+/// Re-extract from authenticated audio instead of trusting old absolute-scale metadata.
+pub(crate) fn needs_waveform_repair(samples: Option<&[u8]>) -> bool {
+    let Some(samples) = samples.filter(|samples| !samples.is_empty()) else {
+        return true;
+    };
+    samples.iter().all(|sample| *sample == samples[0])
+        || samples.iter().all(|sample| *sample <= 13)
+}
+
 /// Extract waveform peaks from an audio file.
 ///
 /// Returns a vector of amplitude values (0-255) representing the waveform.
@@ -419,6 +429,15 @@ fn process_samples_to_bars(samples: Vec<f32>, num_bars: usize) -> Result<Vec<u8>
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn repair_detects_flat_and_absolute_scale_metadata() {
+        assert!(needs_waveform_repair(None));
+        assert!(needs_waveform_repair(Some(&[])));
+        assert!(needs_waveform_repair(Some(&[80; 32])));
+        assert!(needs_waveform_repair(Some(&[0, 1, 3, 13])));
+        assert!(!needs_waveform_repair(Some(&[13, 128, 255])));
+    }
 
     #[test]
     fn normalization_preserves_quiet_shape_and_wire_scale() {

@@ -217,7 +217,9 @@ export component Sidebar inherits Rectangle {
     // from the pre-resize width drew a half-width first frame at launch.
     animate width { duration: root.mobile-mode ? 0ms : 200ms; easing: ease-out; }
 
-    VerticalLayout {
+    in property <length> bottom-inset: 0px;
+
+    Rectangle {
         // ════════════════════════════════════════
         // FIXED TOP ROW — the app's title row
         // ════════════════════════════════════════
@@ -225,94 +227,24 @@ export component Sidebar inherits Rectangle {
         // reasons: it is the row Telegram (and every native list app) keeps
         // pinned, and on macOS the traffic lights are painted over this corner,
         // so a row that scrolls would slide conversations under them.
-        if !root.collapsed: GlassSurface {
-            material-level: 2;
-            elevation: 1;
-
-            horizontal-stretch: 1;
-            height: root.top-row-height;
-            accessible-role: button;
-            accessible-label: "Search";
-            HorizontalLayout {
-                // The traffic lights own the leading edge of this row on macOS
-                // (0px elsewhere), so the search entry starts after them.
-                padding-left: root.quick-link-inset + root.traffic-lights-width;
-                padding-right: Spacing.sm; spacing: Spacing.sm; alignment: start;
-                VerticalLayout { alignment: center; horizontal-stretch: 0; width: root.quick-link-slot;
-                    HorizontalLayout { alignment: center; Image { source: Icons.search; width: root.quick-link-icon-size; height: root.quick-link-icon-size; colorize: Colors.text-secondary; } }
-                }
-                Text { text: "Search"; color: root.quick-link-text-color; font-size: root.quick-link-text-size; vertical-alignment: center; }
-            }
-            search-touch := TouchArea { mouse-cursor: pointer; clicked => { root.search-clicked(); } }
-            // Create — New Chat / New Channel / New Section. Two-pane only; a
-            // phone has the floating button on the Chats tab instead. Left of
-            // the Shield toggle.
-            if !root.mobile-mode: HeaderButton {
-                touch: root.touch;
-                x: parent.width - self.width - Spacing.sm - self.width - Spacing.header-action-gap;
-                y: (parent.height - self.height) / 2;
-                icon: Icons.plus;
-                label: "Create";
-                clicked => { root.create-clicked(); }
-            }
-            // Shield toggle — the chat list's own header control (owner decision
-            // 2026-09-26: Shield is a mode of this list, not a tab). Declared
-            // after `search-touch` so it sits above the row's search target.
-            // Tinted when on; the dot is Tor status.
-            //
-            // Offered in every build: Shield is the anonymous-mailbox mode and
-            // works without Tor. A build without the `onion` feature stays
-            // direct, core reports TorStatus Unavailable and the
-            // ShieldNetworkBanner says so. Only the Tor dot is gated on
-            // AnonMode.onion-built — without Tor it would be a permanent red.
-            HeaderButton {
-                touch: root.touch;
-                x: parent.width - self.width - Spacing.sm; y: (parent.height - self.height) / 2;
-                icon: Icons.shield;
-                label: AnonMode.enabled ? "Shield on - tap to turn off" : "Shield off - tap to turn on";
-                active: AnonMode.enabled;
-                clicked => { root.anon-mode-clicked(); }
-                // Tor status dot: green=connected, amber=CONNECTING ONLY,
-                // red=error, muted=off. State 0 is Off — traffic is going
-                // direct — and it used to fall through to amber, i.e. the
-                // dot claimed "connecting" forever on a build with no Tor
-                // in it. Shield mode only, and only where Tor exists.
-                Rectangle {
-                    visible: AnonMode.enabled && AnonMode.onion-built;
-                    width: 8px; height: 8px; border-radius: 4px;
-                    // On the glyph's top-right corner, not the box's.
-                    x: (parent.width + (root.touch ? Spacing.header-glyph-touch : Spacing.header-glyph)) / 2 - self.width * 0.75;
-                    y: (parent.height - (root.touch ? Spacing.header-glyph-touch : Spacing.header-glyph)) / 2 - self.height * 0.25;
-                    border-width: 1px; border-color: Colors.surface;
-                    background: TorStatus.state == 2 ? Colors.success
-                        : TorStatus.state >= 3 ? Colors.error
-                        : TorStatus.state == 1 ? Colors.warning
-                        : Colors.text-muted;
-                }
-            }
-        }
-        // Collapsed to the rail, the panel is narrower than the traffic lights
-        // are wide, so nothing can share their row — the rail's slots start
-        // below them instead. Zero height off macOS.
-        if root.collapsed && root.traffic-lights-width > 0px: Rectangle {
-            height: root.titlebar-height;
-        }
 
         // ════════════════════════════════════════
         // SCROLLABLE CENTRAL CONTENT
         // ════════════════════════════════════════
         Flickable {
-            vertical-stretch: 1;
+            width: root.width;
+            height: root.height;
             viewport-height: central-layout.preferred-height;
 
             central-layout := VerticalLayout {
                 // No gap under the pinned Search row on a phone: it and Saved
                 // Messages are one list.
-                padding-top: root.mobile-mode ? 0px : Spacing.sm;
+                padding-top: (root.collapsed ? (root.traffic-lights-width > 0px ? root.titlebar-height : 0px) : root.top-row-height) + (root.mobile-mode ? 0px : Spacing.sm);
                 // On a phone the Chats tab's floating create button sits over
                 // the foot of this list; room for it, so it never covers the
                 // last row.
-                padding-bottom: root.mobile-mode ? Spacing.fab-size + Spacing.md * 2 : Spacing.md;
+                padding-bottom: root.mobile-mode ? root.bottom-inset + Spacing.fab-size + Spacing.md * 2
+                    : (root.collapsed ? root.rail-button-count * root.rail-icon-size + (root.rail-button-count - 1) * 8px + 16px : 44px) + Spacing.md;
 
                 // QUICK LINKS (top navigation)
 
@@ -628,13 +560,78 @@ export component Sidebar inherits Rectangle {
                 Rectangle { vertical-stretch: 1; }
             }
         }
+        if !root.collapsed: GlassSurface {
+            material-level: 2;
+            elevation: 1;
 
-        // 7. BOTTOM UTILITY BAR — shared chrome material.
-        // Desktop only. On mobile its last occupant (the shield) moved up onto
-        // the search row, and what remained was a translucent grey strip across
-        // the foot of the list holding nothing — visible as a lighter rectangle
-        // above the floating dock.
+            // Pinned to the top: without x/y a sized element is centred.
+            x: 0;
+            y: 0;
+            width: root.width;
+            height: root.top-row-height;
+            accessible-role: button;
+            accessible-label: "Search";
+            HorizontalLayout {
+                // The traffic lights own the leading edge of this row on macOS
+                // (0px elsewhere), so the search entry starts after them.
+                padding-left: root.quick-link-inset + root.traffic-lights-width;
+                padding-right: Spacing.sm; spacing: Spacing.sm; alignment: start;
+                VerticalLayout { alignment: center; horizontal-stretch: 0; width: root.quick-link-slot;
+                    HorizontalLayout { alignment: center; Image { source: Icons.search; width: root.quick-link-icon-size; height: root.quick-link-icon-size; colorize: Colors.text-secondary; } }
+                }
+                Text { text: "Search"; color: root.quick-link-text-color; font-size: root.quick-link-text-size; vertical-alignment: center; }
+            }
+            search-touch := TouchArea { mouse-cursor: pointer; clicked => { root.search-clicked(); } }
+            // Create — New Chat / New Channel / New Section. Two-pane only; a
+            // phone has the floating button on the Chats tab instead. Left of
+            // the Shield toggle.
+            if !root.mobile-mode: HeaderButton {
+                touch: root.touch;
+                x: parent.width - self.width - Spacing.sm - self.width - Spacing.header-action-gap;
+                y: (parent.height - self.height) / 2;
+                icon: Icons.plus;
+                label: "Create";
+                clicked => { root.create-clicked(); }
+            }
+            // Shield toggle — the chat list's own header control (owner decision
+            // 2026-09-26: Shield is a mode of this list, not a tab). Declared
+            // after `search-touch` so it sits above the row's search target.
+            // Tinted when on; the dot is Tor status.
+            //
+            // Offered in every build: Shield is the anonymous-mailbox mode and
+            // works without Tor. A build without the `onion` feature stays
+            // direct, core reports TorStatus Unavailable and the
+            // ShieldNetworkBanner says so. Only the Tor dot is gated on
+            // AnonMode.onion-built — without Tor it would be a permanent red.
+            HeaderButton {
+                touch: root.touch;
+                x: parent.width - self.width - Spacing.sm; y: (parent.height - self.height) / 2;
+                icon: Icons.shield;
+                label: AnonMode.enabled ? "Shield on - tap to turn off" : "Shield off - tap to turn on";
+                active: AnonMode.enabled;
+                clicked => { root.anon-mode-clicked(); }
+                // Tor status dot: green=connected, amber=CONNECTING ONLY,
+                // red=error, muted=off. State 0 is Off — traffic is going
+                // direct — and it used to fall through to amber, i.e. the
+                // dot claimed "connecting" forever on a build with no Tor
+                // in it. Shield mode only, and only where Tor exists.
+                Rectangle {
+                    visible: AnonMode.enabled && AnonMode.onion-built;
+                    width: 8px; height: 8px; border-radius: 4px;
+                    // On the glyph's top-right corner, not the box's.
+                    x: (parent.width + (root.touch ? Spacing.header-glyph-touch : Spacing.header-glyph)) / 2 - self.width * 0.75;
+                    y: (parent.height - (root.touch ? Spacing.header-glyph-touch : Spacing.header-glyph)) / 2 - self.height * 0.25;
+                    border-width: 1px; border-color: Colors.surface;
+                    background: TorStatus.state == 2 ? Colors.success
+                        : TorStatus.state >= 3 ? Colors.error
+                        : TorStatus.state == 1 ? Colors.warning
+                        : Colors.text-muted;
+                }
+            }
+        }
         if !root.mobile-mode: GlassSurface {
+            width: root.width;
+            y: root.height - self.height;
             material-level: 2;
             elevation: 1;
 
@@ -826,6 +823,13 @@ export component Sidebar inherits Rectangle {
 
             }
         }
+
+        // 7. BOTTOM UTILITY BAR — shared chrome material.
+        // Desktop only. On mobile its last occupant (the shield) moved up onto
+        // the search row, and what remained was a translucent grey strip across
+        // the foot of the list holding nothing — visible as a lighter rectangle
+        // above the floating dock.
+
     }
 
     // Right edge — the seam against the chat column. Desktop only: on a phone

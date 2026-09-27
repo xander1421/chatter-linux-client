@@ -464,6 +464,16 @@ impl MessageGateway {
             ServiceError::Validation(format!("SyncSent has invalid destination_user_id: {e}"))
         })?;
 
+        let targets = sync.receipt_targets.iter().map(|target| {
+            let user: UserId = target.user_id.parse().map_err(|_| {
+                ServiceError::Validation("SyncSent has invalid receipt recipient".into())
+            })?;
+            if user != destination || user == current_user || target.device_id == 0 {
+                return Err(ServiceError::Validation("SyncSent has invalid receipt target".into()));
+            }
+            Ok((user, crate::domain::ids::DeviceId(target.device_id)))
+        }).collect::<Result<Vec<_>, ServiceError>>()?;
+
         let data_message = sync.message.ok_or_else(|| {
             ServiceError::Validation("SyncSent carried no inner message".into())
         })?;
@@ -554,7 +564,7 @@ impl MessageGateway {
                 .filter_map(|id| id.parse().ok())
                 .collect(),
             targets_ai_bot: data_message.targets_ai_bot,
-            delivery_status: String::new(),
+            delivery_status: "sent".into(),
             failure_reason: None,
         };
 
@@ -563,6 +573,11 @@ impl MessageGateway {
             data_message.quote.as_ref(),
             &self.message_repo,
         );
+
+        crate::storage::repositories::message_receipt_repo::MessageReceiptRepository::new(
+            self.settings_repo.database().clone(),
+        ).snapshot_for_send(channel_id, ConversationType::ServerDm, current_user,
+            data_message.timestamp, &targets)?;
 
         self.message_repo.insert(&message)?;
 

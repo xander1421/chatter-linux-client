@@ -221,10 +221,12 @@ impl MessageService {
         if *requester != us {
             return Ok(None);
         }
-        Ok(super::dm::sync_sent_copy(&peer, &content).map(|mut copy| {
-            Self::pad_content_to_bucket(&mut copy);
-            copy
-        }))
+        let Some(mut copy) = super::dm::sync_sent_copy(&peer, &content) else {
+            return Ok(None);
+        };
+        self.populate_sync_receipt_targets(&mut copy)?;
+        Self::pad_content_to_bucket(&mut copy);
+        Ok(Some(copy))
     }
 
     /// The wire `Content` of one of our stored friend DMs, as it was first

@@ -25,6 +25,13 @@ component NavTab inherits Rectangle {
     horizontal-stretch: 1;
     background: transparent;
 
+    Rectangle {
+        x: 5px; y: 5px;
+        width: parent.width - 10px; height: parent.height - 10px;
+        border-radius: self.height / 2;
+        background: root.active ? Colors.text-primary.with-alpha(0.12) : transparent;
+    }
+
     VerticalLayout {
         alignment: center;
         spacing: 2px;
@@ -131,7 +138,7 @@ export component MobileBottomNav inherits Rectangle {
         y: 0;
         width: parent.width - root.side-inset * 2;
         height: Spacing.bottom-nav-height;
-        border-radius: Spacing.radius-chrome;
+        border-radius: self.height / 2;
     }
 
     // Four equal columns, positioned explicitly rather than by a

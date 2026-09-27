@@ -4,7 +4,7 @@ use crate::domain::ids::{ChannelId, DeviceId, MessageId, UserId};
 use crate::domain::message::ConversationType;
 use crate::inbox::DomainEvent;
 use crate::storage::repositories::message_receipt_repo::{DeviceReceipt, MessageReceiptRepository};
-use crate::storage::repositories::settings_repo::{keys, SettingsRepository};
+use crate::storage::repositories::settings_repo::{SettingsRepository, keys};
 
 /// Preserve acknowledged progress when queued UI events arrive out of order.
 pub fn advance_delivery_status<'a>(current: &'a str, incoming: &'a str) -> &'a str {
@@ -100,6 +100,35 @@ impl MessageService {
         Ok(())
     }
 
+    /// Preserve the originating device's receipt scope in its own-device transcript.
+    pub(super) fn populate_sync_receipt_targets(
+        &self,
+        content: &mut crate::proto::content_v1::Content,
+    ) -> Result<(), MessageError> {
+        use crate::proto::content_v1::{SyncSentReceiptTarget, content::Content};
+        let Some(Content::SyncSent(sync)) = content.content.as_mut() else {
+            return Ok(());
+        };
+        let peer: UserId = sync
+            .destination_user_id
+            .parse()
+            .map_err(|_| MessageError::InvalidContent("invalid sync destination".into()))?;
+        sync.receipt_targets = MessageReceiptRepository::new(self.database.clone())
+            .targets_for_send(
+                ChannelId::from(peer),
+                ConversationType::ServerDm,
+                self.current_user_id()?,
+                sync.timestamp,
+            )?
+            .into_iter()
+            .map(|(user, device)| SyncSentReceiptTarget {
+                user_id: user.to_string(),
+                device_id: device.0,
+            })
+            .collect();
+        Ok(())
+    }
+
     pub fn message_receipts(
         &self,
         message_id: MessageId,
@@ -113,21 +142,14 @@ impl MessageService {
             .get(&id)?
             .ok_or(MessageError::MessageNotFound(id))?;
         let rows = self.message_receipts(id)?;
-        if rows.is_empty() {
-            return Ok("Delivery details are not available for this message.".into());
-        }
         let show_read = self
             .settings_repo
             .get_bool(keys::SEND_READ_RECEIPTS)?
             .unwrap_or(true);
-        let mut lines = vec![format!(
-            "Status: {}",
-            if !show_read && message.delivery_status == "read" {
-                "delivered"
-            } else {
-                &message.delivery_status
-            }
-        )];
+        let mut lines = vec![message_receipt_summary(&message, show_read)];
+        if rows.is_empty() {
+            lines.push("Per-device delivery times are not available for this message.".into());
+        }
         for row in rows {
             let name = self
                 .user_repo
@@ -202,6 +224,22 @@ impl MessageService {
     }
 }
 
+fn message_receipt_summary(message: &crate::domain::message::Message, show_read: bool) -> String {
+    let status = match message.delivery_status.as_str() {
+        "read" if !show_read => "delivered",
+        "" => "Unknown",
+        status => status,
+    };
+    let sent = i64::try_from(message.sent_at)
+        .ok()
+        .map(chrono::DateTime::from_timestamp_nanos)
+        .unwrap_or(message.created_at)
+        .with_timezone(&chrono::Local)
+        .format("%Y-%m-%d %H:%M:%S")
+        .to_string();
+    format!("Sent: {sent}\nStatus: {status}")
+}
+
 /// The same preference gates sending and observing peer read receipts.
 fn receipt_stage(
     settings: &SettingsRepository,
@@ -218,6 +256,133 @@ fn receipt_stage(
 mod tests {
     use super::*;
     use std::sync::Arc;
+
+    #[tokio::test]
+    async fn sync_sent_ingestion_preserves_phone_targets_and_applies_tablet_receipts() {
+        use crate::domain::message::Message;
+        use crate::proto::content_v1::content;
+        use crate::services::gateway::MessageGateway;
+
+        keyring::set_default_credential_builder(keyring::mock::default_credential_builder());
+        let phone_dir = tempfile::tempdir().unwrap();
+        let tablet_dir = tempfile::tempdir().unwrap();
+        let build = |path: &std::path::Path| {
+            crate::client::ChatterClient::builder()
+                .server_url("http://localhost:1")
+                .data_dir(path.to_str().unwrap())
+                .build()
+                .unwrap()
+        };
+        let phone = build(phone_dir.path());
+        let tablet = build(tablet_dir.path());
+        let author = UserId::new();
+        let peer = UserId::new();
+        let channel = ChannelId::from(peer);
+        for client in [&phone, &tablet] {
+            client
+                .messages()
+                .settings_repo
+                .set_string(keys::CURRENT_USER_ID, &author.to_string())
+                .unwrap();
+        }
+        let target = tablet.messages();
+        let gateway = MessageGateway::new(
+            target.signal_service.as_ref().clone(),
+            target.message_repo.clone(),
+            target.channel_repo.clone(),
+            target.user_repo.clone(),
+            target.settings_repo.clone(),
+            target.solicited_resends.clone(),
+        );
+        for (timestamp, early) in [(123, false), (124, true)] {
+            let original = crate::services::build_text_content("phone message", timestamp);
+            phone
+                .messages()
+                .snapshot_dm_content_targets(peer, &original, &[1, 2])
+                .unwrap();
+            let mut copy = super::super::dm::sync_sent_copy(&peer, &original).unwrap();
+            phone
+                .messages()
+                .populate_sync_receipt_targets(&mut copy)
+                .unwrap();
+            let Some(content::Content::SyncSent(sync)) = copy.content else {
+                panic!("expected SyncSent")
+            };
+            assert_eq!(sync.receipt_targets.len(), 2);
+            assert!(
+                gateway
+                    .store_synced_sent_message(sync.clone(), peer)
+                    .await
+                    .is_err()
+            );
+            let mut wrong_target = sync.clone();
+            wrong_target.receipt_targets[0].user_id = UserId::new().to_string();
+            assert!(gateway.store_synced_sent_message(wrong_target, author).await.is_err());
+            if early {
+                target
+                    .apply_peer_receipt(
+                        channel,
+                        ConversationType::ServerDm,
+                        peer,
+                        DeviceId(2),
+                        2,
+                        &[timestamp],
+                    )
+                    .unwrap();
+            }
+            gateway
+                .store_synced_sent_message(sync, author)
+                .await
+                .unwrap();
+            if !early {
+                target
+                    .apply_peer_receipt(
+                        channel,
+                        ConversationType::ServerDm,
+                        peer,
+                        DeviceId(2),
+                        2,
+                        &[timestamp],
+                    )
+                    .unwrap();
+            }
+            let stored = target
+                .message_repo
+                .get_by_sender_timestamp(&author, timestamp)
+                .unwrap()
+                .unwrap();
+            assert_eq!(stored.delivery_status, "read");
+            assert_eq!(target.message_receipts(stored.id).unwrap().len(), 2);
+        }
+        let mut old = Message::new_text(
+            channel,
+            ConversationType::ServerDm,
+            Some(author),
+            "old".into(),
+            125,
+        );
+        old.delivery_status = "delivered".into();
+        target.message_repo.insert_outgoing(&old).unwrap();
+        let info = target.message_receipt_info(old.id).unwrap();
+        assert!(info.contains("Sent:"));
+        assert!(info.contains("Status: delivered"));
+    }
+
+    #[test]
+    fn message_info_without_device_evidence_preserves_known_facts() {
+        let mut message = crate::domain::message::Message::new_text(
+            ChannelId::new(),
+            ConversationType::ServerDm,
+            Some(UserId::new()),
+            "old message".into(),
+            1_700_000_000_000_000_000,
+        );
+        message.delivery_status = "read".into();
+        let summary = message_receipt_summary(&message, true);
+        assert!(summary.contains("Sent: 2023-"));
+        assert!(summary.contains("Status: read"));
+        assert!(message_receipt_summary(&message, false).contains("Status: delivered"));
+    }
 
     #[test]
     fn queued_status_events_cannot_regress_acknowledgements() {

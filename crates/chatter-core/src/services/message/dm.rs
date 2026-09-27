@@ -172,6 +172,10 @@ impl MessageService {
     ) -> usize {
         use crate::storage::repositories::settings_repo::keys;
 
+        if let Err(error) = self.populate_sync_receipt_targets(&mut sync) {
+            tracing::warn!(%error, "Could not snapshot own-device receipt targets");
+            return 0;
+        }
         let Ok(me) = self.current_user_id() else { return 0 };
         let me = me.to_string();
         if !self.shield_mode.load(std::sync::atomic::Ordering::Acquire) {
@@ -739,6 +743,7 @@ pub(super) fn sync_sent_copy(
             destination_user_id: peer_id.to_string(),
             timestamp: dm.timestamp,
             message: Some(dm.clone()),
+            receipt_targets: Vec::new(),
         })),
         ..Default::default()
     })

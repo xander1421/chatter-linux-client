@@ -4,28 +4,14 @@ import { Materials } from "../theme/materials.slint";
 import { Appearance } from "../theme/appearance.slint";
 import { Spacing } from "../theme/spacing.slint";
 
-export component GlassSurface inherits Rectangle {
-    in property <bool> material-enabled: true;
-    // 0 ultra-thin / 1 thin: controlled ambient backgrounds only; 2 regular / 3 thick.
-    in property <int> material-level: 2;
-    // 0 flat pill, 1 header contact, 2 floating chrome, 3 dialog.
-    in property <int> elevation: 1;
-    in property <color> material-tint: material-level == 0 ? Materials.ultra-thin
-        : material-level == 1 ? Materials.thin
-        : material-level == 3 ? Materials.thick : Materials.regular;
-    // Opt in only on transient chrome. No animation exists at idle.
-    in property <bool> shown: true;
-    in property <length> enter-distance: 0px;
-    in property <duration> enter-duration: Materials.menu-duration;
-    property <float> open-progress: 0;
-    out property <length> entrance-offset: root.enter-distance * (1 - root.open-progress);
-    init => { root.open-progress = root.shown ? 1 : 0; }
-    changed shown => { root.open-progress = root.shown ? 1 : 0; }
-    animate open-progress {
-        duration: Appearance.reduce-motion || root.enter-distance == 0px ? 0ms : root.enter-duration;
-        easing: Materials.settle;
-    }
-    border-radius: Spacing.radius-chrome;
+// Callers supply @children, so Slint must inline GlassSurface at each use.
+// Keep the material in a childless component instance: its conditional layer
+// trees can then share generated code instead of being cloned into every caller.
+component GlassMaterial inherits Rectangle {
+    in property <bool> material-enabled;
+    in property <int> material-level;
+    in property <color> material-tint;
+    in property <int> elevation;
 
     if root.material-enabled && Appearance.glass-effects: Rectangle {
         border-radius: root.border-radius;
@@ -61,6 +47,16 @@ export component GlassSurface inherits Rectangle {
             background: Materials.specular;
         }
         if Appearance.glass-effects: Rectangle {
+            x: Materials.glass-edge-width + 1px;
+            y: self.x;
+            width: max(0px, root.width - 2 * self.x);
+            height: max(0px, root.height - 2 * self.y);
+            border-radius: max(0px, root.border-radius - self.x);
+            border-width: 1px;
+            border-color: Materials.inner-edge;
+            background: transparent;
+        }
+        if Appearance.glass-effects: Rectangle {
             x: Materials.glass-edge-width / 2;
             y: self.x;
             width: max(0px, root.width - Materials.glass-edge-width);
@@ -69,6 +65,40 @@ export component GlassSurface inherits Rectangle {
             border-width: Materials.glass-edge-width;
             border-color: Materials.glass-edge;
         }
+    }
+}
+
+export component GlassSurface inherits Rectangle {
+    in property <bool> material-enabled: true;
+    // 0 ultra-thin / 1 thin: controlled ambient backgrounds only; 2 regular / 3 thick.
+    in property <int> material-level: 2;
+    // 0 flat pill, 1 header contact, 2 floating chrome, 3 dialog.
+    in property <int> elevation: 1;
+    in property <color> material-tint: material-level == 0 ? Materials.ultra-thin
+        : material-level == 1 ? Materials.thin
+        : material-level == 3 ? Materials.thick : Materials.regular;
+    // Opt in only on transient chrome. No animation exists at idle.
+    in property <bool> shown: true;
+    in property <length> enter-distance: 0px;
+    in property <duration> enter-duration: Materials.menu-duration;
+    property <float> open-progress: 0;
+    out property <length> entrance-offset: root.enter-distance * (1 - root.open-progress);
+    init => { root.open-progress = root.shown ? 1 : 0; }
+    changed shown => { root.open-progress = root.shown ? 1 : 0; }
+    animate open-progress {
+        duration: Appearance.reduce-motion || root.enter-distance == 0px ? 0ms : root.enter-duration;
+        easing: Materials.settle;
+    }
+    border-radius: Spacing.radius-chrome;
+
+    GlassMaterial {
+        width: root.width;
+        height: root.height;
+        border-radius: root.border-radius;
+        material-enabled: root.material-enabled;
+        material-level: root.material-level;
+        material-tint: root.material-tint;
+        elevation: root.elevation;
     }
     @children
 }

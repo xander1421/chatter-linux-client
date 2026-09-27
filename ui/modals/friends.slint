@@ -147,6 +147,7 @@ export component FriendsModal inherits Rectangle {
     property <string> confirm-remove-id: "";
 
     Modal {
+        floating-content: root.mobile-mode;
         show: root.show-modal;
         title: "Contacts";
         modal-width: 680px;
@@ -171,6 +172,7 @@ export component FriendsModal inherits Rectangle {
             // the header row above it, so the two rows share one baseline
             // instead of the tabs sitting 4px short of the touch floor.
             HorizontalLayout {
+                z: 1;
                 height: root.mobile-mode ? Spacing.header-action-box-touch : Spacing.header-action-box;
 
                 for tab in [
@@ -234,6 +236,7 @@ export component FriendsModal inherits Rectangle {
 
                     // Friends count header
                     Text {
+                        z: 1;
                         text: root.friends.length + (root.friends.length == 1 ? " Friend" : " Friends");
                         color: Colors.text-secondary;
                         font-size: Typography.xs;
@@ -276,141 +279,152 @@ export component FriendsModal inherits Rectangle {
                         }
                     }
 
-                    if root.friends.length > 0: Flickable {
+                    if root.friends.length > 0: Rectangle {
                         vertical-stretch: 1;
-                        viewport-height: friends-list.preferred-height;
+                        property <length> chrome-inset: self.absolute-position.y - root.absolute-position.y;
+                        scroll-friends-list := Flickable {
+                            property <length> chrome-inset: parent.chrome-inset;
+                            width: parent.width;
+                            y: root.mobile-mode ? -parent.chrome-inset : 0px;
+                            height: root.mobile-mode ? root.height : parent.height;
 
-                        friends-list := VerticalLayout {
-                            // Rows stack from the TOP. A VerticalLayout with no
-                            // alignment distributes its leftover space around
-                            // fixed-height children, so one friend in a
-                            // full-screen list sank to the bottom of the
-                            // viewport with the gap above it.
-                            alignment: start;
-                            spacing: Spacing.xs;
+                            viewport-height: friends-list.preferred-height;
 
-                            for friend in root.friends: Rectangle {
-                                height: root.row-height;
-                                background: friend-touch.has-hover ? Colors.surface-hover : transparent;
-                                border-radius: Spacing.radius-md;
+                            friends-list := VerticalLayout {
+                                padding-top: root.mobile-mode ? scroll-friends-list.chrome-inset : 0px;
+                                padding-bottom: root.mobile-mode ? root.bottom-inset + Spacing.md : 0px;
+                                // Rows stack from the TOP. A VerticalLayout with no
+                                // alignment distributes its leftover space around
+                                // fixed-height children, so one friend in a
+                                // full-screen list sank to the bottom of the
+                                // viewport with the gap above it.
+                                alignment: start;
+                                spacing: Spacing.xs;
 
-                                HorizontalLayout {
-                                    padding: Spacing.sm;
-                                    spacing: Spacing.sm;
+                                for friend in root.friends: Rectangle {
+                                    height: root.row-height;
+                                    background: friend-touch.has-hover ? Colors.surface-hover : transparent;
+                                    border-radius: Spacing.radius-md;
 
-                                    Avatar {
-                                        size: root.row-avatar;
-                                        // `source` was never bound, so every
-                                        // contact fell back to text even when
-                                        // FriendData carried a decoded avatar.
-                                        source: friend.avatar-source;
-                                        // Initials, not the whole name: Avatar
-                                        // renders this INSIDE the circle, so a
-                                        // display name clipped to "xande".
-                                        fallback-text: friend.initials;
-                                        show-presence: true;
-                                        presence-color: friend.presence-status == "online" ? Colors.online
-                                                     : friend.presence-status == "away" ? Colors.away
-                                                     : friend.presence-status == "dnd" ? Colors.dnd
-                                                     : Colors.offline;
-                                    }
+                                    HorizontalLayout {
+                                        padding: Spacing.sm;
+                                        spacing: Spacing.sm;
 
-                                    VerticalLayout {
-                                        horizontal-stretch: 1;
-                                        alignment: center;
-                                        spacing: root.mobile-mode ? 3px : 2px;
-
-                                        Text {
-                                            text: friend.display-name;
-                                            color: Colors.text-primary;
-                                            font-size: root.row-name-size;
-                                            font-weight: Typography.medium;
-                                            overflow: elide;
+                                        Avatar {
+                                            size: root.row-avatar;
+                                            // `source` was never bound, so every
+                                            // contact fell back to text even when
+                                            // FriendData carried a decoded avatar.
+                                            source: friend.avatar-source;
+                                            // Initials, not the whole name: Avatar
+                                            // renders this INSIDE the circle, so a
+                                            // display name clipped to "xande".
+                                            fallback-text: friend.initials;
+                                            show-presence: true;
+                                            presence-color: friend.presence-status == "online" ? Colors.online
+                                            : friend.presence-status == "away" ? Colors.away
+                                            : friend.presence-status == "dnd" ? Colors.dnd
+                                            : Colors.offline;
                                         }
 
-                                        if friend.custom-status != "": Text {
-                                            text: friend.custom-status;
-                                            color: Colors.text-muted;
-                                            font-size: root.row-sub-size;
-                                            overflow: elide;
-                                        }
-                                    }
+                                        VerticalLayout {
+                                            horizontal-stretch: 1;
+                                            alignment: center;
+                                            spacing: root.mobile-mode ? 3px : 2px;
 
-                                    // No stretch: sharing the row's slack with
-                                    // the name, the centred icons drifted with
-                                    // the name's length. Fixed, they form one
-                                    // right-hand column.
-                                    // Centred on the name: fixed 44px buttons in
-                                    // a HorizontalLayout otherwise sit at its top.
-                                    VerticalLayout {
-                                        alignment: center;
-                                        horizontal-stretch: 0;
-                                        HorizontalLayout {
-                                            spacing: Spacing.xs;
+                                            Text {
+                                                text: friend.display-name;
+                                                color: Colors.text-primary;
+                                                font-size: root.row-name-size;
+                                                font-weight: Typography.medium;
+                                                overflow: elide;
+                                            }
+
+                                            if friend.custom-status != "": Text {
+                                                text: friend.custom-status;
+                                                color: Colors.text-muted;
+                                                font-size: root.row-sub-size;
+                                                overflow: elide;
+                                            }
+                                        }
+
+                                        // No stretch: sharing the row's slack with
+                                        // the name, the centred icons drifted with
+                                        // the name's length. Fixed, they form one
+                                        // right-hand column.
+                                        // Centred on the name: fixed 44px buttons in
+                                        // a HorizontalLayout otherwise sit at its top.
+                                        VerticalLayout {
                                             alignment: center;
                                             horizontal-stretch: 0;
+                                            HorizontalLayout {
+                                                spacing: Spacing.xs;
+                                                alignment: center;
+                                                horizontal-stretch: 0;
 
-                                            // Message button
-                                            Rectangle {
-                                                width: 44px;
-                                                height: 44px;
-                                                border-radius: Spacing.radius-sm;
-                                                background: msg-touch.has-hover ? Colors.surface : transparent;
+                                                // Message button
+                                                Rectangle {
+                                                    width: 44px;
+                                                    height: 44px;
+                                                    border-radius: Spacing.radius-sm;
+                                                    background: msg-touch.has-hover ? Colors.surface : transparent;
 
-                                                Image {
-                                                    source: Icons.message-circle;
-                                                    colorize: Colors.text-secondary;
-                                                    width: 18px;
-                                                    height: 18px;
-                                                    x: (parent.width - self.width) / 2;
-                                                    y: (parent.height - self.height) / 2;
-                                                }
+                                                    Image {
+                                                        source: Icons.message-circle;
+                                                        colorize: Colors.text-secondary;
+                                                        width: 18px;
+                                                        height: 18px;
+                                                        x: (parent.width - self.width) / 2;
+                                                        y: (parent.height - self.height) / 2;
+                                                    }
 
-                                                msg-touch := TouchArea {
-                                                    mouse-cursor: pointer;
-                                                    clicked => {
-                                                        root.start-dm(friend.user-id);
+                                                    msg-touch := TouchArea {
+                                                        mouse-cursor: pointer;
+                                                        clicked => {
+                                                            root.start-dm(friend.user-id);
+                                                        }
                                                     }
                                                 }
-                                            }
 
-                                            // More options: the profile, where Remove
-                                            // Friend and Block live behind a confirm.
-                                            Rectangle {
-                                                width: 44px;
-                                                height: 44px;
-                                                border-radius: Spacing.radius-sm;
-                                                background: more-touch.has-hover ? Colors.surface : transparent;
+                                                // More options: the profile, where Remove
+                                                // Friend and Block live behind a confirm.
+                                                Rectangle {
+                                                    width: 44px;
+                                                    height: 44px;
+                                                    border-radius: Spacing.radius-sm;
+                                                    background: more-touch.has-hover ? Colors.surface : transparent;
 
-                                                // Icons.more-vertical, not U+22EE:
-                                                // Inter has no vertical-ellipsis glyph
-                                                // and the fallback drew a notdef box.
-                                                Image {
-                                                    source: Icons.more-vertical;
-                                                    colorize: Colors.text-secondary;
-                                                    width: 16px;
-                                                    height: 16px;
-                                                    x: (parent.width - self.width) / 2;
-                                                    y: (parent.height - self.height) / 2;
-                                                }
+                                                    // Icons.more-vertical, not U+22EE:
+                                                    // Inter has no vertical-ellipsis glyph
+                                                    // and the fallback drew a notdef box.
+                                                    Image {
+                                                        source: Icons.more-vertical;
+                                                        colorize: Colors.text-secondary;
+                                                        width: 16px;
+                                                        height: 16px;
+                                                        x: (parent.width - self.width) / 2;
+                                                        y: (parent.height - self.height) / 2;
+                                                    }
 
-                                                more-touch := TouchArea {
-                                                    mouse-cursor: pointer;
-                                                    clicked => {
-                                                        root.view-profile(friend.user-id);
+                                                    more-touch := TouchArea {
+                                                        mouse-cursor: pointer;
+                                                        clicked => {
+                                                            root.view-profile(friend.user-id);
+                                                        }
                                                     }
                                                 }
                                             }
                                         }
                                     }
-                                }
 
-                                friend-touch := TouchArea {
-                                    clicked => {
-                                        root.view-profile(friend.user-id);
+                                    friend-touch := TouchArea {
+                                        clicked => {
+                                            root.view-profile(friend.user-id);
+                                        }
                                     }
                                 }
                             }
+
                         }
                     }
                 }
@@ -729,6 +743,7 @@ export component FriendsModal inherits Rectangle {
 
                     // Sub-tab bar
                     HorizontalLayout {
+                        z: 1;
                         height: 36px * Appearance.text-grow;
 
                         Rectangle {
@@ -917,83 +932,94 @@ export component FriendsModal inherits Rectangle {
                             }
                         }
 
-                        if root.received-requests.length > 0: Flickable {
-                            viewport-height: received-list.preferred-height;
+                        if root.received-requests.length > 0: Rectangle {
+                            vertical-stretch: 1;
+                            property <length> chrome-inset: self.absolute-position.y - root.absolute-position.y;
+                            scroll-received-list := Flickable {
+                                property <length> chrome-inset: parent.chrome-inset;
+                                width: parent.width;
+                                y: root.mobile-mode ? -parent.chrome-inset : 0px;
+                                height: root.mobile-mode ? root.height : parent.height;
+                                viewport-height: received-list.preferred-height;
 
-                            received-list := VerticalLayout {
-                                // Rows stack from the top (see friends-list).
-                                alignment: start;
-                                spacing: Spacing.xs;
+                                received-list := VerticalLayout {
+                                    padding-top: root.mobile-mode ? scroll-received-list.chrome-inset : 0px;
+                                    padding-bottom: root.mobile-mode ? root.bottom-inset + Spacing.md : 0px;
+                                    // Rows stack from the top (see friends-list).
+                                    alignment: start;
+                                    spacing: Spacing.xs;
 
-                                for request in root.received-requests: Rectangle {
-                                    min-height: 64px;
-                                    background: recv-touch.has-hover ? Colors.surface-hover : transparent;
-                                    border-radius: Spacing.radius-md;
+                                    for request in root.received-requests: Rectangle {
+                                        min-height: 64px;
+                                        background: recv-touch.has-hover ? Colors.surface-hover : transparent;
+                                        border-radius: Spacing.radius-md;
 
-                                    // TouchArea first (behind) for hover detection
-                                    recv-touch := TouchArea {}
-
-                                    HorizontalLayout {
-                                        padding: Spacing.sm;
-                                        spacing: Spacing.sm;
-
-                                        Avatar {
-                                            size: 40px;
-                                            source: request.avatar-source;
-                                            name: request.display-name;
-                                        }
-
-                                        VerticalLayout {
-                                            horizontal-stretch: 1;
-                                            alignment: center;
-                                            spacing: 2px;
-
-                                            Text {
-                                                text: request.display-name;
-                                                color: Colors.text-primary;
-                                                font-size: Typography.sm;
-                                                font-weight: Typography.medium;
-                                                overflow: elide;
-                                            }
-
-                                            if request.note != "": Text {
-                                                text: request.note;
-                                                color: Colors.text-secondary;
-                                                font-size: Typography.xs;
-                                                wrap: word-wrap;
-                                            }
-
-                                            if request.sent-at != "": Text {
-                                                text: request.sent-at;
-                                                color: Colors.text-muted;
-                                                font-size: Typography.xs;
-                                            }
-                                        }
+                                        // TouchArea first (behind) for hover detection
+                                        recv-touch := TouchArea {}
 
                                         HorizontalLayout {
-                                            spacing: Spacing.xs;
-                                            alignment: center;
+                                            padding: Spacing.sm;
+                                            spacing: Spacing.sm;
 
-                                            Button {
-                                                text: "Accept";
-                                                variant: "primary";
+                                            Avatar {
+                                                size: 40px;
+                                                source: request.avatar-source;
+                                                name: request.display-name;
+                                            }
 
-                                                clicked => {
-                                                    root.accept-request(request.user-id);
+                                            VerticalLayout {
+                                                horizontal-stretch: 1;
+                                                alignment: center;
+                                                spacing: 2px;
+
+                                                Text {
+                                                    text: request.display-name;
+                                                    color: Colors.text-primary;
+                                                    font-size: Typography.sm;
+                                                    font-weight: Typography.medium;
+                                                    overflow: elide;
+                                                }
+
+                                                if request.note != "": Text {
+                                                    text: request.note;
+                                                    color: Colors.text-secondary;
+                                                    font-size: Typography.xs;
+                                                    wrap: word-wrap;
+                                                }
+
+                                                if request.sent-at != "": Text {
+                                                    text: request.sent-at;
+                                                    color: Colors.text-muted;
+                                                    font-size: Typography.xs;
                                                 }
                                             }
 
-                                            Button {
-                                                text: "Decline";
-                                                variant: "ghost";
+                                            HorizontalLayout {
+                                                spacing: Spacing.xs;
+                                                alignment: center;
 
-                                                clicked => {
-                                                    root.decline-request(request.user-id);
+                                                Button {
+                                                    text: "Accept";
+                                                    variant: "primary";
+
+                                                    clicked => {
+                                                        root.accept-request(request.user-id);
+                                                    }
+                                                }
+
+                                                Button {
+                                                    text: "Decline";
+                                                    variant: "ghost";
+
+                                                    clicked => {
+                                                        root.decline-request(request.user-id);
+                                                    }
                                                 }
                                             }
                                         }
                                     }
                                 }
+
                             }
                         }
                     }
@@ -1013,60 +1039,71 @@ export component FriendsModal inherits Rectangle {
                             }
                         }
 
-                        if root.sent-requests.length > 0: Flickable {
-                            viewport-height: sent-list.preferred-height;
+                        if root.sent-requests.length > 0: Rectangle {
+                            vertical-stretch: 1;
+                            property <length> chrome-inset: self.absolute-position.y - root.absolute-position.y;
+                            scroll-sent-list := Flickable {
+                                property <length> chrome-inset: parent.chrome-inset;
+                                width: parent.width;
+                                y: root.mobile-mode ? -parent.chrome-inset : 0px;
+                                height: root.mobile-mode ? root.height : parent.height;
+                                viewport-height: sent-list.preferred-height;
 
-                            sent-list := VerticalLayout {
-                                // Rows stack from the top (see friends-list).
-                                alignment: start;
-                                spacing: Spacing.xs;
+                                sent-list := VerticalLayout {
+                                    padding-top: root.mobile-mode ? scroll-sent-list.chrome-inset : 0px;
+                                    padding-bottom: root.mobile-mode ? root.bottom-inset + Spacing.md : 0px;
+                                    // Rows stack from the top (see friends-list).
+                                    alignment: start;
+                                    spacing: Spacing.xs;
 
-                                for request in root.sent-requests: Rectangle {
-                                    height: 56px;
-                                    background: sent-touch.has-hover ? Colors.surface-hover : transparent;
-                                    border-radius: Spacing.radius-md;
+                                    for request in root.sent-requests: Rectangle {
+                                        height: 56px;
+                                        background: sent-touch.has-hover ? Colors.surface-hover : transparent;
+                                        border-radius: Spacing.radius-md;
 
-                                    // TouchArea first (behind) for hover detection
-                                    sent-touch := TouchArea {}
-
-                                    HorizontalLayout {
-                                        padding: Spacing.sm;
-                                        spacing: Spacing.sm;
-
-                                        Avatar {
-                                            size: 40px;
-                                            name: request.display-name;
-                                        }
-
-                                        VerticalLayout {
-                                            horizontal-stretch: 1;
-                                            alignment: center;
-                                            spacing: 2px;
-
-                                            Text {
-                                                text: request.display-name;
-                                                color: Colors.text-primary;
-                                                font-size: Typography.sm;
-                                                font-weight: Typography.medium;
-                                                overflow: elide;
-                                            }
-
-                                        }
+                                        // TouchArea first (behind) for hover detection
+                                        sent-touch := TouchArea {}
 
                                         HorizontalLayout {
-                                            alignment: center;
+                                            padding: Spacing.sm;
+                                            spacing: Spacing.sm;
 
-                                            Button {
-                                                text: "Cancel";
-                                                variant: "ghost";
+                                            Avatar {
+                                                size: 40px;
+                                                name: request.display-name;
+                                            }
 
-                                                clicked => {
-                                                    root.cancel-request(request.user-id);
+                                            VerticalLayout {
+                                                horizontal-stretch: 1;
+                                                alignment: center;
+                                                spacing: 2px;
+
+                                                Text {
+                                                    text: request.display-name;
+                                                    color: Colors.text-primary;
+                                                    font-size: Typography.sm;
+                                                    font-weight: Typography.medium;
+                                                    overflow: elide;
+                                                }
+
+                                            }
+
+                                            HorizontalLayout {
+                                                alignment: center;
+
+                                                Button {
+                                                    text: "Cancel";
+                                                    variant: "ghost";
+
+                                                    clicked => {
+                                                        root.cancel-request(request.user-id);
+                                                    }
                                                 }
                                             }
                                         }
                                     }
                                 }
+
                             }
                         }
                     }
@@ -1101,116 +1138,127 @@ export component FriendsModal inherits Rectangle {
                             }
                         }
 
-                        if root.private-requests.length > 0: Flickable {
-                            viewport-height: private-list.preferred-height;
+                        if root.private-requests.length > 0: Rectangle {
+                            vertical-stretch: 1;
+                            property <length> chrome-inset: self.absolute-position.y - root.absolute-position.y;
+                            scroll-private-list := Flickable {
+                                property <length> chrome-inset: parent.chrome-inset;
+                                width: parent.width;
+                                y: root.mobile-mode ? -parent.chrome-inset : 0px;
+                                height: root.mobile-mode ? root.height : parent.height;
+                                viewport-height: private-list.preferred-height;
 
-                            private-list := VerticalLayout {
-                                // Rows stack from the top (see friends-list).
-                                alignment: start;
-                                spacing: Spacing.xs;
+                                private-list := VerticalLayout {
+                                    padding-top: root.mobile-mode ? scroll-private-list.chrome-inset : 0px;
+                                    padding-bottom: root.mobile-mode ? root.bottom-inset + Spacing.md : 0px;
+                                    // Rows stack from the top (see friends-list).
+                                    alignment: start;
+                                    spacing: Spacing.xs;
 
-                                for request in root.private-requests: Rectangle {
-                                    height: 72px;
-                                    background: priv-touch.has-hover ? Colors.surface-hover : transparent;
-                                    border-radius: Spacing.radius-md;
+                                    for request in root.private-requests: Rectangle {
+                                        height: 72px;
+                                        background: priv-touch.has-hover ? Colors.surface-hover : transparent;
+                                        border-radius: Spacing.radius-md;
 
-                                    // TouchArea first (behind) for hover detection
-                                    priv-touch := TouchArea {}
+                                        // TouchArea first (behind) for hover detection
+                                        priv-touch := TouchArea {}
 
-                                    HorizontalLayout {
-                                        padding: Spacing.sm;
-                                        spacing: Spacing.sm;
+                                        HorizontalLayout {
+                                            padding: Spacing.sm;
+                                            spacing: Spacing.sm;
 
-                                        // Lock icon instead of avatar for privacy
-                                        Rectangle {
-                                            width: 40px;
-                                            height: 40px;
-                                            border-radius: 20px;
-                                            background: Colors.surface;
+                                            // Lock icon instead of avatar for privacy
+                                            Rectangle {
+                                                width: 40px;
+                                                height: 40px;
+                                                border-radius: 20px;
+                                                background: Colors.surface;
 
-                                            Text {
-                                                text: "\u{1F510}";  // Lock
-                                                font-size: Typography.xl;
-                                                horizontal-alignment: center;
-                                                vertical-alignment: center;
-                                                width: 100%;
-                                                height: 100%;
+                                                Text {
+                                                    text: "\u{1F510}";  // Lock
+                                                    font-size: Typography.xl;
+                                                    horizontal-alignment: center;
+                                                    vertical-alignment: center;
+                                                    width: 100%;
+                                                    height: 100%;
+                                                }
                                             }
-                                        }
 
-                                        VerticalLayout {
-                                            horizontal-stretch: 1;
-                                            alignment: center;
-                                            spacing: 2px;
+                                            VerticalLayout {
+                                                horizontal-stretch: 1;
+                                                alignment: center;
+                                                spacing: 2px;
+
+                                                HorizontalLayout {
+                                                    spacing: Spacing.xs;
+
+                                                    Text {
+                                                        text: request.display-name;
+                                                        color: Colors.text-primary;
+                                                        font-size: Typography.sm;
+                                                        font-weight: Typography.medium;
+                                                        overflow: elide;
+                                                    }
+
+                                                    Rectangle {
+                                                        width: 16px;
+                                                        height: 16px;
+                                                        border-radius: 8px;
+                                                        background: Colors.primary.with-alpha(0.2);
+
+                                                        Text {
+                                                            text: "\u{1F512}";  // Private badge
+                                                            font-size: Typography.xxs;
+                                                            horizontal-alignment: center;
+                                                            vertical-alignment: center;
+                                                            width: 100%;
+                                                            height: 100%;
+                                                        }
+                                                    }
+                                                }
+
+                                                if request.sent-at != "": Text {
+                                                    text: request.sent-at;
+                                                    color: Colors.text-muted;
+                                                    font-size: Typography.xs;
+                                                }
+                                            }
 
                                             HorizontalLayout {
                                                 spacing: Spacing.xs;
+                                                alignment: center;
 
-                                                Text {
-                                                    text: request.display-name;
-                                                    color: Colors.text-primary;
-                                                    font-size: Typography.sm;
-                                                    font-weight: Typography.medium;
-                                                    overflow: elide;
-                                                }
+                                                Button {
+                                                    text: "Accept";
+                                                    variant: "primary";
 
-                                                Rectangle {
-                                                    width: 16px;
-                                                    height: 16px;
-                                                    border-radius: 8px;
-                                                    background: Colors.primary.with-alpha(0.2);
-
-                                                    Text {
-                                                        text: "\u{1F512}";  // Private badge
-                                                        font-size: Typography.xxs;
-                                                        horizontal-alignment: center;
-                                                        vertical-alignment: center;
-                                                        width: 100%;
-                                                        height: 100%;
+                                                    clicked => {
+                                                        root.accept-private-request(request.user-id);
                                                     }
                                                 }
-                                            }
 
-                                            if request.sent-at != "": Text {
-                                                text: request.sent-at;
-                                                color: Colors.text-muted;
-                                                font-size: Typography.xs;
-                                            }
-                                        }
+                                                Button {
+                                                    text: "Decline";
+                                                    variant: "ghost";
 
-                                        HorizontalLayout {
-                                            spacing: Spacing.xs;
-                                            alignment: center;
-
-                                            Button {
-                                                text: "Accept";
-                                                variant: "primary";
-
-                                                clicked => {
-                                                    root.accept-private-request(request.user-id);
+                                                    clicked => {
+                                                        root.decline-private-request(request.user-id);
+                                                    }
                                                 }
-                                            }
 
-                                            Button {
-                                                text: "Decline";
-                                                variant: "ghost";
+                                                Button {
+                                                    text: "Block";
+                                                    variant: "destructive";
 
-                                                clicked => {
-                                                    root.decline-private-request(request.user-id);
-                                                }
-                                            }
-
-                                            Button {
-                                                text: "Block";
-                                                variant: "destructive";
-
-                                                clicked => {
-                                                    root.block-private-request(request.user-id);
+                                                    clicked => {
+                                                        root.block-private-request(request.user-id);
+                                                    }
                                                 }
                                             }
                                         }
                                     }
                                 }
+
                             }
                         }
                     }
@@ -1245,107 +1293,118 @@ export component FriendsModal inherits Rectangle {
                             }
                         }
 
-                        if root.group-invites.length > 0: Flickable {
-                            viewport-height: group-invite-list.preferred-height;
+                        if root.group-invites.length > 0: Rectangle {
+                            vertical-stretch: 1;
+                            property <length> chrome-inset: self.absolute-position.y - root.absolute-position.y;
+                            scroll-group-invite-list := Flickable {
+                                property <length> chrome-inset: parent.chrome-inset;
+                                width: parent.width;
+                                y: root.mobile-mode ? -parent.chrome-inset : 0px;
+                                height: root.mobile-mode ? root.height : parent.height;
+                                viewport-height: group-invite-list.preferred-height;
 
-                            group-invite-list := VerticalLayout {
-                                // Rows stack from the top (see friends-list).
-                                alignment: start;
-                                spacing: Spacing.xs;
+                                group-invite-list := VerticalLayout {
+                                    padding-top: root.mobile-mode ? scroll-group-invite-list.chrome-inset : 0px;
+                                    padding-bottom: root.mobile-mode ? root.bottom-inset + Spacing.md : 0px;
+                                    // Rows stack from the top (see friends-list).
+                                    alignment: start;
+                                    spacing: Spacing.xs;
 
-                                for invite in root.group-invites: Rectangle {
-                                    height: 72px;
-                                    background: gi-touch.has-hover ? Colors.surface-hover : transparent;
-                                    border-radius: Spacing.radius-md;
+                                    for invite in root.group-invites: Rectangle {
+                                        height: 72px;
+                                        background: gi-touch.has-hover ? Colors.surface-hover : transparent;
+                                        border-radius: Spacing.radius-md;
 
-                                    gi-touch := TouchArea {}
+                                        gi-touch := TouchArea {}
 
-                                    HorizontalLayout {
-                                        padding: Spacing.sm;
-                                        spacing: Spacing.sm;
+                                        HorizontalLayout {
+                                            padding: Spacing.sm;
+                                            spacing: Spacing.sm;
 
-                                        // Shield icon for group
-                                        Rectangle {
-                                            width: 40px;
-                                            height: 40px;
-                                            border-radius: 20px;
-                                            background: Colors.group-accent.with-alpha(0.2);
+                                            // Shield icon for group
+                                            Rectangle {
+                                                width: 40px;
+                                                height: 40px;
+                                                border-radius: 20px;
+                                                background: Colors.group-accent.with-alpha(0.2);
 
-                                            Text {
-                                                text: "\u{1F6E1}";  // Shield
-                                                font-size: Typography.xl;
-                                                horizontal-alignment: center;
-                                                vertical-alignment: center;
-                                                width: 100%;
-                                                height: 100%;
+                                                Text {
+                                                    text: "\u{1F6E1}";  // Shield
+                                                    font-size: Typography.xl;
+                                                    horizontal-alignment: center;
+                                                    vertical-alignment: center;
+                                                    width: 100%;
+                                                    height: 100%;
+                                                }
                                             }
-                                        }
 
-                                        VerticalLayout {
-                                            horizontal-stretch: 1;
-                                            alignment: center;
-                                            spacing: 2px;
+                                            VerticalLayout {
+                                                horizontal-stretch: 1;
+                                                alignment: center;
+                                                spacing: 2px;
+
+                                                HorizontalLayout {
+                                                    spacing: Spacing.xs;
+
+                                                    Text {
+                                                        text: invite.display-name;
+                                                        color: Colors.text-primary;
+                                                        font-size: Typography.sm;
+                                                        font-weight: Typography.medium;
+                                                        overflow: elide;
+                                                    }
+
+                                                    Rectangle {
+                                                        width: 16px;
+                                                        height: 16px;
+                                                        border-radius: 8px;
+                                                        background: Colors.group-accent.with-alpha(0.2);
+
+                                                        Text {
+                                                            text: "\u{1F6E1}";
+                                                            font-size: Typography.xxs;
+                                                            horizontal-alignment: center;
+                                                            vertical-alignment: center;
+                                                            width: 100%;
+                                                            height: 100%;
+                                                        }
+                                                    }
+                                                }
+
+                                                // Inviter info (stored in username field)
+                                                if invite.username != "": Text {
+                                                    text: "Invited by " + invite.username;
+                                                    color: Colors.text-muted;
+                                                    font-size: Typography.xs;
+                                                }
+                                            }
 
                                             HorizontalLayout {
                                                 spacing: Spacing.xs;
+                                                alignment: center;
 
-                                                Text {
-                                                    text: invite.display-name;
-                                                    color: Colors.text-primary;
-                                                    font-size: Typography.sm;
-                                                    font-weight: Typography.medium;
-                                                    overflow: elide;
-                                                }
+                                                Button {
+                                                    text: "Join";
+                                                    variant: "primary";
 
-                                                Rectangle {
-                                                    width: 16px;
-                                                    height: 16px;
-                                                    border-radius: 8px;
-                                                    background: Colors.group-accent.with-alpha(0.2);
-
-                                                    Text {
-                                                        text: "\u{1F6E1}";
-                                                        font-size: Typography.xxs;
-                                                        horizontal-alignment: center;
-                                                        vertical-alignment: center;
-                                                        width: 100%;
-                                                        height: 100%;
+                                                    clicked => {
+                                                        root.accept-group-invite(invite.user-id);
                                                     }
                                                 }
-                                            }
 
-                                            // Inviter info (stored in username field)
-                                            if invite.username != "": Text {
-                                                text: "Invited by " + invite.username;
-                                                color: Colors.text-muted;
-                                                font-size: Typography.xs;
-                                            }
-                                        }
+                                                Button {
+                                                    text: "Decline";
+                                                    variant: "ghost";
 
-                                        HorizontalLayout {
-                                            spacing: Spacing.xs;
-                                            alignment: center;
-
-                                            Button {
-                                                text: "Join";
-                                                variant: "primary";
-
-                                                clicked => {
-                                                    root.accept-group-invite(invite.user-id);
-                                                }
-                                            }
-
-                                            Button {
-                                                text: "Decline";
-                                                variant: "ghost";
-
-                                                clicked => {
-                                                    root.decline-group-invite(invite.user-id);
+                                                    clicked => {
+                                                        root.decline-group-invite(invite.user-id);
+                                                    }
                                                 }
                                             }
                                         }
                                     }
                                 }
+
                             }
                         }
                     }
@@ -1379,96 +1438,107 @@ export component FriendsModal inherits Rectangle {
                             }
                         }
 
-                        if root.channel-invites.length > 0: Flickable {
-                            viewport-height: channel-invite-list.preferred-height;
+                        if root.channel-invites.length > 0: Rectangle {
+                            vertical-stretch: 1;
+                            property <length> chrome-inset: self.absolute-position.y - root.absolute-position.y;
+                            scroll-channel-invite-list := Flickable {
+                                property <length> chrome-inset: parent.chrome-inset;
+                                width: parent.width;
+                                y: root.mobile-mode ? -parent.chrome-inset : 0px;
+                                height: root.mobile-mode ? root.height : parent.height;
+                                viewport-height: channel-invite-list.preferred-height;
 
-                            channel-invite-list := VerticalLayout {
-                                // Rows stack from the top (see friends-list).
-                                alignment: start;
-                                spacing: Spacing.xs;
+                                channel-invite-list := VerticalLayout {
+                                    padding-top: root.mobile-mode ? scroll-channel-invite-list.chrome-inset : 0px;
+                                    padding-bottom: root.mobile-mode ? root.bottom-inset + Spacing.md : 0px;
+                                    // Rows stack from the top (see friends-list).
+                                    alignment: start;
+                                    spacing: Spacing.xs;
 
-                                for invite in root.channel-invites: Rectangle {
-                                    height: 72px;
-                                    background: ci-touch.has-hover ? Colors.surface-hover : transparent;
-                                    border-radius: Spacing.radius-md;
+                                    for invite in root.channel-invites: Rectangle {
+                                        height: 72px;
+                                        background: ci-touch.has-hover ? Colors.surface-hover : transparent;
+                                        border-radius: Spacing.radius-md;
 
-                                    ci-touch := TouchArea {}
-
-                                    HorizontalLayout {
-                                        padding: Spacing.sm;
-                                        spacing: Spacing.sm;
-
-                                        // Hash icon for channel
-                                        Rectangle {
-                                            width: 40px;
-                                            height: 40px;
-                                            border-radius: 20px;
-                                            background: Colors.primary.with-alpha(0.2);
-
-                                            Text {
-                                                text: "\u{0023}";  // Hash
-                                                font-size: Typography.xl;
-                                                horizontal-alignment: center;
-                                                vertical-alignment: center;
-                                                width: 100%;
-                                                height: 100%;
-                                            }
-                                        }
-
-                                        VerticalLayout {
-                                            horizontal-stretch: 1;
-                                            alignment: center;
-                                            spacing: 2px;
-
-                                            Text {
-                                                text: invite.display-name;
-                                                color: Colors.text-primary;
-                                                font-size: Typography.sm;
-                                                font-weight: Typography.medium;
-                                                overflow: elide;
-                                            }
-
-                                            // "Invited by <name>" (channel_invites.rs puts it in username)
-                                            if invite.username != "": Text {
-                                                text: invite.username;
-                                                color: Colors.text-muted;
-                                                font-size: Typography.xs;
-                                                overflow: elide;
-                                            }
-
-                                            // Invitation message (stored in note field)
-                                            if invite.note != "": Text {
-                                                text: invite.note;
-                                                color: Colors.text-muted;
-                                                font-size: Typography.xs;
-                                                overflow: elide;
-                                            }
-                                        }
+                                        ci-touch := TouchArea {}
 
                                         HorizontalLayout {
-                                            spacing: Spacing.xs;
-                                            alignment: center;
+                                            padding: Spacing.sm;
+                                            spacing: Spacing.sm;
 
-                                            Button {
-                                                text: "Join";
-                                                variant: "primary";
+                                            // Hash icon for channel
+                                            Rectangle {
+                                                width: 40px;
+                                                height: 40px;
+                                                border-radius: 20px;
+                                                background: Colors.primary.with-alpha(0.2);
 
-                                                clicked => {
-                                                    root.accept-channel-invite(invite.user-id);
+                                                Text {
+                                                    text: "\u{0023}";  // Hash
+                                                    font-size: Typography.xl;
+                                                    horizontal-alignment: center;
+                                                    vertical-alignment: center;
+                                                    width: 100%;
+                                                    height: 100%;
                                                 }
                                             }
 
-                                            Button {
-                                                text: "Decline";
-                                                variant: "ghost";
+                                            VerticalLayout {
+                                                horizontal-stretch: 1;
+                                                alignment: center;
+                                                spacing: 2px;
 
-                                                clicked => {
-                                                    root.decline-channel-invite(invite.user-id);
+                                                Text {
+                                                    text: invite.display-name;
+                                                    color: Colors.text-primary;
+                                                    font-size: Typography.sm;
+                                                    font-weight: Typography.medium;
+                                                    overflow: elide;
+                                                }
+
+                                                // "Invited by <name>" (channel_invites.rs puts it in username)
+                                                if invite.username != "": Text {
+                                                    text: invite.username;
+                                                    color: Colors.text-muted;
+                                                    font-size: Typography.xs;
+                                                    overflow: elide;
+                                                }
+
+                                                // Invitation message (stored in note field)
+                                                if invite.note != "": Text {
+                                                    text: invite.note;
+                                                    color: Colors.text-muted;
+                                                    font-size: Typography.xs;
+                                                    overflow: elide;
+                                                }
+                                            }
+
+                                            HorizontalLayout {
+                                                spacing: Spacing.xs;
+                                                alignment: center;
+
+                                                Button {
+                                                    text: "Join";
+                                                    variant: "primary";
+
+                                                    clicked => {
+                                                        root.accept-channel-invite(invite.user-id);
+                                                    }
+                                                }
+
+                                                Button {
+                                                    text: "Decline";
+                                                    variant: "ghost";
+
+                                                    clicked => {
+                                                        root.decline-channel-invite(invite.user-id);
+                                                    }
                                                 }
                                             }
                                         }
                                     }
                                 }
+
                             }
                         }
                     }
@@ -1518,110 +1588,121 @@ export component FriendsModal inherits Rectangle {
                             }
                         }
 
-                    if root.blocked-users.length > 0: Flickable {
+                    if root.blocked-users.length > 0: Rectangle {
                         vertical-stretch: 1;
-                        viewport-height: blocked-list.preferred-height;
+                        property <length> chrome-inset: self.absolute-position.y - root.absolute-position.y;
+                        scroll-blocked-list := Flickable {
+                            property <length> chrome-inset: parent.chrome-inset;
+                            width: parent.width;
+                            y: root.mobile-mode ? -parent.chrome-inset : 0px;
+                            height: root.mobile-mode ? root.height : parent.height;
 
-                        blocked-list := VerticalLayout {
-                            // Rows stack from the top (see friends-list).
-                            alignment: start;
-                            spacing: Spacing.xs;
+                            viewport-height: blocked-list.preferred-height;
 
-                            for user in root.blocked-users: Rectangle {
-                                height: 56px;
-                                background: blocked-touch.has-hover ? Colors.surface-hover : transparent;
-                                border-radius: Spacing.radius-md;
+                            blocked-list := VerticalLayout {
+                                padding-top: root.mobile-mode ? scroll-blocked-list.chrome-inset : 0px;
+                                padding-bottom: root.mobile-mode ? root.bottom-inset + Spacing.md : 0px;
+                                // Rows stack from the top (see friends-list).
+                                alignment: start;
+                                spacing: Spacing.xs;
 
-                                // TouchArea first (behind) for hover detection
-                                blocked-touch := TouchArea {}
+                                for user in root.blocked-users: Rectangle {
+                                    height: 56px;
+                                    background: blocked-touch.has-hover ? Colors.surface-hover : transparent;
+                                    border-radius: Spacing.radius-md;
 
-                                HorizontalLayout {
-                                    padding: Spacing.sm;
-                                    spacing: Spacing.sm;
+                                    // TouchArea first (behind) for hover detection
+                                    blocked-touch := TouchArea {}
 
-                                    Avatar {
-                                        size: 40px;
-                                        name: user.display-name;
-                                    }
+                                    HorizontalLayout {
+                                        padding: Spacing.sm;
+                                        spacing: Spacing.sm;
 
-                                    VerticalLayout {
-                                        horizontal-stretch: 1;
-                                        alignment: center;
-                                        spacing: 2px;
-
-                                        Text {
-                                            text: user.display-name;
-                                            color: Colors.text-primary;
-                                            font-size: Typography.sm;
-                                            font-weight: Typography.medium;
-                                            overflow: elide;
+                                        Avatar {
+                                            size: 40px;
+                                            name: user.display-name;
                                         }
 
-                                        if root.confirm-remove-id == user.user-id: Text {
-                                            text: user.anon ? "Delete this chat? They stay blocked." : "Remove from friends and unblock?";
-                                            color: Colors.text-secondary;
-                                            font-size: Typography.xs;
-                                            overflow: elide;
-                                        }
+                                        VerticalLayout {
+                                            horizontal-stretch: 1;
+                                            alignment: center;
+                                            spacing: 2px;
 
-                                        if root.confirm-remove-id != user.user-id && user.blocked-at != "": Text {
-                                            text: "Blocked " + user.blocked-at;
-                                            color: Colors.text-muted;
-                                            font-size: Typography.xs;
-                                        }
-                                    }
+                                            Text {
+                                                text: user.display-name;
+                                                color: Colors.text-primary;
+                                                font-size: Typography.sm;
+                                                font-weight: Typography.medium;
+                                                overflow: elide;
+                                            }
 
-                                    if root.confirm-remove-id != user.user-id: HorizontalLayout {
-                                        alignment: center;
-                                        spacing: Spacing.xs;
+                                            if root.confirm-remove-id == user.user-id: Text {
+                                                text: user.anon ? "Delete this chat? They stay blocked." : "Remove from friends and unblock?";
+                                                color: Colors.text-secondary;
+                                                font-size: Typography.xs;
+                                                overflow: elide;
+                                            }
 
-                                        Button {
-                                            text: "Unblock";
-                                            variant: "ghost";
-
-                                            clicked => {
-                                                root.unblock-user(user.user-id);
+                                            if root.confirm-remove-id != user.user-id && user.blocked-at != "": Text {
+                                                text: "Blocked " + user.blocked-at;
+                                                color: Colors.text-muted;
+                                                font-size: Typography.xs;
                                             }
                                         }
 
-                                        // An anon peer has no friendship; its second action
-                                        // deletes the stored chat (Signal: Delete on a
-                                        // blocked chat), and there is none once deleted.
-                                        if !user.anon || user.anon-chat: Button {
-                                            text: user.anon ? "Delete chat" : "Remove";
-                                            variant: "ghost";
+                                        if root.confirm-remove-id != user.user-id: HorizontalLayout {
+                                            alignment: center;
+                                            spacing: Spacing.xs;
 
-                                            clicked => {
-                                                root.confirm-remove-id = user.user-id;
+                                            Button {
+                                                text: "Unblock";
+                                                variant: "ghost";
+
+                                                clicked => {
+                                                    root.unblock-user(user.user-id);
+                                                }
+                                            }
+
+                                            // An anon peer has no friendship; its second action
+                                            // deletes the stored chat (Signal: Delete on a
+                                            // blocked chat), and there is none once deleted.
+                                            if !user.anon || user.anon-chat: Button {
+                                                text: user.anon ? "Delete chat" : "Remove";
+                                                variant: "ghost";
+
+                                                clicked => {
+                                                    root.confirm-remove-id = user.user-id;
+                                                }
                                             }
                                         }
-                                    }
 
-                                    if root.confirm-remove-id == user.user-id: HorizontalLayout {
-                                        alignment: center;
-                                        spacing: Spacing.xs;
+                                        if root.confirm-remove-id == user.user-id: HorizontalLayout {
+                                            alignment: center;
+                                            spacing: Spacing.xs;
 
-                                        Button {
-                                            text: "Cancel";
-                                            variant: "ghost";
+                                            Button {
+                                                text: "Cancel";
+                                                variant: "ghost";
 
-                                            clicked => {
-                                                root.confirm-remove-id = "";
+                                                clicked => {
+                                                    root.confirm-remove-id = "";
+                                                }
                                             }
-                                        }
 
-                                        Button {
-                                            text: user.anon ? "Delete" : "Remove";
-                                            variant: "danger";
+                                            Button {
+                                                text: user.anon ? "Delete" : "Remove";
+                                                variant: "danger";
 
-                                            clicked => {
-                                                root.confirm-remove-id = "";
-                                                root.remove-blocked-user(user.user-id);
+                                                clicked => {
+                                                    root.confirm-remove-id = "";
+                                                    root.remove-blocked-user(user.user-id);
+                                                }
                                             }
                                         }
                                     }
                                 }
                             }
+
                         }
                     }
                 }

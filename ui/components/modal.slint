@@ -17,6 +17,8 @@ export component Modal inherits Rectangle {
     in property <length> max-modal-height: 600px;
     in property <bool> fill-height: false;
     in property <bool> full-screen: false;
+    // Full-screen lists extend behind the header and dock, with scroll insets.
+    in property <bool> floating-content: false;
     in property <length> bottom-inset: 0px;
     // A confirm dialog with its own Cancel needs no second way out in the header.
     in property <bool> show-close: true;
@@ -43,11 +45,12 @@ export component Modal inherits Rectangle {
         max-modal-height: min(root.max-modal-height, root.viewport-height-cap);
         fill-height: root.fill-height;
         full-screen: root.full-screen;
-        bottom-inset: root.bottom-inset;
+        bottom-inset: root.floating-content ? 0px : root.bottom-inset;
         close => { root.close(); }
 
         modal-layout := VerticalLayout {
             padding: Spacing.lg;
+            padding-bottom: Spacing.lg + (root.floating-content ? root.bottom-inset : 0px);
             spacing: Spacing.md;
 
             // Header row.
@@ -61,8 +64,9 @@ export component Modal inherits Rectangle {
             // floating dialog they close (X, TRAILING edge). Exactly one of
             // the two exists at a time — never both.
             GlassSurface {
+                z: 1;
                 material-enabled: root.full-screen;
-                border-radius: 0px;
+                border-radius: root.full-screen ? self.height / 2 : 0px;
                 height: root.full-screen ? Spacing.header-action-box-touch : Spacing.header-action-box;
                 HorizontalLayout {
                     spacing: Spacing.header-action-gap;

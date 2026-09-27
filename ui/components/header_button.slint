@@ -1,10 +1,11 @@
+import { GlassSurface } from "glass_surface.slint";
 import { Materials } from "../theme/materials.slint";
 // HeaderButton — the ONE control that sits in a header or title row.
 //
 // Back, close, ⋮, search, call, video, +, Shield, settings: every icon control
 // in every title row of the app is this component, so they all share one box
 // (Spacing.header-action-box / -touch), one glyph size (Spacing.header-glyph /
-// -touch), one hover/pressed treatment and no stroke.
+// -touch), one hover/pressed treatment and a circular shared glass shell.
 //
 // The ROOT has no fixed height: in a layout it stretches to the row (never
 // shorter than the box) and draws the square box vertically centred, so the
@@ -44,11 +45,13 @@ export component HeaderButton inherits Rectangle {
     min-height: self.width;
     opacity: root.enabled ? 1.0 : 0.4;
 
-    box := Rectangle {
+    box := GlassSurface {
+        material-level: 1;
+        elevation: 0;
         width: parent.width;
         height: self.width;
         y: (parent.height - self.height) / 2;
-        border-radius: Spacing.radius-md;
+        border-radius: self.height / 2;
         background: touch-area.pressed ? Materials.pressed : touch-area.has-hover ? Materials.hover
             : (root.active ? Colors.primary.with-alpha(0.15) : transparent);
 

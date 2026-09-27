@@ -5,26 +5,23 @@ export global Materials {
     // With real backdrop blur (glass effects on) the tint is see-through like
     // iOS materials; without blur the near-opaque values keep text readable.
     out property <color> ultra-thin: Appearance.glass-effects
-        ? (Appearance.dark ? #1c1c1e33 : #f2f2f733)
+        ? (Appearance.dark ? #0000000d : #ffffff0d)
         : (Appearance.dark ? #17233199 : #f8fcff99);
     out property <color> thin: Appearance.glass-effects
-        ? (Appearance.dark ? #1c1c1e59 : #f2f2f766)
+        ? (Appearance.dark ? #0000001a : #ffffff1a)
         : (Appearance.dark ? #172331c7 : #f8fcffc7);
     out property <color> regular: Appearance.glass-effects
-        ? (Appearance.dark ? #1c1c1e80 : #f2f2f78c)
+        ? (Appearance.dark ? #00000029 : #ffffff29)
         : (Appearance.dark ? #172331eb : #f8fcffeb);
     out property <color> thick: Appearance.glass-effects
-        ? (Appearance.dark ? #1c1c1ea6 : #f2f2f7b3)
+        ? (Appearance.dark ? #00000033 : #ffffff33)
         : (Appearance.dark ? #18222ff7 : #fcfdfff7);
     out property <color> opaque: Appearance.dark ? #172331 : #f8fcff;
     // The single optical edge is local to GlassSurface, never a row/card stroke.
-    out property <brush> glass-edge: Appearance.dark
-        ? @linear-gradient(180deg, #ffffff38 0%, #ffffff06 100%)
-        : @linear-gradient(180deg, #ffffffa6 0%, #ffffff14 100%);
-    out property <length> glass-edge-width: 1px;
-    out property <brush> specular: Appearance.dark
-        ? @linear-gradient(180deg, #ffffff12 0%, #ffffff00 35%)
-        : @linear-gradient(180deg, #ffffff30 0%, #ffffff00 35%);
+    out property <brush> glass-edge: @linear-gradient(135deg, #ffffffad 0%, #ffffff60 35%, #ffffff1a 75%, #ffffff40 100%);
+    out property <length> glass-edge-width: 1.75px;
+    out property <brush> inner-edge: @linear-gradient(135deg, #ffffff38 0%, #ffffff00 65%);
+    out property <brush> specular: @linear-gradient(160deg, #ffffff14 0%, #ffffff00 40%, #ffffff06 100%);
     out property <color> shadow-contact: Appearance.dark ? #00000038 : #11233914;
     out property <color> shadow-float: Appearance.dark ? #00000052 : #1123391c;
     out property <color> shadow-modal: Appearance.dark ? #00000066 : #11233926;
@@ -34,8 +31,8 @@ export global Materials {
     out property <brush> ambient: Appearance.dark
         ? @linear-gradient(135deg, #000000 0%, #000000 100%)
         : @linear-gradient(135deg, #eaf4f5 0%, #eff1f8 45%, #f3f5f8 100%);
-    out property <length> blur-regular: 24px;
-    out property <length> blur-thick: 28px;
+    out property <length> blur-regular: 14px;
+    out property <length> blur-thick: 18px;
     out property <float> saturation: 1.8;
     // Edge lensing strength for the Backdrop refraction shader (0..1).
     out property <float> refraction: 0.15;

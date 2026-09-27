@@ -124,32 +124,36 @@ fn receipt_cannot_cross_conversation_author_or_timestamp() {
             .unwrap();
         ids.push(message.id);
     }
-    assert!(receipts
-        .apply(
-            first,
-            ConversationType::ServerDm,
-            peer,
-            peer,
-            DeviceId(1),
-            &[123],
-            true,
-            456
-        )
-        .unwrap()
-        .is_empty());
-    assert!(receipts
-        .apply(
-            first,
-            ConversationType::ServerDm,
-            author,
-            peer,
-            DeviceId(1),
-            &[124],
-            true,
-            456
-        )
-        .unwrap()
-        .is_empty());
+    assert!(
+        receipts
+            .apply(
+                first,
+                ConversationType::ServerDm,
+                peer,
+                peer,
+                DeviceId(1),
+                &[123],
+                true,
+                456
+            )
+            .unwrap()
+            .is_empty()
+    );
+    assert!(
+        receipts
+            .apply(
+                first,
+                ConversationType::ServerDm,
+                author,
+                peer,
+                DeviceId(1),
+                &[124],
+                true,
+                456
+            )
+            .unwrap()
+            .is_empty()
+    );
     receipts
         .apply(
             first,
@@ -191,19 +195,21 @@ fn receipt_before_local_echo_is_attached_on_insert() {
             &[(peer, DeviceId(1))],
         )
         .unwrap();
-    assert!(receipts
-        .apply(
-            channel,
-            ConversationType::ServerDm,
-            author,
-            peer,
-            DeviceId(1),
-            &[123],
-            true,
-            456
-        )
-        .unwrap()
-        .is_empty());
+    assert!(
+        receipts
+            .apply(
+                channel,
+                ConversationType::ServerDm,
+                author,
+                peer,
+                DeviceId(1),
+                &[123],
+                true,
+                456
+            )
+            .unwrap()
+            .is_empty()
+    );
     let message = Message::new_text(
         channel,
         ConversationType::ServerDm,
@@ -279,4 +285,169 @@ fn public_channel_receipt_waits_for_server_timestamp_binding() {
             Some(456)
         );
     }
+}
+
+#[test]
+fn phone_send_and_linked_tablet_receipts_converge_in_either_order() {
+    use chatter_core::proto::content_v1::{DataMessage, SyncSent, SyncSentReceiptTarget};
+    use prost::Message as _;
+
+    for receipt_first in [false, true] {
+        let temp = tempfile::TempDir::new().unwrap();
+        let phone = Arc::new(Database::open(&temp.path().join("phone.db"), "test").unwrap());
+        let tablet = Arc::new(Database::open(&temp.path().join("tablet.db"), "test").unwrap());
+        phone.run_migrations().unwrap();
+        tablet.run_migrations().unwrap();
+        let author = UserId::new();
+        let peer = UserId::new();
+        let channel = ChannelId::from(peer);
+        let kind = ConversationType::ServerDm;
+        let sent_at = 123;
+        let phone_receipts = MessageReceiptRepository::new(phone.clone());
+        let tablet_receipts = MessageReceiptRepository::new(tablet.clone());
+        phone_receipts
+            .snapshot_for_send(
+                channel,
+                kind.clone(),
+                author,
+                sent_at,
+                &[(peer, DeviceId(1)), (peer, DeviceId(2))],
+            )
+            .unwrap();
+        let sync = SyncSent {
+            destination_user_id: peer.to_string(),
+            timestamp: sent_at,
+            message: Some(DataMessage {
+                body: "sent from phone".into(),
+                timestamp: sent_at,
+                ..Default::default()
+            }),
+            receipt_targets: phone_receipts
+                .targets_for_send(channel, kind.clone(), author, sent_at)
+                .unwrap()
+                .into_iter()
+                .map(|(user, device)| SyncSentReceiptTarget {
+                    user_id: user.to_string(),
+                    device_id: device.0,
+                })
+                .collect(),
+        };
+        let wire = SyncSent::decode(sync.encode_to_vec().as_slice()).unwrap();
+        let targets: Vec<_> = wire
+            .receipt_targets
+            .iter()
+            .map(|target| (target.user_id.parse().unwrap(), DeviceId(target.device_id)))
+            .collect();
+        let apply = |receipts: &MessageReceiptRepository, device, read| {
+            receipts
+                .apply(
+                    channel,
+                    kind.clone(),
+                    author,
+                    peer,
+                    DeviceId(device),
+                    &[sent_at],
+                    read,
+                    456,
+                )
+                .unwrap();
+        };
+        if receipt_first {
+            apply(&tablet_receipts, 2, true);
+            // A peer device outside the eventual snapshot cannot add evidence.
+            apply(&tablet_receipts, 99, true);
+        }
+        tablet_receipts
+            .snapshot_for_send(channel, kind.clone(), author, sent_at, &targets)
+            .unwrap();
+        let phone_message = Message::new_text(
+            channel,
+            kind.clone(),
+            Some(author),
+            "sent from phone".into(),
+            sent_at,
+        );
+        let tablet_message = Message::new_text(
+            channel,
+            kind.clone(),
+            Some(author),
+            wire.message.unwrap().body,
+            sent_at,
+        );
+        let phone_messages = MessageRepository::new(phone);
+        let tablet_messages = MessageRepository::new(tablet);
+        phone_messages.insert_outgoing(&phone_message).unwrap();
+        tablet_messages.insert_outgoing(&tablet_message).unwrap();
+        apply(&phone_receipts, 2, true);
+        if !receipt_first {
+            apply(&tablet_receipts, 2, true);
+        }
+        apply(&tablet_receipts, 1, false);
+        assert_eq!(
+            phone_messages
+                .get(&phone_message.id)
+                .unwrap()
+                .unwrap()
+                .delivery_status,
+            "read"
+        );
+        assert_eq!(
+            tablet_messages
+                .get(&tablet_message.id)
+                .unwrap()
+                .unwrap()
+                .delivery_status,
+            "read"
+        );
+        let rows = tablet_receipts.for_message(tablet_message.id).unwrap();
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[1].read_at, Some(456));
+    }
+}
+
+#[test]
+fn receipt_before_sync_cannot_escape_the_later_snapshot() {
+    let temp = tempfile::TempDir::new().unwrap();
+    let db = Arc::new(Database::open(&temp.path().join("scoped.db"), "test").unwrap());
+    db.run_migrations().unwrap();
+    let receipts = MessageReceiptRepository::new(db.clone());
+    let messages = MessageRepository::new(db);
+    let author = UserId::new();
+    let peer = UserId::new();
+    let channel = ChannelId::from(peer);
+    receipts
+        .apply(
+            channel,
+            ConversationType::ServerDm,
+            author,
+            peer,
+            DeviceId(99),
+            &[123],
+            true,
+            456,
+        )
+        .unwrap();
+    receipts
+        .snapshot_for_send(
+            channel,
+            ConversationType::ServerDm,
+            author,
+            123,
+            &[(peer, DeviceId(1))],
+        )
+        .unwrap();
+    let mut message = Message::new_text(
+        channel,
+        ConversationType::ServerDm,
+        Some(author),
+        "hi".into(),
+        123,
+    );
+    message.delivery_status = "sent".into();
+    messages.insert_outgoing(&message).unwrap();
+    assert_eq!(
+        messages.get(&message.id).unwrap().unwrap().delivery_status,
+        "sent"
+    );
+    assert_eq!(receipts.for_message(message.id).unwrap()[0].read_at, None);
 }

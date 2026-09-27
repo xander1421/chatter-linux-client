@@ -55,6 +55,7 @@ export component CallHistoryScreen inherits Rectangle {
     }
 
     Modal {
+        floating-content: root.mobile-mode;
         show: root.show-modal;
         title: "Calls";
         modal-width: 560px;
@@ -77,6 +78,7 @@ export component CallHistoryScreen inherits Rectangle {
             // Filter tabs — mirrors core's `CallHistoryFilter`. Same box
             // height as the header row's dismissal control above it.
             HorizontalLayout {
+                z: 1;
                 height: root.mobile-mode ? Spacing.header-action-box-touch : Spacing.header-action-box;
 
                 for tab in [
@@ -158,146 +160,157 @@ export component CallHistoryScreen inherits Rectangle {
                 }
             }
 
-            if !root.loading && root.rows.length > 0: Flickable {
+            if !root.loading && root.rows.length > 0: Rectangle {
                 vertical-stretch: 1;
-                viewport-height: calls-list.preferred-height;
+                property <length> chrome-inset: self.absolute-position.y - root.absolute-position.y;
+                scroll-calls-list := Flickable {
+                    property <length> chrome-inset: parent.chrome-inset;
+                    width: parent.width;
+                    y: root.mobile-mode ? -parent.chrome-inset : 0px;
+                    height: root.mobile-mode ? root.height : parent.height;
 
-                calls-list := VerticalLayout {
-                    spacing: Spacing.xs;
+                    viewport-height: calls-list.preferred-height;
 
-                    for row in root.rows: Rectangle {
-                        height: root.row-height;
-                        background: row-touch.has-hover ? Colors.surface-hover : transparent;
-                        border-radius: Spacing.radius-md;
+                    calls-list := VerticalLayout {
+                        padding-top: root.mobile-mode ? scroll-calls-list.chrome-inset : 0px;
+                        padding-bottom: root.mobile-mode ? root.bottom-inset + Spacing.md : 0px;
+                        spacing: Spacing.xs;
 
-                        // Under the row's content, not over it: declared last it
-                        // sat on top and took the redial buttons' taps, so
-                        // "call back" opened the DM instead of calling.
-                        row-touch := TouchArea {
-                            clicked => {
-                                root.open-conversation(row.conversation-id, row.conversation-type);
+                        for row in root.rows: Rectangle {
+                            height: root.row-height;
+                            background: row-touch.has-hover ? Colors.surface-hover : transparent;
+                            border-radius: Spacing.radius-md;
+
+                            // Under the row's content, not over it: declared last it
+                            // sat on top and took the redial buttons' taps, so
+                            // "call back" opened the DM instead of calling.
+                            row-touch := TouchArea {
+                                clicked => {
+                                    root.open-conversation(row.conversation-id, row.conversation-type);
+                                }
                             }
-                        }
 
-                        HorizontalLayout {
-                            padding: Spacing.sm;
-                            spacing: Spacing.sm;
+                            HorizontalLayout {
+                                padding: Spacing.sm;
+                                spacing: Spacing.sm;
 
-                            Avatar {
-                                size: root.row-avatar;
-                                name: row.name;
-                                source: row.avatar-source;
-                            }
-
-                            VerticalLayout {
-                                horizontal-stretch: 1;
-                                alignment: center;
-                                spacing: root.mobile-mode ? 3px : 2px;
-
-                                Text {
-                                    // A missed call is the one thing on this
-                                    // screen you came looking for, so it is the
-                                    // name that carries the colour, not a badge
-                                    // tucked into the second line.
-                                    text: row.name;
-                                    color: row.is-missed ? Colors.error : Colors.text-primary;
-                                    font-size: root.row-name-size;
-                                    font-weight: Typography.medium;
-                                    overflow: elide;
+                                Avatar {
+                                    size: root.row-avatar;
+                                    name: row.name;
+                                    source: row.avatar-source;
                                 }
 
-                                HorizontalLayout {
-                                    spacing: Spacing.xs;
+                                VerticalLayout {
+                                    horizontal-stretch: 1;
+                                    alignment: center;
+                                    spacing: root.mobile-mode ? 3px : 2px;
 
-                                    Image {
-                                        source: row.is-video ? Icons.video : Icons.phone;
-                                        colorize: row.is-missed ? Colors.error : Colors.text-muted;
-                                        width: 12px;
-                                        height: 12px;
-                                        y: (parent.height - self.height) / 2;
-                                    }
-
-                                    // The outcome takes all the slack and may
-                                    // elide; the time keeps its natural width
-                                    // and never does. Sizing the outcome to
-                                    // exactly its preferred width (FX4) still
-                                    // elided "Incoming · 0:16" to "0…" on the
-                                    // phone with the row half empty.
                                     Text {
-                                        text: row.detail;
-                                        color: Colors.text-muted;
-                                        font-size: root.row-sub-size;
+                                        // A missed call is the one thing on this
+                                        // screen you came looking for, so it is the
+                                        // name that carries the colour, not a badge
+                                        // tucked into the second line.
+                                        text: row.name;
+                                        color: row.is-missed ? Colors.error : Colors.text-primary;
+                                        font-size: root.row-name-size;
+                                        font-weight: Typography.medium;
                                         overflow: elide;
-                                        horizontal-stretch: 1;
                                     }
 
-                                    Text {
-                                        text: row.timestamp;
-                                        color: Colors.text-muted;
-                                        font-size: root.row-sub-size;
-                                        horizontal-stretch: 0;
-                                    }
-                                }
-                            }
+                                    HorizontalLayout {
+                                        spacing: Spacing.xs;
 
-                            // Redial. Both types are offered rather than
-                            // repeating the original call's type: wanting to
-                            // switch is exactly why you'd come back to a row.
-                            // Fixed width, no stretch, so the two buttons
-                            // sit at the same x on every row.
-                            if row.can-call-back: HorizontalLayout {
-                                spacing: Spacing.xs;
-                                alignment: center;
-                                horizontal-stretch: 0;
+                                        Image {
+                                            source: row.is-video ? Icons.video : Icons.phone;
+                                            colorize: row.is-missed ? Colors.error : Colors.text-muted;
+                                            width: 12px;
+                                            height: 12px;
+                                            y: (parent.height - self.height) / 2;
+                                        }
 
-                                Rectangle {
-                                    width: 44px;
-                                    height: 44px;
-                                    border-radius: Spacing.radius-sm;
-                                    background: voice-touch.has-hover ? Colors.surface : transparent;
+                                        // The outcome takes all the slack and may
+                                        // elide; the time keeps its natural width
+                                        // and never does. Sizing the outcome to
+                                        // exactly its preferred width (FX4) still
+                                        // elided "Incoming · 0:16" to "0…" on the
+                                        // phone with the row half empty.
+                                        Text {
+                                            text: row.detail;
+                                            color: Colors.text-muted;
+                                            font-size: root.row-sub-size;
+                                            overflow: elide;
+                                            horizontal-stretch: 1;
+                                        }
 
-                                    Image {
-                                        source: Icons.phone;
-                                        colorize: Colors.primary;
-                                        width: 18px;
-                                        height: 18px;
-                                        x: (parent.width - self.width) / 2;
-                                        y: (parent.height - self.height) / 2;
-                                    }
-
-                                    voice-touch := TouchArea {
-                                        mouse-cursor: pointer;
-                                        clicked => {
-                                            root.call-back(row.conversation-id, row.conversation-type, false);
+                                        Text {
+                                            text: row.timestamp;
+                                            color: Colors.text-muted;
+                                            font-size: root.row-sub-size;
+                                            horizontal-stretch: 0;
                                         }
                                     }
                                 }
 
-                                Rectangle {
-                                    width: 44px;
-                                    height: 44px;
-                                    border-radius: Spacing.radius-sm;
-                                    background: video-touch.has-hover ? Colors.surface : transparent;
+                                // Redial. Both types are offered rather than
+                                // repeating the original call's type: wanting to
+                                // switch is exactly why you'd come back to a row.
+                                // Fixed width, no stretch, so the two buttons
+                                // sit at the same x on every row.
+                                if row.can-call-back: HorizontalLayout {
+                                    spacing: Spacing.xs;
+                                    alignment: center;
+                                    horizontal-stretch: 0;
 
-                                    Image {
-                                        source: Icons.video;
-                                        colorize: Colors.primary;
-                                        width: 18px;
-                                        height: 18px;
-                                        x: (parent.width - self.width) / 2;
-                                        y: (parent.height - self.height) / 2;
+                                    Rectangle {
+                                        width: 44px;
+                                        height: 44px;
+                                        border-radius: Spacing.radius-sm;
+                                        background: voice-touch.has-hover ? Colors.surface : transparent;
+
+                                        Image {
+                                            source: Icons.phone;
+                                            colorize: Colors.primary;
+                                            width: 18px;
+                                            height: 18px;
+                                            x: (parent.width - self.width) / 2;
+                                            y: (parent.height - self.height) / 2;
+                                        }
+
+                                        voice-touch := TouchArea {
+                                            mouse-cursor: pointer;
+                                            clicked => {
+                                                root.call-back(row.conversation-id, row.conversation-type, false);
+                                            }
+                                        }
                                     }
 
-                                    video-touch := TouchArea {
-                                        mouse-cursor: pointer;
-                                        clicked => {
-                                            root.call-back(row.conversation-id, row.conversation-type, true);
+                                    Rectangle {
+                                        width: 44px;
+                                        height: 44px;
+                                        border-radius: Spacing.radius-sm;
+                                        background: video-touch.has-hover ? Colors.surface : transparent;
+
+                                        Image {
+                                            source: Icons.video;
+                                            colorize: Colors.primary;
+                                            width: 18px;
+                                            height: 18px;
+                                            x: (parent.width - self.width) / 2;
+                                            y: (parent.height - self.height) / 2;
+                                        }
+
+                                        video-touch := TouchArea {
+                                            mouse-cursor: pointer;
+                                            clicked => {
+                                                root.call-back(row.conversation-id, row.conversation-type, true);
+                                            }
                                         }
                                     }
                                 }
                             }
                         }
                     }
+
                 }
             }
 
