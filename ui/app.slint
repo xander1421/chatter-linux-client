@@ -1648,7 +1648,7 @@ export component App inherits Rectangle {
 
                     if !root.active-call-fullscreen
                         && !(root.is-small-screen && root.thread-panel-visible)
-                        && root.channel-name != "": ChatLayout {
+                        && (root.channel-name != "" || root.loading-messages): ChatLayout {
                     vertical-stretch: 1;
                     hide-header: root.selection-mode;
                     // No back button: the conversation list is always on
@@ -1782,7 +1782,10 @@ export component App inherits Rectangle {
                     // open path names the conversation, so an empty name means
                     // none: without this the pane read "No messages yet / Be
                     // the first to say something! / Public channel".
-                    if !root.active-call-fullscreen && root.channel-name == "": Rectangle {
+                    // An open in flight is not "nothing open": the name arrives
+                    // with the messages, and showing this for those ~300 ms
+                    // flashed the two-pane placeholder on every phone open.
+                    if !root.active-call-fullscreen && root.channel-name == "" && !root.loading-messages: Rectangle {
                         vertical-stretch: 1;
                         background: Colors.background;
                         Text {
