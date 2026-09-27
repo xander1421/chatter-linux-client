@@ -258,8 +258,10 @@ export component MessageItem inherits Rectangle {
                 // answered calls, so a caller's "declined" drew ↙ (RC24 D4).
                 property <bool> is-outgoing: root.is-own;
 
-                width: call-content.preferred-width + Spacing.lg * 2;
-                height: call-content.preferred-height + Spacing.md * 2;
+                // call-content carries its own padding; adding more here left
+                // slack that the fixed-size icon did not share.
+                width: call-content.preferred-width;
+                height: call-content.preferred-height;
                 background: is-missed ? Colors.error.transparentize(0.9) : Colors.surface;
                 border-radius: Spacing.radius-lg;
 
@@ -303,19 +305,25 @@ export component MessageItem inherits Rectangle {
                         }
                     }
 
-                    Rectangle {
-                        width: 40px;
-                        height: 40px;
-                        border-radius: 20px;
-                        background: is-missed ? Colors.error.transparentize(0.8) : Colors.primary.transparentize(0.85);
+                    // A fixed-size child of a HorizontalLayout sits at the
+                    // row's top; centre the icon on the text block's axis.
+                    VerticalLayout {
+                        alignment: center;
 
-                        Image {
-                            width: 20px;
-                            height: 20px;
-                            source: Icons.phone;
-                            colorize: is-missed ? Colors.error : Colors.primary;
-                            x: (parent.width - self.width) / 2;
-                            y: (parent.height - self.height) / 2;
+                        Rectangle {
+                            width: 40px;
+                            height: 40px;
+                            border-radius: 20px;
+                            background: is-missed ? Colors.error.transparentize(0.8) : Colors.primary.transparentize(0.85);
+
+                            Image {
+                                width: 20px;
+                                height: 20px;
+                                source: Icons.phone;
+                                colorize: is-missed ? Colors.error : Colors.primary;
+                                x: (parent.width - self.width) / 2;
+                                y: (parent.height - self.height) / 2;
+                            }
                         }
                     }
                 }
