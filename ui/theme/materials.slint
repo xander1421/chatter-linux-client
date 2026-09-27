@@ -2,10 +2,20 @@
 import { Appearance } from "appearance.slint";
 
 export global Materials {
-    out property <color> ultra-thin: Appearance.dark ? #17233199 : #f8fcff99;
-    out property <color> thin: Appearance.dark ? #172331c7 : #f8fcffc7;
-    out property <color> regular: Appearance.dark ? #172331eb : #f8fcffeb;
-    out property <color> thick: Appearance.dark ? #18222ff7 : #fcfdfff7;
+    // With real backdrop blur (glass effects on) the tint is see-through like
+    // iOS materials; without blur the near-opaque values keep text readable.
+    out property <color> ultra-thin: Appearance.glass-effects
+        ? (Appearance.dark ? #1c1c1e33 : #f2f2f733)
+        : (Appearance.dark ? #17233199 : #f8fcff99);
+    out property <color> thin: Appearance.glass-effects
+        ? (Appearance.dark ? #1c1c1e59 : #f2f2f766)
+        : (Appearance.dark ? #172331c7 : #f8fcffc7);
+    out property <color> regular: Appearance.glass-effects
+        ? (Appearance.dark ? #1c1c1e80 : #f2f2f78c)
+        : (Appearance.dark ? #172331eb : #f8fcffeb);
+    out property <color> thick: Appearance.glass-effects
+        ? (Appearance.dark ? #1c1c1ea6 : #f2f2f7b3)
+        : (Appearance.dark ? #18222ff7 : #fcfdfff7);
     out property <color> opaque: Appearance.dark ? #172331 : #f8fcff;
     // The single optical edge is local to GlassSurface, never a row/card stroke.
     out property <brush> glass-edge: Appearance.dark
