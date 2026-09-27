@@ -2,7 +2,7 @@
 //!
 //! Tests device management, session synchronization, and multi-device messaging.
 
-mod common;
+use crate::{common, skip_if_no_server};
 
 use chatter_core::network::grpc::{AuthClient, ChannelClient, MessageClient};
 use chatter_core::proto::chat_v1::{
@@ -284,7 +284,6 @@ async fn test_messages_visible_across_devices() {
                 None,
                 false,
                 None,
-                None,
                 vec![],
                 false,
                 vec![],
@@ -427,7 +426,6 @@ async fn test_concurrent_device_operations() {
                     content,
                     None,
                     false,
-                    None,
                     None,
                     vec![],
                     false,

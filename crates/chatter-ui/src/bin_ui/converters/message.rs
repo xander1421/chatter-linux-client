@@ -106,6 +106,7 @@ pub struct MessageDisplayData {
     /// Decoded from `reply_to_thumbnail_bytes` before hitting the UI thread.
     pub reply_to_thumbnail_decoded: Option<(Vec<u8>, u32, u32)>,
     pub delivery_status: String,
+    pub failure_reason: String,
     /// Raw avatar bytes for anonymous group members.
     pub sender_avatar_bytes: Option<Vec<u8>>,
     /// Pre-decoded avatar pixels (RGBA, width, height).
@@ -272,6 +273,7 @@ impl MessageDisplayData {
         reply_to_thumbnail_height: reply_to_thumb_h,
         show_sender: true,
         // For own messages with empty status, default to "sent"
+        failure_reason: self.failure_reason.clone().into(),
         delivery_status: if is_own && self.delivery_status.is_empty() {
             "sent".into()
         } else {
@@ -386,6 +388,7 @@ pub fn message_to_display_data_with_replies(
         reply_to_thumbnail_bytes: msg.reply_to_thumbnail.clone(),
         reply_to_thumbnail_decoded: None,
         delivery_status: msg.delivery_status.clone(),
+        failure_reason: msg.failure_reason.clone().unwrap_or_default(),
         is_pinned: msg.is_pinned,
         is_call,
         call_message_type,
@@ -501,6 +504,7 @@ pub fn anon_message_to_display_data(
         reply_to_thumbnail_bytes: None,
         reply_to_thumbnail_decoded: None,
         delivery_status: msg.delivery_status().to_string(),
+        failure_reason: String::new(),
         sender_avatar_bytes: sender_avatar,
         sender_avatar_decoded: None,
         is_pinned: msg.is_pinned(),

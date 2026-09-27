@@ -7,7 +7,7 @@
 //! 4. Users exchange messages
 //! 5. Messages are received correctly
 
-mod common;
+use crate::{common, skip_if_no_server};
 
 use chatter_core::network::grpc::{ChannelClient, MessageClient};
 use chatter_core::proto::chat_v1::{
@@ -251,7 +251,6 @@ async fn test_e2e_users_send_messages_in_channel() {
                     None,   // parent_id
                     false,  // ephemeral
                     None,   // ephemeral_ttl
-                    None,   // crypto_options
                     vec![], // mentioned_integrations
                     false,  // targets_ai_bot
                     vec![], // mentioned_file_ids

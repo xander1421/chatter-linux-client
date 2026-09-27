@@ -7,7 +7,7 @@
 //! - Saved messages (Note to Self)
 //! - Signal-style (sender_id, sent_at) lookups
 
-mod common;
+use crate::common;
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -370,6 +370,7 @@ fn test_system_message_user_joined() {
         mentioned_integrations: Vec::new(),
         targets_ai_bot: false,
         delivery_status: String::new(),
+        failure_reason: None,
     };
 
     message_repo.insert(&msg).unwrap();
@@ -424,6 +425,7 @@ fn test_system_message_user_left() {
         mentioned_integrations: Vec::new(),
         targets_ai_bot: false,
         delivery_status: String::new(),
+        failure_reason: None,
     };
 
     message_repo.insert(&msg).unwrap();
@@ -1118,18 +1120,22 @@ fn test_delivery_status_update_with_lookup_updates_by_id() {
     let sender = UserId::new();
     let channel = create_test_channel(&channel_repo, ChannelType::Public);
 
+    // The timestamp lookup serves anonymous control receipts only; identified
+    // receipts go through MessageReceiptRepository, so a server message with
+    // the same timestamp must not be touched by it.
     let ts = next_timestamp_ns();
-    let msg = Message::new_text(channel.id, ConversationType::Channel, Some(sender), "Test".to_string(), ts);
-    message_repo.insert(&msg).unwrap();
+    let anon = Message::new_text(channel.id, ConversationType::AnonDm, Some(sender), "Test".to_string(), ts);
+    message_repo.insert(&anon).unwrap();
+    let server = Message::new_text(channel.id, ConversationType::Channel, Some(sender), "Test".to_string(), ts);
+    message_repo.insert(&server).unwrap();
 
-    // Use the lookup-based update
     let updated = message_repo
         .update_delivery_status_by_timestamp_with_lookup(ts, "read")
         .unwrap();
     assert!(updated);
 
-    let loaded = message_repo.get(&msg.id).unwrap().unwrap();
-    assert_eq!(loaded.delivery_status, "read");
+    assert_eq!(message_repo.get(&anon.id).unwrap().unwrap().delivery_status, "read");
+    assert_eq!(message_repo.get(&server.id).unwrap().unwrap().delivery_status, "");
 }
 
 // ============================================================================
@@ -1795,7 +1801,7 @@ fn test_mark_conversation_read_returns_the_boundary_it_erased() {
         .unread_anchor(&channel.id, &ConversationType::Channel)
         .unwrap();
     assert_eq!(peeked.unread_count, 4);
-    assert_eq!(peeked.first_unread_sent_at, Some(unread_ts[0]));
+    assert_eq!(peeked.unread_sent_at, unread_ts);
 
     // Opening the conversation: the anchor comes back from the very call that
     // destroys it.
@@ -1804,12 +1810,11 @@ fn test_mark_conversation_read_returns_the_boundary_it_erased() {
         .unwrap();
     assert_eq!(anchor.unread_count, 4, "anchor captured after the UPDATE, not before");
     assert_eq!(
-        anchor.first_unread_sent_at,
-        Some(unread_ts[0]),
-        "boundary must be the oldest unread message, not the newest"
+        anchor.unread_sent_at, unread_ts,
+        "the anchor names the messages that were unread, oldest first"
     );
     assert!(
-        anchor.first_unread_sent_at.unwrap() > *read_ts.last().unwrap(),
+        anchor.unread_sent_at[0] > *read_ts.last().unwrap(),
         "boundary must sit after everything already read"
     );
 
@@ -1858,10 +1863,34 @@ fn test_unread_anchor_empty_when_all_read() {
         .mark_conversation_read(&channel.id, &ConversationType::Channel)
         .unwrap();
     assert_eq!(anchor.unread_count, 0);
-    assert_eq!(anchor.first_unread_sent_at, None);
+    assert!(anchor.unread_sent_at.is_empty());
 
     let page = message_repo
         .list_for_channel_asc(&channel.id, &ConversationType::Channel, None, 50)
         .unwrap();
     assert_eq!(anchor.divider_index(&page), None);
+}
+
+/// Server-stream and inbox delivery share reactor-keyed storage. Replaying
+/// either transport must not increment counts or remove another user's vote.
+#[test]
+fn test_server_reaction_replay_and_reactor_isolation() {
+    let (_temp_dir, db) = setup_test_db();
+    let repo = MessageRepository::new(db.clone());
+    let channels = ChannelRepository::new(db);
+    let channel = create_test_channel(&channels, ChannelType::Public);
+    let author = UserId::new();
+    let me = UserId::new();
+    let other = UserId::new();
+    let timestamp = next_timestamp_ns();
+    let message = Message::new_text(channel.id, ConversationType::Channel, Some(author), "target".into(), timestamp);
+    repo.insert(&message).unwrap();
+    assert!(repo.add_reaction(&author, timestamp, &me, &me, "👍").unwrap());
+    assert!(!repo.add_reaction(&author, timestamp, &me, &me, "👍").unwrap());
+    assert!(repo.add_reaction(&author, timestamp, &other, &me, "👍").unwrap());
+    assert_eq!(repo.get_reactions(&author, timestamp).unwrap().len(), 2);
+    assert!(repo.remove_reaction(&author, timestamp, &other, &me, "👍").unwrap());
+    assert!(!repo.remove_reaction(&author, timestamp, &other, &me, "👍").unwrap());
+    assert_eq!(repo.get_reactions(&author, timestamp).unwrap().len(), 1);
+    assert!(repo.user_has_reacted(&author, timestamp, "👍").unwrap());
 }

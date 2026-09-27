@@ -3,7 +3,7 @@
 //! Tests that the server pushes real-time events through StreamUserEvents
 //! when friend requests are sent, accepted, or declined.
 
-mod common;
+use crate::{common, skip_if_no_server};
 
 use std::time::Duration;
 

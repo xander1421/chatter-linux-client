@@ -354,6 +354,17 @@ class MainActivity : GameActivity() {
             nativeOnPermissionsResult(granted, denied)
         }
 
+    /** Android 11 and older require system Location for BLE discovery. */
+    @Suppress("unused")
+    fun meshLocationEnabled(): Boolean {
+        if (android.os.Build.VERSION.SDK_INT >= 31) return true
+        val manager = getSystemService(android.content.Context.LOCATION_SERVICE) as? android.location.LocationManager
+            ?: return false
+        return if (android.os.Build.VERSION.SDK_INT >= 28) manager.isLocationEnabled
+        else manager.isProviderEnabled(android.location.LocationManager.GPS_PROVIDER) ||
+            manager.isProviderEnabled(android.location.LocationManager.NETWORK_PROVIDER)
+    }
+
     /** Called from Rust (JNI). True if [permission] is already granted. */
     @Suppress("unused")
     fun hasPermission(permission: String): Boolean =

@@ -13,6 +13,7 @@ use crate::MainWindow;
 /// Wire more-clicked callback to show context menu.
 /// Uses Signal-style (sender_id, timestamp_ns) for message identification.
 pub fn wire_more_clicked(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
+    wire_message_info(window, ui_ctx);
     let ui_ctx = Arc::clone(ui_ctx);
     let weak_window = window.as_weak();
 
@@ -85,12 +86,14 @@ pub fn wire_more_clicked(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                     _ => return,
                 };
 
+                let can_retry = is_own_message && msg.can_retry_send();
                 let is_pinned = msg.is_pinned;
                 let has_attachments = !msg.attachments.is_empty();
 
                 let _ = slint::invoke_from_event_loop(move || {
                     if let Some(w) = weak.upgrade() {
                         set_context_menu(&w, sender_id_str, timestamp_ns_str, is_own_message, can_delete_for_everyone, is_pinned, has_attachments, menu_x, menu_y);
+                        w.set_context_menu_can_retry(can_retry);
                     }
                 });
             }
@@ -142,10 +145,27 @@ fn set_context_menu(
     w.set_context_menu_sender_id(sender_id.into());
     w.set_context_menu_timestamp_ns(timestamp_ns.into());
     w.set_context_menu_is_own_message(is_own_message);
+    w.set_context_menu_can_retry(false);
     w.set_context_menu_can_delete_for_everyone(can_delete_for_everyone);
     w.set_context_menu_is_pinned(is_pinned);
     w.set_context_menu_has_attachments(has_attachments);
     w.set_context_menu_x(menu_x);
     w.set_context_menu_y(menu_y);
     w.set_context_menu_visible(true);
+}
+
+fn wire_message_info(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
+    let weak = window.as_weak();
+    let client = ui_ctx.clone();
+    window.global::<crate::MessageInfo>().on_open(move |id| {
+        let Ok(message_id) = id.parse() else { return };
+        let details = client.message_receipt_info(message_id)
+            .unwrap_or_else(|error| format!("Could not load delivery details: {error}"));
+        if let Some(window) = weak.upgrade() {
+            let info = window.global::<crate::MessageInfo>();
+            info.set_message_id(id);
+            info.set_details(details.into());
+            info.set_show(true);
+        }
+    });
 }

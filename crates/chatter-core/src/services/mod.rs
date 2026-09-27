@@ -25,6 +25,7 @@ pub mod call_notification_bridge;
 #[cfg(feature = "media")]
 pub mod call_history_recorder;
 pub mod call_verification;
+pub mod server_records;
 pub mod notification_service;
 pub mod notification_stream;
 pub mod search_service;
@@ -152,3 +153,5 @@ pub use svr_backup_service::{SvrBackupError, SvrBackupService, RestoreResult};
 
 // Re-exports for section service
 pub use section_service::{SectionError, SectionService};
+
+pub mod voice_recording;

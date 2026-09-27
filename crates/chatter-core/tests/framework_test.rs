@@ -1,7 +1,7 @@
 //! Framework tests - verifies the testing framework compiles and works.
 
-mod common;
-mod framework;
+use crate::common;
+use crate::{assert_none, assert_ok, assert_some, framework};
 
 use framework::prelude::*;
 

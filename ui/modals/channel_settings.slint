@@ -96,6 +96,8 @@ export component ChannelSettingsModal inherits Rectangle {
     // Active section for navigation
     in-out property <string> active-section: "general";  // "general", "notifications", "members", "danger"
 
+    callback integrations();
+    callback server-calls();
     callback close();
     callback save-settings(string, string);  // name, description
     callback pick-channel-icon();  // opens native file picker for the channel icon
@@ -345,6 +347,14 @@ export component ChannelSettingsModal inherits Rectangle {
                         if root.active-section == "general": VerticalLayout {
                             spacing: Spacing.md;
 
+                            if root.is-owner: Button {
+                                text: "Integrations"; variant: "secondary";
+                                clicked => { root.integrations(); }
+                            }
+                            Button {
+                                text: "Channel call history"; variant: "secondary";
+                                clicked => { root.server-calls(); }
+                            }
                             // Channel header info
                             HorizontalLayout {
                                 spacing: Spacing.sm;

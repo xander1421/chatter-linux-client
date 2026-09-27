@@ -125,6 +125,9 @@ pub mod keys {
     /// Group resends this device asked for — see `SolicitedResends`.
     pub const SOLICITED_RESENDS: &str = "message.solicited_resends";
 
+    /// Friend-DM deposits a peer may ask us to send again — see `DmSentLog`.
+    pub const DM_SENT_LOG: &str = "message.dm_sent_log";
+
     // Notification privacy settings
     // Controls what metadata leaks to the OS notification system.
     // Signal Desktop approach: default to no content, user opts in.

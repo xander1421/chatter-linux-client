@@ -15,7 +15,7 @@
 //! - Domain type construction and validation
 //! - Two-user flow simulation
 
-mod common;
+use crate::{common, skip_if_no_server};
 
 use chatter_core::domain::anon_dm::{AnonDm, AnonDmId, AnonDmMailbox, AnonDmMessage, AnonDmStatus};
 use chatter_core::domain::UserId;

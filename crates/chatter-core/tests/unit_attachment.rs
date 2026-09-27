@@ -3,8 +3,8 @@
 //! Tests attachment upload, download, encryption,
 //! and metadata handling using the testing framework.
 
-mod common;
-mod framework;
+use crate::common;
+use crate::framework;
 
 use framework::prelude::*;
 

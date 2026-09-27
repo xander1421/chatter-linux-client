@@ -1,3 +1,9 @@
+import { MessageInfo } from "modals/message_info.slint";
+export { MessageInfo }
+import { VoiceRecording } from "chat/voice_recording.slint";
+export { VoiceRecording }
+import { ServerRecordsGlobal, ServerRecordRow } from "server_records/screen.slint";
+export { ServerRecordsGlobal, ServerRecordRow }
 // Chatter Linux Client - Main UI
 // Root component for the application
 
@@ -9,7 +15,7 @@ import { AnonMode, TorStatus } from "anon_mode/anon_mode_global.slint";
 import { MeshGlobal, MeshConversationData } from "mesh/mesh_global.slint";
 import { Typography } from "theme/typography.slint";
 import { Appearance } from "theme/appearance.slint";
-import { NotificationSound } from "settings/notification_sound.slint";
+import { NotificationSound, NotificationDelivery } from "settings/notification_sound.slint";
 import { Haptics } from "components/haptics.slint";
 import { AvatarText } from "components/avatar.slint";
 import { ConversationKind } from "chat/conversation_kind.slint";
@@ -36,7 +42,7 @@ export { DisappearingGlobal, DisappearingOption }
 // Theme choice. Bound in `bin_ui::features::modals::settings`.
 export { Appearance }
 // Settings › Notifications › Sound and vibration. Bound in `bin_ui::features::modals::settings`.
-export { NotificationSound }
+export { NotificationSound, NotificationDelivery }
 
 export component MainWindow inherits Window {
     title: "Chatter";
@@ -273,6 +279,7 @@ export component MainWindow inherits Window {
     // ========== GIF picker state ==========
     in-out property <bool> composer-gif-picker-visible <=> app.composer-gif-picker-visible;
     in property <bool> composer-gif-picker-loading <=> app.composer-gif-picker-loading;
+    in property <bool> composer-gif-picker-failed <=> app.composer-gif-picker-failed;
     in property <[GifData]> composer-gif-picker-results <=> app.composer-gif-picker-results;
     in-out property <string> composer-gif-picker-search <=> app.composer-gif-picker-search;
     callback composer-gif-selected <=> app.composer-gif-selected;
@@ -290,6 +297,7 @@ export component MainWindow inherits Window {
     in-out property <string> context-menu-timestamp-ns <=> app.context-menu-timestamp-ns;
     in-out property <length> context-menu-x <=> app.context-menu-x;
     in-out property <length> context-menu-y <=> app.context-menu-y;
+    in property <bool> context-menu-can-retry <=> app.context-menu-can-retry;
     in property <bool> context-menu-is-own-message <=> app.context-menu-is-own-message;
     in property <bool> context-menu-can-delete-for-everyone <=> app.context-menu-can-delete-for-everyone;
     in property <bool> context-menu-is-pinned <=> app.context-menu-is-pinned;
@@ -905,6 +913,14 @@ export component MainWindow inherits Window {
     // app, and only a force-stop recovers it (§112y). Re-take focus whenever
     // the conversation pane or a modal closes, which is when the focused text
     // field goes away.
+    changed channel-id => { VoiceRecording.cancel(); }
+    changed conversation-kind => { VoiceRecording.cancel(); }
+    changed selection-mode => { if root.selection-mode { VoiceRecording.cancel(); } }
+    changed composer-is-editing => { if root.composer-is-editing { VoiceRecording.cancel(); } }
+    changed thread-panel-visible => { VoiceRecording.cancel(); }
+    changed active-tab => { VoiceRecording.cancel(); }
+    changed current-view => { VoiceRecording.cancel(); }
+    changed active-call-visible => { if root.active-call-visible { VoiceRecording.cancel(); } }
     changed mobile-show-chat => {
         if (!root.mobile-show-chat) {
             back-scope.focus();
@@ -913,6 +929,7 @@ export component MainWindow inherits Window {
             // they float over whatever screen comes next.
             root.composer-gif-picker-visible = false;
             root.composer-emoji-picker-visible = false;
+            VoiceRecording.cancel();
             root.chat-pane-closed();
         }
     }
@@ -925,6 +942,7 @@ export component MainWindow inherits Window {
         }
     }
     changed active-modal => {
+        if root.active-modal != "" { VoiceRecording.cancel(); }
         root.secure-screen(root.active-modal == "recovery-codes");
         // On open too: taking focus off the composer is what hides the soft
         // keyboard (a TextInput's FocusOut sends InputMethodRequest::Disable),

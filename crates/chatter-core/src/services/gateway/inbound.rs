@@ -406,6 +406,7 @@ pub enum SealedSenderResult {
     /// via per-device sealed sender — caller dispatches to the right event.
     ControlContent {
         sender_id: UserId,
+        sender_device_id: u32,
         content: Box<crate::proto::content_v1::Content>,
     },
     /// RECEIVER half of the 1:1 session self-heal: an inner Whisper/PreKey
@@ -423,10 +424,14 @@ pub enum SealedSenderResult {
     /// `DecryptionErrorMessage` about a message we sent was processed.
     /// `archived` is true when our session with `(peer_id, peer_device_id)`
     /// was archived — the next send re-establishes via PreKeySignalMessage.
+    /// Archived or not, the caller sends the message the report names again
+    /// (`MessageService::resend_dm_on_decryption_error`); `timestamp_ms` is
+    /// the failed envelope's server timestamp in epoch millis.
     SessionHealed {
         peer_id: UserId,
         peer_device_id: u32,
         archived: bool,
+        timestamp_ms: u64,
     },
     /// SENDER half of the sender-key retry: a peer's `DecryptionErrorMessage`
     /// named a group message we sent (no ratchet key). The caller resends that

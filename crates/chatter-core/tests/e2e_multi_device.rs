@@ -5,8 +5,8 @@
 //! - Session establishment and reuse
 //! - Device revocation handling
 
-mod common;
-mod framework;
+use crate::{common, skip_if_no_server};
+use crate::framework;
 
 use chatter_core::proto::chat_v1::{
     get_pre_key_bundle_response, ChannelType, MessageSortDirection,
@@ -144,7 +144,7 @@ async fn test_e2e_channel_message_reaches_device() {
 
     let message = assert_ok(
         msg_client
-            .send_message(&channel_id, content, None, false, None, None, vec![], false, vec![])
+            .send_message(&channel_id, content, None, false, None, vec![], false, vec![])
             .await,
     );
 

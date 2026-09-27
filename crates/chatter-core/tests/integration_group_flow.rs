@@ -2,7 +2,7 @@
 //!
 //! Tests group creation, member management, messaging, and permissions.
 
-mod common;
+use crate::{common, skip_if_no_server};
 
 use base64::Engine;
 use chatter_core::network::grpc::{ChannelClient, MessageClient};
@@ -272,7 +272,6 @@ async fn test_send_message_to_group() {
                 None,
                 false,
                 None,
-                None, // crypto_options
                 vec![],
                 false,
                 vec![],
@@ -325,7 +324,6 @@ async fn test_group_message_thread() {
                 None,
                 false,
                 None,
-                None,
                 vec![],
                 false,
                 vec![],
@@ -345,7 +343,6 @@ async fn test_group_message_thread() {
                 reply_content,
                 Some(&original.id),
                 false,
-                None,
                 None,
                 vec![],
                 false,
@@ -618,7 +615,6 @@ async fn test_group_message_pagination() {
                 None,
                 false,
                 None,
-                None,
                 vec![],
                 false,
                 vec![],
@@ -724,7 +720,6 @@ async fn test_non_member_cannot_send_to_private_group() {
             content,
             None,
             false,
-            None,
             None,
             vec![],
             false,

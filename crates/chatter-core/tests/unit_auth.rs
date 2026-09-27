@@ -3,8 +3,8 @@
 //! Tests login, registration, logout, and session management
 //! using the testing framework with mocked services.
 
-mod common;
-mod framework;
+use crate::common;
+use crate::framework;
 
 use framework::prelude::*;
 

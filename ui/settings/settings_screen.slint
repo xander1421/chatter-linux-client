@@ -11,7 +11,7 @@ import { ToggleRow } from "../components/toggle_row.slint";
 import { JarvisGlobal } from "../jarvis/jarvis_global.slint";
 import { Appearance } from "../theme/appearance.slint";
 import { Icons } from "../theme/icons.slint";
-import { NotificationSound } from "notification_sound.slint";
+import { NotificationSound, NotificationDelivery } from "notification_sound.slint";
 import { AnonMode } from "../anon_mode/anon_mode_global.slint";
 
 // A local AI provider found running on this machine.
@@ -1695,6 +1695,47 @@ export component SettingsScreen inherits Rectangle {
                                 font-weight: Typography.semibold;
                             }
 
+                            VerticalLayout {
+                                spacing: Spacing.sm;
+                                init => { NotificationDelivery.load(); }
+
+                                ToggleRow {
+                                    accessible-text: "Account push notifications";
+                                    checked <=> NotificationDelivery.push-enabled;
+                                    disabled: NotificationDelivery.busy || !NotificationDelivery.loaded;
+                                    toggled(value) => { NotificationDelivery.push-enabled-changed(value); }
+
+                                    Text {
+                                        text: "Account push notifications";
+                                        color: Colors.text-primary;
+                                        font-size: Typography.sm;
+                                    }
+                                    Text {
+                                        text: "Allow server push notifications for all devices on this account. Device notification settings still apply.";
+                                        color: Colors.text-muted;
+                                        font-size: Typography.xs;
+                                        wrap: word-wrap;
+                                    }
+                                }
+                                if NotificationDelivery.busy: Text {
+                                    text: "Saving or loading notification preferences…";
+                                    color: Colors.text-muted;
+                                    font-size: Typography.xs;
+                                }
+                                if NotificationDelivery.error != "": Text {
+                                    text: NotificationDelivery.error;
+                                    color: Colors.error;
+                                    font-size: Typography.xs;
+                                    wrap: word-wrap;
+                                }
+                                if NotificationDelivery.error != "": Button {
+                                    text: "Retry";
+                                    variant: "ghost";
+                                    disabled: NotificationDelivery.busy;
+                                    clicked => { NotificationDelivery.load(); }
+                                }
+                            }
+
                             // Notification content (Signal: Settings > Notifications >
                             // Show). Governs what reaches the OS notification shade —
                             // enforced in core (NotificationService::show_message_notification);
@@ -2009,7 +2050,7 @@ export component SettingsScreen inherits Rectangle {
 
                             if JarvisGlobal.enabled : Text {
                                 init => { root.local-ai-refresh(); }
-                                text: "Chat with a local model in the Jarvis (AI) channel. Everything runs on this machine — nothing leaves your device.";
+                                text: "Chat with Jarvis in the AI channel. Local models run on your device; cloud models send your prompts and conversation context to the selected provider.";
                                 color: Colors.text-muted;
                                 font-size: Typography.sm;
                                 wrap: word-wrap;

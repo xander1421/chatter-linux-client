@@ -1,0 +1,12 @@
+// Presentation state only; capture, duration limits and attachment preparation
+// are owned by chatter-core's recording session.
+export global VoiceRecording {
+    in-out property <bool> active: false;
+    in-out property <bool> busy: false;
+    in-out property <bool> locked: false;
+    in-out property <string> elapsed: "00:00";
+    in-out property <string> status: "";
+    callback start();
+    callback finish();
+    callback cancel();
+}

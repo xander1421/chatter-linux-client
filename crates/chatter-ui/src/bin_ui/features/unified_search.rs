@@ -5,7 +5,7 @@
 
 use std::sync::Arc;
 
-use slint::{ComponentHandle, Model, ModelRc, SharedString, VecModel};
+use slint::{ComponentHandle, ModelRc, SharedString, VecModel};
 
 use chatter_core::client::ChatterClient;
 
@@ -239,36 +239,30 @@ fn wire_message_selected(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                 }
             };
             let (conv_type, conv_id) = ui_ctx.search_hit_target(&message);
-            run_ui!(weak, |w| open_conversation(&w, conv_id.into(), conv_type));
-            // Scroll-to-message once the loader populates the model.
-            let weak_scroll = weak.clone();
-            let target_id = message_id_str.clone();
-            tokio::spawn(async move {
-                for _ in 0..20 {
-                    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-                    let target_id = target_id.clone();
-                    let weak_inner = weak_scroll.clone();
-                    let found = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
-                    let found_set = found.clone();
-                    let _ = slint::invoke_from_event_loop(move || {
-                        if let Some(w) = weak_inner.upgrade() {
-                            let messages = w.get_messages();
-                            for i in 0..messages.row_count() {
-                                if let Some(m) = messages.row_data(i) {
-                                    if m.message_id == target_id {
-                                        w.set_scroll_to_message_index(i as i32);
-                                        found_set.store(true, std::sync::atomic::Ordering::SeqCst);
-                                        break;
-                                    }
-                                }
-                            }
-                        }
-                    });
-                    tokio::time::sleep(std::time::Duration::from_millis(20)).await;
-                    if found.load(std::sync::atomic::Ordering::SeqCst) { break; }
-                }
+            run_ui!(weak, |w| {
+                open_conversation(&w, conv_id.into(), conv_type);
+                jump_once_open(w.as_weak(), ui_ctx, message_id_str, 50);
             });
         });
+    });
+}
+
+/// Jump to `message_id` once the conversation that holds it has finished
+/// opening — every open path lowers `loading-messages` when its page is in.
+/// Polled (100 ms, bounded) because the open paths have no completion hook.
+fn jump_once_open(
+    weak: slint::Weak<MainWindow>,
+    ui_ctx: Arc<ChatterClient>,
+    message_id: String,
+    tries: u32,
+) {
+    slint::Timer::single_shot(std::time::Duration::from_millis(100), move || {
+        let Some(w) = weak.upgrade() else { return };
+        if !w.get_loading_messages() {
+            crate::bin_ui::features::header::jump_to_message(&w, &ui_ctx, &message_id);
+        } else if tries > 0 {
+            jump_once_open(weak, ui_ctx, message_id, tries - 1);
+        }
     });
 }
 

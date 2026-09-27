@@ -94,6 +94,7 @@ export struct MessageItemData {
     reply-to-thumbnail-width: int,   // Quoted thumbnail natural width (px) — for aspect sizing; 0 = unknown
     reply-to-thumbnail-height: int,  // Quoted thumbnail natural height (px)
     show-sender: bool,
+    failure-reason: string,
     delivery-status: string,  // "sending", "sent", "failed", "delivered", "read", or "" for non-own messages
     is-pinned: bool,          // Whether message is pinned
     // Call message fields

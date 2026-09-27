@@ -281,6 +281,15 @@ impl MessageState {
         self.store.update(|state| {
             for messages in state.messages.values_mut() {
                 for msg in messages.iter_mut() {
+                    // Server receipt evidence arrives by MessageDeliveryChanged,
+                    // keyed by ID. Timestamp-only anonymous events cannot touch it.
+                    if matches!(new_status.as_str(), "read" | "delivered")
+                        && !matches!(msg.conversation_type,
+                            crate::domain::message::ConversationType::AnonDm |
+                            crate::domain::message::ConversationType::AnonGroup)
+                    {
+                        continue;
+                    }
                     if timestamps.contains(&msg.sent_at) && status_rank(&msg.delivery_status) < new_rank {
                         msg.delivery_status = new_status.clone();
                     }

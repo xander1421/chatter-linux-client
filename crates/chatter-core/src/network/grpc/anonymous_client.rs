@@ -14,7 +14,7 @@ use crate::error::NetworkError;
 use crate::proto::chat_v1::{
     auth_service_client::AuthServiceClient,
     key_transparency_service_client::KeyTransparencyServiceClient,
-    message_service_client::MessageServiceClient, GetConsistencyProofRequest,
+    message_service_client::MessageServiceClient, DestinationDevice, GetConsistencyProofRequest,
     GetConsistencyProofResponse, GetPreKeyBundleRequest, GetPreKeyBundleResponse, GetProofRequest,
     GetProofResponse, SealedSenderMessage, SendSealedMessageRequest,
     SendSealedMessageResponse,
@@ -79,6 +79,27 @@ impl AnonymousMessageClient {
         sealed_message: SealedSenderMessage,
         uak: &[u8; 16],
     ) -> Result<SendSealedMessageResponse, NetworkError> {
+        self.send_sealed_message_to_device_set_with_uak(
+            destination_user_id,
+            destination_device_id,
+            sealed_message,
+            Vec::new(),
+            uak,
+        )
+        .await
+    }
+
+    /// [`Self::send_sealed_message_with_uak`] as one request of a send to
+    /// every device of the recipient — see
+    /// `MessageClient::send_sealed_message_to_device_set`.
+    pub async fn send_sealed_message_to_device_set_with_uak(
+        &mut self,
+        destination_user_id: &str,
+        destination_device_id: u32,
+        sealed_message: SealedSenderMessage,
+        device_set: Vec<DestinationDevice>,
+        uak: &[u8; 16],
+    ) -> Result<SendSealedMessageResponse, NetworkError> {
         use base64::Engine;
         use tonic::Request;
 
@@ -88,6 +109,7 @@ impl AnonymousMessageClient {
             sealed_message: Some(sealed_message),
             client_request_id: uuid::Uuid::new_v4().to_string(),
             envelope_type: 0, // Default: server determines from content
+            device_set,
         };
 
         // Create request WITHOUT any auth headers
@@ -114,8 +136,8 @@ impl AnonymousMessageClient {
         self.inner
             .send_sealed_message(request)
             .await
-            .map(|r| r.into_inner())
             .map_err(|s| NetworkError::from_status(&s))
+            .and_then(|r| super::message_client::sealed_send_result(r.into_inner()))
     }
 
     /// Send a sealed message using anonymous credential (blind signature).
@@ -186,6 +208,7 @@ impl AnonymousMessageClient {
             sealed_message: Some(sealed_message),
             client_request_id: uuid::Uuid::new_v4().to_string(),
             envelope_type,
+            device_set: Vec::new(),
         };
 
         // Create request WITHOUT any auth headers

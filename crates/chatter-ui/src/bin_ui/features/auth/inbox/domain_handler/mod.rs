@@ -16,6 +16,7 @@ mod calls;
 mod helpers;
 pub(crate) use helpers::{recompute_total_unread, update_unread_count};
 mod messaging;
+pub(crate) use messaging::set_own_status_at;
 mod sessions;
 mod social;
 
@@ -159,13 +160,25 @@ pub async fn handle_domain_event(
             }
         }
 
+        DomainEvent::MessageDeliveryChanged { message_id, status, .. } => {
+            messaging::handle_persisted_delivery_status(window, ui_ctx, message_id.to_string(), status);
+        }
+
         // Receipt events: update checkmarks (✓✓) in the Slint message model.
         DomainEvent::MessagesDelivered { message_timestamps, .. } => {
-            messaging::handle_delivery_status_update(window, message_timestamps, "delivered");
+            if matches!(ui_ctx.chat_state().active_conversation(),
+                chatter_core::state::ActiveConversation::AnonDm(_) |
+                chatter_core::state::ActiveConversation::AnonGroup(_)) {
+                messaging::handle_delivery_status_update(window, message_timestamps, "delivered");
+            }
         }
 
         DomainEvent::MessagesRead { message_timestamps, .. } => {
-            messaging::handle_delivery_status_update(window, message_timestamps, "read");
+            if matches!(ui_ctx.chat_state().active_conversation(),
+                chatter_core::state::ActiveConversation::AnonDm(_) |
+                chatter_core::state::ActiveConversation::AnonGroup(_)) {
+                messaging::handle_delivery_status_update(window, message_timestamps, "read");
+            }
         }
 
         // Reaction UI updates: update emoji summary on the message bubble + sidebar

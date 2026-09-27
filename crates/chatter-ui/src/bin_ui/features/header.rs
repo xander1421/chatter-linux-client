@@ -7,6 +7,7 @@ use std::sync::Arc;
 use slint::{ComponentHandle, Model, ModelRc, VecModel};
 
 use chatter_core::client::ChatterClient;
+use chatter_core::domain::ids::MessageId;
 use chatter_core::state::ActiveConversation;
 
 use crate::bin_ui::converters::messages_to_display_batch;
@@ -87,39 +88,13 @@ fn wire_pinned_navigation(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     // Go to pinned message (scroll to it in chat)
     let chat_state_goto = ui_ctx.chat_state().clone();
     let weak_window = window.as_weak();
+    let ui_ctx_goto = ui_ctx.clone();
 
     window.on_pinned_go_to_message(move || {
-        if let Some(message_id) = chat_state_goto.pinned_current_message_id() {
-            let message_id_str = message_id.to_string();
-
-            // Already on UI thread - no need for invoke_from_event_loop
-            if let Some(w) = weak_window.upgrade() {
-                let messages = w.get_messages();
-                let message_count = messages.row_count();
-
-                // Find the index of the pinned message and let the list
-                // land on it (it measures rows; a pixel guess from here
-                // cannot).
-                for i in 0..message_count {
-                    if let Some(msg) = messages.row_data(i) {
-                        if msg.message_id.as_str() == message_id_str.as_str() {
-                            w.set_scroll_to_message_index(i as i32);
-                            w.set_highlighted_message_id(message_id_str.as_str().into());
-                            tracing::info!(
-                                message_id = %message_id_str,
-                                index = i,
-                                "Scrolling to pinned message"
-                            );
-                            return;
-                        }
-                    }
-                }
-
-                tracing::warn!(
-                    message_id = %message_id_str,
-                    "Pinned message not found in current message list"
-                );
-            }
+        if let (Some(message_id), Some(w)) =
+            (chat_state_goto.pinned_current_message_id(), weak_window.upgrade())
+        {
+            jump_to_message(&w, &ui_ctx_goto, &message_id.to_string());
         }
     });
 }
@@ -357,128 +332,155 @@ fn wire_invite_member(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
 
 fn wire_load_more(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     let weak_window = window.as_weak();
-    let chat_state = ui_ctx.chat_state().clone();
-    let ui_ctx_load = ui_ctx.clone();
-    let message_state = ui_ctx.message_state().clone();
+    let ui_ctx = ui_ctx.clone();
 
     window.on_load_more(move || {
-        let weak = weak_window.clone();
-        let chat_state = chat_state.clone();
-        let ui_ctx = ui_ctx_load.clone();
-        let message_state = message_state.clone();
-
-        // Load messages in background thread (DB queries are sync)
-        std::thread::spawn(move || {
-            let state = chat_state.get();
-            let channel_id = match state.active_channel_id {
-                Some(id) => id,
-                None => {
-                    tracing::warn!("Cannot load more: no active channel");
-                    return;
-                }
-            };
-            // Resolve conversation type via client helper so we pick up
-            // the correct variant for encrypted-vs-non-encrypted channels
-            // (cheap channel_repo lookup inside).
-            let conversation_type = match ui_ctx.active_conversation_type() {
-                Some(ct) => ct,
-                None => {
-                    tracing::warn!("Cannot load more: no active conversation type");
-                    return;
-                }
-            };
-
-            if message_state.is_loading(&channel_id) {
-                tracing::trace!("Already loading messages for channel: {}", channel_id);
-                return;
-            }
-
-            let cursor = message_state.get_cursor(&channel_id);
-            if let Some(ref c) = cursor {
-                if !c.has_more {
-                    tracing::trace!("No more messages to load for channel: {}", channel_id);
-                    return;
-                }
-            }
-
-            message_state.set_loading(channel_id, true);
-
-            let before = cursor.and_then(|c| c.oldest_message_id);
-
-            let older_messages = match ui_ctx.get_messages_local_asc(&channel_id, &conversation_type, before.as_ref(), chatter_core::config::MESSAGE_PAGE_SIZE as u32) {
-                Ok(msgs) => msgs,
-                Err(e) => {
-                    tracing::error!("Failed to load more messages: {}", e);
-                    message_state.set_loading(channel_id, false);
-                    return;
-                }
-            };
-
-            let has_more = older_messages.len() as i32 >= chatter_core::config::MESSAGE_PAGE_SIZE;
-            let new_cursor = if !older_messages.is_empty() {
-                chatter_core::state::PaginationCursor::new(
-                    has_more,
-                    older_messages.first().map(|m| m.id),
-                    older_messages.first().map(|m| m.created_at),
-                )
-            } else {
-                chatter_core::state::PaginationCursor::exhausted()
-            };
-            message_state.set_cursor(channel_id, new_cursor);
-
-            // Convert older messages to display data
-            let mut display_messages = messages_to_display_batch(
-                &older_messages,
-                |m| ui_ctx.message_sender_display_name(m),
-                |m| ui_ctx.message_sender_avatar(m),
-                |att_id| ui_ctx.get_attachment(att_id),
-                |m| ui_ctx.reply_author_display_name(m),
-                |m| ui_ctx.reply_parent_missing_for(m),
-                |m| ui_ctx.reply_parent_media(m),
-            );
-            crate::bin_ui::converters::apply_reply_counts(
-                &mut display_messages,
-                &ui_ctx.thread_reply_counts(&channel_id, &conversation_type),
-            );
-
-            let msg_count = older_messages.len();
-            // Get current user ID for is_own calculation
-            let current_user_id = ui_ctx.session_current_user_id().map(|id| id.to_string()).unwrap_or_default();
-
-            let _ = slint::invoke_from_event_loop(move || {
-                if let Some(w) = weak.upgrade() {
-                    // Convert display data to Slint types (must be done on UI thread)
-                    let slint_messages: Vec<_> = display_messages.iter().map(|d| d.to_slint_with_user(&current_user_id)).collect();
-
-                    let current_model = w.get_messages();
-                    let current_count = current_model.row_count();
-
-                    // Collect current message IDs for deduplication
-                    let current_ids: std::collections::HashSet<String> = (0..current_count)
-                        .filter_map(|i| current_model.row_data(i))
-                        .map(|msg| msg.message_id.to_string())
-                        .collect();
-
-                    // Prepend older messages (older go at top), skipping
-                    // duplicates. Inserted in place: rows added above the
-                    // first visible one shift the list's index without
-                    // moving what is on screen, so history loads without
-                    // a jump.
-                    let older: Vec<_> = slint_messages
-                        .into_iter()
-                        .filter(|msg| !current_ids.contains(msg.message_id.as_str()))
-                        .collect();
-                    crate::bin_ui::features::chat::edit_messages(&w, |model| {
-                        for (i, msg) in older.into_iter().enumerate() {
-                            model.insert(i, msg);
-                        }
-                    });
-                    tracing::debug!("Loaded {} older messages for channel", msg_count);
-                }
-            });
-
-            message_state.set_loading(channel_id, false);
-        });
+        if let Some(w) = weak_window.upgrade() {
+            load_older(&w, &ui_ctx, None);
+        }
     });
 }
 
+/// Row of the open list holding `message_id`.
+fn row_of(w: &MainWindow, message_id: &str) -> Option<usize> {
+    let messages = w.get_messages();
+    (0..messages.row_count())
+        .find(|&i| messages.row_data(i).is_some_and(|m| m.message_id.as_str() == message_id))
+}
+
+/// Scroll the open conversation to `message_id` and flash it: a quote's
+/// parent, a search hit, the pinned message. One that is older than what is
+/// loaded has the history back to it loaded first. UI thread.
+pub(crate) fn jump_to_message(w: &MainWindow, ui_ctx: &Arc<ChatterClient>, message_id: &str) {
+    let Some(row) = row_of(w, message_id) else {
+        match message_id.parse() {
+            Ok(id) => load_older(w, ui_ctx, Some(id)),
+            Err(_) => tracing::debug!(message_id, "Jump target is not a stored message"),
+        }
+        return;
+    };
+    w.set_scroll_to_message_index(row as i32);
+    w.set_highlighted_message_id(message_id.into());
+
+    // A brief pulse, not a permanent highlight. The index goes back with it:
+    // the list acts on it changing, so left in place a second jump to the
+    // same row would do nothing.
+    let weak = w.as_weak();
+    slint::Timer::single_shot(std::time::Duration::from_millis(1500), move || {
+        if let Some(w) = weak.upgrade() {
+            w.set_highlighted_message_id(slint::SharedString::new());
+            w.set_scroll_to_message_index(-1);
+        }
+    });
+}
+
+/// Load history older than the oldest row of the open list and insert it
+/// above: one page, or with `until` every page back to that message, which
+/// is then jumped to. The oldest loaded row is the cursor — the list itself,
+/// not a copy of where it was last time. UI thread.
+fn load_older(w: &MainWindow, ui_ctx: &Arc<ChatterClient>, until: Option<MessageId>) {
+    let Some(before) = w
+        .get_messages()
+        .row_data(0)
+        .and_then(|m| m.message_id.parse::<MessageId>().ok())
+    else {
+        return;
+    };
+    let weak = w.as_weak();
+    let ui_ctx = ui_ctx.clone();
+
+    // Load messages in background thread (DB queries are sync)
+    std::thread::spawn(move || {
+        let Some(channel_id) = ui_ctx.chat_state().get().active_channel_id else {
+            tracing::warn!("Cannot load more: no active channel");
+            return;
+        };
+        // Resolve conversation type via client helper so we pick up
+        // the correct variant for encrypted-vs-non-encrypted channels
+        // (cheap channel_repo lookup inside).
+        let Some(conversation_type) = ui_ctx.active_conversation_type() else {
+            tracing::warn!("Cannot load more: no active conversation type");
+            return;
+        };
+
+        let message_state = ui_ctx.message_state();
+        if message_state.is_loading(&channel_id) {
+            tracing::trace!("Already loading messages for channel: {}", channel_id);
+            return;
+        }
+        message_state.set_loading(channel_id, true);
+        let older_messages = ui_ctx.get_older_messages_local_asc(
+            &channel_id,
+            &conversation_type,
+            &before,
+            until.as_ref(),
+        );
+        message_state.set_loading(channel_id, false);
+        let older_messages = match older_messages {
+            Ok(msgs) => msgs,
+            Err(e) => {
+                tracing::error!("Failed to load more messages: {}", e);
+                return;
+            }
+        };
+        if older_messages.is_empty() {
+            tracing::debug!("No older messages for channel: {}", channel_id);
+            return;
+        }
+
+        // Convert older messages to display data
+        let mut display_messages = messages_to_display_batch(
+            &older_messages,
+            |m| ui_ctx.message_sender_display_name(m),
+            |m| ui_ctx.message_sender_avatar(m),
+            |att_id| ui_ctx.get_attachment(att_id),
+            |m| ui_ctx.reply_author_display_name(m),
+            |m| ui_ctx.reply_parent_missing_for(m),
+            |m| ui_ctx.reply_parent_media(m),
+        );
+        crate::bin_ui::converters::apply_reply_counts(
+            &mut display_messages,
+            &ui_ctx.thread_reply_counts(&channel_id, &conversation_type),
+        );
+
+        // Get current user ID for is_own calculation
+        let current_user_id = ui_ctx.session_current_user_id().map(|id| id.to_string()).unwrap_or_default();
+
+        let _ = slint::invoke_from_event_loop(move || {
+            let Some(w) = weak.upgrade() else { return };
+            // The conversation was switched while this loaded.
+            if ui_ctx.chat_state().get().active_channel_id != Some(channel_id) {
+                return;
+            }
+            // Convert display data to Slint types (must be done on UI thread)
+            let slint_messages: Vec<_> = display_messages.iter().map(|d| d.to_slint_with_user(&current_user_id)).collect();
+
+            let current_model = w.get_messages();
+            let current_ids: std::collections::HashSet<String> = (0..current_model.row_count())
+                .filter_map(|i| current_model.row_data(i))
+                .map(|msg| msg.message_id.to_string())
+                .collect();
+
+            // Prepend older messages (older go at top), skipping
+            // duplicates. Inserted in place: rows added above the
+            // first visible one shift the list's index without
+            // moving what is on screen, so history loads without
+            // a jump.
+            let older: Vec<_> = slint_messages
+                .into_iter()
+                .filter(|msg| !current_ids.contains(msg.message_id.as_str()))
+                .collect();
+            tracing::debug!("Loaded {} older messages for channel", older.len());
+            crate::bin_ui::features::chat::edit_messages(&w, |model| {
+                for (i, msg) in older.into_iter().enumerate() {
+                    model.insert(i, msg);
+                }
+            });
+            if let Some(target) = until.map(|id| id.to_string()) {
+                if row_of(&w, &target).is_some() {
+                    jump_to_message(&w, &ui_ctx, &target);
+                }
+            }
+        });
+    });
+}

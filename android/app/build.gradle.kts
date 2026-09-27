@@ -17,6 +17,23 @@ android {
         ndk { abiFilters += "arm64-v8a" }
     }
 
+    // Opt-in debug test identities share Rust/JNI staging and one Gradle run.
+    // Ordinary builds retain their existing application ID and output paths.
+    if (providers.gradleProperty("multiInstance").orNull == "true") {
+        flavorDimensions += "instance"
+        productFlavors {
+            create("base") { dimension = "instance" }
+            create("b") {
+                dimension = "instance"
+                applicationIdSuffix = ".b"
+            }
+            create("c") {
+                dimension = "instance"
+                applicationIdSuffix = ".c"
+            }
+        }
+    }
+
     // Release signing comes from the environment (build-android.sh RELEASE=1);
     // the keystore lives outside the repository. Without it, assembleRelease
     // yields only an unsigned APK, which build-android.sh refuses to ship.

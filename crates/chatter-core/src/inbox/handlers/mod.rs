@@ -85,6 +85,12 @@ pub enum DomainEvent {
         /// Sender's clock (TypingMessage.timestamp or message sent_at, ns).
         timestamp: u64,
     },
+    /// Persisted aggregate receipt state changed for one outgoing message.
+    MessageDeliveryChanged {
+        message_id: MessageId,
+        channel_id: ChannelId,
+        status: String,
+    },
     /// Read receipt received.
     MessagesRead {
         reader_id: UserId,
@@ -693,6 +699,7 @@ impl DomainEvent {
             DomainEvent::AttachmentReady { channel_id, .. } => Some(*channel_id),
             DomainEvent::TypingStarted { channel_id, .. } => Some(*channel_id),
             DomainEvent::TypingStopped { channel_id, .. } => Some(*channel_id),
+            DomainEvent::MessageDeliveryChanged { channel_id, .. } => Some(*channel_id),
             DomainEvent::MessagesRead { channel_id, .. } => *channel_id,
             DomainEvent::MessagesDelivered { .. } => None,
             DomainEvent::ViewedReceipt { .. } => None,

@@ -49,6 +49,12 @@ pub enum NetworkError {
     #[error("data loss: {0}")]
     DataLoss(String),
 
+    /// A sealed send named a device set that is not the recipient's
+    /// registered devices (`SendSealedMessageResponse.mismatched_devices`,
+    /// Signal-Server's 409 / 410). Nothing was queued.
+    #[error("recipient devices changed: missing {missing:?}, extra {extra:?}, stale {stale:?}")]
+    MismatchedDevices { missing: Vec<u32>, extra: Vec<u32>, stale: Vec<u32> },
+
     /// Unknown or unclassified error.
     #[error("unknown error: {0}")]
     Unknown(String),

@@ -2,7 +2,7 @@
 //!
 //! Tests the special SavedMessages channel type where channel_id = user_id.
 
-mod common;
+use crate::{common, skip_if_no_server};
 
 use base64::Engine;
 use chatter_core::network::grpc::{ChannelClient, MessageClient};
@@ -214,7 +214,6 @@ async fn test_send_message_to_saved_messages() {
             None,
             false,
             None,
-            None, // crypto_options
             vec![],
             false,
             vec![],
@@ -292,7 +291,6 @@ async fn test_retrieve_saved_messages() {
                 content,
                 None,
                 false,
-                None,
                 None,
                 vec![],
                 false,
@@ -372,7 +370,6 @@ async fn test_saved_message_with_text_only() {
             None,
             false,
             None,
-            None,
             vec![],
             false,
             vec![],
@@ -428,7 +425,6 @@ async fn test_saved_messages_pagination() {
                 content,
                 None,
                 false,
-                None,
                 None,
                 vec![],
                 false,
@@ -516,7 +512,6 @@ async fn test_saved_messages_not_visible_to_others() {
                 content,
                 None,
                 false,
-                None,
                 None,
                 vec![],
                 false,
@@ -650,7 +645,6 @@ async fn test_saved_messages_from_single_device() {
             content,
             None,
             false,
-            None,
             None,
             vec![],
             false,

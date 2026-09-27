@@ -111,6 +111,37 @@ impl ChatterClient {
         tracing::info!("notification stream re-dialed over new transport");
     }
 
+    /// Account-wide push delivery preference. This does not change this
+    /// device's notification content, sound, or operating-system permission.
+    pub async fn account_push_enabled(&self) -> Result<bool, crate::error::NetworkError> {
+        let user_id = self.session_current_user_id()
+            .ok_or(crate::error::NetworkError::Unauthenticated)?.to_string();
+        let preferences = self.services.grpc_pool.notification_client()
+            .get_preferences(Some(&user_id)).await?
+            .preferences.ok_or_else(|| crate::error::NetworkError::ServerError(
+                "notification preferences missing from response".into()))?;
+        Ok(preferences.push_enabled)
+    }
+
+    /// Read before updating because the server replaces the whole preference
+    /// record. Preserve quiet hours, type filters, and all other delivery flags.
+    pub async fn set_account_push_enabled(
+        &self,
+        enabled: bool,
+    ) -> Result<bool, crate::error::NetworkError> {
+        let user_id = self.session_current_user_id()
+            .ok_or(crate::error::NetworkError::Unauthenticated)?.to_string();
+        let mut notification_client = self.services.grpc_pool.notification_client();
+        let mut preferences = notification_client.get_preferences(Some(&user_id)).await?
+            .preferences.ok_or_else(|| crate::error::NetworkError::ServerError(
+                "notification preferences missing from response".into()))?;
+        preferences.push_enabled = enabled;
+        let saved = notification_client.update_preferences(Some(&user_id), preferences).await?
+            .preferences.ok_or_else(|| crate::error::NetworkError::ServerError(
+                "notification preferences missing from response".into()))?;
+        Ok(saved.push_enabled)
+    }
+
     /// Whether message notifications make a sound (desktop; default on).
     pub fn notification_sound_enabled(&self) -> bool {
         use crate::storage::repositories::settings_repo::{keys, SettingsRepository};

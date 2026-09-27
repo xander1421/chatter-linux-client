@@ -389,7 +389,7 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore = "needs ANTHROPIC_API_KEY"]
+    #[ignore = "requires network access to the live Anthropic API (uses an intentionally invalid key)"]
     async fn live_bad_key_is_unavailable_not_inference_failure() {
         let backend = AnthropicBackend::new("sk-ant-invalid", Duration::from_secs(15));
         let err = backend

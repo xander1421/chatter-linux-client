@@ -22,6 +22,7 @@ pub(crate) fn wire_gif_clicked(window: &MainWindow, ui_ctx: &Arc<ChatterClient>)
             if let Some(w) = weak.upgrade() {
                 if w.get_composer_gif_picker_visible() {
                     w.set_composer_gif_picker_loading(true);
+                    w.set_composer_gif_picker_failed(false);
                     
                     let weak_load = weak.clone();
                     let ui_ctx_load = ui_ctx.clone();
@@ -124,6 +125,7 @@ pub(crate) fn wire_gif_search(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) 
 
         if let Some(w) = weak.upgrade() {
             w.set_composer_gif_picker_loading(true);
+            w.set_composer_gif_picker_failed(false);
             crate::bin_ui::gif_state::clear_picker_gifs();
         }
 
@@ -195,10 +197,24 @@ async fn fetch_full_gif_frames(id: String, url: &str, ui_ctx: &std::sync::Arc<Ch
 }
 
 fn load_gif_previews(
-    raw_gifs: Vec<RawGifData>,
+    raw_gifs: Result<Vec<RawGifData>, chatter_core::error::NetworkError>,
     weak_window: slint::Weak<MainWindow>,
     ui_ctx: std::sync::Arc<ChatterClient>,
 ) {
+    let raw_gifs = match raw_gifs {
+        Ok(gifs) => gifs,
+        Err(error) => {
+            tracing::warn!(%error, "GIF request failed");
+            let _ = slint::invoke_from_event_loop(move || {
+                if let Some(w) = weak_window.upgrade() {
+                    w.set_composer_gif_picker_results(ModelRc::new(VecModel::<GifData>::default()));
+                    w.set_composer_gif_picker_failed(true);
+                    w.set_composer_gif_picker_loading(false);
+                }
+            });
+            return;
+        }
+    };
     let raw_gifs_clone: Vec<_> = raw_gifs
         .iter()
         .map(|(id, _, full_url, width, height)| {
@@ -222,6 +238,7 @@ fn load_gif_previews(
                     .collect();
                 let model = Rc::new(VecModel::from(gifs));
                 w.set_composer_gif_picker_results(ModelRc::from(model));
+                w.set_composer_gif_picker_failed(false);
                 w.set_composer_gif_picker_loading(false);
             }
         });
@@ -268,24 +285,29 @@ fn load_gif_previews(
     }
 }
 
-async fn fetch_trending_gifs_raw(ui_ctx: &ChatterClient) -> Vec<RawGifData> {
-    ui_ctx.trending_gifs(20).await
+async fn fetch_trending_gifs_raw(
+    ui_ctx: &ChatterClient,
+) -> Result<Vec<RawGifData>, chatter_core::error::NetworkError> {
+    Ok(ui_ctx.trending_gifs(20).await?
         .into_iter()
         .map(|r| {
             let width = r.dims.first().copied().unwrap_or(0) as u32;
             let height = r.dims.get(1).copied().unwrap_or(0) as u32;
             (r.id, r.preview_url, r.url, width, height)
         })
-        .collect()
+        .collect())
 }
 
-async fn search_gifs_raw(query: &str, ui_ctx: &ChatterClient) -> Vec<RawGifData> {
-    ui_ctx.search_gifs(query, 20).await
+async fn search_gifs_raw(
+    query: &str,
+    ui_ctx: &ChatterClient,
+) -> Result<Vec<RawGifData>, chatter_core::error::NetworkError> {
+    Ok(ui_ctx.search_gifs(query, 20).await?
         .into_iter()
         .map(|r| {
             let width = r.dims.first().copied().unwrap_or(0) as u32;
             let height = r.dims.get(1).copied().unwrap_or(0) as u32;
             (r.id, r.preview_url, r.url, width, height)
         })
-        .collect()
+        .collect())
 }

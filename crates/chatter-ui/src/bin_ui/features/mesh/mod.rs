@@ -178,18 +178,26 @@ pub fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
         let weak = window.as_weak();
         let ui_ctx = ui_ctx.clone();
         global.on_panic_wipe(move || {
-            let Some(w) = weak.upgrade() else { return };
-            let wiped = core_api::panic_wipe(&ui_ctx);
-            clear_active(&w);
-            refresh_rows(&w, &ui_ctx);
-            if let Err(error) = &wiped {
-                tracing::warn!(%error, "mesh: panic wipe incomplete");
-                w.global::<MeshGlobal>()
-                    .set_notice(format!("Mesh wipe incomplete: {error}").into());
-            } else {
-                w.global::<MeshGlobal>().set_notice("Mesh data wiped from this device.".into());
-            }
-            w.global::<MeshGlobal>().invoke_set_mesh_on(false);
+            let weak = weak.clone();
+            let ui_ctx = ui_ctx.clone();
+            tokio::spawn(async move {
+                // Stop ingress before clearing pins so an in-flight announce
+                // cannot write them back while the wipe is in progress.
+                ui_ctx.stop_mesh().await;
+                let wiped = core_api::panic_wipe(&ui_ctx);
+                run_ui!(weak, |w| {
+                    clear_active(&w);
+                    refresh_rows(&w, &ui_ctx);
+                    if let Err(error) = &wiped {
+                        tracing::warn!(%error, "mesh: panic wipe incomplete");
+                        w.global::<MeshGlobal>()
+                            .set_notice(format!("Mesh wipe incomplete: {error}").into());
+                    } else {
+                        w.global::<MeshGlobal>().set_notice("Mesh data wiped from this device.".into());
+                    }
+                    w.global::<MeshGlobal>().invoke_set_mesh_on(false);
+                });
+            });
         });
     }
 
@@ -207,6 +215,24 @@ pub fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                 w.global::<MeshGlobal>().set_mesh_on(wanted);
             }
             tokio::spawn(async move {
+                #[cfg(target_os = "android")]
+                if wanted {
+                    if !crate::platform::android::permissions::ensure_mesh().await {
+                        run_ui!(weak, |w| {
+                            w.global::<MeshGlobal>().set_mesh_on(false);
+                            w.global::<MeshGlobal>().set_notice("Bluetooth permissions are required for mesh.".into());
+                        });
+                        return;
+                    }
+                    // A radio start refused for missing permissions ends its runtime.
+                    if !core_api::status(&ui_ctx).radio_running {
+                        ui_ctx.stop_mesh().await;
+                    }
+                    if !crate::platform::android::permissions::mesh_location_enabled() {
+                        run_ui!(weak, |w| w.global::<MeshGlobal>().set_notice(
+                            "Turn on Location in Android settings to discover nearby Bluetooth peers.".into()));
+                    }
+                }
                 let outcome = ui_ctx.set_mesh_enabled(wanted).await;
                 let ui_ctx = ui_ctx.clone();
                 let _ = slint::invoke_from_event_loop(move || {
@@ -399,6 +425,11 @@ fn handle_event(event: MeshEvent, weak: &slint::Weak<MainWindow>, ui_ctx: &Arc<C
         MeshEvent::GeohashJoined(_) | MeshEvent::GeohashLeft(_) => {
             let ui_ctx = ui_ctx.clone();
             run_ui!(weak, |w| refresh_rows(&w, &ui_ctx));
+        }
+        MeshEvent::IdentityKeyChanged { peer } => {
+            run_ui!(weak, |w| w.global::<MeshGlobal>().set_notice(
+                format!("Identity key change refused for {peer}. A new identity appears as a new peer.").into()
+            ));
         }
         MeshEvent::Degraded(reason) => {
             run_ui!(weak, |w| w

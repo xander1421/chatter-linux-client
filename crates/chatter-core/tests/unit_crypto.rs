@@ -3,8 +3,8 @@
 //! Tests Signal Protocol components, key generation, session management,
 //! and encryption/decryption flows using the testing framework.
 
-mod common;
-mod framework;
+use crate::common;
+use crate::framework;
 
 use framework::prelude::*;
 

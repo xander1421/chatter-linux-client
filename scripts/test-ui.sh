@@ -12,8 +12,8 @@
 #       imports that never render, callbacks nothing invokes, and right-click
 #       menus a finger cannot open.
 #
-# SLINT_EMIT_DEBUG_INFO=1 is REQUIRED: the ElementHandle query API is inert
-# without Slint debug info compiled into the generated code.
+# Host debug builds always include Slint debug info for ElementHandle queries
+# (chatter-ui/build.rs); no environment toggle or separate rebuild is needed.
 #
 # --features chatter-core/insecure-test-anchors is REQUIRED: integration tests
 # link WITHOUT `cfg(test)` set on chatter-core, so its `cfg!(test)` dev-key
@@ -55,7 +55,7 @@ echo "=================================================================="
 # runs are incremental. Filter the benign per-query debug-info notice.
 FEATURES=chatter-core/dev-trust-root,chatter-core/insecure-test-anchors
 
-SLINT_EMIT_DEBUG_INFO=1 cargo test -p chatter-ui --features $FEATURES --test ui_wiring 2>&1 \
+cargo test -p chatter-ui --features $FEATURES --test ui_wiring 2>&1 \
     | grep -v 'requires the presence of debug info'
 TEST_RC=${PIPESTATUS[0]}
 
@@ -65,7 +65,7 @@ echo " VALIDATED-UI  ·  LAYER 1 — geometry/layout suite"
 echo "=================================================================="
 # Separate binary: the integration testing backend (real layout passes) is
 # once-per-process and ui_wiring already claims it.
-SLINT_EMIT_DEBUG_INFO=1 cargo test -p chatter-ui --features $FEATURES --test ui_layout 2>&1 \
+cargo test -p chatter-ui --features $FEATURES --test ui_layout 2>&1 \
     | grep -v 'requires the presence of debug info'
 LAYOUT_RC=${PIPESTATUS[0]}
 
@@ -76,7 +76,7 @@ echo "=================================================================="
 # Third binary for the same once-per-process reason. This is the layer that
 # answers the question 43/43 green could not: does the main view actually
 # render its columns, or is the app a blank screen with live callbacks?
-SLINT_EMIT_DEBUG_INFO=1 cargo test -p chatter-ui --features $FEATURES --test ui_render 2>&1 \
+cargo test -p chatter-ui --features $FEATURES --test ui_render 2>&1 \
     | grep -v 'requires the presence of debug info'
 RENDER_RC=${PIPESTATUS[0]}
 

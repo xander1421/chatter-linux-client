@@ -3,7 +3,7 @@
 //! Tests user profile operations, presence, friends, blocking,
 //! and navigation history.
 
-mod common;
+use crate::{common, skip_if_no_server};
 
 use chatter_core::network::grpc::{ChannelClient, UserClient};
 use chatter_core::proto::chat_v1::{friend_requests_filter, ChannelType, UserPresence};

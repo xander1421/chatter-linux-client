@@ -248,6 +248,7 @@ impl MeshState {
                     nickname: record.nickname,
                 })
                 .collect();
+            disambiguate_nicknames(&mut peers);
             // Deterministic order so the UI never re-sorts, and so two renders of
             // an unchanged mesh are identical.
             peers.sort_by(|a, b| a.peer.cmp(&b.peer));
@@ -420,6 +421,26 @@ mod tests {
     }
 
     #[test]
+    fn colliding_nicknames_use_stable_fingerprint_suffixes() {
+        let state = MeshState::new(peer("aaaaaaaaaaaaaaaa"));
+        let first = peer("1111111111111111");
+        let second = peer("2222222222222222");
+        state.with(|s| {
+            for (id, key) in [(&first, [1u8; 32]), (&second, [2u8; 32])] {
+                let announce = chatter_mesh::tlv::announce::AnnouncementPacket::new(
+                    "Alice".into(), key.to_vec(), vec![3; 32], None, None, None,
+                );
+                s.peers.upsert_verified_announce(id, &announce, true, now_millis());
+            }
+        });
+        let peers = state.peers();
+        assert_eq!(peers[0].nickname, format!("Alice#{}", &chatter_mesh_noise::fingerprint_of(&[1; 32])[..4]));
+        assert_eq!(peers[1].nickname, format!("Alice#{}", &chatter_mesh_noise::fingerprint_of(&[2; 32])[..4]));
+        state.with(|s| { s.peers.remove(&second); });
+        assert_eq!(state.peers()[0].nickname, "Alice");
+    }
+
+    #[test]
     fn a_fresh_state_knows_nothing() {
         let state = MeshState::new(peer("aaaaaaaaaaaaaaaa"));
         let other = peer("bbbbbbbbbbbbbbbb");
@@ -518,5 +539,22 @@ mod tests {
         assert_eq!(state.dm_origin(&peer(&key)).as_deref(), Some("u4pruy"));
         assert_eq!(state.nickname(&peer(&key)).as_deref(), Some("wanderer"));
         assert!(state.knows_peer(&peer(&key)));
+    }
+}
+
+
+// A fingerprint belongs to the identity, so a collision suffix stays stable
+// when peer-list ordering changes.
+fn disambiguate_nicknames(peers: &mut [MeshPeer]) {
+    let mut counts = std::collections::BTreeMap::new();
+    for peer in peers.iter() {
+        *counts.entry(peer.nickname.clone()).or_insert(0usize) += 1;
+    }
+    for peer in peers {
+        if counts.get(&peer.nickname).copied().unwrap_or(0) > 1 {
+            let fingerprint = peer.fingerprint.as_deref().unwrap_or(peer.peer.as_str());
+            let suffix: String = fingerprint.chars().filter(|c| c.is_ascii_hexdigit()).take(4).collect();
+            peer.nickname = format!("{}#{}", peer.nickname, suffix.to_lowercase());
+        }
     }
 }

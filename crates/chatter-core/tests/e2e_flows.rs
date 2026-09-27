@@ -3,8 +3,8 @@
 //! Tests complete user workflows from registration through
 //! messaging, using the full testing framework stack.
 
-mod common;
-mod framework;
+use crate::common;
+use crate::framework;
 
 use framework::prelude::*;
 use std::time::Duration;

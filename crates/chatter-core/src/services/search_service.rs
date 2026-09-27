@@ -440,6 +440,7 @@ fn proto_to_domain_message(proto: &chat_v1::Message) -> Result<Message, SearchEr
         mentioned_integrations,
         targets_ai_bot: proto.targets_ai_bot,
         delivery_status: String::new(),
+        failure_reason: None,
     })
 }
 

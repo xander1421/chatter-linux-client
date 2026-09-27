@@ -200,6 +200,7 @@ mod tests {
             emoji: emoji.to_string(),
             add,
             proof_of_work: vec![],
+            reactor_id: TEST_AUTHOR.to_string(),
         }
     }
 

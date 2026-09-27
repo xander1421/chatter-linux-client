@@ -37,7 +37,7 @@ use chatter_mesh::tlv::hex_encode;
 use chatter_mesh::tlv::private_message::PrivateMessagePacket;
 use chatter_mesh::tlv::request_sync::RequestSyncPacket;
 use chatter_mesh_link::announce::{
-    AnnounceLinkContext, AnnouncePreflightConfig, evaluate_announce,
+    AnnounceDistrust, AnnounceLinkContext, AnnouncePreflightConfig, evaluate_announce,
 };
 use chatter_mesh_link::backpressure::{
     InboundAppend, InboundAppendMetadata, InboundChunk, InboundLimits,
@@ -56,6 +56,8 @@ use chatter_mesh_noise::seal::open_courier;
 use chatter_mesh_noise::sign::{sign_packet, verify_packet};
 use chatter_mesh_noise::{MeshIdentity, NoiseError};
 use chatter_mesh_store::CourierTier;
+use chatter_mesh_store::storage::{Storage, StorageKey};
+use chatter_mesh_store::outbox::Sealer;
 use chatter_mesh_store::archive::GossipMessageArchive;
 use chatter_mesh_store::courier::{AnnounceIngress, CourierStore};
 use chatter_mesh_store::outbox::AckKind;
@@ -136,6 +138,8 @@ const MANIFEST_REPEAT_SECS: u64 = 60;
 
 /// The radio loop.
 pub struct BleRuntime {
+    storage: SharedStorage,
+    sealer: Arc<dyn Sealer>,
     radio: Arc<dyn MeshLink>,
     state: Arc<MeshState>,
     /// Read only, so a status event reports both transports rather than
@@ -179,6 +183,7 @@ impl BleRuntime {
         events: MeshEvents,
         router: Arc<RouterHandle>,
         storage: SharedStorage,
+        sealer: Arc<dyn Sealer>,
     ) -> Self {
         let now = now_secs();
         let archive = GossipMessageArchive::new(Arc::new(storage.clone()));
@@ -188,8 +193,10 @@ impl BleRuntime {
             Some(archive),
             now,
         );
-        let couriers = CourierStore::new(storage);
+        let couriers = CourierStore::new(storage.clone());
         Self {
+            storage,
+            sealer,
             radio,
             state,
             nostr_state,
@@ -211,12 +218,32 @@ impl BleRuntime {
         }
     }
 
+    fn restore_pins(&self) -> Result<(), String> {
+        if let Some(sealed) = self.storage.load(StorageKey::PeerPins).map_err(|e| e.to_string())? {
+            let bytes = self.sealer.open(&sealed).map_err(|e| e.to_string())?;
+            self.state.with(|state| state.peers.restore_pins(&bytes))
+                .map_err(|_| "malformed peer pins".to_string())?;
+        }
+        Ok(())
+    }
+
+    #[cfg(test)]
+    fn save_pins(&self) -> Result<(), String> {
+        let bytes = self.state.with(|state| state.peers.pins_to_bytes());
+        let sealed = self.sealer.seal(&bytes).map_err(|e| e.to_string())?;
+        self.storage.save(StorageKey::PeerPins, &sealed).map_err(|e| e.to_string())
+    }
+
     /// Start the radio and run until the command channel or the radio closes.
     ///
     /// The receiver is a parameter rather than a field so that the `select!`
     /// branch reading it does not borrow the whole runtime, which every handler
     /// needs mutably.
     pub async fn run(mut self, mut commands: UnboundedReceiver<BleCommand>) {
+        if let Err(error) = self.restore_pins() {
+            self.degraded(format!("Peer identity pins could not be restored: {error}"));
+            return;
+        }
         // Before `start`, because an advertiser already running will not pick it
         // up. This is what lets peers recognise us across a private address
         // rotation instead of spending a connection to find out who we are.
@@ -642,7 +669,9 @@ impl BleRuntime {
 
         let retainable = self.dispatch(link, &packet, &claimed, now_s).await;
 
-        if packet.is_broadcast() && retainable {
+        // Refused identity-control packets must not be propagated to peers.
+        if !retainable { return; }
+        if packet.is_broadcast() {
             self.gossip.on_public_packet_seen(&packet, now_s);
         }
         self.relay(link, &packet, &local).await;
@@ -655,7 +684,7 @@ impl BleRuntime {
     /// means a hostile peer cannot make us descend at all.
     ///
     /// Returns whether the packet may be retained and re-gossiped. Only an
-    /// announce ever says no — see [`Self::handle_typed`].
+    /// announce or unverified Leave says no — see [`Self::handle_typed`].
     async fn dispatch(
         &mut self,
         link: &LinkId,
@@ -704,6 +733,12 @@ impl BleRuntime {
             Some(MessageType::Announce) => return self.on_announce(link, packet, claimed).await,
             Some(MessageType::Message) => self.on_public_message(packet, claimed),
             Some(MessageType::Leave) => {
+                let verified = self.state.with(|state| {
+                    state.peers.pinned(claimed)
+                        .and_then(|pin| <[u8; 32]>::try_from(pin.signing_public_key.as_slice()).ok())
+                        .is_some_and(|key| verify_packet(packet, &key))
+                });
+                if !verified { return false; }
                 self.state.with(|state| {
                     state.peers.remove(claimed);
                     state.sessions.forget(claimed);
@@ -749,14 +784,15 @@ impl BleRuntime {
         let (presence, link_bound_elsewhere, existing_noise_key, existing_signing_key) =
             self.state.with(|state| {
                 let record = state.peers.info(claimed);
+                let pin = state.peers.pinned(claimed);
                 (
                     state.links.presence(claimed),
                     state
                         .links
                         .peer_for(link)
                         .is_some_and(|bound| bound != claimed),
-                    record.and_then(|r| r.noise_public_key.clone()),
-                    record.and_then(|r| r.signing_public_key.clone()),
+                    pin.map(|p| p.noise_public_key.clone()).or_else(|| record.and_then(|r| r.noise_public_key.clone())),
+                    pin.map(|p| p.signing_public_key.clone()).or_else(|| record.and_then(|r| r.signing_public_key.clone())),
                 )
             });
 
@@ -813,6 +849,9 @@ impl BleRuntime {
         // an attacker-chosen noise key and nickname, so accepting it is exactly the
         // identity-poisoning their handler exists to prevent.
         if !accepted.should_upsert_peer() {
+            if matches!(accepted.trust.distrust(), Some(AnnounceDistrust::KeyMismatch | AnnounceDistrust::SigningKeyMismatch)) {
+                self.events.send(MeshEvent::IdentityKeyChanged { peer: claimed.clone() });
+            }
             tracing::debug!(
                 target: "mesh::ble",
                 peer = %claimed,
@@ -822,7 +861,24 @@ impl BleRuntime {
             return false;
         }
 
+        if !self.state.with(|state| state.peers.can_pin(claimed)) {
+            self.degraded("Peer identity storage is full; new peers are refused.".to_string());
+            return false;
+        }
         let announcement = accepted.announcement.clone();
+        // Commit the pin before exposing the peer as trusted. A failed write
+        // leaves no accepted identity that would silently lose its pin on restart.
+        let persisted = self.state.with(|state| -> Result<(), String> {
+            if state.peers.pinned(claimed).is_some() { return Ok(()); }
+            let mut candidate = state.peers.clone();
+            candidate.upsert_verified_announce(claimed, &announcement, false, now_ms);
+            let sealed = self.sealer.seal(&candidate.pins_to_bytes()).map_err(|e| e.to_string())?;
+            self.storage.save(StorageKey::PeerPins, &sealed).map_err(|e| e.to_string())
+        });
+        if let Err(error) = persisted {
+            self.degraded(format!("Peer identity pin could not be saved: {error}"));
+            return false;
+        }
         let direct = VerifiedDirectAnnounce::from_packet(
             claimed.clone(),
             packet,
@@ -3401,6 +3457,7 @@ mod tests {
             events,
             router,
             storage,
+            Arc::new(NoopSealer),
         );
         (runtime, radio, state, timeline)
     }
@@ -3427,6 +3484,27 @@ mod tests {
                 .upsert_verified_announce(peer, &announcement, true, now_millis());
         });
         identity
+    }
+
+    #[tokio::test]
+    async fn leave_requires_the_pinned_signature_and_preserves_the_pin() {
+        let (mut runtime, _radio, state) = runtime();
+        let peer = PeerId::from_str("bbbbbbbbbbbbbbbb");
+        let identity = register_verified_peer(&state, &peer, "Alice");
+        let attacker = MeshIdentity::generate(&mut OsRng);
+        let link = LinkId::new("/mock/leave");
+        let mut packet = BitchatPacket::new(
+            MessageType::Leave, peer.to_routing_bytes().unwrap(), None,
+            now_millis(), Vec::new(), chatter_mesh::relay::MESSAGE_TTL_DEFAULT,
+        );
+        assert!(!runtime.handle_typed(&link, &packet, &peer).await);
+        packet.signature = Some(sign_packet(&attacker, &packet).unwrap());
+        assert!(!runtime.handle_typed(&link, &packet, &peer).await);
+        assert!(state.with(|s| s.peers.info(&peer).is_some()));
+        packet.signature = Some(sign_packet(&identity, &packet).unwrap());
+        assert!(runtime.handle_typed(&link, &packet, &peer).await);
+        assert!(state.with(|s| s.peers.info(&peer).is_none()));
+        assert!(state.with(|s| s.peers.pinned(&peer).is_some()));
     }
 
     /// One file transfer on the wire, optionally signed.
@@ -3617,11 +3695,20 @@ mod tests {
             inner.max_write.insert(attacker_link.clone(), 512);
         });
 
+        runtime.save_pins().expect("save pins");
+        state.with(|inner| {
+            inner.peers.clear_pins();
+            inner.peers.remove(&victim);
+        });
+        runtime.restore_pins().expect("restore pins");
+        assert!(state.with(|inner| inner.peers.info(&victim).is_none()));
+        let mut events = runtime.events.subscribe();
         let accepted = runtime.on_announce(&attacker_link, &forged_packet, &victim).await;
+        assert!(matches!(events.try_recv(), Ok(MeshEvent::IdentityKeyChanged { peer }) if peer == victim));
 
         assert!(!accepted, "the forged announce must be refused");
         assert_eq!(
-            state.with(|inner| inner.peers.info(&victim).and_then(|r| r.signing_public_key.clone())),
+            state.with(|inner| inner.peers.pinned(&victim).map(|r| r.signing_public_key.clone())),
             Some(pinned_signing_key),
             "the victim's pinned signing key must survive the attempt"
         );

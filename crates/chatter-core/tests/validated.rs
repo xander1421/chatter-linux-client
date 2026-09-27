@@ -4855,8 +4855,11 @@ async fn v16_message_roundtrip_fidelity() {
     let big = client_a
         .send_text(ActiveConversation::ServerDm { peer_id: uid_b }, &one_mb)
         .await;
+    // A friend DM the server refuses is stored as a "failed" bubble
+    // (`SendResult::send_error`), not returned as `Err` — either way it was
+    // not delivered.
     assert!(
-        big.is_err(),
+        big.as_ref().map_or(true, |r| r.send_error.is_some()),
         "SIZE CAP: a 1 MB payload was ACCEPTED at send. Expected rejection by the \
          sealed-body cap (MaxSealedBodySize=8192, sealed_sender.go:44) behind the \
          1 MiB Connect request cap (handlers.go:38). If accepted, probe whether B \
@@ -9287,28 +9290,11 @@ async fn v41_group_reply_carries_quote_to_recipient() {
     client_b.shutdown().await;
 }
 
-/// V42 — 1:1 DM read receipt LIVE-REFRESHES the sender (emits a DomainEvent).
-///
-/// THE GAP (MISSING-FEATURES #8, live-refresh half): V39 proved the DB
-/// `delivery_status` flips to "read" on the 1:1 ServerDm path. But the
-/// `InboxEvent::DmReceipt` handler (`inbox_processor.rs`) updated the row
-/// SILENTLY — it emitted no `DomainEvent`, so a live UI kept showing the old
-/// checkmark until a manual re-query. The channel and anon receipt paths emit
-/// `DomainEvent::MessagesRead`; the ServerDm path did not.
-///
-/// THE FIX (this test): the DmReceipt handler now emits the SAME
-/// `DomainEvent::MessagesRead` (read/viewed) / `MessagesDelivered` (delivery)
-/// the other paths do, so the sender's bubble refreshes live.
-///
-/// Proof (asserts on the SENDER's live event stream, scoped to this run):
-///   POSITIVE CONTROL — A sends B a DM and B stores it (so the read below is
-///     not vacuous).
-///   THE FIX — B reads A's DM; A (the SENDER) receives a
-///     `DomainEvent::MessagesRead` naming B as the reader, on A's live bus —
-///     NOT from a re-query.
-///
-/// MUTATION (RED): delete the `emit_domain(MessagesRead)` in the DmReceipt
-/// handler → A's stream never sees the event → the wait times out → RED.
+/// V42: a peer read receipt emits persisted aggregate state on the sender's
+/// live event bus. CX10 keys this event by message ID and conversation, so a
+/// timestamp collision or a partial group receipt cannot light another bubble.
+/// Removing MessageDeliveryChanged emission must time out this live proof.
+
 #[tokio::test]
 async fn v42_dm_read_receipt_live_refreshes_sender() {
     skip_if_no_server!();
@@ -9341,25 +9327,13 @@ async fn v42_dm_read_receipt_live_refreshes_sender() {
     let read_ts = a_reads_bs_message(&client_b, uid_a, &conv_on_b, &marker).await;
     println!("  positive control: B stored + read A's DM (ts={read_ts})");
 
-    // THE FIX: A (the SENDER) receives a live MessagesRead naming B as reader.
-    let reader = uid_b;
-    let got = wait_for_event(&mut events_a, EVENT_TIMEOUT, move |e| matches!(
-        e, DomainEvent::MessagesRead { reader_id, .. } if *reader_id == reader
+    let conversation = ChannelId::from(uid_b);
+    let got = wait_for_event(&mut events_a, EVENT_TIMEOUT, move |event| matches!(
+        event, DomainEvent::MessageDeliveryChanged { channel_id, status, .. }
+            if *channel_id == conversation && status == "read"
     )).await;
-    assert!(
-        got.is_some(),
-        "DM READ RECEIPT DID NOT LIVE-REFRESH: B read A's DM, but A's event bus never saw a \
-         DomainEvent::MessagesRead naming B within {EVENT_TIMEOUT:?}. The DmReceipt handler \
-         updated the DB silently (finding #8 live-refresh half) — the sender's checkmark would \
-         only update on a manual re-query."
-    );
-    println!("  the fix: A received a live DomainEvent::MessagesRead naming B as reader");
-
-    println!(
-        "\n  V42 PASS — a 1:1 DM read receipt now LIVE-REFRESHES the sender: B reading A's DM \
-         emits DomainEvent::MessagesRead on A's bus (not just a silent DB flip). Closes the \
-         live-refresh half of MISSING-FEATURES #8. See VALIDATED.md.\n"
-    );
+    assert!(got.is_some(), "B read A's DM but no persisted read status reached A's live bus");
+    println!("V42 PASS: persisted DM read status live-refreshes the sender");
 
     client_a.shutdown().await;
     client_b.shutdown().await;

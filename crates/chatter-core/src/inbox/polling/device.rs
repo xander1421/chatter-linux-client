@@ -566,6 +566,7 @@ async fn process_sender_key_message(
                         dispatch_control_content(
                             inner,
                             sender_id,
+                            msg.source_device_id,
                             &msg.message_guid,
                             msg.server_timestamp,
                             event_tx,
@@ -1131,11 +1132,12 @@ async fn process_identified_sender_message(
             );
             stats.write().messages_failed += 1;
         }
-        Ok(SealedSenderResult::ControlContent { sender_id: actual_sender, content }) => {
+        Ok(SealedSenderResult::ControlContent { sender_id: actual_sender, sender_device_id, content }) => {
             if let Some(inner) = content.content {
                 dispatch_control_content(
                     inner,
                     &actual_sender,
+                    sender_device_id,
                     &msg.message_guid,
                     msg.server_timestamp,
                     event_tx,
@@ -1517,11 +1519,12 @@ async fn process_sealed_sender_message(
             );
             stats.write().messages_failed += 1;
         }
-        Ok(SealedSenderResult::ControlContent { sender_id: actual_sender, content }) => {
+        Ok(SealedSenderResult::ControlContent { sender_id: actual_sender, sender_device_id, content }) => {
             if let Some(inner) = content.content {
                 dispatch_control_content(
                     inner,
                     &actual_sender,
+                    sender_device_id,
                     &msg.message_guid,
                     msg.server_timestamp,
                     event_tx,
@@ -1579,11 +1582,14 @@ async fn process_sealed_sender_message(
         }
         // SENDER half of the 1:1 self-heal: a peer's DecryptionErrorMessage
         // about a message we sent was processed (session archived when
-        // `archived`). Surface on the domain bus for observability.
+        // `archived`). Surface on the domain bus for observability, and have
+        // the InboxEventProcessor send the message again — archived or not,
+        // as Signal-Desktop's `onRetryRequest` does.
         Ok(SealedSenderResult::SessionHealed {
             peer_id,
             peer_device_id,
             archived,
+            timestamp_ms,
         }) => {
             if let Some(tx) = domain_tx {
                 let _ = tx.send(DomainEvent::DmSessionHealed {
@@ -1592,6 +1598,11 @@ async fn process_sealed_sender_message(
                     archived,
                 });
             }
+            let _ = event_tx.send(InboxEvent::DmResendRequested {
+                peer_id,
+                peer_device_id,
+                timestamp_ms,
+            });
             let _ = event_tx.send(InboxEvent::MessageProcessed {
                 message_id: msg.message_guid.clone(),
             });
@@ -1846,6 +1857,7 @@ async fn process_sealed_sender_message(
 pub fn dispatch_control_content(
     inner: content::Content,
     sender_id: &UserId,
+    sender_device_id: u32,
     message_guid: &str,
     // When the server received the envelope (ns); ages call offers.
     server_timestamp: u64,
@@ -2083,6 +2095,7 @@ pub fn dispatch_control_content(
             if receipt.channel_id.is_empty() {
                 // Empty channel_id => channel-free DM (ServerDm) receipt.
                 let _ = event_tx.send(InboxEvent::DmReceipt {
+                    sender_device_id,
                     peer_id: *sender_id,
                     receipt_type: receipt.r#type,
                     timestamps: receipt.timestamps,
@@ -2096,6 +2109,7 @@ pub fn dispatch_control_content(
                     "Channel receipt received"
                 );
                 let _ = event_tx.send(InboxEvent::ChannelReceipt {
+                    sender_device_id,
                     channel_id,
                     sender_id: *sender_id,
                     receipt_type: receipt.r#type,
@@ -2205,7 +2219,7 @@ mod call_control_tests {
         let caller = UserId::new();
         let offer = crate::services::build_call_key_offer("call-1", [7u8; 32], "", "");
 
-        dispatch_control_content(offer.content.unwrap(), &caller, "guid", 42, &event_tx, &stats);
+        dispatch_control_content(offer.content.unwrap(), &caller, 1, "guid", 42, &event_tx, &stats);
 
         match event_rx.try_recv().expect("an event") {
             InboxEvent::CallKeyOfferReceived { peer_id, call_id, ephemeral_public_key, call_type, channel_id, timestamp } => {

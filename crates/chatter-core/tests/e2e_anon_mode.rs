@@ -25,8 +25,7 @@
 //!        cargo test -p chatter-core --features testing \
 //!        --test e2e_anon_mode -- --nocapture --test-threads=1`
 
-#[macro_use]
-mod common;
+use crate::{common, skip_if_no_server};
 
 use std::sync::Arc;
 use std::time::{Duration, Instant};

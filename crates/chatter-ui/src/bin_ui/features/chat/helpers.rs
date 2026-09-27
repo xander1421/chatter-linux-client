@@ -105,6 +105,7 @@ pub fn build_own_message_item(
         reply_to_thumbnail_height,
         show_sender: true,
         delivery_status: delivery_status.into(),
+        failure_reason: Default::default(),
         is_pinned: false,
         is_call: false,
         call_type: "".into(),

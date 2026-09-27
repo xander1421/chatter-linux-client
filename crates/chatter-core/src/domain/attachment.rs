@@ -208,10 +208,8 @@ impl SharedCategory {
             return Self::Gif;
         }
         if meta.is_audio() {
-            // A waveform is only ever attached by the in-app recorder, so it
-            // is the one honest voice-note marker we have. The proto's
-            // `voice_note` bool is written `false` everywhere and read
-            // nowhere.
+            // Stored attachment metadata classifies voice by waveform; the
+            // recorder supplies it even without a platform waveform decoder.
             return if meta.waveform_samples.is_some() {
                 Self::Voice
             } else {

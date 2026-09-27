@@ -106,11 +106,11 @@ impl UnifiedMessageRepository {
                 reaction_counts_blob, current_user_reactions_blob,
                 mentioned_integrations_blob, targets_ai_bot, delivery_status,
                 reply_to_author_id, reply_to_text,
-                reply_to_thumbnail, reply_to_thumbnail_mime
+                reply_to_thumbnail, reply_to_thumbnail_mime, failure_reason
             ) VALUES (
                 ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10,
                 ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19,
-                ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28
+                ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29
             )",
             params![
                 message.id.to_string(),
@@ -141,6 +141,7 @@ impl UnifiedMessageRepository {
                 message.reply_to_text.as_deref(),
                 message.reply_to_thumbnail.as_deref(),
                 message.reply_to_thumbnail_mime.as_deref(),
+                message.failure_reason.as_deref(),
             ],
         )?;
         index_shared_content(&conn, message);
@@ -170,11 +171,11 @@ impl UnifiedMessageRepository {
                 reaction_counts_blob, current_user_reactions_blob,
                 mentioned_integrations_blob, targets_ai_bot, delivery_status,
                 reply_to_author_id, reply_to_text,
-                reply_to_thumbnail, reply_to_thumbnail_mime
+                reply_to_thumbnail, reply_to_thumbnail_mime, failure_reason
             ) VALUES (
                 ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10,
                 ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19,
-                ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28
+                ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29
             )",
             params![
                 message.id.to_string(),
@@ -205,6 +206,7 @@ impl UnifiedMessageRepository {
                 message.reply_to_text.as_deref(),
                 message.reply_to_thumbnail.as_deref(),
                 message.reply_to_thumbnail_mime.as_deref(),
+                message.failure_reason.as_deref(),
             ],
         )?;
         if rows > 0 {
@@ -341,8 +343,9 @@ impl UnifiedMessageRepository {
                 reply_to_author_id = COALESCE(?18, reply_to_author_id),
                 reply_to_text = COALESCE(?19, reply_to_text),
                 reply_to_thumbnail = COALESCE(?20, reply_to_thumbnail),
-                reply_to_thumbnail_mime = COALESCE(?21, reply_to_thumbnail_mime)
-             WHERE id = ?22",
+                reply_to_thumbnail_mime = COALESCE(?21, reply_to_thumbnail_mime),
+                failure_reason = ?22
+             WHERE id = ?23",
             params![
                 content_type_discriminant(&message.content),
                 content_json,
@@ -365,6 +368,7 @@ impl UnifiedMessageRepository {
                 message.reply_to_text.as_deref(),
                 message.reply_to_thumbnail.as_deref(),
                 message.reply_to_thumbnail_mime.as_deref(),
+                message.failure_reason.as_deref(),
                 message.id.to_string(),
             ],
         )?;
@@ -639,19 +643,18 @@ impl UnifiedMessageRepository {
         conversation_type: &ConversationType,
     ) -> Result<UnreadAnchor, StorageError> {
         let conn = self.db.read_connection()?;
-        let anchor = conn.query_row(
-            "SELECT COUNT(*), MIN(sent_at) FROM messages \
-             WHERE conversation_id = ?1 AND conversation_type = ?2 \
-               AND is_read = 0 AND is_deleted = 0",
-            params![conversation_id.to_string(), conversation_type.as_str()],
-            |row| {
-                Ok(UnreadAnchor {
-                    unread_count: row.get::<_, i64>(0)? as u32,
-                    first_unread_sent_at: row.get::<_, Option<i64>>(1)?.map(|v| v as u64),
-                })
-            },
-        )?;
-        Ok(anchor)
+        let unread_sent_at = conn
+            .prepare(
+                "SELECT sent_at FROM messages \
+                 WHERE conversation_id = ?1 AND conversation_type = ?2 \
+                   AND is_read = 0 AND is_deleted = 0 \
+                 ORDER BY sent_at",
+            )?
+            .query_map(params![conversation_id.to_string(), conversation_type.as_str()], |row| {
+                row.get::<_, i64>(0).map(|v| v as u64)
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(UnreadAnchor { unread_count: unread_sent_at.len() as u32, unread_sent_at })
     }
 
     /// Get the count of unread messages in a conversation.
@@ -1387,7 +1390,9 @@ impl UnifiedMessageRepository {
     ) -> Result<bool, StorageError> {
         let conn = self.db.connection()?;
         // Step 1: Find message IDs matching this timestamp (read-only).
-        let mut stmt = conn.prepare("SELECT id FROM messages WHERE sent_at = ?1")?;
+        // Identity-bearing server receipts use MessageReceiptRepository. Anonymous
+        // control events cannot acknowledge a server message with the same time.
+        let mut stmt = conn.prepare("SELECT id FROM messages WHERE sent_at = ?1 AND conversation_type IN ('anon_dm', 'anon_group')")?;
         let ids: Vec<String> = stmt
             .query_map(params![sent_at as i64], |row| row.get::<_, String>(0))?
             .filter_map(|r| r.ok())
@@ -1551,7 +1556,7 @@ const MSG_COLS: &str =
      reaction_counts_blob, current_user_reactions_blob, \
      mentioned_integrations_blob, targets_ai_bot, delivery_status, \
      reply_to_author_id, reply_to_text, \
-     reply_to_thumbnail, reply_to_thumbnail_mime";
+     reply_to_thumbnail, reply_to_thumbnail_mime, failure_reason";
 
 /// Parse an RFC3339 datetime, falling back to now.
 fn parse_datetime(s: &str) -> DateTime<Utc> {
@@ -1673,6 +1678,7 @@ fn row_to_message(row: &rusqlite::Row<'_>) -> rusqlite::Result<Result<Message, S
         mentioned_integrations,
         targets_ai_bot: row.get::<_, i32>(21)? != 0,
         delivery_status: row.get::<_, String>(22).unwrap_or_default(),
+        failure_reason: row.get::<_, Option<String>>(27)?,
     }))
 }
 

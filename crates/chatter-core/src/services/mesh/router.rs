@@ -595,10 +595,15 @@ impl Actor {
                     self.events
                         .send(MeshEvent::Degraded(format!("outbox wipe failed: {error}")));
                 }
-                if let Err(error) = self.storage.wipe_all() {
-                    self.events.send(MeshEvent::Degraded(format!(
-                        "mesh storage wipe failed: {error}"
-                    )));
+                // Mail cleanup does not reset identity trust. Panic wipe
+                // destroys PeerPins explicitly in MeshService.
+                for key in StorageKey::ALL {
+                    if *key == StorageKey::PeerPins { continue; }
+                    if let Err(error) = self.storage.wipe(*key) {
+                        self.events.send(MeshEvent::Degraded(format!(
+                            "mesh storage wipe failed: {error}"
+                        )));
+                    }
                 }
             }
         }

@@ -16,7 +16,7 @@ use crate::proto::chat_v1::{
     GetMessagesRequest, GetMessagesResponse,
     ListPinnedMessagesResponse, Message, MessageEvent, MessageSearchRequest, MessageSearchResponse,
     MessageSortDirection, MessageUpdate, SealedSenderMessage,
-    SendMessageRequest, SendSealedMessageRequest, SendSealedMessageResponse,
+    DestinationDevice, SendMessageRequest, SendSealedMessageRequest, SendSealedMessageResponse,
     StreamGlobalEventsRequest, StreamMessageEventsRequest,
     StreamMessagesRequest,
 };
@@ -32,7 +32,7 @@ use crate::proto::chat_v1::{
 /// pool.connect().await?;
 ///
 /// let mut client = MessageClient::new(pool.channel(), pool.auth_clone());
-/// let message = client.send_message("channel-123", content, None, false, None, false, None, vec![], false, vec![]).await?;
+/// let message = client.send_message("channel-123", content, None, false, None, vec![], false, vec![]).await?;
 /// ```
 pub struct MessageClient {
     inner: MessageServiceClient<InterceptedService<GrpcTransport, AuthInterceptor>>,
@@ -57,7 +57,6 @@ impl MessageClient {
     /// * `parent_id` - Optional parent message ID for threading
     /// * `ephemeral` - Whether message is ephemeral
     /// * `ephemeral_ttl` - TTL for ephemeral messages
-    /// * `crypto_options` - Optional encryption preferences
     /// * `mentioned_integrations` - Integration IDs mentioned in message
     /// * `targets_ai_bot` - Whether message targets AI bot
     /// * `mentioned_file_ids` - File IDs mentioned in message
@@ -69,7 +68,6 @@ impl MessageClient {
         parent_id: Option<&str>,
         ephemeral: bool,
         ephemeral_ttl: Option<prost_types::Duration>,
-        crypto_options: Option<crate::proto::chat_v1::CryptoOptions>,
         mentioned_integrations: Vec<String>,
         targets_ai_bot: bool,
         mentioned_file_ids: Vec<String>,
@@ -81,7 +79,6 @@ impl MessageClient {
             ephemeral,
             ephemeral_ttl,
             client_request_id: uuid::Uuid::new_v4().to_string(),
-            crypto_options,
             mentioned_integrations,
             targets_ai_bot,
             mentioned_file_ids,
@@ -243,19 +240,41 @@ impl MessageClient {
         destination_device_id: u32,
         sealed_message: SealedSenderMessage,
     ) -> Result<SendSealedMessageResponse, NetworkError> {
+        self.send_sealed_message_to_device_set(
+            destination_user_id,
+            destination_device_id,
+            sealed_message,
+            Vec::new(),
+        )
+        .await
+    }
+
+    /// [`Self::send_sealed_message`] as one request of a send to every device
+    /// of the recipient: `device_set` is all the devices that send is
+    /// encrypted for. The server checks it against the recipient's registered
+    /// devices and a difference comes back as
+    /// [`NetworkError::MismatchedDevices`], with nothing queued.
+    pub async fn send_sealed_message_to_device_set(
+        &mut self,
+        destination_user_id: &str,
+        destination_device_id: u32,
+        sealed_message: SealedSenderMessage,
+        device_set: Vec<DestinationDevice>,
+    ) -> Result<SendSealedMessageResponse, NetworkError> {
         let request = SendSealedMessageRequest {
             destination_user_id: destination_user_id.to_string(),
             destination_device_id,
             sealed_message: Some(sealed_message),
             client_request_id: uuid::Uuid::new_v4().to_string(),
             envelope_type: 0, // Default: server determines from content
+            device_set,
         };
 
         self.inner
             .send_sealed_message(request)
             .await
-            .map(|r| r.into_inner())
             .map_err(|s| NetworkError::from_status(&s))
+            .and_then(|r| sealed_send_result(r.into_inner()))
     }
 
     /// Send a sealed sender message with UAK for anonymous delivery.
@@ -374,6 +393,7 @@ impl MessageClient {
             sealed_message: Some(sealed_message),
             client_request_id: uuid::Uuid::new_v4().to_string(),
             envelope_type: 0, // Default: server determines from content
+            device_set: Vec::new(),
         };
 
         // Create request with UAK headers for anonymous delivery
@@ -423,6 +443,7 @@ impl MessageClient {
             sealed_message: Some(sealed_message),
             client_request_id: uuid::Uuid::new_v4().to_string(),
             envelope_type: 0, // Default: server determines from content
+            device_set: Vec::new(),
         };
 
         let mut request = Request::new(proto_request);
@@ -726,7 +747,6 @@ mod tests {
             edited_at: 0,
             mentioned_integrations: vec![],
             targets_ai_bot: false,
-            channel_type: 0,
         };
 
         assert_eq!(message.id, "msg-123");
@@ -812,7 +832,6 @@ mod tests {
             edited_at: 0,
             mentioned_integrations: vec![],
             targets_ai_bot: false,
-            channel_type: 0,
         };
 
         let event = MessageEvent {
@@ -861,5 +880,20 @@ mod tests {
         // XOR is reversible: combined XOR uak1 == uak2
         let reversed: [u8; 16] = std::array::from_fn(|i| combined[i] ^ uak1[i]);
         assert_eq!(reversed, uak2);
+    }
+}
+
+/// A `SendSealedMessage` answer that reports a device-set mismatch is a send
+/// that did not happen: make it an error no caller can read as delivered.
+pub(crate) fn sealed_send_result(
+    response: SendSealedMessageResponse,
+) -> Result<SendSealedMessageResponse, NetworkError> {
+    match response.mismatched_devices {
+        Some(m) => Err(NetworkError::MismatchedDevices {
+            missing: m.missing_devices,
+            extra: m.extra_devices,
+            stale: m.stale_devices,
+        }),
+        None => Ok(response),
     }
 }

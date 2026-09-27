@@ -573,7 +573,6 @@ fn every_sealed_sender_decrypt_consumer_refuses_unratcheted_plaintext() {
     const EXPECTED_CONSUMERS: &[&str] = &[
         "chatter-core/src/services/gateway/decryption.rs",
         "chatter-core/src/services/pairwise.rs",
-        "chatter-core/src/inbox/processor.rs",
         // Plumbing: forwards the (result, type) tuple to the consumers above and
         // never interprets the bytes itself.
         "chatter-core/src/services/signal/actor.rs",

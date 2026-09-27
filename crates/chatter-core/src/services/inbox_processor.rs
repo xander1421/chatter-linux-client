@@ -136,6 +136,16 @@ impl InboxEventProcessor {
                 });
             }
 
+            InboxEvent::DmResendRequested { peer_id, peer_device_id, timestamp_ms } => {
+                let message_service = self.message_service.clone();
+                let (peer_id, peer_device_id, timestamp_ms) = (*peer_id, *peer_device_id, *timestamp_ms);
+                tokio::spawn(async move {
+                    message_service
+                        .resend_dm_on_decryption_error(&peer_id, peer_device_id, timestamp_ms)
+                        .await;
+                });
+            }
+
             InboxEvent::DmMailboxExpired { peer_id } => {
                 tracing::info!(
                     peer_id = %peer_id,
@@ -955,18 +965,12 @@ impl InboxEventProcessor {
                 }
             }
 
-            InboxEvent::ChannelReceipt { channel_id, sender_id: _, receipt_type, timestamps, .. } => {
-                let status = match receipt_type {
-                    1 => "delivered",
-                    2 => "read",
-                    3 => "read", // viewed = read
-                    _ => "sent",
-                };
-                let conversation_type = self.message_service.conversation_type(channel_id);
-                for ts in timestamps {
-                    let _ = self.message_service.update_delivery_status_by_timestamp(
-                        channel_id, &conversation_type, *ts, status,
-                    );
+            InboxEvent::ChannelReceipt { channel_id, sender_id, sender_device_id, receipt_type, timestamps } => {
+                if let Err(error) = self.message_service.apply_peer_receipt(
+                    *channel_id, self.message_service.conversation_type(channel_id), *sender_id,
+                    crate::domain::ids::DeviceId(*sender_device_id), *receipt_type, timestamps,
+                ) {
+                    tracing::warn!(%error, "Failed to persist channel receipt");
                 }
             }
 
@@ -1001,47 +1005,13 @@ impl InboxEventProcessor {
                 });
             }
 
-            // DM read/delivery receipt → update stored delivery_status, same as
-            // the channel path above (ServerDm rows keyed by peer channel_id).
-            InboxEvent::DmReceipt { peer_id, receipt_type, timestamps } => {
-                // A receipt from ourselves is about no message of ours: filing
-                // it on the A-self thread is the F8 mis-routing. Our devices
-                // sync reads with `ReadSync`, never receipts.
-                if self.message_service.current_user_id().ok().as_ref() == Some(peer_id) {
-                    return;
-                }
-                let status = match receipt_type {
-                    1 => "delivered",
-                    2 | 3 => "read", // read + viewed both surface as read
-                    _ => "sent",
-                };
-                let channel_id = crate::domain::ids::ChannelId::from(*peer_id);
-                for ts in timestamps {
-                    let _ = self.message_service.update_delivery_status_by_timestamp(
-                        &channel_id, &crate::domain::message::ConversationType::ServerDm, *ts, status,
-                    );
-                }
-                // Live-refresh the sender's checkmark: emit the SAME DomainEvent
-                // the channel/anon receipt paths use so the UI updates the bubble
-                // without a re-query (#8 — the DB status flipped, but the live
-                // view didn't). Read/viewed → MessagesRead, delivery → Delivered.
-                match receipt_type {
-                    2 | 3 => {
-                        self.event_bus.emit_domain(DomainEvent::MessagesRead {
-                            reader_id: *peer_id,
-                            message_timestamps: timestamps.clone(),
-                            receipt_timestamp: 0,
-                            channel_id: Some(channel_id),
-                        });
-                    }
-                    1 => {
-                        self.event_bus.emit_domain(DomainEvent::MessagesDelivered {
-                            recipient_id: *peer_id,
-                            message_timestamps: timestamps.clone(),
-                            receipt_timestamp: 0,
-                        });
-                    }
-                    _ => {}
+            InboxEvent::DmReceipt { peer_id, sender_device_id, receipt_type, timestamps } => {
+                if let Err(error) = self.message_service.apply_peer_receipt(
+                    crate::domain::ids::ChannelId::from(*peer_id),
+                    crate::domain::message::ConversationType::ServerDm, *peer_id,
+                    crate::domain::ids::DeviceId(*sender_device_id), *receipt_type, timestamps,
+                ) {
+                    tracing::warn!(%error, "Failed to persist DM receipt");
                 }
             }
 

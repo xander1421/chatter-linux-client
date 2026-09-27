@@ -1,3 +1,5 @@
+import { MessageInfo, MessageInfoModal } from "modals/message_info.slint";
+import { ServerRecordsScreen, ServerRecordsGlobal } from "server_records/screen.slint";
 // Chatter Application Component
 // Main application layout with view routing and modal overlay system
 
@@ -438,6 +440,7 @@ export component App inherits Rectangle {
     // ========== Composer GIF picker state ==========
     in-out property <bool> composer-gif-picker-visible: false;
     in property <bool> composer-gif-picker-loading: false;
+    in property <bool> composer-gif-picker-failed: false;
     in property <[GifData]> composer-gif-picker-results: [];
     in-out property <string> composer-gif-picker-search: "";
     callback composer-gif-selected(string, string);
@@ -476,6 +479,7 @@ export component App inherits Rectangle {
     in-out property <length> context-menu-y: 0px;
     // Where the open conversation's content starts; the menu stays below it.
     in-out property <length> context-menu-content-top: 0px;
+    in property <bool> context-menu-can-retry: false;
     in property <bool> context-menu-is-own-message: false;
     in property <bool> context-menu-can-delete-for-everyone: false;
     in property <bool> context-menu-is-pinned: false;
@@ -2151,6 +2155,11 @@ export component App inherits Rectangle {
         approve(p) => { root.link-approve-submit(p); }
     }
 
+    if root.active-modal == "server-records": ServerRecordsScreen {
+        mobile-mode: root.compact-layout;
+        close => { root.nav-pop(); }
+    }
+
     // Account menu — the "Profile" tab. A tab screen like Calls and Contacts:
     // z -1, under anything pushed over it and under the bottom bar. Settings
     // and My Profile are pushed from here, so Back returns to it.
@@ -2167,6 +2176,10 @@ export component App inherits Rectangle {
 
         close => {
             root.active-tab = "chats";
+        }
+        notifications => {
+            root.nav-push("server-records");
+            ServerRecordsGlobal.open("notifications", "");
         }
         my-profile => {
             root.nav-push("user-profile");
@@ -2404,6 +2417,14 @@ export component App inherits Rectangle {
     if root.active-modal == "channel-settings": ChannelSettingsModal {
         show-modal: true;
         channel-id: root.channel-settings-id;
+        integrations => {
+            root.nav-push("server-records");
+            ServerRecordsGlobal.open("integrations", root.channel-settings-id);
+        }
+        server-calls => {
+            root.nav-push("server-records");
+            ServerRecordsGlobal.open("calls", root.channel-settings-id);
+        }
         channel-name: root.channel-settings-name;
         channel-description: root.channel-settings-description;
         channel-name-draft <=> root.channel-settings-name-draft;
@@ -3085,6 +3106,8 @@ export component App inherits Rectangle {
         }
     }
 
+    MessageInfoModal { }
+
     MessageContextMenu {
         show: root.context-menu-visible;
         sender-id: root.context-menu-sender-id;
@@ -3096,6 +3119,9 @@ export component App inherits Rectangle {
         safe-area-bottom: root.safe-area-bottom;
         content-top: root.context-menu-content-top;
         is-own-message: root.context-menu-is-own-message;
+        can-retry: root.context-menu-can-retry;
+        retry-clicked(id) => { root.message-clicked(id); }
+        info-clicked(id) => { MessageInfo.open(id); }
         can-delete-for-everyone: root.context-menu-can-delete-for-everyone;
         is-pinned: root.context-menu-is-pinned;
         has-attachments: root.context-menu-has-attachments;
@@ -3223,6 +3249,7 @@ export component App inherits Rectangle {
     GifPicker {
         show: root.composer-gif-picker-visible;
         loading: root.composer-gif-picker-loading;
+        failed: root.composer-gif-picker-failed;
         results: root.composer-gif-picker-results;
         search-query <=> root.composer-gif-picker-search;
         max-picker-width: min(320px, root.width - 32px);

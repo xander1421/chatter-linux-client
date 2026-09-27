@@ -61,7 +61,6 @@ async fn test_send_message_callback_flow() {
             false,      // ephemeral
             None,       // ephemeral_ttl
             false,      // encrypt
-            None,       // crypto_options
             vec![],     // mentioned_integrations
             false,      // targets_ai_bot
             vec![],     // mentioned_file_ids

@@ -298,18 +298,25 @@ impl CoreServices {
     /// Plain Basic-auth RPC: GifService has no anonymous-credential path on the
     /// server, so a mailbox token here bought nothing and burned the daily
     /// budget (OPEN-ITEMS §120).
-    pub async fn trending_gifs(&self, limit: u32) -> Vec<crate::proto::chat_v1::GifResult> {
+    pub async fn trending_gifs(
+        &self,
+        limit: u32,
+    ) -> Result<Vec<crate::proto::chat_v1::GifResult>, crate::error::NetworkError> {
         match self.gif_client() {
-            Some(mut client) => client.trending(limit as i32).await.unwrap_or_default(),
-            None => Vec::new(),
+            Some(mut client) => client.trending(limit as i32).await,
+            None => Err(crate::error::NetworkError::Unavailable),
         }
     }
 
     /// Search GIFs. Basic-auth, no mailbox token — see [`Self::trending_gifs`].
-    pub async fn search_gifs(&self, query: &str, limit: u32) -> Vec<crate::proto::chat_v1::GifResult> {
+    pub async fn search_gifs(
+        &self,
+        query: &str,
+        limit: u32,
+    ) -> Result<Vec<crate::proto::chat_v1::GifResult>, crate::error::NetworkError> {
         match self.gif_client() {
-            Some(mut client) => client.search(query, limit as i32).await.unwrap_or_default(),
-            None => Vec::new(),
+            Some(mut client) => client.search(query, limit as i32).await,
+            None => Err(crate::error::NetworkError::Unavailable),
         }
     }
 

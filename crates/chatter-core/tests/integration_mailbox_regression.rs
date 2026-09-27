@@ -10,7 +10,7 @@
 //!
 //! All tests use real server connections to simulate production conditions.
 
-mod common;
+use crate::{common, skip_if_no_server};
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -279,7 +279,7 @@ async fn test_message_before_mailbox_exchange() {
     };
 
     let send_result = msg_client1
-        .send_message(&channel_id, content, None, false, None, None, vec![], false, vec![])
+        .send_message(&channel_id, content, None, false, None, vec![], false, vec![])
         .await;
 
     // The message should either:
@@ -804,7 +804,7 @@ async fn test_e2e_message_with_mailbox_exchange() {
 
     let msg1 = assert_ok(
         msg_client1
-            .send_message(&channel_id, content1, None, false, None, None, vec![], false, vec![])
+            .send_message(&channel_id, content1, None, false, None, vec![], false, vec![])
             .await,
     );
 
@@ -818,7 +818,7 @@ async fn test_e2e_message_with_mailbox_exchange() {
 
     let msg2 = assert_ok(
         msg_client2
-            .send_message(&channel_id, content2, None, false, None, None, vec![], false, vec![])
+            .send_message(&channel_id, content2, None, false, None, vec![], false, vec![])
             .await,
     );
 

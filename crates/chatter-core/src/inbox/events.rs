@@ -95,6 +95,17 @@ pub enum InboxEvent {
         /// Server timestamp of the failed message, epoch millis.
         timestamp_ms: u64,
     },
+    /// A friend's device could not decrypt a DM WE sent and asked for it again
+    /// (`DecryptionErrorMessage` with a ratchet key). Handled by
+    /// `InboxEventProcessor` → `MessageService::resend_dm_on_decryption_error`.
+    DmResendRequested {
+        /// Authenticated peer that failed to decrypt.
+        peer_id: UserId,
+        /// Their device that failed.
+        peer_device_id: u32,
+        /// Server timestamp of the failed envelope, epoch millis.
+        timestamp_ms: u64,
+    },
     /// DM mailbox poll completed.
     DmPollCompleted {
         /// Total messages received across all mailboxes.
@@ -117,6 +128,8 @@ pub enum InboxEvent {
         receipt_type: i32,
         /// Message timestamps being acknowledged.
         timestamps: Vec<u64>,
+        /// Authenticated sender device, never a device claimed inside the receipt.
+        sender_device_id: u32,
     },
     /// Reaction received.
     DmReaction {
@@ -282,6 +295,8 @@ pub enum InboxEvent {
         receipt_type: i32,
         /// Message timestamps being acknowledged.
         timestamps: Vec<u64>,
+        /// Authenticated sender device, never a device claimed inside the receipt.
+        sender_device_id: u32,
     },
     /// Channel unread count was updated.
     ChannelUnreadCountUpdated {

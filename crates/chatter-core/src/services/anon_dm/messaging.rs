@@ -176,6 +176,7 @@ impl AnonDmService {
             mentioned_integrations: Vec::new(),
             targets_ai_bot: false,
             delivery_status: String::new(),
+            failure_reason: None,
         };
         self.message_repo.insert_outgoing(&message)?;
         tracing::info!(

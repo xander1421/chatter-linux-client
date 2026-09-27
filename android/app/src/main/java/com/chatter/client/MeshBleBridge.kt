@@ -162,6 +162,7 @@ object MeshBleBridge {
     /** Scanning as it actually is right now. */
     private var scanActive = false
     private var advertising = false
+    private var serviceReady = false
 
     /** Our mesh peer id, advertised in the scan response. Set before [start]. */
     private var localPeer: ByteArray = ByteArray(0)
@@ -402,7 +403,11 @@ object MeshBleBridge {
      */
     @Suppress("unused")
     fun start(): Boolean = synchronized(lock) {
-        if (started) return@synchronized true
+        if (started) {
+            if (serviceReady) beginAdvertisingLocked()
+            applyScanLocked()
+            return@synchronized true
+        }
 
         val context = context() ?: return@synchronized false
 
@@ -417,9 +422,14 @@ object MeshBleBridge {
             Log.w(TAG, "start: no Bluetooth adapter on this device")
             return@synchronized false
         }
+        registerAdapterReceiverLocked(context)
         if (!guard("start/isEnabled", false) { adapter.isEnabled }) {
-            Log.w(TAG, "start: Bluetooth is off")
-            return@synchronized false
+            // Keep the Rust runtime and receiver alive for STATE_ON recovery.
+            started = true
+            MeshService.start(context)
+            emitAdapterPower(false)
+            Log.w(TAG, "start: waiting for Bluetooth to be turned on")
+            return@synchronized true
         }
 
         if (!openGattServerLocked(context)) {
@@ -456,6 +466,7 @@ object MeshBleBridge {
             return@synchronized false
         }
         scanRequested = on
+        if (serviceReady) beginAdvertisingLocked()
         applyScanLocked()
         scanActive == on
     }
@@ -703,6 +714,7 @@ object MeshBleBridge {
 
     private fun beginAdvertisingLocked(): Boolean {
         if (advertising) return true
+        if (!started || !serviceReady) return false
         val context = context() ?: return false
         val adapter = adapterOf(context) ?: return false
         val advertiser = guard("getBluetoothLeAdvertiser", null as BluetoothLeAdvertiser?) {
@@ -793,7 +805,12 @@ object MeshBleBridge {
             }
             // Off the binder thread before taking the lifecycle lock.
             handler.post {
-                synchronized(lock) { if (started) beginAdvertisingLocked() }
+                synchronized(lock) {
+                    if (started && gattServer != null) {
+                        serviceReady = true
+                        beginAdvertisingLocked()
+                    }
+                }
             }
         }
 
@@ -1085,7 +1102,8 @@ object MeshBleBridge {
                     Log.w(TAG, "$id: requestMtu refused; continuing at $DEFAULT_MAX_WRITE bytes")
                     discoverOnce(link, gatt)
                 }
-            } else if (newState == BluetoothProfile.STATE_DISCONNECTED) {
+            } else if (newState == BluetoothProfile.STATE_DISCONNECTED ||
+                status != BluetoothGatt.GATT_SUCCESS) {
                 // Removal is the guard: whoever removes the link emits the event,
                 // so a teardown started here and one started by disconnect() cannot
                 // both report it.
@@ -1404,6 +1422,7 @@ object MeshBleBridge {
         dropAllLinks()
         gattServer?.let { server -> guard("closeGattServer", Unit) { server.close() } }
         gattServer = null
+        serviceReady = false
         notifyCharacteristic = null
         emitAdapterPower(false)
     }
@@ -1434,6 +1453,7 @@ object MeshBleBridge {
             guard("closeGattServer", Unit) { server.close() }
         }
         gattServer = null
+        serviceReady = false
         notifyCharacteristic = null
 
         val context = context()

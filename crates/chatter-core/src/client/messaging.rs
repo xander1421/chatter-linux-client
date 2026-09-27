@@ -96,6 +96,23 @@ impl ChatterClient {
             .get_messages_local_asc(channel_id, conversation_type, before, limit)
     }
 
+    /// See [`crate::services::message::MessageService::get_older_messages_local_asc`].
+    pub fn get_older_messages_local_asc(
+        &self,
+        channel_id: &crate::domain::ids::ChannelId,
+        conversation_type: &crate::domain::message::ConversationType,
+        before: &crate::domain::ids::MessageId,
+        until: Option<&crate::domain::ids::MessageId>,
+    ) -> Result<Vec<crate::domain::message::Message>, crate::services::message::MessageError> {
+        self.messages().get_older_messages_local_asc(
+            channel_id,
+            conversation_type,
+            before,
+            until,
+            crate::config::MESSAGE_PAGE_SIZE as u32,
+        )
+    }
+
     pub fn get_message_by_sender_timestamp(
         &self,
         sender_id: &crate::domain::ids::UserId,
@@ -1562,7 +1579,8 @@ pub struct SendMessageUiResult {
     pub timestamp_display: String,
     /// Sidebar preview with "You: " prefix, truncated to sidebar width.
     pub sidebar_preview: String,
-    /// Either `"sent"` (delivered) or `"sending"` (DM bootstrap in flight).
+    /// `"sent"` (delivered), `"sending"` (DM bootstrap in flight), or
+    /// `"failed"` (stored, not delivered — see `failure_notice`).
     pub delivery_status: &'static str,
     /// True when a DM bootstrap was kicked off — UI should show the
     /// "Setting up secure channel..." composer placeholder.
@@ -1576,6 +1594,10 @@ pub struct SendMessageUiResult {
     /// waveform) so the sender's own bubble renders the audio player / media
     /// preview immediately, without waiting for a reload.
     pub reply_parent_media: crate::client::ReplyParentMedia,
+    /// Why the message was not delivered, for the user, when
+    /// `delivery_status` is `"failed"`.
+    pub failure_notice: Option<String>,
+    pub failure_reason: Option<String>,
 }
 
 /// Enriched mention suggestion surfaced by
@@ -1809,5 +1831,81 @@ mod new_channel_row_tests {
         let ids: Vec<_> = rows.iter().map(|r| r.id.clone()).collect();
         assert_eq!(ids, [new, old], "the new channel leads the list");
         assert!(!rows[0].timestamp.is_empty(), "the new channel shows its creation time");
+    }
+}
+
+#[cfg(test)]
+mod older_messages_tests {
+    use crate::client::ChatterClient;
+    use crate::domain::ids::{ChannelId, MessageId, UserId};
+    use crate::domain::message::{ConversationType, Message};
+
+    /// 120 messages, `sent_at` 1..=120, and their ids in that order.
+    fn conversation() -> (std::sync::Arc<ChatterClient>, ChannelId, Vec<MessageId>) {
+        static MOCK_KEYRING: std::sync::Once = std::sync::Once::new();
+        MOCK_KEYRING.call_once(|| {
+            keyring::set_default_credential_builder(keyring::mock::default_credential_builder());
+        });
+        let dir = tempfile::tempdir().unwrap();
+        let client = ChatterClient::builder()
+            .server_url("http://localhost:1")
+            .data_dir(dir.path().to_str().unwrap())
+            .build()
+            .expect("build client");
+        let (conv, peer) = (ChannelId::new(), UserId::new());
+        let ids = (1..=120u64)
+            .map(|ts| {
+                let msg = Message::new_text(conv, ConversationType::ServerDm, Some(peer), "hi".into(), ts);
+                client.messages().store_message_local(&msg).expect("store");
+                msg.id
+            })
+            .collect();
+        (client, conv, ids)
+    }
+
+    /// Device sweep RC25: after a cold start nothing older than the newest
+    /// page ever loaded. Paging from the oldest loaded row walks the whole
+    /// history, a page at a time, and ends on an empty page.
+    #[tokio::test]
+    async fn pages_back_to_the_beginning() {
+        let (client, conv, ids) = conversation();
+        let kind = ConversationType::ServerDm;
+        let page = |before: &MessageId| {
+            let rows = client.get_older_messages_local_asc(&conv, &kind, before, None).unwrap();
+            rows.iter().map(|m| m.sent_at).collect::<Vec<_>>()
+        };
+        // The open loaded 71..=120.
+        assert_eq!(page(&ids[70]), (21..=70).collect::<Vec<u64>>());
+        assert_eq!(page(&ids[20]), (1..=20).collect::<Vec<u64>>());
+        assert!(page(&ids[0]).is_empty());
+    }
+
+    /// A jump to a message older than what is loaded brings in every page
+    /// back to it — and nothing for a target this list cannot hold.
+    #[tokio::test]
+    async fn pages_until_the_jump_target() {
+        let (client, conv, ids) = conversation();
+        let kind = ConversationType::ServerDm;
+        let until = |target: &MessageId| {
+            let rows = client
+                .get_older_messages_local_asc(&conv, &kind, &ids[100], Some(target))
+                .unwrap();
+            rows.iter().map(|m| m.sent_at).collect::<Vec<_>>()
+        };
+        // Row 101 is the oldest loaded; the target is two pages up. Whole
+        // pages, contiguous with what is loaded.
+        assert_eq!(until(&ids[29]), (1..=100).collect::<Vec<u64>>());
+        assert_eq!(until(&ids[80]), (51..=100).collect::<Vec<u64>>());
+
+        let elsewhere = Message::new_text(
+            ChannelId::new(),
+            ConversationType::ServerDm,
+            Some(UserId::new()),
+            "other conversation".into(),
+            5,
+        );
+        client.messages().store_message_local(&elsewhere).expect("store");
+        assert!(until(&elsewhere.id).is_empty(), "a target in another conversation");
+        assert!(until(&MessageId::new()).is_empty(), "a target that is not stored");
     }
 }

@@ -10,6 +10,7 @@ mod format_text;
 mod gif;
 mod mentions;
 mod text;
+mod voice;
 
 use std::sync::Arc;
 
@@ -36,6 +37,7 @@ pub fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     );
     mentions::wire_mention_selected(window);
     text::wire_process_text(window);
+    voice::wire(window, ui_ctx);
     format_text::wire_format_text(window);
     wire_per_conversation_drafts(window, ui_ctx);
 }

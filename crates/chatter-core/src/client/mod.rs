@@ -26,6 +26,7 @@ mod jarvis;
 pub use jarvis::{is_jarvis_channel, jarvis_channel_id, JARVIS_CHANNEL_NAME};
 mod link_device;
 mod messaging;
+mod receipts;
 pub use messaging::{InviteCandidate, ReplyParentMedia, SectionRowExtras};
 pub use anon_group::AnonGroupInviteCandidate;
 
@@ -405,6 +406,21 @@ pub use crate::services::user::ReceivedFriendRequestProfile;
 impl ChatterClient {
     pub fn builder() -> ClientBuilder {
         ClientBuilder::new()
+    }
+
+    /// Server-backed account inbox / channel management presentation.
+    pub async fn server_records_page(&self, kind: &str, channel: &str, cursor: &str)
+        -> Result<crate::services::server_records::RecordPage, crate::error::NetworkError>
+    {
+        let user = self.session_current_user_id()
+            .ok_or(crate::error::NetworkError::Unauthenticated)?.to_string();
+        crate::services::server_records::page(&self.services.grpc_pool, kind, channel, cursor, &user).await
+    }
+
+    pub async fn server_records_action(&self, kind: &str, channel: &str, id: &str, action: &str)
+        -> Result<(), crate::error::NetworkError>
+    {
+        crate::services::server_records::action(&self.services.grpc_pool, kind, channel, id, action).await
     }
 
     // ── Services (return &Arc<T> so .clone() yields Arc<T>) ─────────────
@@ -2164,12 +2180,15 @@ impl ChatterClient {
         &self,
         query: &str,
         limit: u32,
-    ) -> Vec<crate::proto::chat_v1::GifResult> {
+    ) -> Result<Vec<crate::proto::chat_v1::GifResult>, NetworkError> {
         self.services.search_gifs(query, limit).await
     }
 
     /// Fetch trending GIFs.
-    pub async fn trending_gifs(&self, limit: u32) -> Vec<crate::proto::chat_v1::GifResult> {
+    pub async fn trending_gifs(
+        &self,
+        limit: u32,
+    ) -> Result<Vec<crate::proto::chat_v1::GifResult>, NetworkError> {
         self.services.trending_gifs(limit).await
     }
 
@@ -2541,13 +2560,22 @@ impl ChatterClient {
         use crate::client::messaging::SendMessageUiResult;
         use crate::domain::message::truncate_preview_text;
 
-        let result = self
+        let mut result = self
             .send_message(conversation, text, pending_attachments, quote, options)
             .await?;
+
+        // Stored but not delivered: the bubble shows "not sent" (tap to retry,
+        // `retry_failed_message`) and the reason is surfaced once.
+        let failure_notice = result
+            .send_error
+            .take()
+            .map(|e| crate::services::gateway::shared::handle_send_error(&SendError::Message(e), "send"));
 
         let real_message_id = result.message_id_string();
         let (message_id_effective, delivery_status) = if result.bootstrap_initiated {
             (format!("pending-{}", result.sent_at), "sending")
+        } else if failure_notice.is_some() || result.message.as_ref().is_some_and(|m| m.delivery_status == "failed") {
+            (real_message_id, "failed")
         } else {
             (real_message_id, "sent")
         };
@@ -2602,7 +2630,40 @@ impl ChatterClient {
             attachments,
             reply_thumbnail_bytes,
             reply_parent_media,
+            failure_notice,
+            failure_reason: result.message.as_ref().and_then(|m| m.failure_reason.clone()),
         })
+    }
+
+    /// Retry a failed channel message or friend DM and return the updated row.
+    /// Channels acquire the server message ID; DMs retain their original identity.
+    pub async fn retry_failed_message(&self, message_id: &str) -> Result<crate::domain::message::Message, SendError> {
+        use crate::services::message::MessageError;
+        let id = message_id.parse::<crate::domain::ids::MessageId>()
+            .map_err(|_| SendError::Message(MessageError::InvalidContent("Invalid message ID".into())))?;
+        let service = &self.services.message_service;
+        let message = service.get_message_local(&id)?.ok_or(MessageError::MessageNotFound(id))?;
+        let result = if message.conversation_type == crate::domain::message::ConversationType::Channel {
+            service.retry_channel_message(&id).await
+        } else {
+            match service.retry_server_dm(&id).await {
+                Ok(_) => service.get_message_local(&id)?.ok_or(MessageError::MessageNotFound(id)),
+                Err(error) => Err(error),
+            }
+        };
+        match result {
+            Ok(message) => Ok(message),
+            Err(error) => {
+                // Preparation (e.g. an attachment deleted since the first send)
+                // can fail before the transport. Persist its refusal as well.
+                if message.can_retry_send() {
+                    let mut failed = message;
+                    failed.failure_reason = error.permanent_send_failure_reason().map(str::to_owned);
+                    service.update_message(&failed)?;
+                }
+                Err(error.into())
+            }
+        }
     }
 
     /// Get a [`ConversationHandle`] for per-conversation operations.

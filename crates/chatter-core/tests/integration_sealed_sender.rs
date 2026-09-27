@@ -6,7 +6,7 @@
 //! - Blind signature token management
 //! - Device message queue operations
 
-mod common;
+use crate::{common, skip_if_no_server};
 
 use chatter_core::mailbox::blind_signature::{blind_key, unblind, ServerPublicKey};
 use chatter_core::network::grpc::{AuthClient, MailboxClient, MessageClient};

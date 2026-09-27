@@ -37,12 +37,9 @@ rustflags = [
 # Use sccache for compilation caching
 rustc-wrapper = "sccache"
 
-# Parallel compilation jobs (adjust based on your CPU cores)
-jobs = 8
+# Leave build.jobs to the user/global config (the host uses 4 to avoid OOM).
 
 [env]
-# Reduce debug info for faster builds (set to 2 for full debugging)
-CARGO_PROFILE_DEV_DEBUG = "0"
 # webrtc-sys 0.3.24 auto-compiled a broken VA-API H.264 encoder shim when
 # libva.pc was detected — the shim #include'd internal webrtc headers that
 # the prebuilt didn't ship. 0.3.29 handles this correctly; we leave the

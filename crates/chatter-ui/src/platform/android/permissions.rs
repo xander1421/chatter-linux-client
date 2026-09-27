@@ -147,3 +147,26 @@ fn read_string_array(env: &mut JNIEnv, arr: &JObjectArray) -> Result<Vec<String>
     }
     Ok(out)
 }
+
+// Requested only from mesh user actions, never from startup.
+pub async fn ensure_mesh() -> bool {
+    let sdk = activity::jni_env().ok().and_then(|mut env| {
+        env.get_static_field("android/os/Build$VERSION", "SDK_INT", "I").ok()?.i().ok()
+    });
+    match sdk {
+        Some(31..) => ensure(&[
+            "android.permission.BLUETOOTH_SCAN",
+            "android.permission.BLUETOOTH_ADVERTISE",
+            "android.permission.BLUETOOTH_CONNECT",
+        ]).await,
+        Some(_) => ensure(&["android.permission.ACCESS_FINE_LOCATION"]).await,
+        None => false,
+    }
+}
+
+pub fn mesh_location_enabled() -> bool {
+    let Ok(mut env) = activity::jni_env() else { return false; };
+    let Ok(act) = activity::activity() else { return false; };
+    env.call_method(act, "meshLocationEnabled", "()Z", &[])
+        .ok().and_then(|value| value.z().ok()).unwrap_or(false)
+}

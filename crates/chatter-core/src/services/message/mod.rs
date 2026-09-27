@@ -12,6 +12,7 @@
 
 mod dm;
 mod dm_bootstrap;
+mod dm_resend;
 mod group;
 pub mod core;
 pub mod channel_inbound;
@@ -20,6 +21,8 @@ mod server_dm;
 mod thread;
 mod pin;
 mod saved;
+mod receipts;
+pub use receipts::advance_delivery_status;
 
 use std::sync::Arc;
 
@@ -133,13 +136,13 @@ impl MessageError {
     /// `EncryptionFailed(format!("…: {e}"))` — which is a string, so the UI
     /// could only offer "try again".
     pub(crate) fn from_signal_send(err: crate::error::ServiceError, context: &str) -> Self {
-        if let crate::error::ServiceError::Crypto(
-            crate::error::CryptoError::UntrustedIdentity { ref peer_id, .. },
-        ) = err
-        {
-            return Self::RecipientIdentityChanged { peer_id: peer_id.clone() };
+        match err {
+            crate::error::ServiceError::Network(error) => Self::Network(error),
+            crate::error::ServiceError::NotLoggedIn => Self::NotLoggedIn,
+            crate::error::ServiceError::Validation(reason) => Self::InvalidContent(reason),
+            crate::error::ServiceError::Crypto(crate::error::CryptoError::UntrustedIdentity { peer_id, .. }) => Self::RecipientIdentityChanged { peer_id },
+            error => Self::EncryptionFailed(format!("{context}: {error}")),
         }
-        Self::EncryptionFailed(format!("{context}: {err}"))
     }
 }
 
@@ -183,6 +186,9 @@ pub struct DmSendResult {
     /// True if the Shield mailbox with this friend was not established yet:
     /// the message was queued and goes out when the bootstrap completes.
     pub bootstrap_initiated: bool,
+    /// Delivery failed: the message is stored as `"failed"` for a retry
+    /// (`retry_server_dm`), and this says why.
+    pub send_error: Option<MessageError>,
 }
 
 /// What a post-bootstrap flush did with the queue it drained (either side:
@@ -298,6 +304,8 @@ pub struct MessageService {
     /// `MessageGateway`, which honours a resend's carried server id only
     /// against an entry here, and consumes it.
     pub(crate) solicited_resends: SolicitedResends,
+    /// Friend-DM deposits a peer device may ask us to send again.
+    pub(crate) dm_sent_log: dm_resend::DmSentLog,
     /// Our own device list as the server last gave it: (fetched at, epoch
     /// nanos; device ids). See [`MessageService::is_retired_device`].
     pub(crate) own_devices: Arc<tokio::sync::Mutex<Option<(u64, std::collections::HashSet<u32>)>>>,
@@ -411,6 +419,7 @@ impl MessageService {
         mailbox_manager: Arc<MailboxManager>,
     ) -> Self {
         let solicited_resends = SolicitedResends::load(settings_repo.clone());
+        let dm_sent_log = dm_resend::DmSentLog::load(settings_repo.clone());
         Self {
             grpc_pool,
             database,
@@ -432,6 +441,7 @@ impl MessageService {
             sender_key_requests: Arc::new(parking_lot::Mutex::new(std::collections::HashMap::new())),
             group_retry_requests: Arc::new(parking_lot::Mutex::new(std::collections::HashSet::new())),
             solicited_resends,
+            dm_sent_log,
             own_devices: Arc::new(tokio::sync::Mutex::new(None)),
             retired_peer_devices: Arc::new(parking_lot::Mutex::new(std::collections::HashMap::new())),
             eviction_resends: Arc::new(parking_lot::Mutex::new(std::collections::HashMap::new())),
@@ -487,6 +497,47 @@ impl MessageService {
     ) -> Result<Vec<Message>, MessageError> {
         let messages = self.message_repo.list_for_channel_asc(channel_id, conversation_type, before, limit)?;
         Ok(messages)
+    }
+
+    /// History older than `before`, oldest first: one page, or with `until`
+    /// as many pages as it takes to reach that message (a jump to a quote,
+    /// a search hit or a pin that is older than what is loaded). Empty when
+    /// there is nothing older, or when `until` is not a message of this
+    /// conversation's main list — never the whole history for a target that
+    /// is not in it.
+    pub fn get_older_messages_local_asc(
+        &self,
+        channel_id: &ChannelId,
+        conversation_type: &ConversationType,
+        before: &crate::domain::ids::MessageId,
+        until: Option<&crate::domain::ids::MessageId>,
+        page_size: u32,
+    ) -> Result<Vec<Message>, MessageError> {
+        if let Some(target) = until {
+            let reachable = self.message_repo.get(target)?.is_some_and(|m| {
+                m.conversation_id == *channel_id
+                    && m.conversation_type == *conversation_type
+                    && m.thread_id.is_none()
+            });
+            if !reachable {
+                return Ok(Vec::new());
+            }
+        }
+        let mut older = Vec::new();
+        let mut before = *before;
+        loop {
+            let page = self
+                .message_repo
+                .list_for_channel_asc(channel_id, conversation_type, Some(&before), page_size)?;
+            let Some(first) = page.first() else { break };
+            before = first.id;
+            let reached = until.is_none_or(|target| page.iter().any(|m| m.id == *target));
+            older.splice(0..0, page);
+            if reached {
+                break;
+            }
+        }
+        Ok(older)
     }
 
     /// Reply count per thread root for a conversation (drives the "N replies"

@@ -353,6 +353,7 @@ impl MessageGateway {
                 .collect(),
             targets_ai_bot: data_message.targets_ai_bot,
             delivery_status: String::new(),
+            failure_reason: None,
         };
 
         // Reply/quote context (shared with the mailbox inbound path).
@@ -554,6 +555,7 @@ impl MessageGateway {
                 .collect(),
             targets_ai_bot: data_message.targets_ai_bot,
             delivery_status: String::new(),
+            failure_reason: None,
         };
 
         crate::services::gateway::inbound::apply_inbound_quote(

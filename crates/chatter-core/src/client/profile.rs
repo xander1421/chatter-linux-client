@@ -809,6 +809,42 @@ impl ChatterClient {
         self.attachments().upload_to_cdn_encrypted(path).await
     }
 
+    /// Encrypt/upload a recorded voice note, preserving voice metadata on every
+    /// platform; the caller retains the recording for retry until sent/cancelled.
+    pub async fn upload_voice_note(
+        &self,
+        note: &crate::services::voice_recording::RecordedVoiceNote,
+    ) -> Result<crate::state::chat_state::PendingAttachment, String> {
+        use crate::services::voice_recording::recording_context_is_current;
+        if !recording_context_is_current(self.chat_state(), note.conversation) {
+            return Err("Conversation changed; recording discarded".into());
+        }
+        let upload = self.upload_attachment_to_cdn_encrypted(note.file.path()).await
+            .map_err(|e| e.to_string())?;
+        if !recording_context_is_current(self.chat_state(), note.conversation) {
+            return Err("Conversation changed; recording discarded".into());
+        }
+        let mut pointer = upload.to_attachment_pointer();
+        pointer.voice_note = true;
+        pointer.waveform = note.waveform.clone();
+        pointer.duration_ms = note.duration_ms;
+        pointer.file_name = "Voice message.wav".into();
+        // The sender renders from the already-uploaded local attachment row;
+        // receivers render from the pointer. Keep the same metadata on both.
+        if let Some(mut attachment) = self.attachments().get(&upload.attachment_id)
+            .map_err(|e| e.to_string())? {
+            attachment.metadata.name = pointer.file_name.clone();
+            attachment.metadata.waveform_samples = Some(pointer.waveform.clone());
+            attachment.metadata.duration_seconds = Some(pointer.duration_ms as f64 / 1000.0);
+            self.attachments().update(&attachment).map_err(|e| e.to_string())?;
+        }
+
+        Ok(crate::state::chat_state::PendingAttachment::with_pointer(
+            upload.attachment_id, std::path::PathBuf::new(), pointer.file_name.clone(),
+            upload.plaintext_size, "audio/wav".into(), pointer,
+        ))
+    }
+
     pub async fn download_url_bytes(
         &self,
         url: &str,

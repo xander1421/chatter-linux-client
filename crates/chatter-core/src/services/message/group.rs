@@ -1123,7 +1123,7 @@ impl MessageService {
     /// Deposit one sealed envelope in one device inbox, UAK-authorized when we
     /// hold the peer's profile key (the same choice as
     /// `send_decryption_error_report`).
-    async fn deposit_sealed_to_device(
+    pub(super) async fn deposit_sealed_to_device(
         &self,
         peer_id: &UserId,
         device_id: u32,

@@ -3,8 +3,8 @@
 //! Tests network conditions, mock server behavior,
 //! and error handling using the testing framework.
 
-mod common;
-mod framework;
+use crate::common;
+use crate::framework;
 
 use framework::prelude::*;
 use std::time::Duration;

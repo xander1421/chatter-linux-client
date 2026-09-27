@@ -18,6 +18,25 @@ use crate::services::current_user::CurrentUserProvider;
 
 use super::{MessageError, MessageService};
 
+impl MessageError {
+    /// A missing reason means a transient failure that the user can retry.
+    /// Unknown/stringified failures are deliberately not guessed to be transient.
+    pub fn permanent_send_failure_reason(&self) -> Option<&'static str> {
+        use crate::error::NetworkError;
+        match self {
+            Self::Network(e) if e.is_retryable() || e.is_transport_error() => None,
+            Self::Network(NetworkError::MismatchedDevices { .. }) => None,
+            Self::Network(NetworkError::PermissionDenied) | Self::NotAuthor => Some("Not allowed"),
+            Self::Network(NetworkError::InvalidRequest(_)) | Self::InvalidContent(_)
+                | Self::InvalidMessage(_) => Some("Message rejected"),
+            Self::NotLoggedIn | Self::Network(NetworkError::Unauthenticated) => Some("Sign in required"),
+            Self::RecipientIdentityChanged { .. } => Some("Identity changed"),
+            Self::ChannelNotFound(_) | Self::Network(NetworkError::NotFound(_)) => Some("Conversation unavailable"),
+            _ => Some("Cannot send message"),
+        }
+    }
+}
+
 impl MessageService {
     /// Send a message to a channel.
     ///
@@ -84,13 +103,14 @@ impl MessageService {
         // pairwise `content_v1::DataMessage` proto so attachment pointers
         // (CDN key + per-blob AES key) travel with the message and receivers
         // can actually download + decrypt the blob.
+        let sent_at = crate::util::time::TimestampNanos::now().as_u64();
         let plaintext_bytes = {
             use prost::Message as _;
             let dm = crate::proto::content_v1::DataMessage {
                 body: trimmed_text.to_string(),
                 attachments: attachment_pointers.clone(),
                 channel_id: channel_id.to_string(),
-                timestamp: crate::util::time::TimestampNanos::now().as_u64(),
+                timestamp: sent_at,
                 mentioned_integrations: mentioned_integrations
                     .iter()
                     .map(|id| id.to_string())
@@ -140,6 +160,10 @@ impl MessageService {
             self.distribute_sender_key(auth_client, message_client, channel_id, &skdm).await?;
         }
 
+        // Snapshot the authoritative recipient set before fanout. A receipt can
+        // beat the server response; the logical key preserves that evidence.
+        self.snapshot_channel_receipt_targets(*channel_id, sent_at, auth_client, channel_client).await?;
+
         // Call server
         tracing::debug!(
             channel_id = %channel_id,
@@ -162,7 +186,6 @@ impl MessageService {
                 thread_id.map(|id| id.to_string()).as_deref(),
                 ephemeral,
                 ephemeral_ttl,
-                None,  // crypto_options
                 mentioned_integrations.iter().map(|id| id.to_string()).collect(),
                 targets_ai_bot,
                 attachment_ids.iter().map(|id| id.to_string()).collect(),
@@ -207,6 +230,13 @@ impl MessageService {
         let conv_type = super::conversion::conversation_type_for_channel(&self.channel_repo, channel_id);
         let mut message = proto_to_domain_message(&proto_message, sender_id, conv_type)?;
         message.attachments = attachment_ids;
+        if is_dm || require_encryption {
+            // Encrypted receipts name the E2E DataMessage clock.
+            message.sent_at = sent_at;
+        } else {
+            crate::storage::repositories::message_receipt_repo::MessageReceiptRepository::new(self.database.clone())
+                .bind_send_timestamp(*channel_id, message.conversation_type.clone(), sender_id, sent_at, message.sent_at)?;
+        }
 
         // IMPORTANT: Check if server returned a different channel_id
         if message.conversation_id != *channel_id {
@@ -229,7 +259,10 @@ impl MessageService {
             text_len = trimmed_text.len(),
             "[SEND_MESSAGE] Storing message locally"
         );
-        self.message_repo.insert_outgoing(&message)?;
+        self.message_repo.insert_or_ignore(&message)?;
+        if let Some(stored) = self.message_repo.get(&message.id)? {
+            message.delivery_status = stored.delivery_status;
+        }
         tracing::info!(
             channel_id = %channel_id,
             message_id = %message.id,
@@ -338,21 +371,76 @@ impl MessageService {
         let mut auth_client = self.auth_client();
         let mut channel_client = self.channel_client();
 
-        self.send_message(
-            &mut message_client,
-            &mut auth_client,
-            &mut channel_client,
-            group_fanout,
-            channel_id,
-            text,
-            attachment_ids,
-            attachment_pointers,
-            thread_id,
-            mentioned_integrations,
-            targets_ai_bot,
-            quote,
-        )
-        .await
+        let result = tokio::time::timeout(std::time::Duration::from_secs(30), self.send_message(
+            &mut message_client, &mut auth_client, &mut channel_client,
+            group_fanout, channel_id, text, attachment_ids.clone(), attachment_pointers,
+            thread_id, mentioned_integrations.clone(), targets_ai_bot, quote,
+        )).await.unwrap_or_else(|_| Err(MessageError::Network(crate::error::NetworkError::Timeout)));
+        match result {
+            Ok(message) => Ok(message),
+            Err(error) => {
+                let mut message = Message::new_text(
+                    *channel_id,
+                    super::conversion::conversation_type_for_channel(&self.channel_repo, channel_id),
+                    Some(self.settings_repo.current_user_id()?),
+                    text.to_string(),
+                    crate::util::time::TimestampNanos::now().as_u64(),
+                );
+                message.attachments = attachment_ids;
+                message.thread_id = thread_id.copied();
+                message.mentioned_integrations = mentioned_integrations;
+                message.targets_ai_bot = targets_ai_bot;
+                message.delivery_status = "failed".into();
+                message.failure_reason = error.permanent_send_failure_reason().map(str::to_owned);
+                self.message_repo.insert_outgoing(&message)?;
+                tracing::warn!(error = %error, message_id = %message.id, "Channel send stored as failed");
+                Ok(message)
+            }
+        }
+    }
+
+    /// Retry a stored channel send; replace its local failed row with the server's row.
+    pub async fn retry_channel_message(&self, id: &MessageId) -> Result<Message, MessageError> {
+        let mut failed = self.message_repo.get(id)?.ok_or(MessageError::MessageNotFound(*id))?;
+        if failed.conversation_type != crate::domain::message::ConversationType::Channel
+            || failed.sender_id != Some(self.settings_repo.current_user_id()?)
+            || failed.delivery_status != "failed" || failed.failure_reason.is_some()
+        {
+            return Err(MessageError::InvalidContent("message cannot be retried".into()));
+        }
+        let pointers = failed.attachments.iter().map(|id| {
+            self.attachment_repo.get(id)?.and_then(|a| a.to_pointer())
+                .ok_or_else(|| MessageError::InvalidContent("Attachment unavailable".into()))
+        }).collect::<Result<Vec<_>, MessageError>>()?;
+        let quote = match (failed.reply_to_author_id, failed.reply_to) {
+            (Some(author), Some(parent)) => self.message_repo.get(&parent)?.map(|parent| {
+                crate::services::gateway::QuoteIntent {
+                    target_author_id: author, target_timestamp: parent.sent_at,
+                    target_preview: failed.reply_to_text.clone(),
+                }
+            }),
+            _ => None,
+        };
+        let result = tokio::time::timeout(std::time::Duration::from_secs(30), self.send_message(
+            &mut self.message_client(), &mut self.auth_client(), &mut self.channel_client(),
+            None, &failed.conversation_id, failed.as_text().unwrap_or(""),
+            failed.attachments.clone(), pointers, failed.thread_id.as_ref(),
+            failed.mentioned_integrations.clone(), failed.targets_ai_bot, quote.as_ref(),
+        )).await.unwrap_or_else(|_| Err(MessageError::Network(crate::error::NetworkError::Timeout)));
+        match result {
+            Ok(mut sent) => {
+                if let Some(quote) = quote {
+                    sent = self.persist_outgoing_reply_context(sent, &quote).map_err(|(_, e)| e)?;
+                }
+                self.message_repo.delete(id)?;
+                Ok(sent)
+            }
+            Err(error) => {
+                failed.failure_reason = error.permanent_send_failure_reason().map(str::to_owned);
+                self.message_repo.update(&failed)?;
+                Err(error)
+            }
+        }
     }
 
     /// Send a message with file attachments (high-level API).
@@ -663,6 +751,10 @@ impl MessageService {
             nanos: 0,
         });
 
+        let provisional = crate::util::time::TimestampNanos::now().as_u64();
+        self.snapshot_channel_receipt_targets(*channel_id, provisional,
+            &mut self.grpc_pool.auth_client(), &mut self.grpc_pool.channel_client()).await?;
+
         // Call server with ephemeral flag
         let proto_message = message_client
             .send_message(
@@ -671,7 +763,6 @@ impl MessageService {
                 thread_id.map(|id| id.to_string()).as_deref(),
                 true,          // ephemeral = true
                 ephemeral_ttl, // TTL duration
-                None,          // crypto_options
                 Vec::new(),    // mentioned_integrations (not typically used with ephemeral)
                 false,         // targets_ai_bot
                 attachment_ids.iter().map(|id| id.to_string()).collect(),
@@ -693,8 +784,12 @@ impl MessageService {
             message.conversation_id = *channel_id;
         }
 
-        // Store locally
-        self.message_repo.insert_outgoing(&message)?;
+        crate::storage::repositories::message_receipt_repo::MessageReceiptRepository::new(self.database.clone())
+            .bind_send_timestamp(*channel_id, message.conversation_type.clone(), sender_id, provisional, message.sent_at)?;
+        self.message_repo.insert_or_ignore(&message)?;
+        if let Some(stored) = self.message_repo.get(&message.id)? {
+            message.delivery_status = stored.delivery_status;
+        }
 
         Ok(message)
     }
@@ -1037,3 +1132,23 @@ impl MessageService {
 
 // Re-export proto conversion functions from conversion module
 pub use super::conversion::{proto_to_domain_message, proto_to_domain_message_with_sender, proto_content_to_domain};
+
+#[cfg(test)]
+mod send_failure_tests {
+    use super::MessageError;
+    use crate::error::NetworkError;
+
+    #[test]
+    fn only_transient_send_failures_offer_retry() {
+        for error in [NetworkError::Timeout, NetworkError::Unavailable,
+            NetworkError::RateLimited, NetworkError::ConnectionFailed("offline".into())] {
+            assert_eq!(MessageError::Network(error).permanent_send_failure_reason(), None);
+        }
+        for error in [NetworkError::PermissionDenied,
+            NetworkError::InvalidRequest("message too large".into()),
+            NetworkError::Unauthenticated, NetworkError::Unknown("unclassified".into())] {
+            assert!(MessageError::Network(error).permanent_send_failure_reason().is_some());
+        }
+        assert!(MessageError::InvalidContent("too large".into()).permanent_send_failure_reason().is_some());
+    }
+}

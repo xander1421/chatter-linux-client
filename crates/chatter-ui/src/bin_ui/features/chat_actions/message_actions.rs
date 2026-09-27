@@ -2,107 +2,88 @@
 //!
 //! Handles message click, reply, react, and thread actions.
 
-use std::cell::Cell;
-use std::rc::Rc;
 use std::sync::Arc;
-use std::time::Duration;
 
-use slint::{ComponentHandle, Model, SharedString, Timer};
+use slint::{ComponentHandle, Model, SharedString};
 
 use chatter_core::client::ChatterClient;
 use chatter_core::domain::ids::MessageId;
 use crate::bin_ui::features::chat::emoji_loader;
 use crate::MainWindow;
 
-/// Wire message click callback.
-pub fn wire_message_clicked(window: &MainWindow) {
+/// Wire message click callback: the only click a bubble reports is a tap on
+/// its "not sent" label, which retries the send (Signal's "tap to retry").
+pub fn wire_message_clicked(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     let weak_window = window.as_weak();
+    let ui_ctx = ui_ctx.clone();
 
     window.on_message_clicked(move |message_id: SharedString| {
-        let message_id_str = message_id.to_string();
-        let weak = weak_window.clone();
-        tracing::debug!("Message clicked: {}", message_id_str);
+        let Some(w) = weak_window.upgrade() else { return };
+        let Some(sent_at) = own_failed_timestamp(&w, &message_id) else { return };
 
-        let _ = slint::invoke_from_event_loop(move || {
-            if let Some(_w) = weak.upgrade() {
-                tracing::trace!("Message selected: {}", message_id_str);
-            }
+        crate::bin_ui::features::auth::inbox::domain_handler::set_own_status_at(&w, &[sent_at], "sending");
+        let weak = weak_window.clone();
+        let ui_ctx = ui_ctx.clone();
+        let message_id = message_id.to_string();
+        tokio::spawn(async move {
+            let (message, notice) = match ui_ctx.retry_failed_message(&message_id).await {
+                Ok(message) => (Some(message), None),
+                Err(e) => {
+                    let message = message_id.parse::<MessageId>().ok()
+                        .and_then(|id| ui_ctx.get_message_local(&id));
+                    (message, Some(ui_ctx.format_send_error(&e, "send")))
+                }
+            };
+            let _ = slint::invoke_from_event_loop(move || {
+                let Some(w) = weak.upgrade() else { return };
+                let model = w.get_messages();
+                for i in 0..model.row_count() {
+                    let Some(mut row) = model.row_data(i) else { continue };
+                    if row.message_id.as_str() != message_id { continue; }
+                    if let Some(message) = &message {
+                        row.message_id = message.id.to_string().into();
+                        row.timestamp_ns = message.sent_at.to_string().into();
+                        row.delivery_status = if message.delivery_status.is_empty() { "sent".into() }
+                            else { message.delivery_status.clone().into() };
+                        row.failure_reason = message.failure_reason.clone().unwrap_or_default().into();
+                    } else {
+                        row.delivery_status = "failed".into();
+                    }
+                    model.set_row_data(i, row);
+                    break;
+                }
+                if let Some(notice) = notice {
+                    w.set_toast_message(notice.into());
+                    w.set_toast_variant("error".into());
+                    w.set_toast_visible(true);
+                    w.global::<crate::Haptics>().invoke_error();
+                }
+            });
         });
     });
 }
 
-/// Scroll to (and briefly flash) the message whose id matches `parent_id`,
-/// if it is present in the current UI model. Returns whether it was found.
-fn try_jump_to_message(w: &MainWindow, parent_id: &str) -> bool {
+/// `sent_at` of our own bubble `message_id` when it says "not sent".
+fn own_failed_timestamp(w: &MainWindow, message_id: &str) -> Option<u64> {
     let messages = w.get_messages();
-    for i in 0..messages.row_count() {
-        if let Some(m) = messages.row_data(i) {
-            if m.message_id.as_str() == parent_id {
-                w.set_scroll_to_message_index(i as i32);
-                w.set_highlighted_message_id(parent_id.into());
-
-                // Auto-clear the flash after ~1.5s — a brief pulse, not a
-                // permanent highlight.
-                let weak = w.as_weak();
-                Timer::single_shot(Duration::from_millis(1500), move || {
-                    if let Some(w) = weak.upgrade() {
-                        w.set_highlighted_message_id(SharedString::new());
-                    }
-                });
-                return true;
-            }
-        }
-    }
-    false
+    (0..messages.row_count())
+        .filter_map(|i| messages.row_data(i))
+        .find(|m| m.message_id.as_str() == message_id)
+        .filter(|m| m.is_own && m.delivery_status == "failed" && m.failure_reason.is_empty())
+        .and_then(|m| m.timestamp_ns.parse().ok())
 }
 
-/// Wire quote/reply-bubble click callback.
-///
-/// Jumps the message list to the quoted parent and flashes it. If the parent
-/// isn't loaded yet, pulls older history via `load-more` and re-resolves a few
-/// times as the model repopulates; if it still isn't found, logs and no-ops.
-pub fn wire_quote_clicked(window: &MainWindow) {
+/// Wire quote/reply-bubble click callback: jump to the quoted parent.
+pub fn wire_quote_clicked(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     let weak_window = window.as_weak();
+    let ui_ctx = ui_ctx.clone();
 
     window.on_quote_clicked(move |parent_id: SharedString| {
-        let parent_id = parent_id.to_string();
         if parent_id.is_empty() {
             return;
         }
-        let Some(w) = weak_window.upgrade() else { return };
-
-        // Fast path: parent already in the visible model.
-        if try_jump_to_message(&w, &parent_id) {
-            return;
-        }
-
-        // Parent not loaded — request older history, then re-resolve as the
-        // model repopulates. Bounded, self-owning single-shot timers avoid a
-        // retained-Timer reference cycle.
-        tracing::debug!(parent = %parent_id, "Quote target not loaded; requesting older history");
-        w.invoke_load_more();
-
-        let done = Rc::new(Cell::new(false));
-        for &delay_ms in &[200u64, 450, 750, 1100, 1500] {
-            let weak_try = w.as_weak();
-            let target = parent_id.clone();
-            let done = done.clone();
-            let is_last = delay_ms == 1500;
-            Timer::single_shot(Duration::from_millis(delay_ms), move || {
-                if done.get() {
-                    return;
-                }
-                if let Some(w) = weak_try.upgrade() {
-                    if try_jump_to_message(&w, &target) {
-                        done.set(true);
-                    } else if is_last {
-                        tracing::info!(
-                            parent = %target,
-                            "Quote parent still not loaded after fetching older history"
-                        );
-                    }
-                }
-            });
+        if let Some(w) = weak_window.upgrade() {
+            crate::bin_ui::features::header::jump_to_message(&w, &ui_ctx, parent_id.as_str());
         }
     });
 }

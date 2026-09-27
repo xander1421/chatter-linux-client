@@ -8,7 +8,7 @@
 //!
 //! All tests are gated by skip_if_no_server!() and require INTEGRATION_TESTS=1.
 
-mod common;
+use crate::{common, skip_if_no_server};
 use common::*;
 use chatter_core::network::grpc::*;
 use chatter_core::proto::chat_v1::*;

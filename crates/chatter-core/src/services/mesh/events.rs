@@ -133,6 +133,8 @@ pub struct MeshStatus {
 /// Everything the service surfaces.
 #[derive(Clone, Debug, PartialEq)]
 pub enum MeshEvent {
+    /// An announcement tried to replace a pinned identity key.
+    IdentityKeyChanged { peer: PeerId },
     /// A message arrived, or one we sent was mirrored into the timeline.
     Message(Box<MeshMessage>),
     /// Delivery state changed for a message this device sent.

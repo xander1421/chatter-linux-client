@@ -1,20 +1,18 @@
 fn main() {
-    slint_build::compile("../../ui/main.slint").unwrap();
-
-    // Slint's `ElementHandle` query API is inert unless the .slint compiler
-    // emitted debug info, and that is driven by an env var read at *build*
-    // time. Without it the UI tests do not fail with "you forgot a flag" —
-    // every query silently returns zero elements, so they fail as
-    // "ThreadPanel was never instantiated" and "there are no Rectangles",
-    // which reads like a broken UI rather than a wrong command line.
-    // Forward the answer so a test can say what actually happened.
-    println!("cargo:rerun-if-env-changed=SLINT_EMIT_DEBUG_INFO");
+    let target_os = std::env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
+    let profile = std::env::var("PROFILE").unwrap_or_default();
+    // ElementHandle queries need debug info. Keep it on for every host debug
+    // build so cargo check and UI tests use the same generated Slint code.
+    let debug_info = profile == "debug" && target_os != "android";
+    slint_build::compile_with_config(
+        "../../ui/main.slint",
+        slint_build::CompilerConfiguration::new().with_debug_info(debug_info),
+    )
+    .unwrap();
     println!(
         "cargo:rustc-env=CHATTER_UI_SLINT_DEBUG_INFO={}",
-        u8::from(std::env::var_os("SLINT_EMIT_DEBUG_INFO").is_some())
+        u8::from(debug_info)
     );
-
-    let target_os = std::env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
 
     if target_os == "macos" {
         // webrtc-sys links a static WebRTC lib containing Objective-C

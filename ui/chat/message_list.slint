@@ -42,11 +42,12 @@ export component MessageList inherits Rectangle {
     in property <string> privacy-line: "Messages are end-to-end encrypted";
     in property <bool> is-dm: false;  // When true, messages show minimal UI (no avatars/names in DMs)
     in property <bool> can-thread: true;
-    // No longer the list's viewport: a binding on `viewport-y` disables both
-    // clamps that keep a short conversation from opening pushed down from the
-    // top (the ListView runtime's and the Flickable's own — each checks
-    // `has_binding` first). Kept declared only because chat_layout / app /
-    // main still alias it; nothing reads or writes it any more.
+    // How far the list is scrolled from its top, as of the last layout pass
+    // (the runtime's estimate, see below). Written here, read by tests; never
+    // bound to `viewport-y`, because a binding there disables both clamps
+    // that keep a short conversation from opening pushed down from the top
+    // (the ListView runtime's and the Flickable's own — each checks
+    // `has_binding` first).
     in-out property <length> scroll-position: 0;
     in property <int> scroll-to-index: -1;  // Set to message index to scroll to it
     in property <string> highlighted-message-id: "";  // Message id to briefly flash (quote jump)
@@ -55,11 +56,14 @@ export component MessageList inherits Rectangle {
     in property <float> audio-progress: 0.0;
     in property <string> audio-elapsed: "0:00";
 
-    // Scroll state - exposed for parent to detect and control auto-scroll.
-    // in-out, not out: opening a conversation has to be able to reset it. When
-    // it was write-only-upward, a list left scrolled up in one conversation
-    // stayed "not at bottom" in the next one, and the next one opened wherever
-    // the previous scroll happened to leave the viewport.
+    // Following the newest message: within 50px of it when the list last came
+    // to rest. Only a scroll (finger, wheel, fling) or a jump takes it away —
+    // never the content growing underneath, which is the one moment it is
+    // needed. in-out, not out: opening a conversation has to be able to reset
+    // it, and a send sets it. When it was write-only-upward, a list left
+    // scrolled up in one conversation stayed "not at bottom" in the next one,
+    // and the next one opened wherever the previous scroll happened to leave
+    // the viewport.
     in-out property <bool> is-at-bottom: true;
     in property <bool> should-auto-scroll: true;  // Enable/disable auto-scroll behavior
 
@@ -87,7 +91,9 @@ export component MessageList inherits Rectangle {
             // conversation, it would drag the next one to its end on the
             // first layout pass, over its unread divider.
             root.at-end = false;
+            root.scrolling = false;
             root.load-more-armed = true;
+            root.seen-rows = 0;
         }
     }
 
@@ -98,16 +104,42 @@ export component MessageList inherits Rectangle {
     private property <int> end-passes: 0;
     // Sitting exactly on the newest message, as of the last layout pass.
     private property <bool> at-end: false;
-    // Row to land at the top edge, until the list has an estimate to seek by.
+    // Row to land at the top edge. Re-issued over a few passes: the first
+    // seek goes by the average row height, the next ones walk the rows that
+    // seek made live and close on the exact row.
     private property <int> jump-row: -1;
+    private property <int> jump-passes: 0;
     // Older history is requested once per approach to the top.
     private property <bool> load-more-armed: true;
+    // The user is scrolling: a finger, the wheel, or the fling either leaves
+    // behind (Flickable `flicked`, until the viewport has been still a moment).
+    private property <bool> scrolling: false;
+    // What the last layout pass saw, so the next one can tell a message
+    // arriving or a page of history from a scroll. 0 rows = no pass yet.
+    private property <int> seen-rows: 0;
+    private property <string> seen-first: "";
+    private property <length> seen-height: 0;
+    private property <length> seen-y: 0;
+    private property <int> seen-top: 0;
+    // The divider's row moved because history was inserted above it, not
+    // because a conversation opened on it.
+    private property <bool> unread-index-shifted: false;
     // A mirror `changed` can watch: a message arriving, or a page of history.
+    // The list does the same from its layout pass; whichever runs first.
     property <int> row-count: root.messages.length;
     changed row-count => {
         root.load-more-armed = true;
         if (root.is-at-bottom && root.should-auto-scroll && root.jump-row < 0) {
             root.go-to-end();
+        }
+    }
+
+    // Jump-to-message (quote click, search result, pinned bar). Watched here,
+    // not inside the list: a search result opens its conversation first, and
+    // the index can land before the list exists.
+    changed scroll-to-index => {
+        if (root.scroll-to-index >= 0) {
+            root.go-to-row(root.scroll-to-index);
         }
     }
 
@@ -123,10 +155,13 @@ export component MessageList inherits Rectangle {
         root.nav-serial += 1;
     }
 
-    // Row `i` at the top edge.
+    // Row `i` at the top edge. Leaves the end, so nothing may pull back to it.
     function go-to-row(i: int) {
         root.end-pending = false;
+        root.at-end = false;
+        root.is-at-bottom = false;
         root.jump-row = i;
+        root.jump-passes = 0;
         root.nav-serial += 1;
     }
 
@@ -283,6 +318,17 @@ export component MessageList inherits Rectangle {
         width: 100%;
         height: 100%;
 
+        // A fling reports its release, not its end: `scrolling` lasts until
+        // the viewport has been still this long. Runs only after a scroll.
+        at-rest := Timer {
+            interval: 300ms;
+            running: false;
+            triggered => {
+                self.running = false;
+                root.scrolling = false;
+            }
+        }
+
         list := ListView {
             width: 100%;
             height: 100%;
@@ -295,7 +341,9 @@ export component MessageList inherits Rectangle {
                 return self.viewport-height + self.viewport-y - self.height;
             }
 
-            function update-at-bottom() {
+            // Where the viewport came to rest.
+            function read-position() {
+                root.at-end = self.bottom-gap() <= 1px;
                 root.is-at-bottom = self.bottom-gap() <= 50px;
                 // Reaching the newest message is what "caught up" means; the
                 // pill must stop claiming N new messages after that, including
@@ -303,6 +351,16 @@ export component MessageList inherits Rectangle {
                 if (root.is-at-bottom) {
                     root.unread-count = 0;
                 }
+            }
+
+            // The runtime's estimate of the row at the top edge, within one.
+            pure function top-row() -> int {
+                return Math.floor(-self.viewport-y * root.messages.length / self.viewport-height);
+            }
+
+            // Row `i` starts below the bottom edge.
+            pure function is-below(i: int) -> bool {
+                return i * self.viewport-height / root.messages.length > self.height - self.viewport-y;
             }
 
             function seek-end() {
@@ -314,6 +372,15 @@ export component MessageList inherits Rectangle {
             // list's own height), and a row seek computed from it lands on
             // row 0.
             property <bool> measured: false;
+
+            // A finger, the wheel or a fling's release. Whatever was being
+            // pursued, the user has taken over.
+            flicked => {
+                root.scrolling = true;
+                root.end-pending = false;
+                root.jump-row = -1;
+                at-rest.restart();
+            }
 
             // Carry out whatever root just recorded.
             property <int> nav: root.nav-serial;
@@ -329,24 +396,40 @@ export component MessageList inherits Rectangle {
             }
 
             // Land row `i` at the top edge. The runtime seeks by its average
-            // row height: more than 1.5 screens from the live rows (every
-            // open, since a fresh list has measured one row) it places row
-            // `i` at exactly y = 0; nearer, it walks measured rows from the
-            // current anchor, and the row lands within about a row of the
-            // top — the highlight flash pins which one it is. Needs an
-            // estimate to seek by, so before the first layout this waits.
+            // row height: more than 1.5 screens from the live rows it places
+            // row `i` at exactly y = 0; nearer, it walks measured rows from
+            // the current anchor and lands within a row — so the seek is
+            // issued again from there, where the walk is a row long and
+            // exact. Needs an estimate to seek by, so before the first
+            // layout this waits.
+            property <length> row-y;
             function seek-row(i: int) {
                 if (root.messages.length > 0 && self.measured) {
                     // 1px past the row's estimated top so the runtime's
-                    // floor() picks `i`, not `i - 1`.
-                    self.viewport-y = -(i * self.viewport-height / root.messages.length) - 1px;
-                    root.jump-row = -1;
+                    // floor() picks `i`, not `i - 1`; and no further than the
+                    // list can scroll, or a row of the last screen (or of a
+                    // conversation shorter than one) is a target that is
+                    // never reached.
+                    self.row-y = Math.min(0px, Math.max(
+                        Math.min(0px, self.height - self.viewport-height),
+                        -(i * self.viewport-height / root.messages.length) - 1px));
+                    if (root.jump-passes >= 3 || Math.abs((self.row-y - self.viewport-y) / 1px) < 1) {
+                        root.jump-row = -1;
+                        self.read-position();
+                    } else {
+                        root.jump-passes += 1;
+                        self.viewport-y = self.row-y;
+                    }
                 }
             }
 
             // Every layout pass ends with the runtime rewriting viewport-y
-            // and/or viewport-height; this is where pending targets are
-            // re-issued until they hold, and where load-more fires.
+            // and/or viewport-height, which says nothing about who moved:
+            // the same two properties change for a finger, for a message
+            // arriving and for a row being measured. So each pass is told
+            // apart by what changed since the last one.
+            property <int> grown;
+            property <bool> prepended;
             function settle() {
                 // The runtime's "content shorter than the view" fix-up can
                 // leave viewport-y positive (rows pushed down from the top,
@@ -356,37 +439,72 @@ export component MessageList inherits Rectangle {
                     self.viewport-y = 0px;
                     return;
                 }
-                self.update-at-bottom();
-                root.at-end = self.bottom-gap() <= 1px;
-                if (root.end-pending) {
-                    if (root.at-end || root.end-passes >= 6) {
+                root.scroll-position = -self.viewport-y;
+                if (root.scrolling && self.viewport-y != root.seen-y) {
+                    at-rest.restart();
+                }
+                self.grown = root.seen-rows > 0 ? root.messages.length - root.seen-rows : 0;
+                self.prepended = self.grown > 0 && root.messages[0].message-id != root.seen-first;
+                if (self.grown != 0) {
+                    // Rows moved under a jump still being refined: its index
+                    // is no longer that row.
+                    root.jump-row = -1;
+                }
+                if (self.prepended && root.unread-index >= 0) {
+                    root.unread-index-shifted = true;
+                    root.unread-index += self.grown;
+                }
+                if (self.prepended && !root.is-at-bottom
+                        && Math.abs(self.top-row() - root.seen-top - self.grown) > 1) {
+                    // History landed while row 0 was live: the runtime put the
+                    // new rows on screen instead of above it. Back to the row
+                    // that was at the top.
+                    root.go-to-row(root.seen-top + self.grown);
+                } else if (root.end-pending) {
+                    if (self.bottom-gap() <= 1px || root.end-passes >= 6) {
                         root.end-pending = false;
+                        self.read-position();
                     } else {
                         root.end-passes += 1;
                         self.seek-end();
                     }
                 } else if (root.jump-row >= 0) {
                     self.seek-row(root.jump-row);
-                } else if (root.load-more-armed && self.viewport-y > -Spacing.xl * 4) {
-                    // Near the true top (the estimate is exact once row 0 is
-                    // live). Once per approach; re-armed when the model grows.
-                    root.load-more-armed = false;
-                    root.load-more();
+                } else if (self.grown != 0 && root.is-at-bottom && root.should-auto-scroll) {
+                    // A message arrived (or left) under a reader who was on
+                    // the newest one. Decided on where they were, not on the
+                    // gap the message itself just opened.
+                    root.go-to-end();
+                } else if (root.at-end && !root.scrolling
+                        && self.viewport-height != root.seen-height && self.bottom-gap() > 1px) {
+                    // A content re-estimate (a row measured, a thumbnail
+                    // grown) while sitting exactly on the end keeps the end.
+                    self.seek-end();
+                } else {
+                    self.read-position();
+                    if (root.load-more-armed && self.viewport-y > -self.height * 1.5) {
+                        // Approaching the top, early enough that the page is
+                        // in before row 0 is on screen: rows inserted above
+                        // the live ones move nothing.
+                        root.load-more-armed = false;
+                        root.load-more();
+                    } else if (self.viewport-y < -self.height * 3) {
+                        // Left the top; the next approach asks again.
+                        root.load-more-armed = true;
+                    }
                 }
+                root.seen-rows = root.messages.length;
+                root.seen-first = root.messages[0].message-id;
+                root.seen-height = self.viewport-height;
+                root.seen-y = self.viewport-y;
+                root.seen-top = self.top-row();
             }
 
             changed viewport-y => {
                 self.settle();
             }
-            // A content re-estimate (a row measured, a thumbnail grown) while
-            // sitting exactly on the end keeps the end in place. A finger
-            // moves viewport-y first, which clears `at-end` before any
-            // re-estimate its scrolling causes — so this never fights a drag.
             changed viewport-height => {
                 self.measured = true;
-                if (root.at-end && !root.end-pending) {
-                    self.seek-end();
-                }
                 self.settle();
             }
 
@@ -401,31 +519,28 @@ export component MessageList inherits Rectangle {
                 self.settle();
             }
 
-            // Mirror the root properties locally so `changed` fires inside
+            // Mirror the root property locally so `changed` fires inside
             // list scope.
             property <int> open-index: root.unread-index;
             changed open-index => {
-                if (self.open-index >= 0) {
+                if (root.unread-index-shifted) {
+                    root.unread-index-shifted = false;
+                } else if (self.open-index >= 0) {
                     root.go-to-row(self.open-index);
-                }
-            }
-
-            // Jump-to-message (quote click, search result, pinned bar).
-            property <int> jump-index: root.scroll-to-index;
-            changed jump-index => {
-                if (self.jump-index >= 0) {
-                    root.go-to-row(self.jump-index);
                 }
             }
 
             // The list is created fresh on every open (it lives under
             // `!loading`), before any row is laid out: record the intent and
             // let the first layout pass, inside this same frame, carry it out.
+            // A jump already recorded (a search result) outranks both.
             init => {
-                if (root.unread-index >= 0) {
-                    root.go-to-row(root.unread-index);
-                } else {
-                    root.go-to-end();
+                if (root.jump-row < 0) {
+                    if (root.unread-index >= 0) {
+                        root.go-to-row(root.unread-index);
+                    } else {
+                        root.go-to-end();
+                    }
                 }
                 self.pursue();
             }
@@ -566,6 +681,7 @@ export component MessageList inherits Rectangle {
                     reply-to-thumbnail-height: item.reply-to-thumbnail-height;
                     show-sender: item.show-sender;
                     delivery-status: item.delivery-status;
+                    failure-reason: item.failure-reason;
                     is-continuation: item.is-continuation;
                     selected: item.selected;
                     selection-mode: root.selection-mode;
@@ -669,12 +785,18 @@ export component MessageList inherits Rectangle {
 
             scroll-btn := TouchArea {
                 clicked => {
-                    // Consume the anchor: the user has chosen the newest
-                    // message, so no later relayout may drag them back up.
-                    root.unread-index = -1;
-                    root.unread-count = 0;
-                    root.is-at-bottom = true;
-                    root.go-to-end();
+                    if (root.unread-index >= 0 && list.is-below(root.unread-index)) {
+                        // Scrolled up past the unread boundary: that is
+                        // where reading resumes.
+                        root.go-to-row(root.unread-index);
+                    } else {
+                        // Consume the anchor: the user has chosen the newest
+                        // message, so no later relayout may drag them back up.
+                        root.unread-index = -1;
+                        root.unread-count = 0;
+                        root.is-at-bottom = true;
+                        root.go-to-end();
+                    }
                     root.scroll-to-bottom-clicked();
                 }
             }

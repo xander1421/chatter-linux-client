@@ -2,7 +2,7 @@
 //!
 //! Tests the Signal-style presigned attachment upload flow.
 
-mod common;
+use crate::{common, skip_if_no_server};
 
 use std::sync::Arc;
 

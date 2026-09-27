@@ -155,12 +155,16 @@ impl AudioRecorder {
         T: cpal::SizedSample,
         f32: cpal::FromSample<T>,
     {
+        // Bound memory even if the recording worker is temporarily delayed.
+        let max_samples = self.sample_rate as usize * self.channels as usize
+            * crate::services::voice_recording::MAX_RECORDING_SECONDS as usize;
         self.device
             .build_input_stream(
                 &self.config,
                 move |data: &[T], _: &cpal::InputCallbackInfo| {
                     let mut samples = samples.lock().unwrap();
-                    for &sample in data {
+                    let remaining = max_samples.saturating_sub(samples.len());
+                    for &sample in data.iter().take(remaining) {
                         // Convert to f32 for storage using cpal's FromSample trait
                         let f32_sample: f32 = cpal::Sample::from_sample(sample);
                         samples.push(f32_sample);

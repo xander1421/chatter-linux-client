@@ -98,7 +98,7 @@ fn test_03_directories_init() {
 }
 
 #[test]
-#[ignore] // Requires real keyring service (D-Bus secret service)
+#[ignore = "requires an unlocked D-Bus Secret Service; run serially"]
 fn test_04_keyring_access() {
     use chatter_core::system::Keyring;
     use std::path::PathBuf;
@@ -165,18 +165,13 @@ fn test_05_keyring_with_env_bypass() {
 }
 
 #[test]
-#[ignore] // Requires keyring for DB passphrase; run with --test-threads=1
 fn test_06_database_open() {
     use chatter_core::storage::Database;
 
     println!("\n=== Testing database open ===");
 
-    let test_db_path = std::path::PathBuf::from("/tmp/chatter-startup-test/test.db");
-
-    // Ensure parent directory exists
-    if let Some(parent) = test_db_path.parent() {
-        let _ = std::fs::create_dir_all(parent);
-    }
+    let dir = tempfile::tempdir().unwrap();
+    let test_db_path = dir.path().join("test.db");
 
     let (result, duration) = with_timeout("Database::open", || {
         Database::open(&test_db_path, "test-passphrase")
@@ -222,7 +217,7 @@ fn test_07_grpc_pool_creation() {
 }
 
 #[test]
-#[ignore] // Requires keyring + real filesystem; run with --test-threads=1
+#[ignore = "mutates process environment for full desktop initialization; run serially via make test-rust-ignored"]
 fn test_08_infrastructure_container() {
     println!("\n=== Testing InfrastructureContainer (full init) ===");
 
@@ -256,7 +251,7 @@ fn test_08_infrastructure_container() {
 }
 
 #[test]
-#[ignore] // Requires keyring + real filesystem; run with --test-threads=1
+#[ignore = "mutates process environment for full desktop initialization; run serially via make test-rust-ignored"]
 fn test_09_app_context() {
     println!("\n=== Testing AppContext (full app init) ===");
 
@@ -291,7 +286,7 @@ fn test_09_app_context() {
 
 /// Test that specifically checks for the keyring retry blocking issue.
 #[test]
-#[ignore] // Requires real keyring service (D-Bus secret service)
+#[ignore = "requires an unlocked D-Bus Secret Service; run serially"]
 fn test_10_keyring_no_retry_block() {
     use chatter_core::system::Keyring;
     use std::path::PathBuf;
@@ -324,45 +319,10 @@ fn test_10_keyring_no_retry_block() {
     }
 }
 
-/// Test with REAL retry parameters (6 retries, 5 second delays = 30+ seconds)
-/// This reproduces the actual hang in InfrastructureContainer
-#[test]
-#[ignore = "Takes 30+ seconds - run manually to verify hang behavior"]
-fn test_10b_keyring_real_retry_params() {
-    use chatter_core::system::Keyring;
-    use std::path::PathBuf;
-
-    println!("\n=== Testing keyring with REAL retry params (6, 5) ===");
-    println!("  WARNING: This test takes 30+ seconds if no passphrase exists");
-
-    // Fresh path with no entry
-    let unique_path = format!("/tmp/chatter-retry-test-{}", std::process::id());
-    let keyring = Keyring::new(PathBuf::from(&unique_path));
-
-    let start = std::time::Instant::now();
-
-    // These are the REAL parameters from InfrastructureContainer
-    let result = keyring.get_passphrase_with_retry(6, 5);
-
-    let elapsed = start.elapsed();
-
-    println!("  Result: {:?}", result.is_ok());
-    println!("  Total elapsed: {:?}", elapsed);
-
-    // If no passphrase exists, this SHOULD complete, but will take ~30 seconds
-    // The bug is that it takes way too long for a missing entry
-    assert!(result.is_err(), "Should fail (no entry)");
-
-    // This assertion shows the problem: 30 seconds for a simple "not found"
-    if elapsed > Duration::from_secs(25) {
-        println!("  BUG CONFIRMED: Took {:?} seconds just to find out there's no entry!", elapsed.as_secs());
-    }
-}
-
 /// Test keyring with the EXACT path the app uses (XDG_DATA_HOME based)
 /// Tests the NEW smart retry logic that fails fast on NoEntry errors.
 #[test]
-#[ignore] // Requires real keyring service (D-Bus secret service)
+#[ignore = "requires an unlocked D-Bus Secret Service; run serially"]
 fn test_11_keyring_real_path() {
     use chatter_core::system::{Directories, Keyring};
     use std::sync::mpsc;
@@ -465,7 +425,7 @@ fn test_12_keyring_set_passphrase() {
 
 /// Test the full passphrase_or_generate flow with real path
 #[test]
-#[ignore] // Requires real keyring + filesystem; run with --test-threads=1
+#[ignore = "requires unlocked Secret Service and mutates XDG_DATA_HOME; run serially"]
 fn test_13_infrastructure_real_path() {
     use std::sync::mpsc;
     use std::thread;

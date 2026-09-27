@@ -772,52 +772,41 @@ mod tests {
     }
 
 
-    /// Real-sample harness (opt-in): point GPS_SAMPLES_DIR at a directory of
-    /// GPS-tagged .jpg/.png/.mp4 files. Each is sanitized; the output must
-    /// contain no GPS bytes, still decode (images), and is written back as
-    /// <name>.sanitized.<ext> for external verification (exiftool).
-    /// Run: GPS_SAMPLES_DIR=... cargo test -p chatter-core --lib sanitize -- --ignored
-    /// This is the ONLY coverage of the MP4 moov.udta/meta GPS strip on a
-    /// real (mp4san-valid) file — a hand-crafted moov can't satisfy mp4san's
-    /// required-trak validation, so the crafted tests cover JPEG/PNG only.
+    /// Real, decodable GPS-tagged fixtures, generated from a black 16x16 frame
+    /// with FFmpeg; JPEG/PNG GPS EXIF was added with ExifTool. No external
+    /// services, tools or GPS_SAMPLES_DIR are needed to run this regression.
     #[test]
-    #[ignore]
     fn real_gps_samples_are_stripped_and_still_decode() {
-        let dir = std::env::var("GPS_SAMPLES_DIR").expect("set GPS_SAMPLES_DIR");
-        let hay = |needle: &[u8], hay: &[u8]| hay.windows(needle.len()).any(|w| w == needle);
-        let mut checked = 0;
-        for entry in std::fs::read_dir(&dir).unwrap() {
-            let path = entry.unwrap().path();
-            let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
-            if path.to_string_lossy().contains(".sanitized.")
-                || !matches!(ext, "jpg" | "jpeg" | "png" | "mp4")
-            {
-                continue;
-            }
-            let input = std::fs::read(&path).unwrap();
-            let out = match sanitize_media(&input)
-                .unwrap_or_else(|e| panic!("{path:?} must sanitize: {e:?}"))
-            {
-                SanitizeOutcome::Rewritten(b) => b,
-                SanitizeOutcome::Unchanged => input.clone(),
+        let samples: [(&str, &[u8]); 3] = [
+            ("jpg", include_bytes!("../../../tests/fixtures/gps/location.jpg")),
+            ("png", include_bytes!("../../../tests/fixtures/gps/location.png")),
+            ("mp4", include_bytes!("../../../tests/fixtures/gps/location.mp4")),
+        ];
+        let hay = |needle: &[u8], bytes: &[u8]| bytes.windows(needle.len()).any(|w| w == needle);
+        for (ext, input) in samples {
+            let out = match sanitize_media(input).expect("GPS fixture must sanitize") {
+                SanitizeOutcome::Rewritten(bytes) => bytes,
+                SanitizeOutcome::Unchanged => panic!("{ext}: GPS fixture was not stripped"),
             };
-            for needle in [&b"GPSLatitude"[..], b"48.8583", b"2.2944", b"+48.8583"] {
-                assert!(
-                    !hay(needle, &out),
-                    "{path:?}: GPS needle {:?} survived sanitize",
-                    String::from_utf8_lossy(needle)
-                );
+            assert!(out.len() < input.len(), "{ext}: metadata must be removed");
+            assert!(validate_media(&out).is_ok(), "{ext}: sanitized media must remain valid");
+            if ext == "mp4" {
+                assert!(hay(b"udta", input), "fixture must exercise moov.udta stripping");
+                assert!(!hay(b"udta", &out), "MP4 private metadata survived");
+                assert!(!hay(b"+48.8583", &out), "MP4 GPS location survived");
+            } else {
+                // JPEG EXIF APP1 and PNG eXIf both carry binary GPS rationals;
+                // testing just an ASCII coordinate would miss those encodings.
+                if ext == "jpg" {
+                    assert!(hay(b"Exif", input));
+                    assert!(!hay(b"Exif", &out));
+                } else {
+                    assert!(hay(b"eXIf", input));
+                    assert!(!hay(b"eXIf", &out));
+                }
+                image::load_from_memory(&out).expect("stripped image must still decode");
             }
-            if ext != "mp4" {
-                assert!(!hay(b"Exif", &out), "{path:?}: Exif block survived");
-                image::load_from_memory(&out)
-                    .unwrap_or_else(|e| panic!("{path:?}: stripped image no longer decodes: {e}"));
-            }
-            let out_path = path.with_extension(format!("sanitized.{ext}"));
-            std::fs::write(&out_path, &out).unwrap();
-            checked += 1;
         }
-        assert!(checked >= 3, "expected at least 3 sample files, checked {checked}");
     }
 
 

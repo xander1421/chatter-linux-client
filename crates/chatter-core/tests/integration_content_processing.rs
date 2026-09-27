@@ -6,7 +6,7 @@
 //! - Multi-device sync detection
 //! - Inbox processor message routing
 
-mod common;
+use crate::{common, skip_if_no_server};
 
 use chatter_core::network::grpc::{ChannelClient, MessageClient};
 use chatter_core::proto::chat_v1::{
@@ -334,7 +334,7 @@ async fn test_server_text_message_roundtrip() {
 
     let sent_message = assert_ok(
         msg_client
-            .send_message(&channel_id, content, None, false, None, None, vec![], false, vec![])
+            .send_message(&channel_id, content, None, false, None, vec![], false, vec![])
             .await,
     );
 

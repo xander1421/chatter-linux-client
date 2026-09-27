@@ -163,3 +163,19 @@ fn a_local_read_returns_what_it_flipped() {
         .1
         .is_empty());
 }
+
+#[test]
+fn a_read_sync_never_marks_another_peers_dm_at_the_same_time() {
+    let (_tmp, db) = setup();
+    let repo = MessageRepository::new(db);
+    let me = UserId::new();
+    let peer = UserId::new();
+    let other = UserId::new();
+    let ts = 1_700_000_000_000_000_000;
+    let conv = ChannelId::from(peer);
+    let intended = unread_from(&repo, conv, ConversationType::ServerDm, peer, ts);
+    let unrelated = unread_from(&repo, ChannelId::from(other), ConversationType::ServerDm, other, ts);
+    assert_eq!(repo.mark_read_synced(&[(conv, peer, ts)], &me).unwrap(), vec![conv]);
+    assert!(is_read(&repo, &intended));
+    assert!(!is_read(&repo, &unrelated));
+}

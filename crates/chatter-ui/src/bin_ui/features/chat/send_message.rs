@@ -287,7 +287,9 @@ pub fn wire_send(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             };
 
             // Scale timeout for attachments: base 10s + 30s per attachment.
-            let send_timeout = if pending_attachments.is_empty() {
+            let send_timeout = if matches!(conversation, ActiveConversation::Channel(_)) {
+                std::time::Duration::from_secs(35 + 30 * pending_attachments.len() as u64)
+            } else if pending_attachments.is_empty() {
                 crate::bin_ui::ui_helpers::UI_SERVICE_TIMEOUT
             } else {
                 std::time::Duration::from_secs(10 + 30 * pending_attachments.len() as u64)
@@ -322,17 +324,6 @@ pub fn wire_send(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                     // send against a dead server cleared the composer and
                     // reported nothing at all.
                     report_send_failure(&weak, ui_ctx.format_send_error(&e, "send"));
-                    // The server answered no, so the message did not leave:
-                    // the composer cleared itself on tap, so the text goes
-                    // back — unless something was typed in the meantime.
-                    let weak_restore = weak.clone();
-                    let _ = slint::invoke_from_event_loop(move || {
-                        if let Some(w) = weak_restore.upgrade() {
-                            if w.get_composer_text().is_empty() {
-                                w.set_composer_text(text.into());
-                            }
-                        }
-                    });
                     // A refusal means we are muted or were removed, and no
                     // event told us: re-read the roster and swap the composer
                     // for the notice.
@@ -377,6 +368,8 @@ pub fn wire_send(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             let delivery_status = ui_result.delivery_status;
             let bootstrap_initiated = ui_result.bootstrap_initiated;
             let sent_at = ui_result.sent_at;
+            let failure_notice = ui_result.failure_notice.clone();
+            let failure_reason = ui_result.failure_reason.clone().unwrap_or_default();
 
             tracing::info!(msg_id = %msg_id, "[UI_SEND] scheduling invoke_from_event_loop for append");
             let _ = slint::invoke_from_event_loop(move || {
@@ -402,7 +395,7 @@ pub fn wire_send(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                             (slint::Image::from_rgba8(buf), true, w as i32, h as i32)
                         })
                         .unwrap_or_else(|| (slint::Image::default(), false, 0, 0));
-                    let msg_item = super::helpers::build_own_message_item(
+                    let mut msg_item = super::helpers::build_own_message_item(
                         &msg_id, &current_user_id, &current_user_name, &sent_text,
                         &timestamp_str, sent_at, slint_attachments,
                         is_reply, &reply_sender_name, &reply_preview_text,
@@ -418,7 +411,10 @@ pub fn wire_send(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                             "[UI_SEND] calling append_message_to_ui"
                         );
                     }
+                    msg_item.failure_reason = failure_reason.into();
+                    let draft = w.get_composer_text();
                     super::helpers::append_message_to_ui(&w, msg_item);
+                    w.set_composer_text(draft);
                     {
                         use slint::Model;
                         tracing::info!(
@@ -429,6 +425,15 @@ pub fn wire_send(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
 
                     if bootstrap_initiated {
                         w.set_composer_placeholder("Setting up secure channel...".into());
+                    }
+
+                    // Stored but not delivered: the bubble says "not sent"
+                    // (tap to retry); the reason is told once, here.
+                    if let Some(notice) = failure_notice {
+                        w.set_toast_message(notice.into());
+                        w.set_toast_variant("error".into());
+                        w.set_toast_visible(true);
+                        w.global::<crate::Haptics>().invoke_error();
                     }
 
                     crate::bin_ui::features::sidebar::update_sidebar_preview(

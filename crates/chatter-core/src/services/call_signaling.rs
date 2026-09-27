@@ -1272,6 +1272,7 @@ impl CallSignalingService {
                             mentioned_integrations: vec![],
                             targets_ai_bot: false,
                             delivery_status: String::new(),
+                            failure_reason: None,
                         };
                         self.message_service.event_bus.emit_domain(
                             DomainEvent::MessageReceived { message: domain_msg },
@@ -1397,6 +1398,7 @@ impl CallSignalingService {
             mentioned_integrations: vec![],
             targets_ai_bot: false,
             delivery_status: String::new(),
+            failure_reason: None,
         };
 
         if let Err(e) = self.message_service.store_message_local(&message) {

@@ -74,19 +74,14 @@ use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError, Weak};
 
 use chatter_mesh_link::{BoxFuture, LinkError, LinkEvent, LinkId, LinkRole, MeshLink};
-use tokio::sync::{Mutex as AsyncMutex, mpsc};
+use tokio::sync::Notify;
 
 use crate::bridge;
 use crate::error;
 
-/// How many events may sit in the queue before the oldest producer starts
-/// losing them.
-///
-/// Bounded, and bounded deliberately. Events are produced on binder threads: an
-/// unbounded queue turns a stalled consumer into an out-of-memory kill, and
-/// blocking to apply backpressure would stall the entire Android Bluetooth
-/// stack, not merely this app. Dropping with a loud log is the only option that
-/// fails locally.
+/// Soft event limit: evict the oldest data/discovery event under pressure.
+/// Lifecycle-only bursts may exceed it so the policy layer never retains a
+/// phantom link or misses a new connection. Binder callbacks never await space.
 const EVENT_QUEUE_CAPACITY: usize = 256;
 
 /// How many inbound packets to hold for a connection that has delivered bytes
@@ -377,22 +372,17 @@ impl Connections {
 /// State shared between the link object and the JNI callbacks.
 struct Shared {
     conns: Mutex<Connections>,
-    /// `None` once the link layer has been stopped. Dropping the sender is what
-    /// ends `next_event`: the receiver hands back whatever is still queued and
-    /// then resolves to `None` forever, with no separate shutdown signal to
-    /// race against.
-    events_tx: Mutex<Option<mpsc::Sender<LinkEvent>>>,
-    queue: AsyncMutex<mpsc::Receiver<LinkEvent>>,
+    queue: Mutex<(std::collections::VecDeque<LinkEvent>, bool)>,
+    available: Notify,
     capacity: usize,
 }
 
 impl Shared {
     fn new(capacity: usize) -> Arc<Self> {
-        let (events_tx, events_rx) = mpsc::channel(capacity);
         Arc::new(Self {
             conns: Mutex::new(Connections::default()),
-            events_tx: Mutex::new(Some(events_tx)),
-            queue: AsyncMutex::new(events_rx),
+            queue: Mutex::new((std::collections::VecDeque::new(), false)),
+            available: Notify::new(),
             capacity,
         })
     }
@@ -404,43 +394,29 @@ impl Shared {
     }
 
     fn stopped(&self) -> bool {
-        self.events_tx.lock().unwrap_or_else(PoisonError::into_inner).is_none()
+        self.queue.lock().unwrap_or_else(PoisonError::into_inner).1
     }
 
-    /// Drop the sending half, ending `next_event` once the queue drains.
     fn close_queue(&self) {
-        *self.events_tx.lock().unwrap_or_else(PoisonError::into_inner) = None;
+        self.queue.lock().unwrap_or_else(PoisonError::into_inner).1 = true;
+        self.available.notify_one();
     }
 
-    /// Queue an event, dropping it rather than waiting for room.
-    ///
-    /// Called from binder threads, so it must never block: a blocked Bluetooth
-    /// callback stalls the whole Android Bluetooth stack, not just this app.
-    /// A full queue means the policy layer has stopped draining, and the honest
-    /// response is to lose events loudly rather than to buffer without limit
-    /// off a radio anyone in range can talk to.
+    // Data/discovery pressure must never lose link lifecycle transitions.
+    // If only lifecycle events remain, allow them beyond the soft capacity.
     fn emit(&self, event: LinkEvent) {
-        let sender = { self.events_tx.lock().unwrap_or_else(PoisonError::into_inner).clone() };
-        let Some(sender) = sender else {
-            error::log_warn(&format!(
-                "mesh: event after shutdown, dropping {}",
-                describe(&event)
-            ));
-            return;
-        };
-
-        match sender.try_send(event) {
-            Ok(()) => {}
-            Err(mpsc::error::TrySendError::Full(dropped)) => error::log_warn(&format!(
-                "mesh: event queue full at {} events, dropping {} — the policy layer is not draining",
-                self.capacity,
-                describe(&dropped)
-            )),
-            Err(mpsc::error::TrySendError::Closed(dropped)) => error::log_warn(&format!(
-                "mesh: event queue closed, dropping {}",
-                describe(&dropped)
-            )),
+        let mut queue = self.queue.lock().unwrap_or_else(PoisonError::into_inner);
+        if queue.1 { return; }
+        if queue.0.len() >= self.capacity {
+            if let Some(index) = queue.0.iter().position(|event| !lifecycle(event)) {
+                queue.0.remove(index);
+            } else if !lifecycle(&event) {
+                return;
+            }
         }
+        queue.0.push_back(event);
+        drop(queue);
+        self.available.notify_one();
     }
 
     /// Register an outbound attempt and hand back its id.
@@ -792,8 +768,15 @@ impl MeshLink for AndroidLink {
 
     fn next_event(&self) -> BoxFuture<'_, Option<LinkEvent>> {
         Box::pin(async move {
-            let mut queue = self.inner.queue.lock().await;
-            queue.recv().await
+            loop {
+                let available = self.inner.available.notified();
+                {
+                    let mut queue = self.inner.queue.lock().unwrap_or_else(PoisonError::into_inner);
+                    if let Some(event) = queue.0.pop_front() { return Some(event); }
+                    if queue.1 { return None; }
+                }
+                available.await;
+            }
         })
     }
 }
@@ -826,9 +809,9 @@ mod tests {
     /// Everything currently queued. Needs no runtime — `try_recv` is
     /// synchronous, which is what keeps these tests executor-free.
     fn drain_events(shared: &Shared) -> Vec<LinkEvent> {
-        let mut queue = shared.queue.try_lock().expect("nothing else holds the queue");
+        let mut queue = shared.queue.lock().expect("queue lock");
         let mut events = Vec::new();
-        while let Ok(event) = queue.try_recv() {
+        while let Some(event) = queue.0.pop_front() {
             events.push(event);
         }
         events
@@ -1184,6 +1167,22 @@ mod tests {
     // -- the bounded queue -------------------------------------------------
 
     #[test]
+    fn queue_pressure_keeps_every_lifecycle_transition_in_order() {
+        let shared = shared(2);
+        let link = LinkId::new("central:test#1");
+        let connected = LinkEvent::Connected { link: link.clone(), role: LinkRole::Central, max_write: 244 };
+        let disconnected = LinkEvent::Disconnected { link: link.clone() };
+        shared.emit(connected.clone());
+        for _ in 0..8 {
+            shared.emit(LinkEvent::Data { link: link.clone(), bytes: vec![1] });
+        }
+        shared.emit(disconnected.clone());
+        shared.emit(LinkEvent::Data { link: link.clone(), bytes: vec![2] });
+        shared.emit(connected.clone()); // Lifecycle-only overflow is retained too.
+        assert_eq!(drain_events(&shared), vec![connected.clone(), disconnected, connected]);
+    }
+
+    #[test]
     fn a_full_queue_drops_rather_than_blocking_the_binder_thread() {
         // Blocking here would stall the entire Android Bluetooth stack, and
         // buffering without limit off a radio anyone in range can talk to is an
@@ -1195,10 +1194,9 @@ mod tests {
 
         let events = drain_events(&shared);
         assert_eq!(events.len(), 2, "the queue must not grow past its bound");
-        // The oldest survive: `try_send` refuses the newcomer rather than
-        // evicting, which keeps ordering intact for whatever is still queued.
-        assert_eq!(events[0], LinkEvent::Discovered { address: PEER.to_string(), rssi: -40, peer: None });
-        assert_eq!(events[1], LinkEvent::Discovered { address: PEER.to_string(), rssi: -50, peer: None });
+        // Oldest non-lifecycle events are evicted.
+        assert_eq!(events[0], LinkEvent::Discovered { address: PEER.to_string(), rssi: -60, peer: None });
+        assert_eq!(events[1], LinkEvent::Discovered { address: PEER.to_string(), rssi: -70, peer: None });
     }
 
     #[test]
@@ -1345,4 +1343,9 @@ mod tests {
         assert_send_sync::<AndroidLink>();
         assert_send_sync::<Shared>();
     }
+}
+
+
+fn lifecycle(event: &LinkEvent) -> bool {
+    matches!(event, LinkEvent::Connected { .. } | LinkEvent::Disconnected { .. })
 }

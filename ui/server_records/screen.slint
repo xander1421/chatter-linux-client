@@ -1,0 +1,85 @@
+import { Modal } from "../components/modal.slint";
+import { Button } from "../components/button.slint";
+import { Colors } from "../theme/colors.slint";
+import { Spacing } from "../theme/spacing.slint";
+import { Typography } from "../theme/typography.slint";
+import { ScrollView } from "std-widgets.slint";
+
+export struct ServerRecordRow { id: string, title: string, body: string, primary: string, secondary: string }
+export global ServerRecordsGlobal {
+    in-out property <string> kind;
+    in-out property <string> channel;
+    in-out property <[ServerRecordRow]> rows;
+    in-out property <string> next;
+    in-out property <bool> loading;
+    in-out property <string> error;
+    callback open(string, string);
+    callback load(bool);
+    callback act(string, string);
+}
+
+export component ServerRecordsScreen inherits Rectangle {
+    in property <bool> mobile-mode;
+    callback close();
+    Modal {
+        show: true;
+        title: ServerRecordsGlobal.kind == "notifications" ? "Notification inbox" : ServerRecordsGlobal.kind == "integrations" ? "Channel integrations" : "Channel call history";
+        modal-width: 600px;
+        max-modal-height: 800px;
+        fill-height: true;
+        full-screen: root.mobile-mode;
+        close => { root.close(); }
+        VerticalLayout {
+            spacing: Spacing.md;
+            HorizontalLayout {
+                spacing: Spacing.sm;
+                Button { text: "Refresh"; variant: "secondary"; disabled: ServerRecordsGlobal.loading; clicked => { ServerRecordsGlobal.load(false); } }
+                if ServerRecordsGlobal.kind == "notifications": Button {
+                    text: "Mark all read"; variant: "secondary"; disabled: ServerRecordsGlobal.loading;
+                    clicked => { ServerRecordsGlobal.act("", "Mark all read"); }
+                }
+            }
+            if ServerRecordsGlobal.kind == "integrations": Text {
+                text: "Install your configured integrations in this channel, or remove an installed integration.";
+                wrap: word-wrap; color: Colors.text-secondary; font-size: Typography.sm;
+            }
+            if ServerRecordsGlobal.kind == "calls": Text {
+                text: "Call records from this channel’s server. Private call history stays in Calls.";
+                wrap: word-wrap; color: Colors.text-secondary; font-size: Typography.sm;
+            }
+            if ServerRecordsGlobal.error != "": Text {
+                text: ServerRecordsGlobal.error; wrap: word-wrap; color: Colors.error;
+            }
+            if ServerRecordsGlobal.loading: Text { text: "Loading…"; color: Colors.text-secondary; }
+            if !ServerRecordsGlobal.loading && ServerRecordsGlobal.error == "" && ServerRecordsGlobal.rows.length == 0: Text {
+                text: "No records yet"; color: Colors.text-secondary;
+            }
+            ScrollView {
+                vertical-stretch: 1;
+                VerticalLayout {
+                    spacing: Spacing.md;
+                    for row in ServerRecordsGlobal.rows: VerticalLayout {
+                        spacing: Spacing.xs;
+                        Text { text: row.title; wrap: word-wrap; color: Colors.text-primary; font-size: Typography.base; }
+                        Text { text: row.body; wrap: word-wrap; color: Colors.text-secondary; font-size: Typography.sm; }
+                        HorizontalLayout {
+                            spacing: Spacing.sm;
+                            if row.primary != "": Button {
+                                text: row.primary; variant: "secondary"; disabled: ServerRecordsGlobal.loading;
+                                clicked => { ServerRecordsGlobal.act(row.id, row.primary); }
+                            }
+                            if row.secondary != "": Button {
+                                text: row.secondary; variant: "ghost"; disabled: ServerRecordsGlobal.loading;
+                                clicked => { ServerRecordsGlobal.act(row.id, row.secondary); }
+                            }
+                        }
+                    }
+                }
+            }
+            if ServerRecordsGlobal.next != "": Button {
+                text: "Load more"; variant: "secondary"; disabled: ServerRecordsGlobal.loading;
+                clicked => { ServerRecordsGlobal.load(true); }
+            }
+        }
+    }
+}

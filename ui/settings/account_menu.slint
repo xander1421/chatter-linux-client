@@ -69,6 +69,7 @@ export component AccountMenu inherits Rectangle {
     callback saved-messages();
     callback new-channel();
     callback settings();
+    callback notifications();
 
     function toggle-night() {
         Appearance.theme = Appearance.dark ? "light" : "dark";
@@ -123,6 +124,7 @@ export component AccountMenu inherits Rectangle {
                 // (sidebar.slint hides both), so neither is offered here.
                 if !AnonMode.enabled: MenuRow { icon: Icons.bookmark; label: "Saved Messages"; clicked => { root.saved-messages(); } }
                 if !AnonMode.enabled: MenuRow { icon: Icons.megaphone; label: "New Channel"; clicked => { root.new-channel(); } }
+                MenuRow { icon: Icons.bell; label: "Notification inbox"; clicked => { root.notifications(); } }
                 MenuRow { icon: Icons.settings; label: "Settings"; clicked => { root.settings(); } }
                 Divider { }
 

@@ -42,6 +42,14 @@ pub enum StorageKey {
     /// about who this device is messaging and when — so unlike [`Self::Metrics`] it
     /// is not safe to persist in the clear.
     BridgeDropDedup,
+    /// The keys each peer ID was first seen with.
+    ///
+    /// Must survive a restart, or trust on first use starts over every launch
+    /// and the first announce to claim a known peer's ID is believed.
+    ///
+    /// **Seal this one** too: public keys, but the list of them is everyone
+    /// this device has been near.
+    PeerPins,
 }
 
 impl StorageKey {
@@ -55,6 +63,7 @@ impl StorageKey {
         StorageKey::PublicArchive,
         StorageKey::Metrics,
         StorageKey::BridgeDropDedup,
+        StorageKey::PeerPins,
     ];
 
     /// Stable identifier for a file name or a database row.
@@ -65,6 +74,7 @@ impl StorageKey {
             StorageKey::PublicArchive => "public-archive",
             StorageKey::Metrics => "sf-metrics",
             StorageKey::BridgeDropDedup => "bridge-drop-dedup",
+            StorageKey::PeerPins => "peer-pins",
         }
     }
 }

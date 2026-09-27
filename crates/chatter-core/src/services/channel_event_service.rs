@@ -869,6 +869,7 @@ impl ChannelEventService {
             mentioned_integrations: Vec::new(),
             targets_ai_bot: false,
             delivery_status: String::new(),
+            failure_reason: None,
         }
     }
 }

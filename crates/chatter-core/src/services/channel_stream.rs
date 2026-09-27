@@ -27,9 +27,12 @@
 //!   replays from the server's event log instead of relying on the catch-up.
 //!
 //! The catch-up is the correctness path; the cursor is a latency
-//! optimisation. Redis cannot tell a client "your cursor was trimmed", so a
-//! resume that lands past the server's replay buffer silently returns less
-//! than was missed — which is exactly why every connect also syncs.
+//! optimisation. The server's event log is a bounded replay buffer, and when
+//! a cursor has fallen out of it (or replaying would exceed the server's
+//! budget) the server says so with a `ResyncRequired` event instead of
+//! replaying a partial history. That event means "what you missed is not
+//! coming on this stream": we take the cursor it hands us and run the durable
+//! sync again (OPEN-ITEMS §40/§56).
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -299,6 +302,33 @@ impl ChannelStreamService {
         }
     }
 
+    /// The server could not replay everything after our cursor: it was older
+    /// than the event log retains, a channel's buffer was trimmed past it, or
+    /// the stream's replay budget ran out. What it skipped is not coming on
+    /// this stream, so fetch it from the durable store — the sync cycle covers
+    /// the channel list, members and messages (OPEN-ITEMS §40/§56).
+    ///
+    /// Forced, not rate-limited, for the same reason as the connect-time
+    /// catch-up: a throttle that skips this one leaves the gap open.
+    async fn handle_resync(&self, new_cursor: &str, resync: &chat_v1::ResyncRequired) {
+        tracing::info!(
+            channels = resync.channel_ids.len(),
+            new_cursor,
+            "Server could not replay from our cursor; resyncing from the durable store"
+        );
+        if new_cursor.is_empty() {
+            // Nothing is buffered to resume against. Keeping the old cursor
+            // would present the same dead position on every reconnect and be
+            // told to resync every time.
+            if let Err(e) = self.settings_repo.delete(CURSOR_KEY) {
+                tracing::debug!(error = %e, "Failed to clear stream resume cursor");
+            }
+        } else {
+            self.store_cursor(new_cursor);
+        }
+        self.catch_up_now().await;
+    }
+
     /// Dispatch one `MessageEvent`.
     ///
     /// INFRA-4: the oneof has five arms and the server constructs all five.
@@ -308,6 +338,12 @@ impl ChannelStreamService {
     async fn handle_event(&self, event: chat_v1::MessageEvent) {
         if event.event_id == STREAM_READY_EVENT_ID {
             tracing::debug!("Channel message stream ready");
+            return;
+        }
+        // Before anything that reads channel_id: a resync covers several
+        // channels and carries none of its own.
+        if let Some(MsgEventType::ResyncRequired(resync)) = &event.event {
+            self.handle_resync(&event.event_id, resync).await;
             return;
         }
         self.store_cursor(&event.event_id);
@@ -335,23 +371,14 @@ impl ChannelStreamService {
             Some(MsgEventType::MessageDeletedId(id)) => {
                 self.handle_delete(&id, channel_id);
             }
-            Some(MsgEventType::ReactionAdded(update)) | Some(MsgEventType::ReactionRemoved(update)) => {
-                // Deliberately not applied. `ReactionUpdate` carries the
-                // target message and emoji but NOT the reactor's user id, and
-                // per-user reaction state cannot be reconstructed without it —
-                // applying this would mean inventing a reactor. Nothing in
-                // this client calls the server's AddReaction RPC either: every
-                // reaction we send or receive rides E2E content through the
-                // device inbox (`inbox_processor`), which does carry the
-                // reactor. Adding `reactor_id` to the proto is WP5's call; if
-                // it lands, apply it here.
-                tracing::debug!(
-                    %channel_id,
-                    emoji = %update.emoji,
-                    target_author = %update.target_author_aci,
-                    "Server reaction event ignored: proto carries no reactor id (E2E path is authoritative)"
-                );
+            Some(MsgEventType::ReactionAdded(update)) => {
+                self.handle_reaction(update, channel_id, false, event.timestamp);
             }
+            Some(MsgEventType::ReactionRemoved(update)) => {
+                self.handle_reaction(update, channel_id, true, event.timestamp);
+            }
+            // Handled above, before the channel_id parse.
+            Some(MsgEventType::ResyncRequired(_)) => {}
             None => {
                 tracing::warn!(
                     %channel_id,
@@ -359,6 +386,56 @@ impl ChannelStreamService {
                     "Message event with no payload arm"
                 );
             }
+        }
+    }
+
+    fn handle_reaction(
+        &self,
+        update: chat_v1::ReactionUpdate,
+        channel_id: ChannelId,
+        remove: bool,
+        timestamp: u64,
+    ) {
+        let (Ok(sender_id), Ok(reactor_id)) =
+            (update.target_author_aci.parse(), update.reactor_id.parse())
+        else {
+            tracing::warn!(%channel_id, "Reaction event has invalid author or reactor identity");
+            return;
+        };
+        // A stream must never mutate a target in another conversation.
+        match self.messages.get_by_sender_timestamp(&sender_id, update.target_sent_timestamp) {
+            Ok(Some(message)) if message.conversation_id == channel_id => {}
+            _ => return,
+        }
+        match self.messages.record_reaction(
+            &sender_id,
+            update.target_sent_timestamp,
+            &reactor_id,
+            &update.emoji,
+            remove,
+        ) {
+            Ok(true) => {
+                let event = if remove {
+                    DomainEvent::ReactionRemoved {
+                        sender_id,
+                        sent_at_ns: update.target_sent_timestamp,
+                        reactor_id,
+                        emoji: update.emoji,
+                        timestamp: timestamp / 1_000_000,
+                    }
+                } else {
+                    DomainEvent::ReactionAdded {
+                        sender_id,
+                        sent_at_ns: update.target_sent_timestamp,
+                        reactor_id,
+                        emoji: update.emoji,
+                        timestamp: timestamp / 1_000_000,
+                    }
+                };
+                self.event_bus.emit_domain(event);
+            }
+            Ok(false) => {}
+            Err(error) => tracing::warn!(%error, %channel_id, "Failed to persist server reaction"),
         }
     }
 
@@ -500,6 +577,53 @@ mod subscribe_before_backfill {
             "catch_up_now must ignore the rate limiter: a reconnecting client has usually \
              synced within MIN_CATCHUP_INTERVAL, so throttling it would skip precisely the \
              sync that closes the subscribe window (§103)."
+        );
+    }
+}
+
+/// §40/§56 — a `ResyncRequired` event names its channels in the payload and
+/// leaves `MessageEvent.channel_id` empty, so it has to be dispatched before
+/// the channel_id parse that drops unroutable events, and it has to end in a
+/// durable sync that the rate limiter cannot skip. Same reasoning as
+/// `subscribe_before_backfill` for reading the source: both properties are
+/// about order and call choice inside one function.
+#[cfg(test)]
+mod resync_required {
+    #[test]
+    fn a_resync_is_handled_before_the_channel_id_parse() {
+        let src = include_str!("channel_stream.rs");
+        let body = src
+            .split_once("async fn handle_event")
+            .expect("handle_event still exists")
+            .1;
+        let body = body.split_once("\n    fn ").map(|(b, _)| b).unwrap_or(body);
+
+        let resync = body
+            .find("self.handle_resync(")
+            .expect("handle_event must dispatch ResyncRequired");
+        let parse = body
+            .find("event.channel_id.parse")
+            .expect("handle_event still parses channel_id");
+        assert!(
+            resync < parse,
+            "ResyncRequired carries no channel_id; dispatching it after the parse drops it \
+             as unroutable and the gap it announces is never backfilled."
+        );
+    }
+
+    #[test]
+    fn a_resync_forces_the_durable_catch_up() {
+        let src = include_str!("channel_stream.rs");
+        let body = src
+            .split_once("async fn handle_resync")
+            .expect("handle_resync still exists")
+            .1;
+        let body = body.split_once("\n    /// Dispatch one").map(|(b, _)| b).unwrap_or(body);
+
+        assert!(
+            body.contains("self.catch_up_now().await"),
+            "a resync must run the forced catch-up: the skipped events are not coming on \
+             the stream, and the rate-limited catch_up() can skip the sync that fetches them."
         );
     }
 }

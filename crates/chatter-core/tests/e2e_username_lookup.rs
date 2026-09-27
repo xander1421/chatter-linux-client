@@ -8,8 +8,7 @@
 //! Requires `INTEGRATION_TESTS=1` + a server on `localhost:50051`
 //! (`skip_if_no_server!()`). Isolated tempdir per client.
 
-#[macro_use]
-mod common;
+use crate::{common, skip_if_no_server};
 
 use std::sync::Arc;
 

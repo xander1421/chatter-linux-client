@@ -3,7 +3,7 @@
 //! Tests channel operations including create, get, list, search,
 //! join/leave, archive, and membership management.
 
-mod common;
+use crate::{common, skip_if_no_server};
 
 use chatter_core::error::NetworkError;
 use chatter_core::network::grpc::ChannelClient;

@@ -11,6 +11,7 @@
 #
 # Usage: ./build-android.sh [install]
 #   install -> also adb-install to the connected device and set the 50051 tunnel.
+#   MULTI_INSTANCE=1 -> build base, .b and .c debug packages in one Gradle run.
 set -euo pipefail
 cd "$(dirname "$0")"
 PROJECT_ROOT="$(cd .. && pwd)"
@@ -75,11 +76,9 @@ export RUSTFLAGS="${RUSTFLAGS:-} -C link-arg=-Wl,-z,max-page-size=16384"
 
 # ── 1. Build the cdylib ─────────────────────────────────────────────────────
 echo ">> cargo-ndk: building libchatter_ui.so (arm64-v8a)…"
-# MESH=1 adds the bitchat mesh (BLE radio over the JNI bridge). Off by default,
-# matching the desktop build: the radio stack is opt-in until it has been shown
-# to talk to another device.
+# Mesh is included by default; MESH=0 omits the Bluetooth transport.
 MESH_FEATURE=""
-if [ "${MESH:-0}" = "1" ]; then
+if [ "${MESH:-1}" = "1" ]; then
     MESH_FEATURE=",mesh"
     echo ">> mesh enabled (BLE radio + Kotlin bridge)"
 fi
@@ -169,6 +168,12 @@ fi
 # needs CHATTER_KEYSTORE, CHATTER_KEYSTORE_PASSWORD, CHATTER_KEY_ALIAS and
 # CHATTER_KEY_PASSWORD (read by app/build.gradle.kts).
 RUST_PROFILE=debug; CARGO_PROFILE_FLAG=""; GRADLE_TASK=assembleDebug; APK="app/build/outputs/apk/debug/app-debug.apk"
+GRADLE_ARGS=()
+if [ "${MULTI_INSTANCE:-0}" = "1" ]; then
+    [ "${RELEASE:-0}" != "1" ] || { echo "FATAL: MULTI_INSTANCE=1 is debug-only"; exit 1; }
+    GRADLE_ARGS+=(-PmultiInstance=true)
+    APK="app/build/outputs/apk/base/debug/app-base-debug.apk"
+fi
 if [ "${RELEASE:-0}" = "1" ]; then
     if [ -n "$TRUST_ROOT_FEATURE" ] || [ -n "$DEV_AUTO_REGISTER_FEATURE" ]; then
         echo "FATAL: RELEASE=1 needs DEV_TRUST_ROOT=0 and DEV_AUTO_REGISTER=0"
@@ -190,6 +195,10 @@ fi
 JNI_DIR="app/src/main/jniLibs/arm64-v8a"
 mkdir -p "$JNI_DIR"
 cp "$PROJECT_ROOT/target/aarch64-linux-android/$RUST_PROFILE/libchatter_ui.so" "$JNI_DIR/"
+# Strip only the staged copy; target/ retains symbols for native diagnostics.
+# --strip-debug leaves the enormous .symtab/.strtab in place. --strip-unneeded
+# removes them while preserving dynamic exports (including WebRTC JNI).
+"$NDK_BIN/llvm-strip" --strip-unneeded "$JNI_DIR/libchatter_ui.so"
 echo ">> staged $(du -h "$JNI_DIR/libchatter_ui.so" | cut -f1) cdylib"
 
 # Note: LiveKit's webrtc Java classes (livekit.org.webrtc / jni_zero) are pulled
@@ -198,10 +207,18 @@ echo ">> staged $(du -h "$JNI_DIR/libchatter_ui.so" | cut -f1) cdylib"
 
 # ── 3. Assemble the APK ─────────────────────────────────────────────────────
 echo ">> gradle: $GRADLE_TASK…"
-JAVA_HOME="${JAVA_HOME:-/opt/android-studio/jbr}" ./gradlew :app:$GRADLE_TASK --no-daemon
+# Gradle 8.10 needs a supported JDK; Android Studio may bundle a newer one.
+JAVA_HOME="${JAVA_HOME:-/usr/lib/jvm/java-17-openjdk}" ./gradlew :app:$GRADLE_TASK "${GRADLE_ARGS[@]}" --no-daemon
 [ -f "$APK" ] || { echo "FATAL: $APK missing (unsigned release?)"; exit 1; }
 echo "------------------------------------------------------------"
 echo "Build complete: $APK"
+if [ "${MULTI_INSTANCE:-0}" = "1" ]; then
+    for variant in b c; do
+        variant_apk="app/build/outputs/apk/$variant/debug/app-$variant-debug.apk"
+        [ -f "$variant_apk" ] || { echo "FATAL: $variant_apk missing"; exit 1; }
+        echo "Build complete: $variant_apk (com.chatter.client.$variant)"
+    done
+fi
 echo "------------------------------------------------------------"
 
 # ── 4. Optional: install + tunnel ───────────────────────────────────────────

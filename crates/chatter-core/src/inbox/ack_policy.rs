@@ -326,6 +326,7 @@ pub fn marker_message(target: MarkerTarget, marker: FailureMarker) -> Message {
         mentioned_integrations: Vec::new(),
         targets_ai_bot: false,
         delivery_status: String::new(),
+        failure_reason: None,
     }
 }
 

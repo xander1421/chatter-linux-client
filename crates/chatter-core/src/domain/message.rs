@@ -122,11 +122,15 @@ impl std::fmt::Display for ConversationType {
 ///
 /// Our own sent messages land `is_read = 1` (`insert_outgoing`), so the
 /// boundary always points at a message somebody else sent.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct UnreadAnchor {
-    /// `sent_at` of the oldest unread message. `None` when nothing was unread —
-    /// the common case, and the caller should open at the newest message.
-    pub first_unread_sent_at: Option<u64>,
+    /// `sent_at` of every message that was unread, ascending. Empty when
+    /// nothing was unread — the common case, and the caller should open at the
+    /// newest message. The messages themselves rather than the oldest one's
+    /// time: the list is ordered by `sent_at`, not by arrival, so an unread
+    /// message can sit anywhere in it (delivered late, a thread reply, older
+    /// than the loaded page) and everything after it is not thereby unread.
+    pub unread_sent_at: Vec<u64>,
     /// How many unread messages the conversation held. May exceed one page.
     pub unread_count: u32,
 }
@@ -134,19 +138,17 @@ pub struct UnreadAnchor {
 impl UnreadAnchor {
     /// Index of the unread divider in an ascending (oldest-first) page.
     ///
-    /// The divider sits *above* the first message at or after the boundary, so
+    /// The divider sits *above* the first row of the page that was unread, so
     /// the returned index is the row the viewport should open on. `None` means
-    /// open at the newest message: either nothing was unread, or the page does
-    /// not reach back far enough to contain the boundary (every loaded row is
-    /// older than it, which cannot happen for a newest-N page but is handled
-    /// rather than panicked on).
+    /// open at the newest message: either nothing was unread, or none of what
+    /// was unread is on this page.
     ///
     /// Row 0 is a legitimate answer — a conversation whose entire loaded page
     /// is unread opens at the top with the divider above the first row.
     #[must_use]
     pub fn divider_index(&self, page: &[Message]) -> Option<usize> {
-        let boundary = self.first_unread_sent_at?;
-        page.iter().position(|m| m.sent_at >= boundary)
+        page.iter()
+            .position(|m| self.unread_sent_at.binary_search(&m.sent_at).is_ok())
     }
 }
 
@@ -216,6 +218,8 @@ pub struct Message {
     pub targets_ai_bot: bool,
     /// Delivery status: "", "sent", "delivered", "read".
     pub delivery_status: String,
+    /// Permanent send refusal; absent for transient failures.
+    pub failure_reason: Option<String>,
 }
 
 impl Message {
@@ -269,7 +273,14 @@ impl Message {
             mentioned_integrations: Vec::new(),
             targets_ai_bot: false,
             delivery_status: String::new(),
+            failure_reason: None,
         }
+    }
+
+    /// A failed delivery can be retried only when core recorded no permanent refusal.
+    #[must_use]
+    pub fn can_retry_send(&self) -> bool {
+        self.delivery_status == "failed" && self.failure_reason.is_none()
     }
 
     /// Check if this message is the root of a thread.
@@ -951,9 +962,9 @@ mod tests {
         assert_eq!(ordered_insert_position(&[], 1, "a"), InsertPosition::At(0));
     }
 
-    /// The unread divider must land on the first message at-or-after the
-    /// boundary, never "somewhere near it". Every case here is a way the chat
-    /// opens on the wrong row if `divider_index` drifts.
+    /// The unread divider must land on the first row that was unread, never
+    /// "somewhere near it". Every case here is a way the chat opens on the
+    /// wrong row if `divider_index` drifts.
     #[test]
     fn unread_anchor_divider_index() {
         let cid = ChannelId::new();
@@ -962,36 +973,39 @@ mod tests {
             .into_iter()
             .map(|ts| Message::new_text(cid, ConversationType::ServerDm, them, "m".into(), ts))
             .collect();
+        let anchor = |unread: &[u64]| UnreadAnchor {
+            unread_sent_at: unread.to_vec(),
+            unread_count: unread.len() as u32,
+        };
 
         // Nothing unread → open at the newest message, no divider.
         assert_eq!(UnreadAnchor::default().divider_index(&page), None);
 
-        // Boundary exactly on a loaded row.
-        let anchor = UnreadAnchor { first_unread_sent_at: Some(30), unread_count: 3 };
-        assert_eq!(anchor.divider_index(&page), Some(2));
+        // The unread tail of the page.
+        assert_eq!(anchor(&[30, 40, 50]).divider_index(&page), Some(2));
 
-        // Boundary between rows → the first row after it.
-        let anchor = UnreadAnchor { first_unread_sent_at: Some(35), unread_count: 2 };
-        assert_eq!(anchor.divider_index(&page), Some(3));
-
-        // Whole page unread (boundary older than the oldest loaded row) → open
-        // at the top, divider above row 0. Not None: "everything is new" is
-        // exactly when the divider matters most.
-        let anchor = UnreadAnchor { first_unread_sent_at: Some(1), unread_count: 99 };
-        assert_eq!(anchor.divider_index(&page), Some(0));
+        // Whole page unread, and more above it → open at the top, divider
+        // above row 0. Not None: "everything is new" is exactly when the
+        // divider matters most.
+        assert_eq!(anchor(&[1, 2, 10, 20, 30, 40, 50]).divider_index(&page), Some(0));
 
         // Only the newest row is unread.
-        let anchor = UnreadAnchor { first_unread_sent_at: Some(50), unread_count: 1 };
-        assert_eq!(anchor.divider_index(&page), Some(4));
+        assert_eq!(anchor(&[50]).divider_index(&page), Some(4));
 
-        // Boundary newer than everything loaded → nothing to anchor on; open
+        // Two unread messages older than the page (device sweep RC25: a badge
+        // of 2 put the divider 50 rows back, above a page that was all read).
+        assert_eq!(anchor(&[1, 2]).divider_index(&page), None);
+
+        // One unread message older than the page and one on it: the divider
+        // goes above the one that is here, not above row 0.
+        assert_eq!(anchor(&[1, 50]).divider_index(&page), Some(4));
+
+        // Unread newer than everything loaded → nothing to anchor on; open
         // at the bottom rather than off the end of the model.
-        let anchor = UnreadAnchor { first_unread_sent_at: Some(60), unread_count: 1 };
-        assert_eq!(anchor.divider_index(&page), None);
+        assert_eq!(anchor(&[60]).divider_index(&page), None);
 
         // Empty page never yields an index.
-        let anchor = UnreadAnchor { first_unread_sent_at: Some(10), unread_count: 1 };
-        assert_eq!(anchor.divider_index(&[]), None);
+        assert_eq!(anchor(&[10]).divider_index(&[]), None);
     }
 
     #[test]

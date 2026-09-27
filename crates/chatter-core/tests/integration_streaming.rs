@@ -2,7 +2,7 @@
 //!
 //! Tests real-time event streams for messages, channels, users, and presence.
 
-mod common;
+use crate::{common, skip_if_no_server};
 
 use std::time::Duration;
 use chatter_core::network::grpc::{ChannelClient, MessageClient, UserClient};
@@ -150,7 +150,6 @@ async fn test_message_stream_receives_new_messages() {
                 None,
                 false,
                 None,
-                None, // crypto_options
                 vec![],
                 false,
                 vec![],
@@ -467,7 +466,6 @@ async fn test_message_stream_with_cursor() {
                 None,
                 false,
                 None,
-                None, // crypto_options
                 vec![],
                 false,
                 vec![],

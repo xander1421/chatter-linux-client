@@ -156,6 +156,9 @@ pub struct SendResult {
     pub bootstrap_initiated: bool,
     pub anon_message_id: Option<String>,
     pub call_result: Option<CallOfferResult>,
+    /// The message was stored but not delivered (status `"failed"`, retryable);
+    /// friend DMs only — every other path returns `Err` instead.
+    pub send_error: Option<MessageError>,
 }
 
 /// Result of initiating a call.
@@ -313,6 +316,7 @@ pub async fn route_outgoing(
                 bootstrap_initiated: false,
                 anon_message_id: None,
                 call_result: None,
+                send_error: None,
             })
         }
 
@@ -469,6 +473,7 @@ impl SendResult {
             bootstrap_initiated: false,
             anon_message_id: None,
             call_result: None,
+            send_error: None,
         }
     }
 
@@ -485,6 +490,7 @@ impl SendResult {
                 room_name: res.room_name,
                 call_encryption_key: res.call_encryption_key,
             }),
+            send_error: None,
         }
     }
 }
@@ -516,6 +522,7 @@ async fn route_server_dm(
         bootstrap_initiated: dm_result.bootstrap_initiated,
         anon_message_id: None,
         call_result: None,
+        send_error: dm_result.send_error,
     })
 }
 
@@ -580,6 +587,7 @@ async fn route_channel(
         bootstrap_initiated: false,
         anon_message_id: None,
         call_result: None,
+        send_error: None,
     })
 }
 
@@ -619,6 +627,7 @@ async fn route_anon_dm(
         bootstrap_initiated: false,
         anon_message_id: Some(message_id.to_string()),
         call_result: None,
+        send_error: None,
     })
 }
 
@@ -666,6 +675,7 @@ async fn route_anon_group(
         bootstrap_initiated: false,
         anon_message_id: Some(message_id.as_str().to_string()),
         call_result: None,
+        send_error: None,
     })
 }
 

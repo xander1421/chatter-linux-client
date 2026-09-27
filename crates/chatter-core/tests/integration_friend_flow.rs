@@ -2,7 +2,7 @@
 //!
 //! Tests the full friend lifecycle: request, accept, chat, unfriend.
 
-mod common;
+use crate::{common, skip_if_no_server};
 
 use base64::Engine;
 use chatter_core::network::grpc::UserClient;

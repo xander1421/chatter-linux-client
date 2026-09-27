@@ -24,6 +24,7 @@ export component GifPicker inherits Rectangle {
 
     // Loading state
     in property <bool> loading: false;
+    in property <bool> failed: false;
 
     // GIF results from Rust
     in property <[GifData]> results: [];
@@ -311,32 +312,27 @@ export component GifPicker inherits Rectangle {
                         }
                     }
 
-                    // Trending is never legitimately empty; core hands back an
-                    // empty list for every failure (server without
-                    // KLIPY_API_KEY, offline, provider error), so empty
-                    // trending means the service is not reachable — say that
-                    // rather than implying there is nothing popular today.
                     Text {
-                        text: show-search-results ? "No GIFs found" : "Couldn't load GIFs";
+                        text: root.failed ? "Couldn't load GIFs" : (show-search-results ? "No GIFs found" : "No trending GIFs");
                         color: Colors.text-secondary;
                         font-size: Typography.sm;
                         horizontal-alignment: center;
                     }
 
                     Text {
-                        text: show-search-results ? "Try a different search term" : "Check your connection and try again.";
+                        text: root.failed ? "The GIF service is unavailable. Try again later." : (show-search-results ? "Try a different search term" : "Try again later.");
+                        wrap: word-wrap;
                         color: Colors.text-muted;
                         font-size: Typography.xs;
                         horizontal-alignment: center;
                     }
 
-                    // An empty query refetches trending.
-                    if !show-search-results: HorizontalLayout {
+                    if root.failed: HorizontalLayout {
                         alignment: center;
                         Button {
                             text: "Retry";
                             variant: "secondary";
-                            clicked => { root.search(""); }
+                            clicked => { root.search(root.search-query); }
                         }
                     }
                 }

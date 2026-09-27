@@ -151,6 +151,7 @@ pub fn proto_to_domain_message_with_sender(
         mentioned_integrations,
         targets_ai_bot: proto.targets_ai_bot,
         delivery_status: String::new(),
+        failure_reason: None,
     })
 }
 
@@ -429,6 +430,7 @@ mod tests {
                 emoji: "👍".to_string(),
                 add: true,
                 proof_of_work: vec![],
+                reactor_id: "550e8400-e29b-41d4-a716-446655440001".to_string(),
             })),
         };
 

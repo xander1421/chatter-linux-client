@@ -3,7 +3,7 @@
 //! Tests message operations including send, edit, delete, reactions,
 //! pins, search, and streaming against a running server.
 
-mod common;
+use crate::{common, skip_if_no_server};
 
 use chatter_core::error::NetworkError;
 use chatter_core::network::grpc::{ChannelClient, MessageClient};
@@ -87,7 +87,6 @@ async fn test_send_and_get_message() {
                 None,
                 false,
                 None,
-                None,
                 vec![],
                 false,
                 vec![],
@@ -154,7 +153,6 @@ async fn test_delete_message() {
                 text_content("Message to delete"),
                 None,
                 false,
-                None,
                 None,
                 vec![],
                 false,
@@ -240,7 +238,6 @@ async fn test_message_search() {
                 None,
                 false,
                 None,
-                None,
                 vec![],
                 false,
                 vec![],
@@ -301,7 +298,6 @@ async fn test_send_to_nonexistent_channel() {
             text_content("This should fail"),
             None,
             false,
-            None,
             None,
             vec![],
             false,

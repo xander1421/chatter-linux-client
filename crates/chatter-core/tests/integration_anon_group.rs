@@ -10,7 +10,7 @@
 //! - Message delivery to ephemeral mailboxes
 //! - Full two-user flow (invite -> accept -> message)
 
-mod common;
+use crate::{common, skip_if_no_server};
 
 use base64::Engine;
 use chatter_core::network::grpc::MailboxClient;

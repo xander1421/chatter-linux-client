@@ -207,15 +207,27 @@ impl JarvisBackgroundHandles {
 mod tests {
     use super::*;
 
-    #[test]
-    #[ignore = "Requires database mocking"]
-    fn test_builder_default_interval() {
-        let jarvis = Arc::new(create_test_jarvis());
+    #[tokio::test]
+    async fn test_builder_default_interval() {
+        use crate::local_ai::settings::LocalAISettings;
+        use crate::services::ai::LocalAIActorHandle;
+        use crate::services::jarvis::engine::{JarvisEngine, SharedJarvisEngine};
+        use crate::storage::Database;
+        use crate::storage::repositories::{JarvisGraphRepository, JarvisMemoryRepository};
+
+        let dir = tempfile::tempdir().unwrap();
+        let db = Arc::new(Database::open(&dir.path().join("jarvis.db"), "test-passphrase").unwrap());
+        db.run_migrations().unwrap();
+        let engine = SharedJarvisEngine::new(JarvisEngine::from_settings(
+            &LocalAISettings::default(), LocalAIActorHandle::spawn(),
+        ));
+        let jarvis = Arc::new(JarvisService::new(
+            Arc::new(JarvisMemoryRepository::new(db.clone())),
+            Arc::new(JarvisGraphRepository::new(db)),
+            engine, EventBus::new(), None,
+        ));
         let builder = JarvisBackgroundBuilder::new(jarvis);
         assert_eq!(builder.maintenance_interval, Duration::from_secs(24 * 60 * 60));
     }
 
-    fn create_test_jarvis() -> JarvisService {
-        unimplemented!("Requires database mocking")
-    }
 }

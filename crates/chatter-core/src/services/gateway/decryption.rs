@@ -198,6 +198,17 @@ impl MessageGateway {
         })?;
         let peer_device_id: u32 = sender_address.device_id().into();
 
+        // The report skipped `process_incoming_message_inner`, and with it
+        // the block check every other sealed message gets. A blocked peer
+        // must not reset our session with it or have a message sent again.
+        if sender_is_blocked(&self.user_repo, &self.settings_repo, &peer_id)? {
+            tracing::info!(
+                sender_id = %peer_id,
+                "GATEWAY: dropping a DecryptionErrorMessage from a blocked sender"
+            );
+            return Ok(SealedSenderResult::DroppedBlockedSender { sender_id: peer_id });
+        }
+
         let plaintext_content = PlaintextContent::try_from(plaintext)
             .map_err(|e| ServiceError::Crypto(CryptoError::Protocol(e.to_string())))?;
         let dem =
@@ -270,6 +281,7 @@ impl MessageGateway {
             peer_id,
             peer_device_id,
             archived,
+            timestamp_ms: dem.timestamp().epoch_millis(),
         })
     }
 
@@ -453,6 +465,7 @@ impl MessageGateway {
                 if data_message.delete.is_some() {
                     return Ok(SealedSenderResult::ControlContent {
                         sender_id,
+                        sender_device_id: u32::from(sender_address.device_id()),
                         content: Box::new(Content {
                             timestamp: content_ts,
                             content: Some(content::Content::DataMessage(data_message)),
@@ -555,6 +568,7 @@ impl MessageGateway {
                 );
                 return Ok(SealedSenderResult::ControlContent {
                     sender_id,
+                    sender_device_id: u32::from(sender_address.device_id()),
                     content: Box::new(content_proto),
                 });
             }

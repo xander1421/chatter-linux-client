@@ -13,3 +13,14 @@ export global NotificationSound {
     callback enabled-changed(bool);
     callback open-system-settings();
 }
+
+// Account-level server push delivery, separate from this device's sound.
+export global NotificationDelivery {
+    in-out property <bool> push-enabled: false;
+    in property <bool> saved-push-enabled: false;
+    in property <bool> loaded: false;
+    in property <bool> busy: false;
+    in property <string> error: "";
+    callback load();
+    callback push-enabled-changed(bool);
+}

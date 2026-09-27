@@ -3,7 +3,7 @@
 //! Tests device provisioning flow via QR code linking against a running server.
 //! Requires `INTEGRATION_TESTS=1` environment variable.
 
-mod common;
+use crate::{common, skip_if_no_server};
 
 use base64::engine::general_purpose::STANDARD as BASE64;
 use base64::Engine;

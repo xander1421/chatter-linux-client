@@ -760,7 +760,44 @@ pub struct AnnounceUpdate {
     /// reconnection, which the UI reports differently from a first sighting.
     pub was_disconnected: bool,
     pub previous_nickname: Option<String>,
+    /// This announce established the pin, so the caller has something new to
+    /// persist.
+    pub pinned_now: bool,
 }
+
+/// The keys a peer ID was first seen with.
+///
+/// Held apart from [`PeerRecord`] because the two have opposite lifetimes. A
+/// record is presence: it ages out, and a peer that leaves is forgotten. A pin
+/// is identity: if it went the same way, anything that makes us forget a peer
+/// — silence, a restart, a `Leave` — would also reopen trust on first use for
+/// its ID, and the next announce to claim it would be believed.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PinnedIdentity {
+    pub noise_public_key: Vec<u8>,
+    pub signing_public_key: Vec<u8>,
+    /// The nickname at first sight. Display only, for naming the peer in a
+    /// key-change warning after its record is gone.
+    pub nickname: String,
+    pub pinned_at_ms: u64,
+}
+
+/// How many pins are kept.
+///
+/// When full, new peers are not pinned and existing pins are untouched. The
+/// other choice, evicting the oldest, would let anyone in radio range push a
+/// victim's pin out by announcing throwaway identities. The ceiling is a heavy
+/// user eventually meeting more distinct peers than this; expiring pins unseen
+/// for months is the upgrade, and needs a last-seen write this does not do.
+pub const MAX_PINNED_IDENTITIES: usize = 4096;
+
+/// First byte of the persisted pin set.
+const PIN_BLOB_VERSION: u8 = 1;
+
+/// The persisted pin set could not be read. Carries nothing: the only thing a
+/// caller can do is refuse to start from it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct MalformedPins;
 
 /// A peer that aged out. Ported from `BLERemovedPeer`.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -790,9 +827,12 @@ impl ConnectivityChanges {
 /// A `BTreeMap` rather than a hash map so eviction and snapshot order are stable
 /// — the reconciliation pass emits events, and event order that depends on hash
 /// seeding is a class of test flake worth not having.
-#[derive(Debug, Default)]
+#[derive(Clone, Debug, Default)]
 pub struct PeerRegistry {
     peers: BTreeMap<PeerId, PeerRecord>,
+    /// Outlives `peers` on purpose — see [`PinnedIdentity`]. Nothing that
+    /// forgets a peer touches it.
+    pins: BTreeMap<PeerId, PinnedIdentity>,
 }
 
 impl PeerRegistry {
@@ -921,6 +961,94 @@ impl PeerRegistry {
         self.peers.clear();
     }
 
+    /// The keys this peer ID was first seen with, whether or not the peer is
+    /// still in the registry.
+    pub fn pinned(&self, peer: &PeerId) -> Option<&PinnedIdentity> {
+        self.pins.get(peer)
+    }
+
+    pub fn can_pin(&self, peer: &PeerId) -> bool {
+        self.pins.contains_key(peer) || self.pins.len() < MAX_PINNED_IDENTITIES
+    }
+
+    /// Forget every pin. For a panic wipe, and nothing else.
+    pub fn clear_pins(&mut self) {
+        self.pins.clear();
+    }
+
+    /// The pin set, for the caller to seal and persist.
+    ///
+    /// Every field is length-prefixed with one byte, so a nickname is cut at
+    /// 255 bytes — it is display text, and the announce TLV cannot carry more.
+    pub fn pins_to_bytes(&self) -> Vec<u8> {
+        fn field(out: &mut Vec<u8>, bytes: &[u8]) {
+            let bytes = &bytes[..bytes.len().min(usize::from(u8::MAX))];
+            out.push(bytes.len() as u8);
+            out.extend_from_slice(bytes);
+        }
+
+        let mut out = vec![PIN_BLOB_VERSION];
+        for (peer, pin) in &self.pins {
+            field(&mut out, peer.as_str().as_bytes());
+            field(&mut out, &pin.noise_public_key);
+            field(&mut out, &pin.signing_public_key);
+            field(&mut out, pin.nickname.as_bytes());
+            out.extend_from_slice(&pin.pinned_at_ms.to_be_bytes());
+        }
+        out
+    }
+
+    /// Load a persisted pin set, keeping any pin already held.
+    ///
+    /// All or nothing. A blob that does not parse to its last byte changes
+    /// nothing, because half a pin set is a set with holes an attacker may
+    /// have chosen.
+    pub fn restore_pins(&mut self, bytes: &[u8]) -> Result<(), MalformedPins> {
+        fn field<'a>(rest: &mut &'a [u8]) -> Result<&'a [u8], MalformedPins> {
+            let (&len, tail) = rest.split_first().ok_or(MalformedPins)?;
+            let (value, tail) = tail
+                .split_at_checked(usize::from(len))
+                .ok_or(MalformedPins)?;
+            *rest = tail;
+            Ok(value)
+        }
+
+        let Some((&PIN_BLOB_VERSION, mut rest)) = bytes.split_first() else {
+            return Err(MalformedPins);
+        };
+        let mut loaded = Vec::new();
+        while !rest.is_empty() {
+            let peer = std::str::from_utf8(field(&mut rest)?).map_err(|_| MalformedPins)?;
+            let noise_public_key = field(&mut rest)?.to_vec();
+            let signing_public_key = field(&mut rest)?.to_vec();
+            let nickname = String::from_utf8_lossy(field(&mut rest)?).into_owned();
+            let (stamp, tail) = rest.split_first_chunk::<8>().ok_or(MalformedPins)?;
+            rest = tail;
+            // A pin filed under an ID its own key does not derive to could
+            // never have been recorded by `on_announce`, so the blob is not
+            // one we wrote.
+            if PeerId::from_noise_key(&noise_public_key).as_str() != peer {
+                return Err(MalformedPins);
+            }
+            loaded.push((
+                PeerId::from_str(peer),
+                PinnedIdentity {
+                    noise_public_key,
+                    signing_public_key,
+                    nickname,
+                    pinned_at_ms: u64::from_be_bytes(*stamp),
+                },
+            ));
+        }
+        for (peer, pin) in loaded {
+            if self.pins.len() >= MAX_PINNED_IDENTITIES {
+                break;
+            }
+            self.pins.entry(peer).or_insert(pin);
+        }
+        Ok(())
+    }
+
     /// Flips a known peer to connected. False when it is unknown or already
     /// connected — i.e. false means "nothing changed", so callers can skip the
     /// republish.
@@ -959,11 +1087,26 @@ impl PeerRegistry {
         connected: bool,
         now_unix_millis: u64,
     ) -> AnnounceUpdate {
+        let pinned_now =
+            !self.pins.contains_key(peer) && self.pins.len() < MAX_PINNED_IDENTITIES;
+        if pinned_now {
+            self.pins.insert(
+                peer.clone(),
+                PinnedIdentity {
+                    noise_public_key: announcement.noise_public_key.clone(),
+                    signing_public_key: announcement.signing_public_key.clone(),
+                    nickname: announcement.nickname.clone(),
+                    pinned_at_ms: now_unix_millis,
+                },
+            );
+        }
+
         let existing = self.peers.get(peer);
         let update = AnnounceUpdate {
             is_new_peer: existing.is_none(),
             was_disconnected: existing.is_some_and(|e| !e.connected),
             previous_nickname: existing.map(|e| e.nickname.clone()),
+            pinned_now,
         };
 
         self.peers.insert(
@@ -2021,6 +2164,148 @@ mod tests {
                 .peers_advertising(PeerCapabilities::GATEWAY)
                 .is_empty()
         );
+    }
+
+    /// An announce whose peer ID really is derived from its Noise key, which
+    /// is what a persisted pin has to be.
+    fn derived(noise_byte: u8, signing_byte: u8, nickname: &str) -> (PeerId, AnnouncementPacket) {
+        let noise = vec![noise_byte; 32];
+        let announcement = AnnouncementPacket::new(
+            nickname.to_string(),
+            noise.clone(),
+            vec![signing_byte; 32],
+            None,
+            None,
+            None,
+        );
+        (PeerId::from_noise_key(&noise), announcement)
+    }
+
+    #[test]
+    fn the_first_announce_pins_and_a_later_one_does_not_move_the_pin() {
+        let mut registry = PeerRegistry::new();
+        let (alice, first) = derived(1, 2, "alice");
+
+        assert!(registry.upsert_verified_announce(&alice, &first, true, 10).pinned_now);
+
+        let (_, renamed) = derived(1, 9, "alice-renamed");
+        let update = registry.upsert_verified_announce(&alice, &renamed, true, 20);
+
+        assert!(!update.pinned_now);
+        let pin = registry.pinned(&alice).expect("pinned");
+        assert_eq!(pin.signing_public_key, vec![2; 32]);
+        assert_eq!(pin.nickname, "alice");
+        assert_eq!(pin.pinned_at_ms, 10);
+    }
+
+    #[test]
+    fn forgetting_a_peer_does_not_forget_its_pin() {
+        let mut registry = PeerRegistry::new();
+        let (alice, announcement) = derived(1, 2, "alice");
+        registry.upsert_verified_announce(&alice, &announcement, false, 0);
+
+        // Aged out as a disconnected peer, then removed outright, then the
+        // whole registry cleared: every way a record can go.
+        let removed = registry.reconcile_connectivity(
+            REACHABILITY_RETENTION_VERIFIED_MS + 1,
+            &BTreeMap::new(),
+        );
+        assert_eq!(removed.removed.len(), 1);
+        registry.remove(&alice);
+        registry.remove_all();
+
+        assert!(registry.info(&alice).is_none());
+        assert_eq!(
+            registry.pinned(&alice).map(|pin| pin.signing_public_key.clone()),
+            Some(vec![2; 32])
+        );
+    }
+
+    #[test]
+    fn pins_survive_a_round_trip_through_storage() {
+        let mut registry = PeerRegistry::new();
+        let (alice, a) = derived(1, 2, "alice");
+        let (bob, b) = derived(3, 4, "bob");
+        registry.upsert_verified_announce(&alice, &a, true, 10);
+        registry.upsert_verified_announce(&bob, &b, true, 20);
+
+        let mut restarted = PeerRegistry::new();
+        restarted
+            .restore_pins(&registry.pins_to_bytes())
+            .expect("restore");
+
+        assert_eq!(restarted.pinned(&alice), registry.pinned(&alice));
+        assert_eq!(restarted.pinned(&bob), registry.pinned(&bob));
+        assert!(restarted.is_empty(), "a pin is not presence");
+    }
+
+    #[test]
+    fn a_restored_pin_does_not_replace_one_already_held() {
+        let (alice, stored) = derived(1, 2, "alice");
+        let mut old = PeerRegistry::new();
+        old.upsert_verified_announce(&alice, &stored, true, 10);
+
+        let mut registry = PeerRegistry::new();
+        let (_, live) = derived(1, 7, "alice");
+        registry.upsert_verified_announce(&alice, &live, true, 99);
+        registry.restore_pins(&old.pins_to_bytes()).expect("restore");
+
+        assert_eq!(
+            registry.pinned(&alice).map(|pin| pin.pinned_at_ms),
+            Some(99)
+        );
+    }
+
+    #[test]
+    fn a_damaged_pin_blob_is_refused_whole() {
+        let mut registry = PeerRegistry::new();
+        let (alice, a) = derived(1, 2, "alice");
+        let (bob, b) = derived(3, 4, "bob");
+        registry.upsert_verified_announce(&alice, &a, true, 10);
+        registry.upsert_verified_announce(&bob, &b, true, 20);
+        let good = registry.pins_to_bytes();
+
+        let mut wrong_version = good.clone();
+        wrong_version[0] = PIN_BLOB_VERSION + 1;
+
+        // Same length, but the first pin's Noise key no longer derives to the
+        // ID it is filed under.
+        let mut swapped_key = good.clone();
+        let key_start = 1 + 1 + alice.as_str().len().max(bob.as_str().len()) + 1;
+        swapped_key[key_start] ^= 0xFF;
+
+        for blob in [&good[..good.len() - 1], &[][..], &wrong_version, &swapped_key] {
+            let mut target = PeerRegistry::new();
+            assert_eq!(target.restore_pins(blob), Err(MalformedPins));
+            assert!(target.pinned(&alice).is_none() && target.pinned(&bob).is_none());
+        }
+    }
+
+    #[test]
+    fn a_full_pin_set_refuses_newcomers_and_keeps_what_it_has() {
+        let mut registry = PeerRegistry::new();
+        let (alice, announcement) = derived(1, 2, "alice");
+        registry.upsert_verified_announce(&alice, &announcement, true, 0);
+        for n in 0..MAX_PINNED_IDENTITIES as u64 {
+            let noise = n.to_be_bytes().repeat(4);
+            let flood = AnnouncementPacket::new(
+                "flood".to_string(),
+                noise.clone(),
+                vec![0; 32],
+                None,
+                None,
+                None,
+            );
+            registry.upsert_verified_announce(&PeerId::from_noise_key(&noise), &flood, true, 1);
+        }
+
+        let (late, announcement) = derived(0xEE, 0xEF, "late");
+        let update = registry.upsert_verified_announce(&late, &announcement, true, 2);
+
+        assert!(!update.pinned_now);
+        assert!(registry.pinned(&late).is_none());
+        assert!(registry.info(&late).is_some(), "still a peer for this session");
+        assert!(registry.pinned(&alice).is_some());
     }
 
     #[test]

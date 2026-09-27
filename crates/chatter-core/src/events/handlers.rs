@@ -263,6 +263,11 @@ impl EventHandlers {
             // ================================================================
             // Receipt Events
             // ================================================================
+            DomainEvent::MessageDeliveryChanged { message_id, channel_id, status } => {
+                self.message_state.update_message(&channel_id, &message_id, |message| {
+                    message.delivery_status = crate::services::message::advance_delivery_status(&message.delivery_status, &status).to_owned();
+                });
+            }
             DomainEvent::MessagesRead {
                 reader_id,
                 message_timestamps,

@@ -103,6 +103,7 @@ export component MessageContextMenu inherits Rectangle {
     in property <string> sender-id: "";
     in property <string> timestamp-ns: "";
     in property <string> message-id: "";        // Thread + selection are keyed by message id
+    in property <bool> can-retry: false;
     in property <bool> is-own-message: false;  // Can edit own messages
     in property <bool> can-delete-for-everyone: false;  // Derived from permissions
     in property <bool> is-pinned: false;
@@ -110,6 +111,8 @@ export component MessageContextMenu inherits Rectangle {
     in property <bool> can-thread: false;  // Threads are a channel feature (none in 1:1, as in Signal)
 
     // Callbacks - use (sender_id, timestamp_ns) for Signal-style lookups
+    callback retry-clicked(string);
+    callback info-clicked(string);
     callback close();
     callback quick-react(string, string, string);   // (sender_id, timestamp_ns, emoji)
     callback more-reactions-clicked(string, string);
@@ -224,11 +227,29 @@ export component MessageContextMenu inherits Rectangle {
                     background: Colors.surface-hover;
                 }
 
+                if root.can-retry: MenuItem {
+                    icon: Icons.send;
+                    label: "Retry";
+                    clicked => {
+                        root.retry-clicked(root.message-id);
+                        root.close();
+                    }
+                }
+
                 MenuItem {
                     icon: Icons.smile;
                     label: "More reactions";
                     clicked => {
                         root.more-reactions-clicked(root.sender-id, root.timestamp-ns);
+                        root.close();
+                    }
+                }
+
+                if root.is-own-message: MenuItem {
+                    icon: Icons.clock;
+                    label: "Info";
+                    clicked => {
+                        root.info-clicked(root.message-id);
                         root.close();
                     }
                 }

@@ -5,7 +5,7 @@
 //! - Message decryption with shared secrets
 //! - Event emission for UI updates
 
-mod common;
+use crate::common;
 
 use std::sync::Arc;
 use tempfile::TempDir;

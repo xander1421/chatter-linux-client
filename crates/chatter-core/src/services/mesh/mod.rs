@@ -203,6 +203,7 @@ pub struct MeshService {
     nostr_state: Arc<NostrState>,
     favorites: Arc<MeshFavorites>,
     storage: SharedStorage,
+    sealer: Arc<dyn Sealer>,
     router: Arc<RouterHandle>,
     ble: Arc<CommandBus<BleCommand>>,
     nostr: Arc<CommandBus<NostrCommand>>,
@@ -297,6 +298,7 @@ impl MeshService {
             favorites,
             identity_store,
             storage: SharedStorage::new(deps.storage),
+            sealer: deps.sealer,
             router,
             ble: Arc::clone(&ble_bus),
             nostr: Arc::clone(&nostr_bus),
@@ -355,6 +357,7 @@ impl MeshService {
                 self.events.clone(),
                 Arc::clone(&self.router),
                 self.storage.clone(),
+                Arc::clone(&self.sealer),
             );
             tasks.push(tokio::spawn(runtime.run(ble_rx)));
         } else {
@@ -389,7 +392,7 @@ impl MeshService {
         Ok(())
     }
 
-    /// Stop both runtimes and the store thread, and wait for them.
+    /// Stop and join both transport runtimes; the router lives until service drop.
     pub async fn shutdown(&self) {
         if !self.running.swap(false, Ordering::SeqCst) {
             return;
@@ -401,7 +404,8 @@ impl MeshService {
         for task in tasks {
             let _ = task.await;
         }
-        self.router.shutdown();
+        // The router's channel is permanent. Keep its retained outbox actor
+        // alive across a radio restart; RouterHandle::drop joins it at teardown.
     }
 
     // -------------------------------------------------------------- read paths
@@ -977,7 +981,14 @@ impl MeshService {
             }
         };
 
-        self.state.with(|state| state.sessions.clear());
+        self.state.with(|state| {
+            state.sessions.clear();
+            state.peers.clear_pins();
+            state.peers.remove_all();
+        });
+        if let Err(error) = self.storage.wipe(chatter_mesh_store::storage::StorageKey::PeerPins) {
+            fail(error.into(), &mut first_error);
+        }
 
         if let Err(error) = self.router.send(RouterCommand::Wipe) {
             fail(error, &mut first_error);
@@ -1121,6 +1132,7 @@ mod tests {
             nostr_state,
             favorites,
             storage: SharedStorage::new(storage),
+            sealer,
             router,
             ble: ble_bus,
             nostr: nostr_bus,
@@ -1193,6 +1205,10 @@ mod tests {
         service
             .send_room("still here")
             .expect("a send after a restart is routed");
+        service.router.send_private(
+            "after restart".into(), PeerId::from_str("bbbbbbbbbbbbbbbb"),
+            "Bob".into(), "restart-router-test".into(),
+        ).await.expect("the private-message router also survives restart");
 
         service.shutdown().await;
         assert!(!service.is_running());

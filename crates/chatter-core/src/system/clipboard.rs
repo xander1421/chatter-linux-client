@@ -158,7 +158,7 @@ mod tests {
     use super::*;
 
     #[test]
-    #[ignore] // Requires display server
+    #[ignore = "requires a display server and replaces the desktop clipboard"]
     fn test_clipboard_text_roundtrip() {
         let mut clipboard = Clipboard::new().expect("Should create clipboard");
         let test_text = "Hello from Chatter clipboard test!";

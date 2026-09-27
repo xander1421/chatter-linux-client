@@ -2,7 +2,7 @@
 //!
 //! Tests the NDSS '21 style ephemeral mailbox system for privacy-preserving messaging.
 
-mod common;
+use crate::{common, skip_if_no_server};
 
 use chatter_core::network::grpc::MailboxClient;
 use common::*;

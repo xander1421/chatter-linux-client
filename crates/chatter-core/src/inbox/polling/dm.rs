@@ -641,6 +641,7 @@ fn dispatch_dm_content(
         } => {
             tracing::debug!(peer_id = %peer_id, receipt_type, count = timestamps.len(), "DM receipt");
             let _ = event_tx.send(InboxEvent::DmReceipt {
+                sender_device_id,
                 peer_id,
                 receipt_type,
                 timestamps,

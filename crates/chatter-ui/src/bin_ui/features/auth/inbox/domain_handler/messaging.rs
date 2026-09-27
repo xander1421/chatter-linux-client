@@ -2,7 +2,7 @@
 
 use std::sync::Arc;
 
-use slint::{Model, ModelRc, VecModel, Weak};
+use slint::{ComponentHandle, Model, ModelRc, VecModel, Weak};
 
 use chatter_core::client::ChatterClient;
 use chatter_core::domain::ids::{ChannelId, UserId};
@@ -233,13 +233,13 @@ pub(super) fn handle_dm_bootstrap_completed(
 
 /// Set the status of our own bubbles sent at `timestamps` (`timestamp_ns`) in
 /// the open message list. Core has already stored the same status.
-fn set_own_status_at(w: &MainWindow, timestamps: &[u64], status: &str) {
+pub(crate) fn set_own_status_at(w: &MainWindow, timestamps: &[u64], status: &str) {
     let messages = w.get_messages();
     let Some(model) = messages.as_any().downcast_ref::<VecModel<MessageItemData>>() else { return };
     for i in 0..model.row_count() {
         let Some(mut msg) = model.row_data(i) else { continue };
         if msg.is_own && msg.timestamp_ns.parse::<u64>().is_ok_and(|ts| timestamps.contains(&ts)) {
-            msg.delivery_status = status.into();
+            msg.delivery_status = chatter_core::services::message::advance_delivery_status(msg.delivery_status.as_str(), status).into();
             model.set_row_data(i, msg);
         }
     }
@@ -264,7 +264,7 @@ pub(super) fn handle_delivery_status_update(
             if let Some(msg) = messages.row_data(i) {
                 if msg.is_own && timestamp_strs.iter().any(|ts| msg.timestamp_ns.as_str() == ts.as_str()) {
                     let mut updated = msg.clone();
-                    updated.delivery_status = new_status.into();
+                    updated.delivery_status = chatter_core::services::message::advance_delivery_status(msg.delivery_status.as_str(), new_status).into();
                     if let Some(model) = messages.as_any().downcast_ref::<VecModel<MessageItemData>>() {
                         model.set_row_data(i, updated);
                     }
@@ -460,6 +460,30 @@ pub(super) fn update_active_channel_member_count(
     let _ = slint::invoke_from_event_loop(move || {
         if let Some(w) = weak.upgrade() {
             w.set_member_count(member_count);
+        }
+    });
+}
+
+/// Render only the persisted aggregate, keyed by message ID (not timestamp).
+pub(super) fn handle_persisted_delivery_status(
+    window: &Weak<MainWindow>, client: &Arc<ChatterClient>, message_id: String, status: String,
+) {
+    let details = message_id.parse().ok().and_then(|id| client.message_receipt_info(id).ok());
+    let weak = window.clone();
+    let _ = slint::invoke_from_event_loop(move || {
+        let Some(w) = weak.upgrade() else { return };
+        let info = w.global::<crate::MessageInfo>();
+        if info.get_show() && info.get_message_id().as_str() == message_id {
+            if let Some(details) = details { info.set_details(details.into()); }
+        }
+        let messages = w.get_messages();
+        let Some(model) = messages.as_any().downcast_ref::<VecModel<MessageItemData>>() else { return };
+        for i in 0..model.row_count() {
+            let Some(mut message) = model.row_data(i) else { continue };
+            if message.message_id.as_str() == message_id {
+                message.delivery_status = chatter_core::services::message::advance_delivery_status(message.delivery_status.as_str(), &status).into();
+                model.set_row_data(i, message);
+            }
         }
     });
 }

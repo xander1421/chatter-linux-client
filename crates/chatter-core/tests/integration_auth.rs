@@ -3,7 +3,7 @@
 //! Tests authentication, registration, session management, and device management
 //! against a running server.
 
-mod common;
+use crate::{common, skip_if_no_server};
 
 use sha2::{Digest, Sha256};
 use tokio_stream::StreamExt;

@@ -45,6 +45,7 @@ pub mod section_repo;
 pub mod shared_content_repo;
 pub mod unified_conversation_repo;
 pub mod unified_message_repo;
+pub mod message_receipt_repo;
 pub mod vector_repo;
 
 pub use attachment_repo::AttachmentRepository;

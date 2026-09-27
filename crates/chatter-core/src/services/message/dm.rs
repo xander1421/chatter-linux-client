@@ -92,6 +92,8 @@ impl MessageService {
 
         // Conversation is ready - proceed with sending
         let conversation = conversation.unwrap();
+        self.snapshot_dm_content_targets(*peer_id, &content,
+            &conversation.ready_devices().into_iter().map(|(mailbox, _)| mailbox.device_id).collect::<Vec<_>>())?;
         let plaintext = content.encode_to_vec();
 
         // Every ready peer device gets its own copy: sealed for that device
@@ -158,7 +160,9 @@ impl MessageService {
     /// session with (`session_devices`, local), so a linked device we have
     /// never messaged is skipped until a normal-mode send makes a session.
     /// Normal mode fetches our own bundles (identified, naming only us), which
-    /// is how a newly linked device gets its first session.
+    /// is how a newly linked device gets its first session, and names its
+    /// device set so the server reports one linked since
+    /// (`deposit_sealed_to_all_devices`).
     ///
     /// Best effort, like Signal's sync: failures are logged.
     pub(crate) async fn sync_to_own_devices(
@@ -170,16 +174,19 @@ impl MessageService {
 
         let Ok(me) = self.current_user_id() else { return 0 };
         let me = me.to_string();
-        let devices = if self.shield_mode.load(std::sync::atomic::Ordering::Acquire) {
-            let this_device = self.settings_repo.get::<u32>(keys::CURRENT_DEVICE_ID).ok().flatten();
-            self.signal_service
-                .session_devices(&me)
+        if !self.shield_mode.load(std::sync::atomic::Ordering::Acquire) {
+            Self::pad_content_to_bucket(&mut sync);
+            return self
+                .deposit_sealed_to_all_devices(auth_client, &mut self.message_client(), &me, &sync.encode_to_vec())
                 .await
-                .map(|devices| devices.into_iter().filter(|d| Some(*d) != this_device).collect())
-        } else {
-            // Leaves out this device (`ensure_sessions_and_uak_all_devices`).
-            self.signal_service.ensure_sessions_all_devices(auth_client, &me).await
-        };
+                .delivered;
+        }
+        let this_device = self.settings_repo.get::<u32>(keys::CURRENT_DEVICE_ID).ok().flatten();
+        let devices = self
+            .signal_service
+            .session_devices(&me)
+            .await
+            .map(|devices| devices.into_iter().filter(|d| Some(*d) != this_device).collect());
         let devices: Vec<u32> = match devices {
             Ok(devices) => devices,
             Err(e) => {
@@ -202,9 +209,15 @@ impl MessageService {
                 return 0;
             }
         };
-        self.deposit_sealed_ciphertexts(&mut self.message_client(), &me, ciphertexts, None)
-            .await
-            .delivered
+        let outcome = self
+            .deposit_sealed_ciphertexts(&mut self.message_client(), &me, ciphertexts, None)
+            .await;
+        // What that device's DecryptionErrorMessage will name
+        // (`resend_dm_on_decryption_error`).
+        if let Ok(me) = me.parse() {
+            self.dm_sent_log.record(me, &sync, &outcome.deposits);
+        }
+        outcome.delivered
     }
 
     /// Seal `plaintext` for one peer device and deposit it in its mailbox.
@@ -480,6 +493,7 @@ impl MessageService {
         }
 
         // Establish fresh sessions for ALL devices
+        self.signal_service.forget_device_list(&peer_id.to_string());
         let device_ids = self.signal_service
             .ensure_sessions_all_devices(auth_client, &peer_id.to_string())
             .await

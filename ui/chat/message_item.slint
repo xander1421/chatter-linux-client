@@ -49,6 +49,7 @@ export component MessageItem inherits Rectangle {
     in property <bool> show-sender: true;
     in property <bool> is-dm: false;  // When true, hide avatar/name - just bubbles
     in property <bool> can-thread: true;  // Threads are a channel feature
+    in property <string> failure-reason: "";
     in property <string> delivery-status: "";  // "sending", "sent", "failed", "delivered", "read" for own messages
     /// Whether this message went over the mesh. Set by the caller rather than
     /// inferred from the status string: "sent" is a mesh state too — in fact the
@@ -1155,13 +1156,37 @@ export component MessageItem inherits Rectangle {
                             // that queue's flush failed: a word, not a tick —
                             // neither has reached the server, and "failed"
                             // must never read as delivered.
-                            if root.is-own && !root.mesh-delivery && (root.delivery-status == "sending" || root.delivery-status == "failed"): Text {
-                                text: root.delivery-status == "failed" ? "not sent" : "sending";
-                                color: root.delivery-status == "failed" ? Colors.error : Colors.text-muted;
+                            if root.is-own && !root.mesh-delivery && root.delivery-status == "sending": Text {
+                                text: "sending";
+                                color: Colors.text-muted;
                                 font-size: Typography.xs;
                                 font-italic: true;
                                 accessible-role: text;
-                                accessible-label: root.delivery-status == "failed" ? "Not sent" : "Sending";
+                                accessible-label: "Sending";
+                            }
+
+                            // "not sent" is the retry control (Signal's "tap
+                            // to retry"): `message-clicked` resends it.
+                            if root.is-own && !root.mesh-delivery && root.delivery-status == "failed" && root.failure-reason == "": Text {
+                                text: "not sent \u{b7} retry";
+                                color: Colors.error;
+                                font-size: Typography.xs;
+                                font-italic: true;
+                                accessible-role: button;
+                                accessible-label: "Not sent, tap to retry";
+                                accessible-action-default => { root.message-clicked(root.message-id); }
+
+                                TouchArea {
+                                    mouse-cursor: pointer;
+                                    clicked => { root.message-clicked(root.message-id); }
+                                }
+                            }
+
+                            if root.is-own && !root.mesh-delivery && root.delivery-status == "failed" && root.failure-reason != "": Text {
+                                text: "not sent · " + root.failure-reason;
+                                color: Colors.error;
+                                font-size: Typography.xs;
+                                accessible-role: text;
                             }
 
                             if root.is-own && !root.mesh-delivery && root.delivery-status != "sending" && root.delivery-status != "failed": ticks := Rectangle {

@@ -29,6 +29,9 @@ pub fn open(window: &MainWindow, ui_ctx: &Arc<ChatterClient>, id: &str) {
         return;
     };
 
+    #[cfg(target_os = "android")]
+    window.global::<MeshGlobal>().invoke_set_mesh_on(true);
+
     super::set_active(Some(row.conversation.clone()));
 
     // Nothing server-backed is on screen any more. Leaving a stale
@@ -181,13 +184,13 @@ pub(super) fn append_incoming(
         return;
     }
 
-    let nickname = message.nickname.clone();
+    let nickname = message.message.sender_id.as_ref()
+        .and_then(|sender| ui_ctx.mesh_sender_display_name(sender))
+        .unwrap_or_else(|| message.nickname.clone());
     let display = messages_to_display_batch(
         std::slice::from_ref(&message.message),
-        // The nickname is what the sender called themselves on the wire. It is
-        // unauthenticated for public traffic — a display string, never an
-        // identity — and it is still the best name we have for a peer that has
-        // no chatter account.
+        // Core supplies collision suffixes; retain the live nickname if the
+        // sender has no peer record (for example our own local echo).
         |_| nickname.clone(),
         |_| None,
         |att_id| ui_ctx.get_attachment(att_id),

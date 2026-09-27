@@ -1,4 +1,6 @@
 [package]
+# All suites are registered explicitly below; tests/it.rs shares helper code.
+autotests = false
 name = "chatter-core"
 version = "0.1.0"
 edition = "2024"
@@ -174,9 +176,9 @@ livekit = { version = "0.7.52", default-features = false, features = ["tokio", "
 async-stream = "0.3.6"
 
 # ============================================================================
-# Local AI (optional - requires CUDA)
+# Local AI (optional; CPU by default, CUDA is an explicit opt-in)
 # ============================================================================
-mistralrs = { version = "0.7", optional = true, features = ["cuda", "flash-attn"] }
+mistralrs = { version = "0.7", optional = true, default-features = false }
 
 # ============================================================================
 # Tor onion transport (optional — gated behind `onion` feature, Stage 2)
@@ -336,6 +338,7 @@ desktop-media = ["media", "desktop-gstreamer"]
 # keyring silently falls back to an in-memory mock (keyring lib.rs:286).
 ios = ["keyring/apple-native"]
 local-ai = ["dep:mistralrs"]
+local-ai-cuda = ["local-ai", "mistralrs/cuda", "mistralrs/flash-attn"]
 jarvis = []
 # The bitchat mesh. Off by default: the radio stack has never exchanged a byte
 # with another device, so it should be opted into rather than shipped live.
@@ -375,3 +378,29 @@ insecure-test-anchors = []
 # four fail-closed anchor guards do not stop a docs build that provisions
 # nothing (docs.rs builds in a dev profile, which build.rs permits).
 features = ["testing", "insecure-test-anchors"]
+
+# Keep process-global state and throughput measurements in their own binaries.
+
+[[test]]
+name = "it"
+path = "tests/it.rs"
+
+[[test]]
+name = "crypto_hwaccel_test"
+path = "tests/crypto_hwaccel_test.rs"
+
+[[test]]
+name = "e2e_two_user_suite"
+path = "tests/e2e_two_user_suite.rs"
+
+[[test]]
+name = "integration_calls"
+path = "tests/integration_calls.rs"
+
+[[test]]
+name = "startup_regression_test"
+path = "tests/startup_regression_test.rs"
+
+[[test]]
+name = "validated"
+path = "tests/validated.rs"

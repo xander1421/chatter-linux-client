@@ -21,12 +21,17 @@ pub const DEFAULT_MODEL_ID: &str = "Qwen/Qwen2.5-7B-Instruct-GGUF";
 pub struct LocalAIService {
     actor: LocalAIActorHandle,
     settings_repo: Arc<SettingsRepository>,
+    http_service: parking_lot::Mutex<Option<Arc<crate::services::local_ai_service::HttpLocalAIService>>>,
 }
 
 impl LocalAIService {
     /// Create a new LocalAIService.
     pub fn new(actor: LocalAIActorHandle, settings_repo: Arc<SettingsRepository>) -> Self {
-        Self { actor, settings_repo }
+        Self {
+            actor,
+            settings_repo,
+            http_service: parking_lot::Mutex::new(None),
+        }
     }
 
     /// Handle to the underlying inference actor (for engine rebuilds).
@@ -136,10 +141,21 @@ impl LocalAIService {
             .map_err(|e| LocalAIError::LoadFailed(format!("Failed to save model settings: {}", e)))
     }
 
+    pub fn attach_http_service(
+        &self,
+        service: Arc<crate::services::local_ai_service::HttpLocalAIService>,
+    ) {
+        *self.http_service.lock() = Some(service);
+    }
+
     /// Enable or disable local AI.
     pub fn set_enabled(&self, enabled: bool) -> Result<(), LocalAIError> {
         self.settings_repo
             .set_local_ai_enabled(enabled)
-            .map_err(|e| LocalAIError::LoadFailed(format!("Failed to save enabled state: {}", e)))
+            .map_err(|e| LocalAIError::LoadFailed(format!("Failed to save enabled state: {}", e)))?;
+        if let Some(service) = self.http_service.lock().as_ref() {
+            service.refresh_indexing();
+        }
+        Ok(())
     }
 }

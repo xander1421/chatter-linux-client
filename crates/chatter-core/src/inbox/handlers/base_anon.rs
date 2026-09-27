@@ -167,6 +167,7 @@ pub fn build_message_from_content(
         mentioned_integrations: Vec::new(),
         targets_ai_bot: false,
         delivery_status: String::new(),
+        failure_reason: None,
     }
 }
 

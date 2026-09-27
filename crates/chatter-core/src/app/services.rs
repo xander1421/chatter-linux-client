@@ -11,7 +11,6 @@ use crate::services::jarvis::{JarvisEngine, JarvisService, SharedJarvisEngine};
 use crate::services::ai_service::AIService;
 use crate::services::local_ai_service::HttpLocalAIService;
 use crate::services::semantic_search::SemanticSearchService;
-use crate::local_ai::indexer::MessageIndexer;
 use crate::services::anon_dm::AnonDmService;
 use crate::services::anon_group::AnonGroupService;
 use crate::services::attachment::AttachmentService;
@@ -308,26 +307,12 @@ impl ServiceContainer {
             .with_keyword_index(infra.search_index.clone(), infra.message_repo.clone()),
         );
 
-        // 19d. Message indexer — auto-index decrypted messages for semantic search
-        if http_local_ai_service.is_auto_index_enabled() {
-            let (indexer, _indexer_handle) = MessageIndexer::spawn(semantic_search_service.clone());
-            indexer.subscribe_events(infra.event_bus.subscribe_domain());
-            // Note: _indexer_handle is detached — runs until the event bus closes.
-
-            // Ensure the embedding model exists so semantic memory is never
-            // silently off: background pull-if-missing when Ollama is up.
-            if let Ok(handle) = tokio::runtime::Handle::try_current() {
-                let svc = http_local_ai_service.clone();
-                handle.spawn(async move {
-                    if svc.health_check().await {
-                        match svc.ensure_embedding_model().await {
-                            Ok(m) => tracing::info!(model = %m.name, "embedding model ready"),
-                            Err(e) => tracing::debug!("embedding model auto-pull skipped: {e}"),
-                        }
-                    }
-                });
-            }
-        }
+        // The service owns both indexer tasks, so opt-out cancels queued work.
+        http_local_ai_service.configure_indexing(
+            semantic_search_service.clone(),
+            infra.event_bus.clone(),
+        );
+        local_ai_service.attach_http_service(http_local_ai_service.clone());
 
         // 20. Jarvis AI assistant service, driven by the active local AI provider
         // The mesh. Constructed but not started — `start()` is the caller's,

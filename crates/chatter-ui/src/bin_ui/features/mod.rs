@@ -30,6 +30,7 @@ pub mod mesh;
 pub mod modals;
 pub mod navigation;
 pub mod notifications;
+pub mod server_records;
 pub mod sidebar;
 pub mod status;
 pub mod thread;
@@ -64,6 +65,7 @@ pub fn wire_all(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     connection::wire(window, ui_ctx);
     unified_search::wire(window, ui_ctx);
     notifications::wire(window, ui_ctx);
+    server_records::wire(window, ui_ctx);
 
     // Initialize inline GIF animation system
     crate::bin_ui::gif_state::init_inline_animations(window.as_weak());

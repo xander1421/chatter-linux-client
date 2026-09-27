@@ -38,6 +38,22 @@ pub struct HttpLocalAIService {
     semantic_search: SemanticSearchService,
     settings: LocalAISettings,
     settings_repo: Arc<SettingsRepository>,
+    indexing: parking_lot::Mutex<Option<Indexing>>,
+}
+
+struct Indexing {
+    search: Arc<SemanticSearchService>,
+    events: crate::events::EventBus,
+    runtime: tokio::runtime::Handle,
+    tasks: Vec<tokio::task::JoinHandle<()>>,
+}
+
+impl Drop for Indexing {
+    fn drop(&mut self) {
+        for task in &self.tasks {
+            task.abort();
+        }
+    }
 }
 
 /// Errors specific to the HTTP local AI service.
@@ -86,6 +102,7 @@ impl HttpLocalAIService {
             semantic_search,
             settings,
             settings_repo,
+            indexing: parking_lot::Mutex::new(None),
         }
     }
 
@@ -243,12 +260,58 @@ impl HttpLocalAIService {
 
     /// Check if local AI is enabled in settings.
     pub fn is_enabled(&self) -> bool {
-        self.settings.enabled
+        self.settings_repo.get_local_ai_enabled().unwrap_or(false)
     }
 
     /// Whether auto-indexing is enabled.
     pub fn is_auto_index_enabled(&self) -> bool {
-        self.settings.enabled && self.settings.auto_index
+        self.is_enabled() && self.settings.auto_index
+    }
+
+    /// Attach the background indexer lifecycle to the live preference.
+    pub fn configure_indexing(
+        &self,
+        search: Arc<SemanticSearchService>,
+        events: crate::events::EventBus,
+    ) {
+        *self.indexing.lock() = Some(Indexing {
+            search,
+            events,
+            runtime: tokio::runtime::Handle::current(),
+            tasks: Vec::new(),
+        });
+        self.refresh_indexing();
+    }
+
+    /// Start on opt-in; abort the listener, queued work and model pull on opt-out.
+    pub fn refresh_indexing(&self) {
+        let mut indexing = self.indexing.lock();
+        let Some(indexing) = indexing.as_mut() else {
+            return;
+        };
+        if !self.is_auto_index_enabled() {
+            for task in indexing.tasks.drain(..) {
+                task.abort();
+            }
+        } else if indexing.tasks.is_empty() {
+            let _runtime = indexing.runtime.enter();
+            let (indexer, worker) =
+                crate::local_ai::indexer::MessageIndexer::spawn(indexing.search.clone());
+            indexing.tasks.push(worker);
+            indexing.tasks.push(indexer.subscribe_events(indexing.events.subscribe_domain()));
+            let manager = ModelManager::new(OllamaBackend::new(
+                &self.settings.ollama_url,
+                self.settings.request_timeout,
+            ));
+            let model = self.settings.embedding_model.clone();
+            indexing.tasks.push(tokio::spawn(async move {
+                if manager.is_backend_healthy().await {
+                    if let Err(error) = manager.ensure_model(&model).await {
+                        tracing::debug!(%error, "embedding model auto-pull skipped");
+                    }
+                }
+            }));
+        }
     }
 
     /// Get current settings (snapshot).
@@ -404,7 +467,7 @@ impl HttpLocalAIService {
     // ==================== Internal ====================
 
     fn check_enabled(&self) -> Result<(), HttpLocalAIError> {
-        if !self.settings.enabled {
+        if !self.is_enabled() {
             return Err(HttpLocalAIError::Disabled);
         }
         Ok(())
@@ -461,7 +524,6 @@ mod per_conversation_ai_tests {
     use crate::ai_policy::channel_ai::Resolved;
     use crate::ai_policy::policy::Silo;
     use crate::cloud_ai::CloudMode;
-    use crate::local_ai::providers::ProviderKind;
     use crate::storage::Database;
 
     /// Same pattern as the other repository tests: SQLCipher needs a real path.
@@ -476,6 +538,45 @@ mod per_conversation_ai_tests {
         let settings_repo = Arc::new(SettingsRepository::new(db.clone()));
         let vector_repo = Arc::new(VectorRepository::new(db));
         HttpLocalAIService::new(settings_repo, vector_repo)
+    }
+
+    #[tokio::test]
+    async fn local_ai_toggle_updates_live_service_and_indexer() {
+        let svc = Arc::new(service());
+        let settings = crate::services::ai::LocalAIService::new(
+            crate::services::ai::LocalAIActorHandle::spawn(), svc.settings_repo.clone(),
+        );
+        settings.attach_http_service(svc.clone());
+        svc.configure_indexing(Arc::new(SemanticSearchService::new(
+            {
+                let dir = tempfile::tempdir().unwrap();
+                let db = Arc::new(Database::open(&dir.path().join("index.db"), "testpass").unwrap());
+                db.run_migrations().unwrap();
+                Box::leak(Box::new(dir));
+                Arc::new(VectorRepository::new(db))
+            },
+            Arc::new(EmbeddingGenerator::new(OllamaBackend::default_local(), &svc.settings)),
+        )), crate::events::EventBus::new());
+        assert!(!svc.is_enabled());
+        assert!(matches!(svc.check_enabled(), Err(HttpLocalAIError::Disabled)));
+        // Settings callbacks run on the UI thread, outside the Tokio context.
+        let settings = std::thread::spawn(move || {
+            settings.set_enabled(true).unwrap();
+            settings.set_enabled(true).unwrap();
+            settings
+        }).join().unwrap();
+        assert!(svc.check_enabled().is_ok());
+        let tasks: Vec<_> = svc.indexing.lock().as_ref().unwrap().tasks.iter()
+            .map(|task| task.abort_handle()).collect();
+        assert_eq!(tasks.len(), 3);
+        settings.set_enabled(false).unwrap();
+        assert!(!svc.is_enabled());
+        assert!(svc.indexing.lock().as_ref().unwrap().tasks.is_empty());
+        tokio::task::yield_now().await;
+        assert!(tasks.iter().all(|task| task.is_finished()));
+        settings.set_enabled(true).unwrap();
+        assert_eq!(svc.indexing.lock().as_ref().unwrap().tasks.len(), 3);
+        settings.set_enabled(false).unwrap();
     }
 
     #[test]
