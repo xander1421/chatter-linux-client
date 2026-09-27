@@ -255,7 +255,7 @@ pub fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                             let global = w.global::<MeshGlobal>();
                             global.set_mesh_on(!wanted);
                             global.set_notice(
-                                format!("Could not turn the mesh {}: {error}",
+                                format!("Could not turn mesh {}. Check Bluetooth and permissions.",
                                     if wanted { "on" } else { "off" }).into(),
                             );
                         }
@@ -432,9 +432,10 @@ fn handle_event(event: MeshEvent, weak: &slint::Weak<MainWindow>, ui_ctx: &Arc<C
             ));
         }
         MeshEvent::Degraded(reason) => {
+            tracing::warn!(%reason, "Mesh transport unavailable");
             run_ui!(weak, |w| w
                 .global::<MeshGlobal>()
-                .set_notice(reason.clone().into()));
+                .set_notice("Mesh connection unavailable. Check Bluetooth and permissions.".into()));
         }
     }
 }

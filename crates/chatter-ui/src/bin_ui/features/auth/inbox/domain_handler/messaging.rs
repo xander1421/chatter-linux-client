@@ -113,7 +113,7 @@ pub(super) fn handle_message_received(
     // The message ends its sender's typing: record it so a STARTED sent before
     // it but delivered after it is dropped rather than shown.
     if let Some(sid) = sender_id {
-        ui_ctx.chat_state().accept_typing(conversation_id, sid, timestamp, false);
+        ui_ctx.update_typing_indicator(conversation_id, sid, timestamp, false);
     }
 
     let weak = window.clone();
@@ -134,7 +134,14 @@ pub(super) fn handle_message_received(
         // A message ends its sender's typing. Keyed by conversation, like the
         // typing state itself: the sender's id matched only for DMs, so in a
         // channel the indicator outlived the message it announced.
-        super::super::typing::clear_typing_for_peer(&w, &conversation_id.to_string(), is_active);
+        let typing_text = ui_ctx_ui.typing_indicator_text(conversation_id);
+        if typing_text.is_empty() {
+            super::super::typing::clear_typing_for_peer(&w, &conversation_id.to_string(), is_active);
+        } else {
+            super::super::typing::set_typing_with_timer(
+                &w, &conversation_id.to_string(), ui_ctx_ui.chat_state(), conversation_id, &typing_text,
+            );
+        }
 
         if let Some(root_id) = thread_root {
             if is_active {
@@ -473,7 +480,7 @@ pub(super) fn handle_persisted_delivery_status(
     let _ = slint::invoke_from_event_loop(move || {
         let Some(w) = weak.upgrade() else { return };
         let info = w.global::<crate::MessageInfo>();
-        if info.get_show() && info.get_message_id().as_str() == message_id {
+        if w.get_active_modal().as_str() == "message-info" && info.get_message_id().as_str() == message_id {
             if let Some(details) = details { info.set_details(details.into()); }
         }
         let messages = w.get_messages();

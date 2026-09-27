@@ -115,11 +115,7 @@ pub mod keys {
     pub const FONT_SIZE: &str = "ui.font_size";
     pub const SEARCH_SHORTCUT: &str = "ui.search_shortcut";
 
-    /// Whether the user wants the BLE mesh running. Absent means yes.
-    ///
-    /// Opt-*out*, not opt-in: the mesh exists for the moment the network fails,
-    /// and a feature that has to be enabled from a working app before it can help
-    /// is not available when it is needed.
+    /// Whether the user enabled the BLE mesh. Absent means off; radio use is opt-in.
     pub const MESH_ENABLED: &str = "mesh.enabled";
 
     /// Group resends this device asked for — see `SolicitedResends`.

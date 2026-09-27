@@ -47,6 +47,8 @@ pub struct AndroidWindowAdapter {
     pub(crate) show_cursor_handles: Cell<bool>,
 
     long_press: RefCell<Option<LongPressDetection>>,
+    /// A completed text-selection gesture must not re-enable the IME on release.
+    long_press_selection: Cell<bool>,
     last_pressed_state: Cell<ButtonState>,
 
     /// Chatter patch: states already pushed to GameTextInput during the current
@@ -198,6 +200,7 @@ impl i_slint_core::window::WindowAdapterInternal for AndroidWindowAdapter {
                     .unwrap_or_else(|e| print_jni_error(&self.app, e));
             }
             InputMethodRequest::Disable => {
+                self.dismiss_selection_menu();
                 self.java_helper
                     .show_or_hide_soft_input(false)
                     .unwrap_or_else(|e| print_jni_error(&self.app, e));
@@ -284,10 +287,16 @@ impl i_slint_core::window::WindowAdapterInternal for AndroidWindowAdapter {
                 }
                 // A parked Update belongs to the field that had focus.
                 self.deferred_ime_update.take();
-                self.app.show_soft_input(true);
-                // New field focused — force the next state push.
-                *self.last_ime_epoch.borrow_mut() = None;
-                self.ime_states_seen.borrow_mut().clear();
+                // Slint calls Enable again when the selecting finger lifts.
+                // GameTextInput's show_soft_input also calls restartInput, even
+                // for an already visible keyboard; resetting the echo guards
+                // then repeats the selected-state restart too. Neither belongs
+                // to long-press selection (which must keep IME/insets stable).
+                if !self.long_press_selection.get() {
+                    self.app.show_soft_input(true);
+                    *self.last_ime_epoch.borrow_mut() = None;
+                    self.ime_states_seen.borrow_mut().clear();
+                }
                 props
             }
             InputMethodRequest::Update(props) => {
@@ -298,6 +307,7 @@ impl i_slint_core::window::WindowAdapterInternal for AndroidWindowAdapter {
                 props
             }
             InputMethodRequest::Disable => {
+                self.dismiss_selection_menu();
                 // A parked Update belongs to the field losing focus.
                 self.deferred_ime_update.take();
                 // Clear a composition on the way out, so a field that loses
@@ -328,6 +338,13 @@ impl i_slint_core::window::WindowAdapterInternal for AndroidWindowAdapter {
             }
             _ => return,
         };
+        // RC26: game-activity bypasses set_imm_data, so its long-press ActionMode
+        // never received selection geometry or the collapse/clear that finishes it.
+        // Keep presentation in sync before the IME echo guards return; only the
+        // long-press detector may open the menu, never an IME anchor/cursor report.
+        self.java_helper
+            .update_selection_menu(&props, self.window.scale_factor())
+            .unwrap_or_else(|e| print_jni_error(&self.app, e));
         let mut text = props.text.to_string();
         if !props.preedit_text.is_empty() {
             text.insert_str(props.preedit_offset, props.preedit_text.as_str());
@@ -471,9 +488,13 @@ impl i_slint_core::window::WindowAdapterInternal for AndroidWindowAdapter {
     /// field may have been destroyed without a FocusOut (§112m).
     fn handle_focus_change(
         &self,
-        _old: Option<i_slint_core::item_tree::ItemRc>,
-        _new: Option<i_slint_core::item_tree::ItemRc>,
+        old: Option<i_slint_core::item_tree::ItemRc>,
+        new: Option<i_slint_core::item_tree::ItemRc>,
     ) {
+        if old != new {
+            self.long_press_selection.set(false);
+            self.dismiss_selection_menu();
+        }
         self.release_vanished_ime_client(true);
     }
 
@@ -487,8 +508,15 @@ impl i_slint_core::window::WindowAdapterInternal for AndroidWindowAdapter {
 }
 
 impl AndroidWindowAdapter {
+    fn dismiss_selection_menu(&self) {
+        self.java_helper
+            .hide_action_menu()
+            .unwrap_or_else(|e| print_jni_error(&self.app, e));
+    }
+
     /// Drop everything recorded about the current client's editing session.
     fn forget_ime_session(&self) {
+        self.dismiss_selection_menu();
         self.had_compose.set(false);
         *self.last_ime_text.borrow_mut() = None;
         self.last_ime_selection.set((0, 0));
@@ -554,6 +582,7 @@ impl AndroidWindowAdapter {
             offset: Default::default(),
             show_cursor_handles: Cell::new(false),
             long_press: RefCell::default(),
+            long_press_selection: Cell::new(false),
             last_pressed_state: Cell::new(ButtonState(0)),
             last_ime_selection: Cell::new((0, 0)),
             pending_self_echo: RefCell::default(),
@@ -620,6 +649,9 @@ impl AndroidWindowAdapter {
                 self.window.try_dispatch_event(WindowEvent::WindowActiveChanged(true))?;
             }
             PollEvent::Main(MainEvent::LostFocus) => {
+                self.long_press.take();
+                self.long_press_selection.set(false);
+                self.dismiss_selection_menu();
                 self.window.try_dispatch_event(WindowEvent::WindowActiveChanged(false))?;
             }
             PollEvent::Main(MainEvent::ConfigChanged { .. }) => {
@@ -698,6 +730,8 @@ impl AndroidWindowAdapter {
     }
 
     fn try_dispatch_key_event(&self, ev: WindowEvent) -> KeyEventResult {
+        self.long_press.take();
+        self.dismiss_selection_menu();
         #[cfg_attr(slint_nightly_test, allow(non_exhaustive_omitted_patterns))]
         match ev {
             WindowEvent::KeyPressed { text } => WindowInner::from_pub(&self.window)
@@ -764,6 +798,7 @@ impl AndroidWindowAdapter {
                     };
                     match motion_event.action() {
                         MotionAction::ButtonPress => {
+                            self.dismiss_selection_menu();
                             result = self.window.try_dispatch_event(WindowEvent::PointerPressed {
                                 position: position_for_event(motion_event, offset, scale),
                                 button: button_for_event(motion_event, &self.last_pressed_state),
@@ -778,6 +813,8 @@ impl AndroidWindowAdapter {
                             InputStatus::Handled
                         }
                         MotionAction::Down => {
+                            self.long_press_selection.set(false);
+                            self.dismiss_selection_menu();
                             let position = position_for_event(motion_event, offset, scale);
 
                             // A field destroyed since the last focus change
@@ -819,6 +856,7 @@ impl AndroidWindowAdapter {
                                     TouchPhase::Ended,
                                 );
                             }
+                            self.long_press_selection.set(false);
                             InputStatus::Handled
                         }
                         MotionAction::Move => {
@@ -876,6 +914,7 @@ impl AndroidWindowAdapter {
                         }
                         MotionAction::Cancel | MotionAction::Outside => {
                             self.long_press.take();
+                            self.long_press_selection.set(false);
                             let runtime_window = WindowInner::from_pub(&self.window);
                             for p in motion_event.pointers() {
                                 runtime_window.process_touch_input(
@@ -920,6 +959,15 @@ impl AndroidWindowAdapter {
                     if self_echo {
                         *self.pending_self_echo.borrow_mut() = None;
                         return InputStatus::Handled;
+                    }
+                    // A selected-state echo after long-press is not typing. A
+                    // changed string, composition or collapsed caret is.
+                    if state.compose_region.is_some()
+                        || state.selection.start == state.selection.end
+                        || (self.last_ime_text.borrow().as_ref() != Some(&state.text)
+                            && self.last_pushed_text.borrow().as_ref() != Some(&state.text))
+                    {
+                        self.dismiss_selection_menu();
                     }
                     // Remember what the IME believes, so the outbound path can
                     // tell an app-initiated change from an echo of this (§112n).
@@ -1115,6 +1163,11 @@ fn long_press_timeout() {
                     text_input.select_word(&adaptor, &focus_item);
                 }
             }
+            let (cursor, anchor) = text_input.selection_anchor_and_cursor();
+            if cursor == anchor {
+                return;
+            }
+            adaptor.long_press_selection.set(true);
             adaptor
                 .java_helper
                 .show_action_menu()

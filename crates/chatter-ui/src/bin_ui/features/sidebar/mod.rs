@@ -358,11 +358,20 @@ pub(crate) fn show_chat_pane(weak: &slint::Weak<MainWindow>) {
         // A conversation lives on the Chats tab: opened from Contacts, Calls
         // or a pushed profile, it must not stay hidden behind them.
         crate::bin_ui::features::back::reset_to_chats(&w);
+        // Clear the old header synchronously, before revealing the pane or
+        // waiting for the next conversation's asynchronous load.
+        w.set_loading_messages(true);
+        w.set_channel_name("".into());
+        w.set_topic("".into());
+        w.set_member_count(0);
+        w.set_header_presence_status("offline".into());
+        w.set_channel_avatar_source(slint::Image::default());
+        w.set_channel_has_avatar(false);
+        // The header's typing line belongs to the conversation being left.
+        w.set_typing_indicator("".into());
         if w.get_is_mobile_platform() {
             w.set_mobile_show_chat(true);
         }
-        // The header's typing line belongs to the conversation being left.
-        w.set_typing_indicator("".into());
     }
 }
 

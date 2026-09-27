@@ -482,7 +482,23 @@ impl MessageService {
         limit: u32,
     ) -> Result<Vec<Message>, MessageError> {
         let messages = self.message_repo.list_for_channel(channel_id, conversation_type, before, limit)?;
-        Ok(messages)
+        Ok(self.resolve_stored_quotes(messages))
+    }
+
+    /// Re-resolve quote references at load time, including parents received after
+    /// the reply. Persist only the resolved reference; retain the quoted snapshot.
+    fn resolve_stored_quotes(&self, mut messages: Vec<Message>) -> Vec<Message> {
+        for message in &mut messages {
+            if let Ok(Some(parent)) = self.message_repo.resolve_reply_parent(message) {
+                if message.reply_to != Some(parent) {
+                    message.reply_to = Some(parent);
+                    if let Err(error) = self.message_repo.update_reply_parent(&message.id, &parent) {
+                        tracing::warn!(%error, "Could not persist resolved quote");
+                    }
+                }
+            }
+        }
+        messages
     }
 
     /// Get messages for a channel in chronological order (oldest first).
@@ -496,7 +512,7 @@ impl MessageService {
         limit: u32,
     ) -> Result<Vec<Message>, MessageError> {
         let messages = self.message_repo.list_for_channel_asc(channel_id, conversation_type, before, limit)?;
-        Ok(messages)
+        Ok(self.resolve_stored_quotes(messages))
     }
 
     /// History older than `before`, oldest first: one page, or with `until`
@@ -537,7 +553,7 @@ impl MessageService {
                 break;
             }
         }
-        Ok(older)
+        Ok(self.resolve_stored_quotes(older))
     }
 
     /// Reply count per thread root for a conversation (drives the "N replies"
@@ -584,7 +600,7 @@ impl MessageService {
         &self,
         message_id: &crate::domain::ids::MessageId,
     ) -> Result<Option<Message>, MessageError> {
-        self.message_repo.get(message_id).map_err(MessageError::from)
+        Ok(self.resolve_stored_quotes(self.message_repo.get(message_id)?.into_iter().collect()).pop())
     }
 
     /// Whether the parent message a reply quotes is missing or deleted.
@@ -634,6 +650,7 @@ impl MessageService {
         };
         self.message_repo
             .list_for_thread(thread_root_id, before_sent_at, limit)
+            .map(|messages| self.resolve_stored_quotes(messages))
             .map_err(MessageError::from)
     }
 
@@ -653,7 +670,8 @@ impl MessageService {
         channel_id: &ChannelId,
         conversation_type: &ConversationType,
     ) -> Result<Vec<Message>, MessageError> {
-        self.message_repo.list_pinned_all(channel_id, conversation_type).map_err(MessageError::from)
+        self.message_repo.list_pinned_all(channel_id, conversation_type)
+            .map(|messages| self.resolve_stored_quotes(messages)).map_err(MessageError::from)
     }
 
     /// Set the pinned status of a message in local storage.
@@ -925,6 +943,59 @@ impl MessageService {
                 .add_reaction(target_sender, target_sent_at_ns, reactor, &current, emoji)
                 .map_err(MessageError::from)
         }
+    }
+
+    /// Replace a channel message's reaction ledger from an authoritative
+    /// server snapshot, including reactions removed while replay was skipped.
+    pub fn reconcile_channel_reactions(
+        &self,
+        message: &crate::proto::chat_v1::Message,
+        channel_id: ChannelId,
+    ) -> Result<(), MessageError> {
+        let id = message.id.parse::<crate::domain::ids::MessageId>()
+            .map_err(|_| MessageError::InvalidContent("invalid message id".into()))?;
+        let Some(local) = self.get_message_local(&id)? else { return Ok(()); };
+        if local.conversation_id != channel_id || local.is_deleted { return Ok(()); }
+        let Some(sender) = local.sender_id else { return Ok(()); };
+        let desired: Vec<(UserId, String)> = message.reactions.iter().map(|reaction| {
+            let reactor = reaction.reactor_id.parse::<UserId>()
+                .map_err(|_| MessageError::InvalidContent("invalid reactor id".into()))?;
+            if reaction.target_author_aci != sender.to_string()
+                || reaction.target_sent_timestamp != local.sent_at {
+                return Err(MessageError::InvalidContent("reaction target mismatch".into()));
+            }
+            Ok((reactor, reaction.emoji.clone()))
+        }).collect::<Result<_, MessageError>>()?;
+        let existing = self.message_repo.get_reactions(&sender, local.sent_at)?;
+        for reaction in existing {
+            if !desired.iter().any(|(user, emoji)| *user == reaction.user_id && *emoji == reaction.emoji.value) {
+                if self.record_reaction(&sender, local.sent_at, &reaction.user_id, &reaction.emoji.value, true)? {
+                    self.event_bus.emit_domain(crate::events::DomainEvent::ReactionRemoved {
+                        sender_id: sender, sent_at_ns: local.sent_at,
+                        reactor_id: reaction.user_id, emoji: reaction.emoji.value,
+                        timestamp: message.updated_at / 1_000_000,
+                    });
+                }
+            }
+        }
+        for (reactor, emoji) in &desired {
+            if self.record_reaction(&sender, local.sent_at, reactor, emoji, false)? {
+                self.event_bus.emit_domain(crate::events::DomainEvent::ReactionAdded {
+                    sender_id: sender, sent_at_ns: local.sent_at, reactor_id: *reactor,
+                    emoji: emoji.clone(), timestamp: message.updated_at / 1_000_000,
+                });
+            }
+        }
+        // Empty snapshots must also clear aggregate blobs left by older
+        // fetches that never populated the per-reactor ledger.
+        if let Some(mut local) = self.get_message_local(&id)? {
+            local.reaction_counts = self.message_repo.get_reaction_counts(&sender, local.sent_at)?;
+            let current = self.current_user_id()?;
+            local.current_user_reactions = desired.iter().filter(|(user, _)| *user == current)
+                .map(|(_, emoji)| emoji.clone()).collect();
+            self.update_message(&local)?;
+        }
+        Ok(())
     }
 
     /// Classify a raw `(channel_id, conversation_type, peer_id)` triple into

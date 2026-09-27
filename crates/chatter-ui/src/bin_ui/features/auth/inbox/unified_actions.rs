@@ -51,7 +51,7 @@ fn typing_key(source: &EventSource) -> String {
 /// arrived out of order and is dropped (`ChatState::accept_typing`).
 pub fn handle_typing(
     weak_window: &slint::Weak<MainWindow>,
-    chat_state: &ChatState,
+    client: &std::sync::Arc<chatter_core::client::ChatterClient>,
     source: EventSource,
     user_id: UserId,
     timestamp: u64,
@@ -59,22 +59,22 @@ pub fn handle_typing(
 ) {
     let EventSource::Channel(channel_id) = &source;
     let channel_id = *channel_id;
-    if !chat_state.accept_typing(channel_id, user_id, timestamp, is_started) {
+    if !client.update_typing_indicator(channel_id, user_id, timestamp, is_started) {
         tracing::debug!(%channel_id, %user_id, timestamp, "TYPING_UI: dropping STARTED older than its STOPPED");
         return;
     }
     let key = typing_key(&source);
-    let chat_state = chat_state.clone();
+    let client = client.clone();
+    let chat_state = client.chat_state().clone();
     let weak = weak_window.clone();
 
     let _ = slint::invoke_from_event_loop(move || {
         let Some(window) = weak.upgrade() else { return };
         let active = is_active(&chat_state, &source);
 
-        if is_started {
-            if active {
-                set_typing_with_timer(&window, &key, &chat_state, channel_id);
-            }
+        let text = client.typing_indicator_text(channel_id);
+        if !text.is_empty() {
+            set_typing_with_timer(&window, &key, &chat_state, channel_id, &text);
         } else {
             clear_typing_for_peer(&window, &key, active);
         }

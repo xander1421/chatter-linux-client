@@ -73,7 +73,7 @@ impl MessageSync {
     /// Messages are inserted with `INSERT OR IGNORE` to avoid duplicates.
     pub async fn sync_channel(&self, channel_id: &ChannelId) -> Result<MessageSyncResult, SyncError> {
         let channel_id_str = channel_id.to_string();
-        let sync_key = format!("sync:messages:{}:last_at", channel_id);
+        let sync_key = format!("sync:messages:{}:last_at_ns", channel_id);
         let last_sync = self.settings_repo.get::<u64>(&sync_key)
             .ok()
             .flatten();
@@ -83,6 +83,9 @@ impl MessageSync {
             ..Default::default()
         };
 
+        // Capture the boundary before fetching, so messages arriving during
+        // pagination remain eligible on the next sync. The wire uses Unix ns.
+        let sync_started_ns = reference_time_ns(chrono::Utc::now())?;
         let mut page_token: Option<String> = None;
 
         loop {
@@ -127,8 +130,7 @@ impl MessageSync {
         }
 
         // Update the per-channel sync timestamp
-        let now = chrono::Utc::now().timestamp_millis() as u64;
-        let _ = self.settings_repo.set(&sync_key, &now);
+        let _ = self.settings_repo.set(&sync_key, &sync_started_ns);
 
         if result.inserted > 0 {
             tracing::info!(
@@ -178,7 +180,27 @@ impl MessageSync {
 
     /// Get the last sync timestamp for a channel.
     pub fn last_synced_at(&self, channel_id: &ChannelId) -> Option<u64> {
-        let key = format!("sync:messages:{}:last_at", channel_id);
+        let key = format!("sync:messages:{}:last_at_ns", channel_id);
         self.settings_repo.get::<u64>(&key).ok().flatten()
+    }
+}
+
+// Keep the persisted checkpoint and GetMessages.reference_time in one unit.
+fn reference_time_ns(now: chrono::DateTime<chrono::Utc>) -> Result<u64, SyncError> {
+    now.timestamp_nanos_opt()
+        .and_then(|ns| u64::try_from(ns).ok())
+        .ok_or_else(|| SyncError::Network("sync timestamp out of range".into()))
+}
+
+#[cfg(test)]
+mod timestamp_tests {
+    use super::*;
+
+    #[test]
+    fn reference_time_round_trips_as_unix_nanoseconds() {
+        let now = chrono::DateTime::from_timestamp(1_800_000_000, 123_456_789).unwrap();
+        let reference = reference_time_ns(now).unwrap();
+        assert_eq!(reference, 1_800_000_000_123_456_789);
+        assert_eq!(chrono::DateTime::from_timestamp_nanos(reference as i64), now);
     }
 }

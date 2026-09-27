@@ -41,7 +41,7 @@ pub async fn page(
             let start = offset(cursor)?;
             let response = pool
                 .notification_client()
-                .list_notifications(None, false, vec![], 50, start)
+                .list_notifications(false, vec![], 50, start)
                 .await?;
             let end = start.saturating_add(response.notifications.len() as i32);
             Ok(RecordPage {

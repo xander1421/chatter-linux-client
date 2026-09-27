@@ -10,6 +10,17 @@ use crate::util::time::TimestampNanos;
 
 use super::{MessageError, MessageService};
 
+fn sender_key_distribution_result(
+    delivered: usize,
+    recipients: usize,
+    failure: Option<MessageError>,
+) -> Result<(), MessageError> {
+    if delivered == 0 && recipients > 0 {
+        return Err(failure.unwrap_or(MessageError::Network(crate::error::NetworkError::Unavailable)));
+    }
+    Ok(())
+}
+
 impl MessageService {
     /// Distribute a sender key distribution message to channel members.
     ///
@@ -56,6 +67,7 @@ impl MessageService {
         // Distribute to each member's devices pairwise via Sealed Sender.
         let mut success_count = 0;
         let mut error_count = 0;
+        let mut failure = None;
 
         for member_id in &fanout_user_ids {
             let is_self = member_id == &our_user_id;
@@ -74,6 +86,9 @@ impl MessageService {
             success_count += outcome.delivered;
             if outcome.delivered == 0 && !is_self {
                 error_count += 1;
+                if let Some(error) = outcome.error {
+                    super::server_dm::record_deposit_error(&mut failure, error);
+                }
             }
             if outcome.delivered > 0 {
                 if is_self {
@@ -96,13 +111,7 @@ impl MessageService {
         // Consider it success if at least one device received the SKDM (or
         // the only "member" is ourselves on this one device and no fanout is needed).
         let non_self_members = fanout_user_ids.iter().filter(|u| *u != &our_user_id).count();
-        if success_count == 0 && non_self_members > 0 {
-            return Err(MessageError::EncryptionFailed(
-                "Failed to distribute SKDM to any member".into()
-            ));
-        }
-
-        Ok(())
+        sender_key_distribution_result(success_count, non_self_members, failure)
     }
 
     /// Our mailbox public key for this channel, if we have one (NDSS '21
@@ -1275,6 +1284,27 @@ fn sender_key_request_due(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn skdm_distribution_preserves_retryable_causes_and_validation_errors() {
+        use crate::error::NetworkError;
+        for cause in [NetworkError::Unavailable, NetworkError::Timeout, NetworkError::RateLimited,
+            NetworkError::ConnectionFailed("offline".into())] {
+            let error = sender_key_distribution_result(0, 2, Some(MessageError::Network(cause))).unwrap_err();
+            assert!(matches!(error, MessageError::Network(_)));
+            assert_eq!(error.permanent_send_failure_reason(), None);
+        }
+        let error = sender_key_distribution_result(0, 2, Some(MessageError::Network(
+            NetworkError::InvalidRequest("invalid recipient".into()),
+        ))).unwrap_err();
+        assert_eq!(error.permanent_send_failure_reason(), Some("Message rejected"));
+        let mut failure = Some(error);
+        super::super::server_dm::record_deposit_error(&mut failure, MessageError::Network(NetworkError::Timeout));
+        assert_eq!(sender_key_distribution_result(0, 2, failure).unwrap_err().permanent_send_failure_reason(), None);
+        assert_eq!(sender_key_distribution_result(0, 2, None).unwrap_err().permanent_send_failure_reason(), None);
+        assert!(sender_key_distribution_result(1, 2, None).is_ok());
+        assert!(sender_key_distribution_result(0, 0, None).is_ok());
+    }
+
     /// Own devices are the ones with a bundle; a response without any is none.
     #[test]
     fn own_devices_are_the_bundle_holders() {

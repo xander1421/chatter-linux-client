@@ -411,6 +411,7 @@ mod tests {
             edited_at: 0,
             mentioned_integrations: vec![],
             targets_ai_bot: false,
+            ..Default::default()
         }
     }
 }

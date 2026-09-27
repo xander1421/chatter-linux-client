@@ -3,21 +3,19 @@ import { Colors } from "../theme/colors.slint";
 import { Typography } from "../theme/typography.slint";
 
 export global MessageInfo {
-    in-out property <bool> show: false;
     in-out property <string> message-id: "";
     in-out property <string> details: "";
     callback open(string);
 }
 
-export component MessageInfoModal inherits Rectangle {
-    visible: MessageInfo.show;
-    Modal {
-        show: MessageInfo.show;
-        title: "Message info";
-        modal-width: 440px;
-        close => { MessageInfo.show = false; }
+export component MessageInfoModal inherits Modal {
+    title: "Message info";
+    modal-width: 440px;
+    max-modal-height: 460px;
+    fill-height: true;
+
+    VerticalLayout {
         Flickable {
-            height: min(360px, details.preferred-height);
             viewport-height: details.preferred-height;
             details := Text {
                 width: parent.width;

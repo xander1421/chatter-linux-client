@@ -223,8 +223,10 @@ impl ChannelInbound {
             // message key, so a second one fails as a duplicate — which is not a
             // failure, and must not ask the sender for a resend.
             if let Ok(id) = proto_msg.id.parse::<crate::domain::ids::MessageId>() {
-                if let Ok(Some(_)) = self.messages.get_message_local(&id) {
-                    return Err(Ingested::Dropped);
+                if let Ok(Some(existing)) = self.messages.get_message_local(&id) {
+                    if !is_newer_edit(proto_msg, &existing) {
+                        return Err(Ingested::Dropped);
+                    }
                 }
             }
 
@@ -404,11 +406,33 @@ impl ChannelInbound {
     }
 }
 
+/// A new edit has fresh ciphertext; only duplicate/older versions reuse the
+/// consumed sender key. This comparison also avoids replaying an old edit.
+pub(crate) fn is_newer_edit(proto: &chat_v1::Message, existing: &Message) -> bool {
+    proto.edited && proto.edited_at > 0 && proto.edited_at > existing.edited_at
+        .and_then(|time| time.timestamp_nanos_opt())
+        .and_then(|ns| u64::try_from(ns).ok()).unwrap_or(0)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::client::ChatterClient;
     use crate::domain::message::ConversationType;
+
+    #[test]
+    fn a_new_edit_is_not_a_duplicate_of_the_original() {
+        let mut original = Message::new_text(
+            ChannelId::new(), ConversationType::Channel, None, "original".into(), 1_000_000,
+        );
+        let edit = chat_v1::Message { edited: true, edited_at: 2_000_000, ..Default::default() };
+        assert!(is_newer_edit(&edit, &original));
+        original.edited_at = Some(chrono::DateTime::from_timestamp_nanos(2_000_000));
+        assert!(!is_newer_edit(&edit, &original));
+        let older = chat_v1::Message { edited_at: 1_000_000, ..edit.clone() };
+        assert!(!is_newer_edit(&older, &original));
+        assert!(!is_newer_edit(&chat_v1::Message::default(), &original));
+    }
 
     /// The catch-up sync re-fetches every message newer than its last run,
     /// including ones that already arrived live and were read. Re-ingesting

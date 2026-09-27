@@ -137,21 +137,18 @@ impl NotificationClient {
     ///
     /// # Arguments
     ///
-    /// * `user_id` - User ID to list notifications for (uses authenticated user if None)
     /// * `unread_only` - Filter to only unread notifications
     /// * `types` - Optional filter by notification types
     /// * `limit` - Maximum number of notifications to return
     /// * `offset` - Pagination offset
     pub async fn list_notifications(
         &mut self,
-        user_id: Option<&str>,
         unread_only: bool,
         types: Vec<NotificationType>,
         limit: i32,
         offset: i32,
     ) -> Result<ListNotificationsResponse, NetworkError> {
         let request = ListNotificationsRequest {
-            user_id: user_id.unwrap_or("").to_string(),
             unread_only,
             types: types.into_iter().map(|t| t.into()).collect(),
             limit,
@@ -373,14 +370,12 @@ mod tests {
     fn test_list_notifications_request_construction() {
         // Verify ListNotificationsRequest can be constructed with filters
         let request = ListNotificationsRequest {
-            user_id: "user-123".to_string(),
             unread_only: true,
             types: vec![NotificationType::Message as i32, NotificationType::Mention as i32],
             limit: 20,
             offset: 0,
         };
 
-        assert_eq!(request.user_id, "user-123");
         assert!(request.unread_only);
         assert_eq!(request.types.len(), 2);
         assert_eq!(request.limit, 20);

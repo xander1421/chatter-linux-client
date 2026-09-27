@@ -11,16 +11,18 @@ use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::sync::RwLock;
 
+use crate::proto::mailbox_v1::GetBlindSignaturePublicKeyResponse;
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
 use ed25519_dalek::{SigningKey, VerifyingKey};
+use prost::Message;
 
 use crate::error::{CryptoError, NetworkError};
 use crate::mailbox::blind_signature::{
     blind_key, unblind, BlindingOperation, BlindingSecret, MessageRandomizer, ServerPublicKey,
 };
 use crate::network::grpc::client_pool::GrpcClientPool;
-use crate::network::grpc::AnonymousMailboxClient;
 use crate::network::grpc::mailbox_client::MailboxClient;
+use crate::network::grpc::AnonymousMailboxClient;
 use crate::proto::mailbox_v1::{self, EnvelopeType};
 use crate::storage::repositories::settings_repo::SettingsRepository;
 
@@ -87,7 +89,7 @@ pub struct ActiveMailbox {
 }
 
 // Settings key for cached server blind signature public key.
-const SERVER_BLIND_SIG_PUBKEY: &str = "mailbox.server_blind_sig_pubkey";
+const SERVER_BLIND_SIG_MANIFEST: &str = "mailbox.server_blind_sig_manifest";
 
 // Maximum number of tokens to keep in the pool.
 // Prevents unbounded accumulation when tokens are acquired faster than used.
@@ -121,10 +123,7 @@ pub struct MailboxManager {
 
 impl MailboxManager {
     /// Create a new MailboxManager.
-    pub fn new(
-        client_pool: Arc<GrpcClientPool>,
-        settings_repo: Arc<SettingsRepository>,
-    ) -> Self {
+    pub fn new(client_pool: Arc<GrpcClientPool>, settings_repo: Arc<SettingsRepository>) -> Self {
         Self {
             client_pool,
             settings_repo,
@@ -141,11 +140,13 @@ impl MailboxManager {
     /// Uses deterministic RSABSSA variant per NDSS '21 specification.
     pub async fn initialize(&self) -> Result<(), MailboxError> {
         // Try loading from cache first (stored as base64)
-        if let Ok(Some(cached_b64)) = self.settings_repo.get_string(SERVER_BLIND_SIG_PUBKEY) {
+        if let Ok(Some(cached_b64)) = self.settings_repo.get_string(SERVER_BLIND_SIG_MANIFEST) {
             if let Ok(cached_key) = BASE64.decode(&cached_b64) {
-                // Use a default key_id and far-future expiry for cached keys
-                // In production, these should be stored alongside the key
-                if let Ok(server_pk) = ServerPublicKey::from_der(&cached_key, "cached".to_string(), u64::MAX) {
+                if let Some(server_pk) =
+                    GetBlindSignaturePublicKeyResponse::decode(cached_key.as_slice())
+                        .ok()
+                        .and_then(|m| ServerPublicKey::from_manifest(&m).ok())
+                {
                     *self.server_pubkey.write().await = Some(server_pk);
                     tracing::debug!("Loaded blind signature public key from cache");
                     return Ok(());
@@ -158,16 +159,16 @@ impl MailboxManager {
         let response = client.get_blind_signature_public_key().await?;
 
         // Parse and cache in memory - use server-provided key_id and valid_until
-        let server_pk = ServerPublicKey::from_der(
-            &response.public_key,
-            response.key_id.clone(),
-            response.valid_until,
-        ).map_err(|e| MailboxError::Crypto(CryptoError::InvalidKey(e.to_string())))?;
+        let server_pk = ServerPublicKey::from_manifest(&response)
+            .map_err(|e| MailboxError::Crypto(CryptoError::InvalidKey(e.to_string())))?;
         *self.server_pubkey.write().await = Some(server_pk);
 
         // Persist to settings for next startup (as base64)
-        let key_b64 = BASE64.encode(&response.public_key);
-        if let Err(e) = self.settings_repo.set_string(SERVER_BLIND_SIG_PUBKEY, &key_b64) {
+        let key_b64 = BASE64.encode(response.encode_to_vec());
+        if let Err(e) = self
+            .settings_repo
+            .set_string(SERVER_BLIND_SIG_MANIFEST, &key_b64)
+        {
             tracing::warn!("Failed to cache blind signature public key: {}", e);
         }
 
@@ -190,6 +191,8 @@ impl MailboxManager {
                 "Token count must be 1-10".to_string(),
             )));
         }
+
+        self.initialize().await?;
 
         // Get server public key (clone it so we can use it after releasing the lock)
         let server_pk = self
@@ -220,8 +223,9 @@ impl MailboxManager {
                 blinded_message,
                 secret,
                 randomizer,
-            } = blind_key(&server_pk, public_key.as_bytes())
-                .map_err(|e| MailboxError::Crypto(CryptoError::BlindSignatureError(e.to_string())))?;
+            } = blind_key(&server_pk, public_key.as_bytes()).map_err(|e| {
+                MailboxError::Crypto(CryptoError::BlindSignatureError(e.to_string()))
+            })?;
 
             blinded_keys.push(blinded_message);
 
@@ -243,7 +247,7 @@ impl MailboxManager {
         // Request blind signatures from server
         let mut client = self.create_mailbox_client();
         let response = client
-            .get_mailbox_tokens(count as i32, blinded_keys)
+            .get_mailbox_tokens(count as i32, blinded_keys, server_pk.key_id.clone())
             .await?;
 
         // Unblind the signatures
@@ -254,7 +258,8 @@ impl MailboxManager {
                 &token.blinding_secret,
                 &token.msg_randomizer,
                 token.public_key.as_bytes(),
-            ).map_err(|e| MailboxError::Crypto(CryptoError::BlindSignatureError(e.to_string())))?;
+            )
+            .map_err(|e| MailboxError::Crypto(CryptoError::BlindSignatureError(e.to_string())))?;
 
             token.signature = Some(signature);
         }
@@ -331,8 +336,12 @@ impl MailboxManager {
         // Per NDSS '21 spec, server verifies signature directly against public_key
         // (no message_randomizer needed with deterministic mode)
         let signature = token.signature.ok_or(MailboxError::NoTokensAvailable)?;
-        let message_randomizer = token.msg_randomizer.as_bytes().map(|b| b.to_vec()).unwrap_or_default();
-        
+        let message_randomizer = token
+            .msg_randomizer
+            .as_bytes()
+            .map(|b| b.to_vec())
+            .unwrap_or_default();
+
         let mut client = self.create_anonymous_mailbox_client();
         let response = client
             .create_ephemeral_mailbox(

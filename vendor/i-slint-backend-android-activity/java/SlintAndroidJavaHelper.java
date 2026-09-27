@@ -238,6 +238,7 @@ class SlintInputView extends View {
     public void setCursorPos(int left_x, int left_y, int right_x, int right_y, int cursor_height, int num_handles) {
         int handleHeight = 0;
         if (num_handles == 1) {
+            hideActionMenu(-1);
             if (mLeftHandle != null) {
                 mLeftHandle.hide();
             }
@@ -275,7 +276,7 @@ class SlintInputView extends View {
             if (mCursorHandle != null) {
                 mCursorHandle.hide();
             }
-            showActionMenu();
+            // A selection update (including an IME echo) is not a long-press.
         } else {
             if (mCursorHandle != null) {
                 handleHeight = mCursorHandle.getHeight();
@@ -310,6 +311,32 @@ class SlintInputView extends View {
     }
 
     private ActionMode mCurrentActionMode;
+    private String mSelectionText = "";
+
+    public void updateSelectionMenu(String text, boolean selected, int left, int top, int right, int bottom) {
+        if (!selected || !mSelectionText.equals(text)) {
+            hideActionMenu(-1);
+        }
+        mSelectionText = text;
+        selectionRect.set(left, top, right, bottom);
+        if (mCurrentActionMode != null) {
+            mCurrentActionMode.invalidateContentRect();
+        }
+    }
+
+    @Override
+    public void onWindowFocusChanged(boolean hasWindowFocus) {
+        super.onWindowFocusChanged(hasWindowFocus);
+        if (!hasWindowFocus) {
+            setCursorPos(0, 0, 0, 0, 0, 0);
+        }
+    }
+
+    @Override
+    protected void onDetachedFromWindow() {
+        setCursorPos(0, 0, 0, 0, 0, 0);
+        super.onDetachedFromWindow();
+    }
 
     public void showActionMenu() {
         if (mCurrentActionMode != null) {
@@ -319,6 +346,7 @@ class SlintInputView extends View {
         ActionMode.Callback2 action = new ActionMode.Callback2() {
             @Override
             public boolean onCreateActionMode(ActionMode mode, Menu menu) {
+                mode.setTag("slint-text-selection");
                 mode.setTitle(null);
                 mode.setSubtitle(null);
                 mode.setTitleOptionalHint(true);
@@ -366,6 +394,12 @@ class SlintInputView extends View {
 
             @Override
             public void onDestroyActionMode(ActionMode action) {
+                // Android can finish this itself (BACK, focus loss, menu action).
+                // Retaining the finished instance makes the next long-press call
+                // hide(0) on a dead toolbar instead of creating a new one.
+                if (mCurrentActionMode == action) {
+                    mCurrentActionMode = null;
+                }
             }
 
             // Introduced in API level 23
@@ -401,9 +435,15 @@ public class SlintAndroidJavaHelper {
     Activity mActivity;
     SlintInputView mInputView;
 
-    public SlintAndroidJavaHelper(Activity activity) {
+    public SlintAndroidJavaHelper(Activity activity, boolean nativeActivity) {
         this.mActivity = activity;
         this.mInputView = new SlintInputView(activity);
+        // GameActivity's SurfaceView owns the input connection. This helper is
+        // only an ActionMode host there, never a second focusable IME editor.
+        if (!nativeActivity) {
+            this.mInputView.setFocusable(false);
+            this.mInputView.setFocusableInTouchMode(false);
+        }
         this.mActivity.runOnUiThread(new Runnable() {
             @Override
             public void run() {
@@ -620,6 +660,14 @@ public class SlintAndroidJavaHelper {
             }
             return new Rect(0, 0, 0, 0);
         }
+    }
+
+    public void hide_action_menu() {
+        mActivity.runOnUiThread(() -> mInputView.setCursorPos(0, 0, 0, 0, 0, 0));
+    }
+
+    public void update_selection_menu(String text, boolean selected, int left, int top, int right, int bottom) {
+        mActivity.runOnUiThread(() -> mInputView.updateSelectionMenu(text, selected, left, top, right, bottom));
     }
 
     public void show_action_menu() {

@@ -35,7 +35,7 @@ bind_java_type! {
         AndroidRect => "android.graphics.Rect",
     },
     constructors {
-        fn new(activity: AndroidActivity),
+        fn new(activity: AndroidActivity, native_activity: jboolean),
     },
     methods {
         fn accent_color {
@@ -90,6 +90,14 @@ bind_java_type! {
                 input_type: jint,
                 show_cursor_handles: jboolean
             ),
+        },
+        fn hide_action_menu {
+            name = "hide_action_menu",
+            sig = (),
+        },
+        fn update_selection_menu {
+            name = "update_selection_menu",
+            sig = (text: JString, selected: jboolean, left: jint, top: jint, right: jint, bottom: jint),
         },
         fn show_action_menu {
             name = "show_action_menu",
@@ -333,7 +341,9 @@ fn load_java_helper(
             unsafe { env.as_cast_raw::<jni::refs::Global<AndroidActivity>>(&native_activity_ptr)? };
         let loader = LoaderContext::Loader(get_helper_class_loader(env, native_activity.as_ref())?);
         let _ = SlintAndroidJavaHelperAPI::get(env, &loader)?;
-        let helper_instance = SlintAndroidJavaHelper::new(env, native_activity)?;
+        let helper_instance = SlintAndroidJavaHelper::new(
+            env, native_activity, cfg!(feature = "native-activity"),
+        )?;
         env.new_global_ref(&helper_instance)
     })
 }
@@ -474,6 +484,37 @@ impl JavaHelper {
         self.with_jni_env(|env, _helper| {
             let long_press_timeout = AndroidViewConfiguration::get_long_press_timeout(env)?;
             Ok(Duration::from_millis(long_press_timeout as _))
+        })
+    }
+
+    pub fn hide_action_menu(&self) -> Result<(), jni::errors::Error> {
+        self.with_jni_env(|env, helper| helper.hide_action_menu(env))
+    }
+
+    /// Selection presentation only: GameTextInput owns the editable and composition.
+    /// Calling set_imm_data here would restart a second, native-activity InputConnection.
+    pub fn update_selection_menu(
+        &self,
+        data: &i_slint_core::window::InputMethodProperties,
+        scale_factor: f32,
+    ) -> Result<(), jni::errors::Error> {
+        self.with_jni_env(|env, helper| {
+            let cursor = data.cursor_rect_origin.to_physical(scale_factor);
+            let anchor = data.anchor_point.to_physical(scale_factor);
+            let size = data.cursor_rect_size.to_physical(scale_factor);
+            let selected = data.anchor_position.is_some_and(|a| a != data.cursor_position)
+                && !data.text.is_empty()
+                && data.preedit_text.is_empty();
+            let text = JString::new(env, data.text.as_str())?;
+            helper.update_selection_menu(
+                env,
+                &text,
+                selected,
+                cursor.x.min(anchor.x),
+                cursor.y.min(anchor.y - size.height as i32),
+                cursor.x.max(anchor.x),
+                (cursor.y + size.height as i32).max(anchor.y),
+            )
         })
     }
 

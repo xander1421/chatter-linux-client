@@ -250,7 +250,7 @@ impl ChannelStreamService {
         loop {
             tokio::select! {
                 item = stream.next() => match item {
-                    Some(result) => self.handle_event(result?).await,
+                    Some(result) => self.handle_event(result?).await?,
                     None => return Ok(()),
                 },
                 _ = self.resubscribe.notified() => {
@@ -310,12 +310,58 @@ impl ChannelStreamService {
     ///
     /// Forced, not rate-limited, for the same reason as the connect-time
     /// catch-up: a throttle that skips this one leaves the gap open.
-    async fn handle_resync(&self, new_cursor: &str, resync: &chat_v1::ResyncRequired) {
+    async fn handle_resync(&self, new_cursor: &str, resync: &chat_v1::ResyncRequired) -> Result<(), crate::error::NetworkError> {
         tracing::info!(
             channels = resync.channel_ids.len(),
             new_cursor,
             "Server could not replay from our cursor; resyncing from the durable store"
         );
+        // Complete recovery before adopting the replacement cursor. On failure
+        // the stream reconnects from the old cursor and requests resync again.
+        self.catch_up_now().await;
+        for channel in &resync.channel_ids {
+            let channel_id = channel.parse::<ChannelId>()
+                .map_err(|_| crate::error::NetworkError::InvalidRequest("invalid resync channel".into()))?;
+            let mut page_token: Option<String> = None;
+            loop {
+                let page = self.grpc_pool.message_client()
+                    .get_message_changes(channel, page_token.as_deref()).await?;
+                for message in &page.messages {
+                    if message.channel_id != *channel {
+                        return Err(crate::error::NetworkError::DataLoss("resync channel mismatch".into()));
+                    }
+                    if message.deleted_at != 0 {
+                        self.apply_delete(&message.id, channel_id)
+                            .map_err(|e| crate::error::NetworkError::Unknown(e.to_string()))?;
+                    } else {
+                        let id = message.id.parse::<MessageId>()
+                            .map_err(|_| crate::error::NetworkError::DataLoss("invalid resync message id".into()))?;
+                        if self.messages.message_repo.is_tombstoned(&id)
+                            .map_err(|e| crate::error::NetworkError::Unknown(e.to_string()))? { continue; }
+                        let existing = self.messages.get_message_local(&id)
+                            .map_err(|e| crate::error::NetworkError::Unknown(e.to_string()))?;
+                        let needs_content = existing.as_ref().is_none_or(|local|
+                            crate::services::message::channel_inbound::is_newer_edit(message, local));
+                        if needs_content {
+                            let outcome = if message.edited {
+                                self.inbound.ingest_edit(message, channel_id).await
+                            } else {
+                                self.inbound.ingest(message, channel_id, false).await
+                            };
+                            if matches!(outcome,
+                                crate::services::message::channel_inbound::Ingested::Dropped
+                                | crate::services::message::channel_inbound::Ingested::DeferredPendingSenderKey) {
+                                return Err(crate::error::NetworkError::Unknown("resync content not persisted yet".into()));
+                            }
+                        }
+                        self.messages.reconcile_channel_reactions(message, channel_id)
+                            .map_err(|e| crate::error::NetworkError::Unknown(e.to_string()))?;
+                    }
+                }
+                if page.next_page_token.is_empty() { break; }
+                page_token = Some(page.next_page_token);
+            }
+        }
         if new_cursor.is_empty() {
             // Nothing is buffered to resume against. Keeping the old cursor
             // would present the same dead position on every reconnect and be
@@ -326,7 +372,7 @@ impl ChannelStreamService {
         } else {
             self.store_cursor(new_cursor);
         }
-        self.catch_up_now().await;
+        Ok(())
     }
 
     /// Dispatch one `MessageEvent`.
@@ -335,16 +381,16 @@ impl ChannelStreamService {
     /// The old consumer matched `MessageSent` only, with no `else` and no log,
     /// so edits, deletions and reactions from other members were received and
     /// dropped on the floor. This match is exhaustive.
-    async fn handle_event(&self, event: chat_v1::MessageEvent) {
+    async fn handle_event(&self, event: chat_v1::MessageEvent) -> Result<(), crate::error::NetworkError> {
         if event.event_id == STREAM_READY_EVENT_ID {
             tracing::debug!("Channel message stream ready");
-            return;
+            return Ok(());
         }
         // Before anything that reads channel_id: a resync covers several
         // channels and carries none of its own.
         if let Some(MsgEventType::ResyncRequired(resync)) = &event.event {
-            self.handle_resync(&event.event_id, resync).await;
-            return;
+            self.handle_resync(&event.event_id, resync).await?;
+            return Ok(());
         }
         self.store_cursor(&event.event_id);
 
@@ -357,7 +403,7 @@ impl ChannelStreamService {
                     channel_id = %event.channel_id,
                     "Message event with unparseable channel_id; dropping"
                 );
-                return;
+                return Ok(());
             }
         };
 
@@ -387,6 +433,7 @@ impl ChannelStreamService {
                 );
             }
         }
+        Ok(())
     }
 
     fn handle_reaction(
@@ -441,43 +488,35 @@ impl ChannelStreamService {
 
     /// Apply a remote "delete for everyone" to local storage and tell the UI.
     fn handle_delete(&self, message_id: &str, channel_id: ChannelId) {
-        let Ok(uuid) = message_id.parse::<uuid::Uuid>() else {
-            tracing::warn!(%channel_id, message_id, "Delete event with unparseable message id");
-            return;
-        };
-        let id = MessageId::from(uuid);
-
-        // The UI matches on (sender, sent_at) Signal-style, so read the local
-        // row before removing it.
-        let existing = match self.messages.get_message_local(&id) {
-            Ok(Some(m)) => m,
-            Ok(None) => {
-                tracing::debug!(%channel_id, %id, "Delete event for a message we never stored");
-                return;
-            }
-            Err(e) => {
-                tracing::warn!(%channel_id, %id, error = %e, "Failed to read message for delete event");
-                return;
-            }
-        };
-
-        if let Err(e) = self.messages.delete_message_local(&id) {
-            tracing::warn!(%channel_id, %id, error = %e, "Failed to delete message locally");
-            return;
+        if let Err(error) = self.apply_delete(message_id, channel_id) {
+            tracing::warn!(%error, %channel_id, "Failed to persist message deletion");
         }
-
-        let Some(author_id) = existing.sender_id else {
-            tracing::debug!(%channel_id, %id, "Deleted message had no known author; not announcing");
-            return;
-        };
-
-        let _ = self.event_bus.domain_sender().send(DomainEvent::MessageDeleted {
-            message_id: id,
-            author_id,
-            channel_id: Some(channel_id),
-            target_sent_timestamp: existing.sent_at,
-        });
     }
+
+    fn apply_delete(&self, message_id: &str, channel_id: ChannelId) -> Result<(), crate::services::message::MessageError> {
+        let id = message_id.parse::<MessageId>()
+            .map_err(|_| crate::services::message::MessageError::InvalidContent("invalid deleted message id".into()))?;
+        let existing = self.messages.get_message_local(&id)?;
+        if existing.as_ref().is_some_and(|m| m.conversation_id != channel_id) {
+            return Err(crate::services::message::MessageError::InvalidContent("delete channel mismatch".into()));
+        }
+        // Record even unseen tombstones: a delayed/deferred message must not
+        // reappear after recovery told us it had been deleted.
+        match self.messages.delete_message_local(&id) {
+            Ok(()) | Err(crate::services::message::MessageError::Storage(crate::error::StorageError::NotFound(_))) => {}
+            Err(error) => return Err(error),
+        }
+        if let Some(existing) = existing {
+            if let Some(author_id) = existing.sender_id {
+                self.event_bus.emit_domain(DomainEvent::MessageDeleted {
+                    message_id: id, author_id, channel_id: Some(channel_id),
+                    target_sent_timestamp: existing.sent_at,
+                });
+            }
+        }
+        Ok(())
+    }
+
 }
 
 #[cfg(test)]

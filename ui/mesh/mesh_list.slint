@@ -201,22 +201,6 @@ export component MeshList inherits Rectangle {
             }
         }
 
-        // ── Whatever core last said went wrong ──
-        if !root.collapsed && MeshGlobal.notice != "": Rectangle {
-            height: notice-text.preferred-height + 8px;
-            HorizontalLayout {
-                padding-left: 10px;
-                padding-right: Spacing.sm;
-                padding-bottom: 4px;
-                notice-text := Text {
-                    text: MeshGlobal.notice;
-                    color: Colors.warning;
-                    font-size: Typography.xxs;
-                    wrap: word-wrap;
-                }
-            }
-        }
-
         // ── Rows ──
         if root.expanded: VerticalLayout {
             padding-left: Spacing.xs;

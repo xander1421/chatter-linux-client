@@ -179,6 +179,7 @@ impl MessageClient {
             page_token: page_token.unwrap_or("").to_string(),
             sort_direction: sort_direction.into(),
             reference_point,
+            updated_since: None,
         };
 
         self.inner
@@ -186,6 +187,23 @@ impl MessageClient {
             .await
             .map(|r| r.into_inner())
             .map_err(|s| NetworkError::from_status(&s))
+    }
+
+    /// Recover current message state, tombstones and reactions from the
+    /// server's retained change window. The page token freezes its boundaries.
+    pub async fn get_message_changes(
+        &mut self,
+        channel_id: &str,
+        page_token: Option<&str>,
+    ) -> Result<GetMessagesResponse, NetworkError> {
+        self.inner.get_messages(GetMessagesRequest {
+            channel_id: channel_id.to_string(),
+            limit: 50,
+            sort_direction: MessageSortDirection::SortOldestFirst.into(),
+            page_token: page_token.unwrap_or("").to_string(),
+            updated_since: Some(0),
+            ..Default::default()
+        }).await.map(|r| r.into_inner()).map_err(|s| NetworkError::from_status(&s))
     }
 
     /// Stream messages from a channel.
@@ -590,6 +608,7 @@ impl MessageClient {
             page_token: String::new(),
             sort_direction: MessageSortDirection::SortUnspecified.into(),
             reference_point: None,
+            updated_since: None,
         };
 
         self.inner
@@ -747,6 +766,7 @@ mod tests {
             edited_at: 0,
             mentioned_integrations: vec![],
             targets_ai_bot: false,
+            ..Default::default()
         };
 
         assert_eq!(message.id, "msg-123");
@@ -832,6 +852,7 @@ mod tests {
             edited_at: 0,
             mentioned_integrations: vec![],
             targets_ai_bot: false,
+            ..Default::default()
         };
 
         let event = MessageEvent {

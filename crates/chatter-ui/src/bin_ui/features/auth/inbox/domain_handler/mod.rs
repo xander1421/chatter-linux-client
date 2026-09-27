@@ -116,7 +116,7 @@ pub async fn handle_domain_event(
         DomainEvent::TypingStarted { user_id, channel_id, timestamp } => {
             super::unified_actions::handle_typing(
                 window,
-                ui_ctx.chat_state(),
+                ui_ctx,
                 super::unified_actions::EventSource::Channel(channel_id),
                 user_id,
                 timestamp,
@@ -127,7 +127,7 @@ pub async fn handle_domain_event(
         DomainEvent::TypingStopped { user_id, channel_id, timestamp } => {
             super::unified_actions::handle_typing(
                 window,
-                ui_ctx.chat_state(),
+                ui_ctx,
                 super::unified_actions::EventSource::Channel(channel_id),
                 user_id,
                 timestamp,

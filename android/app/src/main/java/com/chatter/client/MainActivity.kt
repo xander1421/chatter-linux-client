@@ -12,6 +12,7 @@ import android.os.Handler
 import android.os.Looper
 import android.provider.OpenableColumns
 import android.util.Log
+import android.view.ActionMode
 import android.view.KeyEvent
 import android.view.View
 import android.view.ViewGroup
@@ -233,6 +234,21 @@ class MainActivity : GameActivity() {
     /** Implemented in Rust. Re-shows a ringing call's screen that Back hid. */
     private external fun nativeShowIncomingCall(callId: String)
 
+    // The Slint helper owns this floating selection toolbar, but GameActivity's
+    // surface owns pre-IME BACK. Finish the toolbar before hiding the keyboard;
+    // otherwise Samsung consumes BACK without ever notifying the helper view.
+    private var textSelectionMode: ActionMode? = null
+
+    override fun onActionModeStarted(mode: ActionMode) {
+        super.onActionModeStarted(mode)
+        if (mode.tag == "slint-text-selection") textSelectionMode = mode
+    }
+
+    override fun onActionModeFinished(mode: ActionMode) {
+        if (textSelectionMode === mode) textSelectionMode = null
+        super.onActionModeFinished(mode)
+    }
+
     // --- Back key --------------------------------------------------------------
     /**
      * Back with the soft keyboard up closes the keyboard, decided here, BEFORE
@@ -262,18 +278,25 @@ class MainActivity : GameActivity() {
     private inner class BackHidesImeSurfaceView : InputEnabledSurfaceView(this@MainActivity) {
         /** The current Back press started while the keyboard was up. */
         private var backHidesIme = false
+        private var backSelectionMode: ActionMode? = null
 
         override fun onKeyPreIme(keyCode: Int, event: KeyEvent): Boolean {
             if (keyCode != KeyEvent.KEYCODE_BACK) return super.onKeyPreIme(keyCode, event)
             when (event.action) {
                 KeyEvent.ACTION_DOWN -> {
                     if (event.repeatCount == 0) {
-                        backHidesIme = ViewCompat.getRootWindowInsets(this)
+                        backSelectionMode = textSelectionMode
+                        backHidesIme = backSelectionMode == null && ViewCompat.getRootWindowInsets(this)
                             ?.isVisible(WindowInsetsCompat.Type.ime()) == true
                     }
-                    if (backHidesIme) return true
+                    if (backSelectionMode != null || backHidesIme) return true
                 }
-                KeyEvent.ACTION_UP -> if (backHidesIme) {
+                KeyEvent.ACTION_UP -> if (backSelectionMode != null) {
+                    val mode = backSelectionMode
+                    backSelectionMode = null
+                    if (!event.isCanceled) mode?.finish()
+                    return true
+                } else if (backHidesIme) {
                     backHidesIme = false
                     if (!event.isCanceled) {
                         WindowCompat.getInsetsController(window, this)

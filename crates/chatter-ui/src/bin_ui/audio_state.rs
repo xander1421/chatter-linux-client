@@ -100,6 +100,18 @@ pub fn get_current_playing_id() -> Option<String> {
     }
 }
 
+/// Query the player's end-of-stream state; rodio resets position when its
+/// queue drains, so duration progress alone cannot detect completion.
+pub fn playback_finished() -> bool {
+    let player_arc = get_audio_player();
+    let state_arc = get_audio_state();
+    if let (Ok(player), Ok(state)) = (player_arc.lock(), state_arc.lock()) {
+        return state.current_id.is_some() && state.is_playing
+            && player.as_ref().is_some_and(|player| !player.is_playing() && !player.is_paused());
+    }
+    false
+}
+
 /// Get the current playback progress as a float from 0.0 to 1.0.
 ///
 /// Returns 0.0 if nothing is playing or duration is unknown.

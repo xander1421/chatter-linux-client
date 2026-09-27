@@ -892,7 +892,7 @@ impl MessageService {
 }
 
 // If any destination failed transiently, a retry can still make progress.
-fn record_deposit_error(current: &mut Option<MessageError>, error: MessageError) {
+pub(super) fn record_deposit_error(current: &mut Option<MessageError>, error: MessageError) {
     if current.is_none() || error.permanent_send_failure_reason().is_none() {
         *current = Some(error);
     }

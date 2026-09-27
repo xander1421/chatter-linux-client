@@ -3106,7 +3106,10 @@ export component App inherits Rectangle {
         }
     }
 
-    MessageInfoModal { }
+    if root.active-modal == "message-info": MessageInfoModal {
+        show: true;
+        close => { root.nav-close("message-info"); }
+    }
 
     MessageContextMenu {
         show: root.context-menu-visible;
@@ -3114,10 +3117,10 @@ export component App inherits Rectangle {
         timestamp-ns: root.context-menu-timestamp-ns;
         message-id: root.context-menu-message-id;
         position-x: root.context-menu-x;
-        position-y: root.context-menu-y;
-        safe-area-top: root.safe-area-top;
-        safe-area-bottom: root.safe-area-bottom;
-        content-top: root.context-menu-content-top;
+        // This overlay lives in the same inset content rectangle as the
+        // composer. Its height already excludes the IME and system bars.
+        position-y: root.context-menu-y - root.safe-area-top;
+        content-top: root.context-menu-content-top - root.safe-area-top;
         is-own-message: root.context-menu-is-own-message;
         can-retry: root.context-menu-can-retry;
         retry-clicked(id) => { root.message-clicked(id); }

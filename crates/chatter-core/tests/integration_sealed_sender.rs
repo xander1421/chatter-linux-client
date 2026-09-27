@@ -10,10 +10,10 @@ use crate::{common, skip_if_no_server};
 
 use chatter_core::mailbox::blind_signature::{blind_key, unblind, ServerPublicKey};
 use chatter_core::network::grpc::{AuthClient, MailboxClient, MessageClient};
+use chatter_core::proto::mailbox_v1::EnvelopeType;
 use chatter_core::proto::{
     signal_pre_key_bundle::PreKeyRecord, GetPreKeyBundleResponse, SealedSenderMessage,
 };
-use chatter_core::proto::mailbox_v1::EnvelopeType;
 use common::*;
 use ed25519_dalek::{Signer, SigningKey};
 use rand::RngCore;
@@ -105,10 +105,7 @@ async fn test_send_sealed_message_without_uak_rejected() {
         .await;
 
     // Should fail with Unauthenticated - requires UAK header
-    assert!(
-        result.is_err(),
-        "Should fail without UAK header"
-    );
+    assert!(result.is_err(), "Should fail without UAK header");
 }
 
 #[tokio::test]
@@ -309,11 +306,7 @@ async fn test_blind_signature_flow() {
     let pk_response = assert_ok(mailbox_client.get_blind_signature_public_key().await);
 
     // Parse the server public key using real blind_signature module
-    let server_pk = assert_ok(ServerPublicKey::from_der(
-        &pk_response.public_key,
-        pk_response.key_id.clone(),
-        pk_response.valid_until,
-    ));
+    let server_pk = assert_ok(ServerPublicKey::from_manifest(&pk_response));
 
     // Step 2: Generate real Ed25519 keypair
     let mut secret_bytes = [0u8; 32];
@@ -326,7 +319,11 @@ async fn test_blind_signature_flow() {
 
     // Step 4: Request blind signature from server
     let result = mailbox_client
-        .get_mailbox_tokens(1, vec![blinding_op.blinded_message.clone()])
+        .get_mailbox_tokens(
+            1,
+            vec![blinding_op.blinded_message.clone()],
+            server_pk.key_id.clone(),
+        )
         .await;
 
     assert!(
@@ -336,7 +333,11 @@ async fn test_blind_signature_flow() {
     );
 
     let response = result.unwrap();
-    assert_eq!(response.blinded_signatures.len(), 1, "Should get 1 signature");
+    assert_eq!(
+        response.blinded_signatures.len(),
+        1,
+        "Should get 1 signature"
+    );
     assert!(response.remaining_quota >= 0, "Should have quota info");
 
     // Step 5: Unblind the signature
@@ -369,11 +370,7 @@ async fn test_get_mailbox_tokens_multiple() {
 
     // Get server key
     let pk_response = assert_ok(mailbox_client.get_blind_signature_public_key().await);
-    let server_pk = assert_ok(ServerPublicKey::from_der(
-        &pk_response.public_key,
-        pk_response.key_id.clone(),
-        pk_response.valid_until,
-    ));
+    let server_pk = assert_ok(ServerPublicKey::from_manifest(&pk_response));
 
     // Generate 3 keypairs and blind them
     let mut blinded_keys = Vec::new();
@@ -388,7 +385,9 @@ async fn test_get_mailbox_tokens_multiple() {
     }
 
     // Request all 3 signatures
-    let result = mailbox_client.get_mailbox_tokens(3, blinded_keys).await;
+    let result = mailbox_client
+        .get_mailbox_tokens(3, blinded_keys, server_pk.key_id.clone())
+        .await;
 
     assert!(
         result.is_ok(),
@@ -397,7 +396,11 @@ async fn test_get_mailbox_tokens_multiple() {
     );
 
     let response = result.unwrap();
-    assert_eq!(response.blinded_signatures.len(), 3, "Should get 3 signatures");
+    assert_eq!(
+        response.blinded_signatures.len(),
+        3,
+        "Should get 3 signatures"
+    );
 }
 
 #[tokio::test]
@@ -411,11 +414,7 @@ async fn test_create_ephemeral_mailbox_with_real_signature() {
 
     // Step 1: Get server's RSA public key
     let pk_response = assert_ok(mailbox_client.get_blind_signature_public_key().await);
-    let server_pk = assert_ok(ServerPublicKey::from_der(
-        &pk_response.public_key,
-        pk_response.key_id.clone(),
-        pk_response.valid_until,
-    ));
+    let server_pk = assert_ok(ServerPublicKey::from_manifest(&pk_response));
 
     // Step 2: Generate Ed25519 keypair
     let mut secret_bytes = [0u8; 32];
@@ -428,7 +427,11 @@ async fn test_create_ephemeral_mailbox_with_real_signature() {
 
     let tokens_response = assert_ok(
         mailbox_client
-            .get_mailbox_tokens(1, vec![blinding_op.blinded_message.clone()])
+            .get_mailbox_tokens(
+                1,
+                vec![blinding_op.blinded_message.clone()],
+                server_pk.key_id.clone(),
+            )
             .await,
     );
 
@@ -446,7 +449,12 @@ async fn test_create_ephemeral_mailbox_with_real_signature() {
     let mut message_randomizer = [0u8; 32];
     rand::fill(&mut message_randomizer);
     let create_result = mailbox_client
-        .create_ephemeral_mailbox(public_key_bytes.clone(), signature, 86400, message_randomizer.to_vec())
+        .create_ephemeral_mailbox(
+            public_key_bytes.clone(),
+            signature,
+            86400,
+            message_randomizer.to_vec(),
+        )
         .await;
 
     assert!(
@@ -459,7 +467,11 @@ async fn test_create_ephemeral_mailbox_with_real_signature() {
     if !response.success {
         println!("Mailbox creation failed: error={}", response.error);
     }
-    assert!(response.success, "Mailbox creation should succeed: {}", response.error);
+    assert!(
+        response.success,
+        "Mailbox creation should succeed: {}",
+        response.error
+    );
     assert!(!response.mailbox_id.is_empty(), "Should have mailbox ID");
 
     println!("Created mailbox: {}", response.mailbox_id);
@@ -476,11 +488,7 @@ async fn test_ephemeral_mailbox_poll_with_real_signature() {
 
     // Get server key
     let pk_response = assert_ok(mailbox_client.get_blind_signature_public_key().await);
-    let server_pk = assert_ok(ServerPublicKey::from_der(
-        &pk_response.public_key,
-        pk_response.key_id.clone(),
-        pk_response.valid_until,
-    ));
+    let server_pk = assert_ok(ServerPublicKey::from_manifest(&pk_response));
 
     // Generate keypair
     let mut secret_bytes = [0u8; 32];
@@ -492,7 +500,11 @@ async fn test_ephemeral_mailbox_poll_with_real_signature() {
     let blinding_op = assert_ok(blind_key(&server_pk, &public_key_bytes));
     let tokens_response = assert_ok(
         mailbox_client
-            .get_mailbox_tokens(1, vec![blinding_op.blinded_message.clone()])
+            .get_mailbox_tokens(
+                1,
+                vec![blinding_op.blinded_message.clone()],
+                server_pk.key_id.clone(),
+            )
             .await,
     );
     let signature = assert_ok(unblind(
@@ -508,10 +520,19 @@ async fn test_ephemeral_mailbox_poll_with_real_signature() {
     rand::fill(&mut message_randomizer);
     let create_response = assert_ok(
         mailbox_client
-            .create_ephemeral_mailbox(public_key_bytes.clone(), signature, 86400, message_randomizer.to_vec())
+            .create_ephemeral_mailbox(
+                public_key_bytes.clone(),
+                signature,
+                86400,
+                message_randomizer.to_vec(),
+            )
             .await,
     );
-    assert!(create_response.success, "Mailbox creation should succeed: {}", create_response.error);
+    assert!(
+        create_response.success,
+        "Mailbox creation should succeed: {}",
+        create_response.error
+    );
 
     // Get challenge
     let challenge_response = assert_ok(
@@ -556,11 +577,7 @@ async fn test_send_to_ephemeral_mailbox() {
 
     // Create a mailbox first using real crypto
     let pk_response = assert_ok(mailbox_client.get_blind_signature_public_key().await);
-    let server_pk = assert_ok(ServerPublicKey::from_der(
-        &pk_response.public_key,
-        pk_response.key_id.clone(),
-        pk_response.valid_until,
-    ));
+    let server_pk = assert_ok(ServerPublicKey::from_manifest(&pk_response));
 
     let mut secret_bytes = [0u8; 32];
     rand::fill(&mut secret_bytes);
@@ -570,7 +587,11 @@ async fn test_send_to_ephemeral_mailbox() {
     let blinding_op = assert_ok(blind_key(&server_pk, &public_key_bytes));
     let tokens_response = assert_ok(
         mailbox_client
-            .get_mailbox_tokens(1, vec![blinding_op.blinded_message.clone()])
+            .get_mailbox_tokens(
+                1,
+                vec![blinding_op.blinded_message.clone()],
+                server_pk.key_id.clone(),
+            )
             .await,
     );
     let signature = assert_ok(unblind(
@@ -585,10 +606,19 @@ async fn test_send_to_ephemeral_mailbox() {
     rand::fill(&mut message_randomizer);
     let create_response = assert_ok(
         mailbox_client
-            .create_ephemeral_mailbox(public_key_bytes.clone(), signature, 86400, message_randomizer.to_vec())
+            .create_ephemeral_mailbox(
+                public_key_bytes.clone(),
+                signature,
+                86400,
+                message_randomizer.to_vec(),
+            )
             .await,
     );
-    assert!(create_response.success, "Mailbox creation should succeed: {}", create_response.error);
+    assert!(
+        create_response.success,
+        "Mailbox creation should succeed: {}",
+        create_response.error
+    );
 
     // Now send a message to this mailbox
     let send_result = mailbox_client

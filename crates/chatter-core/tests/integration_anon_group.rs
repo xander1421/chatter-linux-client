@@ -33,6 +33,7 @@ async fn test_request_blind_signature_tokens() {
 
     let mut mailbox_client = MailboxClient::new(pool.channel(), pool.auth_clone());
 
+    let manifest = assert_ok(mailbox_client.get_blind_signature_public_key().await);
     // Request blind signature tokens
     // The server provides blinded tokens that can be used to register anonymous mailboxes
     // Note: get_mailbox_tokens requires blinded keys to be provided
@@ -43,7 +44,9 @@ async fn test_request_blind_signature_tokens() {
             key
         })
         .collect();
-    let result = mailbox_client.get_mailbox_tokens(5, blinded_keys).await;
+    let result = mailbox_client
+        .get_mailbox_tokens(5, blinded_keys, manifest.key_id.clone())
+        .await;
 
     match result {
         Ok(response) => {
@@ -147,7 +150,10 @@ async fn test_send_to_ephemeral_mailbox() {
         }
         Err(e) => {
             // Expected to fail if mailbox doesn't exist
-            eprintln!("Send to mailbox error (expected if mailbox not registered): {:?}", e);
+            eprintln!(
+                "Send to mailbox error (expected if mailbox not registered): {:?}",
+                e
+            );
         }
     }
 }
@@ -185,14 +191,14 @@ async fn test_poll_ephemeral_mailbox() {
 
     match result {
         Ok(response) => {
-            eprintln!(
-                "Polled mailbox: {} messages",
-                response.messages.len()
-            );
+            eprintln!("Polled mailbox: {} messages", response.messages.len());
         }
         Err(e) => {
             // Expected to fail if mailbox doesn't exist
-            eprintln!("Poll mailbox error (expected if mailbox not registered): {:?}", e);
+            eprintln!(
+                "Poll mailbox error (expected if mailbox not registered): {:?}",
+                e
+            );
         }
     }
 }
@@ -214,6 +220,7 @@ async fn test_blind_token_full_flow() {
 
     let mut mailbox_client = MailboxClient::new(pool.channel(), pool.auth_clone());
 
+    let manifest = assert_ok(mailbox_client.get_blind_signature_public_key().await);
     // Step 1: Request blind tokens
     let blinded_keys: Vec<Vec<u8>> = (0..3)
         .map(|_| {
@@ -222,7 +229,9 @@ async fn test_blind_token_full_flow() {
             key
         })
         .collect();
-    let tokens_result = mailbox_client.get_mailbox_tokens(3, blinded_keys).await;
+    let tokens_result = mailbox_client
+        .get_mailbox_tokens(3, blinded_keys, manifest.key_id.clone())
+        .await;
 
     match tokens_result {
         Ok(response) => {
@@ -236,11 +245,7 @@ async fn test_blind_token_full_flow() {
             // This requires the full blind signature protocol implementation
 
             for (i, sig) in response.blinded_signatures.iter().enumerate() {
-                eprintln!(
-                    "Signature {}: len={}",
-                    i,
-                    sig.len()
-                );
+                eprintln!("Signature {}: len={}", i, sig.len());
             }
         }
         Err(e) => {
@@ -258,8 +263,10 @@ async fn test_anon_group_content_serialization() {
     skip_if_no_server!();
 
     // Test the content proto serialization for anonymous group messages
+    use chatter_core::proto::content_v1::{
+        self, AnonGroupInvite, AnonGroupMessage, Content, DataMessage,
+    };
     use prost::Message;
-    use chatter_core::proto::content_v1::{self, AnonGroupInvite, AnonGroupMessage, Content, DataMessage};
 
     // Create a test group invite
     let group_id = uuid::Uuid::new_v4().as_bytes().to_vec();
@@ -314,7 +321,9 @@ async fn test_anon_group_content_serialization() {
     };
 
     let wrapper = Content {
-        content: Some(content_v1::content::Content::AnonGroupMessage(Box::new(group_msg))),
+        content: Some(content_v1::content::Content::AnonGroupMessage(Box::new(
+            group_msg,
+        ))),
         ephemeral_reply_to: None,
         timestamp: 0,
         padding: vec![0u8; 32],
@@ -338,8 +347,8 @@ async fn test_anon_group_content_serialization() {
 async fn test_anon_group_join_ack_content() {
     skip_if_no_server!();
 
-    use prost::Message;
     use chatter_core::proto::content_v1::{self, AnonGroupJoinAck, Content};
+    use prost::Message;
 
     // Create join ack (sent when accepting an invite)
     let group_id = uuid::Uuid::new_v4().as_bytes().to_vec();
@@ -392,8 +401,8 @@ async fn test_anon_group_join_ack_content() {
 async fn test_anon_group_kick_content() {
     skip_if_no_server!();
 
-    use prost::Message;
     use chatter_core::proto::content_v1::{self, AnonGroupKick, Content};
+    use prost::Message;
 
     let group_id = uuid::Uuid::new_v4().as_bytes().to_vec();
     let kicked_user_id = uuid::Uuid::new_v4().as_bytes().to_vec();
@@ -436,8 +445,8 @@ async fn test_anon_group_kick_content() {
 async fn test_anon_group_leave_content() {
     skip_if_no_server!();
 
-    use prost::Message;
     use chatter_core::proto::content_v1::{self, AnonGroupLeave, Content};
+    use prost::Message;
 
     let group_id = uuid::Uuid::new_v4().as_bytes().to_vec();
 
@@ -477,8 +486,10 @@ async fn test_anon_group_leave_content() {
 async fn test_anon_group_member_list_content() {
     skip_if_no_server!();
 
+    use chatter_core::proto::content_v1::{
+        self, AnonGroupMemberInfo, AnonGroupMemberList, Content,
+    };
     use prost::Message;
-    use chatter_core::proto::content_v1::{self, AnonGroupMemberInfo, AnonGroupMemberList, Content};
 
     let group_id = uuid::Uuid::new_v4().as_bytes().to_vec();
 
@@ -511,7 +522,9 @@ async fn test_anon_group_member_list_content() {
     };
 
     let content = Content {
-        content: Some(content_v1::content::Content::AnonGroupMemberList(member_list)),
+        content: Some(content_v1::content::Content::AnonGroupMemberList(
+            member_list,
+        )),
         ephemeral_reply_to: None,
         timestamp: 0,
         padding: vec![0u8; 32],

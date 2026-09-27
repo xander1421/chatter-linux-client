@@ -3,18 +3,18 @@
 //! Client for ephemeral mailbox service operations.
 //! Enables ephemeral mailbox management for privacy-preserving messaging (NDSS '21 system).
 
-use tonic::service::interceptor::InterceptedService;
 use crate::network::grpc::transport::GrpcTransport;
+use tonic::service::interceptor::InterceptedService;
 
 use crate::error::NetworkError;
 use crate::network::grpc::interceptors::AuthInterceptor;
 use crate::proto::mailbox_v1::{
-    ephemeral_mailbox_service_client::EphemeralMailboxServiceClient,
-    AcknowledgeMessagesRequest, AcknowledgeMessagesResponse, CreateEphemeralMailboxRequest,
-    CreateEphemeralMailboxResponse, GetBlindSignaturePublicKeyRequest,
-    GetBlindSignaturePublicKeyResponse, GetMailboxChallengeRequest, GetMailboxChallengeResponse,
-    GetMailboxTokensRequest, GetMailboxTokensResponse, PollEphemeralMailboxRequest,
-    PollEphemeralMailboxResponse, SendToEphemeralMailboxRequest, SendToEphemeralMailboxResponse,
+    ephemeral_mailbox_service_client::EphemeralMailboxServiceClient, AcknowledgeMessagesRequest,
+    AcknowledgeMessagesResponse, CreateEphemeralMailboxRequest, CreateEphemeralMailboxResponse,
+    GetBlindSignaturePublicKeyRequest, GetBlindSignaturePublicKeyResponse,
+    GetMailboxChallengeRequest, GetMailboxChallengeResponse, GetMailboxTokensRequest,
+    GetMailboxTokensResponse, PollEphemeralMailboxRequest, PollEphemeralMailboxResponse,
+    SendToEphemeralMailboxRequest, SendToEphemeralMailboxResponse,
 };
 
 /// Mailbox service client wrapper.
@@ -29,7 +29,7 @@ use crate::proto::mailbox_v1::{
 /// pool.connect().await?;
 ///
 /// let mut mailbox = MailboxClient::new(pool.channel(), pool.auth_clone());
-/// let tokens = mailbox.get_mailbox_tokens(5, vec![]).await?;
+/// let tokens = mailbox.get_mailbox_tokens(5, vec![], "manifest-key-id".into()).await?;
 /// ```
 pub struct MailboxClient {
     inner: EphemeralMailboxServiceClient<InterceptedService<GrpcTransport, AuthInterceptor>>,
@@ -58,10 +58,12 @@ impl MailboxClient {
         &mut self,
         count: i32,
         blinded_keys: Vec<Vec<u8>>,
+        key_id: String,
     ) -> Result<GetMailboxTokensResponse, NetworkError> {
         let request = GetMailboxTokensRequest {
             count,
             blinded_keys,
+            key_id,
         };
 
         self.inner
@@ -262,6 +264,7 @@ mod tests {
         let blinded_key = vec![0u8; 256]; // RSA-2048 blinded key
         let request = GetMailboxTokensRequest {
             count: 5,
+            key_id: "test-key".into(),
             blinded_keys: vec![blinded_key.clone(), blinded_key],
         };
 
@@ -273,9 +276,9 @@ mod tests {
     fn test_create_ephemeral_mailbox_request_construction() {
         // Verify CreateEphemeralMailboxRequest can be constructed
         let request = CreateEphemeralMailboxRequest {
-            public_key: vec![0u8; 32],        // Ed25519 public key
-            signature: vec![0u8; 256],        // RSA-2048 unblinded signature
-            ttl_seconds: 86400,               // 1 day
+            public_key: vec![0u8; 32],         // Ed25519 public key
+            signature: vec![0u8; 256],         // RSA-2048 unblinded signature
+            ttl_seconds: 86400,                // 1 day
             message_randomizer: vec![0u8; 32], // RFC 9474 randomizer
         };
 

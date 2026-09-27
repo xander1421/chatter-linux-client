@@ -11,8 +11,11 @@
 //! 4. Client unblinds the signature
 //! 5. Result: signature on original key that server cannot link to blinding request
 
+use crate::proto::mailbox_v1::GetBlindSignaturePublicKeyResponse;
 use blind_rsa_signatures::{BlindSignature, BlindingResult, Options, PublicKey, Secret};
+use ed25519_dalek::{Signature, VerifyingKey};
 use rsa::pkcs8::DecodePublicKey;
+use rsa::PublicKeyParts;
 
 use crate::error::MailboxError;
 
@@ -29,6 +32,7 @@ pub struct ServerPublicKey {
     pub key_id: String,
     /// When this key expires (Unix timestamp nanoseconds, per proto spec).
     pub valid_until: u64,
+    valid_from: u64,
 }
 
 impl ServerPublicKey {
@@ -43,15 +47,16 @@ impl ServerPublicKey {
     /// # Errors
     ///
     /// Returns `MailboxError::InvalidServerKey` if parsing fails.
-    pub fn from_der(
-        der_bytes: &[u8],
-        key_id: String,
-        valid_until: u64,
-    ) -> Result<Self, MailboxError> {
+    fn from_der(der_bytes: &[u8], key_id: String, valid_until: u64) -> Result<Self, MailboxError> {
         // Parse as RSA public key
         let rsa_key = rsa::RsaPublicKey::from_public_key_der(der_bytes)
             .map_err(|e| MailboxError::InvalidServerKey(format!("failed to parse DER: {}", e)))?;
 
+        if rsa_key.n().bits() != 2048 || rsa_key.e() != &rsa::BigUint::from(65537u32) {
+            return Err(MailboxError::InvalidServerKey(
+                "expected RSA-2048 with exponent 65537".into(),
+            ));
+        }
         // Convert to blind-rsa-signatures PublicKey
         // PublicKey::new in 0.14 returns the key directly (not Result)
         let inner = PublicKey::new(rsa_key);
@@ -60,7 +65,66 @@ impl ServerPublicKey {
             inner,
             key_id,
             valid_until,
+            valid_from: 0,
         })
+    }
+
+    /// Authenticate the complete rotating manifest against the compile-time KT pin.
+    /// Raw DER is deliberately not a public construction path.
+    pub fn from_manifest(
+        manifest: &GetBlindSignaturePublicKeyResponse,
+    ) -> Result<Self, MailboxError> {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_err(|_| MailboxError::InvalidServerKey("clock before Unix epoch".into()))?
+            .as_nanos() as u64;
+        Self::verify_manifest_at(manifest, &crate::config::KT_TREE_HEAD_PUBLIC_KEY_BYTES, now)
+    }
+
+    fn verify_manifest_at(
+        m: &GetBlindSignaturePublicKeyResponse,
+        pin: &[u8; 32],
+        now: u64,
+    ) -> Result<Self, MailboxError> {
+        let invalid =
+            || MailboxError::InvalidServerKey("invalid or expired signed key manifest".into());
+        let next = m.next_key.as_ref().ok_or_else(invalid)?;
+        if m.key_id.is_empty()
+            || next.key_id.is_empty()
+            || m.key_id == next.key_id
+            || m.public_key == next.public_key
+            || m.valid_from >= m.valid_until
+            || next.valid_from <= m.valid_from
+            || next.valid_from > m.valid_until
+            || next.valid_from >= next.valid_until
+            || next.valid_until <= m.valid_until
+            || m.key_id.len() > 64
+            || next.key_id.len() > 64
+            || m.public_key.len() > 1024
+            || next.public_key.len() > 1024
+        {
+            return Err(invalid());
+        }
+        let signature = Signature::from_slice(&m.signature).map_err(|_| invalid())?;
+        VerifyingKey::from_bytes(pin)
+            .map_err(|_| invalid())?
+            .verify_strict(&manifest_bytes(m), &signature)
+            .map_err(|_| invalid())?;
+        // Parse both signed keys, including the future key, before caching.
+        let mut current = Self::from_der(&m.public_key, m.key_id.clone(), m.valid_until)?;
+        current.valid_from = m.valid_from;
+        let mut successor =
+            Self::from_der(&next.public_key, next.key_id.clone(), next.valid_until)?;
+        successor.valid_from = next.valid_from;
+        let selected = if now >= successor.valid_from {
+            successor
+        } else {
+            current
+        };
+        if now < selected.valid_from || now >= selected.valid_until {
+            return Err(invalid());
+        }
+        Ok(selected)
     }
 
     /// Check if this key is still valid.
@@ -70,13 +134,37 @@ impl ServerPublicKey {
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_nanos() as u64)
             .unwrap_or(0);
-        now_nanos < self.valid_until
+        self.valid_from <= now_nanos && now_nanos < self.valid_until
     }
 
     /// Get a reference to the inner public key.
     pub(crate) fn inner(&self) -> &PublicKey {
         &self.inner
     }
+}
+
+// Must match service/manifest.go. Explicit framing avoids protobuf serialization
+// differences and binds the key IDs, schedule, and DER under one signature.
+fn manifest_bytes(m: &GetBlindSignaturePublicKeyResponse) -> Vec<u8> {
+    let mut bytes = b"chatter/mailbox-blind-key-manifest/v1\0".to_vec();
+    let mut add = |der: &[u8], id: &str, from: u64, until: u64| {
+        bytes.extend_from_slice(&(der.len() as u32).to_be_bytes());
+        bytes.extend_from_slice(der);
+        bytes.extend_from_slice(&(id.len() as u32).to_be_bytes());
+        bytes.extend_from_slice(id.as_bytes());
+        bytes.extend_from_slice(&from.to_be_bytes());
+        bytes.extend_from_slice(&until.to_be_bytes());
+    };
+    add(&m.public_key, &m.key_id, m.valid_from, m.valid_until);
+    if let Some(next) = &m.next_key {
+        add(
+            &next.public_key,
+            &next.key_id,
+            next.valid_from,
+            next.valid_until,
+        );
+    }
+    bytes
 }
 
 impl std::fmt::Debug for ServerPublicKey {
@@ -217,7 +305,11 @@ pub fn blind_key(
     server_pk: &ServerPublicKey,
     ephemeral_pk: &[u8],
 ) -> Result<BlindingOperation, MailboxError> {
-    // Use deterministic options (no randomizer) for server-side verification compatibility
+    if !server_pk.is_valid() {
+        return Err(MailboxError::InvalidServerKey(
+            "blind-signature key expired".into(),
+        ));
+    }
     // Use deterministic options (no randomizer) for server-side verification compatibility
     // The server can verify without needing to know the randomizer
     // using salt_len=48 (standard for SHA-384-PSS)
@@ -265,6 +357,11 @@ pub fn unblind(
     randomizer: &MessageRandomizer,
     original_message: &[u8],
 ) -> Result<Vec<u8>, MailboxError> {
+    if !server_pk.is_valid() {
+        return Err(MailboxError::InvalidServerKey(
+            "blind-signature key expired".into(),
+        ));
+    }
     // Use deterministic options matching blind_key
     let options = Options::new(blind_rsa_signatures::Hash::Sha384, true, 48);
 
@@ -278,7 +375,13 @@ pub fn unblind(
     // Finalize (unblind) the signature
     let signature = server_pk
         .inner()
-        .finalize(&blind_sig, &blinding_secret, msg_randomizer, original_message, &options)
+        .finalize(
+            &blind_sig,
+            &blinding_secret,
+            msg_randomizer,
+            original_message,
+            &options,
+        )
         .map_err(|e| MailboxError::BlindSignature(format!("unblinding failed: {}", e)))?;
 
     Ok(signature.as_slice().to_vec())
@@ -304,6 +407,9 @@ pub fn verify(
     signature: &[u8],
     randomizer: &MessageRandomizer,
 ) -> bool {
+    if !server_pk.is_valid() {
+        return false;
+    }
     // Use deterministic options (no randomizer) for server-side verification compatibility
     // The server can verify without needing to know the randomizer
     // using salt_len=48 (standard for SHA-384-PSS)
@@ -319,6 +425,109 @@ pub fn verify(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn signed_manifest_authenticates_keys_and_rotation_windows() {
+        use crate::proto::mailbox_v1::BlindSignatureNextKey;
+        use ed25519_dalek::Signer;
+        let signer = ed25519_dalek::SigningKey::from_bytes(&[42; 32]);
+        let pin = signer.verifying_key().to_bytes();
+        let mut m = GetBlindSignaturePublicKeyResponse {
+            public_key: blind_rsa_signatures::KeyPair::generate(2048)
+                .unwrap()
+                .pk
+                .to_der()
+                .unwrap(),
+            key_id: "current".into(),
+            valid_from: 100,
+            valid_until: 300,
+            next_key: Some(BlindSignatureNextKey {
+                public_key: blind_rsa_signatures::KeyPair::generate(2048)
+                    .unwrap()
+                    .pk
+                    .to_der()
+                    .unwrap(),
+                key_id: "next".into(),
+                valid_from: 200,
+                valid_until: 400,
+            }),
+            signature: vec![],
+        };
+        m.signature = signer.sign(&manifest_bytes(&m)).to_bytes().to_vec();
+        // Persistence round-trip preserves signed bytes and selects the next
+        // key after activation, even when the previous key has expired.
+        use prost::Message;
+        let cached =
+            GetBlindSignaturePublicKeyResponse::decode(m.encode_to_vec().as_slice()).unwrap();
+        assert_eq!(
+            ServerPublicKey::verify_manifest_at(&cached, &pin, 350)
+                .unwrap()
+                .key_id,
+            "next"
+        );
+        assert_eq!(
+            ServerPublicKey::verify_manifest_at(&m, &pin, 100)
+                .unwrap()
+                .key_id,
+            "current"
+        );
+        assert_eq!(
+            ServerPublicKey::verify_manifest_at(&m, &pin, 200)
+                .unwrap()
+                .key_id,
+            "next"
+        );
+        assert_eq!(
+            ServerPublicKey::verify_manifest_at(&m, &pin, 399)
+                .unwrap()
+                .key_id,
+            "next"
+        );
+        assert!(ServerPublicKey::verify_manifest_at(&m, &pin, 99).is_err());
+        assert!(ServerPublicKey::verify_manifest_at(&m, &pin, 400).is_err());
+        assert!(ServerPublicKey::verify_manifest_at(&m, &[0; 32], 150).is_err());
+        // Every field that might tag clients or extend a key's lifetime is signed.
+        for field in 0..8 {
+            let mut altered = m.clone();
+            match field {
+                0 => altered.public_key[50] ^= 1,
+                1 => altered.key_id.push('x'),
+                2 => altered.valid_from -= 1,
+                3 => altered.valid_until += 1,
+                4 => altered.next_key.as_mut().unwrap().public_key[50] ^= 1,
+                5 => altered.next_key.as_mut().unwrap().key_id.push('x'),
+                6 => altered.next_key.as_mut().unwrap().valid_from += 1,
+                _ => altered.next_key.as_mut().unwrap().valid_until += 1,
+            }
+            assert!(ServerPublicKey::verify_manifest_at(&altered, &pin, 150).is_err());
+        }
+        let mut unsigned = m.clone();
+        unsigned.signature.clear();
+        assert!(ServerPublicKey::verify_manifest_at(&unsigned, &pin, 150).is_err());
+        // An authenticated but malformed schedule also fails closed.
+        m.next_key.as_mut().unwrap().valid_from = 301;
+        m.signature = signer.sign(&manifest_bytes(&m)).to_bytes().to_vec();
+        assert!(ServerPublicKey::verify_manifest_at(&m, &pin, 150).is_err());
+    }
+
+    #[test]
+    fn manifest_canonical_vector_matches_go() {
+        use crate::proto::mailbox_v1::BlindSignatureNextKey;
+        let m = GetBlindSignaturePublicKeyResponse {
+            public_key: vec![1, 2],
+            key_id: "a".into(),
+            valid_from: 1,
+            valid_until: 3,
+            next_key: Some(BlindSignatureNextKey {
+                public_key: vec![3],
+                key_id: "b".into(),
+                valid_from: 2,
+                valid_until: 4,
+            }),
+            signature: vec![],
+        };
+        assert_eq!(hex::encode(manifest_bytes(&m)), "636861747465722f6d61696c626f782d626c696e642d6b65792d6d616e69666573742f7631000000000201020000000161000000000000000100000000000000030000000103000000016200000000000000020000000000000004");
+    }
 
     #[test]
     fn test_blinding_secret_roundtrip() {
@@ -412,6 +621,7 @@ mod tests {
             inner: kp.pk,
             key_id: "test-key".to_string(),
             valid_until: u64::MAX,
+            valid_from: 0,
         };
 
         // Generate N distinct 32-byte "Ed25519 public keys"
@@ -479,8 +689,7 @@ mod tests {
         }
 
         let own_mean = own_distances.iter().sum::<u32>() as f64 / own_distances.len() as f64;
-        let other_mean =
-            other_distances.iter().sum::<u32>() as f64 / other_distances.len() as f64;
+        let other_mean = other_distances.iter().sum::<u32>() as f64 / other_distances.len() as f64;
 
         // Both means should be close to 128 (half of 256 bits). Allow 10% tolerance.
         // A biased blinding scheme would show own_mean significantly lower than other_mean.

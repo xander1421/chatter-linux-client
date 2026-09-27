@@ -229,6 +229,27 @@ impl UnifiedMessageRepository {
         }
     }
 
+    pub fn update_reply_parent(&self, id: &MessageId, parent: &MessageId) -> Result<(), StorageError> {
+        self.db.connection()?.execute(
+            "UPDATE messages SET reply_to = ?1 WHERE id = ?2",
+            params![parent.to_string(), id.to_string()],
+        )?;
+        Ok(())
+    }
+
+    /// Resolve a stored quote reference, including a timestamp-derived reference
+    /// written before its parent arrived. Scope the lookup to author and conversation.
+    pub fn resolve_reply_parent(&self, message: &Message) -> Result<Option<MessageId>, StorageError> {
+        let (Some(parent), Some(author)) = (message.reply_to, message.reply_to_author_id) else {
+            return Ok(message.reply_to);
+        };
+        if message.conversation_type.is_anon() || self.get(&parent)?.is_some() {
+            return Ok(Some(parent));
+        }
+        let conn = self.db.read_connection()?;
+        resolve_timestamp_quote(&conn, &parent, &author, &message.conversation_id, &message.conversation_type)
+    }
+
     /// Get a message by (sender_id, sent_at) — Signal-style dedup key.
     pub fn get_by_sender_timestamp(
         &self,
@@ -1546,6 +1567,29 @@ impl UnifiedMessageRepository {
 // Column list & row mappers
 // ============================================================================
 
+// Timestamp-only quote IDs are hashes, so recover the local ID from the
+// author's timestamps rather than trying to decode the UUID or match text.
+fn resolve_timestamp_quote(
+    conn: &rusqlite::Connection,
+    parent: &MessageId,
+    author: &UserId,
+    conversation: &ChannelId,
+    kind: &ConversationType,
+) -> Result<Option<MessageId>, StorageError> {
+    let mut stmt = conn.prepare(
+        "SELECT id, sent_at FROM messages WHERE sender_id = ?1 AND conversation_id = ?2 AND conversation_type = ?3",
+    )?;
+    let mut rows = stmt.query(params![author.to_string(), conversation.to_string(), kind.as_str()])?;
+    while let Some(row) = rows.next()? {
+        let sent_at = row.get::<_, i64>(1)? as u64;
+        if MessageId::from_timestamp(sent_at) == *parent {
+            let id: String = row.get(0)?;
+            return Ok(id.parse().ok());
+        }
+    }
+    Ok(None)
+}
+
 /// SELECT column list for unified messages — must match `row_to_message` column indices.
 const MSG_COLS: &str =
     "id, conversation_id, conversation_type, sender_id, device_id, \
@@ -1747,6 +1791,30 @@ fn collect_messages(rows: &mut rusqlite::Rows<'_>) -> Result<Vec<Message>, Stora
 mod tests {
     use super::*;
     use crate::domain::message::{EncryptedContent, EncryptedMessageType};
+
+    #[test]
+    fn stored_timestamp_quote_resolves_when_parent_arrives_in_same_conversation() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute_batch("CREATE TABLE messages (id TEXT, sender_id TEXT, conversation_id TEXT, conversation_type TEXT, sent_at INTEGER)").unwrap();
+        let author = UserId::new();
+        let other_author = UserId::new();
+        let conversation = ChannelId::new();
+        let other_conversation = ChannelId::new();
+        let parent = MessageId::new();
+        let reference = MessageId::from_timestamp(123456789);
+        let kind = ConversationType::Channel;
+        let resolve = || resolve_timestamp_quote(&conn, &reference, &author, &conversation, &kind).unwrap();
+        assert_eq!(resolve(), None);
+        for (sender, channel) in [(other_author, conversation), (author, other_conversation)] {
+            conn.execute("INSERT INTO messages VALUES (?1, ?2, ?3, ?4, ?5)",
+                params![MessageId::new().to_string(), sender.to_string(), channel.to_string(), kind.as_str(), 123456789i64]).unwrap();
+        }
+        assert_eq!(resolve(), None);
+        conn.execute("INSERT INTO messages VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![parent.to_string(), author.to_string(), conversation.to_string(), kind.as_str(), 123456789i64]).unwrap();
+        assert_eq!(resolve(), Some(parent));
+        assert_eq!(resolve_timestamp_quote(&conn, &MessageId::from_timestamp(99), &author, &conversation, &kind).unwrap(), None);
+    }
 
     #[test]
     fn test_content_type_discriminant_covers_all_variants() {

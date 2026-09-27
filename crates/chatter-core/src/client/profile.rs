@@ -68,6 +68,47 @@ impl ChatterClient {
         self.users().get_display_name(user_id)
     }
 
+    /// Apply the event before rendering: the core state subscriber and UI
+    /// subscriber run independently, so the UI must not race the former.
+    pub fn update_typing_indicator(
+        &self,
+        channel_id: crate::domain::ids::ChannelId,
+        user_id: crate::domain::ids::UserId,
+        timestamp: u64,
+        started: bool,
+    ) -> bool {
+        let state = self.chat_state();
+        if !state.accept_typing(channel_id, user_id, timestamp, started) {
+            return false;
+        }
+        let mut users = state.get_typing_users(&channel_id);
+        users.retain(|id| *id != user_id);
+        if started {
+            users.push(user_id);
+        }
+        state.set_typing_users(channel_id, users);
+        true
+    }
+
+    /// Named typing text, with anonymous-group names resolved in their group.
+    /// The UI's existing inactivity timer clears this conversation's aggregate.
+    pub fn typing_indicator_text(&self, channel_id: crate::domain::ids::ChannelId) -> String {
+        let group_id = crate::domain::anon_group::AnonGroupId::from_uuid(*channel_id.as_uuid());
+        let kind = if self.get_anon_group(&group_id).is_some() {
+            ConversationType::AnonGroup
+        } else {
+            self.conversation_type_of(&ActiveConversation::Channel(channel_id))
+                .unwrap_or(ConversationType::Channel)
+        };
+        let me = self.auth_state().get().current_user_id;
+        let mut users = self.chat_state().get_typing_users(&channel_id);
+        users.retain(|id| Some(*id) != me);
+        users.sort_by_key(|id| id.0);
+        let names: Vec<_> = users.iter().take(3)
+            .map(|id| self.display_name_in(&kind, &channel_id, id)).collect();
+        typing_text(&names)
+    }
+
     /// Name for a friend-request row. The server's display_name for the
     /// peer is ciphertext without their profile key, so resolve locally, and
     /// when nothing local knows them use the plaintext username the server
@@ -881,6 +922,26 @@ mod tests {
         (client, dir)
     }
 
+    #[tokio::test]
+    async fn typing_aggregate_survives_one_sender_stopping_and_expires() {
+        let (client, _dir) = test_client();
+        let channel = ChannelId::new();
+        let alice = UserId::from_uuid(uuid::Uuid::from_u128(1));
+        let bob = UserId::from_uuid(uuid::Uuid::from_u128(2));
+        assert!(client.update_typing_indicator(channel, alice, 100, true));
+        assert!(client.update_typing_indicator(channel, bob, 100, true));
+        assert_eq!(client.typing_indicator_text(channel), format!(
+            "{} and {} are typing…", client.display_name(&alice), client.display_name(&bob)));
+        assert!(client.update_typing_indicator(channel, alice, 200, false));
+        assert_eq!(client.typing_indicator_text(channel), format!("{} is typing…", client.display_name(&bob)));
+        assert!(!client.update_typing_indicator(channel, alice, 150, true));
+        assert!(client.update_typing_indicator(channel, alice, 300, true));
+        assert!(client.update_typing_indicator(channel, UserId::new(), 300, true));
+        assert_eq!(client.typing_indicator_text(channel), "Several people are typing…");
+        client.chat_state().clear_typing(&channel);
+        assert_eq!(client.typing_indicator_text(channel), "");
+    }
+
     /// Friends › Blocked › Delete chat on an anon peer: the conversation and
     /// its history go, the block stays, and the peer's friend requests stay
     /// hidden. Unblock afterwards lifts the peer block (no chat to go through).
@@ -935,5 +996,14 @@ mod tests {
         client.unblock_profile_user(&peer).await.unwrap();
         assert_eq!(client.is_anon_dm_conversation_blocked(&dm.id), Some(false));
         assert!(client.blocked_users().iter().all(|b| b.id != peer));
+    }
+}
+
+fn typing_text(names: &[String]) -> String {
+    match names {
+        [] => String::new(),
+        [name] => format!("{name} is typing…"),
+        [first, second] => format!("{first} and {second} are typing…"),
+        _ => "Several people are typing…".to_string(),
     }
 }

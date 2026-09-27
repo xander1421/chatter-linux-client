@@ -48,7 +48,7 @@ export global MeshGlobal {
     // context bar already has wording for a mesh with no radio, so the off state
     // needs no new surface — it says "Bluetooth off", which is now true because
     // the user turned it off.
-    in-out property <bool> mesh-on: true;
+    in-out property <bool> mesh-on: false;
 
     // Set the switch. Persists the preference and starts or stops the radio.
     callback set-mesh-on(bool);

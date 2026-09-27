@@ -89,14 +89,8 @@ export component MessageContextMenu inherits Rectangle {
     in property <length> position-x: 0;
     in property <length> position-y: 0;
 
-    // Viewport insets, so the popup never renders under the status bar or the
-    // gesture-nav strip on Android.
-    in property <length> safe-area-top: 0px;
-    in property <length> safe-area-bottom: 0px;
-    // Window y of the conversation content (below its header). The menu is a
-    // full-window overlay, but it belongs to the conversation: clamping only to
-    // the status bar let a tall menu opened near the bottom slide up over the
-    // header and hide the conversation title.
+    // Local y of conversation content below the header. The parent already
+    // excludes system bars and the IME, exactly like the composer.
     in property <length> content-top: 0px;
 
     // Message context (Signal-style identification: sender_id + timestamp_ns)
@@ -154,22 +148,16 @@ export component MessageContextMenu inherits Rectangle {
     //   * prefer just below the anchor, so the popup does not sit under the
     //     finger that opened it;
     //   * if that would overflow the bottom inset, flip to just above it;
-    //   * clamp into [max(safe-area-top, content-top), height - safe-area-bottom]
+    //   * clamp into [content-top, height]
     //     regardless, so it never renders under the status bar, the
     //     conversation header, or the gesture strip;
     //   * a menu taller than that band is capped to it and its body scrolls.
-    //     `safe-area-bottom` already includes the soft keyboard (main.slint
-    //     passes insets.bottom + virtual-keyboard-size), so the band is what is
-    //     visible above the keyboard. Before the cap, a menu taller than the
-    //     band was pinned at top-limit and its lower rows ran under the
-    //     keyboard (§112i) — the own-message menu (~575px) cannot fit a ~610px
-    //     chat area on a Galaxy S9 once the keyboard is up.
     menu-container := Rectangle {
         // The layout carries its own padding; adding it again here left an
         // empty band under "Delete for Me".
         property <length> menu-h: menu-layout.preferred-height;
-        property <length> top-limit: max(root.safe-area-top, root.content-top) + Spacing.sm;
-        property <length> bottom-limit: parent.height - root.safe-area-bottom - Spacing.sm;
+        property <length> top-limit: max(0px, root.content-top) + Spacing.sm;
+        property <length> bottom-limit: parent.height - Spacing.sm;
         // Does the preferred (below-the-anchor) placement fit?
         property <bool> flip-up: root.position-y + Spacing.sm + self.height > self.bottom-limit;
 

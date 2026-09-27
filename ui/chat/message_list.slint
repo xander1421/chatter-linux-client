@@ -119,6 +119,7 @@ export component MessageList inherits Rectangle {
     private property <int> seen-rows: 0;
     private property <string> seen-first: "";
     private property <length> seen-height: 0;
+    private property <length> seen-view-height: 0;
     private property <length> seen-y: 0;
     private property <int> seen-top: 0;
     // The divider's row moved because history was inserted above it, not
@@ -431,6 +432,15 @@ export component MessageList inherits Rectangle {
             property <int> grown;
             property <bool> prepended;
             function settle() {
+                // Runtime viewport callbacks may arrive before changed height.
+                // Preserve the pre-resize anchor before either callback can
+                // classify the new geometry as a user scroll away from bottom.
+                if (root.seen-view-height != self.height) {
+                    root.seen-view-height = self.height;
+                    if (root.is-at-bottom && !root.scrolling && root.jump-row < 0) {
+                        root.go-to-end();
+                    }
+                }
                 // The runtime's "content shorter than the view" fix-up can
                 // leave viewport-y positive (rows pushed down from the top,
                 // blank above them); the Flickable's own clamp does not
@@ -508,14 +518,7 @@ export component MessageList inherits Rectangle {
                 self.settle();
             }
 
-            // The view itself shrinking (soft keyboard opening) must keep the
-            // newest message in sight too, not just content growing. Decided
-            // on the pre-resize `is-at-bottom`, then settled against the new
-            // height (which alone can change how far the end is).
             changed height => {
-                if (root.is-at-bottom) {
-                    root.go-to-end();
-                }
                 self.settle();
             }
 

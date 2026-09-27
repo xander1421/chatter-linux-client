@@ -23,7 +23,10 @@ async fn test_get_blind_signature_public_key() {
     let response = assert_ok(mailbox_client.get_blind_signature_public_key().await);
 
     // Should return an RSA-2048 public key
-    assert!(!response.public_key.is_empty(), "Public key should not be empty");
+    assert!(
+        !response.public_key.is_empty(),
+        "Public key should not be empty"
+    );
     assert!(!response.key_id.is_empty(), "Key ID should not be empty");
 
     // RSA-2048 public key DER should be around 294 bytes
@@ -82,13 +85,18 @@ async fn test_get_mailbox_tokens() {
         blinded_keys.push(key);
     }
 
-    let response = mailbox_client.get_mailbox_tokens(3, blinded_keys).await;
+    let response = mailbox_client
+        .get_mailbox_tokens(3, blinded_keys, key_response.key_id.clone())
+        .await;
 
     // Token request should succeed (though signatures may not be valid without proper blinding)
     match response {
         Ok(tokens) => {
             // Should get blinded signatures back
-            assert!(tokens.blinded_signatures.len() <= 3, "Should not get more tokens than requested");
+            assert!(
+                tokens.blinded_signatures.len() <= 3,
+                "Should not get more tokens than requested"
+            );
         }
         Err(e) => {
             // Server might reject invalid blinded keys - that's expected
@@ -120,7 +128,10 @@ async fn test_get_mailbox_challenge() {
     match result {
         Ok(challenge) => {
             // If it succeeds, verify challenge format
-            assert!(!challenge.challenge.is_empty(), "Challenge should not be empty");
+            assert!(
+                !challenge.challenge.is_empty(),
+                "Challenge should not be empty"
+            );
         }
         Err(e) => {
             // Not found is expected for random public key
@@ -263,7 +274,12 @@ async fn test_acknowledge_messages_invalid_mailbox() {
     let fake_message_ids = vec!["msg-1".to_string(), "msg-2".to_string()];
 
     let result = mailbox_client
-        .acknowledge_messages(fake_public_key, fake_challenge_signature, fake_challenge, fake_message_ids)
+        .acknowledge_messages(
+            fake_public_key,
+            fake_challenge_signature,
+            fake_challenge,
+            fake_message_ids,
+        )
         .await;
 
     // Should fail for invalid mailbox
@@ -291,7 +307,9 @@ async fn test_mailbox_requires_authentication() {
     let mut mailbox_client = MailboxClient::new(pool.channel(), pool.auth_clone());
 
     // Try to get tokens without auth
-    let result = mailbox_client.get_mailbox_tokens(1, vec![]).await;
+    let result = mailbox_client
+        .get_mailbox_tokens(1, vec![], "test-key".into())
+        .await;
 
     // Should require authentication
     assert_unauthenticated(result);
@@ -311,7 +329,7 @@ async fn test_blind_signature_key_requires_authentication() {
     // Server might allow this without auth (public key is not secret)
     // or require auth - both are valid implementations
     match result {
-        Ok(_) => {} // Public key endpoint might be open
+        Ok(_) => {}  // Public key endpoint might be open
         Err(_) => {} // Or might require auth
     }
 }

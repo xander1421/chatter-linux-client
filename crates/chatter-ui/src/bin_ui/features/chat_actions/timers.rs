@@ -44,8 +44,8 @@ pub fn start_audio_progress_timer(window: &MainWindow) {
                     w.set_audio_progress(progress);
                     w.set_audio_elapsed(elapsed.into());
 
-                    // Check if playback finished (progress >= 1.0 or sink empty)
-                    if progress >= 0.999 {
+                    // Completion comes from the player, including unknown durations.
+                    if audio_state::playback_finished() {
                         // Stop timer and clear state
                         stop_audio_progress_timer();
                         audio_state::clear_state();

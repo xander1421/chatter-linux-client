@@ -566,6 +566,9 @@ impl ChatterClient {
     /// Safe to call more than once; the service tracks whether it is running.
     #[cfg(feature = "mesh")]
     pub async fn start_mesh(&self) -> Result<(), crate::services::mesh::MeshError> {
+        if !self.mesh_enabled() {
+            return Ok(());
+        }
         self.mesh().start().await
     }
 
@@ -580,12 +583,7 @@ impl ChatterClient {
         self.mesh().shutdown().await;
     }
 
-    /// Whether the user wants the mesh on. Defaults to on.
-    ///
-    /// Defaulting to off would make a feature that exists for the moment the
-    /// network fails require a working app to go and enable — which is the one
-    /// situation it is for. So the toggle is opt-*out*, and this returns true
-    /// until somebody says otherwise.
+    /// Whether the user explicitly enabled mesh. Runtime radios default off.
     #[cfg(feature = "mesh")]
     #[must_use]
     pub fn mesh_enabled(&self) -> bool {
@@ -594,7 +592,7 @@ impl ChatterClient {
             .get_bool(keys::MESH_ENABLED)
             .ok()
             .flatten()
-            .unwrap_or(true)
+            .unwrap_or(false)
     }
 
     /// Record the preference and act on it now.

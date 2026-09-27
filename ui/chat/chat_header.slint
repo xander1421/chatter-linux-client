@@ -86,9 +86,6 @@ export component ChatHeader inherits Rectangle {
     // while nothing is set on app start before the user picks a chat.
     property <bool> has-channel: channel-name != "";
 
-    // Show member count for channels and private groups (not DMs)
-    property <bool> show-member-count: has-channel && !tight && !read-only && (is-channel || is-private-group) && member-count > 0;
-
     // Show settings for regular channels and private groups, not for anon DMs or saved messages
     property <bool> show-settings: has-channel && ((!is-anon-dm && !is-saved) || is-private-group) && !is-mesh;
 
@@ -334,9 +331,8 @@ export component ChatHeader inherits Rectangle {
                         min-width: 0px;
                         overflow: elide;
                     }
-                    // On a phone the inline count below has no room; it goes
-                    // under the name instead, as Signal/Telegram groups do.
-                    if root.typing-indicator == "" && root.tight && has-channel && !root.read-only && (is-channel || is-private-group) && member-count > 0: Text {
+                    // Keep member count in the title column at every width.
+                    if root.typing-indicator == "" && has-channel && !root.read-only && (is-channel || is-private-group) && member-count > 0: Text {
                         text: root.member-count == 1 ? "1 member" : "\{root.member-count} members";
                         color: Colors.text-muted;
                         font-size: Typography.xs;
@@ -413,29 +409,6 @@ export component ChatHeader inherits Rectangle {
                     font-weight: root.mesh-radio-down ? 600 : 400;
                     vertical-alignment: center;
                     horizontal-stretch: 0;
-                }
-            }
-
-            // Member count. min-width: 0 + elide so it yields on narrow screens
-            // (the members icon in the right section already covers this) instead
-            // of forcing the header — and the chat column — past the screen.
-            if root.show-member-count: HorizontalLayout {
-                spacing: Spacing.xs;
-                alignment: center;
-                min-width: 0px;
-                Rectangle {
-                    width: 1px;
-                    height: 16px;
-                    background: Colors.text-muted;
-                    y: (parent.height - self.height) / 2;
-                }
-                Text {
-                    text: root.member-count == 1 ? "1 member" : "\{root.member-count} members";
-                    color: Colors.text-muted;
-                    font-size: Typography.sm;
-                    vertical-alignment: center;
-                    overflow: elide;
-                    min-width: 0px;
                 }
             }
         }

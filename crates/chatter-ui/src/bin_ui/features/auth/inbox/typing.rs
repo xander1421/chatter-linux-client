@@ -36,7 +36,7 @@ pub const TYPING_TIMEOUT_MS: u64 = 15_000;
 /// Set typing indicator with auto-clear timer (Signal-style).
 ///
 /// When STARTED is received:
-/// 1. Show typing indicator ("is typing ..." since header shows peer name)
+/// 1. Show the named aggregate supplied by core
 /// 2. Update sidebar typing state
 /// 3. Start/restart 15-second timer to auto-clear both header and sidebar
 ///
@@ -49,9 +49,12 @@ pub fn set_typing_with_timer(
     key: &str,
     chat_state: &ChatState,
     channel_id: ChannelId,
+    text: &str,
 ) {
     tracing::info!(key = %key, "TYPING_SET: Setting typing indicator");
-    window.set_typing_indicator("is typing ...".into());
+    if chat_state.active_conversation().is_for_channel(channel_id) {
+        window.set_typing_indicator(text.into());
+    }
     update_sidebar_typing(window, key, true);
 
     // Clear from cancelled set if it was there (we're starting fresh)
@@ -70,6 +73,7 @@ pub fn set_typing_with_timer(
             tracing::debug!(key = %key_owned, "TYPING_TIMER: fired but was cancelled - skipping clear");
         } else if let Some(w) = weak_window.upgrade() {
             tracing::debug!(key = %key_owned, "TYPING_TIMER: 15s timeout FIRED - clearing indicator");
+            chat_state.clear_typing(&channel_id);
             if chat_state.active_conversation().is_for_channel(channel_id) {
                 w.set_typing_indicator("".into());
             }

@@ -165,7 +165,7 @@ fn wire_message_info(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             let info = window.global::<crate::MessageInfo>();
             info.set_message_id(id);
             info.set_details(details.into());
-            info.set_show(true);
+            super::super::back::push(&window, "message-info");
         }
     });
 }
