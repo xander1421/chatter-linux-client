@@ -1,3 +1,4 @@
+import { GlassSurface } from "../components/glass_surface.slint";
 // Thread panel component for viewing replies to a message
 //
 // Displays as a right-side panel with root message preview, reply list, and composer.
@@ -90,9 +91,11 @@ export component ThreadPanel inherits Rectangle {
     VerticalLayout {
         // Header — same height as the conversation header it sits beside, so
         // the two panes share one top row instead of stepping.
-        Rectangle {
+        GlassSurface {
+            material-level: 2;
+            elevation: 1;
+
             height: root.mobile ? Spacing.header-height-touch : Spacing.header-height;
-            background: Colors.surface;
 
             HorizontalLayout {
                 // Horizontal padding only: vertical padding squeezed the 48dp

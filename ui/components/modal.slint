@@ -1,4 +1,5 @@
-// Modal component with header, close button, and content slots — Neo 2.0 styled
+import { GlassSurface } from "glass_surface.slint";
+// Modal shell with one glass surface and shared header controls.
 // Uses ModalContainer to ensure proper sizing and centering (not full-screen)
 
 import { Colors } from "../theme/colors.slint";
@@ -59,38 +60,42 @@ export component Modal inherits Rectangle {
             // LEADING edge, matching chat_header.slint); otherwise it is a
             // floating dialog they close (X, TRAILING edge). Exactly one of
             // the two exists at a time — never both.
-            HorizontalLayout {
-                spacing: Spacing.header-action-gap;
-                // The row is as tall as its one control, so title and glyph
-                // share a vertical centre at both densities.
+            GlassSurface {
+                material-enabled: root.full-screen;
+                border-radius: 0px;
                 height: root.full-screen ? Spacing.header-action-box-touch : Spacing.header-action-box;
+                HorizontalLayout {
+                    spacing: Spacing.header-action-gap;
+                    // The row is as tall as its one control, so title and glyph
+                    // share a vertical centre at both densities.
 
-                if root.full-screen && !root.root-screen: DismissButton {
-                    back: true;
-                    clicked => { root.close(); }
-                }
+                    if root.full-screen && !root.root-screen: DismissButton {
+                        back: true;
+                        clicked => { root.close(); }
+                    }
 
-                // Title
-                Text {
-                    text: root.title;
-                    color: Colors.text-primary;
-                    font-size: Typography.lg;
-                    font-weight: Typography.semibold;
-                    vertical-alignment: center;
-                    horizontal-stretch: 1;
-                    overflow: elide;
-                }
+                    // Title
+                    Text {
+                        text: root.title;
+                        color: Colors.text-primary;
+                        font-size: Typography.lg;
+                        font-weight: Typography.semibold;
+                        vertical-alignment: center;
+                        horizontal-stretch: 1;
+                        overflow: elide;
+                    }
 
-                if root.show-more: HeaderButton {
-                    touch: root.full-screen;
-                    icon: Icons.more-vertical;
-                    label: "More options";
-                    clicked => { root.more-clicked(); }
-                }
+                    if root.show-more: HeaderButton {
+                        touch: root.full-screen;
+                        icon: Icons.more-vertical;
+                        label: "More options";
+                        clicked => { root.more-clicked(); }
+                    }
 
-                if !root.full-screen && root.show-close: DismissButton {
-                    back: false;
-                    clicked => { root.close(); }
+                    if !root.full-screen && root.show-close: DismissButton {
+                        back: false;
+                        clicked => { root.close(); }
+                    }
                 }
             }
 

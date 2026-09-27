@@ -1,3 +1,4 @@
+import { GlassSurface } from "glass_surface.slint";
 // Code preview panel component
 //
 // Displays syntax-highlighted code with line numbers in a scrollable panel.
@@ -37,10 +38,12 @@ export component CodePreviewPanel inherits Rectangle {
 
     VerticalLayout {
         // Header bar
-        Rectangle {
+        GlassSurface {
+            material-level: 2;
+            elevation: 1;
+
             // As tall as the header buttons, so the file name shares their axis.
             height: Spacing.header-action-box;
-            background: Colors.surface;
 
             HorizontalLayout {
                 padding-left: Spacing.md;

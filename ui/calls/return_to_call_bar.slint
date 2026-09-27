@@ -1,3 +1,4 @@
+import { GlassSurface } from "../components/glass_surface.slint";
 // "Return to call" pill — the active call's presence everywhere the docked
 // call view is not on screen (the chat list, Contacts, any modal). Tapping it
 // goes back to the call.
@@ -8,7 +9,11 @@ import { Typography } from "../theme/typography.slint";
 import { Icons } from "../theme/icons.slint";
 import { ActiveCallData } from "types.slint";
 
-export component ReturnToCallBar inherits Rectangle {
+export component ReturnToCallBar inherits GlassSurface {
+    material-level: 2;
+    elevation: 0;
+    border-radius: self.height / 2;
+
     in property <ActiveCallData> call-data;
     callback clicked();
 
@@ -18,10 +23,6 @@ export component ReturnToCallBar inherits Rectangle {
         && call-data.duration-seconds == 0;
 
     height: 44px;
-    border-radius: self.height / 2;
-    background: Colors.success;
-    drop-shadow-blur: 12px;
-    drop-shadow-color: #00000040;
 
     accessible-role: button;
     accessible-label: "Return to call with " + call-data.title;
@@ -40,7 +41,7 @@ export component ReturnToCallBar inherits Rectangle {
             source: Icons.phone;
             width: 16px;
             height: 16px;
-            colorize: white;
+            colorize: Colors.success;
             y: (parent.height - self.height) / 2;
         }
         Text {
@@ -48,14 +49,14 @@ export component ReturnToCallBar inherits Rectangle {
             text: call-data.title;
             font-size: Typography.sm;
             font-weight: Typography.semibold;
-            color: white;
+            color: Colors.text-primary;
             overflow: elide;
             vertical-alignment: center;
         }
         Text {
             text: root.is-connecting ? "Calling…" : format-duration(call-data.duration-seconds);
             font-size: Typography.sm;
-            color: white;
+            color: Colors.text-primary;
             vertical-alignment: center;
         }
     }

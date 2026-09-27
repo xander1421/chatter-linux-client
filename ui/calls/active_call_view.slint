@@ -1,3 +1,4 @@
+import { GlassSurface } from "../components/glass_surface.slint";
 // Active call view as a dock on top of the chat pane (Discord-style).
 //
 // Renders a compact header strip (title + duration + verification), a bounded
@@ -254,9 +255,6 @@ export component ActiveCallView inherits Rectangle {
     max-height: show ? (fullscreen ? 100000px : dock-height) : 0px;
     preferred-height: show ? dock-height : 0px;
     background: Colors.surface.with-alpha(0.6);
-    drop-shadow-blur: Spacing.neo-blur-md;
-    drop-shadow-offset-y: Spacing.neo-offset-sm;
-    drop-shadow-color: Colors.neo-shadow;
 
     if show: VerticalLayout {
         // Video grid area — bounded, tiles scale to fit
@@ -381,13 +379,15 @@ export component ActiveCallView inherits Rectangle {
 
             // Per-peer controls bar — top of the maximized tile, remote only.
             if maximized-index >= 0 && !maximized-is-local
-               && maximized-index < call-data.participant-count: Rectangle {
+               && maximized-index < call-data.participant-count: GlassSurface {
+                material-level: 3;
+                elevation: 0;
+
                 x: (parent.width - self.width) / 2;
                 y: Spacing.sm + Spacing.sm;
                 width: 96px;
                 height: 40px;
-                border-radius: 20px;
-                background: Colors.overlay-heavy;
+                border-radius: self.height / 2;
 
                 HorizontalLayout {
                     padding-left: Spacing.xs;
@@ -461,13 +461,15 @@ export component ActiveCallView inherits Rectangle {
 
             // Call info overlay — top-left: duration, participant count, and
             // the security indicator (SAS emojis when available, else lock).
-            Rectangle {
+            GlassSurface {
+                material-level: 3;
+                elevation: 0;
+
                 x: Spacing.sm + Spacing.xs;
                 y: Spacing.sm + Spacing.xs;
                 width: info-row.preferred-width + Spacing.md;
                 height: 24px;
-                border-radius: 12px;
-                background: Colors.overlay-heavy;
+                border-radius: self.height / 2;
 
                 info-row := HorizontalLayout {
                     padding-left: Spacing.sm;
@@ -533,13 +535,15 @@ export component ActiveCallView inherits Rectangle {
             // grid and maximized modes. Asks the parent layout to expand the
             // dock to cover the chat area.
             // The shared header control on a scrim, so it reads over video.
-            Rectangle {
+            GlassSurface {
+                material-level: 3;
+                elevation: 0;
+
                 x: parent.width - self.width - Spacing.sm;
                 y: Spacing.sm;
                 width: fullscreen-button.width;
                 height: self.width;
-                border-radius: Spacing.radius-md;
-                background: Colors.overlay-heavy;
+                border-radius: self.height / 2;
 
                 fullscreen-button := HeaderButton {
                     icon: fullscreen ? Icons.minimize : Icons.maximize;
@@ -551,13 +555,15 @@ export component ActiveCallView inherits Rectangle {
             // Persistent "you are sharing" banner — bottom of the stage, just
             // above the control row. The toggled toolbar icon alone is too easy
             // to forget; a live share needs an always-visible state + one-click stop.
-            if root.is-screen-sharing: Rectangle {
+            if root.is-screen-sharing: GlassSurface {
+                material-level: 3;
+                elevation: 0;
+
                 x: (parent.width - self.width) / 2;
                 y: parent.height - Spacing.sm - self.height;
                 width: share-banner-row.preferred-width + Spacing.md * 2;
                 height: 28px;
-                border-radius: 14px;
-                background: Colors.overlay-heavy;
+                border-radius: self.height / 2;
 
                 share-banner-row := HorizontalLayout {
                     padding-left: Spacing.md;

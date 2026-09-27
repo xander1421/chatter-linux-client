@@ -1,10 +1,7 @@
-// Neo Action Toggle — AI feature toggle with cyan/violet glow
-//
-// Enhanced toggle for AI features. When checked, emits a colored glow
-// ring around the track. Supports two glow modes: "cyan" and "violet".
+// AI feature toggle. State uses a tinted track; the surrounding chrome owns depth.
 
+import { Appearance } from "../theme/appearance.slint";
 import { Colors } from "../theme/colors.slint";
-import { Spacing } from "../theme/spacing.slint";
 
 export component NeoActionToggle inherits Rectangle {
     in-out property <bool> checked: false;
@@ -23,7 +20,6 @@ export component NeoActionToggle inherits Rectangle {
 
     // Resolved glow colors based on mode
     property <color> glow-color: glow-mode == "violet" ? Colors.glow-violet : Colors.glow-cyan;
-    property <color> glow-soft: glow-mode == "violet" ? Colors.glow-violet-soft : Colors.glow-cyan-soft;
 
     // Track color: when checked, glow color replaces primary
     property <color> track-color: {
@@ -47,23 +43,6 @@ export component NeoActionToggle inherits Rectangle {
     height: 24px;
     opacity: disabled ? 0.5 : 1.0;
 
-    // Outer glow ring (only when checked)
-    Rectangle {
-        width: parent.width + 4px;
-        height: parent.height + 4px;
-        x: -2px;
-        y: -2px;
-        border-radius: 14px;
-        background: transparent;
-        drop-shadow-blur: root.checked ? Spacing.neo-blur-sm : 0px;
-        drop-shadow-color: root.checked ? root.glow-soft : transparent;
-
-        animate drop-shadow-blur, drop-shadow-color {
-            duration: 250ms;
-            easing: ease-in-out;
-        }
-    }
-
     // Track
     Rectangle {
         width: 100%;
@@ -72,11 +51,11 @@ export component NeoActionToggle inherits Rectangle {
         background: root.track-color;
 
         animate background {
-            duration: 200ms;
+            duration: Appearance.reduce-motion ? 0ms : 160ms;
             easing: ease-in-out;
         }
 
-        // Thumb — slides with glow when active
+        // Thumb — short state transition, respecting reduced motion.
         Rectangle {
             width: 20px;
             height: 20px;
@@ -84,16 +63,10 @@ export component NeoActionToggle inherits Rectangle {
             background: Colors.text-primary;
             y: 2px;
             x: root.checked ? 22px : 2px;
-            drop-shadow-blur: root.checked ? 4px : 0px;
-            drop-shadow-color: root.checked ? root.glow-color.with-alpha(0.5) : transparent;
 
             animate x {
-                duration: 200ms;
+                duration: Appearance.reduce-motion ? 0ms : 160ms;
                 easing: cubic-bezier(0.34, 1.56, 0.64, 1);  // Snappy overshoot
-            }
-            animate drop-shadow-blur, drop-shadow-color {
-                duration: 250ms;
-                easing: ease-in-out;
             }
         }
     }

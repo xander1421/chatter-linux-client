@@ -175,7 +175,7 @@ pub async fn action(
         }
         ("notifications", "Mark all read") => {
             pool.notification_client()
-                .mark_all_as_read(None, vec![])
+                .mark_all_as_read(vec![])
                 .await?;
         }
         ("integrations", "Install") => {

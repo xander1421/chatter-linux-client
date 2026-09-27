@@ -1,5 +1,4 @@
-// Color definitions for Chatter — Neomorphism 2.0 "Ink & Neon" OLED Black
-// True black base for OLED screens, navy/plum shadows, cyan/violet glows
+// Semantic colors for Chatter. Chrome materials are defined in materials.slint.
 
 import { Appearance } from "appearance.slint";
 
@@ -7,8 +6,15 @@ import { Appearance } from "appearance.slint";
 // (right). `Appearance.dark` picks; nothing outside this file should need a
 // literal colour.
 export global Colors {
+    // Filled actions have a stable readable foreground in both themes.
+    out property <color> action-fill: Appearance.dark ? #117d73 : #087c73;
+    out property <color> action-hover: #076b63;
+    out property <color> action-active: #065a54;
+    out property <color> on-action: #ffffff;
+
     // Primary colors (dark teal)
     out property <color> primary: #0d9488;
+    out property <color> glass-accent: Appearance.dark ? #3ccdba : #087c73;
     out property <color> primary-hover: #0f766e;
     out property <color> primary-active: #115e59;
 
@@ -17,19 +23,19 @@ export global Colors {
     out property <color> accent-hover: Appearance.dark ? #ea580c : #c2410c;
 
     // Background colors — OLED Black
-    out property <color> background: Appearance.dark ? #000000 : #f2f3f5;
-    out property <color> surface: Appearance.dark ? #0a0a0b : #ffffff;
-    out property <color> surface-hover: Appearance.dark ? #141416 : #e7e9ec;
+    out property <color> background: Appearance.dark ? #000000 : #f3f5f8;
+    out property <color> surface: Appearance.dark ? #111820 : #ffffff;
+    out property <color> surface-hover: Appearance.dark ? #1b2632 : #e8edf2;
     // Secondary-button fill. Its own step, not `surface`: a secondary button
     // sits on the page AND on cards (which are `surface`), and with no stroke
     // a surface-filled button on a card was a bare label (RC24 D2).
-    out property <color> fill-secondary: Appearance.dark ? #232326 : #e2e4e8;
-    out property <color> fill-secondary-hover: Appearance.dark ? #2e2e32 : #d5d8dd;
+    out property <color> fill-secondary: Appearance.dark ? #253240 : #e1e7ed;
+    out property <color> fill-secondary-hover: Appearance.dark ? #304050 : #d6dee7;
 
     // Text colors (4.5:1 contrast minimum on black)
-    out property <color> text-primary: Appearance.dark ? #f0f0f2 : #111418;
-    out property <color> text-secondary: Appearance.dark ? #a0aec0 : #3f4a5a;
-    out property <color> text-muted: Appearance.dark ? #7d8b9e : #5b6678;
+    out property <color> text-primary: Appearance.dark ? #f2f6fa : #15202b;
+    out property <color> text-secondary: Appearance.dark ? #b5c3d2 : #445367;
+    out property <color> text-muted: Appearance.dark ? #98a9bc : #596a7c;
 
     // Status colors
     out property <color> success: Appearance.dark ? #10b981 : #059669;

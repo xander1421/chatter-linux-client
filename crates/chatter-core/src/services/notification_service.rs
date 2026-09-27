@@ -271,6 +271,9 @@ pub fn spawn_notification_listener(
             match &event {
                 DomainEvent::MessageReceived { message } => {
                     let Some(client) = client.upgrade() else { break };
+                    if let Err(error) = crate::services::conversation::ConversationHandle::mark_received_as_read(&client, message).await {
+                        tracing::warn!(%error, "Failed to mark visible incoming message read");
+                    }
                     let (on_screen, muted) = conversation_attention(&client, message);
                     if !should_notify_message(message, me.as_ref(), on_screen, muted) {
                         continue;

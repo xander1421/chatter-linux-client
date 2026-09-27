@@ -1,3 +1,4 @@
+import { GlassSurface } from "glass_surface.slint";
 // Emoji picker component with category tabs, search, and emoji grid
 
 import { Colors } from "../theme/colors.slint";
@@ -12,7 +13,11 @@ export struct EmojiData {
     category: int,
 }
 
-export component EmojiPicker inherits Rectangle {
+export component EmojiPicker inherits GlassSurface {
+    material-level: 3;
+    elevation: 2;
+    border-radius: Spacing.radius-xl;
+
     // Picker visibility
     in property <bool> show: false;
 
@@ -67,8 +72,6 @@ export component EmojiPicker inherits Rectangle {
     property <length> grid-content-width: root.width - 2 * Spacing.sm;
     property <int> emoji-columns: max(4, Math.floor(grid-content-width / 46px));
     property <length> emoji-cell-stride: grid-content-width / emoji-columns;
-    background: Colors.surface;
-    border-radius: Spacing.radius-lg;
 
     // Block clicks from passing through
     TouchArea {

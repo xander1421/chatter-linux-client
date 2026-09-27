@@ -127,7 +127,7 @@ pub fn spawn_grpc_notification_consumer(
             let user_id_str = user_id.to_string();
 
             info!(user_id = %user_id_str, "notification_stream: connecting");
-            match client.stream_notifications(Some(&user_id_str), Vec::new()).await {
+            match client.stream_notifications(Vec::new()).await {
                 Ok(stream) => {
                     // Connected — reset backoff for next reconnect.
                     backoff = Duration::from_secs(1);

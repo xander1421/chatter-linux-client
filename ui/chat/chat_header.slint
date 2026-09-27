@@ -1,3 +1,4 @@
+import { GlassSurface } from "../components/glass_surface.slint";
 // Chat header component
 //
 // Displays channel information, topic, and action buttons.
@@ -26,7 +27,11 @@ export struct ChatHeaderData {
     presence-status: string,  // "online", "away", "dnd", "offline" — shown for DMs only
 }
 
-export component ChatHeader inherits Rectangle {
+export component ChatHeader inherits GlassSurface {
+    material-level: 2;
+    elevation: 1;
+    border-radius: 0px;
+
     // Properties from ChatHeaderData
     in property <string> channel-id: "";
     in property <string> channel-name: "";
@@ -163,21 +168,11 @@ export component ChatHeader inherits Rectangle {
     // (the rail), and 0 on every other platform.
     in property <length> leading-inset: 0px;
 
-    // Layout — Neo glassmorphism: translucent surface with edge definition.
+    // The shared material carries the header above plain conversation content.
     // 52px is a 44px touch row plus 4px of air above and below; the old 56px was
     // that plus a spare row of nothing, repeated at the top of every
     // conversation.
     height: root.header-height;
-    background: Colors.surface.with-alpha(0.85);
-    // No `border-width`: this read as "edge definition" but Slint draws all
-    // four sides, which put a hairline down both edges of the chat column (and
-    // both screen edges on a phone). The explicit bottom-edge Rectangle at the
-    // end of this file is the separation that actually matters, on the one
-    // side that has something to separate from.
-    drop-shadow-blur: root.mobile ? 0px : Spacing.neo-blur-sm;
-    drop-shadow-offset-y: Spacing.neo-offset-sm;
-    drop-shadow-color: Colors.neo-shadow;
-
     HorizontalLayout {
         // Constrain to the header width so the name elides instead of growing
         // the whole chat column past the screen (which clipped the composer's
@@ -561,11 +556,5 @@ export component ChatHeader inherits Rectangle {
         }
     }
 
-    // Bottom edge — the header's hairline divider
-    Rectangle {
-        y: parent.height - 1px;
-        width: 100%;
-        height: 1px;
-        background: Colors.border;
-    }
+
 }

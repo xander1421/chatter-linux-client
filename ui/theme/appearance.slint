@@ -7,6 +7,12 @@
 import { Palette } from "std-widgets.slint";
 
 export global Appearance {
+    // Presentation preference; system-setting wiring is owned by the host integration.
+    in-out property <bool> reduce-motion: false;
+    // Disable expensive material optics on slow devices.
+    in-out property <bool> glass-effects: true;
+    callback glass-effects-changed(bool);
+
     // "system" | "light" | "dark"
     in-out property <string> theme: "system";
 

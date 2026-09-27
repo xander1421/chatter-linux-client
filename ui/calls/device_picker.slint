@@ -1,3 +1,5 @@
+import { Materials } from "../theme/materials.slint";
+import { GlassSurface } from "../components/glass_surface.slint";
 // Device picker modal for audio/video/screen selection
 
 import { Colors } from "../theme/colors.slint";
@@ -89,7 +91,7 @@ export component DevicePicker inherits Rectangle {
     callback closed();
 
     visible: show;
-    background: Colors.overlay;
+    background: Materials.scrim;
 
     // Click outside to close
     TouchArea {
@@ -97,15 +99,18 @@ export component DevicePicker inherits Rectangle {
     }
 
     // Modal content
-    Rectangle {
+    GlassSurface {
+        enter-distance: 6px;
+        shown: root.show;
+
+        material-level: 3;
+        elevation: 2;
+
         x: (parent.width - self.width) / 2;
-        y: (parent.height - self.height) / 2;
+        y: ((parent.height - self.height) / 2) + self.entrance-offset;
         width: min(360px, parent.width - 32px);
         height: min(480px, content.preferred-height + 80px);
-        background: Colors.surface;
-        border-radius: Spacing.radius-lg;
-        drop-shadow-blur: 20px;
-        drop-shadow-color: Colors.shadow;
+        border-radius: Spacing.radius-xl;
 
         // Prevent clicks from closing
         TouchArea {}

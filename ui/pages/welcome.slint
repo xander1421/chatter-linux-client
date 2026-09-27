@@ -1,3 +1,4 @@
+import { Materials } from "../theme/materials.slint";
 // Welcome page — shown after first registration to guide new users
 
 import { Colors } from "../theme/colors.slint";
@@ -13,7 +14,7 @@ export component WelcomePage inherits Rectangle {
     callback browse-channels();
     callback get-started();
 
-    background: Colors.background;
+    background: Materials.ambient;
 
     VerticalLayout {
         alignment: center;

@@ -97,7 +97,8 @@ bind_java_type! {
         },
         fn update_selection_menu {
             name = "update_selection_menu",
-            sig = (text: JString, selected: jboolean, left: jint, top: jint, right: jint, bottom: jint),
+            sig = (text: JString, selected: jboolean, left_x: jint, left_y: jint,
+                right_x: jint, right_y: jint, cursor_height: jint, show_handles: jboolean),
         },
         fn show_action_menu {
             name = "show_action_menu",
@@ -497,6 +498,7 @@ impl JavaHelper {
         &self,
         data: &i_slint_core::window::InputMethodProperties,
         scale_factor: f32,
+        show_handles: bool,
     ) -> Result<(), jni::errors::Error> {
         self.with_jni_env(|env, helper| {
             let cursor = data.cursor_rect_origin.to_physical(scale_factor);
@@ -505,15 +507,38 @@ impl JavaHelper {
             let selected = data.anchor_position.is_some_and(|a| a != data.cursor_position)
                 && !data.text.is_empty()
                 && data.preedit_text.is_empty();
+            let cursor_visible = data.clip_rect.map_or(true, |r| {
+                r.contains(i_slint_core::lengths::logical_point_from_api(data.cursor_rect_origin))
+            });
+            let anchor_visible = data.clip_rect.map_or(true, |r| {
+                r.contains(i_slint_core::lengths::logical_point_from_api(data.anchor_point))
+            });
+            let height = size.height as i32 + 2 * size.width as i32;
+            let cursor_handle = (
+                if cursor_visible { cursor.x + size.width as i32 / 2 } else { -1 },
+                cursor.y + height,
+            );
+            let anchor_handle = (
+                if anchor_visible { anchor.x } else { -1 },
+                anchor.y + 2 * size.width as i32,
+            );
+            let (left, right) =
+                if data.cursor_position < data.anchor_position.unwrap_or(data.cursor_position) {
+                    (cursor_handle, anchor_handle)
+                } else {
+                    (anchor_handle, cursor_handle)
+                };
             let text = JString::new(env, data.text.as_str())?;
             helper.update_selection_menu(
                 env,
                 &text,
                 selected,
-                cursor.x.min(anchor.x),
-                cursor.y.min(anchor.y - size.height as i32),
-                cursor.x.max(anchor.x),
-                (cursor.y + size.height as i32).max(anchor.y),
+                left.0,
+                left.1,
+                right.0,
+                right.1,
+                height,
+                show_handles && selected,
             )
         })
     }
@@ -659,6 +684,7 @@ fn callback_move_cursor_handle<'local>(
             {
                 if let Some(text_input) = focus_item.downcast::<i_slint_core::items::TextInput>() {
                     let scale_factor = adaptor.window.scale_factor();
+                    adaptor.begin_selection_change();
                     let adaptor = adaptor.clone() as Rc<dyn WindowAdapter>;
                     let size = text_input
                         .as_pin_ref()
@@ -728,6 +754,9 @@ fn callback_popup_menu_action<'local>(
             {
                 if let Some(text_input) = focus_item.downcast::<i_slint_core::items::TextInput>() {
                     let text_input = text_input.as_pin_ref();
+                    if id == 3 {
+                        adaptor.begin_selection_change();
+                    }
                     let adaptor = adaptor.clone() as Rc<dyn WindowAdapter>;
                     match id {
                         0 => text_input.cut(&adaptor, &focus_item),

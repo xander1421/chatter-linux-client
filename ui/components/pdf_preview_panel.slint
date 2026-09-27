@@ -1,3 +1,4 @@
+import { GlassSurface } from "glass_surface.slint";
 // PDF preview panel component
 //
 // Renders PDF pages inline using pdfium-render. Shows page image
@@ -37,10 +38,12 @@ export component PdfPreviewPanel inherits Rectangle {
 
     VerticalLayout {
         // Header bar
-        Rectangle {
+        GlassSurface {
+            material-level: 2;
+            elevation: 1;
+
             // As tall as the header buttons, so the file name shares their axis.
             height: Spacing.header-action-box;
-            background: Colors.background;
 
             HorizontalLayout {
                 padding-left: Spacing.md;

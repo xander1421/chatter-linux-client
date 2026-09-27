@@ -1,0 +1,36 @@
+// Chrome material tokens. Only GlassSurface owns backdrop sampling.
+import { Appearance } from "appearance.slint";
+
+export global Materials {
+    out property <color> ultra-thin: Appearance.dark ? #17233199 : #f8fcff99;
+    out property <color> thin: Appearance.dark ? #172331c7 : #f8fcffc7;
+    out property <color> regular: Appearance.dark ? #172331eb : #f8fcffeb;
+    out property <color> thick: Appearance.dark ? #18222ff7 : #fcfdfff7;
+    out property <color> opaque: Appearance.dark ? #172331 : #f8fcff;
+    // The single optical edge is local to GlassSurface, never a row/card stroke.
+    out property <brush> glass-edge: Appearance.dark
+        ? @linear-gradient(180deg, #ffffff38 0%, #ffffff06 100%)
+        : @linear-gradient(180deg, #ffffffa6 0%, #ffffff14 100%);
+    out property <length> glass-edge-width: 1px;
+    out property <brush> specular: Appearance.dark
+        ? @linear-gradient(180deg, #ffffff12 0%, #ffffff00 35%)
+        : @linear-gradient(180deg, #ffffff30 0%, #ffffff00 35%);
+    out property <color> shadow-contact: Appearance.dark ? #00000038 : #11233914;
+    out property <color> shadow-float: Appearance.dark ? #00000052 : #1123391c;
+    out property <color> shadow-modal: Appearance.dark ? #00000066 : #11233926;
+    out property <color> scrim: Appearance.dark ? #00000066 : #08111c40;
+    out property <color> hover: Appearance.dark ? #ffffff0c : #15202b0a;
+    out property <color> pressed: Appearance.dark ? #ffffff18 : #15202b14;
+    out property <brush> ambient: Appearance.dark
+        ? @linear-gradient(135deg, #000000 0%, #000000 100%)
+        : @linear-gradient(135deg, #eaf4f5 0%, #eff1f8 45%, #f3f5f8 100%);
+    out property <length> blur-regular: 24px;
+    out property <length> blur-thick: 28px;
+    out property <float> saturation: 1.8;
+    // Edge lensing strength for the Backdrop refraction shader (0..1).
+    out property <float> refraction: 0.15;
+    out property <duration> feedback-duration: Appearance.reduce-motion ? 0ms : 100ms;
+    out property <duration> menu-duration: Appearance.reduce-motion ? 0ms : 180ms;
+    out property <duration> sheet-duration: Appearance.reduce-motion ? 0ms : 240ms;
+    out property <easing> settle: cubic-bezier(0.22, 1.12, 0.36, 1);
+}

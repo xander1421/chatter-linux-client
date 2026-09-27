@@ -343,7 +343,7 @@ impl i_slint_core::window::WindowAdapterInternal for AndroidWindowAdapter {
         // Keep presentation in sync before the IME echo guards return; only the
         // long-press detector may open the menu, never an IME anchor/cursor report.
         self.java_helper
-            .update_selection_menu(&props, self.window.scale_factor())
+            .update_selection_menu(&props, self.window.scale_factor(), self.show_cursor_handles.get())
             .unwrap_or_else(|e| print_jni_error(&self.app, e));
         let mut text = props.text.to_string();
         if !props.preedit_text.is_empty() {
@@ -422,6 +422,7 @@ impl i_slint_core::window::WindowAdapterInternal for AndroidWindowAdapter {
         // which is worth doing on its own, but the backend cannot repair what
         // Slint believes it holds. §112n stays open.
         if self.last_pushed_text.borrow().as_deref() == Some(text.as_str())
+            && compose.is_some()
             && sel_end == 0
             && self.last_pushed_cursor.get() > 0
         {
@@ -508,6 +509,13 @@ impl i_slint_core::window::WindowAdapterInternal for AndroidWindowAdapter {
 }
 
 impl AndroidWindowAdapter {
+    /// A user may select the same range twice without changing the text.
+    /// Historical IME echo guards must not suppress that new gesture.
+    pub(crate) fn begin_selection_change(&self) {
+        self.ime_states_seen.borrow_mut().clear();
+        self.stale_commit_cursor.set(None);
+    }
+
     fn dismiss_selection_menu(&self) {
         self.java_helper
             .hide_action_menu()
@@ -860,6 +868,13 @@ impl AndroidWindowAdapter {
                             InputStatus::Handled
                         }
                         MotionAction::Move => {
+                            // Slint still considers this a single-click drag.
+                            // A move after select_word would shrink the selection
+                            // back to the finger's byte offset; use the handles
+                            // to extend a completed long-press selection instead.
+                            if self.long_press_selection.get() {
+                                return InputStatus::Handled;
+                            }
                             let position = position_for_event(motion_event, offset, scale);
 
                             let mut lp = self.long_press.borrow_mut();
@@ -933,7 +948,6 @@ impl AndroidWindowAdapter {
                     }
                 }
                 InputEvent::TextEvent(state) => {
-                    self.show_cursor_handles.set(false);
                     // No live field owns the input method: this is the IME
                     // still reporting on a field that was destroyed (or a
                     // late report after it was released). Delivering it would
@@ -967,6 +981,7 @@ impl AndroidWindowAdapter {
                         || (self.last_ime_text.borrow().as_ref() != Some(&state.text)
                             && self.last_pushed_text.borrow().as_ref() != Some(&state.text))
                     {
+                        self.show_cursor_handles.set(false);
                         self.dismiss_selection_menu();
                     }
                     // Remember what the IME believes, so the outbound path can
@@ -1155,14 +1170,27 @@ fn long_press_timeout() {
             if !geometry.contains(i_slint_core::lengths::logical_point_from_api(current.position)) {
                 return;
             };
-            let (cursor, anchor) = text_input.selection_anchor_and_cursor();
-            if cursor == anchor {
-                let text = text_input.text();
-                if text.len() > cursor && text.as_bytes()[cursor] != b'\n' {
-                    let adaptor = adaptor.clone() as Rc<dyn WindowAdapter>;
-                    text_input.select_word(&adaptor, &focus_item);
-                }
+            let window_adapter = adaptor.clone() as Rc<dyn WindowAdapter>;
+            let position = i_slint_core::lengths::logical_point_from_api(current.position)
+                - geometry.origin.to_vector();
+            let cursor = text_input.byte_offset_for_position(position, &window_adapter, &focus_item);
+            let text = text_input.text();
+            if text.is_empty() || text.as_bytes().get(cursor) == Some(&b'\n') {
+                return;
             }
+            // Tiny moves before the timeout may already have made a partial
+            // selection. Start at the held point, then expand BOTH boundaries.
+            text_input.anchor_position_byte_offset.set(cursor as i32);
+            text_input.set_cursor_position(
+                cursor as i32,
+                true,
+                i_slint_core::items::TextChangeNotify::SkipCallbacks,
+                &window_adapter,
+                &focus_item,
+            );
+            adaptor.show_cursor_handles.set(true);
+            adaptor.begin_selection_change();
+            text_input.select_word(&window_adapter, &focus_item);
             let (cursor, anchor) = text_input.selection_anchor_and_cursor();
             if cursor == anchor {
                 return;

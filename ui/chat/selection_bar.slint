@@ -1,3 +1,4 @@
+import { GlassSurface } from "../components/glass_surface.slint";
 // Multi-select action bar.
 //
 // Stands in for the channel's own header while selection mode is active: how
@@ -22,7 +23,11 @@ import { Typography } from "../theme/typography.slint";
 import { Icons } from "../theme/icons.slint";
 import { HeaderButton } from "../components/header_button.slint";
 
-export component SelectionBar inherits Rectangle {
+export component SelectionBar inherits GlassSurface {
+    material-level: 2;
+    elevation: 1;
+    border-radius: 0px;
+
     in property <bool> show: false;
     in property <int> count: 0;
     in property <length> safe-area-top: 0px;
@@ -37,10 +42,6 @@ export component SelectionBar inherits Rectangle {
 
     visible: root.show;
     height: (root.touch ? Spacing.header-height-touch : Spacing.header-height) + root.safe-area-top;
-    background: Colors.surface;
-    drop-shadow-blur: Spacing.neo-blur-md;
-    drop-shadow-offset-y: Spacing.neo-offset-md;
-    drop-shadow-color: Colors.neo-shadow;
 
     HorizontalLayout {
         y: root.safe-area-top;

@@ -6,6 +6,7 @@
 // divider, auto-follow of new messages, older history on reaching the top.
 
 import { Colors } from "../theme/colors.slint";
+import { GlassSurface } from "../components/glass_surface.slint";
 import { Spacing } from "../theme/spacing.slint";
 import { Typography } from "../theme/typography.slint";
 import { Icons } from "../theme/icons.slint";
@@ -344,8 +345,13 @@ export component MessageList inherits Rectangle {
 
             // Where the viewport came to rest.
             function read-position() {
-                root.at-end = self.bottom-gap() <= 1px;
-                root.is-at-bottom = self.bottom-gap() <= 50px;
+                // Keyboard reveal and row remeasurement can update viewport-y
+                // before height. That transient gap is not a user leaving the
+                // bottom: retain the anchor until a scroll or explicit jump.
+                root.at-end = self.bottom-gap() <= 1px
+                    || (root.at-end && !root.scrolling && root.jump-row < 0);
+                root.is-at-bottom = self.bottom-gap() <= 50px
+                    || (root.is-at-bottom && !root.scrolling && root.jump-row < 0);
                 // Reaching the newest message is what "caught up" means; the
                 // pill must stop claiming N new messages after that, including
                 // when the user scrolls back up later in the same session.
@@ -380,6 +386,7 @@ export component MessageList inherits Rectangle {
                 root.scrolling = true;
                 root.end-pending = false;
                 root.jump-row = -1;
+                self.read-position();
                 at-rest.restart();
             }
 
@@ -735,25 +742,21 @@ export component MessageList inherits Rectangle {
 
         // Scroll-to-bottom floating button
         // Appears when user has scrolled up from the bottom
-        // Scroll-to-bottom — Neo convex floating button
         // Scroll-to-bottom, which becomes a "N new messages" pill when the
         // conversation opened on an unread boundary — the affordance that says
         // how much is below you and takes you there in one tap.
-        if !root.is-at-bottom: Rectangle {
+        if !root.is-at-bottom: GlassSurface {
+            elevation: 0;
             x: root.width - self.width - 16px;
             y: root.height - 60px;
             width: pill-content.preferred-width + Spacing.lg * 2;
             height: 44px;
             border-radius: 22px;
-            background: Colors.primary;
+            material-tint: Colors.action-fill.with-alpha(0.97);
             accessible-role: button;
             accessible-label: root.unread-count > 0
                 ? root.unread-count + " new messages, jump to newest"
                 : "Scroll to bottom";
-            drop-shadow-blur: Spacing.neo-blur-lg;
-            drop-shadow-offset-x: Spacing.neo-offset-md;
-            drop-shadow-offset-y: Spacing.neo-offset-md;
-            drop-shadow-color: Colors.neo-shadow-strong;
 
             // Fade in animation
             opacity: 1.0;
@@ -770,7 +773,7 @@ export component MessageList inherits Rectangle {
                     text: root.unread-count == 1
                         ? "1 new message"
                         : root.unread-count + " new messages";
-                    color: Colors.text-primary;
+                    color: Colors.on-action;
                     font-size: Typography.sm;
                     font-weight: Typography.medium;
                     vertical-alignment: center;
@@ -779,7 +782,7 @@ export component MessageList inherits Rectangle {
                 // Down arrow icon
                 Text {
                     text: "↓";
-                    color: Colors.text-primary;
+                    color: Colors.on-action;
                     font-size: Typography.xl;
                     horizontal-alignment: center;
                     vertical-alignment: center;
@@ -807,7 +810,7 @@ export component MessageList inherits Rectangle {
             // Hover effect
             states [
                 hover when scroll-btn.has-hover: {
-                    background: Colors.primary-hover;
+                    material-tint: Colors.action-hover.with-alpha(0.97);
                 }
             ]
         }

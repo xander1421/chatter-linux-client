@@ -1,3 +1,4 @@
+import { GlassSurface } from "glass_surface.slint";
 // Mobile bottom navigation bar
 //
 // Shows tab bar with Chats, Calls, Contacts, Profile on mobile screens.
@@ -40,7 +41,7 @@ component NavTab inherits Rectangle {
                 source: root.icon;
                 width: 24px;
                 height: 24px;
-                colorize: root.active ? Colors.primary : Colors.text-muted;
+                colorize: root.active ? Colors.glass-accent : Colors.text-muted;
             }
 
             if root.use-avatar: Rectangle {
@@ -85,7 +86,7 @@ component NavTab inherits Rectangle {
             text: root.label;
             font-size: Typography.xs2;
             font-weight: root.active ? 600 : 400;
-            color: root.active ? Colors.primary : Colors.text-muted;
+            color: root.active ? Colors.glass-accent : Colors.text-muted;
             horizontal-alignment: center;
         }
     }
@@ -112,10 +113,7 @@ export component MobileBottomNav inherits Rectangle {
     // already uses (chat_header.slint: translucent surface + edge highlight),
     // not a new visual language.
     //
-    // Slint has no backdrop blur, so "glass" here is what actually reads as
-    // glass without one: a translucent fill over moving content, a bright hair-
-    // line along the top edge to catch the light, and a soft shadow to lift it
-    // off the page. Blur would add little on a near-black background anyway.
+    // The dock shares the chrome material; GlassSurface owns backdrop blur.
     in property <length> side-inset: Spacing.md;
     in property <length> bottom-gap: Spacing.sm;
     // What the dock occupies in total, for whoever reserves space for it.
@@ -125,17 +123,15 @@ export component MobileBottomNav inherits Rectangle {
     height: root.occupied-height;
     background: transparent;
 
-    dock := Rectangle {
+    dock := GlassSurface {
+        material-level: 2;
+        elevation: 2;
+
         x: root.side-inset;
         y: 0;
         width: parent.width - root.side-inset * 2;
         height: Spacing.bottom-nav-height;
-        border-radius: Spacing.radius-xl;
-        background: Colors.surface.with-alpha(0.85);
-        drop-shadow-blur: Spacing.neo-blur-lg;
-        drop-shadow-offset-y: Spacing.neo-offset-md;
-        drop-shadow-color: Colors.neo-shadow-strong;
-        clip: true;
+        border-radius: Spacing.radius-chrome;
     }
 
     // Four equal columns, positioned explicitly rather than by a

@@ -163,6 +163,20 @@ pub fn wire_settings_callbacks(window: &MainWindow, ui_ctx: &Arc<ChatterClient>)
         }
     });
 
+    // Chrome effects are device-local and applied before the first frame.
+    appearance.set_glass_effects(ui_ctx.glass_effects_enabled());
+    let ui_ctx_glass = ui_ctx.clone();
+    let weak_glass = window.as_weak();
+    appearance.on_glass_effects_changed(move |enabled: bool| {
+        if let Err(e) = ui_ctx_glass.set_glass_effects_enabled(enabled) {
+            tracing::error!("Failed to save glass effects: {}", e);
+        }
+        if let Some(w) = weak_glass.upgrade() {
+            w.global::<crate::Appearance>()
+                .set_glass_effects(ui_ctx_glass.glass_effects_enabled());
+        }
+    });
+
     // Account push delivery is read from and saved to the server. Keep this
     // separate from device sound/OS permissions and notification privacy.
     let delivery = window.global::<crate::NotificationDelivery>();

@@ -1,8 +1,11 @@
-// Spacing and sizing tokens for Chatter — Neomorphism 2.0
+// Spacing and sizing tokens for Chatter.
 
 import { Appearance } from "appearance.slint";
 
 export global Spacing {
+    out property <length> radius-chrome: 24px;
+    out property <length> radius-sheet: 28px;
+
     // Base spacing
     out property <length> xxs: 2px;
     out property <length> xs: 4px;
@@ -13,7 +16,7 @@ export global Spacing {
     out property <length> xxl: 32px;
     out property <length> xxxl: 48px;
 
-    // Border radius — Neo 2.0 uses generous radii (superellipse-approximate)
+    // Content radii stay stable; chrome and sheet radii are separate above.
     out property <length> radius-sm: 6px;
     out property <length> radius-md: 10px;
     out property <length> radius-lg: 16px;
@@ -84,6 +87,7 @@ export global Spacing {
     // selected/checked state (Colors.primary), an unchecked checkbox or radio
     // (Colors.text-muted). Cards, rows, sheets, menus, chips, avatars and
     // buttons are flat — separated by background tone, not outlines.
+    // The sole optical exception is Materials.glass-edge inside GlassSurface.
     out property <length> stroke: 1.5px;
 
     // Count and label badges (unread, missed calls, member counts, role

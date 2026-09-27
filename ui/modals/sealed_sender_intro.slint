@@ -1,3 +1,5 @@
+import { Materials } from "../theme/materials.slint";
+import { GlassSurface } from "../components/glass_surface.slint";
 // SealedSenderIntroModal — honest one-screen explainer shown after registration.
 //
 // It states the sealed-sender property WITHOUT overclaiming: the server
@@ -23,7 +25,7 @@ export component SealedSenderIntroModal inherits Rectangle {
     opacity: root.show-modal ? 1 : 0;
     visible: root.show-modal;
 
-    background: Colors.overlay;
+    background: Materials.scrim;
 
     // Block backdrop clicks (no dismiss allowed — must acknowledge).
     TouchArea {
@@ -31,16 +33,15 @@ export component SealedSenderIntroModal inherits Rectangle {
         height: 100%;
     }
 
-    Rectangle {
+    GlassSurface {
+        material-level: 3;
+        elevation: 3;
+
         width: min(480px, parent.width - 32px);
         height: max(200px, min(content-layout.preferred-height, min(640px, parent.height - 48px)));
         x: (parent.width - self.width) / 2;
         y: (parent.height - self.height) / 2;
-        background: Colors.surface;
-        border-radius: Spacing.radius-lg;
-        clip: true;
-        drop-shadow-blur: 16px;
-        drop-shadow-color: Colors.shadow;
+        border-radius: Spacing.radius-sheet;
 
         TouchArea {
             width: 100%;

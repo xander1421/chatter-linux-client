@@ -1,3 +1,4 @@
+import { GlassSurface } from "glass_surface.slint";
 // Mention autocomplete popup for @user, #channel, @here, @all suggestions
 
 import { Colors } from "../theme/colors.slint";
@@ -14,7 +15,11 @@ export struct MentionSuggestion {
     has-avatar: bool,      // Whether avatar image is available
 }
 
-export component MentionAutocomplete inherits Rectangle {
+export component MentionAutocomplete inherits GlassSurface {
+    material-level: 3;
+    elevation: 2;
+    border-radius: Spacing.radius-xl;
+
     // Popup visibility
     in property <bool> show: false;
 
@@ -36,8 +41,6 @@ export component MentionAutocomplete inherits Rectangle {
     in property <length> max-popup-width: 240px;
     width: root.max-popup-width;
     height: Math.min(suggestions.length, 8) * 40px + Spacing.sm * 2;
-    background: Colors.surface;
-    border-radius: Spacing.radius-lg;
 
     // Block clicks from passing through
     TouchArea {

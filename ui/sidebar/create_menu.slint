@@ -1,3 +1,4 @@
+import { GlassSurface } from "../components/glass_surface.slint";
 // Create menu — what the chat list's '+' opens (owner decision 2026-09-26).
 //
 // CreateMenu: the small popup of New Chat / New Channel / New Section. On a
@@ -34,17 +35,17 @@ export component CreateMenu inherits Rectangle {
     // keep taps outside the card from reaching the list under it.
     TouchArea { clicked => { root.close(); } }
 
-    Rectangle {
+    GlassSurface {
+        enter-distance: 6px;
+
+        material-level: 3;
+        elevation: 2;
+
         x: root.card-x;
-        y: root.card-y;
+        y: (root.card-y) + self.entrance-offset;
         width: root.card-width;
         height: root.card-height;
-        border-radius: Spacing.radius-lg;
-        background: Colors.surface;
-        drop-shadow-blur: Spacing.neo-blur-lg;
-        drop-shadow-offset-y: Spacing.neo-offset-md;
-        drop-shadow-color: Colors.neo-shadow-strong;
-        clip: true;
+        border-radius: Spacing.radius-xl;
         // Eat taps on the card's own padding.
         TouchArea { }
 

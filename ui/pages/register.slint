@@ -1,3 +1,4 @@
+import { Materials } from "../theme/materials.slint";
 // Register page component with multi-step onboarding flow
 
 import { Colors } from "../theme/colors.slint";
@@ -60,7 +61,7 @@ export component RegisterPage inherits Rectangle {
     in property <bool> server-unreachable: false;
     in property <bool> account-free-surfaces: false;
 
-    background: Colors.background;
+    background: Materials.ambient;
 
     VerticalLayout {
         // TopAppBar / Header (Task 2)

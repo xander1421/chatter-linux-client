@@ -666,8 +666,15 @@ public class SlintAndroidJavaHelper {
         mActivity.runOnUiThread(() -> mInputView.setCursorPos(0, 0, 0, 0, 0, 0));
     }
 
-    public void update_selection_menu(String text, boolean selected, int left, int top, int right, int bottom) {
-        mActivity.runOnUiThread(() -> mInputView.updateSelectionMenu(text, selected, left, top, right, bottom));
+    public void update_selection_menu(String text, boolean selected, int left_x, int left_y,
+            int right_x, int right_y, int cursor_height, boolean show_handles) {
+        mActivity.runOnUiThread(() -> {
+            mInputView.updateSelectionMenu(text, selected, Math.min(left_x, right_x),
+                    Math.min(left_y, right_y) - cursor_height, Math.max(left_x, right_x),
+                    Math.max(left_y, right_y));
+            mInputView.setCursorPos(left_x, left_y, right_x, right_y, cursor_height,
+                    show_handles ? 2 : 0);
+        });
     }
 
     public void show_action_menu() {

@@ -1,3 +1,4 @@
+import { Materials } from "../theme/materials.slint";
 // Login page component
 
 import { Colors } from "../theme/colors.slint";
@@ -52,7 +53,7 @@ export component LoginPage inherits Rectangle {
     callback continue-without-account();
     callback accept-new-identity();
 
-    background: Colors.background;
+    background: Materials.ambient;
 
     flick := Flickable {
         width: 100%;

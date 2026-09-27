@@ -1,3 +1,4 @@
+import { GlassSurface } from "glass_surface.slint";
 // Tooltip components for hover hints
 //
 // Provides both a raw Tooltip and a self-contained TooltipArea that
@@ -8,7 +9,11 @@ import { Spacing } from "../theme/spacing.slint";
 import { Typography } from "../theme/typography.slint";
 
 // Raw tooltip — positioned absolutely, controlled by parent
-export component Tooltip inherits Rectangle {
+export component Tooltip inherits GlassSurface {
+    material-level: 3;
+    elevation: 1;
+    border-radius: Spacing.radius-xl;
+
     in property <string> text: "";
     in property <bool> show: false;
     in property <length> tip-x: 0px;
@@ -28,12 +33,6 @@ export component Tooltip inherits Rectangle {
     animate opacity { duration: 150ms; }
 
     // Tooltip background — Neo 2.0 with subtle shadow
-    background: Colors.tooltip-bg;
-    border-radius: Spacing.radius-sm;
-    drop-shadow-blur: Spacing.neo-blur-sm;
-    drop-shadow-offset-x: Spacing.neo-offset-sm;
-    drop-shadow-offset-y: Spacing.neo-offset-sm;
-    drop-shadow-color: Colors.neo-shadow;
 
     // Tooltip text
     text-content := Text {
@@ -76,7 +75,10 @@ export component TooltipArea inherits Rectangle {
     @children
 
     // Render tooltip inline when hovered and enabled
-    if root.hovered && root.tooltip-enabled && root.tooltip-text != "": Rectangle {
+    if root.hovered && root.tooltip-enabled && root.tooltip-text != "": GlassSurface {
+        material-level: 3;
+        elevation: 1;
+
         // Position based on placement
         x: root.placement == "right" ? parent.width + 8px :
            root.placement == "bottom" ? (parent.width - self.width) / 2 :
@@ -88,8 +90,7 @@ export component TooltipArea inherits Rectangle {
         width: Math.min(tt-text.preferred-width + Spacing.sm * 2, 200px);
         height: tt-text.preferred-height + Spacing.sm * 2;
 
-        background: Colors.tooltip-bg;
-        border-radius: Spacing.radius-sm;
+        border-radius: Spacing.radius-xl;
         opacity: 1;
         animate opacity { duration: 150ms; }
 

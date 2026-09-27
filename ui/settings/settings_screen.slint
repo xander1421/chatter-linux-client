@@ -1,3 +1,5 @@
+import { Materials } from "../theme/materials.slint";
+import { GlassSurface } from "../components/glass_surface.slint";
 // SettingsScreen - Main settings page with sidebar navigation
 
 import { Colors } from "../theme/colors.slint";
@@ -194,7 +196,7 @@ export component SettingsScreen inherits Rectangle {
     callback cloud-ai-api-key-changed(string);
     callback cloud-ai-refresh-quota();
 
-    background: Colors.background;
+    background: Materials.ambient;
 
     // Responsive breakpoint: compact mode when width < 500px
     property <bool> compact-mode: root.width < 500px;
@@ -207,12 +209,11 @@ export component SettingsScreen inherits Rectangle {
         // Compact mode: horizontal tab bar at top — Neo glass
         // Tall enough for 48px touch targets (close button + tab chips) plus
         // the 4px padding the tab strip carries.
-        if compact-mode: Rectangle {
+        if compact-mode: GlassSurface {
+            material-level: 2;
+            elevation: 1;
+
             height: Spacing.touch-target-min + Spacing.sm;
-            background: Colors.surface.with-alpha(0.85);
-            drop-shadow-blur: Spacing.neo-blur-sm;
-            drop-shadow-offset-y: Spacing.neo-offset-sm;
-            drop-shadow-color: Colors.neo-shadow;
 
             HorizontalLayout {
                 padding-left: Spacing.sm;
@@ -276,12 +277,11 @@ export component SettingsScreen inherits Rectangle {
         HorizontalLayout {
 
         // Sidebar navigation — hidden in compact mode — Neo surface
-        if !compact-mode: Rectangle {
+        if !compact-mode: GlassSurface {
+            material-level: 2;
+            elevation: 1;
+
             width: min(240px, root.width * 0.35);
-            background: Colors.surface;
-            drop-shadow-blur: Spacing.neo-blur-sm;
-            drop-shadow-offset-x: Spacing.neo-offset-sm;
-            drop-shadow-color: Colors.neo-shadow;
 
             VerticalLayout {
                 padding: Spacing.md;
@@ -2752,6 +2752,33 @@ export component SettingsScreen inherits Rectangle {
                                                 Appearance.text-size-changed(opt.key);
                                             }
                                         }
+                                    }
+                                }
+                            }
+
+                            Rectangle {
+                                background: Colors.surface;
+                                border-radius: Spacing.radius-lg;
+
+                                ToggleRow {
+                                    row-padding: Spacing.md;
+                                    row-spacing: Spacing.md;
+                                    label-spacing: Spacing.sm;
+                                    accessible-text: "Glass effects";
+                                    checked <=> Appearance.glass-effects;
+                                    toggled(value) => { Appearance.glass-effects-changed(value); }
+
+                                    Text {
+                                        text: "Glass effects";
+                                        color: Colors.text-primary;
+                                        font-size: Typography.sm;
+                                        font-weight: Typography.medium;
+                                    }
+                                    Text {
+                                        text: "Translucent navigation and controls. Turn off for a simpler appearance and better performance.";
+                                        color: Colors.text-muted;
+                                        font-size: Typography.xs;
+                                        wrap: word-wrap;
                                     }
                                 }
                             }

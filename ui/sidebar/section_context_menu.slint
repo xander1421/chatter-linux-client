@@ -1,3 +1,5 @@
+import { Materials } from "../theme/materials.slint";
+import { GlassSurface } from "../components/glass_surface.slint";
 // Section context menu for sidebar conversations — Neo 2.0
 //
 // Opened by right-click on desktop and by press-and-hold on touch (HoldArea
@@ -102,7 +104,7 @@ export component SectionHeaderContextMenu inherits Rectangle {
     height: 100%;
     // Dimmed like the message context menu, so the menu reads as a modal
     // choice over the list rather than a stray card on top of it.
-    background: Colors.overlay;
+    background: Materials.scrim;
 
     // Backdrop — click anywhere outside to close
     TouchArea {
@@ -112,17 +114,18 @@ export component SectionHeaderContextMenu inherits Rectangle {
     }
 
     // Menu card
-    Rectangle {
+    GlassSurface {
+        enter-distance: 6px;
+        shown: root.show;
+
+        material-level: 3;
+        elevation: 2;
+
         x: min(root.position-x, parent.width - self.width - Spacing.md);
-        y: min(root.position-y, parent.height - self.height - Spacing.md);
+        y: (min(root.position-y, parent.height - self.height - Spacing.md)) + self.entrance-offset;
         width: 220px;
         height: header-menu-layout.preferred-height + Spacing.sm * 2;
-        background: Colors.surface;
-        border-radius: Spacing.radius-md;
-        drop-shadow-blur: Spacing.neo-blur-lg;
-        drop-shadow-offset-x: Spacing.neo-offset-lg;
-        drop-shadow-offset-y: Spacing.neo-offset-lg;
-        drop-shadow-color: Colors.neo-shadow-strong;
+        border-radius: Spacing.radius-xl;
 
         // Block backdrop clicks on menu area
         TouchArea { }
@@ -285,7 +288,7 @@ export component SectionContextMenu inherits Rectangle {
     height: 100%;
     // Dimmed like the message context menu, so the menu reads as a modal
     // choice over the list rather than a stray card on top of it.
-    background: Colors.overlay;
+    background: Materials.scrim;
 
     // Backdrop — click anywhere outside to close
     TouchArea {
@@ -295,17 +298,18 @@ export component SectionContextMenu inherits Rectangle {
     }
 
     // Menu card — Neo 2.0 strong popup surface
-    menu-container := Rectangle {
+    menu-container := GlassSurface {
+        enter-distance: 6px;
+        shown: root.show;
+
+        material-level: 3;
+        elevation: 2;
+
         x: min(root.position-x, parent.width - self.width - Spacing.md);
-        y: min(root.position-y, parent.height - self.height - Spacing.md);
+        y: (min(root.position-y, parent.height - self.height - Spacing.md)) + self.entrance-offset;
         width: 220px;
         height: menu-layout.preferred-height + Spacing.sm * 2;
-        background: Colors.surface;
-        border-radius: Spacing.radius-md;
-        drop-shadow-blur: Spacing.neo-blur-lg;
-        drop-shadow-offset-x: Spacing.neo-offset-lg;
-        drop-shadow-offset-y: Spacing.neo-offset-lg;
-        drop-shadow-color: Colors.neo-shadow-strong;
+        border-radius: Spacing.radius-xl;
 
         // Block backdrop clicks on menu area
         TouchArea { }

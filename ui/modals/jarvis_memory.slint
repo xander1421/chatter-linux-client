@@ -1,3 +1,4 @@
+import { GlassSurface } from "../components/glass_surface.slint";
 // Jarvis memory browser — what the local AI knows and how it connects.
 //
 // Left: typed facts (current + superseded history with temporal info).
@@ -42,7 +43,11 @@ export struct MemoryGraphEdgeData {
     x1: float, y1: float, x2: float, y2: float,
 }
 
-export component JarvisMemoryModal inherits Rectangle {
+export component JarvisMemoryModal inherits GlassSurface {
+    material-level: 3;
+    elevation: 3;
+    border-radius: Spacing.radius-sheet;
+
     in property <[MemoryFactData]> facts: [];
     in property <[MemoryEntityData]> entities: [];
     in property <[MemoryGraphNodeData]> graph-nodes: [];
@@ -56,10 +61,6 @@ export component JarvisMemoryModal inherits Rectangle {
     // Instantiation site clamps to the window; these are just defaults.
     width: 860px;
     height: 560px;
-    background: Colors.surface;
-    border-radius: Spacing.radius-lg;
-    drop-shadow-blur: 24px;
-    drop-shadow-color: Colors.background.with-alpha(0.6);
 
     VerticalLayout {
         padding: Spacing.lg;

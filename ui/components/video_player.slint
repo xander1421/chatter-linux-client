@@ -1,3 +1,4 @@
+import { GlassSurface } from "glass_surface.slint";
 // Video player modal component
 //
 // Full-screen video player with controls for playback, seeking, and volume.
@@ -53,7 +54,10 @@ export component VideoPlayer inherits Rectangle {
             padding: Spacing.lg;
 
         // Header with filename and close button
-        Rectangle {
+        GlassSurface {
+            material-level: 3;
+            elevation: 1;
+
             height: 48px * Appearance.text-grow;
 
             // Block clicks on header from closing video
@@ -129,9 +133,11 @@ export component VideoPlayer inherits Rectangle {
         }
 
         // Controls bar
-        Rectangle {
+        GlassSurface {
+            material-level: 3;
+            elevation: 1;
+
             height: 80px;
-            background: transparent;
 
             // Block clicks on controls from closing video
             TouchArea {}

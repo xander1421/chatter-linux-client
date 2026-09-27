@@ -1,3 +1,4 @@
+import { Materials } from "../theme/materials.slint";
 // Loading page component with animated spinner and customizable messages
 
 import { Colors } from "../theme/colors.slint";
@@ -8,7 +9,7 @@ export component LoadingPage inherits Rectangle {
     in property <string> message: "Loading...";
     in property <string> secondary-message: "";
 
-    background: Colors.background;
+    background: Materials.ambient;
 
     // Centered content
     VerticalLayout {

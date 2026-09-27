@@ -248,3 +248,8 @@ lto = "thin"
 # chatter-ui builds). See vendor/i-slint-backend-android-activity/.
 [patch.crates-io]
 i-slint-backend-android-activity = { path = "vendor/i-slint-backend-android-activity" }
+
+# Slint 1.17.1 Backdrop builtin and Skia backdrop image filters.
+i-slint-compiler = { path = "vendor/i-slint-compiler" }
+i-slint-core = { path = "vendor/i-slint-core" }
+i-slint-renderer-skia = { path = "vendor/i-slint-renderer-skia" }

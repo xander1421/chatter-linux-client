@@ -1,3 +1,5 @@
+import { Materials } from "../theme/materials.slint";
+import { GlassSurface } from "../components/glass_surface.slint";
 // Incoming call notification modal
 
 import { Colors } from "../theme/colors.slint";
@@ -20,7 +22,7 @@ export component IncomingCallModal inherits Rectangle {
     // Full screen overlay
     width: 100%;
     height: 100%;
-    background: Colors.overlay;
+    background: Materials.scrim;
     opacity: show ? 1.0 : 0.0;
     visible: show;
 
@@ -36,18 +38,19 @@ export component IncomingCallModal inherits Rectangle {
         enabled: root.show;
     }
 
-    if show: Rectangle {
+    if show: GlassSurface {
+        enter-distance: 6px;
+        shown: root.show;
+
+        material-level: 3;
+        elevation: 2;
+
         // Center card — Neo strong surface
         x: (parent.width - self.width) / 2;
-        y: (parent.height - self.height) / 2;
+        y: ((parent.height - self.height) / 2) + self.entrance-offset;
         width: min(320px, parent.width - 32px);
         height: min(380px, parent.height - 48px);
-        background: Colors.surface;
-        border-radius: Spacing.radius-lg;
-        drop-shadow-blur: Spacing.neo-blur-lg;
-        drop-shadow-offset-x: Spacing.neo-offset-lg;
-        drop-shadow-offset-y: Spacing.neo-offset-lg;
-        drop-shadow-color: Colors.neo-shadow-strong;
+        border-radius: Spacing.radius-xl;
 
         VerticalLayout {
             alignment: center;

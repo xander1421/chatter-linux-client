@@ -1,4 +1,5 @@
-// Sidebar — Neo 2.0
+import { GlassSurface } from "../components/glass_surface.slint";
+// Sidebar — plain conversation content with shared chrome materials.
 //
 // Layout (top to bottom):
 //   1. Search bar — inset surface
@@ -211,9 +212,6 @@ export component Sidebar inherits Rectangle {
     // across the top of the title row, right under the traffic lights. The
     // edge is drawn explicitly below instead, on the one side that means
     // something. The shadow has nothing to cast onto on a phone either.
-    drop-shadow-blur: root.mobile-mode ? 0px : Spacing.neo-blur-md;
-    drop-shadow-offset-x: root.mobile-mode ? 0px : Spacing.neo-offset-md;
-    drop-shadow-color: Colors.neo-shadow;
 
     // No animation on a phone: the list is full width there, and animating
     // from the pre-resize width drew a half-width first frame at launch.
@@ -227,10 +225,12 @@ export component Sidebar inherits Rectangle {
         // reasons: it is the row Telegram (and every native list app) keeps
         // pinned, and on macOS the traffic lights are painted over this corner,
         // so a row that scrolls would slide conversations under them.
-        if !root.collapsed: Rectangle {
+        if !root.collapsed: GlassSurface {
+            material-level: 2;
+            elevation: 1;
+
             horizontal-stretch: 1;
             height: root.top-row-height;
-            background: search-touch.has-hover ? Colors.surface-hover : transparent;
             accessible-role: button;
             accessible-label: "Search";
             HorizontalLayout {
@@ -629,12 +629,15 @@ export component Sidebar inherits Rectangle {
             }
         }
 
-        // 7. BOTTOM UTILITY BAR — Neo 2.0 glass surface.
+        // 7. BOTTOM UTILITY BAR — shared chrome material.
         // Desktop only. On mobile its last occupant (the shield) moved up onto
         // the search row, and what remained was a translucent grey strip across
         // the foot of the list holding nothing — visible as a lighter rectangle
         // above the floating dock.
-        if !root.mobile-mode: Rectangle {
+        if !root.mobile-mode: GlassSurface {
+            material-level: 2;
+            elevation: 1;
+
             // Derived, not a magic number: this was hardcoded at 140px, which
             // fit the three 32px buttons the rail used to have and silently
             // clipped everything past them off the bottom of the screen once
@@ -644,20 +647,11 @@ export component Sidebar inherits Rectangle {
                 ? root.rail-button-count * root.rail-icon-size
                     + (root.rail-button-count - 1) * 8px + 16px
                 : 44px;
-            background: Colors.surface.with-alpha(0.85);
-            drop-shadow-blur: Spacing.neo-blur-sm;
-            drop-shadow-offset-y: -2px;
-            drop-shadow-color: Colors.neo-shadow;
 
             // Top edge only — the one side that separates this strip from the
             // list. The four-sided border it replaces doubled up against the
             // panel's own left/right edges and closed a box around the footer.
-            Rectangle {
-                y: 0;
-                width: 100%;
-                height: 1px;
-                background: Colors.neo-highlight;
-            }
+
 
             // Expanded view: Profile + Jarvis + Settings on same row
             // No `alignment` — under any alignment other than stretch, Slint
@@ -836,12 +830,7 @@ export component Sidebar inherits Rectangle {
 
     // Right edge — the seam against the chat column. Desktop only: on a phone
     // this panel is the whole screen and has no column beside it.
-    if !root.mobile-mode: Rectangle {
-        x: parent.width - 1px;
-        width: 1px;
-        height: 100%;
-        background: AnonMode.enabled ? Colors.primary.with-alpha(0.4) : Colors.neo-highlight;
-    }
+
 
     // Section context menu overlay (renders on top of all sidebar content)
     SectionContextMenu {

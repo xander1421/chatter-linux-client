@@ -1,3 +1,5 @@
+import { Materials } from "../theme/materials.slint";
+import { GlassSurface } from "../components/glass_surface.slint";
 // Reaction picker popup component
 //
 // Wraps EmojiPicker with quick reaction bar and message context.
@@ -41,7 +43,7 @@ export component ReactionPicker inherits Rectangle {
     // Full screen backdrop, dimmed like the message menu it replaces.
     width: 100%;
     height: 100%;
-    background: Colors.overlay;
+    background: Materials.scrim;
 
     // Backdrop touch area (click outside to close)
     backdrop := TouchArea {
@@ -53,17 +55,18 @@ export component ReactionPicker inherits Rectangle {
     }
 
     // Picker container — Neo convex popup with strong shadow
-    Rectangle {
+    GlassSurface {
+        enter-distance: 6px;
+        shown: root.show;
+
+        material-level: 3;
+        elevation: 2;
+
         x: root.position-x;
-        y: root.position-y;
+        y: (root.position-y) + self.entrance-offset;
         width: min(280px, parent.width - 32px);
         height: min(352px, parent.height - 48px);
-        background: Colors.surface;
         border-radius: Spacing.radius-xl;
-        drop-shadow-blur: Spacing.neo-blur-lg;
-        drop-shadow-offset-x: Spacing.neo-offset-lg;
-        drop-shadow-offset-y: Spacing.neo-offset-lg;
-        drop-shadow-color: Colors.neo-shadow-strong;
 
         // Block backdrop clicks when clicking picker
         TouchArea {

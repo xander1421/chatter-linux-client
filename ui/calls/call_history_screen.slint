@@ -1,3 +1,5 @@
+import { Materials } from "../theme/materials.slint";
+import { GlassSurface } from "../components/glass_surface.slint";
 // CallHistoryScreen — the mobile bottom nav's "Calls" tab.
 //
 // A list of past calls across every conversation type that can host one
@@ -343,21 +345,21 @@ export component CallHistoryScreen inherits Rectangle {
     // Header ⋮ menu. A scrim closes it; the card sits under the header's
     // trailing edge, where the ⋮ is.
     if root.show-modal && root.show-more-menu: Rectangle {
-        background: Colors.overlay;
+        background: Materials.scrim;
 
         TouchArea {
             clicked => { root.show-more-menu = false; }
         }
 
-        Rectangle {
+        GlassSurface {
+            material-level: 3;
+            elevation: 2;
+
             x: parent.width - self.width - Spacing.lg;
             y: Spacing.lg + (root.mobile-mode ? Spacing.header-action-box-touch : Spacing.header-action-box);
             width: menu-label.preferred-width + 2 * Spacing.lg;
             height: Spacing.touch-target-min;
-            border-radius: Spacing.radius-sm;
-            background: menu-touch.has-hover ? Colors.surface-hover : Colors.surface;
-            drop-shadow-blur: 12px;
-            drop-shadow-color: #00000040;
+            border-radius: Spacing.radius-xl;
 
             menu-label := Text {
                 text: "Clear call history";

@@ -11,12 +11,14 @@ import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.provider.OpenableColumns
+import android.text.Selection
 import android.util.Log
 import android.view.ActionMode
 import android.view.KeyEvent
 import android.view.View
 import android.view.ViewGroup
 import android.view.WindowManager
+import android.view.inputmethod.EditorInfo
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.camera.core.CameraSelector
 import androidx.camera.core.ImageAnalysis
@@ -279,6 +281,18 @@ class MainActivity : GameActivity() {
         /** The current Back press started while the keyboard was up. */
         private var backHidesIme = false
         private var backSelectionMode: ActionMode? = null
+
+        override fun onCreateInputConnection(outAttrs: EditorInfo): com.google.androidgamesdk.gametextinput.InputConnection? {
+            val connection = super.onCreateInputConnection(outAttrs) ?: return null
+            // GameTextInput 4.4 setState changes the Editable then restarts input,
+            // but does not refresh EditorInfo's initial selection. An IME can
+            // then restore stale offsets after toolbar Select all (RC27 D2).
+            // Read the actual UTF-16 spans whenever Android opens the connection.
+            val editable = connection.editable
+            outAttrs.initialSelStart = Selection.getSelectionStart(editable)
+            outAttrs.initialSelEnd = Selection.getSelectionEnd(editable)
+            return connection
+        }
 
         override fun onKeyPreIme(keyCode: Int, event: KeyEvent): Boolean {
             if (keyCode != KeyEvent.KEYCODE_BACK) return super.onKeyPreIme(keyCode, event)

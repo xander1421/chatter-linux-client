@@ -1,3 +1,4 @@
+import { GlassSurface } from "glass_surface.slint";
 // Image viewer modal component
 //
 // Full-screen lightbox for viewing images within the app.
@@ -35,33 +36,37 @@ export component ImageViewer inherits Rectangle {
         padding: Spacing.xl;
 
         // Header with filename and close button
-        HorizontalLayout {
+        GlassSurface {
+            material-enabled: true;
+            border-radius: 0px;
             height: 48px * Appearance.text-grow;
-            padding-left: Spacing.md;
-            padding-right: Spacing.md;
-            alignment: space-between;
+            HorizontalLayout {
+                padding-left: Spacing.md;
+                padding-right: Spacing.md;
+                alignment: space-between;
 
-            // File info
-            VerticalLayout {
-                alignment: center;
+                // File info
+                VerticalLayout {
+                    alignment: center;
 
-                Text {
-                    text: root.filename;
-                    color: Colors.text-primary;
-                    font-size: Typography.base;
-                    font-weight: Typography.medium;
+                    Text {
+                        text: root.filename;
+                        color: Colors.text-primary;
+                        font-size: Typography.base;
+                        font-weight: Typography.medium;
+                    }
+
+                    if root.size-display != "": Text {
+                        text: root.size-display;
+                        color: Colors.text-muted;
+                        font-size: Typography.xs;
+                    }
                 }
 
-                if root.size-display != "": Text {
-                    text: root.size-display;
-                    color: Colors.text-muted;
-                    font-size: Typography.xs;
+                // Close button
+                DismissButton {
+                    clicked => { root.close(); }
                 }
-            }
-
-            // Close button
-            DismissButton {
-                clicked => { root.close(); }
             }
         }
 

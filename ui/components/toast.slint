@@ -1,3 +1,4 @@
+import { GlassSurface } from "glass_surface.slint";
 // Toast notification component
 
 import { Colors } from "../theme/colors.slint";
@@ -5,7 +6,11 @@ import { Spacing } from "../theme/spacing.slint";
 import { Typography } from "../theme/typography.slint";
 import { Icons } from "../theme/icons.slint";
 
-export component Toast inherits Rectangle {
+export component Toast inherits GlassSurface {
+    material-level: 3;
+    elevation: 2;
+    border-radius: Spacing.radius-xl;
+
     in property <string> message: "";
     in property <string> variant: "info";  // "success", "error", "warning", "info"
     in property <bool> show-toast: false;
@@ -28,11 +33,9 @@ export component Toast inherits Rectangle {
     in property <length> max-toast-width: 320px;
     width: root.max-toast-width;
     height: content-layout.preferred-height + Spacing.md * 2;
-    background: Colors.surface;
-    border-radius: Spacing.radius-md;
 
     content-layout := HorizontalLayout {
-        // No left accent bar: a flat toast, Signal-style. The variant dot
+        // The variant dot carries status without another material or outline. It
         // already carries success/error/warning/info.
         padding: Spacing.md;
         spacing: Spacing.md;

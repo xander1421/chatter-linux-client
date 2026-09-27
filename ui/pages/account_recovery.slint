@@ -1,3 +1,4 @@
+import { Materials } from "../theme/materials.slint";
 // Account Recovery page for entering recovery code and new credentials
 
 import { Colors } from "../theme/colors.slint";
@@ -30,7 +31,7 @@ export component AccountRecoveryPage inherits Rectangle {
     callback recover(string, string, string, string);  // username, recovery_code, new_password, new_pin
     callback go-to-login();
 
-    background: Colors.background;
+    background: Materials.ambient;
 
     // Centered form container
     VerticalLayout {

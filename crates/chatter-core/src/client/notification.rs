@@ -114,10 +114,10 @@ impl ChatterClient {
     /// Account-wide push delivery preference. This does not change this
     /// device's notification content, sound, or operating-system permission.
     pub async fn account_push_enabled(&self) -> Result<bool, crate::error::NetworkError> {
-        let user_id = self.session_current_user_id()
-            .ok_or(crate::error::NetworkError::Unauthenticated)?.to_string();
+        self.session_current_user_id()
+            .ok_or(crate::error::NetworkError::Unauthenticated)?;
         let preferences = self.services.grpc_pool.notification_client()
-            .get_preferences(Some(&user_id)).await?
+            .get_preferences().await?
             .preferences.ok_or_else(|| crate::error::NetworkError::ServerError(
                 "notification preferences missing from response".into()))?;
         Ok(preferences.push_enabled)
@@ -129,14 +129,14 @@ impl ChatterClient {
         &self,
         enabled: bool,
     ) -> Result<bool, crate::error::NetworkError> {
-        let user_id = self.session_current_user_id()
-            .ok_or(crate::error::NetworkError::Unauthenticated)?.to_string();
+        self.session_current_user_id()
+            .ok_or(crate::error::NetworkError::Unauthenticated)?;
         let mut notification_client = self.services.grpc_pool.notification_client();
-        let mut preferences = notification_client.get_preferences(Some(&user_id)).await?
+        let mut preferences = notification_client.get_preferences().await?
             .preferences.ok_or_else(|| crate::error::NetworkError::ServerError(
                 "notification preferences missing from response".into()))?;
         preferences.push_enabled = enabled;
-        let saved = notification_client.update_preferences(Some(&user_id), preferences).await?
+        let saved = notification_client.update_preferences(preferences).await?
             .preferences.ok_or_else(|| crate::error::NetworkError::ServerError(
                 "notification preferences missing from response".into()))?;
         Ok(saved.push_enabled)

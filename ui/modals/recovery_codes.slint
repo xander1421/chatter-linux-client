@@ -1,3 +1,5 @@
+import { Materials } from "../theme/materials.slint";
+import { GlassSurface } from "../components/glass_surface.slint";
 // RecoveryCodesModal - Displays one-time recovery codes after registration
 
 import { Colors } from "../theme/colors.slint";
@@ -23,7 +25,7 @@ export component RecoveryCodesModal inherits Rectangle {
     visible: root.show-modal;
 
     // Backdrop
-    background: Colors.overlay;
+    background: Materials.scrim;
 
     // Block backdrop clicks (no dismiss allowed)
     TouchArea {
@@ -32,16 +34,15 @@ export component RecoveryCodesModal inherits Rectangle {
     }
 
     // Modal container — centered card with content-based sizing
-    Rectangle {
+    GlassSurface {
+        material-level: 3;
+        elevation: 3;
+
         width: min(480px, parent.width - 32px);
         height: max(200px, min(content-layout.preferred-height, min(760px, parent.height - 48px)));
         x: (parent.width - self.width) / 2;
         y: (parent.height - self.height) / 2;
-        background: Colors.surface;
-        border-radius: Spacing.radius-lg;
-        clip: true;
-        drop-shadow-blur: 16px;
-        drop-shadow-color: Colors.shadow;
+        border-radius: Spacing.radius-sheet;
 
         // Block clicks from passing through
         TouchArea {

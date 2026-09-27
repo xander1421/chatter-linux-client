@@ -1,0 +1,74 @@
+// One material per chrome group. Never instantiate in a message or list row.
+// Tint alpha is local to the fill: labels and hit targets stay opaque.
+import { Materials } from "../theme/materials.slint";
+import { Appearance } from "../theme/appearance.slint";
+import { Spacing } from "../theme/spacing.slint";
+
+export component GlassSurface inherits Rectangle {
+    in property <bool> material-enabled: true;
+    // 0 ultra-thin / 1 thin: controlled ambient backgrounds only; 2 regular / 3 thick.
+    in property <int> material-level: 2;
+    // 0 flat pill, 1 header contact, 2 floating chrome, 3 dialog.
+    in property <int> elevation: 1;
+    in property <color> material-tint: material-level == 0 ? Materials.ultra-thin
+        : material-level == 1 ? Materials.thin
+        : material-level == 3 ? Materials.thick : Materials.regular;
+    // Opt in only on transient chrome. No animation exists at idle.
+    in property <bool> shown: true;
+    in property <length> enter-distance: 0px;
+    in property <duration> enter-duration: Materials.menu-duration;
+    property <float> open-progress: 0;
+    out property <length> entrance-offset: root.enter-distance * (1 - root.open-progress);
+    init => { root.open-progress = root.shown ? 1 : 0; }
+    changed shown => { root.open-progress = root.shown ? 1 : 0; }
+    animate open-progress {
+        duration: Appearance.reduce-motion || root.enter-distance == 0px ? 0ms : root.enter-duration;
+        easing: Materials.settle;
+    }
+    border-radius: Spacing.radius-chrome;
+
+    if root.material-enabled && Appearance.glass-effects: Rectangle {
+        border-radius: root.border-radius;
+        background: transparent;
+        drop-shadow-blur: root.elevation == 3 ? 28px : root.elevation == 2 ? 18px : 0px;
+        drop-shadow-offset-y: root.elevation == 3 ? 10px : root.elevation == 2 ? 6px : 0px;
+        drop-shadow-color: root.elevation == 3 ? Materials.shadow-modal
+            : root.elevation == 2 ? Materials.shadow-float : transparent;
+    }
+    if root.material-enabled && Appearance.glass-effects: Rectangle {
+        border-radius: root.border-radius;
+        background: transparent;
+        drop-shadow-blur: root.elevation > 0 ? 6px : 0px;
+        drop-shadow-offset-y: root.elevation > 0 ? 2px : 0px;
+        drop-shadow-color: root.elevation > 0 ? Materials.shadow-contact : transparent;
+    }
+    // SLINT1 builtin integration is intentionally confined to this one element.
+    if root.material-enabled: Backdrop {
+        border-radius: root.border-radius;
+        blur: Appearance.glass-effects ? (root.material-level == 3
+            ? Materials.blur-thick : Materials.blur-regular) : 0px;
+        saturation: Appearance.glass-effects ? Materials.saturation : 1.0;
+        brightness: 0.0;
+        // Liquid Glass lenses its backdrop at the edges; keep it subtle so
+        // text under chrome stays legible.
+        refraction: Appearance.glass-effects ? Materials.refraction : 0.0;
+        Rectangle {
+            border-radius: root.border-radius;
+            background: root.material-tint;
+        }
+        if Appearance.glass-effects: Rectangle {
+            border-radius: root.border-radius;
+            background: Materials.specular;
+        }
+        if Appearance.glass-effects: Rectangle {
+            x: Materials.glass-edge-width / 2;
+            y: self.x;
+            width: max(0px, root.width - Materials.glass-edge-width);
+            height: max(0px, root.height - Materials.glass-edge-width);
+            border-radius: max(0px, root.border-radius - Materials.glass-edge-width / 2);
+            border-width: Materials.glass-edge-width;
+            border-color: Materials.glass-edge;
+        }
+    }
+    @children
+}

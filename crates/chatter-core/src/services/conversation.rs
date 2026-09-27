@@ -635,6 +635,22 @@ impl ConversationHandle {
         }
     }
 
+    /// A persisted incoming message is read only while its conversation is on
+    /// screen. Reuse the open-chat read path for local state, linked-device
+    /// sync, and peer receipts (including the receipt privacy setting).
+    pub(crate) async fn mark_received_as_read(
+        client: &Arc<ChatterClient>,
+        message: &crate::domain::message::Message,
+    ) -> Result<(), ConversationError> {
+        let active = client.chat_state().active_conversation();
+        if client.chat_state().is_app_visible()
+            && active.is_for_channel(message.conversation_id)
+        {
+            client.conversation(active).mark_as_read().await?;
+        }
+        Ok(())
+    }
+
     /// Mark all messages in this conversation as read.
     ///
     /// Two halves, and the sidebar only ever sees the first one: the unread
@@ -1099,6 +1115,35 @@ mod tests {
             .message_repo
             .get_unread_count(id, conv_type)
             .expect("unread count")
+    }
+
+    #[tokio::test]
+    async fn live_receive_marks_only_the_foreground_conversation_read() {
+        let (client, _dir) = test_client();
+        let peer = UserId::new();
+        let id: ChannelId = peer.into();
+        let message = crate::domain::message::Message::new_text(
+            id, ConversationType::ServerDm, Some(peer), "live".into(), 1,
+        );
+        client.messages().message_repo.insert(&message).unwrap();
+        client.chat_state().set_active_conversation(ActiveConversation::Channel(ChannelId::new()));
+        ConversationHandle::mark_received_as_read(&client, &message).await.unwrap();
+        assert_eq!(unread(&client, &id, &ConversationType::ServerDm), 1);
+
+        client.chat_state().set_active_conversation(ActiveConversation::ServerDm { peer_id: peer });
+        client.chat_state().set_app_visible(false);
+        ConversationHandle::mark_received_as_read(&client, &message).await.unwrap();
+        assert_eq!(unread(&client, &id, &ConversationType::ServerDm), 1);
+
+        client.chat_state().set_app_visible(true);
+        ConversationHandle::mark_received_as_read(&client, &message).await.unwrap();
+        assert_eq!(unread(&client, &id, &ConversationType::ServerDm), 0);
+
+        // A subsequent arrival is read without reopening the conversation,
+        // even when sending peer read receipts is disabled.
+        store_peer_message(&client, id, ConversationType::ServerDm, peer, 2);
+        ConversationHandle::mark_received_as_read(&client, &message).await.unwrap();
+        assert_eq!(unread(&client, &id, &ConversationType::ServerDm), 0);
     }
 
     /// A friend DM's transport is Shield mode's call, made in one place.

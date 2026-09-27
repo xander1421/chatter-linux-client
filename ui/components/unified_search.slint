@@ -1,3 +1,5 @@
+import { Materials } from "../theme/materials.slint";
+import { GlassSurface } from "glass_surface.slint";
 // Unified search — full-window overlay palette.
 // Replaces QuickSwitcher (Ctrl+K) and SearchModal (Ctrl+F).
 //
@@ -252,20 +254,23 @@ export component UnifiedSearch inherits Rectangle {
     Rectangle {
         width: 100%;
         height: 100%;
-        background: Colors.overlay;
+        background: Materials.scrim;
         TouchArea { clicked => { root.close(); } }
     }
 
     // Palette panel — near top, centered.
-    Rectangle {
+    GlassSurface {
+        enter-distance: 6px;
+        shown: root.show;
+
+        material-level: 3;
+        elevation: 2;
+
         x: (parent.width - self.width) / 2;
-        y: min(72px, parent.height * 0.1);
+        y: (min(72px, parent.height * 0.1)) + self.entrance-offset;
         width: min(640px, parent.width - 32px);
         height: min(content.preferred-height, parent.height - 160px);
-        background: Colors.surface;
-        border-radius: Spacing.radius-lg;
-        drop-shadow-blur: Spacing.neo-blur-lg;
-        drop-shadow-color: Colors.neo-shadow-strong;
+        border-radius: Spacing.radius-xl;
 
         // Swallow clicks so they don't reach the backdrop.
         TouchArea {}

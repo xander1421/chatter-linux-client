@@ -1,3 +1,4 @@
+import { Materials } from "../theme/materials.slint";
 // HeaderButton — the ONE control that sits in a header or title row.
 //
 // Back, close, ⋮, search, call, video, +, Shield, settings: every icon control
@@ -48,8 +49,10 @@ export component HeaderButton inherits Rectangle {
         height: self.width;
         y: (parent.height - self.height) / 2;
         border-radius: Spacing.radius-md;
-        background: touch-area.has-hover || touch-area.pressed ? Colors.surface-hover
+        background: touch-area.pressed ? Materials.pressed : touch-area.has-hover ? Materials.hover
             : (root.active ? Colors.primary.with-alpha(0.15) : transparent);
+
+        animate background { duration: Materials.feedback-duration; easing: ease-out; }
 
         Image {
             source: root.icon;
@@ -58,7 +61,7 @@ export component HeaderButton inherits Rectangle {
             x: (parent.width - self.width) / 2;
             y: (parent.height - self.height) / 2;
             colorize: root.destructive ? Colors.error
-                : root.active ? Colors.primary
+                : root.active ? Colors.glass-accent
                 : touch-area.pressed ? Colors.text-muted
                 : (touch-area.has-hover ? Colors.text-primary : Colors.text-secondary);
         }

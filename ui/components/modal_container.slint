@@ -1,7 +1,8 @@
-// ModalContainer - Neo 2.0 strong surface backdrop and centered card for all modals
+import { Materials } from "../theme/materials.slint";
+import { GlassSurface } from "glass_surface.slint";
+// ModalContainer — shared floating glass shell and plain full-screen pages.
 // Ensures modals are centered and have reasonable sizing (not full-screen)
 
-import { Colors } from "../theme/colors.slint";
 import { Spacing } from "../theme/spacing.slint";
 
 // Height of the on-screen keyboard. Only the Window can read
@@ -42,36 +43,7 @@ export component ModalContainer inherits Rectangle {
     // Backdrop - full parent coverage. Full-screen has no "outside" to dim:
     // the card covers everything except the strip deliberately left for the tab
     // bar, and dimming THAT is just greying out the navigation.
-    background: root.full-screen ? transparent : Colors.overlay;
-
-    // Backdrop touch area for click-outside dismissal. Stops short of the
-    // reserved strip when full-screen — otherwise it swallows every tap meant
-    // for the tab bar showing through it, so the bar looks live and does
-    // nothing but close the screen.
-    TouchArea {
-        width: 100%;
-        height: root.full-screen ? parent.height - root.bottom-inset : parent.height;
-        clicked => {
-            root.close();
-        }
-    }
-
-    // Keyboard handler — Escape to close, Tab trapped within modal
-    modal-keys := FocusScope {
-        enabled: root.show;
-        // Same carve-out as the backdrop TouchArea above: a FocusScope takes
-        // pointer events to claim focus, so left at full size it swallows taps
-        // over the reserved tab-bar strip even though nothing is drawn there.
-        width: parent.width;
-        height: root.full-screen ? parent.height - root.bottom-inset : parent.height;
-        key-pressed(event) => {
-            if (event.text == Key.Escape) {
-                root.close();
-                return accept;
-            }
-            return reject;
-        }
-    }
+    background: root.full-screen ? transparent : Materials.scrim;
 
     // Where the Android window does not shrink for the keyboard (edge-to-edge,
     // Android 15+ with targetSdk 35) it covers the card's lower edge — Save/Cancel in Edit Profile were unreachable
@@ -84,19 +56,36 @@ export component ModalContainer inherits Rectangle {
     // is resized or re-laid-out under the focused field — shrinking the card
     // by the keyboard height instead broke text entry in every modal.
     //
-    // Interactive only while the keyboard is up: an interactive Flickable
-    // delays every press and takes taps outside the card from the backdrop,
-    // neither of which is wanted when there is nothing to scroll. Full-screen
-    // pages keep their own scrolling and the automatic reveal.
-    Flickable {
+    // Interactive only while the keyboard is up: avoid delaying presses
+    // when there is nothing to scroll. Full-screen pages keep their own
+    // scrolling and the automatic reveal.
+    modal-scroll := Flickable {
         width: root.width;
         height: root.height;
         viewport-width: self.width;
         viewport-height: self.height;
         interactive: !root.full-screen && VirtualKeyboard.height > 0;
 
+        // Keep dismissal in the same scrolling surface as the card. An
+        // outer backdrop can be intercepted by this Flickable when IME is up.
+        TouchArea {
+            // The card may scroll upward to reveal a focused field, but the
+            // scrim must still cover the bottom of the visible viewport.
+            y: -modal-scroll.viewport-y;
+            width: parent.width;
+            height: root.full-screen ? parent.height - root.bottom-inset : parent.height;
+            clicked => { root.close(); }
+        }
+
         // Modal card - centered and sized to content
-        Rectangle {
+        GlassSurface {
+            material-enabled: !root.full-screen;
+            material-level: 3;
+            elevation: 3;
+            shown: root.show;
+            enter-distance: root.full-screen ? 0px : 16px;
+            enter-duration: Materials.sheet-duration;
+
             accessible-role: groupbox;
             accessible-label: "Modal dialog";
             
@@ -113,19 +102,25 @@ export component ModalContainer inherits Rectangle {
 
             // Centering — round to nearest pixel to avoid sub-pixel text rendering
             x: root.full-screen ? 0 : Math.round((root.width - self.width) / 2 / 1px) * 1px;
-            y: root.full-screen ? 0 : Math.round((root.height - self.height) / 2 / 1px) * 1px;
+            y: (root.full-screen ? 0px : Math.round((root.height - self.height) / 2 / 1px) * 1px) + self.entrance-offset;
 
-            // Full-screen is a PAGE, so it takes the page's colour. `Colors.surface`
-            // is the raised-card tone (#0A0A0B against a #000 background) — as a
-            // card it reads as elevation, but edge-to-edge it reads as a grey slab
-            // with a visible seam where it meets the black behind the floating dock.
-            background: root.full-screen ? Colors.background : Colors.surface;
-            border-radius: root.full-screen ? 0 : Spacing.radius-lg;
-            clip: true;
-            drop-shadow-blur: root.full-screen ? 0px : Spacing.neo-blur-lg;
-            drop-shadow-offset-x: root.full-screen ? 0px : Spacing.neo-offset-lg;
-            drop-shadow-offset-y: root.full-screen ? 0px : Spacing.neo-offset-lg;
-            drop-shadow-color: Colors.neo-shadow-strong;
+            // Full-screen content stays plain; its header owns the glass.
+            background: root.full-screen ? Materials.ambient : transparent;
+            border-radius: root.full-screen ? 0px : Spacing.radius-sheet;
+
+            // Keyboard handler — Escape to close, Tab trapped within modal
+            modal-keys := FocusScope {
+                enabled: root.show;
+                width: parent.width;
+                height: parent.height;
+                key-pressed(event) => {
+                    if (event.text == Key.Escape) {
+                        root.close();
+                        return accept;
+                    }
+                    return reject;
+                }
+            }
 
             // Block clicks on modal from closing
             TouchArea {

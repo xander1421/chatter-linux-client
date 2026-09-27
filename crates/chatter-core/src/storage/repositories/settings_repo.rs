@@ -18,6 +18,8 @@ pub mod keys {
     pub const TEXT_SIZE: &str = "app.text_size";
     /// Settings › Appearance › Message spacing — `services::appearance::MessageDensity`.
     pub const MESSAGE_DENSITY: &str = "app.message_density";
+    /// Device-local chrome effects preference, enabled by default.
+    pub const GLASS_EFFECTS: &str = "app.glass_effects";
     pub const NOTIFICATION_SOUND: &str = "app.notification_sound";
     pub const NOTIFICATION_ENABLED: &str = "app.notification_enabled";
     /// Opaque ntfy push topic issued by the server in AuthResponse. The client

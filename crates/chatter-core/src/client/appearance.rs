@@ -1,4 +1,4 @@
-//! Appearance façade: the persisted theme, text size and message density.
+//! Appearance façade: persisted theme, text size, message density and glass effects.
 
 use crate::services::appearance::{MessageDensity, TextSize, ThemeMode};
 use crate::storage::repositories::settings_repo::{keys, SettingsRepository};
@@ -6,6 +6,21 @@ use crate::storage::repositories::settings_repo::{keys, SettingsRepository};
 use super::ChatterClient;
 
 impl ChatterClient {
+    /// Whether chrome uses glass optics. Enabled by default on each device.
+    pub fn glass_effects_enabled(&self) -> bool {
+        SettingsRepository::new(self.services.database.clone())
+            .get_bool(keys::GLASS_EFFECTS)
+            .ok()
+            .flatten()
+            .unwrap_or(true)
+    }
+
+    /// Persist the device-local glass effects preference.
+    pub fn set_glass_effects_enabled(&self, enabled: bool) -> Result<(), crate::error::StorageError> {
+        SettingsRepository::new(self.services.database.clone())
+            .set_bool(keys::GLASS_EFFECTS, enabled)
+    }
+
     /// The user's theme choice (defaults to [`ThemeMode::System`]).
     pub fn theme_mode(&self) -> ThemeMode {
         let raw = SettingsRepository::new(self.services.database.clone())

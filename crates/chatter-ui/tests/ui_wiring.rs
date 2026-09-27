@@ -193,6 +193,34 @@ fn settings_theme_pick_persists_and_flips_palette() {
 }
 
 #[test]
+fn settings_glass_effects_persists_and_restores_before_first_frame() {
+    use slint::ComponentHandle;
+    let (rt, tmp, client, w) = wired_offline();
+    let appearance = w.global::<chatter_ui::Appearance>();
+    assert!(client.glass_effects_enabled());
+    assert!(appearance.get_glass_effects());
+
+    appearance.invoke_glass_effects_changed(false);
+    assert!(!client.glass_effects_enabled());
+    assert!(!appearance.get_glass_effects());
+    drop(w);
+    drop(client);
+
+    let _guard = rt.enter();
+    let client = chatter_core::client::ChatterClient::builder()
+        .data_dir(tmp.path().to_string_lossy().to_string())
+        .build()
+        .expect("offline client restart");
+    let w = MainWindow::new().expect("restarted window");
+    chatter_ui::bin_ui::features::modals::settings::wire_settings_callbacks(&w, &client);
+    let appearance = w.global::<chatter_ui::Appearance>();
+    assert!(!appearance.get_glass_effects(), "saved preference must apply before showing the window");
+    appearance.invoke_glass_effects_changed(true);
+    assert!(client.glass_effects_enabled());
+    assert!(appearance.get_glass_effects());
+}
+
+#[test]
 fn settings_read_receipts_toggle_reaches_core() {
     require_element_queries();
     let (_rt, _tmp, client, w) = wired_offline();
@@ -2235,7 +2263,7 @@ fn tab_bar_and_call_bar_sit_under_pushed_modals() {
         r#"if root.active-tab == "contacts": FriendsModal {"#,
         r#"if root.active-tab == "profile": AccountMenu {"#,
         r#"if root.settings-open: SettingsScreen {"#,
-        "if root.fab-visible: Rectangle {",
+        "if root.fab-visible: GlassSurface {",
         r#"if current-view == "main": VerticalLayout {"#,
     ] {
         let at = app.find(header).unwrap_or_else(|| panic!("app.slint lost `{header}`"));
@@ -4404,4 +4432,32 @@ fn phone_call_end_without_chat_returns_to_list() {
     w.set_active_call_visible(false);
     tick();
     assert!(w.get_mobile_show_chat(), "call end closed the chat it was placed from");
+}
+
+/// Glass optics stay centralized and outside the scroll delegates fixed by PERF1/PERF2.
+#[test]
+fn glass_material_is_chrome_only_with_one_optical_edge() {
+    let sources = all_slint_sources();
+    let mut backdrops = Vec::new();
+    for (name, src) in &sources {
+        let code = src.lines().map(|line| line.split("//").next().unwrap_or("")).collect::<Vec<_>>().join("\n");
+        if code.contains("Backdrop {") {
+            backdrops.push(name.as_str());
+        }
+        if code.contains("Materials.glass-edge") {
+            assert_eq!(name, "components/glass_surface.slint", "optical edges belong only to GlassSurface");
+        }
+        if name.ends_with("_list_item.slint") || name == "chat/message_item.slint" {
+            assert!(!code.contains("GlassSurface"), "{name} puts glass in a scroll delegate");
+            assert!(!code.contains("Backdrop"), "{name} samples the backdrop while scrolling");
+            assert!(!code.contains("drop-shadow-"), "{name} restores a per-row shadow");
+        }
+    }
+    assert_eq!(backdrops, ["components/glass_surface.slint"]);
+    let glass = sources.iter().find(|(name, _)| name == "components/glass_surface.slint").unwrap().1.as_str();
+    assert!(glass.contains("Appearance.glass-effects"));
+    assert!(glass.contains("Appearance.reduce-motion"));
+    assert!(!glass.contains("iteration-count"), "glass must settle without an idle animation loop");
+    let modal = sources.iter().find(|(name, _)| name == "components/modal_container.slint").unwrap().1.as_str();
+    assert!(modal.contains("material-enabled: !root.full-screen;"), "full-screen content is not a glass sheet");
 }

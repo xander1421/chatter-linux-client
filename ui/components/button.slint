@@ -24,22 +24,22 @@ export component Button inherits Rectangle {
     // Computed background color based on variant and state
     property <color> bg-color: {
         if disabled {
-            variant == "primary" ? Colors.primary :
+            variant == "primary" ? Colors.action-fill :
             variant == "secondary" ? Colors.fill-secondary :
             variant == "danger" ? Colors.error :
             transparent
         } else if pressed {
-            variant == "primary" ? Colors.primary-active :
+            variant == "primary" ? Colors.action-active :
             variant == "secondary" ? Colors.fill-secondary-hover :
             variant == "danger" ? Colors.error-hover :
             Colors.surface-hover.with-alpha(0.2)
         } else if hover {
-            variant == "primary" ? Colors.primary-hover :
+            variant == "primary" ? Colors.action-hover :
             variant == "secondary" ? Colors.fill-secondary-hover :
             variant == "danger" ? Colors.error-hover :
             Colors.surface.with-alpha(0.1)
         } else {
-            variant == "primary" ? Colors.primary :
+            variant == "primary" ? Colors.action-fill :
             variant == "secondary" ? Colors.fill-secondary :
             variant == "danger" ? Colors.error :
             transparent
@@ -55,6 +55,8 @@ export component Button inherits Rectangle {
     // merely dimmed, so a dead Create looked like a live one.
     opacity: disabled ? 0.38 : 1.0;
 
+    property <color> foreground: root.variant == "primary" ? Colors.on-action : Colors.text-primary;
+
     // Content layout
     HorizontalLayout {
         alignment: center;
@@ -67,7 +69,7 @@ export component Button inherits Rectangle {
             width: 16px;
             height: 16px;
             source: root.icon;
-            colorize: Colors.text-primary;
+            colorize: root.foreground;
             vertical-alignment: center;
         }
 
@@ -83,21 +85,21 @@ export component Button inherits Rectangle {
                 width: 4px;
                 height: 4px;
                 border-radius: 2px;
-                background: Colors.text-primary;
+                background: root.foreground;
                 opacity: 0.4 + 0.6 * Math.cos(anim-progress * 360deg);
             }
             Rectangle {
                 width: 4px;
                 height: 4px;
                 border-radius: 2px;
-                background: Colors.text-primary;
+                background: root.foreground;
                 opacity: 0.4 + 0.6 * Math.cos((anim-progress - 0.33) * 360deg);
             }
             Rectangle {
                 width: 4px;
                 height: 4px;
                 border-radius: 2px;
-                background: Colors.text-primary;
+                background: root.foreground;
                 opacity: 0.4 + 0.6 * Math.cos((anim-progress - 0.66) * 360deg);
             }
 
@@ -115,7 +117,7 @@ export component Button inherits Rectangle {
         // Button text
         if !loading: Text {
             text: root.text;
-            color: Colors.text-primary;
+            color: root.foreground;
             font-size: Typography.sm;
             font-weight: Typography.medium;
             horizontal-alignment: center;

@@ -1,3 +1,5 @@
+import { GlassSurface } from "components/glass_surface.slint";
+import { Materials } from "theme/materials.slint";
 import { MessageInfo, MessageInfoModal } from "modals/message_info.slint";
 import { ServerRecordsScreen, ServerRecordsGlobal } from "server_records/screen.slint";
 // Chatter Application Component
@@ -1133,7 +1135,7 @@ export component App inherits Rectangle {
     callback toggle-anon-mode();              // sidebar button → Rust handler
     callback submit-anon-mode-pin(string);    // PIN modal submit → Rust verify
 
-    background: Colors.background;
+    background: Materials.ambient;
 
     // ========== Responsive sidebar auto-collapse ==========
     // Auto-collapse sidebar on smaller screens (< 800px width)
@@ -2579,13 +2581,15 @@ export component App inherits Rectangle {
             clicked => { root.nav-close("keyboard-shortcuts"); }
         }
 
-        Rectangle {
+        GlassSurface {
+            material-level: 3;
+            elevation: 3;
+
             width: min(420px, parent.width - 32px);
             x: (parent.width - self.width) / 2;
             y: (parent.height - self.height) / 2;
             height: min(shortcuts-layout.preferred-height, parent.height - 48px);
-            background: Colors.surface;
-            border-radius: Spacing.radius-lg;
+            border-radius: Spacing.radius-sheet;
             accessible-role: groupbox;
             accessible-description: "Keyboard shortcuts";
 
@@ -3371,17 +3375,16 @@ export component App inherits Rectangle {
     // from the dock's edge and clear above it. Above the list (-2) and the
     // dock (-1), under every modal and overlay (0) — the incoming-call screen
     // and toasts are not covered by fab-visible, so they must stay on top.
-    if root.fab-visible: Rectangle {
+    if root.fab-visible: GlassSurface {
+        elevation: 2;
+
         z: -0.5;
         width: Spacing.fab-size;
         height: Spacing.fab-size;
         x: parent.width - self.width - Spacing.xl;
         y: root.fab-y;
         border-radius: self.width / 2;
-        background: fab-touch.pressed ? Colors.primary-hover : Colors.primary;
-        drop-shadow-blur: Spacing.neo-blur-lg;
-        drop-shadow-offset-y: Spacing.neo-offset-md;
-        drop-shadow-color: Colors.neo-shadow-strong;
+        material-tint: (fab-touch.pressed ? Colors.action-hover : Colors.action-fill).with-alpha(0.97);
         accessible-role: button;
         accessible-label: "Create";
         accessible-action-default => { root.nav-push("create-menu"); }
@@ -3392,7 +3395,7 @@ export component App inherits Rectangle {
             x: (parent.width - self.width) / 2;
             y: (parent.height - self.height) / 2;
             // Same glyph colour as the composer's send button on primary.
-            colorize: Colors.text-primary;
+            colorize: Colors.on-action;
         }
         fab-touch := TouchArea { mouse-cursor: pointer; clicked => { root.nav-push("create-menu"); } }
     }
