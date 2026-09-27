@@ -401,7 +401,7 @@ export component MessageComposer inherits GlassSurface {
         if root.show-formatting: Rectangle {
             width: 100%;
             height: root.format-bar-height;
-            background: Colors.background;
+            background: transparent;
 
             HorizontalLayout {
                 padding-left: Spacing.md;
@@ -568,7 +568,7 @@ export component MessageComposer inherits GlassSurface {
         if root.send-status != "": Rectangle {
             width: 100%;
             height: 28px;
-            background: Colors.background;
+            background: transparent;
             HorizontalLayout {
                 padding-left: Spacing.md;
                 padding-right: Spacing.md;
@@ -587,7 +587,7 @@ export component MessageComposer inherits GlassSurface {
         if root.has-attachments: Rectangle {
             width: 100%;
             height: root.attachment-tray-height;
-            background: Colors.background;
+            background: transparent;
 
             Flickable {
                 width: 100%;

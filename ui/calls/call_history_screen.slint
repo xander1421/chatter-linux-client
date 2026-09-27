@@ -77,41 +77,45 @@ export component CallHistoryScreen inherits Rectangle {
 
             // Filter tabs — mirrors core's `CallHistoryFilter`. Same box
             // height as the header row's dismissal control above it.
-            HorizontalLayout {
+            GlassSurface {
+                material-enabled: root.mobile-mode;
+                elevation: 0;
                 z: 1;
                 height: root.mobile-mode ? Spacing.header-action-box-touch : Spacing.header-action-box;
 
-                for tab in [
-                    { id: "all", label: "All" },
-                    { id: "missed", label: "Missed" }
-                ]: Rectangle {
-                    horizontal-stretch: 1;
-                    background: root.active-filter == tab.id ? Colors.neo-inset-bg : (tab-touch.has-hover ? Colors.surface-hover.with-alpha(0.3) : transparent);
+                HorizontalLayout {
+                    for tab in [
+                        { id: "all", label: "All" },
+                        { id: "missed", label: "Missed" }
+                    ]: Rectangle {
+                        horizontal-stretch: 1;
+                        background: root.active-filter == tab.id ? Colors.text-primary.with-alpha(0.12) : (tab-touch.has-hover ? Colors.surface-hover.with-alpha(0.3) : transparent);
 
-                    VerticalLayout {
-                        HorizontalLayout {
-                            alignment: center;
-                            vertical-stretch: 1;
+                        VerticalLayout {
+                            HorizontalLayout {
+                                alignment: center;
+                                vertical-stretch: 1;
 
-                            Text {
-                                text: tab.label;
-                                color: root.active-filter == tab.id ? Colors.text-primary : Colors.text-secondary;
-                                font-size: Typography.sm;
-                                font-weight: root.active-filter == tab.id ? Typography.semibold : Typography.normal;
-                                vertical-alignment: center;
+                                Text {
+                                    text: tab.label;
+                                    color: root.active-filter == tab.id ? Colors.text-primary : Colors.text-secondary;
+                                    font-size: Typography.sm;
+                                    font-weight: root.active-filter == tab.id ? Typography.semibold : Typography.normal;
+                                    vertical-alignment: center;
+                                }
+                            }
+
+                            Rectangle {
+                                height: 2px;
+                                background: root.active-filter == tab.id ? Colors.primary : transparent;
                             }
                         }
 
-                        Rectangle {
-                            height: 2px;
-                            background: root.active-filter == tab.id ? Colors.primary : transparent;
-                        }
-                    }
-
-                    tab-touch := TouchArea {
-                        mouse-cursor: pointer;
-                        clicked => {
-                            root.filter-changed(tab.id);
+                        tab-touch := TouchArea {
+                            mouse-cursor: pointer;
+                            clicked => {
+                                root.filter-changed(tab.id);
+                            }
                         }
                     }
                 }

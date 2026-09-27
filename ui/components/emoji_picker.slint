@@ -87,7 +87,7 @@ export component EmojiPicker inherits GlassSurface {
         Rectangle {
             height: 32px;
             border-radius: Spacing.radius-md;
-            background: Colors.background;
+            background: transparent;
             border-width: Spacing.stroke;
             border-color: search-focused ? Colors.primary : Colors.border;
 
@@ -164,7 +164,7 @@ export component EmojiPicker inherits GlassSurface {
         // Category tabs (only show when not searching)
         if root.search-query == "": Rectangle {
             height: 44px;
-            background: Colors.background;
+            background: transparent;
             border-radius: Spacing.radius-md;
 
             HorizontalLayout {
@@ -236,7 +236,7 @@ export component EmojiPicker inherits GlassSurface {
         // Skin tone selector (shown for People & Body category)
         if root.search-query == "" && root.selected-category == 1: Rectangle {
             height: 28px;
-            background: Colors.background;
+            background: transparent;
             border-radius: Spacing.radius-sm;
 
             HorizontalLayout {

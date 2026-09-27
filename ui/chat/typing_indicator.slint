@@ -1,3 +1,4 @@
+import { GlassSurface } from "../components/glass_surface.slint";
 // Typing indicator component
 //
 // Shows animated dots and smart user list formatting for typing status.
@@ -6,8 +7,8 @@ import { Colors } from "../theme/colors.slint";
 import { Spacing } from "../theme/spacing.slint";
 import { Typography } from "../theme/typography.slint";
 
-// Neo 2.0: dots rendered as small convex bumps with subtle shadows
-export component TypingIndicator inherits Rectangle {
+// A single capsule for the status, with plain animated dots.
+export component TypingIndicator inherits GlassSurface {
     // Properties - typing-text is pre-formatted by Rust
     in property <string> typing-text: "";
     in property <bool> visible: typing-text != "";
@@ -52,7 +53,9 @@ export component TypingIndicator inherits Rectangle {
     }
 
     // Layout
-    height: visible ? 20px : 0px;
+    height: visible ? 28px : 0px;
+    border-radius: 14px;
+    elevation: 0;
     opacity: visible ? 1.0 : 0.0;
 
     HorizontalLayout {
@@ -71,10 +74,6 @@ export component TypingIndicator inherits Rectangle {
                 height: 7px;
                 border-radius: 3.5px;
                 background: Colors.primary;
-                drop-shadow-blur: Spacing.neo-blur-sm;
-                drop-shadow-offset-x: 1px;
-                drop-shadow-offset-y: 1px;
-                drop-shadow-color: Colors.neo-shadow;
                 opacity: dot-opacity(0);
             }
 
@@ -84,10 +83,6 @@ export component TypingIndicator inherits Rectangle {
                 height: 7px;
                 border-radius: 3.5px;
                 background: Colors.primary;
-                drop-shadow-blur: Spacing.neo-blur-sm;
-                drop-shadow-offset-x: 1px;
-                drop-shadow-offset-y: 1px;
-                drop-shadow-color: Colors.neo-shadow;
                 opacity: dot-opacity(1);
             }
 
@@ -97,10 +92,6 @@ export component TypingIndicator inherits Rectangle {
                 height: 7px;
                 border-radius: 3.5px;
                 background: Colors.primary;
-                drop-shadow-blur: Spacing.neo-blur-sm;
-                drop-shadow-offset-x: 1px;
-                drop-shadow-offset-y: 1px;
-                drop-shadow-color: Colors.neo-shadow;
                 opacity: dot-opacity(2);
             }
         }

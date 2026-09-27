@@ -1,3 +1,4 @@
+import { GlassSurface } from "../components/glass_surface.slint";
 // Main chat layout component
 //
 // Integrates ChatHeader, MessageList, and MessageComposer into a complete chat view.
@@ -353,6 +354,7 @@ export component ChatLayout inherits Rectangle {
     }
 
     bottom-chrome := VerticalLayout {
+        x: 0;
         width: root.width;
         height: self.preferred-height;
         y: root.height - self.height;
@@ -360,10 +362,10 @@ export component ChatLayout inherits Rectangle {
         // explicit height drives the layout slot. A wrapping plain Rectangle
         // does not auto-size from children, which collapses the hit-test
         // region to 0 even though the composer renders via overflow.
-        if root.composer-notice != "": Rectangle {
+        if root.composer-notice != "": GlassSurface {
             vertical-stretch: 0;
             height: notice-text.preferred-height + 2 * Spacing.md;
-            background: root.mobile ? Colors.background : Colors.surface;
+            elevation: 0;
 
             Rectangle {
                 y: 0;

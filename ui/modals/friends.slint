@@ -1,3 +1,4 @@
+import { GlassSurface } from "../components/glass_surface.slint";
 // FriendsModal - Comprehensive friends management
 // Tabs: Add Friend, Friends, Requests, Blocked
 
@@ -171,49 +172,53 @@ export component FriendsModal inherits Rectangle {
             // Main tab bar — Neo. Same box height as the dismissal control in
             // the header row above it, so the two rows share one baseline
             // instead of the tabs sitting 4px short of the touch floor.
-            HorizontalLayout {
+            GlassSurface {
+                material-enabled: root.mobile-mode;
+                elevation: 0;
                 z: 1;
                 height: root.mobile-mode ? Spacing.header-action-box-touch : Spacing.header-action-box;
 
-                for tab in [
-                    { id: "find", label: "Add Friend" },
-                    { id: "friends", label: "Friends" },
-                    { id: "requests", label: "Requests" },
-                    { id: "blocked", label: "Blocked" }
-                ]: Rectangle {
-                    horizontal-stretch: 1;
-                    background: root.active-tab == tab.id ? Colors.neo-inset-bg : (tab-touch.has-hover ? Colors.surface-hover.with-alpha(0.3) : transparent);
+                HorizontalLayout {
+                    for tab in [
+                        { id: "find", label: "Add Friend" },
+                        { id: "friends", label: "Friends" },
+                        { id: "requests", label: "Requests" },
+                        { id: "blocked", label: "Blocked" }
+                    ]: Rectangle {
+                        horizontal-stretch: 1;
+                        background: root.active-tab == tab.id ? Colors.text-primary.with-alpha(0.12) : (tab-touch.has-hover ? Colors.surface-hover.with-alpha(0.3) : transparent);
 
-                    VerticalLayout {
-                        HorizontalLayout {
-                            alignment: center;
-                            vertical-stretch: 1;
+                        VerticalLayout {
+                            HorizontalLayout {
+                                alignment: center;
+                                vertical-stretch: 1;
 
-                            Text {
-                                text: tab.label + (tab.id == "requests" && (root.received-requests.length > 0) ?
-                                    " (" + root.received-requests.length + ")" : "");
-                                color: root.active-tab == tab.id ? Colors.text-primary : Colors.text-secondary;
-                                font-size: Typography.sm;
-                                font-weight: root.active-tab == tab.id ? Typography.semibold : Typography.normal;
-                                vertical-alignment: center;
-                                overflow: elide;
+                                Text {
+                                    text: tab.label + (tab.id == "requests" && (root.received-requests.length > 0) ?
+                                        " (" + root.received-requests.length + ")" : "");
+                                    color: root.active-tab == tab.id ? Colors.text-primary : Colors.text-secondary;
+                                    font-size: Typography.sm;
+                                    font-weight: root.active-tab == tab.id ? Typography.semibold : Typography.normal;
+                                    vertical-alignment: center;
+                                    overflow: elide;
+                                }
+                            }
+
+                            Rectangle {
+                                height: 2px;
+                                background: root.active-tab == tab.id ? Colors.glow-cyan : transparent;
                             }
                         }
 
-                        Rectangle {
-                            height: 2px;
-                            background: root.active-tab == tab.id ? Colors.glow-cyan : transparent;
-                        }
-                    }
-
-                    // TouchArea on top to capture clicks (fills parent)
-                    tab-touch := TouchArea {
-                        width: 100%;
-                        height: 100%;
-                        mouse-cursor: pointer;
-                        clicked => {
-                            root.active-tab = tab.id;
-                            root.switch-tab(tab.id);
+                        // TouchArea on top to capture clicks (fills parent)
+                        tab-touch := TouchArea {
+                            width: 100%;
+                            height: 100%;
+                            mouse-cursor: pointer;
+                            clicked => {
+                                root.active-tab = tab.id;
+                                root.switch-tab(tab.id);
+                            }
                         }
                     }
                 }

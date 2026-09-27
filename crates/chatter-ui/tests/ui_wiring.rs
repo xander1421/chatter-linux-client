@@ -1509,8 +1509,10 @@ fn profile_shared_content_drawer_is_wired() {
     // Full-screen on mobile must reuse ModalContainer's existing support, not
     // a second mechanism.
     assert!(
-        modal_src.contains("full-screen: root.mobile-mode")
-            && modal_src.contains("bottom-inset: root.bottom-inset"),
+        modal_src.contains("ModalContainer {")
+            && modal_src.contains("full-screen: root.mobile-mode")
+            && modal_src.contains("bottom-inset: root.mobile-mode ? 0px : root.bottom-inset;")
+            && modal_src.contains("padding-bottom: root.mobile-mode ? root.bottom-inset + Spacing.md : 0px;"),
         "user_profile.slint must go full-screen through ModalContainer"
     );
 }
@@ -4489,6 +4491,68 @@ fn floating_chrome_keeps_content_insets_and_clear_materials() {
     }
     assert!(material.contains("#00000029 : #ffffff29"));
     assert!(material.contains("blur-regular: 14px") && material.contains("blur-thick: 18px"));
-    assert!(material.contains("glass-edge-width: 1.75px") && material.contains("refraction: 0.15"));
+    assert!(material.contains("glass-edge-width: 0.75px") && material.contains("refraction: 0.15"));
     assert!(nav.contains("background: root.active ? Colors.text-primary.with-alpha(0.12) : transparent;"));
+}
+
+
+/// DESIGN3: the row wrappers are just as important as the leaf delegates.
+#[test]
+fn repeated_chat_rows_never_sample_glass() {
+    for (name, src) in all_slint_sources() {
+        if name.ends_with("_list_item.slint")
+            || matches!(name.as_str(), "chat/message_item.slint" | "sidebar/chat_list.slint" | "sidebar/custom_section_list.slint")
+        {
+            let code = src.lines().map(|line| line.split("//").next().unwrap_or("")).collect::<Vec<_>>().join("\n");
+            for forbidden in ["GlassSurface", "Backdrop", "drop-shadow-"] {
+                assert!(!code.contains(forbidden), "{name} adds {forbidden} to a repeated row");
+            }
+        }
+    }
+}
+
+#[test]
+fn fine_glass_rim_preserves_shared_childless_material() {
+    let materials = include_str!("../../../ui/theme/materials.slint");
+    let glass = include_str!("../../../ui/components/glass_surface.slint");
+    assert!(materials.contains("glass-edge-width: 0.75px;"));
+    for alpha in ["#ffffff2e", "#ffffff08", "#ffffff99", "#ffffff1a"] {
+        assert!(materials.contains(alpha), "missing theme-aware rim endpoint {alpha}");
+    }
+    assert!(!materials.contains("inner-edge") && !glass.contains("inner-edge"));
+    assert_eq!(glass.matches("border-width:").count(), 1, "a second stroke makes the rim look thick");
+    let private = glass.split("export component GlassSurface").next().unwrap();
+    assert!(private.contains("component GlassMaterial inherits Rectangle"));
+    assert!(!private.lines().any(|line| line.trim() == "@children"), "MEM1: material must remain childless");
+    assert!(glass.contains("GlassMaterial {\n        x: 0;\n        y: 0;"));
+}
+
+#[test]
+fn secondary_chrome_exposes_its_shared_material() {
+    for src in [
+        include_str!("../../../ui/chat/pinned_bar.slint"),
+        include_str!("../../../ui/chat/typing_indicator.slint"),
+    ] {
+        assert!(src.contains("inherits GlassSurface"));
+        assert!(!src.contains("drop-shadow-"));
+    }
+    for src in [
+        include_str!("../../../ui/components/emoji_picker.slint"),
+        include_str!("../../../ui/components/gif_picker.slint"),
+        include_str!("../../../ui/chat/message_composer.slint"),
+    ] {
+        assert!(!src.contains("background: Colors.background;"), "opaque chrome masks its glass shell");
+    }
+    let reaction = include_str!("../../../ui/chat/reaction_picker.slint");
+    assert!(reaction.contains("material-enabled: false;"), "embedded emoji picker must not stack glass");
+    let list = include_str!("../../../ui/chat/message_list.slint");
+    assert_eq!(list.matches("GlassSurface {").count(), 3, "date, unread and jump capsules");
+    assert!(!list.contains("Colors.action-fill.with-alpha(0.97)"));
+    let profile = include_str!("../../../ui/modals/user_profile.slint");
+    assert!(profile.contains("height: parent.height - self.y;"));
+    assert!(profile.contains("padding-top: root.mobile-mode ? profile-header.height + Spacing.sm * 2 : 0px;"));
+    let account = include_str!("../../../ui/settings/account_menu.slint");
+    assert!(account.contains("floating-content: root.mobile-mode;"));
+    assert!(account.contains("y: root.mobile-mode ? -menu-body.chrome-inset : 0px;"));
+    assert!(!account.contains("absolute-position"), "content-sized menus must not derive their padding from their own layout position");
 }

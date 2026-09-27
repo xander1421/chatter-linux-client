@@ -78,7 +78,7 @@ export component ReactionPicker inherits Rectangle {
             // Quick reactions bar — Neo inset tray
             Rectangle {
                 height: Spacing.touch-target-min;
-                background: Colors.neo-inset-bg;
+                background: transparent;
                 border-radius: Spacing.radius-xl;
 
                 HorizontalLayout {
@@ -127,6 +127,8 @@ export component ReactionPicker inherits Rectangle {
 
             // EmojiPicker
             EmojiPicker {
+                // The outer reaction panel already supplies the material.
+                material-enabled: false;
                 show: true;
                 show-gif-tab: false;
                 emoji-list: root.emoji-list;

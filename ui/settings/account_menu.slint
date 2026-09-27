@@ -76,9 +76,10 @@ export component AccountMenu inherits Rectangle {
         Appearance.theme-changed(Appearance.theme);
     }
 
-    Modal {
+    account-modal := Modal {
+        floating-content: root.mobile-mode;
         show: root.show-modal;
-        title: "";
+        title: "Profile";
         modal-width: 360px;
         max-modal-height: 640px;
         full-screen: root.mobile-mode;
@@ -88,80 +89,91 @@ export component AccountMenu inherits Rectangle {
 
         close => { root.close(); }
 
-        Flickable {
-            viewport-height: menu.preferred-height;
+        menu-body := Rectangle {
+            preferred-height: menu.preferred-height;
+            property <length> chrome-inset: account-modal.content-top-inset;
+            Flickable {
+                x: 0;
+                y: root.mobile-mode ? -menu-body.chrome-inset : 0px;
+                width: parent.width;
+                height: root.mobile-mode ? root.height : parent.height;
+                viewport-width: self.width;
+                viewport-height: menu.preferred-height;
 
-            menu := VerticalLayout {
-                alignment: start;
+                menu := VerticalLayout {
+                    padding-top: root.mobile-mode ? menu-body.chrome-inset : 0px;
+                    padding-bottom: root.mobile-mode ? root.bottom-inset + Spacing.md : 0px;
+                    alignment: start;
 
-                // Header: who is signed in.
-                VerticalLayout {
-                    padding-left: Spacing.md;
-                    padding-right: Spacing.md;
-                    padding-bottom: Spacing.md;
-                    spacing: Spacing.sm;
-                    Avatar { size: 64px; source: root.avatar; fallback-text: root.initials; name: root.display-name; }
-                    Text {
-                        text: root.display-name;
-                        color: Colors.text-primary;
-                        font-size: Typography.lg;
-                        font-weight: Typography.semibold;
-                        overflow: elide;
-                    }
-                    if root.username != "": Text {
-                        text: "@" + root.username;
-                        color: Colors.text-secondary;
-                        font-size: Typography.sm;
-                        overflow: elide;
-                    }
-                }
-                Divider { }
-
-                MenuRow { icon: Icons.user; label: "My Profile"; clicked => { root.my-profile(); } }
-                Divider { }
-
-                // Shield mode has no Saved Messages and no channels
-                // (sidebar.slint hides both), so neither is offered here.
-                if !AnonMode.enabled: MenuRow { icon: Icons.bookmark; label: "Saved Messages"; clicked => { root.saved-messages(); } }
-                if !AnonMode.enabled: MenuRow { icon: Icons.megaphone; label: "New Channel"; clicked => { root.new-channel(); } }
-                MenuRow { icon: Icons.bell; label: "Notification inbox"; clicked => { root.notifications(); } }
-                MenuRow { icon: Icons.settings; label: "Settings"; clicked => { root.settings(); } }
-                Divider { }
-
-                // Night Mode reads the palette actually in force, so on
-                // "system" it shows what the OS picked; flipping it pins an
-                // explicit Light or Dark. The row's TouchArea is declared
-                // after the switch so it takes every tap: the switch's own
-                // would write `checked` and cut its binding to the palette.
-                Rectangle {
-                    height: Spacing.list-row-height-touch;
-                    accessible-role: switch;
-                    accessible-label: "Night Mode";
-                    accessible-checkable: true;
-                    accessible-checked: Appearance.dark;
-                    accessible-action-default => { root.toggle-night(); }
-                    background: night-touch.has-hover ? Colors.surface-hover : transparent;
-                    HorizontalLayout {
+                    // Header: who is signed in.
+                    VerticalLayout {
                         padding-left: Spacing.md;
                         padding-right: Spacing.md;
-                        spacing: Spacing.lg;
-                        VerticalLayout { alignment: center; horizontal-stretch: 0;
-                            Image { source: Icons.moon; width: 24px; height: 24px; colorize: Colors.text-secondary; }
-                        }
+                        padding-bottom: Spacing.md;
+                        spacing: Spacing.sm;
+                        Avatar { size: 64px; source: root.avatar; fallback-text: root.initials; name: root.display-name; }
                         Text {
-                            text: "Night Mode";
+                            text: root.display-name;
                             color: Colors.text-primary;
-                            font-size: Typography.base;
-                            vertical-alignment: center;
-                            horizontal-stretch: 1;
+                            font-size: Typography.lg;
+                            font-weight: Typography.semibold;
+                            overflow: elide;
                         }
-                        VerticalLayout { alignment: center; horizontal-stretch: 0;
-                            Toggle { checked: Appearance.dark; }
+                        if root.username != "": Text {
+                            text: "@" + root.username;
+                            color: Colors.text-secondary;
+                            font-size: Typography.sm;
+                            overflow: elide;
                         }
                     }
-                    night-touch := TouchArea {
-                        mouse-cursor: pointer;
-                        clicked => { root.toggle-night(); }
+                    Divider { }
+
+                    MenuRow { icon: Icons.user; label: "My Profile"; clicked => { root.my-profile(); } }
+                    Divider { }
+
+                    // Shield mode has no Saved Messages and no channels
+                    // (sidebar.slint hides both), so neither is offered here.
+                    if !AnonMode.enabled: MenuRow { icon: Icons.bookmark; label: "Saved Messages"; clicked => { root.saved-messages(); } }
+                    if !AnonMode.enabled: MenuRow { icon: Icons.megaphone; label: "New Channel"; clicked => { root.new-channel(); } }
+                    MenuRow { icon: Icons.bell; label: "Notification inbox"; clicked => { root.notifications(); } }
+                    MenuRow { icon: Icons.settings; label: "Settings"; clicked => { root.settings(); } }
+                    Divider { }
+
+                    // Night Mode reads the palette actually in force, so on
+                    // "system" it shows what the OS picked; flipping it pins an
+                    // explicit Light or Dark. The row's TouchArea is declared
+                    // after the switch so it takes every tap: the switch's own
+                    // would write `checked` and cut its binding to the palette.
+                    Rectangle {
+                        height: Spacing.list-row-height-touch;
+                        accessible-role: switch;
+                        accessible-label: "Night Mode";
+                        accessible-checkable: true;
+                        accessible-checked: Appearance.dark;
+                        accessible-action-default => { root.toggle-night(); }
+                        background: night-touch.has-hover ? Colors.surface-hover : transparent;
+                        HorizontalLayout {
+                            padding-left: Spacing.md;
+                            padding-right: Spacing.md;
+                            spacing: Spacing.lg;
+                            VerticalLayout { alignment: center; horizontal-stretch: 0;
+                                Image { source: Icons.moon; width: 24px; height: 24px; colorize: Colors.text-secondary; }
+                            }
+                            Text {
+                                text: "Night Mode";
+                                color: Colors.text-primary;
+                                font-size: Typography.base;
+                                vertical-alignment: center;
+                                horizontal-stretch: 1;
+                            }
+                            VerticalLayout { alignment: center; horizontal-stretch: 0;
+                                Toggle { checked: Appearance.dark; }
+                            }
+                        }
+                        night-touch := TouchArea {
+                            mouse-cursor: pointer;
+                            clicked => { root.toggle-night(); }
+                        }
                     }
                 }
             }

@@ -588,7 +588,7 @@ export component MessageList inherits Rectangle {
                 // the user was away.
                 if idx == root.unread-index: HorizontalLayout {
                     width: 100%;
-                    height: 32px;
+                    height: 40px;
                     spacing: Spacing.md;
                     alignment: center;
                     padding-top: Spacing.sm;
@@ -601,13 +601,19 @@ export component MessageList inherits Rectangle {
                         opacity: 0.5;
                     }
 
-                    Text {
-                        text: "Unread messages";
-                        color: Colors.primary;
-                        font-size: Typography.xs;
-                        font-weight: Typography.medium;
-                        horizontal-alignment: center;
-                        vertical-alignment: center;
+                    GlassSurface {
+                        elevation: 0;
+                        border-radius: 12px;
+                        min-width: unread-label.preferred-width + Spacing.md * 2;
+                        height: 24px;
+                        unread-label := Text {
+                            text: "Unread messages";
+                            color: Colors.primary;
+                            font-size: Typography.xs;
+                            font-weight: Typography.medium;
+                            horizontal-alignment: center;
+                            vertical-alignment: center;
+                        }
                     }
 
                     Rectangle {
@@ -624,7 +630,7 @@ export component MessageList inherits Rectangle {
                 if item.date-separator-text != ""
                     && (idx == 0 || root.messages[idx - 1].date-separator-text != item.date-separator-text): HorizontalLayout {
                     width: 100%;
-                    height: 32px;
+                    height: 40px;
                     spacing: Spacing.md;
                     alignment: center;
                     padding-top: Spacing.sm;
@@ -636,13 +642,19 @@ export component MessageList inherits Rectangle {
                         background: Colors.surface-hover;
                     }
 
-                    Text {
-                        text: item.date-separator-text;
-                        color: Colors.text-muted;
-                        font-size: Typography.xs;
-                        font-weight: Typography.medium;
-                        horizontal-alignment: center;
-                        vertical-alignment: center;
+                    GlassSurface {
+                        elevation: 0;
+                        border-radius: 12px;
+                        min-width: date-label.preferred-width + Spacing.md * 2;
+                        height: 24px;
+                        date-label := Text {
+                            text: item.date-separator-text;
+                            color: Colors.text-muted;
+                            font-size: Typography.xs;
+                            font-weight: Typography.medium;
+                            horizontal-alignment: center;
+                            vertical-alignment: center;
+                        }
                     }
 
                     Rectangle {
@@ -767,7 +779,7 @@ export component MessageList inherits Rectangle {
             width: pill-content.preferred-width + Spacing.lg * 2;
             height: 44px;
             border-radius: 22px;
-            material-tint: Colors.action-fill.with-alpha(0.97);
+            material-level: 3;
             accessible-role: button;
             accessible-label: root.unread-count > 0
                 ? root.unread-count + " new messages, jump to newest"
@@ -788,7 +800,7 @@ export component MessageList inherits Rectangle {
                     text: root.unread-count == 1
                         ? "1 new message"
                         : root.unread-count + " new messages";
-                    color: Colors.on-action;
+                    color: Colors.text-primary;
                     font-size: Typography.sm;
                     font-weight: Typography.medium;
                     vertical-alignment: center;
@@ -797,7 +809,7 @@ export component MessageList inherits Rectangle {
                 // Down arrow icon
                 Text {
                     text: "↓";
-                    color: Colors.on-action;
+                    color: Colors.text-primary;
                     font-size: Typography.xl;
                     horizontal-alignment: center;
                     vertical-alignment: center;

@@ -1,3 +1,4 @@
+import { GlassSurface } from "../components/glass_surface.slint";
 // Pinned messages bar component
 //
 // Telegram-style always-visible bar for navigating pinned messages.
@@ -9,7 +10,7 @@ import { Spacing } from "../theme/spacing.slint";
 import { Typography } from "../theme/typography.slint";
 import { Icons } from "../theme/icons.slint";
 
-export component PinnedBar inherits Rectangle {
+export component PinnedBar inherits GlassSurface {
     // Properties
     in property <string> message-preview: "";
     in property <int> current-index: 1;  // 1-based for display
@@ -25,13 +26,10 @@ export component PinnedBar inherits Rectangle {
     // Computed
     property <string> position-text: has-multiple ? "Pinned message \{current-index} of \{total-count}" : "Pinned message";
 
-    // Layout — Neo floating bar: raised surface with shadow
+    // One material for the pinned-message chrome.
     height: Spacing.touch-target-min * Appearance.text-grow;
-    background: Colors.surface;
-    drop-shadow-blur: Spacing.neo-blur-md;
-    drop-shadow-offset-x: Spacing.neo-offset-sm;
-    drop-shadow-offset-y: Spacing.neo-offset-md;
-    drop-shadow-color: Colors.neo-shadow;
+    elevation: 0;
+    border-radius: Spacing.radius-chrome;
 
     // Main content
     HorizontalLayout {
@@ -100,8 +98,6 @@ export component PinnedBar inherits Rectangle {
             y: (parent.height - self.height) / 2;
             background: Colors.primary;
             border-radius: 1.5px;
-            drop-shadow-blur: 4px;
-            drop-shadow-color: Colors.glow-primary;
         }
 
         // Clickable content area (go to message)
@@ -166,11 +162,4 @@ export component PinnedBar inherits Rectangle {
         }
     }
 
-    // Bottom edge — neo highlight
-    Rectangle {
-        y: parent.height - 1px;
-        width: 100%;
-        height: 1px;
-        background: Colors.neo-highlight;
-    }
 }

@@ -179,14 +179,13 @@ export component UserProfileModal inherits Rectangle {
         max-modal-height: max(240px, root.height - 96px);
         fill-height: true;
         full-screen: root.mobile-mode;
-        bottom-inset: root.bottom-inset;
+        bottom-inset: root.mobile-mode ? 0px : root.bottom-inset;
 
         close => {
             root.close();
         }
 
-        VerticalLayout {
-            spacing: 0px;
+        Rectangle {
 
             // ── Top bar ───────────────────────────────────────────────
             // Same rule `Modal` applies, hand-placed only because this screen
@@ -194,9 +193,13 @@ export component UserProfileModal inherits Rectangle {
             // to edge, which `Modal`'s padded body cannot do). The glyph, size
             // and label still come from the shared `DismissButton` — only the
             // EDGE is decided here, because that is a position in this layout.
-            GlassSurface {
+            profile-header := GlassSurface {
+                z: 1;
+                x: root.mobile-mode ? Spacing.sm : 0px;
+                y: root.mobile-mode ? Spacing.sm : 0px;
+                width: parent.width - 2 * self.x;
                 material-enabled: root.mobile-mode;
-                border-radius: 0px;
+                border-radius: root.mobile-mode ? self.height / 2 : 0px;
                 height: root.mobile-mode ? Spacing.header-action-box-touch : Spacing.header-action-box;
                 HorizontalLayout {
                     padding-left: Spacing.xs;
@@ -222,7 +225,10 @@ export component UserProfileModal inherits Rectangle {
 
             // ── The page ──────────────────────────────────────────────
             page-scroll := Flickable {
-                vertical-stretch: 1;
+                x: 0;
+                y: root.mobile-mode ? 0px : profile-header.height;
+                width: parent.width;
+                height: parent.height - self.y;
                 viewport-width: self.width;
                 viewport-height: page.preferred-height;
 
@@ -237,6 +243,8 @@ export component UserProfileModal inherits Rectangle {
                 }
 
                 page := VerticalLayout {
+                    padding-top: root.mobile-mode ? profile-header.height + Spacing.sm * 2 : 0px;
+                    padding-bottom: root.mobile-mode ? root.bottom-inset + Spacing.md : 0px;
                     alignment: start;
                     spacing: Spacing.md;
 

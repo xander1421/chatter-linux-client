@@ -47,16 +47,6 @@ component GlassMaterial inherits Rectangle {
             background: Materials.specular;
         }
         if Appearance.glass-effects: Rectangle {
-            x: Materials.glass-edge-width + 1px;
-            y: self.x;
-            width: max(0px, root.width - 2 * self.x);
-            height: max(0px, root.height - 2 * self.y);
-            border-radius: max(0px, root.border-radius - self.x);
-            border-width: 1px;
-            border-color: Materials.inner-edge;
-            background: transparent;
-        }
-        if Appearance.glass-effects: Rectangle {
             x: Materials.glass-edge-width / 2;
             y: self.x;
             width: max(0px, root.width - Materials.glass-edge-width);
@@ -92,6 +82,8 @@ export component GlassSurface inherits Rectangle {
     border-radius: Spacing.radius-chrome;
 
     GlassMaterial {
+        x: 0;
+        y: 0;
         width: root.width;
         height: root.height;
         border-radius: root.border-radius;

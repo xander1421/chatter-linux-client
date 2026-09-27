@@ -29,6 +29,11 @@ export component Modal inherits Rectangle {
     in property <bool> root-screen: false;
     // A trailing ⋮ in the header for the screen's overflow actions.
     in property <bool> show-more: false;
+    // Full-screen content starts below this fixed header geometry. Consumers
+    // must not measure a layout child's position to size that same layout.
+    out property <length> content-top-inset: Spacing.lg
+        + (root.full-screen ? Spacing.header-action-box-touch : Spacing.header-action-box)
+        + Spacing.md;
 
     callback close();
     callback more-clicked();

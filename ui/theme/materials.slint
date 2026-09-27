@@ -18,9 +18,10 @@ export global Materials {
         : (Appearance.dark ? #18222ff7 : #fcfdfff7);
     out property <color> opaque: Appearance.dark ? #172331 : #f8fcff;
     // The single optical edge is local to GlassSurface, never a row/card stroke.
-    out property <brush> glass-edge: @linear-gradient(135deg, #ffffffad 0%, #ffffff60 35%, #ffffff1a 75%, #ffffff40 100%);
-    out property <length> glass-edge-width: 1.75px;
-    out property <brush> inner-edge: @linear-gradient(135deg, #ffffff38 0%, #ffffff00 65%);
+    out property <brush> glass-edge: Appearance.dark
+        ? @linear-gradient(180deg, #ffffff2e 0%, #ffffff14 35%, #ffffff08 100%)
+        : @linear-gradient(180deg, #ffffff99 0%, #ffffff40 35%, #ffffff1a 100%);
+    out property <length> glass-edge-width: 0.75px;
     out property <brush> specular: @linear-gradient(160deg, #ffffff14 0%, #ffffff00 40%, #ffffff06 100%);
     out property <color> shadow-contact: Appearance.dark ? #00000038 : #11233914;
     out property <color> shadow-float: Appearance.dark ? #00000052 : #1123391c;
