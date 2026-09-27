@@ -22,7 +22,6 @@ pub mod video_player;
 #[cfg(feature = "desktop-media")]
 pub mod video_processor;
 pub mod video_recorder;
-#[cfg(feature = "desktop-media")]
 pub mod waveform;
 
 // Re-exports for convenient access
@@ -48,6 +47,5 @@ pub use video_processor::{
     get_video_duration, get_video_duration_from_memory,
 };
 pub use video_recorder::VideoRecorder;
-#[cfg(feature = "desktop-media")]
 pub use waveform::{extract_waveform, extract_waveform_from_memory, WAVEFORM_BAR_COUNT};
 

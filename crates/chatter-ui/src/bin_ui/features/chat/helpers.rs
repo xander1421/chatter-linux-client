@@ -98,7 +98,10 @@ pub fn build_own_message_item(
         reply_to_attachment_id: reply_media.attachment_id.clone().into(),
         reply_to_duration: reply_media.duration.clone().into(),
         reply_to_filename: reply_media.filename.clone().into(),
-        reply_to_waveform: ModelRc::new(VecModel::from(reply_media.waveform.clone())),
+        reply_to_waveform: ModelRc::new(VecModel::from(
+            reply_media.waveform.iter().copied()
+                .map(crate::bin_ui::converters::waveform_bar).collect::<Vec<_>>(),
+        )),
         reply_to_has_thumbnail,
         reply_to_thumbnail,
         reply_to_thumbnail_width,

@@ -872,13 +872,13 @@ impl ChatterClient {
         pointer.file_name = "Voice message.wav".into();
         // The sender renders from the already-uploaded local attachment row;
         // receivers render from the pointer. Keep the same metadata on both.
-        if let Some(mut attachment) = self.attachments().get(&upload.attachment_id)
-            .map_err(|e| e.to_string())? {
-            attachment.metadata.name = pointer.file_name.clone();
-            attachment.metadata.waveform_samples = Some(pointer.waveform.clone());
-            attachment.metadata.duration_seconds = Some(pointer.duration_ms as f64 / 1000.0);
-            self.attachments().update(&attachment).map_err(|e| e.to_string())?;
-        }
+        let mut attachment = self.attachments().get(&upload.attachment_id)
+            .map_err(|e| e.to_string())?
+            .ok_or_else(|| "Uploaded voice attachment is missing from local storage".to_string())?;
+        attachment.metadata.name = pointer.file_name.clone();
+        attachment.metadata.waveform_samples = Some(pointer.waveform.clone());
+        attachment.metadata.duration_seconds = Some(pointer.duration_ms as f64 / 1000.0);
+        self.attachments().update(&attachment).map_err(|e| e.to_string())?;
 
         Ok(crate::state::chat_state::PendingAttachment::with_pointer(
             upload.attachment_id, std::path::PathBuf::new(), pointer.file_name.clone(),

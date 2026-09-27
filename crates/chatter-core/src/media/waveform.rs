@@ -1,13 +1,18 @@
 //! Audio waveform extraction.
 //!
 //! Extracts amplitude peaks from audio files for visualization.
-//! Uses GStreamer for audio decoding to avoid FFmpeg symbol conflicts.
+//! Decodes voice-note WAV directly on all platforms and other desktop formats
+//! with GStreamer to avoid FFmpeg symbol conflicts.
 
 use std::path::Path;
 
+#[cfg(feature = "desktop-media")]
 use gstreamer as gst;
+#[cfg(feature = "desktop-media")]
 use gstreamer::prelude::*;
+#[cfg(feature = "desktop-media")]
 use gstreamer_app as gst_app;
+#[cfg(feature = "desktop-media")]
 use gstreamer_pbutils as gst_pbutils;
 
 use crate::error::MediaError;
@@ -17,7 +22,7 @@ pub const WAVEFORM_BAR_COUNT: usize = 32;
 
 /// Extract waveform peaks from an audio file.
 ///
-/// Returns a vector of amplitude values (0-100) representing the waveform.
+/// Returns a vector of amplitude values (0-255) representing the waveform.
 /// The number of values equals `WAVEFORM_BAR_COUNT` (32).
 ///
 /// # Arguments
@@ -37,13 +42,18 @@ pub fn extract_waveform_with_bars(path: &Path, num_bars: usize) -> Result<Vec<u8
         return Ok(Vec::new());
     }
 
-    // Initialize GStreamer
-    gst::init().map_err(|e| {
-        MediaError::InvalidFormat(format!("GStreamer init failed: {}", e))
-    })?;
-
-    let uri = format!("file://{}", path.display());
-    extract_waveform_from_uri(&uri, num_bars)
+    #[cfg(feature = "desktop-media")]
+    {
+        gst::init().map_err(|e| MediaError::InvalidFormat(format!("GStreamer init failed: {}", e)))?;
+        let uri = format!("file://{}", path.display());
+        extract_waveform_from_uri(&uri, num_bars)
+    }
+    #[cfg(not(feature = "desktop-media"))]
+    {
+        let data = std::fs::read(path)
+            .map_err(|e| MediaError::InvalidFormat(e.to_string()))?;
+        extract_waveform_from_memory_with_bars(&data, num_bars)
+    }
 }
 
 /// Extract waveform peaks from in-memory audio data.
@@ -65,20 +75,29 @@ pub fn extract_waveform_from_memory_with_bars(data: &[u8], num_bars: usize) -> R
         return Ok(Vec::new());
     }
 
-    if data.is_empty() {
-        return Ok(vec![10; num_bars]);
+    // Voice notes are PCM WAV on every platform. Decode them without a
+    // platform media backend, including Android builds without GStreamer.
+    if data.starts_with(b"RIFF") && data.get(8..12) == Some(b"WAVE") {
+        let mut reader = hound::WavReader::new(std::io::Cursor::new(data))
+            .map_err(|e| MediaError::InvalidFormat(e.to_string()))?;
+        let samples = match reader.spec().sample_format {
+            hound::SampleFormat::Float => reader.samples::<f32>().collect::<Result<Vec<_>, _>>(),
+            hound::SampleFormat::Int => reader.samples::<i32>()
+                .map(|s| s.map(|s| s as f32)).collect::<Result<Vec<_>, _>>(),
+        }.map_err(|e| MediaError::InvalidFormat(e.to_string()))?;
+        return process_samples_to_bars(samples, num_bars);
     }
-
-    // Initialize GStreamer
-    gst::init().map_err(|e| {
-        MediaError::InvalidFormat(format!("GStreamer init failed: {}", e))
-    })?;
-
-    // Use appsrc for true memory-only processing
-    extract_waveform_from_data(data, num_bars)
+    #[cfg(feature = "desktop-media")]
+    {
+        gst::init().map_err(|e| MediaError::InvalidFormat(format!("GStreamer init failed: {}", e)))?;
+        extract_waveform_from_data(data, num_bars)
+    }
+    #[cfg(not(feature = "desktop-media"))]
+    Err(MediaError::InvalidFormat("Waveform extraction requires PCM WAV on this platform".into()))
 }
 
 /// Extract waveform from in-memory data using appsrc.
+#[cfg(feature = "desktop-media")]
 fn extract_waveform_from_data(data: &[u8], num_bars: usize) -> Result<Vec<u8>, MediaError> {
     // Create pipeline: appsrc -> decodebin -> audioconvert -> audioresample -> appsink
     let pipeline = gst::Pipeline::new();
@@ -210,12 +229,13 @@ fn extract_waveform_from_data(data: &[u8], num_bars: usize) -> Result<Vec<u8>, M
 /// Instead of decoding the entire file (which takes minutes for large files),
 /// we seek to `num_bars` positions and sample a small chunk at each position.
 /// This reduces a 5-minute decode to ~1 second.
+#[cfg(feature = "desktop-media")]
 fn extract_waveform_from_uri(uri: &str, num_bars: usize) -> Result<Vec<u8>, MediaError> {
     // First, query the duration using playbin
     let duration_ns = query_audio_duration(uri)?;
 
     if duration_ns == 0 {
-        return Ok(vec![50; num_bars]); // Default waveform for unknown duration
+        return Err(MediaError::InvalidFormat("Unknown audio duration".into()));
     }
 
     // Calculate sample positions (evenly distributed across the file)
@@ -279,7 +299,7 @@ fn extract_waveform_from_uri(uri: &str, num_bars: usize) -> Result<Vec<u8>, Medi
     // Wait for PAUSED state (max 5 seconds) to allow seeking
     let _ = pipeline.state(gst::ClockTime::from_seconds(5));
 
-    let mut peaks: Vec<u8> = Vec::with_capacity(num_bars);
+    let mut peaks: Vec<f32> = Vec::with_capacity(num_bars);
 
     // Sample at each position
     for i in 0..num_bars {
@@ -293,7 +313,7 @@ fn extract_waveform_from_uri(uri: &str, num_bars: usize) -> Result<Vec<u8>, Medi
         );
 
         if seek_result.is_err() {
-            peaks.push(50); // Default value if seek fails
+            peaks.push(0.0); // No decoded samples at this position
             continue;
         }
 
@@ -333,28 +353,17 @@ fn extract_waveform_from_uri(uri: &str, num_bars: usize) -> Result<Vec<u8>, Medi
         // Pause for next seek
         pipeline.set_state(gst::State::Paused).ok();
 
-        // Convert peak to 0-100 range (assuming audio peaks at ~1.0)
-        let normalized = (chunk_peak.min(1.0) * 100.0) as u8;
-        peaks.push(normalized.max(5)); // Minimum 5 for visibility
+        peaks.push(chunk_peak);
     }
 
     // Cleanup
     pipeline.set_state(gst::State::Null).ok();
 
-    // Normalize peaks relative to max
-    if let Some(&max_peak) = peaks.iter().max() {
-        if max_peak > 0 {
-            for peak in &mut peaks {
-                *peak = ((*peak as u32 * 100) / max_peak as u32).min(100) as u8;
-                *peak = (*peak).max(5); // Minimum visibility
-            }
-        }
-    }
-
-    Ok(peaks)
+    Ok(normalize_peaks(&peaks))
 }
 
 /// Query audio duration without decoding.
+#[cfg(feature = "desktop-media")]
 fn query_audio_duration(uri: &str) -> Result<u64, MediaError> {
     let discoverer = gst_pbutils::Discoverer::new(gst::ClockTime::from_seconds(10))
         .map_err(|e| MediaError::InvalidFormat(format!("Failed to create discoverer: {}", e)))?;
@@ -371,57 +380,68 @@ fn query_audio_duration(uri: &str) -> Result<u64, MediaError> {
     }
 }
 
-/// Process audio samples into waveform bars.
-fn process_samples_to_bars(all_samples: Vec<f32>, num_bars: usize) -> Result<Vec<u8>, MediaError> {
-    if all_samples.is_empty() {
-        return Ok(vec![10; num_bars]);
-    }
-
-    let samples_per_bar = all_samples.len() / num_bars;
-    if samples_per_bar == 0 {
-        // Not enough samples, just return even bars
-        return Ok(vec![50; num_bars]);
-    }
-
-    let mut peaks: Vec<u8> = Vec::with_capacity(num_bars);
-    let mut max_peak: f32 = 0.0;
-
-    // Calculate peak for each bar
-    let mut bar_peaks: Vec<f32> = Vec::with_capacity(num_bars);
-    for i in 0..num_bars {
-        let start = i * samples_per_bar;
-        let end = ((i + 1) * samples_per_bar).min(all_samples.len());
-
-        let mut peak: f32 = 0.0;
-        for &sample in &all_samples[start..end] {
-            let abs_sample = sample.abs();
-            if abs_sample > peak {
-                peak = abs_sample;
-            }
-        }
-
-        bar_peaks.push(peak);
-        if peak > max_peak {
-            max_peak = peak;
-        }
-    }
-
-    // Normalize to 0-100 range
-    for peak in bar_peaks {
-        let normalized = if max_peak > 0.0 {
-            ((peak / max_peak) * 100.0) as u8
+/// Normalize against the note's own peak before quantizing to wire/storage
+/// bytes. A small floor keeps silent regions visible without flattening quiet speech.
+fn normalize_peaks(peaks: &[f32]) -> Vec<u8> {
+    let max = peaks.iter().copied().filter(|p| p.is_finite()).fold(0.0_f32, f32::max);
+    peaks.iter().map(|&peak| {
+        if max > 0.0 && peak.is_finite() {
+            ((peak / max * 255.0).round() as u8).max(13)
         } else {
-            10
-        };
-        // Ensure minimum visibility
-        peaks.push(normalized.max(5));
+            13
+        }
+    }).collect()
+}
+
+pub(crate) fn waveform_from_pcm(samples: &[i16]) -> Vec<u8> {
+    let peaks: Vec<f32> = (0..WAVEFORM_BAR_COUNT).map(|i| {
+        let start = i * samples.len() / WAVEFORM_BAR_COUNT;
+        let end = ((i + 1) * samples.len() / WAVEFORM_BAR_COUNT)
+            .max(start + 1).min(samples.len());
+        samples[start..end].iter().map(|&s| (s as f32).abs()).fold(0.0, f32::max)
+    }).collect();
+    normalize_peaks(&peaks)
+}
+
+/// Process decoded samples without quantizing quiet audio before normalization.
+fn process_samples_to_bars(samples: Vec<f32>, num_bars: usize) -> Result<Vec<u8>, MediaError> {
+    if samples.is_empty() {
+        return Err(MediaError::InvalidFormat("No audio samples decoded".into()));
+    }
+    let peaks: Vec<f32> = (0..num_bars).map(|i| {
+        let start = i * samples.len() / num_bars;
+        let end = ((i + 1) * samples.len() / num_bars).max(start + 1).min(samples.len());
+        samples[start..end].iter().map(|s| s.abs()).fold(0.0, f32::max)
+    }).collect();
+    Ok(normalize_peaks(&peaks))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn normalization_preserves_quiet_shape_and_wire_scale() {
+        assert_eq!(normalize_peaks(&[0.0, 0.00001, 0.00002]), vec![13, 128, 255]);
+        assert_eq!(normalize_peaks(&[0.0, 0.5, 1.0]), vec![13, 128, 255]);
+        assert_eq!(normalize_peaks(&[0.0; 32]), vec![13; 32]);
     }
 
-    tracing::debug!(
-        "Extracted waveform: {} samples -> {} bars",
-        all_samples.len(),
-        peaks.len()
-    );
-
-    Ok(peaks)
+    #[test]
+    fn wav_extraction_matches_recording_and_includes_last_sample() {
+        let samples: Vec<i16> = (0..65).map(|i| if i == 64 { -200 } else { i }).collect();
+        let mut bytes = std::io::Cursor::new(Vec::new());
+        {
+            let spec = hound::WavSpec { channels: 1, sample_rate: 8000,
+                bits_per_sample: 16, sample_format: hound::SampleFormat::Int };
+            let mut writer = hound::WavWriter::new(&mut bytes, spec).unwrap();
+            for sample in &samples { writer.write_sample(*sample).unwrap(); }
+            writer.finalize().unwrap();
+        }
+        let extracted = extract_waveform_from_memory(bytes.get_ref()).unwrap();
+        assert_eq!(extracted, waveform_from_pcm(&samples));
+        assert_eq!(extracted.len(), 32);
+        assert_eq!(extracted[31], 255);
+        assert!(extracted[0] < extracted[30]);
+    }
 }

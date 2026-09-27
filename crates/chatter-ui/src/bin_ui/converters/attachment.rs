@@ -217,6 +217,11 @@ impl AttachmentDisplayData {
     }
 }
 
+/// Convert stored/wire amplitudes to the UI's percentage bar scale.
+pub(crate) fn waveform_bar(sample: i32) -> i32 {
+    (sample.clamp(0, 255) * 100 + 127) / 255
+}
+
 /// Convert a domain Attachment to thread-safe AttachmentDisplayData.
 pub fn attachment_to_display_data(attachment: &Attachment) -> AttachmentDisplayData {
     let meta = &attachment.metadata;
@@ -229,12 +234,13 @@ pub fn attachment_to_display_data(attachment: &Attachment) -> AttachmentDisplayD
     // Get icon and color for category
     let (icon, icon_color) = category_to_icon_and_color(category);
 
-    // Get waveform samples (convert u8 to i32 for Slint)
+    // Normalize wire/storage bytes (0-255) to the Slint bar scale (0-100).
     let waveform: Vec<i32> = meta
         .waveform_samples
         .as_ref()
+        .filter(|samples| !samples.is_empty())
         .map(|samples| {
-            let converted: Vec<i32> = samples.iter().map(|&s| s as i32).collect();
+            let converted: Vec<i32> = samples.iter().map(|&s| waveform_bar(i32::from(s))).collect();
             if meta.is_audio() {
                 let max = converted.iter().max().copied().unwrap_or(0);
                 tracing::debug!(

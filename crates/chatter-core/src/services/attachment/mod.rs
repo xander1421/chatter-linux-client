@@ -725,3 +725,33 @@ impl AttachmentService {
             .map_err(|e| AttachmentError::StorageError(e.to_string()))
     }
 }
+
+#[cfg(test)]
+mod waveform_tests {
+    use super::*;
+
+    #[test]
+    fn incoming_voice_pointer_preserves_waveform_in_storage() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = Arc::new(crate::storage::database::Database::open(
+            &dir.path().join("waveform.db"), "testpass").unwrap());
+        db.run_migrations().unwrap();
+        let service = AttachmentService::new_local(Arc::new(AttachmentRepository::new(db)));
+        let pointer = AttachmentPointer {
+            cdn_key: "voice-waveform-test".into(),
+            content_type: "audio/wav".into(),
+            file_name: "Voice message.wav".into(),
+            voice_note: true,
+            waveform: vec![0, 13, 128, 255],
+            duration_ms: 1250,
+            ..Default::default()
+        };
+        let ids = service.create_from_pointers(std::slice::from_ref(&pointer));
+        let stored = service.get(&ids[0]).unwrap().unwrap();
+        assert_eq!(stored.metadata.waveform_samples, Some(pointer.waveform.clone()));
+        assert_eq!(stored.metadata.duration_seconds, Some(1.25));
+        assert_eq!(service.create_from_pointers(&[pointer]), ids);
+        assert_eq!(service.get(&ids[0]).unwrap().unwrap().metadata.waveform_samples,
+            stored.metadata.waveform_samples);
+    }
+}

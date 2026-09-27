@@ -266,7 +266,10 @@ impl MessageDisplayData {
         reply_to_attachment_id: self.reply_to_attachment_id.clone().into(),
         reply_to_duration: self.reply_to_duration.clone().into(),
         reply_to_filename: self.reply_to_filename.clone().into(),
-        reply_to_waveform: ModelRc::new(VecModel::from(self.reply_to_waveform.clone())),
+        reply_to_waveform: ModelRc::new(VecModel::from(
+            self.reply_to_waveform.iter().copied()
+                .map(super::attachment::waveform_bar).collect::<Vec<_>>(),
+        )),
         reply_to_has_thumbnail,
         reply_to_thumbnail,
         reply_to_thumbnail_width: reply_to_thumb_w,

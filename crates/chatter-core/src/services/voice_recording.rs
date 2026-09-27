@@ -151,21 +151,7 @@ fn record(
 }
 
 fn waveform(samples: &[i16]) -> Vec<u8> {
-    (0..32)
-        .map(|i| {
-            let start = i * samples.len() / 32;
-            let end = ((i + 1) * samples.len() / 32)
-                .max(start + 1)
-                .min(samples.len());
-            samples
-                .get(start..end)
-                .unwrap_or_default()
-                .iter()
-                .map(|s| (i32::from(*s).unsigned_abs() * 255 / 32768) as u8)
-                .max()
-                .unwrap_or(0)
-        })
-        .collect()
+    crate::media::waveform::waveform_from_pcm(samples)
 }
 
 #[cfg(test)]
@@ -189,9 +175,18 @@ mod tests {
     }
 
     #[test]
+    fn quiet_recordings_retain_shape() {
+        let samples: Vec<i16> = (0..32).map(|i| i * 2).collect();
+        let bars = super::waveform(&samples);
+        assert_eq!(bars[0], 13);
+        assert_eq!(bars[31], 255);
+        assert!(bars[8] < bars[16]);
+    }
+
+    #[test]
     fn waveform_handles_silence_short_input_and_negative_full_scale() {
-        assert_eq!(super::waveform(&[]), vec![0; 32]);
-        assert_eq!(super::waveform(&[0; 64]), vec![0; 32]);
+        assert_eq!(super::waveform(&[]), vec![13; 32]);
+        assert_eq!(super::waveform(&[0; 64]), vec![13; 32]);
         assert_eq!(super::waveform(&[i16::MIN; 64]), vec![255; 32]);
         assert_eq!(super::waveform(&[i16::MIN])[0], 255);
     }

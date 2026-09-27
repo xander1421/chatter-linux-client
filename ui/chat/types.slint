@@ -33,7 +33,7 @@ export struct MessageAttachmentData {
     is-playing: bool,       // Whether this audio/video is currently playing
     icon: string,           // Emoji icon for file type (set by Rust)
     icon-color: color,      // Color for icon background (set by Rust)
-    waveform: [int],        // Audio waveform samples (32 values, 0-100)
+    waveform: [int],        // Display bars (32 values, 0-100; storage/wire are 0-255)
     duration-display: string, // Formatted duration (e.g., "1:23")
     // Transfer progress
     is-uploading: bool,     // Whether upload is in progress
