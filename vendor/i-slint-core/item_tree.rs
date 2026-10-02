@@ -3035,10 +3035,6 @@ mod tests {
             unimplemented!("Not required in this test");
         }
 
-        fn slint_context(&self) -> Option<crate::SlintContext> {
-            None
-        }
-
         fn supports_transformations(&self) -> bool {
             self.supports_transformations
         }

@@ -3080,6 +3080,17 @@ impl ChatterClient {
                     tracing::warn!(peer_id = %peer, error = %e, "prewarm DM session after friend accept failed");
                 }
             });
+
+            // Acceptance must exchange our profile key for every SDK caller,
+            // including headless clients. The requester sends its half from
+            // FriendAccepted; neither side waits for a visible message.
+            let client = Arc::clone(self);
+            let peer = *user_id;
+            tokio::spawn(async move {
+                if let Err(e) = client.messages().send_profile_key_handshake(&peer).await {
+                    tracing::warn!(peer_id = %peer, error = %e, "Accept-request: profile-key handshake send failed");
+                }
+            });
         }
 
         Ok(result)

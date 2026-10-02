@@ -28,42 +28,9 @@ use crate::storage::repositories::AttachmentRepository;
 // Submodules add impl blocks to AttachmentService
 // No re-exports needed - methods are on the struct
 
-/// The shared HTTP client for presigned CDN transfers.
-///
-/// Every direct CDN request used to build its own `reqwest::Client::new()`, with
-/// no deadline of any kind. Against an unreachable or black-holing storage host
-/// that hung forever, and one of those hangs was permanent from the user's side:
-/// `handle_download_attachment` persists `AttachmentStatus::Downloading` before
-/// spawning, and the click handler refuses to start a download that is already
-/// "in progress" — so a single tap while the server was gone left that
-/// attachment un-openable and un-retryable across restarts. A request that can
-/// fail is what lets that state clear.
-///
-/// The bounds are deliberately not an overall request timeout: attachments are
-/// large, a slow link is not a broken one, and a whole-request deadline would
-/// cancel honest transfers. Instead:
-///
-/// * `connect_timeout` bounds finding the host at all — the offline case.
-/// * `read_timeout` bounds the gap *between* bytes, so a transfer that is
-///   progressing is never interrupted but a stalled one is.
-///
-/// One shared client, also because `reqwest::Client::new()` per request threw
-/// away the connection pool and TLS session cache on every call.
-fn cdn_client() -> &'static reqwest::Client {
-    static CLIENT: std::sync::OnceLock<reqwest::Client> = std::sync::OnceLock::new();
-    CLIENT.get_or_init(|| {
-        reqwest::Client::builder()
-            .connect_timeout(std::time::Duration::from_secs(15))
-            .read_timeout(std::time::Duration::from_secs(60))
-            .build()
-            // A builder failure here is a TLS/config problem, not a network one,
-            // and there is no meaningful degraded mode — fall back to the
-            // unbounded default rather than take the process down over it.
-            .unwrap_or_else(|error| {
-                tracing::error!(%error, "could not build the CDN HTTP client; using defaults");
-                reqwest::Client::new()
-            })
-    })
+/// Use the common pinned storage policy for every direct CDN transfer.
+fn cdn_client() -> Result<reqwest::Client, AttachmentError> {
+    crate::network::storage_http::storage_client().map_err(AttachmentError::NetworkError)
 }
 
 /// Attachment service errors.
@@ -294,22 +261,28 @@ impl AttachmentService {
                 .map_err(AttachmentError::NetworkError);
         }
 
-        let response = cdn_client()
+        let mut response = cdn_client()?
             .get(url)
             .send()
             .await
-            .map_err(|e| AttachmentError::NetworkError(format!("HTTP download failed: {}", e)))?;
+            .map_err(|e| AttachmentError::NetworkError(format!("HTTP download failed: {}", e.without_url())))?;
         if !response.status().is_success() {
             return Err(AttachmentError::NetworkError(format!(
                 "CDN download failed with status: {}",
                 response.status()
             )));
         }
-        response
-            .bytes()
-            .await
-            .map(|b| b.to_vec())
-            .map_err(|e| AttachmentError::NetworkError(format!("Failed to read response: {}", e)))
+        let limit = crate::network::anon_http::storage_response_limit();
+        if response.content_length().is_some_and(|len| len > limit as u64) {
+            return Err(AttachmentError::NetworkError("storage response exceeds attachment size limit".into()));
+        }
+        let mut body = Vec::new();
+        while let Some(chunk) = response.chunk().await
+            .map_err(|e| AttachmentError::NetworkError(format!("Failed to read response: {}", e.without_url())))? {
+            crate::network::anon_http::append_storage_chunk(&mut body, &chunk, limit)
+                .map_err(AttachmentError::NetworkError)?;
+        }
+        Ok(body)
     }
 
     /// PUT `body` to a presigned URL, over Tor in anon mode and direct otherwise.
@@ -333,14 +306,14 @@ impl AttachmentService {
         }
 
         let content_length = body.len();
-        let response = cdn_client()
+        let response = cdn_client()?
             .put(url)
             .header("Content-Type", content_type)
             .header("Content-Length", content_length)
             .body(body)
             .send()
             .await
-            .map_err(|e| AttachmentError::NetworkError(format!("HTTP upload failed: {}", e)))?;
+            .map_err(|e| AttachmentError::NetworkError(format!("HTTP upload failed: {}", e.without_url())))?;
         let status = response.status().as_u16();
         let etag = response
             .headers()
@@ -753,5 +726,16 @@ mod waveform_tests {
         assert_eq!(service.create_from_pointers(&[pointer]), ids);
         assert_eq!(service.get(&ids[0]).unwrap().unwrap().metadata.waveform_samples,
             stored.metadata.waveform_samples);
+    }
+}
+
+#[cfg(test)]
+mod cdn_security_tests {
+    #[tokio::test]
+    async fn direct_cdn_rejects_cleartext_before_connecting() {
+        let error = super::cdn_client().unwrap()
+            .get("http://127.0.0.1:1/object?secret=capability")
+            .send().await.unwrap_err();
+        assert!(error.is_builder());
     }
 }

@@ -243,8 +243,8 @@ export component UserProfileModal inherits Rectangle {
                 }
 
                 page := VerticalLayout {
-                    padding-top: root.mobile-mode ? profile-header.height + Spacing.sm * 2 : 0px;
-                    padding-bottom: root.mobile-mode ? root.bottom-inset + Spacing.md : 0px;
+                    padding-top: root.mobile-mode ? profile-header.height + Spacing.sm * 2 : Spacing.none;
+                    padding-bottom: root.mobile-mode ? root.bottom-inset + Spacing.md : Spacing.none;
                     alignment: start;
                     spacing: Spacing.md;
 
@@ -276,8 +276,8 @@ export component UserProfileModal inherits Rectangle {
                         // Signal shows a badge only once verified; an
                         // unverified "?" read as "suspicious person".
                         if !root.is-self && root.is-verified: Rectangle {
-                            width: 22px;
-                            height: 22px;
+                            width: Spacing.button-height;
+                            height: Spacing.button-height;
                             y: (parent.height - self.height) / 2;
                             border-radius: 11px;
                             background: Colors.online.with-alpha(0.15);
@@ -454,7 +454,7 @@ export component UserProfileModal inherits Rectangle {
 
                                         VerticalLayout {
                                             horizontal-stretch: 1;
-                                            spacing: 2px;
+                                            spacing: Spacing.xxs;
 
                                             Text {
                                                 text: "Disappearing messages";
@@ -487,7 +487,7 @@ export component UserProfileModal inherits Rectangle {
                                     for opt in DisappearingGlobal.options: Rectangle {
                                         // A radio row, not a list row: 48dp is the touch floor
                                         // (72dp let only five options fit a phone screen).
-                                        height: root.mobile-mode ? Spacing.touch-target-min : 36px;
+                                        height: root.mobile-mode ? Spacing.touch-target-min : Spacing.button-height;
                                         border-radius: Spacing.radius-sm;
                                         background: opt-touch.has-hover ? Colors.surface-hover : transparent;
                                         accessible-role: button;
@@ -594,7 +594,7 @@ export component UserProfileModal inherits Rectangle {
 
                                     VerticalLayout {
                                         horizontal-stretch: 1;
-                                        spacing: 2px;
+                                        spacing: Spacing.xxs;
 
                                         Text {
                                             text: "@" + root.username;
@@ -611,8 +611,8 @@ export component UserProfileModal inherits Rectangle {
                                     }
 
                                     if root.is-self: Rectangle {
-                                        width: 40px;
-                                        height: 40px;
+                                        width: Spacing.button-height;
+                                        height: Spacing.button-height;
                                         border-radius: Spacing.radius-sm;
                                         background: qr-touch.has-hover ? Colors.surface-hover : transparent;
                                         accessible-role: button;
@@ -726,7 +726,7 @@ export component UserProfileModal inherits Rectangle {
 
                                 // Bio
                                 if root.bio != "": VerticalLayout {
-                                    spacing: 2px;
+                                    spacing: Spacing.xxs;
 
                                     Text {
                                         text: root.bio;
@@ -770,7 +770,7 @@ export component UserProfileModal inherits Rectangle {
                                 { mode: "dnd", label: "DND", dot: Colors.dnd },
                                 { mode: "invisible", label: "Invisible", dot: Colors.text-muted },
                             ]: Rectangle {
-                                height: 32px;
+                                height: Spacing.button-height;
                                 horizontal-stretch: 1;
                                 border-radius: 6px;
                                 border-width: root.status-mode == opt.mode ? Spacing.stroke : 0px;
@@ -784,7 +784,7 @@ export component UserProfileModal inherits Rectangle {
                                 }
                                 HorizontalLayout {
                                     alignment: center;
-                                    spacing: 4px;
+                                    spacing: Spacing.xs;
                                     VerticalLayout { alignment: center;
                                         Rectangle { width: 8px; height: 8px; border-radius: 4px; background: opt.dot; }
                                     }
@@ -889,7 +889,7 @@ export component UserProfileModal inherits Rectangle {
 
                         if root.is-friend: Button {
                             text: root.loading ? "" : "Remove Friend";
-                            variant: "danger";
+                            variant: "destructive";
                             horizontal-stretch: 1;
                             loading: root.loading;
                             clicked => {
@@ -911,7 +911,7 @@ export component UserProfileModal inherits Rectangle {
 
                         Button {
                             text: "Block";
-                            variant: "danger";
+                            variant: "destructive";
                             horizontal-stretch: 1;
                             clicked => { root.confirm-remove = false; root.confirm-block = true; }
                         }
@@ -954,8 +954,8 @@ export component UserProfileModal inherits Rectangle {
                             background: Colors.neo-inset-bg;
 
                             HorizontalLayout {
-                                padding: 2px;
-                                spacing: 2px;
+                                padding: Spacing.xxs;
+                                spacing: Spacing.xxs;
 
                                 for tab in root.shared-tabs: Rectangle {
                                     horizontal-stretch: 1;
@@ -1054,7 +1054,7 @@ export component UserProfileModal inherits Rectangle {
                     // ── Files / Links / Voice / Music list ────────────
                     if root.shared-tab != "" && root.shared-tab != "media" && root.shared-tab != "gif": VerticalLayout {
                         alignment: start;
-                        spacing: 0px;
+                        spacing: Spacing.none;
 
                         for item in root.shared-items: Rectangle {
                             height: root.row-height;
@@ -1098,7 +1098,7 @@ export component UserProfileModal inherits Rectangle {
                                 VerticalLayout {
                                     alignment: center;
                                     horizontal-stretch: 1;
-                                    spacing: 2px;
+                                    spacing: Spacing.xxs;
 
                                     Text {
                                         text: item.title;
@@ -1187,7 +1187,7 @@ export component UserProfileModal inherits Rectangle {
 
                 Button {
                     text: "Remove";
-                    variant: "danger";
+                    variant: "destructive";
                     clicked => {
                         root.confirm-remove = false;
                         root.remove-friend();
@@ -1226,7 +1226,7 @@ export component UserProfileModal inherits Rectangle {
 
                 Button {
                     text: "Block";
-                    variant: "danger";
+                    variant: "destructive";
                     clicked => {
                         root.confirm-block = false;
                         root.block-user();

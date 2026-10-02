@@ -85,7 +85,7 @@ export component EmojiPicker inherits GlassSurface {
 
         // Search input
         Rectangle {
-            height: 32px;
+            height: Spacing.button-height;
             border-radius: Spacing.radius-md;
             background: transparent;
             border-width: Spacing.stroke;
@@ -134,8 +134,8 @@ export component EmojiPicker inherits GlassSurface {
 
                 // Clear button (shown when search has text)
                 if root.search-query != "": Rectangle {
-                    width: 20px;
-                    height: 20px;
+                    width: Spacing.button-height;
+                    height: Spacing.button-height;
                     y: (parent.height - self.height) / 2;
                     border-radius: Spacing.radius-full;
                     background: clear-area.has-hover ? Colors.surface-hover : transparent;
@@ -163,70 +163,74 @@ export component EmojiPicker inherits GlassSurface {
 
         // Category tabs (only show when not searching)
         if root.search-query == "": Rectangle {
-            height: 44px;
+            height: Spacing.button-height + Spacing.xs * 2;
             background: transparent;
             border-radius: Spacing.radius-md;
 
-            HorizontalLayout {
-                padding: Spacing.xs;
-                spacing: 0;
+            Flickable {
+                viewport-width: categories.preferred-width;
+                viewport-height: self.height;
+                categories := HorizontalLayout {
+                    padding: Spacing.xs;
+                    spacing: 0;
 
-                for icon[index] in root.category-icons: Rectangle {
-                    property <int> cat: root.icon-index-to-category(index);
-                    horizontal-stretch: 1;
-                    height: 36px;
-                    border-radius: Spacing.radius-sm;
-                    background: cat == root.selected-category ? Colors.primary.with-alpha(0.2) : (tab-area.has-hover ? Colors.surface-hover : transparent);
+                    for icon[index] in root.category-icons: Rectangle {
+                        property <int> cat: root.icon-index-to-category(index);
+                        width: Spacing.button-height;
+                        height: Spacing.button-height;
+                        border-radius: Spacing.radius-sm;
+                        background: cat == root.selected-category ? Colors.primary.with-alpha(0.2) : (tab-area.has-hover ? Colors.surface-hover : transparent);
 
-                    Text {
-                        text: icon;
-                        font-family: Typography.font-family-emoji;
-                        font-size: Typography.base;
-                        horizontal-alignment: center;
-                        vertical-alignment: center;
-                    }
+                        Text {
+                            text: icon;
+                            font-family: Typography.font-family-emoji;
+                            font-size: Typography.base;
+                            horizontal-alignment: center;
+                            vertical-alignment: center;
+                        }
 
-                    // Selected indicator
-                    if cat == root.selected-category: Rectangle {
-                        height: 2px;
-                        y: parent.height - 2px;
-                        width: parent.width * 60%;
-                        x: (parent.width - self.width) / 2;
-                        background: Colors.primary;
-                        border-radius: 1px;
-                    }
+                        // Selected indicator
+                        if cat == root.selected-category: Rectangle {
+                            height: 2px;
+                            y: parent.height - 2px;
+                            width: parent.width * 60%;
+                            x: (parent.width - self.width) / 2;
+                            background: Colors.primary;
+                            border-radius: 1px;
+                        }
 
-                    tab-area := TouchArea {
-                        width: 100%;
-                        height: 100%;
-                        clicked => {
-                            root.selected-category = cat;
-                            root.category-changed(cat);
+                        tab-area := TouchArea {
+                            width: 100%;
+                            height: 100%;
+                            clicked => {
+                                root.selected-category = cat;
+                                root.category-changed(cat);
+                            }
                         }
                     }
-                }
 
-                // GIF tab — switches to GIF picker
-                if root.show-gif-tab: Rectangle {
-                    horizontal-stretch: 1;
-                    height: 36px;
-                    border-radius: Spacing.radius-sm;
-                    background: gif-tab-area.has-hover ? Colors.surface-hover : transparent;
+                    // GIF tab — switches to GIF picker
+                    if root.show-gif-tab: Rectangle {
+                        width: Spacing.button-height;
+                        height: Spacing.button-height;
+                        border-radius: Spacing.radius-sm;
+                        background: gif-tab-area.has-hover ? Colors.surface-hover : transparent;
 
-                    Text {
-                        text: "GIF";
-                        color: Colors.text-secondary;
-                        font-size: Typography.xs;
-                        font-weight: Typography.bold;
-                        horizontal-alignment: center;
-                        vertical-alignment: center;
-                    }
+                        Text {
+                            text: "GIF";
+                            color: Colors.text-secondary;
+                            font-size: Typography.xs;
+                            font-weight: Typography.bold;
+                            horizontal-alignment: center;
+                            vertical-alignment: center;
+                        }
 
-                    gif-tab-area := TouchArea {
-                        width: 100%;
-                        height: 100%;
-                        clicked => {
-                            root.gif-mode-requested();
+                        gif-tab-area := TouchArea {
+                            width: 100%;
+                            height: 100%;
+                            clicked => {
+                                root.gif-mode-requested();
+                            }
                         }
                     }
                 }
@@ -235,17 +239,17 @@ export component EmojiPicker inherits GlassSurface {
 
         // Skin tone selector (shown for People & Body category)
         if root.search-query == "" && root.selected-category == 1: Rectangle {
-            height: 28px;
+            height: Spacing.button-height;
             background: transparent;
             border-radius: Spacing.radius-sm;
 
             HorizontalLayout {
                 alignment: center;
-                spacing: Spacing.sm;
+                spacing: Spacing.none;
 
                 for swatch[tone-idx] in ["\u{1F44B}", "\u{1F44B}\u{1F3FB}", "\u{1F44B}\u{1F3FC}", "\u{1F44B}\u{1F3FD}", "\u{1F44B}\u{1F3FE}", "\u{1F44B}\u{1F3FF}"]: Rectangle {
-                    width: 28px;
-                    height: 28px;
+                    width: Spacing.button-height;
+                    height: Spacing.button-height;
                     border-radius: Spacing.radius-sm;
                     background: tone-idx == root.selected-skin-tone ? Colors.primary.with-alpha(0.2) : (tone-area.has-hover ? Colors.surface-hover : transparent);
                     border-width: tone-idx == root.selected-skin-tone ? Spacing.stroke : 0px;

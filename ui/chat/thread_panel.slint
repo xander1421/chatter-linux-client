@@ -1,3 +1,4 @@
+import { IconAction } from "../components/icon_action.slint";
 import { GlassSurface } from "../components/glass_surface.slint";
 // Thread panel component for viewing replies to a message
 //
@@ -113,7 +114,7 @@ export component ThreadPanel inherits Rectangle {
                 VerticalLayout {
                     horizontal-stretch: 1;
                     alignment: center;
-                    spacing: 2px;
+                    spacing: Spacing.xxs;
 
                     // Title with reply count badge
                     HorizontalLayout {
@@ -186,7 +187,7 @@ export component ThreadPanel inherits Rectangle {
 
             VerticalLayout {
                 padding: Spacing.sm;
-                spacing: 2px;
+                spacing: Spacing.xxs;
 
                 // Sender name
                 Text {
@@ -293,12 +294,12 @@ export component ThreadPanel inherits Rectangle {
                 replies-layout := VerticalLayout {
                     width: 100%;
                     padding: Spacing.sm;
-                    spacing: 2px;
+                    spacing: Spacing.xxs;
 
                     // Only the newest page loads on open; `reply-count` is the
                     // thread's true total, so a shortfall means earlier replies.
                     if root.replies.length < root.reply-count: Rectangle {
-                        height: 28px;
+                        height: Spacing.button-height;
                         Text {
                             text: "Load earlier replies";
                             color: more-touch.has-hover ? Colors.text-primary : Colors.primary;
@@ -356,7 +357,7 @@ export component ThreadPanel inherits Rectangle {
 
         // Composer at bottom (simplified)
         Rectangle {
-            height: 56px;
+            height: Spacing.button-height + Spacing.sm * 2;
             background: Colors.surface;
 
             // Top border
@@ -372,7 +373,7 @@ export component ThreadPanel inherits Rectangle {
                 // Text input area
                 Rectangle {
                     horizontal-stretch: 1;
-                    height: 40px;
+                    height: Spacing.button-height;
                     background: Colors.background;
                     border-radius: Spacing.radius-md;
                     border-width: Spacing.stroke;
@@ -410,33 +411,14 @@ export component ThreadPanel inherits Rectangle {
                 }
 
                 // Send button
-                Rectangle {
-                    width: 40px;
-                    height: 40px;
-                    border-radius: Spacing.radius-md;
-                    background: root.composer-text != "" ? Colors.primary : Colors.text-muted.with-alpha(0.3);
-
-                    // Icons.send, not U+27A4: Inter has no glyph for that
-                    // dingbat, so the thread reply button drew a notdef box —
-                    // and it is the only way to post a reply in this panel.
-                    Image {
-                        source: Icons.send;
-                        colorize: root.composer-text != "" ? Colors.text-primary : Colors.text-muted;
-                        width: 18px;
-                        height: 18px;
-                        x: (parent.width - self.width) / 2;
-                        y: (parent.height - self.height) / 2;
-                    }
-
-                    TouchArea {
-                        width: 100%;
-                        height: 100%;
-                        clicked => {
-                            if root.composer-text != "" {
-                                root.send-reply(root.composer-text);
-                                root.composer-text = "";
-                            }
-                        }
+                IconAction {
+                    icon: Icons.send;
+                    label: "Send reply";
+                    active: true;
+                    enabled: root.composer-text != "";
+                    clicked => {
+                        root.send-reply(root.composer-text);
+                        root.composer-text = "";
                     }
                 }
             }

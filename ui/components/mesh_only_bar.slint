@@ -56,8 +56,8 @@ export component MeshOnlyBar inherits Rectangle {
             horizontal-stretch: 0;
             Rectangle {
                 width: sign-in-label.preferred-width + Spacing.md;
-                height: 28px;
-                border-radius: Spacing.radius-sm;
+                height: Spacing.button-height;
+                border-radius: self.height / 2;
                 background: sign-in-touch.has-hover ? Colors.surface-hover : transparent;
 
                 sign-in-label := Text {

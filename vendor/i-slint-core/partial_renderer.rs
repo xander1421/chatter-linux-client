@@ -359,6 +359,7 @@ pub struct PartialRenderer<'a, T> {
     cache: &'a RefCell<PartialRendererCache>,
     /// The region of the screen which is considered dirty and that should be repainted
     pub dirty_region: DirtyRegion,
+    backdrop_sources: alloc::vec::Vec<LogicalRect>,
     /// The actual renderer which the drawing call will be forwarded to
     pub actual_renderer: T,
     /// The window adapter the renderer is rendering into.
@@ -373,7 +374,13 @@ impl<'a, T: ItemRenderer + ItemRendererFeatures> PartialRenderer<'a, T> {
         actual_renderer: T,
     ) -> Self {
         let window_adapter = actual_renderer.window().window_adapter();
-        Self { cache, dirty_region: initial_dirty_region, actual_renderer, window_adapter }
+        Self {
+            cache,
+            dirty_region: initial_dirty_region,
+            backdrop_sources: Default::default(),
+            actual_renderer,
+            window_adapter,
+        }
     }
 
     /// Visit the tree of item and compute what are the dirty regions
@@ -414,20 +421,24 @@ impl<'a, T: ItemRenderer + ItemRendererFeatures> PartialRenderer<'a, T> {
                 let new_geom =
                     CachedItemBoundingBoxAndTransform::new::<T>(&item_rc, &self.window_adapter);
 
-                // Backdrop depends on other items, including pixels read by its blur kernel.
-                // Repaint the whole component so both the sampled source and filtered output
-                // are fresh; limiting damage to the glass rect leaves stale input pixels.
+                // Collect dependencies first: later siblings/components can add damage.
+                // Include the blur footprint and both transforms for moving glass.
                 if T::SUPPORTS_BACKDROP
-                    && ItemRef::downcast_pin::<Backdrop>(item).is_some_and(|backdrop| {
-                        backdrop.blur().get() > 0 as crate::Coord
-                            || backdrop.saturation() != 1.0
-                            || backdrop.brightness() != 0.0
-                            || backdrop.refraction() > 0.0
-                    })
+                    && let Some(backdrop) = ItemRef::downcast_pin::<Backdrop>(item)
+                    && (backdrop.blur().get() > 0 as crate::Coord
+                        || backdrop.saturation() != 1.0
+                        || backdrop.brightness() != 0.0
+                        || backdrop.refraction() > 0.0)
                     && !state.clipped.is_empty()
                     && !new_geom.bounding_rect().is_empty()
                 {
-                    self.dirty_region.add_rect(LogicalRect::new(origin, size));
+                    let footprint =
+                        (backdrop.blur().get().max(0 as Coord) * 3 as Coord) + 2 as Coord;
+                    let source = new_geom.bounding_rect().inflate(footprint, footprint);
+                    for transform in [state.transform_to_screen, state.old_transform_to_screen] {
+                        self.backdrop_sources
+                            .push(transform.outer_transformed_rect(&source.cast()).cast());
+                    }
                 }
 
                 let rendering_data = item.cached_rendering_data_offset();
@@ -815,6 +826,11 @@ impl PartialRenderingState {
             partial_renderer.dirty_region = screen_region.into();
         }
 
+        expand_backdrop_damage(
+            &mut partial_renderer.dirty_region,
+            &partial_renderer.backdrop_sources,
+            screen_region,
+        );
         let region_to_repaint = partial_renderer.dirty_region.clone();
 
         partial_renderer.dirty_region = match dirty_region_of_existing_buffer {
@@ -823,6 +839,12 @@ impl PartialRenderingState {
         }
         .intersection(screen_region);
 
+        // Buffer-age repair also repaints source pixels, even with no new item damage.
+        expand_backdrop_damage(
+            &mut partial_renderer.dirty_region,
+            &partial_renderer.backdrop_sources,
+            screen_region,
+        );
         region_to_repaint
     }
 
@@ -852,6 +874,34 @@ impl PartialRenderingState {
     pub fn force_screen_refresh(&self) {
         self.force_screen_refresh.set(true);
     }
+}
+
+// A filtered layer must read freshly painted source pixels, not the previous
+// frame's already-composited glass. Keep full reconstruction when its source is
+// touched; unrelated damage and unchanged frames can retain the glass pixels.
+fn expand_backdrop_damage(region: &mut DirtyRegion, sources: &[LogicalRect], screen: LogicalRect) {
+    if sources.iter().any(|source| region.draw_intersects(*source)) {
+        *region = screen.into();
+    }
+}
+
+#[test]
+fn backdrop_damage_retains_unchanged_pixels() {
+    let screen = LogicalRect::from_size(LogicalSize::new(200., 200.));
+    let source = LogicalRect::new(LogicalPoint::new(20., 20.), LogicalSize::new(60., 60.));
+    let mut region = DirtyRegion::default();
+    expand_backdrop_damage(&mut region, &[source], screen);
+    assert_eq!(region.iter().count(), 0);
+    let unrelated = LogicalRect::new(LogicalPoint::new(150., 150.), LogicalSize::new(10., 10.));
+    region.add_rect(unrelated);
+    expand_backdrop_damage(&mut region, &[source], screen);
+    assert!(!region.draw_intersects(source));
+    region.add_rect(LogicalRect::new(
+        LogicalPoint::new(30., 30.),
+        LogicalSize::new(1., 1.),
+    ));
+    expand_backdrop_damage(&mut region, &[source], screen);
+    assert_eq!(region.iter().next().unwrap().to_rect(), screen);
 }
 
 #[test]

@@ -13,8 +13,10 @@ export global Materials {
     out property <color> regular: Appearance.glass-effects
         ? (Appearance.dark ? #00000029 : #ffffff29)
         : (Appearance.dark ? #172331eb : #f8fcffeb);
+    // Sheets sample the dimmed backdrop; light mode needs a milkier tint
+    // to stay distinct from the scrim while retaining the blurred content.
     out property <color> thick: Appearance.glass-effects
-        ? (Appearance.dark ? #00000033 : #ffffff33)
+        ? (Appearance.dark ? #00000033 : #ffffff99)
         : (Appearance.dark ? #18222ff7 : #fcfdfff7);
     out property <color> opaque: Appearance.dark ? #172331 : #f8fcff;
     // The single optical edge is local to GlassSurface, never a row/card stroke.

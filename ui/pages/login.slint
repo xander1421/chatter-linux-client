@@ -63,7 +63,7 @@ export component LoginPage inherits Rectangle {
 
         content := VerticalLayout {
             padding: Spacing.lg;
-            spacing: 0px;
+            spacing: Spacing.none;
             // Centre the card: a max-width alone left-aligns it, so on a
             // tablet it sat against the left edge of a 1000dp+ screen.
             cross-axis-alignment: center;
@@ -112,7 +112,7 @@ export component LoginPage inherits Rectangle {
 
                     // PIN with explanation
                     VerticalLayout {
-                        spacing: 2px;
+                        spacing: Spacing.xxs;
 
                         Input {
                             placeholder: "PIN";
@@ -140,22 +140,20 @@ export component LoginPage inherits Rectangle {
                     HorizontalLayout {
                         spacing: Spacing.sm;
 
-                        Rectangle {
-                            height: 28px;
+                        Button {
+                            text: "Localhost";
+                            variant: "secondary";
                             horizontal-stretch: 1;
-                            background: Colors.surface-hover;
-                            border-radius: Spacing.radius-sm;
-                            Text { text: "Localhost"; font-size: Typography.xs; color: Colors.text-secondary; horizontal-alignment: center; vertical-alignment: center; }
-                            TouchArea { clicked => { root.server-url = "http://localhost:50051"; } }
+                            disabled: root.loading;
+                            clicked => { root.server-url = "http://localhost:50051"; }
                         }
 
-                        Rectangle {
-                            height: 28px;
+                        Button {
+                            text: "LAN";
+                            variant: "secondary";
                             horizontal-stretch: 1;
-                            background: Colors.surface-hover;
-                            border-radius: Spacing.radius-sm;
-                            Text { text: "LAN"; font-size: Typography.xs; color: Colors.text-secondary; horizontal-alignment: center; vertical-alignment: center; }
-                            TouchArea { clicked => { root.server-url = root.configured-server-url; } }
+                            disabled: root.loading;
+                            clicked => { root.server-url = root.configured-server-url; }
                         }
 
                     }
@@ -181,7 +179,7 @@ export component LoginPage inherits Rectangle {
 
                         Button {
                             text: "Start over with new keys";
-                            variant: "danger";
+                            variant: "destructive";
                             disabled: root.loading;
                             clicked => { root.accept-new-identity(); }
                         }

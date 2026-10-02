@@ -113,7 +113,7 @@ export component PrivateGroupListItem inherits Rectangle {
         VerticalLayout {
             horizontal-stretch: 1;
             alignment: center;
-            spacing: 2px;
+            spacing: Spacing.xxs;
 
             HorizontalLayout {
                 spacing: Spacing.xs;
@@ -148,7 +148,7 @@ export component PrivateGroupListItem inherits Rectangle {
 
             // Typing indicator or last message preview
             if root.is-typing: HorizontalLayout {
-                spacing: 3px;
+                spacing: Spacing.xs;
                 alignment: start;
 
                 Rectangle {
@@ -192,7 +192,7 @@ export component PrivateGroupListItem inherits Rectangle {
         // timestamp reached this component but was never rendered.
         if root.timestamp != "" || root.unread-count > 0: VerticalLayout {
             alignment: center;
-            spacing: 4px;
+            spacing: Spacing.xs;
             horizontal-stretch: 0;
 
             Text {

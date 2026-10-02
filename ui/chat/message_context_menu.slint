@@ -133,6 +133,8 @@ export component MessageContextMenu inherits Rectangle {
     // dismisses this menu at the same moment the message becomes selected, and
     // an instant disappearance there reads as a glitch rather than as an
     // escalation.
+    // Keep every descendant of chat chrome below this modal scrim.
+    z: 10;
     visible: root.show;
     opacity: root.show ? 1 : 0;
     animate opacity { duration: 120ms; easing: ease-out; }
@@ -197,7 +199,7 @@ export component MessageContextMenu inherits Rectangle {
                 width: parent.width;
                 height: menu-container.menu-h;
                 padding: Spacing.sm;
-                spacing: 2px;
+                spacing: Spacing.xxs;
 
                 if root.more-actions: MenuItem {
                     icon: Icons.chevron-left;
@@ -212,7 +214,7 @@ export component MessageContextMenu inherits Rectangle {
                 // reactions pill below a bubble is `if has-reactions`, so it could
                 // not bootstrap the first reaction either.
                 if !root.more-actions: HorizontalLayout {
-                    spacing: 0px;
+                    spacing: Spacing.none;
                     alignment: space-between;
                     padding-bottom: Spacing.xs;
 

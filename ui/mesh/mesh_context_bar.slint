@@ -59,8 +59,8 @@ export component MeshContextBar inherits Rectangle {
     HorizontalLayout {
         padding-left: Spacing.md;
         padding-right: Spacing.md;
-        padding-top: 5px;
-        padding-bottom: 5px;
+        padding-top: Spacing.xs;
+        padding-bottom: Spacing.xs;
         spacing: Spacing.sm;
 
         VerticalLayout {
@@ -79,7 +79,7 @@ export component MeshContextBar inherits Rectangle {
         VerticalLayout {
             horizontal-stretch: 1;
             alignment: center;
-            spacing: 1px;
+            spacing: Spacing.xxs;
 
             Text {
                 text: root.delivery-line;
@@ -93,15 +93,15 @@ export component MeshContextBar inherits Rectangle {
             // sidebar, which is collapsed by default on a narrow screen — so a
             // failed send was reported to nobody. Tap to dismiss.
             if MeshGlobal.notice != "": Rectangle {
-                height: notice-text.preferred-height + 6px;
+                height: max(Spacing.button-height, notice-text.preferred-height + Spacing.sm);
                 border-radius: Spacing.radius-sm;
                 background: notice-touch.has-hover
                     ? Colors.warning.with-alpha(0.16)
                     : Colors.warning.with-alpha(0.10);
                 notice-text := Text {
-                    x: 6px;
-                    y: 3px;
-                    width: parent.width - 12px;
+                    x: Spacing.sm;
+                    y: (parent.height - self.height) / 2;
+                    width: parent.width - Spacing.sm * 2;
                     text: MeshGlobal.notice;
                     color: Colors.warning;
                     font-size: Typography.xs;

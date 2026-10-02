@@ -55,17 +55,17 @@ export component ReactionPicker inherits Rectangle {
     }
 
     // Picker container — Neo convex popup with strong shadow
-    GlassSurface {
+    picker-shell := GlassSurface {
         enter-distance: 6px;
         shown: root.show;
 
         material-level: 3;
         elevation: 2;
 
-        x: root.position-x;
-        y: (root.position-y) + self.entrance-offset;
-        width: min(280px, parent.width - 32px);
-        height: min(352px, parent.height - 48px);
+        x: max(Spacing.sm, min(root.position-x, parent.width - self.width - Spacing.sm));
+        y: max(Spacing.sm, min(root.position-y, parent.height - self.height - Spacing.sm)) + self.entrance-offset;
+        width: min(320px, parent.width - Spacing.xxl);
+        height: max(0px, min(400px, parent.height - Spacing.xxxl));
         border-radius: Spacing.radius-xl;
 
         // Block backdrop clicks when clicking picker
@@ -91,8 +91,8 @@ export component ReactionPicker inherits Rectangle {
                         height: Spacing.touch-target-min;
 
                         Rectangle {
-                            width: 40px;
-                            height: 40px;
+                            width: Spacing.button-height;
+                            height: Spacing.button-height;
                             x: (parent.width - self.width) / 2;
                             y: (parent.height - self.height) / 2;
                             border-radius: Spacing.radius-sm;
@@ -121,7 +121,7 @@ export component ReactionPicker inherits Rectangle {
 
             // Divider — neo edge
             Rectangle {
-                height: 1px;
+                height: Spacing.stroke;
                 background: Colors.neo-highlight;
             }
 
@@ -129,6 +129,8 @@ export component ReactionPicker inherits Rectangle {
             EmojiPicker {
                 // The outer reaction panel already supplies the material.
                 material-enabled: false;
+                max-picker-width: picker-shell.width;
+                max-picker-height: max(0px, picker-shell.height - Spacing.touch-target-min - Spacing.stroke);
                 show: true;
                 show-gif-tab: false;
                 emoji-list: root.emoji-list;

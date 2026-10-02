@@ -123,6 +123,9 @@ fn main_view_renders_its_columns_and_they_cover_the_window() {
 
     let w = MainWindow::new().expect("MainWindow::new");
     w.set_current_view("main".into());
+    // A selected conversation mounts ChatLayout; no selection deliberately
+    // shows the welcome state without a composer. Exercise a real chat here.
+    w.set_channel_name("Render smoke".into());
     // Default desktop shape: a real window, mouse input, sidebar expanded.
     w.set_is_mobile_platform(false);
     w.set_sidebar_collapsed(false);
@@ -204,6 +207,10 @@ fn main_view_renders_its_columns_and_they_cover_the_window() {
     w.window().set_size(slint::LogicalSize::new(400.0, 800.0));
     w.set_mobile_show_chat(false);
     pump(&w);
+    // Mobile geometry is measured against the resized window, not the
+    // desktop width retained above.
+    let win = w.window().size().to_logical(w.window().scale_factor());
+    let (win_w, win_h) = (win.width, win.height);
     let list_side = find(&w, "Sidebar");
     assert_visible(&list_side, "Sidebar", "mobile, conversation list");
     let list_side = list_side.unwrap();

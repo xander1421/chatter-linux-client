@@ -1,3 +1,4 @@
+import { Checkbox } from "../components/checkbox.slint";
 // CreateChannelModal - Single-page adaptive form.
 //
 // UX: one-step form with access-model pills (Open / Invite-only / Private group),
@@ -327,7 +328,7 @@ export component CreateChannelModal inherits Rectangle {
 
                         VerticalLayout {
                             padding: Spacing.sm;
-                            spacing: 2px;
+                            spacing: Spacing.xxs;
                             alignment: center;
 
                             HorizontalLayout {
@@ -370,7 +371,7 @@ export component CreateChannelModal inherits Rectangle {
 
                         VerticalLayout {
                             padding: Spacing.sm;
-                            spacing: 2px;
+                            spacing: Spacing.xxs;
                             alignment: center;
 
                             HorizontalLayout {
@@ -413,7 +414,7 @@ export component CreateChannelModal inherits Rectangle {
 
                         VerticalLayout {
                             padding: Spacing.sm;
-                            spacing: 2px;
+                            spacing: Spacing.xxs;
                             alignment: center;
 
                             HorizontalLayout {
@@ -538,7 +539,7 @@ export component CreateChannelModal inherits Rectangle {
 
                         friend-list := VerticalLayout {
                             padding: Spacing.xs;
-                            spacing: 2px;
+                            spacing: Spacing.xxs;
 
                             for friend[idx] in root.available-friends: Rectangle {
                                 height: 48px * Appearance.text-grow;
@@ -584,7 +585,7 @@ export component CreateChannelModal inherits Rectangle {
                                     VerticalLayout {
                                         horizontal-stretch: 1;
                                         alignment: center;
-                                        spacing: 2px;
+                                        spacing: Spacing.xxs;
 
                                         Text {
                                             text: friend.display-name;
@@ -602,24 +603,29 @@ export component CreateChannelModal inherits Rectangle {
                                         }
                                     }
 
-                                    if friend.selected: Rectangle {
-                                        width: role-text.width + Spacing.sm * 2;
-                                        height: 24px;
-                                        border-radius: Spacing.radius-sm;
-                                        background: role-touch.has-hover ? (friend.role == "admin" ? Colors.warning.with-alpha(0.3) : Colors.surface) : (friend.role == "admin" ? Colors.warning.with-alpha(0.2) : Colors.surface-hover);
+                                    if friend.selected: VerticalLayout {
+                                        alignment: center;
+                                        horizontal-stretch: 0;
+                                        Rectangle {
+                                            width: role-text.preferred-width + Spacing.sm * 2;
+                                            height: Spacing.button-height;
+                                            border-radius: Spacing.radius-sm;
+                                            background: role-touch.has-hover ? (friend.role == "admin" ? Colors.warning.with-alpha(0.3) : Colors.surface) : (friend.role == "admin" ? Colors.warning.with-alpha(0.2) : Colors.surface-hover);
 
-                                        role-text := Text {
-                                            text: friend.role == "admin" ? "Admin" : "Member";
-                                            color: friend.role == "admin" ? Colors.warning : Colors.text-secondary;
-                                            font-size: Typography.xs;
-                                            font-weight: Typography.medium;
-                                            horizontal-alignment: center;
-                                            vertical-alignment: center;
-                                        }
+                                            role-text := Text {
+                                                text: friend.role == "admin" ? "Admin" : "Member";
+                                                color: friend.role == "admin" ? Colors.warning : Colors.text-secondary;
+                                                font-size: Typography.xs;
+                                                font-weight: Typography.medium;
+                                                horizontal-alignment: center;
+                                                vertical-alignment: center;
+                                            }
 
-                                        role-touch := TouchArea {
-                                            mouse-cursor: pointer;
-                                            clicked => { root.toggle-friend-role(idx); }
+                                            role-touch := TouchArea {
+                                                mouse-cursor: pointer;
+                                                clicked => { root.toggle-friend-role(idx); }
+                                            }
+
                                         }
                                     }
                                 }
@@ -636,7 +642,7 @@ export component CreateChannelModal inherits Rectangle {
                 spacing: Spacing.xs;
 
                 Rectangle {
-                    height: 28px;
+                    height: Spacing.button-height;
                     background: transparent;
 
                     HorizontalLayout {
@@ -681,33 +687,14 @@ export component CreateChannelModal inherits Rectangle {
                             spacing: Spacing.sm;
                             alignment: start;
 
-                            Rectangle {
-                                width: 20px;
-                                height: 20px;
-                                border-radius: 4px;
-                                border-width: Spacing.stroke;
-                                border-color: root.use-ephemeral ? Colors.primary : Colors.text-muted;
-                                background: root.use-ephemeral ? Colors.primary : transparent;
-                                y: (parent.height - self.height) / 2;
-
-                                if root.use-ephemeral: Image {
-                                    source: Icons.check;
-                                    width: 12px;
-                                    height: 12px;
-                                    x: (parent.width - self.width) / 2;
-                                    y: (parent.height - self.height) / 2;
-                                    colorize: Colors.text-primary;
-                                }
-
-                                ephemeral-touch := TouchArea {
-                                    mouse-cursor: pointer;
-                                    clicked => { root.use-ephemeral = !root.use-ephemeral; }
-                                }
+                            Checkbox {
+                                checked <=> root.use-ephemeral;
+                                label: "Auto-delete messages";
                             }
 
                             VerticalLayout {
                                 alignment: center;
-                                spacing: 2px;
+                                spacing: Spacing.xxs;
 
                                 Text {
                                     text: "Auto-delete messages";
@@ -726,7 +713,7 @@ export component CreateChannelModal inherits Rectangle {
 
                         if root.use-ephemeral: HorizontalLayout {
                             spacing: Spacing.xs;
-                            padding-left: 32px;
+                            padding-left: Spacing.xxl;
                             alignment: start;
 
                             Text {
@@ -774,38 +761,14 @@ export component CreateChannelModal inherits Rectangle {
                             spacing: Spacing.sm;
                             alignment: start;
 
-                            Rectangle {
-                                width: 20px;
-                                height: 20px;
-                                border-radius: 4px;
-                                border-width: Spacing.stroke;
-                                border-color: root.use-ai ? Colors.primary : Colors.text-muted;
-                                background: root.use-ai ? Colors.primary : transparent;
-                                y: (parent.height - self.height) / 2;
-
-                                if root.use-ai: Image {
-                                    source: Icons.check;
-                                    width: 12px;
-                                    height: 12px;
-                                    x: (parent.width - self.width) / 2;
-                                    y: (parent.height - self.height) / 2;
-                                    colorize: Colors.text-primary;
-                                }
-
-                                ai-touch := TouchArea {
-                                    mouse-cursor: pointer;
-                                    clicked => {
-                                        root.use-ai = !root.use-ai;
-                                        if root.use-ai && root.ai-provider != "" {
-                                            root.provider-selected(root.ai-provider);
-                                        }
-                                    }
-                                }
+                            Checkbox {
+                                checked <=> root.use-ai;
+                                label: "Enable AI assistant";
                             }
 
                             VerticalLayout {
                                 alignment: center;
-                                spacing: 2px;
+                                spacing: Spacing.xxs;
 
                                 Text {
                                     text: "AI assistant";
@@ -824,14 +787,14 @@ export component CreateChannelModal inherits Rectangle {
 
                         if root.use-ai: VerticalLayout {
                             spacing: Spacing.sm;
-                            padding-left: 32px;
+                            padding-left: Spacing.xxl;
 
                             // Provider
                             HorizontalLayout {
                                 spacing: Spacing.sm;
 
                                 for provider in root.ai-providers: Rectangle {
-                                    height: 32px;
+                                    height: Spacing.button-height;
                                     horizontal-stretch: 1;
                                     border-radius: Spacing.radius-md;
                                     border-width: root.ai-provider == provider.id ? Spacing.stroke : 0px;
@@ -870,7 +833,7 @@ export component CreateChannelModal inherits Rectangle {
                                 }
 
                                 if root.ai-models-error != "": VerticalLayout {
-                                    spacing: 2px;
+                                    spacing: Spacing.xxs;
                                     Text {
                                         text: root.ai-models-error;
                                         color: Colors.error;
@@ -889,10 +852,10 @@ export component CreateChannelModal inherits Rectangle {
                                     viewport-height: model-layout.preferred-height;
 
                                     model-layout := VerticalLayout {
-                                        spacing: 2px;
+                                        spacing: Spacing.xxs;
 
                                         for model in root.ai-models: Rectangle {
-                                            height: 32px;
+                                            height: Spacing.button-height;
                                             border-radius: Spacing.radius-sm;
                                             border-width: root.ai-model == model.id ? Spacing.stroke : 0px;
                                             border-color: Colors.primary;

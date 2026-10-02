@@ -91,7 +91,7 @@ impl CbcRangeDecryptor {
         if off >= self.plaintext_size || len == 0 {
             return Vec::new();
         }
-        let end = (off + len).min(self.plaintext_size);
+        let end = off.saturating_add(len).min(self.plaintext_size);
         let start_block = off / AES_BLOCK;
         let end_block = (end - 1) / AES_BLOCK; // inclusive; end <= encrypted_len so in range
 
@@ -142,7 +142,9 @@ impl CbcRangeReader {
 
 impl std::io::Read for CbcRangeReader {
     fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
-        let chunk = self.dec.read_range(self.pos as usize, buf.len());
+        // Seeking past EOF is allowed, so `pos` can exceed usize on 32-bit.
+        let off = usize::try_from(self.pos).unwrap_or(usize::MAX);
+        let chunk = self.dec.read_range(off, buf.len());
         let n = chunk.len();
         buf[..n].copy_from_slice(&chunk);
         self.pos += n as u64;
@@ -153,20 +155,17 @@ impl std::io::Read for CbcRangeReader {
 impl std::io::Seek for CbcRangeReader {
     fn seek(&mut self, pos: std::io::SeekFrom) -> std::io::Result<u64> {
         use std::io::SeekFrom;
-        let size = self.dec.plaintext_size() as i64;
+        // Offsets come from a decoder parsing a file the sender chose, so the
+        // arithmetic is checked rather than trusted not to wrap.
         let new_pos = match pos {
-            SeekFrom::Start(o) => o as i64,
-            SeekFrom::End(o) => size + o,
-            SeekFrom::Current(o) => self.pos as i64 + o,
+            SeekFrom::Start(o) => Some(o),
+            SeekFrom::End(o) => (self.dec.plaintext_size() as u64).checked_add_signed(o),
+            SeekFrom::Current(o) => self.pos.checked_add_signed(o),
         };
-        if new_pos < 0 {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::InvalidInput,
-                "seek before start",
-            ));
-        }
         // Seeking past EOF is allowed; the next read returns 0 bytes.
-        self.pos = new_pos as u64;
+        self.pos = new_pos.ok_or_else(|| {
+            std::io::Error::new(std::io::ErrorKind::InvalidInput, "seek out of range")
+        })?;
         Ok(self.pos)
     }
 }
@@ -285,5 +284,12 @@ mod tests {
         // Seek past EOF -> read returns 0.
         reader.seek(SeekFrom::Start(plaintext.len() as u64 + 999)).unwrap();
         assert_eq!(reader.read(&mut b).unwrap(), 0);
+
+        // Offsets a hostile media file can steer a decoder into: errors or
+        // EOF, never a wrap or a panic.
+        reader.seek(SeekFrom::Start(u64::MAX)).unwrap();
+        assert_eq!(reader.read(&mut b).unwrap(), 0);
+        assert!(reader.seek(SeekFrom::Current(i64::MAX)).is_err());
+        assert!(reader.seek(SeekFrom::End(i64::MIN)).is_err());
     }
 }

@@ -12,7 +12,7 @@ use chatter_core::calls::ScreenCapture;
 use slint::{Model, ModelRc, SharedString, VecModel};
 use crate::{CallParticipantData, MainWindow};
 
-use super::timers::{get_call_duration_secs, stop_call_timer, stop_video_frame_timer};
+use super::timers::{stop_call_timer, stop_video_frame_timer};
 
 /// Toggle the local participant's `is_screen_sharing` flag in the active-call
 /// model so their own tile picks up the screen-share badge. Remote peers'
@@ -273,9 +273,6 @@ pub fn wire_active_call(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             tracing::info!("End call");
 
             slint::spawn_local(async move {
-                // Read duration BEFORE stopping timer — stop_call_timer clears CALL_START_NS
-                let duration = get_call_duration_secs() as i64;
-
                 // Update UI immediately BEFORE async operations so the modal
                 // doesn't linger if network calls block.
                 stop_call_timer();
@@ -287,7 +284,7 @@ pub fn wire_active_call(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                 // Core resolves call kind (anon/DM/group) from orchestrator state.
                 let ctx = ui_ctx.clone();
                 tokio::spawn(async move {
-                    if let Err(e) = ctx.end_active_call(duration).await {
+                    if let Err(e) = ctx.end_active_call().await {
                         tracing::error!(error = %e, "Failed to end active call");
                     }
                 });

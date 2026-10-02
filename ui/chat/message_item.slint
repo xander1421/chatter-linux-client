@@ -1,3 +1,4 @@
+import { IconAction } from "../components/icon_action.slint";
 // Single message item component with bubble layout
 //
 // Displays an individual message with chat-style bubbles.
@@ -202,8 +203,11 @@ export component MessageItem inherits Rectangle {
     // Styling
     min-height: main-layout.preferred-height;
     // Selected rows tint rather than outline the flat bubbles.
-    background: root.selected ? Colors.primary.with-alpha(0.18) : transparent;
-    animate background { duration: 150ms; easing: ease-out; }
+    // Animate a private property so Slint can share MessageItem between the
+    // main conversation and thread panel instead of inlining both trees.
+    property <brush> selection-background: root.selected ? Colors.primary.with-alpha(0.18) : transparent;
+    background: root.selection-background;
+    animate selection-background { duration: 150ms; easing: ease-out; }
 
     // Wrap entire content in TouchArea for reliable hover detection.
     // Width/Height 100% ensures it covers the whole row.
@@ -272,7 +276,7 @@ export component MessageItem inherits Rectangle {
 
                     VerticalLayout {
                         alignment: center;
-                        spacing: 2px;
+                        spacing: Spacing.xxs;
 
                         HorizontalLayout {
                             spacing: Spacing.xs;
@@ -466,8 +470,8 @@ export component MessageItem inherits Rectangle {
                     }
 
                     bubble-content := VerticalLayout {
-                        padding: Spacing.sm + 2px;
-                        padding-left: root.is-ai ? Spacing.sm + 6px : Spacing.sm + 2px;
+                        padding: Spacing.sm + Spacing.xxs;
+                        padding-left: root.is-ai ? Spacing.sm + Spacing.sm : Spacing.sm + Spacing.xxs;
                         spacing: Spacing.xs;
 
                         // Sender name + timestamp (only in channels for others, hidden in continuations)
@@ -504,7 +508,7 @@ export component MessageItem inherits Rectangle {
                         // quote block below). Purple to keep it distinct from
                         // the teal quote accent.
                         if root.is-thread-reply: HorizontalLayout {
-                            spacing: 4px;
+                            spacing: Spacing.xs;
                             alignment: start;
 
                             Image {
@@ -623,7 +627,7 @@ export component MessageItem inherits Rectangle {
                                 // Right column — sender name + label/player, fills
                                 // the width beside the thumbnail (no empty gap).
                                 VerticalLayout {
-                                    spacing: 4px;
+                                    spacing: Spacing.xs;
                                     horizontal-stretch: 1;
                                     alignment: center;
 
@@ -682,7 +686,7 @@ export component MessageItem inherits Rectangle {
                         // Message content — rich text rendering
                         // Uses parsed markdown spans when available, falls back to plain text
                         if root.content != "" && root.rich-content.length > 0 && !root.single-text-span: VerticalLayout {
-                            spacing: 4px;
+                            spacing: Spacing.xs;
                             max-width: root.text-max-width;
 
                             for span in root.rich-content: VerticalLayout {
@@ -692,7 +696,7 @@ export component MessageItem inherits Rectangle {
                                     border-radius: 4px;
 
                                     VerticalLayout {
-                                        padding: 8px;
+                                        padding: Spacing.sm;
 
                                         Text {
                                             text: span.text;
@@ -1027,7 +1031,7 @@ export component MessageItem inherits Rectangle {
                                         VerticalLayout {
                                             horizontal-stretch: 1;
                                             alignment: center;
-                                            spacing: 2px;
+                                            spacing: Spacing.xxs;
 
                                             Text {
                                                 text: attachment.filename;
@@ -1096,7 +1100,7 @@ export component MessageItem inherits Rectangle {
 
                         // Timestamp row — bottom-right for all messages (messenger convention)
                         HorizontalLayout {
-                            spacing: 4px;
+                            spacing: Spacing.xs;
                             alignment: end;
 
                             if root.is-pinned: Image {
@@ -1250,7 +1254,7 @@ export component MessageItem inherits Rectangle {
                     height: 22px;
                     width: reactions-row.preferred-width + 8px;
                     background: Colors.surface;
-                    border-radius: 11px;
+                    border-radius: self.height / 2;
 
                     x: root.is-own ? -self.width + 8px : bubble.width - 8px;
                     y: bubble.height - 4px;
@@ -1258,16 +1262,16 @@ export component MessageItem inherits Rectangle {
                     accessible-label: "Reactions: " + root.reaction-summary;
 
                     reactions-row := HorizontalLayout {
-                        padding-left: 6px;
-                        padding-right: 6px;
-                        spacing: 6px;
+                        padding-left: Spacing.sm;
+                        padding-right: Spacing.sm;
+                        spacing: Spacing.sm;
                         alignment: center;
 
                         for reaction in root.reactions: Rectangle {
                             width: entry.preferred-width;
 
                             entry := HorizontalLayout {
-                                spacing: 2px;
+                                spacing: Spacing.xxs;
                                 alignment: center;
 
                                 Text {
@@ -1303,73 +1307,39 @@ export component MessageItem inherits Rectangle {
                 // Do not allocate hidden controls for every row (or any mobile row).
                 if root.is-hovered: Rectangle {
                     x: root.is-own ? -action-btns.width + 8px : bubble.width - 8px;
-                    y: -14px; // Float halfway above the top edge
+                    y: -Spacing.button-height / 2; // Float halfway above the top edge
                     width: action-btns.width;
                     height: action-btns.height;
                     visible: root.is-hovered && !root.is-system && !root.is-deleted && !root.is-call;
 
                     action-btns := Rectangle {
-                        height: 28px;
-                        width: 106px;
+                        height: Spacing.button-height + Spacing.xxs * 2;
+                        width: (root.can-thread ? 4 : 3) * Spacing.button-height + (root.can-thread ? 5 : 4) * Spacing.xxs;
                         background: Colors.surface;
                         border-radius: Spacing.radius-md;
 
                         HorizontalLayout {
-                            padding: 2px;
-                            spacing: 2px;
+                            padding: Spacing.xxs;
+                            spacing: Spacing.xxs;
                             alignment: center;
 
                             // Reply button
-                            Rectangle {
-                                height: 24px;
-                                width: 24px;
-                                background: reply-touch.has-hover ? Colors.surface-hover : transparent;
-                                border-radius: Spacing.radius-sm;
-                                accessible-role: button;
-                                accessible-label: "Reply to message";
-
-                                Image {
-                                    width: 14px;
-                                    height: 14px;
-                                    source: Icons.reply;
-                                    colorize: Colors.text-secondary;
-                                    x: (parent.width - self.width) / 2;
-                                    y: (parent.height - self.height) / 2;
-                                }
-
-                                reply-touch := TouchArea {
-                                    mouse-cursor: pointer;
-                                    clicked => {
+                            IconAction {
+                                label: "Reply to message";
+                                icon: Icons.reply;
+                                clicked => {
                                         root.reply-clicked(root.sender-id, root.timestamp-ns);
-                                    }
                                 }
                             }
 
                             // React button
-                            react-btn := Rectangle {
-                                height: 24px;
-                                width: 24px;
-                                background: react-btn-touch.has-hover ? Colors.surface-hover : transparent;
-                                border-radius: Spacing.radius-sm;
-                                accessible-role: button;
-                                accessible-label: "Add reaction";
-
-                                Image {
-                                    width: 14px;
-                                    height: 14px;
-                                    source: Icons.smile;
-                                    colorize: Colors.text-secondary;
-                                    x: (parent.width - self.width) / 2;
-                                    y: (parent.height - self.height) / 2;
-                                }
-
-                                react-btn-touch := TouchArea {
-                                    mouse-cursor: pointer;
-                                    clicked => {
+                            react-btn := IconAction {
+                                label: "Add reaction";
+                                icon: Icons.smile;
+                                clicked => {
                                         root.react-clicked(root.sender-id, root.timestamp-ns,
                                             react-btn.absolute-position.x,
                                             react-btn.absolute-position.y + react-btn.height);
-                                    }
                                 }
                             }
 
@@ -1377,56 +1347,22 @@ export component MessageItem inherits Rectangle {
                             // this message. Previously the ONLY thread entry was
                             // the "N replies" badge (rendered `if reply-count > 0`),
                             // so a message with no replies could never START a thread.
-                            if root.can-thread: thread-btn := Rectangle {
-                                height: 24px;
-                                width: 24px;
-                                background: thread-btn-touch.has-hover ? Colors.surface-hover : transparent;
-                                border-radius: Spacing.radius-sm;
-                                accessible-role: button;
-                                accessible-label: "Reply in thread";
-
-                                Image {
-                                    width: 14px;
-                                    height: 14px;
-                                    source: Icons.message-circle;
-                                    colorize: Colors.text-secondary;
-                                    x: (parent.width - self.width) / 2;
-                                    y: (parent.height - self.height) / 2;
-                                }
-
-                                thread-btn-touch := TouchArea {
-                                    mouse-cursor: pointer;
-                                    clicked => {
+                            if root.can-thread: thread-btn := IconAction {
+                                label: "Reply in thread";
+                                icon: Icons.message-circle;
+                                clicked => {
                                         root.thread-clicked(root.message-id);
-                                    }
                                 }
                             }
 
                             // More button
-                            more-btn := Rectangle {
-                                height: 24px;
-                                width: 24px;
-                                background: more-touch.has-hover ? Colors.surface-hover : transparent;
-                                border-radius: Spacing.radius-sm;
-                                accessible-role: button;
-                                accessible-label: "More message actions";
-
-                                Image {
-                                    width: 14px;
-                                    height: 14px;
-                                    source: Icons.more-horizontal;
-                                    colorize: Colors.text-secondary;
-                                    x: (parent.width - self.width) / 2;
-                                    y: (parent.height - self.height) / 2;
-                                }
-
-                                more-touch := TouchArea {
-                                    mouse-cursor: pointer;
-                                    clicked => {
+                            more-btn := IconAction {
+                                label: "More message actions";
+                                icon: Icons.more-horizontal;
+                                clicked => {
                                         root.more-clicked(root.sender-id, root.timestamp-ns,
                                             more-btn.absolute-position.x,
                                             more-btn.absolute-position.y + more-btn.height);
-                                    }
                                 }
                             }
                         }
@@ -1444,9 +1380,9 @@ export component MessageItem inherits Rectangle {
                     // Pill button (not bare text) so the thread entry point
                     // reads as clickable.
                     Rectangle {
-                        height: 22px;
+                        height: Spacing.button-height;
                         width: thread-layout.preferred-width + Spacing.sm * 2;
-                        border-radius: 11px;
+                        border-radius: self.height / 2;
                         background: thread-touch.has-hover
                             ? Colors.primary.transparentize(0.75)
                             : Colors.primary.transparentize(0.9);
@@ -1455,7 +1391,7 @@ export component MessageItem inherits Rectangle {
 
                         thread-layout := HorizontalLayout {
                             spacing: Spacing.xs;
-                            padding: 2px;
+                            padding: Spacing.xxs;
                             padding-left: Spacing.sm;
                             alignment: center;
 

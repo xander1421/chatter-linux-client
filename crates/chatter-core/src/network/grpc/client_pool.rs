@@ -162,6 +162,7 @@ impl GrpcClientPool {
     /// * `server_url` - Server URL
     /// * `timeout` - Request timeout (None for no timeout, suitable for streaming)
     fn with_timeout(server_url: &str, timeout: Option<Duration>) -> Result<Self, NetworkError> {
+        Self::validate_direct_url(server_url)?;
         let endpoint = Self::create_endpoint(server_url, timeout)?;
 
         Ok(Self {
@@ -180,6 +181,24 @@ impl GrpcClientPool {
             #[cfg(feature = "onion")]
             anon_onion_tor: Arc::new(tokio::sync::OnceCell::new()),
         })
+    }
+
+    /// Public transports must not send device credentials over cleartext HTTP.
+    /// Onion endpoints are created separately and authenticated by Arti.
+    fn validate_direct_url(server_url: &str) -> Result<(), NetworkError> {
+        let url = url::Url::parse(server_url)
+            .map_err(|_| NetworkError::ConnectionFailed("invalid URL".into()))?;
+        let dev_loopback = cfg!(feature = "dev-trust-root") && match url.host() {
+            Some(url::Host::Domain("localhost")) => true,
+            Some(url::Host::Ipv4(ip)) => ip.is_loopback(),
+            Some(url::Host::Ipv6(ip)) => ip.is_loopback(),
+            _ => false,
+        };
+        if (url.scheme() != "https" && !(url.scheme() == "http" && dev_loopback))
+            || !url.username().is_empty() || url.password().is_some() {
+            return Err(NetworkError::ConnectionFailed("direct server connection requires HTTPS".into()));
+        }
+        Ok(())
     }
 
     /// Helper to create an endpoint with standard settings.
@@ -201,7 +220,7 @@ impl GrpcClientPool {
         // starts with an EMPTY trust store in tonic 0.12; we add just our CA and
         // never call `with_native_roots()`. Onion endpoints are `http://` over Tor,
         // pinned by their `.onion` address, and never reach this branch.
-        if server_url.starts_with("https://") {
+        if endpoint.uri().scheme_str() == Some("https") {
             let ca_pem = crate::config::TLS_ROOT_CA_PEM.ok_or_else(|| {
                 NetworkError::ConnectionFailed(
                     "no TLS root CA provisioned; refusing to open an unpinned TLS connection \
@@ -235,6 +254,7 @@ impl GrpcClientPool {
     ///
     /// Returns `NetworkError::ConnectionFailed` if the URL is invalid.
     pub fn set_url(&self, server_url: &str) -> Result<(), NetworkError> {
+        Self::validate_direct_url(server_url)?;
         let new_endpoint = Self::create_endpoint(server_url, self.timeout)?;
 
         // Disconnect first
@@ -1138,5 +1158,18 @@ mod tests {
             QuicProbeState::Untried,
             "a new server_url must get a fresh QUIC probe, not inherit the old one's verdict"
         );
+    }
+}
+
+#[cfg(test)]
+mod transport_security_tests {
+    use super::GrpcClientPool;
+
+    #[test]
+    fn direct_remote_endpoints_require_tls() {
+        for url in ["http://example.com", "http://192.0.2.1:50051", "http://example.onion", "https://user:secret@example.com", "ftp://example.com"] {
+            assert!(GrpcClientPool::validate_direct_url(url).is_err(), "{url}");
+        }
+        assert!(GrpcClientPool::validate_direct_url("https://example.com").is_ok());
     }
 }

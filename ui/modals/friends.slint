@@ -296,8 +296,8 @@ export component FriendsModal inherits Rectangle {
                             viewport-height: friends-list.preferred-height;
 
                             friends-list := VerticalLayout {
-                                padding-top: root.mobile-mode ? scroll-friends-list.chrome-inset : 0px;
-                                padding-bottom: root.mobile-mode ? root.bottom-inset + Spacing.md : 0px;
+                                padding-top: root.mobile-mode ? scroll-friends-list.chrome-inset : Spacing.none;
+                                padding-bottom: root.mobile-mode ? root.bottom-inset + Spacing.md : Spacing.none;
                                 // Rows stack from the TOP. A VerticalLayout with no
                                 // alignment distributes its leftover space around
                                 // fixed-height children, so one friend in a
@@ -335,7 +335,7 @@ export component FriendsModal inherits Rectangle {
                                         VerticalLayout {
                                             horizontal-stretch: 1;
                                             alignment: center;
-                                            spacing: root.mobile-mode ? 3px : 2px;
+                                            spacing: root.mobile-mode ? Spacing.xs : Spacing.xxs;
 
                                             Text {
                                                 text: friend.display-name;
@@ -653,7 +653,7 @@ export component FriendsModal inherits Rectangle {
 
                                 VerticalLayout {
                                     horizontal-stretch: 1;
-                                    spacing: 2px;
+                                    spacing: Spacing.xxs;
 
                                     Text {
                                         text: root.effective-private-mode ? "Private mode (Shield)" : "Server-managed";
@@ -948,8 +948,8 @@ export component FriendsModal inherits Rectangle {
                                 viewport-height: received-list.preferred-height;
 
                                 received-list := VerticalLayout {
-                                    padding-top: root.mobile-mode ? scroll-received-list.chrome-inset : 0px;
-                                    padding-bottom: root.mobile-mode ? root.bottom-inset + Spacing.md : 0px;
+                                    padding-top: root.mobile-mode ? scroll-received-list.chrome-inset : Spacing.none;
+                                    padding-bottom: root.mobile-mode ? root.bottom-inset + Spacing.md : Spacing.none;
                                     // Rows stack from the top (see friends-list).
                                     alignment: start;
                                     spacing: Spacing.xs;
@@ -975,7 +975,7 @@ export component FriendsModal inherits Rectangle {
                                             VerticalLayout {
                                                 horizontal-stretch: 1;
                                                 alignment: center;
-                                                spacing: 2px;
+                                                spacing: Spacing.xxs;
 
                                                 Text {
                                                     text: request.display-name;
@@ -1055,8 +1055,8 @@ export component FriendsModal inherits Rectangle {
                                 viewport-height: sent-list.preferred-height;
 
                                 sent-list := VerticalLayout {
-                                    padding-top: root.mobile-mode ? scroll-sent-list.chrome-inset : 0px;
-                                    padding-bottom: root.mobile-mode ? root.bottom-inset + Spacing.md : 0px;
+                                    padding-top: root.mobile-mode ? scroll-sent-list.chrome-inset : Spacing.none;
+                                    padding-bottom: root.mobile-mode ? root.bottom-inset + Spacing.md : Spacing.none;
                                     // Rows stack from the top (see friends-list).
                                     alignment: start;
                                     spacing: Spacing.xs;
@@ -1081,7 +1081,7 @@ export component FriendsModal inherits Rectangle {
                                             VerticalLayout {
                                                 horizontal-stretch: 1;
                                                 alignment: center;
-                                                spacing: 2px;
+                                                spacing: Spacing.xxs;
 
                                                 Text {
                                                     text: request.display-name;
@@ -1154,8 +1154,8 @@ export component FriendsModal inherits Rectangle {
                                 viewport-height: private-list.preferred-height;
 
                                 private-list := VerticalLayout {
-                                    padding-top: root.mobile-mode ? scroll-private-list.chrome-inset : 0px;
-                                    padding-bottom: root.mobile-mode ? root.bottom-inset + Spacing.md : 0px;
+                                    padding-top: root.mobile-mode ? scroll-private-list.chrome-inset : Spacing.none;
+                                    padding-bottom: root.mobile-mode ? root.bottom-inset + Spacing.md : Spacing.none;
                                     // Rows stack from the top (see friends-list).
                                     alignment: start;
                                     spacing: Spacing.xs;
@@ -1192,7 +1192,7 @@ export component FriendsModal inherits Rectangle {
                                             VerticalLayout {
                                                 horizontal-stretch: 1;
                                                 alignment: center;
-                                                spacing: 2px;
+                                                spacing: Spacing.xxs;
 
                                                 HorizontalLayout {
                                                     spacing: Spacing.xs;
@@ -1309,8 +1309,8 @@ export component FriendsModal inherits Rectangle {
                                 viewport-height: group-invite-list.preferred-height;
 
                                 group-invite-list := VerticalLayout {
-                                    padding-top: root.mobile-mode ? scroll-group-invite-list.chrome-inset : 0px;
-                                    padding-bottom: root.mobile-mode ? root.bottom-inset + Spacing.md : 0px;
+                                    padding-top: root.mobile-mode ? scroll-group-invite-list.chrome-inset : Spacing.none;
+                                    padding-bottom: root.mobile-mode ? root.bottom-inset + Spacing.md : Spacing.none;
                                     // Rows stack from the top (see friends-list).
                                     alignment: start;
                                     spacing: Spacing.xs;
@@ -1346,7 +1346,7 @@ export component FriendsModal inherits Rectangle {
                                             VerticalLayout {
                                                 horizontal-stretch: 1;
                                                 alignment: center;
-                                                spacing: 2px;
+                                                spacing: Spacing.xxs;
 
                                                 HorizontalLayout {
                                                     spacing: Spacing.xs;
@@ -1454,8 +1454,8 @@ export component FriendsModal inherits Rectangle {
                                 viewport-height: channel-invite-list.preferred-height;
 
                                 channel-invite-list := VerticalLayout {
-                                    padding-top: root.mobile-mode ? scroll-channel-invite-list.chrome-inset : 0px;
-                                    padding-bottom: root.mobile-mode ? root.bottom-inset + Spacing.md : 0px;
+                                    padding-top: root.mobile-mode ? scroll-channel-invite-list.chrome-inset : Spacing.none;
+                                    padding-bottom: root.mobile-mode ? root.bottom-inset + Spacing.md : Spacing.none;
                                     // Rows stack from the top (see friends-list).
                                     alignment: start;
                                     spacing: Spacing.xs;
@@ -1491,7 +1491,7 @@ export component FriendsModal inherits Rectangle {
                                             VerticalLayout {
                                                 horizontal-stretch: 1;
                                                 alignment: center;
-                                                spacing: 2px;
+                                                spacing: Spacing.xxs;
 
                                                 Text {
                                                     text: invite.display-name;
@@ -1605,8 +1605,8 @@ export component FriendsModal inherits Rectangle {
                             viewport-height: blocked-list.preferred-height;
 
                             blocked-list := VerticalLayout {
-                                padding-top: root.mobile-mode ? scroll-blocked-list.chrome-inset : 0px;
-                                padding-bottom: root.mobile-mode ? root.bottom-inset + Spacing.md : 0px;
+                                padding-top: root.mobile-mode ? scroll-blocked-list.chrome-inset : Spacing.none;
+                                padding-bottom: root.mobile-mode ? root.bottom-inset + Spacing.md : Spacing.none;
                                 // Rows stack from the top (see friends-list).
                                 alignment: start;
                                 spacing: Spacing.xs;
@@ -1631,7 +1631,7 @@ export component FriendsModal inherits Rectangle {
                                         VerticalLayout {
                                             horizontal-stretch: 1;
                                             alignment: center;
-                                            spacing: 2px;
+                                            spacing: Spacing.xxs;
 
                                             Text {
                                                 text: user.display-name;
@@ -1696,7 +1696,7 @@ export component FriendsModal inherits Rectangle {
 
                                             Button {
                                                 text: user.anon ? "Delete" : "Remove";
-                                                variant: "danger";
+                                                variant: "destructive";
 
                                                 clicked => {
                                                     root.confirm-remove-id = "";

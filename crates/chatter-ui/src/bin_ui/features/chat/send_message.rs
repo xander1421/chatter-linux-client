@@ -150,6 +150,7 @@ pub fn wire_send(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     let weak_window = window.as_weak();
 
     window.on_send(move |text: slint::SharedString| {
+        let send_started = std::time::Instant::now();
         let text = text.to_string();
         let pending_attachments = chat_state.get_pending_attachments();
         let has_attachments = !pending_attachments.is_empty();
@@ -362,7 +363,9 @@ pub fn wire_send(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             let sent_text = text.clone();
             let timestamp_str = ui_result.timestamp_display.clone();
             let sidebar_preview = ui_result.sidebar_preview.clone();
-            let reply_thumbnail_bytes = ui_result.reply_thumbnail_bytes.clone();
+            let reply_thumbnail_rgba = ui_result.reply_thumbnail_bytes.as_ref()
+                .and_then(|bytes| image::load_from_memory(bytes).ok())
+                .map(|img| img.to_rgba8());
             let reply_media = ui_result.reply_parent_media.clone();
             let msg_id = ui_result.message_id_effective.clone();
             let delivery_status = ui_result.delivery_status;
@@ -383,11 +386,9 @@ pub fn wire_send(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                 w.set_composer_send_status("".into());
                 {
                     let slint_attachments: Vec<_> = attachment_display.iter().map(|a| a.to_slint()).collect();
-                    let (reply_thumbnail, reply_has_thumbnail, reply_thumb_w, reply_thumb_h) = reply_thumbnail_bytes
+                    let (reply_thumbnail, reply_has_thumbnail, reply_thumb_w, reply_thumb_h) = reply_thumbnail_rgba
                         .as_ref()
-                        .and_then(|bytes| image::load_from_memory(bytes).ok())
-                        .map(|img| {
-                            let rgba = img.to_rgba8();
+                        .map(|rgba| {
                             let (w, h) = rgba.dimensions();
                             let buf = slint::SharedPixelBuffer::<slint::Rgba8Pixel>::clone_from_slice(
                                 rgba.as_raw(), w, h,
@@ -414,6 +415,7 @@ pub fn wire_send(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                     msg_item.failure_reason = failure_reason.into();
                     let draft = w.get_composer_text();
                     super::helpers::append_message_to_ui(&w, msg_item);
+                    tracing::debug!(elapsed_ms = send_started.elapsed().as_millis(), "send: bubble appended");
                     w.set_composer_text(draft);
                     {
                         use slint::Model;

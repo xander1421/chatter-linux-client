@@ -101,8 +101,8 @@ export component AccountMenu inherits Rectangle {
                 viewport-height: menu.preferred-height;
 
                 menu := VerticalLayout {
-                    padding-top: root.mobile-mode ? menu-body.chrome-inset : 0px;
-                    padding-bottom: root.mobile-mode ? root.bottom-inset + Spacing.md : 0px;
+                    padding-top: root.mobile-mode ? menu-body.chrome-inset : Spacing.none;
+                    padding-bottom: root.mobile-mode ? root.bottom-inset + Spacing.md : Spacing.none;
                     alignment: start;
 
                     // Header: who is signed in.

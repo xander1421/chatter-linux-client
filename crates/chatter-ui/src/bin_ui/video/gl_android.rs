@@ -114,6 +114,7 @@ pub fn init_gl_video(window: &MainWindow) -> bool {
     // Set up rendering notifier
     let weak = window.as_weak();
     if let Err(e) = window.window().set_rendering_notifier(move |state, graphics_api| {
+        crate::record_startup_frame(&state);
         match state {
             slint::RenderingState::RenderingSetup => {
                 GL_VIDEO_STATE.with(|cell| {

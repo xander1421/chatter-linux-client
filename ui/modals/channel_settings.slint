@@ -94,7 +94,7 @@ export component ChannelSettingsModal inherits Rectangle {
     in property <string> error-message: "";
 
     // Active section for navigation
-    in-out property <string> active-section: "general";  // "general", "notifications", "members", "danger"
+    in-out property <string> active-section: "general";  // "general", "notifications", "members", "destructive"
 
     callback integrations();
     callback server-calls();
@@ -200,7 +200,7 @@ export component ChannelSettingsModal inherits Rectangle {
 
                     // General section — Neo nav item
                     Rectangle {
-                        height: root.narrow ? 48px : 36px;
+                        height: root.narrow ? Spacing.touch-target-min : Spacing.button-height;
                         background: root.active-section == "general" ? Colors.surface-hover : transparent;
                         border-radius: Spacing.radius-sm;
 
@@ -234,7 +234,7 @@ export component ChannelSettingsModal inherits Rectangle {
 
                     // Notifications section — Neo nav item
                     Rectangle {
-                        height: root.narrow ? 48px : 36px;
+                        height: root.narrow ? Spacing.touch-target-min : Spacing.button-height;
                         background: root.active-section == "notifications" ? Colors.surface-hover : transparent;
                         border-radius: Spacing.radius-sm;
 
@@ -265,7 +265,7 @@ export component ChannelSettingsModal inherits Rectangle {
 
                     // Members section — Neo nav item
                     if root.can-manage-members: Rectangle {
-                        height: root.narrow ? 48px : 36px;
+                        height: root.narrow ? Spacing.touch-target-min : Spacing.button-height;
                         background: root.active-section == "members" ? Colors.surface-hover : transparent;
                         border-radius: Spacing.radius-sm;
 
@@ -297,12 +297,12 @@ export component ChannelSettingsModal inherits Rectangle {
 
                     // Danger zone section: every member can at least leave.
                     if root.can-archive || root.can-delete || root.can-leave: Rectangle {
-                        height: root.narrow ? 48px : 36px;
-                        background: root.active-section == "danger" ? Colors.error.with-alpha(0.1) : transparent;
+                        height: root.narrow ? Spacing.touch-target-min : Spacing.button-height;
+                        background: root.active-section == "destructive" ? Colors.error.with-alpha(0.1) : transparent;
                         border-radius: Spacing.radius-sm;
 
                         TouchArea {
-                            clicked => { root.active-section = "danger"; }
+                            clicked => { root.active-section = "destructive"; }
 
                             HorizontalLayout {
                                 padding-left: Spacing.sm;
@@ -313,12 +313,12 @@ export component ChannelSettingsModal inherits Rectangle {
                                     source: Icons.alert-triangle;
                                     width: 14px;
                                     height: 14px;
-                                    colorize: root.active-section == "danger" ? Colors.error : Colors.text-secondary;
+                                    colorize: root.active-section == "destructive" ? Colors.error : Colors.text-secondary;
                                 }
                                 Rectangle { width: Spacing.sm; }
                                 if !root.narrow: Text {
                                     text: "Danger Zone";
-                                    color: root.active-section == "danger" ? Colors.error : Colors.text-secondary;
+                                    color: root.active-section == "destructive" ? Colors.error : Colors.text-secondary;
                                     font-size: Typography.sm;
                                     vertical-alignment: center;
                                     wrap: word-wrap;
@@ -749,7 +749,7 @@ export component ChannelSettingsModal inherits Rectangle {
                                 // Invite button for private groups (admins/owners only)
                                 if root.is-private-group && root.can-manage-members: Rectangle {
                                     width: invite-btn-text.width + Spacing.md * 2;
-                                    height: 28px;
+                                    height: Spacing.button-height;
                                     background: invite-btn-touch.has-hover ? Colors.primary.darker(10%) : Colors.primary;
                                     border-radius: Spacing.radius-sm;
 
@@ -771,7 +771,7 @@ export component ChannelSettingsModal inherits Rectangle {
                                 // Invite button for regular channels (admins/owners only)
                                 if !root.is-private-group && root.can-manage-members: Rectangle {
                                     width: invite-ch-btn-text.width + Spacing.md * 2;
-                                    height: 28px;
+                                    height: Spacing.button-height;
                                     background: invite-ch-btn-touch.has-hover ? Colors.primary.darker(10%) : Colors.primary;
                                     border-radius: Spacing.radius-sm;
 
@@ -939,7 +939,7 @@ export component ChannelSettingsModal inherits Rectangle {
 
                                             Button {
                                                 text: root.confirm-action == "ban" ? "Ban" : root.confirm-action == "owner" ? "Make owner" : "Remove";
-                                                variant: root.confirm-action == "owner" ? "primary" : "danger";
+                                                variant: root.confirm-action == "owner" ? "primary" : "destructive";
                                                 horizontal-stretch: 1;
                                                 clicked => {
                                                     if root.confirm-action == "ban" {
@@ -1028,14 +1028,14 @@ export component ChannelSettingsModal inherits Rectangle {
 
                                         if root.can-manage-members: Button {
                                             text: "Remove from channel";
-                                            variant: "danger";
+                                            variant: "destructive";
 
                                             clicked => { root.confirm-action = "remove"; }
                                         }
 
                                         if member.can-ban: Button {
                                             text: "Ban (can't rejoin)";
-                                            variant: "danger";
+                                            variant: "destructive";
 
                                             clicked => { root.confirm-action = "ban"; }
                                         }
@@ -1111,14 +1111,14 @@ export component ChannelSettingsModal inherits Rectangle {
 
                                             if root.can-manage-members: Button {
                                                 text: "Remove";
-                                                variant: "danger";
+                                                variant: "destructive";
 
                                                 clicked => { root.confirm-action = "remove"; }
                                             }
 
                                             if member.can-ban: Button {
                                                 text: "Ban";
-                                                variant: "danger";
+                                                variant: "destructive";
 
                                                 clicked => { root.confirm-action = "ban"; }
                                             }
@@ -1174,7 +1174,7 @@ export component ChannelSettingsModal inherits Rectangle {
                         }
 
                         // ========== Danger Zone Section ==========
-                        if root.active-section == "danger": VerticalLayout {
+                        if root.active-section == "destructive": VerticalLayout {
                             spacing: Spacing.md;
 
                             Text {
@@ -1257,7 +1257,7 @@ export component ChannelSettingsModal inherits Rectangle {
 
                                     Button {
                                         text: "Leave channel";
-                                        variant: "danger";
+                                        variant: "destructive";
                                         clicked => {
                                             root.show-leave-confirm = false;
                                             root.leave-channel();
@@ -1370,7 +1370,7 @@ export component ChannelSettingsModal inherits Rectangle {
 
                                 Button {
                                     text: "Delete";
-                                    variant: "danger";
+                                    variant: "destructive";
 
                                     clicked => {
                                         root.show-delete-confirm = true;
@@ -1404,7 +1404,7 @@ export component ChannelSettingsModal inherits Rectangle {
 
                                     Button {
                                         text: "Delete channel";
-                                        variant: "danger";
+                                        variant: "destructive";
                                         clicked => {
                                             root.show-delete-confirm = false;
                                             root.delete-channel();

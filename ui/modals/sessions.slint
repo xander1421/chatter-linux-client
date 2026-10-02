@@ -104,7 +104,7 @@ export component SessionsModal inherits Rectangle {
                     VerticalLayout {
                         horizontal-stretch: 1;
                         alignment: center;
-                        spacing: 2px;
+                        spacing: Spacing.xxs;
 
                         Text {
                             text: link.device-name != "" ? link.device-name : "New device";
@@ -208,7 +208,7 @@ export component SessionsModal inherits Rectangle {
                                 VerticalLayout {
                                     horizontal-stretch: 1;
                                     alignment: center;
-                                    spacing: 2px;
+                                    spacing: Spacing.xxs;
 
                                     HorizontalLayout {
                                         spacing: Spacing.sm;
@@ -320,7 +320,7 @@ export component SessionsModal inherits Rectangle {
 
                     Button {
                         text: "Revoke all";
-                        variant: "danger";
+                        variant: "destructive";
                         disabled: root.revoking;
                         clicked => {
                             root.confirm-revoke-all = false;

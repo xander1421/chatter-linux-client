@@ -278,6 +278,10 @@ impl ChannelInbound {
                         })
                     };
                     let mut patched = proto_msg.clone();
+                    // Encrypted edits, pins and receipts address the original
+                    // DataMessage clock, as the sender stores it. The server's
+                    // envelope timestamp is only transport metadata.
+                    patched.timestamp = dm.timestamp;
                     patched.content = Some(chat_v1::message::Content { r#type: Some(new_type) });
                     patched
                 }

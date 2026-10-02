@@ -73,7 +73,7 @@ export component AudioPlayer inherits HorizontalLayout {
 
     VerticalLayout {
         alignment: center;
-        spacing: 4px;
+        spacing: Spacing.xs;
         width: root.track-width;
 
         Text {
@@ -87,7 +87,7 @@ export component AudioPlayer inherits HorizontalLayout {
             height: 16px;
 
             HorizontalLayout {
-                spacing: 3px;
+                spacing: Spacing.xs;
 
                 for bar[idx] in root.waveform: VerticalLayout {
                     horizontal-stretch: 1;

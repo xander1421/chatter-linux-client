@@ -319,7 +319,8 @@ export component ChatHeader inherits GlassSurface {
                     // Typing shares the title's bounded column, so long peer
                     // names yield to the call buttons instead of drawing over them.
                     if root.typing-indicator != "" && !(JarvisGlobal.enabled && root.jarvis-thinking): Text {
-                        text: root.typing-indicator;
+                        // The peer is already named above; preserve the status verb on narrow DMs.
+                        text: root.mobile && root.is-dm ? "Typing…" : root.typing-indicator;
                         color: Colors.text-secondary;
                         font-size: Typography.xs;
                         font-italic: true;
@@ -344,7 +345,7 @@ export component ChatHeader inherits GlassSurface {
             // Disappearing-messages timer (Signal draws the same clock + value
             // beside the name). Core decides the value; "" means off.
             if has-channel && !root.is-mesh && DisappearingGlobal.header-label != "": HorizontalLayout {
-                spacing: 2px;
+                spacing: Spacing.xxs;
                 alignment: center;
                 horizontal-stretch: 0;
                 accessible-role: text;
@@ -429,7 +430,7 @@ export component ChatHeader inherits GlassSurface {
 
             // Jarvis thinking
             if JarvisGlobal.enabled && root.jarvis-thinking: HorizontalLayout {
-                spacing: 6px;
+                spacing: Spacing.sm;
                 alignment: center;
                 for i in [0, 1, 2]: Rectangle {
                     width: 6px;

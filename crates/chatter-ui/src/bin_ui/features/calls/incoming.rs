@@ -162,6 +162,7 @@ fn render_accepted_call(
             let peer_avatar_bytes = ui_ctx
                 .resolve_call_participant(&peer_id.to_string())
                 .avatar_bytes;
+            let ui_ctx = ui_ctx.clone();
             let _ = slint::invoke_from_event_loop(move || {
                 let Some(w) = weak.upgrade() else { return };
                 let local_initials = get_initials(&my_display_name);
@@ -220,7 +221,7 @@ fn render_accepted_call(
                 w.set_call_is_video_enabled(is_video);
                 w.set_call_is_screen_sharing(false);
                 w.set_active_call_visible(true);
-                start_call_timer(&w, (setup.started_at_ns != 0).then_some(setup.started_at_ns));
+                start_call_timer(&w, ui_ctx.clone());
                 start_video_frame_timer(&w, frames);
                 open_call_screen(&w);
             });
@@ -237,7 +238,6 @@ fn render_accepted_call(
                 setup.peer_display_name,
                 setup.is_video,
                 setup.verification_emojis,
-                setup.started_at_ns,
                 setup.peer_avatar,
             );
             // Queued after the render above (the event loop runs them in order).
@@ -345,18 +345,18 @@ fn open_call_screen(w: &MainWindow) {
 #[allow(clippy::too_many_arguments)]
 fn render_active_anon_call(
     weak: &slint::Weak<MainWindow>,
-    _ui_ctx: &Arc<ChatterClient>,
+    ui_ctx: &Arc<ChatterClient>,
     shared_frames: chatter_core::calls::SharedVideoFrames,
     room_name: String,
     channel_id: String,
     peer_display_name: String,
     is_video: bool,
     verification_emojis: [String; 4],
-    started_at_ns: u64,
     peer_avatar: Option<Vec<u8>>,
 ) {
     let weak = weak.clone();
     let frames = shared_frames.clone();
+    let ui_ctx = ui_ctx.clone();
     let _ = slint::invoke_from_event_loop(move || {
         let Some(w) = weak.upgrade() else { return };
         // If `LiveKitRoomEvent::ParticipantJoined` already landed on the UI
@@ -441,7 +441,7 @@ fn render_active_anon_call(
         w.set_call_is_screen_sharing(false);
         w.set_active_call_visible(true);
         super::super::auth::initial_data::hide_incoming_call(&w);
-        start_call_timer(&w, Some(started_at_ns));
+        start_call_timer(&w, ui_ctx.clone());
         start_video_frame_timer(&w, frames);
     });
     // Media is auto-published by the call worker after connect — no UI-side
@@ -609,7 +609,6 @@ fn handle_orchestrator_event(
                 info.peer_display_name,
                 info.is_video,
                 info.verification_emojis,
-                info.started_at_ns,
                 info.peer_avatar,
             );
         }

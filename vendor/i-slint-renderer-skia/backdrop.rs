@@ -4,12 +4,14 @@
 //! Backdrop filters operate in the physical, item-local coordinate space.
 use skia_safe::runtime_effect::RuntimeShaderBuilder;
 use skia_safe::{ImageFilter, Rect, RuntimeEffect, image_filters};
-use std::cell::OnceCell;
+use std::cell::{OnceCell, RefCell};
+use std::collections::VecDeque;
 use std::sync::OnceLock;
 
 // RuntimeEffect is not Sync. Cache it once on the UI/render thread, never behind
 // an unsafe global; the process-wide environment switch contains only a bool.
 thread_local! {
+    static FILTERS: RefCell<VecDeque<([u32; 9], ImageFilter)>> = const { RefCell::new(VecDeque::new()) };
     static LENS: OnceCell<Result<RuntimeEffect, String>> = const { OnceCell::new() };
 }
 static ENABLED: OnceLock<bool> = OnceLock::new();
@@ -48,7 +50,28 @@ fn color_matrix(saturation: f32, brightness: f32) -> [f32; 20] {
     let s = saturation.max(0.0);
     let [r, g, b] = [0.2126, 0.7152, 0.0722].map(|l| l * (1.0 - s));
     let v = brightness.clamp(-1.0, 1.0);
-    [r + s, g, b, 0.0, v, r, g + s, b, 0.0, v, r, g, b + s, 0.0, v, 0.0, 0.0, 0.0, 1.0, 0.0]
+    [
+        r + s,
+        g,
+        b,
+        0.0,
+        v,
+        r,
+        g + s,
+        b,
+        0.0,
+        v,
+        r,
+        g,
+        b + s,
+        0.0,
+        v,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+    ]
 }
 
 pub(crate) fn filter(
@@ -62,7 +85,56 @@ pub(crate) fn filter(
     if !enabled() || (blur <= 0.0 && saturation == 1.0 && brightness == 0.0 && refraction <= 0.0) {
         return None;
     }
-    let mut result = if blur > 0.0 {
+    // Geometry is part of the key: crop and lens uniforms are item-local.
+    // Bound this cache so animated sizes/strengths cannot retain filters forever.
+    let key = [
+        bounds.left,
+        bounds.top,
+        bounds.right,
+        bounds.bottom,
+        blur,
+        saturation,
+        brightness,
+        refraction,
+        radius,
+    ]
+    .map(f32::to_bits);
+    if let Some(filter) = FILTERS.with(|cache| {
+        let mut cache = cache.borrow_mut();
+        let index = cache.iter().position(|(cached, _)| *cached == key)?;
+        let entry = cache.remove(index)?;
+        let filter = entry.1.clone();
+        cache.push_back(entry);
+        Some(filter)
+    }) {
+        return Some(filter);
+    }
+    let mut result = if blur >= 4.0 {
+        // Work in half-resolution coordinates, retaining the physical blur sigma
+        // and crop after upsampling. Small blurs keep their full-resolution detail.
+        let down = image_filters::matrix_transform(
+            &skia_safe::Matrix::scale((0.5, 0.5)),
+            skia_safe::FilterMode::Linear,
+            None,
+        );
+        let low_bounds = Rect::new(
+            bounds.left * 0.5,
+            bounds.top * 0.5,
+            bounds.right * 0.5,
+            bounds.bottom * 0.5,
+        );
+        let blurred = image_filters::blur(
+            (blur * 0.5, blur * 0.5),
+            skia_safe::TileMode::Clamp,
+            down,
+            low_bounds,
+        );
+        image_filters::matrix_transform(
+            &skia_safe::Matrix::scale((2.0, 2.0)),
+            skia_safe::FilterMode::Linear,
+            blurred,
+        )
+    } else if blur > 0.0 {
         image_filters::blur((blur, blur), skia_safe::TileMode::Clamp, None, bounds)
     } else {
         None
@@ -96,12 +168,48 @@ pub(crate) fn filter(
             Err(_) => {}
         }
     }
+    if let Some(filter) = &result {
+        FILTERS.with(|cache| {
+            let mut cache = cache.borrow_mut();
+            if cache.len() == 32 {
+                cache.pop_front();
+            }
+            cache.push_back((key, filter.clone()));
+        });
+    }
     result
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn filter_cache_reuses_parameters_and_bounds_animated_entries() {
+        FILTERS.with(|cache| cache.borrow_mut().clear());
+        let bounds = Rect::from_wh(120.0, 80.0);
+        assert!(filter(bounds, 12.0, 1.7, 0.05, 0.4, 20.0).is_some());
+        assert!(filter(bounds, 12.0, 1.7, 0.05, 0.4, 20.0).is_some());
+        FILTERS.with(|cache| assert_eq!(cache.borrow().len(), 1));
+        for width in 121..161 {
+            assert!(
+                filter(
+                    Rect::from_wh(width as f32, 80.0),
+                    12.0,
+                    1.7,
+                    0.05,
+                    0.4,
+                    20.0
+                )
+                .is_some()
+            );
+        }
+        FILTERS.with(|cache| {
+            let cache = cache.borrow();
+            assert_eq!(cache.len(), 32);
+            assert_eq!(cache.back().unwrap().0[2], 160.0f32.to_bits());
+        });
+    }
 
     #[test]
     fn saturation_preserves_neutrals_and_brightness_preserves_alpha() {
@@ -171,7 +279,11 @@ mod tests {
         canvas.save();
         canvas.translate((8.0, 8.0));
         let bounds = Rect::from_wh(48.0, 48.0);
-        canvas.clip_rrect(skia_safe::RRect::new_rect_xy(bounds, 12.0, 12.0), None, true);
+        canvas.clip_rrect(
+            skia_safe::RRect::new_rect_xy(bounds, 12.0, 12.0),
+            None,
+            true,
+        );
         let lens = filter(bounds, 0.0, 1.0, 0.0, 0.8, 12.0).unwrap();
         canvas.save_layer(
             &skia_safe::canvas::SaveLayerRec::default().bounds(&bounds).backdrop(&lens),

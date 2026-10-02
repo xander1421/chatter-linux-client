@@ -151,6 +151,7 @@ pub fn set_light_system_bars(light: bool) {
 pub fn clear_launch_cover_after_first_frame(window: &slint::Window) {
     let mut done = false;
     let res = window.set_rendering_notifier(move |state, _| {
+        crate::record_startup_frame(&state);
         if done || !matches!(state, slint::RenderingState::AfterRendering) {
             return;
         }

@@ -135,8 +135,8 @@ export component GifPicker inherits GlassSurface {
 
                 // Clear button (shown when search has text)
                 if root.search-query != "": Rectangle {
-                    width: 20px;
-                    height: 20px;
+                    width: Spacing.button-height;
+                    height: Spacing.button-height;
                     y: (parent.height - self.height) / 2;
                     border-radius: Spacing.radius-full;
                     background: clear-area.has-hover ? Colors.surface-hover : transparent;
@@ -164,7 +164,7 @@ export component GifPicker inherits GlassSurface {
 
         // Tab bar
         Rectangle {
-            height: 32px;
+            height: Spacing.button-height + Spacing.xs * 2;
             background: transparent;
             border-radius: Spacing.radius-md;
 
@@ -175,7 +175,7 @@ export component GifPicker inherits GlassSurface {
                 // Trending tab
                 Rectangle {
                     horizontal-stretch: 1;
-                    height: 24px;
+                    height: Spacing.button-height;
                     border-radius: Spacing.radius-sm;
                     background: !show-search-results ? Colors.primary.with-alpha(0.2) : (trending-area.has-hover ? Colors.surface-hover : transparent);
 
@@ -223,7 +223,7 @@ export component GifPicker inherits GlassSurface {
                 // Search Results tab (only active when searching)
                 Rectangle {
                     horizontal-stretch: 1;
-                    height: 24px;
+                    height: Spacing.button-height;
                     border-radius: Spacing.radius-sm;
                     background: show-search-results ? Colors.primary.with-alpha(0.2) : (results-area.has-hover && root.search-query != "" ? Colors.surface-hover : transparent);
                     opacity: root.search-query != "" ? 1.0 : 0.5;
@@ -311,7 +311,7 @@ export component GifPicker inherits GlassSurface {
                             source: show-search-results ? Icons.search : Icons.image;
                             colorize: Colors.text-muted;
                             width: 32px;
-                            height: 32px;
+                            height: Spacing.button-height;
                         }
                     }
 

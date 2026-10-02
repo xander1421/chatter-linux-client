@@ -77,10 +77,10 @@ export component MeshListItem inherits Rectangle {
         VerticalLayout {
             horizontal-stretch: 1;
             alignment: center;
-            spacing: 1px;
+            spacing: Spacing.xxs;
 
             HorizontalLayout {
-                spacing: 4px;
+                spacing: Spacing.xs;
                 Text {
                     text: root.title;
                     color: root.selected ? Colors.text-primary : Colors.text-secondary;

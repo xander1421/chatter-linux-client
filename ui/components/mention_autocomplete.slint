@@ -40,7 +40,7 @@ export component MentionAutocomplete inherits GlassSurface {
     // Compact popup - responsive width, height based on suggestions
     in property <length> max-popup-width: 240px;
     width: root.max-popup-width;
-    height: Math.min(suggestions.length, 8) * 40px + Spacing.sm * 2;
+    height: Math.min(suggestions.length, 8) * Spacing.button-height * Appearance.text-grow + Spacing.sm * 2;
 
     // Block clicks from passing through
     TouchArea {
@@ -54,7 +54,7 @@ export component MentionAutocomplete inherits GlassSurface {
         spacing: 0;
 
         for suggestion[index] in root.suggestions: Rectangle {
-            height: 40px * Appearance.text-grow;
+            height: Spacing.button-height * Appearance.text-grow;
             border-radius: Spacing.radius-sm;
             background: index == root.selected-index ? Colors.primary.with-alpha(0.2) : (item-area.has-hover ? Colors.surface-hover : transparent);
 
@@ -114,7 +114,7 @@ export component MentionAutocomplete inherits GlassSurface {
                 VerticalLayout {
                     horizontal-stretch: 1;
                     alignment: center;
-                    spacing: 2px;
+                    spacing: Spacing.xxs;
 
                     // Display name with prefix
                     Text {

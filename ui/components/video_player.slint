@@ -1,3 +1,5 @@
+import { Icons } from "../theme/icons.slint";
+import { IconAction } from "icon_action.slint";
 import { GlassSurface } from "glass_surface.slint";
 // Video player modal component
 //
@@ -137,7 +139,7 @@ export component VideoPlayer inherits Rectangle {
             material-level: 3;
             elevation: 1;
 
-            height: 80px;
+            height: Spacing.button-height + Spacing.fab-size + Spacing.sm * 3;
 
             // Block clicks on controls from closing video
             TouchArea {}
@@ -148,7 +150,7 @@ export component VideoPlayer inherits Rectangle {
 
                 // Progress bar
                 Rectangle {
-                    height: 20px;
+                    height: Spacing.button-height;
 
                     HorizontalLayout {
                         spacing: Spacing.sm;
@@ -165,42 +167,48 @@ export component VideoPlayer inherits Rectangle {
                         }
 
                         // Progress track
-                        Rectangle {
-                            height: 6px;
+                        VerticalLayout {
+                            alignment: center;
                             horizontal-stretch: 1;
-                            background: Colors.surface-hover;
-                            border-radius: 3px;
-
-                            // Progress fill - must be explicitly left-aligned
                             Rectangle {
-                                x: 0;
-                                y: 0;
-                                width: parent.width * root.progress;
-                                height: 100%;
-                                background: Colors.primary;
+                                height: 6px;
+                                horizontal-stretch: 1;
+                                background: Colors.surface-hover;
                                 border-radius: 3px;
-                            }
 
-                            // Seek handle
-                            Rectangle {
-                                x: parent.width * root.progress - 8px;
-                                y: -5px;
-                                width: 16px;
-                                height: 16px;
-                                border-radius: 8px;
-                                background: Colors.primary;
-                                visible: progress-touch.has-hover || progress-touch.pressed;
-                            }
-
-                            progress-touch := TouchArea {
-                                mouse-cursor: pointer;
-                                clicked => {
-                                    // Calculate seek position
-                                    root.seek(self.mouse-x / self.width);
+                                // Progress fill - must be explicitly left-aligned
+                                Rectangle {
+                                    x: 0;
+                                    y: 0;
+                                    width: parent.width * root.progress;
+                                    height: 100%;
+                                    background: Colors.primary;
+                                    border-radius: 3px;
                                 }
-                                moved => {
-                                    if self.pressed {
-                                        root.seek(clamp(self.mouse-x / self.width, 0.0, 1.0));
+
+                                // Seek handle
+                                Rectangle {
+                                    x: parent.width * root.progress - 8px;
+                                    y: -5px;
+                                    width: 16px;
+                                    height: 16px;
+                                    border-radius: 8px;
+                                    background: Colors.primary;
+                                    visible: progress-touch.has-hover || progress-touch.pressed;
+                                }
+
+                                progress-touch := TouchArea {
+                                    y: (parent.height - self.height) / 2;
+                                    height: Spacing.button-height;
+                                    mouse-cursor: pointer;
+                                    clicked => {
+                                        // Calculate seek position
+                                        root.seek(self.mouse-x / self.width);
+                                    }
+                                    moved => {
+                                        if self.pressed {
+                                            root.seek(clamp(self.mouse-x / self.width, 0.0, 1.0));
+                                        }
                                     }
                                 }
                             }
@@ -219,71 +227,54 @@ export component VideoPlayer inherits Rectangle {
 
                 // Control buttons row
                 HorizontalLayout {
-                    height: 44px;
+                    height: Spacing.fab-size;
                     alignment: center;
                     spacing: Spacing.lg;
 
                     // Volume control
                     HorizontalLayout {
-                        width: 120px;
+                        width: Spacing.button-height * 2 + Spacing.md;
                         spacing: Spacing.xs;
                         alignment: center;
 
                         // Volume icon
-                        Rectangle {
-                            width: 32px;
-                            height: 32px;
-                            border-radius: 16px;
-                            background: volume-icon-touch.has-hover ? Colors.surface-hover : transparent;
-
-                            Text {
-                                width: 100%;
-                                height: 100%;
-                                text: root.volume > 0 ? "\u{1F50A}\u{FE0F}" : "\u{1F507}\u{FE0F}";  // Speaker or muted (with emoji variant selector)
-                                font-family: Typography.font-family-emoji;
-                                font-size: Typography.base;
-                                horizontal-alignment: center;
-                                vertical-alignment: center;
-                            }
-
-                            volume-icon-touch := TouchArea {
-                                mouse-cursor: pointer;
-                                clicked => {
-                                    // Toggle mute
-                                    if root.volume > 0 {
-                                        root.set-volume(0.0);
-                                    } else {
-                                        root.set-volume(1.0);
-                                    }
-                                }
-                            }
+                        IconAction {
+                            label: root.volume > 0 ? "Mute video" : "Unmute video";
+                            icon: root.volume > 0 ? Icons.volume-2 : Icons.volume-x;
+                            clicked => { root.set-volume(root.volume > 0 ? 0.0 : 1.0); }
                         }
 
                         // Volume slider
-                        Rectangle {
-                            width: 80px;
-                            height: 6px;
-                            background: Colors.surface;
-                            border-radius: 3px;
-
-                            // Volume fill - must be explicitly left-aligned
+                        VerticalLayout {
+                            alignment: center;
+                            horizontal-stretch: 0;
                             Rectangle {
-                                x: 0;
-                                y: 0;
-                                width: parent.width * root.volume;
-                                height: 100%;
-                                background: Colors.text-muted;
+                                width: Spacing.button-height + Spacing.sm;
+                                height: 6px;
+                                background: Colors.surface;
                                 border-radius: 3px;
-                            }
 
-                            volume-touch := TouchArea {
-                                mouse-cursor: pointer;
-                                clicked => {
-                                    root.set-volume(clamp(self.mouse-x / self.width, 0.0, 1.0));
+                                // Volume fill - must be explicitly left-aligned
+                                Rectangle {
+                                    x: 0;
+                                    y: 0;
+                                    width: parent.width * root.volume;
+                                    height: 100%;
+                                    background: Colors.text-muted;
+                                    border-radius: 3px;
                                 }
-                                moved => {
-                                    if self.pressed {
+
+                                volume-touch := TouchArea {
+                                    y: (parent.height - self.height) / 2;
+                                    height: Spacing.button-height;
+                                    mouse-cursor: pointer;
+                                    clicked => {
                                         root.set-volume(clamp(self.mouse-x / self.width, 0.0, 1.0));
+                                    }
+                                    moved => {
+                                        if self.pressed {
+                                            root.set-volume(clamp(self.mouse-x / self.width, 0.0, 1.0));
+                                        }
                                     }
                                 }
                             }
@@ -291,33 +282,17 @@ export component VideoPlayer inherits Rectangle {
                     }
 
                     // Play/Pause button
-                    Rectangle {
-                        width: 56px;
-                        height: 56px;
-                        border-radius: 28px;
-                        background: play-touch.has-hover ? Colors.primary-hover : Colors.primary;
-
-                        Text {
-                            width: 100%;
-                            height: 100%;
-                            text: root.is-playing ? "\u{23F8}" : "\u{25B6}";  // Pause or Play
-                            color: Colors.text-primary;
-                            font-size: Typography.xxl;
-                            horizontal-alignment: center;
-                            vertical-alignment: center;
-                        }
-
-                        play-touch := TouchArea {
-                            mouse-cursor: pointer;
-                            clicked => {
-                                root.toggle-play-pause();
-                            }
-                        }
+                    IconAction {
+                        size: Spacing.fab-size;
+                        active: true;
+                        label: root.is-playing ? "Pause video" : "Play video";
+                        icon: root.is-playing ? Icons.pause : Icons.play;
+                        clicked => { root.toggle-play-pause(); }
                     }
 
                     // Spacer to balance volume control
                     Rectangle {
-                        width: 120px;
+                        width: Spacing.button-height * 2 + Spacing.md;
                     }
                 }
             }

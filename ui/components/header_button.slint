@@ -43,9 +43,11 @@ export component HeaderButton inherits Rectangle {
 
     width: root.touch ? Spacing.header-action-box-touch : Spacing.header-action-box;
     min-height: self.width;
-    opacity: root.enabled ? 1.0 : 0.4;
 
+    // Keeping opacity below the root lets childless header controls share
+    // generated code; caller-supplied status marks remain inside this box.
     box := GlassSurface {
+        opacity: root.enabled ? 1.0 : 0.4;
         material-level: 1;
         elevation: 0;
         width: parent.width;

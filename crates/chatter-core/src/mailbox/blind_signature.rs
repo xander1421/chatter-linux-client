@@ -181,7 +181,7 @@ impl std::fmt::Debug for ServerPublicKey {
 ///
 /// Must be retained from blinding until unblinding is complete.
 /// Serializable for storage during pending operations.
-#[derive(Clone)]
+#[derive(Clone, zeroize::Zeroize, zeroize::ZeroizeOnDrop)]
 pub struct BlindingSecret {
     /// Serialized secret bytes.
     secret_bytes: Vec<u8>,
@@ -217,7 +217,7 @@ impl BlindingSecret {
 ///
 /// Required for unblinding when deterministic padding is NOT used.
 /// The randomizer is a fixed 32-byte value.
-#[derive(Clone)]
+#[derive(Clone, zeroize::Zeroize, zeroize::ZeroizeOnDrop)]
 pub struct MessageRandomizer {
     /// Serialized randomizer bytes (fixed 32 bytes).
     randomizer_bytes: Option<[u8; 32]>,

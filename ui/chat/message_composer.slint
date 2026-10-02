@@ -236,7 +236,7 @@ export component MessageComposer inherits GlassSurface {
     VerticalLayout {
         // 100% width for proper text wrapping in children
         width: 100%;
-        padding-top: 1px;
+        padding-top: Spacing.xxs;
 
         // Edit mode indicator bar
         if root.is-editing: Rectangle {
@@ -350,7 +350,7 @@ export component MessageComposer inherits GlassSurface {
 
                     VerticalLayout {
                         alignment: center;
-                        spacing: 2px;
+                        spacing: Spacing.xxs;
 
                         Text {
                             text: "Reply to " + root.reply-to-sender;
@@ -406,7 +406,7 @@ export component MessageComposer inherits GlassSurface {
             HorizontalLayout {
                 padding-left: Spacing.md;
                 padding-right: Spacing.md;
-                spacing: 2px;
+                spacing: Spacing.xxs;
                 alignment: start;
 
                 // Bold button
@@ -606,7 +606,7 @@ export component MessageComposer inherits GlassSurface {
                     // Pending attachment items — Neo convex cards
                     for attachment in root.pending-attachments: Rectangle {
                         width: 180px;
-                        height: 56px * Appearance.text-grow;
+                        height: (Spacing.button-height + Spacing.sm * 2) * Appearance.text-grow;
                         background: Colors.surface;
                         border-radius: Spacing.radius-md;
                         drop-shadow-blur: Spacing.neo-blur-sm;
@@ -677,7 +677,7 @@ export component MessageComposer inherits GlassSurface {
                             VerticalLayout {
                                 horizontal-stretch: 1;
                                 alignment: center;
-                                spacing: 2px;
+                                spacing: Spacing.xxs;
 
                                 Text {
                                     text: attachment.filename;
@@ -686,7 +686,7 @@ export component MessageComposer inherits GlassSurface {
                                     overflow: elide;
                                 }
                                 HorizontalLayout {
-                                    spacing: 4px;
+                                    spacing: Spacing.xs;
 
                                     Text {
                                         text: attachment.is-ready ? attachment.size-display : "Encrypting...";
@@ -698,8 +698,8 @@ export component MessageComposer inherits GlassSurface {
 
                             // Remove button
                             Rectangle {
-                                width: 24px;
-                                height: 24px;
+                                width: Spacing.button-height;
+                                height: Spacing.button-height;
                                 background: remove-touch.has-hover ? Colors.error.transparentize(0.7) : Colors.error.transparentize(0.9);
                                 border-radius: Spacing.radius-full;
                                 accessible-role: button;

@@ -79,7 +79,7 @@ pub async fn handle_call_key_answer(
         call_data.verification_emoji_4 = setup.verification_emojis[3].clone().into();
         w.set_active_call_data(call_data);
 
-        start_call_timer(&w, (setup.started_at_ns != 0).then_some(setup.started_at_ns));
+        start_call_timer(&w, ui_ctx.clone());
         if let Some(frames) = shared_frames {
             start_video_frame_timer(&w, frames);
         }

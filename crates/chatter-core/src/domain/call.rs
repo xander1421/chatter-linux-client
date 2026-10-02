@@ -201,10 +201,10 @@ impl Call {
         self.state = CallState::Connecting;
     }
 
-    /// Transition to the Connected state and set connected_at timestamp.
+    /// Transition to Connected, retaining the first connection timestamp.
     pub fn start(&mut self) {
         self.state = CallState::Connected;
-        self.connected_at = Some(Utc::now());
+        self.connected_at.get_or_insert_with(Utc::now);
     }
 
     /// Transition to the Reconnecting state.
@@ -228,6 +228,14 @@ impl Call {
         let connected = self.connected_at?;
         let end_time = self.ended_at.unwrap_or_else(Utc::now);
         Some(end_time - connected)
+    }
+
+    /// Connected duration for presentation and hangup metadata, in whole seconds.
+    /// Ringing time is excluded; a backwards wall-clock adjustment cannot make
+    /// the displayed duration negative.
+    #[must_use]
+    pub fn duration_seconds(&self) -> i64 {
+        self.duration().map(|duration| duration.num_seconds().max(0)).unwrap_or(0)
     }
 
     /// Check if the call is currently active (connected or reconnecting).
@@ -369,6 +377,24 @@ mod tests {
     }
 
     #[test]
+    fn connected_duration_excludes_ringing_and_freezes_at_hangup() {
+        let mut call = Call::new(ChannelId::new(), UserId::new(), CallType::Voice);
+        let connected = Utc::now() - Duration::seconds(20);
+        call.started_at = Some(connected - Duration::seconds(15));
+        call.ring();
+        assert_eq!(call.duration_seconds(), 0);
+        call.connected_at = Some(connected);
+        call.reconnect();
+        call.start();
+        assert_eq!(call.connected_at, Some(connected), "reconnection must not reset duration");
+        assert!(call.duration_seconds() >= 20);
+        call.ended_at = Some(connected + Duration::milliseconds(12_900));
+        assert_eq!(call.duration_seconds(), 12);
+        call.ended_at = Some(connected - Duration::seconds(1));
+        assert_eq!(call.duration_seconds(), 0);
+    }
+
+    #[test]
     fn test_participant() {
         let user_id = UserId::new();
         let mut participant = Participant::new(user_id);
@@ -463,8 +489,8 @@ pub struct CallSetupResult {
     pub verification_emojis: [String; 4],
     /// Whether this is a video call.
     pub is_video: bool,
-    /// Local time the call connected (Unix nanos), taken on each side when
-    /// the offer/answer completes, so the timer counts talk time, not ringing.
+    /// Local offer/answer completion time (Unix nanos).
+    /// Live duration uses the active Call's connected_at instead.
     pub started_at_ns: u64,
 }
 
@@ -486,9 +512,9 @@ pub struct AnonCallSetupResult {
     pub is_video: bool,
     /// Display name of the remote peer.
     pub peer_display_name: String,
-    /// Shared anchor for the duration timer: ns since epoch from the callee's
-    /// `AnonCallAnswer.timestamp`. Both peers anchor on the same value so
-    /// their displayed durations match regardless of wall-clock skew.
+    /// Callee's answer envelope timestamp (Unix nanos).
+    /// Live duration uses the active Call's local connected_at, avoiding
+    /// remote wall-clock skew and signaling-to-connection latency.
     pub started_at_ns: u64,
     /// Cached avatar bytes for the remote peer, sourced from the local
     /// `AnonDm.peer_avatar` row. Threaded so the active-call tile shows the

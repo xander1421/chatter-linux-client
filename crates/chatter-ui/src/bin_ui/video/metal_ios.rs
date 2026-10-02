@@ -100,6 +100,7 @@ pub fn init_metal_video(window: &MainWindow) -> bool {
     // Set up rendering notifier for frame updates
     let weak = window.as_weak();
     if let Err(e) = window.window().set_rendering_notifier(move |render_state, _graphics_api| {
+        crate::record_startup_frame(&render_state);
         match render_state {
             slint::RenderingState::BeforeRendering => {
                 METAL_VIDEO_STATE.with(|cell| {

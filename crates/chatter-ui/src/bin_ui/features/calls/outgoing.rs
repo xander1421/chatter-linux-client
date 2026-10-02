@@ -302,7 +302,7 @@ fn render_calling_placeholder(
     // — their timers are started by the `AnonCallConnected` / DM key-exchange
     // paths when the peer answers.
     if setup.verification_emojis.is_some() {
-        start_call_timer(&w, None);
+        start_call_timer(&w, ui_ctx.clone());
         if let Some(frames) = ui_ctx.call_video_frames() {
             start_video_frame_timer(&w, frames);
         }

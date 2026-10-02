@@ -70,6 +70,20 @@ impl ChatterClient {
             return Ok(());
         }
 
+        use crate::services::current_user::CurrentUserProvider;
+
+        // A freshly linked device has the provisioned key but may not have
+        // opened its profile UI yet. Fetch/decrypt missing profile fields
+        // BEFORE replacing that key or its backup: after the commit the old
+        // server ciphertext can no longer be read with our current key.
+        let me = settings.current_user_id().map_err(|e| ClientError::Validation(e.to_string()))?;
+        if self.messages().user_repo.get_profile(&me).map_err(storage)?.is_none() {
+            self.users()
+                .get_user_profile(&me)
+                .await
+                .map_err(|e| ClientError::Validation(format!("couldn't load your profile before changing visibility: {e}")))?;
+        }
+
         let next = policy::next_profile_key(settings).map_err(storage)?;
         let has_backup = self
             .svr_backup()

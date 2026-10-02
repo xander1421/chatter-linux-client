@@ -206,9 +206,8 @@ pub struct AnonCallConnectedInfo {
     pub verification_emojis: [String; 4],
     pub is_video: bool,
     pub peer_display_name: String,
-    /// Shared call-start anchor (ns since epoch) for the duration timer.
-    /// Sourced from the callee's answer envelope so both peers count from
-    /// the same reference point.
+    /// Callee's answer envelope timestamp (Unix nanos), retained as metadata.
+    /// Presentation duration uses the active Call's local connected_at.
     pub started_at_ns: u64,
     /// Cached peer avatar bytes (from the local AnonDm row) for the active
     /// call tile. None when the peer never sent a profile avatar.
@@ -1666,6 +1665,11 @@ fn run_call_worker(
                 }
 
                 CallCommand::OrchMarkConnected { call, kind, peer_id, is_video } => {
+                    if let Some(state) = active_call.borrow_mut().as_mut() {
+                        if derive_call_handle(state) == call && state.call.connected_at.is_none() {
+                            state.call.start();
+                        }
+                    }
                     // Clear from pending maps regardless of whether it was
                     // incoming or outgoing — either way it's now connected.
                     orchestrator.outgoing.remove(&call);
@@ -1855,8 +1859,14 @@ async fn initiate_call_impl(
 
     let mut call = Call::new(channel_id, initiator_id, call_type);
     call.id = call_id;
-    call.start();
-    // Anchor to the server's creation time so both peers show the same duration.
+    // The DM caller joins with a placeholder before the peer answers. Keep
+    // connected_at unset until OrchMarkConnected; group calls connect now.
+    if encryption_root_key == &[0u8; 32] {
+        call.ring();
+    } else {
+        call.start();
+    }
+    // Retain server creation time for signaling, separate from connected_at.
     if let Some(dt) = response.call_info.as_ref().and_then(|ci| server_ns_to_utc(ci.created_at)) {
         call.started_at = Some(dt);
     }
@@ -1935,8 +1945,8 @@ async fn join_call_impl(
     let mut call = Call::new(channel_id, initiator_id, call_type);
     call.id = call_id;
     call.start();
-    // Anchor to the server's creation time so both peers show the same duration
-    // (the callee otherwise counts from accept — ~ring-duration behind).
+    // Share the server creation time for key-ratchet boundaries; duration
+    // separately uses the local connected_at timestamp.
     if let Some(dt) = server_ns_to_utc(call_info.created_at) {
         call.started_at = Some(dt);
     }

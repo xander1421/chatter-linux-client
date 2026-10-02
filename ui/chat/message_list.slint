@@ -294,7 +294,7 @@ export component MessageList inherits Rectangle {
             // this screen that could get somebody hurt.
             HorizontalLayout {
                 alignment: center;
-                spacing: 6px;
+                spacing: Spacing.sm;
 
                 Image {
                     source: root.public-broadcast ? Icons.globe : Icons.lock;
@@ -575,14 +575,14 @@ export component MessageList inherits Rectangle {
                 height: self.preferred-height;
                 padding-left: Spacing.md;
                 padding-right: Spacing.md;
-                padding-top: idx == 0 ? root.top-inset + Spacing.md : 0px;
+                padding-top: idx == 0 ? root.top-inset + Spacing.md : Spacing.none;
                 // Extra bottom clearance under the last row so the
                 // scroll-to-bottom FAB (44px, docked bottom-right) never
                 // covers its corner.
                 padding-bottom: idx == root.messages.length - 1
-                    ? root.bottom-inset + Spacing.md + 48px
+                    ? root.bottom-inset + Spacing.md + Spacing.touch-target-min
                     : Spacing.message-gap;
-                spacing: 2px;
+                spacing: Spacing.xxs;
 
                 // Unread divider — everything below this line arrived while
                 // the user was away.

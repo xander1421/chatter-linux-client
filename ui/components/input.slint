@@ -68,7 +68,7 @@ export component Input inherits Rectangle {
             // characters (OPEN-ITEMS §112n).
             if root.text == "" && input.preedit-text == "": Text {
                 x: Spacing.md;
-                width: parent.width - Spacing.md * 2 - (root.password ? 32px : 0px);
+                width: parent.width - Spacing.md * 2 - (root.password ? Spacing.button-height : 0px);
                 height: 100%;
                 text: root.placeholder;
                 color: Colors.text-muted;
@@ -92,7 +92,7 @@ export component Input inherits Rectangle {
             // Actual text input (full width for reliable touch targeting)
             input := TextInput {
                 x: Spacing.md;
-                width: parent.width - Spacing.md * 2 - (root.password ? 32px : 0px);
+                width: parent.width - Spacing.md * 2 - (root.password ? Spacing.button-height : 0px);
                 height: parent.height;
                 color: Colors.text-primary;
                 font-size: Typography.base;
@@ -112,8 +112,8 @@ export component Input inherits Rectangle {
 
             // Password visibility toggle
             if root.password: Rectangle {
-                x: parent.width - 36px;
-                width: 32px;
+                x: parent.width - Spacing.button-height;
+                width: Spacing.button-height;
                 height: 100%;
 
                 Image {

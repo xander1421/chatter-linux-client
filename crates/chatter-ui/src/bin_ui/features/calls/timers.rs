@@ -7,20 +7,20 @@ use std::cell::RefCell;
 use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::{SystemTime, UNIX_EPOCH};
 
 use slint::{ComponentHandle, Timer, TimerMode};
 #[cfg(not(target_os = "linux"))]
 use slint::{Model, ModelRc, VecModel};
 
 use chatter_core::calls::SharedVideoFrames;
+use chatter_core::client::ChatterClient;
 use crate::MainWindow;
 
 thread_local! {
     /// Call duration timer (must be on UI thread).
     static CALL_TIMER: RefCell<Option<Timer>> = const { RefCell::new(None) };
-    /// Call start timestamp (nanoseconds since epoch) for synchronized duration.
-    static CALL_START_NS: RefCell<Option<u64>> = const { RefCell::new(None) };
+    /// Cancels an in-flight core snapshot when this call ends or is replaced.
+    static CALL_TIMER_STOP: RefCell<Option<Arc<AtomicBool>>> = const { RefCell::new(None) };
     /// Video frame keepalive timer (low-rate poll alongside the push subscriber).
     static VIDEO_FRAME_TIMER: RefCell<Option<Timer>> = const { RefCell::new(None) };
     /// Stop flag for the push-driven video frame subscriber task.
@@ -44,97 +44,50 @@ thread_local! {
         const { RefCell::new(None) };
 }
 
-/// Get current time in nanoseconds since epoch.
-pub fn current_time_ns() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_nanos() as u64)
-        .unwrap_or(0)
-}
-
-/// Start the call duration timer.
-///
-/// # Arguments
-/// * `call_start_ns` - Optional call start timestamp in nanoseconds since epoch.
-///                     If None, uses current time (caller side).
-///                     If Some, uses provided timestamp (receiver side for sync).
-pub fn start_call_timer(window: &MainWindow, call_start_ns: Option<u64>) {
+/// Start presentation ticks from core's connected-time snapshot.
+/// Must run on the UI thread. Signaling timestamps are key-exchange metadata,
+/// not the duration baseline, and delayed UI mounting must not restart the clock.
+pub fn start_call_timer(window: &MainWindow, ui_ctx: Arc<ChatterClient>) {
+    stop_call_timer();
     let weak = window.as_weak();
+    let stop = Arc::new(AtomicBool::new(false));
+    CALL_TIMER_STOP.with(|cell| *cell.borrow_mut() = Some(stop.clone()));
+    crate::rt_handle().spawn(async move {
+        let Some(call) = ui_ctx.call_active_call().await else { return };
+        let _ = slint::invoke_from_event_loop(move || {
+            if stop.load(Ordering::Relaxed) {
+                return;
+            }
+            let Some(w) = weak.upgrade() else { return };
+            let mut data = w.get_active_call_data();
+            data.duration_seconds = call.duration_seconds().min(i32::MAX as i64) as i32;
+            w.set_active_call_data(data);
 
-    // Use provided timestamp or current time
-    let start_timestamp = call_start_ns.unwrap_or_else(current_time_ns);
-
-    CALL_START_NS.with(|start| {
-        *start.borrow_mut() = Some(start_timestamp);
-    });
-
-    // Update UI immediately with current elapsed time
-    let now = current_time_ns();
-    let initial_elapsed = if now > start_timestamp {
-        ((now - start_timestamp) / 1_000_000_000) as i32
-    } else {
-        0
-    };
-
-    if let Some(w) = weak.upgrade() {
-        let mut data = w.get_active_call_data();
-        data.duration_seconds = initial_elapsed;
-        w.set_active_call_data(data);
-    }
-
-    CALL_TIMER.with(|timer_cell| {
-        // Stop existing timer if any
-        if let Some(ref timer) = *timer_cell.borrow() {
-            timer.stop();
-        }
-
-        // Create new timer that updates every second
-        let timer = Timer::default();
-        timer.start(
-            TimerMode::Repeated,
-            std::time::Duration::from_secs(1),
-            move || {
+            let timer = Timer::default();
+            timer.start(TimerMode::Repeated, std::time::Duration::from_secs(1), move || {
                 if let Some(w) = weak.upgrade() {
-                    CALL_START_NS.with(|start| {
-                        if let Some(start_timestamp) = *start.borrow() {
-                            let now = current_time_ns();
-                            let elapsed = if now > start_timestamp {
-                                ((now - start_timestamp) / 1_000_000_000) as i32
-                            } else {
-                                0
-                            };
-                            let mut data = w.get_active_call_data();
-                            data.duration_seconds = elapsed;
-                            w.set_active_call_data(data);
-                        }
-                    });
+                    let mut data = w.get_active_call_data();
+                    data.duration_seconds = call.duration_seconds().min(i32::MAX as i64) as i32;
+                    w.set_active_call_data(data);
                 }
-            },
-        );
-        *timer_cell.borrow_mut() = Some(timer);
+            });
+            CALL_TIMER.with(|cell| *cell.borrow_mut() = Some(timer));
+        });
     });
-
-    tracing::debug!(
-        start_timestamp_ns = start_timestamp,
-        initial_elapsed_secs = initial_elapsed,
-        "Call timer started"
-    );
 }
 
-/// Stop the call duration timer.
+/// Stop ticks and invalidate any outstanding core snapshot request.
 pub fn stop_call_timer() {
-    CALL_TIMER.with(|timer_cell| {
-        if let Some(ref timer) = *timer_cell.borrow() {
+    CALL_TIMER_STOP.with(|cell| {
+        if let Some(stop) = cell.borrow_mut().take() {
+            stop.store(true, Ordering::Relaxed);
+        }
+    });
+    CALL_TIMER.with(|cell| {
+        if let Some(timer) = cell.borrow_mut().take() {
             timer.stop();
         }
-        *timer_cell.borrow_mut() = None;
     });
-
-    CALL_START_NS.with(|start| {
-        *start.borrow_mut() = None;
-    });
-
-    tracing::debug!("Call timer stopped");
 }
 
 /// Start the video frame UI subscriber.
@@ -384,22 +337,4 @@ pub fn stop_video_frame_timer() {
     crate::bin_ui::video::gl_call::clear_inbox();
 
     tracing::debug!("Video frame subscriber stopped");
-}
-
-/// Get the current call duration in seconds.
-///
-/// Returns 0 if no call is active or timer hasn't started.
-pub fn get_call_duration_secs() -> i64 {
-    CALL_START_NS.with(|start| {
-        if let Some(start_ns) = *start.borrow() {
-            let now = current_time_ns();
-            if now > start_ns {
-                ((now - start_ns) / 1_000_000_000) as i64
-            } else {
-                0
-            }
-        } else {
-            0
-        }
-    })
 }

@@ -716,10 +716,14 @@ fn message_reply_in_thread_button_is_wired() {
     // action row (so ANY message can start a thread), firing thread-clicked.
     let slint_src = include_str!("../../../ui/chat/message_item.slint");
     assert!(
-        slint_src.contains(r#"accessible-label: "Reply in thread""#),
+        slint_src.contains("thread-btn := IconAction {")
+            && slint_src.contains(r#"label: "Reply in thread""#),
         "the message hover actions must include a Reply-in-thread button so a \
          message with zero replies can still START a thread"
     );
+    let icon_action = include_str!("../../../ui/components/icon_action.slint");
+    assert!(icon_action.contains("accessible-label: root.label;"));
+    assert!(icon_action.contains("accessible-action-default => { if root.enabled { root.clicked(); } }"));
     assert!(
         slint_src.contains("root.thread-clicked(root.message-id)"),
         "the Reply-in-thread button must fire thread-clicked with the message id"
@@ -1512,7 +1516,7 @@ fn profile_shared_content_drawer_is_wired() {
         modal_src.contains("ModalContainer {")
             && modal_src.contains("full-screen: root.mobile-mode")
             && modal_src.contains("bottom-inset: root.mobile-mode ? 0px : root.bottom-inset;")
-            && modal_src.contains("padding-bottom: root.mobile-mode ? root.bottom-inset + Spacing.md : 0px;"),
+            && modal_src.contains("padding-bottom: root.mobile-mode ? root.bottom-inset + Spacing.md : Spacing.none;"),
         "user_profile.slint must go full-screen through ModalContainer"
     );
 }
@@ -2723,7 +2727,7 @@ fn folder_ui_sizes_up_for_touch() {
         "folder conversation rows must meet the touch minimum"
     );
     assert!(
-        list.contains("height: root.mobile-mode ? Spacing.touch-target-min : 32px"),
+        list.contains("height: root.mobile-mode ? Spacing.touch-target-min : Spacing.button-height"),
         "folder headers must meet the touch minimum"
     );
     assert!(
@@ -3840,7 +3844,7 @@ fn shared_content_pill_tabs_clear_the_touch_floor() {
         .expect("the grid follows the tab strip");
     let block = &src[strip..strip + end];
     assert!(
-        block.contains("height: Spacing.touch-target-min;") && block.contains("padding: 2px;"),
+        block.contains("height: Spacing.touch-target-min;") && block.contains("padding: Spacing.xxs;"),
         "the pill shell must be Spacing.touch-target-min with a 2px inset, so each \
          chip lands on the 44px touch floor — a literal here is how 34px happened"
     );
@@ -4476,8 +4480,8 @@ fn floating_chrome_keeps_content_insets_and_clear_materials() {
     assert!(chat.find("message-list := MessageList").unwrap() < chat.find("top-chrome := VerticalLayout").unwrap());
     assert!(chat.contains("top-inset: top-chrome.height;") && chat.contains("bottom-inset: bottom-chrome.height;"));
     assert!(chat.contains("y: root.height - self.height;"));
-    assert!(list.contains("padding-top: idx == 0 ? root.top-inset + Spacing.md : 0px;"));
-    assert!(list.contains("? root.bottom-inset + Spacing.md + 48px"));
+    assert!(list.contains("padding-top: idx == 0 ? root.top-inset + Spacing.md : Spacing.none;"));
+    assert!(list.contains("? root.bottom-inset + Spacing.md + Spacing.touch-target-min"));
     assert!(list.contains("(self.viewport-height - root.bottom-inset) + self.viewport-y"));
     assert!(list.contains("changed bottom-inset =>") && list.contains("root.is-at-bottom && !root.scrolling && root.jump-row < 0"));
     assert!(list.contains("y: root.height - root.bottom-inset - 60px;"));
@@ -4487,7 +4491,7 @@ fn floating_chrome_keeps_content_insets_and_clear_materials() {
     for src in [include_str!("../../../ui/modals/friends.slint"), include_str!("../../../ui/calls/call_history_screen.slint")] {
         assert!(src.contains("floating-content: root.mobile-mode;"));
         assert!(src.contains("height: root.mobile-mode ? root.height : parent.height;"));
-        assert!(src.contains("padding-bottom: root.mobile-mode ? root.bottom-inset + Spacing.md : 0px;"));
+        assert!(src.contains("padding-bottom: root.mobile-mode ? root.bottom-inset + Spacing.md : Spacing.none;"));
     }
     assert!(material.contains("#00000029 : #ffffff29"));
     assert!(material.contains("blur-regular: 14px") && material.contains("blur-thick: 18px"));
@@ -4550,9 +4554,120 @@ fn secondary_chrome_exposes_its_shared_material() {
     assert!(!list.contains("Colors.action-fill.with-alpha(0.97)"));
     let profile = include_str!("../../../ui/modals/user_profile.slint");
     assert!(profile.contains("height: parent.height - self.y;"));
-    assert!(profile.contains("padding-top: root.mobile-mode ? profile-header.height + Spacing.sm * 2 : 0px;"));
+    assert!(profile.contains("padding-top: root.mobile-mode ? profile-header.height + Spacing.sm * 2 : Spacing.none;"));
     let account = include_str!("../../../ui/settings/account_menu.slint");
     assert!(account.contains("floating-content: root.mobile-mode;"));
     assert!(account.contains("y: root.mobile-mode ? -menu-body.chrome-inset : 0px;"));
     assert!(!account.contains("absolute-position"), "content-sized menus must not derive their padding from their own layout position");
+}
+
+// POLISH1: keep layout rhythm and ordinary controls in the shared primitives.
+// These are source checks so they also cover screens absent from the headless
+// fixture, without needing every account/channel/call state to be constructed.
+fn raw_layout_spacing(src: &str) -> Vec<String> {
+    let code = src.lines().map(|line| line.split("//").next().unwrap_or("")).collect::<Vec<_>>().join("\n");
+    let mut findings = Vec::new();
+    for (at, _) in code.match_indices(':') {
+        let property = code[..at].trim_end().rsplit(|c: char| !(c.is_ascii_alphanumeric() || c == '-')).next().unwrap_or("");
+        if !matches!(property, "spacing" | "padding" | "padding-left" | "padding-right" | "padding-top" | "padding-bottom") {
+            continue;
+        }
+        let value = code[at + 1..].split(';').next().unwrap_or("");
+        if value.match_indices("px").any(|(i, _)| i > 0 && value.as_bytes()[i - 1].is_ascii_digit()) {
+            findings.push(format!("{property}: {}", value.trim()));
+        }
+    }
+    findings
+}
+
+#[test]
+fn screen_layout_spacing_uses_tokens() {
+    assert!(!raw_layout_spacing("HorizontalLayout { spacing: 6px; padding-left: wide ? 8px : 0px; }").is_empty());
+    assert!(raw_layout_spacing("// spacing: 8px;\nspacing: Spacing.sm; letter-spacing: 1px;").is_empty());
+    let mut findings = Vec::new();
+    for (name, src) in all_slint_sources() {
+        if name.starts_with("theme/") { continue; }
+        for property in raw_layout_spacing(&src) {
+            findings.push(format!("ui/{name}: {property}"));
+        }
+    }
+    assert!(findings.is_empty(), "Layout spacing must use Spacing tokens:\n{}", findings.join("\n"));
+}
+
+#[test]
+fn screens_do_not_define_private_button_families() {
+    let mut findings = Vec::new();
+    for (name, src) in all_slint_sources() {
+        if name.starts_with("components/") || name.starts_with("theme/") { continue; }
+        let code = src.lines().map(|line| line.split("//").next().unwrap_or("")).collect::<Vec<_>>().join("\n");
+        let words: Vec<_> = code.split_whitespace().collect();
+        for pair in words.windows(2) {
+            if pair[0] == "component" && pair[1].ends_with("Button") {
+                findings.push(format!("ui/{name}: private {} — use Button, HeaderButton or IconAction", pair[1]));
+            }
+        }
+        for import in code.split(';').filter(|part| part.contains("std-widgets.slint")) {
+            if import.split(|c: char| !c.is_ascii_alphanumeric()).any(|word| word == "Button") {
+                findings.push(format!("ui/{name}: platform Button bypasses the shared family"));
+            }
+        }
+    }
+    assert!(findings.is_empty(), "{}", findings.join("\n"));
+}
+
+#[test]
+fn polish_shared_controls_and_rc28_regressions() {
+    let sources = all_slint_sources();
+    let source = |name: &str| sources.iter().find(|(path, _)| path == name).unwrap().1.as_str();
+    let button = source("components/button.slint");
+    assert!(button.contains("pressed: touch.pressed && !root.disabled && !root.loading"));
+    assert!(button.contains("height: Spacing.button-height;") && button.contains("border-radius: self.height / 2;"));
+    assert!(button.contains("overflow: elide;") && button.contains("accessible-action-default"));
+    let toggle = source("components/toggle.slint");
+    assert!(toggle.contains("height: Spacing.button-height;") && toggle.contains("background: Colors.on-action;"));
+    let icons = source("components/icon_action.slint");
+    assert!(icons.contains("max(Spacing.button-height, root.size)") && icons.contains("enabled: root.enabled;"));
+    let checkbox = source("components/checkbox.slint");
+    assert!(checkbox.contains("width: Spacing.button-height;") && checkbox.contains("height: Spacing.button-height;"));
+    assert!(source("components/emoji_picker.slint").contains("viewport-width: categories.preferred-width;"));
+    let picker = source("chat/reaction_picker.slint");
+    assert!(picker.contains("max-picker-width: picker-shell.width;"));
+    assert!(picker.contains("max-picker-height: max(0px, picker-shell.height - Spacing.touch-target-min - Spacing.stroke);"));
+    // D3 and the notification-inbox portion of D9 were already migrated to
+    // the shared shell before this pass; protect the title and that route.
+    assert!(source("settings/account_menu.slint").contains("title: \"Profile\";"));
+    assert!(source("server_records/screen.slint").contains("Modal {"));
+    assert!(source("components/modal.slint").contains("title: root.title;"));
+    // D4: a modal scrim must sort above the conversation's floating controls.
+    assert!(source("chat/message_context_menu.slint").contains("z: 10;"));
+    // D6: the narrow DM column must retain the word that conveys the status.
+    assert!(source("chat/chat_header.slint").contains("root.mobile && root.is-dm ? \"Typing…\" : root.typing-indicator"));
+    // D7: both cut edges are faded, and tabs share the ordinary Button family.
+    let settings = source("settings/settings_screen.slint");
+    assert!(settings.contains("if tabs.viewport-x < 0px: Rectangle"));
+    assert!(settings.contains("if tabs.viewport-width + tabs.viewport-x > tabs.width: Rectangle"));
+    assert!(settings.contains("variant: root.active-section == item.id ? \"primary\" : \"ghost\";"));
+}
+
+/// D10: every call entry point delegates duration to the core connected clock.
+#[test]
+fn call_duration_uses_core_connection_time() {
+    let timers = include_str!("../src/bin_ui/features/calls/timers.rs");
+    assert!(timers.contains("ui_ctx.call_active_call().await"));
+    assert!(timers.contains("call.duration_seconds()"));
+    assert!(!timers.contains("SystemTime") && !timers.contains("started_at_ns"));
+    assert!(timers.contains("stop.load(Ordering::Relaxed)"), "a late snapshot must not restart a stopped timer");
+    for source in [
+        include_str!("../src/bin_ui/features/calls/outgoing.rs"),
+        include_str!("../src/bin_ui/features/calls/incoming.rs"),
+        include_str!("../src/bin_ui/features/calls/key_exchange.rs"),
+    ] {
+        assert!(source.contains("start_call_timer(&w, ui_ctx.clone())"));
+        assert!(!source.contains("start_call_timer(&w, Some(") && !source.contains("start_call_timer(&w, None)"));
+    }
+    let active = include_str!("../src/bin_ui/features/calls/active.rs");
+    assert!(active.contains("ctx.end_active_call().await"), "hangup duration must also come from core");
+    let worker = include_str!("../../chatter-core/src/services/call_worker.rs");
+    assert!(worker.contains("if encryption_root_key == &[0u8; 32] {\n        call.ring();"), "a DM room alone is not an answered call");
+    assert!(worker.contains("derive_call_handle(state) == call && state.call.connected_at.is_none()"), "only the matching first answer starts the core clock");
 }

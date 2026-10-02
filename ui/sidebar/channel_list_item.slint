@@ -138,10 +138,10 @@ export component ChannelListItem inherits Rectangle {
         VerticalLayout {
             horizontal-stretch: 1;
             alignment: center;
-            spacing: root.mobile-mode ? 3px : 2px;
+            spacing: root.mobile-mode ? Spacing.xs : Spacing.xxs;
 
             HorizontalLayout {
-                spacing: 4px;
+                spacing: Spacing.xs;
 
                 Text {
                     // Same rule as the DM row: the name is the anchor and is
@@ -173,7 +173,7 @@ export component ChannelListItem inherits Rectangle {
             // posted in yet keeps its old one-line look instead of reserving a
             // blank second line.
             if root.is-typing: HorizontalLayout {
-                spacing: 3px;
+                spacing: Spacing.xs;
                 alignment: start;
 
                 // Animated dots with staggered opacity
@@ -217,7 +217,7 @@ export component ChannelListItem inherits Rectangle {
         // Right side: timestamp above the unread badge, as on DM rows.
         if root.timestamp != "" || root.unread-count > 0: VerticalLayout {
             alignment: center;
-            spacing: 4px;
+            spacing: Spacing.xs;
             horizontal-stretch: 0;
 
             Text {

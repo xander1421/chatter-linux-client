@@ -1,3 +1,4 @@
+import { Checkbox } from "../components/checkbox.slint";
 import { Materials } from "../theme/materials.slint";
 import { GlassSurface } from "../components/glass_surface.slint";
 // SealedSenderIntroModal — honest one-screen explainer shown after registration.
@@ -87,46 +88,30 @@ export component SealedSenderIntroModal inherits Rectangle {
                 horizontal-alignment: center;
             }
 
-            HorizontalLayout {
-                alignment: center;
-                spacing: Spacing.sm;
-
-                Rectangle {
-                    width: 20px;
-                    height: 20px;
-                    border-radius: Spacing.radius-sm;
-                    border-width: Spacing.stroke;
-                    border-color: root.allow-from-anyone ? Colors.primary : Colors.text-muted;
-                    background: root.allow-from-anyone ? Colors.primary : transparent;
-
-                    if root.allow-from-anyone: Text {
-                        text: "\u{2713}";
-                        color: Colors.text-primary;
-                        font-size: Typography.sm;
-                        horizontal-alignment: center;
-                        vertical-alignment: center;
-                        width: 100%;
-                        height: 100%;
-                    }
-
-                    TouchArea {
-                        mouse-cursor: pointer;
-                        clicked => {
-                            root.allow-from-anyone = !root.allow-from-anyone;
-                        }
-                    }
-                }
-
-                Text {
-                    text: "Allow sealed messages from anyone";
-                    color: Colors.text-secondary;
-                    font-size: Typography.sm;
-                }
-
+            Rectangle {
+                min-height: Spacing.button-height;
                 TouchArea {
                     mouse-cursor: pointer;
-                    clicked => {
-                        root.allow-from-anyone = !root.allow-from-anyone;
+                    clicked => { root.allow-from-anyone = !root.allow-from-anyone; }
+                }
+                HorizontalLayout {
+                    spacing: Spacing.sm;
+                    VerticalLayout {
+                        alignment: center;
+                        horizontal-stretch: 0;
+                        Checkbox {
+                            checked <=> root.allow-from-anyone;
+                            label: "Allow sealed messages from anyone";
+                        }
+                    }
+                    Text {
+                        text: "Allow sealed messages from anyone";
+                        color: Colors.text-secondary;
+                        font-size: Typography.sm;
+                        vertical-alignment: center;
+                        horizontal-stretch: 1;
+                        min-width: 0px;
+                        wrap: word-wrap;
                     }
                 }
             }

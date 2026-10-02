@@ -25,7 +25,7 @@ component MenuItem inherits Rectangle {
     in property <angle> icon-rotation: 0deg;
     callback clicked();
 
-    height: root.mobile-mode ? Spacing.touch-target-min : 36px;
+    height: root.mobile-mode ? Spacing.touch-target-min : Spacing.button-height;
     background: touch.has-hover ? Colors.surface-hover : transparent;
     border-radius: Spacing.radius-sm;
 
@@ -132,7 +132,7 @@ export component SectionHeaderContextMenu inherits Rectangle {
 
         header-menu-layout := VerticalLayout {
             padding: Spacing.sm;
-            spacing: 2px;
+            spacing: Spacing.xxs;
 
             MenuItem {
                 icon: Icons.chevron-right;
@@ -316,7 +316,7 @@ export component SectionContextMenu inherits Rectangle {
 
         menu-layout := VerticalLayout {
             padding: Spacing.sm;
-            spacing: 2px;
+            spacing: Spacing.xxs;
 
             // Pin / Unpin — local-only, never synced to the server.
             MenuItem {

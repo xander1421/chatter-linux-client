@@ -1,3 +1,4 @@
+import { IconAction } from "../components/icon_action.slint";
 import { GlassSurface } from "../components/glass_surface.slint";
 // Active call view as a dock on top of the chat pane (Discord-style).
 //
@@ -245,7 +246,7 @@ export component ActiveCallView inherits Rectangle {
     // Voice-only calls (no camera, no screen share anywhere) collapse to a
     // compact strip — a tall grid of empty avatar tiles wastes the chat area.
     // Phones (`speaker-toggle`) get 48dp touch targets on the control row.
-    property <length> button-size: speaker-toggle ? 48px : 34px;
+    property <length> button-size: speaker-toggle ? Spacing.touch-target-min : Spacing.button-height;
     property <length> controls-height: button-size + 6px;
     property <length> dock-height: any-video
         ? clamp(viewport-height * 0.45, 240px, 560px)
@@ -385,75 +386,43 @@ export component ActiveCallView inherits Rectangle {
 
                 x: (parent.width - self.width) / 2;
                 y: Spacing.sm + Spacing.sm;
-                width: 96px;
-                height: 40px;
+                width: Spacing.button-height * 2 + Spacing.xs * 3;
+                height: Spacing.button-height + Spacing.xs * 2;
                 border-radius: self.height / 2;
 
                 HorizontalLayout {
+                    padding-top: Spacing.xs;
+                    padding-bottom: Spacing.xs;
                     padding-left: Spacing.xs;
                     padding-right: Spacing.xs;
                     spacing: Spacing.xs;
                     alignment: center;
 
                     // Audio mute toggle for this peer.
-                    Rectangle {
-                        width: 36px;
-                        height: 36px;
-                        border-radius: 18px;
-                        accessible-role: button;
-                        accessible-label: (call-data.participants[maximized-index].is-audio-muted-locally
+                    IconAction {
+                        label: (call-data.participants[maximized-index].is-audio-muted-locally
                             ? "Unmute " : "Mute ")
                             + call-data.participants[maximized-index].display-name + " for you";
-                        background: call-data.participants[maximized-index].is-audio-muted-locally
-                            ? Colors.error.with-alpha(0.85)
-                            : Colors.surface-hover;
-
-                        mute-touch := TouchArea {
-                            clicked => {
+                        icon: call-data.participants[maximized-index].is-audio-muted-locally
+                                ? Icons.mic-off : Icons.mic;
+                        active: call-data.participants[maximized-index].is-audio-muted-locally;
+                        clicked => {
                                 root.peer-audio-mute-toggle(
                                     call-data.participants[maximized-index].user-id);
-                            }
-                        }
-
-                        Image {
-                            source: call-data.participants[maximized-index].is-audio-muted-locally
-                                ? Icons.mic-off : Icons.mic;
-                            width: 16px;
-                            height: 16px;
-                            x: (parent.width - self.width) / 2;
-                            y: (parent.height - self.height) / 2;
-                            colorize: Colors.text-primary;
                         }
                     }
 
                     // Video pause toggle for this peer.
-                    Rectangle {
-                        width: 36px;
-                        height: 36px;
-                        border-radius: 18px;
-                        accessible-role: button;
-                        accessible-label: (call-data.participants[maximized-index].is-video-paused-locally
+                    IconAction {
+                        label: (call-data.participants[maximized-index].is-video-paused-locally
                             ? "Resume " : "Pause ")
                             + call-data.participants[maximized-index].display-name + "'s video for you";
-                        background: call-data.participants[maximized-index].is-video-paused-locally
-                            ? Colors.error.with-alpha(0.85)
-                            : Colors.surface-hover;
-
-                        pause-touch := TouchArea {
-                            clicked => {
+                        icon: call-data.participants[maximized-index].is-video-paused-locally
+                                ? Icons.play : Icons.pause;
+                        active: call-data.participants[maximized-index].is-video-paused-locally;
+                        clicked => {
                                 root.peer-video-pause-toggle(
                                     call-data.participants[maximized-index].user-id);
-                            }
-                        }
-
-                        Image {
-                            source: call-data.participants[maximized-index].is-video-paused-locally
-                                ? Icons.play : Icons.pause;
-                            width: 16px;
-                            height: 16px;
-                            x: (parent.width - self.width) / 2;
-                            y: (parent.height - self.height) / 2;
-                            colorize: Colors.text-primary;
                         }
                     }
                 }
@@ -486,7 +455,7 @@ export component ActiveCallView inherits Rectangle {
                     }
 
                     if call-data.participant-count > 2: HorizontalLayout {
-                        spacing: 3px;
+                        spacing: Spacing.xs;
 
                         Image {
                             source: Icons.users;
@@ -504,7 +473,7 @@ export component ActiveCallView inherits Rectangle {
                     }
 
                     if call-data.is-encrypted && call-data.verification-emoji-1 != "": HorizontalLayout {
-                        spacing: 2px;
+                        spacing: Spacing.xxs;
 
                         // Lock prefix — marks the emoji cluster as the E2EE
                         // verification code (SAS), not reactions.
@@ -562,7 +531,7 @@ export component ActiveCallView inherits Rectangle {
                 x: (parent.width - self.width) / 2;
                 y: parent.height - Spacing.sm - self.height;
                 width: share-banner-row.preferred-width + Spacing.md * 2;
-                height: 28px;
+                height: Spacing.button-height + Spacing.sm;
                 border-radius: self.height / 2;
 
                 share-banner-row := HorizontalLayout {
@@ -588,7 +557,7 @@ export component ActiveCallView inherits Rectangle {
 
                     Rectangle {
                         width: stop-text.preferred-width + Spacing.sm * 2;
-                        height: 20px;
+                        height: Spacing.button-height;
                         y: (parent.height - self.height) / 2;
                         border-radius: 10px;
                         background: stop-touch.has-hover ? Colors.error-hover : Colors.error;

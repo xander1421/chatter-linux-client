@@ -111,10 +111,10 @@ export component CreateSectionModal inherits Rectangle {
                 // 324px row: fine inside the 400px card on a desktop, off the
                 // right edge of a 360dp phone, where ModalContainer caps the
                 // card at `viewport - 32px` and the last column was clipped.
-                property <int> grid-cols: max(4, Math.floor((self.width - Spacing.sm * 2) / 44px));
+                property <int> grid-cols: max(4, Math.floor((self.width - Spacing.sm * 2) / Spacing.button-height));
 
                 Flickable {
-                    viewport-height: Math.ceil(SectionEmojis.icons.length / grid-box.grid-cols) * 40px + Spacing.sm * 2;
+                    viewport-height: Math.ceil(SectionEmojis.icons.length / grid-box.grid-cols) * Spacing.button-height + Spacing.sm * 2;
                     viewport-width: parent.width;
 
                     Rectangle {
@@ -125,10 +125,10 @@ export component CreateSectionModal inherits Rectangle {
                             property <int> grid-row: Math.floor(index / grid-box.grid-cols);
                             property <int> grid-col: mod(index, grid-box.grid-cols);
 
-                            x: Spacing.sm + self.grid-col * 44px;
-                            y: Spacing.sm + self.grid-row * 40px;
-                            width: 40px;
-                            height: 36px;
+                            x: Spacing.sm + self.grid-col * Spacing.button-height;
+                            y: Spacing.sm + self.grid-row * Spacing.button-height;
+                            width: Spacing.button-height;
+                            height: Spacing.button-height;
                             border-radius: Spacing.radius-sm;
                             background: icon == root.selected-emoji
                                 ? Colors.primary.with-alpha(0.25)

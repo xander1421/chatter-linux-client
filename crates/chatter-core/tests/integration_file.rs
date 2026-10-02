@@ -14,6 +14,21 @@ use chatter_core::storage::{AttachmentRepository, Database};
 
 use common::*;
 
+// The storage edge uses the same private PKI as the application transport.
+// Exercise signed multipart HTTP directly without trusting public CA roots.
+fn storage_http_client() -> reqwest::Client {
+    let pem = chatter_core::config::TLS_ROOT_CA_PEM.expect("test storage CA must be pinned");
+    let ca = reqwest::Certificate::from_pem(pem.as_bytes()).expect("valid test storage CA");
+    reqwest::Client::builder()
+        .tls_built_in_root_certs(false)
+        .add_root_certificate(ca)
+        .https_only(true)
+        .redirect(reqwest::redirect::Policy::none())
+        .timeout(std::time::Duration::from_secs(30))
+        .build()
+        .expect("pinned storage HTTP client")
+}
+
 // ============================================================================
 // Attachment URL Tests
 // ============================================================================
@@ -67,7 +82,7 @@ async fn test_rustfs_supports_presigned_multipart() {
         "server returned zero presigned part URLs"
     );
 
-    let http = reqwest::Client::new();
+    let http = storage_http_client();
     let body = vec![7u8; size];
     let resp = http
         .put(&create.part_urls[0])
@@ -75,6 +90,7 @@ async fn test_rustfs_supports_presigned_multipart() {
         .body(body)
         .send()
         .await
+        .map_err(reqwest::Error::without_url)
         .expect("presigned part PUT request should reach RustFS");
 
     assert!(
@@ -126,15 +142,15 @@ async fn test_rustfs_presigned_multipart_minimal() {
         create.part_size
     );
     assert!(!create.part_urls.is_empty(), "server returned zero part URLs");
-    eprintln!("part_url[0]={}", create.part_urls[0]);
 
-    let http = reqwest::Client::new();
+    let http = storage_http_client();
     let resp = http
         .put(&create.part_urls[0])
         .header("Content-Length", size as u64)
         .body(vec![7u8; size])
         .send()
         .await
+        .map_err(reqwest::Error::without_url)
         .expect("presigned part PUT should reach RustFS");
 
     eprintln!("PART PUT status={} etag={:?}", resp.status(), resp.headers().get(reqwest::header::ETAG));

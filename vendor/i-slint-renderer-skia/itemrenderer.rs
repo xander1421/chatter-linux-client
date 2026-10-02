@@ -24,7 +24,7 @@ use i_slint_core::lengths::{
 use i_slint_core::textlayout::sharedparley::{self, GlyphRenderer, fontique};
 use i_slint_core::window::WindowInner;
 use i_slint_core::{Brush, Color, SharedString};
-use skia_safe::{Matrix, TileMode};
+use skia_safe::{Matrix, QuickReject, TileMode};
 
 pub type SkiaBoxShadowCache = BoxShadowCache<skia_safe::Image>;
 
@@ -1025,6 +1025,11 @@ impl ItemRenderer for SkiaItemRenderer<'_> {
             return RenderingResult::ContinueRenderingWithoutChildren;
         }
         let bounds = skia_safe::Rect::from_wh(physical_size.width, physical_size.height);
+        // The canvas clip includes this frame's damage region. Backdrop clips its
+        // children too, so a rejected layer needs neither sampling nor traversal.
+        if self.canvas.quick_reject(&bounds) {
+            return RenderingResult::ContinueRenderingWithoutChildren;
+        }
         let radius = (backdrop.border_radius() * self.scale_factor)
             .get()
             .max(0.0)

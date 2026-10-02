@@ -124,14 +124,14 @@ export component JarvisMemoryModal inherits GlassSurface {
                         vertical-stretch: 1;
                         viewport-height: facts-column.preferred-height;
                         facts-column := VerticalLayout {
-                            spacing: 6px;
+                            spacing: Spacing.sm;
                             for fact in root.facts: Rectangle {
                                 border-radius: Spacing.radius-md;
                                 background: fact.is-current ? Colors.surface : transparent;
                                 opacity: fact.is-current ? 1.0 : 0.55;
                                 VerticalLayout {
                                     padding: Spacing.sm;
-                                    spacing: 2px;
+                                    spacing: Spacing.xxs;
                                     HorizontalLayout {
                                         spacing: Spacing.sm;
                                         Text {
@@ -188,9 +188,9 @@ export component JarvisMemoryModal inherits GlassSurface {
                         height: 92px;
                         viewport-height: chips.preferred-height;
                         chips := VerticalLayout {
-                            spacing: 4px;
+                            spacing: Spacing.xs;
                             for row in root.entities: Rectangle {
-                                height: 26px;
+                                height: Spacing.button-height;
                                 border-radius: Spacing.radius-md;
                                 background: row.is-selected ? Colors.surface-hover : transparent;
                                 TouchArea { clicked => { root.select-entity(row.entity-id); } }

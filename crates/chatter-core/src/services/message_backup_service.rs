@@ -27,6 +27,7 @@ use crate::crypto::message_backup::{
 };
 use crate::error::{CryptoError, NetworkError, StorageError};
 use crate::network::grpc::client_pool::GrpcClientPool;
+use crate::network::storage_http::storage_client;
 use crate::storage::backup_data::{dump_frames, import_frames, ImportSummary};
 use crate::storage::repositories::settings_repo::{keys, SettingsRepository};
 use crate::storage::Database;
@@ -53,6 +54,44 @@ pub enum MessageBackupError {
     /// Orchestration-level failures (missing settings, HTTP transfer).
     #[error("message backup: {0}")]
     Generic(String),
+}
+
+// Presigned URLs are bearer capabilities, including on body-read failures.
+fn storage_transfer_error(context: &str, error: reqwest::Error) -> MessageBackupError {
+    let error = error.without_url();
+    tracing::warn!(operation = context, error = ?error, "Storage archive transfer failed");
+    MessageBackupError::Generic(format!("{context}: {error}"))
+}
+
+// Both svr.proto and provisioning.proto cap encrypted archives at 1 GiB.
+const MAX_ARCHIVE_BYTES: usize = 1_073_741_824;
+
+fn append_archive_chunk(
+    body: &mut Vec<u8>,
+    chunk: &[u8],
+    limit: usize,
+) -> Result<(), MessageBackupError> {
+    crate::network::anon_http::append_storage_chunk(body, chunk, limit).map_err(|_| {
+        MessageBackupError::Generic(
+            "archive exceeds its byte limit or cannot allocate memory".into(),
+        )
+    })
+}
+
+async fn read_archive(
+    mut response: reqwest::Response,
+    context: &str,
+) -> Result<Vec<u8>, MessageBackupError> {
+    // Count actual chunks; never trust Content-Length for bounds or allocation.
+    let mut body = Vec::new();
+    while let Some(chunk) = response
+        .chunk()
+        .await
+        .map_err(|e| storage_transfer_error(context, e))?
+    {
+        append_archive_chunk(&mut body, &chunk, MAX_ARCHIVE_BYTES)?;
+    }
+    Ok(body)
 }
 
 /// Outcome of a successful export/upload.
@@ -254,13 +293,13 @@ impl MessageBackupService {
             .set_message_backup(backup_id.to_vec(), container.len() as u64)
             .await?;
 
-        let response = reqwest::Client::new()
+        let response = storage_client().map_err(MessageBackupError::Generic)?
             .put(&upload.upload_url)
             .header("Content-Type", "application/octet-stream")
             .body(container.clone())
             .send()
             .await
-            .map_err(|e| MessageBackupError::Generic(format!("blob upload failed: {e}")))?;
+            .map_err(|e| storage_transfer_error("blob upload failed", e))?;
         if !response.status().is_success() {
             return Err(MessageBackupError::Generic(format!(
                 "blob upload failed with status {}",
@@ -301,21 +340,18 @@ impl MessageBackupService {
         };
 
         let blob = async {
-            let response = reqwest::Client::new()
+            let response = storage_client().map_err(MessageBackupError::Generic)?
                 .get(&download.download_url)
                 .send()
                 .await
-                .map_err(|e| MessageBackupError::Generic(format!("blob download failed: {e}")))?;
+                .map_err(|e| storage_transfer_error("blob download failed", e))?;
             if !response.status().is_success() {
                 return Err(MessageBackupError::Generic(format!(
                     "blob download failed with status {}",
                     response.status()
                 )));
             }
-            response
-                .bytes()
-                .await
-                .map_err(|e| MessageBackupError::Generic(format!("blob read failed: {e}")))
+            read_archive(response, "blob read failed").await
         }
         .await;
         let blob = match blob {
@@ -381,15 +417,13 @@ impl MessageBackupService {
         container: &[u8],
         upload_url: &str,
     ) -> Result<(), MessageBackupError> {
-        let response = reqwest::Client::new()
+        let response = storage_client().map_err(MessageBackupError::Generic)?
             .put(upload_url)
             .header("Content-Type", "application/octet-stream")
             .body(container.to_vec())
             .send()
             .await
-            .map_err(|e| {
-                MessageBackupError::Generic(format!("transfer archive upload failed: {e}"))
-            })?;
+            .map_err(|e| storage_transfer_error("transfer archive upload failed", e))?;
         if !response.status().is_success() {
             return Err(MessageBackupError::Generic(format!(
                 "transfer archive upload failed with status {}",
@@ -408,22 +442,18 @@ impl MessageBackupService {
         download_url: &str,
         kek: &[u8; 32],
     ) -> Result<ImportSummary, MessageBackupError> {
-        let response = reqwest::Client::new()
+        let response = storage_client().map_err(MessageBackupError::Generic)?
             .get(download_url)
             .send()
             .await
-            .map_err(|e| {
-                MessageBackupError::Generic(format!("transfer archive download failed: {e}"))
-            })?;
+            .map_err(|e| storage_transfer_error("transfer archive download failed", e))?;
         if !response.status().is_success() {
             return Err(MessageBackupError::Generic(format!(
                 "transfer archive download failed with status {}",
                 response.status()
             )));
         }
-        let blob = response.bytes().await.map_err(|e| {
-            MessageBackupError::Generic(format!("transfer archive read failed: {e}"))
-        })?;
+        let blob = read_archive(response, "transfer archive read failed").await?;
 
         let summary = self.decrypt_and_import(&blob, kek, KEY_MODE_LINK)?;
         tracing::info!(
@@ -460,6 +490,38 @@ mod tests {
             db,
             file,
         )
+    }
+
+    #[test]
+    fn archive_collection_rejects_excess_before_appending() {
+        let mut body = vec![1, 2];
+        append_archive_chunk(&mut body, &[3, 4], 4).unwrap();
+        assert_eq!(body, [1, 2, 3, 4]);
+        assert!(append_archive_chunk(&mut body, &[5], 4).is_err());
+        assert_eq!(body, [1, 2, 3, 4]);
+        let mut empty = Vec::new();
+        assert!(append_archive_chunk(&mut empty, &[1, 2], 1).is_err());
+        assert!(empty.is_empty());
+        append_archive_chunk(&mut empty, &[], 0).unwrap();
+    }
+
+    #[tokio::test]
+    async fn link_transfers_reject_cleartext_without_leaking_capabilities() {
+        let (service, _db, _file) = svc_with_db();
+        let url = "http://127.0.0.1:1/private-object?secret=capability";
+        let upload = service.upload_link_archive(b"archive", url).await.unwrap_err();
+        let download = service
+            .download_and_import_link_archive(url, &[7; 32])
+            .await
+            .unwrap_err();
+        for error in [upload, download] {
+            for rendered in [error.to_string(), format!("{error:?}")] {
+                assert!(!rendered.contains("127.0.0.1"));
+                assert!(!rendered.contains("private-object"));
+                assert!(!rendered.contains("capability"));
+                assert!(rendered.contains("transfer archive"));
+            }
+        }
     }
 
     fn user(id: &str, name: &str) -> User {

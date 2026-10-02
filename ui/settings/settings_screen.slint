@@ -259,7 +259,7 @@ export component SettingsScreen inherits Rectangle {
                     { id: "ai", label: "AI Assistant", enabled: true },
                     { id: "appearance", label: "Appearance", enabled: true }
                 ]: Rectangle {
-                    height: 40px;
+                    height: Spacing.button-height;
                     border-radius: Spacing.radius-md;
                     background: active-section == item.id ? Colors.primary :
                                (nav-touch.has-hover && item.enabled ? Colors.surface-hover : transparent);
@@ -306,7 +306,7 @@ export component SettingsScreen inherits Rectangle {
 
                 content-layout := VerticalLayout {
                     padding: root.content-padding;
-                    padding-top: root.content-padding + (root.compact-mode ? Spacing.touch-target-min + Spacing.sm : 0px);
+                    padding-top: root.content-padding + (root.compact-mode ? Spacing.touch-target-min + Spacing.sm : Spacing.none);
                     spacing: root.compact-mode ? Spacing.md : Spacing.lg;
                     alignment: start;
 
@@ -997,7 +997,7 @@ export component SettingsScreen inherits Rectangle {
 
                                         if !show-logout-confirm && !root.compact-mode: Button {
                                             text: "Log Out";
-                                            variant: "danger";
+                                            variant: "destructive";
                                             clicked => { show-logout-confirm = true; }
                                         }
                                     }
@@ -1005,7 +1005,7 @@ export component SettingsScreen inherits Rectangle {
                                     // Compact: full-width button stacked below
                                     if !show-logout-confirm && root.compact-mode: Button {
                                         text: "Log Out";
-                                        variant: "danger";
+                                        variant: "destructive";
                                         clicked => { show-logout-confirm = true; }
                                     }
 
@@ -1021,7 +1021,7 @@ export component SettingsScreen inherits Rectangle {
 
                                         Button {
                                             text: "Log Out of This Device";
-                                            variant: "danger";
+                                            variant: "destructive";
                                             clicked => {
                                                 show-logout-confirm = false;
                                                 root.logout-clicked();
@@ -1063,7 +1063,7 @@ export component SettingsScreen inherits Rectangle {
                                         // (with password) — never deletes directly.
                                         if !show-delete-confirm && !root.compact-mode: Button {
                                             text: "Delete Account";
-                                            variant: "danger";
+                                            variant: "destructive";
                                             clicked => {
                                                 root.delete-account-clicked();
                                                 show-delete-confirm = true;
@@ -1074,7 +1074,7 @@ export component SettingsScreen inherits Rectangle {
                                     // Compact: full-width button stacked below
                                     if !show-delete-confirm && root.compact-mode: Button {
                                         text: "Delete Account";
-                                        variant: "danger";
+                                        variant: "destructive";
                                         clicked => {
                                             root.delete-account-clicked();
                                             show-delete-confirm = true;
@@ -1120,7 +1120,7 @@ export component SettingsScreen inherits Rectangle {
 
                                             Button {
                                                 text: "Delete Forever";
-                                                variant: "danger";
+                                                variant: "destructive";
                                                 loading: root.delete-loading;
                                                 disabled: root.delete-password == "";
                                                 clicked => {
@@ -1585,7 +1585,7 @@ export component SettingsScreen inherits Rectangle {
                                             { key: "both", label: "Both" },
                                         ]: Rectangle {
                                             property <bool> selected: root.search-shortcut == opt.key;
-                                            height: 32px;
+                                            height: Spacing.button-height;
                                             min-width: 56px;
                                             border-radius: Spacing.radius-md;
                                             background: selected ? Colors.primary : Colors.surface-hover;
@@ -2276,7 +2276,7 @@ export component SettingsScreen inherits Rectangle {
                                     }
 
                                     for model in root.local-ai-models: Rectangle {
-                                        height: 32px;
+                                        height: Spacing.button-height;
                                         border-radius: Spacing.radius-md;
                                         background: model == root.local-ai-active-model ? Colors.surface-hover : transparent;
                                         model-touch := TouchArea {
@@ -2332,7 +2332,7 @@ export component SettingsScreen inherits Rectangle {
                                         VerticalLayout {
                                             padding-left: Spacing.sm;
                                             padding-right: Spacing.sm;
-                                            spacing: 2px;
+                                            spacing: Spacing.xxs;
 
                                             HorizontalLayout {
                                                 spacing: Spacing.sm;
@@ -2568,7 +2568,7 @@ export component SettingsScreen inherits Rectangle {
 
                                             VerticalLayout {
                                                 alignment: center;
-                                                spacing: 2px;
+                                                spacing: Spacing.xxs;
 
                                                 Text {
                                                     text: opt.label;
@@ -2662,7 +2662,7 @@ export component SettingsScreen inherits Rectangle {
 
                                             VerticalLayout {
                                                 alignment: center;
-                                                spacing: 2px;
+                                                spacing: Spacing.xxs;
 
                                                 Text {
                                                     text: opt.label;
@@ -2781,7 +2781,7 @@ export component SettingsScreen inherits Rectangle {
 
                                             VerticalLayout {
                                                 alignment: center;
-                                                spacing: 2px;
+                                                spacing: Spacing.xxs;
 
                                                 Text {
                                                     text: opt.label;
@@ -2839,46 +2839,47 @@ export component SettingsScreen inherits Rectangle {
                 clicked => { root.close-settings(); }
             }
 
-            // Tab bar (scrollable)
-            Flickable {
+            // A clipped scrolling strip needs a soft edge beside the back button.
+            Rectangle {
                 horizontal-stretch: 1;
-                viewport-width: tab-layout.preferred-width;
+                min-width: 0px;
+                clip: true;
+                tabs := Flickable {
+                    width: parent.width;
+                    height: parent.height;
+                    viewport-width: tab-layout.preferred-width;
+                    viewport-height: self.height;
 
-                tab-layout := HorizontalLayout {
-                    spacing: 2px;
-                    padding: Spacing.xs;
+                    tab-layout := HorizontalLayout {
+                        spacing: Spacing.xxs;
+                        padding: Spacing.xs;
 
-                    for item in [
-                        { id: "account", label: "Account", enabled: true },
-                        { id: "devices", label: "Linked devices", enabled: true },
-                        { id: "privacy", label: "Privacy", enabled: true },
-                        { id: "notifications", label: "Notifications", enabled: true },
-                        { id: "encryption", label: "Encryption", enabled: true },
-                        { id: "ai", label: "AI", enabled: true },
-                        { id: "appearance", label: "Appearance", enabled: true }
-                    ]: Rectangle {
-                        width: compact-tab-text.preferred-width + Spacing.md * 2;
-                        height: Spacing.touch-target-min;
-                        border-radius: Spacing.radius-sm;
-                        background: active-section == item.id ? Colors.primary :
-                                   (compact-tab-touch.has-hover ? Colors.surface-hover : transparent);
-
-                        compact-tab-text := Text {
+                        for item in [
+                            { id: "account", label: "Account" },
+                            { id: "devices", label: "Linked devices" },
+                            { id: "privacy", label: "Privacy" },
+                            { id: "notifications", label: "Notifications" },
+                            { id: "encryption", label: "Encryption" },
+                            { id: "ai", label: "AI" },
+                            { id: "appearance", label: "Appearance" }
+                        ]: Button {
                             text: item.label;
-                            color: active-section == item.id ? Colors.text-primary : Colors.text-secondary;
-                            font-size: Typography.xs;
-                            font-weight: active-section == item.id ? Typography.medium : Typography.normal;
-                            horizontal-alignment: center;
-                            vertical-alignment: center;
-                        }
-
-                        compact-tab-touch := TouchArea {
-                            mouse-cursor: pointer;
-                            clicked => {
-                                if item.enabled { active-section = item.id; }
-                            }
+                            height: Spacing.touch-target-min;
+                            variant: root.active-section == item.id ? "primary" : "ghost";
+                            clicked => { root.active-section = item.id; }
                         }
                     }
+                }
+                if tabs.viewport-x < 0px: Rectangle {
+                    width: Spacing.lg;
+                    height: parent.height;
+                    background: @linear-gradient(90deg, Colors.background 0%, Colors.background.with-alpha(0) 100%);
+                }
+                if tabs.viewport-width + tabs.viewport-x > tabs.width: Rectangle {
+                    x: parent.width - self.width;
+                    width: Spacing.lg;
+                    height: parent.height;
+                    background: @linear-gradient(90deg, Colors.background.with-alpha(0) 0%, Colors.background 100%);
                 }
             }
         }

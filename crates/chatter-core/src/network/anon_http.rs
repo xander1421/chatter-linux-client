@@ -10,7 +10,7 @@
 //! The Tor tunnel hides the client IP from the CDN host; it does **not**
 //! authenticate that host. That is still TLS's job — so for `https://` we run a
 //! real rustls client handshake with SNI and full certificate verification
-//! against the webpki root store. Cert verification is never disabled.
+//! against the pinned chatter CA. Cert verification is never disabled.
 //!
 //! # Structure
 //! The [`ANON_HTTP_ACTIVE`] flag and URL parsing are always compiled so the leaf
@@ -29,6 +29,24 @@ use std::sync::atomic::AtomicBool;
 /// without the `onion` feature the transport can never be Onion, so this stays
 /// false and every anon branch is dead.
 pub static ANON_HTTP_ACTIVE: AtomicBool = AtomicBool::new(false);
+
+/// Maximum encrypted storage object, including log-bucket padding, CBC
+/// alignment, IV and MAC. Do not trust a response's Content-Length for allocation.
+pub(crate) fn storage_response_limit() -> usize {
+    let size = crate::crypto::attachment_crypto::max_attachment_size();
+    usize::try_from(size.saturating_add(size / 20).saturating_add(1024))
+        .unwrap_or(usize::MAX)
+}
+
+pub(crate) fn append_storage_chunk(body: &mut Vec<u8>, chunk: &[u8], limit: usize) -> Result<(), String> {
+    let len = body.len().checked_add(chunk.len())
+        .filter(|len| *len <= limit)
+        .ok_or_else(|| "storage response exceeds attachment size limit".to_string())?;
+    body.try_reserve(len - body.len())
+        .map_err(|_| "not enough memory for storage response".to_string())?;
+    body.extend_from_slice(chunk);
+    Ok(())
+}
 
 /// Parsed components of an absolute http(s) URL.
 // Used by the `onion` Tor transport below and by unit tests; unused in a plain
@@ -61,6 +79,14 @@ pub(crate) fn parse_url(url: &str) -> Result<ParsedUrl, String> {
         .host_str()
         .ok_or_else(|| "URL has no host".to_string())?
         .to_string();
+    // A Tor exit does not authenticate cleartext HTTP. Only onion services
+    // provide authenticated transport without TLS.
+    if !https && !host.ends_with(".onion") {
+        return Err("storage URL requires HTTPS or an onion service".to_string());
+    }
+    if !u.username().is_empty() || u.password().is_some() {
+        return Err("storage URL must not contain credentials".to_string());
+    }
     // `port_or_known_default` fills in 443/80 for https/http when absent.
     let port = u.port_or_known_default().unwrap_or(if https { 443 } else { 80 });
     let mut path_and_query = u.path().to_string();
@@ -207,13 +233,15 @@ mod tor {
             .map_err(|e| format!("HTTP request failed: {e}"))?;
         let status = resp.status().as_u16();
         let headers = resp.headers().clone();
-        let body = resp
-            .into_body()
-            .collect()
-            .await
-            .map_err(|e| format!("reading response body failed: {e}"))?
-            .to_bytes()
-            .to_vec();
+        let mut incoming = resp.into_body();
+        let mut body = Vec::new();
+        let limit = super::storage_response_limit();
+        while let Some(frame) = incoming.frame().await {
+            let frame = frame.map_err(|e| format!("reading response body failed: {e}"))?;
+            if let Ok(data) = frame.into_data() {
+                super::append_storage_chunk(&mut body, &data, limit)?;
+            }
+        }
         Ok((status, headers, body))
     }
 
@@ -249,7 +277,7 @@ mod tor {
             .map_err(|e| format!("building GET request failed: {e}"))?;
         let (status, _headers, body) = request(tor, &p, req).await?;
         if !(200..300).contains(&status) {
-            return Err(format!("GET {url} returned status {status}"));
+            return Err(format!("storage GET returned status {status}"));
         }
         Ok(body)
     }
@@ -288,6 +316,14 @@ mod tests {
     use super::*;
 
     #[test]
+    fn storage_response_limit_is_enforced_before_append() {
+        let mut body = vec![1, 2];
+        append_storage_chunk(&mut body, &[3, 4], 4).unwrap();
+        assert!(append_storage_chunk(&mut body, &[5], 4).is_err());
+        assert_eq!(body, [1, 2, 3, 4]);
+    }
+
+    #[test]
     fn parse_https_default_port() {
         let p = parse_url("https://cdn.example.com/path/to/obj?sig=abc").unwrap();
         assert!(p.https);
@@ -298,9 +334,9 @@ mod tests {
 
     #[test]
     fn parse_http_default_port() {
-        let p = parse_url("http://storage.local/bucket/key").unwrap();
+        let p = parse_url("http://storage.onion/bucket/key").unwrap();
         assert!(!p.https);
-        assert_eq!(p.host, "storage.local");
+        assert_eq!(p.host, "storage.onion");
         assert_eq!(p.port, 80);
         assert_eq!(p.path_and_query, "/bucket/key");
     }
@@ -316,8 +352,15 @@ mod tests {
 
     #[test]
     fn parse_root_path_defaults_to_slash() {
-        let p = parse_url("http://h").unwrap();
+        let p = parse_url("https://h").unwrap();
         assert_eq!(p.path_and_query, "/");
+    }
+
+    #[test]
+    fn parse_rejects_unauthenticated_storage() {
+        assert!(parse_url("http://storage.local/bucket/key").is_err());
+        assert!(parse_url("http://storage.onion.evil.example/key").is_err());
+        assert!(parse_url("https://user:secret@storage.example/key").is_err());
     }
 
     #[test]

@@ -30,19 +30,19 @@ export component MeshList inherits Rectangle {
         // ── Section header ──
         // Same header rhythm as the sidebar's own sections — see sidebar.slint.
         if !root.collapsed: Rectangle {
-            height: 42px;
+            height: Spacing.button-height + Spacing.md;
             HorizontalLayout {
-                padding-top: 10px;
-                padding-left: 6px;
-                padding-right: 4px;
+                padding-top: Spacing.md;
+                padding-left: Spacing.sm;
+                padding-right: Spacing.xs;
 
                 TouchArea {
                     horizontal-stretch: 1;
                     mouse-cursor: pointer;
                     clicked => { root.expanded = !root.expanded; }
                     HorizontalLayout {
-                        padding-left: 2px;
-                        spacing: 4px;
+                        padding-left: Spacing.xxs;
+                        spacing: Spacing.xs;
                         alignment: start;
                         VerticalLayout {
                             alignment: center;
@@ -69,7 +69,7 @@ export component MeshList inherits Rectangle {
 
                 // Join a geohash cell.
                 Rectangle {
-                    width: 28px;
+                    width: Spacing.button-height;
                     horizontal-stretch: 0;
                     Rectangle {
                         width: 24px;
@@ -102,9 +102,9 @@ export component MeshList inherits Rectangle {
         if !root.collapsed && root.expanded: Rectangle {
             height: 20px * Appearance.text-grow;
             HorizontalLayout {
-                padding-left: 10px;
+                padding-left: Spacing.md;
                 padding-right: Spacing.sm;
-                spacing: 5px;
+                spacing: Spacing.xs;
                 alignment: start;
 
                 VerticalLayout {
@@ -150,7 +150,7 @@ export component MeshList inherits Rectangle {
             HorizontalLayout {
                 padding-left: Spacing.sm;
                 padding-right: Spacing.sm;
-                padding-bottom: 4px;
+                padding-bottom: Spacing.xs;
 
                 Rectangle {
                     height: 28px;
@@ -162,7 +162,7 @@ export component MeshList inherits Rectangle {
                     HorizontalLayout {
                         padding-left: Spacing.sm;
                         padding-right: Spacing.sm;
-                        spacing: 4px;
+                        spacing: Spacing.xs;
 
                         VerticalLayout {
                             alignment: center;
@@ -205,7 +205,7 @@ export component MeshList inherits Rectangle {
         if root.expanded: VerticalLayout {
             padding-left: Spacing.xs;
             padding-right: Spacing.xs;
-            spacing: 2px;
+            spacing: Spacing.xxs;
 
             for item in MeshGlobal.conversations: MeshListItem {
                 title: item.title;
@@ -226,9 +226,9 @@ export component MeshList inherits Rectangle {
         if !root.collapsed && root.expanded && MeshGlobal.conversations.length == 0: Rectangle {
             height: empty-text.preferred-height + 12px;
             HorizontalLayout {
-                padding-left: 10px;
+                padding-left: Spacing.md;
                 padding-right: Spacing.sm;
-                padding-bottom: 6px;
+                padding-bottom: Spacing.sm;
                 empty-text := Text {
                     text: "Nothing here yet. Messages arrive over Bluetooth from whoever is nearby, and can be relayed onwards hours later.";
                     color: Colors.text-muted;
@@ -243,7 +243,7 @@ export component MeshList inherits Rectangle {
         if !root.collapsed && root.expanded && !root.confirming-wipe: Rectangle {
             height: 22px;
             HorizontalLayout {
-                padding-left: 10px;
+                padding-left: Spacing.md;
                 alignment: start;
                 Text {
                     text: "Wipe mesh data…";
@@ -260,10 +260,10 @@ export component MeshList inherits Rectangle {
         if !root.collapsed && root.expanded && root.confirming-wipe: Rectangle {
             height: confirm-layout.preferred-height;
             confirm-layout := VerticalLayout {
-                padding-left: 10px;
+                padding-left: Spacing.md;
                 padding-right: Spacing.sm;
-                padding-bottom: 6px;
-                spacing: 4px;
+                padding-bottom: Spacing.sm;
+                spacing: Spacing.xs;
                 Text {
                     text: "Erase the mesh identity, every mesh message, carried mail and favourites from this device? Your chatter account and its messages are not touched. This cannot be undone.";
                     color: Colors.warning;

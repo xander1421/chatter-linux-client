@@ -44,7 +44,7 @@ component CustomSectionHeader inherits Rectangle {
     callback delete-clicked();
     callback context-menu-requested(/* x */ length, /* y */ length);
 
-    height: root.mobile-mode ? Spacing.touch-target-min : 32px;
+    height: root.mobile-mode ? Spacing.touch-target-min : Spacing.button-height;
 
     // The header's ONE pointer surface: tap toggles, hold (or right-click)
     // opens the menu. There used to be a second TouchArea over the name inside
@@ -67,15 +67,15 @@ component CustomSectionHeader inherits Rectangle {
     }
 
     if !root.collapsed: HorizontalLayout {
-        padding-left: 6px;
-        padding-right: 4px;
+        padding-left: Spacing.sm;
+        padding-right: Spacing.xs;
 
         Rectangle {
             horizontal-stretch: 1;
 
             HorizontalLayout {
-                padding-left: 2px;
-                spacing: 4px;
+                padding-left: Spacing.xxs;
+                spacing: Spacing.xs;
                 alignment: start;
 
                 // Collapse chevron
@@ -136,13 +136,13 @@ component CustomSectionHeader inherits Rectangle {
         // Rename and Remove; a 24px button here would be an unhittable
         // duplicate of a control the user already has.
         if !root.mobile-mode && header-hover.has-hover: HorizontalLayout {
-            spacing: 2px;
+            spacing: Spacing.xxs;
             alignment: end;
 
             // Rename button
             Rectangle {
-                width: 24px;
-                height: 24px;
+                width: Spacing.button-height;
+                height: Spacing.button-height;
                 border-radius: Spacing.radius-sm;
                 background: rename-touch.has-hover ? Colors.surface-hover : transparent;
 
@@ -163,8 +163,8 @@ component CustomSectionHeader inherits Rectangle {
 
             // Delete button
             Rectangle {
-                width: 24px;
-                height: 24px;
+                width: Spacing.button-height;
+                height: Spacing.button-height;
                 border-radius: Spacing.radius-sm;
                 background: delete-touch.has-hover ? Colors.surface-hover : transparent;
 
@@ -231,11 +231,11 @@ export component CustomSectionList inherits Rectangle {
     callback rename-section-clicked(/* section-id */ string);
 
     VerticalLayout {
-        spacing: 0px;
+        spacing: Spacing.none;
 
         // Render each section
         for section in root.sections: VerticalLayout {
-            spacing: 0px;
+            spacing: Spacing.none;
 
             CustomSectionHeader {
                 section-id: section.section-id;
@@ -259,7 +259,7 @@ export component CustomSectionList inherits Rectangle {
             if section.is-expanded: VerticalLayout {
                 padding-left: Spacing.xs;
                 padding-right: Spacing.xs;
-                spacing: 2px;
+                spacing: Spacing.xxs;
 
                 // A folder row is the main list's own row, so a chat looks
                 // the same filed or not; filing one used to shrink it to a

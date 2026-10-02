@@ -34,20 +34,20 @@ export component PinnedBar inherits GlassSurface {
     // Main content
     HorizontalLayout {
         padding-left: Spacing.sm;
-        padding-right: 0px;
+        padding-right: Spacing.none;
         spacing: Spacing.sm;
         // No `alignment`: under `start` Slint ignores horizontal-stretch, so
         // the preview never grew and the close button floated mid-row.
 
         // Navigation buttons on LEFT (only if multiple pinned)
         if root.has-multiple: HorizontalLayout {
-            spacing: 2px;
+            spacing: Spacing.xxs;
             alignment: center;
 
             // Up/prev button
             Rectangle {
-                width: 36px;
-                height: 36px;
+                width: Spacing.button-height;
+                height: Spacing.button-height;
                 background: prev-touch.has-hover ? Colors.surface-hover : transparent;
                 border-radius: Spacing.radius-sm;
 
@@ -69,8 +69,8 @@ export component PinnedBar inherits GlassSurface {
 
             // Down/next button
             Rectangle {
-                width: 36px;
-                height: 36px;
+                width: Spacing.button-height;
+                height: Spacing.button-height;
                 background: next-touch.has-hover ? Colors.surface-hover : transparent;
                 border-radius: Spacing.radius-sm;
 
@@ -114,7 +114,7 @@ export component PinnedBar inherits GlassSurface {
             // Content area
             VerticalLayout {
                 alignment: center;
-                spacing: 1px;
+                spacing: Spacing.xxs;
 
                 // Position text (small, muted)
                 Text {

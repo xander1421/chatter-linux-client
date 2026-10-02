@@ -126,11 +126,11 @@ export component DMListItem inherits Rectangle {
         VerticalLayout {
             horizontal-stretch: 1;
             alignment: center;
-            spacing: root.mobile-mode ? 3px : 2px;
+            spacing: root.mobile-mode ? Spacing.xs : Spacing.xxs;
 
             // Display name with encryption indicator
             HorizontalLayout {
-                spacing: 4px;
+                spacing: Spacing.xs;
 
                 Text {
                     text: root.display-name;
@@ -163,7 +163,7 @@ export component DMListItem inherits Rectangle {
 
             // Typing indicator or last message preview
             if root.is-typing: HorizontalLayout {
-                spacing: 3px;
+                spacing: Spacing.xs;
                 alignment: start;
 
                 // Animated dots with staggered opacity
@@ -207,7 +207,7 @@ export component DMListItem inherits Rectangle {
         // Right side: timestamp and unread badge
         VerticalLayout {
             alignment: center;
-            spacing: 4px;
+            spacing: Spacing.xs;
 
             // Timestamp
             Text {

@@ -1,14 +1,14 @@
 //! Streaming attachment decryption.
 //!
 //! Decrypts large attachments in chunks without loading the entire
-//! ciphertext into memory. Uses **single-pass** approach:
+//! ciphertext into memory. **Two passes**, verify then decrypt:
 //!
-//! 1. Read IV, initialize AES-CBC decryptor + HMAC + SHA256
-//! 2. For each chunk: compute HMAC/SHA256 AND decrypt simultaneously
-//! 3. Verify HMAC and digest at the end
+//! 1. Stream the blob through SHA-256 and HMAC-SHA256 and check both tags
+//! 2. Only then read it again through AES-CBC
 //!
-//! This is secure for encrypt-then-MAC with AES-CBC: worst case is we
-//! decrypt garbage from tampered ciphertext, but we catch it at verification.
+//! AES never runs on bytes that have not been authenticated. CBC decrypts
+//! every untampered block correctly, so a single pass that verifies at the end
+//! holds real plaintext for a blob it is about to reject.
 //!
 //! ## Memory Usage
 //!
@@ -16,14 +16,15 @@
 //!
 //! ## Performance
 //!
-//! Uses OpenSSL for hardware-accelerated crypto (SHA-NI + AES-NI).
-//! Single-pass reads the blob once, roughly halving I/O time.
+//! The second pass re-reads a file the first pass just pulled into the page
+//! cache.
 
 use std::io::{Read, Seek, SeekFrom};
 
 use aes::cipher::generic_array::GenericArray;
 use aes::cipher::{BlockDecryptMut, KeyIvInit};
 use subtle::ConstantTimeEq;
+use zeroize::Zeroizing;
 
 use crate::crypto::attachment_crypto::KEY_SET_LENGTH;
 use crate::crypto::hmac_compat::Sha256Stream;
@@ -52,9 +53,14 @@ pub struct StreamingDecryptor<R: Read + Seek> {
     verified: bool,
     decryption_position: usize,
     decryptor: Option<Aes256CbcDec>,
-    /// Partial-block remainder (CBC works per 16-byte block; reads may not be
-    /// block-aligned). Carried between `read_decrypted` calls.
-    carry: Vec<u8>,
+}
+
+impl<R: Read + Seek> Drop for StreamingDecryptor<R> {
+    fn drop(&mut self) {
+        use zeroize::Zeroize;
+        self.aes_key.zeroize();
+        self.mac_key.zeroize();
+    }
 }
 
 impl<R: Read + Seek> StreamingDecryptor<R> {
@@ -99,8 +105,23 @@ impl<R: Read + Seek> StreamingDecryptor<R> {
             verified: false,
             decryption_position: 0,
             decryptor: None,
-            carry: Vec::new(),
         }
+    }
+
+    /// Length of the AES-CBC body, once `total_size` has been checked.
+    ///
+    /// `total_size` is the size of a blob the storage server handed us. Too
+    /// short and the offsets derived from it underflow; not a whole number of
+    /// blocks and it cannot be raw CBC.
+    fn encrypted_len(&self) -> Result<usize, CryptoError> {
+        self.total_size
+            .checked_sub(IV_LENGTH + HMAC_LENGTH)
+            .filter(|len| *len >= AES_BLOCK && len % AES_BLOCK == 0)
+            .ok_or_else(|| {
+                CryptoError::AttachmentDecryptionFailed(
+                    "ciphertext too short or not block-aligned".into(),
+                )
+            })
     }
 
     /// Verify the integrity of the ciphertext (pass 1).
@@ -116,12 +137,12 @@ impl<R: Read + Seek> StreamingDecryptor<R> {
             return Ok(());
         }
 
+        let hmac_start = IV_LENGTH + self.encrypted_len()?;
+
         // Seek to beginning
         self.reader
             .seek(SeekFrom::Start(0))
             .map_err(|e| CryptoError::AttachmentDecryptionFailed(format!("seek: {}", e)))?;
-
-        let hmac_start = self.total_size - HMAC_LENGTH;
 
         // Initialize hashers using OpenSSL (hardware accelerated)
         let mut digest_hasher = Sha256Stream::new()
@@ -213,7 +234,6 @@ impl<R: Read + Seek> StreamingDecryptor<R> {
             .map_err(|e| CryptoError::AttachmentDecryptionFailed(format!("AES init: {e}")))?;
 
         self.decryptor = Some(decryptor);
-        self.carry.clear();
         self.decryption_position = 0;
 
         Ok(())
@@ -226,58 +246,41 @@ impl<R: Read + Seek> StreamingDecryptor<R> {
     ///
     /// # Arguments
     ///
-    /// * `output` - Buffer to write decrypted data (should be at least CHUNK_SIZE + 16)
+    /// * `output` - Buffer to write decrypted data, at least one AES block.
+    ///   Whole blocks are decrypted in place in it, so up to 15 bytes past the
+    ///   returned length may be overwritten with padding.
     pub fn read_decrypted(&mut self, output: &mut [u8]) -> Result<usize, CryptoError> {
-        if self.decryptor.is_none() {
+        let Some(decryptor) = self.decryptor.as_mut() else {
             return Err(CryptoError::AttachmentDecryptionFailed(
                 "decryption not initialized".into(),
             ));
-        }
+        };
 
-        // Calculate how much ciphertext remains
-        let encrypted_start = IV_LENGTH;
-        let encrypted_end = self.total_size - HMAC_LENGTH;
-        let encrypted_len = encrypted_end - encrypted_start;
-        let ciphertext_remaining = encrypted_len.saturating_sub(self.decryption_position);
-
-        if ciphertext_remaining == 0 {
+        // Everything past plaintext_size is padding; nothing left to hand out.
+        let plaintext_remaining = self.plaintext_size.saturating_sub(self.decryption_position);
+        if plaintext_remaining == 0 {
             return Ok(0);
         }
+        if output.len() < AES_BLOCK {
+            return Err(CryptoError::AttachmentDecryptionFailed(
+                "output buffer smaller than one AES block".into(),
+            ));
+        }
 
-        // Read a chunk of ciphertext
-        let to_read = CHUNK_SIZE.min(ciphertext_remaining);
-        let mut ciphertext = vec![0u8; to_read];
-        let n = self
-            .reader
-            .read(&mut ciphertext[..to_read])
+        // Whole blocks only. plaintext_size is clamped to the block-aligned
+        // body, so rounding the remainder up never reads into the HMAC.
+        let to_read = (output.len() / AES_BLOCK * AES_BLOCK)
+            .min(CHUNK_SIZE)
+            .min(plaintext_remaining.next_multiple_of(AES_BLOCK));
+        self.reader
+            .read_exact(&mut output[..to_read])
             .map_err(|e| CryptoError::AttachmentDecryptionFailed(format!("read: {}", e)))?;
-
-        if n == 0 {
-            return Ok(0);
-        }
-        self.decryption_position += n;
-
-        // Decrypt the whole-block prefix of (carry + new bytes) into `output`,
-        // keeping any partial-block remainder for the next call.
-        self.carry.extend_from_slice(&ciphertext[..n]);
-        let full = self.carry.len() - (self.carry.len() % AES_BLOCK);
-        let decryptor = self.decryptor.as_mut().unwrap();
-        for blk in self.carry[..full].chunks_exact_mut(AES_BLOCK) {
+        for blk in output[..to_read].chunks_exact_mut(AES_BLOCK) {
             decryptor.decrypt_block_mut(GenericArray::from_mut_slice(blk));
         }
-        output[..full].copy_from_slice(&self.carry[..full]);
-        self.carry.drain(..full);
-        let decrypted_len = full;
+        self.decryption_position += to_read;
 
-        // Truncate to plaintext size if we're at the end
-        if self.decryption_position >= encrypted_len {
-            // This is the last chunk - may include zero padding
-            let padding = encrypted_len - self.plaintext_size;
-            let actual_len = decrypted_len.saturating_sub(padding);
-            return Ok(actual_len);
-        }
-
-        Ok(decrypted_len)
+        Ok(to_read.min(plaintext_remaining))
     }
 
     /// Finalize decryption and return any remaining data.
@@ -289,148 +292,31 @@ impl<R: Read + Seek> StreamingDecryptor<R> {
         }
         // Raw CBC, no padding: every block is emitted by read_decrypted and the
         // ciphertext is block-aligned, so nothing remains buffered.
-        debug_assert!(self.carry.is_empty(), "CBC carry not block-aligned at finalize");
         Ok(0)
     }
 
-    /// Decrypt the entire ciphertext in a single pass.
+    /// Verify the entire ciphertext, then decrypt it.
     ///
-    /// Reads the blob once, computing HMAC/SHA256 while decrypting.
-    /// Verifies integrity at the end. This is ~2x faster than two-pass
-    /// for large files since it only reads the data once.
-    ///
-    /// Security: For encrypt-then-MAC with AES-CBC, decrypting before
-    /// verification is safe - worst case we decrypt garbage from tampered
-    /// ciphertext, but we detect and reject it at the end.
+    /// Two passes over the blob: [`Self::verify`], then AES. Nothing is
+    /// decrypted unless both the HMAC and the digest matched.
     pub fn decrypt_all(&mut self) -> Result<Vec<u8>, CryptoError> {
-        use std::time::Instant;
-        let total_start = Instant::now();
-        let mut read_time = std::time::Duration::ZERO;
-        let mut decrypt_time = std::time::Duration::ZERO;
-        let mut hash_time = std::time::Duration::ZERO;
+        self.verify()?;
+        self.init_decryption()?;
 
-        // Seek to beginning
-        self.reader
-            .seek(SeekFrom::Start(0))
-            .map_err(|e| CryptoError::AttachmentDecryptionFailed(format!("seek: {}", e)))?;
-
-        // Read IV
-        let mut iv = [0u8; IV_LENGTH];
-        self.reader
-            .read_exact(&mut iv)
-            .map_err(|e| CryptoError::AttachmentDecryptionFailed(format!("read iv: {}", e)))?;
-
-        // Initialize all processors using OpenSSL (hardware accelerated)
-        let mut digest_hasher = Sha256Stream::new()
-            .map_err(|e| CryptoError::AttachmentDecryptionFailed(format!("SHA256 init: {}", e)))?;
-        let mut hmac = crate::crypto::hmac_compat::hmac_init(&self.mac_key)
-            .map_err(|e| CryptoError::AttachmentDecryptionFailed(format!("HMAC init: {}", e)))?;
-
-        let mut decryptor = Aes256CbcDec::new_from_slices(&self.aes_key, &iv)
-            .map_err(|e| CryptoError::AttachmentDecryptionFailed(format!("AES init: {e}")))?;
-        // Partial-block remainder between reads (raw CBC, no padding).
-        let mut carry: Vec<u8> = Vec::new();
-
-        // IV is included in both digest and HMAC
-        digest_hasher.update(&iv)
-            .map_err(|e| CryptoError::AttachmentDecryptionFailed(format!("SHA256 update: {}", e)))?;
-        hmac.update(&iv)
-            .map_err(|e| CryptoError::AttachmentDecryptionFailed(format!("HMAC update: {}", e)))?;
-
-        // Calculate positions
-        let encrypted_start = IV_LENGTH;
-        let hmac_start = self.total_size - HMAC_LENGTH;
-        let encrypted_len = hmac_start - encrypted_start;
-
-        // Pre-allocate output
-        let mut plaintext = Vec::with_capacity(self.plaintext_size);
-        let mut ciphertext_chunk = vec![0u8; CHUNK_SIZE];
-        let mut bytes_read = 0;
-
-        // Single pass: read ciphertext, update hashes, decrypt
-        while bytes_read < encrypted_len {
-            let to_read = CHUNK_SIZE.min(encrypted_len - bytes_read);
-
-            // Time the read (SQLite BLOB / SQLCipher)
-            let read_start = Instant::now();
-            let n = self
-                .reader
-                .read(&mut ciphertext_chunk[..to_read])
-                .map_err(|e| CryptoError::AttachmentDecryptionFailed(format!("read: {}", e)))?;
-            read_time += read_start.elapsed();
-
+        // Zeroizing: an I/O error part-way leaves authentic plaintext behind.
+        let mut plaintext =
+            Zeroizing::new(vec![0u8; self.plaintext_size.next_multiple_of(AES_BLOCK)]);
+        let mut filled = 0;
+        while filled < self.plaintext_size {
+            let n = self.read_decrypted(&mut plaintext[filled..])?;
             if n == 0 {
                 break;
             }
-
-            // Time the hash computations (OpenSSL hardware accelerated)
-            let hash_start = Instant::now();
-            digest_hasher.update(&ciphertext_chunk[..n])
-                .map_err(|e| CryptoError::AttachmentDecryptionFailed(format!("SHA256: {}", e)))?;
-            hmac.update(&ciphertext_chunk[..n])
-                .map_err(|e| CryptoError::AttachmentDecryptionFailed(format!("HMAC: {}", e)))?;
-            hash_time += hash_start.elapsed();
-
-            // Time the AES decryption: decrypt whole blocks, keep the remainder.
-            let decrypt_start = Instant::now();
-            carry.extend_from_slice(&ciphertext_chunk[..n]);
-            let full = carry.len() - (carry.len() % AES_BLOCK);
-            for blk in carry[..full].chunks_exact_mut(AES_BLOCK) {
-                decryptor.decrypt_block_mut(GenericArray::from_mut_slice(blk));
-            }
-            plaintext.extend_from_slice(&carry[..full]);
-            carry.drain(..full);
-            decrypt_time += decrypt_start.elapsed();
-
-            bytes_read += n;
+            filled += n;
         }
-
-        // Raw CBC, no padding: ciphertext is block-aligned, nothing buffered.
-        debug_assert!(carry.is_empty(), "CBC carry not block-aligned");
-
-        // Read and verify HMAC
-        let mut expected_hmac = [0u8; HMAC_LENGTH];
-        self.reader
-            .read_exact(&mut expected_hmac)
-            .map_err(|e| CryptoError::AttachmentDecryptionFailed(format!("read hmac: {}", e)))?;
-
-        // HMAC is also included in digest
-        digest_hasher.update(&expected_hmac)
-            .map_err(|e| CryptoError::AttachmentDecryptionFailed(format!("SHA256: {}", e)))?;
-
-        // Verify HMAC (constant-time)
-        let computed_hmac = hmac.finalize()
-            .map_err(|e| CryptoError::AttachmentDecryptionFailed(format!("HMAC finalize: {}", e)))?;
-        if computed_hmac.ct_eq(&expected_hmac).unwrap_u8() != 1 {
-            return Err(CryptoError::AttachmentMacMismatch);
-        }
-
-        // Verify digest (constant-time)
-        let actual_digest = digest_hasher.finish()
-            .map_err(|e| CryptoError::AttachmentDecryptionFailed(format!("SHA256 finalize: {}", e)))?;
-        if actual_digest.as_slice().ct_eq(&self.expected_digest).unwrap_u8() != 1 {
-            return Err(CryptoError::AttachmentDigestMismatch);
-        }
-
-        // Truncate to exact plaintext size (remove padding)
         plaintext.truncate(self.plaintext_size);
 
-        self.verified = true;
-
-        // Log timing breakdown
-        let total_time = total_start.elapsed();
-        let size_mb = self.plaintext_size as f64 / (1024.0 * 1024.0);
-        tracing::info!(
-            "DECRYPT TIMING: total={:.2}s, read(SQLCipher)={:.2}s, decrypt(AES)={:.2}s, hash={:.2}s, size={:.1}MB, read_throughput={:.1}MB/s",
-            total_time.as_secs_f64(),
-            read_time.as_secs_f64(),
-            decrypt_time.as_secs_f64(),
-            hash_time.as_secs_f64(),
-            size_mb,
-            size_mb / read_time.as_secs_f64()
-        );
-
-        Ok(plaintext)
+        Ok(std::mem::take(&mut *plaintext))
     }
 }
 
@@ -577,6 +463,75 @@ mod tests {
         // 0, not underflow.
         let d2 = StreamingDecryptor::new(Cursor::new(Vec::<u8>::new()), &key, &digest, 1000, 10);
         assert_eq!(d2.plaintext_size, 0);
+    }
+
+    /// Pins verify-then-decrypt: a blob that fails authentication must never
+    /// reach the point where an AES decryptor exists for it.
+    #[test]
+    fn decrypt_all_authenticates_before_aes() {
+        let plaintext: Vec<u8> = (0..100_000).map(|i| (i % 256) as u8).collect();
+        let encrypted = AttachmentCrypto::encrypt(&plaintext).unwrap();
+
+        let mut tampered = encrypted.ciphertext.clone();
+        tampered[IV_LENGTH + 5] ^= 1;
+        // Digest recomputed over the tampered bytes so the digest check passes
+        // and the HMAC check is the one under test.
+        let digest = AttachmentCrypto::compute_digest(&tampered);
+
+        let total = tampered.len();
+        let mut d = StreamingDecryptor::new(
+            Cursor::new(tampered),
+            &encrypted.key,
+            &digest,
+            encrypted.plaintext_size,
+            total,
+        );
+        assert!(matches!(d.decrypt_all(), Err(CryptoError::AttachmentMacMismatch)));
+        assert!(d.decryptor.is_none(), "AES initialised for unauthenticated ciphertext");
+    }
+
+    /// `total_size` is the size of whatever the storage server returned.
+    #[test]
+    fn hostile_total_size_is_an_error_not_a_panic() {
+        let key = [0u8; KEY_SET_LENGTH];
+        let digest = [0u8; 32];
+        // Shorter than the HMAC, shorter than IV + HMAC + one block, and a
+        // body that is not a whole number of blocks.
+        for total_size in [0, 10, IV_LENGTH + HMAC_LENGTH, IV_LENGTH + HMAC_LENGTH + AES_BLOCK + 1] {
+            let blob = vec![0u8; total_size];
+            let mut d = StreamingDecryptor::new(Cursor::new(blob), &key, &digest, 1, total_size);
+            assert!(matches!(d.verify(), Err(CryptoError::AttachmentDecryptionFailed(_))));
+            assert!(matches!(d.decrypt_all(), Err(CryptoError::AttachmentDecryptionFailed(_))));
+        }
+    }
+
+    /// Bucket padding is up to 5% of the file, so for anything large it spans
+    /// more than the last chunk. The chunked reader must stop at plaintext_size.
+    #[test]
+    fn chunked_read_stops_at_plaintext_size() {
+        let plaintext: Vec<u8> = (0..1_000_000).map(|i| (i % 251) as u8).collect();
+        let encrypted = AttachmentCrypto::encrypt(&plaintext).unwrap();
+        let total = encrypted.ciphertext.len();
+        let mut d = StreamingDecryptor::new(
+            Cursor::new(encrypted.ciphertext.clone()),
+            &encrypted.key,
+            &encrypted.digest,
+            encrypted.plaintext_size,
+            total,
+        );
+        d.verify().unwrap();
+        d.init_decryption().unwrap();
+
+        let mut result = Vec::new();
+        let mut output = vec![0u8; 4096];
+        loop {
+            let n = d.read_decrypted(&mut output).unwrap();
+            if n == 0 {
+                break;
+            }
+            result.extend_from_slice(&output[..n]);
+        }
+        assert_eq!(result, plaintext);
     }
 
     #[test]

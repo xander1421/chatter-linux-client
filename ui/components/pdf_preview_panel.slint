@@ -163,7 +163,7 @@ export component PdfPreviewPanel inherits Rectangle {
 
         // Footer bar with page navigation
         if root.page-count > 1 && !root.has-error: Rectangle {
-            height: 40px;
+            height: Spacing.button-height;
             background: Colors.background;
 
             HorizontalLayout {
@@ -171,30 +171,11 @@ export component PdfPreviewPanel inherits Rectangle {
                 spacing: Spacing.md;
 
                 // Previous page button
-                Rectangle {
-                    width: 32px;
-                    height: 32px;
-                    background: root.can-prev && prev-touch.has-hover ? Colors.surface-hover : transparent;
-                    border-radius: Spacing.radius-sm;
-                    opacity: root.can-prev ? 1.0 : 0.3;
-
-                    Text {
-                        width: 100%;
-                        height: 100%;
-                        text: "\u{2039}"; // Left angle
-                        font-size: Typography.lg;
-                        color: Colors.text-secondary;
-                        horizontal-alignment: center;
-                        vertical-alignment: center;
-                    }
-
-                    prev-touch := TouchArea {
-                        enabled: root.can-prev;
-                        mouse-cursor: root.can-prev ? pointer : default;
-                        clicked => {
-                            root.page-prev-clicked();
-                        }
-                    }
+                HeaderButton {
+                    icon: Icons.chevron-left;
+                    label: "Previous page";
+                    enabled: root.can-prev;
+                    clicked => { root.page-prev-clicked(); }
                 }
 
                 // Page indicator
@@ -206,30 +187,11 @@ export component PdfPreviewPanel inherits Rectangle {
                 }
 
                 // Next page button
-                Rectangle {
-                    width: 32px;
-                    height: 32px;
-                    background: root.can-next && next-touch.has-hover ? Colors.surface-hover : transparent;
-                    border-radius: Spacing.radius-sm;
-                    opacity: root.can-next ? 1.0 : 0.3;
-
-                    Text {
-                        width: 100%;
-                        height: 100%;
-                        text: "\u{203A}"; // Right angle
-                        font-size: Typography.lg;
-                        color: Colors.text-secondary;
-                        horizontal-alignment: center;
-                        vertical-alignment: center;
-                    }
-
-                    next-touch := TouchArea {
-                        enabled: root.can-next;
-                        mouse-cursor: root.can-next ? pointer : default;
-                        clicked => {
-                            root.page-next-clicked();
-                        }
-                    }
+                HeaderButton {
+                    icon: Icons.chevron-right;
+                    label: "Next page";
+                    enabled: root.can-next;
+                    clicked => { root.page-next-clicked(); }
                 }
             }
         }

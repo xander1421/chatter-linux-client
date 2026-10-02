@@ -1,0 +1,44 @@
+// Flat icon controls inside a shared chrome group (for example call controls).
+import { Colors } from "../theme/colors.slint";
+import { Spacing } from "../theme/spacing.slint";
+import { Materials } from "../theme/materials.slint";
+
+export component IconAction inherits Rectangle {
+    in property <image> icon;
+    in property <string> label;
+    in property <bool> active: false;
+    in property <bool> destructive: false;
+    in property <bool> enabled: true;
+    in property <length> size: Spacing.button-height;
+    callback clicked();
+
+    width: max(Spacing.button-height, root.size);
+    height: self.width;
+    accessible-role: button;
+    accessible-label: root.label;
+    accessible-enabled: root.enabled;
+    accessible-action-default => { if root.enabled { root.clicked(); } }
+
+    Rectangle {
+        border-radius: self.height / 2;
+        opacity: root.enabled ? 1 : 0.38;
+        background: root.destructive
+            ? (touch.pressed || touch.has-hover ? Colors.error-hover : Colors.error)
+            : root.active
+            ? (touch.pressed ? Colors.action-active : touch.has-hover ? Colors.action-hover : Colors.action-fill)
+            : (touch.pressed ? Materials.pressed : touch.has-hover ? Materials.hover : Colors.fill-secondary);
+        Image {
+            source: root.icon;
+            width: Spacing.button-icon;
+            height: self.width;
+            x: (parent.width - self.width) / 2;
+            y: (parent.height - self.height) / 2;
+            colorize: root.active || root.destructive ? Colors.on-action : Colors.text-primary;
+        }
+    }
+    touch := TouchArea {
+        enabled: root.enabled;
+        mouse-cursor: root.enabled ? pointer : default;
+        clicked => { if root.enabled { root.clicked(); } }
+    }
+}

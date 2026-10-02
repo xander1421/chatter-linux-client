@@ -101,26 +101,31 @@ export component InvitePrivateGroupModal inherits Rectangle {
                                 }
 
                                 // Role selector (only shown when selected)
-                                if friend.selected: Rectangle {
-                                    width: invite-role-text.width + Spacing.sm * 2;
-                                    height: 24px;
-                                    border-radius: Spacing.radius-sm;
-                                    background: friend.role == "admin" ? Colors.warning.with-alpha(0.2) : Colors.surface-hover;
+                                if friend.selected: VerticalLayout {
+                                    alignment: center;
+                                    horizontal-stretch: 0;
+                                    Rectangle {
+                                        width: invite-role-text.preferred-width + Spacing.sm * 2;
+                                        height: Spacing.button-height;
+                                        border-radius: Spacing.radius-sm;
+                                        background: friend.role == "admin" ? Colors.warning.with-alpha(0.2) : Colors.surface-hover;
 
-                                    invite-role-text := Text {
-                                        text: friend.role == "admin" ? "Admin" : "Member";
-                                        color: friend.role == "admin" ? Colors.warning : Colors.text-secondary;
-                                        font-size: Typography.xs;
-                                        font-weight: Typography.medium;
-                                        horizontal-alignment: center;
-                                        vertical-alignment: center;
-                                    }
-
-                                    invite-role-touch := TouchArea {
-                                        mouse-cursor: pointer;
-                                        clicked => {
-                                            root.toggle-role(index);
+                                        invite-role-text := Text {
+                                            text: friend.role == "admin" ? "Admin" : "Member";
+                                            color: friend.role == "admin" ? Colors.warning : Colors.text-secondary;
+                                            font-size: Typography.xs;
+                                            font-weight: Typography.medium;
+                                            horizontal-alignment: center;
+                                            vertical-alignment: center;
                                         }
+
+                                        invite-role-touch := TouchArea {
+                                            mouse-cursor: pointer;
+                                            clicked => {
+                                                root.toggle-role(index);
+                                            }
+                                        }
+
                                     }
                                 }
 

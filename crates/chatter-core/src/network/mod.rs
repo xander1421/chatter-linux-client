@@ -10,6 +10,7 @@ pub mod offline_queue;
 pub mod reconnect_config;
 pub mod recovery;
 pub mod server_monitor;
+pub(crate) mod storage_http;
 pub mod streaming;
 pub mod validation;
 

@@ -1079,7 +1079,7 @@ impl ChatterClient {
     /// this from its "End call" button instead of branching between
     /// `end_dm_call` / `end_anon_call` based on view state.
     #[cfg(feature = "media")]
-    pub async fn end_active_call(&self, duration_secs: i64) -> Result<(), ClientError> {
+    pub async fn end_active_call(&self) -> Result<(), ClientError> {
         use crate::services::call_worker::OrchestratedCallKind;
 
         let worker = self.call_service().get()
@@ -1091,6 +1091,10 @@ impl ChatterClient {
                 return Ok(());
             }
         };
+        // Core owns the connected-time baseline for both the live UI and
+        // terminal metadata; never trust a separately accumulated UI timer.
+        let duration_secs = worker.active_call().await
+            .map(|call| call.duration_seconds()).unwrap_or(0);
         match kind {
             OrchestratedCallKind::AnonDm | OrchestratedCallKind::AnonGroup => {
                 self.end_anon_call(duration_secs).await.map(|_| ())

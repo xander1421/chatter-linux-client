@@ -176,8 +176,8 @@ export component CallHistoryScreen inherits Rectangle {
                     viewport-height: calls-list.preferred-height;
 
                     calls-list := VerticalLayout {
-                        padding-top: root.mobile-mode ? scroll-calls-list.chrome-inset : 0px;
-                        padding-bottom: root.mobile-mode ? root.bottom-inset + Spacing.md : 0px;
+                        padding-top: root.mobile-mode ? scroll-calls-list.chrome-inset : Spacing.none;
+                        padding-bottom: root.mobile-mode ? root.bottom-inset + Spacing.md : Spacing.none;
                         spacing: Spacing.xs;
 
                         for row in root.rows: Rectangle {
@@ -207,7 +207,7 @@ export component CallHistoryScreen inherits Rectangle {
                                 VerticalLayout {
                                     horizontal-stretch: 1;
                                     alignment: center;
-                                    spacing: root.mobile-mode ? 3px : 2px;
+                                    spacing: root.mobile-mode ? Spacing.xs : Spacing.xxs;
 
                                     Text {
                                         // A missed call is the one thing on this
@@ -348,7 +348,7 @@ export component CallHistoryScreen inherits Rectangle {
 
                     Button {
                         text: "Clear history";
-                        variant: "danger";
+                        variant: "destructive";
                         clicked => {
                             root.show-clear-confirm = false;
                             root.clear-history();

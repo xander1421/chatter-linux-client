@@ -10,6 +10,57 @@ import { DismissButton } from "dismiss_button.slint";
 import { HeaderButton } from "header_button.slint";
 import { Icons } from "../theme/icons.slint";
 
+// Modal accepts children and is inlined at every use. Its header does not:
+// share the title and conditional controls across all modal bodies.
+component ModalHeader inherits GlassSurface {
+    in property <bool> full-screen;
+    in property <bool> root-screen;
+    in property <bool> show-more;
+    in property <bool> show-close;
+    in property <string> title;
+    callback close();
+    callback more-clicked();
+
+    z: 1;
+    material-enabled: root.full-screen;
+    border-radius: root.full-screen ? self.height / 2 : 0px;
+    height: root.full-screen ? Spacing.header-action-box-touch : Spacing.header-action-box;
+    HorizontalLayout {
+        spacing: Spacing.header-action-gap;
+        padding-left: root.full-screen && root.root-screen ? Spacing.lg : Spacing.none;
+        // The row is as tall as its one control, so title and glyph
+        // share a vertical centre at both densities.
+
+        if root.full-screen && !root.root-screen: DismissButton {
+            back: true;
+            clicked => { root.close(); }
+        }
+
+        // Title
+        Text {
+            text: root.title;
+            color: Colors.text-primary;
+            font-size: Typography.lg;
+            font-weight: Typography.semibold;
+            vertical-alignment: center;
+            horizontal-stretch: 1;
+            overflow: elide;
+        }
+
+        if root.show-more: HeaderButton {
+            touch: root.full-screen;
+            icon: Icons.more-vertical;
+            label: "More options";
+            clicked => { root.more-clicked(); }
+        }
+
+        if !root.full-screen && root.show-close: DismissButton {
+            back: false;
+            clicked => { root.close(); }
+        }
+    }
+}
+
 export component Modal inherits Rectangle {
     in property <bool> show: false;
     in property <string> title: "";
@@ -55,7 +106,7 @@ export component Modal inherits Rectangle {
 
         modal-layout := VerticalLayout {
             padding: Spacing.lg;
-            padding-bottom: Spacing.lg + (root.floating-content ? root.bottom-inset : 0px);
+            padding-bottom: Spacing.lg + (root.floating-content ? root.bottom-inset : Spacing.none);
             spacing: Spacing.md;
 
             // Header row.
@@ -68,44 +119,14 @@ export component Modal inherits Rectangle {
             // LEADING edge, matching chat_header.slint); otherwise it is a
             // floating dialog they close (X, TRAILING edge). Exactly one of
             // the two exists at a time — never both.
-            GlassSurface {
-                z: 1;
-                material-enabled: root.full-screen;
-                border-radius: root.full-screen ? self.height / 2 : 0px;
-                height: root.full-screen ? Spacing.header-action-box-touch : Spacing.header-action-box;
-                HorizontalLayout {
-                    spacing: Spacing.header-action-gap;
-                    // The row is as tall as its one control, so title and glyph
-                    // share a vertical centre at both densities.
-
-                    if root.full-screen && !root.root-screen: DismissButton {
-                        back: true;
-                        clicked => { root.close(); }
-                    }
-
-                    // Title
-                    Text {
-                        text: root.title;
-                        color: Colors.text-primary;
-                        font-size: Typography.lg;
-                        font-weight: Typography.semibold;
-                        vertical-alignment: center;
-                        horizontal-stretch: 1;
-                        overflow: elide;
-                    }
-
-                    if root.show-more: HeaderButton {
-                        touch: root.full-screen;
-                        icon: Icons.more-vertical;
-                        label: "More options";
-                        clicked => { root.more-clicked(); }
-                    }
-
-                    if !root.full-screen && root.show-close: DismissButton {
-                        back: false;
-                        clicked => { root.close(); }
-                    }
-                }
+            ModalHeader {
+                full-screen: root.full-screen;
+                root-screen: root.root-screen;
+                show-more: root.show-more;
+                show-close: root.show-close;
+                title: root.title;
+                close => { root.close(); }
+                more-clicked => { root.more-clicked(); }
             }
 
             // Content area - wrapped in a Rectangle to allow @children

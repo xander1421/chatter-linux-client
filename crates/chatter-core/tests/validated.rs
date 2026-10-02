@@ -88,9 +88,28 @@ fn sh(cmd: &str) -> String {
     s
 }
 
+// Full dumps and V0's probe-table DDL must not overlap: pg_dump enumerates
+// tables before locking them, so a concurrent DROP can invalidate its snapshot.
+static POSTGRES_DUMP_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
 /// Full logical dump of the application database.
-fn pg_dump_all() -> String {
-    sh("docker compose exec -T postgres pg_dump -U chatter chatter_dev 2>/dev/null")
+async fn pg_dump_all() -> String {
+    let guard = POSTGRES_DUMP_LOCK.lock().await;
+    pg_dump_locked(&guard).await
+}
+
+async fn pg_dump_locked(_guard: &tokio::sync::MutexGuard<'_, ()>) -> String {
+    // Keep the current-thread runtime polling client connections during a dump.
+    tokio::task::spawn_blocking(|| {
+        let out = std::process::Command::new("docker")
+            .args(["compose", "exec", "-T", "postgres", "pg_dump", "-U", "chatter", "chatter_dev"])
+            .current_dir(repo_dir())
+            .output()
+            .expect("pg_dump failed to spawn");
+        assert!(out.status.success(), "pg_dump failed ({}): {}",
+            out.status, String::from_utf8_lossy(&out.stderr));
+        String::from_utf8(out.stdout).expect("pg_dump output was not UTF-8")
+    }).await.expect("pg_dump worker panicked")
 }
 
 /// Type-aware dump of every value in Redis.
@@ -387,6 +406,31 @@ async fn befriend(
             break;
         }
         tokio::time::sleep(POLL_INTERVAL).await;
+    }
+
+    // A Signal session does not imply that both profile-key handshakes were
+    // processed. Prove possession via authenticated profile decryption before
+    // tests shut a recipient down or snapshot its envelope queue.
+    let requester_name = requester.get_user_profile(&requester_id).await
+        .expect("requester own profile unavailable").display_name;
+    let accepter_name = accepter.get_user_profile(&accepter_id).await
+        .expect("accepter own profile unavailable").display_name;
+    assert!(!requester_name.is_empty() && !accepter_name.is_empty());
+    let deadline = Instant::now() + CONDITION_TIMEOUT;
+    let mut wait = POLL_INTERVAL;
+    loop {
+        let a_profile = requester.get_user_profile(&accepter_id).await;
+        let b_profile = accepter.get_user_profile(&requester_id).await;
+        let a_ready = a_profile.as_ref().is_ok_and(|profile| profile.display_name == accepter_name);
+        let b_ready = b_profile.as_ref().is_ok_and(|profile| profile.display_name == requester_name);
+        if a_ready && b_ready { break; }
+        assert!(Instant::now() < deadline,
+            "mutual profile-key exchange did not complete: requester {requester_id}={a_ready} {:?}, \
+             accepter {accepter_id}={b_ready} {:?}; expected names {:?}/{:?}",
+            a_profile.as_ref().map(|p| &p.display_name),
+            b_profile.as_ref().map(|p| &p.display_name), accepter_name, requester_name);
+        tokio::time::sleep(wait).await;
+        wait = backoff(wait);
     }
 }
 
@@ -843,16 +887,18 @@ async fn v0_detector_self_check() {
     println!("  redis detector: found planted marker {found_redis}x — detector works");
 
     // ---- Postgres: plant in a real table so pg_dump must carry it ---------
-    // Table name is per-run: a shared name would race under parallel threads,
-    // where one test's DROP truncates another's haystack mid-dump.
+    // A unique name alone does not protect other full dumps from our DROP.
+    // Hold their lock for the entire create -> dump -> drop transaction.
+    let dump_guard = POSTGRES_DUMP_LOCK.lock().await;
     let probe_tbl = format!("validated_probe_{}", &marker[17..33]);
     psql(&format!("CREATE TABLE IF NOT EXISTS {probe_tbl} (payload text)"));
     psql(&format!(
         "INSERT INTO {probe_tbl} (payload) VALUES ('{marker}')"
     ));
-    let dump = pg_dump_all();
+    let dump = pg_dump_locked(&dump_guard).await;
     let found_pg = dump.matches(&marker).count();
     psql(&format!("DROP TABLE IF EXISTS {probe_tbl}"));
+    drop(dump_guard);
     assert!(
         found_pg > 0,
         "DETECTOR BROKEN: planted marker in a Postgres table and pg_dump did \
@@ -945,7 +991,7 @@ async fn v1_server_never_holds_plaintext() {
         "E2EE VIOLATED: plaintext marker found in Redis {hits_redis} time(s)"
     );
 
-    let dump = pg_dump_all();
+    let dump = pg_dump_all().await;
     assert!(
         dump.len() > 10_000,
         "POSITIVE CONTROL FAILED: pg_dump only {} bytes — not a real dump",
@@ -1140,6 +1186,11 @@ async fn v2_corrupted_ciphertext_never_decrypts() {
     );
     println!("  corruption landed: 1 base64 symbol changed, length preserved");
 
+    // Prevent an authenticated retry report from eliciting a fresh, valid
+    // resend during the corruption observation window (V47 proves recovery).
+    client_a.shutdown().await;
+    drop(client_a);
+
     // ---- B comes online: must NOT surface the plaintext --------------------
     let client_b2 = build_client(&path_b);
     client_b2.connect().await.expect("B reconnect failed");
@@ -1156,18 +1207,25 @@ async fn v2_corrupted_ciphertext_never_decrypts() {
 
     let expected_conv = ChannelId::from(uid_a);
     let leaked = wait_for_event(&mut events_b, Duration::from_secs(20), |e| {
-        matches!(e, DomainEvent::MessageReceived { message } if message.conversation_id == expected_conv)
+        matches!(e, DomainEvent::MessageReceived { message }
+            if message.conversation_id == expected_conv
+            && !matches!(message.content,
+                chatter_core::domain::message::MessageContent::System(
+                    chatter_core::domain::message::SystemMessage::DeliveryIssue)))
     })
     .await;
 
+    // A locally generated DeliveryIssue is the rejection notification, not
+    // decrypted content. Every other message from this peer still fails.
     if let Some(DomainEvent::MessageReceived { message }) = &leaked {
         let body = message.as_text().unwrap_or("<not text>");
         panic!(
-            "INTEGRITY VIOLATED: B surfaced a message from a corrupted ciphertext: {body:?}"
+            "INTEGRITY VIOLATED: B surfaced a message from a corrupted ciphertext: {body:?}; content={:?}",
+            message.content
         );
     }
 
-    println!("  B surfaced no message from the corrupted envelope");
+    println!("  B surfaced no decrypted content from the corrupted envelope");
 
     // ---- IN-TEST POSITIVE CONTROL -----------------------------------------
     // "B received nothing" is only evidence if B *could* have received
@@ -1176,6 +1234,7 @@ async fn v2_corrupted_ciphertext_never_decrypts() {
     // Without this, a dead pipeline would pass V2 for entirely the wrong
     // reason. This doubles as a check that a rejected ciphertext does not
     // wedge the session.
+    let (client_a, _) = restore_and_start(dir_a.path(), "V2 sender").await;
     let marker2 = unique_marker();
     client_a
         .send_text(ActiveConversation::ServerDm { peer_id: uid_b }, &marker2)
@@ -1582,7 +1641,7 @@ async fn v5_kyber_is_load_bearing_not_decorative() {
         .send_text(ActiveConversation::ServerDm { peer_id: uid_b }, &m2)
         .await;
     assert!(
-        res2.is_ok(),
+        matches!(&res2, Ok(result) if result.send_error.is_none()),
         "POSITIVE CONTROL 3 FAILED: send errored after dropping the session even \
          with Kyber present ({:?}). The re-handshake path is broken independently \
          of Kyber, so the final assertion would pass for the wrong reason.",
@@ -1665,12 +1724,12 @@ async fn v5_kyber_is_load_bearing_not_decorative() {
     // a Kyber-less bundle and the client refused it. A transport/NotFound error
     // would instead mean the server declined to serve at all. See VALIDATED.md.
     println!("  send with Kyber stripped -> {}", match &res3 {
-        Ok(_) => "SUCCEEDED".to_string(),
+        Ok(result) => format!("send_error={:?}", result.send_error),
         Err(e) => format!("Err({e:?})"),
     });
 
     assert!(
-        res3.is_err(),
+        res3.is_err() || matches!(&res3, Ok(result) if result.send_error.is_some()),
         "KYBER IS DECORATIVE: A established a session and sent a message to B \
          after every Kyber prekey B had was deleted from the server. PQXDH did \
          not happen; the post-quantum claim is false. (Control 3 proves this same \
@@ -1693,21 +1752,9 @@ async fn v5_kyber_is_load_bearing_not_decorative() {
     // identical from the send's return value, and only the second is a
     // server-side finding. So ask the server directly.
     //
-    // The wildcard ("*") fetch that send_text uses cannot answer this: it passes
-    // popOTPK=false (signal_protocol.go:215) and so leaves no trace. The
-    // SINGLE-device fetch does pop, and the friend-request path takes it —
-    // user/mod.rs:558 fetches device "1" for the recipient's identity key. So a
-    // fresh user C friend-requesting the stripped B exercises the server's
-    // bundle-serving path and leaves a countable mark.
-    //
-    // C only needs B's identity key, so C's request is indifferent to Kyber. If
-    // the server has a PQXDH floor, it refuses and no OTPK moves. If it serves a
-    // Kyber-less bundle, C's request succeeds and an OTPK is consumed.
-    //
-    // This block used to only PRINT what it saw, because the server had no floor
-    // (finding K1). The floor now exists — the serve path refuses a Kyber-less
-    // bundle before committing, so the pops roll back — and these are assertions
-    // that guard it. See VALIDATED.md K1.
+    // Probe the single-device handout explicitly. Friend requests now use
+    // ECIES and wildcard identity discovery; they do not consume a prekey.
+    // The server must refuse the malformed bundle and roll back its OPK pop.
     let otpk_used = || -> i64 {
         count(format!(
             "select count(*) from signal_one_time_prekeys \
@@ -1716,10 +1763,10 @@ async fn v5_kyber_is_load_bearing_not_decorative() {
     };
     let used_before = otpk_used();
 
-    let dir_c = tempfile::tempdir().unwrap();
-    let client_c = build_client(dir_c.path());
-    let _uid_c = register_and_start(&client_c, &unique_user("v5c"), "Carol").await;
-    let probe = client_c.send_friend_request(&uid_b, Some("v5 server probe")).await;
+    let probe_pool = common::create_test_pool().await.expect("probe pool connect failed");
+    let _probe_user = common::setup_authenticated_test(&probe_pool)
+        .await.expect("probe registration failed");
+    let probe = probe_pool.auth_client().get_pre_key_bundle(&uid_b.to_string(), "1").await;
     tokio::time::sleep(Duration::from_secs(2)).await;
     let used_after = otpk_used();
 
@@ -1744,7 +1791,6 @@ async fn v5_kyber_is_load_bearing_not_decorative() {
          lever for any caller."
     );
     println!("  server refused and consumed no OTPK — the PQXDH floor holds on both sides");
-    client_c.shutdown().await;
 
     // And nothing may reach B.
     let leaked = wait_for_event(&mut events_b, Duration::from_secs(10), |e| {
@@ -2040,7 +2086,7 @@ async fn v6_delivered_message_key_is_destroyed() {
 }
 
 // ============================================================================
-// V7: THE PQOPK POOL IS SEEDED AND CONSUMED — per-session post-quantum secrecy
+// V7: THE PQOPK POOL IS SEEDED AND CONSUMED by single-device handout
 //
 // CLAIM (README): post-quantum key agreement via Kyber/ML-KEM prekeys.
 //
@@ -2064,8 +2110,8 @@ async fn v6_delivered_message_key_is_destroyed() {
 //
 // The fallback is spec-permitted (PQXDH §3.2 — that is what a last-resort key is
 // FOR), so this test does not assert the fallback is impossible. It asserts the
-// pool is stocked and actually drawn from, so the fallback stays the exception
-// it is meant to be instead of being the only code path that ever runs.
+// pool is stocked and actually drawn from by the single-device handout path.
+// It does not establish consumption on production wildcard DM sends.
 //
 // POSITIVE CONTROL FIRST: assert the CLASSICAL OPK pool for this very user_id is
 // non-empty before asserting anything about the PQ pool. Registration-time prekey
@@ -2075,10 +2121,11 @@ async fn v6_delivered_message_key_is_destroyed() {
 // test would go red for a reason that has nothing to do with PQXDH.
 //
 // THE SECOND HALF: seeding the pool is worthless if nothing pops it. So this also
-// drives a REAL handshake through the server's single-device fetch (the
-// friend-request path — the wildcard fetch passes popOTPK=false and leaves no
-// trace) and requires that a PQOPK was actually consumed AND that the server did
-// not log the PQSPK fallback for this user.
+// drives the server's single-device fetch explicitly and requires that a
+// PQOPK was actually consumed AND no PQSPK fallback was logged for this user.
+// Friend requests now use ECIES and wildcard identity discovery; they are not
+// a PQXDH handshake. Wildcard fetches still pass popOTPK=false, so their
+// production handshake consumption remains a separate, unproven property.
 //
 // MUTATION CHECK: comment out the PQOPK seeding block in
 // `services/auth_service.rs::register` (the `refresh_pre_keys_with_kyber_otpk`
@@ -2127,10 +2174,9 @@ async fn v7_pqopk_pool_is_seeded_and_consumed() {
          session. V5 cannot see this: the fallback still 'uses Kyber'."
     );
 
-    // ---- THE SECOND HALF: a real handshake must actually POP one ------------
-    // A stocked pool that nothing draws from is decoration. The friend-request
-    // path takes the SINGLE-device fetch, which is the one that pops (the
-    // wildcard fetch passes popOTPK=false and would leave no trace).
+    // ---- THE SECOND HALF: a single-device bundle handout must actually POP one ------------
+    // Exercise the single-device handout explicitly, as V8 does for linked
+    // devices. Friend requests use ECIES identity discovery, not PQXDH.
     let pq_used = || -> i64 {
         count(format!(
             "select count(*) from signal_kyber_one_time_prekeys \
@@ -2139,14 +2185,12 @@ async fn v7_pqopk_pool_is_seeded_and_consumed() {
     };
     let used_before = pq_used();
 
-    let dir_a = tempfile::tempdir().unwrap();
-    let client_a = build_client(dir_a.path());
-    let _uid_a = register_and_start(&client_a, &unique_user("v7a"), "Alice").await;
-    client_a
-        .send_friend_request(&uid_b, Some("v7 pqopk consumption probe"))
-        .await
-        .expect("friend request failed — the server-side bundle fetch never ran, \
-                 so nothing below would be measuring PQOPK consumption");
+    let peer_pool = common::create_test_pool().await.expect("peer pool connect failed");
+    let _peer = common::setup_authenticated_test(&peer_pool)
+        .await.expect("peer registration failed");
+    let response = peer_pool.auth_client().get_pre_key_bundle(&uid_b.to_string(), "1")
+        .await.expect("primary-device prekey handout failed");
+    assert!(response.result.is_some(), "primary-device handout returned no bundle");
     // The pop is committed by the server after the RPC returns. Poll for the
     // counter to move instead of sleeping a fixed 2s: `used_at` only ever goes
     // up, so a poll that gives up still reports the same value a sleep would
@@ -2158,10 +2202,10 @@ async fn v7_pqopk_pool_is_seeded_and_consumed() {
         used_after = pq_used();
     }
 
-    println!("  PQOPKs consumed by one real handshake: {used_before} -> {used_after}");
+    println!("  PQOPKs consumed by one single-device bundle handout: {used_before} -> {used_after}");
     assert!(
         used_after > used_before,
-        "PQOPK POOL IS DECORATIVE: the pool holds {pqopk} keys, a real handshake \
+        "PQOPK POOL IS DECORATIVE: the pool holds {pqopk} keys, a single-device bundle handout \
          against user {uid_b} completed, and yet no PQOPK was marked used \
          ({used_before} -> {used_after}). The keys are being stored and never \
          drawn from, so the handshake still rode the reused last-resort PQSPK."
@@ -2182,11 +2226,10 @@ async fn v7_pqopk_pool_is_seeded_and_consumed() {
     );
 
     println!(
-        "V7 PASS — registration seeds the PQOPK pool and a real handshake burns \
-         one: PQ forward secrecy is per-session, not one reused key\n"
+        "V7 PASS — registration seeds the PQOPK pool and a single-device bundle handout burns \
+         one: the primary device consumes one-time material on explicit handout\n"
     );
 
-    client_a.shutdown().await;
     client_b.shutdown().await;
 }
 
@@ -4733,10 +4776,11 @@ async fn v16_message_roundtrip_fidelity() {
     // behavior) and this goes RED — proving the wire is no longer trimmed. Verified
     // red, then reverted. See VALIDATED.md F11.
     let padded_in = "  \t padded body \n ";
-    client_a
+    let sent = client_a
         .send_text(ActiveConversation::ServerDm { peer_id: uid_b }, padded_in)
         .await
         .expect("padded send failed");
+    assert!(sent.send_error.is_none(), "padded delivery failed: {:?}", sent.send_error);
     let padded_out = next_body(&mut events_b, conv, EVENT_TIMEOUT)
         .await
         .expect("padded payload never arrived");
@@ -4755,10 +4799,11 @@ async fn v16_message_roundtrip_fidelity() {
 
     // ---- POSITIVE CONTROL: a normal sentinel round-trips byte-exact --------
     let sentinel = format!("V16-SENTINEL-{}", unique_marker());
-    client_a
+    let sent = client_a
         .send_text(ActiveConversation::ServerDm { peer_id: uid_b }, &sentinel)
         .await
         .expect("send sentinel failed");
+    assert!(sent.send_error.is_none(), "sentinel delivery failed: {:?}", sent.send_error);
     let first = next_body(&mut events_b, conv, EVENT_TIMEOUT)
         .await
         .expect("positive control: B received no sentinel — pipeline is dead");
@@ -4800,10 +4845,11 @@ async fn v16_message_roundtrip_fidelity() {
     }
 
     for (name, payload) in &battery {
-        client_a
+        let sent = client_a
             .send_text(ActiveConversation::ServerDm { peer_id: uid_b }, payload)
             .await
             .unwrap_or_else(|e| panic!("send [{name}] failed: {e:?}"));
+        assert!(sent.send_error.is_none(), "delivery [{name}] failed: {:?}", sent.send_error);
         tokio::time::sleep(Duration::from_millis(60)).await;
     }
 
@@ -4875,10 +4921,11 @@ async fn v16_message_roundtrip_fidelity() {
     // with small overhead; 6000 plaintext bytes leaves ample margin under the
     // 8192-byte sealed-body cap.
     let big_ok = "U".repeat(6000);
-    client_a
+    let sent = client_a
         .send_text(ActiveConversation::ServerDm { peer_id: uid_b }, &big_ok)
         .await
         .expect("just-under-cap 6000B send failed");
+    assert!(sent.send_error.is_none(), "just-under-cap 6000B delivery failed: {:?}", sent.send_error);
     let got_big = next_body(&mut events_b, conv, EVENT_TIMEOUT)
         .await
         .expect("just-under-cap payload never arrived at B");
@@ -5214,9 +5261,10 @@ async fn v18_self_synced_read_receipt_clears_unread_on_linked_device() {
     let before_a = quiesced_row_ids(&uid_a).await;
 
     // THE ACTION UNDER TEST: A reads B's message from the PRIMARY.
+    fx.client_ap.set_app_visible(true);
     fx.client_ap
         .conversation(ActiveConversation::ServerDm { peer_id: uid_b })
-        .send_read_receipt(&[ts_m])
+        .mark_as_read()
         .await
         .expect("send_read_receipt failed");
 
@@ -6085,7 +6133,7 @@ async fn v22_attachment_binary_fidelity() {
 
     // Server-side stores never held the marker (the AttachmentPointer key/blob
     // ride inside the E2E-encrypted DataMessage; the blob is client-encrypted).
-    let pg = pg_dump_all();
+    let pg = pg_dump_all().await;
     assert!(pg.len() > 10_000, "pg_dump too small to be real");
     assert_eq!(pg.matches(&marker).count(), 0, "E2EE VIOLATED: marker in Postgres");
     let rd = redis_dump_all();
@@ -7376,15 +7424,17 @@ async fn v29_disappearing_messages_arm_the_ttl() {
 
     // ========================================================================
     // EXPIRY — the armed message must VANISH from the server within its TTL
-    // window (Temporal ephemeral_ttl cleanup hard-deletes the row), while the
+    // window (Temporal cleanup keeps a scrubbed tombstone for resync), while the
     // un-armed control row must PERSIST. Real, and selective.
     // ========================================================================
-    let count_sql = format!("select count(*) from messages where id = '{armed_id}'");
+    let count_sql = format!("select count(*) from messages where id = '{armed_id}' \
+        and deleted_at is not null and octet_length(content) = 0 \
+        and encrypted_data is null and mixed_content is null");
     let mut gone = false;
     let mut last = String::new();
     for _ in 0..45 {
         last = psql(&count_sql);
-        if last.trim() == "0" {
+        if last.trim() == "1" {
             gone = true;
             break;
         }
@@ -7392,13 +7442,13 @@ async fn v29_disappearing_messages_arm_the_ttl() {
     }
     assert!(
         gone,
-        "EXPIRY FAILED: the armed (3s TTL) message {armed_id} is STILL present after ~45s \
+        "EXPIRY FAILED: the armed (3s TTL) message {armed_id} lacks a scrubbed tombstone after ~45s \
          (count={last:?}). The server-side ephemeral_ttl cleanup workflow did not delete it."
     );
-    println!("  EXPIRY PROVEN — the armed message row is GONE from the server after its 3s TTL.");
+    println!("  EXPIRY PROVEN — the armed message is tombstoned with all content scrubbed.");
 
     // The control (un-armed) message must NOT have vanished.
-    let ctrl_count = psql(&format!("select count(*) from messages where id = '{ctrl_id}'"));
+    let ctrl_count = psql(&format!("select count(*) from messages where id = '{ctrl_id}' and deleted_at is null"));
     assert_eq!(
         ctrl_count.trim(), "1",
         "SELECTIVITY FAILED: the un-armed control message {ctrl_id} also vanished (count={ctrl_count:?}). \
@@ -8359,7 +8409,13 @@ async fn v36_disappearing_messages_expire_locally() {
         "RECEIVE-SIDE FAILED: B never stored the armed DM ({vanish}) — cannot prove \
          local expiry on a message that never landed."
     );
-    println!("  armed message stored on BOTH A and B — now waiting for the reaper");
+    // Incoming disappearing messages start their timer on read, not delivery.
+    tokio::time::sleep(Duration::from_secs(u64::from(ttl_secs) + 2)).await;
+    assert!(b_has(&vanish), "unread disappearing message expired before being read");
+    client_b.set_app_visible(true);
+    client_b.conversation(ActiveConversation::ServerDm { peer_id: uid_a })
+        .mark_as_read().await.expect("B mark_as_read failed");
+    println!("  unread copy survived its TTL; B read it — now waiting for the reaper");
 
     // LOAD-BEARING: the armed copy must vanish from the RECIPIENT's local store
     // (TTL elapsed + a reaper tick soft-deleted it).
@@ -9688,7 +9744,7 @@ async fn v45_reactions_edits_pins_roundtrip_in_channel() {
 
     // B posts msgE (B's edit/pin target); A must receive it (establishes B's key on A).
     let e_text = unique_marker();
-    client_b
+    let b_msg_e = client_b
         .send_channel_message(None, &chan.id, &e_text, vec![], vec![], None, vec![], false)
         .await
         .expect("B msgE send failed");
@@ -9701,6 +9757,10 @@ async fn v45_reactions_edits_pins_roundtrip_in_channel() {
     };
     let e_id = a_msg_e.id;
     let e_ts = a_msg_e.sent_at;
+    assert_eq!(e_ts, b_msg_e.sent_at, "encrypted channel peers must store the same E2E timestamp");
+    println!("  V45 channel clock: sender={} receiver={e_ts}; sender_id={:?}; stored={:?}",
+        b_msg_e.sent_at, b_msg_e.sender_id,
+        client_b.get_message_local(&b_msg_e.id).map(|m| (m.sent_at, m.sender_id)));
     tokio::time::sleep(Duration::from_secs(3)).await; // A processes B's SKDM
 
     // ---- REACTION: B reacts to A's msgR; A's copy must show it -------------
@@ -9888,8 +9948,8 @@ async fn v46_reactions_edits_pins_roundtrip_in_dm() {
 //   POSITIVE CONTROL 1 — a clean A→B DM delivers (pipeline alive).
 //   SABOTAGE + POSITIVE CONTROL 2 — B deletes its session record for A:1
 //     (the state loss). A's next message (m2, a Whisper under a session B no
-//     longer has) must NOT surface at B within the wedge window: proves the
-//     desync is real, so the heal below cannot pass vacuously.
+//     longer has) must produce DeliveryIssue: proves rejection of the original
+//     envelope before F1 repairs the session and resends its content.
 //   THE FIX (sender half) — A's domain bus surfaces
 //     DmSessionHealed { peer: B, archived: true } — B's DEM arrived, named
 //     this device + the live ratchet, and A archived the wedged session.
@@ -9975,29 +10035,27 @@ async fn v47_desynced_dm_session_self_heals_via_decryption_error_message() {
     );
     println!("  sabotage: B deleted its Signal session record for {addr_a_on_b}");
 
-    // ---- POSITIVE CONTROL 2: the wedge is real -----------------------------
-    // m2 is a Whisper under a session B no longer has. It must NOT surface.
-    // (Signal semantics: the wedged ciphertext itself is unrecoverable — the
-    // heal applies to the SESSION so the NEXT message decrypts.)
+    // ---- POSITIVE CONTROL 2: the wedged envelope is rejected ---------------
+    // F1 now resends the original content after processing the DEM. Require
+    // the failure marker first: eventual recovered text is not evidence that
+    // the original ciphertext decrypted under the deleted session.
+    assert!(client_b.signal().key_store().load_session(&addr_a_on_b)
+        .expect("read sabotaged session").is_none(), "session survived sabotage");
     let m2 = unique_marker();
-    client_a
+    let sent2 = client_a
         .send_text(ActiveConversation::ServerDm { peer_id: uid_b }, &m2)
-        .await
-        .expect("m2 send failed (send-side must succeed; the wedge is receive-side)");
-    let g2 = conv_on_b.clone();
-    let t2 = m2.clone();
-    let got2 = wait_for_event(&mut events_b, Duration::from_secs(10), move |e| {
+        .await.expect("m2 send failed");
+    assert!(sent2.send_error.is_none(), "m2 delivery failed: {:?}", sent2.send_error);
+    let got_failure = wait_for_event(&mut events_b, Duration::from_secs(10), |e| {
         matches!(e, DomainEvent::MessageReceived { message }
-                 if message.conversation_id == g2
-                 && message.as_text() == Some(t2.as_str()))
-    })
-    .await;
-    assert!(
-        got2.is_none(),
-        "POSITIVE CONTROL 2 FAILED: B decrypted m2 WITHOUT its session record — \
-         there is no desync, so 'self-heal' below would be proving nothing"
-    );
-    println!("  control 2: m2 did NOT decrypt at B — the 1:1 session is genuinely wedged");
+            if message.conversation_id == conv_on_b
+            && matches!(message.content,
+                chatter_core::domain::message::MessageContent::System(
+                    chatter_core::domain::message::SystemMessage::DeliveryIssue)))
+    }).await;
+    assert!(got_failure.is_some(),
+        "POSITIVE CONTROL 2 FAILED: B never recorded rejection of the wedged envelope");
+    println!("  control 2: deleted session stayed absent; B recorded DeliveryIssue for m2");
 
     // ---- THE FIX, sender half: B's DEM reaches A and archives the session --
     let healed = wait_for_event(&mut events_a, EVENT_TIMEOUT, |e| {
@@ -10013,6 +10071,13 @@ async fn v47_desynced_dm_session_self_heals_via_decryption_error_message() {
          conversation stays wedged forever — exactly the bug this feature removes."
     );
     println!("  the fix: A received B's DecryptionErrorMessage and ARCHIVED the wedged session");
+
+    let recovered = wait_for_event(&mut events_b, EVENT_TIMEOUT, |e| {
+        matches!(e, DomainEvent::MessageReceived { message }
+            if message.conversation_id == conv_on_b && message.as_text() == Some(m2.as_str()))
+    }).await;
+    assert!(recovered.is_some(), "F1 failed to resend m2 after confirmed rejection and session repair");
+
 
     // ---- THE FIX, round trip: the next message decrypts --------------------
     let m3 = unique_marker();
@@ -10474,7 +10539,7 @@ async fn v51_server_message_backup_restores_on_fresh_install_via_pin() {
     );
     println!("  raw RustFS object: {} bytes, magic OK, zero plaintext hits", blob.len());
 
-    let dump = pg_dump_all();
+    let dump = pg_dump_all().await;
     assert!(dump.len() > 10_000, "pg_dump suspiciously small");
     assert_eq!(
         dump.matches(&marker).count(),
@@ -11188,10 +11253,36 @@ async fn v56_linked_device_restricts_profile_visibility_with_pin() {
     let dir_p = tempfile::tempdir().unwrap();
     let client_p = build_client(dir_p.path());
     let uid = register_and_start(&client_p, &unique_user("v56p"), "V56 Primary").await;
+    let avatar = b"V56-small-avatar-preserved-through-rotation".to_vec();
+    let status = chatter_core::domain::user::StatusMessage::new("V56 retained status".into());
+    client_p.set_avatar_bytes(&avatar).expect("seed primary avatar");
+    client_p.update_user_profile(Some("V56 Primary".into()), Some(status.clone()))
+        .await.expect("seed primary profile fields");
+    let seeded = client_p.get_user_profile(&uid).await.expect("fetch seeded profile");
+    assert_eq!(seeded.display_name, "V56 Primary");
+    assert_eq!(seeded.status_message, Some(status));
+    assert_eq!(seeded.avatar_bytes, Some(avatar));
     let dir_s = tempfile::tempdir().unwrap();
     let client_s = build_client(dir_s.path());
     link_secondary_device(&client_p, &client_s, uid).await;
-    start_linked(&client_s, "V56 linked").await;
+    // Linked archive import may include this row. Force the precise cold-cache
+    // condition on this throwaway device, preserving its provisioned key and
+    // every server field; do not start background sync before the API call.
+    let evict_linked_profile = || {
+        let path = dir_s.path().join("data/chatter.db");
+        assert!(path.is_file(), "linked database must already exist");
+        let passphrase = zeroize::Zeroizing::new(
+            chatter_core::system::keyring::Keyring::new(path.clone())
+                .get_passphrase().expect("linked DB passphrase unavailable"));
+        let db = chatter_core::storage::Database::open(&path, &passphrase)
+            .expect("open linked cache fixture");
+        db.connection().expect("linked cache connection")
+            .execute("DELETE FROM profiles WHERE user_id = ?1", [uid.to_string()])
+            .expect("evict only linked own-profile cache");
+    };
+    evict_linked_profile();
+    assert!(client_s.users().get_profile_local(&uid).expect("linked profile lookup").is_none(),
+        "positive control: linked own-profile cache eviction failed");
 
     let row = || psql(&format!("select version || '|' || md5(encrypted_backup) from svr_backups where user_id = '{uid}'"));
     let before = row();
@@ -11210,10 +11301,48 @@ async fn v56_linked_device_restricts_profile_visibility_with_pin() {
     assert!(!local_pin_ok(&client_s), "a wrong PIN stored a fingerprint");
 
     // 2. right PIN: rotation goes through from the linked device.
+    let profile_before = client_p.get_user_profile(&uid).await.expect("primary profile unavailable");
+    // The wrong-PIN preflight hydrates too; force a cache miss on success.
+    evict_linked_profile();
+    assert!(client_s.users().get_profile_local(&uid).expect("linked profile lookup").is_none());
     client_s
         .set_profile_visibility(ProfileVisibility::Contacts, Some(PIN))
         .await
         .expect("the right PIN must let the linked device restrict");
+    let profile_after = client_s.get_user_profile(&uid).await.expect("rotated linked profile unavailable");
+    assert_eq!(profile_after.display_name, profile_before.display_name, "rotation lost display name");
+    assert_eq!(profile_after.status_message, profile_before.status_message, "rotation lost status");
+    assert_eq!(profile_after.avatar_bytes, profile_before.avatar_bytes, "rotation lost avatar");
+
+    // Bypass restore_own_profile's cached-value fallback: decrypt the actual
+    // server ciphertexts with the linked device's newly committed profile key.
+    // Read only this throwaway client's database; never print key material.
+    let db_path = dir_s.path().join("data/chatter.db");
+    let passphrase = zeroize::Zeroizing::new(
+        chatter_core::system::keyring::Keyring::new(db_path.clone())
+            .get_passphrase().expect("linked DB passphrase unavailable"));
+    let db = Arc::new(chatter_core::storage::Database::open(&db_path, &passphrase)
+        .expect("open linked profile-key store"));
+    let settings = chatter_core::storage::SettingsRepository::new(db);
+    let key: [u8; 32] = settings.get_bytes(chatter_core::storage::settings_keys::PROFILE_KEY)
+        .expect("read linked profile key").expect("linked profile key absent")
+        .try_into().ok().expect("linked profile key length");
+    let key = zeroize::Zeroizing::new(key);
+    let wire = psql(&format!("select display_name || '|' || coalesce(status_message, '') || '|' || \
+        encode(encrypted_avatar, 'hex') from user_profiles where user_id = '{uid}'"));
+    let fields: Vec<&str> = wire.split('|').collect();
+    assert_eq!(fields.len(), 3, "expected exactly one complete server profile");
+    use base64::Engine as _;
+    let name_cipher = base64::engine::general_purpose::STANDARD.decode(fields[0]).expect("name base64");
+    let status_cipher = base64::engine::general_purpose::STANDARD.decode(fields[1]).expect("status base64");
+    let avatar_cipher = hex::decode(fields[2]).expect("avatar hex");
+    assert_eq!(chatter_core::crypto::profile_crypto::decrypt_display_name(&key, &name_cipher)
+        .expect("server name must decrypt with rotated key"), "V56 Primary");
+    assert_eq!(chatter_core::crypto::profile_crypto::decrypt_status(&key, &status_cipher)
+        .expect("server status must decrypt with rotated key"), "V56 retained status");
+    assert_eq!(chatter_core::crypto::profile_crypto::decrypt_avatar(&key, &avatar_cipher)
+        .expect("server avatar must decrypt with rotated key"),
+        b"V56-small-avatar-preserved-through-rotation");
     let after = row();
     assert!(after.starts_with("2|") && after != before, "backup not rewritten: {after:?}");
     assert!(local_pin_ok(&client_s), "the verified PIN's fingerprint was not stored");

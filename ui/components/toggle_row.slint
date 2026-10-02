@@ -18,11 +18,12 @@ export component ToggleRow inherits Rectangle {
     in property <string> accessible-text: "";
     // "" = plain Toggle; "cyan" / "violet" = NeoActionToggle with that glow.
     in property <string> glow-mode: "";
-    in property <length> row-padding: 0px;
+    in property <length> row-padding: Spacing.none;
     in property <length> row-spacing: Spacing.sm;
-    in property <length> label-spacing: 0px;
+    in property <length> label-spacing: Spacing.none;
 
     callback toggled(bool);
+    min-height: Spacing.button-height;
 
     TouchArea {
         mouse-cursor: root.disabled ? default : pointer;
@@ -41,23 +42,28 @@ export component ToggleRow inherits Rectangle {
         VerticalLayout {
             horizontal-stretch: 1;
             min-width: 0px;
+            alignment: center;
             spacing: root.label-spacing;
 
             @children
         }
 
-        if root.glow-mode == "": Toggle {
-            checked <=> root.checked;
-            disabled: root.disabled;
-            accessible-text: root.accessible-text;
-            toggled(value) => { root.toggled(value); }
-        }
-        if root.glow-mode != "": NeoActionToggle {
-            checked <=> root.checked;
-            disabled: root.disabled;
-            accessible-text: root.accessible-text;
-            glow-mode: root.glow-mode;
-            toggled(value) => { root.toggled(value); }
+        VerticalLayout {
+            alignment: center;
+            horizontal-stretch: 0;
+            if root.glow-mode == "": Toggle {
+                checked <=> root.checked;
+                disabled: root.disabled;
+                accessible-text: root.accessible-text;
+                toggled(value) => { root.toggled(value); }
+            }
+            if root.glow-mode != "": NeoActionToggle {
+                checked <=> root.checked;
+                disabled: root.disabled;
+                accessible-text: root.accessible-text;
+                glow-mode: root.glow-mode;
+                toggled(value) => { root.toggled(value); }
+            }
         }
     }
 }

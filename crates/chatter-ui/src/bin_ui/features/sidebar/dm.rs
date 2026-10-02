@@ -54,6 +54,7 @@ pub fn wire_dm_selected(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     let weak_window = window.as_weak();
 
     window.on_dm_selected(move |dm_id: SharedString| {
+        let open_started = std::time::Instant::now();
         let dm_id_str = dm_id.to_string();
         if dm_id_str.is_empty() {
             return;
@@ -215,6 +216,7 @@ pub fn wire_dm_selected(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                     let slint_messages: Vec<_> = display_messages.iter().map(|d| d.to_slint_with_user(&current_user_id)).collect();
                     tracing::info!(before_count = before, replacing_with = slint_messages.len(), "[UI_OPEN_DM] anon DM run_ui replacing messages");
                     w.set_messages(ModelRc::new(VecModel::from(slint_messages)));
+                    tracing::debug!(elapsed_ms = open_started.elapsed().as_millis(), "conversation open: messages presented");
                     w.set_loading_messages(false);
                     crate::bin_ui::converters::set_conversation_kind(
                         &w, &chatter_core::domain::message::ConversationType::AnonDm, false,
@@ -322,6 +324,7 @@ pub fn wire_dm_selected(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                 let current_user_id = ui_ctx.session_current_user_id().map(|id| id.to_string()).unwrap_or_default();
                 let slint_messages: Vec<_> = display_messages.iter().map(|d| d.to_slint_with_user(&current_user_id)).collect();
                 w.set_messages(ModelRc::new(VecModel::from(slint_messages)));
+                tracing::debug!(elapsed_ms = open_started.elapsed().as_millis(), "conversation open: messages presented");
                 w.set_loading_messages(false);
                 crate::bin_ui::converters::set_conversation_kind(&w, &conv_type, false);
                 w.set_is_dm(true);

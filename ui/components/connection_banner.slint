@@ -166,9 +166,9 @@ export component ConnectionBanner inherits Rectangle {
         // visible overflows — the button is a transparent box — and the target
         // stays the full 44px. Ordinary padding on top of a 44px row is what
         // turned one sentence into a slab in the first place.
-        padding-top: root.tight ? (root.compact-height - 44px) / 2 : 8px;
-        padding-bottom: root.tight ? (root.compact-height - 44px) / 2 : 8px;
-        spacing: 2px;
+        padding-top: root.tight ? (root.compact-height - Spacing.button-height) / 2 : Spacing.sm;
+        padding-bottom: root.tight ? (root.compact-height - Spacing.button-height) / 2 : Spacing.sm;
+        spacing: Spacing.xxs;
 
         HorizontalLayout {
             spacing: root.tight ? Spacing.xs : Spacing.sm;

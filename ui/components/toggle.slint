@@ -1,3 +1,4 @@
+import { Spacing } from "../theme/spacing.slint";
 // Toggle switch component with smooth animation
 
 import { Colors } from "../theme/colors.slint";
@@ -35,16 +36,17 @@ export component Toggle inherits Rectangle {
         }
     };
 
-    // Dimensions: 44x24 with 20px thumb
-    width: 44px;
-    height: 24px;
+    // Keep the 44x24 track inside a full-height hit target.
+    width: Spacing.switch-width;
+    height: Spacing.button-height;
     opacity: disabled ? 0.5 : 1.0;
 
     // Track
     Rectangle {
         width: 100%;
-        height: 100%;
-        border-radius: 12px;
+        height: Spacing.switch-track-height;
+        y: (root.height - self.height) / 2;
+        border-radius: self.height / 2;
         background: track-color;
 
         animate background {
@@ -54,12 +56,12 @@ export component Toggle inherits Rectangle {
 
         // Thumb - 20px circle that slides
         Rectangle {
-            width: root.checked ? 20px : 20px;
-            height: 20px;
-            border-radius: 10px;
-            background: Colors.text-primary;
-            y: 2px;
-            x: root.checked ? 22px : 2px;
+            width: Spacing.switch-thumb;
+            height: Spacing.switch-thumb;
+            border-radius: self.height / 2;
+            background: Colors.on-action;
+            y: Spacing.xxs;
+            x: root.checked ? parent.width - self.width - Spacing.xxs : Spacing.xxs;
 
             animate x {
                 duration: 180ms;

@@ -1,12 +1,13 @@
 // Button component with variants, hover/press states, icons, and loading
 
+import { Materials } from "../theme/materials.slint";
 import { Colors } from "../theme/colors.slint";
 import { Spacing } from "../theme/spacing.slint";
 import { Typography } from "../theme/typography.slint";
 
 export component Button inherits Rectangle {
     in property <string> text: "";
-    in property <string> variant: "primary";  // "primary", "secondary", "ghost", "danger"
+    in property <string> variant: "primary";  // "primary", "secondary", "ghost", "destructive"
     in property <bool> disabled: false;
     in property <bool> loading: false;
     in property <image> icon;
@@ -14,140 +15,162 @@ export component Button inherits Rectangle {
     accessible-role: button;
     accessible-label: root.text;
     accessible-enabled: !root.disabled && !root.loading;
+    accessible-action-default => { if !root.disabled && !root.loading { root.clicked(); } }
 
     callback clicked();
 
     // Internal state
     property <bool> hover: false;
-    property <bool> pressed: false;
+    property <bool> pressed: touch.pressed && !root.disabled && !root.loading;
 
     // Computed background color based on variant and state
     property <color> bg-color: {
         if disabled {
             variant == "primary" ? Colors.action-fill :
             variant == "secondary" ? Colors.fill-secondary :
-            variant == "danger" ? Colors.error :
+            variant == "destructive" ? Colors.error :
             transparent
         } else if pressed {
             variant == "primary" ? Colors.action-active :
             variant == "secondary" ? Colors.fill-secondary-hover :
-            variant == "danger" ? Colors.error-hover :
-            Colors.surface-hover.with-alpha(0.2)
+            variant == "destructive" ? Colors.error-hover :
+            Materials.pressed
         } else if hover {
             variant == "primary" ? Colors.action-hover :
             variant == "secondary" ? Colors.fill-secondary-hover :
-            variant == "danger" ? Colors.error-hover :
-            Colors.surface.with-alpha(0.1)
+            variant == "destructive" ? Colors.error-hover :
+            Materials.hover
         } else {
             variant == "primary" ? Colors.action-fill :
             variant == "secondary" ? Colors.fill-secondary :
-            variant == "danger" ? Colors.error :
+            variant == "destructive" ? Colors.error :
             transparent
         }
     };
 
-    min-width: 80px;
-    height: 44px;
+    min-width: Spacing.button-min-width;
+    height: Spacing.button-height;
     vertical-stretch: 0;
-    border-radius: Spacing.radius-md;
-    background: bg-color;
-    // 38%: Material's disabled level. At 50% a disabled primary read as
-    // merely dimmed, so a dead Create looked like a live one.
-    opacity: disabled ? 0.38 : 1.0;
+    border-radius: self.height / 2;
 
-    property <color> foreground: root.variant == "primary" ? Colors.on-action : Colors.text-primary;
+    property <color> foreground: (root.variant == "primary" || root.variant == "destructive") ? Colors.on-action : Colors.text-primary;
 
-    // Content layout
-    HorizontalLayout {
-        alignment: center;
-        padding-left: Spacing.md;
-        padding-right: Spacing.md;
-        spacing: Spacing.sm;
+    // Keep opacity on the visual child. A root opacity binding makes Slint
+    // inline the whole Button (including its loading animation) at every use.
+    Rectangle {
+        border-radius: root.border-radius;
+        background: root.bg-color;
+        // 38%: Material's disabled level, including both fill and content.
+        opacity: root.disabled ? 0.38 : 1.0;
 
-        // Optional icon
-        if icon.width > 0 && !loading: Image {
-            width: 16px;
-            height: 16px;
-            source: root.icon;
-            colorize: root.foreground;
-            vertical-alignment: center;
-        }
-
-        // Loading spinner (simple animated dots)
-        if loading: HorizontalLayout {
-            spacing: 2px;
+        // Content layout
+        HorizontalLayout {
             alignment: center;
+            padding-left: Spacing.md;
+            padding-right: Spacing.md;
+            spacing: Spacing.sm;
 
-            property <float> anim-progress;
-
-            // Three animated dots with staggered opacity
-            Rectangle {
-                width: 4px;
-                height: 4px;
-                border-radius: 2px;
-                background: root.foreground;
-                opacity: 0.4 + 0.6 * Math.cos(anim-progress * 360deg);
-            }
-            Rectangle {
-                width: 4px;
-                height: 4px;
-                border-radius: 2px;
-                background: root.foreground;
-                opacity: 0.4 + 0.6 * Math.cos((anim-progress - 0.33) * 360deg);
-            }
-            Rectangle {
-                width: 4px;
-                height: 4px;
-                border-radius: 2px;
-                background: root.foreground;
-                opacity: 0.4 + 0.6 * Math.cos((anim-progress - 0.66) * 360deg);
+            // Optional icon
+            if icon.width > 0 && !loading: VerticalLayout {
+                alignment: center;
+                horizontal-stretch: 0;
+                Image {
+                    width: Spacing.button-icon;
+                    height: Spacing.button-icon;
+                    source: root.icon;
+                    colorize: root.foreground;
+                    vertical-alignment: center;
+                }
             }
 
-            anim-progress: 0;
-            animate anim-progress {
-                duration: 800ms;
-                iteration-count: -1;
+            // Loading spinner (simple animated dots)
+            if loading: HorizontalLayout {
+                spacing: Spacing.xxs;
+                alignment: center;
+
+                property <float> anim-progress;
+
+                // Three animated dots with staggered opacity
+                VerticalLayout {
+                    alignment: center;
+                    Rectangle {
+                        width: Spacing.xs;
+                        height: Spacing.xs;
+                        border-radius: self.height / 2;
+                        background: root.foreground;
+                        opacity: 0.4 + 0.6 * Math.cos(anim-progress * 360deg);
+                    }
+                }
+                VerticalLayout {
+                    alignment: center;
+                    Rectangle {
+                        width: Spacing.xs;
+                        height: Spacing.xs;
+                        border-radius: self.height / 2;
+                        background: root.foreground;
+                        opacity: 0.4 + 0.6 * Math.cos((anim-progress - 0.33) * 360deg);
+                    }
+                }
+                VerticalLayout {
+                    alignment: center;
+                    Rectangle {
+                        width: Spacing.xs;
+                        height: Spacing.xs;
+                        border-radius: self.height / 2;
+                        background: root.foreground;
+                        opacity: 0.4 + 0.6 * Math.cos((anim-progress - 0.66) * 360deg);
+                    }
+                }
+
+                anim-progress: 0;
+                animate anim-progress {
+                    duration: 800ms;
+                    iteration-count: -1;
+                }
+
+                init => {
+                    self.anim-progress = 1.0;
+                }
             }
 
-            init => {
-                self.anim-progress = 1.0;
+            // Button text
+            if !loading: Text {
+                text: root.text;
+                color: root.foreground;
+                font-size: Typography.sm;
+                font-weight: Typography.medium;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+                min-width: 0px;
+                overflow: elide;
             }
         }
 
-        // Button text
-        if !loading: Text {
-            text: root.text;
-            color: root.foreground;
-            font-size: Typography.sm;
-            font-weight: Typography.medium;
-            horizontal-alignment: center;
-            vertical-alignment: center;
-        }
-    }
+        // Interaction area
+        touch := TouchArea {
+            mouse-cursor: disabled ? default : pointer;
 
-    // Interaction area
-    touch := TouchArea {
-        mouse-cursor: disabled ? default : pointer;
+            pointer-event(event) => {
+                if !disabled && !loading {
+                    if event.kind == PointerEventKind.move {
+                        hover = true;
+                    }
+                }
+            }
 
-        pointer-event(event) => {
-            if !disabled && !loading {
-                if event.kind == PointerEventKind.move {
+            moved => {
+                if !disabled && !loading {
                     hover = true;
+                }
+            }
+
+            clicked => {
+                if !disabled && !loading {
+                    root.clicked();
                 }
             }
         }
 
-        moved => {
-            if !disabled && !loading {
-                hover = true;
-            }
-        }
-
-        clicked => {
-            if !disabled && !loading {
-                root.clicked();
-            }
-        }
     }
 
     // Reset hover when mouse leaves

@@ -1,3 +1,4 @@
+import { Checkbox } from "../components/checkbox.slint";
 import { Materials } from "../theme/materials.slint";
 import { GlassSurface } from "../components/glass_surface.slint";
 // RecoveryCodesModal - Displays one-time recovery codes after registration
@@ -146,46 +147,30 @@ export component RecoveryCodesModal inherits Rectangle {
             Rectangle { height: Spacing.xs; }
 
             // Checkbox: I have saved my recovery codes
-            HorizontalLayout {
-                alignment: center;
-                spacing: Spacing.sm;
-
-                Rectangle {
-                    width: 20px;
-                    height: 20px;
-                    border-radius: Spacing.radius-sm;
-                    border-width: Spacing.stroke;
-                    border-color: root.saved-confirmed ? Colors.primary : Colors.text-muted;
-                    background: root.saved-confirmed ? Colors.primary : transparent;
-
-                    if root.saved-confirmed: Text {
-                        text: "\u{2713}";
-                        color: Colors.text-primary;
-                        font-size: Typography.sm;
-                        horizontal-alignment: center;
-                        vertical-alignment: center;
-                        width: 100%;
-                        height: 100%;
-                    }
-
-                    TouchArea {
-                        mouse-cursor: pointer;
-                        clicked => {
-                            root.saved-confirmed = !root.saved-confirmed;
-                        }
-                    }
-                }
-
-                Text {
-                    text: "I have saved my recovery codes";
-                    color: Colors.text-secondary;
-                    font-size: Typography.sm;
-                }
-
+            Rectangle {
+                min-height: Spacing.button-height;
                 TouchArea {
                     mouse-cursor: pointer;
-                    clicked => {
-                        root.saved-confirmed = !root.saved-confirmed;
+                    clicked => { root.saved-confirmed = !root.saved-confirmed; }
+                }
+                HorizontalLayout {
+                    spacing: Spacing.sm;
+                    VerticalLayout {
+                        alignment: center;
+                        horizontal-stretch: 0;
+                        Checkbox {
+                            checked <=> root.saved-confirmed;
+                            label: "I have saved my recovery codes";
+                        }
+                    }
+                    Text {
+                        text: "I have saved my recovery codes";
+                        color: Colors.text-secondary;
+                        font-size: Typography.sm;
+                        vertical-alignment: center;
+                        horizontal-stretch: 1;
+                        min-width: 0px;
+                        wrap: word-wrap;
                     }
                 }
             }

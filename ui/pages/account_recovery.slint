@@ -2,7 +2,6 @@ import { Materials } from "../theme/materials.slint";
 // Account Recovery page for entering recovery code and new credentials
 
 import { Colors } from "../theme/colors.slint";
-import { Appearance } from "../theme/appearance.slint";
 import { Spacing } from "../theme/spacing.slint";
 import { Typography } from "../theme/typography.slint";
 import { Button } from "../components/button.slint";
@@ -260,22 +259,10 @@ export component AccountRecoveryPage inherits Rectangle {
                     alignment: center;
                     spacing: Spacing.xs;
 
-                    Rectangle {
-                        height: 20px * Appearance.text-grow;
-
-                        Text {
-                            text: "Back to Login";
-                            color: Colors.primary;
-                            font-size: Typography.sm;
-                            font-weight: Typography.medium;
-                        }
-
-                        TouchArea {
-                            mouse-cursor: pointer;
-                            clicked => {
-                                root.go-to-login();
-                            }
-                        }
+                    Button {
+                        text: "Back to Login";
+                        variant: "ghost";
+                        clicked => { root.go-to-login(); }
                     }
                 }
             }

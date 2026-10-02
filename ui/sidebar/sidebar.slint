@@ -239,12 +239,12 @@ export component Sidebar inherits Rectangle {
             central-layout := VerticalLayout {
                 // No gap under the pinned Search row on a phone: it and Saved
                 // Messages are one list.
-                padding-top: (root.collapsed ? (root.traffic-lights-width > 0px ? root.titlebar-height : 0px) : root.top-row-height) + (root.mobile-mode ? 0px : Spacing.sm);
+                padding-top: (root.collapsed ? (root.traffic-lights-width > Spacing.none ? root.titlebar-height : Spacing.none) : root.top-row-height) + (root.mobile-mode ? Spacing.none : Spacing.sm);
                 // On a phone the Chats tab's floating create button sits over
                 // the foot of this list; room for it, so it never covers the
                 // last row.
                 padding-bottom: root.mobile-mode ? root.bottom-inset + Spacing.fab-size + Spacing.md * 2
-                    : (root.collapsed ? root.rail-button-count * root.rail-icon-size + (root.rail-button-count - 1) * 8px + 16px : 44px) + Spacing.md;
+                    : (root.collapsed ? root.rail-button-count * root.rail-icon-size + (root.rail-button-count - 1) * Spacing.sm + Spacing.lg : Spacing.button-height) + Spacing.md;
 
                 // QUICK LINKS (top navigation)
 
@@ -452,9 +452,9 @@ export component Sidebar inherits Rectangle {
                 // floating button), not in per-block headers.
                 // Collapsed channel-action rail: find / new-channel / new-section
                 if root.collapsed && !AnonMode.enabled : VerticalLayout {
-                    spacing: 4px;
-                    padding-top: 4px;
-                    padding-bottom: 4px;
+                    spacing: Spacing.xs;
+                    padding-top: Spacing.xs;
+                    padding-bottom: Spacing.xs;
 
                     TooltipArea {
                         height: root.rail-icon-size; width: 44px; x: (parent.width - self.width) / 2;
@@ -717,7 +717,7 @@ export component Sidebar inherits Rectangle {
 
             // Collapsed view: Vertical stack of icons
             if root.collapsed: VerticalLayout {
-                alignment: end; spacing: 8px; padding-bottom: 8px;
+                alignment: end; spacing: Spacing.sm; padding-bottom: Spacing.sm;
                 // Ungated, like the expanded header shield.
                 TooltipArea {
                     height: root.rail-icon-size; width: 44px; x: (parent.width - self.width) / 2;

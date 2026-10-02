@@ -22,6 +22,20 @@ pub mod platform;
 /// startup and used via `rt_handle().spawn(...)` instead of `tokio::spawn(...)`.
 static RT_HANDLE: std::sync::OnceLock<tokio::runtime::Handle> = std::sync::OnceLock::new();
 
+static STARTUP_STARTED: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
+static FIRST_FRAME_RECORDED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Called by existing rendering notifiers so timing never replaces video/JNI hooks.
+pub(crate) fn record_startup_frame(state: &slint::RenderingState) {
+    if matches!(state, slint::RenderingState::AfterRendering)
+        && !FIRST_FRAME_RECORDED.swap(true, std::sync::atomic::Ordering::Relaxed)
+    {
+        if let Some(started) = STARTUP_STARTED.get() {
+            tracing::debug!(elapsed_ms = started.elapsed().as_millis(), "startup: first frame rendered");
+        }
+    }
+}
+
 /// Get the tokio runtime handle. Panics if called before app_main.
 pub fn rt_handle() -> &'static tokio::runtime::Handle {
     RT_HANDLE.get().expect("tokio runtime not initialized")
@@ -132,6 +146,8 @@ pub struct AppState {
 /// Creates client, gRPC channels, window, and wires callbacks.
 /// Returns state for the sync event loop phase.
 pub async fn app_init() -> AppState {
+    let startup_started = std::time::Instant::now();
+    let _ = STARTUP_STARTED.set(startup_started);
     let _ = RT_HANDLE.set(tokio::runtime::Handle::current());
 
     // NB: LiveKit/webrtc's android init (initialize_android) runs from
@@ -371,6 +387,11 @@ pub async fn app_init() -> AppState {
         tracing::info!("Using software video rendering");
     }
 
+    // On desktop without a video notifier, install the timing-only notifier.
+    // Android's launch-cover notifier owns the fallback and records the same event.
+    #[cfg(not(target_os = "android"))]
+    let _ = window.window().set_rendering_notifier(|state, _| record_startup_frame(&state));
+
     // The mesh comes up regardless of login. It is serverless by design — no
     // RPC, no account, no internet required — and the situations it exists for
     // are precisely the ones where nobody is signing in to anything. Starting it
@@ -575,6 +596,7 @@ pub async fn app_init() -> AppState {
         }
     });
 
+    tracing::debug!(elapsed_ms = startup_started.elapsed().as_millis(), "startup: UI initialized");
     AppState {
         window,
         ui_ctx: client,

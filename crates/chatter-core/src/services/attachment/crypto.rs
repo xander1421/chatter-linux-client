@@ -192,9 +192,9 @@ impl AttachmentService {
 
     /// Decrypt attachment using true streaming I/O.
     ///
-    /// Uses `StreamingDecryptor` which reads in 512KB chunks with OpenSSL
-    /// hardware-accelerated SHA-NI + AES-NI. Single-pass: computes SHA256,
-    /// HMAC-SHA256, and AES-CBC decryption simultaneously.
+    /// Uses `StreamingDecryptor`, which reads in 512KB chunks. Two passes:
+    /// SHA256 and HMAC-SHA256 over the whole file first, AES-CBC only once
+    /// both have matched.
     ///
     /// ## Memory Usage
     ///
@@ -202,16 +202,12 @@ impl AttachmentService {
     /// The output plaintext still requires memory, but the ciphertext is never
     /// fully loaded — it streams from the file.
     ///
-    /// ## Performance
-    ///
-    /// Single-pass with OpenSSL hardware crypto is faster than the rayon parallel
-    /// approach because it avoids the 874MB allocation + copy overhead.
     pub fn decrypt_streaming(
         &self,
         attachment_id: &AttachmentId,
     ) -> Result<SecureBuffer, AttachmentError> {
         let start = std::time::Instant::now();
-        tracing::info!(attachment_id = %attachment_id, "Starting streaming decryption (OpenSSL single-pass)");
+        tracing::info!(attachment_id = %attachment_id, "Starting streaming decryption");
 
         // Get attachment metadata
         let attachment = self
@@ -278,7 +274,7 @@ impl AttachmentService {
         })?;
         let reader = std::io::BufReader::with_capacity(512 * 1024, file);
 
-        // Use StreamingDecryptor — single-pass, 512KB chunks, OpenSSL hardware crypto
+        // Use StreamingDecryptor — verify pass, then decrypt pass, 512KB chunks
         let mut decryptor = StreamingDecryptor::new(
             reader,
             &key,
@@ -298,7 +294,7 @@ impl AttachmentService {
             plaintext_len = plaintext.len(),
             total_ms = total_elapsed.as_millis(),
             throughput_mbps = format_args!("{:.1}", size_mb / total_elapsed.as_secs_f64()),
-            "Decrypted attachment via streaming (single-pass)"
+            "Decrypted attachment via streaming"
         );
 
         // Validate incoming media (MP4/WebP structure) before renderers parse it.
@@ -400,11 +396,10 @@ impl AttachmentService {
 
     /// Decrypt attachment using the best method for its size.
     ///
-    /// - Small files (<1MB): `decrypt_to_memory` with rayon parallel (fast for small data)
-    /// - Large files (>=1MB): `decrypt_streaming` with OpenSSL single-pass (low memory)
+    /// - Small files (<1MB): `decrypt_to_memory`, whole ciphertext in memory
+    /// - Large files (>=1MB): `decrypt_streaming`, ciphertext streamed from disk
     ///
-    /// The threshold is 1MB because below that, the overhead of OpenSSL init
-    /// and single-pass coordination exceeds the memory savings.
+    /// Both authenticate the ciphertext before decrypting any of it.
     pub fn decrypt_auto(
         &self,
         attachment_id: &AttachmentId,
