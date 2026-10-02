@@ -18,6 +18,9 @@ use rsa::pkcs8::DecodePublicKey;
 use rsa::PublicKeyParts;
 
 use crate::error::MailboxError;
+use crate::network::grpc::AnonymousKtClient;
+use crate::services::signal::kt_anchor;
+use crate::storage::repositories::SettingsRepository;
 
 /// Server's RSA public key for blind signatures.
 ///
@@ -69,8 +72,10 @@ impl ServerPublicKey {
         })
     }
 
-    /// Authenticate the complete rotating manifest against the compile-time KT pin.
-    /// Raw DER is deliberately not a public construction path.
+    /// Authenticate the complete rotating manifest against the compile-time KT pin,
+    /// and require the KT log to commit to it. Raw DER is deliberately not a
+    /// public construction path. Also the check for a cached manifest; a fresh
+    /// one goes through [`Self::from_fetched_manifest`].
     pub fn from_manifest(
         manifest: &GetBlindSignaturePublicKeyResponse,
     ) -> Result<Self, MailboxError> {
@@ -78,7 +83,32 @@ impl ServerPublicKey {
             .duration_since(std::time::UNIX_EPOCH)
             .map_err(|_| MailboxError::InvalidServerKey("clock before Unix epoch".into()))?
             .as_nanos() as u64;
+        verify_manifest_in_log(manifest)?;
         Self::verify_manifest_at(manifest, &crate::config::KT_TREE_HEAD_PUBLIC_KEY_BYTES, now)
+    }
+
+    /// A manifest just fetched from the server: [`Self::from_manifest`], then
+    /// its tree head held to the one this device pinned from every other KT
+    /// proof (`kt_anchor`), so a log forked for this client alone is refused.
+    pub async fn from_fetched_manifest(
+        manifest: &GetBlindSignaturePublicKeyResponse,
+        settings: &SettingsRepository,
+        kt: &mut AnonymousKtClient,
+    ) -> Result<Self, MailboxError> {
+        let key = Self::from_manifest(manifest)?;
+        let sth = manifest
+            .kt_proof
+            .as_ref()
+            .and_then(|p| p.signed_tree_head.as_ref())
+            .ok_or_else(|| MailboxError::InvalidServerKey("manifest has no tree head".into()))?;
+        kt_anchor::hold_head(settings, sth, |old, new| kt.get_consistency_proof(old, new))
+            .await
+            .map_err(|e| {
+            MailboxError::InvalidServerKey(format!(
+                "manifest tree head contradicts this device's pinned head: {e}"
+            ))
+        })?;
+        Ok(key)
     }
 
     fn verify_manifest_at(
@@ -141,6 +171,26 @@ impl ServerPublicKey {
     pub(crate) fn inner(&self) -> &PublicKey {
         &self.inner
     }
+}
+
+// Must match keytransparency.MailboxManifestLabel (log.go). Not a UUID, so it
+// can never be a user's label.
+fn manifest_label(key_id: &str) -> String {
+    format!("chatter/mailbox-manifest/v1/{key_id}")
+}
+
+// The pinned signer can sign a different manifest for each client; this makes
+// it prove the one it gave us is the one the KT log holds for the key, with the
+// same verifier as a peer's identity key.
+fn verify_manifest_in_log(m: &GetBlindSignaturePublicKeyResponse) -> Result<(), MailboxError> {
+    use sha2::{Digest, Sha256};
+    let proof = m.kt_proof.as_ref().ok_or_else(|| {
+        MailboxError::InvalidServerKey("manifest has no key-transparency proof".into())
+    })?;
+    let digest = Sha256::digest(manifest_bytes(m));
+    crate::crypto::verify_kt_proof(&manifest_label(&m.key_id), &digest, proof).map_err(|e| {
+        MailboxError::InvalidServerKey(format!("manifest key-transparency proof: {e}"))
+    })
 }
 
 // Must match service/manifest.go. Explicit framing avoids protobuf serialization
@@ -423,7 +473,7 @@ pub fn verify(
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
 
     #[test]
@@ -452,6 +502,7 @@ mod tests {
                 valid_until: 400,
             }),
             signature: vec![],
+            kt_proof: None,
         };
         m.signature = signer.sign(&manifest_bytes(&m)).to_bytes().to_vec();
         // Persistence round-trip preserves signed bytes and selects the next
@@ -510,6 +561,60 @@ mod tests {
         assert!(ServerPublicKey::verify_manifest_at(&m, &pin, 150).is_err());
     }
 
+    /// A manifest signed and committed by the Go server (development KT keys:
+    /// keytransparency.MailboxManifestLabel + CommitMailboxManifest's proof
+    /// shape), valid until 2^62 ns.
+    pub(crate) fn kt_manifest_vector() -> Option<GetBlindSignaturePublicKeyResponse> {
+        use prost::Message;
+        // Only meaningful when the build pins the development KT keys, which
+        // `cargo test` does unless provisioned ones are exported.
+        let dev_head = hex::decode("88ad412806054a7534e1b9deb42ef249bd7c92709f5bebf1d6be7b0e40926f72").unwrap();
+        if crate::config::KT_TREE_HEAD_PUBLIC_KEY_BYTES[..] != dev_head[..] {
+            return None;
+        }
+        Some(
+            GetBlindSignaturePublicKeyResponse::decode(
+                &include_bytes!("testdata/kt_manifest_vector.bin")[..],
+            )
+            .unwrap(),
+        )
+    }
+
+    #[test]
+    fn manifest_requires_a_valid_kt_inclusion_proof() {
+        let Some(m) = kt_manifest_vector() else { return };
+        assert_eq!(ServerPublicKey::from_manifest(&m).unwrap().key_id, "vector-current");
+
+        let mut missing = m.clone();
+        missing.kt_proof = None;
+        assert!(ServerPublicKey::from_manifest(&missing).is_err());
+
+        // Committed value is not this manifest's digest.
+        let mut wrong_value = m.clone();
+        wrong_value.kt_proof.as_mut().unwrap().inclusion_proof.as_mut().unwrap().value[0] ^= 1;
+        assert!(ServerPublicKey::from_manifest(&wrong_value).is_err());
+
+        // Inclusion path does not reach the committed root.
+        let mut bad_path = m.clone();
+        bad_path.kt_proof.as_mut().unwrap().inclusion_proof.as_mut().unwrap().sibling_hashes.last_mut().unwrap()[0] ^= 1;
+        assert!(ServerPublicKey::from_manifest(&bad_path).is_err());
+
+        // Tree head not signed by the pinned key.
+        let mut bad_head = m.clone();
+        bad_head.kt_proof.as_mut().unwrap().signed_tree_head.as_mut().unwrap().signature[0] ^= 1;
+        assert!(ServerPublicKey::from_manifest(&bad_head).is_err());
+
+        // A valid proof for a different label (a user's, or another key's) does
+        // not cover this manifest.
+        assert_ne!(manifest_label(&m.key_id), "vector-current");
+        assert!(crate::crypto::verify_kt_proof(
+            "vector-current",
+            &m.kt_proof.as_ref().unwrap().inclusion_proof.as_ref().unwrap().value,
+            m.kt_proof.as_ref().unwrap(),
+        )
+        .is_err());
+    }
+
     #[test]
     fn manifest_canonical_vector_matches_go() {
         use crate::proto::mailbox_v1::BlindSignatureNextKey;
@@ -525,6 +630,7 @@ mod tests {
                 valid_until: 4,
             }),
             signature: vec![],
+            kt_proof: None,
         };
         assert_eq!(hex::encode(manifest_bytes(&m)), "636861747465722f6d61696c626f782d626c696e642d6b65792d6d616e69666573742f7631000000000201020000000161000000000000000100000000000000030000000103000000016200000000000000020000000000000004");
     }

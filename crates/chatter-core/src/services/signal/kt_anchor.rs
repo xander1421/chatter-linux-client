@@ -44,6 +44,9 @@
 use serde::{Deserialize, Serialize};
 
 use crate::crypto::keytransparency::{verify_consistency_proof, KtError};
+use std::future::Future;
+
+use crate::error::NetworkError;
 use crate::proto::chat_v1::{GetConsistencyProofResponse, SignedTreeHead};
 use crate::storage::repositories::SettingsRepository;
 
@@ -158,6 +161,34 @@ pub fn accept_advance(
 
     store(settings, sth.epoch, offered_root)?;
     Ok(AnchorOutcome::Advanced)
+}
+
+/// [`classify_head`] then, for a newer head, [`accept_advance`] with the proof
+/// `fetch` returns for the pinned->offered range (callers pass the anonymous
+/// KT client). Any failure, fetch included, rejects: an error must not be a
+/// way past the check. Verify the head's signature first; a first pin is
+/// stored unverified.
+///
+/// `fetch` is `FnOnce` by value, so the future stays `Send` without the
+/// `RefCell` an earlier callback design needed (see [`classify_head`]).
+pub async fn hold_head<F, Fut>(
+    settings: &SettingsRepository,
+    sth: &SignedTreeHead,
+    fetch: F,
+) -> Result<AnchorOutcome, KtError>
+where
+    F: FnOnce(u64, u64) -> Fut,
+    Fut: Future<Output = Result<GetConsistencyProofResponse, NetworkError>>,
+{
+    match classify_head(settings, sth)? {
+        AnchorAction::Settled(outcome) => Ok(outcome),
+        AnchorAction::NeedsProof { old_epoch, new_epoch } => {
+            let resp = fetch(old_epoch, new_epoch)
+                .await
+                .map_err(|_| KtError::ConsistencyUnavailable)?;
+            accept_advance(settings, sth, &resp)
+        }
+    }
 }
 
 /// Tie a verified consistency proof to THIS device's history.
@@ -287,6 +318,82 @@ mod tests {
             7,
             "classify must not advance the pin before the proof is checked"
         );
+    }
+
+    /// Pinned->offered proof (epochs 3->5) from the Go server's log code,
+    /// signed with the development tree-head key, which `cargo test` pins.
+    fn dev_consistency_vector() -> Option<GetConsistencyProofResponse> {
+        use prost::Message;
+        let dev_head = hex::decode("88ad412806054a7534e1b9deb42ef249bd7c92709f5bebf1d6be7b0e40926f72").unwrap();
+        if crate::config::KT_TREE_HEAD_PUBLIC_KEY_BYTES[..] != dev_head[..] {
+            return None;
+        }
+        let bytes = hex::decode("0ad001080310051a205ed9e9409cde85956181059d21619eb6d03ad1a702a28aab187b36f19e3ac559222093fc7ed082c0645ecda3730127828cbcc45715eb804f7ab9b3a6c88e20a29e962a202c1a31e263ce44dd488fe109624f5f2b6ce878abc94682443a1dfeaae31e101c2a20c3aeb3b4971908ef5a272c19ad3c48fbece6aae37ea81109d0b4dc6a43fbaf342a20d9ecb1f2efc4207cebe9e736aa3bc8c590ce5eb57e9512851026d3712b0f72492a204b1b46d1e688e4ec8c5308c5028bde466a0683e0a3b95784cb79c022fabdee371268080312205ed9e9409cde85956181059d21619eb6d03ad1a702a28aab187b36f19e3ac559180322406760e4ce59358342fd48591390ecb2367a172ade74a7ffece3a7170458bd9015c756e72a75daf44a010f62192e66d99fbd6bac8537deae41b3d946469a26d80a1a680805122093fc7ed082c0645ecda3730127828cbcc45715eb804f7ab9b3a6c88e20a29e9618052240ba4a10369857031171b4bd1b07f57d9fa9e83761553c9b0dfb021a9985d17ea313c2004a79b6dac3eac6eaa28b69bdc42c82c82074ecc85e4f8bb67a57bfca01").unwrap();
+        Some(GetConsistencyProofResponse::decode(bytes.as_slice()).unwrap())
+    }
+
+    fn fetch_ok(
+        resp: GetConsistencyProofResponse,
+        asked: &mut Option<(u64, u64)>,
+    ) -> impl FnOnce(u64, u64) -> std::future::Ready<Result<GetConsistencyProofResponse, NetworkError>> + '_ {
+        move |old, new| {
+            *asked = Some((old, new));
+            std::future::ready(Ok(resp))
+        }
+    }
+
+    #[tokio::test]
+    async fn hold_head_pins_first_head_without_fetching() {
+        let (s, _dir) = settings();
+        // A fetch would fail the call: a first pin has nothing to prove against.
+        let outcome = hold_head(&s, &sth(7, [1u8; 32]), |_, _| async {
+            Err::<GetConsistencyProofResponse, _>(NetworkError::ConnectionFailed("no fetch".into()))
+        })
+        .await
+        .unwrap();
+        assert_eq!(outcome, AnchorOutcome::FirstPin);
+        assert_eq!(pinned_head(&s).unwrap(), PinnedTreeHead { epoch: 7, root: [1u8; 32] });
+    }
+
+    #[tokio::test]
+    async fn hold_head_advances_on_a_valid_consistency_proof() {
+        let Some(resp) = dev_consistency_vector() else { return };
+        let (s, _dir) = settings();
+        let old = resp.old_signed_tree_head.clone().unwrap();
+        let new = resp.new_signed_tree_head.clone().unwrap();
+        classify_head(&s, &old).unwrap();
+        let mut asked = None;
+        let outcome = hold_head(&s, &new, fetch_ok(resp, &mut asked)).await.unwrap();
+        assert_eq!(outcome, AnchorOutcome::Advanced);
+        assert_eq!(asked, Some((3, 5)), "the proof is fetched for exactly pinned->offered");
+        assert_eq!(pinned_head(&s).unwrap().epoch, 5);
+    }
+
+    /// A newer head whose proof does not start at the root this device
+    /// pinned: the log this client saw was not the one the server extended.
+    #[tokio::test]
+    async fn hold_head_rejects_a_fork_and_keeps_the_pin() {
+        let Some(resp) = dev_consistency_vector() else { return };
+        let (s, _dir) = settings();
+        let new = resp.new_signed_tree_head.clone().unwrap();
+        classify_head(&s, &sth(3, [9u8; 32])).unwrap();
+        let mut asked = None;
+        assert_eq!(
+            hold_head(&s, &new, fetch_ok(resp, &mut asked)).await.unwrap_err(),
+            KtError::ConsistencyRootMismatch
+        );
+        assert_eq!(pinned_head(&s).unwrap(), PinnedTreeHead { epoch: 3, root: [9u8; 32] });
+
+        // A failed fetch is a rejection too, never a pass.
+        assert_eq!(
+            hold_head(&s, &new, |_, _| async {
+                Err::<GetConsistencyProofResponse, _>(NetworkError::ConnectionFailed("down".into()))
+            })
+                .await
+                .unwrap_err(),
+            KtError::ConsistencyUnavailable
+        );
+        assert_eq!(pinned_head(&s).unwrap().epoch, 3);
     }
 
     /// A bad proof must leave the pin where it was.

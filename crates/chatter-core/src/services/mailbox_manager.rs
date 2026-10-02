@@ -159,8 +159,13 @@ impl MailboxManager {
         let response = client.get_blind_signature_public_key().await?;
 
         // Parse and cache in memory - use server-provided key_id and valid_until
-        let server_pk = ServerPublicKey::from_manifest(&response)
-            .map_err(|e| MailboxError::Crypto(CryptoError::InvalidKey(e.to_string())))?;
+        let server_pk = ServerPublicKey::from_fetched_manifest(
+            &response,
+            &self.settings_repo,
+            &mut self.client_pool.anonymous_kt_client(),
+        )
+        .await
+        .map_err(|e| MailboxError::Crypto(CryptoError::InvalidKey(e.to_string())))?;
         *self.server_pubkey.write().await = Some(server_pk);
 
         // Persist to settings for next startup (as base64)

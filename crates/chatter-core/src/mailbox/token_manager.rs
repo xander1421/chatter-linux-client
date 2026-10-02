@@ -26,7 +26,8 @@ use crate::error::MailboxError;
 use crate::mailbox::blind_signature::{
     blind_key, unblind, BlindingSecret, MessageRandomizer, ServerPublicKey,
 };
-use crate::network::grpc::MailboxClient;
+use crate::network::grpc::{AnonymousKtClient, MailboxClient};
+use crate::storage::repositories::SettingsRepository;
 use crate::storage::Database;
 
 /// Default number of mailbox tokens to request at once.
@@ -123,9 +124,11 @@ impl TokenManager {
     /// # Arguments
     ///
     /// * `client` - MailboxClient for server communication
+    /// * `kt` - anonymous KT client for the manifest's consistency proof
     pub async fn refresh_server_key(
         &self,
         client: &mut MailboxClient,
+        kt: &mut AnonymousKtClient,
     ) -> Result<ServerPublicKey, MailboxError> {
         tracing::info!("TokenManager: refresh_server_key called");
 
@@ -159,7 +162,8 @@ impl TokenManager {
         })?;
         tracing::info!("Got blind signature public key from server");
 
-        let server_key = ServerPublicKey::from_manifest(&response)?;
+        let settings = SettingsRepository::new(self.db.clone());
+        let server_key = ServerPublicKey::from_fetched_manifest(&response, &settings, kt).await?;
         // Only authenticated keys populate the token-expiry join table.
         self.store_server_key(&response.key_id, &response.public_key, response.valid_until)?;
         if let Some(next) = &response.next_key {
@@ -237,6 +241,7 @@ impl TokenManager {
     /// # Arguments
     ///
     /// * `client` - MailboxClient for server communication
+    /// * `kt` - anonymous KT client (see [`Self::refresh_server_key`])
     /// * `count` - Number of tokens to request
     ///
     /// # Returns
@@ -245,6 +250,7 @@ impl TokenManager {
     pub async fn request_tokens(
         &self,
         client: &mut MailboxClient,
+        kt: &mut AnonymousKtClient,
         count: u32,
     ) -> Result<u32, MailboxError> {
         tracing::info!("TokenManager: request_tokens called, count={}", count);
@@ -257,7 +263,7 @@ impl TokenManager {
 
         // Get/refresh server key
         tracing::info!("TokenManager: refreshing server key...");
-        let server_key = self.refresh_server_key(client).await?;
+        let server_key = self.refresh_server_key(client, kt).await?;
         tracing::info!("TokenManager: got server key, generating keypairs...");
 
         // Generate ephemeral keypairs and blind them
@@ -639,6 +645,7 @@ impl TokenManager {
     /// # Arguments
     ///
     /// * `client` - MailboxClient for server communication
+    /// * `kt` - anonymous KT client (see [`Self::refresh_server_key`])
     /// * `count` - Number of tokens to request
     ///
     /// # Returns
@@ -647,6 +654,7 @@ impl TokenManager {
     pub async fn request_call_room_tokens(
         &self,
         client: &mut MailboxClient,
+        kt: &mut AnonymousKtClient,
         count: u32,
     ) -> Result<u32, MailboxError> {
         tracing::info!(
@@ -662,7 +670,7 @@ impl TokenManager {
         );
 
         // Get/refresh server key (shared with mailbox tokens)
-        let server_key = self.refresh_server_key(client).await?;
+        let server_key = self.refresh_server_key(client, kt).await?;
 
         // Generate ephemeral keypairs and blind them
         let mut blinded_keys = Vec::with_capacity(request_count as usize);
@@ -982,6 +990,25 @@ mod tests {
         let conn = tm.db.connection().unwrap();
         conn.execute("INSERT INTO settings (key, value, updated_at) VALUES ('mailbox.signed_key_manifest', 'corrupt', 'now')", []).unwrap();
         drop(conn);
+        assert!(tm.get_cached_server_key().unwrap().is_none());
+    }
+
+    #[test]
+    fn cached_manifest_is_reverified_with_its_kt_proof() {
+        use crate::mailbox::blind_signature::tests::kt_manifest_vector;
+        let Some(m) = kt_manifest_vector() else { return };
+        let tm = TokenManager::new(test_db());
+        let cache = |m: &GetBlindSignaturePublicKeyResponse| {
+            tm.db.connection().unwrap().execute(
+                "INSERT OR REPLACE INTO settings (key, value, updated_at) VALUES ('mailbox.signed_key_manifest', ?1, 'now')",
+                [hex::encode(m.encode_to_vec())],
+            ).unwrap();
+        };
+        cache(&m);
+        assert_eq!(tm.get_cached_server_key().unwrap().unwrap().key_id, "vector-current");
+        let mut stripped = m.clone();
+        stripped.kt_proof = None;
+        cache(&stripped);
         assert!(tm.get_cached_server_key().unwrap().is_none());
     }
 

@@ -146,7 +146,7 @@ async fn test_stale_mailbox_key_detection() {
 
     // Step 2: Request tokens and setup first mailbox
     let mut mailbox_client = ctx.mailbox_client();
-    let tokens_acquired = assert_ok(ctx.token_manager.request_tokens(&mut mailbox_client, 3).await);
+    let tokens_acquired = assert_ok(ctx.token_manager.request_tokens(&mut mailbox_client, &mut ctx.pool.anonymous_kt_client(), 3).await);
     assert!(tokens_acquired > 0, "Should acquire at least one token");
 
     let mut anon_mailbox_client = ctx.anon_mailbox_client();
@@ -168,7 +168,7 @@ async fn test_stale_mailbox_key_detection() {
     ctx.mailbox_manager.delete_group_state(&channel_id).ok();
 
     // Get more tokens for second mailbox
-    let _ = ctx.token_manager.request_tokens(&mut mailbox_client, 3).await;
+    let _ = ctx.token_manager.request_tokens(&mut mailbox_client, &mut ctx.pool.anonymous_kt_client(), 3).await;
 
     let second_setup = assert_ok(
         ctx.group_coordinator
@@ -512,7 +512,7 @@ async fn test_concurrent_mailbox_setup() {
 
     // Pre-request tokens
     let mut mailbox_client = ctx.mailbox_client();
-    let _ = ctx.token_manager.request_tokens(&mut mailbox_client, 10).await;
+    let _ = ctx.token_manager.request_tokens(&mut mailbox_client, &mut ctx.pool.anonymous_kt_client(), 10).await;
 
     // Spawn multiple concurrent setup attempts
     let mut handles = Vec::new();
@@ -610,7 +610,7 @@ async fn test_server_rejects_wrong_credentials() {
     let mut mailbox_client = ctx.mailbox_client();
 
     // Request tokens and create a real mailbox
-    let _ = ctx.token_manager.request_tokens(&mut mailbox_client, 3).await;
+    let _ = ctx.token_manager.request_tokens(&mut mailbox_client, &mut ctx.pool.anonymous_kt_client(), 3).await;
 
     let channel_id: ChannelId = uuid::Uuid::new_v4().to_string().parse().expect("Valid UUID");
     let mut anon_mailbox_client = ctx.anon_mailbox_client();

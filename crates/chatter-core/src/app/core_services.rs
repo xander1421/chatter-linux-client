@@ -334,6 +334,7 @@ impl CoreServices {
             .top_up(
                 &self.token_manager,
                 &mut self.grpc_pool.mailbox_client(),
+                &mut self.grpc_pool.anonymous_kt_client(),
                 have,
                 crate::mailbox::DEFAULT_CALL_ROOM_TOKEN_REQUEST_COUNT,
             )
@@ -357,8 +358,9 @@ impl CoreServices {
         );
 
         let mut mailbox_client = self.grpc_pool.mailbox_client();
+        let mut kt = self.grpc_pool.anonymous_kt_client();
 
-        let fetched = self.token_manager.request_tokens(&mut mailbox_client, needed).await?;
+        let fetched = self.token_manager.request_tokens(&mut mailbox_client, &mut kt, needed).await?;
         tracing::info!("Pre-fetched {} anonymous tokens", fetched);
         Ok(fetched)
     }
@@ -397,6 +399,7 @@ impl CoreServices {
             loop {
                 jittered_sleep().await;
                 let mut client = grpc_pool.mailbox_client();
+                let mut kt = grpc_pool.anonymous_kt_client();
                 for pool in [TokenPool::Mailbox, TokenPool::CallRoom] {
                     let (target, low_water) = match pool {
                         TokenPool::Mailbox => (BATCH, LOW_WATER),
@@ -406,7 +409,7 @@ impl CoreServices {
                     };
                     match pool.count(&token_manager) {
                         Ok(current) if current < low_water => {
-                            let now = pool.top_up(&token_manager, &mut client, current, target).await;
+                            let now = pool.top_up(&token_manager, &mut client, &mut kt, current, target).await;
                             tracing::info!(?pool, had = current, now, "Token refill: pool topped up");
                         }
                         Ok(_) => {}
@@ -956,13 +959,14 @@ impl TokenPool {
         self,
         tm: &TokenManager,
         client: &mut crate::network::grpc::MailboxClient,
+        kt: &mut crate::network::grpc::AnonymousKtClient,
         mut have: u32,
         target: u32,
     ) -> u32 {
         while have < target {
             let got = match self {
-                Self::Mailbox => tm.request_tokens(client, target - have).await,
-                Self::CallRoom => tm.request_call_room_tokens(client, target - have).await,
+                Self::Mailbox => tm.request_tokens(client, kt, target - have).await,
+                Self::CallRoom => tm.request_call_room_tokens(client, kt, target - have).await,
             };
             match got {
                 Ok(0) => break,
