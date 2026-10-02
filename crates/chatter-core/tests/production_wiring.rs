@@ -101,6 +101,18 @@ const TABLE: &[Entry] = &[
               different trees — so a fork, a rollback and a per-user split view all become \
               undetectable again. Dead until 2026-08-03; that is why this file exists.",
     },
+    Entry {
+        symbol: "hold_head_locked",
+        defined_in: "chatter-core/src/services/signal/kt_anchor.rs",
+        expect: Expect::Wired,
+        why: "Holds a served tree head to the device's pinned head under the pin lock \
+              (classify -> consistency proof -> accept). Called from session.rs for the \
+              identified AND anonymous KT paths (the anon gate is session.rs-internal, so it is \
+              covered by kt_pin_tests, not by this table) and from mailbox/blind_signature.rs for \
+              blind-key manifests. Lose it and inclusion proofs verify against whatever \
+              head the server sent, so a forked log goes undetected; before 2026-10-03 the \
+              anonymous path never anchored at all.",
+    },
     // ---- Reactions -------------------------------------------------------
     Entry {
         symbol: "record_reaction",
