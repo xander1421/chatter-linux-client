@@ -75,23 +75,29 @@ impl SignalService {
     /// could fork the log undetectably, which is the same reasoning that
     /// already makes a transport error on `GetProof` a reject rather than a
     /// "no leaf".
-    async fn check_tree_head_consistency(
+    ///
+    /// `fetch_consistency` is the channel's own consistency-proof RPC, so the
+    /// anonymous path never falls back to an identified request.
+    async fn check_tree_head_consistency<F, Fut>(
         &self,
         pin: &kt_anchor::PinGuard,
-        auth_client: &mut AuthClient,
+        fetch_consistency: F,
         recipient_id: &str,
         proof: &crate::proto::chat_v1::GetProofResponse,
-    ) -> Result<(), ServiceError> {
+    ) -> Result<(), ServiceError>
+    where
+        F: FnOnce(u64, u64) -> Fut,
+        Fut: std::future::Future<
+            Output = Result<crate::proto::chat_v1::GetConsistencyProofResponse, crate::error::NetworkError>,
+        >,
+    {
         let Some(sth) = proof.signed_tree_head.as_ref() else {
             return Err(ServiceError::Validation(
                 "KT proof has no signed tree head".to_string(),
             ));
         };
 
-        match kt_anchor::hold_head_locked(pin, &self.settings_repo, sth, |old, new| {
-            auth_client.get_consistency_proof(old, new)
-        })
-        .await
+        match kt_anchor::hold_head_locked(pin, &self.settings_repo, sth, fetch_consistency).await
         {
             Ok(kt_anchor::AnchorOutcome::FirstPin) => {
                 tracing::info!(
@@ -156,7 +162,13 @@ impl SignalService {
                         // server just signed. It says nothing about WHICH tree,
                         // so on its own it cannot see a fork or a rollback.
                         // Pin the head across time as well.
-                        self.check_tree_head_consistency(&pin, auth_client, recipient_id, &proof).await
+                        self.check_tree_head_consistency(
+                            &pin,
+                            |old, new| auth_client.get_consistency_proof(old, new),
+                            recipient_id,
+                            &proof,
+                        )
+                        .await
                     }
                     // `Malformed` means the proof doesn't even have the shape
                     // this verifier expects (e.g. missing prefix_root) — that's
@@ -1002,7 +1014,8 @@ impl SignalService {
     /// authenticated identity — because the anon path has none.
     ///
     /// This closes the anon-path MITM hole: before Phase 3a the anon path
-    /// trusted peer identity keys blindly (no KT call at all).
+    /// trusted peer identity keys blindly (no KT call at all). Its tree head
+    /// is held to this device's pin exactly like the identified path's.
     async fn verify_peer_key_transparency_anon(
         &self,
         anon_kt_client: &mut crate::network::grpc::AnonymousKtClient,
@@ -1014,6 +1027,8 @@ impl SignalService {
             .map_err(|e| ServiceError::Validation(format!("bundle missing identity key: {e}")))?
             .serialize();
 
+        // Same pin discipline as the identified path (`kt_anchor::lock_pin`).
+        let pin = kt_anchor::lock_pin().await;
         match anon_kt_client.get_proof(recipient_id).await {
             Ok(Some(proof)) => {
                 match crate::crypto::verify_kt_proof(recipient_id, &identity_key, &proof) {
@@ -1028,7 +1043,17 @@ impl SignalService {
                             epoch,
                             "KT(anon): peer identity key verified against the signed transparency log"
                         );
-                        Ok(())
+                        // Without this a server could fork the log for
+                        // anonymous lookups alone: each proof verifies against
+                        // the head in its own response. The consistency proof
+                        // comes over the same anonymous channel.
+                        self.check_tree_head_consistency(
+                            &pin,
+                            |old, new| anon_kt_client.get_consistency_proof(old, new),
+                            recipient_id,
+                            &proof,
+                        )
+                        .await
                     }
                     // See verify_peer_key_transparency's identical arm: Malformed
                     // means protocol-version mismatch (server still on KT v1),
@@ -1385,6 +1410,40 @@ fn session_device_ids<'a>(recipient_id: &str, addresses: impl Iterator<Item = &'
     ids.sort_unstable();
     ids.dedup();
     ids
+}
+
+#[cfg(test)]
+mod kt_pin_tests {
+    use super::*;
+    use crate::proto::chat_v1::{GetConsistencyProofResponse, GetProofResponse, SignedTreeHead};
+
+    /// The anchor both KT paths (identified and `verify_peer_key_transparency_anon`)
+    /// run after the inclusion proof: a head that forks from the pin is refused
+    /// without asking the server anything.
+    #[tokio::test]
+    async fn a_head_forked_from_the_pin_is_rejected() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = Arc::new(crate::storage::Database::open(&dir.path().join("kt.db"), "testpass").unwrap());
+        db.run_migrations().unwrap();
+        let settings = Arc::new(crate::storage::repositories::SettingsRepository::new(db.clone()));
+        let svc = SignalService::new(Arc::new(crate::storage::KeyStore::new(db)), settings.clone());
+
+        let head = |root: u8| GetProofResponse {
+            signed_tree_head: Some(SignedTreeHead { epoch: 5, root_hash: vec![root; 32], ..Default::default() }),
+            ..Default::default()
+        };
+        fn no_fetch(
+            _: u64,
+            _: u64,
+        ) -> std::future::Ready<Result<GetConsistencyProofResponse, crate::error::NetworkError>> {
+            panic!("a fork needs no consistency proof")
+        }
+        let pin = kt_anchor::lock_pin().await;
+        svc.check_tree_head_consistency(&pin, no_fetch, "bob", &head(1)).await.unwrap();
+        let err = svc.check_tree_head_consistency(&pin, no_fetch, "bob", &head(2)).await.unwrap_err();
+        assert!(err.to_string().contains("consistency check failed"), "{err}");
+        assert_eq!(kt_anchor::pinned_head(&settings).unwrap().root, [1u8; 32]);
+    }
 }
 
 #[cfg(test)]

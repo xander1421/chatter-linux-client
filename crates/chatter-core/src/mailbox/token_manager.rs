@@ -146,24 +146,30 @@ impl TokenManager {
         }
 
         // Fetch new key from server with timeout to prevent hangs
-        tracing::info!("TokenManager: calling get_blind_signature_public_key RPC...");
-        let response = tokio::time::timeout(
-            Duration::from_secs(10),
-            client.get_blind_signature_public_key(),
-        )
-        .await
-        .map_err(|_| {
-            tracing::error!("get_blind_signature_public_key timed out after 10s");
-            MailboxError::Network("RPC timeout".to_string())
-        })?
-        .map_err(|e| {
-            tracing::error!("get_blind_signature_public_key failed: {}", e);
-            MailboxError::Network(e.to_string())
-        })?;
-        tracing::info!("Got blind signature public key from server");
-
         let settings = SettingsRepository::new(self.db.clone());
-        let server_key = ServerPublicKey::from_fetched_manifest(&response, &settings, kt).await?;
+        let (response, server_key) = ServerPublicKey::fetch_manifest(
+            || async {
+                tracing::info!("TokenManager: calling get_blind_signature_public_key RPC...");
+                let response = tokio::time::timeout(
+                    Duration::from_secs(10),
+                    client.get_blind_signature_public_key(),
+                )
+                .await
+                .map_err(|_| {
+                    tracing::error!("get_blind_signature_public_key timed out after 10s");
+                    MailboxError::Network("RPC timeout".to_string())
+                })?
+                .map_err(|e| {
+                    tracing::error!("get_blind_signature_public_key failed: {}", e);
+                    MailboxError::Network(e.to_string())
+                })?;
+                tracing::info!("Got blind signature public key from server");
+                Ok(response)
+            },
+            &settings,
+            |old, new| kt.get_consistency_proof(old, new),
+        )
+        .await?;
         // Only authenticated keys populate the token-expiry join table.
         self.store_server_key(&response.key_id, &response.public_key, response.valid_until)?;
         if let Some(next) = &response.next_key {

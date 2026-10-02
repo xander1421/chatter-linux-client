@@ -156,16 +156,27 @@ impl MailboxManager {
 
         // Fetch from server (anonymous — no auth needed for public key retrieval)
         let mut client = self.create_anonymous_mailbox_client();
-        let response = client.get_blind_signature_public_key().await?;
-
-        // Parse and cache in memory - use server-provided key_id and valid_until
-        let server_pk = ServerPublicKey::from_fetched_manifest(
-            &response,
+        let mut kt = self.client_pool.anonymous_kt_client();
+        // The fetch's own error keeps its type; anything else is the manifest
+        // failing verification.
+        let mut fetch_error = None;
+        let verified = ServerPublicKey::fetch_manifest(
+            || async {
+                client.get_blind_signature_public_key().await.map_err(|e| {
+                    let message = e.to_string();
+                    fetch_error = Some(e);
+                    crate::error::MailboxError::Network(message)
+                })
+            },
             &self.settings_repo,
-            &mut self.client_pool.anonymous_kt_client(),
+            |old, new| kt.get_consistency_proof(old, new),
         )
-        .await
-        .map_err(|e| MailboxError::Crypto(CryptoError::InvalidKey(e.to_string())))?;
+        .await;
+        let (response, server_pk) = match (verified, fetch_error) {
+            (Ok(verified), _) => verified,
+            (Err(_), Some(e)) => return Err(e.into()),
+            (Err(e), None) => return Err(MailboxError::Crypto(CryptoError::InvalidKey(e.to_string()))),
+        };
         *self.server_pubkey.write().await = Some(server_pk);
 
         // Persist to settings for next startup (as base64)

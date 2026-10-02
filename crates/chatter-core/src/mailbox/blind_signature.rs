@@ -17,8 +17,10 @@ use ed25519_dalek::{Signature, VerifyingKey};
 use rsa::pkcs8::DecodePublicKey;
 use rsa::PublicKeyParts;
 
-use crate::error::MailboxError;
-use crate::network::grpc::AnonymousKtClient;
+use std::future::Future;
+
+use crate::error::{MailboxError, NetworkError};
+use crate::proto::chat_v1::GetConsistencyProofResponse;
 use crate::services::signal::kt_anchor;
 use crate::storage::repositories::SettingsRepository;
 
@@ -75,7 +77,7 @@ impl ServerPublicKey {
     /// Authenticate the complete rotating manifest against the compile-time KT pin,
     /// and require the KT log to commit to it. Raw DER is deliberately not a
     /// public construction path. Also the check for a cached manifest; a fresh
-    /// one goes through [`Self::from_fetched_manifest`].
+    /// one goes through [`Self::fetch_manifest`].
     pub fn from_manifest(
         manifest: &GetBlindSignaturePublicKeyResponse,
     ) -> Result<Self, MailboxError> {
@@ -87,28 +89,41 @@ impl ServerPublicKey {
         Self::verify_manifest_at(manifest, &crate::config::KT_TREE_HEAD_PUBLIC_KEY_BYTES, now)
     }
 
-    /// A manifest just fetched from the server: [`Self::from_manifest`], then
-    /// its tree head held to the one this device pinned from every other KT
-    /// proof (`kt_anchor`), so a log forked for this client alone is refused.
-    pub async fn from_fetched_manifest(
-        manifest: &GetBlindSignaturePublicKeyResponse,
+    /// Fetch the manifest with `fetch`, check it with [`Self::from_manifest`],
+    /// then hold its tree head to the one this device pinned from every other
+    /// KT proof (`kt_anchor`), so a log forked for this client alone is
+    /// refused. `fetch_consistency` is the anonymous KT client's RPC.
+    ///
+    /// The fetch runs under the pin lock (`kt_anchor::lock_pin`): a manifest
+    /// fetched before a concurrent check advanced the pin carries an older head
+    /// than the pin, and would be rejected as a rollback.
+    pub async fn fetch_manifest<M, MFut, C, CFut>(
+        fetch: M,
         settings: &SettingsRepository,
-        kt: &mut AnonymousKtClient,
-    ) -> Result<Self, MailboxError> {
-        let key = Self::from_manifest(manifest)?;
+        fetch_consistency: C,
+    ) -> Result<(GetBlindSignaturePublicKeyResponse, Self), MailboxError>
+    where
+        M: FnOnce() -> MFut,
+        MFut: Future<Output = Result<GetBlindSignaturePublicKeyResponse, MailboxError>>,
+        C: FnOnce(u64, u64) -> CFut,
+        CFut: Future<Output = Result<GetConsistencyProofResponse, NetworkError>>,
+    {
+        let pin = kt_anchor::lock_pin().await;
+        let manifest = fetch().await?;
+        let key = Self::from_manifest(&manifest)?;
         let sth = manifest
             .kt_proof
             .as_ref()
             .and_then(|p| p.signed_tree_head.as_ref())
             .ok_or_else(|| MailboxError::InvalidServerKey("manifest has no tree head".into()))?;
-        kt_anchor::hold_head(settings, sth, |old, new| kt.get_consistency_proof(old, new))
+        kt_anchor::hold_head_locked(&pin, settings, sth, fetch_consistency)
             .await
             .map_err(|e| {
             MailboxError::InvalidServerKey(format!(
                 "manifest tree head contradicts this device's pinned head: {e}"
             ))
         })?;
-        Ok(key)
+        Ok((manifest, key))
     }
 
     fn verify_manifest_at(
@@ -613,6 +628,40 @@ pub(crate) mod tests {
             m.kt_proof.as_ref().unwrap(),
         )
         .is_err());
+    }
+
+    /// The manifest is fetched only once the pin lock is held, so its head
+    /// cannot predate a pin another check advanced meanwhile.
+    #[tokio::test]
+    async fn manifest_is_fetched_under_the_pin_lock() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        let Some(m) = kt_manifest_vector() else { return };
+        let dir = tempfile::tempdir().unwrap();
+        let db = std::sync::Arc::new(
+            crate::storage::Database::open(&dir.path().join("kt.db"), "testpass").unwrap(),
+        );
+        db.run_migrations().unwrap();
+        let settings = SettingsRepository::new(db);
+
+        let fetched = AtomicBool::new(false);
+        let pin = kt_anchor::lock_pin().await;
+        let other_check = async {
+            tokio::task::yield_now().await;
+            assert!(!fetched.load(Ordering::SeqCst), "fetched while another check held the pin");
+            drop(pin);
+        };
+        let fetch = ServerPublicKey::fetch_manifest(
+            || async {
+                fetched.store(true, Ordering::SeqCst);
+                Ok(m)
+            },
+            &settings,
+            |_, _| async { Err(NetworkError::ConnectionFailed("first pin needs no proof".into())) },
+        );
+        let ((), result) = tokio::join!(other_check, fetch);
+        assert_eq!(result.unwrap().1.key_id, "vector-current");
+        assert!(fetched.load(Ordering::SeqCst));
+        assert!(kt_anchor::pinned_head(&settings).is_some());
     }
 
     #[test]
