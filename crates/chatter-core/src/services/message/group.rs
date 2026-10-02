@@ -822,6 +822,26 @@ impl MessageService {
         Ok(())
     }
 
+    /// Sender-asserted timestamp (epoch nanos) of a group message, read from
+    /// the `GroupEncrypted` envelope.
+    ///
+    /// That proto is the `EncryptedData` ciphertext the server stores and
+    /// returns whole. Its `timestamp` sits beside the sender-key ciphertext,
+    /// so a recipient that cannot decrypt still has it. The outer
+    /// `Message.timestamp` is the server's receive time and is not a name
+    /// for the message. `None` when the envelope does not carry one.
+    fn group_envelope_timestamp_ns(proto_msg: &crate::proto::chat_v1::Message) -> Option<u64> {
+        use crate::proto::chat_v1::message::content::Type;
+        use crate::proto::content_v1::GroupEncrypted;
+        use prost::Message as _;
+
+        let Some(Type::Encrypted(enc)) = proto_msg.content.as_ref().and_then(|c| c.r#type.as_ref()) else {
+            return None;
+        };
+        let ge = GroupEncrypted::decode(enc.ciphertext.as_slice()).ok()?;
+        (ge.timestamp != 0).then_some(ge.timestamp)
+    }
+
     /// RECEIVER half of Signal's sender-key retry: ask the device that sent a
     /// group message we cannot decrypt to resend it pairwise.
     ///
@@ -829,6 +849,9 @@ impl MessageService {
     /// message it sent before we held the key ("old counter") is unreadable
     /// here for good; only the sender can give us the content again
     /// (Signal-Desktop `onRetryRequest`). One request per (message, device).
+    /// The DecryptionErrorMessage names the original by the sender-asserted
+    /// envelope timestamp ([`Self::group_envelope_timestamp_ns`]), the same
+    /// clock the sender stored as `sent_at`.
     pub async fn request_group_resend(
         &self,
         channel_id: ChannelId,
@@ -848,6 +871,14 @@ impl MessageService {
         if us == (Some(sender_id), Some(device_id)) {
             return;
         }
+        // The clock the sender put on the envelope. The server's
+        // Message.timestamp is receive time and does not match the sender's
+        // sent_at, so a DecryptionErrorMessage named with it is dropped.
+        let Some(named_ns) = Self::group_envelope_timestamp_ns(proto_msg) else {
+            tracing::warn!(%channel_id, %sender_id, device_id, message_id = %proto_msg.id,
+                "Group message envelope has no sender timestamp; not asking for a resend by server receive time");
+            return;
+        };
         // Already held — decrypted before (then "old counter" is a genuine
         // duplicate), or recovered by an earlier resend (stored under the
         // server id it carries, and the same (sender, sent_at)).
@@ -859,7 +890,7 @@ impl MessageService {
             .is_some()
             || self
                 .message_repo
-                .get_by_conversation_sender_timestamp(&channel_id, &sender_id, proto_msg.timestamp)
+                .get_by_conversation_sender_timestamp(&channel_id, &sender_id, named_ns)
                 .ok()
                 .flatten()
                 .is_some();
@@ -867,15 +898,17 @@ impl MessageService {
             return;
         }
         // A retired device will never answer, and the server refuses to queue
-        // anything for it.
+        // anything for it. The server receive time is what this check compares
+        // to our device list.
         if self.is_retired_device(sender_id, device_id, proto_msg.timestamp).await {
             tracing::info!(%channel_id, %sender_id, device_id, message_id = %proto_msg.id,
                 "Group message from a retired device is unrecoverable; dropped");
             return;
         }
         // Recorded before the request goes out, so the answer cannot race it.
+        // Keyed by the sender clock the resend's DataMessage will carry.
         self.solicited_resends
-            .insert((channel_id, sender_id, proto_msg.timestamp / 1_000_000));
+            .insert((channel_id, sender_id, named_ns / 1_000_000));
         {
             let mut asked = self.group_retry_requests.lock();
             // ponytail: cleared wholesale at 4096 entries; a forgotten entry
@@ -890,7 +923,7 @@ impl MessageService {
 
         let dem = match crate::services::signal::SignalService::group_decryption_error(
             ciphertext,
-            proto_msg.timestamp,
+            named_ns,
             device_id,
         ) {
             Ok(dem) => dem,
@@ -967,10 +1000,11 @@ impl MessageService {
     }
 
     /// SENDER half of Signal's sender-key retry: `peer_id`'s device could not
-    /// decrypt the group message we sent at `timestamp_ms` (server time, epoch
-    /// millis). Resend its content pairwise to that one device, as a
-    /// `DataMessage` stamped with the message's server timestamp so the peer
-    /// files it under the same (sender, sent_at) as the copy it could not read.
+    /// decrypt the group message we sent at `timestamp_ms` (the sender-asserted
+    /// envelope clock, epoch millis — not the server receive time). Resend its
+    /// content pairwise to that one device, as a `DataMessage` stamped with
+    /// that same `sent_at` so the peer files it under the same (sender, sent_at)
+    /// as the copy it could not read.
     ///
     /// Bounded like Signal-Desktop's send log: only our own messages, only for
     /// 24h, and only to a device of a CURRENT member of that channel — a
@@ -1105,9 +1139,9 @@ impl MessageService {
             body,
             attachments,
             channel_id: message.conversation_id.to_string(),
-            // The SERVER timestamp, not the original client clock: it is the
-            // sent_at every member files this message (and its reactions,
-            // edits, deletes) under.
+            // The sender-asserted clock (DataMessage and GroupEncrypted
+            // timestamp), not the server receive time. Members file this
+            // message, and this resend, under that sent_at.
             timestamp: message.sent_at,
             quote: self.build_wire_quote(quote.as_ref()),
             thread_id: message.thread_id.map(|id| id.to_string()).unwrap_or_default(),
@@ -1471,18 +1505,27 @@ mod tests {
         let (alice, bob) = (&t.alice, &t.bob);
         let (alice_id, bob_id, channel_id) = (t.alice_id, t.bob_id, t.channel_id);
 
-        // Alice sends before Bob holds her key; the server stamps it T.
+        // Alice's client clock and the server's receive time differ by more
+        // than a millisecond, and both are inside the 24h resend window.
+        // The row and the GroupEncrypted envelope use her clock; the outer
+        // Message.timestamp is the server's.
+        let server_ts = TimestampNanos::now().as_u64();
+        let client_ts = server_ts - 5_000_000_000;
+        assert_ne!(client_ts / 1_000_000, server_ts / 1_000_000);
+
         let plaintext = content_v1::Content {
             content: Some(content_v1::content::Content::DataMessage(content_v1::DataMessage {
                 body: "sent before the SKDM".into(),
                 channel_id: channel_id.to_string(),
+                timestamp: client_ts,
                 ..Default::default()
             })),
+            timestamp: client_ts,
             ..Default::default()
         }
         .encode_to_vec();
-        let (ge, _) = alice.signal().encrypt_for_group(&channel_id, &plaintext).await.unwrap();
-        let server_ts = TimestampNanos::now().as_u64();
+        let (mut ge, _) = alice.signal().encrypt_for_group(&channel_id, &plaintext).await.unwrap();
+        ge.timestamp = client_ts;
         let message_id = MessageId::new();
         alice
             .messages()
@@ -1494,7 +1537,7 @@ mod tests {
                     ConversationType::Channel,
                     Some(alice_id),
                     "sent before the SKDM".into(),
-                    server_ts,
+                    client_ts,
                 )
             })
             .unwrap();
@@ -1508,15 +1551,21 @@ mod tests {
             "positive control: the pre-SKDM message is unreadable on its own");
 
         // Bob's DEM names a sender-key message: no ratchet key, so Alice's
-        // gateway resends instead of archiving their 1:1 session.
-        let dem_bytes = crate::services::signal::SignalService::group_decryption_error(&ge.ciphertext, server_ts, 1).unwrap();
+        // gateway resends instead of archiving their 1:1 session. It names
+        // Alice's envelope clock, not the server receive time.
+        let dem_bytes = crate::services::signal::SignalService::group_decryption_error(&ge.ciphertext, client_ts, 1).unwrap();
         let dem = libsignal_protocol::DecryptionErrorMessage::try_from(dem_bytes.as_slice()).unwrap();
         assert!(dem.ratchet_key().is_none());
         assert_eq!(dem.device_id(), 1);
         let ts_ms = dem.timestamp().epoch_millis();
+        assert_eq!(ts_ms, client_ts / 1_000_000);
+        assert_ne!(ts_ms, server_ts / 1_000_000);
 
-        // Alice's resend bounds: a non-member gets nothing back.
+        // Alice's resend bounds: a non-member gets nothing back, and the
+        // server's receive time is not a key she stored.
         assert!(alice.messages().group_resend_content(&UserId::new(), ts_ms).unwrap().is_none());
+        assert!(alice.messages().group_resend_content(&bob_id, server_ts / 1_000_000).unwrap().is_none(),
+            "the server timestamp must not match the sender's sent_at");
         let resent = alice.messages().group_resend_content(&bob_id, ts_ms).unwrap()
             .expect("Alice finds the message she sent at that timestamp");
 
@@ -1540,13 +1589,16 @@ mod tests {
             if !m.solicited_resends.is_empty() { break; }
             tokio::task::yield_now().await;
         }
-        assert!(m.solicited_resends.contains(&(channel_id, alice_id, server_ts / 1_000_000)));
+        assert!(m.solicited_resends.contains(&(channel_id, alice_id, client_ts / 1_000_000)),
+            "the resend request is keyed by the sender's envelope timestamp");
+        assert!(!m.solicited_resends.contains(&(channel_id, alice_id, server_ts / 1_000_000)),
+            "the resend request must not be keyed by the server receive time");
         gateway.store_data_message(dm, Some(alice_id)).await.unwrap();
         let stored = m
             .message_repo
-            .get_by_conversation_sender_timestamp(&channel_id, &alice_id, server_ts)
+            .get_by_conversation_sender_timestamp(&channel_id, &alice_id, client_ts)
             .unwrap()
-            .expect("the recovered message is filed under the server timestamp");
+            .expect("the recovered message is filed under the sender's sent_at");
         assert_eq!(stored.content, MessageContent::Text("sent before the SKDM".into()));
         assert_eq!(stored.id, message_id,
             "the recovered message keeps the server id the other members hold");

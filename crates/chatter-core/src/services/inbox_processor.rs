@@ -1073,7 +1073,7 @@ impl InboxEventProcessor {
                                 tracing::warn!(
                                     peer_id = %friend_id,
                                     error = %e,
-                                    "FriendAccepted: profile-key handshake send failed"
+                                    "FriendAccepted: profile-key handshake not delivered; retries exhausted or no longer friends"
                                 );
                             }
                         });

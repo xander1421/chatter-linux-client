@@ -161,6 +161,7 @@ impl MessageService {
             content,
             is_dm,
             require_encryption,
+            sent_at,
         ).await?;
 
         // If a new sender key was created, distribute SKDM to channel members
@@ -1065,6 +1066,7 @@ impl MessageService {
         original_content: chat_v1::message::Content,
         is_dm: bool,
         require_encryption: bool,
+        sent_at: u64,
     ) -> Result<(chat_v1::message::Content, Option<crate::proto::content_v1::SenderKeyDistribution>), MessageError> {
         // DM: Use sealed sender (pairwise encryption)
         // Multi-device: encrypt for ALL recipient devices, send primary ciphertext
@@ -1136,9 +1138,14 @@ impl MessageService {
         // Encrypted channel: Use sender keys (group encryption)
         if require_encryption {
             match self.signal_service.encrypt_for_group(channel_id, plaintext).await {
-                Ok((group_encrypted, skdm_opt)) => {
+                Ok((mut group_encrypted, skdm_opt)) => {
                     use prost::Message;
-                    // Serialize GroupEncrypted proto and pack into EncryptedData
+                    // encrypt_for_group stamps a later now(). The envelope
+                    // timestamp is outside the sender-key ciphertext, and it
+                    // is the clock a recipient names in a DecryptionErrorMessage
+                    // when it cannot decrypt. It has to be the same sender
+                    // clock as the DataMessage and the local row (`sent_at`).
+                    group_encrypted.timestamp = sent_at;
                     let group_bytes = group_encrypted.encode_to_vec();
 
                     let encrypted_content = chat_v1::message::Content {

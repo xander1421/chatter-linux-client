@@ -313,18 +313,46 @@ impl MessageService {
     /// message to carry it (`send_server_dm`'s `inject_profile_key_if_sharing`).
     /// The gateway recognizes the empty body and stores the key without
     /// creating a visible message (`store_data_message`).
+    ///
+    /// Nothing else re-sends the key until a real message carries it, so one
+    /// lost send left the friend showing "User <id>". A failed send is retried
+    /// with backoff ([`PROFILE_KEY_RETRY`]) until the server accepts it, the
+    /// peer is no longer a friend, or the attempts run out. Not persisted: an
+    /// app restart mid-retry ends it.
     pub async fn send_profile_key_handshake(&self, peer_id: &UserId) -> Result<(), MessageError> {
-        let content = crate::services::build_data_message_content(
-            "",
-            vec![],
-            crate::util::time::TimestampNanos::now().as_u64(),
-        );
+        retry_while(
+            PROFILE_KEY_RETRY,
+            move || async move {
+                let content = crate::services::build_data_message_content(
+                    "",
+                    vec![],
+                    crate::util::time::TimestampNanos::now().as_u64(),
+                );
+                // Auto-enables profile sharing with an accepted friend and sets
+                // `profile_key` on the DataMessage.
+                let content = self.inject_profile_key_if_sharing(peer_id, content)?;
+                match self.send_friend_dm_content(peer_id, content).await {
+                    // Shield without a mailbox yet: queued for the bootstrap
+                    // flush, which delivers it.
+                    Ok(()) | Err(MessageError::BootstrapInitiated) => Ok(()),
+                    Err(e) => Err(e),
+                }
+            },
+            || self.is_accepted_friend(peer_id),
+        )
+        .await
+    }
 
-        // Auto-enables profile sharing with an accepted friend and sets
-        // `profile_key` on the DataMessage.
-        let content = self.inject_profile_key_if_sharing(peer_id, content)?;
-
-        self.send_friend_dm_content(peer_id, content).await
+    /// Whether `peer_id` is an accepted friend, in either direction of the
+    /// original request (`UserService::is_friend_local`).
+    fn is_accepted_friend(&self, peer_id: &UserId) -> bool {
+        let Ok(me) = self.settings_repo.current_user_id() else { return false };
+        [(me, *peer_id), (*peer_id, me)].iter().any(|(a, b)| {
+            matches!(
+                self.user_repo.get_friendship(a, b),
+                Ok(Some(f)) if f.status == crate::domain::user::FriendshipStatus::Accepted
+            )
+        })
     }
 
     /// Change the disappearing-messages timer of the DM with `peer_id`
@@ -926,9 +954,87 @@ pub(super) struct DepositOutcome {
     pub(super) deposits: Vec<(u32, u64)>,
 }
 
+/// Attempts and backoff for [`MessageService::send_profile_key_handshake`]:
+/// 1s, 2s, 4s … capped at 60s, eight attempts (about two minutes).
+const PROFILE_KEY_RETRY: Backoff = Backoff {
+    attempts: 8,
+    first: std::time::Duration::from_secs(1),
+    max: std::time::Duration::from_secs(60),
+};
+
+#[derive(Clone, Copy)]
+struct Backoff {
+    attempts: u32,
+    first: std::time::Duration,
+    max: std::time::Duration,
+}
+
+/// Run `attempt` until it succeeds, retrying with doubling delays while
+/// `wanted()` still holds after each wait. Returns the last error otherwise.
+async fn retry_while<A, Fut>(
+    backoff: Backoff,
+    mut attempt: A,
+    wanted: impl Fn() -> bool,
+) -> Result<(), MessageError>
+where
+    A: FnMut() -> Fut,
+    Fut: std::future::Future<Output = Result<(), MessageError>>,
+{
+    let mut delay = backoff.first;
+    let mut n = 1;
+    loop {
+        let error = match attempt().await {
+            Ok(()) => return Ok(()),
+            Err(e) => e,
+        };
+        if n >= backoff.attempts {
+            return Err(error);
+        }
+        tracing::warn!(attempt = n, retry_in_ms = delay.as_millis() as u64, %error, "send failed; retrying");
+        tokio::time::sleep(delay).await;
+        if !wanted() {
+            return Err(error);
+        }
+        delay = (delay * 2).min(backoff.max);
+        n += 1;
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::pick_sealed_access_key;
+
+    #[tokio::test]
+    async fn retry_while_retries_until_success_and_stops_when_unwanted() {
+        use super::{retry_while, Backoff, MessageError};
+        use std::cell::Cell;
+        let quick = Backoff {
+            attempts: 5,
+            first: std::time::Duration::from_millis(1),
+            max: std::time::Duration::from_millis(2),
+        };
+        let fail = || MessageError::DmError("transient".into());
+
+        // Two transient failures, then delivered.
+        let calls = Cell::new(0);
+        let ok = retry_while(quick, || {
+            calls.set(calls.get() + 1);
+            let n = calls.get();
+            async move { if n < 3 { Err(fail()) } else { Ok(()) } }
+        }, || true).await;
+        assert!(ok.is_ok());
+        assert_eq!(calls.get(), 3);
+
+        // Bounded: gives up after `attempts`.
+        let calls = Cell::new(0);
+        assert!(retry_while(quick, || { calls.set(calls.get() + 1); async { Err(fail()) } }, || true).await.is_err());
+        assert_eq!(calls.get(), 5);
+
+        // No longer a friend: no further attempt.
+        let calls = Cell::new(0);
+        assert!(retry_while(quick, || { calls.set(calls.get() + 1); async { Err(fail()) } }, || false).await.is_err());
+        assert_eq!(calls.get(), 1);
+    }
 
     #[test]
     fn deposit_failure_keeps_typed_retry_and_permanent_causes() {

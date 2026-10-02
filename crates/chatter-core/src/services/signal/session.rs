@@ -77,6 +77,7 @@ impl SignalService {
     /// "no leaf".
     async fn check_tree_head_consistency(
         &self,
+        pin: &kt_anchor::PinGuard,
         auth_client: &mut AuthClient,
         recipient_id: &str,
         proof: &crate::proto::chat_v1::GetProofResponse,
@@ -87,60 +88,33 @@ impl SignalService {
             ));
         };
 
-        let action = kt_anchor::classify_head(&self.settings_repo, sth).map_err(|e| {
-            tracing::error!(
-                recipient = %recipient_id,
-                offered_epoch = sth.epoch,
-                error = %e,
-                "KT REJECT: the offered tree head contradicts the head this device already \
-                 accepted — fork, rollback or split view"
-            );
-            ServiceError::Validation(format!(
-                "Key Transparency consistency check failed for {recipient_id}: {e}"
-            ))
-        })?;
-
-        let (old_epoch, new_epoch) = match action {
-            kt_anchor::AnchorAction::Settled(kt_anchor::AnchorOutcome::FirstPin) => {
+        match kt_anchor::hold_head_locked(pin, &self.settings_repo, sth, |old, new| {
+            auth_client.get_consistency_proof(old, new)
+        })
+        .await
+        {
+            Ok(kt_anchor::AnchorOutcome::FirstPin) => {
                 tracing::info!(
                     epoch = sth.epoch,
                     "KT: pinned the transparency log's tree head for the first time"
                 );
-                return Ok(());
+                Ok(())
             }
-            kt_anchor::AnchorAction::Settled(_) => return Ok(()),
-            kt_anchor::AnchorAction::NeedsProof { old_epoch, new_epoch } => (old_epoch, new_epoch),
-        };
-
-        let resp = auth_client
-            .get_consistency_proof(old_epoch, new_epoch)
-            .await
-            .map_err(|e| {
-                tracing::error!(
-                    old_epoch, new_epoch, error = %e,
-                    "KT REJECT: could not fetch the consistency proof"
-                );
-                ServiceError::Validation(format!(
-                    "Key Transparency consistency check failed for {recipient_id}: {}",
-                    KtError::ConsistencyUnavailable
-                ))
-            })?;
-
-        match kt_anchor::accept_advance(&self.settings_repo, sth, &resp) {
-            Ok(_) => {
+            Ok(kt_anchor::AnchorOutcome::Advanced) => {
                 tracing::info!(
-                    old_epoch,
-                    new_epoch,
+                    new_epoch = sth.epoch,
                     "KT: advanced the pinned tree head; log verified append-only"
                 );
                 Ok(())
             }
+            Ok(kt_anchor::AnchorOutcome::Unchanged) => Ok(()),
             Err(e) => {
                 tracing::error!(
                     recipient = %recipient_id,
-                    old_epoch, new_epoch, error = %e,
-                    "KT REJECT: the transparency log is NOT append-only between the head this \
-                     device pinned and the one now offered — the log was rewritten"
+                    offered_epoch = sth.epoch,
+                    error = %e,
+                    "KT REJECT: the offered tree head is not consistent with the head this \
+                     device pinned — fork, rollback, split view or rewritten log"
                 );
                 Err(ServiceError::Validation(format!(
                     "Key Transparency consistency check failed for {recipient_id}: {e}"
@@ -160,6 +134,10 @@ impl SignalService {
             .map_err(|e| ServiceError::Validation(format!("bundle missing identity key: {e}")))?
             .serialize();
 
+        // Held from the proof fetch through the pin update, so this head is
+        // never older than a pin a concurrent check just advanced
+        // (`kt_anchor::lock_pin`).
+        let pin = kt_anchor::lock_pin().await;
         match auth_client.get_key_transparency_proof(recipient_id).await {
             Ok(Some(proof)) => {
                 match crate::crypto::verify_kt_proof(recipient_id, &identity_key, &proof) {
@@ -178,7 +156,7 @@ impl SignalService {
                         // server just signed. It says nothing about WHICH tree,
                         // so on its own it cannot see a fork or a rollback.
                         // Pin the head across time as well.
-                        self.check_tree_head_consistency(auth_client, recipient_id, &proof).await
+                        self.check_tree_head_consistency(&pin, auth_client, recipient_id, &proof).await
                     }
                     // `Malformed` means the proof doesn't even have the shape
                     // this verifier expects (e.g. missing prefix_root) — that's
@@ -593,7 +571,15 @@ impl SignalService {
         // without this the stale post-reinstall session is reused silently.
         self.refuse_pending_identity_change(recipient_id)?;
 
-        let this_device = (self.settings_repo.get_string(keys::CURRENT_USER_ID).ok().flatten().as_deref()
+        // Single-flight per recipient. Concurrent first sends to one peer (a
+        // new friend's prewarm and profile-key send) each fetched a bundle —
+        // popping a one-time prekey apiece — and built a session over the
+        // other's. The one that waits here finds the device list the first
+        // recorded below and reuses its sessions.
+        let build_lock = self.get_encrypt_lock(&format!("{recipient_id}:establish")).await;
+        let _build = build_lock.lock().await;
+
+        let this_device =(self.settings_repo.get_string(keys::CURRENT_USER_ID).ok().flatten().as_deref()
             == Some(recipient_id))
             .then(|| self.settings_repo.get::<u32>(keys::CURRENT_DEVICE_ID).ok().flatten())
             .flatten();

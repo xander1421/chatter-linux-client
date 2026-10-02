@@ -164,19 +164,20 @@ impl SignalService {
     /// A sender-key DEM carries no ratchet key (libsignal `for_original`
     /// ignores the ciphertext for `SenderKey`), which is how the sender tells
     /// it apart from a 1:1 desync and resends the content instead of archiving
-    /// a session. `server_timestamp_ns` is the message's server timestamp —
-    /// the one value both sides hold for it — carried as epoch millis like
-    /// Signal's sent timestamp.
+    /// a session. `sent_timestamp_ns` is the timestamp the SENDER stamped into
+    /// the `GroupEncrypted` envelope — the value its resend lookup keys on —
+    /// never the server receive time; carried as epoch millis like Signal's
+    /// sent timestamp.
     pub fn group_decryption_error(
         ciphertext: &[u8],
-        server_timestamp_ns: u64,
+        sent_timestamp_ns: u64,
         sender_device_id: u32,
     ) -> Result<Vec<u8>, ServiceError> {
         use libsignal_protocol::{CiphertextMessageType, DecryptionErrorMessage, Timestamp};
         DecryptionErrorMessage::for_original(
             ciphertext,
             CiphertextMessageType::SenderKey,
-            Timestamp::from_epoch_millis(server_timestamp_ns / 1_000_000),
+            Timestamp::from_epoch_millis(sent_timestamp_ns / 1_000_000),
             sender_device_id,
         )
         .map(|dem| dem.serialized().to_vec())

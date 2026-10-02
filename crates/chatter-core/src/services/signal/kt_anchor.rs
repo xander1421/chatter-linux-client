@@ -163,6 +163,30 @@ pub fn accept_advance(
     Ok(AnchorOutcome::Advanced)
 }
 
+/// Serializes every read-check-write of the pin.
+///
+/// [`classify_head`] reads the pin and [`accept_advance`] writes it, with a
+/// consistency-proof fetch in between. Two callers checking the same new head
+/// concurrently (a prewarm and a profile-key send for one new friend, both
+/// establishing a session) used to both see `NeedsProof` from the old pin; the
+/// first advanced it, and the second's proof no longer started at the pin, so
+/// it was REJECTED as a rewritten log and its session refused.
+///
+/// One lock for the process, not per database: a client process holds one
+/// account, and the critical section is one proof fetch. A process hosting
+/// many accounts (the test harness) only serializes those fetches.
+static PIN_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+/// Proof that the caller holds [`PIN_LOCK`].
+pub type PinGuard = tokio::sync::MutexGuard<'static, ()>;
+
+/// Take [`PIN_LOCK`]. Hold it across fetching the head too when the head comes
+/// from a fresh KT proof: a head fetched before another caller advanced the pin
+/// would otherwise be older than the pin and be rejected as a rollback.
+pub async fn lock_pin() -> PinGuard {
+    PIN_LOCK.lock().await
+}
+
 /// [`classify_head`] then, for a newer head, [`accept_advance`] with the proof
 /// `fetch` returns for the pinned->offered range (callers pass the anonymous
 /// KT client). Any failure, fetch included, rejects: an error must not be a
@@ -172,6 +196,21 @@ pub fn accept_advance(
 /// `fetch` is `FnOnce` by value, so the future stays `Send` without the
 /// `RefCell` an earlier callback design needed (see [`classify_head`]).
 pub async fn hold_head<F, Fut>(
+    settings: &SettingsRepository,
+    sth: &SignedTreeHead,
+    fetch: F,
+) -> Result<AnchorOutcome, KtError>
+where
+    F: FnOnce(u64, u64) -> Fut,
+    Fut: Future<Output = Result<GetConsistencyProofResponse, NetworkError>>,
+{
+    let pin = lock_pin().await;
+    hold_head_locked(&pin, settings, sth, fetch).await
+}
+
+/// [`hold_head`] for a caller already holding [`PIN_LOCK`].
+pub async fn hold_head_locked<F, Fut>(
+    _pin: &PinGuard,
     settings: &SettingsRepository,
     sth: &SignedTreeHead,
     fetch: F,
@@ -366,6 +405,44 @@ mod tests {
         let outcome = hold_head(&s, &new, fetch_ok(resp, &mut asked)).await.unwrap();
         assert_eq!(outcome, AnchorOutcome::Advanced);
         assert_eq!(asked, Some((3, 5)), "the proof is fetched for exactly pinned->offered");
+        assert_eq!(pinned_head(&s).unwrap().epoch, 5);
+    }
+
+    /// Two concurrent checks of the same new head (V34: a new friend's prewarm
+    /// and profile-key send each establishing a session). The second must see
+    /// the advanced pin, not reject its own proof as a rewritten log.
+    #[tokio::test]
+    async fn concurrent_checks_of_one_new_head_both_pass() {
+        let Some(resp) = dev_consistency_vector() else { return };
+        let (s, _dir) = settings();
+        let old = resp.old_signed_tree_head.clone().unwrap();
+        let new = resp.new_signed_tree_head.clone().unwrap();
+        classify_head(&s, &old).unwrap();
+
+        // The interleaving the lock forbids: both classify against the old
+        // pin, the first advances it, the second's proof no longer starts there.
+        let needs = AnchorAction::NeedsProof { old_epoch: 3, new_epoch: 5 };
+        assert_eq!(classify_head(&s, &new).unwrap(), needs);
+        assert_eq!(classify_head(&s, &new).unwrap(), needs);
+        assert_eq!(accept_advance(&s, &new, &resp).unwrap(), AnchorOutcome::Advanced);
+        assert_eq!(accept_advance(&s, &new, &resp).unwrap_err(), KtError::ConsistencyRootMismatch);
+        let (s, _dir) = settings();
+        classify_head(&s, &old).unwrap();
+
+        let fetch = |resp: GetConsistencyProofResponse| {
+            move |_, _| async move {
+                // Let the other check run between classify and accept.
+                tokio::task::yield_now().await;
+                Ok::<_, NetworkError>(resp)
+            }
+        };
+        let (a, b) = tokio::join!(
+            hold_head(&s, &new, fetch(resp.clone())),
+            hold_head(&s, &new, fetch(resp)),
+        );
+        let mut outcomes = [a.unwrap(), b.unwrap()];
+        outcomes.sort_by_key(|o| *o as u8);
+        assert_eq!(outcomes, [AnchorOutcome::Unchanged, AnchorOutcome::Advanced]);
         assert_eq!(pinned_head(&s).unwrap().epoch, 5);
     }
 
