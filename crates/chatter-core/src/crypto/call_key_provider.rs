@@ -444,15 +444,25 @@ impl CallKeyState {
         &self.call_id
     }
 
-    /// Replace the current key with a new random key (for member-leave rotation).
+    /// Make `key` this chain's key at `epoch`, replacing the current one.
     ///
-    /// Unlike `ratchet()` which derives deterministically from the current key,
-    /// this replaces the key entirely. The departed member cannot derive the
-    /// new key since it's randomly generated. The caller must redistribute
-    /// the new key to remaining participants.
-    pub fn reset(&mut self, new_key: [u8; 32]) {
-        self.current_key = new_key;
-        self.epoch += 1;
+    /// The one way a group-call key enters a chain from outside it: the
+    /// initiator's member-leave rotation adopts a fresh random key at
+    /// `epoch() + 1`, and every other participant adopts the `(key, epoch)`
+    /// it is sent — so all hold the same key at the same epoch, and the
+    /// periodic [`ratchet`](Self::ratchet) continues from it identically.
+    /// Unlike `ratchet()` the key is not derived from the old chain, so a
+    /// departed member cannot follow.
+    ///
+    /// Returns false — and changes nothing — unless `epoch` is ahead of ours:
+    /// a key for an epoch we already hold or passed is stale.
+    pub fn adopt(&mut self, key: [u8; 32], epoch: u32) -> bool {
+        if epoch <= self.epoch {
+            return false;
+        }
+        self.current_key = key;
+        self.epoch = epoch;
+        true
     }
 
     /// Ratchet the key forward (for long-running calls).
@@ -780,7 +790,7 @@ mod tests {
 
         // Reset with a new random key
         let new_key = [42u8; 32];
-        state.reset(new_key);
+        assert!(state.adopt(new_key, 2));
         assert_eq!(state.epoch(), 2);
         assert_ne!(*state.current_key(), initial_key);
         assert_ne!(*state.current_key(), ratcheted_key);
@@ -794,7 +804,7 @@ mod tests {
 
     #[test]
     fn test_key_state_reset_breaks_chain() {
-        // Verify that reset() produces a key the old chain can't derive
+        // Verify that adopt() produces a key the old chain can't derive
         let shared_secret = [1u8; 32];
         let mut state_a = CallKeyState::new(&shared_secret, "test-call").unwrap();
         let mut state_b = CallKeyState::new(&shared_secret, "test-call").unwrap();
@@ -804,7 +814,7 @@ mod tests {
 
         // A resets with new key (member left), B continues ratcheting (departed member)
         let new_key = generate_group_call_key();
-        state_a.reset(new_key);
+        assert!(state_a.adopt(new_key, 1));
         state_b.ratchet().unwrap();
 
         // Keys must differ — departed member can't derive the rotated key

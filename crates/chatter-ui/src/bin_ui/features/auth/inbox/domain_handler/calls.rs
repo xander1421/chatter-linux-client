@@ -38,11 +38,12 @@ pub(super) fn handle_call_key_offer(
     );
 }
 
-// NOTE: CallKeyAnswerReceived and GroupCallKeyReceived are handled by
-// calls/event_handlers.rs (wire_call_key_answer_handler), which delegates
-// to key_exchange::handle_call_key_answer for ECDH key derivation and
-// call_service.set_encryption_key for group keys. The domain_handler
-// arms for these events are intentional no-ops.
+// NOTE: CallKeyAnswerReceived is handled by calls/event_handlers.rs
+// (wire_call_key_answer_handler), which delegates to
+// key_exchange::handle_call_key_answer for ECDH key derivation.
+// GroupCallKeyReceived is installed in core (ChatterClient::handle_group_call_key);
+// the UI never sees group key bytes. The domain_handler arms for these
+// events are intentional no-ops.
 
 /// Handle call hangup received — hide call UI.
 pub(super) fn handle_call_hangup(

@@ -228,6 +228,61 @@ fn render_accepted_call(
             // Media is auto-published by the call worker after connect.
         }
 
+        AcceptedIncomingCall::Group { setup, title } => {
+            let weak = weak.clone();
+            let frames = shared_frames.clone();
+            let ui_ctx = ui_ctx.clone();
+            let _ = slint::invoke_from_event_loop(move || {
+                let Some(w) = weak.upgrade() else { return };
+                // Keep the remote tiles already up: the answering view's
+                // caller tile, and any `ParticipantJoined` for the people
+                // already in the room that landed before this repaint. Each
+                // later joiner adds its own tile (room_events.rs).
+                let existing = w.get_active_call_data().participants;
+                let mut participants: Vec<CallParticipantData> = (0..existing.row_count())
+                    .filter_map(|i| existing.row_data(i))
+                    .collect();
+                participants.pop(); // the local tile, pinned last; rebuilt below
+                participants.push(CallParticipantData {
+                    user_id: current_user_id.clone().into(),
+                    display_name: my_display_name.clone().into(),
+                    initials: get_initials(&my_display_name).into(),
+                    avatar_source: w.get_user_avatar_source(),
+                    is_muted: false,
+                    is_video_enabled: setup.is_video,
+                    is_screen_sharing: false,
+                    is_speaking: false,
+                    is_audio_muted_locally: false,
+                    is_video_paused_locally: false,
+                });
+                let call_data = ActiveCallData {
+                    call_id: setup.call_id.to_string().into(),
+                    channel_id: setup.channel_id.to_string().into(),
+                    title: title.into(),
+                    is_video_call: setup.is_video,
+                    is_anonymous_call: false,
+                    is_encrypted: true,
+                    is_identity_verified: false,
+                    identity_warning: "".into(),
+                    participant_count: participants.len() as i32,
+                    duration_seconds: 0,
+                    participants: ModelRc::new(VecModel::from(participants)),
+                    verification_emoji_1: setup.verification_emojis[0].clone().into(),
+                    verification_emoji_2: setup.verification_emojis[1].clone().into(),
+                    verification_emoji_3: setup.verification_emojis[2].clone().into(),
+                    verification_emoji_4: setup.verification_emojis[3].clone().into(),
+                };
+                w.set_active_call_data(call_data);
+                w.set_call_is_muted(false);
+                w.set_call_is_video_enabled(setup.is_video);
+                w.set_call_is_screen_sharing(false);
+                w.set_active_call_visible(true);
+                start_call_timer(&w, ui_ctx.clone());
+                start_video_frame_timer(&w, frames);
+                open_call_screen(&w);
+            });
+        }
+
         AcceptedIncomingCall::Anon { setup, peer_id: _ } => {
             render_active_anon_call(
                 weak,
@@ -496,6 +551,7 @@ fn handle_orchestrator_event(
             is_video,
             is_identity_verified,
             identity_warning,
+            channel_context,
             replaces_active,
             ..
         } => {
@@ -507,6 +563,12 @@ fn handle_orchestrator_event(
                 kind,
                 OrchestratedCallKind::AnonDm | OrchestratedCallKind::AnonGroup
             );
+            // A channel group call rings with its channel ("in #team"); the
+            // modal then offers it as a group call to join.
+            let channel_name = match kind {
+                OrchestratedCallKind::GroupChannel => channel_context.unwrap_or_default(),
+                _ => String::new(),
+            };
             // Caller avatar — core owns the "server-DM profile vs anon-DM row"
             // source rule. Pass bytes (Send) and decode on the UI thread;
             // slint::Image is not Send.
@@ -525,6 +587,11 @@ fn handle_orchestrator_event(
                         is_anonymous,
                         avatar_bytes.as_deref(),
                     );
+                    if !channel_name.is_empty() {
+                        let mut data = w.get_incoming_call_data();
+                        data.channel_name = channel_name.into();
+                        w.set_incoming_call_data(data);
+                    }
                     w.set_incoming_call_replaces_active(replaces_active);
                 }
             });

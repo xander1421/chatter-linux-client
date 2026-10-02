@@ -441,6 +441,19 @@ enum CallCommand {
         new_key: [u8; 32],
         response: oneshot::Sender<Result<u32, CallError>>,
     },
+    /// Install a group-call key a participant sent us, exactly as the
+    /// rotator installed it. `Ok(false)` when `epoch` is stale.
+    InstallGroupKey {
+        call_id: CallId,
+        key: [u8; 32],
+        epoch: u32,
+        response: oneshot::Sender<Result<bool, CallError>>,
+    },
+    /// The active call's id, current key and epoch — what a late joiner
+    /// must be sent to decrypt from now on.
+    CurrentGroupKey {
+        response: oneshot::Sender<Option<(CallId, [u8; 32], u32)>>,
+    },
     /// Connect directly to LiveKit with a pre-made access token (for anonymous calls).
     ConnectWithToken {
         access_token: String,
@@ -1114,6 +1127,29 @@ impl CallWorkerHandle {
         rx.await.map_err(|_| CallError::WorkerShutdown)?
     }
 
+    /// Install a group-call `(key, epoch)` received from a participant of
+    /// `call_id`. Returns `Ok(false)` for a stale epoch, `Err(NotInCall)` when
+    /// `call_id` is not the active call.
+    pub async fn install_group_key(
+        &self,
+        call_id: CallId,
+        key: [u8; 32],
+        epoch: u32,
+    ) -> Result<bool, CallError> {
+        let (tx, rx) = oneshot::channel();
+        self.cmd_tx
+            .try_send(CallCommand::InstallGroupKey { call_id, key, epoch, response: tx })
+            .map_err(|_| CallError::WorkerShutdown)?;
+        rx.await.map_err(|_| CallError::WorkerShutdown)?
+    }
+
+    /// The active call's id with its current key and epoch, or `None`.
+    pub async fn current_group_key(&self) -> Option<(CallId, [u8; 32], u32)> {
+        let (tx, rx) = oneshot::channel();
+        self.cmd_tx.try_send(CallCommand::CurrentGroupKey { response: tx }).ok()?;
+        rx.await.ok().flatten()
+    }
+
     /// Set encryption key externally (e.g., from CallKeyState ratchet).
     ///
     /// Use this when managing keys via the Signal-based CallKeyState.
@@ -1527,23 +1563,44 @@ fn run_call_worker(
                 }
 
                 CallCommand::RotateKey { new_key, response } => {
-                    let result = {
-                        let mut call_guard = active_call.borrow_mut();
-                        if let Some(ref mut state) = *call_guard {
-                            state.key_state.reset(new_key);
-                            let epoch = state.key_state.epoch();
+                    let adopted = active_call.borrow_mut().as_mut().map(|state| {
+                        let epoch = state.key_state.epoch() + 1;
+                        adopt_group_key(&mut state.key_state, new_key, epoch)
+                    });
+                    let result = match adopted {
+                        Some(Some((epoch, key_cur, key_next))) => {
+                            room_manager.set_ratcheted_shared_key(epoch, key_cur, key_next);
                             tracing::info!(epoch, "Call key rotated after member departure");
                             Ok(epoch)
-                        } else {
-                            Err(CallError::NotInCall)
                         }
+                        // epoch() + 1 is always ahead; unreachable short of overflow.
+                        Some(None) => Err(CallError::CryptoError("key rotation rejected".into())),
+                        None => Err(CallError::NotInCall),
                     };
-
-                    if result.is_ok() {
-                        room_manager.set_encryption_key(new_key.to_vec());
-                    }
-
                     let _ = response.send(result);
+                }
+
+                CallCommand::InstallGroupKey { call_id, key, epoch, response } => {
+                    let adopted = adopt_into_call(active_call.borrow_mut().as_mut(), call_id, key, epoch);
+                    let result = adopted.map(|adopted| match adopted {
+                        Some((epoch, key_cur, key_next)) => {
+                            room_manager.set_ratcheted_shared_key(epoch, key_cur, key_next);
+                            tracing::info!(epoch, "Installed group call key from participant");
+                            true
+                        }
+                        None => {
+                            tracing::debug!(epoch, "Group call key is stale; ignored");
+                            false
+                        }
+                    });
+                    let _ = response.send(result);
+                }
+
+                CallCommand::CurrentGroupKey { response } => {
+                    let current = active_call.borrow().as_ref().map(|state| {
+                        (state.call.id, *state.key_state.current_key(), state.key_state.epoch())
+                    });
+                    let _ = response.send(current);
                 }
 
                 CallCommand::RatchetKey { response } => {
@@ -1806,6 +1863,43 @@ struct ActiveCallState {
     room_name: String,
     /// LiveKit server URL for reconnection.
     livekit_url: String,
+}
+
+/// [`adopt_group_key`] into the active call, which must be `call_id`.
+fn adopt_into_call(
+    active: Option<&mut ActiveCallState>,
+    call_id: CallId,
+    key: [u8; 32],
+    epoch: u32,
+) -> Result<Option<(u32, Vec<u8>, Vec<u8>)>, CallError> {
+    match active {
+        Some(state) if state.call.id == call_id => Ok(adopt_group_key(&mut state.key_state, key, epoch)),
+        _ => Err(CallError::NotInCall),
+    }
+}
+
+/// Adopt a group-call `key` at `epoch` into `key_state`, returning what to
+/// hand LiveKit: the epoch (= shared-key index), its key, and the next
+/// epoch's pre-installed key — the same shape the periodic ratchet installs.
+///
+/// The single install path for a group key: the initiator's rotation and a
+/// receiver of that rotation (or of a late-join key) both run it, so for the
+/// same `(key, epoch)` they hold byte-identical chains and LiveKit indices.
+/// `None` when `epoch` is not ahead of the chain (stale; nothing changes).
+fn adopt_group_key(
+    key_state: &mut CallKeyState,
+    key: [u8; 32],
+    epoch: u32,
+) -> Option<(u32, Vec<u8>, Vec<u8>)> {
+    if !key_state.adopt(key, epoch) {
+        return None;
+    }
+    let key_cur = key_state.current_key_vec();
+    let key_next = key_state
+        .peek_next_key()
+        .map(|k| k.to_vec())
+        .unwrap_or_else(|_| key_cur.clone());
+    Some((epoch, key_cur, key_next))
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -2493,11 +2587,11 @@ pub const RING_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60)
 /// (Signal's rule; the inbox falls back to the caller's clock only when the
 /// server gave none). `0` means nothing was stamped: ring rather than silently
 /// drop a live call. A clock ahead of ours saturates to age 0 and rings.
-fn offer_is_stale(sent_ns: u64, now_ns: u64) -> bool {
+pub(crate) fn offer_is_stale(sent_ns: u64, now_ns: u64) -> bool {
     sent_ns != 0 && now_ns.saturating_sub(sent_ns) > RING_TIMEOUT.as_nanos() as u64
 }
 
-fn offer_is_stale_now(sent_ns: u64) -> bool {
+pub(crate) fn offer_is_stale_now(sent_ns: u64) -> bool {
     offer_is_stale(sent_ns, crate::util::time::TimestampNanos::now().as_u64())
 }
 
@@ -2713,12 +2807,12 @@ fn handle_domain_event(
             );
         }
 
+        // Key answers are completed by the UI/glue layer against the
+        // ChatterClient API; group-call keys (ring, rotation, late join) by
+        // `ChatterClient::handle_group_call_key`, which needs channel
+        // membership and the server's view of the call.
         DomainEvent::CallKeyAnswerReceived { .. }
-        | DomainEvent::GroupCallKeyReceived { .. } => {
-            // Key-answer handling is driven by the UI/glue layer against the
-            // existing ChatterClient API. Nothing for the orchestrator to do
-            // here in phase 1.
-        }
+        | DomainEvent::GroupCallKeyReceived { .. } => {}
 
         _ => {}
     }
@@ -3026,5 +3120,73 @@ mod failed_accept_tests {
                 other => panic!("expected ActiveEnded, got {other:?}"),
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod group_key_install_tests {
+    use super::{adopt_group_key, adopt_into_call, ActiveCallState, Call, CallError, CallId, CallKeyState, CallType, ChannelId, UserId};
+
+    const CALL: &str = "11111111-2222-4333-8444-555555555555";
+
+    fn active(root: [u8; 32]) -> ActiveCallState {
+        let mut call = Call::new(ChannelId::new(), UserId::new(), CallType::Voice);
+        call.id = CALL.parse().unwrap();
+        ActiveCallState {
+            call,
+            key_state: CallKeyState::new(&root, CALL).unwrap(),
+            room_name: String::new(),
+            livekit_url: String::new(),
+        }
+    }
+
+    /// The initiator rotates (adopting at its epoch + 1) and sends that
+    /// `(key, epoch)`; a receiver whose chain has ratcheted differently
+    /// installs it. Both must hand LiveKit the same index and bytes, and keep
+    /// agreeing on the next 30 s ratchet.
+    #[test]
+    fn received_key_installs_the_rotators_bytes() {
+        let root = [7u8; 32];
+        let new_key = [9u8; 32];
+        let mut rotator = CallKeyState::new(&root, CALL).unwrap();
+        rotator.ratchet().unwrap();
+        rotator.ratchet().unwrap();
+        let epoch = rotator.epoch() + 1;
+        let sent = adopt_group_key(&mut rotator, new_key, epoch).unwrap();
+
+        let mut receiver = CallKeyState::new(&root, CALL).unwrap();
+        let installed = adopt_group_key(&mut receiver, new_key, epoch).unwrap();
+        assert_eq!(sent, installed);
+        assert_eq!(sent.0, 3);
+        assert_eq!(rotator.current_key(), receiver.current_key());
+
+        rotator.ratchet().unwrap();
+        receiver.ratchet().unwrap();
+        assert_eq!(rotator.current_key(), receiver.current_key());
+        assert_eq!(rotator.epoch(), receiver.epoch());
+    }
+
+    #[test]
+    fn stale_epoch_changes_nothing() {
+        let mut state = active([7u8; 32]);
+        let call: CallId = CALL.parse().unwrap();
+        assert!(adopt_into_call(Some(&mut state), call, [9u8; 32], 2).unwrap().is_some());
+        let held = *state.key_state.current_key();
+        for stale in [0, 1, 2] {
+            assert_eq!(adopt_into_call(Some(&mut state), call, [5u8; 32], stale).unwrap(), None);
+        }
+        assert_eq!(*state.key_state.current_key(), held);
+        assert_eq!(state.key_state.epoch(), 2);
+    }
+
+    #[test]
+    fn key_for_another_call_is_refused() {
+        let mut state = active([7u8; 32]);
+        let other = CallId(uuid::Uuid::new_v4());
+        let before = *state.key_state.current_key();
+        assert!(matches!(adopt_into_call(Some(&mut state), other, [9u8; 32], 5), Err(CallError::NotInCall)));
+        assert!(matches!(adopt_into_call(None, other, [9u8; 32], 5), Err(CallError::NotInCall)));
+        assert_eq!(*state.key_state.current_key(), before);
+        assert_eq!(state.key_state.epoch(), 0);
     }
 }

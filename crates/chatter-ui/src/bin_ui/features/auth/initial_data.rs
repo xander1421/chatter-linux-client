@@ -15,29 +15,68 @@ use crate::bin_ui::converters::{
 };
 use crate::{ChatRowData, FriendData, FriendRequestData, MainWindow};
 
-/// Rebuild the FriendsModal "Friends" tab list — core's mode-filtered rows
-/// (`friends_tab_entries`) — and push it into the UI. Cheap enough to
-/// run on every relevant event (friend accepted, anon-DM accepted,
-/// anon-DM profile updated); the modal pulls the model by reference.
+/// Rebuild the FriendsModal "Friends" tab list and push it into the UI.
+///
+/// An empty list is painted from local storage before `ListFriends`
+/// returns, so a cold start with the server down does not sit on
+/// "No friends yet" until the RPC fails. A list that is already showing
+/// is left alone until the server answers: painting the offline rows
+/// over it would grey every presence dot for the length of the call.
+/// When the server answers, its rows replace the local ones. When it
+/// does not, the local rows stay (or replace a stale online list).
 pub fn refresh_friends_list(window_weak: Weak<MainWindow>, ui_ctx: Arc<ChatterClient>) {
     tokio::spawn(async move {
-        let mut friends_data = ui_ctx.friends_tab_entries().await;
-        for f in &mut friends_data {
-            f.pre_decode_avatar();
+        let empty = friends_list_empty(&window_weak).await;
+        if empty {
+            publish_friends(window_weak.clone(), ui_ctx.local_friend_tab_entries());
         }
-        let _ = slint::invoke_from_event_loop(move || {
-            if let Some(w) = window_weak.upgrade() {
-                let slint_list: Vec<FriendData> =
-                    friends_data.into_iter().map(|f| f.to_slint()).collect();
-                w.set_friends_list(ModelRc::new(VecModel::from(slint_list)));
-            }
-        });
+        publish_friends(window_weak, ui_ctx.friends_tab_entries().await);
+    });
+}
+
+/// `true` when Contacts has nothing to show yet. A dropped window counts
+/// as empty so the caller still publishes the local rows.
+async fn friends_list_empty(window_weak: &Weak<MainWindow>) -> bool {
+    let weak = window_weak.clone();
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    if slint::invoke_from_event_loop(move || {
+        let empty = weak
+            .upgrade()
+            .map(|w| w.get_friends_list().row_count() == 0)
+            .unwrap_or(true);
+        let _ = tx.send(empty);
+    })
+    .is_err()
+    {
+        return true;
+    }
+    rx.await.unwrap_or(true)
+}
+
+fn publish_friends(
+    window_weak: Weak<MainWindow>,
+    mut friends_data: Vec<chatter_core::ui::sidebar_data::FriendDataSendData>,
+) {
+    for f in &mut friends_data {
+        f.pre_decode_avatar();
+    }
+    let _ = slint::invoke_from_event_loop(move || {
+        if let Some(w) = window_weak.upgrade() {
+            let slint_list: Vec<FriendData> =
+                friends_data.into_iter().map(|f| f.to_slint()).collect();
+            w.set_friends_list(ModelRc::new(VecModel::from(slint_list)));
+        }
     });
 }
 
 /// Load initial data after login or on startup.
 pub async fn load_initial_data(window_weak: Weak<MainWindow>, ui_ctx: &Arc<ChatterClient>) {
     tracing::info!("Loading initial data...");
+
+    // Friends tab, off the awaits below. ListFriends used to run before the
+    // first paint and, on failure, publish an empty list over people the
+    // chat list was about to render from storage.
+    refresh_friends_list(window_weak.clone(), ui_ctx.clone());
 
     // Now that we're authenticated, start the auth-gated notification streams
     // (gRPC message stream + call → ring-notification bridge). The boot-time
@@ -175,12 +214,6 @@ pub async fn load_initial_data(window_weak: Weak<MainWindow>, ui_ctx: &Arc<Chatt
         req.pre_decode_avatar();
     }
 
-    // Friends-tab rows, already filtered to the current mode by core.
-    let mut friends_data = ui_ctx.friends_tab_entries().await;
-    for f in &mut friends_data {
-        f.pre_decode_avatar();
-    }
-
     // Update UI with channels, DMs, private groups, and friend requests
     let window_weak_ui = window_weak.clone();
     let pending_message_requests_count = private_requests_ui.len() as i32;
@@ -230,9 +263,10 @@ pub async fn load_initial_data(window_weak: Weak<MainWindow>, ui_ctx: &Arc<Chatt
             w.set_friends_sent_requests(ModelRc::new(VecModel::from(sent_ui_slint)));
             w.set_friends_private_requests(ModelRc::new(VecModel::from(private_requests_ui_slint)));
 
-            // Friends-tab list — accepted friendships + Active anon-DM peers.
-            let friends_slint: Vec<FriendData> = friends_data.into_iter().map(|f| f.to_slint()).collect();
-            w.set_friends_list(ModelRc::new(VecModel::from(friends_slint)));
+            // Friends-tab list is published by `refresh_friends_list` (local
+            // rows first, server rows when ListFriends returns). Setting it
+            // again here raced that reconcile and put the offline snapshot
+            // back on top.
 
             // Set blocked users
             w.set_friends_blocked_users(ModelRc::new(VecModel::from(blocked_users_slint)));

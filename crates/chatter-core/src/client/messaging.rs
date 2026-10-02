@@ -934,14 +934,62 @@ impl ChatterClient {
 
     /// Rows for the Friends tab, mode-exclusive like the DM sidebar: shield on
     /// lists only active anon-DM peers (and makes no identified server call);
-    /// off lists only accepted server friends. Anon rows carry the anon DM id
-    /// in `user_id` (see `FriendDataSendData`).
+    /// off lists accepted friends. Anon rows carry the anon DM id in
+    /// `user_id` (see `FriendDataSendData`).
+    ///
+    /// Identified friends are local-first. [`Self::local_friend_tab_entries`]
+    /// is what cold start paints; this call replaces those rows when
+    /// `ListFriends` succeeds and returns them unchanged when it does not.
+    /// An error used to publish an empty vec, so Contacts showed "No friends
+    /// yet" while the chat list still rendered the same people from storage.
     pub async fn friends_tab_entries(&self) -> Vec<crate::ui::sidebar_data::FriendDataSendData> {
+        if self.anon_mode_enabled() {
+            return self.local_friend_tab_entries();
+        }
+        match self.list_friends_with_profiles().await {
+            Ok(pairs) => {
+                let mut out = Vec::with_capacity(pairs.len());
+                for (friendship, profile) in pairs {
+                    // The server already leaves out its own blocks; this also
+                    // drops a friend blocked through their anon DM.
+                    if self.is_profile_user_blocked(&friendship.addressee_id) {
+                        continue;
+                    }
+                    out.push(crate::ui::sidebar_data::FriendDataSendData {
+                        user_id: friendship.addressee_id.to_string(),
+                        // The resolver, not the raw row: a row written
+                        // without the profile key holds `User <id8>`, and a
+                        // known username reads better (REVIEW-R4 P0-3).
+                        display_name: self.display_name(&friendship.addressee_id),
+                        username: String::new(),
+                        avatar_bytes: profile.avatar_bytes.clone(),
+                        avatar_decoded: None,
+                        presence_status: profile.presence.as_str().to_string(),
+                        custom_status: String::new(),
+                        is_anon: false,
+                    });
+                }
+                out
+            }
+            Err(e) => {
+                tracing::warn!(error = %e, "Friends list: server unreachable, showing the local store");
+                self.local_friend_tab_entries()
+            }
+        }
+    }
+
+    /// Friends-tab rows from local storage. No network.
+    ///
+    /// Shield on: active anon-DM peers. Shield off: accepted friends who are
+    /// not blocked (`listed_friends`, either direction of the row). Presence
+    /// is `offline` — the stored profile can still say `online` from the
+    /// previous session, and this path has not asked the server.
+    pub fn local_friend_tab_entries(&self) -> Vec<crate::ui::sidebar_data::FriendDataSendData> {
         use crate::domain::anon_dm::AnonDmStatus;
         use crate::ui::sidebar_data::FriendDataSendData;
 
-        let mut out = Vec::new();
         if self.anon_mode_enabled() {
+            let mut out = Vec::new();
             for dm in self.list_anon_dm_conversations() {
                 if dm.status != AnonDmStatus::Active {
                     continue;
@@ -962,32 +1010,23 @@ impl ChatterClient {
             }
             return out;
         }
-        match self.list_friends_with_profiles().await {
-            Ok(pairs) => {
-                for (friendship, profile) in pairs {
-                    // The server already leaves out its own blocks; this also
-                    // drops a friend blocked through their anon DM.
-                    if self.is_profile_user_blocked(&friendship.addressee_id) {
-                        continue;
-                    }
-                    out.push(FriendDataSendData {
-                        user_id: friendship.addressee_id.to_string(),
-                        // The resolver, not the raw row: a row written
-                        // without the profile key holds `User <id8>`, and a
-                        // known username reads better (REVIEW-R4 P0-3).
-                        display_name: self.display_name(&friendship.addressee_id),
-                        username: String::new(),
-                        avatar_bytes: profile.avatar_bytes.clone(),
-                        avatar_decoded: None,
-                        presence_status: profile.presence.as_str().to_string(),
-                        custom_status: String::new(),
-                        is_anon: false,
-                    });
+
+        self.listed_friends()
+            .into_iter()
+            .map(|peer| {
+                let avatar_bytes = self.get_profile_local(&peer).and_then(|p| p.avatar_bytes);
+                FriendDataSendData {
+                    user_id: peer.to_string(),
+                    display_name: self.display_name(&peer),
+                    username: String::new(),
+                    avatar_bytes,
+                    avatar_decoded: None,
+                    presence_status: "offline".to_string(),
+                    custom_status: String::new(),
+                    is_anon: false,
                 }
-            }
-            Err(e) => tracing::warn!("Failed to load accepted friends: {}", e),
-        }
-        out
+            })
+            .collect()
     }
 
     /// Local message search, limited to conversations the current mode shows:
@@ -1721,6 +1760,82 @@ mod shield_mode_tests {
             client.resolve_dm_conversation(&stranger.to_string()),
             Some(ActiveConversation::ServerDm { peer_id: stranger })
         );
+    }
+}
+
+#[cfg(test)]
+mod local_friends_tests {
+    //! Contacts › Friends must render from the friendships table when the
+    //! server cannot be reached. The builder points at a closed port.
+    use std::sync::Arc;
+
+    use crate::client::ChatterClient;
+    use crate::domain::ids::UserId;
+    use crate::domain::user::{FriendshipStatus, PresenceStatus, Profile};
+
+    fn build_test_client() -> Arc<ChatterClient> {
+        static MOCK_KEYRING: std::sync::Once = std::sync::Once::new();
+        MOCK_KEYRING.call_once(|| {
+            keyring::set_default_credential_builder(keyring::mock::default_credential_builder());
+        });
+        let dir = tempfile::tempdir().unwrap();
+        ChatterClient::builder()
+            .server_url("http://127.0.0.1:1")
+            .data_dir(dir.path().to_str().unwrap())
+            .build()
+            .expect("build client")
+    }
+
+    #[tokio::test]
+    async fn local_friends_list_without_network() {
+        let client = build_test_client();
+        let (me, friend, pending, blocked) = (UserId::new(), UserId::new(), UserId::new(), UserId::new());
+        client.auth_state().set_logged_in(me, 1, "Me".into());
+        client
+            .messages()
+            .settings_repo
+            .set_string(
+                crate::storage::repositories::settings_repo::keys::CURRENT_USER_ID,
+                &me.to_string(),
+            )
+            .unwrap();
+        let users = &client.messages().user_repo;
+        for id in [me, friend, pending, blocked] {
+            users.ensure_user_exists(&id).unwrap();
+        }
+        let mut accepted = crate::domain::user::Friendship::new_request(me, friend);
+        accepted.accept();
+        users.insert_friendship(&accepted).unwrap();
+        users
+            .insert_friendship(&crate::domain::user::Friendship::new_request(me, pending))
+            .unwrap();
+        let mut blocked_row = crate::domain::user::Friendship::new_request(me, blocked);
+        blocked_row.status = FriendshipStatus::Blocked;
+        users.insert_friendship(&blocked_row).unwrap();
+
+        // Stored presence is Online from the last session. Offline render
+        // must not repeat that.
+        let mut profile = Profile::new(friend, "Ada Lovelace".into());
+        profile.avatar_bytes = Some(vec![1, 2, 3, 4]);
+        profile.presence = PresenceStatus::Online;
+        users.upsert_profile(&profile).unwrap();
+
+        let local = client.local_friend_tab_entries();
+        assert_eq!(local.len(), 1, "pending and blocked rows are not friends");
+        assert_eq!(local[0].user_id, friend.to_string());
+        assert_eq!(local[0].display_name, "Ada Lovelace");
+        assert_eq!(local[0].avatar_bytes.as_deref(), Some(&[1, 2, 3, 4][..]));
+        assert_eq!(local[0].presence_status, "offline");
+        assert!(!local[0].is_anon);
+
+        // ListFriends against a closed port fails. The tab still returns
+        // the stored friend instead of an empty vec.
+        let via_tab = client.friends_tab_entries().await;
+        assert_eq!(via_tab.len(), 1);
+        assert_eq!(via_tab[0].user_id, friend.to_string());
+        assert_eq!(via_tab[0].display_name, "Ada Lovelace");
+        assert_eq!(via_tab[0].avatar_bytes.as_deref(), Some(&[1, 2, 3, 4][..]));
+        assert_eq!(via_tab[0].presence_status, "offline");
     }
 }
 

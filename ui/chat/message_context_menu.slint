@@ -251,7 +251,7 @@ export component MessageContextMenu inherits Rectangle {
                 }
 
                 if MessageMenuActions.resend && !root.more-actions: MenuItem {
-                    icon: Icons.send;
+                    icon: Icons.rotate-ccw;
                     label: "Resend";
                     clicked => {
                         root.retry-clicked(root.message-id);

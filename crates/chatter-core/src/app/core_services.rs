@@ -561,22 +561,21 @@ impl CoreServices {
         })
     }
 
-    /// Spawn the DM mailbox key-rolling background task (L4 anonymity).
+    /// Spawn the mailbox key-rolling background task (L4 anonymity).
     ///
-    /// Periodically rotates DM mailboxes that are approaching expiry: mints a
-    /// fresh token-bound mailbox server-side (saved alongside the old for a
-    /// loss-free overlap), then announces the new address to the peer via a
-    /// `DmMailboxRotation` content so they redirect future sends. Sends always
-    /// target the newest mailbox; the old one is polled until its natural TTL.
-    ///
-    /// DM only — group rotation is intentionally not driven here.
+    /// One loop, one interval ([`DEFAULT_CHECK_INTERVAL_SECS`], the same sleep
+    /// DMs already used — no separate group timer). Each tick rotates every
+    /// mailbox [`KeyRollingService::scheduler_due`] returns: DM and group.
+    /// A fresh token-bound mailbox is minted anonymously and saved alongside
+    /// the old one. Sends target the newest; the old one is polled until its
+    /// TTL.
     ///
     /// Returns a JoinHandle that should be stored for graceful shutdown.
     pub fn spawn_key_rolling(&self) -> tokio::task::JoinHandle<()> {
         use std::time::Duration;
         use crate::mailbox::dm::DmConversationManager;
         use crate::mailbox::group::GroupMailboxManager;
-        use crate::mailbox::key_rolling::{KeyRollingService, DEFAULT_CHECK_INTERVAL_SECS};
+        use crate::mailbox::key_rolling::{KeyRollingService, RotationTarget, DEFAULT_CHECK_INTERVAL_SECS};
         use crate::proto::content_v1;
         use crate::services::message::SendDmContentParams;
         use crate::util::time::TimestampNanos;
@@ -586,6 +585,8 @@ impl CoreServices {
         let token_manager = self.token_manager.clone();
         let message_service = self.message_service.clone();
         let mailbox_manager = self.mailbox_manager.clone();
+        let channel_repo = self.channel_repo.clone();
+        let signal_service = self.signal_service.clone();
 
         tokio::spawn(async move {
             let dm_manager = Arc::new(DmConversationManager::new(database.clone()));
@@ -600,56 +601,71 @@ impl CoreServices {
             loop {
                 tokio::time::sleep(Duration::from_secs(DEFAULT_CHECK_INTERVAL_SECS)).await;
 
-                let candidates = match svc.get_dm_rotation_candidates() {
-                    Ok(c) => c,
-                    Err(e) => {
-                        tracing::warn!("KeyRolling: failed to list DM rotation candidates: {}", e);
-                        continue;
-                    }
-                };
+                for target in svc.scheduler_due() {
+                    match target {
+                        RotationTarget::Dm(peer_id) => {
+                            let notif = match svc.rotate_dm_mailbox(&peer_id).await {
+                                Ok(n) => n,
+                                Err(e) => {
+                                    tracing::warn!(peer_id = %peer_id, "KeyRolling: DM rotation failed: {}", e);
+                                    continue;
+                                }
+                            };
 
-                for peer_id in candidates {
-                    let notif = match svc.rotate_dm_mailbox(&peer_id).await {
-                        Ok(n) => n,
-                        Err(e) => {
-                            tracing::warn!(peer_id = %peer_id, "KeyRolling: DM rotation failed: {}", e);
-                            continue;
-                        }
-                    };
-
-                    // Announce the new mailbox to the peer's CURRENT mailbox so
-                    // they switch to depositing into the rotated one.
-                    let content = content_v1::Content {
-                        content: Some(content_v1::content::Content::DmMailboxRotation(
-                            content_v1::DmMailboxRotation {
-                                new_mailbox_pk: notif.new_mailbox_public_key.to_vec(),
-                                old_mailbox_pk: vec![],
+                            // Announce the new mailbox to the peer's CURRENT mailbox so
+                            // they switch to depositing into the rotated one.
+                            let content = content_v1::Content {
+                                content: Some(content_v1::content::Content::DmMailboxRotation(
+                                    content_v1::DmMailboxRotation {
+                                        new_mailbox_pk: notif.new_mailbox_public_key.to_vec(),
+                                        old_mailbox_pk: vec![],
+                                        timestamp: TimestampNanos::now().as_u64(),
+                                    },
+                                )),
+                                ephemeral_reply_to: None,
                                 timestamp: TimestampNanos::now().as_u64(),
-                            },
-                        )),
-                        ephemeral_reply_to: None,
-                        timestamp: TimestampNanos::now().as_u64(),
-                        padding: vec![],
-                    };
+                                padding: vec![],
+                            };
 
-                    let mut auth_client = grpc_pool.auth_client();
-                    match message_service
-                        .send_dm_content(SendDmContentParams {
-                            auth_client: &mut auth_client,
-                            peer_id: &peer_id,
-                            content,
-                            mailbox_manager: &mailbox_manager,
-                            grpc_pool: Some(&grpc_pool),
-                            attachment_ids: None,
-                            channel_id: None,
-                        })
-                        .await
-                    {
-                        Ok(_) => {
-                            tracing::info!(peer_id = %peer_id, "KeyRolling: rotation announced to peer");
+                            let mut auth_client = grpc_pool.auth_client();
+                            match message_service
+                                .send_dm_content(SendDmContentParams {
+                                    auth_client: &mut auth_client,
+                                    peer_id: &peer_id,
+                                    content,
+                                    mailbox_manager: &mailbox_manager,
+                                    grpc_pool: Some(&grpc_pool),
+                                    attachment_ids: None,
+                                    channel_id: None,
+                                })
+                                .await
+                            {
+                                Ok(_) => {
+                                    tracing::info!(peer_id = %peer_id, "KeyRolling: rotation announced to peer");
+                                }
+                                Err(e) => {
+                                    tracing::warn!(peer_id = %peer_id, "KeyRolling: failed to announce rotation: {}", e);
+                                }
+                            }
                         }
-                        Err(e) => {
-                            tracing::warn!(peer_id = %peer_id, "KeyRolling: failed to announce rotation: {}", e);
+                        RotationTarget::Group(group_id) => {
+                            let notif = match svc.rotate_group_mailbox(&group_id).await {
+                                Ok(n) => n,
+                                Err(e) => {
+                                    tracing::warn!(group_id = %group_id, "KeyRolling: group rotation failed: {}", e);
+                                    continue;
+                                }
+                            };
+                            announce_rotated_group_mailbox(
+                                &group_id,
+                                &notif.new_mailbox_public_key,
+                                &svc,
+                                &channel_repo,
+                                &signal_service,
+                                &message_service,
+                                &grpc_pool,
+                            )
+                            .await;
                         }
                     }
                 }
@@ -733,6 +749,181 @@ impl CoreServices {
         }
     }
 
+}
+
+/// Tell every device of every member who is still in `group_id` the new
+/// mailbox address. A departed member is not a recipient: local membership
+/// is the entitlement, and their leftover mailbox row is deleted first.
+///
+/// No identified RPC. Encryption uses the cached sender certificate and
+/// sessions we already hold (`encrypt_message_anonymous`); a missing session
+/// or certificate skips that device rather than fetching a prekey bundle.
+/// Delivery is the anonymous mailbox deposit (no account on the wire) and,
+/// when we hold the member's profile key, a UAK sealed send to that device's
+/// inbox so every device converges. A rejected or missing UAK is not retried
+/// over Basic auth — that would stamp our user id on the rotation.
+async fn announce_rotated_group_mailbox(
+    group_id: &crate::domain::ChannelId,
+    new_mailbox_pk: &[u8; 32],
+    svc: &crate::mailbox::key_rolling::KeyRollingService,
+    channel_repo: &crate::storage::ChannelRepository,
+    signal_service: &crate::services::signal_service::SignalService,
+    message_service: &crate::services::message::MessageService,
+    grpc_pool: &crate::network::grpc::client_pool::GrpcClientPool,
+) {
+    use crate::mailbox::key_rolling::group_mailbox_rotation_plaintext;
+    use crate::proto::chat_v1::SealedSenderMessage;
+    use crate::proto::mailbox_v1::EnvelopeType;
+    use crate::services::current_user::CurrentUserProvider;
+    use crate::util::time::TimestampNanos;
+
+    let me = match message_service.settings_repo.current_user_id() {
+        Ok(id) => id,
+        Err(e) => {
+            tracing::warn!(group_id = %group_id, error = %e, "KeyRolling: not announcing group rotation; no current user");
+            return;
+        }
+    };
+    let members = match channel_repo.list_members(group_id) {
+        Ok(members) => members,
+        Err(e) => {
+            tracing::warn!(group_id = %group_id, error = %e, "KeyRolling: not announcing group rotation; membership unknown");
+            return;
+        }
+    };
+    if members.is_empty() {
+        tracing::warn!(group_id = %group_id, "KeyRolling: not announcing group rotation; no current members");
+        return;
+    }
+    let member_ids: Vec<crate::domain::UserId> = members.iter().map(|m| m.user_id).collect();
+    if let Err(e) = svc.drop_departed_member_mailboxes(group_id, &member_ids) {
+        tracing::warn!(group_id = %group_id, error = %e, "KeyRolling: could not drop departed member mailboxes");
+    }
+
+    let mut session_devices = Vec::new();
+    for member_id in &member_ids {
+        if *member_id == me {
+            continue;
+        }
+        match signal_service.session_devices(&member_id.to_string()).await {
+            Ok(devices) => {
+                for device_id in devices {
+                    session_devices.push((*member_id, device_id));
+                }
+            }
+            Err(e) => {
+                tracing::warn!(group_id = %group_id, member_id = %member_id, error = %e, "KeyRolling: could not list local sessions");
+            }
+        }
+    }
+    let recipients = crate::mailbox::key_rolling::group_rotation_recipients(&me, &member_ids, &session_devices);
+    if recipients.is_empty() {
+        tracing::info!(group_id = %group_id, "KeyRolling: group rotated; no remaining member device to tell");
+        return;
+    }
+
+    let mailboxes = match svc.member_mailbox_keys(group_id) {
+        Ok(keys) => keys,
+        Err(e) => {
+            tracing::warn!(group_id = %group_id, error = %e, "KeyRolling: could not load member mailboxes");
+            std::collections::HashMap::new()
+        }
+    };
+    let plaintext = group_mailbox_rotation_plaintext(group_id, new_mailbox_pk);
+    let mut anon_mailbox = grpc_pool.anonymous_mailbox_client();
+    let mut anon_messages = grpc_pool.anonymous_message_client();
+    let mut told = 0usize;
+
+    for recipient in recipients {
+        let ciphertext = match signal_service
+            .encrypt_message_anonymous(&recipient.user_id.to_string(), recipient.device_id, &plaintext)
+            .await
+        {
+            Ok(bytes) => bytes,
+            Err(e) => {
+                tracing::warn!(
+                    group_id = %group_id,
+                    member_id = %recipient.user_id,
+                    device_id = recipient.device_id,
+                    error = %e,
+                    "KeyRolling: skipped a member device; not fetching a prekey bundle"
+                );
+                continue;
+            }
+        };
+
+        let mut reached = false;
+        if let Some(mailbox_pk) = mailboxes.get(&recipient.user_id) {
+            match anon_mailbox
+                .send_to_ephemeral_mailbox(
+                    mailbox_pk.to_vec(),
+                    ciphertext.clone(),
+                    EnvelopeType::SealedSender as i32,
+                )
+                .await
+            {
+                Ok(_) => reached = true,
+                Err(e) => {
+                    tracing::warn!(
+                        group_id = %group_id,
+                        member_id = %recipient.user_id,
+                        device_id = recipient.device_id,
+                        error = %e,
+                        "KeyRolling: anonymous mailbox announce failed"
+                    );
+                }
+            }
+        }
+
+        // UAK on the anonymous channel names the recipient account and not us.
+        // No Basic-auth fallback: that would link our identity to the rotation.
+        let uak = message_service
+            .user_repo
+            .get_friend_profile_key(&me, &recipient.user_id)
+            .ok()
+            .flatten()
+            .map(|pk| crate::crypto::derive_uak(&pk));
+        if let Some(uak) = uak {
+            let sealed = SealedSenderMessage {
+                sealed_body: ciphertext,
+                server_key_id: signal_service.get_server_key_id(),
+                timestamp: TimestampNanos::now().as_u64(),
+            };
+            match anon_messages
+                .send_sealed_message_with_uak(
+                    &recipient.user_id.to_string(),
+                    recipient.device_id,
+                    sealed,
+                    &uak,
+                )
+                .await
+            {
+                Ok(_) => reached = true,
+                Err(e) => {
+                    tracing::warn!(
+                        group_id = %group_id,
+                        member_id = %recipient.user_id,
+                        device_id = recipient.device_id,
+                        error = %e,
+                        "KeyRolling: UAK announce failed; not falling back to identified delivery"
+                    );
+                }
+            }
+        } else if !reached {
+            tracing::warn!(
+                group_id = %group_id,
+                member_id = %recipient.user_id,
+                device_id = recipient.device_id,
+                "KeyRolling: member device not told; no mailbox and no profile key, and an identified send is refused"
+            );
+        }
+
+        if reached {
+            told += 1;
+        }
+    }
+
+    tracing::info!(group_id = %group_id, devices = told, "KeyRolling: group rotation announced");
 }
 
 /// Wait `BASE` plus up to `JITTER`, uniformly random.

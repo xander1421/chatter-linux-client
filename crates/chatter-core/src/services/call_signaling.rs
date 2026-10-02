@@ -12,9 +12,11 @@
 //! Uses a randomly generated AES-256 key distributed to all members
 //! via pairwise sealed sender DMs (`GroupCallKey` proto).
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use parking_lot::Mutex;
+use zeroize::Zeroizing;
 
 #[cfg(feature = "media")]
 use crate::crypto::call_key_provider::EphemeralCallKey;
@@ -75,6 +77,25 @@ pub enum CallSignalingError {
     Mobile(String),
 }
 
+/// A channel group call we were rung for, held from the ring until we have
+/// joined it, declined it, or it rang out. The ring carries the call's root
+/// key — what `join_call` connects with.
+struct GroupCallInvite {
+    root_key: Zeroizing<[u8; 32]>,
+    /// Set once the user accepts, so the ring-out timer leaves it alone.
+    accepted: bool,
+    /// The newest participant key `(sender, key, epoch)` that arrived while
+    /// we were still joining — installed as soon as the join completes.
+    latest: Option<(UserId, Zeroizing<[u8; 32]>, u32)>,
+}
+
+/// A participant key that reached us while we were joining its call.
+pub struct PendingGroupCallKey {
+    pub sender: UserId,
+    pub key: Zeroizing<[u8; 32]>,
+    pub epoch: u32,
+}
+
 /// Handles call signaling (key exchange, hangup) over the Signal Protocol.
 ///
 /// Every signaling message goes through `MessageService::send_friend_dm_content`,
@@ -89,6 +110,8 @@ pub struct CallSignalingService {
     anon_group_service: Arc<AnonGroupService>,
     /// Pending outgoing DM call state (waiting for answer with peer's ephemeral key).
     pending_dm_call: Arc<Mutex<Option<PendingDmCall>>>,
+    /// Channel group calls we were rung for, by call id.
+    group_call_invites: Arc<Mutex<HashMap<String, GroupCallInvite>>>,
 }
 
 impl CallSignalingService {
@@ -104,6 +127,7 @@ impl CallSignalingService {
             anon_dm_service,
             anon_group_service,
             pending_dm_call: Arc::new(Mutex::new(None)),
+            group_call_invites: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 
@@ -216,6 +240,61 @@ impl CallSignalingService {
             Err(e) => return Err(e.into()),
         }
         Ok(())
+    }
+
+    /// Hold the root key of a group call we are being rung for. False when
+    /// this call is already held — a repeated ring.
+    pub fn store_group_call_invite(&self, call_id: &str, root_key: [u8; 32]) -> bool {
+        let mut invites = self.group_call_invites.lock();
+        if invites.contains_key(call_id) {
+            return false;
+        }
+        invites.insert(call_id.to_string(), GroupCallInvite {
+            root_key: Zeroizing::new(root_key),
+            accepted: false,
+            latest: None,
+        });
+        true
+    }
+
+    /// Keep a participant key for a call we were rung for and have not yet
+    /// finished joining. True when such a call is held — the key is then
+    /// kept if it is the newest seen, else dropped; false when it is not.
+    pub fn buffer_group_call_key(&self, call_id: &str, sender: UserId, key: [u8; 32], epoch: u32) -> bool {
+        let mut invites = self.group_call_invites.lock();
+        let Some(invite) = invites.get_mut(call_id) else { return false };
+        if invite.latest.as_ref().is_none_or(|(_, _, held)| epoch > *held) {
+            invite.latest = Some((sender, Zeroizing::new(key), epoch));
+        }
+        true
+    }
+
+    /// The user answered: hand back the call's root key to join with, and
+    /// keep the invite (collecting keys) until [`Self::take_group_call_invite`].
+    pub fn accept_group_call_invite(&self, call_id: &str) -> Option<Zeroizing<[u8; 32]>> {
+        let mut invites = self.group_call_invites.lock();
+        let invite = invites.get_mut(call_id)?;
+        invite.accepted = true;
+        Some(invite.root_key.clone())
+    }
+
+    /// Forget a group call invite (joined, declined or failed), returning
+    /// the newest key that arrived while we were joining.
+    pub fn take_group_call_invite(&self, call_id: &str) -> Option<PendingGroupCallKey> {
+        let invite = self.group_call_invites.lock().remove(call_id)?;
+        invite.latest.map(|(sender, key, epoch)| PendingGroupCallKey { sender, key, epoch })
+    }
+
+    /// The ring ran out: forget the invite unless the user has answered.
+    pub fn drop_ringing_group_call_invite(&self, call_id: &str) {
+        self.group_call_invites.lock().retain(|id, invite| id != call_id || invite.accepted);
+    }
+
+    /// Whether `user_id` is a member of `channel_id`, per the server's full
+    /// (paginated) member list.
+    pub async fn is_channel_member(&self, channel_id: &ChannelId, user_id: &UserId) -> Result<bool, CallSignalingError> {
+        let members = self.channel_service.get_all_channel_members(channel_id).await?;
+        Ok(members.iter().any(|m| &m.user_id == user_id))
     }
 
     /// Redistribute a rotated group call key to the peers actually in the room.

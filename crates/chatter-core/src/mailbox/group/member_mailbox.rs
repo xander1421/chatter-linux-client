@@ -502,6 +502,35 @@ impl GroupMailboxManager {
         Ok(())
     }
 
+    /// Drop mailbox rows for users who are no longer members.
+    ///
+    /// Leaving a channel deletes the membership row and does not touch
+    /// `group_member_mailboxes`, and nothing else calls
+    /// [`Self::remove_member_mailbox`]. A fan-out over the leftover rows
+    /// would hand a departed member the rotated mailbox key. `current` is
+    /// the local membership list; an empty list deletes nothing — an empty
+    /// read must not wipe every address.
+    pub fn drop_departed_member_mailboxes(
+        &self,
+        group_id: &ChannelId,
+        current: &[UserId],
+    ) -> Result<u32, MailboxError> {
+        if current.is_empty() {
+            return Ok(0);
+        }
+        let Some(state) = self.load_group_state(group_id)? else {
+            return Ok(0);
+        };
+        let mut dropped = 0u32;
+        for user_id in state.member_mailboxes.keys() {
+            if !current.contains(user_id) {
+                self.remove_member_mailbox(group_id, user_id)?;
+                dropped += 1;
+            }
+        }
+        Ok(dropped)
+    }
+
     /// Update last_polled_at timestamp for a mailbox.
     ///
     /// Tries both `group_mailboxes` (server-managed) and `anon_group_mailboxes` (anonymous groups).
@@ -1446,5 +1475,32 @@ mod tests {
             candidates.is_empty(),
             "group with a fresh row must not be re-selected for rotation"
         );
+    }
+
+    #[test]
+    fn drop_departed_member_mailboxes_keeps_only_current_members() {
+        let db = setup_db();
+        let mgr = GroupMailboxManager::new(db);
+        let group = ChannelId::new();
+        let stayed = UserId::new();
+        let departed = UserId::new();
+        mgr.save_member_mailbox(&group, &MemberMailbox::new(stayed, [1u8; 32], None)).unwrap();
+        mgr.save_member_mailbox(&group, &MemberMailbox::new(departed, [2u8; 32], None)).unwrap();
+
+        let dropped = mgr.drop_departed_member_mailboxes(&group, &[stayed]).unwrap();
+        assert_eq!(dropped, 1, "the departed member's mailbox row is removed");
+
+        let state = mgr.load_group_state(&group).unwrap().unwrap();
+        assert!(state.member_mailboxes.contains_key(&stayed));
+        assert!(
+            !state.member_mailboxes.contains_key(&departed),
+            "a departed member must not keep an address we could fan the new key to"
+        );
+        assert_eq!(
+            mgr.drop_departed_member_mailboxes(&group, &[]).unwrap(),
+            0,
+            "an empty membership read must not wipe the rows we still trust"
+        );
+        assert!(mgr.load_group_state(&group).unwrap().unwrap().member_mailboxes.contains_key(&stayed));
     }
 }

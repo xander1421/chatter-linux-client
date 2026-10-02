@@ -943,35 +943,6 @@ impl RoomManager {
         self.e2ee.read().epoch
     }
 
-    /// Set a new encryption key (for external key management).
-    ///
-    /// This replaces the current key with a new one derived externally.
-    /// In shared key mode, this sets the key at the next epoch index.
-    ///
-    /// Note: For normal operation, prefer `ratchet_key()` which uses
-    /// LiveKit's internal key derivation. Use this only when you need
-    /// to sync keys from an external source (e.g., CallKeyState).
-    pub fn set_encryption_key(&self, key: Vec<u8>) -> bool {
-        let mut e2ee = self.e2ee.write();
-        let provider = match e2ee.provider.clone() {
-            Some(p) => p,
-            None => {
-                tracing::warn!("Cannot set key: no key provider");
-                return false;
-            }
-        };
-
-        // The provider is in SHARED-key mode, so the frame cryptor reads the
-        // shared key ring — `set_shared_key`, NOT the per-participant
-        // `set_key` (which only feeds the non-shared path and never reached
-        // the cryptor, the root cause of media dying on the first ratchet).
-        e2ee.epoch += 1;
-        let new_epoch = e2ee.epoch;
-        provider.set_shared_key(key, new_epoch as i32);
-        tracing::info!(epoch = new_epoch, "E2EE key updated externally");
-        true
-    }
-
     /// Install an externally-ratcheted shared key for `epoch`, pre-installing
     /// `epoch + 1` so a peer whose 30 s ratchet timer fires slightly ahead can
     /// still decrypt immediately.

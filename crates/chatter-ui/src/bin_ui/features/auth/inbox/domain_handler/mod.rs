@@ -526,12 +526,14 @@ pub async fn handle_domain_event(
         // conversation but never its row. Rebuild the rows from storage, the
         // way every DM receive already does (`refresh_chat_list`).
         DomainEvent::SyncComplete { messages_synced, blocks_changed, .. } => {
-            // A block or unblock from another device: the sidebar was built
-            // from the old block list, so rebuild it and the two Friends tabs.
+            // Friends were painted from storage at startup. This cycle is
+            // the reconcile: membership and live presence, or the same
+            // stored rows if the server is still down. A block change also
+            // rebuilds the Blocked tab (that list is already local).
+            crate::bin_ui::features::auth::initial_data::refresh_friends_list(
+                window.clone(), ui_ctx.clone(),
+            );
             if blocks_changed {
-                crate::bin_ui::features::auth::initial_data::refresh_friends_list(
-                    window.clone(), ui_ctx.clone(),
-                );
                 crate::bin_ui::features::modals::friends::refresh_blocked_users(window.clone(), ui_ctx);
             }
             if messages_synced > 0 || blocks_changed {

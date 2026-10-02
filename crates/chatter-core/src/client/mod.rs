@@ -1163,23 +1163,6 @@ impl ChatterClient {
                             break;
                         }
                     }
-                    Ok(DomainEvent::GroupCallKeyReceived {
-                        call_id,
-                        sender_id,
-                        key_material,
-                        key_epoch,
-                        channel_id,
-                    }) => {
-                        if tx.send(events::CallKeyEvent::GroupKeyReceived {
-                            call_id,
-                            sender_id,
-                            key_material,
-                            key_epoch,
-                            channel_id,
-                        }).is_err() {
-                            break;
-                        }
-                    }
                     Ok(_) => {}
                     Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
                         tracing::warn!(skipped = n, "subscribe_call_key_events lagged");
@@ -2269,13 +2252,17 @@ impl ChatterClient {
         })
     }
 
-    /// Call-worker room-events policy listener. On `ParticipantLeft` in a
+    /// Call-worker group-call key policy listener. On `ParticipantLeft` in a
     /// channel-based group call, the initiator rotates the encryption key and
     /// redistributes it so the departed participant can't decrypt future
-    /// frames. The "when" decision lives in core, not the UI crate.
+    /// frames; on `ParticipantJoined` we send the joiner the current key; a
+    /// received `GroupCallKey` rings, or is installed. One loop, so keys are
+    /// handled in arrival order. The "when" decisions live in core, not the
+    /// UI crate.
     #[cfg(feature = "media")]
     fn spawn_call_room_policy_listener(self: &Arc<Self>) -> tokio::task::JoinHandle<()> {
         let client = Arc::clone(self);
+        let mut domain_rx = self.services.event_bus.subscribe_domain();
         tokio::spawn(async move {
             // Wait for the call worker to be initialized. init_call_service runs
             // before start() returns, but on Android it is deferred.
@@ -2287,18 +2274,37 @@ impl ChatterClient {
             };
 
             use crate::calls::LiveKitRoomEvent;
+            use tokio::sync::broadcast::error::RecvError;
+            let mut late_join_sent = std::collections::HashSet::new();
             loop {
-                match rx.recv().await {
-                    Ok(LiveKitRoomEvent::ParticipantLeft { identity }) => {
-                        if let Err(e) = client.handle_participant_departed(&identity).await {
-                            tracing::error!(error = %e, "Failed to handle participant departure");
+                tokio::select! {
+                    event = rx.recv() => match event {
+                        Ok(LiveKitRoomEvent::ParticipantLeft { identity }) => {
+                            if let Err(e) = client.handle_participant_departed(&identity).await {
+                                tracing::error!(error = %e, "Failed to handle participant departure");
+                            }
                         }
-                    }
-                    Ok(_) => {}
-                    Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
-                        tracing::warn!(skipped = n, "Call room-events policy lagged");
-                    }
-                    Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                        Ok(LiveKitRoomEvent::ParticipantJoined { identity, .. }) => {
+                            if let Err(e) = client.handle_participant_joined(&identity, &mut late_join_sent).await {
+                                tracing::error!(error = %e, "Failed to send group call key to joiner");
+                            }
+                        }
+                        Ok(_) => {}
+                        Err(RecvError::Lagged(n)) => {
+                            tracing::warn!(skipped = n, "Call room-events policy lagged");
+                        }
+                        Err(RecvError::Closed) => break,
+                    },
+                    event = domain_rx.recv() => match event {
+                        Ok(DomainEvent::GroupCallKeyReceived { call_id, sender_id, key_material, key_epoch, channel_id }) => {
+                            client.handle_group_call_key(call_id, sender_id, key_material, key_epoch, channel_id).await;
+                        }
+                        Ok(_) => {}
+                        Err(RecvError::Lagged(n)) => {
+                            tracing::warn!(skipped = n, "Call key policy lagged on domain events");
+                        }
+                        Err(RecvError::Closed) => break,
+                    },
                 }
             }
         })

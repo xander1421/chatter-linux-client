@@ -31,7 +31,7 @@
 
 use crate::domain::anon_dm::AnonDmId;
 use crate::domain::anon_group::AnonGroupId;
-use crate::domain::ids::{ChannelId, UserId};
+use crate::domain::ids::UserId;
 
 /// Typed payloads for anonymous DM request / acceptance / init events.
 ///
@@ -95,14 +95,6 @@ pub enum CallKeyEvent {
         call_id: String,
         peer_id: UserId,
         ephemeral_public_key: [u8; 32],
-    },
-    /// Group call key distributed via pairwise sealed sender.
-    GroupKeyReceived {
-        call_id: String,
-        sender_id: UserId,
-        key_material: [u8; 32],
-        key_epoch: u32,
-        channel_id: ChannelId,
     },
 }
 

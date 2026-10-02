@@ -118,7 +118,11 @@ export component IncomingCallModal inherits Rectangle {
                 }
 
                 Text {
-                    text: call-data.is-video-call ? "Incoming video call..." : "Incoming voice call...";
+                    // A channel call rings with its channel: answering joins
+                    // a call already under way rather than starting one.
+                    text: call-data.channel-name != ""
+                        ? (call-data.is-video-call ? "Join group video call" : "Join group voice call")
+                        : (call-data.is-video-call ? "Incoming video call..." : "Incoming voice call...");
                     font-size: Typography.sm;
                     color: Colors.text-secondary;
                     horizontal-alignment: center;

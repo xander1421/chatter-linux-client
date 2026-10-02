@@ -92,6 +92,12 @@ pub enum AcceptedIncomingCall {
         setup: crate::domain::call::AnonCallSetupResult,
         peer_id: crate::domain::ids::UserId,
     },
+    /// Channel group call joined from its ring.
+    Group {
+        setup: crate::domain::call::CallSetupResult,
+        /// The channel's name, for the call view and return-to-call bar.
+        title: String,
+    },
 }
 
 impl ChatterClient {
@@ -547,9 +553,17 @@ impl ChatterClient {
                 AcceptedIncomingCall::Anon { setup, peer_id }
             }
             OrchestratedCallKind::GroupChannel => {
-                return Err(ClientError::Inbox(
-                    "Group channel incoming accept not supported".into(),
-                ));
+                let setup = self.join_group_call(&worker, call_id).await?;
+                worker.orch_mark_connected(
+                    CallHandle::from(call_id),
+                    kind,
+                    peer_id,
+                    setup.is_video,
+                );
+                AcceptedIncomingCall::Group {
+                    setup,
+                    title: snapshot.channel_context.unwrap_or_default(),
+                }
             }
         }) }
         .await;
@@ -561,6 +575,9 @@ impl ChatterClient {
         // failed and takes down the call view, and the hangup ends the caller's.
         if let Err(e) = &accepted {
             worker.orch_mark_ended(handle, CallEndReason::Error(e.to_string()));
+            if kind == OrchestratedCallKind::GroupChannel {
+                self.call_signaling().take_group_call_invite(call_id);
+            }
             if kind == OrchestratedCallKind::DmStandard {
                 if let Err(e) = self
                     .call_signaling()
@@ -725,14 +742,6 @@ impl ChatterClient {
         }
     }
 
-    #[cfg(feature = "media")]
-    pub async fn call_set_encryption_key(&self, key: Vec<u8>) -> bool {
-        match self.call_service().get().cloned() {
-            Some(worker) => worker.set_encryption_key(key).await,
-            None => false,
-        }
-    }
-
     /// Subscribe to the orchestrator's broadcast stream. Returns `None`
     /// until the call service has been initialized (post-login).
     #[cfg(feature = "media")]
@@ -817,20 +826,24 @@ impl ChatterClient {
             .map_err(|e| ClientError::Inbox(e.to_string()))?;
 
         match snapshot.kind {
-            OrchestratedCallKind::DmStandard | OrchestratedCallKind::GroupChannel => {
-                if snapshot.kind == OrchestratedCallKind::DmStandard {
-                    // The caller hears the decline end-to-end; our other
-                    // devices get its DECLINED_ELSEWHERE copy and stop ringing.
-                    if let Err(e) = self.call_signaling()
-                        .send_call_decline(&snapshot.peer_id, call_id)
-                        .await
-                    {
-                        tracing::warn!(error = %e, call_id, "Call decline not delivered");
-                    }
+            OrchestratedCallKind::DmStandard => {
+                // The caller hears the decline end-to-end; our other
+                // devices get its DECLINED_ELSEWHERE copy and stop ringing.
+                if let Err(e) = self.call_signaling()
+                    .send_call_decline(&snapshot.peer_id, call_id)
+                    .await
+                {
+                    tracing::warn!(error = %e, call_id, "Call decline not delivered");
                 }
                 self.decline_call(call_id).await.map_err(|e| {
                     ClientError::Inbox(format!("decline_call: {e}"))
                 })?;
+            }
+            // A group call goes on without us (Signal): declining only stops
+            // our ringing. Nothing goes on the wire — we never joined the call
+            // a server-side leave would take us out of.
+            OrchestratedCallKind::GroupChannel => {
+                self.call_signaling().take_group_call_invite(call_id);
             }
             OrchestratedCallKind::AnonDm | OrchestratedCallKind::AnonGroup => {
                 self.decline_anon_call(call_id).await.map_err(|e| {
@@ -838,6 +851,227 @@ impl ChatterClient {
                 })?;
             }
         }
+        Ok(())
+    }
+
+    // ── Channel group call keys ──────────────────────────────────────
+    //
+    // One wire message, `GroupCallKey { call_id, key, epoch }`, carries every
+    // group-call key. Epoch 0 is the ring: the initiator sends the call's
+    // root key to the channel when the call starts. Any later epoch is a
+    // chain key — the initiator's member-leave rotation, or a participant
+    // bringing a late joiner up to date — installed exactly as the sender
+    // holds it (`CallWorkerHandle::install_group_key`). Never in the UI.
+
+    /// Route a received group-call key: ring, install, keep for after the
+    /// join, or drop. Senders must be members of the channel the key names;
+    /// installing also requires them in the room.
+    #[cfg(feature = "media")]
+    pub(crate) async fn handle_group_call_key(
+        &self,
+        call_id: String,
+        sender_id: crate::domain::ids::UserId,
+        key: [u8; 32],
+        epoch: u32,
+        channel_id: crate::domain::ids::ChannelId,
+    ) {
+        let Some(worker) = self.call_service().get().cloned() else { return };
+        let Ok(call) = call_id.parse::<crate::domain::ids::CallId>() else {
+            tracing::warn!(call_id, "Group call key with a malformed call id; ignored");
+            return;
+        };
+        match self.call_signaling().is_channel_member(&channel_id, &sender_id).await {
+            Ok(true) => {}
+            Ok(false) => {
+                tracing::warn!(%sender_id, %channel_id, "Group call key from a non-member; ignored");
+                return;
+            }
+            Err(e) => {
+                tracing::warn!(error = %e, %channel_id, "Group call key: membership check failed; ignored");
+                return;
+            }
+        }
+
+        // Checked before the active call: a join takes the invite only after
+        // the call is active, so a key that misses the invite finds the call.
+        if epoch > 0 && self.call_signaling().buffer_group_call_key(&call_id, sender_id, key, epoch) {
+            return;
+        }
+        if worker.active_call().await.is_some_and(|c| c.id == call) {
+            self.install_participant_group_key(&worker, call, &channel_id, sender_id, key, epoch).await;
+        } else if epoch == 0 {
+            self.present_group_call_ring(&worker, call_id, sender_id, key, channel_id).await;
+        } else {
+            tracing::debug!(call_id, epoch, "Group call key for a call we are not in; ignored");
+        }
+    }
+
+    /// Install a participant's `(key, epoch)` into the active call `call`,
+    /// if they are in the room and the call is in `channel_id`.
+    #[cfg(feature = "media")]
+    async fn install_participant_group_key(
+        &self,
+        worker: &CallWorkerHandle,
+        call: crate::domain::ids::CallId,
+        channel_id: &crate::domain::ids::ChannelId,
+        sender_id: crate::domain::ids::UserId,
+        key: [u8; 32],
+        epoch: u32,
+    ) {
+        let in_channel = worker.active_call().await.is_some_and(|c| c.channel_id == *channel_id);
+        let roster = worker.remote_participant_identities().await;
+        if !in_channel || !sender_in_room(&sender_id, &roster) {
+            tracing::warn!(%sender_id, %call, "Group call key from outside the call; ignored");
+            return;
+        }
+        match worker.install_group_key(call, key, epoch).await {
+            Ok(true) => tracing::info!(%call, epoch, "Group call key installed"),
+            Ok(false) => {}
+            Err(e) => tracing::debug!(error = %e, %call, "Group call key not installed"),
+        }
+    }
+
+    /// Ring for a channel group call — only one the server confirms is the
+    /// channel's live call, started by the member who rang. A call that has
+    /// been going longer than a ring lasts is filed as missed instead.
+    #[cfg(feature = "media")]
+    async fn present_group_call_ring(
+        &self,
+        worker: &CallWorkerHandle,
+        call_id: String,
+        sender_id: crate::domain::ids::UserId,
+        root_key: [u8; 32],
+        channel_id: crate::domain::ids::ChannelId,
+    ) {
+        use crate::proto::chat_v1::CallType as ProtoCallType;
+        use crate::services::call_worker::{offer_is_stale_now, CallEndReason, CallHandle, OrchestratedCallKind, RING_TIMEOUT};
+
+        let info = match self.services.grpc_pool.call_client()
+            .get_active_call_in_channel(&channel_id.to_string())
+            .await
+        {
+            Ok(Some(info)) => info,
+            Ok(None) => {
+                tracing::debug!(call_id, "Group call ring for a call that is over; ignored");
+                return;
+            }
+            Err(e) => {
+                tracing::warn!(error = %e, call_id, "Group call ring: active-call lookup failed; ignored");
+                return;
+            }
+        };
+        if info.id != call_id || info.created_by != sender_id.to_string() {
+            tracing::warn!(call_id, %sender_id, "Group call ring does not match the channel's call; ignored");
+            return;
+        }
+        let is_video = matches!(
+            ProtoCallType::try_from(info.r#type),
+            Ok(ProtoCallType::Video | ProtoCallType::ScreenShare)
+        );
+        let peer_name = self.display_name(&sender_id);
+        let channel_name = self.channels().get_channel_local(&channel_id).ok().flatten().map(|c| c.name);
+        let handle = CallHandle::from(call_id.as_str());
+
+        if offer_is_stale_now(info.created_at) {
+            worker.orch_missed_incoming(handle, OrchestratedCallKind::GroupChannel, peer_name, is_video, channel_id.to_string());
+            return;
+        }
+        if !self.call_signaling().store_group_call_invite(&call_id, root_key) {
+            return;
+        }
+        worker.orch_present_incoming(
+            handle.clone(),
+            OrchestratedCallKind::GroupChannel,
+            sender_id,
+            peer_name,
+            is_video,
+            false,
+            String::new(),
+            None,
+            channel_name,
+            channel_id.to_string(),
+        );
+
+        // A group ring has no hangup to end it — the call goes on whether or
+        // not we answer — so it rings out here, as Signal's does.
+        let worker = worker.clone();
+        let signaling = self.call_signaling().clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(RING_TIMEOUT).await;
+            signaling.drop_ringing_group_call_invite(handle.as_str());
+            worker.orch_withdraw_incoming(handle, CallEndReason::NoAnswer);
+        });
+    }
+
+    /// Join the group call we were rung for with its root key, then install
+    /// any newer key a participant sent while we were joining.
+    #[cfg(feature = "media")]
+    async fn join_group_call(
+        &self,
+        worker: &CallWorkerHandle,
+        call_id: &str,
+    ) -> Result<crate::domain::call::CallSetupResult, ClientError> {
+        use crate::services::call_verification::CallVerification;
+
+        let call = call_id.parse::<crate::domain::ids::CallId>()
+            .map_err(|_| ClientError::Inbox("malformed group call id".into()))?;
+        let root_key = self.call_signaling().accept_group_call_invite(call_id)
+            .ok_or_else(|| ClientError::Inbox("no key for this group call".into()))?;
+        let user_id = self.session_current_user_id()
+            .ok_or_else(|| ClientError::Inbox("Not logged in".into()))?;
+
+        let joined = worker.join_call(call, &root_key, user_id).await
+            .map_err(|e| ClientError::Inbox(e.to_string()))?;
+
+        if let Some(pending) = self.call_signaling().take_group_call_invite(call_id) {
+            self.install_participant_group_key(
+                worker, call, &joined.channel_id, pending.sender, *pending.key, pending.epoch,
+            ).await;
+        }
+
+        let verification = CallVerification::derive_verification_emojis(&root_key, call_id);
+        let emojis = CallVerification::to_slint_tuple(&verification);
+        Ok(crate::domain::call::CallSetupResult {
+            call_id: call,
+            channel_id: joined.channel_id,
+            verification_emojis: [emojis.0, emojis.1, emojis.2, emojis.3],
+            is_video: matches!(joined.call_type, crate::domain::call::CallType::Video),
+            started_at_ns: joined.started_at
+                .and_then(|d| d.timestamp_nanos_opt())
+                .filter(|n| *n > 0)
+                .map(|n| n as u64)
+                .unwrap_or(0),
+        })
+    }
+
+    /// Bring `joiner`, who just entered our channel group call, up to the
+    /// key we encrypt with now — the root key they joined with no longer
+    /// works once the call has been rekeyed. Every participant sends (as in
+    /// Signal), so a joiner is covered after the initiator has left; `sent`
+    /// keeps it to one send per joiner per epoch. Epoch 0 is never sent:
+    /// the joiner derives it from the ring, and epoch 0 on the wire is a ring.
+    #[cfg(feature = "media")]
+    pub(crate) async fn handle_participant_joined(
+        &self,
+        joiner: &str,
+        sent: &mut std::collections::HashSet<(crate::domain::ids::CallId, String, u32)>,
+    ) -> Result<(), ClientError> {
+        use crate::services::call_worker::OrchestratedCallKind;
+
+        let Some(worker) = self.call_service().get().cloned() else { return Ok(()) };
+        if worker.orch_active_kind().await != Some(OrchestratedCallKind::GroupChannel) {
+            return Ok(());
+        }
+        let Some(call) = worker.active_call().await else { return Ok(()) };
+        let Some((call_id, key, epoch)) = worker.current_group_key().await else { return Ok(()) };
+        let key = zeroize::Zeroizing::new(key);
+        if call_id != call.id || !first_late_join_send(sent, call_id, joiner, epoch) {
+            return Ok(());
+        }
+        self.call_signaling()
+            .redistribute_group_call_key(&call.channel_id, &call_id.to_string(), *key, epoch, &[joiner.to_string()])
+            .await
+            .map_err(|e| ClientError::Inbox(e.to_string()))?;
         Ok(())
     }
 
@@ -1236,4 +1470,50 @@ pub struct RingingPeer {
     /// ephemeral key only learned when they join.
     pub user_id: String,
     pub info: crate::ui::chat_data::CallParticipantInfo,
+}
+
+/// Whether `sender` is in the call's room right now. LiveKit identities are
+/// user ids (the server mints tokens with `SetIdentity(userID)`).
+#[cfg(feature = "media")]
+fn sender_in_room(sender: &crate::domain::ids::UserId, roster: &[String]) -> bool {
+    let sender = sender.to_string();
+    roster.iter().any(|id| *id == sender)
+}
+
+/// Record a late-join key send; false when this joiner already has this
+/// call's key at `epoch` from us, or when `epoch` is 0 (derived from the ring).
+#[cfg(feature = "media")]
+fn first_late_join_send(
+    sent: &mut std::collections::HashSet<(crate::domain::ids::CallId, String, u32)>,
+    call: crate::domain::ids::CallId,
+    joiner: &str,
+    epoch: u32,
+) -> bool {
+    epoch > 0 && sent.insert((call, joiner.to_string(), epoch))
+}
+
+#[cfg(all(test, feature = "media"))]
+mod group_call_key_tests {
+    use super::*;
+    use crate::domain::ids::{CallId, UserId};
+
+    #[test]
+    fn only_a_sender_in_the_room_is_trusted() {
+        let sender = UserId::new();
+        let other = UserId::new();
+        assert!(sender_in_room(&sender, &[other.to_string(), sender.to_string()]));
+        assert!(!sender_in_room(&sender, &[other.to_string()]));
+        assert!(!sender_in_room(&sender, &[]));
+    }
+
+    #[test]
+    fn late_joiner_gets_each_epoch_once() {
+        let mut sent = std::collections::HashSet::new();
+        let call = CallId(uuid::Uuid::new_v4());
+        assert!(!first_late_join_send(&mut sent, call, "joiner", 0), "epoch 0 is the ring's");
+        assert!(first_late_join_send(&mut sent, call, "joiner", 3));
+        assert!(!first_late_join_send(&mut sent, call, "joiner", 3), "repeat join, same epoch");
+        assert!(first_late_join_send(&mut sent, call, "joiner", 4), "rekeyed since");
+        assert!(first_late_join_send(&mut sent, call, "other", 3));
+    }
 }
