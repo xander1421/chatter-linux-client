@@ -35,6 +35,13 @@ pub struct UserSyncResult {
     pub friendships_removed: usize,
     /// Blocked users reconciled from the server this cycle.
     pub blocked_synced: usize,
+    /// Friendships newly accepted this pass (inserted, or pending → accepted).
+    /// One of these is enough for the contacts list: the UI reloads every
+    /// friend from storage when it hears `FriendAccepted`.
+    pub new_friend_ids: Vec<UserId>,
+    /// A row failed. The pass returned what it could, but `last_synced_at`
+    /// was not advanced and the engine must run this step again.
+    pub incomplete: bool,
 }
 
 impl UserSync {
@@ -191,6 +198,8 @@ impl UserSync {
                                 error = %e,
                                 "Failed to update friendship during sync"
                             );
+                        } else {
+                            result.new_friend_ids.push(user_id);
                         }
                     }
                     Ok(Some(_)) => {} // accepted or blocked, nothing to do
@@ -198,7 +207,10 @@ impl UserSync {
                         let mut friendship = Friendship::new_request(current_user, user_id);
                         friendship.status = FriendshipStatus::Accepted;
                         match self.user_repo.insert_friendship(&friendship) {
-                            Ok(()) => result.friendships_inserted += 1,
+                            Ok(()) => {
+                                result.friendships_inserted += 1;
+                                result.new_friend_ids.push(user_id);
+                            }
                             Err(e) => {
                                 had_failure = true;
                                 tracing::debug!(
@@ -261,6 +273,7 @@ impl UserSync {
         }
 
         // Only advance the sync timestamp on full success.
+        result.incomplete = had_failure;
         if !had_failure {
             let now = Utc::now().timestamp_millis();
             let _ = self.settings_repo.set(SYNC_KEY, &now);

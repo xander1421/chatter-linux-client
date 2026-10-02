@@ -4,6 +4,7 @@
 
 use std::path::Path;
 
+use crate::domain::attachment::{AttachmentStatus, ContentLocation};
 use crate::domain::ephemeral::MessageTTL;
 use crate::domain::ids::{AttachmentId, ChannelId, IntegrationId, MessageId};
 use crate::domain::message::{Message, MessageContent};
@@ -19,14 +20,21 @@ use crate::services::current_user::CurrentUserProvider;
 use super::{MessageError, MessageService};
 
 impl MessageError {
-    /// A missing reason means a transient failure that the user can retry.
-    /// Unknown/stringified failures are deliberately not guessed to be transient.
+    /// User-facing label for a send that did not land.
+    ///
+    /// `None` is a transient failure: the bubble reads "not sent · retry".
+    /// `Some` is the short reason shown after "not sent · ". Resend stays
+    /// available either way (`Message::can_retry_send`). Unknown failures are
+    /// not guessed to be transient.
     pub fn permanent_send_failure_reason(&self) -> Option<&'static str> {
         use crate::error::NetworkError;
         match self {
             Self::Network(e) if e.is_retryable() || e.is_transport_error() => None,
             Self::Network(NetworkError::MismatchedDevices { .. }) => None,
-            Self::Network(NetworkError::PermissionDenied) | Self::NotAuthor => Some("Not allowed"),
+            // SpiceDB down answers PermissionDenied. That is a delivery miss,
+            // not a rule the user broke.
+            Self::Network(NetworkError::PermissionDenied) => Some("Not delivered"),
+            Self::NotAuthor => Some("Not allowed"),
             Self::Network(NetworkError::InvalidRequest(_)) | Self::InvalidContent(_)
                 | Self::InvalidMessage(_) => Some("Message rejected"),
             Self::NotLoggedIn | Self::Network(NetworkError::Unauthenticated) => Some("Sign in required"),
@@ -400,18 +408,19 @@ impl MessageService {
     }
 
     /// Retry a stored channel send; replace its local failed row with the server's row.
+    ///
+    /// A stored failure label does not block the retry. The server assigns the
+    /// canonical id, so the open chat adopts that id in the same row.
     pub async fn retry_channel_message(&self, id: &MessageId) -> Result<Message, MessageError> {
         let mut failed = self.message_repo.get(id)?.ok_or(MessageError::MessageNotFound(*id))?;
         if failed.conversation_type != crate::domain::message::ConversationType::Channel
             || failed.sender_id != Some(self.settings_repo.current_user_id()?)
-            || failed.delivery_status != "failed" || failed.failure_reason.is_some()
+            || failed.delivery_status != "failed"
+            || failed.is_deleted
         {
             return Err(MessageError::InvalidContent("message cannot be retried".into()));
         }
-        let pointers = failed.attachments.iter().map(|id| {
-            self.attachment_repo.get(id)?.and_then(|a| a.to_pointer())
-                .ok_or_else(|| MessageError::InvalidContent("Attachment unavailable".into()))
-        }).collect::<Result<Vec<_>, MessageError>>()?;
+        let pointers = self.pointers_for_resend(&failed.attachments).await?;
         let quote = match (failed.reply_to_author_id, failed.reply_to) {
             (Some(author), Some(parent)) => self.message_repo.get(&parent)?.map(|parent| {
                 crate::services::gateway::QuoteIntent {
@@ -432,7 +441,9 @@ impl MessageService {
                 if let Some(quote) = quote {
                     sent = self.persist_outgoing_reply_context(sent, &quote).map_err(|(_, e)| e)?;
                 }
-                self.message_repo.delete(id)?;
+                if sent.id != *id {
+                    self.message_repo.delete(id)?;
+                }
                 Ok(sent)
             }
             Err(error) => {
@@ -441,6 +452,58 @@ impl MessageService {
                 Err(error)
             }
         }
+    }
+
+    /// Pointers for a resend. An attachment whose upload already finished is
+    /// reused (`Attachment::to_pointer`, which keeps the voice-note flag).
+    /// Otherwise the plaintext at `local_path` is uploaded and the CDN fields
+    /// are stamped onto the original row, so the bubble keeps its attachment id.
+    /// The ciphertext from a finished upload is never uploaded again.
+    pub(crate) async fn pointers_for_resend(
+        &self,
+        attachment_ids: &[AttachmentId],
+    ) -> Result<Vec<crate::proto::content_v1::AttachmentPointer>, MessageError> {
+        let mut pointers = Vec::with_capacity(attachment_ids.len());
+        for id in attachment_ids {
+            let mut attachment = self.attachment_repo.get(id)?.ok_or_else(|| {
+                MessageError::InvalidContent(format!("attachment {id} can no longer be sent"))
+            })?;
+            if let Some(pointer) = attachment.to_pointer() {
+                pointers.push(pointer);
+                continue;
+            }
+            let path = attachment.local_path.as_deref().filter(|p| {
+                !p.is_empty() && Path::new(p).is_file()
+            });
+            let Some(path) = path else {
+                return Err(MessageError::InvalidContent(format!(
+                    "attachment {id} can no longer be sent"
+                )));
+            };
+            let uploaded = AttachmentService::new(self.attachment_repo.clone(), self.grpc_pool.clone())
+                .upload_to_cdn_encrypted(Path::new(path))
+                .await
+                .map_err(|e| MessageError::AttachmentError(e.to_string()))?;
+            attachment.remote_url = Some(uploaded.cdn_key.clone());
+            attachment.encryption_key = Some(uploaded.encryption_key.to_vec());
+            attachment.encryption_iv = Some(uploaded.digest.to_vec());
+            attachment.status = AttachmentStatus::Ready;
+            attachment.content_location = ContentLocation::OnFilesystem;
+            if attachment.metadata.waveform_samples.is_none() && !uploaded.waveform.is_empty() {
+                attachment.metadata.waveform_samples = Some(uploaded.waveform.clone());
+            }
+            if attachment.metadata.duration_seconds.is_none() && uploaded.duration_ms > 0 {
+                attachment.metadata.duration_seconds = Some(uploaded.duration_ms as f64 / 1000.0);
+            }
+            self.attachment_repo.update(&attachment)?;
+            let pointer = attachment.to_pointer().unwrap_or_else(|| {
+                let mut pointer = uploaded.to_attachment_pointer();
+                pointer.voice_note = !uploaded.waveform.is_empty();
+                pointer
+            });
+            pointers.push(pointer);
+        }
+        Ok(pointers)
     }
 
     /// Send a message with file attachments (high-level API).
@@ -1150,5 +1213,10 @@ mod send_failure_tests {
             assert!(MessageError::Network(error).permanent_send_failure_reason().is_some());
         }
         assert!(MessageError::InvalidContent("too large".into()).permanent_send_failure_reason().is_some());
+        assert_eq!(
+            MessageError::Network(NetworkError::PermissionDenied).permanent_send_failure_reason(),
+            Some("Not delivered"),
+        );
+        assert_eq!(MessageError::NotAuthor.permanent_send_failure_reason(), Some("Not allowed"));
     }
 }

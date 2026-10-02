@@ -1178,9 +1178,9 @@ export component MessageItem inherits Rectangle {
                             }
 
                             // "not sent" is the retry control (Signal's "tap
-                            // to retry"): `message-clicked` resends it.
-                            if root.is-own && !root.mesh-delivery && root.delivery-status == "failed" && root.failure-reason == "": Text {
-                                text: "not sent \u{b7} retry";
+                            // to retry"): `message-clicked` resends it, reason or not.
+                            if root.is-own && !root.mesh-delivery && root.delivery-status == "failed": Text {
+                                text: root.failure-reason == "" ? "not sent \u{b7} retry" : "not sent \u{b7} " + root.failure-reason;
                                 color: Colors.error;
                                 font-size: Typography.xs;
                                 font-italic: true;
@@ -1192,13 +1192,6 @@ export component MessageItem inherits Rectangle {
                                     mouse-cursor: pointer;
                                     clicked => { root.message-clicked(root.message-id); }
                                 }
-                            }
-
-                            if root.is-own && !root.mesh-delivery && root.delivery-status == "failed" && root.failure-reason != "": Text {
-                                text: "not sent · " + root.failure-reason;
-                                color: Colors.error;
-                                font-size: Typography.xs;
-                                accessible-role: text;
                             }
 
                             if root.is-own && !root.mesh-delivery && root.delivery-status != "sending" && root.delivery-status != "failed": ticks := Rectangle {

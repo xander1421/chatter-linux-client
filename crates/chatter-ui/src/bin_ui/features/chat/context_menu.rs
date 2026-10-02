@@ -5,6 +5,7 @@ use std::sync::Arc;
 use slint::{ComponentHandle, Model, SharedString};
 
 use chatter_core::client::ChatterClient;
+use chatter_core::domain::message::MessageMenu;
 use chatter_core::domain::UserId;
 use chatter_core::state::ActiveConversation;
 
@@ -48,70 +49,21 @@ pub fn wire_more_clicked(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                 }
             };
 
-            let is_own_message = match handle.is_own_message(&target_sender_id, target_sent_timestamp) {
-                Ok(v) => v,
+            let menu = match handle.message_menu(&target_sender_id, target_sent_timestamp) {
+                Ok(menu) => menu,
                 Err(e) => {
                     tracing::error!(error = %e, "Failed to look up message for context menu");
                     return;
                 }
             };
 
-            // Capability decision (DM-any vs own-only) lives in core.
-            let can_delete_for_everyone = handle
-                .can_delete_for_everyone(&target_sender_id, target_sent_timestamp)
-                .unwrap_or(is_own_message);
-
-            if conversation.is_anon() {
-                // Anon conversations: get pin state and attachments from UI model
-                let _ = slint::invoke_from_event_loop(move || {
-                    if let Some(w) = weak.upgrade() {
-                        let (is_pinned, has_attachments) = find_message_ui_state(
-                            &w, &sender_id_str, &timestamp_ns_str,
-                        );
-                        set_context_menu(&w, sender_id_str, timestamp_ns_str, is_own_message, can_delete_for_everyone, is_pinned, has_attachments, menu_x, menu_y);
-                    }
-                });
-            } else {
-                // DM/Channel: get pin state and attachments from service data
-                let msg = match handle.conversation() {
-                    ActiveConversation::ServerDm { .. } | ActiveConversation::Channel(_) => {
-                        match ui_ctx.get_message_by_sender_timestamp(&target_sender_id, target_sent_timestamp) {
-                            Some(msg) => msg,
-                            None => {
-                                tracing::error!("Message not found for context menu");
-                                return;
-                            }
-                        }
-                    }
-                    _ => return,
-                };
-
-                let can_retry = is_own_message && msg.can_retry_send();
-                let is_pinned = msg.is_pinned;
-                let has_attachments = !msg.attachments.is_empty();
-
-                let _ = slint::invoke_from_event_loop(move || {
-                    if let Some(w) = weak.upgrade() {
-                        set_context_menu(&w, sender_id_str, timestamp_ns_str, is_own_message, can_delete_for_everyone, is_pinned, has_attachments, menu_x, menu_y);
-                        w.set_context_menu_can_retry(can_retry);
-                    }
-                });
-            }
+            let _ = slint::invoke_from_event_loop(move || {
+                if let Some(w) = weak.upgrade() {
+                    set_context_menu(&w, sender_id_str, timestamp_ns_str, menu, menu_x, menu_y);
+                }
+            });
         });
     });
-}
-
-/// Find pin state and attachment info from the UI message model.
-fn find_message_ui_state(w: &MainWindow, sender_id: &str, timestamp_ns: &str) -> (bool, bool) {
-    let model = w.get_messages();
-    for i in 0..model.row_count() {
-        if let Some(m) = model.row_data(i) {
-            if m.sender_id.as_str() == sender_id && m.timestamp_ns.as_str() == timestamp_ns {
-                return (m.is_pinned, m.has_attachments);
-            }
-        }
-    }
-    (false, false)
 }
 
 /// Resolve the message id for a (sender_id, timestamp_ns) pair from the UI
@@ -130,25 +82,42 @@ fn find_message_id(w: &MainWindow, sender_id: &str, timestamp_ns: &str) -> Strin
 }
 
 /// Set all context menu properties on the window.
+///
+/// Flags come from [`MessageMenu`] and are written before the menu is shown.
+/// The window bools stay in sync for anything that still reads them; the menu
+/// itself renders `MessageMenuActions`.
 fn set_context_menu(
     w: &MainWindow,
     sender_id: String,
     timestamp_ns: String,
-    is_own_message: bool,
-    can_delete_for_everyone: bool,
-    is_pinned: bool,
-    has_attachments: bool,
+    menu: MessageMenu,
     menu_x: f32,
     menu_y: f32,
 ) {
+    let actions = menu.actions;
+    let flags = w.global::<crate::MessageMenuActions>();
+    flags.set_resend(actions.resend);
+    flags.set_react(actions.react);
+    flags.set_reply(actions.reply);
+    flags.set_edit(actions.edit);
+    flags.set_pin(actions.pin);
+    flags.set_pinned(menu.pinned);
+    flags.set_delete_for_everyone(actions.delete_for_everyone);
+    flags.set_delete_for_me(actions.delete_for_me);
+    flags.set_forward(actions.forward);
+    flags.set_copy(actions.copy);
+    flags.set_download(actions.download);
+    flags.set_info(actions.info);
+    flags.set_select(actions.select);
+
     w.set_context_menu_message_id(find_message_id(w, &sender_id, &timestamp_ns).into());
     w.set_context_menu_sender_id(sender_id.into());
     w.set_context_menu_timestamp_ns(timestamp_ns.into());
-    w.set_context_menu_is_own_message(is_own_message);
-    w.set_context_menu_can_retry(false);
-    w.set_context_menu_can_delete_for_everyone(can_delete_for_everyone);
-    w.set_context_menu_is_pinned(is_pinned);
-    w.set_context_menu_has_attachments(has_attachments);
+    w.set_context_menu_is_own_message(menu.is_own);
+    w.set_context_menu_can_retry(actions.resend);
+    w.set_context_menu_can_delete_for_everyone(actions.delete_for_everyone);
+    w.set_context_menu_is_pinned(menu.pinned);
+    w.set_context_menu_has_attachments(actions.download);
     w.set_context_menu_x(menu_x);
     w.set_context_menu_y(menu_y);
     w.set_context_menu_visible(true);

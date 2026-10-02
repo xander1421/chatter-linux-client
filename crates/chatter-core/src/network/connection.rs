@@ -173,6 +173,30 @@ fn now_ms() -> u64 {
 pub fn set_server_status(status: ServerStatus) {
     SERVER_STATUS.store(status.as_i32() as u8, std::sync::atomic::Ordering::Release);
     SERVER_STATUS_AT_MS.store(now_ms(), std::sync::atomic::Ordering::Release);
+    // `watch::send` wakes only when the value changes, so a successful RPC
+    // that reports Reachable again does not poke waiters. Subscribers see
+    // the offline→online edge the banner already shows via OfflineState.
+    let _ = server_status_watch().send(status);
+}
+
+fn server_status_watch() -> &'static tokio::sync::watch::Sender<ServerStatus> {
+    static TX: std::sync::LazyLock<tokio::sync::watch::Sender<ServerStatus>> =
+        std::sync::LazyLock::new(|| {
+            let (tx, _rx) = tokio::sync::watch::channel(ServerStatus::Unknown);
+            tx
+        });
+    &TX
+}
+
+/// Subscribe to server reachability.
+///
+/// The latest status is available from the receiver immediately. `changed`
+/// resolves only when [`set_server_status`] stores a different value — the
+/// same transition `server_monitor` mirrors into `OfflineState` for the
+/// "No server" banner. The sync engine retries a failed cycle on the
+/// offline→online edge of this watch.
+pub fn subscribe_server_status() -> tokio::sync::watch::Receiver<ServerStatus> {
+    server_status_watch().subscribe()
 }
 
 /// Read the process-global server reachability.

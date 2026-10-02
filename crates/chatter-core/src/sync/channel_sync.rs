@@ -40,6 +40,8 @@ pub struct ChannelSyncResult {
     pub channel_parse_errors: usize,
     /// Per-channel member reconcile failures.
     pub member_sync_errors: usize,
+    /// A step failed and `last_synced_at` was not advanced. The engine retries.
+    pub incomplete: bool,
 }
 
 impl ChannelSync {
@@ -151,6 +153,7 @@ impl ChannelSync {
         // Only advance the sync timestamp when every per-channel step
         // succeeded. Partial failure must cause the next cycle to re-try
         // the channels we skipped here.
+        result.incomplete = had_failure;
         if !had_failure {
             let now = chrono::Utc::now().timestamp_millis();
             let _ = self.settings_repo.set(SYNC_KEY, &now);

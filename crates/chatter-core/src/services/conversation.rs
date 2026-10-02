@@ -17,7 +17,7 @@ use std::sync::Arc;
 
 use crate::client::ChatterClient;
 use crate::domain::ids::{ChannelId, UserId};
-use crate::domain::message::{ConversationType, UnreadAnchor};
+use crate::domain::message::{ConversationType, MessageMenu, UnreadAnchor};
 use crate::state::ActiveConversation;
 
 /// Unified error type for conversation operations.
@@ -564,17 +564,64 @@ impl ConversationHandle {
 
     /// Whether the current user may delete a message for everyone.
     ///
-    /// Only your own message, in every conversation (Signal). Keeps the
-    /// capability rule in core.
+    /// Own message, already on the server, inside the remote-action window.
+    /// Delegates to [`crate::domain::message::MessageActions`] so the menu
+    /// and this helper cannot drift.
     pub fn can_delete_for_everyone(
         &self,
         target_author: &UserId,
         target_sent_timestamp: u64,
     ) -> ConversationResult<bool> {
-        // Signal: only your own messages, in every conversation. A peer's
-        // device honours a delete only for the sender's own message, so
-        // offering it on theirs would promise something that never happens.
-        self.is_own_message(target_author, target_sent_timestamp)
+        Ok(self.message_menu(target_author, target_sent_timestamp)?.actions.delete_for_everyone)
+    }
+
+    /// Action flags for the message menu. One lookup for every conversation
+    /// type; the UI renders `actions` and does not re-decide them.
+    pub fn message_menu(
+        &self,
+        target_author: &UserId,
+        target_sent_timestamp: u64,
+    ) -> ConversationResult<MessageMenu> {
+        let message = self.stored_message(target_author, target_sent_timestamp)?;
+        let is_own = message.sender_id == self.client.auth_state().get().current_user_id;
+        let now_ns = crate::util::time::TimestampNanos::now().as_u64();
+        let mut actions = message.actions(is_own, now_ns);
+        // Resend reuses the server-DM and channel send pipelines. Other
+        // conversation types have no retry entry point, so the menu must not
+        // offer one.
+        if !matches!(message.conversation_type, ConversationType::ServerDm | ConversationType::Channel) {
+            actions.resend = false;
+        }
+        Ok(MessageMenu {
+            actions,
+            pinned: message.is_pinned,
+            is_own,
+        })
+    }
+
+    fn stored_message(
+        &self,
+        target_author: &UserId,
+        target_sent_timestamp: u64,
+    ) -> ConversationResult<crate::domain::Message> {
+        match &self.conversation {
+            ActiveConversation::AnonDm(id) => self
+                .client
+                .anon_dms()
+                .get_message_by_sender_timestamp(id, target_author, target_sent_timestamp)?
+                .ok_or_else(|| ConversationError::Other("Message not found".into())),
+            // Timestamp-only: anon-group sender ids are not byte-identical to
+            // the id the menu was opened with (see `is_own_message`).
+            ActiveConversation::AnonGroup(id) => self
+                .client
+                .anon_groups()
+                .get_message_by_timestamp(id, target_sent_timestamp)?
+                .ok_or_else(|| ConversationError::Other("Message not found".into())),
+            ActiveConversation::ServerDm { .. } | ActiveConversation::Channel(_) => {
+                self.lookup_message(target_author, target_sent_timestamp)
+            }
+            ActiveConversation::None => Err(ConversationError::NoConversation),
+        }
     }
 
     // ========================================================================

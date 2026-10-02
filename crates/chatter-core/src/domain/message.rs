@@ -216,10 +216,85 @@ pub struct Message {
     /// AI integrations mentioned in message.
     pub mentioned_integrations: Vec<IntegrationId>,
     pub targets_ai_bot: bool,
-    /// Delivery status: "", "sent", "delivered", "read".
+    /// Delivery status: "", "sent", "delivered", "read", "sending", "failed".
     pub delivery_status: String,
-    /// Permanent send refusal; absent for transient failures.
+    /// Short label for a send that did not land. Absent when the failure is
+    /// transient (the bubble reads "not sent · retry"). A label does not block
+    /// resend — see [`Message::can_retry_send`].
     pub failure_reason: Option<String>,
+}
+
+/// Signal's window for edit and delete-for-everyone, measured from `sent_at`.
+pub const REMOTE_ACTION_WINDOW_NS: u64 = 24 * 60 * 60 * 1_000_000_000;
+
+/// Which message-menu actions a bubble may offer.
+///
+/// Decided here, from send state, sender, content, and age. The UI renders
+/// these flags and does not re-decide them.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct MessageActions {
+    pub resend: bool,
+    pub react: bool,
+    pub reply: bool,
+    pub edit: bool,
+    pub pin: bool,
+    pub delete_for_everyone: bool,
+    pub delete_for_me: bool,
+    pub forward: bool,
+    pub copy: bool,
+    pub download: bool,
+    pub info: bool,
+    pub select: bool,
+}
+
+/// Menu facts the UI needs beside the action flags: pin state (Pin vs Unpin)
+/// and whether the bubble is ours.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct MessageMenu {
+    pub actions: MessageActions,
+    pub pinned: bool,
+    pub is_own: bool,
+}
+
+impl MessageActions {
+    /// `now_ns` and `sent_at` are nanoseconds since the Unix epoch.
+    ///
+    /// A message has reached the server when it is someone else's, or when our
+    /// own copy is no longer `"failed"` or `"sending"` (an empty status counts
+    /// as sent). Resend is offered for every failed outgoing bubble, including
+    /// one that carries a [`Message::failure_reason`]. Edit needs a non-empty
+    /// body, so an attachment-only voice note is not editable. Edit and
+    /// delete-for-everyone also require the remote-action window.
+    #[must_use]
+    pub fn decide(
+        is_own: bool,
+        is_deleted: bool,
+        delivery_status: &str,
+        sent_at: u64,
+        now_ns: u64,
+        text: Option<&str>,
+        has_attachments: bool,
+    ) -> Self {
+        let reached = !is_own || (delivery_status != "failed" && delivery_status != "sending");
+        let within_window =
+            sent_at > 0 && now_ns.saturating_sub(sent_at) <= REMOTE_ACTION_WINDOW_NS;
+        let has_body = text.is_some_and(|t| !t.trim().is_empty());
+        let on_server = reached && !is_deleted;
+        Self {
+            resend: is_own && delivery_status == "failed" && !is_deleted,
+            react: on_server,
+            reply: on_server,
+            edit: is_own && on_server && within_window && has_body,
+            pin: on_server,
+            delete_for_everyone: is_own && on_server && within_window,
+            delete_for_me: !is_deleted,
+            forward: !is_deleted,
+            copy: !is_deleted,
+            download: has_attachments && !is_deleted,
+            info: is_own && on_server,
+            select: !is_deleted,
+        }
+    }
 }
 
 impl Message {
@@ -277,10 +352,26 @@ impl Message {
         }
     }
 
-    /// A failed delivery can be retried only when core recorded no permanent refusal.
+    /// A failed outgoing bubble can be sent again. The failure label is not a lock.
     #[must_use]
     pub fn can_retry_send(&self) -> bool {
-        self.delivery_status == "failed" && self.failure_reason.is_none()
+        self.delivery_status == "failed" && !self.is_deleted
+    }
+
+    /// Menu actions for this message. `is_own` is the caller's authorship check
+    /// (sealed-sender rows do not always carry `sender_id`). `now_ns` is
+    /// nanoseconds since the Unix epoch.
+    #[must_use]
+    pub fn actions(&self, is_own: bool, now_ns: u64) -> MessageActions {
+        MessageActions::decide(
+            is_own,
+            self.is_deleted,
+            &self.delivery_status,
+            self.sent_at,
+            now_ns,
+            self.as_text(),
+            self.has_attachments(),
+        )
     }
 
     /// Check if this message is the root of a thread.
@@ -349,7 +440,7 @@ impl Message {
     ///   its description.
     /// - Other empty-body messages with no attachments render as "[Message]".
     /// - If `current_user_id` is provided and matches this message's sender,
-    ///   the preview is prefixed with "You: " (text messages only).
+    ///   the preview is prefixed with "You: " (text and attachments alike).
     /// - A pinned message carries a 📌 marker, so the row says *why* this is
     ///   the last thing that happened here.
     ///
@@ -388,21 +479,20 @@ impl Message {
             MessageContent::System(system) => return format!("{}{}", pin, system.description()),
             _ => {}
         }
-        if text.is_empty() {
-            if let Some(label) = attachment_label {
-                return format!("{}{}", pin, label);
-            }
-            if att_count > 0 {
-                let suffix = if att_count == 1 { "" } else { "s" };
-                return format!("{}\u{1F4CE} {} attachment{}", pin, att_count, suffix);
-            }
-            return format!("{}[Message]", pin);
-        }
-        let truncated = truncate_preview_text(text, 50);
-        if is_own {
-            format!("{}You: {}", pin, truncated)
+        let body = if !text.is_empty() {
+            truncate_preview_text(text, 50)
+        } else if let Some(label) = attachment_label {
+            label.to_string()
+        } else if att_count > 0 {
+            let suffix = if att_count == 1 { "" } else { "s" };
+            format!("\u{1F4CE} {} attachment{}", att_count, suffix)
         } else {
-            format!("{}{}", pin, truncated)
+            return format!("{}[Message]", pin);
+        };
+        if is_own {
+            format!("{}You: {}", pin, body)
+        } else {
+            format!("{}{}", pin, body)
         }
     }
 }
@@ -1168,6 +1258,14 @@ mod tests {
             "\u{1F5BC}\u{FE0F} Photo +1"
         );
         assert_eq!(file.sidebar_preview(Some(&me), None), "\u{1F4CE} 2 attachments");
+        // Ours says so too — a voice note sent by us was a bare "You:".
+        let mut voice = text(me, "");
+        voice.attachments = vec![AttachmentId::new()];
+        assert_eq!(
+            voice.sidebar_preview(Some(&me), Some("\u{1F3A4} Voice message")),
+            "You: \u{1F3A4} Voice message"
+        );
+        assert_eq!(voice.sidebar_preview(Some(&me), None), "You: \u{1F4CE} 1 attachment");
 
         // Nothing renderable at all still names the row.
         assert_eq!(text(them, "").sidebar_preview(Some(&me), None), "[Message]");
@@ -1192,5 +1290,87 @@ mod tests {
             attachment_ids: Vec::new(),
         };
         assert!(empty.is_empty());
+    }
+
+    fn bubble(status: &str, body: Option<&str>, attachments: bool, sent_at: u64) -> Message {
+        let mut message = Message::new_text(
+            ChannelId::new(),
+            ConversationType::ServerDm,
+            Some(UserId::new()),
+            body.unwrap_or("").into(),
+            sent_at,
+        );
+        if attachments {
+            message.attachments = vec![AttachmentId::new()];
+            let caption = body.unwrap_or("").trim();
+            message.content = if caption.is_empty() {
+                MessageContent::Mixed(MixedContent::attachments_only(message.attachments.clone()))
+            } else {
+                MessageContent::Mixed(MixedContent::new(caption.to_string(), message.attachments.clone()))
+            };
+        }
+        message.delivery_status = status.into();
+        message
+    }
+
+    /// Menu eligibility: failed vs sent, text vs attachment-only, own vs peer.
+    #[test]
+    fn message_actions_follow_send_state() {
+        const NOW: u64 = 1_700_000_000_000_000_000;
+        const HOUR_NS: u64 = 60 * 60 * 1_000_000_000;
+        let young = NOW - HOUR_NS;
+        let old = NOW - 25 * HOUR_NS;
+
+        let mut failed_voice = bubble("failed", None, true, young);
+        failed_voice.failure_reason = Some("Not delivered".into());
+        assert!(failed_voice.can_retry_send());
+        let actions = failed_voice.actions(true, NOW);
+        assert!(actions.resend && actions.forward && actions.copy && actions.download);
+        assert!(actions.delete_for_me && actions.select);
+        assert!(!actions.react && !actions.reply && !actions.edit && !actions.pin);
+        assert!(!actions.delete_for_everyone && !actions.info);
+
+        let failed_text = bubble("failed", Some("hello"), false, young);
+        let actions = failed_text.actions(true, NOW);
+        assert!(actions.resend && !actions.download && !actions.edit);
+        assert!(!actions.react && !actions.delete_for_everyone && !actions.info);
+
+        let sent_text = bubble("sent", Some("hello"), false, young);
+        assert!(!sent_text.can_retry_send());
+        let actions = sent_text.actions(true, NOW);
+        assert!(!actions.resend && !actions.download);
+        assert!(actions.react && actions.reply && actions.edit && actions.pin);
+        assert!(actions.delete_for_everyone && actions.info && actions.forward && actions.copy);
+        assert!(actions.select && actions.delete_for_me);
+
+        let old_text = bubble("sent", Some("hello"), false, old);
+        let actions = old_text.actions(true, NOW);
+        assert!(!actions.edit && !actions.delete_for_everyone);
+        assert!(actions.react && actions.reply && actions.pin && actions.info);
+
+        let sent_voice = bubble("delivered", None, true, young);
+        let actions = sent_voice.actions(true, NOW);
+        assert!(!actions.edit && actions.delete_for_everyone && actions.download);
+
+        let captioned = bubble("sent", Some("listen"), true, young);
+        let actions = captioned.actions(true, NOW);
+        assert!(actions.edit && actions.download && actions.delete_for_everyone);
+
+        let peer = bubble("sent", Some("hello"), false, young);
+        let actions = peer.actions(false, NOW);
+        assert!(!actions.resend && !actions.edit && !actions.delete_for_everyone && !actions.info);
+        assert!(actions.react && actions.reply && actions.pin && actions.forward && actions.copy);
+        assert!(actions.select && actions.delete_for_me);
+
+        let sending = bubble("sending", Some("hello"), false, young);
+        let actions = sending.actions(true, NOW);
+        assert!(!actions.resend && !actions.react && !actions.reply && !actions.edit && !actions.pin);
+        assert!(!actions.delete_for_everyone && !actions.info);
+        assert!(actions.forward && actions.delete_for_me);
+
+        let mut deleted = bubble("failed", Some("hello"), false, young);
+        deleted.is_deleted = true;
+        let actions = deleted.actions(true, NOW);
+        assert!(!actions.resend && !actions.delete_for_me && !actions.forward && !deleted.can_retry_send());
     }
 }

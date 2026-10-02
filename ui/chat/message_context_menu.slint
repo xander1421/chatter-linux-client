@@ -17,6 +17,24 @@ import { Typography } from "../theme/typography.slint";
 import { Icons } from "../theme/icons.slint";
 import { QuickReactions } from "types.slint";
 
+// Action flags for this hold. Core fills them before the menu is shown;
+// this file only renders them.
+export global MessageMenuActions {
+    in-out property <bool> resend: false;
+    in-out property <bool> react: false;
+    in-out property <bool> reply: false;
+    in-out property <bool> edit: false;
+    in-out property <bool> pin: false;
+    in-out property <bool> pinned: false;
+    in-out property <bool> delete-for-everyone: false;
+    in-out property <bool> delete-for-me: false;
+    in-out property <bool> forward: false;
+    in-out property <bool> copy: false;
+    in-out property <bool> download: false;
+    in-out property <bool> info: false;
+    in-out property <bool> select: false;
+}
+
 // One tap-to-react emoji in the quick row. 48px so it is a real touch target.
 component QuickReaction inherits Rectangle {
     in property <string> emoji;
@@ -111,6 +129,11 @@ export component MessageContextMenu inherits Rectangle {
     in property <bool> is-pinned: false;
     in property <bool> has-attachments: false;  // Show download option when true
     in property <bool> can-thread: false;  // Threads are a channel feature (none in 1:1, as in Signal)
+    // Something on the second page is offered. Core decides each flag.
+    private property <bool> more-page: MessageMenuActions.react || MessageMenuActions.info
+        || (MessageMenuActions.reply && root.can-thread) || MessageMenuActions.select
+        || MessageMenuActions.edit || MessageMenuActions.pin || MessageMenuActions.download
+        || MessageMenuActions.delete-for-everyone || MessageMenuActions.delete-for-me;
 
     // Callbacks - use (sender_id, timestamp_ns) for Signal-style lookups
     callback retry-clicked(string);
@@ -213,7 +236,7 @@ export component MessageContextMenu inherits Rectangle {
                 // had to guess where it would appear and hit it blind. The
                 // reactions pill below a bubble is `if has-reactions`, so it could
                 // not bootstrap the first reaction either.
-                if !root.more-actions: HorizontalLayout {
+                if MessageMenuActions.react && !root.more-actions: HorizontalLayout {
                     spacing: Spacing.none;
                     alignment: space-between;
                     padding-bottom: Spacing.xs;
@@ -227,16 +250,16 @@ export component MessageContextMenu inherits Rectangle {
                     }
                 }
 
-                if root.can-retry && !root.more-actions: MenuItem {
+                if MessageMenuActions.resend && !root.more-actions: MenuItem {
                     icon: Icons.send;
-                    label: "Retry";
+                    label: "Resend";
                     clicked => {
                         root.retry-clicked(root.message-id);
                         root.close();
                     }
                 }
 
-                if root.more-actions: MenuItem {
+                if MessageMenuActions.react && root.more-actions: MenuItem {
                     icon: Icons.smile;
                     label: "More reactions";
                     clicked => {
@@ -245,7 +268,7 @@ export component MessageContextMenu inherits Rectangle {
                     }
                 }
 
-                if root.is-own-message && root.more-actions: MenuItem {
+                if MessageMenuActions.info && root.more-actions: MenuItem {
                     icon: Icons.clock;
                     label: "Info";
                     clicked => {
@@ -254,7 +277,7 @@ export component MessageContextMenu inherits Rectangle {
                     }
                 }
 
-                if !root.more-actions: MenuItem {
+                if MessageMenuActions.reply && !root.more-actions: MenuItem {
                     icon: Icons.reply;
                     label: "Reply";
                     clicked => {
@@ -263,7 +286,7 @@ export component MessageContextMenu inherits Rectangle {
                     }
                 }
 
-                if root.can-thread && root.more-actions: MenuItem {
+                if MessageMenuActions.reply && root.can-thread && root.more-actions: MenuItem {
                     icon: Icons.message-circle;
                     label: "Reply in Thread";
                     clicked => {
@@ -274,7 +297,7 @@ export component MessageContextMenu inherits Rectangle {
 
                 // The discoverable route into multi-select, for anyone who never
                 // finds the longer hold.
-                if root.more-actions: MenuItem {
+                if MessageMenuActions.select && root.more-actions: MenuItem {
                     icon: Icons.check;
                     label: "Select";
                     clicked => {
@@ -283,7 +306,7 @@ export component MessageContextMenu inherits Rectangle {
                     }
                 }
 
-                if root.is-own-message && root.more-actions: MenuItem {
+                if MessageMenuActions.edit && root.more-actions: MenuItem {
                     icon: Icons.edit;
                     label: "Edit";
                     clicked => {
@@ -292,16 +315,16 @@ export component MessageContextMenu inherits Rectangle {
                     }
                 }
 
-                if root.more-actions: MenuItem {
+                if MessageMenuActions.pin && root.more-actions: MenuItem {
                     icon: Icons.pin;
-                    label: root.is-pinned ? "Unpin" : "Pin";
+                    label: MessageMenuActions.pinned ? "Unpin" : "Pin";
                     clicked => {
                         root.pin-clicked(root.sender-id, root.timestamp-ns);
                         root.close();
                     }
                 }
 
-                if !root.more-actions: MenuItem {
+                if MessageMenuActions.forward && !root.more-actions: MenuItem {
                     icon: Icons.send;
                     label: "Forward";
                     clicked => {
@@ -310,7 +333,7 @@ export component MessageContextMenu inherits Rectangle {
                     }
                 }
 
-                if !root.more-actions: MenuItem {
+                if MessageMenuActions.copy && !root.more-actions: MenuItem {
                     icon: Icons.copy;
                     label: "Copy";
                     clicked => {
@@ -319,7 +342,7 @@ export component MessageContextMenu inherits Rectangle {
                     }
                 }
 
-                if root.has-attachments && root.more-actions: MenuItem {
+                if MessageMenuActions.download && root.more-actions: MenuItem {
                     icon: Icons.download;
                     label: "Download";
                     clicked => {
@@ -328,13 +351,13 @@ export component MessageContextMenu inherits Rectangle {
                     }
                 }
 
-                if !root.more-actions: MenuItem {
+                if root.more-page && !root.more-actions: MenuItem {
                     icon: Icons.more-horizontal;
                     label: "More";
                     clicked => { root.more-actions = true; menu-scroll.viewport-y = 0px; }
                 }
 
-                if root.can-delete-for-everyone && root.more-actions: MenuItem {
+                if MessageMenuActions.delete-for-everyone && root.more-actions: MenuItem {
                     icon: Icons.trash;
                     label: "Delete for Everyone";
                     destructive: true;
@@ -344,7 +367,7 @@ export component MessageContextMenu inherits Rectangle {
                     }
                 }
 
-                if root.more-actions: MenuItem {
+                if MessageMenuActions.delete-for-me && root.more-actions: MenuItem {
                     icon: Icons.trash;
                     label: "Delete for Me";
                     destructive: true;

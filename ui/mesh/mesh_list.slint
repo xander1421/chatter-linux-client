@@ -101,7 +101,7 @@ export component MeshList inherits Rectangle {
         // ── The standing claim: serverless, and a peer count for connectivity ──
         if !root.collapsed && root.expanded: Rectangle {
             height: 20px * Appearance.text-grow;
-            HorizontalLayout {
+            caption := HorizontalLayout {
                 padding-left: Spacing.md;
                 padding-right: Spacing.sm;
                 spacing: Spacing.xs;
@@ -114,13 +114,16 @@ export component MeshList inherits Rectangle {
                         source: Icons.radio;
                         width: 11px;
                         height: 11px;
-                        colorize: !MeshGlobal.radio-running ? Colors.warning
+                        colorize: !MeshGlobal.mesh-on ? Colors.text-muted
+                            : !MeshGlobal.radio-running ? Colors.warning
                             : MeshGlobal.peer-count > 0 ? Colors.glow-cyan
                             : Colors.text-muted;
                     }
                 }
+                // What the mesh needs, not what this device lacks: worded as a
+                // capability so it is not read as a status while the server is up.
                 Text {
-                    text: "No server, no internet · ";
+                    text: "Works without server or internet · ";
                     color: Colors.text-muted;
                     font-size: Typography.xs;
                     vertical-alignment: center;
@@ -130,13 +133,17 @@ export component MeshList inherits Rectangle {
                 // Zero peers is normal and stays muted; a radio that is *off* is
                 // the one state here the user can act on, so it is the one
                 // allowed a warning colour.
+                // A switched-off mesh has no radio running either; that is the
+                // user's own choice, not Bluetooth being off (chat_header agrees).
+                property <bool> radio-down: MeshGlobal.mesh-on && !MeshGlobal.radio-running;
                 Text {
-                    text: !MeshGlobal.radio-running ? "Bluetooth off"
+                    text: !MeshGlobal.mesh-on ? "mesh off"
+                        : caption.radio-down ? "Bluetooth off"
                         : MeshGlobal.peer-count == 0 ? "none nearby"
                         : MeshGlobal.peer-count == 1 ? "1 nearby"
                         : MeshGlobal.peer-count + " nearby";
-                    color: !MeshGlobal.radio-running ? Colors.warning : Colors.text-muted;
-                    font-weight: !MeshGlobal.radio-running ? 600 : 400;
+                    color: caption.radio-down ? Colors.warning : Colors.text-muted;
+                    font-weight: caption.radio-down ? 600 : 400;
                     font-size: Typography.xs;
                     vertical-alignment: center;
                     horizontal-stretch: 0;

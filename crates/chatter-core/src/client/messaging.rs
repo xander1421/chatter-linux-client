@@ -385,31 +385,17 @@ impl ChatterClient {
             .and_then(|msgs| msgs.into_iter().next())
     }
 
-    /// Typed label for a message's attachments — "🖼️ Photo", "🎬 Video +2",
-    /// "📎 report.pdf". `None` when the message carries no attachment or its
-    /// metadata has not landed locally yet; the caller then falls back to a
-    /// plain count. Media categories get a kind word rather than a filename
-    /// because "IMG_4821.HEIC" tells the reader nothing a 🖼️ hasn't.
+    /// Typed label for a message's attachments — "🎤 Voice message",
+    /// "🎬 Video +2", "📄 report.pdf" (see `FileMetadata::preview_label`).
+    /// `None` when the message carries no attachment or its metadata has not
+    /// landed locally yet; the caller then falls back to a plain count.
     fn attachment_preview_label(&self, message: &crate::domain::message::Message) -> Option<String> {
-        use crate::domain::attachment::FileCategory;
-
-        let meta = self
+        let label = self
             .get_attachment_metadata(message.attachments.first()?)?
-            .metadata;
-        let category = meta.category();
-        let icon = crate::ui::file_data::category_icon(category.as_str());
-        let label = match category {
-            FileCategory::Image => "Photo",
-            FileCategory::Video => "Video",
-            FileCategory::Audio => "Audio",
-            _ => meta.name.as_str(),
-        };
+            .metadata
+            .preview_label();
         let extra = message.attachments.len() - 1;
-        Some(if extra > 0 {
-            format!("{} {} +{}", icon, label, extra)
-        } else {
-            format!("{} {}", icon, label)
-        })
+        Some(if extra > 0 { format!("{} +{}", label, extra) } else { label })
     }
 
     /// The one-line sidebar preview for a message. `Message::sidebar_preview`
@@ -678,7 +664,7 @@ impl ChatterClient {
                 .unwrap_or_else(|| self.fallback_display_name(&dm.peer_id));
             let latest = self.get_latest_anon_dm_message(&dm.id);
             let last_message = match &latest {
-                Some(msg) => msg.as_text().unwrap_or_default().to_string(),
+                Some(msg) => self.message_sidebar_preview(msg),
                 None => "Message request".to_string(),
             };
             out.push(ChatRowSendData {
@@ -707,6 +693,7 @@ impl ChatterClient {
                 Some(msg) => {
                     let preview = msg
                         .as_text()
+                        .filter(|t| !t.is_empty())
                         .map(|t| format!("You: {}", truncate_preview_text(t, 50)))
                         .unwrap_or_else(|| "Message request sent".to_string());
                     (

@@ -13,6 +13,7 @@ use crate::MainWindow;
 
 /// Wire message click callback: the only click a bubble reports is a tap on
 /// its "not sent" label, which retries the send (Signal's "tap to retry").
+/// A stored failure reason is a label, not a reason to ignore the tap.
 pub fn wire_message_clicked(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     let weak_window = window.as_weak();
     let ui_ctx = ui_ctx.clone();
@@ -69,7 +70,7 @@ fn own_failed_timestamp(w: &MainWindow, message_id: &str) -> Option<u64> {
     (0..messages.row_count())
         .filter_map(|i| messages.row_data(i))
         .find(|m| m.message_id.as_str() == message_id)
-        .filter(|m| m.is_own && m.delivery_status == "failed" && m.failure_reason.is_empty())
+        .filter(|m| m.is_own && m.delivery_status == "failed")
         .and_then(|m| m.timestamp_ns.parse().ok())
 }
 

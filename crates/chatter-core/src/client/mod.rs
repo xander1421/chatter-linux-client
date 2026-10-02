@@ -2583,9 +2583,12 @@ impl ChatterClient {
             .format("%H:%M")
             .to_string();
 
-        // "You: {trim(text, 50)}" — same shape as get_dm_sidebar_preview for
-        // receive-side entries.
-        let sidebar_preview = format!("You: {}", truncate_preview_text(text, 50));
+        // Same wording as every other sidebar row; built from the stored
+        // message so an attachment-only send gets its type label, not "You: ".
+        let sidebar_preview = match result.message.as_ref() {
+            Some(message) => self.message_sidebar_preview(message),
+            None => format!("You: {}", truncate_preview_text(text, 50)),
+        };
 
         // Bootstrap sends carry attachments only after the key exchange, so
         // report an empty list for the "sending" placeholder. Non-bootstrap

@@ -727,6 +727,20 @@ mod waveform_tests {
         assert_eq!(service.get(&ids[0]).unwrap().unwrap().metadata.waveform_samples,
             stored.metadata.waveform_samples);
     }
+
+    #[test]
+    fn stored_voice_note_pointer_carries_its_waveform() {
+        let mut meta = crate::domain::attachment::FileMetadata::new(
+            "Voice message.wav".into(), "audio/wav".into(), 4);
+        meta.waveform_samples = Some(vec![13, 128, 255]);
+        let mut att = crate::domain::attachment::Attachment::new(AttachmentId::new(), meta);
+        att.remote_url = Some("cdn".into());
+        att.encryption_key = Some(vec![1; 64]);
+        att.encryption_iv = Some(vec![2; 32]);
+        let pointer = att.to_pointer().unwrap();
+        assert_eq!(pointer.waveform, vec![13, 128, 255]);
+        assert!(pointer.voice_note);
+    }
 }
 
 #[cfg(test)]

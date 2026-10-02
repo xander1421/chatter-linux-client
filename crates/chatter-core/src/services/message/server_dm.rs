@@ -243,14 +243,15 @@ impl MessageService {
 
     /// Send a failed friend DM again: same message id, same `sent_at` (so the
     /// recipient sees one message, deduplicated on its timestamp), content
-    /// rebuilt from the stored copy. Returns the new status, `"sent"` or
-    /// `"sending"` (queued behind a Shield bootstrap); on failure the bubble
-    /// stays `"failed"` and the error is returned.
+    /// rebuilt from the stored copy. A stored failure label does not block
+    /// the retry. Returns the new status, `"sent"` or `"sending"` (queued
+    /// behind a Shield bootstrap); on failure the bubble stays `"failed"` and
+    /// the error is returned.
     pub async fn retry_server_dm(
         &self,
         message_id: &crate::domain::ids::MessageId,
     ) -> Result<&'static str, MessageError> {
-        let message = self
+        let mut message = self
             .message_repo
             .get(message_id)?
             .ok_or(MessageError::MessageNotFound(*message_id))?;
@@ -258,22 +259,13 @@ impl MessageService {
         if message.conversation_type != ConversationType::ServerDm
             || message.sender_id != Some(me)
             || message.delivery_status != "failed"
-            || message.failure_reason.is_some()
+            || message.is_deleted
         {
             return Err(MessageError::InvalidContent("only a failed friend DM can be retried".into()));
         }
         let peer_id = UserId::from_uuid(*message.conversation_id.as_uuid());
 
-        let pointers = message
-            .attachments
-            .iter()
-            .map(|id| {
-                self.attachment_repo
-                    .get(id)?
-                    .and_then(|a| a.to_pointer())
-                    .ok_or_else(|| MessageError::InvalidContent(format!("attachment {id} can no longer be sent")))
-            })
-            .collect::<Result<Vec<_>, MessageError>>()?;
+        let pointers = self.pointers_for_resend(&message.attachments).await?;
         let quote = match (message.reply_to_author_id, message.reply_to) {
             (Some(author), Some(parent_id)) => self.message_repo.get(&parent_id)?.map(|parent| {
                 crate::services::gateway::outgoing::QuoteIntent {
@@ -296,13 +288,17 @@ impl MessageService {
             Ok(()) => "sent",
             Err(MessageError::BootstrapInitiated) => "sending",
             Err(e) => {
-                let mut failed = message.clone();
-                failed.failure_reason = e.permanent_send_failure_reason().map(str::to_owned);
-                self.message_repo.update(&failed)?;
+                message.failure_reason = e.permanent_send_failure_reason().map(str::to_owned);
+                self.message_repo.update(&message)?;
                 return Err(e);
             }
         };
-        self.set_friend_dm_delivery_status(&message.conversation_id, &[message.sent_at], status)?;
+        // `set_friend_dm_delivery_status` writes the status only, so a previous
+        // failure label would stay on the bubble. Update the same row.
+        message.delivery_status = status.into();
+        message.failure_reason = None;
+        message.updated_at = chrono::Utc::now();
+        self.message_repo.update(&message)?;
         Ok(status)
     }
 
@@ -945,7 +941,7 @@ mod tests {
         }
         let mut cause = None;
         record_deposit_error(&mut cause, MessageError::Network(NetworkError::PermissionDenied));
-        assert_eq!(cause.as_ref().unwrap().permanent_send_failure_reason(), Some("Not allowed"));
+        assert_eq!(cause.as_ref().unwrap().permanent_send_failure_reason(), Some("Not delivered"));
         record_deposit_error(&mut cause, MessageError::Network(NetworkError::Unavailable));
         record_deposit_error(&mut cause, MessageError::Network(NetworkError::InvalidRequest("too large".into())));
         assert_eq!(cause.unwrap().permanent_send_failure_reason(), None);

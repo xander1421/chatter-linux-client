@@ -344,6 +344,10 @@ impl Attachment {
                 .duration_seconds
                 .map(|d| (d * 1000.0) as u64)
                 .unwrap_or(0),
+            // Without these every message-path send (DM, group, resend) shipped
+            // a voice note with no bars, and the receiver drew a flat line.
+            waveform: self.metadata.waveform_samples.clone().unwrap_or_default(),
+            voice_note: SharedCategory::of(&self.metadata) == SharedCategory::Voice,
             ..Default::default()
         })
     }
@@ -411,6 +415,27 @@ impl FileMetadata {
             thumbnail_key: None,
             thumbnail_digest: None,
             thumbnail_plaintext_size: None,
+        }
+    }
+
+    /// One-line type label for a conversation preview — "🎤 Voice message",
+    /// "🖼️ Photo", "📄 report.pdf". Media gets a kind word rather than a
+    /// filename because "IMG_4821.HEIC" tells the reader nothing a 🖼️ hasn't;
+    /// a document keeps its name because that is what identifies it.
+    #[must_use]
+    pub fn preview_label(&self) -> String {
+        let category = FileCategory::from_mime_and_filename(&self.mime_type, &self.name);
+        let icon = crate::ui::file_data::category_icon(category.as_str());
+        match SharedCategory::of(self) {
+            SharedCategory::Voice => "\u{1F3A4} Voice message".to_string(),
+            SharedCategory::Gif => "\u{1F39E}\u{FE0F} GIF".to_string(),
+            SharedCategory::Music => format!("{} Audio", icon),
+            _ => match category {
+                FileCategory::Image => format!("{} Photo", icon),
+                FileCategory::Video => format!("{} Video", icon),
+                _ if self.name.trim().is_empty() => format!("{} File", icon),
+                _ => format!("{} {}", icon, self.name.trim()),
+            },
         }
     }
 
@@ -540,4 +565,25 @@ pub struct Thumbnail {
     pub width: u32,
     pub height: u32,
     pub created_at: DateTime<Utc>,
+}
+
+#[cfg(test)]
+mod preview_label_tests {
+    use super::FileMetadata;
+
+    #[test]
+    fn every_attachment_kind_gets_a_type_label() {
+        let label = |name: &str, mime: &str, waveform: Option<Vec<u8>>| {
+            let mut meta = FileMetadata::new(name.into(), mime.into(), 1);
+            meta.waveform_samples = waveform;
+            meta.preview_label()
+        };
+        assert_eq!(label("Voice message.wav", "audio/wav", Some(vec![13; 32])), "\u{1F3A4} Voice message");
+        assert_eq!(label("song.mp3", "audio/mpeg", None), "\u{1F3B5} Audio");
+        assert_eq!(label("IMG_1.HEIC", "image/heic", None), "\u{1F5BC}\u{FE0F} Photo");
+        assert_eq!(label("a.gif", "image/gif", None), "\u{1F39E}\u{FE0F} GIF");
+        assert_eq!(label("clip.mp4", "video/mp4", None), "\u{1F3AC} Video");
+        assert_eq!(label("report.pdf", "application/pdf", None), "\u{1F4C4} report.pdf");
+        assert_eq!(label(" ", "application/octet-stream", None), "\u{1F4CE} File");
+    }
 }
