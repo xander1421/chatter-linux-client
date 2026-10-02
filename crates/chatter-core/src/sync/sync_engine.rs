@@ -465,6 +465,9 @@ async fn drive<F, Fut>(
         return;
     }
     let mut backoff = timing.retry_initial;
+    // Consecutive failed cycles. Reset only by a cycle that succeeds, never by
+    // a connectivity edge.
+    let mut failures: u32 = 0;
     loop {
         if *shutdown.borrow() {
             return;
@@ -482,15 +485,18 @@ async fn drive<F, Fut>(
             Some(failed) => failed,
             None => needs_retry.load(Ordering::SeqCst),
         };
+        let failed_at = Instant::now();
         let status_after = *status.borrow();
-        // The server came back during the cycle. Retry now; the backoff
-        // belongs to the outage that just ended.
-        if failed && became_reachable(status_before, status_after) {
+        if failed {
+            failures = failures.saturating_add(1);
+        } else {
+            failures = 0;
             backoff = timing.retry_initial;
-            continue;
         }
-        if !failed {
-            backoff = timing.retry_initial;
+        // The server came back during the cycle. Retry now, but only for a
+        // first failure — the outage that just ended explains it.
+        if failures == 1 && became_reachable(status_before, status_after) {
+            continue;
         }
         let plan = plan_after_cycle(failed, status_after, backoff, timing.periodic);
         if failed {
@@ -510,10 +516,17 @@ async fn drive<F, Fut>(
         if !wait_plan(plan, status_after, &mut shutdown, &mut status).await {
             return;
         }
-        let now = *status.borrow();
-        if became_reachable(status_after, now) || matches!(plan, WaitPlan::UntilOnline) {
-            backoff = timing.retry_initial;
-        } else if failed {
+        if failed {
+            // An online edge ends the wait early. For a step that keeps
+            // failing it does not end the backoff: otherwise anyone able to
+            // reset the connection turns every flap into a full cycle. An
+            // outage longer than the backoff has already used it up.
+            if failures > 1 {
+                let remaining = backoff.saturating_sub(failed_at.elapsed());
+                if !sleep_or_shutdown(remaining, &mut shutdown).await {
+                    return;
+                }
+            }
             backoff = next_backoff(backoff, timing.retry_max);
         }
     }
@@ -678,6 +691,53 @@ mod retry_tests {
             .expect("retry converged without a restart")
             .unwrap();
         assert_eq!(runs.load(Ordering::SeqCst), 2, "fail once, then the retry succeeds");
+    }
+
+    /// Finding #7: a step that keeps failing must not be rerun on every
+    /// offline→online flap. The first failure still retries on the edge.
+    #[tokio::test]
+    async fn connectivity_flaps_do_not_reset_a_persistent_failure() {
+        let runs = Arc::new(AtomicUsize::new(0));
+        let needs = Arc::new(AtomicBool::new(false));
+        let coalescer = Coalescer::new();
+        let (shut_tx, shut_rx) = watch::channel(false);
+        let (status_tx, status_rx) = watch::channel(ServerStatus::Reachable);
+        let runs_c = Arc::clone(&runs);
+        let needs_c = Arc::clone(&needs);
+
+        let mut timing = fast_timing();
+        timing.retry_initial = Duration::from_secs(3600);
+        timing.retry_max = Duration::from_secs(3600);
+
+        let driver = tokio::spawn(async move {
+            drive(timing, &coalescer, needs_c.as_ref(), shut_rx, status_rx, || {
+                let runs = Arc::clone(&runs_c);
+                let needs = Arc::clone(&needs_c);
+                async move {
+                    runs.fetch_add(1, Ordering::SeqCst);
+                    needs.store(true, Ordering::SeqCst);
+                    true
+                }
+            })
+            .await;
+        });
+
+        let flap = || async {
+            status_tx.send(ServerStatus::Unreachable).unwrap();
+            tokio::time::sleep(Duration::from_millis(50)).await;
+            status_tx.send(ServerStatus::Reachable).unwrap();
+            tokio::time::sleep(Duration::from_millis(200)).await;
+        };
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        assert_eq!(runs.load(Ordering::SeqCst), 1);
+        flap().await;
+        assert_eq!(runs.load(Ordering::SeqCst), 2, "a first failure retries on the online edge");
+        flap().await;
+        flap().await;
+        assert_eq!(runs.load(Ordering::SeqCst), 2, "a repeat failure keeps its backoff across flaps");
+
+        shut_tx.send(true).unwrap();
+        tokio::time::timeout(Duration::from_secs(5), driver).await.unwrap().unwrap();
     }
 
     #[tokio::test]

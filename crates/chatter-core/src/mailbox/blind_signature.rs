@@ -109,7 +109,11 @@ impl ServerPublicKey {
         CFut: Future<Output = Result<GetConsistencyProofResponse, NetworkError>>,
     {
         let pin = kt_anchor::lock_pin().await;
-        let manifest = fetch().await?;
+        // Under the process-wide pin lock, so it gets the pin deadline: a
+        // withheld manifest must not stall every KT check behind it.
+        let manifest = tokio::time::timeout(kt_anchor::PIN_RPC_DEADLINE, fetch())
+            .await
+            .map_err(|_| MailboxError::Network(NetworkError::Timeout.to_string()))??;
         let key = Self::from_manifest(&manifest)?;
         let sth = manifest
             .kt_proof

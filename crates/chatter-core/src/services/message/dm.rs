@@ -328,6 +328,77 @@ impl MessageService {
         }
     }
 
+    /// Shield retry to `devices` only: the peer mailboxes from the original
+    /// send that are still ready. A missing mailbox is a failure, not a
+    /// bootstrap. Bootstrap would queue the content and a later flush would
+    /// deliver it to every ready device, including ones linked since.
+    pub(super) async fn send_shield_dm_to_devices(
+        &self,
+        peer_id: &UserId,
+        content: crate::proto::content_v1::Content,
+        devices: &[u32],
+    ) -> Result<(), MessageError> {
+        if devices.is_empty() {
+            return Err(MessageError::InvalidContent(
+                "no original device of this message can be retried".into(),
+            ));
+        }
+        let content = self.inject_profile_key_if_sharing(peer_id, content)?;
+        let conversation = DmConversationManager::new(self.database.clone())
+            .load_conversation(peer_id)
+            .map_err(|e| MessageError::DmError(format!("Failed to load conversation: {e}")))?;
+        let Some(conversation) = conversation.filter(|c| c.is_ready_to_send()) else {
+            return Err(MessageError::DmError(
+                "secure channel is not ready; the retry stays unsent".into(),
+            ));
+        };
+        let wanted: std::collections::HashSet<u32> = devices.iter().copied().collect();
+        let ready: Vec<_> = conversation
+            .ready_devices()
+            .into_iter()
+            .filter(|(mailbox, _)| wanted.contains(&mailbox.device_id))
+            .collect();
+        if ready.is_empty() {
+            return Err(MessageError::DmError(
+                "no original device of this message still has a mailbox".into(),
+            ));
+        }
+        let mut auth_client = self.auth_client();
+        let plaintext = content.encode_to_vec();
+        let mut delivered = 0usize;
+        let mut last_error = None;
+        for (mailbox, send_key) in &ready {
+            match self
+                .send_to_peer_device(
+                    &mut auth_client,
+                    &self.mailbox_manager,
+                    peer_id,
+                    mailbox,
+                    send_key,
+                    &plaintext,
+                )
+                .await
+            {
+                Ok(()) => delivered += 1,
+                Err(e) => {
+                    tracing::warn!(
+                        peer_id = %peer_id,
+                        device_id = mailbox.device_id,
+                        error = %e,
+                        "Shield DM retry to an original device failed"
+                    );
+                    last_error = Some(e);
+                }
+            }
+        }
+        if delivered == 0 {
+            return Err(last_error.unwrap_or_else(|| {
+                MessageError::DmError("no original device accepted the retry".into())
+            }));
+        }
+        Ok(())
+    }
+
     /// Send a Content proto to a DM peer (simplified API - no client params).
     pub async fn send_dm(
         &self,

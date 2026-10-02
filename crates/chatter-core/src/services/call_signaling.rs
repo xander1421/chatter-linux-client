@@ -75,7 +75,32 @@ pub enum CallSignalingError {
     /// are shaped by the platform SDK rather than our typed domain errors.
     #[error("mobile call: {0}")]
     Mobile(String),
+    #[error("{0} timed out")]
+    Timeout(&'static str),
 }
+
+/// Deadline for each server round trip the group-call key policy makes. That
+/// policy runs off LiveKit room events and received keys; a server that never
+/// answers must not hold it — or a departure rotation queued behind it — open.
+pub(crate) const CALL_POLICY_RPC_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+
+/// Await `fut` for at most [`CALL_POLICY_RPC_TIMEOUT`].
+pub(crate) async fn with_policy_deadline<T, E>(
+    what: &'static str,
+    fut: impl std::future::Future<Output = Result<T, E>>,
+) -> Result<T, CallSignalingError>
+where
+    CallSignalingError: From<E>,
+{
+    match tokio::time::timeout(CALL_POLICY_RPC_TIMEOUT, fut).await {
+        Ok(result) => result.map_err(CallSignalingError::from),
+        Err(_) => Err(CallSignalingError::Timeout(what)),
+    }
+}
+
+/// Most senders whose keys are held for one call we are joining. Each must be
+/// a channel member; the cap bounds what a large channel can make us hold.
+const MAX_BUFFERED_KEY_SENDERS: usize = 32;
 
 /// A channel group call we were rung for, held from the ring until we have
 /// joined it, declined it, or it rang out. The ring carries the call's root
@@ -84,9 +109,11 @@ struct GroupCallInvite {
     root_key: Zeroizing<[u8; 32]>,
     /// Set once the user accepts, so the ring-out timer leaves it alone.
     accepted: bool,
-    /// The newest participant key `(sender, key, epoch)` that arrived while
-    /// we were still joining — installed as soon as the join completes.
-    latest: Option<(UserId, Zeroizing<[u8; 32]>, u32)>,
+    /// Each sender's newest key `(key, epoch)` that arrived while we were
+    /// still joining. Per sender, so no member can displace another's key;
+    /// after the join only the key authority's is installed
+    /// (`ChatterClient::install_participant_group_key`).
+    latest: HashMap<UserId, (Zeroizing<[u8; 32]>, u32)>,
 }
 
 /// A participant key that reached us while we were joining its call.
@@ -252,20 +279,19 @@ impl CallSignalingService {
         invites.insert(call_id.to_string(), GroupCallInvite {
             root_key: Zeroizing::new(root_key),
             accepted: false,
-            latest: None,
+            latest: HashMap::new(),
         });
         true
     }
 
     /// Keep a participant key for a call we were rung for and have not yet
     /// finished joining. True when such a call is held — the key is then
-    /// kept if it is the newest seen, else dropped; false when it is not.
+    /// kept if it is the newest from its sender, else dropped; false when it
+    /// is not.
     pub fn buffer_group_call_key(&self, call_id: &str, sender: UserId, key: [u8; 32], epoch: u32) -> bool {
         let mut invites = self.group_call_invites.lock();
         let Some(invite) = invites.get_mut(call_id) else { return false };
-        if invite.latest.as_ref().is_none_or(|(_, _, held)| epoch > *held) {
-            invite.latest = Some((sender, Zeroizing::new(key), epoch));
-        }
+        buffer_newest_per_sender(&mut invite.latest, sender, key, epoch);
         true
     }
 
@@ -279,10 +305,12 @@ impl CallSignalingService {
     }
 
     /// Forget a group call invite (joined, declined or failed), returning
-    /// the newest key that arrived while we were joining.
-    pub fn take_group_call_invite(&self, call_id: &str) -> Option<PendingGroupCallKey> {
-        let invite = self.group_call_invites.lock().remove(call_id)?;
-        invite.latest.map(|(sender, key, epoch)| PendingGroupCallKey { sender, key, epoch })
+    /// the newest key from each sender that arrived while we were joining.
+    pub fn take_group_call_invite(&self, call_id: &str) -> Vec<PendingGroupCallKey> {
+        let Some(invite) = self.group_call_invites.lock().remove(call_id) else { return Vec::new() };
+        invite.latest.into_iter()
+            .map(|(sender, (key, epoch))| PendingGroupCallKey { sender, key, epoch })
+            .collect()
     }
 
     /// The ring ran out: forget the invite unless the user has answered.
@@ -293,7 +321,10 @@ impl CallSignalingService {
     /// Whether `user_id` is a member of `channel_id`, per the server's full
     /// (paginated) member list.
     pub async fn is_channel_member(&self, channel_id: &ChannelId, user_id: &UserId) -> Result<bool, CallSignalingError> {
-        let members = self.channel_service.get_all_channel_members(channel_id).await?;
+        let members = with_policy_deadline(
+            "channel member list",
+            self.channel_service.get_all_channel_members(channel_id),
+        ).await?;
         Ok(members.iter().any(|m| &m.user_id == user_id))
     }
 
@@ -318,17 +349,20 @@ impl CallSignalingService {
         // Full membership, paginated: a member past the server's page size who
         // IS in the room used to be silently skipped here and left unable to
         // decrypt after rotation (OPEN-ITEMS §16).
-        let members = self.channel_service.get_all_channel_members(channel_id).await?;
+        let members = with_policy_deadline(
+            "channel member list",
+            self.channel_service.get_all_channel_members(channel_id),
+        ).await?;
         let recipients = rotation_recipients(&members, room_identities, &current_user);
         let channel_id_str = channel_id.to_string();
 
         let mut sent_count = 0;
         for peer_id in &recipients {
             let content = build_group_call_key_content(call_id, key, epoch, &channel_id_str);
-            if let Err(e) = self.message_service
-                .send_friend_dm_content(peer_id, content)
-                .await
-            {
+            if let Err(e) = with_policy_deadline(
+                "group call key send",
+                self.message_service.send_friend_dm_content(peer_id, content),
+            ).await {
                 tracing::warn!(
                     call_id, epoch, peer_id = %peer_id, error = %e,
                     "Failed to redistribute rotated group call key to participant"
@@ -1493,6 +1527,23 @@ impl CallSignalingService {
 /// intersected with channel membership, minus ourselves. The roster decides
 /// *who still needs the key*; membership decides *who is entitled to it*, so a
 /// room identity that is not a channel member is dropped rather than sent to.
+/// Keep `(key, epoch)` as `sender`'s buffered key if it is newer than the
+/// one held from them; a new sender only while under the cap.
+fn buffer_newest_per_sender(
+    held: &mut HashMap<UserId, (Zeroizing<[u8; 32]>, u32)>,
+    sender: UserId,
+    key: [u8; 32],
+    epoch: u32,
+) {
+    match held.get(&sender) {
+        Some((_, newest)) if epoch <= *newest => {}
+        None if held.len() >= MAX_BUFFERED_KEY_SENDERS => {}
+        _ => {
+            held.insert(sender, (Zeroizing::new(key), epoch));
+        }
+    }
+}
+
 fn rotation_recipients(
     members: &[crate::domain::channel::Membership],
     room_identities: &[String],
@@ -1579,5 +1630,27 @@ mod rotation_recipient_tests {
         let roster = vec![me.to_string()];
 
         assert!(rotation_recipients(&members, &roster, &me).is_empty());
+    }
+
+    /// Finding 4: a member flooding high epochs while we join cannot
+    /// displace another sender's key; the buffer stays bounded.
+    #[test]
+    fn invite_buffer_keeps_each_senders_newest_key() {
+        let mut held = HashMap::new();
+        let rotator = UserId::new();
+        let mallory = UserId::new();
+        buffer_newest_per_sender(&mut held, rotator, [1u8; 32], 4);
+        buffer_newest_per_sender(&mut held, mallory, [6u8; 32], u32::MAX);
+        buffer_newest_per_sender(&mut held, rotator, [2u8; 32], 3);
+        assert_eq!(held[&rotator].1, 4, "an older key from the same sender is dropped");
+        assert_eq!(*held[&rotator].0, [1u8; 32]);
+        buffer_newest_per_sender(&mut held, rotator, [3u8; 32], 5);
+        assert_eq!(*held[&rotator].0, [3u8; 32]);
+
+        for _ in 0..MAX_BUFFERED_KEY_SENDERS {
+            buffer_newest_per_sender(&mut held, UserId::new(), [0u8; 32], 1);
+        }
+        assert_eq!(held.len(), MAX_BUFFERED_KEY_SENDERS);
+        assert!(held.contains_key(&rotator), "held senders keep their slot");
     }
 }

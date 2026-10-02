@@ -11,7 +11,16 @@ use crate::error::StorageError;
 use crate::storage::Database;
 use chrono::{DateTime, Utc};
 use rusqlite::{params, OptionalExtension};
+use std::collections::HashSet;
 use std::sync::Arc;
+
+/// What a full roster refresh changed. `added` and `removed` are the
+/// membership rows that were not already the local set.
+#[derive(Debug, Default)]
+pub struct MembershipRefresh {
+    pub added: Vec<Membership>,
+    pub removed: Vec<Membership>,
+}
 
 /// Channel data repository.
 ///
@@ -511,6 +520,93 @@ impl ChannelRepository {
         Ok(())
     }
 
+    /// Replace the local roster with `members`, the server's full list.
+    ///
+    /// Inserts anyone new, refreshes server-owned columns on anyone still
+    /// present (`role`, `joined_at`, moderator mute), and deletes anyone
+    /// absent. `last_read_message_id` and `notification_preference` are
+    /// local-only (the member proto does not carry them) and are left as
+    /// stored. An empty `members` deletes nothing: a successful empty read
+    /// is not a roster, and wiping it would also make departed-mailbox
+    /// cleanup skip every address.
+    pub fn replace_memberships(
+        &self,
+        channel_id: &ChannelId,
+        members: &[Membership],
+    ) -> Result<MembershipRefresh, StorageError> {
+        if members.is_empty() {
+            tracing::warn!(%channel_id, "membership refresh was empty; local roster left unchanged");
+            return Ok(MembershipRefresh::default());
+        }
+        let keep: HashSet<UserId> = members.iter().map(|m| m.user_id).collect();
+        let mut conn = self.db.connection()?;
+        let tx = conn.transaction()?;
+        let local = {
+            let mut stmt = tx.prepare(
+                "SELECT channel_id, user_id, role, joined_at, last_read_message_id,
+                        is_muted, muted_until, notification_preference
+                 FROM memberships WHERE channel_id = ?1",
+            )?;
+            let rows = stmt
+                .query_map(params![channel_id.to_string()], row_to_membership)?
+                .collect::<Result<Vec<_>, _>>()?;
+            rows
+        };
+        let mut removed = Vec::new();
+        for member in local {
+            if keep.contains(&member.user_id) {
+                continue;
+            }
+            tx.execute(
+                "DELETE FROM memberships WHERE channel_id = ?1 AND user_id = ?2",
+                params![channel_id.to_string(), member.user_id.to_string()],
+            )?;
+            removed.push(member);
+        }
+        let mut added = Vec::new();
+        for member in members {
+            let exists: bool = tx.query_row(
+                "SELECT EXISTS(SELECT 1 FROM memberships WHERE channel_id = ?1 AND user_id = ?2)",
+                params![channel_id.to_string(), member.user_id.to_string()],
+                |row| row.get(0),
+            )?;
+            if exists {
+                tx.execute(
+                    "UPDATE memberships SET role = ?1, joined_at = ?2, is_muted = ?3, muted_until = ?4
+                     WHERE channel_id = ?5 AND user_id = ?6",
+                    params![
+                        role_to_i32(member.role),
+                        member.joined_at.to_rfc3339(),
+                        member.is_muted as i32,
+                        member.muted_until.map(|dt| dt.to_rfc3339()),
+                        channel_id.to_string(),
+                        member.user_id.to_string(),
+                    ],
+                )?;
+            } else {
+                tx.execute(
+                    "INSERT INTO memberships (
+                        channel_id, user_id, role, joined_at, last_read_message_id,
+                        is_muted, muted_until, notification_preference
+                    ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                    params![
+                        channel_id.to_string(),
+                        member.user_id.to_string(),
+                        role_to_i32(member.role),
+                        member.joined_at.to_rfc3339(),
+                        member.last_read_message_id.map(|id| id.to_string()),
+                        member.is_muted as i32,
+                        member.muted_until.map(|dt| dt.to_rfc3339()),
+                        notification_pref_to_i32(member.notification_preference),
+                    ],
+                )?;
+                added.push(member.clone());
+            }
+        }
+        tx.commit()?;
+        Ok(MembershipRefresh { added, removed })
+    }
+
     /// Delete a membership.
     pub fn delete_membership(
         &self,
@@ -856,6 +952,54 @@ mod tests {
         repo.insert_membership(&again).unwrap();
         let stored = repo.get_membership(&channel, &user).unwrap().unwrap();
         assert_eq!(stored.role, MemberRole::Moderator);
+    }
+
+    #[test]
+    fn a_full_refresh_deletes_members_absent_from_the_list_and_keeps_local_state() {
+        use crate::domain::ids::MessageId;
+
+        let (repo, _dir) = create_test_repo();
+        let channel = ChannelId::new();
+        repo.insert(&make_channel(channel)).unwrap();
+        let (alice, bob, carol, dave) = (UserId::new(), UserId::new(), UserId::new(), UserId::new());
+        let mut alice_row = make_membership(channel, alice);
+        alice_row.notification_preference = NotificationPreference::Mentions;
+        repo.insert_membership(&alice_row).unwrap();
+        let read = MessageId::new();
+        repo.update_last_read(&channel, &alice, &read).unwrap();
+        repo.insert_membership(&make_membership(channel, bob)).unwrap();
+        repo.insert_membership(&make_membership(channel, carol)).unwrap();
+
+        let mut alice_now = make_membership(channel, alice);
+        alice_now.role = MemberRole::Admin;
+        alice_now.notification_preference = NotificationPreference::None;
+        alice_now.last_read_message_id = None;
+        let refresh = repo
+            .replace_memberships(&channel, &[alice_now, make_membership(channel, bob), make_membership(channel, dave)])
+            .unwrap();
+        let ids = |rows: &[Membership]| {
+            let mut ids: Vec<_> = rows.iter().map(|m| m.user_id).collect();
+            ids.sort_by_key(|id| id.to_string());
+            ids
+        };
+        assert_eq!(ids(&refresh.removed), vec![carol]);
+        assert_eq!(ids(&refresh.added), vec![dave]);
+
+        let left = repo.list_members(&channel).unwrap();
+        assert_eq!(ids(&left), {
+            let mut ids = vec![alice, bob, dave];
+            ids.sort_by_key(|id| id.to_string());
+            ids
+        });
+        let stored = repo.get_membership(&channel, &alice).unwrap().unwrap();
+        assert_eq!(stored.role, MemberRole::Admin);
+        assert_eq!(stored.last_read_message_id, Some(read));
+        assert_eq!(stored.notification_preference, NotificationPreference::Mentions);
+        assert!(repo.get_membership(&channel, &carol).unwrap().is_none());
+
+        let untouched = repo.replace_memberships(&channel, &[]).unwrap();
+        assert!(untouched.removed.is_empty());
+        assert_eq!(repo.list_members(&channel).unwrap().len(), 3, "an empty refresh must not wipe the roster");
     }
 
     fn make_membership(channel_id: ChannelId, user_id: UserId) -> Membership {

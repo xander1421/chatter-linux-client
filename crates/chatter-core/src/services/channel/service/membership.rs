@@ -17,6 +17,18 @@ use crate::services::channel::error::ChannelError;
 
 use super::ChannelService;
 
+/// Every proto member, or an error before the caller replaces the local
+/// roster. A partial conversion must not delete the member it failed to read.
+fn full_member_list(
+    channel_id: &ChannelId,
+    proto_members: &[chat_v1::channel::ChannelMember],
+) -> Result<Vec<Membership>, ChannelError> {
+    proto_members
+        .iter()
+        .map(|proto| proto_to_domain_membership(channel_id, proto))
+        .collect()
+}
+
 impl ChannelService {
     /// Join a channel.
     ///
@@ -169,42 +181,19 @@ impl ChannelService {
             .get_all_channel_members(&channel_id_str)
             .await?;
 
-        let total_from_server = proto_members.len();
-        let mut synced_count = 0;
-        for proto_member in &proto_members {
-            // Convert proto to domain membership
-            match proto_to_domain_membership(channel_id, proto_member) {
-                Ok(membership) => {
-                    // Insert or update membership
-                    if let Err(e) = self.channel_repo.insert_membership(&membership) {
-                        tracing::debug!(
-                            channel_id = %channel_id,
-                            user_id = %membership.user_id,
-                            error = %e,
-                            "Failed to save membership (may already exist)"
-                        );
-                    } else {
-                        synced_count += 1;
-                    }
-                }
-                Err(e) => {
-                    tracing::warn!(
-                        channel_id = %channel_id,
-                        error = %e,
-                        "Failed to convert proto membership"
-                    );
-                }
-            }
-        }
+        let memberships = full_member_list(channel_id, &proto_members)?;
+        // The fetch is the whole roster. Upsert-only left departed members in
+        // the local table, and resend, mailbox rotation, and departed-mailbox
+        // cleanup all trust that table.
+        self.channel_repo.replace_memberships(channel_id, &memberships)?;
 
         tracing::info!(
             channel_id = %channel_id,
-            synced_count = synced_count,
-            total_from_server = total_from_server,
+            total_from_server = proto_members.len(),
             "Synced channel members for SKDM distribution"
         );
 
-        Ok(synced_count)
+        Ok(proto_members.len())
     }
 
     /// Leave a channel.
@@ -510,18 +499,11 @@ impl ChannelService {
             .get_all_channel_members(&channel_id.to_string())
             .await?;
 
-        let mut memberships = Vec::with_capacity(proto_members.len());
-        for proto_member in &proto_members {
-            let membership = proto_to_domain_membership(channel_id, proto_member)?;
-            match self
-                .channel_repo
-                .get_membership(channel_id, &membership.user_id)?
-            {
-                Some(_) => self.channel_repo.update_membership(&membership)?,
-                None => self.channel_repo.insert_membership(&membership)?,
-            }
-            memberships.push(membership);
-        }
+        let memberships = full_member_list(channel_id, &proto_members)?;
+        // Same replace as sync: a full fetch is the roster, not a page of
+        // updates. `update_membership` would also wipe local read position
+        // and notification choice, which the proto does not carry.
+        self.channel_repo.replace_memberships(channel_id, &memberships)?;
 
         Ok(memberships)
     }

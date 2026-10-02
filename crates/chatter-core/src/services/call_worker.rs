@@ -371,6 +371,10 @@ enum CallCommand {
     GetRemoteParticipants {
         response: oneshot::Sender<Vec<String>>,
     },
+    /// Our join time and the remote peers' `(identity, join time)`.
+    GetRoomSeniority {
+        response: oneshot::Sender<Option<RoomSeniority>>,
+    },
     /// Publish microphone.
     PublishMicrophone {
         device_id: Option<String>,
@@ -448,11 +452,6 @@ enum CallCommand {
         key: [u8; 32],
         epoch: u32,
         response: oneshot::Sender<Result<bool, CallError>>,
-    },
-    /// The active call's id, current key and epoch — what a late joiner
-    /// must be sent to decrypt from now on.
-    CurrentGroupKey {
-        response: oneshot::Sender<Option<(CallId, [u8; 32], u32)>>,
     },
     /// Connect directly to LiveKit with a pre-made access token (for anonymous calls).
     ConnectWithToken {
@@ -987,6 +986,14 @@ impl CallWorkerHandle {
         rx.await.unwrap_or_default()
     }
 
+    /// Who has been in the LiveKit room longest — what the group-call key
+    /// authority is chosen by. `None` when not connected.
+    pub async fn room_seniority(&self) -> Option<RoomSeniority> {
+        let (tx, rx) = oneshot::channel();
+        self.cmd_tx.try_send(CallCommand::GetRoomSeniority { response: tx }).ok()?;
+        rx.await.ok().flatten()
+    }
+
     /// Get room connection state.
     pub async fn room_state(&self) -> RoomState {
         let (tx, rx) = oneshot::channel();
@@ -1141,13 +1148,6 @@ impl CallWorkerHandle {
             .try_send(CallCommand::InstallGroupKey { call_id, key, epoch, response: tx })
             .map_err(|_| CallError::WorkerShutdown)?;
         rx.await.map_err(|_| CallError::WorkerShutdown)?
-    }
-
-    /// The active call's id with its current key and epoch, or `None`.
-    pub async fn current_group_key(&self) -> Option<(CallId, [u8; 32], u32)> {
-        let (tx, rx) = oneshot::channel();
-        self.cmd_tx.try_send(CallCommand::CurrentGroupKey { response: tx }).ok()?;
-        rx.await.ok().flatten()
     }
 
     /// Set encryption key externally (e.g., from CallKeyState ratchet).
@@ -1484,6 +1484,13 @@ fn run_call_worker(
                     let _ = response.send(room_manager.remote_participant_identities());
                 }
 
+                CallCommand::GetRoomSeniority { response } => {
+                    let seniority = room_manager.room_seniority().map(|(local_joined_at_ms, remote)| {
+                        RoomSeniority { local_joined_at_ms, remote }
+                    });
+                    let _ = response.send(seniority);
+                }
+
                 CallCommand::PublishMicrophone { device_id, response } => {
                     let result = room_manager.publish_microphone(device_id.as_deref()).await;
                     let _ = response.send(result);
@@ -1563,18 +1570,16 @@ fn run_call_worker(
                 }
 
                 CallCommand::RotateKey { new_key, response } => {
-                    let adopted = active_call.borrow_mut().as_mut().map(|state| {
-                        let epoch = state.key_state.epoch() + 1;
-                        adopt_group_key(&mut state.key_state, new_key, epoch)
+                    let rotated = active_call.borrow_mut().as_mut().map(|state| {
+                        state.key_state.rotate(new_key).map(|_| chain_install(&state.key_state))
                     });
-                    let result = match adopted {
-                        Some(Some((epoch, key_cur, key_next))) => {
+                    let result = match rotated {
+                        Some(Ok((epoch, key_cur, key_next))) => {
                             room_manager.set_ratcheted_shared_key(epoch, key_cur, key_next);
                             tracing::info!(epoch, "Call key rotated after member departure");
                             Ok(epoch)
                         }
-                        // epoch() + 1 is always ahead; unreachable short of overflow.
-                        Some(None) => Err(CallError::CryptoError("key rotation rejected".into())),
+                        Some(Err(e)) => Err(CallError::CryptoError(e.to_string())),
                         None => Err(CallError::NotInCall),
                     };
                     let _ = response.send(result);
@@ -1589,18 +1594,11 @@ fn run_call_worker(
                             true
                         }
                         None => {
-                            tracing::debug!(epoch, "Group call key is stale; ignored");
+                            tracing::debug!(epoch, "Group call key is not newer, or too far ahead; ignored");
                             false
                         }
                     });
                     let _ = response.send(result);
-                }
-
-                CallCommand::CurrentGroupKey { response } => {
-                    let current = active_call.borrow().as_ref().map(|state| {
-                        (state.call.id, *state.key_state.current_key(), state.key_state.epoch())
-                    });
-                    let _ = response.send(current);
                 }
 
                 CallCommand::RatchetKey { response } => {
@@ -1853,6 +1851,15 @@ fn run_call_worker(
     });
 }
 
+/// The room's seniority: our LiveKit `joined_at_ms` and each remote
+/// participant's `(identity, joined_at_ms)`. Server-assigned, so every
+/// participant sees the same order — and server-asserted, like the roster.
+#[derive(Debug, Clone)]
+pub struct RoomSeniority {
+    pub local_joined_at_ms: i64,
+    pub remote: Vec<(String, i64)>,
+}
+
 /// Internal state for active call.
 struct ActiveCallState {
     call: Call,
@@ -1878,28 +1885,35 @@ fn adopt_into_call(
     }
 }
 
-/// Adopt a group-call `key` at `epoch` into `key_state`, returning what to
-/// hand LiveKit: the epoch (= shared-key index), its key, and the next
-/// epoch's pre-installed key — the same shape the periodic ratchet installs.
-///
-/// The single install path for a group key: the initiator's rotation and a
-/// receiver of that rotation (or of a late-join key) both run it, so for the
-/// same `(key, epoch)` they hold byte-identical chains and LiveKit indices.
-/// `None` when `epoch` is not ahead of the chain (stale; nothing changes).
+/// Adopt a group-call `key` issued at `epoch` into `key_state`
+/// ([`CallKeyState::adopt`]), returning what to hand LiveKit. `None` when the
+/// key is refused (not newer than the last one adopted, or too far ahead).
 fn adopt_group_key(
     key_state: &mut CallKeyState,
     key: [u8; 32],
     epoch: u32,
 ) -> Option<(u32, Vec<u8>, Vec<u8>)> {
-    if !key_state.adopt(key, epoch) {
-        return None;
+    match key_state.adopt(key, epoch) {
+        Ok(true) => Some(chain_install(key_state)),
+        Ok(false) => None,
+        Err(e) => {
+            tracing::error!(error = %e, "Group call key derivation failed");
+            None
+        }
     }
+}
+
+/// What to hand LiveKit for the chain's current position (its epoch = the
+/// key index): that key, and the next epoch's pre-installed — the same shape
+/// the periodic ratchet installs, so a rotator and every receiver of its key
+/// hold byte-identical chains and LiveKit indices.
+fn chain_install(key_state: &CallKeyState) -> (u32, Vec<u8>, Vec<u8>) {
     let key_cur = key_state.current_key_vec();
     let key_next = key_state
         .peek_next_key()
         .map(|k| k.to_vec())
         .unwrap_or_else(|_| key_cur.clone());
-    Some((epoch, key_cur, key_next))
+    (key_state.epoch(), key_cur, key_next)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -2264,8 +2278,47 @@ fn aligned_ratchet_schedule(elapsed_secs: f64, interval_secs: u64) -> (u32, f64)
     let interval = interval_secs as f64;
     let elapsed = elapsed_secs.max(0.0);
     let epoch_now = (elapsed / interval).floor() as u32;
-    let next_boundary = ((epoch_now + 1) as f64) * interval;
+    let next_boundary = (f64::from(epoch_now) + 1.0) * interval;
     (epoch_now, (next_boundary - elapsed).max(0.0))
+}
+
+/// A timer tick can fire a little before the wall-clock boundary it was
+/// scheduled for (monotonic and wall clocks drift); it still counts as that
+/// boundary.
+const RATCHET_TICK_TOLERANCE_SECS: f64 = 0.5;
+
+/// Most epochs one fast-forward may ratchet through: 24 h of 30 s epochs. A
+/// server-asserted `started_at` further back would otherwise have the call
+/// worker hash up to `u32::MAX` times.
+const MAX_RATCHET_CATCH_UP: u32 = 24 * 60 * 2;
+
+/// The chain position the wall clock says is current for a call that
+/// started at `call_start`.
+fn wall_clock_epoch(call_start: chrono::DateTime<chrono::Utc>) -> u32 {
+    let elapsed = (chrono::Utc::now() - call_start).num_milliseconds() as f64 / 1000.0;
+    aligned_ratchet_schedule(elapsed + RATCHET_TICK_TOLERANCE_SECS, KEY_RATCHET_INTERVAL_SECS).0
+}
+
+/// Ratchet `key_state` up to chain position `target`, returning what to hand
+/// LiveKit when it moved. A chain already at or past `target` stays put: a
+/// rotation is issued one position ahead (`CallKeyState::rotate`) and the
+/// clock catches up to it rather than the chain running further ahead — so
+/// every participant's position stays the wall-clock epoch (or the newest
+/// rotation's, until the clock passes it), however many rotations the call
+/// has had — so a joiner's first key stays within `MAX_JOIN_LEAD`.
+fn ratchet_to(key_state: &mut CallKeyState, target: u32) -> Option<(u32, Vec<u8>, Vec<u8>)> {
+    let behind = target.checked_sub(key_state.epoch()).filter(|n| *n > 0)?;
+    if behind > MAX_RATCHET_CATCH_UP {
+        tracing::error!(epoch = key_state.epoch(), target, "Call key ratchet target out of range; not advancing");
+        return None;
+    }
+    while key_state.epoch() < target {
+        if let Err(e) = key_state.ratchet() {
+            tracing::error!("Key ratchet failed: {}", e);
+            return None;
+        }
+    }
+    Some(chain_install(key_state))
 }
 
 /// Start the coordinated key ratchet timer.
@@ -2308,41 +2361,27 @@ fn start_key_ratchet_timer(
     let active_call = active_call.clone();
 
     tokio::task::spawn_local(async move {
-        // Advance our deterministic CallKeyState by one epoch and push this
-        // epoch's key plus the next (forward window) to LiveKit. Returns false
-        // if the call ended (caller should stop the timer).
+        // Advance our deterministic CallKeyState to the wall-clock epoch (one
+        // step past ours when there is no anchor) and push that epoch's key
+        // plus the next (forward window) to LiveKit. Returns false if the call
+        // ended (caller should stop the timer).
         let ratchet_once = |active_call: &Rc<RefCell<Option<ActiveCallState>>>,
                             room_manager: &Arc<RoomManager>|
          -> bool {
             let ratcheted = {
                 let mut call_guard = active_call.borrow_mut();
-                match call_guard.as_mut() {
-                    Some(state) => match state.key_state.ratchet() {
-                        Ok(()) => {
-                            let epoch = state.key_state.epoch();
-                            let key_cur = state.key_state.current_key_vec();
-                            let key_next = match state.key_state.peek_next_key() {
-                                Ok(k) => k.to_vec(),
-                                Err(e) => {
-                                    tracing::error!("Key peek failed: {}", e);
-                                    key_cur.clone()
-                                }
-                            };
-                            tracing::info!(epoch = epoch, "Coordinated key ratchet completed");
-                            Some((epoch, key_cur, key_next))
-                        }
-                        Err(e) => {
-                            tracing::error!("Key ratchet failed: {}", e);
-                            None
-                        }
-                    },
-                    None => {
-                        tracing::debug!("Key ratchet timer stopping: no active call");
-                        return false;
-                    }
-                }
+                let Some(state) = call_guard.as_mut() else {
+                    tracing::debug!("Key ratchet timer stopping: no active call");
+                    return false;
+                };
+                let target = match call_start {
+                    Some(start) => wall_clock_epoch(start),
+                    None => state.key_state.epoch().saturating_add(1),
+                };
+                ratchet_to(&mut state.key_state, target)
             };
             if let Some((epoch, key_cur, key_next)) = ratcheted {
+                tracing::info!(epoch, "Coordinated key ratchet completed");
                 if !room_manager.set_ratcheted_shared_key(epoch, key_cur, key_next) {
                     tracing::warn!("Failed to push ratcheted key to LiveKit");
                 }
@@ -2359,31 +2398,14 @@ fn start_key_ratchet_timer(
                     aligned_ratchet_schedule(elapsed, KEY_RATCHET_INTERVAL_SECS);
 
                 // Fast-forward to the wall-clock epoch (a peer that joined after
-                // one or more boundaries already passed). Bounded by call age.
-                if epoch_now > 0 {
-                    let ratcheted = {
-                        let mut guard = active_call.borrow_mut();
-                        guard.as_mut().map(|state| {
-                            while state.key_state.epoch() < epoch_now {
-                                if let Err(e) = state.key_state.ratchet() {
-                                    tracing::error!("Key fast-forward failed: {}", e);
-                                    break;
-                                }
-                            }
-                            let epoch = state.key_state.epoch();
-                            let key_cur = state.key_state.current_key_vec();
-                            let key_next = state
-                                .key_state
-                                .peek_next_key()
-                                .map(|k| k.to_vec())
-                                .unwrap_or_else(|_| key_cur.clone());
-                            (epoch, key_cur, key_next)
-                        })
-                    };
-                    if let Some((epoch, key_cur, key_next)) = ratcheted {
-                        tracing::info!(epoch, "Fast-forwarded key to wall-clock epoch on join");
-                        room_manager.set_ratcheted_shared_key(epoch, key_cur, key_next);
-                    }
+                // one or more boundaries already passed).
+                let ratcheted = active_call
+                    .borrow_mut()
+                    .as_mut()
+                    .and_then(|state| ratchet_to(&mut state.key_state, epoch_now));
+                if let Some((epoch, key_cur, key_next)) = ratcheted {
+                    tracing::info!(epoch, "Fast-forwarded key to wall-clock epoch on join");
+                    room_manager.set_ratcheted_shared_key(epoch, key_cur, key_next);
                 }
                 delay
             }
@@ -2808,7 +2830,7 @@ fn handle_domain_event(
         }
 
         // Key answers are completed by the UI/glue layer against the
-        // ChatterClient API; group-call keys (ring, rotation, late join) by
+        // ChatterClient API; group-call keys (ring, rotation) by
         // `ChatterClient::handle_group_call_key`, which needs channel
         // membership and the server's view of the call.
         DomainEvent::CallKeyAnswerReceived { .. }
@@ -3125,7 +3147,7 @@ mod failed_accept_tests {
 
 #[cfg(test)]
 mod group_key_install_tests {
-    use super::{adopt_group_key, adopt_into_call, ActiveCallState, Call, CallError, CallId, CallKeyState, CallType, ChannelId, UserId};
+    use super::{adopt_group_key, adopt_into_call, chain_install, ratchet_to, MAX_RATCHET_CATCH_UP, ActiveCallState, Call, CallError, CallId, CallKeyState, CallType, ChannelId, UserId};
 
     const CALL: &str = "11111111-2222-4333-8444-555555555555";
 
@@ -3140,8 +3162,8 @@ mod group_key_install_tests {
         }
     }
 
-    /// The initiator rotates (adopting at its epoch + 1) and sends that
-    /// `(key, epoch)`; a receiver whose chain has ratcheted differently
+    /// The rotator rotates (to its epoch + 1) and sends that `(key, epoch)`;
+    /// a receiver whose chain has ratcheted differently
     /// installs it. Both must hand LiveKit the same index and bytes, and keep
     /// agreeing on the next 30 s ratchet.
     #[test]
@@ -3151,8 +3173,8 @@ mod group_key_install_tests {
         let mut rotator = CallKeyState::new(&root, CALL).unwrap();
         rotator.ratchet().unwrap();
         rotator.ratchet().unwrap();
-        let epoch = rotator.epoch() + 1;
-        let sent = adopt_group_key(&mut rotator, new_key, epoch).unwrap();
+        let epoch = rotator.rotate(new_key).unwrap();
+        let sent = chain_install(&rotator);
 
         let mut receiver = CallKeyState::new(&root, CALL).unwrap();
         let installed = adopt_group_key(&mut receiver, new_key, epoch).unwrap();
@@ -3164,6 +3186,111 @@ mod group_key_install_tests {
         receiver.ratchet().unwrap();
         assert_eq!(rotator.current_key(), receiver.current_key());
         assert_eq!(rotator.epoch(), receiver.epoch());
+    }
+
+    /// Rotations put the chain ahead of the clock only until the clock
+    /// catches up, so however many a call has had, a joiner (on the
+    /// wall-clock epoch) can adopt the join rotation's key and then ratchets
+    /// in step.
+    #[test]
+    fn rotations_do_not_drift_the_chain_from_the_clock() {
+        let root = [7u8; 32];
+        let mut rotator = CallKeyState::new(&root, CALL).unwrap();
+        ratchet_to(&mut rotator, 10).unwrap();
+        for _ in 0..3 {
+            rotator.rotate(crate::crypto::generate_group_call_key()).unwrap();
+        }
+        assert_eq!(rotator.epoch(), 13);
+        assert!(ratchet_to(&mut rotator, 11).is_none(), "ahead of the clock: wait for it");
+        assert!(ratchet_to(&mut rotator, 12).is_none());
+
+        let mut joiner = CallKeyState::new(&root, CALL).unwrap();
+        ratchet_to(&mut joiner, 12).unwrap();
+        let join_key = crate::crypto::generate_group_call_key();
+        let issued = rotator.rotate(join_key).unwrap();
+        assert!(adopt_group_key(&mut joiner, join_key, issued).is_some());
+
+        for wall in 13..20 {
+            ratchet_to(&mut rotator, wall);
+            ratchet_to(&mut joiner, wall);
+            assert_eq!(rotator.epoch(), wall.max(14));
+            assert_eq!(joiner.current_key(), rotator.current_key(), "wall epoch {wall}");
+        }
+    }
+
+    /// Security review F1: a member who left and rejoins is sent only the
+    /// join rotation's fresh key, from which no key used while they were away
+    /// follows — nor does one from the chain they kept.
+    #[test]
+    fn rejoiner_cannot_derive_the_key_used_while_away() {
+        use crate::crypto::generate_group_call_key as fresh;
+        let root = [7u8; 32];
+        let mut rotator = CallKeyState::new(&root, CALL).unwrap();
+        let mut member = CallKeyState::new(&root, CALL).unwrap();
+        ratchet_to(&mut rotator, 4).unwrap();
+        ratchet_to(&mut member, 4).unwrap();
+        let key = fresh();
+        let at = rotator.rotate(key).unwrap();
+        assert!(adopt_group_key(&mut member, key, at).is_some(), "the member's own join rotation");
+
+        // They leave: the leave rotation keys the call while they are away.
+        rotator.rotate(fresh()).unwrap();
+        let mut while_away = Vec::new();
+        for wall in 6..12 {
+            ratchet_to(&mut rotator, wall);
+            while_away.push(*rotator.current_key());
+            ratchet_to(&mut member, wall);
+            assert!(!while_away.contains(member.current_key()), "their old chain, wall epoch {wall}");
+        }
+
+        // They rejoin: the join rotation's key is all they are sent.
+        let rejoin_key = fresh();
+        let at = rotator.rotate(rejoin_key).unwrap();
+        assert!(adopt_group_key(&mut member, rejoin_key, at).is_some());
+        assert_eq!(member.current_key(), rotator.current_key());
+        for wall in 12..40 {
+            ratchet_to(&mut rotator, wall);
+            ratchet_to(&mut member, wall);
+            assert_eq!(member.current_key(), rotator.current_key());
+            assert!(!while_away.contains(member.current_key()), "after rejoining, wall epoch {wall}");
+        }
+    }
+
+    /// A joiner is sent the join rotation's key — fresh, so nothing the call
+    /// was keyed with before the join follows from it.
+    #[test]
+    fn joiner_is_sent_no_key_from_before_its_join() {
+        use crate::crypto::generate_group_call_key as fresh;
+        let mut rotator = CallKeyState::new(&[7u8; 32], CALL).unwrap();
+        rotator.rotate(fresh()).unwrap();
+        let mut before_join = Vec::new();
+        for wall in 2..10 {
+            ratchet_to(&mut rotator, wall);
+            before_join.push(*rotator.current_key());
+        }
+        before_join.push(rotator.peek_next_key().unwrap());
+
+        let join_key = fresh();
+        let at = rotator.rotate(join_key).unwrap();
+        let (_, sent, _) = chain_install(&rotator);
+        assert_eq!(sent, join_key.to_vec(), "what goes to the joiner is the rotation's key");
+        assert!(!before_join.contains(&join_key));
+
+        let mut joiner = CallKeyState::new(&[7u8; 32], CALL).unwrap();
+        ratchet_to(&mut joiner, 9).unwrap();
+        assert!(adopt_group_key(&mut joiner, join_key, at).is_some());
+        for wall in 10..40 {
+            ratchet_to(&mut joiner, wall);
+            assert!(!before_join.contains(joiner.current_key()), "wall epoch {wall}");
+        }
+    }
+
+    #[test]
+    fn ratchet_catch_up_is_bounded() {
+        let mut state = CallKeyState::new(&[7u8; 32], CALL).unwrap();
+        assert!(ratchet_to(&mut state, MAX_RATCHET_CATCH_UP + 1).is_none());
+        assert!(ratchet_to(&mut state, u32::MAX).is_none());
+        assert_eq!(state.epoch(), 0);
     }
 
     #[test]

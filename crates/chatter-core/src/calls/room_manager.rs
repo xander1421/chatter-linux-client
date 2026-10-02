@@ -86,6 +86,17 @@ pub enum RoomEvent {
     ActiveSpeakersChanged { speaker_identities: Vec<String> },
 }
 
+/// LiveKit E2EE key-ring slots: a peer up to 15 epochs behind still decrypts.
+const KEY_RING_SIZE: i32 = 16;
+
+/// The key-ring slot for chain `epoch`. LiveKit reduces the index modulo the
+/// ring size itself; doing it here keeps every index a valid non-negative
+/// `i32` for any `u32` epoch. 2^32 is a multiple of the ring size, so
+/// `wrapping_add(1)` still lands on the next slot at `u32::MAX`.
+fn key_ring_index(epoch: u32) -> i32 {
+    (epoch % KEY_RING_SIZE as u32) as i32
+}
+
 /// E2EE key state (key provider + epoch under one lock).
 struct E2eeState {
     provider: Option<KeyProvider>,
@@ -659,7 +670,11 @@ impl RoomManager {
         // which diverges from our HKDF chain and never re-syncs, permanently
         // killing media. We install the keys ourselves, so LiveKit must not.
         let key_provider = KeyProvider::with_shared_key(
-            KeyProviderOptions { ratchet_window_size: 0, ..KeyProviderOptions::default() },
+            KeyProviderOptions {
+                ratchet_window_size: 0,
+                key_ring_size: KEY_RING_SIZE,
+                ..KeyProviderOptions::default()
+            },
             encryption_key,
         );
 
@@ -914,6 +929,23 @@ impl RoomManager {
         }
     }
 
+    /// Our own LiveKit `joined_at_ms` and each remote participant's
+    /// `(identity, joined_at_ms)` — the seniority the group-call key
+    /// authority is chosen by. `None` when not connected.
+    ///
+    /// `joined_at_ms` is assigned by the LiveKit server, so every participant
+    /// reads the same values; like the roster itself it is server-asserted.
+    pub fn room_seniority(&self) -> Option<(i64, Vec<(String, i64)>)> {
+        let room = self.room.read();
+        let room = room.as_ref()?;
+        let remote = room
+            .remote_participants()
+            .iter()
+            .map(|(identity, participant)| (identity.to_string(), participant.joined_at()))
+            .collect();
+        Some((room.local_participant().joined_at(), remote))
+    }
+
     /// Ratchet the encryption key for forward secrecy.
     ///
     /// This advances the key to a new epoch, providing forward secrecy
@@ -963,8 +995,8 @@ impl RoomManager {
                 return false;
             }
         };
-        provider.set_shared_key(key_next, (epoch + 1) as i32);
-        provider.set_shared_key(key_cur, epoch as i32);
+        provider.set_shared_key(key_next, key_ring_index(epoch.wrapping_add(1)));
+        provider.set_shared_key(key_cur, key_ring_index(epoch));
         e2ee.epoch = epoch;
         true
     }
@@ -1177,5 +1209,18 @@ impl RoomManager {
             }
             _ => {}
         }
+    }
+}
+
+#[cfg(test)]
+mod key_ring_tests {
+    use super::key_ring_index;
+
+    #[test]
+    fn key_ring_index_never_overflows() {
+        assert_eq!(key_ring_index(0), 0);
+        assert_eq!(key_ring_index(17), 1);
+        assert_eq!(key_ring_index(u32::MAX), 15);
+        assert_eq!(key_ring_index(u32::MAX.wrapping_add(1)), 0, "next slot after the last epoch");
     }
 }

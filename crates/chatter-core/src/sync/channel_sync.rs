@@ -268,77 +268,45 @@ impl ChannelSync {
             .await
             .map_err(|e| SyncError::Network(e.to_string()))?;
 
-        let server_ids: HashSet<UserId> = all_members
-            .iter()
-            .filter_map(|m| m.user_id.parse::<UserId>().ok())
-            .collect();
-
-        let local = self
-            .channel_repo
-            .list_members(channel_id)
-            .map_err(|e| SyncError::Storage(e.to_string()))?;
-        let me = self.settings_repo.current_user_id().ok();
-
-        // Delete local memberships no longer present on the server.
-        let mut removed = 0;
-        for member in &local {
-            if !server_ids.contains(&member.user_id) {
-                match self.channel_repo.delete_membership(channel_id, &member.user_id) {
-                    Ok(()) => {
-                        removed += 1;
-                        if Some(member.user_id) != me {
-                            let reason = self.departure_reason(channel_id, &member.user_id).await;
-                            self.channel_events.record_synced_departure(member, reason);
-                        }
-                    }
-                    Err(e) => tracing::warn!(
-                        channel_id = %channel_id,
-                        user_id = %member.user_id,
-                        error = %e,
-                        "Failed to delete stale membership during sync"
-                    ),
-                }
-            }
-        }
-
-        let own_joined = all_members
-            .iter()
-            .filter_map(|m| proto_to_domain_membership(channel_id, m).ok())
-            .find(|m| Some(m.user_id) == me)
-            .map(|m| m.joined_at);
-
-        // Insert any new memberships present on the server.
-        let mut added = 0;
+        // Convert the whole page set before replacing. One bad proto must not
+        // delete the member it failed to name.
+        let mut memberships = Vec::with_capacity(all_members.len());
         for proto in &all_members {
             match proto_to_domain_membership(channel_id, proto) {
-                Ok(membership) => {
-                    match self.channel_repo.insert_or_ignore_membership(&membership) {
-                        Ok(true) => {
-                            added += 1;
-                            if Some(membership.user_id) != me
-                                && join_is_news(membership.joined_at, last_sync, own_joined)
-                            {
-                                self.channel_events.record_synced_join(&membership);
-                            }
-                        }
-                        Ok(false) => {}
-                        Err(e) => tracing::warn!(
-                            channel_id = %channel_id,
-                            user_id = %membership.user_id,
-                            error = %e,
-                            "Failed to insert membership during sync"
-                        ),
-                    }
+                Ok(membership) => memberships.push(membership),
+                Err(e) => {
+                    tracing::warn!(
+                        channel_id = %channel_id,
+                        error = %e,
+                        "Failed to convert proto member during sync; roster not replaced"
+                    );
+                    return Err(SyncError::Storage(e.to_string()));
                 }
-                Err(e) => tracing::warn!(
-                    channel_id = %channel_id,
-                    error = %e,
-                    "Failed to convert proto member during sync"
-                ),
+            }
+        }
+        let me = self.settings_repo.current_user_id().ok();
+        let own_joined = memberships
+            .iter()
+            .find(|m| Some(m.user_id) == me)
+            .map(|m| m.joined_at);
+        let refresh = self
+            .channel_repo
+            .replace_memberships(channel_id, &memberships)
+            .map_err(|e| SyncError::Storage(e.to_string()))?;
+        for member in &refresh.removed {
+            if Some(member.user_id) != me {
+                let reason = self.departure_reason(channel_id, &member.user_id).await;
+                self.channel_events.record_synced_departure(member, reason);
+            }
+        }
+        for membership in &refresh.added {
+            if Some(membership.user_id) != me && join_is_news(membership.joined_at, last_sync, own_joined)
+            {
+                self.channel_events.record_synced_join(membership);
             }
         }
 
-        Ok((added, removed))
+        Ok((refresh.added.len(), refresh.removed.len()))
     }
 
     /// Get the last sync timestamp.

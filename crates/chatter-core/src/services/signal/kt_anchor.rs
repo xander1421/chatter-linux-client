@@ -45,6 +45,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::crypto::keytransparency::{verify_consistency_proof, KtError};
 use std::future::Future;
+use std::time::Duration;
 
 use crate::error::NetworkError;
 use crate::proto::chat_v1::{GetConsistencyProofResponse, SignedTreeHead};
@@ -110,6 +111,17 @@ pub fn classify_head(
     let offered_root = root_of(sth)?;
     let offered_epoch = sth.epoch;
 
+    // The server's epoch IS its log size (keytransparency/service.go `state`),
+    // so an honest head has epoch == tree_size >= 1; epoch 0 is the empty log,
+    // which is never signed. Refusing anything else, before the first pin, is
+    // what makes every later advance need a consistency proof from the pinned
+    // root: a head signed at epoch 0 over a non-empty tree used to be pinned,
+    // and from a 0 pin the next head was re-pinned with no proof, so a fork
+    // planted there could step onto the public log.
+    if offered_epoch == 0 || offered_epoch != sth.tree_size {
+        return Err(KtError::Malformed("tree head epoch is not its log size"));
+    }
+
     let Some(pin) = pinned_head(settings) else {
         store(settings, offered_epoch, offered_root)?;
         return Ok(AnchorAction::Settled(AnchorOutcome::FirstPin));
@@ -129,14 +141,6 @@ pub fn classify_head(
             // this is to sign two trees, so it is a fork by definition.
             Err(KtError::ConsistencyRootMismatch)
         };
-    }
-
-    // A pin at epoch 0 cannot anchor a proof — the server rejects
-    // `old_epoch == 0` (keytransparency/service.go:166) — and epoch 0 is never
-    // a signed head in practice. Re-pin rather than wedge the client forever.
-    if pin.epoch == 0 {
-        store(settings, offered_epoch, offered_root)?;
-        return Ok(AnchorAction::Settled(AnchorOutcome::FirstPin));
     }
 
     Ok(AnchorAction::NeedsProof {
@@ -187,6 +191,32 @@ pub async fn lock_pin() -> PinGuard {
     PIN_LOCK.lock().await
 }
 
+/// Deadline for every RPC made while [`PIN_LOCK`] is held. The lock is
+/// process-wide, so one response the server withholds (keepalive pings still
+/// answered, so the transport never fails) would otherwise stall every session
+/// establishment and every manifest fetch behind it. Ten seconds matches the
+/// manifest fetch's own deadline in `token_manager`.
+pub const PIN_RPC_DEADLINE: Duration = Duration::from_secs(10);
+
+/// Run `rpc` under [`PIN_RPC_DEADLINE`]. A timeout is
+/// [`NetworkError::Timeout`]: the caller fails that check (an error is never a
+/// way past it) and returning drops its [`PinGuard`], freeing the lock.
+pub async fn pinned_rpc<T, E>(rpc: impl Future<Output = Result<T, E>>) -> Result<T, E>
+where
+    E: From<NetworkError>,
+{
+    within(PIN_RPC_DEADLINE, rpc).await
+}
+
+async fn within<T, E>(deadline: Duration, rpc: impl Future<Output = Result<T, E>>) -> Result<T, E>
+where
+    E: From<NetworkError>,
+{
+    tokio::time::timeout(deadline, rpc)
+        .await
+        .unwrap_or_else(|_| Err(NetworkError::Timeout.into()))
+}
+
 /// [`classify_head`] then, for a newer head, [`accept_advance`] with the proof
 /// `fetch` returns for the pinned->offered range (callers pass the anonymous
 /// KT client). Any failure, fetch included, rejects: an error must not be a
@@ -222,7 +252,7 @@ where
     match classify_head(settings, sth)? {
         AnchorAction::Settled(outcome) => Ok(outcome),
         AnchorAction::NeedsProof { old_epoch, new_epoch } => {
-            let resp = fetch(old_epoch, new_epoch)
+            let resp = pinned_rpc(fetch(old_epoch, new_epoch))
                 .await
                 .map_err(|_| KtError::ConsistencyUnavailable)?;
             accept_advance(settings, sth, &resp)
@@ -288,6 +318,7 @@ mod tests {
     fn sth(epoch: u64, root: [u8; 32]) -> SignedTreeHead {
         SignedTreeHead {
             epoch,
+            tree_size: epoch,
             root_hash: root.to_vec(),
             ..Default::default()
         }
@@ -473,6 +504,53 @@ mod tests {
         assert_eq!(pinned_head(&s).unwrap().epoch, 3);
     }
 
+    /// F3: the server's epoch is its log size, so a head at epoch 0 or with
+    /// epoch != tree_size was signed by no honest server. It is refused before
+    /// it can become a pin, and nothing is stored.
+    #[test]
+    fn a_head_whose_epoch_is_not_its_log_size_is_never_pinned() {
+        let (s, _dir) = settings();
+        let mut zero = sth(0, [1u8; 32]);
+        zero.tree_size = 1;
+        assert_eq!(
+            classify_head(&s, &zero).unwrap_err(),
+            KtError::Malformed("tree head epoch is not its log size")
+        );
+        let mut skewed = sth(7, [1u8; 32]);
+        skewed.tree_size = 9;
+        assert!(classify_head(&s, &skewed).is_err());
+        assert!(pinned_head(&s).is_none());
+    }
+
+    /// F3: a pin already at epoch 0 (from a build that stored one) no longer
+    /// re-pins the next head for free. It needs a consistency proof bound to
+    /// that root like any other pin, and a proof from anywhere else is refused.
+    #[tokio::test]
+    async fn an_epoch_zero_pin_needs_a_proof_like_any_other() {
+        let (s, _dir) = settings();
+        store(&s, 0, [9u8; 32]).unwrap();
+        assert_eq!(
+            classify_head(&s, &sth(5, [2u8; 32])).unwrap(),
+            AnchorAction::NeedsProof { old_epoch: 0, new_epoch: 5 }
+        );
+        assert_eq!(
+            hold_head(&s, &sth(5, [2u8; 32]), |_, _| async {
+                Err::<GetConsistencyProofResponse, _>(NetworkError::InvalidRequest("old_epoch 0".into()))
+            })
+            .await
+            .unwrap_err(),
+            KtError::ConsistencyUnavailable
+        );
+        assert_eq!(pinned_head(&s).unwrap(), PinnedTreeHead { epoch: 0, root: [9u8; 32] });
+
+        // A genuine, correctly signed proof that does not start at this pin.
+        let Some(resp) = dev_consistency_vector() else { return };
+        let new = resp.new_signed_tree_head.clone().unwrap();
+        let mut asked = None;
+        assert!(hold_head(&s, &new, fetch_ok(resp, &mut asked)).await.is_err());
+        assert_eq!(pinned_head(&s).unwrap().epoch, 0);
+    }
+
     /// A bad proof must leave the pin where it was.
     #[test]
     fn a_failed_advance_leaves_the_pin_untouched() {
@@ -544,5 +622,14 @@ mod tests {
             ..Default::default()
         };
         assert!(bind_proof_to_pin(&resp, pin, 8, [2u8; 32]).is_ok());
+    }
+
+    /// A withheld response fails the check at the deadline instead of holding
+    /// the process-wide pin lock forever.
+    #[tokio::test]
+    async fn a_withheld_response_times_out() {
+        let r: Result<(), NetworkError> =
+            within(Duration::from_millis(10), std::future::pending()).await;
+        assert!(matches!(r, Err(NetworkError::Timeout)));
     }
 }

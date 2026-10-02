@@ -2252,13 +2252,22 @@ impl ChatterClient {
         })
     }
 
-    /// Call-worker group-call key policy listener. On `ParticipantLeft` in a
-    /// channel-based group call, the initiator rotates the encryption key and
-    /// redistributes it so the departed participant can't decrypt future
-    /// frames; on `ParticipantJoined` we send the joiner the current key; a
-    /// received `GroupCallKey` rings, or is installed. One loop, so keys are
-    /// handled in arrival order. The "when" decisions live in core, not the
-    /// UI crate.
+    /// Call-worker group-call key policy listener. In a channel-based group
+    /// call the designated rotator rotates the encryption key on every
+    /// membership change: on `ParticipantLeft` so the departed participant
+    /// can't decrypt future frames, and on `ParticipantJoined` — joins within
+    /// `ROSTER_SETTLE` coalesced into one rotation — so a joiner is sent only
+    /// a key that covered nothing before it joined. A received `GroupCallKey`
+    /// rings, or is installed. The "when" decisions live in core, not the UI
+    /// crate.
+    ///
+    /// The loop only dispatches: each event's network work runs in its own
+    /// task with deadlines, so a slow server or a flood of keys never holds
+    /// up a `ParticipantLeft`. Received keys are handled at most
+    /// [`CALL_KEY_TASKS`] at a time — the rest are dropped — and need no
+    /// ordering: adoption only moves forward (`CallKeyState::adopt`). If the
+    /// room-event bus still lags, the roster is re-read and any departure
+    /// in the gap rotates the key.
     #[cfg(feature = "media")]
     fn spawn_call_room_policy_listener(self: &Arc<Self>) -> tokio::task::JoinHandle<()> {
         let client = Arc::clone(self);
@@ -2266,38 +2275,88 @@ impl ChatterClient {
         tokio::spawn(async move {
             // Wait for the call worker to be initialized. init_call_service runs
             // before start() returns, but on Android it is deferred.
-            let mut rx = loop {
+            let (worker, mut rx) = loop {
                 if let Some(w) = client.ctx.get_call_service() {
-                    break w.subscribe_room_events();
+                    let rx = w.subscribe_room_events();
+                    break (w.clone(), rx);
                 }
                 tokio::time::sleep(std::time::Duration::from_millis(200)).await;
             };
 
             use crate::calls::LiveKitRoomEvent;
+            use std::collections::HashSet;
             use tokio::sync::broadcast::error::RecvError;
-            let mut late_join_sent = std::collections::HashSet::new();
+            let join_gate = Arc::new(calls::JoinRotationGate::default());
+            let key_slots = Arc::new(tokio::sync::Semaphore::new(CALL_KEY_TASKS));
+            // Who we last knew to be in the room, to find departures a lag
+            // swallowed. Refreshed from the worker on every state change
+            // (connect, and each participant count change).
+            let mut known_roster: HashSet<String> = HashSet::new();
+
+            let departed = |identity: String| {
+                let client = Arc::clone(&client);
+                tokio::spawn(async move {
+                    if let Err(e) = client.handle_participant_departed(&identity).await {
+                        tracing::error!(error = %e, "Failed to handle participant departure");
+                    }
+                });
+            };
+            let joined = || {
+                if !join_gate.arm() {
+                    return;
+                }
+                let client = Arc::clone(&client);
+                let gate = Arc::clone(&join_gate);
+                tokio::spawn(async move {
+                    tokio::time::sleep(calls::ROSTER_SETTLE).await;
+                    gate.fire();
+                    if let Err(e) = client.handle_participants_joined().await {
+                        tracing::error!(error = %e, "Failed to rotate the group call key for joiners");
+                    }
+                });
+            };
+
             loop {
                 tokio::select! {
                     event = rx.recv() => match event {
                         Ok(LiveKitRoomEvent::ParticipantLeft { identity }) => {
-                            if let Err(e) = client.handle_participant_departed(&identity).await {
-                                tracing::error!(error = %e, "Failed to handle participant departure");
-                            }
+                            known_roster.remove(&identity);
+                            departed(identity);
                         }
                         Ok(LiveKitRoomEvent::ParticipantJoined { identity, .. }) => {
-                            if let Err(e) = client.handle_participant_joined(&identity, &mut late_join_sent).await {
-                                tracing::error!(error = %e, "Failed to send group call key to joiner");
-                            }
+                            known_roster.insert(identity);
+                            joined();
+                        }
+                        Ok(LiveKitRoomEvent::StateChanged(_)) => {
+                            known_roster = worker.remote_participant_identities().await.into_iter().collect();
                         }
                         Ok(_) => {}
                         Err(RecvError::Lagged(n)) => {
-                            tracing::warn!(skipped = n, "Call room-events policy lagged");
+                            tracing::warn!(skipped = n, "Call room-events policy lagged; re-reading the roster");
+                            let now: HashSet<String> = worker.remote_participant_identities().await.into_iter().collect();
+                            let (gone, new) = roster_changes(&known_roster, &now);
+                            known_roster = now;
+                            // One rotation locks out every departure in the gap.
+                            if let Some(identity) = gone.into_iter().next() {
+                                departed(identity);
+                            }
+                            if !new.is_empty() {
+                                joined();
+                            }
                         }
                         Err(RecvError::Closed) => break,
                     },
                     event = domain_rx.recv() => match event {
                         Ok(DomainEvent::GroupCallKeyReceived { call_id, sender_id, key_material, key_epoch, channel_id }) => {
-                            client.handle_group_call_key(call_id, sender_id, key_material, key_epoch, channel_id).await;
+                            let Ok(slot) = Arc::clone(&key_slots).try_acquire_owned() else {
+                                tracing::warn!(%sender_id, "Group call key dropped: key handling saturated");
+                                continue;
+                            };
+                            let client = Arc::clone(&client);
+                            tokio::spawn(async move {
+                                client.handle_group_call_key(call_id, sender_id, key_material, key_epoch, channel_id).await;
+                                drop(slot);
+                            });
                         }
                         Ok(_) => {}
                         Err(RecvError::Lagged(n)) => {
@@ -4033,6 +4092,20 @@ async fn upload_attachments(pending: &[PendingAttachment], attachment_service: &
     Ok(UploadedAttachments { pointers, attachments })
 }
 
+/// Received group-call keys handled at once by the call-policy listener;
+/// beyond this a key is dropped rather than queued behind a stalled server.
+#[cfg(feature = "media")]
+const CALL_KEY_TASKS: usize = 8;
+
+/// Who left and who joined between two views of a call's room.
+#[cfg(feature = "media")]
+fn roster_changes(
+    before: &std::collections::HashSet<String>,
+    now: &std::collections::HashSet<String>,
+) -> (Vec<String>, Vec<String>) {
+    (before.difference(now).cloned().collect(), now.difference(before).cloned().collect())
+}
+
 fn build_intent(
     conversation: ActiveConversation, text: &str, attachment_pointers: Vec<AttachmentPointer>,
     quote: Option<QuoteIntent>, options: &SendOptions, channel_service: &ChannelService,
@@ -4408,5 +4481,23 @@ mod unread_badge_tests {
             tokio::time::timeout(Duration::from_millis(200), changes.recv()).await.is_err(),
             "a message restating the same timer is not a change"
         );
+    }
+}
+
+#[cfg(all(test, feature = "media"))]
+mod call_policy_tests {
+    use super::roster_changes;
+    use std::collections::HashSet;
+
+    /// A lag that swallowed a ParticipantLeft still yields the departure
+    /// (and so a rotation) once the roster is re-read.
+    #[test]
+    fn lagged_roster_resync_finds_departures_and_joins() {
+        let set = |ids: &[&str]| ids.iter().map(|s| s.to_string()).collect::<HashSet<_>>();
+        let (gone, new) = roster_changes(&set(&["a", "b", "c"]), &set(&["a", "c", "d"]));
+        assert_eq!(gone, vec!["b".to_string()]);
+        assert_eq!(new, vec!["d".to_string()]);
+        let (gone, new) = roster_changes(&set(&["a"]), &set(&["a"]));
+        assert!(gone.is_empty() && new.is_empty());
     }
 }

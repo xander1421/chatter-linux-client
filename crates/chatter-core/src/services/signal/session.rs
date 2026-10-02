@@ -55,9 +55,11 @@ impl SignalService {
     /// No-proof policy (deliberate, LOUD, not silent):
     /// * peer HAS a leaf, key matches  -> Ok (verified).
     /// * peer HAS a leaf, key differs   -> REJECT (F9 forged/MITM identity key).
-    /// * peer has NO leaf (NotFound)    -> TOFU fallback with a `warn!` naming the
-    ///   downgrade — the ~1500 pre-KT users have no leaf and would otherwise be
-    ///   unreachable; their keys are simply not transparency-verified yet.
+    /// * peer has NO leaf (NotFound)    -> REJECT with
+    ///   [`CryptoError::NotInTransparencyLog`]. The server logs every identity
+    ///   key in the transaction that stores it, so "no leaf" is never honest
+    ///   for a peer with a bundle; accepting it would let a server skip KT for
+    ///   any peer it wants to MITM.
     /// * any other transport/server error -> REJECT (an error is not evidence of
     ///   an absent leaf; a malicious server must not be able to error its way
     ///   past the check).
@@ -139,76 +141,93 @@ impl SignalService {
             .identity_key()
             .map_err(|e| ServiceError::Validation(format!("bundle missing identity key: {e}")))?
             .serialize();
-
         // Held from the proof fetch through the pin update, so this head is
         // never older than a pin a concurrent check just advanced
         // (`kt_anchor::lock_pin`).
         let pin = kt_anchor::lock_pin().await;
-        match auth_client.get_key_transparency_proof(recipient_id).await {
-            Ok(Some(proof)) => {
-                match crate::crypto::verify_kt_proof(recipient_id, &identity_key, &proof) {
-                    Ok(()) => {
-                        let epoch = proof
-                            .signed_tree_head
-                            .as_ref()
-                            .map(|s| s.epoch)
-                            .unwrap_or_default();
-                        tracing::debug!(
-                            recipient = %recipient_id,
-                            epoch,
-                            "KT: peer identity key verified against the signed transparency log"
-                        );
-                        // The inclusion proof says the key is in the tree the
-                        // server just signed. It says nothing about WHICH tree,
-                        // so on its own it cannot see a fork or a rollback.
-                        // Pin the head across time as well.
-                        self.check_tree_head_consistency(
-                            &pin,
-                            |old, new| auth_client.get_consistency_proof(old, new),
-                            recipient_id,
-                            &proof,
-                        )
-                        .await
-                    }
-                    // `Malformed` means the proof doesn't even have the shape
-                    // this verifier expects (e.g. missing prefix_root) — that's
-                    // a protocol-version mismatch (client speaks KT v2,
-                    // two-tree/log-sealed; this server still speaks v1,
-                    // single-tree), not evidence of a forged key. Every OTHER
-                    // variant is a real cryptographic verification failure
-                    // against a structurally-valid v2 proof and must keep
-                    // hard-rejecting even here.
-                    #[cfg(feature = "dev-trust-root")]
-                    Err(KtError::Malformed(reason)) => {
-                        tracing::warn!(
-                            recipient = %recipient_id,
-                            reason,
-                            "KT DOWNGRADE (dev-trust-root, protocol version mismatch): server's \
-                             KT proof doesn't match the v2 shape this client verifies (server is \
-                             still on v1) — trusting the bundle identity key WITHOUT a KT proof. \
-                             NEVER hit outside a dev-trust-root build."
-                        );
-                        Ok(())
-                    }
-                    Err(e) => {
-                        tracing::error!(
-                            recipient = %recipient_id,
-                            error = %e,
-                            "KT REJECT: refusing session — bundle identity key is NOT the key \
-                             committed in the Key Transparency log (possible forged/MITM key, F9)"
-                        );
-                        Err(ServiceError::Validation(format!(
-                            "Key Transparency verification failed for {recipient_id}: {e}"
-                        )))
-                    }
-                }
-            }
+        let fetched = kt_anchor::pinned_rpc(auth_client.get_key_transparency_proof(recipient_id)).await;
+        self.judge_kt_proof(&pin, "KT", recipient_id, &identity_key, fetched, |old, new| {
+            auth_client.get_consistency_proof(old, new)
+        })
+        .await
+    }
+
+    /// The verdict both KT gates (identified and anonymous) reach once the
+    /// proof fetch has returned. `path` labels the log lines.
+    async fn judge_kt_proof<F, Fut>(
+        &self,
+        pin: &kt_anchor::PinGuard,
+        path: &'static str,
+        recipient_id: &str,
+        identity_key: &[u8],
+        fetched: Result<Option<crate::proto::chat_v1::GetProofResponse>, crate::error::NetworkError>,
+        fetch_consistency: F,
+    ) -> Result<(), ServiceError>
+    where
+        F: FnOnce(u64, u64) -> Fut,
+        Fut: std::future::Future<
+            Output = Result<crate::proto::chat_v1::GetConsistencyProofResponse, crate::error::NetworkError>,
+        >,
+    {
+        let proof = match fetched {
+            Ok(Some(proof)) => proof,
             Ok(None) => {
+                tracing::error!(
+                    recipient = %recipient_id,
+                    "{path} REJECT: server says the peer has no Key Transparency entry — every \
+                     stored identity key is logged, so this is the server skipping KT; refusing \
+                     session"
+                );
+                return Err(ServiceError::Crypto(CryptoError::NotInTransparencyLog {
+                    peer_id: recipient_id.to_string(),
+                }));
+            }
+            Err(e) => {
+                tracing::error!(
+                    recipient = %recipient_id,
+                    error = %e,
+                    "{path}: proof fetch failed (transport/server error or deadline) — refusing \
+                     session (an error is not evidence of an absent leaf)"
+                );
+                return Err(ServiceError::Network(e));
+            }
+        };
+
+        match crate::crypto::verify_kt_proof(recipient_id, identity_key, &proof) {
+            Ok(()) => {
+                let epoch = proof
+                    .signed_tree_head
+                    .as_ref()
+                    .map(|s| s.epoch)
+                    .unwrap_or_default();
+                tracing::debug!(
+                    recipient = %recipient_id,
+                    epoch,
+                    "{path}: peer identity key verified against the signed transparency log"
+                );
+                // The inclusion proof says the key is in the tree the server
+                // just signed. It says nothing about WHICH tree, so on its own
+                // it cannot see a fork or a rollback. Pin the head across time
+                // as well.
+                self.check_tree_head_consistency(pin, fetch_consistency, recipient_id, &proof)
+                    .await
+            }
+            // `Malformed` means the proof doesn't even have the shape this
+            // verifier expects (e.g. missing prefix_root) — that's a
+            // protocol-version mismatch (client speaks KT v2, two-tree/log-sealed;
+            // this server still speaks v1, single-tree), not evidence of a forged
+            // key. Every OTHER variant is a real cryptographic verification
+            // failure against a structurally-valid v2 proof and must keep
+            // hard-rejecting even here.
+            #[cfg(feature = "dev-trust-root")]
+            Err(KtError::Malformed(reason)) => {
                 tracing::warn!(
                     recipient = %recipient_id,
-                    "KT DOWNGRADE (TOFU): peer has no leaf in the Key Transparency log (pre-KT \
-                     user); trusting the bundle identity key WITHOUT a KT proof — this key is \
-                     NOT transparency-verified"
+                    reason,
+                    "{path} DOWNGRADE (dev-trust-root, protocol version mismatch): server's KT \
+                     proof doesn't match the v2 shape this client verifies (server is still on \
+                     v1) — trusting the bundle identity key WITHOUT a KT proof. NEVER hit \
+                     outside a dev-trust-root build."
                 );
                 Ok(())
             }
@@ -216,10 +235,12 @@ impl SignalService {
                 tracing::error!(
                     recipient = %recipient_id,
                     error = %e,
-                    "KT: proof fetch failed (transport/server error, not NotFound) — refusing \
-                     session (an error is not evidence of an absent leaf)"
+                    "{path} REJECT: refusing session — bundle identity key is NOT the key \
+                     committed in the Key Transparency log (possible forged/MITM key, F9)"
                 );
-                Err(ServiceError::Network(e))
+                Err(ServiceError::Validation(format!(
+                    "Key Transparency verification failed for {recipient_id}: {e}"
+                )))
             }
         }
     }
@@ -1009,7 +1030,7 @@ impl SignalService {
     /// The anonymous analog of `verify_peer_key_transparency`. Same semantics
     /// (verify the bundle's identity key is the one committed in the signed KT
     /// log under the pinned tree-head key; REJECT a mismatch; REJECT a
-    /// transport/server error; TOFU-warn only on `NotFound`), but it fetches the
+    /// transport/server error and `NotFound`), but it fetches the
     /// proof over the isolated ANONYMOUS channel via `AnonymousKtClient` — no
     /// authenticated identity — because the anon path has none.
     ///
@@ -1026,84 +1047,15 @@ impl SignalService {
             .identity_key()
             .map_err(|e| ServiceError::Validation(format!("bundle missing identity key: {e}")))?
             .serialize();
-
         // Same pin discipline as the identified path (`kt_anchor::lock_pin`).
         let pin = kt_anchor::lock_pin().await;
-        match anon_kt_client.get_proof(recipient_id).await {
-            Ok(Some(proof)) => {
-                match crate::crypto::verify_kt_proof(recipient_id, &identity_key, &proof) {
-                    Ok(()) => {
-                        let epoch = proof
-                            .signed_tree_head
-                            .as_ref()
-                            .map(|s| s.epoch)
-                            .unwrap_or_default();
-                        tracing::debug!(
-                            recipient = %recipient_id,
-                            epoch,
-                            "KT(anon): peer identity key verified against the signed transparency log"
-                        );
-                        // Without this a server could fork the log for
-                        // anonymous lookups alone: each proof verifies against
-                        // the head in its own response. The consistency proof
-                        // comes over the same anonymous channel.
-                        self.check_tree_head_consistency(
-                            &pin,
-                            |old, new| anon_kt_client.get_consistency_proof(old, new),
-                            recipient_id,
-                            &proof,
-                        )
-                        .await
-                    }
-                    // See verify_peer_key_transparency's identical arm: Malformed
-                    // means protocol-version mismatch (server still on KT v1),
-                    // not a forged key. Only that variant downgrades, and only
-                    // under dev-trust-root.
-                    #[cfg(feature = "dev-trust-root")]
-                    Err(KtError::Malformed(reason)) => {
-                        tracing::warn!(
-                            recipient = %recipient_id,
-                            reason,
-                            "KT(anon) DOWNGRADE (dev-trust-root, protocol version mismatch): \
-                             server's KT proof doesn't match the v2 shape this client verifies \
-                             (server is still on v1) — trusting the bundle identity key WITHOUT \
-                             a KT proof. NEVER hit outside a dev-trust-root build."
-                        );
-                        Ok(())
-                    }
-                    Err(e) => {
-                        tracing::error!(
-                            recipient = %recipient_id,
-                            error = %e,
-                            "KT(anon) REJECT: refusing anonymous session — bundle identity key is \
-                             NOT the key committed in the Key Transparency log (possible \
-                             forged/MITM key, F9 on the anon path)"
-                        );
-                        Err(ServiceError::Validation(format!(
-                            "Key Transparency verification failed for {recipient_id}: {e}"
-                        )))
-                    }
-                }
-            }
-            Ok(None) => {
-                tracing::warn!(
-                    recipient = %recipient_id,
-                    "KT(anon) DOWNGRADE (TOFU): peer has no leaf in the Key Transparency log \
-                     (pre-KT user); trusting the bundle identity key WITHOUT a KT proof — this \
-                     key is NOT transparency-verified"
-                );
-                Ok(())
-            }
-            Err(e) => {
-                tracing::error!(
-                    recipient = %recipient_id,
-                    error = %e,
-                    "KT(anon): proof fetch failed (transport/server error, not NotFound) — \
-                     refusing session (an error is not evidence of an absent leaf)"
-                );
-                Err(ServiceError::Network(e))
-            }
-        }
+        let fetched = kt_anchor::pinned_rpc(anon_kt_client.get_proof(recipient_id)).await;
+        // The consistency proof comes over the same anonymous channel: without
+        // it a server could fork the log for anonymous lookups alone.
+        self.judge_kt_proof(&pin, "KT(anon)", recipient_id, &identity_key, fetched, |old, new| {
+            anon_kt_client.get_consistency_proof(old, new)
+        })
+        .await
     }
 
     /// Establish a session using a pre-fetched prekey bundle.
@@ -1429,7 +1381,7 @@ mod kt_pin_tests {
         let svc = SignalService::new(Arc::new(crate::storage::KeyStore::new(db)), settings.clone());
 
         let head = |root: u8| GetProofResponse {
-            signed_tree_head: Some(SignedTreeHead { epoch: 5, root_hash: vec![root; 32], ..Default::default() }),
+            signed_tree_head: Some(SignedTreeHead { epoch: 5, tree_size: 5, root_hash: vec![root; 32], ..Default::default() }),
             ..Default::default()
         };
         fn no_fetch(
@@ -1443,6 +1395,36 @@ mod kt_pin_tests {
         let err = svc.check_tree_head_consistency(&pin, no_fetch, "bob", &head(2)).await.unwrap_err();
         assert!(err.to_string().contains("consistency check failed"), "{err}");
         assert_eq!(kt_anchor::pinned_head(&settings).unwrap().root, [1u8; 32]);
+    }
+
+    /// Both KT gates hand their fetch result to `judge_kt_proof`. A server
+    /// answering NotFound must get a refused session, not a TOFU downgrade.
+    #[tokio::test]
+    async fn not_found_refuses_the_session() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = Arc::new(crate::storage::Database::open(&dir.path().join("kt.db"), "testpass").unwrap());
+        db.run_migrations().unwrap();
+        let settings = Arc::new(crate::storage::repositories::SettingsRepository::new(db.clone()));
+        let svc = SignalService::new(Arc::new(crate::storage::KeyStore::new(db)), settings.clone());
+        fn no_fetch(
+            _: u64,
+            _: u64,
+        ) -> std::future::Ready<Result<GetConsistencyProofResponse, crate::error::NetworkError>> {
+            panic!("no proof, nothing to hold")
+        }
+
+        let pin = kt_anchor::lock_pin().await;
+        for path in ["KT", "KT(anon)"] {
+            let err = svc
+                .judge_kt_proof(&pin, path, "bob", &[5u8; 33], Ok(None), no_fetch)
+                .await
+                .unwrap_err();
+            assert!(
+                matches!(&err, ServiceError::Crypto(CryptoError::NotInTransparencyLog { peer_id }) if peer_id == "bob"),
+                "{path}: {err}"
+            );
+        }
+        assert!(kt_anchor::pinned_head(&settings).is_none());
     }
 }
 

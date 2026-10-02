@@ -1007,8 +1007,9 @@ impl MessageService {
     /// as the copy it could not read.
     ///
     /// Bounded like Signal-Desktop's send log: only our own messages, only for
-    /// 24h, and only to a device of a CURRENT member of that channel — a
-    /// removed member must not get content back by asking for it.
+    /// 24h, and only to a device that was a recipient of that send and whose
+    /// user is still a member. A device or member added later gets nothing,
+    /// and a member who left gets nothing.
     pub async fn resend_on_decryption_error(
         &self,
         peer_id: &UserId,
@@ -1045,7 +1046,7 @@ impl MessageService {
         peer_device_id: u32,
         timestamp_ms: u64,
     ) -> Result<bool, MessageError> {
-        let Some(plaintext) = self.group_resend_content(peer_id, timestamp_ms)? else {
+        let Some(plaintext) = self.group_resend_content(peer_id, peer_device_id, timestamp_ms)? else {
             return Ok(false);
         };
         let sealed_body = self
@@ -1061,14 +1062,16 @@ impl MessageService {
         Ok(true)
     }
 
-    /// The content `peer_id` may have back for our group message sent at
-    /// `timestamp_ms`, or `None` when the retention and membership bounds of
-    /// [`Self::resend_on_decryption_error`] say no.
+    /// The content `peer_id`'s `peer_device_id` may have back for our group
+    /// message sent at `timestamp_ms`, or `None` when the retention and
+    /// original-recipient bounds of [`Self::resend_on_decryption_error`] say no.
     fn group_resend_content(
         &self,
         peer_id: &UserId,
+        peer_device_id: u32,
         timestamp_ms: u64,
     ) -> Result<Option<Vec<u8>>, MessageError> {
+        use crate::domain::ids::DeviceId;
         use crate::domain::message::ConversationType;
         use crate::services::current_user::CurrentUserProvider;
         const RETENTION_NS: u64 = 24 * 60 * 60 * 1_000_000_000;
@@ -1086,16 +1089,105 @@ impl MessageService {
         if TimestampNanos::now().as_u64().saturating_sub(message.sent_at) > RETENTION_NS {
             return Ok(None);
         }
-        let is_member = self
+        let original = crate::storage::repositories::message_receipt_repo::MessageReceiptRepository::new(
+            self.database.clone(),
+        )
+        .targets_for_send(
+            message.conversation_id,
+            message.conversation_type.clone(),
+            us,
+            message.sent_at,
+        )?;
+        let current = self
             .channel_repo
-            .list_members(&message.conversation_id)
-            .unwrap_or_default()
-            .iter()
-            .any(|m| m.user_id == *peer_id);
-        if !is_member {
+            .list_members(&message.conversation_id)?
+            .into_iter()
+            .map(|member| member.user_id)
+            .collect::<Vec<_>>();
+        let device = DeviceId(peer_device_id);
+        let allowed = resend_targets(&original, &current)
+            .into_iter()
+            .any(|(user, id)| user == *peer_id && id == device);
+        if !allowed {
             return Ok(None);
         }
         Ok(self.rebuild_group_content(&message))
+    }
+
+    /// User-initiated retry of a stored private channel message: the same
+    /// pairwise `DataMessage` a DecryptionErrorMessage gets, to every original
+    /// recipient device whose user is still a member. Nothing is posted to the
+    /// channel, and the receipt snapshot is not rewritten.
+    pub(super) async fn resend_stored_channel_message(
+        &self,
+        message: &crate::domain::message::Message,
+    ) -> Result<usize, MessageError> {
+        use crate::services::current_user::CurrentUserProvider;
+
+        let us = self.settings_repo.current_user_id()?;
+        let original = crate::storage::repositories::message_receipt_repo::MessageReceiptRepository::new(
+            self.database.clone(),
+        )
+        .targets_for_send(
+            message.conversation_id,
+            message.conversation_type.clone(),
+            us,
+            message.sent_at,
+        )?;
+        let current = self
+            .channel_repo
+            .list_members(&message.conversation_id)?
+            .into_iter()
+            .map(|member| member.user_id)
+            .collect::<Vec<_>>();
+        let targets = resend_targets(&original, &current);
+        if targets.is_empty() {
+            return Err(MessageError::InvalidContent(
+                "no original recipient of this message is still in the channel".into(),
+            ));
+        }
+        let plaintext = self.rebuild_group_content(message).ok_or_else(|| {
+            MessageError::InvalidContent("message cannot be resent".into())
+        })?;
+        self.deliver_group_resend_to(&plaintext, &targets).await
+    }
+
+    /// Encrypt `plaintext` for each `(user, device)` and deposit that one
+    /// device's inbox. A device that fails does not stop the others. `Err`
+    /// only when none were reached.
+    async fn deliver_group_resend_to(
+        &self,
+        plaintext: &[u8],
+        targets: &[(UserId, crate::domain::ids::DeviceId)],
+    ) -> Result<usize, MessageError> {
+        let mut delivered = 0usize;
+        let mut error = None;
+        for (user, device) in targets {
+            let sealed = match self
+                .signal_service
+                .encrypt_message(&mut self.auth_client(), &user.to_string(), device.0, plaintext)
+                .await
+            {
+                Ok(sealed) => sealed,
+                Err(e) => {
+                    super::server_dm::record_deposit_error(
+                        &mut error,
+                        MessageError::from_signal_send(e, "group resend"),
+                    );
+                    continue;
+                }
+            };
+            match self.deposit_sealed_to_device(user, device.0, sealed).await {
+                Ok(()) => delivered += 1,
+                Err(e) => super::server_dm::record_deposit_error(&mut error, e),
+            }
+        }
+        if delivered == 0 {
+            return Err(error.unwrap_or_else(|| {
+                MessageError::InvalidContent("resend reached no device".into())
+            }));
+        }
+        Ok(delivered)
     }
 
     /// The pairwise `Content` for one of our stored channel messages: the
@@ -1247,6 +1339,22 @@ impl MessageService {
             content.padding.push(0);
         }
     }
+}
+
+/// Original recipient devices whose user is still a member.
+///
+/// An empty `original` stays empty. A missing send-time record is not
+/// "everyone who is a member now", and a user absent from `current_members`
+/// (they left) is dropped with every device of theirs.
+pub(super) fn resend_targets(
+    original: &[(UserId, crate::domain::ids::DeviceId)],
+    current_members: &[UserId],
+) -> Vec<(UserId, crate::domain::ids::DeviceId)> {
+    original
+        .iter()
+        .copied()
+        .filter(|(user, _)| current_members.contains(user))
+        .collect()
 }
 
 /// Device ids in a prekey-bundle response (multi-device list or the
@@ -1541,6 +1649,19 @@ mod tests {
                 )
             })
             .unwrap();
+        // Bob's device 1 was a recipient of this send. Without that record the
+        // resend is refused: membership alone is not enough.
+        crate::storage::repositories::message_receipt_repo::MessageReceiptRepository::new(
+            alice.messages().database.clone(),
+        )
+        .snapshot_for_send(
+            channel_id,
+            ConversationType::Channel,
+            alice_id,
+            client_ts,
+            &[(bob_id, crate::domain::ids::DeviceId(1))],
+        )
+        .unwrap();
 
         // Bob gets Alice's SKDM only now: it starts past the message.
         let skdm = alice.signal().create_sender_key(&channel_id).await.unwrap();
@@ -1562,11 +1683,14 @@ mod tests {
         assert_ne!(ts_ms, server_ts / 1_000_000);
 
         // Alice's resend bounds: a non-member gets nothing back, and the
-        // server's receive time is not a key she stored.
-        assert!(alice.messages().group_resend_content(&UserId::new(), ts_ms).unwrap().is_none());
-        assert!(alice.messages().group_resend_content(&bob_id, server_ts / 1_000_000).unwrap().is_none(),
+        // server's receive time is not a key she stored. Bob's other device
+        // was not a recipient of the original send.
+        assert!(alice.messages().group_resend_content(&UserId::new(), 1, ts_ms).unwrap().is_none());
+        assert!(alice.messages().group_resend_content(&bob_id, 1, server_ts / 1_000_000).unwrap().is_none(),
             "the server timestamp must not match the sender's sent_at");
-        let resent = alice.messages().group_resend_content(&bob_id, ts_ms).unwrap()
+        assert!(alice.messages().group_resend_content(&bob_id, 2, ts_ms).unwrap().is_none(),
+            "a device that was not in the original send gets nothing");
+        let resent = alice.messages().group_resend_content(&bob_id, 1, ts_ms).unwrap()
             .expect("Alice finds the message she sent at that timestamp");
 
         // Bob ingests it through the pairwise sealed DataMessage path.
@@ -1609,6 +1733,87 @@ mod tests {
         m.group_retry_requests.lock().clear();
         m.request_group_resend(channel_id, alice_id, 1, &server_copy, &ge.ciphertext).await;
         assert!(m.group_retry_requests.lock().is_empty());
+    }
+
+    /// A resend is the original recipient set intersected with who is still a
+    /// member. Carol joined after the send, Bob's second device was never a
+    /// recipient, and Bob himself is excluded once he leaves.
+    #[tokio::test]
+    async fn resend_refuses_a_later_joiner_a_later_device_and_a_departed_member() {
+        use crate::domain::channel::{MemberRole, Membership, NotificationPreference};
+        use crate::domain::ids::DeviceId;
+        use crate::domain::message::{ConversationType, Message};
+        use crate::storage::repositories::message_receipt_repo::MessageReceiptRepository;
+
+        let t = two_members();
+        let sent_at = TimestampNanos::now().as_u64();
+        let alice = t.alice.messages();
+        alice
+            .message_repo
+            .insert_outgoing(&Message::new_text(
+                t.channel_id,
+                ConversationType::Channel,
+                Some(t.alice_id),
+                "before carol joined".into(),
+                sent_at,
+            ))
+            .unwrap();
+        MessageReceiptRepository::new(alice.database.clone())
+            .snapshot_for_send(
+                t.channel_id,
+                ConversationType::Channel,
+                t.alice_id,
+                sent_at,
+                &[(t.bob_id, DeviceId(1))],
+            )
+            .unwrap();
+
+        let carol = UserId::new();
+        alice
+            .channel_repo
+            .insert_membership(&Membership {
+                channel_id: t.channel_id,
+                user_id: carol,
+                role: MemberRole::Member,
+                joined_at: chrono::Utc::now(),
+                last_read_message_id: None,
+                is_muted: false,
+                muted_until: None,
+                notification_preference: NotificationPreference::default(),
+            })
+            .unwrap();
+
+        let ts_ms = sent_at / 1_000_000;
+        assert!(
+            alice.group_resend_content(&carol, 1, ts_ms).unwrap().is_none(),
+            "a member who was not a recipient of the original send gets nothing"
+        );
+        assert!(
+            alice.group_resend_content(&t.bob_id, 2, ts_ms).unwrap().is_none(),
+            "a device added after the send gets nothing"
+        );
+        assert!(
+            alice.group_resend_content(&t.bob_id, 1, ts_ms).unwrap().is_some(),
+            "the original recipient device still in the channel is resent to"
+        );
+
+        alice.channel_repo.delete_membership(&t.channel_id, &t.bob_id).unwrap();
+        assert!(
+            alice.group_resend_content(&t.bob_id, 1, ts_ms).unwrap().is_none(),
+            "a member who left since the send gets nothing"
+        );
+    }
+
+    #[test]
+    fn resend_targets_drop_departed_users_and_an_empty_original_set() {
+        use crate::domain::ids::DeviceId;
+        let (alice, bob, carol) = (UserId::new(), UserId::new(), UserId::new());
+        let original = [(bob, DeviceId(1)), (bob, DeviceId(2)), (carol, DeviceId(1))];
+        assert_eq!(
+            super::resend_targets(&original, &[alice, bob]),
+            vec![(bob, DeviceId(1)), (bob, DeviceId(2))]
+        );
+        assert!(super::resend_targets(&[], &[alice, bob]).is_empty());
     }
 
     /// F72: a channel member's SKDM carries their profile key to the other

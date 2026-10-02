@@ -102,6 +102,18 @@ pub enum MessageError {
         peer_id: String,
     },
 
+    /// The server could not prove the recipient's identity key is in the Key
+    /// Transparency log, so the session was refused (see
+    /// [`crate::error::CryptoError::NotInTransparencyLog`]). Not
+    /// [`Self::EncryptionFailed`] for the same reason as
+    /// [`Self::RecipientIdentityChanged`]: retrying fails identically until the
+    /// server proves the key.
+    #[error("recipient's identity key is not in the Key Transparency log")]
+    RecipientKeyUnverified {
+        /// The peer whose key could not be verified.
+        peer_id: String,
+    },
+
     /// DM conversation error.
     #[error("dm error: {0}")]
     DmError(String),
@@ -141,6 +153,7 @@ impl MessageError {
             crate::error::ServiceError::NotLoggedIn => Self::NotLoggedIn,
             crate::error::ServiceError::Validation(reason) => Self::InvalidContent(reason),
             crate::error::ServiceError::Crypto(crate::error::CryptoError::UntrustedIdentity { peer_id, .. }) => Self::RecipientIdentityChanged { peer_id },
+            crate::error::ServiceError::Crypto(crate::error::CryptoError::NotInTransparencyLog { peer_id }) => Self::RecipientKeyUnverified { peer_id },
             error => Self::EncryptionFailed(format!("{context}: {error}")),
         }
     }

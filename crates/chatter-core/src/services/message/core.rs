@@ -39,6 +39,7 @@ impl MessageError {
                 | Self::InvalidMessage(_) => Some("Message rejected"),
             Self::NotLoggedIn | Self::Network(NetworkError::Unauthenticated) => Some("Sign in required"),
             Self::RecipientIdentityChanged { .. } => Some("Identity changed"),
+            Self::RecipientKeyUnverified { .. } => Some("Key not verified"),
             Self::ChannelNotFound(_) | Self::Network(NetworkError::NotFound(_)) => Some("Conversation unavailable"),
             _ => Some("Cannot send message"),
         }
@@ -67,6 +68,7 @@ impl MessageService {
         mentioned_integrations: Vec<IntegrationId>,
         targets_ai_bot: bool,
         quote: Option<&crate::services::gateway::QuoteIntent>,
+        sent_at: u64,
     ) -> Result<Message, MessageError> {
         // Check logged in
         let sender_id = self.settings_repo.current_user_id()?;
@@ -111,7 +113,11 @@ impl MessageService {
         // pairwise `content_v1::DataMessage` proto so attachment pointers
         // (CDN key + per-blob AES key) travel with the message and receivers
         // can actually download + decrypt the blob.
-        let sent_at = crate::util::time::TimestampNanos::now().as_u64();
+        // The devices this send is for. Recorded before encryption so a later
+        // failure still has an original recipient set, and a resend cannot
+        // grow it. Receipts use the same rows.
+        self.snapshot_channel_receipt_targets(*channel_id, sent_at, auth_client, channel_client).await?;
+
         let plaintext_bytes = {
             use prost::Message as _;
             let dm = crate::proto::content_v1::DataMessage {
@@ -168,10 +174,6 @@ impl MessageService {
         if let Some(skdm) = skdm_opt {
             self.distribute_sender_key(auth_client, message_client, channel_id, &skdm).await?;
         }
-
-        // Snapshot the authoritative recipient set before fanout. A receipt can
-        // beat the server response; the logical key preserves that evidence.
-        self.snapshot_channel_receipt_targets(*channel_id, sent_at, auth_client, channel_client).await?;
 
         // Call server
         tracing::debug!(
@@ -380,10 +382,13 @@ impl MessageService {
         let mut auth_client = self.auth_client();
         let mut channel_client = self.channel_client();
 
+        // One clock for the receipt snapshot inside `send_message` and, if
+        // that send fails, the stored bubble. A retry looks recipients up by it.
+        let sent_at = crate::util::time::TimestampNanos::now().as_u64();
         let result = tokio::time::timeout(std::time::Duration::from_secs(30), self.send_message(
             &mut message_client, &mut auth_client, &mut channel_client,
             group_fanout, channel_id, text, attachment_ids.clone(), attachment_pointers,
-            thread_id, mentioned_integrations.clone(), targets_ai_bot, quote,
+            thread_id, mentioned_integrations.clone(), targets_ai_bot, quote, sent_at,
         )).await.unwrap_or_else(|_| Err(MessageError::Network(crate::error::NetworkError::Timeout)));
         match result {
             Ok(message) => Ok(message),
@@ -393,7 +398,7 @@ impl MessageService {
                     super::conversion::conversation_type_for_channel(&self.channel_repo, channel_id),
                     Some(self.settings_repo.current_user_id()?),
                     text.to_string(),
-                    crate::util::time::TimestampNanos::now().as_u64(),
+                    sent_at,
                 );
                 message.attachments = attachment_ids;
                 message.thread_id = thread_id.copied();
@@ -408,10 +413,15 @@ impl MessageService {
         }
     }
 
-    /// Retry a stored channel send; replace its local failed row with the server's row.
+    /// Retry a stored channel send.
     ///
-    /// A stored failure label does not block the retry. The server assigns the
-    /// canonical id, so the open chat adopts that id in the same row.
+    /// A public channel (and Saved Messages) is a new send: the post is
+    /// world-readable, or it has no other recipient. A private channel is not.
+    /// Posting it again would hand it to whoever is a member now, including
+    /// someone who joined after the original attempt, and a new sender-key
+    /// ciphertext is readable by anyone holding the current key. That retry
+    /// is pairwise, and only to devices recorded for this `sent_at` that are
+    /// still members. A stored failure label does not block either path.
     pub async fn retry_channel_message(&self, id: &MessageId) -> Result<Message, MessageError> {
         let mut failed = self.message_repo.get(id)?.ok_or(MessageError::MessageNotFound(*id))?;
         if failed.conversation_type != crate::domain::message::ConversationType::Channel
@@ -431,11 +441,25 @@ impl MessageService {
             }),
             _ => None,
         };
+        let channel = self.channel_repo.get(&failed.conversation_id)?;
+        let fresh_send = channel.as_ref().is_some_and(|c| {
+            matches!(
+                c.channel_type,
+                crate::domain::channel::ChannelType::Public
+                    | crate::domain::channel::ChannelType::SavedMessages
+            )
+        });
+        if !fresh_send {
+            return self.retry_private_channel_message(&mut failed).await;
+        }
+        // New post, new clock. The failed row is replaced when the server
+        // assigns a different id.
+        let sent_at = crate::util::time::TimestampNanos::now().as_u64();
         let result = tokio::time::timeout(std::time::Duration::from_secs(30), self.send_message(
             &mut self.message_client(), &mut self.auth_client(), &mut self.channel_client(),
             None, &failed.conversation_id, failed.as_text().unwrap_or(""),
             failed.attachments.clone(), pointers, failed.thread_id.as_ref(),
-            failed.mentioned_integrations.clone(), failed.targets_ai_bot, quote.as_ref(),
+            failed.mentioned_integrations.clone(), failed.targets_ai_bot, quote.as_ref(), sent_at,
         )).await.unwrap_or_else(|_| Err(MessageError::Network(crate::error::NetworkError::Timeout)));
         match result {
             Ok(mut sent) => {
@@ -450,6 +474,28 @@ impl MessageService {
             Err(error) => {
                 failed.failure_reason = error.permanent_send_failure_reason().map(str::to_owned);
                 self.message_repo.update(&failed)?;
+                Err(error)
+            }
+        }
+    }
+
+    /// Pairwise retry of one private channel message. Does not re-snapshot:
+    /// a second snapshot would add devices the original send never had.
+    async fn retry_private_channel_message(
+        &self,
+        failed: &mut Message,
+    ) -> Result<Message, MessageError> {
+        match self.resend_stored_channel_message(failed).await {
+            Ok(_) => {
+                failed.delivery_status = "sent".into();
+                failed.failure_reason = None;
+                failed.updated_at = chrono::Utc::now();
+                self.message_repo.update(failed)?;
+                Ok(failed.clone())
+            }
+            Err(error) => {
+                failed.failure_reason = error.permanent_send_failure_reason().map(str::to_owned);
+                self.message_repo.update(failed)?;
                 Err(error)
             }
         }
@@ -759,27 +805,24 @@ impl MessageService {
             }
         };
 
-        let mut ids = Vec::with_capacity(members.len());
-        for pb_member in &members {
-            let user_id = match pb_member.user_id.parse::<crate::domain::UserId>() {
-                Ok(id) => id,
-                Err(_) => continue,
-            };
-            ids.push(user_id);
-            // Best-effort cache upsert (no-op / FK-ignored if no local channel row).
-            let membership = crate::domain::channel::Membership {
-                channel_id: *channel_id,
-                user_id,
-                role: crate::domain::channel::MemberRole::Member,
-                notification_preference: crate::domain::channel::NotificationPreference::All,
-                joined_at: chrono::Utc::now(),
-                last_read_message_id: None,
-                is_muted: false,
-                muted_until: None,
-            };
-            let _ = self.channel_repo.insert_or_ignore_membership(&membership);
+        let memberships = match members
+            .iter()
+            .map(|proto| crate::services::channel::converters::proto_to_domain_membership(channel_id, proto))
+            .collect::<Result<Vec<_>, _>>()
+        {
+            Ok(memberships) => memberships,
+            Err(e) => {
+                tracing::debug!(channel_id = %channel_id, error = %e, "Member refresh skipped (roster did not convert)");
+                return Vec::new();
+            }
+        };
+        // Full list: drop departed members. A missing local channel row fails
+        // the insert (FK) and rolls the replace back; fan-out still uses the
+        // server ids below.
+        if let Err(e) = self.channel_repo.replace_memberships(channel_id, &memberships) {
+            tracing::debug!(channel_id = %channel_id, error = %e, "Member refresh did not update local roster");
         }
-        ids
+        memberships.into_iter().map(|m| m.user_id).collect()
     }
 
     /// Send an ephemeral (self-destructing) message to a channel.

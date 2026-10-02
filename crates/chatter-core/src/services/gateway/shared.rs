@@ -300,6 +300,13 @@ pub fn handle_send_error(error: &super::outgoing::SendError, context: &str) -> S
         ) => {
             "Their safety number changed — accept it above to send".to_string()
         }
+        // Not "try again" either: the server could not prove this contact's
+        // key, and retrying asks it the same question.
+        SendError::Message(
+            crate::services::message::MessageError::RecipientKeyUnverified { .. },
+        ) => {
+            "Can't verify this contact's security key — not sent".to_string()
+        }
         SendError::AnonDm(crate::services::anon_dm::AnonDmError::ConversationBlocked(_)) |
         SendError::AnonGroup(crate::services::anon_group::AnonGroupError::GroupBlocked(_)) => {
             "Conversation is blocked".to_string()

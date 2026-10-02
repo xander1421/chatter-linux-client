@@ -858,10 +858,11 @@ impl ChatterClient {
     //
     // One wire message, `GroupCallKey { call_id, key, epoch }`, carries every
     // group-call key. Epoch 0 is the ring: the initiator sends the call's
-    // root key to the channel when the call starts. Any later epoch is a
-    // chain key — the initiator's member-leave rotation, or a participant
-    // bringing a late joiner up to date — installed exactly as the sender
-    // holds it (`CallWorkerHandle::install_group_key`). Never in the UI.
+    // root key to the channel when the call starts. Any later epoch is the
+    // designated rotator's rotation on a leave or a join — a joiner is sent
+    // that fresh key, never the one in use before it joined — adopted onto
+    // our chain (`CallWorkerHandle::install_group_key`). Only the key
+    // authority's keys are installed (`is_key_authority`). Never in the UI.
 
     /// Route a received group-call key: ring, install, keep for after the
     /// join, or drop. Senders must be members of the channel the key names;
@@ -898,7 +899,7 @@ impl ChatterClient {
             return;
         }
         if worker.active_call().await.is_some_and(|c| c.id == call) {
-            self.install_participant_group_key(&worker, call, &channel_id, sender_id, key, epoch).await;
+            self.install_participant_group_key(&worker, call, &channel_id, sender_id, key, epoch, true).await;
         } else if epoch == 0 {
             self.present_group_call_ring(&worker, call_id, sender_id, key, channel_id).await;
         } else {
@@ -907,8 +908,14 @@ impl ChatterClient {
     }
 
     /// Install a participant's `(key, epoch)` into the active call `call`,
-    /// if they are in the room and the call is in `channel_id`.
+    /// if the call is in `channel_id` and they are its key authority.
+    ///
+    /// `settle`: a departure the rotator has already seen may not have reached
+    /// our room view yet — the departed senior then still outranks the
+    /// rotator — so a key from a participant who is in the room but not the
+    /// authority is re-checked once after [`ROSTER_SETTLE`].
     #[cfg(feature = "media")]
+    #[allow(clippy::too_many_arguments)]
     async fn install_participant_group_key(
         &self,
         worker: &CallWorkerHandle,
@@ -917,14 +924,22 @@ impl ChatterClient {
         sender_id: crate::domain::ids::UserId,
         key: [u8; 32],
         epoch: u32,
+        settle: bool,
     ) {
+        let key = zeroize::Zeroizing::new(key);
         let in_channel = worker.active_call().await.is_some_and(|c| c.channel_id == *channel_id);
-        let roster = worker.remote_participant_identities().await;
-        if !in_channel || !sender_in_room(&sender_id, &roster) {
-            tracing::warn!(%sender_id, %call, "Group call key from outside the call; ignored");
+        let remote = |s: Option<crate::services::call_worker::RoomSeniority>| s.map(|s| s.remote).unwrap_or_default();
+        let mut roster = remote(worker.room_seniority().await);
+        let in_room = roster.iter().any(|(id, _)| *id == sender_id.to_string());
+        if settle && in_room && !is_key_authority(&sender_id, &roster) {
+            tokio::time::sleep(ROSTER_SETTLE).await;
+            roster = remote(worker.room_seniority().await);
+        }
+        if !in_channel || !is_key_authority(&sender_id, &roster) {
+            tracing::warn!(%sender_id, %call, "Group call key from outside the call or not its key authority; ignored");
             return;
         }
-        match worker.install_group_key(call, key, epoch).await {
+        match worker.install_group_key(call, *key, epoch).await {
             Ok(true) => tracing::info!(%call, epoch, "Group call key installed"),
             Ok(false) => {}
             Err(e) => tracing::debug!(error = %e, %call, "Group call key not installed"),
@@ -946,16 +961,22 @@ impl ChatterClient {
         use crate::proto::chat_v1::CallType as ProtoCallType;
         use crate::services::call_worker::{offer_is_stale_now, CallEndReason, CallHandle, OrchestratedCallKind, RING_TIMEOUT};
 
-        let info = match self.services.grpc_pool.call_client()
-            .get_active_call_in_channel(&channel_id.to_string())
-            .await
-        {
-            Ok(Some(info)) => info,
-            Ok(None) => {
+        use crate::services::call_signaling::CALL_POLICY_RPC_TIMEOUT;
+
+        let mut call_client = self.services.grpc_pool.call_client();
+        let channel = channel_id.to_string();
+        let lookup = tokio::time::timeout(CALL_POLICY_RPC_TIMEOUT, call_client.get_active_call_in_channel(&channel));
+        let info = match lookup.await {
+            Err(_) => {
+                tracing::warn!(call_id, "Group call ring: active-call lookup timed out; ignored");
+                return;
+            }
+            Ok(Ok(Some(info))) => info,
+            Ok(Ok(None)) => {
                 tracing::debug!(call_id, "Group call ring for a call that is over; ignored");
                 return;
             }
-            Err(e) => {
+            Ok(Err(e)) => {
                 tracing::warn!(error = %e, call_id, "Group call ring: active-call lookup failed; ignored");
                 return;
             }
@@ -1004,7 +1025,7 @@ impl ChatterClient {
     }
 
     /// Join the group call we were rung for with its root key, then install
-    /// any newer key a participant sent while we were joining.
+    /// the join rotation's key if it reached us while we were joining.
     #[cfg(feature = "media")]
     async fn join_group_call(
         &self,
@@ -1023,9 +1044,10 @@ impl ChatterClient {
         let joined = worker.join_call(call, &root_key, user_id).await
             .map_err(|e| ClientError::Inbox(e.to_string()))?;
 
-        if let Some(pending) = self.call_signaling().take_group_call_invite(call_id) {
+        // Only the key authority's passes; the others are dropped there.
+        for pending in self.call_signaling().take_group_call_invite(call_id) {
             self.install_participant_group_key(
-                worker, call, &joined.channel_id, pending.sender, *pending.key, pending.epoch,
+                worker, call, &joined.channel_id, pending.sender, *pending.key, pending.epoch, false,
             ).await;
         }
 
@@ -1042,37 +1064,6 @@ impl ChatterClient {
                 .map(|n| n as u64)
                 .unwrap_or(0),
         })
-    }
-
-    /// Bring `joiner`, who just entered our channel group call, up to the
-    /// key we encrypt with now — the root key they joined with no longer
-    /// works once the call has been rekeyed. Every participant sends (as in
-    /// Signal), so a joiner is covered after the initiator has left; `sent`
-    /// keeps it to one send per joiner per epoch. Epoch 0 is never sent:
-    /// the joiner derives it from the ring, and epoch 0 on the wire is a ring.
-    #[cfg(feature = "media")]
-    pub(crate) async fn handle_participant_joined(
-        &self,
-        joiner: &str,
-        sent: &mut std::collections::HashSet<(crate::domain::ids::CallId, String, u32)>,
-    ) -> Result<(), ClientError> {
-        use crate::services::call_worker::OrchestratedCallKind;
-
-        let Some(worker) = self.call_service().get().cloned() else { return Ok(()) };
-        if worker.orch_active_kind().await != Some(OrchestratedCallKind::GroupChannel) {
-            return Ok(());
-        }
-        let Some(call) = worker.active_call().await else { return Ok(()) };
-        let Some((call_id, key, epoch)) = worker.current_group_key().await else { return Ok(()) };
-        let key = zeroize::Zeroizing::new(key);
-        if call_id != call.id || !first_late_join_send(sent, call_id, joiner, epoch) {
-            return Ok(());
-        }
-        self.call_signaling()
-            .redistribute_group_call_key(&call.channel_id, &call_id.to_string(), *key, epoch, &[joiner.to_string()])
-            .await
-            .map_err(|e| ClientError::Inbox(e.to_string()))?;
-        Ok(())
     }
 
     // ── Anonymous Call Orchestration ─────────────────────────────────
@@ -1279,7 +1270,7 @@ impl ChatterClient {
     ///
     /// Unlike a DM call there is no single peer to notify — leaving the
     /// LiveKit room broadcasts `ParticipantDisconnected` to the other
-    /// members, and the initiator rotates the key for those remaining. No
+    /// members, and the designated rotator rekeys the call for them. No
     /// DM hangup is sent (the DM hangup path resolves a single peer, which is
     /// meaningless for a multi-member channel).
     #[cfg(feature = "media")]
@@ -1342,16 +1333,37 @@ impl ChatterClient {
         }
     }
 
-    /// Handle a participant departing from a group call.
-    ///
-    /// If we are the initiator of a channel-based group call, generates a new
-    /// random encryption key, rotates it locally, and redistributes it to the
-    /// peers still in the room so `departed_identity` can't decrypt future
-    /// frames.
-    ///
-    /// Only the initiator rotates to avoid race conditions.
+    /// A participant left the call: rotate so `departed_identity` can't
+    /// decrypt future frames ([`Self::rotate_group_call_key`]).
     #[cfg(feature = "media")]
     pub async fn handle_participant_departed(&self, departed_identity: &str) -> Result<(), ClientError> {
+        self.rotate_group_call_key(Some(departed_identity)).await
+    }
+
+    /// Participants joined the call: rotate so they get a key that covered
+    /// nothing from before they joined ([`Self::rotate_group_call_key`]).
+    /// Joins are coalesced into one call of this by [`JoinRotationGate`].
+    #[cfg(feature = "media")]
+    pub(crate) async fn handle_participants_joined(&self) -> Result<(), ClientError> {
+        self.rotate_group_call_key(None).await
+    }
+
+    /// Rotate a channel group call's key after a leave or a join, if we are
+    /// its designated rotator: generate a new random key, rotate locally, and
+    /// send it to the peers in the room now (`departed`, if any, excluded).
+    ///
+    /// A leave rotates so the departed can't decrypt what follows; a join
+    /// rotates so the joiner is sent only a key that covered nothing before
+    /// it joined — the key in use until now is never sent to a joiner (a
+    /// member who left and rejoins would otherwise read what was said while
+    /// they were away). As in Signal, membership changes rekey the call.
+    ///
+    /// One rotator, so concurrent rotations don't race: the participant in
+    /// the room longest ([`is_designated_rotator`]). Every participant
+    /// evaluates the same server-assigned join times, so they agree on it —
+    /// and it is never a joiner, which holds no current key to rotate from.
+    #[cfg(feature = "media")]
+    async fn rotate_group_call_key(&self, departed: Option<&str>) -> Result<(), ClientError> {
         let call_worker = self.call_service().get()
             .ok_or_else(|| ClientError::Inbox("call service not initialized".into()))?;
 
@@ -1372,12 +1384,8 @@ impl ChatterClient {
             return Ok(());
         }
 
-        // Only the initiator rotates to prevent race conditions
         let my_id = self.sessions().current_user_id()
             .ok_or_else(|| ClientError::Inbox("not logged in".into()))?;
-        if my_id != call.initiator_id {
-            return Ok(());
-        }
 
         // Sample the roster BEFORE rotating. Rotation is irreversible — it bumps
         // the epoch on the local worker — so anything fallible that the
@@ -1389,12 +1397,15 @@ impl ChatterClient {
         // The departed identity is subtracted explicitly rather than trusting the
         // SDK to have evicted it before firing ParticipantLeft — not an ordering
         // assumption this path should depend on.
-        let roster: Vec<String> = call_worker
-            .remote_participant_identities()
-            .await
+        let Some(seniority) = call_worker.room_seniority().await else { return Ok(()) };
+        let others: Vec<(String, i64)> = seniority.remote
             .into_iter()
-            .filter(|id| id != departed_identity)
+            .filter(|(id, _)| Some(id.as_str()) != departed)
             .collect();
+        if !is_designated_rotator(&my_id, seniority.local_joined_at_ms, &others) {
+            return Ok(());
+        }
+        let roster: Vec<String> = others.into_iter().map(|(id, _)| id).collect();
 
         // Generate new random key and rotate locally
         let new_key = crate::crypto::generate_group_call_key();
@@ -1411,7 +1422,7 @@ impl ChatterClient {
         if roster.is_empty() {
             // Still rotated: an empty room is not a reason to leave the departed
             // peer holding a working key.
-            tracing::info!(epoch, "Rotated group call key; no remaining participants to redistribute to");
+            tracing::info!(epoch, "Rotated group call key; no other participants to redistribute to");
             return Ok(());
         }
 
@@ -1421,7 +1432,7 @@ impl ChatterClient {
             .await
         {
             Ok(count) => {
-                tracing::info!(epoch, sent = count, "Rotated group call key after participant departure");
+                tracing::info!(epoch, sent = count, joined = departed.is_none(), "Rotated group call key after a membership change");
             }
             Err(e) => {
                 tracing::error!(error = %e, "Failed to redistribute rotated group call key");
@@ -1472,48 +1483,117 @@ pub struct RingingPeer {
     pub info: crate::ui::chat_data::CallParticipantInfo,
 }
 
-/// Whether `sender` is in the call's room right now. LiveKit identities are
-/// user ids (the server mints tokens with `SetIdentity(userID)`).
+/// A participant's place in the order that picks the group-call key
+/// authority: earliest LiveKit `joined_at_ms`, then lowest user id (LiveKit
+/// identities are user ids — the server mints tokens with
+/// `SetIdentity(userID)`). The join time is assigned by the LiveKit server,
+/// so every participant computes the same order; like the roster itself it
+/// is server-asserted (security review #9).
 #[cfg(feature = "media")]
-fn sender_in_room(sender: &crate::domain::ids::UserId, roster: &[String]) -> bool {
-    let sender = sender.to_string();
-    roster.iter().any(|id| *id == sender)
+fn seniority(identity: &str, joined_at_ms: i64) -> (i64, &str) {
+    (joined_at_ms, identity)
 }
 
-/// Record a late-join key send; false when this joiner already has this
-/// call's key at `epoch` from us, or when `epoch` is 0 (derived from the ring).
+/// Whether `sender` is the participant whose group-call keys we install: the
+/// most senior of the others in the room (`remote`: `(identity,
+/// joined_at_ms)`). Every participant applies the same order, so this is the
+/// designated rotator ([`is_designated_rotator`]) for all but the rotator
+/// itself, which makes its rotations locally. A joiner is never the most
+/// senior, so it never decides a key.
 #[cfg(feature = "media")]
-fn first_late_join_send(
-    sent: &mut std::collections::HashSet<(crate::domain::ids::CallId, String, u32)>,
-    call: crate::domain::ids::CallId,
-    joiner: &str,
-    epoch: u32,
-) -> bool {
-    epoch > 0 && sent.insert((call, joiner.to_string(), epoch))
+fn is_key_authority(sender: &crate::domain::ids::UserId, remote: &[(String, i64)]) -> bool {
+    remote.iter()
+        .min_by(|a, b| seniority(&a.0, a.1).cmp(&seniority(&b.0, b.1)))
+        .is_some_and(|(id, _)| *id == sender.to_string())
+}
+
+/// Whether we rotate the call key on a leave or a join: we have been in the
+/// room longer than everyone else in it (`others`, ourselves excluded).
+/// Deterministic, so the participants agree on one rotator; when it leaves,
+/// the next most senior takes over.
+#[cfg(feature = "media")]
+fn is_designated_rotator(me: &crate::domain::ids::UserId, my_joined_at_ms: i64, others: &[(String, i64)]) -> bool {
+    let me = me.to_string();
+    others.iter().all(|(id, at)| seniority(&me, my_joined_at_ms) < seniority(id, *at))
+}
+
+/// How long a key from an in-room participant who is not (yet) the key
+/// authority waits for our room view to catch up before it is re-checked —
+/// and how long joins are gathered into one rotation.
+#[cfg(feature = "media")]
+pub(crate) const ROSTER_SETTLE: std::time::Duration = std::time::Duration::from_secs(2);
+
+/// Coalesces joins into one rotation: the first join arms it, and every join
+/// until it fires (after [`ROSTER_SETTLE`]) is covered by the same rotation,
+/// which reads the roster when it runs.
+#[cfg(feature = "media")]
+#[derive(Default)]
+pub(crate) struct JoinRotationGate(std::sync::atomic::AtomicBool);
+
+#[cfg(feature = "media")]
+impl JoinRotationGate {
+    /// True when this join must schedule the rotation — none is pending.
+    pub(crate) fn arm(&self) -> bool {
+        !self.0.swap(true, std::sync::atomic::Ordering::SeqCst)
+    }
+
+    /// The pending rotation is about to read the roster: a join from now on
+    /// needs a rotation of its own.
+    pub(crate) fn fire(&self) {
+        self.0.store(false, std::sync::atomic::Ordering::SeqCst);
+    }
 }
 
 #[cfg(all(test, feature = "media"))]
 mod group_call_key_tests {
     use super::*;
-    use crate::domain::ids::{CallId, UserId};
+    use crate::domain::ids::UserId;
 
-    #[test]
-    fn only_a_sender_in_the_room_is_trusted() {
-        let sender = UserId::new();
-        let other = UserId::new();
-        assert!(sender_in_room(&sender, &[other.to_string(), sender.to_string()]));
-        assert!(!sender_in_room(&sender, &[other.to_string()]));
-        assert!(!sender_in_room(&sender, &[]));
+    fn user(n: u8) -> UserId {
+        UserId(format!("00000000-0000-4000-8000-0000000000{n:02}").parse().unwrap())
     }
 
     #[test]
-    fn late_joiner_gets_each_epoch_once() {
-        let mut sent = std::collections::HashSet::new();
-        let call = CallId(uuid::Uuid::new_v4());
-        assert!(!first_late_join_send(&mut sent, call, "joiner", 0), "epoch 0 is the ring's");
-        assert!(first_late_join_send(&mut sent, call, "joiner", 3));
-        assert!(!first_late_join_send(&mut sent, call, "joiner", 3), "repeat join, same epoch");
-        assert!(first_late_join_send(&mut sent, call, "joiner", 4), "rekeyed since");
-        assert!(first_late_join_send(&mut sent, call, "other", 3));
+    fn most_senior_participant_rotates() {
+        // a joined first, then b, then c; c has the lowest id.
+        let (a, b, c) = (user(5), user(7), user(1));
+        let view = |skip: &UserId| -> Vec<(String, i64)> {
+            [(a, 100), (b, 200), (c, 300)].iter()
+                .filter(|(u, _)| u != skip)
+                .map(|(u, at)| (u.to_string(), *at))
+                .collect()
+        };
+        assert!(is_designated_rotator(&a, 100, &view(&a)));
+        assert!(!is_designated_rotator(&b, 200, &view(&b)));
+        assert!(!is_designated_rotator(&c, 300, &view(&c)), "a joiner never rotates, lowest id or not");
+        // a leaves: b, next most senior, takes over.
+        assert!(is_designated_rotator(&b, 200, &[(c.to_string(), 300)]));
+        assert!(!is_designated_rotator(&c, 300, &[(b.to_string(), 200)]));
+        assert!(is_designated_rotator(&b, 200, &[]), "alone in the room");
+        // Same join time: lowest id.
+        assert!(is_designated_rotator(&c, 100, &[(a.to_string(), 100)]));
+    }
+
+    #[test]
+    fn only_the_rotators_keys_are_installed() {
+        let (rotator, mallory, joiner) = (user(9), user(1), user(3));
+        // As the joiner sees the room: the rotator joined first.
+        let room = vec![(mallory.to_string(), 200), (rotator.to_string(), 100)];
+        assert!(is_key_authority(&rotator, &room));
+        assert!(!is_key_authority(&mallory, &room), "an in-room non-rotator is ignored");
+        assert!(!is_key_authority(&joiner, &room), "not in the room");
+        assert!(!is_key_authority(&rotator, &[]));
+    }
+
+    /// Joins that land together cost one rotation; a join after it has
+    /// fired gets its own.
+    #[test]
+    fn simultaneous_joins_make_one_rotation() {
+        let gate = JoinRotationGate::default();
+        let scheduled = (0..5).filter(|_| gate.arm()).count();
+        assert_eq!(scheduled, 1);
+        gate.fire();
+        assert!(gate.arm(), "a later join rotates again");
+        assert!(!gate.arm());
     }
 }

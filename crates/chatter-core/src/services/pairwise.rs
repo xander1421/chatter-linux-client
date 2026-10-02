@@ -32,6 +32,11 @@ pub enum PairwiseError {
     #[error("session error: {0}")]
     SessionError(String),
 
+    /// The peer's identity key is not in the Key Transparency log, so no
+    /// session is established (never trust-on-first-use).
+    #[error("can't verify this contact's security key ({peer_id})")]
+    RecipientKeyUnverified { peer_id: String },
+
     /// Encryption failed.
     #[error("encryption failed: {0}")]
     EncryptionFailed(String),
@@ -307,7 +312,12 @@ impl PairwiseService {
         self.signal_service
             .ensure_session_with_bundle(&mut anon_kt_client, &peer_id_str, device_id, bundle_response)
             .await
-            .map_err(|e| PairwiseError::SessionError(e.to_string()))?;
+            .map_err(|e| match e {
+                crate::error::ServiceError::Crypto(crate::error::CryptoError::NotInTransparencyLog { peer_id }) => {
+                    PairwiseError::RecipientKeyUnverified { peer_id }
+                }
+                e => PairwiseError::SessionError(e.to_string()),
+            })?;
 
         // Encrypt using cached sender certificate (no auth request)
         self.signal_service

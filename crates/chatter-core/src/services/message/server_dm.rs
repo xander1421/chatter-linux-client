@@ -284,7 +284,11 @@ impl MessageService {
             message.sent_at,
             quote.as_ref(),
         )?;
-        let status = match self.send_friend_dm_content(&peer_id, content).await {
+        // The devices this message was encrypted for, not the peer's devices
+        // now. A device linked after the send is not in that set. No fallback
+        // when the set is empty: we do not know who the original was for.
+        let devices = self.original_dm_devices(peer_id, message.sent_at)?;
+        let status = match self.send_friend_dm_to_original_devices(&peer_id, content, &devices).await {
             Ok(()) => "sent",
             Err(MessageError::BootstrapInitiated) => "sending",
             Err(e) => {
@@ -416,6 +420,101 @@ impl MessageService {
         } else {
             self.send_sealed_dm_content(peer_id, content).await
         }
+    }
+
+    /// Devices of `peer` recorded for the DM sent at `sent_at`.
+    fn original_dm_devices(&self, peer: UserId, sent_at: u64) -> Result<Vec<u32>, MessageError> {
+        let me = self.current_user_id()?;
+        let devices = crate::storage::repositories::message_receipt_repo::MessageReceiptRepository::new(
+            self.database.clone(),
+        )
+        .targets_for_send(ChannelId::from(peer), ConversationType::ServerDm, me, sent_at)?
+        .into_iter()
+        .filter(|(user, _)| *user == peer)
+        .map(|(_, device)| device.0)
+        .collect::<Vec<_>>();
+        if devices.is_empty() {
+            return Err(MessageError::InvalidContent(
+                "no original device of this message can be retried".into(),
+            ));
+        }
+        Ok(devices)
+    }
+
+    /// Retry delivery to `devices` only. Does not enumerate the peer's current
+    /// devices, and does not copy the message to our own other devices: those
+    /// were not recipients of the original send.
+    async fn send_friend_dm_to_original_devices(
+        &self,
+        peer_id: &UserId,
+        content: crate::proto::content_v1::Content,
+        devices: &[u32],
+    ) -> Result<(), MessageError> {
+        if self.shield_mode.load(std::sync::atomic::Ordering::Acquire) {
+            self.send_shield_dm_to_devices(peer_id, content, devices).await
+        } else {
+            self.send_sealed_dm_to_devices(peer_id, content, devices).await
+        }
+    }
+
+    /// Sealed retry to a caller-chosen device list. Encrypts each device on
+    /// its own session and deposits that ciphertext. Does not snapshot again
+    /// and does not ask the server who the peer's devices are now.
+    async fn send_sealed_dm_to_devices(
+        &self,
+        peer_id: &UserId,
+        content: crate::proto::content_v1::Content,
+        devices: &[u32],
+    ) -> Result<(), MessageError> {
+        if self.shield_mode.load(std::sync::atomic::Ordering::Acquire) {
+            return Err(MessageError::DmError(
+                "Shield mode: refusing the sealed-sender streaming transport for a DM".into(),
+            ));
+        }
+        if devices.is_empty() {
+            return Err(MessageError::InvalidContent(
+                "no original device of this message can be retried".into(),
+            ));
+        }
+        let plaintext = content.encode_to_vec();
+        let peer = peer_id.to_string();
+        let mut auth_client = self.auth_client();
+        let mut ciphertexts = std::collections::HashMap::new();
+        let mut error = None;
+        for &device_id in devices {
+            match self
+                .signal_service
+                .encrypt_message(&mut auth_client, &peer, device_id, &plaintext)
+                .await
+            {
+                Ok(ciphertext) => {
+                    ciphertexts.insert(device_id, ciphertext);
+                }
+                Err(e) => record_deposit_error(
+                    &mut error,
+                    MessageError::from_signal_send(e, "device encryption"),
+                ),
+            }
+        }
+        if ciphertexts.is_empty() {
+            return Err(error.unwrap_or_else(|| {
+                MessageError::DmError(format!("Failed to encrypt the retry for {peer_id}"))
+            }));
+        }
+        let uak = self.sealed_access_key(&peer, false);
+        let mut message_client = self.message_client();
+        let outcome = self
+            .deposit_sealed_ciphertexts(&mut message_client, &peer, ciphertexts, uak.as_ref())
+            .await;
+        if outcome.delivered == 0 {
+            return Err(outcome.error.unwrap_or_else(|| {
+                MessageError::DmError(format!(
+                    "Failed to deliver sealed DM retry to any original device of {peer_id}"
+                ))
+            }));
+        }
+        self.dm_sent_log.record(*peer_id, &content, &outcome.deposits);
+        Ok(())
     }
 
     /// Send an arbitrary `Content` proto (reactions, typing, pin, edit,
