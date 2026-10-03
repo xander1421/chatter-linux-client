@@ -414,3 +414,9 @@ path = "tests/startup_regression_test.rs"
 [[test]]
 name = "validated"
 path = "tests/validated.rs"
+
+# Onion sign-up proof of work over real Tor (server OPEN-ITEMS §130).
+[[test]]
+name = "onion_signup_pow"
+path = "tests/onion_signup_pow.rs"
+required-features = ["onion"]

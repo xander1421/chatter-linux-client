@@ -857,13 +857,19 @@ impl AuthService {
         // Solved on the blocking pool on every core. Given up after 4 min:
         // the challenge lives 5 min on the server, and measuring from our own
         // clock (not `expires_at`) keeps a skewed phone clock out of it.
+        let pow_started = std::time::Instant::now();
         let pow_solution = crate::crypto::registration_pow::solve_async(
             challenge.challenge_nonce.clone(),
             challenge.pow_difficulty,
-            std::time::Instant::now() + std::time::Duration::from_secs(240),
+            pow_started + std::time::Duration::from_secs(240),
         )
         .await
         .map_err(AuthError::Crypto)?;
+        tracing::info!(
+            pow_bits = challenge.pow_difficulty,
+            solve_ms = pow_started.elapsed().as_millis() as u64,
+            "registration proof of work solved"
+        );
 
         // Build Signal Protocol prekey bundle for server
         use crate::proto::chat_v1::signal_pre_key_bundle::{
