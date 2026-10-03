@@ -129,6 +129,12 @@ async fn test_register_user_stream() {
                 Vec::new(),
                 &challenge.challenge_id,
                 &challenge_response,
+                chatter_core::crypto::registration_pow::solve(
+                    &challenge.challenge_nonce,
+                    challenge.pow_difficulty,
+                    std::time::Instant::now() + std::time::Duration::from_secs(240),
+                )
+                .expect("registration proof of work"),
                 &[0u8; 32], // Empty registration lock for tests
                 &username_lookup_hash,
                 &username_proof,
@@ -281,6 +287,12 @@ async fn test_register_duplicate_username() {
             Vec::new(),
             &challenge.challenge_id,
             &challenge_response,
+            chatter_core::crypto::registration_pow::solve(
+                &challenge.challenge_nonce,
+                challenge.pow_difficulty,
+                std::time::Instant::now() + std::time::Duration::from_secs(240),
+            )
+            .expect("registration proof of work"),
             &dup_registration_lock,
             &dup_username_lookup_hash,
             &dup_username_proof,

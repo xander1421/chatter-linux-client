@@ -20,6 +20,7 @@ pub mod kdf;
 pub mod opaque;
 pub mod keytransparency;
 pub mod profile_crypto;
+pub mod registration_pow;
 pub mod provisioning;
 pub mod secret_key;
 pub mod secret_string;

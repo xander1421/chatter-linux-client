@@ -302,6 +302,7 @@ impl AuthClient {
     /// * `initial_one_time_prekeys` - Initial batch of one-time prekeys (Signal sends 100)
     /// * `challenge_id` - Challenge ID from request_registration_challenge
     /// * `challenge_response` - Signature of challenge nonce
+    /// * `pow_solution` - Proof of work for the challenge's `pow_difficulty`
     ///
     /// # Security Note
     ///
@@ -322,6 +323,7 @@ impl AuthClient {
         initial_one_time_prekeys: Vec<crate::proto::chat_v1::signal_pre_key_bundle::PreKeyRecord>,
         challenge_id: &str,
         challenge_response: &[u8],
+        pow_solution: u64,
         registration_lock: &[u8; 32],
         username_lookup_hash: &[u8; 32],
         username_proof: &[u8],
@@ -346,6 +348,7 @@ impl AuthClient {
             initial_one_time_prekeys,
             challenge_response: challenge_response.to_vec(),
             challenge_id: challenge_id.to_string(),
+            pow_solution,
             username_lookup_hash: username_lookup_hash.to_vec(),
             username_proof: username_proof.to_vec(),
             unidentified_access_key: unidentified_access_key.to_vec(),
@@ -376,6 +379,7 @@ impl AuthClient {
     /// * `initial_one_time_prekeys` - Initial batch of one-time prekeys (Signal sends 100)
     /// * `challenge_id` - Challenge ID from request_registration_challenge
     /// * `challenge_response` - Signature of challenge nonce
+    /// * `pow_solution` - Proof of work for the challenge's `pow_difficulty`
     ///
     /// # Security Note
     ///
@@ -396,6 +400,7 @@ impl AuthClient {
         initial_one_time_prekeys: Vec<crate::proto::chat_v1::signal_pre_key_bundle::PreKeyRecord>,
         challenge_id: &str,
         challenge_response: &[u8],
+        pow_solution: u64,
         registration_lock: &[u8; 32],
         username_lookup_hash: &[u8; 32],
         username_proof: &[u8],
@@ -413,6 +418,7 @@ impl AuthClient {
                 initial_one_time_prekeys,
                 challenge_id,
                 challenge_response,
+                pow_solution,
                 registration_lock,
                 username_lookup_hash,
                 username_proof,

@@ -366,6 +366,12 @@ pub async fn register_test_user(pool: &GrpcClientPool) -> Result<TestUser, Netwo
             Vec::new(), // No additional one-time prekeys for tests
             &challenge.challenge_id,
             &challenge_response,
+            chatter_core::crypto::registration_pow::solve(
+                &challenge.challenge_nonce,
+                challenge.pow_difficulty,
+                std::time::Instant::now() + std::time::Duration::from_secs(240),
+            )
+            .expect("registration proof of work"),
             &[0u8; 32],         // Empty registration lock for tests
             &username_lookup,   // username_claim(full_username): discovery hash
             &username_proof,    // ...and the proof the server verifies it against

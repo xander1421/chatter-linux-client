@@ -318,6 +318,16 @@ const TABLE: &[Entry] = &[
               (INFRA-1). If this loses its caller, that returns, and nothing else in \
               the client notices.",
     },
+    Entry {
+        symbol: "solve_async",
+        defined_in: "chatter-core/src/crypto/registration_pow.rs",
+        expect: Expect::Wired,
+        why: "The registration proof-of-work solver (server OPEN-ITEMS §130), called \
+              from AuthService::register. The server refuses an onion Register \
+              without a solution, so if this loses its caller every sign-up over \
+              the onion service fails with PermissionDenied while clearnet sign-up \
+              (difficulty 0) keeps passing every test.",
+    },
 ];
 
 // ============================================================================

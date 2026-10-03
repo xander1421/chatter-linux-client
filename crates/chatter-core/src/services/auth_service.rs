@@ -852,6 +852,19 @@ impl AuthService {
             .sign_registration_challenge(&challenge.challenge_nonce)
             .map_err(AuthError::Crypto)?;
 
+        // Proof of work the server set for this transport (required over the
+        // onion service, 0 on clearnet), bound to this challenge's nonce.
+        // Solved on the blocking pool on every core. Given up after 4 min:
+        // the challenge lives 5 min on the server, and measuring from our own
+        // clock (not `expires_at`) keeps a skewed phone clock out of it.
+        let pow_solution = crate::crypto::registration_pow::solve_async(
+            challenge.challenge_nonce.clone(),
+            challenge.pow_difficulty,
+            std::time::Instant::now() + std::time::Duration::from_secs(240),
+        )
+        .await
+        .map_err(AuthError::Crypto)?;
+
         // Build Signal Protocol prekey bundle for server
         use crate::proto::chat_v1::signal_pre_key_bundle::{
             KyberPreKeyRecord as ProtoKyberPreKey, PreKeyRecord as ProtoPreKey,
@@ -966,6 +979,7 @@ impl AuthService {
                 initial_prekeys,
                 &challenge.challenge_id,
                 &challenge_response,
+                pow_solution,
                 &registration_lock, // SECURITY: Prevents account takeover without PIN
                 &username_lookup,
                 &username_proof,
