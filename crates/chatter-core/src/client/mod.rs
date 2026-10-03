@@ -2637,7 +2637,7 @@ impl ChatterClient {
 
         let real_message_id = result.message_id_string();
         let (message_id_effective, delivery_status) = if result.bootstrap_initiated {
-            (format!("pending-{}", result.sent_at), "sending")
+            (queued_bubble_id(real_message_id, result.sent_at), "sending")
         } else if failure_notice.is_some() || result.message.as_ref().is_some_and(|m| m.delivery_status == "failed") {
             (real_message_id, "failed")
         } else {
@@ -4162,6 +4162,31 @@ fn build_intent(
             }
         }
         ActiveConversation::None => Err(SendError::UnsupportedAction),
+    }
+}
+
+/// The id of a bubble queued behind a DM bootstrap: the stored message's id
+/// when there is one. Receipts, reactions and message info find a bubble by
+/// that id (`MessageDeliveryChanged`), so a synthetic id left the first
+/// Shield DM at "sent" after its peer's Receipt had made it "delivered".
+/// Only an unstored send keeps the `pending-{sent_at}` placeholder.
+fn queued_bubble_id(stored_id: String, sent_at: u64) -> String {
+    if stored_id.is_empty() {
+        format!("pending-{sent_at}")
+    } else {
+        stored_id
+    }
+}
+
+#[cfg(test)]
+mod queued_bubble_id_tests {
+    /// The bubble of a DM queued behind the Shield bootstrap carries the
+    /// stored message's id, the one `MessageDeliveryChanged` names.
+    #[test]
+    fn a_stored_queued_dm_keeps_its_real_id() {
+        let id = crate::domain::ids::MessageId::new().to_string();
+        assert_eq!(super::queued_bubble_id(id.clone(), 7), id);
+        assert_eq!(super::queued_bubble_id(String::new(), 7), "pending-7");
     }
 }
 

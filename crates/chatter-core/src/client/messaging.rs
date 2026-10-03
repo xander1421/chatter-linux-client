@@ -1595,9 +1595,9 @@ impl InviteCandidate {
 /// preview string building, no "pending-{ts}" synthesis.
 #[derive(Debug, Clone)]
 pub struct SendMessageUiResult {
-    /// Effective message id to render in the UI. Real message id when the
-    /// send completed synchronously; `"pending-{sent_at}"` synthetic id
-    /// when the send triggered a DM bootstrap that must finish first.
+    /// Effective message id to render in the UI: the stored message's id,
+    /// also for a send queued behind a DM bootstrap; `"pending-{sent_at}"`
+    /// only when nothing was stored.
     pub message_id_effective: String,
     /// Server-assigned sent-at timestamp in nanoseconds.
     pub sent_at: u64,

@@ -1045,4 +1045,49 @@ mod tests {
         let stored = ms.message_repo.get(&message.id).unwrap().unwrap();
         assert_eq!(stored.delivery_status, "delivered");
     }
+
+    /// Initiator side (S25, 2026-10-03): a DM queued before the bootstrap and
+    /// sent by `send_pending_messages` is stored "delivered" by the peer
+    /// device's Receipt, and the flush's later `DmBootstrapCompleted` "sent"
+    /// write does not undo it. The stored state was right on the phone too;
+    /// the bubble missed the update because it carried a synthetic id
+    /// (`client::queued_bubble_id`).
+    #[tokio::test]
+    async fn initiator_flush_completion_does_not_regress_a_delivered_pending_dm() {
+        use crate::domain::ids::{ChannelId, DeviceId as Device};
+        use crate::domain::message::{ConversationType, Message};
+        use crate::mailbox::dm::{ConversationKey, DmConversationManager};
+        use prost::Message as _;
+        let me = UserId::from_uuid(uuid::Uuid::from_u128(1));
+        let friend = UserId::from_uuid(uuid::Uuid::max());
+        let (client, _dir) = shield_client(me);
+        let ms = client.messages();
+        cache_sender_certificate(ms, &me);
+        cache_device(ms, &friend, 6, &mut StdRng::seed_from_u64(0x1417)).await;
+        seed_half_open(ms, &friend, &ConversationKey::new(), 5);
+
+        let sent_at = 1_700_000_000_987_654_321u64;
+        let content = crate::services::build_text_content("shield over tor", sent_at);
+        ms.pending_dms.queue(&friend, content.encode_to_vec(), vec![], None).unwrap();
+        let mut message = Message::new_text(
+            ChannelId::from(friend), ConversationType::ServerDm, Some(me), "shield over tor".into(), sent_at,
+        );
+        message.delivery_status = "sending".into();
+        ms.message_repo.insert_outgoing(&message).unwrap();
+
+        // The RESPONSE from device 6 arrived; the initiator flushes.
+        DmConversationManager::new(ms.database.clone())
+            .record_peer_device(&friend, 6, [6u8; 32], ConversationKey::new().our_ephemeral_public)
+            .unwrap();
+        let mut auth = ms.auth_client();
+        let _ = ms.send_pending_messages(&mut auth, &friend, &ms.mailbox_manager).await;
+
+        ms.apply_peer_receipt(ChannelId::from(friend), ConversationType::ServerDm, friend, Device(6), 1, &[sent_at])
+            .unwrap();
+        assert_eq!(ms.message_repo.get(&message.id).unwrap().unwrap().delivery_status, "delivered");
+
+        // What the `DmBootstrapCompleted` handler then persists.
+        ms.set_friend_dm_delivery_status(&ChannelId::from(friend), &[sent_at], "sent").unwrap();
+        assert_eq!(ms.message_repo.get(&message.id).unwrap().unwrap().delivery_status, "delivered");
+    }
 }
