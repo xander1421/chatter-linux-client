@@ -2028,6 +2028,127 @@ fn back_key_still_arrives_after_the_search_palette_closes() {
     );
 }
 
+/// On a phone the composer drops its focus when the emoji/GIF picker opens, so
+/// the panel replaces the keyboard. That left NOTHING focused, and the Back
+/// meant to close the picker went nowhere (S9 + S25). Opening a picker on a
+/// phone must hand focus to back-scope instead. The palette's field stands in
+/// for the composer as the focused text field.
+#[test]
+fn opening_a_composer_picker_on_a_phone_keeps_back_alive() {
+    use slint::ComponentHandle;
+    let w = boot();
+    chatter_ui::bin_ui::features::back::wire(&w);
+    w.set_is_mobile_platform(true);
+    let scale = w.window().scale_factor();
+    let resize = |h: f32| {
+        w.window().dispatch_event(slint::platform::WindowEvent::Resized {
+            size: slint::LogicalSize::new(1000.0, h).to_physical(scale).to_logical(scale),
+        });
+    };
+    resize(800.0);
+
+    w.set_unified_search_open(true);
+    w.window().request_redraw();
+    resize(801.0);
+    slint::platform::update_timers_and_animations();
+    w.window().dispatch_event(slint::platform::WindowEvent::KeyPressed { text: "r".into() });
+    assert_eq!(
+        w.get_unified_search_query().as_str(),
+        "r",
+        "precondition: a text field must hold focus, or this test proves nothing"
+    );
+
+    for gif in [false, true] {
+        if gif {
+            w.set_composer_gif_picker_visible(true);
+        } else {
+            w.set_composer_emoji_picker_visible(true);
+        }
+        slint::platform::update_timers_and_animations();
+        w.window().dispatch_event(slint::platform::WindowEvent::KeyPressed { text: "x".into() });
+        assert_eq!(
+            w.get_unified_search_query().as_str(),
+            "r",
+            "the text field kept focus while a picker opened on a phone (gif={gif})"
+        );
+        w.window().dispatch_event(slint::platform::WindowEvent::KeyPressed {
+            text: slint::platform::Key::Back.into(),
+        });
+        assert!(
+            !w.get_composer_emoji_picker_visible() && !w.get_composer_gif_picker_visible(),
+            "a real Back did not close the picker (gif={gif})"
+        );
+    }
+}
+
+/// New Channel on a phone: the keyboard could not be put away, covering
+/// "Who can join?". The IME's Done (delivered as Return) on the name moves to
+/// Description, Done there drops focus, and `release-text-focus` (what
+/// Android's Back calls after hiding the keyboard) drops it too — each without
+/// stranding the Back key.
+#[test]
+fn new_channel_done_and_back_put_the_keyboard_away() {
+    use slint::ComponentHandle;
+    require_element_queries();
+    let w = boot();
+    chatter_ui::bin_ui::features::back::wire(&w);
+    w.set_is_mobile_platform(true);
+    let scale = w.window().scale_factor();
+    w.window().dispatch_event(slint::platform::WindowEvent::Resized {
+        size: slint::LogicalSize::new(400.0, 800.0).to_physical(scale).to_logical(scale),
+    });
+    chatter_ui::bin_ui::features::back::push(&w, "create-channel");
+    w.window().request_redraw();
+    // Let the card's entrance animation settle so clicks land on the fields.
+    testing::mock_elapsed_time(std::time::Duration::from_millis(1000));
+
+    let key = |t: slint::SharedString| {
+        w.window().dispatch_event(slint::platform::WindowEvent::KeyPressed { text: t.clone() });
+        w.window().dispatch_event(slint::platform::WindowEvent::KeyReleased { text: t });
+    };
+    let ret: slint::SharedString = slint::platform::Key::Return.into();
+
+    let name = testing::ElementHandle::find_by_accessible_label(&w, "Channel name")
+        .next()
+        .expect("the New Channel name field is not on screen");
+    name.mock_single_click(slint::platform::PointerEventButton::Left);
+    key("a".into());
+    assert_eq!(w.get_create_channel_name().as_str(), "a", "precondition: the name field must take typing");
+
+    key(ret.clone());
+    key("d".into());
+    assert_eq!(w.get_create_channel_name().as_str(), "a", "Done on the name did not leave the name field");
+    assert_eq!(
+        w.get_create_channel_description().as_str(),
+        "d",
+        "Done on the name did not move focus to Description"
+    );
+
+    key(ret.clone());
+    key("z".into());
+    assert_eq!(
+        w.get_create_channel_description().as_str(),
+        "d",
+        "Done on Description did not drop focus — the keyboard stays up"
+    );
+
+    name.mock_single_click(slint::platform::PointerEventButton::Left);
+    key("b".into());
+    assert_eq!(w.get_create_channel_name().as_str(), "ab");
+    w.invoke_release_text_focus();
+    key("c".into());
+    assert_eq!(
+        w.get_create_channel_name().as_str(),
+        "ab",
+        "release-text-focus left the name field focused (Back hid the keyboard only on screen)"
+    );
+
+    w.window().dispatch_event(slint::platform::WindowEvent::KeyPressed {
+        text: slint::platform::Key::Back.into(),
+    });
+    assert_eq!(w.get_active_modal().as_str(), "none", "Back stopped arriving after focus was released");
+}
+
 /// Back inside a thread returns to the conversation, not to the chat list.
 /// The thread panel covers the chat pane on a phone, so skipping this layer
 /// jumped two levels up (§112s).

@@ -173,3 +173,23 @@ pub fn clear_launch_cover_after_first_frame(window: &slint::Window) {
         tracing::error!("Android: no rendering notifier for the launch cover: {e:?}");
     }
 }
+
+/// JNI entry point: `MainActivity`'s surface view hid the soft keyboard for a
+/// Back press (`onKeyPreIme`). Hiding it through the insets controller does
+/// not tell Slint, so the TextInput kept focus (caret and focus ring stayed)
+/// and Slint still believed the keyboard was wanted — the likely reason it
+/// stayed or came straight back over New Channel on both phones (not verified
+/// on device). Drop the text focus the same way leaving a screen does, so
+/// Slint's state matches what is on screen.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_com_chatter_client_MainActivity_nativeImeHiddenByBack(
+    _env: JNIEnv,
+    _class: jni::objects::JClass,
+) {
+    let Some(weak) = super::call_actions::main_window() else { return };
+    let _ = slint::invoke_from_event_loop(move || {
+        if let Some(w) = weak.upgrade() {
+            w.invoke_release_text_focus();
+        }
+    });
+}

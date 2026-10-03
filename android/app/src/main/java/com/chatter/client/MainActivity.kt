@@ -236,6 +236,9 @@ class MainActivity : GameActivity() {
     /** Implemented in Rust. Re-shows a ringing call's screen that Back hid. */
     private external fun nativeShowIncomingCall(callId: String)
 
+    /** Implemented in Rust. Back hid the keyboard: drop Slint's text focus too. */
+    private external fun nativeImeHiddenByBack()
+
     // The Slint helper owns this floating selection toolbar, but GameActivity's
     // surface owns pre-IME BACK. Finish the toolbar before hiding the keyboard;
     // otherwise Samsung consumes BACK without ever notifying the helper view.
@@ -315,6 +318,9 @@ class MainActivity : GameActivity() {
                     if (!event.isCanceled) {
                         WindowCompat.getInsetsController(window, this)
                             .hide(WindowInsetsCompat.Type.ime())
+                        // Slint never hears about that hide: its TextInput keeps
+                        // focus and the keyboard can come straight back.
+                        nativeImeHiddenByBack()
                     }
                     return true
                 }

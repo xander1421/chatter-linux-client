@@ -453,6 +453,12 @@ pub(super) fn update_active_channel_member_count(
     ui_ctx: &Arc<ChatterClient>,
     channel_id: ChannelId,
 ) {
+    crate::bin_ui::features::modals::refresh_members_if_open(
+        window.clone(),
+        ui_ctx.clone(),
+        channel_id,
+    );
+
     let is_active = ui_ctx.chat_state().get().active_channel_id
         .map(|id| id == channel_id)
         .unwrap_or(false);

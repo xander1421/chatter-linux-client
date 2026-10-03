@@ -189,6 +189,27 @@ fn refresh_member_lists(weak: slint::Weak<MainWindow>, ui_ctx: Arc<ChatterClient
     });
 }
 
+/// Re-fetch the members pane (and with it the General pane's "N members")
+/// when the roster of the channel it is showing changes.
+///
+/// The pane is a snapshot taken when the modal opened, while the chat header
+/// is updated on every membership event — so with settings open (or opened
+/// just before the join landed), the header read "2 members" and settings
+/// still "1 member". Called from the same membership-event path that updates
+/// the header. A private group's settings are filled by `header.rs` from the
+/// local anon roster and are not refreshed here.
+pub fn refresh_members_if_open(weak: slint::Weak<MainWindow>, ui_ctx: Arc<ChatterClient>, channel_id: ChannelId) {
+    let _ = slint::invoke_from_event_loop(move || {
+        let Some(w) = weak.upgrade() else { return };
+        let open = w.get_channel_settings_id() == channel_id.to_string().as_str()
+            && w.get_channel_settings_type() != "private-group"
+            && w.get_modal_stack().iter().any(|s| s == "channel-settings");
+        if open {
+            refresh_member_lists(weak.clone(), ui_ctx, channel_id);
+        }
+    });
+}
+
 fn wire_save_settings(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     let weak_window = window.as_weak();
     let ui_ctx = ui_ctx.clone();

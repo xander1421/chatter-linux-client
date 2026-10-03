@@ -117,6 +117,9 @@ export component CreateChannelModal inherits Rectangle {
     // Collapsible "More options"
     property <bool> more-options-expanded: false;
 
+    // Bumped by the name field's Done to move focus to Description.
+    property <int> description-focus-requests: 0;
+
     // Reset on close
     changed show-modal => {
         if !show-modal {
@@ -147,7 +150,7 @@ export component CreateChannelModal inherits Rectangle {
         }
     }
 
-    Modal {
+    modal := Modal {
         show: root.show-modal;
         title: "New Channel";
         modal-width: 620px;
@@ -231,6 +234,13 @@ export component CreateChannelModal inherits Rectangle {
             viewport-width: self.width;
             viewport-height: create-body.preferred-height;
 
+            // Beneath the form: a tap on blank space puts the keyboard away.
+            // The card's own catch-all never sees it — this Flickable takes
+            // the press first.
+            TouchArea {
+                clicked => { modal.release-focus(); }
+            }
+
             create-body := VerticalLayout {
             spacing: Spacing.lg;
 
@@ -289,16 +299,33 @@ export component CreateChannelModal inherits Rectangle {
                     horizontal-stretch: 1;
                     spacing: Spacing.sm;
 
+                    // The IME's Done/Enter arrives as `accepted`. Without a
+                    // handler it did nothing, and on a phone the keyboard then
+                    // could not be dismissed over "Who can join?". Done moves
+                    // to Description; Done there (or on a group's name, which
+                    // has none) puts the keyboard away.
                     name-input := Input {
                         placeholder: root.is-private-group ? "Group name" : "Channel name";
                         text <=> root.channel-name;
                         error: root.error-message != "" && root.channel-name == "";
                         error-message: root.error-message != "" && root.channel-name == "" ? "Name is required" : "";
+                        accepted => {
+                            if root.is-private-group {
+                                modal.release-focus();
+                            } else {
+                                root.description-focus-requests += 1;
+                            }
+                        }
                     }
 
+                    // Inside an `if`, so the name field cannot call its
+                    // focus() directly; it bumps this counter instead.
                     if !root.is-private-group: Input {
+                        property <int> focus-requests: root.description-focus-requests;
+                        changed focus-requests => { self.focus(); }
                         placeholder: "Description (optional)";
                         text <=> root.channel-description;
+                        accepted => { modal.release-focus(); }
                     }
                 }
             }

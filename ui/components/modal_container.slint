@@ -36,6 +36,13 @@ export component ModalContainer inherits Rectangle {
     // Forward focus into the modal's keyboard scope for tab trapping
     forward-focus: modal-keys;
 
+    // Take focus off the card's text field (which hides the soft keyboard) and
+    // park it on the modal's own scope. Not `clear-focus()`: that leaves
+    // nothing focused, and Back is then dropped (main.slint `back-scope`).
+    public function release-focus() {
+        modal-keys.focus();
+    }
+
     // Only show when visible
     opacity: root.show ? 1 : 0;
     visible: root.show;
@@ -122,10 +129,13 @@ export component ModalContainer inherits Rectangle {
                 }
             }
 
-            // Block clicks on modal from closing
+            // Block clicks on modal from closing. A tap on the card outside
+            // any field also dismisses the keyboard: on a phone it otherwise
+            // could only be closed from the IME itself (New Channel).
             TouchArea {
                 width: 100%;
                 height: 100%;
+                clicked => { root.release-focus(); }
             }
 
             // The height cap above can be smaller than the content: on Android

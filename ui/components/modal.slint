@@ -95,7 +95,12 @@ export component Modal inherits Rectangle {
     // (~24dp + ~48dp) so the card can never run off-screen in landscape.
     property <length> viewport-height-cap: max(240px, root.height - 96px);
 
-    ModalContainer {
+    // See ModalContainer.release-focus.
+    public function release-focus() {
+        container.release-focus();
+    }
+
+    container := ModalContainer {
         show: root.show;
         modal-width: root.modal-width;
         max-modal-height: min(root.max-modal-height, root.viewport-height-cap);

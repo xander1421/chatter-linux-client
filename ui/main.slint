@@ -937,6 +937,30 @@ export component MainWindow inherits Window {
             root.chat-pane-closed();
         }
     }
+    // Drop whatever text field holds focus (hiding the soft keyboard with it)
+    // without leaving the window focus-less: Back keeps arriving at
+    // back-scope. Called from Rust when Android's Back hid the keyboard
+    // behind Slint's back (platform/android/activity.rs).
+    public function release-text-focus() {
+        back-scope.focus();
+    }
+
+    // Same hole for the composer's pickers. On a phone the composer drops its
+    // focus when one opens so the panel replaces the keyboard
+    // (message_composer.slint, emoji-touch) — which left NOTHING focused, so
+    // the Back meant to close the picker was dropped on the floor. Hand focus
+    // to back-scope instead: the keyboard still goes away, and Back arrives.
+    // Phone only: on desktop the composer keeps the caret while picking.
+    changed composer-emoji-picker-visible => {
+        if root.composer-emoji-picker-visible && root.is-mobile-platform {
+            back-scope.focus();
+        }
+    }
+    changed composer-gif-picker-visible => {
+        if root.composer-gif-picker-visible && root.is-mobile-platform {
+            back-scope.focus();
+        }
+    }
     // Same hole for the search palette: its field holds focus, and picking a
     // result closes the palette, so Back from the chat it opened did nothing
     // (RC20, 3/3). Back from that chat returns to the list, like the header ←.

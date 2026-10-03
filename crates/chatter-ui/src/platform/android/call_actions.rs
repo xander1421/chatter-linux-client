@@ -35,6 +35,12 @@ pub fn register_main_window(window: slint::Weak<crate::MainWindow>) {
     let _ = MAIN_WINDOW.set(window);
 }
 
+/// The registered main window, for other JNI entry points that must reach the
+/// UI (upgrade it only inside `slint::invoke_from_event_loop`).
+pub(crate) fn main_window() -> Option<slint::Weak<crate::MainWindow>> {
+    MAIN_WINDOW.get().cloned()
+}
+
 /// JNI entry point: MainActivity received an Accept activity-intent (the app is
 /// now foreground). Run the in-app accept flow for `call_id` — it connects the
 /// call and paints the active-call screen, same as the in-app Accept button.
