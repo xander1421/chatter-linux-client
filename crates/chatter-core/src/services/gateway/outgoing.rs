@@ -156,8 +156,11 @@ pub struct SendResult {
     pub bootstrap_initiated: bool,
     pub anon_message_id: Option<String>,
     pub call_result: Option<CallOfferResult>,
-    /// The message was stored but not delivered (status `"failed"`, retryable);
-    /// friend DMs only — every other path returns `Err` instead.
+    /// The message was stored but not delivered (status `"failed"`, retryable)
+    /// — friend DMs only. A refused or failed channel send is also `Ok`, but
+    /// carries no error here: `message` comes back stored with
+    /// `delivery_status == "failed"` (`MessageService::send`, core.rs). Other
+    /// paths report a failure as `Err`.
     pub send_error: Option<MessageError>,
 }
 

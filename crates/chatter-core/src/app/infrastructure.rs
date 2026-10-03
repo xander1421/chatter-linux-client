@@ -36,11 +36,6 @@ pub(crate) const DEFAULT_SERVER_URL: &str = "https://localhost:50051";
 /// Environment variable for server URL.
 pub(crate) const SERVER_URL_ENV: &str = "CHATTER_SERVER_URL";
 
-/// Server .onion address for anon-mode Tor transport. Accepts a bare
-/// "<hash>.onion" or a full "http://<hash>.onion:443". When set, anon mode
-/// routes the pool over Tor to this address. In production this should be pinned
-/// in the signed build rather than sourced from env.
-pub(crate) const ONION_ADDRESS_ENV: &str = "CHATTER_ONION_ADDR";
 
 /// Infrastructure container holding low-level dependencies.
 ///
@@ -154,6 +149,14 @@ impl InfrastructureContainer {
 
         // 2. Get database path first (needed for keyring uniqueness)
         let db_path = directories.database_path();
+
+        // Arti keeps its state and directory cache inside the app's own
+        // directories (Android has no $HOME/XDG for its defaults).
+        #[cfg(feature = "onion")]
+        crate::network::grpc::onion_transport::set_tor_directories(
+            directories.data_dir().join("tor"),
+            directories.cache_dir().join("tor"),
+        );
 
         // 3. Create keyring tied to this database path
         let keyring = Keyring::new(db_path.clone());
@@ -275,9 +278,10 @@ impl InfrastructureContainer {
         let grpc_pool = Arc::new(GrpcClientPool::new_for_streaming(&server_url)?);
         let auth_interceptor = grpc_pool.auth_clone();
 
-        // Pin the server's .onion (if configured) so anon mode can route the pool
-        // over Tor. Normalize a bare "<hash>.onion" into "http://<hash>.onion:443".
-        if let Ok(onion) = env::var(ONION_ADDRESS_ENV) {
+        // The build's pinned .onion (config::PINNED_ONION_ADDR), so anon mode can
+        // route the pool over Tor. Normalize a bare "<hash>.onion" into
+        // "http://<hash>.onion:443".
+        if let Some(onion) = crate::config::PINNED_ONION_ADDR {
             let onion = onion.trim();
             if !onion.is_empty() {
                 let url = if onion.contains("://") {

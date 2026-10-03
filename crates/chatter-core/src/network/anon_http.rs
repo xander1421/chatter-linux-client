@@ -116,7 +116,7 @@ mod tor {
     use tokio_rustls::rustls::{ClientConfig, RootCertStore};
     use tokio_rustls::TlsConnector;
 
-    use arti_client::{TorClient, TorClientConfig};
+    use arti_client::TorClient;
 
     use super::{parse_url, ParsedUrl, PutResponse};
     use crate::network::grpc::onion_transport::SharedTorClient;
@@ -185,10 +185,11 @@ mod tor {
         use crate::network::grpc::onion_transport::tor_runtime;
         let base = tor
             .get_or_try_init(|| async {
+                let config = crate::network::grpc::onion_transport::tor_client_config()?;
                 let jh = tor_runtime().spawn(async {
                     let _ = tokio_rustls::rustls::crypto::ring::default_provider()
                         .install_default();
-                    TorClient::create_bootstrapped(TorClientConfig::default()).await
+                    TorClient::create_bootstrapped(config).await
                 });
                 match tokio::time::timeout(std::time::Duration::from_secs(120), jh).await {
                     Err(_) => Err("Tor bootstrap timed out after 120s".to_string()),

@@ -17,6 +17,7 @@
 //! is a deliberate follow-up — see the `TODO(onion)` in [`OnionConnector::call`].
 
 use std::future::Future;
+use std::path::PathBuf;
 use std::pin::Pin;
 use std::sync::{Arc, OnceLock};
 use std::task::{Context, Poll};
@@ -48,6 +49,27 @@ use tower::Service;
 ///
 /// 2 worker threads — ample for one/two onion connections' directory
 /// + circuit work. Bump if many concurrent circuits ever contend.
+/// Arti's state and directory-cache locations, under the app's own data and
+/// cache directories, registered once at startup ([`set_tor_directories`]).
+/// `TorClientConfig::default()` derives them from `$HOME`/XDG, which an Android
+/// app does not have: Tor then refuses to start with "invalid configuration".
+static TOR_DIRS: OnceLock<(PathBuf, PathBuf)> = OnceLock::new();
+
+/// Register where Arti keeps its state and cache. First call wins.
+pub fn set_tor_directories(state_dir: PathBuf, cache_dir: PathBuf) {
+    let _ = TOR_DIRS.set((state_dir, cache_dir));
+}
+
+/// The one Tor client configuration every Arti bootstrap in the app uses.
+pub(crate) fn tor_client_config() -> Result<TorClientConfig, String> {
+    let (state, cache) = TOR_DIRS
+        .get()
+        .ok_or_else(|| "Tor storage directories are not set".to_string())?;
+    arti_client::config::TorClientConfigBuilder::from_directories(state, cache)
+        .build()
+        .map_err(|e| format!("Tor configuration: {e}"))
+}
+
 pub(crate) fn tor_runtime() -> &'static tokio::runtime::Handle {
     static RT: OnceLock<tokio::runtime::Runtime> = OnceLock::new();
     RT.get_or_init(|| {
@@ -129,6 +151,7 @@ impl Service<Uri> for OnionConnector {
             // failed attempt is re-tried on the next dial.
             let base = tor
                 .get_or_try_init(|| async {
+                    let config = tor_client_config().map_err(|e| io_err(format!("onion transport: {e}")))?;
                     let jh = tor_runtime().spawn(async {
                         // Arti's rustls runtime needs a process-wide default rustls
                         // CryptoProvider. Without it, guard/HS-descriptor/rendezvous
@@ -136,7 +159,7 @@ impl Service<Uri> for OnionConnector {
                         // Idempotent — Err means another init already installed one.
                         let _ = tokio_rustls::rustls::crypto::ring::default_provider()
                             .install_default();
-                        TorClient::create_bootstrapped(TorClientConfig::default()).await
+                        TorClient::create_bootstrapped(config).await
                     });
                     match tokio::time::timeout(Duration::from_secs(120), jh).await {
                         Err(_) => Err(io_err("onion transport: Tor bootstrap timed out after 120s")),

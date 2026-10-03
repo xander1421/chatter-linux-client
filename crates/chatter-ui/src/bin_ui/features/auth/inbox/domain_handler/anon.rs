@@ -116,6 +116,8 @@ pub(super) fn handle_group_member_list_received(
         member_count,
         "Received anon group member list"
     );
+    // The whole roster was replaced: an open settings modal re-reads it.
+    crate::bin_ui::features::modals::refresh_members_if_open(window.clone(), ui_ctx.clone(), group_id.into());
 
     let weak = window.clone();
     let ui_ctx = ui_ctx.clone();

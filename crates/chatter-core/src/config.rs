@@ -255,6 +255,18 @@ const DEV_TLS_ROOT_CA_PEM: &str = include_str!("../assets/dev_tls_root_ca.pem");
 /// insecure-by-default under `dev-trust-root`; this one cannot, because the
 /// keyless placeholder CA can't authenticate anything and the server it would
 /// need to front — a plaintext dev loop — no longer exists).
+/// The server's Tor v3 `.onion`, pinned into the build (`CHATTER_ONION_ADDR`
+/// at compile time: a bare `<hash>.onion` or a full `http://<hash>.onion:443`).
+/// Anon mode routes the whole client over Tor to this address only. Pinned,
+/// not read from the runtime environment, so a compromised environment cannot
+/// redirect anon-mode users to an attacker's onion (docs/ONION_DEPLOYMENT.md
+/// §5). `None` (unset or empty): anon mode cannot hide the network location
+/// and says so.
+pub const PINNED_ONION_ADDR: Option<&str> = match option_env!("CHATTER_ONION_ADDR") {
+    Some(addr) if !addr.is_empty() => Some(addr),
+    _ => None,
+};
+
 const SHIPPED_TLS_ROOT_CA_PEM: Option<&str> = option_env!("CHATTER_TLS_ROOT_CA_PEM");
 
 /// The TLS trust anchor this build actually uses. `cfg(test)` / `feature =

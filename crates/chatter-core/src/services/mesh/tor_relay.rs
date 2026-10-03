@@ -26,7 +26,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use arti_client::{DataStream, TorClient, TorClientConfig};
+use arti_client::{DataStream, TorClient};
 use chatter_mesh_nostr::NostrError;
 use chatter_mesh_nostr::relay::{BoxFuture, RelayConnection, RelayConnector, RelaySink, RelayStream};
 use tokio::sync::OnceCell;
@@ -78,13 +78,15 @@ impl TorRelayConnector {
                 // inline, so Arti binds to those threads however the init race
                 // resolves. This must stay identical to the gRPC connector's
                 // init or the two paths fight over which runtime owns Arti.
+                let config = crate::network::grpc::onion_transport::tor_client_config()
+                    .map_err(relay_error)?;
                 let started = tor_runtime().spawn(async {
                     // Arti's rustls runtime needs a process-wide default
                     // provider. Idempotent: an error means someone installed one
                     // already.
                     let _ = tokio_rustls::rustls::crypto::ring::default_provider()
                         .install_default();
-                    TorClient::create_bootstrapped(TorClientConfig::default()).await
+                    TorClient::create_bootstrapped(config).await
                 });
                 match tokio::time::timeout(BOOTSTRAP_TIMEOUT, started).await {
                     Err(_) => Err(relay_error("Tor bootstrap timed out after 120s")),

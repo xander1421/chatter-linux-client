@@ -139,6 +139,19 @@ fi
 # transport, not an opt-in layered on top of one.
 QUIC_FEATURE=",quic"
 
+# Tor v3 onion transport for anon mode (Shield). CHATTER_ONION_ADDR is the
+# server's .onion, pinned into the build (config.rs PINNED_ONION_ADDR) — read
+# it from the server's ONION_DATA_DIR/hs/hostname after starting it with
+# ONION_ENABLED=true. Without it Shield cannot hide the network location and
+# says so.
+ONION_FEATURE=""
+if [ -n "${CHATTER_ONION_ADDR:-}" ]; then
+    ONION_FEATURE=",onion"
+    echo ">> onion transport pinned: $CHATTER_ONION_ADDR"
+else
+    echo ">> no CHATTER_ONION_ADDR: Shield will not hide the network location"
+fi
+
 # Auto-register a throwaway dev account on first launch, with fixed credentials
 # that are in this repository in plain sight (chatter-ui `dev_auto_register`).
 #
@@ -182,7 +195,7 @@ if [ "${RELEASE:-0}" = "1" ]; then
 fi
 
 ( cd "$PROJECT_ROOT" && cargo ndk -t arm64-v8a build -p chatter-ui $CARGO_PROFILE_FLAG \
-    --no-default-features --features "mobile${MESH_FEATURE}${TRUST_ROOT_FEATURE}${QUIC_FEATURE}${DEV_AUTO_REGISTER_FEATURE}" --lib )
+    --no-default-features --features "mobile${MESH_FEATURE}${TRUST_ROOT_FEATURE}${QUIC_FEATURE}${ONION_FEATURE}${DEV_AUTO_REGISTER_FEATURE}" --lib )
 
 # ── 2. Stage the .so into the Gradle module ─────────────────────────────────
 JNI_DIR="app/src/main/jniLibs/arm64-v8a"

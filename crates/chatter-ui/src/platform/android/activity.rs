@@ -193,3 +193,22 @@ pub extern "system" fn Java_com_chatter_client_MainActivity_nativeImeHiddenByBac
         }
     });
 }
+
+/// JNI entry point: the soft keyboard's action key (Done) — see
+/// `MainActivity.onEditorAction` for why it does not reach Slint on its own.
+/// Delivered as an Enter press, so the focused TextInput's `accepted` fires
+/// as it does for Enter on desktop.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_com_chatter_client_MainActivity_nativeImeEditorAction(
+    _env: JNIEnv,
+    _class: jni::objects::JClass,
+) {
+    let Some(weak) = super::call_actions::main_window() else { return };
+    let _ = slint::invoke_from_event_loop(move || {
+        use slint::ComponentHandle;
+        let Some(w) = weak.upgrade() else { return };
+        let enter: slint::SharedString = slint::platform::Key::Return.into();
+        w.window().dispatch_event(slint::platform::WindowEvent::KeyPressed { text: enter.clone() });
+        w.window().dispatch_event(slint::platform::WindowEvent::KeyReleased { text: enter });
+    });
+}

@@ -239,6 +239,25 @@ class MainActivity : GameActivity() {
     /** Implemented in Rust. Back hid the keyboard: drop Slint's text focus too. */
     private external fun nativeImeHiddenByBack()
 
+    /** Implemented in Rust. The IME's action key, delivered to Slint as Enter. */
+    private external fun nativeImeEditorAction()
+
+    /**
+     * The soft keyboard's action key (Done — GameActivity's default
+     * `IME_ACTION_DONE`) and a single-line Enter both land here, via
+     * GameTextInput's `performEditorAction` / `processKeyEvent`. GameActivity
+     * queues it as an editor action that android-activity surfaces as
+     * `InputEvent::TextAction`, which Slint's backend drops
+     * (i-slint-backend-android-activity 1.17.1 `process_inputs`): so a
+     * TextInput's `accepted` never fired on a phone (New Channel's name → Description).
+     * Hand it to Slint as the Enter key instead, which is what its
+     * native-activity backend gets from the same key (BaseInputConnection
+     * sends KEYCODE_ENTER). Not passed to super: nothing reads the queued action.
+     */
+    override fun onEditorAction(action: Int) {
+        nativeImeEditorAction()
+    }
+
     // The Slint helper owns this floating selection toolbar, but GameActivity's
     // surface owns pre-IME BACK. Finish the toolbar before hiding the keyboard;
     // otherwise Samsung consumes BACK without ever notifying the helper view.

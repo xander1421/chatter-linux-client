@@ -4,7 +4,7 @@
 
 use std::sync::Arc;
 
-use slint::{ComponentHandle, Model, ModelRc, VecModel};
+use slint::{ComponentHandle, Model, ModelRc};
 
 use chatter_core::client::ChatterClient;
 use chatter_core::domain::ids::MessageId;
@@ -172,91 +172,22 @@ fn wire_chat_settings_clicked(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) 
             let weak = weak_window.clone();
 
             std::thread::spawn(move || {
-
-                // Get group info for settings modal (DB query in background)
-                let group = match ui_ctx.get_anon_group(&group_id) {
-                    Some(g) => g,
-                    None => {
-                        tracing::error!("Private group not found: {}", group_id);
-                        return;
-                    }
+                // Shared with the live refresh on membership events
+                // (`refresh_members_if_open`), so both read the same roster.
+                let Some(roster) = super::modals::load_private_group_roster(&ui_ctx, group_id) else {
+                    return;
                 };
-
-                let members = ui_ctx.get_anon_group_members(&group_id);
-                let member_count = members.len() as i32;
-                let group_name = group.name.clone();
-                let channel_id: chatter_core::domain::ids::ChannelId = group_id.into();
-
-                // Get current user ID to check if owner
-                let current_user_id = match ui_ctx.session_current_user_id() {
-                    Some(id) => id,
-                    None => return,
-                };
-                let is_owner = group.is_current_user_owner(&current_user_id);
-                let can_manage_members = group.can_manage_members();
-
-                // Convert members to Slint data
-                let mut slint_members = Vec::with_capacity(members.len());
-                for member in members {
-                    let display_name = ui_ctx.display_name_in(
-                        &chatter_core::domain::message::ConversationType::AnonGroup,
-                        &channel_id,
-                        &member.user_id,
-                    );
-
-                    let role = member.role.as_str();
-
-                    // Only Send data leaves this thread; the per-group
-                    // avatar is decoded into an image on the UI thread.
-                    slint_members.push((
-                        member.user_id.to_string(),
-                        display_name,
-                        role,
-                        member.avatar,
-                    ));
-                }
-
-                // Open private group settings modal
                 let _ = slint::invoke_from_event_loop(move || {
                     if let Some(w) = weak.upgrade() {
                         w.set_channel_settings_id(group_id.to_string().into());
-                        w.set_channel_settings_name(group_name.into());
+                        w.set_channel_settings_name(roster.name.as_str().into());
                         w.set_channel_settings_type("private-group".into());
-                        w.set_channel_settings_member_count(member_count);
-                        w.set_channel_settings_is_owner(is_owner);
-                        w.set_channel_settings_can_manage_members(can_manage_members);
-                        let rows: Vec<crate::ChannelMemberData> = slint_members
-                            .into_iter()
-                            .map(|(user_id, display_name, role, avatar)| crate::ChannelMemberData {
-                                user_id: user_id.into(),
-                                display_name: display_name.into(),
-                                username: "".into(),
-                                role: role.into(),
-                                joined_at: "".into(),
-                                avatar_source: avatar
-                                    .as_deref()
-                                    .and_then(crate::bin_ui::converters::avatar_bytes_to_image)
-                                    .unwrap_or_default(),
-                                // Anon groups have no mute/ban RPCs.
-                                muted: false,
-                                can_ban: false,
-                                can_mute: false,
-                                can_make_owner: false,
-                                // Anon-group membership is owner-authoritative,
-                                // not the signed channel log.
-                                unverified: false,
-                            })
-                            .collect();
-                        w.set_channel_settings_members(ModelRc::new(VecModel::from(rows)));
+                        super::modals::apply_private_group_roster(&w, roster);
                         // Clear a previous channel's ban list.
                         w.set_channel_settings_can_view_bans(false);
                         w.set_channel_settings_banned_members(ModelRc::default());
                         crate::bin_ui::features::back::push(&w, "channel-settings");
-                        tracing::debug!(
-                            "Opened settings for private group {} with {} members",
-                            group_id,
-                            member_count
-                        );
+                        tracing::debug!("Opened settings for private group {}", group_id);
                     }
                 });
             });

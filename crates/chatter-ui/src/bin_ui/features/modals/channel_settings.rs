@@ -196,18 +196,106 @@ fn refresh_member_lists(weak: slint::Weak<MainWindow>, ui_ctx: Arc<ChatterClient
 /// is updated on every membership event — so with settings open (or opened
 /// just before the join landed), the header read "2 members" and settings
 /// still "1 member". Called from the same membership-event path that updates
-/// the header. A private group's settings are filled by `header.rs` from the
-/// local anon roster and are not refreshed here.
+/// the header — for private groups too (`anon.rs` passes the group id), whose
+/// roster is re-read from the local anon-group store instead of the server.
 pub fn refresh_members_if_open(weak: slint::Weak<MainWindow>, ui_ctx: Arc<ChatterClient>, channel_id: ChannelId) {
     let _ = slint::invoke_from_event_loop(move || {
         let Some(w) = weak.upgrade() else { return };
-        let open = w.get_channel_settings_id() == channel_id.to_string().as_str()
-            && w.get_channel_settings_type() != "private-group"
+        let id = channel_id.to_string();
+        let open = w.get_channel_settings_id() == id.as_str()
             && w.get_modal_stack().iter().any(|s| s == "channel-settings");
-        if open {
-            refresh_member_lists(weak.clone(), ui_ctx, channel_id);
+        if !open {
+            return;
         }
+        if w.get_channel_settings_type() != "private-group" {
+            refresh_member_lists(weak.clone(), ui_ctx, channel_id);
+            return;
+        }
+        let Ok(group_id) = id.parse::<AnonGroupId>() else { return };
+        let weak = weak.clone();
+        std::thread::spawn(move || {
+            let Some(roster) = load_private_group_roster(&ui_ctx, group_id) else { return };
+            let _ = slint::invoke_from_event_loop(move || {
+                let Some(w) = weak.upgrade() else { return };
+                // Still the same group's settings: the read took a moment.
+                if w.get_channel_settings_id() == id.as_str() {
+                    apply_private_group_roster(&w, roster);
+                }
+            });
+        });
     });
+}
+
+/// A private group's settings roster, read from the local anon-group store.
+/// Only `Send` data: avatars stay bytes until `apply_private_group_roster`
+/// decodes them on the UI thread.
+pub struct PrivateGroupRoster {
+    pub name: String,
+    is_owner: bool,
+    can_manage_members: bool,
+    /// (user id, display name, role, avatar bytes)
+    members: Vec<(String, String, &'static str, Option<Vec<u8>>)>,
+}
+
+/// Blocking DB reads — call off the UI thread. `None` when the group is not
+/// stored locally or no user is signed in.
+pub fn load_private_group_roster(ui_ctx: &ChatterClient, group_id: AnonGroupId) -> Option<PrivateGroupRoster> {
+    let Some(group) = ui_ctx.get_anon_group(&group_id) else {
+        tracing::error!("Private group not found: {}", group_id);
+        return None;
+    };
+    let current_user_id = ui_ctx.session_current_user_id()?;
+    let channel_id: ChannelId = group_id.into();
+    let members = ui_ctx
+        .get_anon_group_members(&group_id)
+        .into_iter()
+        .map(|member| {
+            let display_name = ui_ctx.display_name_in(
+                &chatter_core::domain::message::ConversationType::AnonGroup,
+                &channel_id,
+                &member.user_id,
+            );
+            (member.user_id.to_string(), display_name, member.role.as_str(), member.avatar)
+        })
+        .collect();
+    Some(PrivateGroupRoster {
+        is_owner: group.is_current_user_owner(&current_user_id),
+        can_manage_members: group.can_manage_members(),
+        name: group.name,
+        members,
+    })
+}
+
+/// UI thread only (decodes avatars into `slint::Image`s). Fills the members
+/// pane and the General pane's count; leaves the name field (a draft) alone.
+pub fn apply_private_group_roster(w: &MainWindow, roster: PrivateGroupRoster) {
+    w.set_channel_settings_member_count(roster.members.len() as i32);
+    w.set_channel_settings_is_owner(roster.is_owner);
+    w.set_channel_settings_can_manage_members(roster.can_manage_members);
+    let rows: Vec<ChannelMemberData> = roster
+        .members
+        .into_iter()
+        .map(|(user_id, display_name, role, avatar)| ChannelMemberData {
+            user_id: user_id.into(),
+            display_name: display_name.into(),
+            username: "".into(),
+            role: role.into(),
+            joined_at: "".into(),
+            avatar_source: avatar
+                .as_deref()
+                .and_then(crate::bin_ui::converters::avatar_bytes_to_image)
+                .unwrap_or_default(),
+            // Anon groups have no mute/ban RPCs.
+            muted: false,
+            can_ban: false,
+            can_mute: false,
+            can_make_owner: false,
+            // Anon-group membership is owner-authoritative,
+            // not the signed channel log.
+            unverified: false,
+        })
+        .collect();
+    w.set_channel_settings_members(ModelRc::new(VecModel::from(rows)));
 }
 
 fn wire_save_settings(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
