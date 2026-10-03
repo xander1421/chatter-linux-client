@@ -57,6 +57,57 @@ impl MessageReceiptRepository {
         .collect()
     }
 
+    /// Our own other devices a send was for. Kept apart from the receipt
+    /// targets: they read our messages through the same sender key, but their
+    /// read state travels by ReadSync and must not hold back the aggregate.
+    /// Only a resend within its 24h window reads these, so older rows go.
+    pub fn snapshot_own_devices_for_send(
+        &self,
+        conversation: ChannelId,
+        kind: ConversationType,
+        author: UserId,
+        sent_at: u64,
+        devices: &[DeviceId],
+    ) -> Result<(), StorageError> {
+        const RETENTION_NS: u64 = 24 * 60 * 60 * 1_000_000_000;
+        if devices.iter().any(|device| device.0 == 0) {
+            return Err(StorageError::InvalidData("invalid own device".into()));
+        }
+        let sent_at = i64::try_from(sent_at)
+            .map_err(|_| StorageError::InvalidData("message timestamp out of range".into()))?;
+        let mut conn = self.db.connection()?;
+        let tx = conn.transaction()?;
+        tx.execute("DELETE FROM own_device_send_targets WHERE sent_at < ?1",
+            params![sent_at.saturating_sub(RETENTION_NS as i64)])?;
+        for device in devices {
+            tx.execute("INSERT OR IGNORE INTO own_device_send_targets
+                (conversation_id, conversation_type, author_id, sent_at, device_id) VALUES (?1, ?2, ?3, ?4, ?5)",
+                params![conversation.to_string(), kind.as_str(), author.to_string(), sent_at, device.0])?;
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
+    pub fn own_devices_for_send(
+        &self,
+        conversation: ChannelId,
+        kind: ConversationType,
+        author: UserId,
+        sent_at: u64,
+    ) -> Result<Vec<DeviceId>, StorageError> {
+        let conn = self.db.connection()?;
+        let mut stmt = conn.prepare(
+            "SELECT device_id FROM own_device_send_targets
+            WHERE conversation_id=?1 AND conversation_type=?2 AND author_id=?3 AND sent_at=?4
+            ORDER BY device_id",
+        )?;
+        let rows = stmt.query_map(
+            params![conversation.to_string(), kind.as_str(), author.to_string(), sent_at as i64],
+            |row| row.get::<_, u32>(0).map(DeviceId),
+        )?;
+        rows.map(|row| row.map_err(StorageError::from)).collect()
+    }
+
     /// Convenience for an already-stored outgoing message.
     pub fn snapshot_targets(
         &self,
@@ -139,6 +190,8 @@ impl MessageReceiptRepository {
         let mut conn = self.db.connection()?;
         let tx = conn.transaction()?;
         tx.execute("UPDATE message_receipt_targets SET sent_at=?5 WHERE conversation_id=?1 AND conversation_type=?2 AND author_id=?3 AND sent_at=?4 AND message_id IS NULL",
+            params![conversation.to_string(), kind.as_str(), author.to_string(), provisional as i64, actual as i64])?;
+        tx.execute("UPDATE OR IGNORE own_device_send_targets SET sent_at=?5 WHERE conversation_id=?1 AND conversation_type=?2 AND author_id=?3 AND sent_at=?4",
             params![conversation.to_string(), kind.as_str(), author.to_string(), provisional as i64, actual as i64])?;
         tx.execute("UPDATE message_receipt_targets AS r SET
             delivered_at=COALESCE(r.delivered_at, (SELECT p.delivered_at FROM pending_message_receipts p WHERE p.conversation_id=r.conversation_id AND p.conversation_type=r.conversation_type AND p.author_id=r.author_id AND p.sent_at=r.sent_at AND p.recipient_id=r.recipient_id AND p.device_id=r.device_id)),

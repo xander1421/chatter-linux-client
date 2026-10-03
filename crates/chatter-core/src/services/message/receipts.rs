@@ -72,6 +72,7 @@ impl MessageService {
     ) -> Result<(), MessageError> {
         let author = self.current_user_id()?;
         let mut targets = Vec::new();
+        let mut author_is_member = false;
         for member in channels
             .get_all_channel_members(&channel.to_string())
             .await?
@@ -81,6 +82,7 @@ impl MessageService {
                 .parse()
                 .map_err(|_| MessageError::InvalidContent("invalid channel member ID".into()))?;
             if peer == author {
+                author_is_member = true;
                 continue;
             }
             let devices = self
@@ -90,13 +92,25 @@ impl MessageService {
                 .map_err(|error| MessageError::EncryptionFailed(error.to_string()))?;
             targets.extend(devices.into_iter().map(|device| (peer, DeviceId(device))));
         }
-        MessageReceiptRepository::new(self.database.clone()).snapshot_for_send(
-            channel,
-            self.conversation_type(&channel),
-            author,
-            sent_at,
-            &targets,
-        )?;
+        let receipts = MessageReceiptRepository::new(self.database.clone());
+        receipts.snapshot_for_send(channel, self.conversation_type(&channel), author, sent_at, &targets)?;
+        // Our other devices read this send through the same sender key, so a
+        // resend may go to them too, but only to the ones that exist now: a
+        // device linked later gets nothing, as for any member. If the list
+        // cannot be fetched, nothing is recorded and no own device gets a
+        // resend of this message.
+        if author_is_member {
+            let current = self.settings_repo.get::<u32>(keys::CURRENT_DEVICE_ID).ok().flatten();
+            let own: Vec<DeviceId> = self
+                .own_device_ids()
+                .await
+                .unwrap_or_default()
+                .into_iter()
+                .filter(|device| Some(*device) != current)
+                .map(DeviceId)
+                .collect();
+            receipts.snapshot_own_devices_for_send(channel, self.conversation_type(&channel), author, sent_at, &own)?;
+        }
         Ok(())
     }
 

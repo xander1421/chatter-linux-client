@@ -184,7 +184,7 @@ impl MessageService {
 
     /// Our live device ids, from the `own_devices` cache (refetched when
     /// over a minute old). `None` when the list cannot be fetched.
-    async fn own_device_ids(&self) -> Option<std::collections::HashSet<u32>> {
+    pub(super) async fn own_device_ids(&self) -> Option<std::collections::HashSet<u32>> {
         const MAX_AGE: u64 = 60 * 1_000_000_000;
         let mut cache = self.own_devices.lock().await;
         let now = TimestampNanos::now().as_u64();
@@ -1118,10 +1118,10 @@ impl MessageService {
         if TimestampNanos::now().as_u64().saturating_sub(message.sent_at) > RETENTION_NS {
             return Ok(None);
         }
-        let original = crate::storage::repositories::message_receipt_repo::MessageReceiptRepository::new(
+        let receipts = crate::storage::repositories::message_receipt_repo::MessageReceiptRepository::new(
             self.database.clone(),
-        )
-        .targets_for_send(
+        );
+        let original = receipts.targets_for_send(
             message.conversation_id,
             message.conversation_type.clone(),
             us,
@@ -1134,16 +1134,18 @@ impl MessageService {
             .map(|member| member.user_id)
             .collect::<Vec<_>>();
         let device = DeviceId(peer_device_id);
-        // Our own other devices are never in the send snapshot
-        // (`snapshot_channel_receipt_targets` skips the author), yet they read
-        // our channel messages through the same sender key. Without this, the
-        // resend they ask for matched nothing and the message stayed lost.
-        let own_other_device = *peer_id == us
-            && self.settings_repo.get::<u32>(keys::CURRENT_DEVICE_ID).ok().flatten() != Some(peer_device_id);
-        let allowed = own_other_device
-            || resend_targets(&original, &current)
+        // Our own other devices are not receipt targets, yet they read our
+        // channel messages through the same sender key. Their own snapshot
+        // bounds them like any member: only a device that existed at send time.
+        let allowed = if *peer_id == us {
+            receipts
+                .own_devices_for_send(message.conversation_id, message.conversation_type.clone(), us, message.sent_at)?
+                .contains(&device)
+        } else {
+            resend_targets(&original, &current)
                 .into_iter()
-                .any(|(user, id)| user == *peer_id && id == device);
+                .any(|(user, id)| user == *peer_id && id == device)
+        };
         if !allowed {
             return Ok(None);
         }
@@ -1832,9 +1834,23 @@ mod tests {
             alice.group_resend_content(&t.bob_id, 1, ts_ms).unwrap().is_some(),
             "the original recipient device still in the channel is resent to"
         );
+        // Our own devices: device 7 existed at send time, device 9 was linked later.
+        let receipts = MessageReceiptRepository::new(alice.database.clone());
+        receipts
+            .snapshot_own_devices_for_send(t.channel_id, ConversationType::Channel, t.alice_id, sent_at, &[DeviceId(7)])
+            .unwrap();
+        assert_eq!(
+            receipts.targets_for_send(t.channel_id, ConversationType::Channel, t.alice_id, sent_at).unwrap(),
+            vec![(t.bob_id, DeviceId(1))],
+            "own devices never join the receipt targets the aggregate counts"
+        );
         assert!(
             alice.group_resend_content(&t.alice_id, 7, ts_ms).unwrap().is_some(),
-            "our own other device reads our channel messages too, though no snapshot names it"
+            "our own device present at send time is resent to"
+        );
+        assert!(
+            alice.group_resend_content(&t.alice_id, 9, ts_ms).unwrap().is_none(),
+            "our own device linked after the send gets nothing"
         );
         assert!(
             alice.group_resend_content(&t.alice_id, 1, ts_ms).unwrap().is_none(),

@@ -74,6 +74,7 @@ mod v072_peer_profile_keys;
 mod v073_former_channels;
 mod v074_message_receipts;
 mod v075_message_failure_reason;
+mod v076_own_device_send_targets;
 
 use crate::error::StorageError;
 use chrono::Utc;
@@ -151,6 +152,7 @@ pub use v072_peer_profile_keys::V072PeerProfileKeys;
 pub use v073_former_channels::V073FormerChannels;
 pub use v074_message_receipts::V074MessageReceipts;
 pub use v075_message_failure_reason::V075MessageFailureReason;
+pub use v076_own_device_send_targets::V076OwnDeviceSendTargets;
 
 /// Trait for database migrations.
 ///
@@ -353,4 +355,5 @@ pub fn default_migrations() -> MigrationRunner {
         .register(V073FormerChannels)
         .register(V074MessageReceipts)
         .register(V075MessageFailureReason)
+        .register(V076OwnDeviceSendTargets)
 }
