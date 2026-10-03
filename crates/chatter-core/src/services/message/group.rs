@@ -903,6 +903,7 @@ impl MessageService {
         if self.is_retired_device(sender_id, device_id, proto_msg.timestamp).await {
             tracing::info!(%channel_id, %sender_id, device_id, message_id = %proto_msg.id,
                 "Group message from a retired device is unrecoverable; dropped");
+            self.record_channel_delivery_issue(channel_id, sender_id, proto_msg);
             return;
         }
         // Recorded before the request goes out, so the answer cannot race it.
@@ -947,12 +948,40 @@ impl MessageService {
                 self.pending_group_decrypts
                     .lock()
                     .retain(|(_, s, d), _| (*s, *d) != (sender_id, device_id));
+                self.record_channel_delivery_issue(channel_id, sender_id, proto_msg);
             }
             Err(e) => tracing::warn!(
                 %channel_id, %sender_id, device_id, message_id = %proto_msg.id, error = %e,
                 "Failed to send DecryptionErrorMessage for a group message"
             ),
         }
+    }
+
+    /// A peer's channel message that no device can ever give us: leave a
+    /// DeliveryIssue entry where it would have been, so the gap is visible
+    /// rather than silent. Idempotent per (channel, sender, time bucket), so a
+    /// re-fetch on every sync does not repeat it. Our own lost messages get no
+    /// entry: a reinstall would otherwise fill every channel with them.
+    pub(crate) fn record_channel_delivery_issue(
+        &self,
+        channel_id: ChannelId,
+        sender_id: UserId,
+        proto_msg: &crate::proto::chat_v1::Message,
+    ) {
+        use crate::inbox::ack_policy::{record_marker_then_ack, FailureMarker, MarkerTarget};
+        use crate::services::current_user::CurrentUserProvider;
+
+        if self.settings_repo.current_user_id().ok() == Some(sender_id) {
+            return;
+        }
+        let target = MarkerTarget {
+            conversation_id: channel_id,
+            conversation_type: crate::domain::message::ConversationType::Channel,
+            peer_id: Some(sender_id),
+            envelope_ts_ns: Self::group_envelope_timestamp_ns(proto_msg).unwrap_or(proto_msg.timestamp),
+        };
+        let tx = self.event_bus.domain_sender();
+        record_marker_then_ack(&self.message_repo, Some(&tx), target, FailureMarker::DeliveryIssue);
     }
 
     /// Whether `(user, device)` is a device the server no longer lists, for a
@@ -1105,9 +1134,16 @@ impl MessageService {
             .map(|member| member.user_id)
             .collect::<Vec<_>>();
         let device = DeviceId(peer_device_id);
-        let allowed = resend_targets(&original, &current)
-            .into_iter()
-            .any(|(user, id)| user == *peer_id && id == device);
+        // Our own other devices are never in the send snapshot
+        // (`snapshot_channel_receipt_targets` skips the author), yet they read
+        // our channel messages through the same sender key. Without this, the
+        // resend they ask for matched nothing and the message stayed lost.
+        let own_other_device = *peer_id == us
+            && self.settings_repo.get::<u32>(keys::CURRENT_DEVICE_ID).ok().flatten() != Some(peer_device_id);
+        let allowed = own_other_device
+            || resend_targets(&original, &current)
+                .into_iter()
+                .any(|(user, id)| user == *peer_id && id == device);
         if !allowed {
             return Ok(None);
         }
@@ -1796,6 +1832,14 @@ mod tests {
             alice.group_resend_content(&t.bob_id, 1, ts_ms).unwrap().is_some(),
             "the original recipient device still in the channel is resent to"
         );
+        assert!(
+            alice.group_resend_content(&t.alice_id, 7, ts_ms).unwrap().is_some(),
+            "our own other device reads our channel messages too, though no snapshot names it"
+        );
+        assert!(
+            alice.group_resend_content(&t.alice_id, 1, ts_ms).unwrap().is_none(),
+            "this device never asks itself"
+        );
 
         alice.channel_repo.delete_membership(&t.channel_id, &t.bob_id).unwrap();
         assert!(
@@ -1902,6 +1946,93 @@ mod tests {
         m.group_retry_requests.lock().clear();
         m.expire_pending_group_decrypt(t.channel_id, t.alice_id, 1, &copy.id).await;
         assert!(m.group_retry_requests.lock().is_empty());
+    }
+
+    /// A resync page with a message parked for its sender key goes on to the
+    /// next message: one undecryptable message used to fail the whole resync,
+    /// so the cursor never moved and every channel stalled behind it.
+    #[tokio::test]
+    async fn resync_continues_past_a_message_waiting_for_its_sender_key() {
+        use crate::domain::ids::MessageId;
+        use crate::services::message::channel_inbound::ChannelInbound;
+
+        let t = two_members();
+        let m = t.bob.messages();
+        let inbound = ChannelInbound::new(m.clone(), t.bob.attachments().clone());
+        let (ge, _) = t.alice.signal().encrypt_for_group(&t.channel_id, b"no key yet").await.unwrap();
+        let parked = server_copy(&t, &MessageId::new(), TimestampNanos::now().as_u64(), &ge);
+        let next_id = MessageId::new();
+        let next = crate::proto::chat_v1::Message {
+            id: next_id.to_string(),
+            channel_id: t.channel_id.to_string(),
+            author_id: t.alice_id.to_string(),
+            author_device_id: 1,
+            timestamp: TimestampNanos::now().as_u64(),
+            content: Some(crate::proto::chat_v1::message::Content {
+                r#type: Some(crate::proto::chat_v1::message::content::Type::Text("after".into())),
+            }),
+            ..Default::default()
+        };
+
+        for message in [&parked, &next] {
+            inbound.ingest_resynced(message, t.channel_id).await
+                .expect("a message's own outcome never fails the resync");
+        }
+        assert_eq!(m.pending_group_decrypts.lock().get(&(t.channel_id, t.alice_id, 1)).map(Vec::len), Some(1));
+        assert!(m.get_message_local(&next_id).unwrap().is_some(), "the following message is stored");
+    }
+
+    /// Our own other device is a sender like any other: a message it sent that
+    /// this device has no key for asks for its SKDM, and on expiry its resend.
+    #[tokio::test]
+    async fn message_from_our_other_device_without_a_key_requests_it() {
+        use crate::domain::ids::MessageId;
+        use crate::services::message::channel_inbound::{ChannelInbound, Ingested};
+
+        let t = two_members();
+        // Bob's store is Alice's second device (7); Alice's client is device 1.
+        let m = t.bob.messages();
+        m.settings_repo.set(keys::CURRENT_USER_ID, &t.alice_id.to_string()).unwrap();
+        m.settings_repo.set(keys::CURRENT_DEVICE_ID, &7u32).unwrap();
+        *m.own_devices.lock().await = Some((TimestampNanos::now().as_u64(), [1, 7].into()));
+        let (ge, _) = t.alice.signal().encrypt_for_group(&t.channel_id, b"from device 1").await.unwrap();
+        let copy = server_copy(&t, &MessageId::new(), TimestampNanos::now().as_u64(), &ge);
+        let inbound = ChannelInbound::new(m.clone(), t.bob.attachments().clone());
+
+        assert_eq!(inbound.ingest(&copy, t.channel_id, false).await, Ingested::DeferredPendingSenderKey);
+        assert!(!m.should_request_sender_key(t.channel_id, t.alice_id, 1),
+            "the ingest already sent the SenderKeyRequest, so the gate is closed");
+        m.expire_pending_group_decrypt(t.channel_id, t.alice_id, 1, &copy.id).await;
+        assert!(m.group_retry_requests.lock().contains(&(copy.id.clone(), 1)),
+            "an expired own-device message asks that device to resend it");
+    }
+
+    /// A peer's message from a device that no longer exists leaves a visible
+    /// DeliveryIssue entry, once however often it is re-fetched.
+    #[tokio::test]
+    async fn message_from_a_retired_peer_device_leaves_one_delivery_issue() {
+        use crate::domain::ids::MessageId;
+        use crate::domain::message::{ConversationType, MessageContent, SystemMessage};
+        use crate::services::message::channel_inbound::{ChannelInbound, Ingested};
+
+        let t = two_members();
+        let m = t.bob.messages();
+        m.retired_peer_devices.lock().insert((t.alice_id, 1), std::time::Instant::now());
+        let (ge, _) = t.alice.signal().encrypt_for_group(&t.channel_id, b"gone").await.unwrap();
+        let copy = server_copy(&t, &MessageId::new(), TimestampNanos::now().as_u64(), &ge);
+        let inbound = ChannelInbound::new(m.clone(), t.bob.attachments().clone());
+
+        for _ in 0..2 {
+            assert_eq!(inbound.ingest(&copy, t.channel_id, false).await, Ingested::Dropped);
+        }
+        let issues: Vec<_> = m.message_repo
+            .list_for_conversation(&t.channel_id, &ConversationType::Channel, None, 50)
+            .unwrap()
+            .into_iter()
+            .filter(|msg| matches!(msg.content, MessageContent::System(SystemMessage::DeliveryIssue)))
+            .collect();
+        assert_eq!(issues.len(), 1);
+        assert_eq!(issues[0].sender_id, Some(t.alice_id));
     }
 
     #[test]

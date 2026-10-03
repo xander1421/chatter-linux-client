@@ -334,28 +334,11 @@ impl ChannelStreamService {
                         self.apply_delete(&message.id, channel_id)
                             .map_err(|e| crate::error::NetworkError::Unknown(e.to_string()))?;
                     } else {
-                        let id = message.id.parse::<MessageId>()
-                            .map_err(|_| crate::error::NetworkError::DataLoss("invalid resync message id".into()))?;
-                        if self.messages.message_repo.is_tombstoned(&id)
-                            .map_err(|e| crate::error::NetworkError::Unknown(e.to_string()))? { continue; }
-                        let existing = self.messages.get_message_local(&id)
-                            .map_err(|e| crate::error::NetworkError::Unknown(e.to_string()))?;
-                        let needs_content = existing.as_ref().is_none_or(|local|
-                            crate::services::message::channel_inbound::is_newer_edit(message, local));
-                        if needs_content {
-                            let outcome = if message.edited {
-                                self.inbound.ingest_edit(message, channel_id).await
-                            } else {
-                                self.inbound.ingest(message, channel_id, false).await
-                            };
-                            if matches!(outcome,
-                                crate::services::message::channel_inbound::Ingested::Dropped
-                                | crate::services::message::channel_inbound::Ingested::DeferredPendingSenderKey) {
-                                return Err(crate::error::NetworkError::Unknown("resync content not persisted yet".into()));
-                            }
-                        }
-                        self.messages.reconcile_channel_reactions(message, channel_id)
-                            .map_err(|e| crate::error::NetworkError::Unknown(e.to_string()))?;
+                        self.inbound.ingest_resynced(message, channel_id).await.map_err(|e| match e {
+                            crate::services::message::MessageError::InvalidContent(e) =>
+                                crate::error::NetworkError::DataLoss(e),
+                            e => crate::error::NetworkError::Unknown(e.to_string()),
+                        })?;
                     }
                 }
                 if page.next_page_token.is_empty() { break; }

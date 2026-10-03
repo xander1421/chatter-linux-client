@@ -26,7 +26,7 @@ use crate::services::attachment::AttachmentService;
 use crate::services::current_user::CurrentUserProvider;
 
 use super::conversion::{conversation_type_for_channel, proto_to_domain_message_with_sender};
-use super::MessageService;
+use super::{MessageError, MessageService};
 
 /// Outcome of ingesting one server-delivered channel message.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -132,6 +132,46 @@ impl ChannelInbound {
         }
 
         Ingested::Stored
+    }
+
+    /// One undeleted message from a resync page (`get_message_changes`).
+    ///
+    /// Errors only for a bad message id or a local storage failure. Whatever
+    /// the message's own outcome — stored, parked for its sender key, unusable
+    /// — the resync goes on to the next one: a parked message already has its
+    /// SKDM request out (and, on expiry, a resend request), and an unusable one
+    /// was handled where it failed. Stopping kept the stream cursor in place,
+    /// so one undecryptable message made every reconnect resync again and
+    /// stalled every channel behind it.
+    pub async fn ingest_resynced(
+        &self,
+        proto_msg: &chat_v1::Message,
+        channel_id: ChannelId,
+    ) -> Result<(), MessageError> {
+        let id = proto_msg
+            .id
+            .parse::<crate::domain::ids::MessageId>()
+            .map_err(|_| MessageError::InvalidContent("invalid resync message id".into()))?;
+        if self.messages.message_repo.is_tombstoned(&id)? {
+            return Ok(());
+        }
+        let existing = self.messages.get_message_local(&id)?;
+        if existing.as_ref().is_none_or(|local| is_newer_edit(proto_msg, local)) {
+            if proto_msg.edited {
+                self.ingest_edit(proto_msg, channel_id).await;
+            } else {
+                self.ingest(proto_msg, channel_id, false).await;
+            }
+        }
+        match self.messages.reconcile_channel_reactions(proto_msg, channel_id) {
+            // A malformed reaction is this message's problem, not the resync's.
+            Err(MessageError::InvalidContent(e)) => {
+                tracing::warn!(%channel_id, message_id = %id, error = %e,
+                    "Resync: skipping reactions that do not match their message");
+                Ok(())
+            }
+            other => other,
+        }
     }
 
     /// Decrypt + convert, without touching storage.
@@ -299,6 +339,7 @@ impl ChannelInbound {
                         if self.messages.is_retired_device(sid, device_id, proto_msg.timestamp).await {
                             tracing::debug!(%channel_id, %sid, device_id, message_id = %proto_msg.id,
                                 "Channel message from a retired device is unrecoverable; dropped");
+                            self.messages.record_channel_delivery_issue(channel_id, sid, proto_msg);
                             return Err(Ingested::Dropped);
                         }
                         tracing::warn!(
