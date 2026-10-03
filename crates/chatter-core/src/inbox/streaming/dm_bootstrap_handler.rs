@@ -612,7 +612,19 @@ pub(crate) async fn send_pending_messages_after_bootstrap(
 
     let mut anon_mailbox_client = AnonymousMailboxClient::new(channel);
     for (decoded, content) in queued {
-        let result = deposit(signal_service, auth_client, &mut anon_mailbox_client, &peer_id, &peer_mailbox, &send_key, &content).await;
+        // Receipt targets before transport, exactly as `send_dm_content`
+        // records them: the peer device's Receipt names this DataMessage
+        // timestamp and is applied only against a snapshot that has it.
+        let snapshot = match &decoded {
+            Some(decoded) => message_service
+                .snapshot_dm_content_targets(peer_id, decoded, &[peer_mailbox.device_id])
+                .map_err(|e| format!("receipt targets: {e}")),
+            None => Ok(()),
+        };
+        let result = match snapshot {
+            Ok(()) => deposit(signal_service, auth_client, &mut anon_mailbox_client, &peer_id, &peer_mailbox, &send_key, &content).await,
+            Err(e) => Err(e),
+        };
         if let Err(e) = &result {
             tracing::error!(peer = %peer_id, error = %e, "Failed to send pending message");
         } else {

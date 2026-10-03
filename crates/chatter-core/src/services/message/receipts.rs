@@ -32,7 +32,7 @@ impl MessageService {
     }
 
     /// Capture the actual DM fanout before any device can acknowledge it.
-    pub(super) fn snapshot_dm_content_targets(
+    pub(crate) fn snapshot_dm_content_targets(
         &self,
         peer: UserId,
         content: &crate::proto::content_v1::Content,

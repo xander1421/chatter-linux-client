@@ -996,4 +996,53 @@ mod tests {
         assert!(flush.is_none(), "nothing queued, nothing to announce");
         assert!(conversations.drain_device_queue(&friend, 8).unwrap().is_empty(), "owed copy taken for device 8");
     }
+
+    /// A DM queued before the Shield bootstrap finished and sent by the
+    /// responder's flush records its receipt targets like any send: the
+    /// peer device's Receipt naming the original DataMessage timestamp makes
+    /// the bubble "delivered". The flush used to deposit without recording
+    /// them, so that Receipt matched nothing and the bubble stayed "sent".
+    /// Nothing is behind the server URL: the deposit fails, but the targets
+    /// are captured before transport, as `send_dm_content` does.
+    #[tokio::test]
+    async fn flushed_pending_dm_is_marked_delivered_by_the_peer_receipt() {
+        use crate::domain::ids::{ChannelId, DeviceId as Device};
+        use crate::domain::message::{ConversationType, Message};
+        use crate::mailbox::dm::{ConversationKey, DmConversationManager};
+        use prost::Message as _;
+        let me = UserId::from_uuid(uuid::Uuid::max());
+        let friend = UserId::from_uuid(uuid::Uuid::from_u128(1));
+        let (client, _dir) = shield_client(me);
+        let ms = client.messages();
+        cache_sender_certificate(ms, &me);
+        cache_device(ms, &friend, 6, &mut StdRng::seed_from_u64(0x5EC)).await;
+        seed_half_open(ms, &friend, &ConversationKey::new(), 5);
+
+        // Queued before the bootstrap, stored as a "sending" bubble.
+        let sent_at = 1_700_000_000_123_456_789u64;
+        let content = crate::services::build_text_content("first", sent_at);
+        ms.pending_dms.queue(&friend, content.encode_to_vec(), vec![], None).unwrap();
+        let mut message = Message::new_text(
+            ChannelId::from(friend), ConversationType::ServerDm, Some(me), "first".into(), sent_at,
+        );
+        message.delivery_status = "sending".into();
+        ms.message_repo.insert_outgoing(&message).unwrap();
+
+        // The peer's device 6 answers the bootstrap; the queue is flushed.
+        DmConversationManager::new(ms.database.clone())
+            .record_peer_device(&friend, 6, [6u8; 32], ConversationKey::new().our_ephemeral_public)
+            .unwrap();
+        let mut auth = ms.auth_client();
+        crate::inbox::streaming::dm_bootstrap_handler::send_pending_messages_after_bootstrap(
+            friend, 6, ms.database.clone(), &ms.signal_service, &mut auth, ms.grpc_pool.anon_channel(), ms,
+        )
+        .await
+        .expect("one message was queued");
+
+        // Device 6's delivery Receipt names the original timestamp.
+        ms.apply_peer_receipt(ChannelId::from(friend), ConversationType::ServerDm, friend, Device(6), 1, &[sent_at])
+            .unwrap();
+        let stored = ms.message_repo.get(&message.id).unwrap().unwrap();
+        assert_eq!(stored.delivery_status, "delivered");
+    }
 }
