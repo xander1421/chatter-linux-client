@@ -176,14 +176,19 @@ impl MessageService {
             tracing::warn!(%error, "Could not snapshot own-device receipt targets");
             return 0;
         }
-        let Ok(me) = self.current_user_id() else { return 0 };
-        let me = me.to_string();
+        let Ok(me_id) = self.current_user_id() else { return 0 };
+        let me = me_id.to_string();
         if !self.shield_mode.load(std::sync::atomic::Ordering::Acquire) {
             Self::pad_content_to_bucket(&mut sync);
-            return self
+            let outcome = self
                 .deposit_sealed_to_all_devices(auth_client, &mut self.message_client(), &me, &sync.encode_to_vec())
-                .await
-                .delivered;
+                .await;
+            // What that device's DecryptionErrorMessage will name
+            // (`resend_dm_on_decryption_error`): Signal logs its sync
+            // transcripts in the send log as it does the message
+            // (`SendMessage.preload.ts` `sendSyncMessage`, Resendable).
+            self.record_dm_send(me_id, &sync, &outcome.deposits);
+            return outcome.delivered;
         }
         let this_device = self.settings_repo.get::<u32>(keys::CURRENT_DEVICE_ID).ok().flatten();
         let devices = self
@@ -218,9 +223,7 @@ impl MessageService {
             .await;
         // What that device's DecryptionErrorMessage will name
         // (`resend_dm_on_decryption_error`).
-        if let Ok(me) = me.parse() {
-            self.dm_sent_log.record(me, &sync, &outcome.deposits);
-        }
+        self.record_dm_send(me_id, &sync, &outcome.deposits);
         outcome.delivered
     }
 
@@ -433,7 +436,7 @@ impl MessageService {
         mailbox_manager: &MailboxManager,
     ) -> PendingFlush {
         let mut flush = PendingFlush::default();
-        let pending = match self.sesame_manager.drain_pending_messages(peer_id) {
+        let pending = match self.pending_dms.drain(peer_id) {
             Ok(pending) => pending,
             Err(e) => {
                 tracing::error!(peer_id = %peer_id, error = %e, "PENDING_MESSAGES: Failed to drain pending messages");
@@ -442,7 +445,7 @@ impl MessageService {
             }
         };
         let pending_count = pending.len();
-        tracing::info!(peer_id = %peer_id, count = pending_count, "PENDING_MESSAGES: draining Sesame queue");
+        tracing::info!(peer_id = %peer_id, count = pending_count, "PENDING_MESSAGES: draining pending-DM queue");
 
         for msg in pending {
             let content = match crate::proto::content_v1::Content::decode(msg.content.as_slice()) {
@@ -491,86 +494,31 @@ impl MessageService {
         flush
     }
 
-    /// Reset session with a peer and attempt to re-establish.
-    pub async fn reset_and_establish_session(
-        &self,
-        auth_client: &mut AuthClient,
-        peer_id: &UserId,
-        device_id: u32,
-    ) -> Result<(), MessageError> {
-        tracing::info!(
-            peer_id = %peer_id,
-            device_id,
-            "Resetting session with peer"
-        );
-
-        // Archive all sessions in Sesame
-        if let Err(e) = self.sesame_manager.archive_all_sessions(peer_id, device_id) {
-            tracing::warn!(
-                peer_id = %peer_id,
-                error = %e,
-                "Failed to archive Sesame sessions (continuing anyway)"
-            );
-        }
-
-        // Mark peer as stale
-        if let Err(e) = self.sesame_manager.mark_user_stale(peer_id) {
-            tracing::warn!(
-                peer_id = %peer_id,
-                error = %e,
-                "Failed to mark peer as stale (continuing anyway)"
-            );
-        }
-
-        // Establish a fresh session by fetching their prekey bundle
-        self.signal_service
-            .ensure_session(auth_client, &peer_id.to_string(), device_id)
-            .await
-            .map_err(|e| {
-                tracing::error!(
-                    peer_id = %peer_id,
-                    error = %e,
-                    "Failed to establish new session after reset"
-                );
-                MessageError::from_signal_send(e, "Session establishment failed")
-            })?;
-
-        tracing::info!(
-            peer_id = %peer_id,
-            device_id,
-            "Successfully reset and established new session"
-        );
-
-        Ok(())
-    }
-
-    /// Reset sessions with ALL devices of a peer and re-establish.
+    /// Replace every session with `peer_id` and re-establish fresh ones.
     ///
-    /// Used for convergence failure recovery in multi-device scenarios.
-    /// Archives existing sessions and establishes fresh ones for all known devices.
+    /// Signal's `lightSessionReset` (Signal-Desktop
+    /// `SignalProtocolStore.preload.ts` `lightSessionReset`): archive first, so
+    /// the rebuild below finds no usable session and fetches a bundle per
+    /// device — `ensure_sessions_all_devices` skips any device that still has
+    /// one, which made a reset without the archive a no-op. Archived states
+    /// stay in each `SessionRecord`, so in-flight messages under them still
+    /// decrypt.
     pub async fn reset_and_establish_sessions_all_devices(
         &self,
         auth_client: &mut AuthClient,
         peer_id: &UserId,
     ) -> Result<Vec<u32>, MessageError> {
-        tracing::info!(
-            peer_id = %peer_id,
-            "Resetting sessions for all peer devices"
-        );
+        let peer = peer_id.to_string();
+        let archived = self
+            .signal_service
+            .archive_peer_sessions(&peer)
+            .await
+            .map_err(|e| MessageError::from_signal_send(e, "Session archive failed"))?;
+        tracing::info!(peer_id = %peer_id, archived, "Archived sessions with peer for reset");
 
-        // Mark peer as stale (affects all devices)
-        if let Err(e) = self.sesame_manager.mark_user_stale(peer_id) {
-            tracing::warn!(
-                peer_id = %peer_id,
-                error = %e,
-                "Failed to mark peer as stale (continuing anyway)"
-            );
-        }
-
-        // Establish fresh sessions for ALL devices
-        self.signal_service.forget_device_list(&peer_id.to_string());
+        self.signal_service.forget_device_list(&peer);
         let device_ids = self.signal_service
-            .ensure_sessions_all_devices(auth_client, &peer_id.to_string())
+            .ensure_sessions_all_devices(auth_client, &peer)
             .await
             .map_err(|e| {
                 tracing::error!(
@@ -587,7 +535,78 @@ impl MessageService {
             "Reset sessions for all peer devices"
         );
 
+        // Signal's lightSessionReset then sends a NullMessage, so the peer
+        // gets a PreKey message on the new session now instead of when the
+        // user next types.
+        let reached = self.send_null_messages(auth_client, peer_id, &device_ids).await;
+        tracing::info!(peer_id = %peer_id, reached, "Sent post-reset NullMessage to the peer's devices");
+
         Ok(device_ids)
+    }
+
+    /// Send [`null_message_content`] to `devices` of `peer_id` — the devices
+    /// whose sessions a reset just rebuilt — over the transport a DM to them
+    /// takes now: the mailbox of each ready device in Shield, otherwise
+    /// sealed sender. Signal-Desktop `jobs/helpers/sendNullMessage.preload.ts`
+    /// (sent with `messageIds: []`): nothing to store, show, sync to our own
+    /// devices or resend, so it skips the receipt snapshot and the send log.
+    /// Best effort; returns how many devices it reached.
+    async fn send_null_messages(
+        &self,
+        auth_client: &mut AuthClient,
+        peer_id: &UserId,
+        devices: &[u32],
+    ) -> usize {
+        if devices.is_empty() {
+            return 0;
+        }
+        let plaintext = null_message_content().encode_to_vec();
+
+        if self.shield_mode.load(std::sync::atomic::Ordering::Acquire) {
+            let conversation = match DmConversationManager::new(self.database.clone()).load_conversation(peer_id) {
+                Ok(Some(conversation)) => conversation,
+                Ok(None) => return 0,
+                Err(e) => {
+                    tracing::warn!(peer_id = %peer_id, error = %e, "NullMessage: conversation load failed");
+                    return 0;
+                }
+            };
+            let mut reached = 0;
+            for (mailbox, send_key) in conversation.ready_devices() {
+                if !devices.contains(&mailbox.device_id) {
+                    continue;
+                }
+                match self
+                    .send_to_peer_device(auth_client, &self.mailbox_manager, peer_id, mailbox, &send_key, &plaintext)
+                    .await
+                {
+                    Ok(()) => reached += 1,
+                    Err(e) => tracing::warn!(peer_id = %peer_id, device_id = mailbox.device_id, error = %e, "NullMessage to a peer device failed"),
+                }
+            }
+            return reached;
+        }
+
+        let peer = peer_id.to_string();
+        let ciphertexts = match self
+            .signal_service
+            .encrypt_message_session_devices(auth_client, &peer, devices.to_vec(), &plaintext)
+            .await
+        {
+            Ok(ciphertexts) => ciphertexts,
+            Err(e) => {
+                tracing::warn!(peer_id = %peer_id, error = %e, "NullMessage: encrypt failed");
+                return 0;
+            }
+        };
+        let uak = self.sealed_access_key(&peer, false);
+        let outcome = self
+            .deposit_sealed_ciphertexts(&mut self.message_client(), &peer, ciphertexts, uak.as_ref())
+            .await;
+        if outcome.delivered == 0 {
+            tracing::warn!(peer_id = %peer_id, error = ?outcome.error, "NullMessage: no device reached");
+        }
+        outcome.delivered
     }
 
     /// Send to a mailbox with retry for transient network failures.
@@ -757,6 +776,21 @@ impl MessageService {
     }
 }
 
+/// The `Content` a session reset sends each rebuilt peer device: a
+/// `NullMessage` and nothing else, padded to a bucket like every DM so its
+/// size does not single it out.
+pub(crate) fn null_message_content() -> crate::proto::content_v1::Content {
+    use crate::proto::content_v1::{content, Content, NullMessage};
+
+    let mut null = Content {
+        content: Some(content::Content::NullMessage(NullMessage::default())),
+        timestamp: crate::util::time::TimestampNanos::now().as_u64(),
+        ..Default::default()
+    };
+    MessageService::pad_content_to_bucket(&mut null);
+    null
+}
+
 /// What our own other devices get for `content` sent to `peer_id` over
 /// either DM transport, or `None`: the `SyncSent` for a message
 /// ([`sync_sent_copy`]), the ACCEPTED/DECLINED_ELSEWHERE hangup when this
@@ -894,6 +928,24 @@ impl MessageService {
             reply_to_thumbnail,
             reply_to_thumbnail_mime,
         }
+    }
+}
+
+#[cfg(test)]
+mod null_message_tests {
+    use crate::domain::ids::UserId;
+    use crate::proto::content_v1::content;
+    use prost::Message as _;
+
+    /// The post-reset content is a bucket-padded `NullMessage` alone, and is
+    /// never copied to our own devices.
+    #[test]
+    fn reset_sends_a_padded_null_message() {
+        let null = super::null_message_content();
+        assert!(matches!(null.content, Some(content::Content::NullMessage(_))));
+        assert_eq!(null.encoded_len(), 256, "padded to the smallest bucket");
+        assert!(null.ephemeral_reply_to.is_none());
+        assert!(super::own_device_copy(&UserId::new(), &null, 1).is_none());
     }
 }
 

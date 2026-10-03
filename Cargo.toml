@@ -146,9 +146,6 @@ opt-level = 3
 [profile.release.package.x25519-dalek]
 opt-level = 3
 
-[profile.release.package.hpke]
-opt-level = 3
-
 [profile.release.package.argon2]
 opt-level = 3
 

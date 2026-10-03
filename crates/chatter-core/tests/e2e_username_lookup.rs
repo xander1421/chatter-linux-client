@@ -19,6 +19,7 @@ const PIN: &str = "Kf8mq2xpZ"; // non-blocklisted, clears validate_pin
 const PASSWORD: &str = "TestPass123!";
 
 fn build_client(dir: &tempfile::TempDir) -> Arc<ChatterClient> {
+    crate::common::headless(dir.path());
     ChatterClient::builder()
         .server_url(SERVER_URL)
         .data_dir(dir.path().to_str().unwrap())

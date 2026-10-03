@@ -5,20 +5,54 @@
 use chrono::{DateTime, Utc};
 use std::sync::Arc;
 
+use libsignal_protocol::IdentityKeyPair;
+
+use crate::crypto::device_name::{decrypt_device_name, encrypt_device_name};
+use crate::crypto::signal::identity::IdentityKeyManager;
 use crate::domain::ids::ChannelId;
-use crate::error::{NetworkError, StorageError};
+use crate::error::{CryptoError, NetworkError, StorageError};
 use crate::network::grpc::auth_client::AuthClient;
 use crate::services::channel::ChannelService;
 use crate::services::signal_service::SignalService;
+use crate::storage::key_store::KeyStore;
 use crate::storage::repositories::settings_repo::{keys, SettingsRepository};
+
+/// This account's identity key pair — the key every device name is encrypted
+/// to. Every device of the account holds it.
+fn account_identity(key_store: &Arc<KeyStore>) -> Result<IdentityKeyPair, CryptoError> {
+    IdentityKeyManager::new(key_store.clone())
+        .get_identity()?
+        .map(|(_, pair)| pair)
+        .ok_or(CryptoError::NoIdentity)
+}
+
+/// Decrypt a device's `encrypted_name` from the server. `None` when the device
+/// was never named, or when the name does not decrypt under our identity key
+/// (written by something other than one of our devices) — the caller then
+/// labels the device by its info instead.
+pub(crate) fn readable_device_name(key_store: &Arc<KeyStore>, encrypted: &[u8]) -> Option<String> {
+    if encrypted.is_empty() {
+        return None;
+    }
+    let decrypted = account_identity(key_store).and_then(|id| decrypt_device_name(encrypted, &id));
+    match decrypted {
+        Ok(name) if !name.is_empty() => Some(name),
+        Ok(_) => None,
+        Err(e) => {
+            tracing::warn!(error = %e, "device name did not decrypt under the account identity key");
+            None
+        }
+    }
+}
 
 /// Device information.
 #[derive(Debug, Clone)]
 pub struct Device {
     /// Signal device ID (1 for primary, 2-127 for linked devices).
     pub device_id: u32,
-    /// User-assigned device name.
-    pub name: String,
+    /// Device name, decrypted with the account identity key. `None` when the
+    /// device was never named or its name does not decrypt.
+    pub name: Option<String>,
     /// Device description (e.g., "Linux Desktop", "iPhone 15").
     pub info: String,
     /// When the device was first registered.
@@ -53,6 +87,10 @@ pub enum DeviceError {
     /// Storage operation failed.
     #[error("storage error: {0}")]
     Storage(#[from] StorageError),
+
+    /// Encrypting the device name failed (no identity key, or name too long).
+    #[error("device name: {0}")]
+    Crypto(#[from] CryptoError),
 
     /// Failed to list channels for post-revoke sender-key rotation marking.
     #[error("list channels for rotation: {0}")]
@@ -127,7 +165,7 @@ impl DeviceService {
             .into_iter()
             .map(|d| Device {
                 device_id: d.device_id,
-                name: d.device_name,
+                name: readable_device_name(&self.signal_service.key_store, &d.encrypted_name),
                 info: d.device_info,
                 created_at: DateTime::from_timestamp_millis(d.created_at as i64)
                     .unwrap_or(DateTime::UNIX_EPOCH),
@@ -160,8 +198,22 @@ impl DeviceService {
             return Err(DeviceError::NotLoggedIn);
         }
 
-        auth_client.rename_device(device_id, new_name).await?;
+        let identity = account_identity(&self.signal_service.key_store)?;
+        let encrypted = encrypt_device_name(new_name, identity.identity_key())?;
+        auth_client.rename_device(device_id, encrypted).await?;
         Ok(())
+    }
+
+    /// Name this device on the server (encrypted to the account identity
+    /// key). Registration and login create the device row without a name —
+    /// the server cannot write one it is not allowed to read.
+    pub async fn name_this_device(
+        &self,
+        auth_client: &mut AuthClient,
+        name: &str,
+    ) -> Result<(), DeviceError> {
+        let device_id = self.current_device_id().ok_or(DeviceError::NotLoggedIn)?;
+        self.rename_device(auth_client, device_id, name).await
     }
 
     /// Revoke a device (unlink from account).

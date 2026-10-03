@@ -57,8 +57,10 @@ impl AnonInboxBackend for AnonGroupService {
         self.delete_message_by_timestamp(id, sender, ts).map_err(|e| e.to_string())
     }
 
-    fn update_message_text(&self, id: &Self::Id, sender: &UserId, ts: u64, text: &str) -> Result<bool, String> {
-        self.update_message_text_by_sender(id, sender, ts, text).map_err(|e| e.to_string())
+    fn apply_edit(&self, id: &Self::Id, sender: &UserId, target_ts: u64, text: &str, edit_ts: u64) -> Result<Option<crate::domain::message::Message>, String> {
+        self.message_service
+            .apply_channel_edit(&(*id).into(), sender, target_ts, text, edit_ts, 0)
+            .map_err(|e| e.to_string())
     }
 
     fn add_reaction(
@@ -163,22 +165,12 @@ impl AnonGroupService {
                 });
             }
             Some(ContentType::AnonGroupMemberList(list)) => {
-                // SECURITY: verify sender is admin or owner
-                match self.get_member_role(group_id, peer_id) {
-                    Ok(Some(role)) if role.can_broadcast_member_list() => {}
-                    _ => {
-                        tracing::warn!(
-                            sender_id = %peer_id,
-                            group_id = %group_id,
-                            "Rejected member list from unauthorized sender"
-                        );
-                        return Ok(events);
-                    }
-                }
-
+                // Sender authorization (owner only) lives in handle_member_list,
+                // the one function every transport routes through.
                 let members = list.members.clone();
                 if let Err(e) = self.handle_member_list(*group_id, *peer_id, members.clone()) {
                     tracing::warn!(group_id = %group_id, error = %e, "Failed to handle member list");
+                    return Ok(events);
                 }
 
                 events.push(DomainEvent::AnonGroupMemberListReceived {

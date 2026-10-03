@@ -661,6 +661,22 @@ pub async fn handle_domain_event(
             crate::bin_ui::features::auth::load_initial_data(window.clone(), ui_ctx).await;
         }
 
+        // Core decided what the notice says (`MembershipNotice::user_text`).
+        DomainEvent::ChannelMembershipNotice { channel_id, notice } => {
+            // The banner (and the send block it explains) may have changed.
+            crate::bin_ui::features::chat::show_send_notice(window, ui_ctx, channel_id);
+            let text = notice.user_text();
+            let variant = if notice.is_problem() { "error" } else { "success" };
+            let weak = window.clone();
+            let _ = slint::invoke_from_event_loop(move || {
+                if let Some(w) = weak.upgrade() {
+                    w.set_toast_message(text.into());
+                    w.set_toast_variant(variant.into());
+                    w.set_toast_visible(true);
+                }
+            });
+        }
+
         // The saga said no. Core already re-read the channel from the server,
         // so a refresh drops whatever optimistic row this client was showing;
         // the toast is what stops the user waiting for an operation that is

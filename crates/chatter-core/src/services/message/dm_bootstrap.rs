@@ -68,7 +68,7 @@ impl MessageService {
         // No pool is the post-bootstrap flush: nothing is sent, the message
         // is re-queued behind the bootstrap still in progress.
         let Some(grpc_pool) = grpc_pool else {
-            let _ = self.sesame_manager.queue_pending_message(
+            let _ = self.pending_dms.queue(
                 peer_id,
                 content.encode_to_vec(),
                 attachment_ids.unwrap_or_default(),
@@ -96,7 +96,7 @@ impl MessageService {
 
                 // Queue the original message to be sent once bootstrap completes
                 let content_bytes = content.encode_to_vec();
-                if let Err(e) = self.sesame_manager.queue_pending_message(
+                if let Err(e) = self.pending_dms.queue(
                     peer_id,
                     content_bytes,
                     attachment_ids.unwrap_or_default(),
@@ -119,7 +119,7 @@ impl MessageService {
             Err(crate::error::MailboxError::ConversationExists) => {
                 // Another bootstrap with this peer is in flight - wait for it
                 let content_bytes = content.encode_to_vec();
-                let _ = self.sesame_manager.queue_pending_message(
+                let _ = self.pending_dms.queue(
                     peer_id,
                     content_bytes,
                     attachment_ids.unwrap_or_default(),
@@ -231,7 +231,7 @@ impl MessageService {
             );
             // Still queue the message even if we skip the REQUEST
             let content_bytes = content.encode_to_vec();
-            let _ = self.sesame_manager.queue_pending_message(
+            let _ = self.pending_dms.queue(
                 peer_id,
                 content_bytes,
                 attachment_ids.unwrap_or_default(),
@@ -263,7 +263,7 @@ impl MessageService {
 
         // Queue the message so it will be sent once bootstrap completes
         let content_bytes = content.encode_to_vec();
-        if let Err(e) = self.sesame_manager.queue_pending_message(
+        if let Err(e) = self.pending_dms.queue(
             peer_id,
             content_bytes,
             attachment_ids.unwrap_or_default(),
@@ -272,14 +272,14 @@ impl MessageService {
             tracing::warn!(
                 peer_id = %peer_id,
                 error = %e,
-                "Sesame: Failed to queue message while waiting for peer bootstrap"
+                "Failed to queue message while waiting for peer bootstrap"
             );
         } else {
             tracing::info!(
                 peer_id = %peer_id,
                 our_id = %our_user_id,
                 request_sent = grpc_pool.is_some(),
-                "Sesame: Message queued - will send after peer's bootstrap MESSAGE"
+                "Message queued - will send after peer's bootstrap MESSAGE"
             );
         }
 
@@ -624,7 +624,7 @@ mod tests {
             matches!(sent, Err(MessageError::NotReachablePrivately(p)) if p == friend),
             "got {sent:?}"
         );
-        assert!(ms.sesame_manager.drain_pending_messages(&friend).unwrap().is_empty());
+        assert!(ms.pending_dms.drain(&friend).unwrap().is_empty());
         assert!(crate::mailbox::dm::DmConversationManager::new(ms.database.clone())
             .load_conversation(&friend)
             .unwrap()
@@ -714,7 +714,7 @@ mod tests {
             other => panic!("expected the empty-batch refusal, got {other:?}"),
         }
         assert_eq!(ms.token_manager.available_token_count().unwrap(), 0);
-        assert!(ms.sesame_manager.drain_pending_messages(&friend).unwrap().is_empty());
+        assert!(ms.pending_dms.drain(&friend).unwrap().is_empty());
     }
 
     /// Our side of a conversation whose peer mailbox is gone (expired, or
@@ -725,6 +725,7 @@ mod tests {
             id: format!("mb-{pk}"),
             public_key: [pk; 32],
             private_key: [pk; 64],
+            encryption_private_key: [pk; 32],
             signature: vec![],
             randomizer: None,
             token_id: format!("tok-{pk}"),
@@ -833,14 +834,20 @@ mod tests {
         // authenticated peer (the Signal layer refuses any other identity).
         let mut new_lo_key = ConversationKey::new();
         let new_lo_mailbox = [0x5Au8; 32];
-        let mut rebootstrap = new_lo_mailbox.to_vec();
-        rebootstrap.extend_from_slice(&new_lo_key.our_ephemeral_public);
+        let (_, new_lo_encryption_pk) = crate::crypto::envelope_crypto::generate_mailbox_encryption_key();
+        let rebootstrap = crate::mailbox::dm::bootstrap::MailboxAnnouncement {
+            mailbox_pk: new_lo_mailbox,
+            conversation_pk: new_lo_key.our_ephemeral_public,
+            mailbox_encryption_pk: new_lo_encryption_pk,
+        }
+        .encode();
         let response = bootstrap
             .handle_incoming_bootstrap(lower, 3, &rebootstrap, &mut hi.grpc_pool.anonymous_mailbox_client())
             .await
             .expect("re-bootstrap accepted")
             .expect("answered with our mailbox");
         assert_eq!(response.peer_mailbox_public_key, new_lo_mailbox);
+        assert_eq!(response.peer_mailbox_encryption_key, new_lo_encryption_pk);
         new_lo_key.derive_shared_secret(response.our_ephemeral_public).unwrap();
         let conv = DmConversationManager::new(hi.database.clone()).load_conversation(&lower).unwrap().unwrap();
         assert!(conv.is_ready_to_send());
@@ -853,8 +860,12 @@ mod tests {
         // A bootstrap from any other identity is filed under that identity:
         // it cannot touch the conversation with `lower`.
         let mallory = UserId::from_uuid(uuid::Uuid::from_u128(2));
-        let mut hostile = [0x66u8; 32].to_vec();
-        hostile.extend_from_slice(&ConversationKey::new().our_ephemeral_public);
+        let hostile = crate::mailbox::dm::bootstrap::MailboxAnnouncement {
+            mailbox_pk: [0x66u8; 32],
+            conversation_pk: ConversationKey::new().our_ephemeral_public,
+            mailbox_encryption_pk: [0x67u8; 32],
+        }
+        .encode();
         match bootstrap.handle_incoming_bootstrap(mallory, 3, &hostile, &mut hi.grpc_pool.anonymous_mailbox_client()).await {
             // No conversation with mallory: needs a fresh mailbox, and the token batch is empty.
             Err(MailboxError::NoTokensAvailable) => {}
@@ -975,7 +986,7 @@ mod tests {
         conversations
             .record_peer_device(&friend, 8, [8u8; 32], ConversationKey::new().our_ephemeral_public)
             .unwrap();
-        assert!(ms.sesame_manager.drain_pending_messages(&friend).unwrap().is_empty());
+        assert!(ms.pending_dms.drain(&friend).unwrap().is_empty());
 
         let mut auth = ms.auth_client();
         let flush = crate::inbox::streaming::dm_bootstrap_handler::send_pending_messages_after_bootstrap(

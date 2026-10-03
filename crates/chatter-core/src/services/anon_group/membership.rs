@@ -594,12 +594,30 @@ impl AnonGroupService {
         let current_user = self.current_user_id()?;
 
         // Verify group exists
-        let _group = self
+        let group = self
             .anon_group_repo
             .get_group(&group_id)?
             .ok_or(AnonGroupError::GroupNotFound(group_id))?;
 
-        let is_local_owner = _group.my_role == AnonGroupRole::Owner;
+        // SECURITY: the member list is owner-authoritative. Every producer of
+        // one is owner-gated (`broadcast_member_list` callers at
+        // handle_join_ack, update_member_profile, and refresh_group_mailbox);
+        // a member announces its own mailbox/profile by JoinAck to the owner,
+        // never by a list. So a list from anyone else — whichever transport
+        // (group mailbox, DM, anon DM) carried it — could only be a forged
+        // role or a re-pointed mailbox_pk, and is rejected whole. Same rule as
+        // AnonGroupRoleChange in `handle_update`.
+        if sender_id != group.owner_id {
+            tracing::warn!(
+                sender_id = %sender_id,
+                owner_id = %group.owner_id,
+                group_id = %group_id,
+                "Rejected member list from non-owner"
+            );
+            return Err(AnonGroupError::InsufficientPermissions(
+                "Only the group owner can send member lists".to_string(),
+            ));
+        }
 
         // Update local member state
         for member_info in members {
@@ -689,17 +707,6 @@ impl AnonGroupService {
                     )?;
                 }
             } else {
-                // SECURITY: Only the OWNER can add new members to the group graph.
-                // If an Admin sends a member list with new people, we ignore the new people.
-                if _group.owner_id != sender_id && !is_local_owner {
-                    tracing::warn!(
-                        sender_id = %sender_id,
-                        new_member_id = %user_id,
-                        "Rejected new member addition from non-owner admin"
-                    );
-                    continue;
-                }
-
                 // Add new member
                 let member = if let Some(pk) = mailbox_pk {
                     AnonGroupMember::with_mailbox(group_id, user_id, role, pk)
@@ -994,5 +1001,102 @@ impl AnonGroupService {
     /// List only active (non-blocked) groups.
     pub fn list_active_groups(&self) -> Result<Vec<AnonGroup>, AnonGroupError> {
         Ok(self.anon_group_repo.list_active_groups()?)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::storage::repositories::settings_repo::keys;
+
+    /// We are a plain member of a group owned by `owner`, with a second member
+    /// `mallory` who has a known mailbox.
+    struct Fixture {
+        _client: std::sync::Arc<crate::client::ChatterClient>,
+        _dir: tempfile::TempDir,
+        group_id: AnonGroupId,
+        owner: UserId,
+        mallory: UserId,
+        victim: UserId,
+    }
+
+    const VICTIM_PK: [u8; 32] = [7u8; 32];
+
+    fn fixture() -> Fixture {
+        static MOCK_KEYRING: std::sync::Once = std::sync::Once::new();
+        MOCK_KEYRING.call_once(|| {
+            keyring::set_default_credential_builder(keyring::mock::default_credential_builder());
+        });
+        let dir = tempfile::tempdir().unwrap();
+        let client = crate::client::ChatterClient::builder()
+            .server_url("http://localhost:1")
+            .data_dir(dir.path().to_str().unwrap())
+            .build()
+            .expect("build client");
+        let me = UserId::new();
+        let s = &client.messages().settings_repo;
+        s.set(keys::CURRENT_USER_ID, &me.to_string()).unwrap();
+        s.set(keys::CURRENT_DEVICE_ID, &1u32).unwrap();
+
+        let (owner, mallory, victim) = (UserId::new(), UserId::new(), UserId::new());
+        let group_id = AnonGroupId::new();
+        let repo = &client.anon_groups().anon_group_repo;
+        repo.insert_group(&AnonGroup::from_invite(group_id, "g".into(), owner)).unwrap();
+        repo.add_member(&AnonGroupMember::with_mailbox(group_id, owner, AnonGroupRole::Owner, [1u8; 32])).unwrap();
+        repo.add_member(&AnonGroupMember::with_mailbox(group_id, mallory, AnonGroupRole::Member, [2u8; 32])).unwrap();
+        repo.add_member(&AnonGroupMember::with_mailbox(group_id, victim, AnonGroupRole::Member, VICTIM_PK)).unwrap();
+        Fixture { _client: client, _dir: dir, group_id, owner, mallory, victim }
+    }
+
+    fn info(user: UserId, role: AnonGroupRole, pk: [u8; 32]) -> AnonGroupMemberInfo {
+        AnonGroupMemberInfo {
+            user_id: user.as_bytes().to_vec(),
+            mailbox_pk: pk.to_vec(),
+            role: role.to_i32(),
+            profile_key: None,
+            encrypted_display_name: None,
+            encrypted_avatar: None,
+        }
+    }
+
+    /// The forged list: mallory promotes herself to Owner and re-points the
+    /// victim's mailbox at a key she holds.
+    fn forged(f: &Fixture) -> Vec<AnonGroupMemberInfo> {
+        vec![
+            info(f.mallory, AnonGroupRole::Owner, [2u8; 32]),
+            info(f.victim, AnonGroupRole::Member, [9u8; 32]),
+        ]
+    }
+
+    #[tokio::test]
+    async fn non_owner_member_list_changes_nothing() {
+        let f = fixture();
+        let svc = f._client.anon_groups();
+        let repo = &svc.anon_group_repo;
+
+        let res = svc.handle_member_list(f.group_id, f.mallory, forged(&f));
+        assert!(matches!(res, Err(AnonGroupError::InsufficientPermissions(_))), "{res:?}");
+
+        assert_eq!(repo.get_member_role(&f.group_id, &f.mallory).unwrap(), Some(AnonGroupRole::Member));
+        let victim = repo.get_member(&f.group_id, &f.victim).unwrap().unwrap();
+        assert_eq!(victim.mailbox_pk, Some(VICTIM_PK), "a non-owner must not re-point another member's mailbox");
+
+        // Nor can a stranger who merely knows the group_id.
+        let stranger = UserId::new();
+        assert!(svc.handle_member_list(f.group_id, stranger, vec![info(stranger, AnonGroupRole::Admin, [3u8; 32])]).is_err());
+        assert!(!repo.is_member(&f.group_id, &stranger).unwrap());
+    }
+
+    #[tokio::test]
+    async fn owner_member_list_is_applied() {
+        let f = fixture();
+        let svc = f._client.anon_groups();
+        let repo = &svc.anon_group_repo;
+
+        svc.handle_member_list(f.group_id, f.owner, forged(&f)).unwrap();
+
+        assert_eq!(repo.get_member_role(&f.group_id, &f.mallory).unwrap(), Some(AnonGroupRole::Owner));
+        let victim = repo.get_member(&f.group_id, &f.victim).unwrap().unwrap();
+        assert_eq!(victim.mailbox_pk, Some([9u8; 32]));
     }
 }

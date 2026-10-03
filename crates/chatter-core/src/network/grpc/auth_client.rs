@@ -5,9 +5,9 @@
 //!
 //! # Privacy
 //!
-//! Usernames are hashed (SHA256) before being sent to the server. This prevents
-//! the server from knowing actual usernames - it only stores/matches hashes.
-//! If the database is compromised, attackers see hashes, not usernames.
+//! Usernames are hashed before being sent to the server
+//! (`auth_crypto::login_identifier`), and passwords never are: every password
+//! check is an OPAQUE exchange (`crypto::opaque`).
 
 use tokio_stream::{Stream, StreamExt};
 use tonic::service::interceptor::InterceptedService;
@@ -18,20 +18,23 @@ use crate::network::grpc::interceptors::AuthInterceptor;
 use crate::proto::chat_v1::{
     auth_event, auth_service_client::AuthServiceClient,
     key_transparency_service_client::KeyTransparencyServiceClient, signal_pre_key_bundle,
-    AccountDeletionEvent, AuthEvent, AuthResponse, ChangePasswordRequest,
-    DeleteAccountRequest,
+    AccountDeletionEvent, AuthEvent, AuthResponse, ChangePasswordFinishRequest,
+    ChangePasswordStartRequest, ChangePasswordStartResponse, DeleteAccountRequest,
     GetActiveSessionsRequest, GetActiveSessionsResponse, GetPreKeyBundleRequest,
     GetConsistencyProofRequest, GetConsistencyProofResponse, GetPreKeyBundleResponse,
     GetPreKeyStatsRequest, GetPreKeyStatsResponse, GetProofRequest,
     GetProofResponse, GetSealedSenderPolicyRequest, GetSealedSenderPolicyResponse,
     SetSealedSenderPolicyRequest, SetSealedSenderPolicyResponse, SetUnidentifiedAccessKeyRequest,
     InvalidateAllSessionsRequest,
-    InvalidateSessionRequest, ListDevicesRequest, ListDevicesResponse, LoginRequest, LogoutRequest,
+    InvalidateSessionRequest, ListDevicesRequest, ListDevicesResponse, LoginFinishRequest,
+    LoginStartRequest, LoginStartResponse, LogoutRequest, PasswordProof, PasswordProofStartRequest,
+    PasswordProofStartResponse,
     RefreshPreKeysRequest, RegenerateRecoveryCodesRequest, RegisterRequest, RegistrationResult,
     RenameDeviceRequest, RequestSenderCertificateRequest, RequestSenderCertificateResponse,
     RepublishIdentityKeyRequest, RepublishIdentityKeyResponse,
     RevokeDeviceRequest, SignalPreKeyBundle,
-    UploadPreKeyBundleRequest, UseRecoveryCodeRequest,
+    UploadPreKeyBundleRequest, UseRecoveryCodeFinishRequest, UseRecoveryCodeStartRequest,
+    UseRecoveryCodeStartResponse,
 };
 // NOTE: ServerTrustRootResponse removed - trust root is hardcoded in config.rs per Signal's security model
 
@@ -47,7 +50,7 @@ use crate::proto::chat_v1::{
 /// pool.connect().await?;
 ///
 /// let mut auth = AuthClient::new(pool.channel(), pool.auth_clone());
-/// let response = auth.login("alice", b"password", "linux-desktop").await?;
+/// let started = auth.login_start(&identifier, &ke1).await?;
 /// ```
 pub struct AuthClient {
     inner: AuthServiceClient<InterceptedService<GrpcTransport, AuthInterceptor>>,
@@ -112,34 +115,65 @@ impl AuthClient {
         }
     }
 
-    /// Login with username and password.
-    ///
-    /// Returns session info and user profile on success.
-    #[allow(clippy::too_many_arguments)]
-    pub async fn login(
+    /// OPAQUE login, first round trip: KE1 for the login identifier.
+    pub async fn login_start(
         &mut self,
-        username: &str,
-        password_hash: &[u8],
+        identifier: &str,
+        ke1: &[u8],
+    ) -> Result<LoginStartResponse, NetworkError> {
+        let request = LoginStartRequest { username: identifier.to_string(), ke1: ke1.to_vec() };
+        self.inner
+            .login_start(request)
+            .await
+            .map(|r| r.into_inner())
+            .map_err(|s| NetworkError::from_status(&s))
+    }
+
+    /// OPAQUE login, second round trip: KE3 plus the device fields the
+    /// session is created with. Returns session info and user profile.
+    pub async fn login_finish(
+        &mut self,
+        login_id: &str,
+        ke3: &[u8],
         device_info: &str,
         svr_public_key: &[u8],
         device_auth_token: &[u8],
         device_id: Option<u32>,
     ) -> Result<AuthResponse, NetworkError> {
-        let request = LoginRequest {
-            // NOTE: Caller (auth_service) is responsible for hashing username
-            username: username.to_string(),
-            password_hash: password_hash.to_vec(),
+        let request = LoginFinishRequest {
+            login_id: login_id.to_string(),
+            ke3: ke3.to_vec(),
             svr_public_key: svr_public_key.to_vec(),
             device_info: device_info.to_string(),
             request_id: uuid::Uuid::new_v4().to_string(),
             device_auth_token: device_auth_token.to_vec(),
             device_id: device_id.unwrap_or(0), // 0 = new device assignment
         };
-
         self.inner
-            .login(request)
+            .login_finish(request)
             .await
             .map(|r| r.into_inner())
+            .map_err(|s| NetworkError::from_status(&s))
+    }
+
+    /// Open a password re-confirmation against the caller's own record.
+    pub async fn password_proof_start(
+        &mut self,
+        ke1: &[u8],
+    ) -> Result<PasswordProofStartResponse, NetworkError> {
+        self.inner
+            .password_proof_start(PasswordProofStartRequest { ke1: ke1.to_vec() })
+            .await
+            .map(|r| r.into_inner())
+            .map_err(|s| NetworkError::from_status(&s))
+    }
+
+    /// Spend a password proof on nothing but the check itself.
+    pub async fn verify_password(&mut self, proof: PasswordProof) -> Result<(), NetworkError> {
+        self.inner
+            .verify_password(proof)
+            .await
+            .map(|_| ())
             .map_err(|s| NetworkError::from_status(&s))
     }
 
@@ -218,12 +252,15 @@ impl AuthClient {
     ///
     /// # Arguments
     ///
-    /// * `username` - Hashed username
+    /// * `username` - Login identifier (`auth_crypto::login_identifier`)
     /// * `identity_public_key` - Identity public key (Curve25519)
+    /// * `opaque_registration_request` - OPAQUE RegistrationRequest; the
+    ///   response carries the server's RegistrationResponse
     pub async fn request_registration_challenge(
         &mut self,
         username: &str,
         identity_public_key: &[u8],
+        opaque_registration_request: &[u8],
     ) -> Result<crate::proto::chat_v1::RequestRegistrationChallengeResponse, NetworkError> {
         use crate::proto::chat_v1::RequestRegistrationChallengeRequest;
 
@@ -236,6 +273,7 @@ impl AuthClient {
         let request = RequestRegistrationChallengeRequest {
             username: username.to_string(),
             identity_public_key: identity_public_key.to_vec(),
+            opaque_registration_request: opaque_registration_request.to_vec(),
         };
 
         self.inner
@@ -274,7 +312,7 @@ impl AuthClient {
     pub async fn register(
         &mut self,
         username: &str,
-        password_hash: &[u8],
+        opaque_registration_record: &[u8],
         encrypted_display_name: &[u8],
         svr_public_key: &[u8],
         device_info: &str,
@@ -286,6 +324,7 @@ impl AuthClient {
         challenge_response: &[u8],
         registration_lock: &[u8; 32],
         username_lookup_hash: &[u8; 32],
+        username_proof: &[u8],
     ) -> Result<impl Stream<Item = Result<AuthEvent, NetworkError>>, NetworkError> {
         use base64::Engine;
 
@@ -296,7 +335,7 @@ impl AuthClient {
 
         let request = RegisterRequest {
             username: username.to_string(),
-            password_hash: password_hash.to_vec(),
+            opaque_registration_record: opaque_registration_record.to_vec(),
             svr_public_key: svr_public_key.to_vec(),
             display_name: encoded_display_name,
             device_info: device_info.to_string(),
@@ -308,6 +347,7 @@ impl AuthClient {
             challenge_response: challenge_response.to_vec(),
             challenge_id: challenge_id.to_string(),
             username_lookup_hash: username_lookup_hash.to_vec(),
+            username_proof: username_proof.to_vec(),
             unidentified_access_key: unidentified_access_key.to_vec(),
         };
 
@@ -346,7 +386,7 @@ impl AuthClient {
     pub async fn register_and_wait(
         &mut self,
         username: &str,
-        password_hash: &[u8],
+        opaque_registration_record: &[u8],
         encrypted_display_name: &[u8],
         svr_public_key: &[u8],
         device_info: &str,
@@ -358,11 +398,12 @@ impl AuthClient {
         challenge_response: &[u8],
         registration_lock: &[u8; 32],
         username_lookup_hash: &[u8; 32],
+        username_proof: &[u8],
     ) -> Result<RegistrationResult, NetworkError> {
         let stream = self
             .register(
                 username,
-                password_hash,
+                opaque_registration_record,
                 encrypted_display_name,
                 svr_public_key,
                 device_info,
@@ -374,6 +415,7 @@ impl AuthClient {
                 challenge_response,
                 registration_lock,
                 username_lookup_hash,
+                username_proof,
             )
             .await?;
 
@@ -403,20 +445,40 @@ impl AuthClient {
         ))
     }
 
-    /// Change password for authenticated user.
-    pub async fn change_password(
+    /// Password change, first round trip: KE1 against the current record and
+    /// the new password's RegistrationRequest.
+    pub async fn change_password_start(
         &mut self,
-        current_password_hash: &[u8],
-        new_password_hash: &[u8],
+        ke1: &[u8],
+        registration_request: &[u8],
+    ) -> Result<ChangePasswordStartResponse, NetworkError> {
+        let request = ChangePasswordStartRequest {
+            ke1: ke1.to_vec(),
+            registration_request: registration_request.to_vec(),
+        };
+        self.inner
+            .change_password_start(request)
+            .await
+            .map(|r| r.into_inner())
+            .map_err(|s| NetworkError::from_status(&s))
+    }
+
+    /// Password change, second round trip: KE3 for the current password and
+    /// the new RegistrationRecord.
+    pub async fn change_password_finish(
+        &mut self,
+        flow_id: &str,
+        ke3: &[u8],
+        registration_record: &[u8],
     ) -> Result<(), NetworkError> {
-        let request = ChangePasswordRequest {
-            current_password_hash: current_password_hash.to_vec(),
-            new_password_hash: new_password_hash.to_vec(),
+        let request = ChangePasswordFinishRequest {
+            flow_id: flow_id.to_string(),
+            ke3: ke3.to_vec(),
+            registration_record: registration_record.to_vec(),
             request_id: uuid::Uuid::new_v4().to_string(),
         };
-
         self.inner
-            .change_password(request)
+            .change_password_finish(request)
             .await
             .map(|_| ())
             .map_err(|s| NetworkError::from_status(&s))
@@ -480,15 +542,17 @@ impl AuthClient {
     /// # Arguments
     ///
     /// * `device_id` - Signal device ID to rename
-    /// * `device_name` - New name for the device
+    /// * `encrypted_name` - Serialized `DeviceName` from
+    ///   [`crate::crypto::device_name::encrypt_device_name`]; the server only
+    ///   stores it, it cannot read it
     pub async fn rename_device(
         &mut self,
         device_id: u32,
-        device_name: &str,
+        encrypted_name: Vec<u8>,
     ) -> Result<(), NetworkError> {
         let request = RenameDeviceRequest {
             device_id,
-            device_name: device_name.to_string(),
+            encrypted_name,
             request_id: uuid::Uuid::new_v4().to_string(),
         };
 
@@ -523,13 +587,13 @@ impl AuthClient {
     ///
     /// # Arguments
     ///
-    /// * `password_hash` - Password for confirmation
+    /// * `password_proof` - fresh OPAQUE proof of the current password
     pub async fn delete_account(
         &mut self,
-        password_hash: &[u8],
+        password_proof: PasswordProof,
     ) -> Result<impl Stream<Item = Result<AccountDeletionEvent, NetworkError>>, NetworkError> {
         let request = DeleteAccountRequest {
-            password_hash: password_hash.to_vec(),
+            password_proof: Some(password_proof),
             request_id: uuid::Uuid::new_v4().to_string(),
         };
 
@@ -746,27 +810,18 @@ impl AuthClient {
 
     /// Request a new sender certificate.
     ///
-    /// Certificate is signed by server and used for sealed sender.
-    /// Valid for up to 30 days (default 7 days). Cache and refresh before expiration.
+    /// Certificate is signed by server and used for sealed sender. The server
+    /// fixes its lifetime (24h) and says when to refresh (`refresh_after`,
+    /// Unix NANOSECONDS). Cache and refresh before expiration.
     ///
     /// The server reads the requesting device id from the authenticated
-    /// session, so this RPC takes only the validity duration. Letting the
-    /// client supply a device id was a sender-impersonation primitive (cf.
-    /// Signal-Server `CertificateController` which reads `auth.deviceId()`).
-    ///
-    /// # Arguments
-    ///
-    /// * `validity_duration` - Optional custom validity period
+    /// session, so the request carries nothing. Letting the client supply a
+    /// device id was a sender-impersonation primitive (cf. Signal-Server
+    /// `CertificateController` which reads `auth.deviceId()`).
     pub async fn request_sender_certificate(
         &mut self,
-        validity_duration: Option<std::time::Duration>,
     ) -> Result<RequestSenderCertificateResponse, NetworkError> {
-        let request = RequestSenderCertificateRequest {
-            validity_period: validity_duration.map(|d| prost_types::Duration {
-                seconds: d.as_secs() as i64,
-                nanos: d.subsec_nanos() as i32,
-            }),
-        };
+        let request = RequestSenderCertificateRequest {};
 
         self.inner
             .request_sender_certificate(request)
@@ -784,55 +839,62 @@ impl AuthClient {
 
     // ==================== Account Recovery RPCs ====================
 
-    /// Use a recovery code to reset password and SVR credentials.
-    ///
-    /// This is an unauthenticated RPC -- the recovery code itself is the credential.
-    /// Returns the number of remaining unused recovery codes on success.
-    /// After this succeeds, the user can login with the new password + new PIN.
-    ///
-    /// # Arguments
-    ///
-    /// * `username` - Hashed username
-    /// * `recovery_code` - 12-character one-time recovery code
-    /// * `new_password_hash` - SHA256 hash of the new password
-    /// * `new_svr_public_key` - New SVR public key derived from new PIN
-    /// * `new_registration_lock` - New registration lock derived from new PIN
-    pub async fn use_recovery_code(
+    /// Recovery, first round trip: the code plus the new password's OPAQUE
+    /// RegistrationRequest. Unauthenticated: the recovery code is the
+    /// credential AND the account identifier (the server looks the account up
+    /// by a digest of the code). The code is not spent until
+    /// [`Self::use_recovery_code_finish`].
+    pub async fn use_recovery_code_start(
         &mut self,
-        username: &str,
         recovery_code: &str,
-        new_password_hash: &[u8],
+        registration_request: &[u8],
+    ) -> Result<UseRecoveryCodeStartResponse, NetworkError> {
+        let request = UseRecoveryCodeStartRequest {
+            recovery_code: recovery_code.to_string(),
+            registration_request: registration_request.to_vec(),
+        };
+        self.inner
+            .use_recovery_code_start(request)
+            .await
+            .map(|r| r.into_inner())
+            .map_err(|s| NetworkError::from_status(&s))
+    }
+
+    /// Recovery, second round trip: spends the code and installs the new
+    /// RegistrationRecord, SVR key and registration lock. Returns the number
+    /// of unused recovery codes left.
+    pub async fn use_recovery_code_finish(
+        &mut self,
+        recovery_id: &str,
+        registration_record: &[u8],
         new_svr_public_key: &[u8],
         new_registration_lock: &[u8],
     ) -> Result<i32, NetworkError> {
-        let request = UseRecoveryCodeRequest {
-            username: username.to_string(),
-            recovery_code: recovery_code.to_string(),
-            new_password_hash: new_password_hash.to_vec(),
+        let request = UseRecoveryCodeFinishRequest {
+            recovery_id: recovery_id.to_string(),
+            registration_record: registration_record.to_vec(),
             new_svr_public_key: new_svr_public_key.to_vec(),
             new_registration_lock: new_registration_lock.to_vec(),
             request_id: uuid::Uuid::new_v4().to_string(),
         };
-
         let response = self
             .inner
-            .use_recovery_code(request)
+            .use_recovery_code_finish(request)
             .await
             .map(|r| r.into_inner())
             .map_err(|s| NetworkError::from_status(&s))?;
-
         Ok(response.remaining_codes)
     }
 
     /// Regenerate recovery codes for the authenticated user.
     ///
-    /// Requires password confirmation. Returns newly generated plaintext codes.
+    /// Requires a fresh password proof. Returns newly generated plaintext codes.
     pub async fn regenerate_recovery_codes(
         &mut self,
-        password_hash: &[u8],
+        password_proof: PasswordProof,
     ) -> Result<Vec<String>, NetworkError> {
         let request = RegenerateRecoveryCodesRequest {
-            password_hash: password_hash.to_vec(),
+            password_proof: Some(password_proof),
         };
 
         let response = self

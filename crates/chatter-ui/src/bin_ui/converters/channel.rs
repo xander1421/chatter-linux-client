@@ -134,6 +134,7 @@ pub fn member_to_slint(m: &chatter_core::domain::channel::MemberWithProfile) -> 
         can_ban: m.moderation.can_ban,
         can_mute: m.moderation.can_mute,
         can_make_owner: m.moderation.can_make_owner,
+        unverified: m.unverified,
     }
 }
 

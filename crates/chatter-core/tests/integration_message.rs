@@ -15,7 +15,7 @@ use tokio_stream::StreamExt;
 use common::*;
 
 /// Helper to create a test channel and return its ID.
-async fn create_test_channel(pool: &chatter_core::network::grpc::GrpcClientPool) -> String {
+async fn create_test_channel(pool: &chatter_core::network::grpc::GrpcClientPool, user: &TestUser) -> String {
     let mut channel_client = ChannelClient::new(pool.channel(), pool.auth_clone());
     let channel_name = format!("test_channel_{}", unique_username());
 
@@ -24,12 +24,10 @@ async fn create_test_channel(pool: &chatter_core::network::grpc::GrpcClientPool)
             &channel_name,
             ChannelType::ChannelPublic,
             None,
-            vec![],
-            None,
             Some("Test channel for integration tests"),
             None,
-        )
-        .await
+            Some(membership::genesis(user, true).1),
+        ).await
         .expect("Failed to create channel");
 
     tokio::pin!(stream);
@@ -73,8 +71,8 @@ async fn test_send_and_get_message() {
     skip_if_no_server!();
 
     let pool = assert_ok(create_test_pool().await);
-    let _user = assert_ok(setup_authenticated_test(&pool).await);
-    let channel_id = create_test_channel(&pool).await;
+    let user = assert_ok(setup_authenticated_test(&pool).await);
+    let channel_id = create_test_channel(&pool, &user).await;
 
     let mut msg_client = MessageClient::new(pool.channel(), pool.auth_clone());
 
@@ -90,6 +88,7 @@ async fn test_send_and_get_message() {
                 vec![],
                 false,
                 vec![],
+                Vec::new(),
             )
             .await,
     );
@@ -140,8 +139,8 @@ async fn test_delete_message() {
     skip_if_no_server!();
 
     let pool = assert_ok(create_test_pool().await);
-    let _user = assert_ok(setup_authenticated_test(&pool).await);
-    let channel_id = create_test_channel(&pool).await;
+    let user = assert_ok(setup_authenticated_test(&pool).await);
+    let channel_id = create_test_channel(&pool, &user).await;
 
     let mut msg_client = MessageClient::new(pool.channel(), pool.auth_clone());
 
@@ -157,12 +156,13 @@ async fn test_delete_message() {
                 vec![],
                 false,
                 vec![],
+                Vec::new(),
             )
             .await,
     );
 
     // Delete it
-    let result = msg_client.delete_message(&message.id, &channel_id).await;
+    let result = msg_client.delete_message(&message.id, &channel_id, Vec::new()).await;
     assert!(result.is_ok(), "Delete should succeed");
 
     // Verify it's gone (might still show as deleted or not appear)
@@ -223,8 +223,8 @@ async fn test_message_search() {
     skip_if_no_server!();
 
     let pool = assert_ok(create_test_pool().await);
-    let _user = assert_ok(setup_authenticated_test(&pool).await);
-    let channel_id = create_test_channel(&pool).await;
+    let user = assert_ok(setup_authenticated_test(&pool).await);
+    let channel_id = create_test_channel(&pool, &user).await;
 
     let mut msg_client = MessageClient::new(pool.channel(), pool.auth_clone());
 
@@ -241,6 +241,7 @@ async fn test_message_search() {
                 vec![],
                 false,
                 vec![],
+                Vec::new(),
             )
             .await,
     );
@@ -302,6 +303,7 @@ async fn test_send_to_nonexistent_channel() {
             vec![],
             false,
             vec![],
+            Vec::new(),
         )
         .await;
 
@@ -323,8 +325,8 @@ async fn test_stream_messages() {
     skip_if_no_server!();
 
     let pool = assert_ok(create_test_pool().await);
-    let _user = assert_ok(setup_authenticated_test(&pool).await);
-    let channel_id = create_test_channel(&pool).await;
+    let user = assert_ok(setup_authenticated_test(&pool).await);
+    let channel_id = create_test_channel(&pool, &user).await;
 
     let mut msg_client = MessageClient::new(pool.channel(), pool.auth_clone());
 

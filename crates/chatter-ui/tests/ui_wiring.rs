@@ -4147,6 +4147,7 @@ fn channel_member_row_carries_avatar() {
         username: String::new(),
         avatar_bytes: avatar,
         moderation: Default::default(),
+        unverified: false,
     };
 
     let with = member_to_slint(&member(Some(TINY_PNG.to_vec())));

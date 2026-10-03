@@ -16,6 +16,7 @@ import { Input } from "../components/input.slint";
 import { Avatar } from "../components/avatar.slint";
 import { SearchResultChannel, SearchResultItem } from "join_channel.slint";
 import { AiIntegrationGlobal } from "../ai/ai_global.slint";
+import { MembershipGlobal } from "../chat/membership_global.slint";
 
 // Friend data for private group selection (matches FriendData)
 export struct PrivateGroupFriend {
@@ -967,13 +968,13 @@ export component CreateChannelModal inherits Rectangle {
                     spacing: Spacing.xs;
 
                     Text {
-                        text: "Search channels or enter channel ID";
+                        text: "Search channels, or paste a channel ID or invite link";
                         color: Colors.text-secondary;
                         font-size: Typography.sm;
                     }
 
                     Input {
-                        placeholder: "Search by name or paste channel ID...";
+                        placeholder: "Name, channel ID or chatter://join/ link";
                         text <=> root.join-search-query;
 
                         edited(text) => {
@@ -1034,7 +1035,34 @@ export component CreateChannelModal inherits Rectangle {
                     }
 
                     // Empty state
-                    if !root.join-searching && root.join-error == "" && root.join-results.length == 0 && root.join-search-query != "": Rectangle {
+                    // A pasted invite link: nothing to search, Join uses it.
+                    if !root.join-searching && root.join-error == "" && MembershipGlobal.join-input-is-link: Rectangle {
+                        width: 100%;
+                        height: 100%;
+
+                        VerticalLayout {
+                            spacing: Spacing.sm;
+                            alignment: center;
+
+                            Text {
+                                text: "Invite link";
+                                color: Colors.text-primary;
+                                font-size: Typography.sm;
+                                horizontal-alignment: center;
+                            }
+
+                            Text {
+                                text: "Press Join to use it. Anyone holding this link can join the channel.";
+                                color: Colors.text-muted;
+                                font-size: Typography.xs;
+                                horizontal-alignment: center;
+                                width: 100%;
+                                wrap: word-wrap;
+                            }
+                        }
+                    }
+
+                    if !root.join-searching && root.join-error == "" && root.join-results.length == 0 && root.join-search-query != "" && !MembershipGlobal.join-input-is-link: Rectangle {
                         width: 100%;
                         height: 100%;
 

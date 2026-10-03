@@ -3,7 +3,6 @@
 //! Validates the cryptographic flows described in sections 3, 6, and 7:
 //!
 //!   - UAK derivation from profile key (section 6)
-//!   - UAK group combination (section 3: Channel Message)
 //!   - DM channel ID determinism (section 3: DM)
 //!   - Domain ID type safety (section 6: Key Hierarchy)
 //!   - Sender certificate validation (section 3: Sealed Sender)
@@ -11,10 +10,7 @@
 //! These tests use pure crypto functions with no server dependencies.
 
 use chatter_core::crypto::derive_uak;
-use chatter_core::crypto::signal::sealed_sender::{
-    combine_uaks_for_group,
-    UAK_LENGTH, PROFILE_KEY_LENGTH,
-};
+use chatter_core::crypto::signal::sealed_sender::{UAK_LENGTH, PROFILE_KEY_LENGTH};
 use chatter_core::domain::ids::{ChannelId, DeviceId, MessageId, UserId};
 
 // ---------------------------------------------------------------------------
@@ -79,56 +75,6 @@ fn test_uak_derivation_correct_output_length() {
     let key = [0u8; PROFILE_KEY_LENGTH];
     let uak = derive_uak(&key);
     assert_eq!(uak.len(), UAK_LENGTH);
-}
-
-// ---------------------------------------------------------------------------
-// UAK group combination
-// ---------------------------------------------------------------------------
-
-/// Test UAK combination for group sealed sender.
-///
-/// Architecture reference (section 3: Channel Message):
-///   For group messages, individual UAKs are XOR-combined into a group UAK.
-///   This allows the server to validate delivery for group messages.
-#[test]
-fn test_uak_group_combination() {
-    let uak1 = [0x11u8; UAK_LENGTH];
-    let uak2 = [0x22u8; UAK_LENGTH];
-
-    let combined = combine_uaks_for_group(&[uak1, uak2]);
-    assert_eq!(combined.len(), UAK_LENGTH);
-
-    // XOR combination: 0x11 ^ 0x22 = 0x33
-    assert_eq!(combined, [0x33u8; UAK_LENGTH]);
-}
-
-/// Test that single UAK combination returns the UAK unchanged.
-#[test]
-fn test_uak_group_combination_single() {
-    let uak = [0xABu8; UAK_LENGTH];
-    let combined = combine_uaks_for_group(&[uak]);
-    assert_eq!(combined, uak);
-}
-
-/// Test that combining UAK with itself produces zeros (XOR identity).
-#[test]
-fn test_uak_group_combination_self_cancels() {
-    let uak = [0xFFu8; UAK_LENGTH];
-    let combined = combine_uaks_for_group(&[uak, uak]);
-    assert_eq!(combined, [0x00u8; UAK_LENGTH], "UAK XOR with itself should be zero");
-}
-
-/// Test group combination with multiple members.
-#[test]
-fn test_uak_group_combination_multiple() {
-    let uaks = [
-        [0x01u8; UAK_LENGTH],
-        [0x02u8; UAK_LENGTH],
-        [0x04u8; UAK_LENGTH],
-    ];
-    let combined = combine_uaks_for_group(&uaks);
-    // 0x01 ^ 0x02 ^ 0x04 = 0x07
-    assert_eq!(combined, [0x07u8; UAK_LENGTH]);
 }
 
 // ---------------------------------------------------------------------------

@@ -22,6 +22,7 @@ import { Haptics } from "components/haptics.slint";
 import { AvatarText } from "components/avatar.slint";
 import { ConversationKind } from "chat/conversation_kind.slint";
 import { DisappearingGlobal, DisappearingOption } from "chat/disappearing_global.slint";
+import { MembershipGlobal, InviteLinkRowData, JoinRequestRowData, ServerOperatedRowData } from "chat/membership_global.slint";
 import { VirtualKeyboard } from "components/modal_container.slint";
 
 // Re-export all types for Rust binding
@@ -41,6 +42,7 @@ export { Haptics }
 export { AvatarText }
 export { ConversationKind }
 export { DisappearingGlobal, DisappearingOption }
+export { MembershipGlobal, InviteLinkRowData, JoinRequestRowData, ServerOperatedRowData }
 // Theme choice. Bound in `bin_ui::features::modals::settings`.
 export { Appearance }
 // Settings › Notifications › Sound and vibration. Bound in `bin_ui::features::modals::settings`.

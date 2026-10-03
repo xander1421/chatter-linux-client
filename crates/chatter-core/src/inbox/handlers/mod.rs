@@ -147,8 +147,9 @@ pub enum DomainEvent {
     },
     /// Key exchange received (mailbox DM encryption setup).
     ///
-    /// Key can be 32 bytes (regular key exchange) or 64 bytes (DM bootstrap).
-    /// Bootstrap format: first 32 bytes = mailbox pk, next 32 = conversation ephemeral.
+    /// Key can be 32 bytes (regular key exchange) or a 96-byte
+    /// `MailboxAnnouncement` (DM bootstrap).
+    /// Bootstrap format: mailbox pk || conversation ephemeral || mailbox encryption pk.
     KeyExchangeReceived {
         sender_id: UserId,
         /// The sending device — where the bootstrap message / reply goes.
@@ -249,16 +250,14 @@ pub enum DomainEvent {
         attributed: bool,
     },
 
-    /// A peer who shares a channel with the local user added or revoked a
-    /// device. Consumer must invalidate cached Signal sessions for
-    /// `peer_user_id` and re-distribute sender keys on next group send.
+    /// A peer who shares a channel with the local user added, revoked or
+    /// re-registered a device. Handled by
+    /// `MessageService::handle_peer_device_change`.
     PeerDevicesChanged {
         peer_user_id: UserId,
         /// The device that was added or revoked.
         device_id: u32,
-        /// `"added"` or `"revoked"`. Clients may use this to decide
-        /// whether to proactively fetch the new device's prekeys (added)
-        /// or just prune stale session state (revoked).
+        /// `"added"`, `"revoked"` or `"reregistered"`.
         change_type: String,
     },
 
@@ -621,6 +620,15 @@ pub enum DomainEvent {
         message: String,
     },
 
+    /// Something about a channel's VERIFIED membership the user must see: a
+    /// change that failed verification or a fork (sending is blocked), or a
+    /// member only the server vouches for (no keys) / a removal only the
+    /// server reported. Decided in core; the UI renders it.
+    ChannelMembershipNotice {
+        channel_id: ChannelId,
+        notice: crate::services::channel::membership_log::MembershipNotice,
+    },
+
     // ========================================================================
     // Jarvis AI Events
     // ========================================================================
@@ -749,6 +757,7 @@ impl DomainEvent {
             DomainEvent::ChannelInviteReceived { channel_id, .. } => Some(*channel_id),
             DomainEvent::ChannelInviteResponded { channel_id, .. } => Some(*channel_id),
             DomainEvent::ChannelOperationFailed { channel_id, .. } => Some(*channel_id),
+            DomainEvent::ChannelMembershipNotice { channel_id, .. } => Some(*channel_id),
             DomainEvent::UserPresenceChanged { .. } => None,
             DomainEvent::AnonDmProfileUpdated { .. } => None,
             DomainEvent::UserProfileUpdated { .. } => None,

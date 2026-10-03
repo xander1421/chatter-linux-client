@@ -21,17 +21,17 @@ fn check(name: &str, r: Result<String, String>) -> String {
     }
 }
 
-/// HPKE round-trip through chatter_core::crypto::ecies.
+/// HPKE round-trip through chatter_core's mailbox envelope (libsignal HPKE).
 fn check_crypto() -> Result<String, String> {
-    use chatter_core::crypto::ecies;
-    let (sk, pk) = ecies::generate_x25519_keypair();
+    use chatter_core::crypto::envelope_crypto;
+    let (sk, pk) = envelope_crypto::generate_mailbox_encryption_key();
     let msg = b"chatter on iphone";
-    let sealed = ecies::encrypt(&pk, msg).map_err(|e| format!("{e:?}"))?;
-    let opened = ecies::decrypt(&sk, &sealed).map_err(|e| format!("{e:?}"))?;
+    let sealed = envelope_crypto::encrypt_envelope(msg, &pk).map_err(|e| format!("{e:?}"))?;
+    let opened = envelope_crypto::decrypt_envelope(&sealed, &sk).map_err(|e| format!("{e:?}"))?;
     if opened != msg {
         return Err("round-trip mismatch".into());
     }
-    Ok(format!("X25519 + HPKE round-trip, {} byte ct", sealed.ciphertext.len()))
+    Ok(format!("X25519 + HPKE round-trip, {} byte envelope", sealed.len()))
 }
 
 /// SQLCipher open + write + read inside the app sandbox.

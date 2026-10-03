@@ -92,46 +92,70 @@ impl ChannelInbound {
         Ingested::Stored
     }
 
-    /// Same path, for a message the server says was EDITED. Persists the new
-    /// body and announces `MessageEdited` so an open conversation patches the
-    /// bubble in place instead of appending a duplicate.
+    /// Same path, for a message the server says was EDITED
+    /// (`message_updated`). Decrypts like any channel message (sender keys
+    /// for an encrypted channel), then applies the new body through the one
+    /// edit choke point,
+    /// [`MessageService::apply_channel_edit`]: only the author's own message
+    /// in this channel, ordered and dated by the server's `edited_at`, within
+    /// Signal's 48h, held if the message is not here yet — and a re-delivered
+    /// edit (a catch-up re-fetch) changes nothing and announces nothing. The
+    /// author is the server message's `author_id`, which for an encrypted
+    /// channel is also the sender-key sender that decrypted it.
     ///
-    /// INFRA-4: nothing consumed `message_updated` before, so an edit made by
-    /// another member never appeared on this client at all.
+    /// Announces `MessageEdited` so an open conversation patches the bubble
+    /// in place instead of appending a duplicate.
     pub async fn ingest_edit(
         &self,
         proto_msg: &chat_v1::Message,
         channel_id: ChannelId,
     ) -> Ingested {
-        let mut message = match self.prepare(proto_msg, channel_id, true).await {
+        let message = match self.prepare(proto_msg, channel_id, true).await {
             Ok(m) => m,
             Err(outcome) => return outcome,
         };
-        message.is_edited = true;
-
-        let new_content = message.content.clone();
-        let conversation_type = message.conversation_type.clone();
-        let message_id = message.id;
-        let target_sent_timestamp = message.sent_at;
-        let author_id = message.sender_id;
-
-        if !self.persist(&mut message, channel_id) {
+        // An edit with no known author cannot be authorized.
+        let Some(author) = message.sender_id else {
             return Ingested::Dropped;
+        };
+        // The server names the edited row by id; it must be the author's. Its
+        // `sent_at` is the target (an encrypted edit's DataMessage clock need
+        // not be the original's).
+        let target_sent_at = match self.messages.get_message_local(&message.id) {
+            Ok(Some(existing)) if existing.sender_id != Some(author) => {
+                tracing::warn!(%channel_id, message_id = %message.id, %author,
+                    "Server edit names another author's message; dropped");
+                return Ingested::Dropped;
+            }
+            Ok(Some(existing)) => existing.sent_at,
+            Ok(None) => message.sent_at,
+            Err(e) => {
+                tracing::warn!(%channel_id, message_id = %message.id, error = %e,
+                    "Failed to read the edited message; dropped");
+                return Ingested::Dropped;
+            }
+        };
+        let body = message.as_text().unwrap_or_default();
+        let edit_ts = proto_msg.edited_at;
+        match self.messages.apply_channel_edit(&channel_id, &author, target_sent_at, body, edit_ts, edit_ts) {
+            Ok(Some(edited)) => {
+                let _ = self.event_bus().domain_sender().send(DomainEvent::MessageEdited {
+                    message_id: edited.id,
+                    new_content: edited.content,
+                    channel_id,
+                    conversation_type: edited.conversation_type,
+                    author_id: author,
+                    target_sent_timestamp: target_sent_at,
+                });
+                Ingested::Stored
+            }
+            // Held for its message, refused, or already shown.
+            Ok(None) => Ingested::Dropped,
+            Err(e) => {
+                tracing::warn!(%channel_id, error = %e, "Failed to apply a server channel edit");
+                Ingested::Dropped
+            }
         }
-
-        // An edit with no known author cannot be matched to a bubble.
-        if let Some(author_id) = author_id {
-            let _ = self.event_bus().domain_sender().send(DomainEvent::MessageEdited {
-                message_id,
-                new_content,
-                channel_id,
-                conversation_type,
-                author_id,
-                target_sent_timestamp,
-            });
-        }
-
-        Ingested::Stored
     }
 
     /// One undeleted message from a resync page (`get_message_changes`).
@@ -156,12 +180,15 @@ impl ChannelInbound {
             return Ok(());
         }
         let existing = self.messages.get_message_local(&id)?;
-        if existing.as_ref().is_none_or(|local| is_newer_edit(proto_msg, local)) {
-            if proto_msg.edited {
-                self.ingest_edit(proto_msg, channel_id).await;
-            } else {
+        match &existing {
+            // Never seen: store it as the server has it, edit included.
+            None => {
                 self.ingest(proto_msg, channel_id, false).await;
             }
+            Some(local) if is_newer_edit(proto_msg, local) => {
+                self.ingest_edit(proto_msg, channel_id).await;
+            }
+            Some(_) => {}
         }
         match self.messages.reconcile_channel_reactions(proto_msg, channel_id) {
             // A malformed reaction is this message's problem, not the resync's.
@@ -270,6 +297,16 @@ impl ChannelInbound {
                 }
             }
 
+            // Only a member of our VERIFIED membership may speak in the
+            // channel (Signal drops group messages from non-members). A sender
+            // the server alone vouches for is dropped before decrypting — and
+            // before it can draw a SenderKeyRequest or a resend request.
+            if !self.messages.group_gate().admits(&channel_id, &sid) {
+                tracing::warn!(%channel_id, %sid, message_id = %proto_msg.id,
+                    "Group message from a sender outside the verified membership; dropped");
+                return Err(Ingested::Dropped);
+            }
+
             match self
                 .messages
                 .signal_service
@@ -290,6 +327,10 @@ impl ChannelInbound {
                             return Err(Ingested::Dropped);
                         }
                     };
+
+                    // The sender's verified (revision, state_hash): fork or
+                    // staleness check against ours.
+                    self.messages.check_group_stamp(&channel_id, &dm);
 
                     inbound_quote = dm.quote.clone();
 
@@ -428,6 +469,13 @@ impl ChannelInbound {
                 message.is_read |= existing.is_read;
                 // Likewise a local soft-delete: the server copy never says deleted.
                 message.is_deleted |= existing.is_deleted;
+                // Content changes only through the edit path (author check,
+                // edit-time ordering, 48h window: `apply_channel_edit`). A
+                // re-ingested original — backfill, resync — must not undo an
+                // applied edit or bypass those rules.
+                message.content = existing.content;
+                message.is_edited = existing.is_edited;
+                message.edited_at = existing.edited_at;
                 if let Err(e) = self.messages.update_message(message) {
                     tracing::warn!(%channel_id, message_id = %message.id, error = %e,
                         "Failed to update channel message");
@@ -521,6 +569,47 @@ mod tests {
         client.mark_conversation_read(&channel_id, &ConversationType::Channel).unwrap();
         assert_eq!(inbound.ingest(&proto, channel_id, false).await, Ingested::Stored);
         assert_eq!(unread(), 0);
+    }
+
+    /// A backfill re-ingests the ORIGINAL; it must not undo an edit already
+    /// applied through the edit path.
+    #[tokio::test]
+    async fn reingesting_an_original_keeps_its_applied_edit() {
+        static MOCK_KEYRING: std::sync::Once = std::sync::Once::new();
+        MOCK_KEYRING.call_once(|| {
+            keyring::set_default_credential_builder(keyring::mock::default_credential_builder());
+        });
+        let dir = tempfile::tempdir().unwrap();
+        let client = ChatterClient::builder()
+            .server_url("http://localhost:1")
+            .data_dir(dir.path().to_str().unwrap())
+            .build()
+            .expect("build client");
+        let inbound = ChannelInbound::new(client.messages().clone(), client.attachments().clone());
+
+        let channel_id = ChannelId::new();
+        let id = crate::domain::ids::MessageId::new();
+        let proto = chat_v1::Message {
+            id: id.to_string(),
+            channel_id: channel_id.to_string(),
+            author_id: UserId::new().to_string(),
+            timestamp: 1_000,
+            content: Some(chat_v1::message::Content {
+                r#type: Some(chat_v1::message::content::Type::Text("original".into())),
+            }),
+            ..Default::default()
+        };
+        assert_eq!(inbound.ingest(&proto, channel_id, false).await, Ingested::Stored);
+
+        let mut edited = client.messages().get_message_local(&id).unwrap().expect("stored");
+        edited.content = crate::domain::message::MessageContent::Text("edited".into());
+        edited.is_edited = true;
+        client.messages().update_message(&edited).unwrap();
+
+        assert_eq!(inbound.ingest(&proto, channel_id, false).await, Ingested::Stored);
+        let stored = client.messages().get_message_local(&id).unwrap().expect("stored");
+        assert!(matches!(stored.content, crate::domain::message::MessageContent::Text(ref t) if t == "edited"));
+        assert!(stored.is_edited);
     }
 
     /// Our own message from another device reaches storage by paths that skip
@@ -618,5 +707,83 @@ mod tests {
         inbound.ingest(&proto, channel_id, false).await;
         assert!(client.messages().get_message_local(&message_id).unwrap().is_none(),
             "a re-fetched copy resurrected a deleted message");
+    }
+
+    /// A server `message_updated` edit goes through the same edit logic as a
+    /// sender-key one: author only, ordered by the edit's time, within 48h,
+    /// held until its message arrives, and a re-delivery changes nothing.
+    #[tokio::test]
+    async fn server_channel_edits_follow_the_edit_rules() {
+        static MOCK_KEYRING: std::sync::Once = std::sync::Once::new();
+        MOCK_KEYRING.call_once(|| {
+            keyring::set_default_credential_builder(keyring::mock::default_credential_builder());
+        });
+        let dir = tempfile::tempdir().unwrap();
+        let client = ChatterClient::builder()
+            .server_url("http://localhost:1")
+            .data_dir(dir.path().to_str().unwrap())
+            .build()
+            .expect("build client");
+        // The resync path reads the current user (own-message handling).
+        let settings = &client.messages().settings_repo;
+        settings.set(crate::storage::repositories::settings_repo::keys::CURRENT_USER_ID, &UserId::new().to_string()).unwrap();
+        settings.set(crate::storage::repositories::settings_repo::keys::CURRENT_DEVICE_ID, &1u32).unwrap();
+        let inbound = ChannelInbound::new(client.messages().clone(), client.attachments().clone());
+        let mut events = client.messages().event_bus.subscribe_domain();
+        let mut edits = || {
+            let mut n = 0;
+            while let Ok(e) = events.try_recv() {
+                n += usize::from(matches!(e, DomainEvent::MessageEdited { .. }));
+            }
+            n
+        };
+        let window = MessageService::EDIT_MAX_AGE_NS;
+        let (channel_id, author, stranger) = (ChannelId::new(), UserId::new(), UserId::new());
+        let sent = 1_700_000_000_000_000_000u64;
+        let message = |id: &crate::domain::ids::MessageId, by: UserId, body: &str, edited_at: u64| chat_v1::Message {
+            id: id.to_string(),
+            channel_id: channel_id.to_string(),
+            author_id: by.to_string(),
+            timestamp: sent,
+            edited: edited_at > 0,
+            edited_at,
+            content: Some(chat_v1::message::Content {
+                r#type: Some(chat_v1::message::content::Type::Text(body.into())),
+            }),
+            ..Default::default()
+        };
+        let id = crate::domain::ids::MessageId::new();
+        let body = || client.messages().get_message_local(&id).unwrap().map(|m| m.content);
+        let text = |s: &str| Some(crate::domain::message::MessageContent::Text(s.into()));
+
+        // Early: held, then applied when the message arrives.
+        assert_eq!(inbound.ingest_edit(&message(&id, author, "early", sent + 10), channel_id).await, Ingested::Dropped);
+        assert_eq!(body(), None, "an edit alone does not create the message");
+        assert_eq!(inbound.ingest(&message(&id, author, "original", 0), channel_id, false).await, Ingested::Stored);
+        assert_eq!(body(), text("early"));
+        edits();
+
+        assert_eq!(inbound.ingest_edit(&message(&id, author, "newer", sent + 30), channel_id).await, Ingested::Stored);
+        assert_eq!(edits(), 1);
+        // Older than the edit shown, a re-delivery of it, another author's,
+        // and one past 48h: all ignored, nothing announced.
+        inbound.ingest_edit(&message(&id, author, "older", sent + 20), channel_id).await;
+        inbound.ingest_edit(&message(&id, author, "newer", sent + 30), channel_id).await;
+        inbound.ingest_edit(&message(&id, stranger, "hijack", sent + 40), channel_id).await;
+        inbound.ingest_edit(&message(&id, author, "late", sent + window + 1), channel_id).await;
+        assert_eq!(edits(), 0);
+        let stored = client.messages().get_message_local(&id).unwrap().unwrap();
+        assert_eq!(Some(stored.content), text("newer"));
+        assert_eq!(stored.edited_at, Some(chrono::DateTime::from_timestamp_nanos((sent + 30) as i64)));
+
+        // A resync re-fetch of the applied edit: no event, no edited_at churn.
+        inbound.ingest_resynced(&message(&id, author, "newer", sent + 30), channel_id).await.unwrap();
+        assert_eq!(edits(), 0);
+        assert_eq!(client.messages().get_message_local(&id).unwrap().unwrap().edited_at, stored.edited_at);
+        // A resync of a message never seen stores it, edit included.
+        let unseen = crate::domain::ids::MessageId::new();
+        inbound.ingest_resynced(&chat_v1::Message { timestamp: sent + 1, ..message(&unseen, author, "edited", sent + 5) }, channel_id).await.unwrap();
+        let unseen = client.messages().get_message_local(&unseen).unwrap().expect("stored");
+        assert_eq!(Some(unseen.content), text("edited"));
     }
 }

@@ -152,16 +152,16 @@ async fn test_login_callback_flow() {
     // Clear error before attempt
     login_error = None;
 
-    let login_result = auth_client
-        .login(
-            &user.username,
-            &user.password_hash,
-            "test-device",
-            &user.public_key,
-            &user.device_auth_token,
-            None,
-        )
-        .await;
+    let login_result = opaque_login(
+        &mut auth_client,
+        &user.username,
+        &user.password,
+        "test-device",
+        &random_svr_public_key(),
+        &user.device_auth_token,
+        None,
+    )
+    .await;
 
     match login_result {
         Ok(response) => {
@@ -197,22 +197,18 @@ async fn test_login_wrong_password_flow() {
 
     // Simulate callback with wrong password
     use chatter_core::network::grpc::AuthClient;
-    use sha2::{Digest, Sha256};
-
-    let wrong_password_hash = Sha256::digest(b"wrong_password").to_vec();
-
     let mut auth_client = AuthClient::new(pool.channel(), pool.auth_clone());
 
-    let login_result = auth_client
-        .login(
-            &user.username,
-            &wrong_password_hash,
-            "test-device",
-            &user.public_key,
-            &user.device_auth_token,
-            None,
-        )
-        .await;
+    let login_result = opaque_login(
+        &mut auth_client,
+        &user.username,
+        "wrong_password",
+        "test-device",
+        &random_svr_public_key(),
+        &user.device_auth_token,
+        None,
+    )
+    .await;
 
     match login_result {
         Ok(_response) => {
@@ -243,32 +239,10 @@ async fn test_register_callback_flow() {
     let mut current_user_id: Option<String> = None;
     let mut current_view = "register";
 
-    // Simulate callback: on_register(username, password, display_name)
-    use chatter_core::network::grpc::AuthClient;
-
-    let mut auth_client = AuthClient::new(pool.channel(), pool.auth_clone());
-
-    let username = unique_username();
-    let password_hash = random_password_hash();
-    let device_auth_token = random_device_auth_token();
-    let profile_key = random_profile_key();
-
-    // Generate real prekey bundle with valid signatures
-    let (prekey_bundle, identity_public_key) = generate_prekey_bundle();
-
-    let register_result = auth_client
-        .register_and_wait(
-            &username,
-            &password_hash,
-            "Test User",
-            &identity_public_key,
-            "test-device",
-            &device_auth_token,
-            &profile_key,
-            Some(prekey_bundle),
-            Vec::new(),
-        )
-        .await;
+    // Simulate callback: on_register(username, password, display_name).
+    // The fixture performs the SDK's full registration (OPAQUE record riding
+    // the challenge round trip, prekey bundle, username proof).
+    let register_result = register_test_user(&pool).await;
 
     match register_result {
         Ok(result) => {

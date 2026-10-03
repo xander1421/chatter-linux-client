@@ -128,10 +128,8 @@ pub struct CoreServices {
     pub(crate) database: Arc<Database>,
     pub directories: Directories,
     pub(crate) token_manager: Arc<TokenManager>,
-    /// Exposed so the notification listener can look up peer channel
-    /// memberships when handling PEER_DEVICES_CHANGED (to mark groups
-    /// containing the peer for sender-key rotation). UI code should
-    /// still route through ChannelService, not this field directly.
+    /// Channel lookups for client-level flows. UI code should still route
+    /// through ChannelService, not this field directly.
     pub(crate) channel_repo: Arc<crate::storage::ChannelRepository>,
 
     // Note: key_store is accessed via SignalService — not stored here.

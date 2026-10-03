@@ -9,7 +9,6 @@ use std::sync::Arc;
 use libsignal_protocol::{CiphertextMessageType, ProtocolAddress, DeviceId, SenderCertificate, PublicKey};
 use tokio::sync::Mutex;
 
-use crate::crypto::signal::sesame::ConvergenceResult;
 use crate::network::grpc::auth_client::AuthClient;
 use crate::storage::repositories::settings_repo::keys;
 use crate::error::{CryptoError, ServiceError};
@@ -141,12 +140,24 @@ impl SignalService {
             .identity_key()
             .map_err(|e| ServiceError::Validation(format!("bundle missing identity key: {e}")))?
             .serialize();
+        self.verify_identity_key_transparency(auth_client, recipient_id, &identity_key).await
+    }
+
+    /// The KT gate on a bare identity key: `Ok(())` iff `identity_key` is
+    /// `user_id`'s key in the pinned, append-only transparency log. Used for
+    /// prekey bundles and for the authors of signed channel membership changes.
+    pub async fn verify_identity_key_transparency(
+        &self,
+        auth_client: &mut AuthClient,
+        recipient_id: &str,
+        identity_key: &[u8],
+    ) -> Result<(), ServiceError> {
         // Held from the proof fetch through the pin update, so this head is
         // never older than a pin a concurrent check just advanced
         // (`kt_anchor::lock_pin`).
         let pin = kt_anchor::lock_pin().await;
         let fetched = kt_anchor::pinned_rpc(auth_client.get_key_transparency_proof(recipient_id)).await;
-        self.judge_kt_proof(&pin, "KT", recipient_id, &identity_key, fetched, |old, new| {
+        self.judge_kt_proof(&pin, "KT", recipient_id, identity_key, fetched, |old, new| {
             auth_client.get_consistency_proof(old, new)
         })
         .await
@@ -435,16 +446,30 @@ impl SignalService {
     /// DecryptionErrorMessage handler: those bytes skipped the Double Ratchet,
     /// so nothing checked the sender's identity key, replayed counters, or
     /// forward secrecy.
+    ///
+    /// `server_timestamp_ns` is the envelope's server timestamp; the sender
+    /// certificate's expiry is judged against it, not the local clock, so a
+    /// message read late (device offline) or under clock skew still opens.
+    /// Zero means the server sent none and is refused: it would disable the
+    /// expiry check outright.
     pub async fn decrypt_message(
         &self,
         ciphertext: &[u8],
+        server_timestamp_ns: u64,
     ) -> Result<(ProtocolAddress, Vec<u8>, CiphertextMessageType), ServiceError> {
+        if server_timestamp_ns == 0 {
+            return Err(ServiceError::Validation(
+                "sealed sender envelope has no server timestamp".into(),
+            ));
+        }
+        let validation_time =
+            libsignal_protocol::Timestamp::from_epoch_millis(server_timestamp_ns / 1_000_000);
         let local_uuid = self.settings_repo.get_string(keys::CURRENT_USER_ID)?.ok_or(ServiceError::NotLoggedIn)?;
         let local_device_id = self.settings_repo.get::<u32>(keys::CURRENT_DEVICE_ID)?.ok_or(ServiceError::NotLoggedIn)?;
         let device_id_struct = DeviceId::new(local_device_id.try_into().map_err(|_| ServiceError::Validation("ID too large".into()))?).map_err(|_| ServiceError::Validation("Invalid ID".into()))?;
 
         self.actor
-            .decrypt_sealed(ciphertext.to_vec(), self.trust_root, local_uuid, device_id_struct)
+            .decrypt_sealed(ciphertext.to_vec(), self.trust_root, validation_time, local_uuid, device_id_struct)
             .await
             .inspect_err(|e| self.note_identity_change(e))
     }
@@ -465,25 +490,6 @@ impl SignalService {
             .inspect_err(|e| self.note_identity_change(e))
     }
 
-    /// Decrypt a message with session convergence (Sesame).
-    pub async fn decrypt_with_convergence(
-        &self,
-        envelope: &[u8],
-        sender_id: &str,
-        sender_device_id: u32,
-        sessions: Vec<(Vec<u8>, libsignal_protocol::SessionRecord)>,
-    ) -> Result<ConvergenceResult, ServiceError> {
-        self.actor
-            .decrypt_with_convergence(
-                envelope.to_vec(),
-                sender_id.to_string(),
-                sender_device_id,
-                sessions,
-            )
-            .await
-            .inspect_err(|e| self.note_identity_change(e))
-    }
-
     /// Get sender certificate from cache or request a new one.
     ///
     /// The server picks the device id from the authenticated session, so
@@ -496,7 +502,7 @@ impl SignalService {
             return Ok(cert);
         }
 
-        let cert_response = auth_client.request_sender_certificate(None).await?;
+        let cert_response = auth_client.request_sender_certificate().await?;
         let proto_cert = cert_response.certificate.ok_or(ServiceError::Validation("Missing certificate".into()))?;
         let sender_cert = SenderCertificate::deserialize(&proto_cert.certificate).map_err(|_| ServiceError::Validation("Invalid cert".into()))?;
 
@@ -837,17 +843,47 @@ impl SignalService {
         Ok(())
     }
 
-    /// The registration id our session with a device was established against
-    /// (`SendSealedMessageRequest.device_set`); 0 when it cannot be read, which
-    /// the server takes as "unknown".
-    pub fn session_registration_id(&self, recipient_id: &str, device_id: u32) -> u32 {
+    /// Archive the current session state with every device of `recipient_id`
+    /// we hold a session record for, through the same actor path as
+    /// [`Self::reconcile_devices`]. The next all-devices send then finds no
+    /// usable session and fetches fresh bundles. Returns how many were archived.
+    pub async fn archive_peer_sessions(&self, recipient_id: &str) -> Result<usize, ServiceError> {
+        let devices = session_device_ids(
+            recipient_id,
+            self.key_store
+                .list_sessions_for_user(recipient_id)
+                .map_err(ServiceError::Storage)?
+                .iter()
+                .map(|(address, _)| address.as_str()),
+        );
+        let mut archived = 0;
+        for device_id in devices {
+            if self
+                .actor
+                .archive_session_for_resend(recipient_id.to_string(), device_id, None)
+                .await?
+            {
+                archived += 1;
+            }
+        }
+        Ok(archived)
+    }
+
+    /// The registration id the current session with a device was established
+    /// against — libsignal records it from the bundle when we initiate and
+    /// from the PreKey message when they do (`SessionRecord::
+    /// remote_registration_id`). `None` when there is no current session or
+    /// it holds no id: Signal never names a device without its real id
+    /// (Signal-Desktop `OutgoingMessage` `destinationRegistrationId`), and 0
+    /// is not a registration id.
+    pub fn session_registration_id(&self, recipient_id: &str, device_id: u32) -> Option<u32> {
         self.key_store
             .load_session(&format!("{recipient_id}:{device_id}"))
             .ok()
             .flatten()
             .and_then(|bytes| libsignal_protocol::SessionRecord::deserialize(&bytes).ok())
             .and_then(|record| record.remote_registration_id().ok())
-            .unwrap_or(0)
+            .filter(|&id| id != 0)
     }
 
     /// Encrypt a message for ALL devices of a recipient.
@@ -869,10 +905,15 @@ impl SignalService {
         Ok(self
             .encrypt_message_all_devices_with_access_policy(auth_client, recipient_id, plaintext, false)
             .await?
-            .0)
+            .0
+            .into_iter()
+            .map(|(device_id, sealed)| (device_id, sealed.ciphertext))
+            .collect())
     }
 
-    /// Same as [`Self::encrypt_message_all_devices`], but also returns whether
+    /// Same as [`Self::encrypt_message_all_devices`], but each ciphertext
+    /// carries the registration id of the session it was encrypted with (the
+    /// server-checked device set), and it also returns whether
     /// the recipient accepts sealed sender from anyone (see
     /// [`Self::ensure_sessions_and_access_policy_all_devices`]), which the
     /// caller needs to pick the `Unidentified-Access-Key` for the deposit.
@@ -887,7 +928,7 @@ impl SignalService {
         recipient_id: &str,
         plaintext: &[u8],
         server_checked: bool,
-    ) -> Result<(HashMap<u32, Vec<u8>>, bool), ServiceError> {
+    ) -> Result<(HashMap<u32, DeviceCiphertext>, bool), ServiceError> {
         // First ensure we have sessions with all devices
         let (device_ids, unrestricted) = self
             .ensure_sessions_all_devices_inner(auth_client, recipient_id, server_checked)
@@ -901,7 +942,7 @@ impl SignalService {
         let sender_cert = self.get_or_request_sender_certificate(auth_client).await?;
 
         // Encrypt to each device
-        let mut ciphertexts: HashMap<u32, Vec<u8>> = HashMap::with_capacity(device_ids.len());
+        let mut ciphertexts: HashMap<u32, DeviceCiphertext> = HashMap::with_capacity(device_ids.len());
         let mut failure_count = 0;
 
         for device_id in device_ids {
@@ -920,9 +961,23 @@ impl SignalService {
             let address = ProtocolAddress::new(recipient_id.to_string(), device_id_struct);
 
             match self.actor.encrypt_sealed(plaintext.to_vec(), sender_cert.clone(), address).await {
-                Ok(ciphertext) => {
-                    ciphertexts.insert(device_id, ciphertext);
-                }
+                // Read under the encrypt lock, from the session that just
+                // encrypted. A session that cannot name its device's
+                // registration id is not sent to: listing the device with 0
+                // would switch off the server's stale-device check.
+                Ok(ciphertext) => match self.session_registration_id(recipient_id, device_id) {
+                    Some(registration_id) => {
+                        ciphertexts.insert(device_id, DeviceCiphertext { ciphertext, registration_id });
+                    }
+                    None => {
+                        tracing::warn!(
+                            recipient = %recipient_id,
+                            device_id,
+                            "Encrypted session has no registration id — device not sent to"
+                        );
+                        failure_count += 1;
+                    }
+                },
                 Err(e) => {
                     tracing::warn!(
                         recipient = %recipient_id,
@@ -1110,10 +1165,6 @@ impl SignalService {
     ///
     /// Returns None if no valid cached certificate exists.
     pub fn get_cached_sender_certificate(&self) -> Result<Option<SenderCertificate>, ServiceError> {
-        let now_ms = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_millis() as u64;
 
         let cached_cert_b64: Option<String> =
             self.settings_repo.get_string(keys::SENDER_CERTIFICATE)?;
@@ -1121,7 +1172,7 @@ impl SignalService {
             self.settings_repo.get::<u64>(keys::SENDER_CERTIFICATE_REFRESH_AFTER)?;
 
         if let (Some(cert_b64), Some(refresh_after)) = (&cached_cert_b64, cached_refresh_after) {
-            if now_ms < refresh_after {
+            if !sender_cert_refresh_due(std::time::SystemTime::now(), refresh_after) {
                 use base64::Engine;
                 if let Ok(cert_bytes) =
                     base64::engine::general_purpose::STANDARD.decode(cert_b64)
@@ -1225,6 +1276,46 @@ fn without_device(
     bundles
 }
 
+/// Whether a cached sender certificate is due for refresh. `refresh_after_ns`
+/// is the server's `RequestSenderCertificateResponse.refresh_after`, Unix
+/// NANOSECONDS (auth/service/sealed_sender.go: `refreshAfter.UnixNano()`).
+/// Comparing it against milliseconds made "now" ~10^6 times too small, so the
+/// cache never refreshed early and was only replaced once recipients had
+/// started rejecting the expired certificate.
+fn sender_cert_refresh_due(now: std::time::SystemTime, refresh_after_ns: u64) -> bool {
+    let now_ns = now
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| u64::try_from(d.as_nanos()).unwrap_or(u64::MAX))
+        .unwrap_or(0);
+    now_ns >= refresh_after_ns
+}
+
+#[cfg(test)]
+mod sender_cert_refresh_tests {
+    use super::sender_cert_refresh_due;
+    use std::time::{Duration, UNIX_EPOCH};
+
+    #[test]
+    fn refresh_after_is_compared_in_nanoseconds() {
+        let now = UNIX_EPOCH + Duration::from_secs(1_800_000_000);
+        let now_ns = 1_800_000_000u64 * 1_000_000_000;
+        // A refresh point one hour in the past (as the server sends it, in ns)
+        // is due; the old millisecond comparison called it 10^6 x in the future.
+        assert!(sender_cert_refresh_due(now, now_ns - 3_600 * 1_000_000_000));
+        assert!(sender_cert_refresh_due(now, now_ns));
+        // One hour ahead is not due yet.
+        assert!(!sender_cert_refresh_due(now, now_ns + 3_600 * 1_000_000_000));
+    }
+
+    #[test]
+    fn a_millisecond_scale_value_is_long_past() {
+        // Guards the regression direction: a value on the ms scale for "now"
+        // is ~1970 in nanoseconds, so it must read as due, never as fresh.
+        let now = UNIX_EPOCH + Duration::from_secs(1_800_000_000);
+        assert!(sender_cert_refresh_due(now, 1_800_000_000_000));
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::without_device;
@@ -1261,6 +1352,13 @@ const DEVICE_LIST_TTL: std::time::Duration = std::time::Duration::from_secs(10 *
 
 /// Per recipient: the devices the last all-devices fetch established sessions
 /// with, when, and the recipient's `unrestricted_unidentified_access` flag.
+/// One device's sealed ciphertext and the registration id of the session
+/// that encrypted it, from [`SignalService::encrypt_message_all_devices_with_access_policy`].
+pub struct DeviceCiphertext {
+    pub ciphertext: Vec<u8>,
+    pub registration_id: u32,
+}
+
 #[derive(Default)]
 pub(crate) struct DeviceListCache(HashMap<String, CachedDeviceList>);
 

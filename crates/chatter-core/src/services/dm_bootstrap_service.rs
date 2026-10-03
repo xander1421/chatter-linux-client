@@ -1,6 +1,8 @@
 //! DM Bootstrap service for managing DM channel establishment and session recovery.
 
-use std::sync::Arc;
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 use crate::domain::channel::Channel;
 use crate::domain::ids::UserId;
@@ -39,7 +41,12 @@ pub struct DmBootstrapService {
     /// TODO: Refactor `spawn_dm_bootstrap_handler_from_bus` to take pre-built
     /// services (SignalService, KeyStore) instead of raw Database, then remove this.
     database: Arc<crate::storage::Database>,
+    /// When each peer's sessions were last reset.
+    last_reset: Mutex<HashMap<UserId, Instant>>,
 }
+
+/// Signal-Desktop's `lightSessionReset` bound: one reset per peer per hour.
+const SESSION_RESET_INTERVAL: Duration = Duration::from_secs(60 * 60);
 
 impl DmBootstrapService {
     pub fn new(
@@ -55,6 +62,7 @@ impl DmBootstrapService {
             grpc_pool,
             mailbox_manager,
             database,
+            last_reset: Mutex::new(HashMap::new()),
         }
     }
 
@@ -71,10 +79,23 @@ impl DmBootstrapService {
         )
     }
 
-    /// Handle session convergence failure by resetting and re-establishing sessions.
-    ///
-    /// Multi-device: resets sessions for ALL peer devices, not just primary.
-    pub fn handle_convergence_failure(&self, peer_id: UserId) {
+    /// Reset the sessions with every device of `peer_id` after a session
+    /// desync, at most once per peer per [`SESSION_RESET_INTERVAL`]: every
+    /// envelope under a broken session fails the same way, and each reset
+    /// fetches a prekey bundle per device.
+    pub fn reset_peer_sessions(&self, peer_id: UserId) {
+        {
+            let mut last_reset = self.last_reset.lock().unwrap_or_else(|e| e.into_inner());
+            let now = Instant::now();
+            if last_reset
+                .get(&peer_id)
+                .is_some_and(|at| now.duration_since(*at) < SESSION_RESET_INTERVAL)
+            {
+                tracing::warn!(peer_id = %peer_id, "Skipping session reset: peer was reset within the hour");
+                return;
+            }
+            last_reset.insert(peer_id, now);
+        }
         let message_service = self.message_service.clone();
         let grpc_pool = self.grpc_pool.clone();
 
@@ -100,7 +121,7 @@ impl DmBootstrapService {
                     tracing::error!(
                         peer_id = %peer_id,
                         error = %e,
-                        "Failed to reset sessions after convergence failure"
+                        "Failed to reset sessions with peer"
                     );
                 }
             }
@@ -128,13 +149,11 @@ impl DmBootstrapService {
             );
 
             // Initiate bootstrap - this will create a new mailbox and tell the peer.
-            // We send an empty content proto which just triggers the bootstrap flow.
-            let dummy_content = crate::proto::content_v1::Content {
-                content: None,
-                timestamp: crate::util::time::TimestampNanos::now().as_u64(),
-                ephemeral_reply_to: None,
-                padding: vec![],
-            };
+            // The content only triggers the bootstrap flow; it is queued and
+            // delivered once the mailbox is up, so it is a NullMessage, which
+            // the receiver acks and drops (an empty Content parses as an error
+            // and becomes a delivery-issue marker).
+            let dummy_content = crate::services::message::null_message_content();
 
             match message_service
                 .send_dm_content(crate::services::message::SendDmContentParams {

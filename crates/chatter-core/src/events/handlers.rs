@@ -185,6 +185,11 @@ impl EventHandlers {
             DomainEvent::MessageReceived { message } => {
                 let channel_id = message.conversation_id;
                 trace!(?channel_id, message_id = ?message.id, "Adding message to state");
+                // A pin that arrived before its message is applied at store
+                // time (`message_modifier_repo`), so no MessagePinned follows.
+                if message.is_pinned {
+                    self.chat_state.add_pinned_message(message.id);
+                }
                 self.message_state.append_message(channel_id, message);
             }
 
@@ -875,6 +880,11 @@ impl EventHandlers {
                     %channel_id, %operation_id, %code, %message,
                     "Channel operation failed server-side (rolled back)"
                 );
+            }
+            DomainEvent::ChannelMembershipNotice { channel_id, ref notice } => {
+                // MembershipLog already recorded the status (send-blocked on
+                // a failure or fork) and the exclusion; nothing to mutate here.
+                tracing::warn!(%channel_id, ?notice, "Channel membership notice");
             }
 
             // ================================================================

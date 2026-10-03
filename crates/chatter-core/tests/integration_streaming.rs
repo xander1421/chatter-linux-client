@@ -22,7 +22,7 @@ async fn test_message_stream_establishment() {
     skip_if_no_server!();
 
     let pool = assert_ok(create_streaming_test_pool().await);
-    let _user = assert_ok(setup_authenticated_test(&pool).await);
+    let user = assert_ok(setup_authenticated_test(&pool).await);
 
     // Create a channel first
     let mut channel_client = ChannelClient::new(pool.channel(), pool.auth_clone());
@@ -33,12 +33,10 @@ async fn test_message_stream_establishment() {
             &channel_name,
             ChannelType::ChannelPublic,
             None,
-            vec![],
             None,
             None,
-            None,
-        )
-        .await
+            Some(membership::genesis(&user, true).1),
+        ).await
         .expect("Failed to create channel");
 
     tokio::pin!(create_stream);
@@ -72,7 +70,7 @@ async fn test_message_stream_receives_new_messages() {
     skip_if_no_server!();
 
     let pool = assert_ok(create_streaming_test_pool().await);
-    let _user = assert_ok(setup_authenticated_test(&pool).await);
+    let user = assert_ok(setup_authenticated_test(&pool).await);
 
     // Create channel
     let mut channel_client = ChannelClient::new(pool.channel(), pool.auth_clone());
@@ -83,12 +81,10 @@ async fn test_message_stream_receives_new_messages() {
             &channel_name,
             ChannelType::ChannelPublic,
             None,
-            vec![],
             None,
             None,
-            None,
-        )
-        .await
+            Some(membership::genesis(&user, true).1),
+        ).await
         .expect("Failed to create channel");
 
     tokio::pin!(create_stream);
@@ -153,6 +149,7 @@ async fn test_message_stream_receives_new_messages() {
                 vec![],
                 false,
                 vec![],
+                Vec::new(),
             )
             .await;
     }
@@ -174,7 +171,7 @@ async fn test_channel_event_stream() {
     skip_if_no_server!();
 
     let pool = assert_ok(create_streaming_test_pool().await);
-    let _user = assert_ok(setup_authenticated_test(&pool).await);
+    let user = assert_ok(setup_authenticated_test(&pool).await);
 
     let mut channel_client = ChannelClient::new(pool.channel(), pool.auth_clone());
 
@@ -201,7 +198,7 @@ async fn test_channel_event_stream_specific_channel() {
     skip_if_no_server!();
 
     let pool = assert_ok(create_streaming_test_pool().await);
-    let _user = assert_ok(setup_authenticated_test(&pool).await);
+    let user = assert_ok(setup_authenticated_test(&pool).await);
 
     // Create a channel using a separate scope to ensure stream is dropped
     let channel_id = {
@@ -213,12 +210,10 @@ async fn test_channel_event_stream_specific_channel() {
                 &channel_name,
                 ChannelType::ChannelPublic,
                 None,
-                vec![],
                 None,
                 None,
-                None,
-            )
-            .await
+                Some(membership::genesis(&user, true).1),
+            ).await
             .expect("Failed to create channel");
 
         tokio::pin!(create_stream);
@@ -283,7 +278,7 @@ async fn test_presence_update() {
     skip_if_no_server!();
 
     let pool = assert_ok(create_streaming_test_pool().await);
-    let _user = assert_ok(setup_authenticated_test(&pool).await);
+    let user = assert_ok(setup_authenticated_test(&pool).await);
 
     let mut user_client = UserClient::new(pool.channel(), pool.auth_clone());
 
@@ -301,7 +296,7 @@ async fn test_stream_reconnection() {
     skip_if_no_server!();
 
     let pool = assert_ok(create_streaming_test_pool().await);
-    let _user = assert_ok(setup_authenticated_test(&pool).await);
+    let user = assert_ok(setup_authenticated_test(&pool).await);
 
     // Create channel
     let mut channel_client = ChannelClient::new(pool.channel(), pool.auth_clone());
@@ -312,12 +307,10 @@ async fn test_stream_reconnection() {
             &channel_name,
             ChannelType::ChannelPublic,
             None,
-            vec![],
             None,
             None,
-            None,
-        )
-        .await
+            Some(membership::genesis(&user, true).1),
+        ).await
         .expect("Failed to create channel");
 
     tokio::pin!(create_stream);
@@ -358,7 +351,7 @@ async fn test_multiple_channel_streams() {
     skip_if_no_server!();
 
     let pool = assert_ok(create_streaming_test_pool().await);
-    let _user = assert_ok(setup_authenticated_test(&pool).await);
+    let user = assert_ok(setup_authenticated_test(&pool).await);
 
     // Create two channels using a separate scope
     let channel_ids = {
@@ -373,12 +366,10 @@ async fn test_multiple_channel_streams() {
                     &channel_name,
                     ChannelType::ChannelPublic,
                     None,
-                    vec![],
                     None,
                     None,
-                    None,
-                )
-                .await
+                    Some(membership::genesis(&user, true).1),
+                ).await
                 .expect("Failed to create channel");
 
             tokio::pin!(create_stream);
@@ -418,7 +409,7 @@ async fn test_message_stream_with_cursor() {
     skip_if_no_server!();
 
     let pool = assert_ok(create_streaming_test_pool().await);
-    let _user = assert_ok(setup_authenticated_test(&pool).await);
+    let user = assert_ok(setup_authenticated_test(&pool).await);
 
     // Create channel
     let mut channel_client = ChannelClient::new(pool.channel(), pool.auth_clone());
@@ -429,12 +420,10 @@ async fn test_message_stream_with_cursor() {
             &channel_name,
             ChannelType::ChannelPublic,
             None,
-            vec![],
             None,
             None,
-            None,
-        )
-        .await
+            Some(membership::genesis(&user, true).1),
+        ).await
         .expect("Failed to create channel");
 
     tokio::pin!(create_stream);
@@ -469,6 +458,7 @@ async fn test_message_stream_with_cursor() {
                 vec![],
                 false,
                 vec![],
+                Vec::new(),
             )
             .await
             .expect("Send should succeed");

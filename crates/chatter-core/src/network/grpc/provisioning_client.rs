@@ -78,15 +78,16 @@ impl ProvisioningClient {
     ///
     /// # Arguments
     /// * `device_info` - Platform/model info (e.g., "Linux x86_64")
-    /// * `device_name` - User-friendly name (e.g., "Alex's Desktop")
+    ///
+    /// No device name: the new device cannot encrypt one until the
+    /// ProvisionMessage hands it the account identity key, so the name is
+    /// sent (encrypted) at `complete_device_linking`.
     pub async fn start_provisioning(
         &mut self,
         device_info: &str,
-        device_name: &str,
     ) -> Result<StartProvisioningResponse, NetworkError> {
         let request = StartProvisioningRequest {
             device_info: device_info.to_string(),
-            device_name: device_name.to_string(),
         };
 
         self.inner
@@ -180,7 +181,8 @@ impl ProvisioningClient {
     /// * `provisioning_code` - Code from decrypted ProvisionMessage
     /// * `device_auth_token` - 32-byte client-generated auth token
     /// * `device_info` - Platform/model info
-    /// * `device_name` - User-friendly device name
+    /// * `encrypted_name` - Serialized `DeviceName`, encrypted to the account
+    ///   identity key from the ProvisionMessage (opaque to the server)
     /// * `prekey_bundle` - Signal Protocol prekey bundle for this device
     /// * `one_time_prekeys` - Initial batch of one-time prekeys
     #[allow(clippy::too_many_arguments)]
@@ -189,7 +191,7 @@ impl ProvisioningClient {
         provisioning_code: &str,
         device_auth_token: &[u8; 32],
         device_info: &str,
-        device_name: &str,
+        encrypted_name: Vec<u8>,
         prekey_bundle: SignalPreKeyBundle,
         one_time_prekeys: Vec<PreKeyRecord>,
     ) -> Result<CompleteDeviceLinkingResponse, NetworkError> {
@@ -197,7 +199,7 @@ impl ProvisioningClient {
             provisioning_code: provisioning_code.to_string(),
             device_auth_token: device_auth_token.to_vec(),
             device_info: device_info.to_string(),
-            device_name: device_name.to_string(),
+            encrypted_name,
             prekey_bundle: Some(prekey_bundle),
             initial_one_time_prekeys: one_time_prekeys,
             request_id: uuid::Uuid::new_v4().to_string(),

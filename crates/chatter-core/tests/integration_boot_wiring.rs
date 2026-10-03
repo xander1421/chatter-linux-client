@@ -15,6 +15,7 @@ use std::time::{Duration, Instant};
 fn test_data_dir(test_name: &str) -> String {
     let dir = std::env::temp_dir().join(format!("chatter-test-{}-{}", test_name, std::process::id()));
     std::fs::create_dir_all(&dir).expect("create test data dir");
+    crate::common::headless(&dir);
     dir.to_string_lossy().into_owned()
 }
 

@@ -387,6 +387,15 @@ impl ConversationHandle {
                     target_sent_timestamp, self.active_channel_id().as_deref(),
                 );
                 self.dispatch_content(content).await?;
+                // The server keeps an authorless copy of a sealed-sender
+                // message; take it down too, or a device fetching history
+                // gets it back. Best-effort: the E2E delete already went out.
+                if let Some(msg) = self.own_message_by_timestamp(target_sent_timestamp) {
+                    if let Err(e) = self.client.messages().delete_sealed_server_copy(&msg).await {
+                        tracing::warn!(message_id = %msg.id, error = %e,
+                            "delete-for-everyone: server copy of sealed message not deleted");
+                    }
+                }
                 // Persist deletion locally (sender doesn't get their own delete back)
                 self.delete_local_by_timestamp(target_sent_timestamp);
                 Ok(())
@@ -992,6 +1001,11 @@ impl ConversationHandle {
     }
 
     /// Delete a message from local DB by timestamp (for sender's own deletes).
+    fn own_message_by_timestamp(&self, sent_timestamp: u64) -> Option<crate::domain::Message> {
+        let user_id = self.client.auth_state().get().current_user_id?;
+        self.client.messages().get_by_sender_timestamp(&user_id, sent_timestamp).ok().flatten()
+    }
+
     fn delete_local_by_timestamp(&self, sent_timestamp: u64) {
         if let Some(user_id) = self.client.auth_state().get().current_user_id {
             if let Ok(Some(msg)) = self.client.messages().get_by_sender_timestamp(&user_id, sent_timestamp) {
@@ -1219,7 +1233,7 @@ mod tests {
             matches!(shield, Err(crate::services::message::MessageError::NotReachablePrivately(_))),
             "Shield must take the mailbox, got {shield:?}"
         );
-        assert!(ms.sesame_manager.drain_pending_messages(&friend).unwrap().is_empty());
+        assert!(ms.pending_dms.drain(&friend).unwrap().is_empty());
 
         ms.shield_mode.store(false, Ordering::Release);
         let normal = ms.send_friend_dm_content(&friend, content()).await;
@@ -1227,7 +1241,7 @@ mod tests {
             !matches!(normal, Err(crate::services::message::MessageError::BootstrapInitiated)),
             "normal mode must not take the mailbox"
         );
-        assert!(ms.sesame_manager.drain_pending_messages(&friend).unwrap().is_empty());
+        assert!(ms.pending_dms.drain(&friend).unwrap().is_empty());
     }
 
     /// Opening a DM has to leave the sidebar badge at zero. The badge is a

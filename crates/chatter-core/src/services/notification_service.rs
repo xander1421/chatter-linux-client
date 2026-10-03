@@ -248,8 +248,6 @@ pub fn spawn_notification_listener(
     client: std::sync::Weak<crate::client::ChatterClient>,
     user_service: std::sync::Arc<crate::services::user::UserService>,
     notification_service: std::sync::Arc<NotificationService>,
-    signal_service: std::sync::Arc<crate::services::signal_service::SignalService>,
-    channel_repo: std::sync::Arc<crate::storage::ChannelRepository>,
 ) -> tokio::task::JoinHandle<()> {
     use crate::domain::notification::NotificationPriority;
     use crate::inbox::handlers::DomainEvent;
@@ -355,84 +353,14 @@ pub fn spawn_notification_listener(
                 }
 
                 DomainEvent::PeerDevicesChanged { peer_user_id, device_id, change_type } => {
-                    // Two-phase rekey on peer device change:
-                    //   1. Drop every pairwise Signal session for the peer so
-                    //      ensure_session on next send fetches the fresh
-                    //      prekey set covering the peer's current device
-                    //      list.
-                    //   2. For every channel where the peer holds
-                    //      membership, mark the channel for sender-key
-                    //      rotation. Next group send will regenerate the
-                    //      sender key + redistribute SKDM so the peer's
-                    //      new device receives it (and revoked devices
-                    //      are excluded).
-                    let peer_id = *peer_user_id;
-                    let peer_str = peer_id.to_string();
-                    let signal = signal_service.clone();
-                    let repo = channel_repo.clone();
-                    let change = change_type.clone();
-                    let did = *device_id;
+                    // Per Signal: an added device of a staying member needs
+                    // only our SKDM, a removed one no key reset — see
+                    // `MessageService::handle_peer_device_change`.
+                    let Some(client) = client.upgrade() else { break };
+                    let messages = client.messages().clone();
+                    let (peer, device, change) = (*peer_user_id, *device_id, change_type.clone());
                     tokio::spawn(async move {
-                        // Phase 1: pairwise session invalidation.
-                        match signal.actor.invalidate_peer_sessions(peer_str.clone()).await {
-                            Ok(n) => tracing::info!(
-                                peer = %peer_str,
-                                device_id = did,
-                                change_type = %change,
-                                dropped_sessions = n,
-                                "invalidated peer sessions after device change"
-                            ),
-                            Err(e) => tracing::warn!(
-                                peer = %peer_str,
-                                error = %e,
-                                "failed to invalidate peer sessions on device change"
-                            ),
-                        }
-
-                        // Phase 2: group sender-key rotation flags.
-                        // Run on a blocking thread — channel_repo is a
-                        // synchronous SQLite handle.
-                        let peer_id_for_blocking = peer_id;
-                        let repo_for_blocking = repo.clone();
-                        let channels = tokio::task::spawn_blocking(move || {
-                            repo_for_blocking.list_channels_for_user(&peer_id_for_blocking)
-                        }).await;
-
-                        let channel_ids = match channels {
-                            Ok(Ok(ids)) => ids,
-                            Ok(Err(e)) => {
-                                tracing::warn!(
-                                    peer = %peer_str,
-                                    error = %e,
-                                    "failed to list peer channel memberships — skipping SKDM rotation"
-                                );
-                                return;
-                            }
-                            Err(e) => {
-                                tracing::warn!(
-                                    peer = %peer_str,
-                                    error = %e,
-                                    "join error listing peer channels"
-                                );
-                                return;
-                            }
-                        };
-
-                        for channel_id in &channel_ids {
-                            if let Err(e) = signal.actor.mark_channel_for_rotation(*channel_id).await {
-                                tracing::warn!(
-                                    channel_id = %channel_id,
-                                    peer = %peer_str,
-                                    error = %e,
-                                    "failed to mark channel for SKDM rotation"
-                                );
-                            }
-                        }
-                        tracing::info!(
-                            peer = %peer_str,
-                            channels_marked = channel_ids.len(),
-                            "marked peer-shared channels for sender-key rotation"
-                        );
+                        messages.handle_peer_device_change(peer, device, &change).await;
                     });
                 }
 

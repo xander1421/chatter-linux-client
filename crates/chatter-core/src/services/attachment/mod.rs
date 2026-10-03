@@ -101,10 +101,6 @@ pub struct CdnUploadResult {
     /// Original image/video dimensions.
     pub width: u32,
     pub height: u32,
-    /// Concatenated per-chunk HMAC-SHA256 digests for incremental verification.
-    pub incremental_mac: Vec<u8>,
-    /// Chunk size for incremental MAC (64KB). 0 if not applicable.
-    pub chunk_size: u32,
     /// Total ciphertext size in bytes.
     pub ciphertext_size: u64,
 }

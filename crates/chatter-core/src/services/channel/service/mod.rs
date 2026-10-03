@@ -18,7 +18,7 @@ use std::sync::Arc;
 use tokio_stream::StreamExt;
 
 use crate::domain::channel::{
-    Channel, ChannelConfig, ChannelType, MemberRole, Membership, NotificationPreference,
+    Channel, ChannelConfig, ChannelType,
 };
 use crate::domain::ids::{ChannelId, UserId};
 use crate::mailbox::group::{GroupCoordinator, GroupMailboxSetupResult};
@@ -26,7 +26,8 @@ use crate::network::grpc::channel_client::ChannelClient;
 use crate::network::grpc::client_pool::GrpcClientPool;
 use crate::network::grpc::mailbox_client::MailboxClient;
 use crate::network::grpc::AnonymousMailboxClient;
-use crate::proto::chat_v1::{self, channel_event};
+use crate::proto::chat_v1::{self, self as pb, channel_event};
+use pb::channel_action::Action;
 use crate::services::current_user::CurrentUserProvider;
 use crate::storage::repositories::channel_repo::ChannelRepository;
 use crate::storage::repositories::section_repo::SectionRepository;
@@ -37,6 +38,9 @@ use super::converters::{
     proto_to_domain_channel, proto_to_domain_membership,
 };
 use super::error::ChannelError;
+use super::membership_log::{password_invite_key, AuthorBase, MembershipLog};
+use super::verified_state::{ChannelRole, Policy};
+use membership::action;
 
 /// Channel service for all channel operations.
 ///
@@ -53,6 +57,8 @@ pub struct ChannelService {
     /// For SKDM redistribution after kick/leave; set after MessageService
     /// exists. Read access via `message_service()`.
     pub(crate) message_service: Arc<crate::services::message::MessageService>,
+    /// Authoring and verification of the signed membership log.
+    pub(crate) membership_log: Arc<MembershipLog>,
 }
 
 impl ChannelService {
@@ -65,6 +71,7 @@ impl ChannelService {
         signal_service: Arc<crate::services::signal_service::SignalService>,
         group_coordinator: Arc<GroupCoordinator>,
         message_service: Arc<crate::services::message::MessageService>,
+        membership_log: Arc<MembershipLog>,
     ) -> Self {
         Self {
             grpc_pool,
@@ -74,7 +81,13 @@ impl ChannelService {
             signal_service,
             group_coordinator,
             message_service,
+            membership_log,
         }
+    }
+
+    /// The channel membership log (verified state, authoring, catch-up).
+    pub fn membership_log(&self) -> &Arc<MembershipLog> {
+        &self.membership_log
     }
 
     /// Get the current user's ID.
@@ -108,7 +121,8 @@ impl ChannelService {
     /// * `config` - Optional channel configuration
     /// * `description` - Optional channel description
     /// * `icon` - Optional raw image bytes (PNG/JPEG/WebP, ≤64KB)
-    /// * `password` - Optional password for private channels
+    /// * `password` - Optional channel password. Never sent: it seeds the
+    ///   join capability in the genesis (`password_invite_key`)
     /// * `initial_members` - Initial member user IDs
     /// * `setup_mailbox` - Whether to setup group mailbox for encrypted channels
     ///
@@ -131,7 +145,8 @@ impl ChannelService {
         initial_members: Vec<UserId>,
         setup_mailbox: bool,
     ) -> Result<(Channel, Option<GroupMailboxSetupResult>), ChannelError> {
-        let current_user = self.settings_repo.current_user_id()?;
+        let _ = self.settings_repo.current_user_id()?;
+        let _ = setup_mailbox;
 
         let trimmed_name = name.trim();
         if trimmed_name.is_empty() {
@@ -142,101 +157,92 @@ impl ChannelService {
 
         let proto_type = domain_channel_type_to_proto(channel_type);
         let proto_config = config.as_ref().map(domain_config_to_proto);
+        let password = password.filter(|p| !p.is_empty());
 
-        // Use call_with_retry to handle stale gRPC connections —
-        // disconnects + reconnects on transport error (same fix as DM mailbox path)
-        let member_ids: Vec<String> = initial_members.iter().map(|id| id.to_string()).collect();
-        let mut stream = self
-            .grpc_pool
-            .call_with_retry("CreateChannel", |pool| {
-                let mut client = pool.channel_client();
-                let name = trimmed_name.to_string();
-                let pt = proto_type;
-                let pc = proto_config.clone();
-                let mids = member_ids.clone();
-                let pw = password.map(str::to_string);
-                let desc = description.map(str::to_string);
-                let icon_bytes = icon.map(|b| b.to_vec());
-                async move {
-                    client
-                        .create_channel(
-                            &name,
-                            pt,
-                            pc,
-                            mids,
-                            pw.as_deref(),
-                            desc.as_deref(),
-                            icon_bytes.as_deref(),
-                        )
-                        .await
-                }
-            })
-            .await?;
-
-        let mut channel_opt: Option<Channel> = None;
-        while let Some(event_result) = stream.next().await {
-            let event = event_result?;
-            tracing::debug!(
-                channel_id = %event.channel_id,
-                creation_status = event.creation_status,
-                has_event = event.event.is_some(),
-                "Received channel creation stream event"
+        let channel = if matches!(channel_type, ChannelType::Public | ChannelType::Private) {
+            // Revision 1 of the membership log names the channel id (picked
+            // here). A password becomes a join capability whose key is
+            // derived from it; a public channel without one is OPEN.
+            let channel_id = ChannelId::from(uuid::Uuid::new_v4());
+            let mut policy = Policy::defaults(channel_type == ChannelType::Public);
+            let mut genesis = Vec::new();
+            if let Some(p) = password {
+                policy.join = super::verified_state::JoinMode::InviteOnly;
+                let key = password_invite_key(&channel_id, p)?;
+                genesis.push(action(Action::CreateInvite(pb::CreateInvite {
+                    capability: Some(pb::InviteCapability {
+                        invite_pub: super::membership_log::invite_pub_of(&key).to_vec(),
+                        role: ChannelRole::Member as i32,
+                        expires_at: 0,
+                        max_uses: 0,
+                        needs_approval: false,
+                        uses: 0,
+                    }),
+                })));
+            }
+            genesis.insert(
+                0,
+                action(Action::Genesis(pb::Genesis { policy: Some(policy.to_proto()), disappearing_seconds: 0 })),
             );
-            if let Some(channel_event::Event::ChannelCreated(proto_channel)) = event.event {
-                tracing::info!(
-                    channel_id = %proto_channel.id,
-                    channel_name = %proto_channel.name,
-                    "Received ChannelCreated event from server"
-                );
-                channel_opt = Some(proto_to_domain_channel(&proto_channel)?);
-                break;
+            self.membership_log
+                .author(
+                    &channel_id,
+                    AuthorBase::Genesis,
+                    None,
+                    |_| Ok(genesis.clone()),
+                    |change| self.create_on_server(trimmed_name, proto_type, proto_config.clone(), description, icon, Some(change)),
+                )
+                .await?
+        } else {
+            self.create_on_server(trimmed_name, proto_type, proto_config.clone(), description, icon, None)
+                .await?
+        };
+
+        // Initial members are invitees: each gets a signed invite and joins
+        // by its own AcceptInvite.
+        for member in initial_members {
+            if let Err(e) = self.invite_user(&channel.id, &member, None).await {
+                tracing::warn!(channel_id = %channel.id, user_id = %member, error = %e, "Failed to invite initial member");
             }
         }
 
-        // Drop stream to release borrow of channel_client
-        drop(stream);
-
-        if channel_opt.is_none() {
-            tracing::error!("Stream ended without receiving ChannelCreated event");
-        }
-
-        let channel = channel_opt.ok_or_else(|| {
-            ChannelError::InvalidInput("no channel created event received".to_string())
-        })?;
-
-        tracing::info!(channel_id = %channel.id, "Inserting channel to local repo");
-        self.channel_repo.insert(&channel)?;
-        tracing::info!(channel_id = %channel.id, "Channel inserted");
-
-        let membership = Membership {
-            channel_id: channel.id,
-            user_id: current_user,
-            role: MemberRole::Owner,
-            joined_at: channel.created_at,
-            last_read_message_id: None,
-            is_muted: false,
-            muted_until: None,
-            notification_preference: NotificationPreference::All,
-        };
-        tracing::info!(channel_id = %channel.id, "Inserting membership to local repo");
-        self.channel_repo.insert_membership(&membership)?;
-        tracing::info!(channel_id = %channel.id, "Membership inserted");
-
-        // Server-managed channels no longer register a group mailbox; control
-        // and SKDM fanout flow over the device inbox.
-        let _ = setup_mailbox;
-
-        // Sync members (in case initial_members were added by server)
-        let mut channel_client = self.channel_client();
-        if let Err(e) = self.sync_channel_members_internal(&mut channel_client, &channel.id).await {
-            tracing::debug!(
-                channel_id = %channel.id,
-                error = %e,
-                "Failed to sync members after creation (may be normal for new channel)"
-            );
-        }
-
         Ok((channel, None))
+    }
+
+    /// `CreateChannel` until its `ChannelCreated`; stores the channel row.
+    #[allow(clippy::too_many_arguments)]
+    async fn create_on_server(
+        &self,
+        name: &str,
+        proto_type: chat_v1::ChannelType,
+        proto_config: Option<chat_v1::channel::Config>,
+        description: Option<&str>,
+        icon: Option<&[u8]>,
+        genesis: Option<chat_v1::ChannelChange>,
+    ) -> Result<Channel, crate::error::NetworkError> {
+        let mut stream = self
+            .grpc_pool
+            .channel_client()
+            .create_channel(name, proto_type, proto_config, description, icon, genesis)
+            .await?;
+        while let Some(event) = stream.next().await {
+            match event?.event {
+                Some(channel_event::Event::ChannelCreated(proto_channel)) => {
+                    let channel = proto_to_domain_channel(&proto_channel)
+                        .map_err(|e| crate::error::NetworkError::InvalidRequest(e.to_string()))?;
+                    self.channel_repo
+                        .insert(&channel)
+                        .map_err(|e| crate::error::NetworkError::Unknown(e.to_string()))?;
+                    return Ok(channel);
+                }
+                Some(channel_event::Event::OperationFailed(failure)) => {
+                    let msg = failure.error.map(|e| e.message).unwrap_or_else(|| "channel creation failed".into());
+                    return Err(crate::error::NetworkError::InvalidRequest(msg));
+                }
+                _ => {}
+            }
+        }
+        Err(crate::error::NetworkError::InvalidRequest("no channel created event received".into()))
     }
 
     // ==================== CRUD Operations ====================
@@ -427,6 +433,7 @@ impl ChannelService {
         }
 
         let _ = self.channel_repo.delete(channel_id);
+        let _ = self.membership_log.forget(channel_id);
 
         if let Ok(memberships) = self.channel_repo.list_members(channel_id) {
             for membership in memberships {

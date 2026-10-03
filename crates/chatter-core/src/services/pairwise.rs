@@ -122,15 +122,18 @@ impl PairwiseService {
     ///
     /// # Arguments
     /// * `ciphertext` - The sealed sender ciphertext
+    /// * `server_timestamp_ns` - The envelope's server timestamp (sender
+    ///   certificate validation time)
     ///
     /// # Returns
     /// Tuple of (sender_id, decrypted_plaintext).
     pub async fn decrypt_sealed_sender(
         &self,
         ciphertext: &[u8],
+        server_timestamp_ns: u64,
     ) -> Result<(String, Vec<u8>), PairwiseError> {
         let (address, plaintext, msg_type) = self.signal_service
-            .decrypt_message(ciphertext)
+            .decrypt_message(ciphertext, server_timestamp_ns)
             .await
             .map_err(|e| PairwiseError::DecryptionFailed(e.to_string()))?;
 

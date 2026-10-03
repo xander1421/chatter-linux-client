@@ -176,6 +176,7 @@ fn test_dm_conversation_ready_states() {
         id: "test".to_string(),
         public_key: [0u8; 32],
         private_key: [0u8; 64],
+        encryption_private_key: [0u8; 32],
         signature: vec![],
         randomizer: None,
         token_id: "token".to_string(),
@@ -251,6 +252,7 @@ fn create_test_mailbox(db: &Database, _peer_id: &UserId, mailbox_id: &str, token
         id: mailbox_id.to_string(),
         public_key: [1u8; 32],
         private_key: [2u8; 64],
+        encryption_private_key: [2u8; 32],
         signature: vec![3, 4, 5],
         randomizer: Some(vec![6, 7, 8]),
         token_id: token_id.to_string(),
@@ -373,7 +375,7 @@ fn test_inbox_event_dm_decryption_failed_format() {
     let event = InboxEvent::DmDecryptionFailed {
         peer_id,
         error: "No shared secret".to_string(),
-        convergence_failed: false,
+        session_desync: false,
     };
 
     let debug_str = format!("{:?}", event);

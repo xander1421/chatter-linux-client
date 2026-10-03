@@ -5,13 +5,12 @@
 use std::sync::Arc;
 use tokio_stream::StreamExt;
 
-use crate::crypto::auth_crypto::hash_password;
-
-use crate::error::{NetworkError, StorageError};
+use crate::error::{CryptoError, NetworkError, StorageError};
 use crate::network::grpc::auth_client::AuthClient;
 use crate::network::grpc::client_pool::GrpcClientPool;
 use crate::network::grpc::interceptors::AuthInterceptor;
 use crate::proto::chat_v1::account_deletion_event::Status as DeletionStatus;
+use crate::services::auth_service::{change_password_with, prove_password, AuthError};
 use crate::storage::repositories::settings_repo::{keys, SettingsRepository};
 
 /// Account management errors.
@@ -36,6 +35,25 @@ pub enum AccountError {
     /// Storage operation failed.
     #[error("storage error: {0}")]
     Storage(#[from] StorageError),
+
+    /// Password-proof cryptography failed.
+    #[error("crypto error: {0}")]
+    Crypto(#[from] CryptoError),
+}
+
+impl From<AuthError> for AccountError {
+    fn from(e: AuthError) -> Self {
+        match e {
+            AuthError::InvalidCredentials | AuthError::Network(NetworkError::Unauthenticated) => {
+                AccountError::InvalidPassword
+            }
+            AuthError::Network(n) => AccountError::Network(n),
+            AuthError::Crypto(c) => AccountError::Crypto(c),
+            AuthError::Storage(s) => AccountError::Storage(s),
+            AuthError::NotLoggedIn => AccountError::NotLoggedIn,
+            other => AccountError::Crypto(CryptoError::Protocol(other.to_string())),
+        }
+    }
 }
 
 /// Account management service.
@@ -80,8 +98,8 @@ impl AccountService {
     ///
     /// Orchestrates:
     /// 1. Login state verification
-    /// 2. Password hashing (SHA256 - server expects pre-hashed)
-    /// 3. Server password change request
+    /// 2. OPAQUE proof of the current password + OPAQUE registration of the
+    ///    new one (`auth_service::change_password_with`)
     ///
     /// # Arguments
     ///
@@ -99,18 +117,7 @@ impl AccountService {
             return Err(AccountError::NotLoggedIn);
         }
 
-        let current_hash = hash_password(current_password);
-        let new_hash = hash_password(new_password);
-
-        // Call server to change password
-        auth_client
-            .change_password(current_hash.as_slice(), new_hash.as_slice())
-            .await
-            .map_err(|e| match &e {
-                NetworkError::Unauthenticated => AccountError::InvalidPassword,
-                _ => AccountError::Network(e),
-            })?;
-
+        change_password_with(auth_client, current_password, new_password).await?;
         Ok(())
     }
 
@@ -136,11 +143,12 @@ impl AccountService {
             return Err(AccountError::NotLoggedIn);
         }
 
-        let password_hash = hash_password(password);
+        // A fresh OPAQUE proof of the password, spent by DeleteAccount.
+        let proof = prove_password(auth_client, password).await?;
 
         // Call server to delete account - returns event stream
         let stream = auth_client
-            .delete_account(password_hash.as_slice())
+            .delete_account(proof)
             .await
             .map_err(|e| match &e {
                 NetworkError::Unauthenticated => AccountError::InvalidPassword,

@@ -7,8 +7,8 @@
 //!   - Padding oracle resistance
 //!   - Content padding for traffic analysis resistance (NDSS'21)
 
+use chatter_core::crypto::ecies::{open_with_identity, seal_to_identity, IdentityHpkeUse, OVERHEAD};
 use chatter_core::crypto::{
-    ecies_encrypt, ecies_decrypt, EciesMessage,
     encrypt_dm_bytes, decrypt_dm_bytes,
     AttachmentCrypto, KEY_SET_LENGTH,
 };
@@ -24,52 +24,37 @@ use chatter_core::services::{
 // ECIES — Input Validation
 // ===========================================================================
 
-/// ECIES: all-zero public key should be rejected or produce decrypt failure.
+fn identity() -> libsignal_protocol::IdentityKeyPair {
+    use rand::TryRngCore;
+    libsignal_protocol::IdentityKeyPair::generate(&mut rand::rngs::OsRng.unwrap_err())
+}
+
+/// Identity HPKE: an all-zero (low-order) recipient key is refused at seal.
 ///
 /// Security property: Low-order point rejection prevents key confusion attacks.
 #[test]
 fn test_ecies_zero_public_key() {
-    let zero_pk = [0u8; 32];
-    let result = ecies_encrypt(&zero_pk, b"test");
-    // Either encryption fails (ideal) or decryption with any key fails
-    match result {
-        Err(_) => {} // Good: rejected at encrypt time
-        Ok(msg) => {
-            // Encryption succeeded with zero key — verify it can't be decrypted meaningfully
-            let random_sk = x25519_dalek::StaticSecret::from(rand::random::<[u8; 32]>());
-            let dec = ecies_decrypt(random_sk.as_bytes(), &msg);
-            // The point is: zero-key encryption shouldn't produce useful output
-            // Any result (error or garbage) is acceptable as long as it doesn't
-            // decrypt to the original plaintext with a random key
-            if let Ok(pt) = dec {
-                assert_ne!(pt, b"test".to_vec(), "Zero-key message shouldn't decrypt with random key");
-            }
-        }
+    let mut zero = [0u8; 33];
+    zero[0] = 0x05;
+    let key = libsignal_protocol::IdentityKey::decode(&zero).expect("decodes; DH must refuse it");
+    assert!(seal_to_identity(&key, IdentityHpkeUse::AnonDmInit, b"test").is_err());
+}
+
+/// Identity HPKE: truncated messages are rejected, not panicked on.
+#[test]
+fn test_ecies_truncated_message() {
+    let ours = identity();
+    for len in [0, 1, 32, OVERHEAD - 1, OVERHEAD] {
+        assert!(open_with_identity(&ours, IdentityHpkeUse::AnonDmInit, &vec![0u8; len]).is_err(), "len {len}");
     }
 }
 
-/// ECIES: truncated ciphertext rejected.
-#[test]
-fn test_ecies_truncated_message() {
-    let sk = x25519_dalek::StaticSecret::from(rand::random::<[u8; 32]>());
-    let msg = EciesMessage {
-        enc: vec![0u8; 32],
-        ciphertext: vec![0u8; 5], // Too short for nonce + tag
-    };
-    let result = ecies_decrypt(sk.as_bytes(), &msg);
-    assert!(result.is_err(), "Truncated ECIES message must be rejected");
-}
-
-/// ECIES: empty ciphertext rejected.
+/// Identity HPKE: a well-formed prefix with an empty ciphertext body fails.
 #[test]
 fn test_ecies_empty_ciphertext() {
-    let sk = x25519_dalek::StaticSecret::from(rand::random::<[u8; 32]>());
-    let msg = EciesMessage {
-        enc: vec![0u8; 32],
-        ciphertext: vec![],
-    };
-    let result = ecies_decrypt(sk.as_bytes(), &msg);
-    assert!(result.is_err(), "Empty ECIES ciphertext must be rejected");
+    let ours = identity();
+    let sealed = seal_to_identity(ours.identity_key(), IdentityHpkeUse::AnonDmInit, b"x").unwrap();
+    assert!(open_with_identity(&ours, IdentityHpkeUse::AnonDmInit, &sealed[..33]).is_err());
 }
 
 // ===========================================================================

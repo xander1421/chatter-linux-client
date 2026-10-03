@@ -11,9 +11,12 @@
 //! - `saved` - Saved messages (Note to Self)
 
 mod dm;
+pub(crate) use dm::null_message_content;
 mod dm_bootstrap;
 mod dm_resend;
 mod group;
+pub use group::ChannelStateSync;
+pub(crate) use group::GroupStateGate;
 pub mod core;
 pub mod channel_inbound;
 pub mod conversion;
@@ -26,7 +29,6 @@ pub use receipts::advance_delivery_status;
 
 use std::sync::Arc;
 
-use crate::crypto::signal::{SesameManager, SqliteSesameStore};
 use crate::domain::ids::{AttachmentId, ChannelId, UserId};
 use crate::domain::message::ConversationType;
 use crate::domain::message::Message;
@@ -44,7 +46,7 @@ use crate::services::signal_service::SignalService;
 use crate::storage::Database;
 use crate::storage::repositories::attachment_repo::AttachmentRepository;
 use crate::storage::repositories::channel_repo::ChannelRepository;
-use crate::storage::repositories::MessageRepository;
+use crate::storage::repositories::{MessageRepository, PendingDmRepository};
 use crate::storage::repositories::search_index::{SearchIndex, SearchResult};
 use crate::storage::repositories::settings_repo::SettingsRepository;
 use crate::storage::repositories::user_repo::UserRepository;
@@ -138,6 +140,20 @@ pub enum MessageError {
     /// Attachment upload/download failed.
     #[error("attachment error: {0}")]
     AttachmentError(String),
+
+    /// The channel's verified membership (Design B) does not allow sender-key
+    /// traffic: no verified state yet (`status: None`), a change that failed
+    /// verification, or a detected fork. No SKDM goes out and nothing is
+    /// group-encrypted until it clears. Retrying cannot help.
+    #[error("channel membership could not be verified ({})", match status {
+        None => "no verified state",
+        Some(crate::services::channel::verified_state::VerificationStatus::Fork) => "fork detected",
+        Some(_) => "verification failed",
+    })]
+    MembershipNotVerified {
+        channel_id: ChannelId,
+        status: Option<crate::services::channel::verified_state::VerificationStatus>,
+    },
 }
 
 impl MessageError {
@@ -276,8 +292,8 @@ pub struct MessageService {
     pub(crate) signal_service: Arc<SignalService>,
     /// Group mailbox manager for NDSS '21 per-group mailboxes.
     pub(crate) group_mailbox_manager: Arc<GroupMailboxManager>,
-    /// Sesame session manager for multi-session handling and message queueing.
-    pub(crate) sesame_manager: Arc<SesameManager<SqliteSesameStore>>,
+    /// DMs held back until a first-contact bootstrap completes.
+    pub(crate) pending_dms: Arc<PendingDmRepository>,
     /// Full-text search index for local message search.
     pub(crate) search_index: Arc<SearchIndex>,
     /// Token manager for anonymous mailbox credentials.
@@ -317,8 +333,6 @@ pub struct MessageService {
     /// `MessageGateway`, which honours a resend's carried server id only
     /// against an entry here, and consumes it.
     pub(crate) solicited_resends: SolicitedResends,
-    /// Friend-DM deposits a peer device may ask us to send again.
-    pub(crate) dm_sent_log: dm_resend::DmSentLog,
     /// Our own device list as the server last gave it: (fetched at, epoch
     /// nanos; device ids). See [`MessageService::is_retired_device`].
     pub(crate) own_devices: Arc<tokio::sync::Mutex<Option<(u64, std::collections::HashSet<u32>)>>>,
@@ -330,6 +344,10 @@ pub struct MessageService {
     /// Rate limit on resend requests for messages the parked-decrypt cap
     /// evicted — see [`group::eviction_resend_due`].
     pub(crate) eviction_resends: Arc<parking_lot::Mutex<group::EvictionResendGate>>,
+    /// The channel service's change fetcher (W4), called when a peer's
+    /// `(revision, state_hash)` stamp is ahead of our verified state. See
+    /// [`group::ChannelStateSync`].
+    pub(crate) channel_state_sync: Arc<parking_lot::RwLock<Option<Arc<dyn group::ChannelStateSync>>>>,
 }
 
 /// `(channel, sender, server sent_at in epoch millis)` of every group message
@@ -424,7 +442,7 @@ impl MessageService {
         user_repo: Arc<UserRepository>,
         signal_service: Arc<SignalService>,
         group_mailbox_manager: Arc<GroupMailboxManager>,
-        sesame_manager: Arc<SesameManager<SqliteSesameStore>>,
+        pending_dms: Arc<PendingDmRepository>,
         search_index: Arc<SearchIndex>,
         token_manager: Arc<TokenManager>,
         event_bus: crate::events::EventBus,
@@ -432,7 +450,6 @@ impl MessageService {
         mailbox_manager: Arc<MailboxManager>,
     ) -> Self {
         let solicited_resends = SolicitedResends::load(settings_repo.clone());
-        let dm_sent_log = dm_resend::DmSentLog::load(settings_repo.clone());
         Self {
             grpc_pool,
             database,
@@ -443,7 +460,7 @@ impl MessageService {
             user_repo,
             signal_service,
             group_mailbox_manager,
-            sesame_manager,
+            pending_dms,
             search_index,
             token_manager,
             event_bus,
@@ -454,10 +471,10 @@ impl MessageService {
             sender_key_requests: Arc::new(parking_lot::Mutex::new(std::collections::HashMap::new())),
             group_retry_requests: Arc::new(parking_lot::Mutex::new(std::collections::HashSet::new())),
             solicited_resends,
-            dm_sent_log,
             own_devices: Arc::new(tokio::sync::Mutex::new(None)),
             retired_peer_devices: Arc::new(parking_lot::Mutex::new(std::collections::HashMap::new())),
             eviction_resends: Arc::new(parking_lot::Mutex::new(std::collections::HashMap::new())),
+            channel_state_sync: Arc::new(parking_lot::RwLock::new(None)),
         }
     }
 
@@ -785,13 +802,22 @@ impl MessageService {
         Ok(())
     }
 
-    /// Persist an edit to the database (update body + set is_edited flag).
+    /// Persist an edit of one of OUR messages made on this device (update
+    /// body + set is_edited flag). Anyone else's edit is persisted, ordered
+    /// and dated by [`apply_dm_edit`](Self::apply_dm_edit) /
+    /// [`apply_channel_edit`](Self::apply_channel_edit) when it arrives; the
+    /// `MessageEdited` it announces must not be stored again here with
+    /// `edited_at = now`.
     pub fn update_message_body(
         &self,
         message_id: &crate::domain::ids::MessageId,
         new_content: &crate::domain::message::MessageContent,
     ) -> Result<(), MessageError> {
+        let me = self.current_user_id()?;
         if let Some(mut message) = self.message_repo.get(message_id)? {
+            if message.sender_id != Some(me) || (message.is_edited && message.content == *new_content) {
+                return Ok(());
+            }
             message.content = new_content.clone();
             message.is_edited = true;
             message.edited_at = Some(chrono::Utc::now());
@@ -799,6 +825,100 @@ impl MessageService {
             self.message_repo.update(&message)?;
         }
         Ok(())
+    }
+
+    /// How far from its message an edit may be and still apply
+    /// ([`message_modifier_repo::EDIT_MAX_AGE_NS`](crate::storage::repositories::message_modifier_repo::EDIT_MAX_AGE_NS)).
+    pub const EDIT_MAX_AGE_NS: u64 = crate::storage::repositories::message_modifier_repo::EDIT_MAX_AGE_NS;
+
+    /// Where a modifier from `author` in a friend DM may land: the DM with
+    /// them — or, when the author is us (a copy from our own other device),
+    /// whichever DM our message is in.
+    fn dm_modifier_scope(&self, author: &UserId) -> Option<ChannelId> {
+        (self.current_user_id().ok().as_ref() != Some(author)).then(|| ChannelId::from(*author))
+    }
+
+    /// A friend DM edit from `peer` of its message sent at `target_sent_at`;
+    /// see [`apply_edit`](Self::apply_edit).
+    pub fn apply_dm_edit(
+        &self,
+        peer: &UserId,
+        target_sent_at: u64,
+        new_body: &str,
+        edit_ts: u64,
+        server_ts: u64,
+    ) -> Result<Option<Message>, MessageError> {
+        self.apply_edit(peer, self.dm_modifier_scope(peer), target_sent_at, new_body, edit_ts, server_ts)
+    }
+
+    /// A channel edit from `sender` of its message sent at `target_sent_at`;
+    /// see [`apply_edit`](Self::apply_edit).
+    pub fn apply_channel_edit(
+        &self,
+        channel_id: &ChannelId,
+        sender: &UserId,
+        target_sent_at: u64,
+        new_body: &str,
+        edit_ts: u64,
+        server_ts: u64,
+    ) -> Result<Option<Message>, MessageError> {
+        self.apply_edit(sender, Some(*channel_id), target_sent_at, new_body, edit_ts, server_ts)
+    }
+
+    /// Receive `author`'s edit of its own message sent at `target_sent_at`:
+    /// [`MessageModifierRepository::apply_received_edit`](crate::storage::repositories::message_modifier_repo::MessageModifierRepository::apply_received_edit),
+    /// the one choke point every received edit goes through.
+    fn apply_edit(
+        &self,
+        author: &UserId,
+        conversation: Option<ChannelId>,
+        target_sent_at: u64,
+        new_body: &str,
+        edit_ts: u64,
+        server_ts: u64,
+    ) -> Result<Option<Message>, MessageError> {
+        Ok(crate::storage::repositories::message_modifier_repo::MessageModifierRepository::new(self.database.clone())
+            .apply_received_edit(&self.message_repo, author, conversation, target_sent_at, new_body, edit_ts, server_ts)?)
+    }
+
+    /// A friend DM delete-for-everyone from `peer` of its message sent at
+    /// `target_sent_at`; see [`apply_delete`](Self::apply_delete).
+    pub fn apply_dm_delete(&self, peer: &UserId, target_sent_at: u64) -> Result<Option<Message>, MessageError> {
+        self.apply_delete(peer, self.dm_modifier_scope(peer), target_sent_at)
+    }
+
+    /// A channel delete-for-everyone from `sender` of its message sent at
+    /// `target_sent_at`; see [`apply_delete`](Self::apply_delete).
+    pub fn apply_channel_delete(
+        &self,
+        channel_id: &ChannelId,
+        sender: &UserId,
+        target_sent_at: u64,
+    ) -> Result<Option<Message>, MessageError> {
+        self.apply_delete(sender, Some(*channel_id), target_sent_at)
+    }
+
+    /// The message `author`'s delete-for-everyone names, for the caller to
+    /// delete (`DomainEvent::MessageDeleted`). One not here yet is held
+    /// (Signal-Desktop `Deletes.preload.ts:28`), so it is never stored when
+    /// it arrives (`message_modifier_repo`).
+    fn apply_delete(
+        &self,
+        author: &UserId,
+        conversation: Option<ChannelId>,
+        target_sent_at: u64,
+    ) -> Result<Option<Message>, MessageError> {
+        match self.message_repo.get_by_sender_timestamp(author, target_sent_at)? {
+            Some(message) if conversation.is_none_or(|c| c == message.conversation_id) => Ok(Some(message)),
+            Some(_) => Ok(None),
+            None => {
+                crate::storage::repositories::message_modifier_repo::MessageModifierRepository::new(
+                    self.database.clone(),
+                )
+                .queue_delete(author, target_sent_at, conversation, crate::util::time::TimestampNanos::now().as_u64())?;
+                Ok(None)
+            }
+        }
     }
 
     /// Add or remove a reaction on a message and persist to DB.
@@ -931,7 +1051,8 @@ impl MessageService {
             .unwrap_or(0)
     }
 
-    /// Persist a reaction received via inbox polling.
+    /// Persist a reaction. Does no conversation binding: a peer's reaction
+    /// from the inbox goes through [`Self::record_inbound_reaction`].
     ///
     /// Returns `true` if the reaction was newly inserted, `false` if it was
     /// already known (from a prior poll cycle, or because the reaction was
@@ -955,6 +1076,133 @@ impl MessageService {
             self.message_repo
                 .add_reaction(target_sender, target_sent_at_ns, reactor, &current, emoji)
                 .map_err(MessageError::from)
+        }
+    }
+
+    /// Resolve the target of an inbound peer reaction or pin, or `None` when
+    /// it is not here or must be dropped.
+    ///
+    /// `(target_author, sent_at)` names a message in *any* conversation, so a
+    /// peer who learned one could otherwise react to or pin it from a
+    /// conversation they are not in. Signal-Desktop
+    /// (`ts/messageModifiers/Reactions.preload.ts`, `isMessageAMatchForReaction`)
+    /// accepts a modifier from our own devices for any message we hold, and from
+    /// anyone else only if they are a valid sender in the target's
+    /// conversation. Here the target must also live in `conversation` — the
+    /// one the modifier arrived in (`ChannelId::from(peer)` for a friend DM,
+    /// the carried channel id for a channel). A modifier whose target is not
+    /// here yet is held by [`Self::record_inbound_reaction`] /
+    /// [`Self::resolve_inbound_pin`]; `message_modifier_repo::may_modify`
+    /// applies this same rule when the target arrives.
+    pub fn resolve_inbound_target(
+        &self,
+        conversation: &ChannelId,
+        actor: &UserId,
+        target_author: &UserId,
+        target_sent_at_ns: u64,
+    ) -> Result<Option<Message>, MessageError> {
+        Ok(match self.lookup_inbound_target(conversation, actor, target_author, target_sent_at_ns)? {
+            InboundTarget::Allowed(target) => Some(target),
+            InboundTarget::NotHeld | InboundTarget::Refused => None,
+        })
+    }
+
+    fn lookup_inbound_target(
+        &self,
+        conversation: &ChannelId,
+        actor: &UserId,
+        target_author: &UserId,
+        target_sent_at_ns: u64,
+    ) -> Result<InboundTarget, MessageError> {
+        let Some(target) = self.get_by_sender_timestamp(target_author, target_sent_at_ns)? else {
+            return Ok(InboundTarget::NotHeld);
+        };
+        if *actor == self.current_user_id()? {
+            return Ok(InboundTarget::Allowed(target));
+        }
+        let participant = target.conversation_id == *conversation
+            && match target.conversation_type {
+                ConversationType::ServerDm => *conversation == ChannelId::from(*actor),
+                ConversationType::Channel => self.channel_repo.get_membership(conversation, actor)?.is_some(),
+                _ => false,
+            };
+        if !participant {
+            tracing::debug!(
+                %actor, %conversation, target_conversation = %target.conversation_id,
+                "Inbound reaction/pin: target outside the arrival conversation, or sender not in it — dropped"
+            );
+            return Ok(InboundTarget::Refused);
+        }
+        Ok(InboundTarget::Allowed(target))
+    }
+
+    /// Where a reaction or pin from `actor` arriving in `conversation` may
+    /// land once its target arrives: that conversation — or, from our own
+    /// device, anywhere (as [`Self::lookup_inbound_target`] lets it).
+    fn held_modifier_scope(&self, conversation: &ChannelId, actor: &UserId) -> Result<Option<ChannelId>, MessageError> {
+        Ok((*actor != self.current_user_id()?).then_some(*conversation))
+    }
+
+    /// Persist a peer's reaction that arrived in `conversation`, after binding
+    /// its target to that conversation ([`Self::resolve_inbound_target`]).
+    /// One whose target is not here yet is held until it arrives (Signal
+    /// `Reactions.preload.ts` keeps it likewise), ordered against other held
+    /// actions on the same emoji by `reaction_ts`. `Ok(false)` when held,
+    /// dropped or already recorded.
+    #[allow(clippy::too_many_arguments)]
+    pub fn record_inbound_reaction(
+        &self,
+        conversation: &ChannelId,
+        reactor: &UserId,
+        target_author: &UserId,
+        target_sent_at_ns: u64,
+        emoji: &str,
+        remove: bool,
+        reaction_ts: u64,
+    ) -> Result<bool, MessageError> {
+        match self.lookup_inbound_target(conversation, reactor, target_author, target_sent_at_ns)? {
+            InboundTarget::Allowed(_) => self.record_reaction(target_author, target_sent_at_ns, reactor, emoji, remove),
+            InboundTarget::Refused => Ok(false),
+            InboundTarget::NotHeld => {
+                tracing::debug!(%reactor, %target_author, target_sent_at_ns, "Reaction before its message — held");
+                crate::storage::repositories::message_modifier_repo::MessageModifierRepository::new(self.database.clone())
+                    .queue_reaction(
+                        target_author, target_sent_at_ns, reactor, emoji, remove,
+                        self.held_modifier_scope(conversation, reactor)?, reaction_ts,
+                        crate::util::time::TimestampNanos::now().as_u64(),
+                    )?;
+                Ok(false)
+            }
+        }
+    }
+
+    /// The target of a pin (or `unpin`) that arrived in `conversation`, for
+    /// the caller to announce ([`Self::resolve_inbound_target`]). One whose
+    /// target is not here yet is held and applied to it on arrival, the latest
+    /// `pin_ts` winning; `None` then, as when dropped.
+    #[allow(clippy::too_many_arguments)]
+    pub fn resolve_inbound_pin(
+        &self,
+        conversation: &ChannelId,
+        pinner: &UserId,
+        target_author: &UserId,
+        target_sent_at_ns: u64,
+        unpin: bool,
+        pin_ts: u64,
+    ) -> Result<Option<Message>, MessageError> {
+        match self.lookup_inbound_target(conversation, pinner, target_author, target_sent_at_ns)? {
+            InboundTarget::Allowed(target) => Ok(Some(target)),
+            InboundTarget::Refused => Ok(None),
+            InboundTarget::NotHeld => {
+                tracing::debug!(%pinner, %target_author, target_sent_at_ns, "Pin before its message — held");
+                crate::storage::repositories::message_modifier_repo::MessageModifierRepository::new(self.database.clone())
+                    .queue_pin(
+                        target_author, target_sent_at_ns, pinner, unpin,
+                        self.held_modifier_scope(conversation, pinner)?, pin_ts,
+                        crate::util::time::TimestampNanos::now().as_u64(),
+                    )?;
+                Ok(None)
+            }
         }
     }
 
@@ -1143,5 +1391,122 @@ mod solicited_resends_tests {
         assert!(!after.contains(&stale), "past the resend window it is dropped");
         assert!(after.take(&fresh));
         assert!(SolicitedResends::load(settings).is_empty(), "consumed entries stay consumed");
+    }
+}
+
+/// What an inbound reaction or pin names ([`MessageService::lookup_inbound_target`]).
+enum InboundTarget {
+    /// Held here, and the sender may modify it.
+    Allowed(Message),
+    /// Not here (yet).
+    NotHeld,
+    /// Here, but not the sender's to modify from where it arrived.
+    Refused,
+}
+
+#[cfg(test)]
+mod inbound_target_tests {
+    use super::*;
+    use crate::domain::channel::{Channel, MemberRole, Membership, NotificationPreference};
+    use crate::storage::repositories::settings_repo::keys;
+
+    struct Fixture {
+        client: Arc<crate::client::ChatterClient>,
+        _dir: tempfile::TempDir,
+        me: UserId,
+        /// A friend we DM, who is NOT in `channel`.
+        bob: UserId,
+        /// A friend we DM, who IS in `channel`.
+        carol: UserId,
+        channel: ChannelId,
+    }
+
+    /// Carol's message in our DM with her, and her message in `channel`.
+    const DM_TS: u64 = 100;
+    const CH_TS: u64 = 200;
+
+    fn fixture() -> Fixture {
+        static MOCK_KEYRING: std::sync::Once = std::sync::Once::new();
+        MOCK_KEYRING.call_once(|| {
+            keyring::set_default_credential_builder(keyring::mock::default_credential_builder());
+        });
+        let dir = tempfile::tempdir().unwrap();
+        let client = crate::client::ChatterClient::builder()
+            .server_url("http://localhost:1")
+            .data_dir(dir.path().to_str().unwrap())
+            .build()
+            .expect("build client");
+        let (me, bob, carol, channel) = (UserId::new(), UserId::new(), UserId::new(), ChannelId::new());
+        let svc = client.messages();
+        svc.settings_repo.set(keys::CURRENT_USER_ID, &me.to_string()).unwrap();
+        svc.settings_repo.set(keys::CURRENT_DEVICE_ID, &1u32).unwrap();
+        svc.channel_repo.insert(&Channel::new(channel, "g".into(), ChannelType::Private, me)).unwrap();
+        for user_id in [me, carol] {
+            svc.channel_repo.insert_membership(&Membership {
+                channel_id: channel,
+                user_id,
+                role: MemberRole::Member,
+                joined_at: chrono::Utc::now(),
+                last_read_message_id: None,
+                is_muted: false,
+                muted_until: None,
+                notification_preference: NotificationPreference::default(),
+            }).unwrap();
+        }
+        svc.message_repo.insert(&Message::new_text(ChannelId::from(carol), ConversationType::ServerDm, Some(carol), "dm".into(), DM_TS)).unwrap();
+        svc.message_repo.insert(&Message::new_text(channel, ConversationType::Channel, Some(carol), "ch".into(), CH_TS)).unwrap();
+        Fixture { client, _dir: dir, me, bob, carol, channel }
+    }
+
+    fn reactors(f: &Fixture, ts: u64) -> Vec<UserId> {
+        f.client.messages().message_repo.get_reactions(&f.carol, ts).unwrap().into_iter().map(|r| r.user_id).collect()
+    }
+
+    /// Signal binds a reaction to the conversation it arrived in: a peer who
+    /// knows (author, sent_at) of a message elsewhere cannot touch it.
+    #[tokio::test]
+    async fn reactions_bind_to_the_arrival_conversation() {
+        let f = fixture();
+        let svc = f.client.messages();
+
+        // Bob, from his own DM, targets Carol's DM message and her channel message.
+        assert!(!svc.record_inbound_reaction(&ChannelId::from(f.bob), &f.bob, &f.carol, DM_TS, "x", false, 1).unwrap());
+        assert!(!svc.record_inbound_reaction(&ChannelId::from(f.bob), &f.bob, &f.carol, CH_TS, "x", false, 1).unwrap());
+        // Bob claims the channel he is not a member of.
+        assert!(!svc.record_inbound_reaction(&f.channel, &f.bob, &f.carol, CH_TS, "x", false, 1).unwrap());
+        // Carol, a channel member, aims a channel reaction at her DM message.
+        assert!(!svc.record_inbound_reaction(&f.channel, &f.carol, &f.carol, DM_TS, "x", false, 1).unwrap());
+        assert!(reactors(&f, DM_TS).is_empty() && reactors(&f, CH_TS).is_empty());
+
+        // The legitimate ones land.
+        assert!(svc.record_inbound_reaction(&ChannelId::from(f.carol), &f.carol, &f.carol, DM_TS, "x", false, 1).unwrap());
+        assert!(svc.record_inbound_reaction(&f.channel, &f.carol, &f.carol, CH_TS, "x", false, 1).unwrap());
+        assert_eq!(reactors(&f, DM_TS), vec![f.carol]);
+        assert_eq!(reactors(&f, CH_TS), vec![f.carol]);
+
+        // Removal is bound the same way.
+        svc.record_reaction(&f.carol, DM_TS, &f.bob, "y", false).unwrap();
+        assert!(!svc.record_inbound_reaction(&ChannelId::from(f.bob), &f.bob, &f.carol, DM_TS, "y", true, 1).unwrap());
+        assert!(reactors(&f, DM_TS).contains(&f.bob));
+        assert!(svc.record_inbound_reaction(&ChannelId::from(f.carol), &f.carol, &f.carol, DM_TS, "x", true, 1).unwrap());
+    }
+
+    /// Pins resolve their target through the same binding.
+    #[tokio::test]
+    async fn pin_targets_bind_to_the_arrival_conversation() {
+        let f = fixture();
+        let svc = f.client.messages();
+        let resolve = |conv: &ChannelId, actor: &UserId, ts| svc.resolve_inbound_target(conv, actor, &f.carol, ts).unwrap();
+
+        assert!(resolve(&ChannelId::from(f.bob), &f.bob, DM_TS).is_none());
+        assert!(resolve(&f.channel, &f.bob, CH_TS).is_none());
+        assert!(resolve(&f.channel, &f.carol, DM_TS).is_none());
+        assert!(resolve(&ChannelId::from(f.carol), &f.carol, CH_TS).is_none());
+        assert!(resolve(&ChannelId::new(), &f.carol, 999).is_none(), "unknown target");
+
+        assert_eq!(resolve(&ChannelId::from(f.carol), &f.carol, DM_TS).unwrap().conversation_id, ChannelId::from(f.carol));
+        assert_eq!(resolve(&f.channel, &f.carol, CH_TS).unwrap().conversation_id, f.channel);
+        // Our own devices act on any conversation we hold (Signal: isMe).
+        assert!(resolve(&ChannelId::from(f.me), &f.me, DM_TS).is_some());
     }
 }

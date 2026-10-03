@@ -33,12 +33,10 @@ async fn test_create_saved_messages_channel() {
             "Saved Messages",
             ChannelType::SavedMessages,
             None,
-            vec![], // No members for SavedMessages
-            None,
             Some("Note to self"),
             None,
-        )
-        .await;
+            None,
+        ).await;
 
     match create_result {
         Ok(stream) => {
@@ -99,12 +97,10 @@ async fn test_get_or_create_saved_messages() {
                 "Saved Messages",
                 ChannelType::SavedMessages,
                 None,
-                vec![],
                 None,
                 None,
                 None,
-            )
-            .await;
+            ).await;
 
         if let Ok(stream) = attempt {
             tokio::pin!(stream);
@@ -123,12 +119,10 @@ async fn test_get_or_create_saved_messages() {
                 "Saved Messages",
                 ChannelType::SavedMessages,
                 None,
-                vec![],
                 None,
                 None,
                 None,
-            )
-            .await;
+            ).await;
 
         if let Ok(stream) = attempt {
             tokio::pin!(stream);
@@ -166,12 +160,10 @@ async fn test_send_message_to_saved_messages() {
             "Saved Messages",
             ChannelType::SavedMessages,
             None,
-            vec![],
             None,
             None,
             None,
-        )
-        .await;
+        ).await;
 
     let channel_id = match create_result {
         Ok(stream) => {
@@ -217,6 +209,7 @@ async fn test_send_message_to_saved_messages() {
             vec![],
             false,
             vec![],
+            Vec::new(),
         )
         .await;
 
@@ -247,12 +240,10 @@ async fn test_retrieve_saved_messages() {
             "Saved Messages",
             ChannelType::SavedMessages,
             None,
-            vec![],
             None,
             None,
             None,
-        )
-        .await;
+        ).await;
 
     let channel_id = match create_result {
         Ok(stream) => {
@@ -295,6 +286,7 @@ async fn test_retrieve_saved_messages() {
                 vec![],
                 false,
                 vec![],
+                Vec::new(),
             )
             .await;
     }
@@ -348,12 +340,10 @@ async fn test_saved_message_with_text_only() {
             "Saved Messages",
             ChannelType::SavedMessages,
             None,
-            vec![],
             None,
             None,
             None,
-        )
-        .await;
+        ).await;
 
     // Send text-only saved message
     let mut msg_client = MessageClient::new(pool.channel(), pool.auth_clone());
@@ -373,6 +363,7 @@ async fn test_saved_message_with_text_only() {
             vec![],
             false,
             vec![],
+            Vec::new(),
         )
         .await;
 
@@ -405,12 +396,10 @@ async fn test_saved_messages_pagination() {
             "Saved Messages",
             ChannelType::SavedMessages,
             None,
-            vec![],
             None,
             None,
             None,
-        )
-        .await;
+        ).await;
 
     // Send several messages
     let mut msg_client = MessageClient::new(pool.channel(), pool.auth_clone());
@@ -429,6 +418,7 @@ async fn test_saved_messages_pagination() {
                 vec![],
                 false,
                 vec![],
+                Vec::new(),
             )
             .await
         {
@@ -495,12 +485,10 @@ async fn test_saved_messages_not_visible_to_others() {
                 "Saved Messages",
                 ChannelType::SavedMessages,
                 None,
-                vec![],
                 None,
                 None,
                 None,
-            )
-            .await;
+            ).await;
 
         let mut msg_client = MessageClient::new(pool.channel(), pool.auth_clone());
         let content = Content {
@@ -516,6 +504,7 @@ async fn test_saved_messages_not_visible_to_others() {
                 vec![],
                 false,
                 vec![],
+                Vec::new(),
             )
             .await;
     }
@@ -577,12 +566,10 @@ async fn test_get_saved_messages_channel_info() {
             "Saved Messages",
             ChannelType::SavedMessages,
             None,
-            vec![],
-            None,
             Some("Personal notes"),
             None,
-        )
-        .await;
+            None,
+        ).await;
 
     // Get channel info
     let channel_id = user.user_id.clone();
@@ -624,12 +611,10 @@ async fn test_saved_messages_from_single_device() {
             "Saved Messages",
             ChannelType::SavedMessages,
             None,
-            vec![],
             None,
             None,
             None,
-        )
-        .await;
+        ).await;
 
     // With single device, SavedMessages should work (stored locally + server)
     let mut msg_client = MessageClient::new(pool.channel(), pool.auth_clone());
@@ -649,6 +634,7 @@ async fn test_saved_messages_from_single_device() {
             vec![],
             false,
             vec![],
+            Vec::new(),
         )
         .await;
 

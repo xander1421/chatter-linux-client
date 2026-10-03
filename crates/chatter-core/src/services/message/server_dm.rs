@@ -224,18 +224,13 @@ impl MessageService {
         // written by `set_disappearing_timer`) and ARM the E2E marker on the
         // DataMessage so the RECIPIENT's `store_data_message` tracks + reaps
         // their local copy — and track OUR OWN copy below. `0`/absent = off.
-        let disappearing_ttl_secs: Option<u32> = Some(
-            crate::services::disappearing::server_dm_timer(&self.settings_repo, peer_id),
-        )
-        .filter(|s| *s > 0);
+        // Every message states the timer with its version, so the peer
+        // orders it against changes it has already seen.
+        let timer = crate::services::disappearing::server_dm_state(&self.settings_repo, peer_id);
+        let disappearing_ttl_secs: Option<u32> = Some(timer.seconds).filter(|s| *s > 0);
         let mut content = content;
-        if let Some(secs) = disappearing_ttl_secs {
-            if let Some(crate::proto::content_v1::content::Content::DataMessage(dm)) =
-                content.content.as_mut()
-            {
-                dm.ephemeral = true;
-                dm.ephemeral_ttl_seconds = secs;
-            }
+        if let Some(crate::proto::content_v1::content::Content::DataMessage(dm)) = content.content.as_mut() {
+            crate::services::disappearing::stamp_timer(dm, timer);
         }
 
         Ok((content, reply_ctx, disappearing_ttl_secs))
@@ -360,7 +355,7 @@ impl MessageService {
     }
 
     /// Change the disappearing-messages timer of the DM with `peer_id`
-    /// (`0` = off), Signal-style: adopt it locally, file the "You set
+    /// (`0` = off), Signal-style: adopt it locally at the next version, file the "You set
     /// disappearing messages to …" notice, and announce it to the friend with
     /// a timer-update `DataMessage` so their side adopts the same value.
     ///
@@ -377,7 +372,7 @@ impl MessageService {
     ) -> Result<Option<Message>, MessageError> {
         let me = self.settings_repo.current_user_id()?;
         let sent_at = crate::util::time::TimestampNanos::now().as_u64();
-        let Some(notice) = crate::services::disappearing::adopt_server_dm_timer(
+        let Some((notice, timer)) = crate::services::disappearing::change_server_dm_timer(
             &self.settings_repo,
             &self.message_repo,
             peer_id,
@@ -389,7 +384,7 @@ impl MessageService {
             return Ok(None);
         };
 
-        let content = crate::services::disappearing::timer_update_content(seconds, sent_at);
+        let content = crate::services::disappearing::timer_update_content(timer, sent_at);
         match self.send_friend_dm_content(peer_id, content).await {
             // Shield without an established mailbox: queued for the bootstrap
             // flush, which is delivery as far as this change is concerned.
@@ -513,7 +508,7 @@ impl MessageService {
                 ))
             }));
         }
-        self.dm_sent_log.record(*peer_id, &content, &outcome.deposits);
+        self.record_dm_send(*peer_id, &content, &outcome.deposits);
         Ok(())
     }
 
@@ -564,7 +559,7 @@ impl MessageService {
 
         // What a peer device's DecryptionErrorMessage will name if it cannot
         // decrypt this (`resend_dm_on_decryption_error`).
-        self.dm_sent_log.record(*peer_id, &content, &peer.deposits);
+        self.record_dm_send(*peer_id, &content, &peer.deposits);
 
         // Self-sync: every one of our own devices except this one.
         // One policy for both DM transports (`sync_sent_to_own_devices`).
@@ -605,12 +600,24 @@ impl MessageService {
     /// and no one-time-prekey burn — is needed. Without a profile key we
     /// degrade to identified (Basic auth) delivery, loudly, like
     /// `deposit_sealed_to_all_devices` does.
+    ///
+    /// At most [`DEM_RETRY_LIMIT`] reports per failed message; past that
+    /// this returns `Ok` without sending.
     pub async fn send_decryption_error_report(
         &self,
         peer_id: &UserId,
         peer_device_id: u32,
         dem_serialized: Vec<u8>,
     ) -> Result<(), MessageError> {
+        let original_ms = libsignal_protocol::DecryptionErrorMessage::try_from(dem_serialized.as_slice())
+            .map_err(|e| MessageError::InvalidContent(format!("DecryptionErrorMessage: {e}")))?
+            .timestamp()
+            .epoch_millis();
+        if !count_dem_retry(&mut DEM_RETRIES.lock(), (*peer_id, peer_device_id, original_ms)) {
+            tracing::warn!(peer_id = %peer_id, peer_device_id, original_ms,
+                "DecryptionErrorMessage retry limit reached for this message; not sending another");
+            return Ok(());
+        }
         let mut auth_client = self.auth_client();
         let sealed_body = self
             .signal_service
@@ -651,6 +658,9 @@ impl MessageService {
                     Err(e) => return Err(MessageError::Network(e)),
                 }
             }
+            // To our own user the deposit is identified by design (see
+            // `deposit_sealed_to_session_devices`), not a degradation.
+            None if self.current_user_id().is_ok_and(|me| me == *peer_id) => true,
             None => {
                 tracing::warn!(
                     peer_id = %peer_id,
@@ -765,7 +775,7 @@ impl MessageService {
         recipient_id: &str,
         plaintext: &[u8],
     ) -> Result<DepositOutcome, crate::error::NetworkError> {
-        let (ciphertexts, unrestricted) = match self
+        let (sealed, unrestricted) = match self
             .signal_service
             .encrypt_message_all_devices_with_access_policy(auth_client, recipient_id, plaintext, true)
             .await
@@ -795,17 +805,19 @@ impl MessageService {
         if let (Ok(peer), Ok(content)) = (
             recipient_id.parse::<UserId>(), crate::proto::content_v1::Content::decode(plaintext),
         ) {
-            self.snapshot_dm_content_targets(peer, &content, &ciphertexts.keys().copied().collect::<Vec<_>>())
+            self.snapshot_dm_content_targets(peer, &content, &sealed.keys().copied().collect::<Vec<_>>())
                 .map_err(|error| crate::error::NetworkError::ServerError(format!("persist receipt targets: {error}")))?;
         }
-        let attempted = !ciphertexts.is_empty();
-        let device_set = ciphertexts
-            .keys()
-            .map(|&device_id| DestinationDevice {
-                device_id,
-                registration_id: self.signal_service.session_registration_id(recipient_id, device_id),
-            })
+        let attempted = !sealed.is_empty();
+        // Each device under the registration id of the session that
+        // encrypted to it — never 0, which would skip the stale check.
+        let registration_ids: std::collections::HashMap<u32, u32> =
+            sealed.iter().map(|(&device_id, s)| (device_id, s.registration_id)).collect();
+        let device_set = registration_ids
+            .iter()
+            .map(|(&device_id, &registration_id)| DestinationDevice { device_id, registration_id })
             .collect();
+        let ciphertexts = sealed.into_iter().map(|(device_id, s)| (device_id, s.ciphertext)).collect();
 
         // To our own user (self-sync, SKDM, SenderKeyRequest) the deposit is
         // identified on the authenticated channel, never UAK on the anonymous
@@ -841,6 +853,7 @@ impl MessageService {
         if recipient_uak.is_none() && !is_self {
             outcome.degraded = outcome.delivered;
         }
+        outcome.registration_ids = registration_ids;
         if attempted && outcome.delivered == 0 {
             self.signal_service.forget_device_list(recipient_id);
         }
@@ -965,8 +978,12 @@ impl MessageService {
             };
 
             match result {
-                // Every request of this send names the same set, so the first
-                // one is refused and nothing has been queued.
+                // Every request of this send names the same set, and the
+                // server checks it before queuing, so the first one is
+                // refused and nothing has been queued — unless the
+                // recipient's registered devices changed between two of
+                // these requests; then the devices already reached get the
+                // retry too (peers drop it by (sender, sent_at)).
                 Err(e @ crate::error::NetworkError::MismatchedDevices { .. }) => return Err(e),
                 Ok(response) => {
                     delivered += 1;
@@ -1010,7 +1027,7 @@ impl MessageService {
             }
         }
 
-        Ok(DepositOutcome { delivered, degraded, error, deposits })
+        Ok(DepositOutcome { delivered, degraded, error, deposits, ..Default::default() })
     }
 }
 
@@ -1051,6 +1068,40 @@ pub(super) struct DepositOutcome {
     /// `(device, server timestamp in epoch nanos)` of each deposit: the
     /// timestamp that device's inbox hands it the envelope under.
     pub(super) deposits: Vec<(u32, u64)>,
+    /// Registration id of the session each device was encrypted with, for
+    /// a deposit that named its device set
+    /// ([`MessageService::deposit_sealed_to_all_devices`]); empty otherwise.
+    pub(super) registration_ids: std::collections::HashMap<u32, u32>,
+}
+
+/// `DecryptionErrorMessage`s sent per failed message: Signal-Desktop's
+/// `RETRY_LIMIT` (`ts/util/handleRetry.preload.ts:55`). An envelope the
+/// inbox keeps re-delivering, or a sender that keeps answering with
+/// undecryptable resends, stops costing a report after this many.
+const DEM_RETRY_LIMIT: u32 = 5;
+
+/// Distinct messages counted before the map is cleared wholesale, as
+/// `group_retry_requests` is (`group.rs`). A forgotten count costs at most
+/// `DEM_RETRY_LIMIT` more reports for that message.
+const DEM_RETRY_CAP: usize = 4096;
+
+/// Reports sent per `(sender, sender device, original timestamp in epoch
+/// millis)` — the key of Signal-Desktop's `retryRecord`, in memory as there.
+/// Every DEM goes out through `send_decryption_error_report` (1:1 from the
+/// inbox processor, sender-key from `request_group_resend`), so the count is
+/// kept there.
+static DEM_RETRIES: std::sync::LazyLock<
+    parking_lot::Mutex<std::collections::HashMap<(UserId, u32, u64), u32>>,
+> = std::sync::LazyLock::new(Default::default);
+
+/// Count one more report for `key`; `false` once it is past the limit.
+fn count_dem_retry(retries: &mut std::collections::HashMap<(UserId, u32, u64), u32>, key: (UserId, u32, u64)) -> bool {
+    if retries.len() >= DEM_RETRY_CAP && !retries.contains_key(&key) {
+        retries.clear();
+    }
+    let count = retries.entry(key).or_insert(0);
+    *count += 1;
+    *count <= DEM_RETRY_LIMIT
 }
 
 /// Attempts and backoff for [`MessageService::send_profile_key_handshake`]:
@@ -1102,6 +1153,25 @@ where
 #[cfg(test)]
 mod tests {
     use super::pick_sealed_access_key;
+
+    #[test]
+    fn decryption_error_reports_stop_after_five_per_message() {
+        use super::{count_dem_retry, DEM_RETRY_CAP, DEM_RETRY_LIMIT};
+        use crate::domain::ids::UserId;
+        let mut retries = std::collections::HashMap::new();
+        let (peer, ts) = (UserId::new(), 1_700_000_000_000);
+        for _ in 0..DEM_RETRY_LIMIT {
+            assert!(count_dem_retry(&mut retries, (peer, 2, ts)));
+        }
+        assert!(!count_dem_retry(&mut retries, (peer, 2, ts)), "sixth report for one message");
+        assert!(count_dem_retry(&mut retries, (peer, 3, ts)), "another device's message");
+        assert!(count_dem_retry(&mut retries, (peer, 2, ts + 1)), "another message");
+
+        for i in 0..DEM_RETRY_CAP as u64 {
+            count_dem_retry(&mut retries, (peer, 9, i));
+        }
+        assert!(retries.len() <= DEM_RETRY_CAP, "bounded");
+    }
 
     #[tokio::test]
     async fn retry_while_retries_until_success_and_stops_when_unwanted() {

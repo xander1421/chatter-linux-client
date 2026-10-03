@@ -1,0 +1,52 @@
+// Verified channel membership — runtime state pushed from Rust
+// (`bin_ui::features::chat::membership`). Every string and flag here was
+// produced by `chatter_core::client::membership`; the views only lay it out.
+
+export struct InviteLinkRowData {
+    // Handle for revoking (hex of the capability's public key).
+    id: string,
+    summary: string,
+}
+
+export struct JoinRequestRowData {
+    user-id: string,
+    display-name: string,
+}
+
+export struct ServerOperatedRowData {
+    name: string,
+    label: string,
+}
+
+export global MembershipGlobal {
+    // ---- Open channel ----
+    // "" (no banner), "warning" (not verified / verification failed) or
+    // "alert" (fork).
+    in property <string> banner-severity: "";
+    in property <string> banner-title: "";
+    in property <string> banner-detail: "";
+    // "Public — anyone can join and read", or "".
+    in property <string> public-badge: "";
+
+    // ---- Join box ----
+    // The join box holds a `chatter://join/...` link rather than a search.
+    in property <bool> join-input-is-link: false;
+
+    // ---- Channel Settings › Access ----
+    in property <string> access-public-badge: "";
+    in property <bool> can-manage-invites: false;
+    in property <[InviteLinkRowData]> invite-links: [];
+    in property <bool> can-approve-joins: false;
+    in property <[JoinRequestRowData]> join-requests: [];
+    in property <[ServerOperatedRowData]> server-operated: [];
+    // The link just created: the only moment its key exists to be copied.
+    in property <string> new-link: "";
+    in property <string> access-status: "";
+    in property <bool> access-busy: false;
+
+    callback create-link(string /* channel-id */, bool /* needs-approval */);
+    callback copy-link(string /* link */);
+    callback revoke-link(string /* channel-id */, string /* link id */);
+    callback approve-request(string /* channel-id */, string /* user-id */);
+    callback reject-request(string /* channel-id */, string /* user-id */);
+}

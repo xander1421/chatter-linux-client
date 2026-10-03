@@ -8,7 +8,6 @@ use prost::Message as ProstMessage;
 use zeroize::Zeroize;
 
 use crate::crypto::dm_crypto::decrypt_dm_bytes;
-use crate::crypto::signal::sesame::ConvergenceResult;
 use crate::domain::ids::UserId;
 use crate::error::{CryptoError, ServiceError};
 use crate::proto::content_v1::{Content, DataMessage, GroupEncrypted, content};
@@ -62,7 +61,7 @@ impl MessageGateway {
         // 1:1 self-heal).
         let (sender_address, mut plaintext, msg_type) = match self
             .signal_service
-            .decrypt_message(&envelope.sealed_body)
+            .decrypt_message(&envelope.sealed_body, envelope.timestamp)
             .await
         {
             Ok(v) => v,
@@ -328,13 +327,20 @@ impl MessageGateway {
                 "GATEWAY: Parsed Content proto, content type = {}", ct_name
             );
 
+            // Session-switch carrier after the sender reset its sessions with
+            // us (Signal's NullMessage): decrypting it moved us onto the new
+            // session, and that was its whole job. Nothing to store or show.
+            if let Some(content::Content::NullMessage(_)) = content_proto.content {
+                return Ok(SealedSenderResult::MessageStored);
+            }
+
             // Check for KeyExchange
             if let Some(content::Content::KeyExchange(key_exchange)) = content_proto.content {
                 tracing::info!(
                     sender_id = %sender_id,
                     conversation_id = %key_exchange.conversation_id,
                     key_len = key_exchange.ephemeral_pk.len(),
-                    "GATEWAY: Found KeyExchange! key_len={} (0=REQUEST, 64=MESSAGE)",
+                    "GATEWAY: Found KeyExchange! key_len={} (0=REQUEST, 96=MESSAGE)",
                     key_exchange.ephemeral_pk.len()
                 );
                 return Ok(SealedSenderResult::KeyExchange {
@@ -379,29 +385,12 @@ impl MessageGateway {
                 // devices install under the wrong address and group messages from
                 // those devices fail to decrypt.
                 let sender_device_id: u32 = sender_address.device_id().into();
-                self.signal_service
-                    .process_sender_key(&sender_id, sender_device_id, &skdm)
-                    .await
-                    .map_err(|e| {
-                        tracing::error!(
-                            sender_id = %sender_id,
-                            channel_id = %channel_id,
-                            error = %e,
-                            "GATEWAY: Failed to process sender key"
-                        );
-                        e
-                    })?;
-                tracing::info!(
-                    sender_id = %sender_id,
-                    channel_id = %channel_id,
-                    "GATEWAY: Successfully stored sender key from channel member"
-                );
-                // The member's profile key rides their SKDM (Signal shares it
-                // with the group), so a co-member who is not a friend can
-                // decrypt their name and avatar. Stored against the sealed-
-                // sender-authenticated sender only — the key is theirs; a
-                // blocked sender never reaches this point (checked above).
-                let profile_key_changed = self.store_skdm_profile_key(&sender_id, skdm.profile_key.as_deref());
+                let Some(profile_key_changed) =
+                    self.accept_skdm(&sender_id, sender_device_id, &channel_id, &skdm).await?
+                else {
+                    // Not stored: the sender is outside our verified membership.
+                    return Ok(SealedSenderResult::MessageStored);
+                };
                 // Signal that the key is now installed so the caller can drain
                 // any group messages that arrived before it (F14c). Carry the
                 // exact identifiers the pending-decrypt buffer is keyed on:
@@ -555,6 +544,7 @@ impl MessageGateway {
                     | Some(content::Content::DeleteForMeSync(_))
                     | Some(content::Content::ReadSync(_))
                     | Some(content::Content::ProfileKeySync(_))
+                    | Some(content::Content::ConfigurationSync(_))
                     | Some(content::Content::SavedMessageSync(_))
                     | Some(content::Content::CallKey(_))
                     | Some(content::Content::CallHangup(_))
@@ -596,13 +586,6 @@ impl MessageGateway {
         self.store_data_message(data_message, Some(sender_id)).await
     }
 
-    /// Decrypt an identified sender message (PreKey or Ciphertext).
-    ///
-    /// This is the fallback path when sealed sender is not used.
-    /// The server knows the sender and passes source_user_id/source_device_id.
-    ///
-    /// When SesameManager is available, uses session convergence to try
-    /// multiple sessions if the primary session fails to decrypt.
     /// Persist a channel member's profile key carried on their SKDM. Returns
     /// whether it was new or rotated — the caller's cue to refetch their
     /// profile. Our own (from our other devices) is not a peer key.
@@ -623,89 +606,38 @@ impl MessageGateway {
             .unwrap_or(false)
     }
 
+    /// Decrypt an identified sender message (PreKey or Ciphertext).
+    ///
+    /// This is the fallback path when sealed sender is not used.
+    /// The server knows the sender and passes source_user_id/source_device_id.
     pub async fn decrypt_identified_message(
         &self,
         envelope: &[u8],
         sender_id: &UserId,
         sender_device_id: u32,
     ) -> Result<SealedSenderResult, ServiceError> {
-        // Try to decrypt using session convergence if Sesame is available
-        let mut plaintext = if let Some(ref sesame_manager) = self.sesame_manager {
-            // Get all sessions for convergence from Sesame store
-            let sessions = sesame_manager
-                .get_all_sessions_for_convergence(sender_id, sender_device_id)
-                .map_err(ServiceError::Storage)?;
-
-            // If Sesame has no sessions, check KeyStore directly (session may have been
-            // created via sealed sender decryption which doesn't go through Sesame)
-            if sessions.is_empty() {
-                let session_key = format!("{}:{}", sender_id, sender_device_id);
-                if let Ok(Some(_)) = self.signal_service.key_store.load_session(&session_key) {
-                    tracing::debug!(
-                        sender_id = %sender_id,
-                        sender_device_id,
-                        "Sesame has no sessions but KeyStore has one - using direct decryption"
-                    );
-                    // Fall through to direct decryption path
-                    self.signal_service
-                        .decrypt_message_identified(envelope, &sender_id.to_string(), sender_device_id)
-                        .await?
-                } else {
-                    tracing::warn!(
-                        sender_id = %sender_id,
-                        sender_device_id,
-                        "No sessions in Sesame or KeyStore"
-                    );
-                    return Err(ServiceError::Crypto(
-                        crate::error::CryptoError::Protocol(
-                            "No sessions available for decryption".into()
-                        )
-                    ));
-                }
-            } else {
-                // Use Sesame convergence with available sessions
-                match self
-                    .signal_service
-                    .decrypt_with_convergence(envelope, &sender_id.to_string(), sender_device_id, sessions)
-                    .await?
-                {
-                    ConvergenceResult::ActiveSession { plaintext, session_id } => {
-                        tracing::debug!(
-                            sender_id = %sender_id,
-                            session_id_hex = %hex::encode(&session_id[..8.min(session_id.len())]),
-                            "Decrypted with active session"
-                        );
-                        plaintext
-                    }
-                    ConvergenceResult::PromotedSession { plaintext, session_id } => {
-                        tracing::info!(
-                            sender_id = %sender_id,
-                            session_id_hex = %hex::encode(&session_id[..8.min(session_id.len())]),
-                            "Decrypted with promoted session (Sesame convergence)"
-                        );
-                        plaintext
-                    }
-                    ConvergenceResult::AllFailed { errors } => {
-                        tracing::warn!(
-                            sender_id = %sender_id,
-                            error_count = errors.len(),
-                            first_error = %errors.first().map(|s| s.as_str()).unwrap_or("none"),
-                            "All session convergence attempts failed"
-                        );
-                        return Err(ServiceError::Crypto(
-                            crate::error::CryptoError::Protocol(
-                                format!("Session convergence failed: {} sessions tried", errors.len())
-                            )
-                        ));
-                    }
-                }
-            }
-        } else {
-            // No Sesame manager - use direct decryption
-            self.signal_service
-                .decrypt_message_identified(envelope, &sender_id.to_string(), sender_device_id)
-                .await?
-        };
+        // The identified path never STARTS a session. Its sender is the
+        // server's claim alone, and a first identity key is trusted on first
+        // use (`crypto/signal/store.rs` is_trusted_identity), so a PreKey
+        // message here could pin a server-chosen key for a peer we never
+        // talked to. Sessions are established over sealed sender, whose
+        // certificate names the sender.
+        let session_key = format!("{}:{}", sender_id, sender_device_id);
+        if self.signal_service.key_store.load_session(&session_key).map_err(ServiceError::Storage)?.is_none() {
+            tracing::warn!(%sender_id, sender_device_id,
+                "Identified message with no session for the sender; refusing to start one");
+            return Err(ServiceError::Crypto(CryptoError::Protocol(
+                "No session available for an identified sender".into(),
+            )));
+        }
+        // libsignal's SessionRecord keeps the archived states and, for a
+        // Whisper message the current state cannot open, tries them and
+        // promotes the one that decrypts (libsignal `session_management.rs`
+        // `try_decrypt_from_record`).
+        let mut plaintext = self
+            .signal_service
+            .decrypt_message_identified(envelope, &sender_id.to_string(), sender_device_id)
+            .await?;
 
         // Process plaintext and ensure zeroization
         let result = self
@@ -791,6 +723,8 @@ impl MessageGateway {
     ///
     /// * `mailbox_encrypted` - The doubly-encrypted envelope from the mailbox
     /// * `shared_secret` - The X25519 shared secret for mailbox layer decryption
+    /// * `server_timestamp_ns` - The mailbox message's server timestamp (sender
+    ///   certificate validation time)
     ///
     /// # Returns
     ///
@@ -799,6 +733,7 @@ impl MessageGateway {
         &self,
         mailbox_encrypted: &[u8],
         shared_secret: &[u8; 32],
+        server_timestamp_ns: u64,
     ) -> Result<(UserId, DmContent), ServiceError> {
         // Layer 1: Decrypt mailbox layer (XChaCha20-Poly1305)
         let signal_ciphertext = decrypt_dm_bytes(mailbox_encrypted, shared_secret)?;
@@ -806,7 +741,7 @@ impl MessageGateway {
         // Layer 2: Decrypt Signal layer (sealed sender with Double Ratchet)
         let (sender_address, mut plaintext, msg_type) = self
             .signal_service
-            .decrypt_message(&signal_ciphertext)
+            .decrypt_message(&signal_ciphertext, server_timestamp_ns)
             .await?;
 
         // No DEM ride-along is expected on the DM path, so `Plaintext` here is
@@ -857,7 +792,8 @@ impl MessageGateway {
 
         // Fallback: try as DataMessage proto (backwards compat)
         if let Ok(data_message) = DataMessage::decode(plaintext.as_slice()) {
-            let expire_timer = Some(crate::services::disappearing::stated_timer(&data_message));
+            let expire_timer = Some(crate::services::disappearing::message_ttl(&data_message));
+            let timer_version = data_message.expire_timer_version;
             let timer_update = crate::services::disappearing::is_timer_update(&data_message);
             let profile_key = data_message.profile_key.filter(|k| k.len() == 32);
             tracing::debug!(
@@ -877,6 +813,7 @@ impl MessageGateway {
                 quote: data_message.quote,
                 thread_id,
                 expire_timer,
+                timer_version,
                 timer_update,
             }));
         }
@@ -906,6 +843,7 @@ impl MessageGateway {
             quote: None,
             thread_id: None,
             expire_timer: None,
+            timer_version: 0,
             timer_update: false,
         }))
     }
@@ -921,7 +859,8 @@ impl MessageGateway {
                     });
                 }
 
-                let expire_timer = Some(crate::services::disappearing::stated_timer(&msg));
+                let expire_timer = Some(crate::services::disappearing::message_ttl(&msg));
+                let timer_version = msg.expire_timer_version;
                 let timer_update = crate::services::disappearing::is_timer_update(&msg);
                 // Extract profile key if present (32 bytes for display_name decryption)
                 let profile_key = msg.profile_key.filter(|k| k.len() == 32);
@@ -947,6 +886,7 @@ impl MessageGateway {
                     quote: msg.quote,
                     thread_id,
                     expire_timer,
+                    timer_version,
                     timer_update,
                 })
             }
@@ -974,6 +914,7 @@ impl MessageGateway {
                     remove: msg.remove,
                     target_author_aci: msg.target_author_aci,
                     target_sent_timestamp: msg.target_sent_timestamp,
+                    timestamp: msg.timestamp,
                 })
             }
             Some(content::Content::Pin(msg)) => {
@@ -981,15 +922,17 @@ impl MessageGateway {
                     target_author_aci: msg.target_author_aci,
                     target_sent_timestamp: msg.target_sent_timestamp,
                     unpin: msg.unpin,
+                    timestamp: msg.timestamp,
                 })
             }
             Some(content::Content::Edit(msg)) => {
-                let new_body = msg.data_message
-                    .map(|dm| dm.body)
+                let (new_body, edit_timestamp) = msg.data_message
+                    .map(|dm| (dm.body, dm.timestamp))
                     .unwrap_or_default();
                 Ok(DmContent::Edit {
                     target_sent_timestamp: msg.target_sent_timestamp,
                     new_body,
+                    edit_timestamp,
                 })
             }
             Some(content::Content::DeleteForMeSync(_)) => {
@@ -1184,6 +1127,9 @@ impl MessageGateway {
                     new_mailbox_pk: rotation.new_mailbox_pk,
                 })
             }
+            // Session switch after the peer reset its sessions with us: the
+            // decrypt that produced this already adopted the new session.
+            Some(content::Content::NullMessage(_)) => Ok(DmContent::NullMessage),
             _ => {
                 Err(ServiceError::Validation("Unknown or empty content type".into()))
             }
@@ -1206,6 +1152,43 @@ impl MessageGateway {
     /// - `Ok(DecryptResult::Plaintext(bytes))` - Successfully decrypted
     /// - `Ok(DecryptResult::NeedsSenderKey { channel_id, sender_id })` - Need to request sender's SKDM
     /// - `Err(_)` - Other error
+    /// Install a sealed-sender-authenticated SKDM, gated on the channel's
+    /// VERIFIED membership (Design B). Its `(revision, state_hash)` stamp is
+    /// cross-checked first — a sender ahead of us is recorded for a change
+    /// fetch even when not (yet) a member of our state; a fork counts only
+    /// from a verified member. A sender outside the verified distribution set
+    /// is not stored (`Ok(None)`): the server alone cannot make anyone a
+    /// sender in our channels. `Ok(Some(profile_key_changed))` once stored.
+    pub(crate) async fn accept_skdm(
+        &self,
+        sender_id: &UserId,
+        sender_device_id: u32,
+        channel_id: &crate::domain::ids::ChannelId,
+        skdm: &crate::proto::content_v1::SenderKeyDistribution,
+    ) -> Result<Option<bool>, ServiceError> {
+        let gate = crate::services::message::GroupStateGate::new(&self.settings_repo);
+        let is_member = gate.admits(channel_id, sender_id);
+        gate.cross_check(channel_id, is_member, skdm.state_revision, &skdm.state_hash);
+        if !is_member {
+            tracing::warn!(%sender_id, %channel_id,
+                "GATEWAY: SKDM from a sender outside the verified membership; not stored");
+            return Ok(None);
+        }
+        self.signal_service
+            .process_sender_key(sender_id, sender_device_id, skdm)
+            .await
+            .inspect_err(|e| {
+                tracing::error!(%sender_id, %channel_id, error = %e, "GATEWAY: Failed to process sender key");
+            })?;
+        tracing::info!(%sender_id, %channel_id, "GATEWAY: Successfully stored sender key from channel member");
+        // The member's profile key rides their SKDM (Signal shares it with
+        // the group), so a co-member who is not a friend can decrypt their
+        // name and avatar. Stored against the sealed-sender-authenticated
+        // sender only — the key is theirs; a blocked sender never reaches
+        // this point (checked by the caller).
+        Ok(Some(self.store_skdm_profile_key(sender_id, skdm.profile_key.as_deref())))
+    }
+
     pub async fn process_group_encrypted_message(
         &self,
         encrypted_data: &crate::proto::chat_v1::EncryptedData,
@@ -1270,6 +1253,18 @@ impl MessageGateway {
             "[MSG_RECV] Extracted GroupEncrypted, attempting decryption"
         );
 
+        // Only a member of our VERIFIED membership may speak in the channel
+        // (Signal drops group messages from non-members); checked before
+        // decrypting so a non-member cannot draw a SenderKeyRequest either.
+        let gate = crate::services::message::GroupStateGate::new(&self.settings_repo);
+        if !gate.admits(&channel_id, sender_id) {
+            tracing::warn!(%channel_id, %sender_id,
+                "[MSG_RECV] Group message from a sender outside the verified membership; dropped");
+            return Err(ServiceError::Validation(
+                "group message from a sender outside the verified channel membership".into(),
+            ));
+        }
+
         // Try to decrypt using sender keys
         match self
             .signal_service
@@ -1277,6 +1272,14 @@ impl MessageGateway {
             .await
         {
             Ok(plaintext) => {
+                // The sender's verified (revision, state_hash) stamp. A peer
+                // ahead is recorded; `MessageService::sync_channel_state_if_behind`
+                // has the channel service fetch the changes.
+                if let Some(content::Content::DataMessage(dm)) =
+                    Content::decode(plaintext.as_slice()).ok().and_then(|c| c.content)
+                {
+                    gate.cross_check(&channel_id, true, dm.group_state_revision, &dm.group_state_hash);
+                }
                 tracing::info!(
                     sender_id = %sender_id,
                     channel_id = %channel_id,
@@ -1336,6 +1339,25 @@ mod thread_id_tests {
     //! conversation instead of the open thread panel.
     use super::*;
 
+    /// An edit keeps its own timestamp (`EditMessage.data_message.timestamp`):
+    /// edits order and date by it.
+    #[test]
+    fn parse_content_carries_the_edit_timestamp() {
+        let content = Content {
+            content: Some(content::Content::Edit(crate::proto::content_v1::EditMessage {
+                target_sent_timestamp: 100,
+                data_message: Some(DataMessage { body: "fixed".into(), timestamp: 150, ..Default::default() }),
+            })),
+            ..Default::default()
+        };
+        match MessageGateway::parse_content(content).expect("parse_content failed") {
+            DmContent::Edit { target_sent_timestamp, new_body, edit_timestamp } => {
+                assert_eq!((target_sent_timestamp, new_body.as_str(), edit_timestamp), (100, "fixed", 150));
+            }
+            other => panic!("expected DmContent::Edit, got {other:?}"),
+        }
+    }
+
     #[test]
     fn parse_content_carries_thread_id_through() {
         let content = Content {
@@ -1379,5 +1401,25 @@ mod thread_id_tests {
             }
             other => panic!("expected DmContent::Text, got {other:?}"),
         }
+    }
+}
+
+#[cfg(test)]
+mod null_message_tests {
+    use super::*;
+
+    /// A peer's post-reset `NullMessage` is handled content with nothing in
+    /// it — not the "unknown content" error the mailbox poll loop reports as
+    /// a decrypt failure (`DmDecryptionFailed` + a delivery-issue marker).
+    #[test]
+    fn null_message_parses_as_handled_no_op() {
+        let content = Content {
+            content: Some(content::Content::NullMessage(crate::proto::content_v1::NullMessage::default())),
+            padding: vec![0; 200],
+            ..Default::default()
+        };
+        assert_eq!(content_type_name(&content.content), "NullMessage");
+        let parsed = MessageGateway::parse_content(content).expect("NullMessage must not be an error");
+        assert!(matches!(parsed, DmContent::NullMessage), "got {parsed:?}");
     }
 }

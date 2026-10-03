@@ -93,7 +93,7 @@ async fn test_channel_create() {
     skip_if_no_server!();
 
     let pool = assert_ok(create_test_pool().await);
-    let _user = assert_ok(setup_authenticated_test(&pool).await);
+    let user = assert_ok(setup_authenticated_test(&pool).await);
 
     let mut channel_client = ChannelClient::new(pool.channel(), pool.auth_clone());
     let channel_name = unique_username(); // reuse unique name generator
@@ -102,13 +102,11 @@ async fn test_channel_create() {
         .create_channel(
             &channel_name,
             ChannelType::ChannelPublic,
-            None,       // config
-            vec![],     // initial_member_ids
             None,       // password
             None,       // description
-            None,       // img_url
-        )
-        .await;
+            None,       // icon
+            Some(membership::genesis(&user, true).1),
+        ).await;
 
     let Ok(stream) = stream else {
         eprintln!("Failed to create channel stream");

@@ -2027,7 +2027,7 @@ async fn v6_delivered_message_key_is_destroyed() {
     //   (b) Signal's deliberate retention of keys for undelivered messages is
     //       intact — this test does NOT mistake correct out-of-order tolerance
     //       for a forward-secrecy break.
-    let res_undelivered = client_b2.signal().decrypt_message(&bytes_undelivered).await;
+    let res_undelivered = client_b2.signal().decrypt_message(&bytes_undelivered, chatter_core::util::time::TimestampNanos::now().as_u64()).await;
     match &res_undelivered {
         Ok((_addr, plaintext, _)) => {
             let hay = String::from_utf8_lossy(plaintext);
@@ -2050,7 +2050,7 @@ async fn v6_delivered_message_key_is_destroyed() {
     // ---- THE PROPERTY: the delivered key is GONE ---------------------------
     // Identical API, identical byte source, identical session. The only thing
     // that differs from the call above is that B already processed this one.
-    let res_delivered = client_b2.signal().decrypt_message(&bytes_delivered).await;
+    let res_delivered = client_b2.signal().decrypt_message(&bytes_delivered, chatter_core::util::time::TimestampNanos::now().as_u64()).await;
     println!("  delivered envelope  -> {}", match &res_delivered {
         Ok(_) => "DECRYPTED AGAIN".to_string(),
         Err(e) => format!("REJECTED: {e:?}"),
@@ -4559,7 +4559,7 @@ async fn v15_post_compromise_security_heals_after_dh_ratchet() {
 
     // ---- POSITIVE CONTROL 1: the LIVE (healed) session decrypts POST-step ----
     // Run FIRST, against the pristine healed session, before any overwrite.
-    let live_post = client_b2.signal().decrypt_message(&bytes_post).await;
+    let live_post = client_b2.signal().decrypt_message(&bytes_post, chatter_core::util::time::TimestampNanos::now().as_u64()).await;
     match &live_post {
         Ok((_addr, pt, _)) => {
             let hay = String::from_utf8_lossy(pt);
@@ -4591,7 +4591,7 @@ async fn v15_post_compromise_security_heals_after_dh_ratchet() {
         Some(stolen.as_slice()),
         "overwrite did not land — the store still holds a different session"
     );
-    let stolen_pre = client_b2.signal().decrypt_message(&bytes_pre).await;
+    let stolen_pre = client_b2.signal().decrypt_message(&bytes_pre, chatter_core::util::time::TimestampNanos::now().as_u64()).await;
     match &stolen_pre {
         Ok((_addr, pt, _)) => {
             let hay = String::from_utf8_lossy(pt);
@@ -4618,7 +4618,7 @@ async fn v15_post_compromise_security_heals_after_dh_ratchet() {
         .key_store()
         .store_session(&a_addr, &stolen)
         .expect("store_session (stolen, for post) failed");
-    let stolen_post = client_b2.signal().decrypt_message(&bytes_post).await;
+    let stolen_post = client_b2.signal().decrypt_message(&bytes_post, chatter_core::util::time::TimestampNanos::now().as_u64()).await;
     println!("  stolen record -> POST-step {}", match &stolen_post {
         Ok(_) => "DECRYPTED (!!)".to_string(),
         Err(e) => format!("REJECTED: {e:?}"),
@@ -6421,7 +6421,7 @@ async fn v23_message_ordering_reorder_and_gap() {
     let decrypt_expect = |bytes: Vec<u8>, want: String, others: [String; 2]| {
         let c = client_b2.clone();
         async move {
-            match c.signal().decrypt_message(&bytes).await {
+            match c.signal().decrypt_message(&bytes, chatter_core::util::time::TimestampNanos::now().as_u64()).await {
                 Ok((_addr, plaintext, _)) => {
                     let hay = String::from_utf8_lossy(&plaintext);
                     assert!(
@@ -8649,7 +8649,7 @@ async fn v37_kt_query_privacy_vrf_verified_and_forgery_still_rejected() {
 
     println!(
         "\n  V37 PASS — the KT leaf key is now VRF_sk(user_id); the client verified a LIVE server \
-         VRF proof byte-exact (Go go-ecvrf <-> Rust curve25519-dalek), the recovered index is the \
+         VRF proof byte-exact (Go RFC 9381 prover <-> libsignal-keytrans verifier), the recovered index is the \
          committed leaf, a forged identity key is STILL rejected (V24 under VRF), and a tampered \
          VRF proof is rejected. Query privacy vs a THIRD-PARTY AUDITOR is achieved; vs the serving \
          server it is not (GetProof still carries user_id — an OPRF is out of scope).\n"

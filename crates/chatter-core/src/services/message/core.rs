@@ -40,6 +40,7 @@ impl MessageError {
             Self::NotLoggedIn | Self::Network(NetworkError::Unauthenticated) => Some("Sign in required"),
             Self::RecipientIdentityChanged { .. } => Some("Identity changed"),
             Self::RecipientKeyUnverified { .. } => Some("Key not verified"),
+            Self::MembershipNotVerified { .. } => Some("Membership not verified"),
             Self::ChannelNotFound(_) | Self::Network(NetworkError::NotFound(_)) => Some("Conversation unavailable"),
             _ => Some("Cannot send message"),
         }
@@ -93,6 +94,17 @@ impl MessageService {
             .get_channel_encryption_settings(channel_id, channel_client)
             .await?;
 
+        // Sender-key channel: every key decision reads the VERIFIED membership.
+        // No verified state, a failed verification or a fork blocks the send
+        // before anything is encrypted; otherwise the state stamps the
+        // DataMessage for the receivers' fork / staleness cross-check.
+        let group_state = if require_encryption && !is_dm {
+            self.sync_channel_state_if_behind(channel_id);
+            Some(self.group_gate().for_distribution(channel_id)?)
+        } else {
+            None
+        };
+
         // Disappearing messages: READ this conversation's configured timer (the
         // channel's `default_ttl_seconds`, written by `set_disappearing_timer`)
         // and ARM the message with it. This is the load-bearing wire that was
@@ -120,7 +132,7 @@ impl MessageService {
 
         let plaintext_bytes = {
             use prost::Message as _;
-            let dm = crate::proto::content_v1::DataMessage {
+            let mut dm = crate::proto::content_v1::DataMessage {
                 body: trimmed_text.to_string(),
                 attachments: attachment_pointers.clone(),
                 channel_id: channel_id.to_string(),
@@ -146,6 +158,9 @@ impl MessageService {
                 ephemeral_ttl_seconds: disappearing_ttl_secs.unwrap_or(0),
                 ..Default::default()
             };
+            if let Some(state) = &group_state {
+                super::group::stamp_group_data_message(&mut dm, state);
+            }
             let wrap = crate::proto::content_v1::Content {
                 timestamp: dm.timestamp,
                 content: Some(crate::proto::content_v1::content::Content::DataMessage(dm)),
@@ -190,6 +205,10 @@ impl MessageService {
             ),
             None => (false, None),
         };
+        // A sealed-sender row is stored with no author, so the server can only
+        // let us delete it later against a secret we hold: a fresh random
+        // token per message, of which the server keeps just the SHA-256.
+        let deletion_token = sealed_deletion_token(&content_to_send);
         let proto_message = message_client
             .send_message(
                 &channel_id.to_string(),
@@ -200,6 +219,7 @@ impl MessageService {
                 mentioned_integrations.iter().map(|id| id.to_string()).collect(),
                 targets_ai_bot,
                 attachment_ids.iter().map(|id| id.to_string()).collect(),
+                deletion_token.as_ref().map(deletion_token_hash).unwrap_or_default(),
             )
             .await?;
         tracing::info!(
@@ -271,6 +291,9 @@ impl MessageService {
             "[SEND_MESSAGE] Storing message locally"
         );
         self.message_repo.insert_or_ignore(&message)?;
+        if let Some(token) = &deletion_token {
+            self.message_repo.set_deletion_token(&message.id, token)?;
+        }
         if let Some(stored) = self.message_repo.get(&message.id)? {
             message.delivery_status = stored.delivery_status;
         }
@@ -873,6 +896,7 @@ impl MessageService {
                 Vec::new(),    // mentioned_integrations (not typically used with ephemeral)
                 false,         // targets_ai_bot
                 attachment_ids.iter().map(|id| id.to_string()).collect(),
+                Vec::new(),
             )
             .await?;
 
@@ -978,10 +1002,16 @@ impl MessageService {
             }
         }
 
-        // Call server
+        // Call server. A sealed-sender row names no author; the token we kept
+        // at send time is what authorizes deleting it.
+        let deletion_token = self.message_repo.deletion_token(message_id)?;
         let mut message_client = self.message_client();
         message_client
-            .delete_message(&message_id.to_string(), &channel_id.to_string())
+            .delete_message(
+                &message_id.to_string(),
+                &channel_id.to_string(),
+                deletion_token.map(|t| t.to_vec()).unwrap_or_default(),
+            )
             .await?;
 
         // Soft delete locally - keep for history/sync
@@ -989,6 +1019,24 @@ impl MessageService {
         message.mark_deleted();
         self.message_repo.update(&message)?;
 
+        Ok(())
+    }
+
+    /// Delete-for-everyone, server half: remove the server's copy of a
+    /// sealed-sender message we sent by presenting the deletion token kept at
+    /// send time. A message without a token (not sent by us as sealed sender)
+    /// has no server copy we can prove we own, so this is a no-op for it.
+    pub async fn delete_sealed_server_copy(&self, message: &Message) -> Result<(), MessageError> {
+        let Some(token) = self.message_repo.deletion_token(&message.id)? else {
+            return Ok(());
+        };
+        self.message_client()
+            .delete_message(
+                &message.id.to_string(),
+                &message.conversation_id.to_string(),
+                token.to_vec(),
+            )
+            .await?;
         Ok(())
     }
 
@@ -1243,8 +1291,60 @@ impl MessageService {
     }
 }
 
+/// A fresh deletion token when `content` goes out as sealed sender, else None.
+fn sealed_deletion_token(content: &chat_v1::message::Content) -> Option<[u8; 32]> {
+    use rand::TryRngCore;
+    matches!(content.r#type, Some(chat_v1::message::content::Type::SealedSender(_))).then(|| {
+        let mut token = [0u8; 32];
+        rand::rngs::OsRng
+            .try_fill_bytes(&mut token)
+            .expect("OS RNG unavailable");
+        token
+    })
+}
+
+/// What the server stores for a deletion token: SHA-256 of it.
+fn deletion_token_hash(token: &[u8; 32]) -> Vec<u8> {
+    use sha2::{Digest, Sha256};
+    Sha256::digest(token).to_vec()
+}
+
 // Re-export proto conversion functions from conversion module
 pub use super::conversion::{proto_to_domain_message, proto_to_domain_message_with_sender, proto_content_to_domain};
+
+#[cfg(test)]
+mod deletion_token_tests {
+    use super::{chat_v1, deletion_token_hash, sealed_deletion_token};
+    use sha2::{Digest, Sha256};
+
+    fn content(t: chat_v1::message::content::Type) -> chat_v1::message::Content {
+        chat_v1::message::Content { r#type: Some(t) }
+    }
+
+    #[test]
+    fn only_sealed_sender_gets_a_token_and_each_is_fresh() {
+        let sealed = content(chat_v1::message::content::Type::SealedSender(
+            chat_v1::SealedSenderMessage::default(),
+        ));
+        let a = sealed_deletion_token(&sealed).expect("sealed sender carries a token");
+        let b = sealed_deletion_token(&sealed).expect("sealed sender carries a token");
+        assert_ne!(a, b, "a token per message, never reused");
+        assert_ne!(a, [0u8; 32]);
+        assert!(sealed_deletion_token(&content(chat_v1::message::content::Type::Text("hi".into()))).is_none());
+        assert!(sealed_deletion_token(&content(chat_v1::message::content::Type::Encrypted(
+            chat_v1::EncryptedData::default(),
+        ))).is_none());
+    }
+
+    #[test]
+    fn server_gets_sha256_of_the_token() {
+        let token = [7u8; 32];
+        let h = deletion_token_hash(&token);
+        assert_eq!(h, Sha256::digest(token).to_vec());
+        assert_eq!(h.len(), 32);
+        assert_ne!(h, token.to_vec(), "the token itself never leaves at send time");
+    }
+}
 
 #[cfg(test)]
 mod send_failure_tests {

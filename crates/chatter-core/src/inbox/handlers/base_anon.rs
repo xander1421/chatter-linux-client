@@ -232,7 +232,13 @@ pub trait AnonInboxBackend {
 
     fn delete_message(&self, id: &Self::Id, sender: &UserId, ts: u64) -> Result<bool, String>;
 
-    fn update_message_text(&self, id: &Self::Id, sender: &UserId, ts: u64, text: &str) -> Result<bool, String>;
+    /// Apply `sender`'s edit of its own message sent at `target_ts` in `id`,
+    /// through the one edit choke point
+    /// ([`MessageService::apply_channel_edit`](crate::services::message::MessageService::apply_channel_edit)):
+    /// author only, ordered and dated by `edit_ts`, Signal's 48h, held until
+    /// the message arrives. `sender` is the one the mailbox authenticated.
+    /// Returns the edited message when it changed.
+    fn apply_edit(&self, id: &Self::Id, sender: &UserId, target_ts: u64, text: &str, edit_ts: u64) -> Result<Option<Message>, String>;
 
     /// Returns `true` if the reaction was newly inserted, `false` if it
     /// was already present (per the unified-reactions UNIQUE constraint).
@@ -512,24 +518,27 @@ pub fn dispatch_common_content<B: AnonInboxBackend>(
 
         Some(ContentKind::Edit(edit)) => {
             let target_timestamp = edit.target_sent_timestamp;
-            let new_text = edit.data_message.as_ref().map(|dm| dm.body.clone()).unwrap_or_default();
-            match backend.update_message_text(id, sender_id, target_timestamp, &new_text) {
-                Ok(true) => {
+            let (new_text, edit_ts) =
+                edit.data_message.as_ref().map(|dm| (dm.body.as_str(), dm.timestamp)).unwrap_or_default();
+            // A mailbox carries no server receive time: the edit's own
+            // timestamp measures the 48h window.
+            match backend.apply_edit(id, sender_id, target_timestamp, new_text, edit_ts) {
+                Ok(Some(edited)) => {
                     events.push(DomainEvent::MessageEdited {
-                        message_id: MessageId::from_timestamp(target_timestamp),
-                        new_content: MessageContent::Text(new_text),
+                        message_id: edited.id,
+                        new_content: edited.content,
                         channel_id,
                         conversation_type: backend.conversation_type(),
                         author_id: *sender_id,
                         target_sent_timestamp: target_timestamp,
                     });
                 }
-                Ok(false) => tracing::debug!(
+                Ok(None) => tracing::debug!(
                     id = %id,
                     target_timestamp,
-                    "Edit ignored: message not found or sender not author"
+                    "Edit held for its message, refused, or already shown"
                 ),
-                Err(e) => tracing::warn!(id = %id, error = %e, "Failed to update message text"),
+                Err(e) => tracing::warn!(id = %id, error = %e, "Failed to apply an edit"),
             }
             CommonDispatchOutcome::Handled(events)
         }
@@ -559,7 +568,7 @@ mod tests {
         fn delete_message(&self, _: &AnonGroupId, _: &UserId, _: u64) -> Result<bool, String> {
             Ok(self.row_matched)
         }
-        fn update_message_text(&self, _: &AnonGroupId, _: &UserId, _: u64, _: &str) -> Result<bool, String> { unreachable!() }
+        fn apply_edit(&self, _: &AnonGroupId, _: &UserId, _: u64, _: &str, _: u64) -> Result<Option<Message>, String> { unreachable!() }
         fn add_reaction(&self, _: &AnonGroupId, _: &UserId, _: u64, _: &UserId, _: &str) -> Result<bool, String> { unreachable!() }
         fn remove_reaction(&self, _: &AnonGroupId, _: &UserId, _: u64, _: &UserId, _: &str) -> Result<bool, String> { unreachable!() }
         fn set_pinned(&self, _: &AnonGroupId, _: u64, _: bool) -> Result<(), String> { unreachable!() }
@@ -588,5 +597,55 @@ mod tests {
         assert_eq!(delete_events(true), 1);
         // A member naming someone else's timestamp deletes nothing.
         assert_eq!(delete_events(false), 0);
+    }
+
+    /// An anonymous-group edit goes through the one edit choke point: held
+    /// until its message arrives, author only, ordered by the edit's own
+    /// time, within 48h, and a re-delivery announces nothing.
+    #[tokio::test]
+    async fn anon_group_edits_follow_the_edit_rules() {
+        static MOCK_KEYRING: std::sync::Once = std::sync::Once::new();
+        MOCK_KEYRING.call_once(|| {
+            keyring::set_default_credential_builder(keyring::mock::default_credential_builder());
+        });
+        let dir = tempfile::tempdir().unwrap();
+        let client = crate::client::ChatterClient::builder()
+            .server_url("http://localhost:1")
+            .data_dir(dir.path().to_str().unwrap())
+            .build()
+            .expect("build client");
+        let groups = client.anon_groups();
+        let (group, author, stranger) = (AnonGroupId::new(), UserId::new(), UserId::new());
+        let sent = 1_700_000_000_000_000_000u64;
+        let window = crate::services::message::MessageService::EDIT_MAX_AGE_NS;
+        let edit = |by: &UserId, body: &str, edit_ts: u64| {
+            let content = Content {
+                content: Some(content_v1::content::Content::Edit(content_v1::EditMessage {
+                    target_sent_timestamp: sent,
+                    data_message: Some(content_v1::DataMessage { body: body.into(), timestamp: edit_ts, ..Default::default() }),
+                })),
+                ..Default::default()
+            };
+            match dispatch_common_content(&group, by, &content, groups.as_ref()) {
+                CommonDispatchOutcome::Handled(events) => {
+                    events.iter().filter(|e| matches!(e, DomainEvent::MessageEdited { .. })).count()
+                }
+                _ => panic!("an edit is handled"),
+            }
+        };
+        let stored = || client.messages().message_repo.get_by_sender_timestamp(&author, sent).unwrap().unwrap();
+
+        assert_eq!(edit(&author, "early", sent + 10), 0, "held for its message");
+        groups.store_data_message(&group, &author, "original", &[], sent, None).unwrap();
+        assert_eq!(stored().content, MessageContent::Text("early".into()));
+
+        assert_eq!(edit(&author, "newer", sent + 30), 1);
+        assert_eq!(edit(&author, "older", sent + 20), 0, "older than the edit shown");
+        assert_eq!(edit(&author, "newer", sent + 30), 0, "re-delivered");
+        assert_eq!(edit(&stranger, "hijack", sent + 40), 0, "not the author");
+        assert_eq!(edit(&author, "late", sent + window + 1), 0, "past 48h");
+        let m = stored();
+        assert_eq!(m.content, MessageContent::Text("newer".into()));
+        assert_eq!(m.edited_at, Some(chrono::DateTime::from_timestamp_nanos((sent + 30) as i64)));
     }
 }

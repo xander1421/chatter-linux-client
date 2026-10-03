@@ -83,9 +83,9 @@ impl MailboxTestContext {
 }
 
 /// Helper to create a channel and wait for completion.
-async fn create_test_channel(client: &mut ChannelClient, name: &str) -> String {
+async fn create_test_channel(client: &mut ChannelClient, user: &TestUser, name: &str) -> String {
     let stream = client
-        .create_channel(name, ChannelType::ChannelPublic, None, vec![], None, None, None)
+        .create_channel(name, ChannelType::ChannelPublic, None, None, None, Some(membership::genesis(user, true).1))
         .await
         .expect("Failed to start channel creation");
 
@@ -139,7 +139,7 @@ async fn test_stale_mailbox_key_detection() {
 
     // Step 1: Create channel
     let channel_name = format!("stale_key_test_{}", unique_username());
-    let channel_id_str = create_test_channel(&mut channel_client, &channel_name).await;
+    let channel_id_str = create_test_channel(&mut channel_client, &ctx.user, &channel_name).await;
     let channel_id: ChannelId = channel_id_str.parse().expect("Valid channel ID");
 
     tracing::info!(channel_id = %channel_id, "Created test channel");
@@ -255,14 +255,15 @@ async fn test_message_before_mailbox_exchange() {
     // User 1 creates channel
     let mut channel_client1 = ChannelClient::new(pool1.channel(), pool1.auth_clone());
     let channel_name = format!("timing_test_{}", unique_username());
-    let channel_id = create_test_channel(&mut channel_client1, &channel_name).await;
+    let channel_id = create_test_channel(&mut channel_client1, &user1, &channel_name).await;
 
     tracing::info!(channel_id = %channel_id, "User 1 created channel");
 
     // User 2 joins channel
     let mut channel_client2 = ChannelClient::new(pool2.channel(), pool2.auth_clone());
+    let join = membership::open_join(&user2, &mut channel_client2, &channel_id).await;
     let join_stream = channel_client2
-        .join_channel(&channel_id, None, false)
+        .join_channel(&channel_id, join, false)
         .await
         .expect("Join should start");
 
@@ -279,7 +280,7 @@ async fn test_message_before_mailbox_exchange() {
     };
 
     let send_result = msg_client1
-        .send_message(&channel_id, content, None, false, None, vec![], false, vec![])
+        .send_message(&channel_id, content, None, false, None, vec![], false, vec![], Vec::new())
         .await;
 
     // The message should either:
@@ -507,7 +508,7 @@ async fn test_concurrent_mailbox_setup() {
 
     // Create channel
     let channel_name = format!("concurrent_test_{}", unique_username());
-    let channel_id_str = create_test_channel(&mut channel_client, &channel_name).await;
+    let channel_id_str = create_test_channel(&mut channel_client, &ctx.user, &channel_name).await;
     let channel_id: ChannelId = channel_id_str.parse().expect("Valid channel ID");
 
     // Pre-request tokens
@@ -769,22 +770,23 @@ async fn test_e2e_message_with_mailbox_exchange() {
 
     // Setup two users
     let pool1 = assert_ok(create_test_pool().await);
-    let _user1 = assert_ok(setup_authenticated_test(&pool1).await);
+    let user1 = assert_ok(setup_authenticated_test(&pool1).await);
 
     let pool2 = assert_ok(create_test_pool().await);
-    let _user2 = assert_ok(setup_authenticated_test(&pool2).await);
+    let user2 = assert_ok(setup_authenticated_test(&pool2).await);
 
     // User 1 creates public channel
     let mut channel_client1 = ChannelClient::new(pool1.channel(), pool1.auth_clone());
     let channel_name = format!("e2e_mailbox_test_{}", unique_username());
-    let channel_id = create_test_channel(&mut channel_client1, &channel_name).await;
+    let channel_id = create_test_channel(&mut channel_client1, &user1, &channel_name).await;
 
     tracing::info!(channel_id = %channel_id, "User 1 created channel");
 
     // User 2 joins
     let mut channel_client2 = ChannelClient::new(pool2.channel(), pool2.auth_clone());
+    let join = membership::open_join(&user2, &mut channel_client2, &channel_id).await;
     let join_stream = channel_client2
-        .join_channel(&channel_id, None, false)
+        .join_channel(&channel_id, join, false)
         .await
         .expect("Join should start");
 
@@ -804,7 +806,7 @@ async fn test_e2e_message_with_mailbox_exchange() {
 
     let msg1 = assert_ok(
         msg_client1
-            .send_message(&channel_id, content1, None, false, None, vec![], false, vec![])
+            .send_message(&channel_id, content1, None, false, None, vec![], false, vec![], Vec::new())
             .await,
     );
 
@@ -818,7 +820,7 @@ async fn test_e2e_message_with_mailbox_exchange() {
 
     let msg2 = assert_ok(
         msg_client2
-            .send_message(&channel_id, content2, None, false, None, vec![], false, vec![])
+            .send_message(&channel_id, content2, None, false, None, vec![], false, vec![], Vec::new())
             .await,
     );
 

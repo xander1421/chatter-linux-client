@@ -55,63 +55,9 @@ const CALL_KEY_INFO_PREFIX: &[u8] = b"call-encryption:";
 /// Info string for ephemeral DH-based call key derivation (Signal-style).
 const EPHEMERAL_CALL_INFO: &[u8] = b"Chatter_Calling_EphemeralDH_SRTPKey_KDF";
 
-/// Derive a shared secret from identity keys using X25519 ECDH.
-///
-/// Signal identity keys use Curve25519 (X25519) keys with a 0x05 type prefix.
-/// The public key bytes are already in Montgomery form, so no conversion is needed.
-///
-/// # Arguments
-/// * `our_identity` - Our identity key pair
-/// * `peer_identity` - Peer's identity public key
-///
-/// # Returns
-/// 32-byte ECDH shared secret.
-pub fn derive_call_shared_secret(
-    our_identity: &IdentityKeyPair,
-    peer_identity: &IdentityKey,
-) -> Result<[u8; 32], CryptoError> {
-    // Get our private key bytes and peer's public key bytes
-    let our_private_bytes = our_identity.private_key().serialize();
-    let peer_public_bytes = peer_identity.serialize();
-
-    // The identity key serialization includes a type byte prefix (0x05 for DJB/Curve25519)
-    // Skip the first byte to get the actual 32-byte X25519 public key
-    if peer_public_bytes.len() != 33 || peer_public_bytes[0] != 0x05 {
-        return Err(CryptoError::InvalidKeyFormat);
-    }
-    let peer_x25519_bytes: [u8; 32] = peer_public_bytes[1..33]
-        .try_into()
-        .map_err(|_| CryptoError::InvalidKeyFormat)?;
-
-    // Signal public keys are already X25519 (Curve25519 in Montgomery form)
-    // No conversion needed - use them directly
-    let peer_x25519_public = X25519PublicKey::from(peer_x25519_bytes);
-
-    // Signal private keys are already clamped scalars suitable for X25519
-    let our_x25519_private: [u8; 32] = our_private_bytes[..32]
-        .try_into()
-        .map_err(|_| CryptoError::InvalidKeyFormat)?;
-    let our_private = X25519PrivateKey::from(our_x25519_private);
-
-    // Compute ECDH shared secret
-    let shared_secret = our_private.diffie_hellman(&peer_x25519_public);
-
-    // RFC 7748 §6.1: reject low-order peer keys that collapse ECDH to a
-    // constant. Without this gate a peer (or the server) can force a
-    // predictable call key with a low-order identity key.
-    if !shared_secret.was_contributory() {
-        return Err(CryptoError::KeyDerivationFailed(
-            "non-contributory ECDH (low-order public key)".into(),
-        ));
-    }
-
-    Ok(*shared_secret.as_bytes())
-}
-
 /// Derives a 32-byte call encryption key from a shared secret.
 ///
-/// For DM calls, the shared_secret comes from ECDH(our_identity, peer_identity).
-/// For group calls, the shared_secret comes from the sender key chain.
+/// The root of a call's ratchet chain (`CallKeyState::new`).
 ///
 /// # Arguments
 /// * `shared_secret` - 32-byte ECDH shared secret or sender key
@@ -279,83 +225,6 @@ pub fn derive_call_key_ephemeral(
     let mut call_key = [0u8; 32];
     hkdf.expand(&info, &mut call_key)
         .map_err(|_| CryptoError::KeyDerivationFailed("Ephemeral HKDF expand failed".into()))?;
-
-    Ok(call_key)
-}
-
-// =============================================================================
-// Anonymous DM Call Key Derivation (Hybrid)
-// =============================================================================
-
-/// HKDF salt for anonymous call key derivation.
-const ANON_CALL_KEY_SALT: &[u8] = b"ChatterAnonCallKey-v1";
-
-/// Derive the final call encryption key for anonymous DM calls.
-///
-/// Mixes the Signal session ECDH shared secret with a per-call random
-/// contribution, producing a key that is:
-/// - Bound to the Signal identity keys (MITM protection)
-/// - Unique per call (random contribution)
-/// - Deterministic given the same inputs (both sides derive same key)
-///
-/// Final key = HKDF(
-///     salt: "ChatterAnonCallKey-v1",
-///     ikm: signal_shared_secret || random_contribution,
-///     info: "anon-call:" || room_name
-/// )
-///
-/// # Arguments
-/// * `signal_shared` - 32-byte ECDH shared secret from Signal identity keys
-/// * `random_contribution` - 32-byte random value from the call offer
-/// * `room_name` - The call room name (deterministic context binding)
-///
-/// # Returns
-/// 32-byte AES-256 key for LiveKit E2EE.
-pub fn derive_anon_call_key(
-    signal_shared: &[u8; 32],
-    random_contribution: &[u8; 32],
-    room_name: &str,
-) -> Result<[u8; 32], CryptoError> {
-    // Concatenate both key materials
-    let mut ikm = [0u8; 64];
-    ikm[..32].copy_from_slice(signal_shared);
-    ikm[32..].copy_from_slice(random_contribution);
-
-    let hkdf = Hkdf::<Sha256>::new(Some(ANON_CALL_KEY_SALT), &ikm);
-
-    let info = format!("anon-call:{}", room_name);
-    let mut call_key = [0u8; 32];
-    hkdf.expand(info.as_bytes(), &mut call_key)
-        .map_err(|_| CryptoError::KeyDerivationFailed("Anon call HKDF expand failed".into()))?;
-
-    Ok(call_key)
-}
-
-/// Derive the final call encryption key with optional post-quantum contribution.
-///
-/// Extends `derive_anon_call_key` with an optional Kyber shared secret.
-/// When PQ is available: HKDF(signal || random || kyber, room_name)
-/// When PQ is not available: falls back to HKDF(signal || random, room_name)
-pub fn derive_anon_call_key_hybrid(
-    signal_shared: &[u8; 32],
-    random_contribution: &[u8; 32],
-    pq_shared: Option<&[u8]>,
-    room_name: &str,
-) -> Result<[u8; 32], CryptoError> {
-    // Concatenate all key materials
-    let mut ikm = Vec::with_capacity(64 + pq_shared.map(|s| s.len()).unwrap_or(0));
-    ikm.extend_from_slice(signal_shared);
-    ikm.extend_from_slice(random_contribution);
-    if let Some(pq) = pq_shared {
-        ikm.extend_from_slice(pq);
-    }
-
-    let hkdf = Hkdf::<Sha256>::new(Some(ANON_CALL_KEY_SALT), &ikm);
-
-    let info = format!("anon-call:{}", room_name);
-    let mut call_key = [0u8; 32];
-    hkdf.expand(info.as_bytes(), &mut call_key)
-        .map_err(|_| CryptoError::KeyDerivationFailed("Hybrid anon call HKDF expand failed".into()))?;
 
     Ok(call_key)
 }
@@ -670,36 +539,6 @@ mod tests {
         let key_vec = state.current_key_vec();
         assert_eq!(key_vec.len(), 32);
         assert_eq!(key_vec.as_slice(), state.current_key());
-    }
-
-    #[test]
-    fn test_derive_call_shared_secret() {
-        // Generate two identity key pairs
-        let mut rng = rand::rng();
-        let alice_identity = IdentityKeyPair::generate(&mut rng);
-        let bob_identity = IdentityKeyPair::generate(&mut rng);
-
-        // Debug: print the key format
-        let alice_public = alice_identity.identity_key();
-        let alice_serialized = alice_public.serialize();
-        println!("Alice identity key serialized: {:?}", alice_serialized);
-        println!("Length: {}, First byte: 0x{:02x}", alice_serialized.len(), alice_serialized[0]);
-
-        // Try to derive shared secret
-        let result = derive_call_shared_secret(&alice_identity, bob_identity.identity_key());
-
-        match &result {
-            Ok(secret) => println!("Success! Secret: {:?}", &secret[..8]),
-            Err(e) => println!("Error: {:?}", e),
-        }
-
-        assert!(result.is_ok(), "derive_call_shared_secret should succeed");
-
-        // Verify both parties derive the same secret
-        let alice_to_bob = derive_call_shared_secret(&alice_identity, bob_identity.identity_key()).unwrap();
-        let bob_to_alice = derive_call_shared_secret(&bob_identity, alice_identity.identity_key()).unwrap();
-
-        assert_eq!(alice_to_bob, bob_to_alice, "Both parties should derive the same shared secret");
     }
 
     // =========================================================================

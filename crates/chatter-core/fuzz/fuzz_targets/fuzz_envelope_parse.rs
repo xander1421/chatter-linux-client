@@ -3,9 +3,9 @@
 //!
 //! Property: `decrypt_envelope` must NEVER panic on arbitrary input.
 //! Returning `Err` is the expected outcome for random bytes; even if the
-//! length check passes and a `[u8; 32]` "ephemeral public" is plucked off the
-//! front, the XChaCha20-Poly1305 AEAD tag will fail verification and the
-//! function returns `CryptoError::DecryptionFailed`.
+//! length check passes and an HPKE `enc` is plucked off the front, the
+//! AES-256-GCM tag will fail verification and the function returns
+//! `CryptoError::DecryptionFailed`.
 //!
 //! This target uses ONLY the public chatter-core API:
 //!   - `chatter_core::crypto::envelope_crypto::decrypt_envelope`
@@ -25,7 +25,7 @@ fuzz_target!(|data: &[u8]| {
     let recipient_seed = [0u8; 32];
 
     // Property: NEVER panic. Err is fine. Ok(...) on random bytes is
-    // astronomically unlikely (XChaCha20-Poly1305 has a 128-bit tag) and would
+    // astronomically unlikely (AES-256-GCM has a 128-bit tag) and would
     // indicate either a bug in libsignal/aead or a forgery — fuzzer should
     // surface that as a finding via the assertion below.
     match decrypt_envelope(data, &recipient_seed) {

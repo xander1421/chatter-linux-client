@@ -91,13 +91,13 @@ impl InboxEventProcessor {
             // Pure protocol events
             // =================================================================
 
-            InboxEvent::DmDecryptionFailed { peer_id, error, convergence_failed } => {
+            InboxEvent::DmDecryptionFailed { peer_id, error, session_desync } => {
                 tracing::error!(
-                    "DM decryption failed from {}: {} (convergence_failed={})",
-                    peer_id, error, convergence_failed
+                    "DM decryption failed from {}: {} (session_desync={})",
+                    peer_id, error, session_desync
                 );
-                if *convergence_failed {
-                    self.dm_bootstrap_service.handle_convergence_failure(*peer_id);
+                if *session_desync {
+                    self.dm_bootstrap_service.reset_peer_sessions(*peer_id);
                 }
             }
 
@@ -769,15 +769,17 @@ impl InboxEventProcessor {
             // Ephemeral events — emit DomainEvent for DB persistence, UI also handles
             // =================================================================
 
-            InboxEvent::DmReaction { peer_id, emoji, remove, target_sent_timestamp, target_author_aci, .. } => {
+            InboxEvent::DmReaction { peer_id, emoji, remove, target_sent_timestamp, target_author_aci, timestamp } => {
                 let sender_id = target_author_aci.parse().unwrap_or(*peer_id);
                 // Persist first; the unified-reactions table has UNIQUE
                 // (sender_id, sent_at_ns, user_id, emoji) so this is idempotent.
                 // Only emit the UI delta if the reaction was actually new —
                 // otherwise the snapshot + delta both apply and the bubble
-                // shows count=2 for a single reaction.
-                match self.message_service.record_reaction(
-                    &sender_id, *target_sent_timestamp, peer_id, emoji, *remove,
+                // shows count=2 for a single reaction. The target must be in
+                // this friend DM (`resolve_inbound_target`).
+                match self.message_service.record_inbound_reaction(
+                    &crate::domain::ChannelId::from(*peer_id), peer_id,
+                    &sender_id, *target_sent_timestamp, emoji, *remove, *timestamp,
                 ) {
                     Ok(true) => {
                         let event = if *remove {
@@ -788,16 +790,16 @@ impl InboxEventProcessor {
                         self.event_bus.emit_domain(event);
                     }
                     Ok(false) => {
-                        tracing::debug!(emoji = %emoji, "DM reaction already recorded — skipping UI delta");
+                        tracing::debug!(emoji = %emoji, "DM reaction held, dropped or already recorded — skipping UI delta");
                     }
                     Err(e) => tracing::warn!(error = %e, "Failed to persist DM reaction"),
                 }
             }
 
-            InboxEvent::ChannelReaction { channel_id: _, sender_id, emoji, remove, target_sent_timestamp, target_author_aci, .. } => {
+            InboxEvent::ChannelReaction { channel_id, sender_id, emoji, remove, target_sent_timestamp, target_author_aci, timestamp } => {
                 let target_sender_id = target_author_aci.parse().unwrap_or(*sender_id);
-                match self.message_service.record_reaction(
-                    &target_sender_id, *target_sent_timestamp, sender_id, emoji, *remove,
+                match self.message_service.record_inbound_reaction(
+                    channel_id, sender_id, &target_sender_id, *target_sent_timestamp, emoji, *remove, *timestamp,
                 ) {
                     Ok(true) => {
                         let event = if *remove {
@@ -808,62 +810,90 @@ impl InboxEventProcessor {
                         self.event_bus.emit_domain(event);
                     }
                     Ok(false) => {
-                        tracing::debug!(emoji = %emoji, "Channel reaction already recorded — skipping UI delta");
+                        tracing::debug!(emoji = %emoji, "Channel reaction held, dropped or already recorded — skipping UI delta");
                     }
                     Err(e) => tracing::warn!(error = %e, "Failed to persist channel reaction"),
                 }
             }
 
-            InboxEvent::DmEdit { peer_id, target_sent_timestamp, new_body } => {
-                if let Some(msg) = self.lookup_message(&peer_id.to_string(), *target_sent_timestamp) {
-                    self.event_bus.emit_domain(DomainEvent::MessageEdited {
-                        message_id: msg.id,
-                        new_content: crate::domain::message::MessageContent::Text(new_body.clone()),
-                        channel_id: msg.conversation_id,
-                        conversation_type: msg.conversation_type,
-                        author_id: *peer_id,
-                        target_sent_timestamp: *target_sent_timestamp,
-                    });
+            InboxEvent::DmEdit { peer_id, target_sent_timestamp, new_body, edit_timestamp, server_timestamp } => {
+                match self.message_service.apply_dm_edit(
+                    peer_id, *target_sent_timestamp, new_body, *edit_timestamp, *server_timestamp,
+                ) {
+                    Ok(Some(msg)) => {
+                        self.event_bus.emit_domain(DomainEvent::MessageEdited {
+                            message_id: msg.id,
+                            new_content: msg.content,
+                            channel_id: msg.conversation_id,
+                            conversation_type: msg.conversation_type,
+                            author_id: *peer_id,
+                            target_sent_timestamp: *target_sent_timestamp,
+                        });
+                    }
+                    Ok(None) => {}
+                    Err(e) => tracing::warn!(%peer_id, error = %e, "Failed to apply a DM edit"),
                 }
             }
 
-            InboxEvent::ChannelEdit { channel_id, target_sent_timestamp, new_body, sender_id, .. } => {
-                if let Some(msg) = self.lookup_message(&sender_id.to_string(), *target_sent_timestamp) {
-                    self.event_bus.emit_domain(DomainEvent::MessageEdited {
-                        message_id: msg.id,
-                        new_content: crate::domain::message::MessageContent::Text(new_body.clone()),
-                        channel_id: *channel_id,
-                        conversation_type: self.message_service.conversation_type(channel_id),
-                        author_id: *sender_id,
-                        target_sent_timestamp: *target_sent_timestamp,
-                    });
+            InboxEvent::ChannelEdit {
+                channel_id, target_sent_timestamp, new_body, sender_id, edit_timestamp, server_timestamp,
+            } => {
+                match self.message_service.apply_channel_edit(
+                    channel_id, sender_id, *target_sent_timestamp, new_body, *edit_timestamp, *server_timestamp,
+                ) {
+                    Ok(Some(msg)) => {
+                        self.event_bus.emit_domain(DomainEvent::MessageEdited {
+                            message_id: msg.id,
+                            new_content: msg.content,
+                            channel_id: *channel_id,
+                            conversation_type: msg.conversation_type,
+                            author_id: *sender_id,
+                            target_sent_timestamp: *target_sent_timestamp,
+                        });
+                    }
+                    Ok(None) => {}
+                    Err(e) => tracing::warn!(%channel_id, error = %e, "Failed to apply a channel edit"),
                 }
             }
 
             InboxEvent::DmDeleteForEveryone { peer_id, target_sent_timestamp } => {
-                if let Some(msg) = self.lookup_message(&peer_id.to_string(), *target_sent_timestamp) {
-                    self.event_bus.emit_domain(DomainEvent::MessageDeleted {
-                        message_id: msg.id,
-                        author_id: *peer_id,
-                        channel_id: Some(msg.conversation_id),
-                        target_sent_timestamp: *target_sent_timestamp,
-                    });
+                match self.message_service.apply_dm_delete(peer_id, *target_sent_timestamp) {
+                    Ok(Some(msg)) => {
+                        self.event_bus.emit_domain(DomainEvent::MessageDeleted {
+                            message_id: msg.id,
+                            author_id: *peer_id,
+                            channel_id: Some(msg.conversation_id),
+                            target_sent_timestamp: *target_sent_timestamp,
+                        });
+                    }
+                    Ok(None) => {}
+                    Err(e) => tracing::warn!(%peer_id, error = %e, "Failed to apply a DM delete"),
                 }
             }
 
             InboxEvent::ChannelDeleteForEveryone { channel_id, sender_id, target_sent_timestamp, .. } => {
-                if let Some(msg) = self.lookup_message(&sender_id.to_string(), *target_sent_timestamp) {
-                    self.event_bus.emit_domain(DomainEvent::MessageDeleted {
-                        message_id: msg.id,
-                        author_id: *sender_id,
-                        channel_id: Some(*channel_id),
-                        target_sent_timestamp: *target_sent_timestamp,
-                    });
+                match self.message_service.apply_channel_delete(channel_id, sender_id, *target_sent_timestamp) {
+                    Ok(Some(msg)) => {
+                        self.event_bus.emit_domain(DomainEvent::MessageDeleted {
+                            message_id: msg.id,
+                            author_id: *sender_id,
+                            channel_id: Some(*channel_id),
+                            target_sent_timestamp: *target_sent_timestamp,
+                        });
+                    }
+                    Ok(None) => {}
+                    Err(e) => tracing::warn!(%channel_id, error = %e, "Failed to apply a channel delete"),
                 }
             }
 
-            InboxEvent::DmPin { peer_id, target_sent_timestamp, unpin, target_author_aci, .. } => {
-                if let Some(msg) = self.lookup_message(&target_author_aci, *target_sent_timestamp) {
+            InboxEvent::DmPin { peer_id, target_sent_timestamp, unpin, target_author_aci, timestamp } => {
+                let target = target_author_aci.parse().ok().and_then(|author| {
+                    self.message_service.resolve_inbound_pin(
+                        &crate::domain::ChannelId::from(*peer_id), peer_id, &author, *target_sent_timestamp,
+                        *unpin, *timestamp,
+                    ).ok().flatten()
+                });
+                if let Some(msg) = target {
                     if *unpin {
                         self.event_bus.emit_domain(DomainEvent::MessageUnpinned {
                             message_id: msg.id, unpinner_id: *peer_id,
@@ -878,8 +908,13 @@ impl InboxEventProcessor {
                 }
             }
 
-            InboxEvent::ChannelPin { channel_id, sender_id, target_sent_timestamp, unpin, target_author_aci, .. } => {
-                if let Some(msg) = self.lookup_message(&target_author_aci, *target_sent_timestamp) {
+            InboxEvent::ChannelPin { channel_id, sender_id, target_sent_timestamp, unpin, target_author_aci, timestamp } => {
+                let target = target_author_aci.parse().ok().and_then(|author| {
+                    self.message_service.resolve_inbound_pin(
+                        channel_id, sender_id, &author, *target_sent_timestamp, *unpin, *timestamp,
+                    ).ok().flatten()
+                });
+                if let Some(msg) = target {
                     if *unpin {
                         self.event_bus.emit_domain(DomainEvent::MessageUnpinned {
                             message_id: msg.id, unpinner_id: *sender_id,
@@ -943,6 +978,16 @@ impl InboxEventProcessor {
                 match crate::services::profile_visibility::apply_sync(&self.message_service.settings_repo, sync) {
                     Ok(changed) => tracing::info!(key_changed = changed, "ProfileKeySync applied"),
                     Err(e) => tracing::warn!(error = %e, "ProfileKeySync: storing the key failed"),
+                }
+            }
+
+            InboxEvent::ConfigurationSync { sender_id, sync } => {
+                // `apply` drops one that is not from our own user: a peer
+                // must never change our privacy settings.
+                match crate::services::configuration_sync::apply(&self.message_service.settings_repo, sender_id, sync) {
+                    Ok(true) => tracing::info!("ConfigurationSync applied"),
+                    Ok(false) => {}
+                    Err(e) => tracing::warn!(error = %e, "ConfigurationSync: storing the settings failed"),
                 }
             }
 

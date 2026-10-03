@@ -28,7 +28,7 @@ pub use crate::framework::mocks::MockServices;
 pub use crate::framework::fixtures::{
     TestUser, TestChannel, TestMessage, TestAttachment, TestSession,
     MessageContentType,
-    unique_username, random_password, random_password_hash,
+    unique_username, random_password,
     random_public_key, random_identity_key, random_device_auth_token,
     random_profile_key, random_uak, generate_prekey_bundle,
     unique_channel_name, unique_message_id, random_bytes, fake_cdn_url,

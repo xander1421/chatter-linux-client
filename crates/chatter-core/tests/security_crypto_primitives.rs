@@ -1,222 +1,113 @@
 //! Security tests for cryptographic primitives.
 //!
 //! Validates the correctness and tamper resistance of:
-//!   - ECIES (HPKE for anonymous DM initial contact, section 7)
+//!   - Identity-key HPKE (anonymous DM initial contact, section 7)
 //!   - Envelope crypto (NDSS'21 mailbox encryption, section 7)
 //!   - Profile encryption (AES-256-GCM with padding, section 6)
 //!   - DM message crypto edge cases (XChaCha20-Poly1305, section 3)
 
 use chatter_core::crypto::{
-    // ECIES (anonymous DM init)
-    ecies_encrypt, ecies_decrypt,
     // DM message crypto
     encrypt_dm_bytes, decrypt_dm_bytes, decrypt_dm_message,
     // Attachment crypto (padding)
     AttachmentCrypto,
 };
 use chatter_core::crypto::profile_crypto;
+use chatter_core::crypto::ecies::{open_with_identity, seal_to_identity, IdentityHpkeUse};
 use chatter_core::crypto::envelope_crypto;
+use libsignal_protocol::IdentityKeyPair;
+
+fn identity() -> IdentityKeyPair {
+    use rand::TryRngCore;
+    IdentityKeyPair::generate(&mut rand::rngs::OsRng.unwrap_err())
+}
 
 // ===========================================================================
-// ECIES — Anonymous DM Initial Contact (HPKE: X25519 + HKDF + ChaCha20Poly1305)
+// Identity-key HPKE — Anonymous DM Initial Contact (libsignal HPKE, RFC 9180)
 // ===========================================================================
 
-/// ECIES roundtrip: encrypt with recipient pubkey, decrypt with recipient privkey.
+/// Anon-DM first contact round-trip: sealed to the recipient's Signal identity
+/// key, opened with its identity key pair.
 ///
-/// Security property: Only the holder of the private key can decrypt.
 /// Architecture ref (section 7): Initiator encrypts intro_msg with responder_identity_pk.
 #[test]
-fn test_ecies_encrypt_decrypt_roundtrip() {
-    // Generate a recipient X25519 keypair
-    let recipient_secret = x25519_dalek::StaticSecret::from(rand::random::<[u8; 32]>());
-    let recipient_public = x25519_dalek::PublicKey::from(&recipient_secret);
-
-    let plaintext = b"Hello, I'd like to chat anonymously";
-    let message = ecies_encrypt(recipient_public.as_bytes(), plaintext)
-        .expect("ECIES encrypt should succeed");
-
-    let decrypted = ecies_decrypt(recipient_secret.as_bytes(), &message)
-        .expect("ECIES decrypt should succeed");
-
-    assert_eq!(decrypted, plaintext, "Decrypted should match original");
+fn test_anon_first_contact_roundtrip() {
+    let recipient = identity();
+    let plaintext = b"init || pk_e || identity || delivery token";
+    let sealed = seal_to_identity(recipient.identity_key(), IdentityHpkeUse::AnonDmInit, plaintext)
+        .expect("seal");
+    let opened = open_with_identity(&recipient, IdentityHpkeUse::AnonDmInit, &sealed).expect("open");
+    assert_eq!(opened, plaintext);
 }
 
-/// ECIES: wrong private key cannot decrypt.
-///
-/// Security property: Only the intended recipient can read the message.
+/// Only the holder of the recipient identity key can open it.
 #[test]
-fn test_ecies_wrong_key_fails() {
-    let recipient_secret = x25519_dalek::StaticSecret::from(rand::random::<[u8; 32]>());
-    let recipient_public = x25519_dalek::PublicKey::from(&recipient_secret);
-
-    let wrong_secret = x25519_dalek::StaticSecret::from(rand::random::<[u8; 32]>());
-
-    let message = ecies_encrypt(recipient_public.as_bytes(), b"secret data").unwrap();
-
-    let result = ecies_decrypt(wrong_secret.as_bytes(), &message);
-    assert!(result.is_err(), "Wrong private key must fail decryption");
+fn test_anon_first_contact_wrong_identity_fails() {
+    let sealed = seal_to_identity(identity().identity_key(), IdentityHpkeUse::AnonDmInit, b"secret").unwrap();
+    assert!(open_with_identity(&identity(), IdentityHpkeUse::AnonDmInit, &sealed).is_err());
 }
 
-/// ECIES: tampered ciphertext detected.
-///
-/// Security property: ChaCha20-Poly1305 AEAD tag catches any modification.
+/// Tampering with the ephemeral key or the ciphertext is detected.
 #[test]
-fn test_ecies_tampered_ciphertext_detected() {
-    let recipient_secret = x25519_dalek::StaticSecret::from(rand::random::<[u8; 32]>());
-    let recipient_public = x25519_dalek::PublicKey::from(&recipient_secret);
-
-    let mut message = ecies_encrypt(recipient_public.as_bytes(), b"important data").unwrap();
-
-    // Flip a byte in the ciphertext
-    if let Some(byte) = message.ciphertext.last_mut() {
-        *byte ^= 0xFF;
+fn test_anon_first_contact_tamper_detected() {
+    let recipient = identity();
+    let sealed = seal_to_identity(recipient.identity_key(), IdentityHpkeUse::AnonDmInit, b"important data").unwrap();
+    for i in [1, sealed.len() - 1] {
+        let mut t = sealed.clone();
+        t[i] ^= 0xFF;
+        assert!(open_with_identity(&recipient, IdentityHpkeUse::AnonDmInit, &t).is_err(), "flip at {i}");
     }
-
-    let result = ecies_decrypt(recipient_secret.as_bytes(), &message);
-    assert!(result.is_err(), "Tampered ciphertext must be rejected");
-}
-
-/// ECIES: tampered ephemeral key detected.
-///
-/// Security property: Modified enc (ephemeral public key) produces wrong shared secret.
-#[test]
-fn test_ecies_tampered_ephemeral_key_detected() {
-    let recipient_secret = x25519_dalek::StaticSecret::from(rand::random::<[u8; 32]>());
-    let recipient_public = x25519_dalek::PublicKey::from(&recipient_secret);
-
-    let mut message = ecies_encrypt(recipient_public.as_bytes(), b"test data").unwrap();
-
-    // Flip a byte in the ephemeral public key
-    message.enc[0] ^= 0xFF;
-
-    let result = ecies_decrypt(recipient_secret.as_bytes(), &message);
-    assert!(result.is_err(), "Tampered ephemeral key must fail");
-}
-
-/// ECIES: each encryption produces different ciphertext (randomized).
-///
-/// Security property: IND-CPA — same plaintext, different ciphertext each time.
-#[test]
-fn test_ecies_randomized_encryption() {
-    let recipient_secret = x25519_dalek::StaticSecret::from(rand::random::<[u8; 32]>());
-    let recipient_public = x25519_dalek::PublicKey::from(&recipient_secret);
-
-    let plaintext = b"identical message";
-    let msg1 = ecies_encrypt(recipient_public.as_bytes(), plaintext).unwrap();
-    let msg2 = ecies_encrypt(recipient_public.as_bytes(), plaintext).unwrap();
-
-    // Ephemeral keys must differ
-    assert_ne!(msg1.enc, msg2.enc, "Each encryption should use a fresh ephemeral key");
-    // Ciphertext must differ
-    assert_ne!(msg1.ciphertext, msg2.ciphertext, "Same plaintext must produce different ciphertext");
-
-    // Both must decrypt to the same plaintext
-    let dec1 = ecies_decrypt(recipient_secret.as_bytes(), &msg1).unwrap();
-    let dec2 = ecies_decrypt(recipient_secret.as_bytes(), &msg2).unwrap();
-    assert_eq!(dec1, dec2);
-}
-
-/// ECIES: empty plaintext is handled.
-#[test]
-fn test_ecies_empty_plaintext() {
-    let recipient_secret = x25519_dalek::StaticSecret::from(rand::random::<[u8; 32]>());
-    let recipient_public = x25519_dalek::PublicKey::from(&recipient_secret);
-
-    let message = ecies_encrypt(recipient_public.as_bytes(), b"").unwrap();
-    let decrypted = ecies_decrypt(recipient_secret.as_bytes(), &message).unwrap();
-    assert!(decrypted.is_empty());
 }
 
 // ===========================================================================
-// Envelope crypto — NDSS'21 Mailbox Encryption (ECDH + HKDF + XChaCha20-Poly1305)
+// Envelope crypto — NDSS'21 Mailbox Encryption (libsignal HPKE, RFC 9180)
 // ===========================================================================
 
-/// Ed25519 to X25519 public key conversion.
+/// Envelope encryption roundtrip to a mailbox's separate X25519 encryption key.
 ///
-/// Security property: Birational map must be correct for ECDH to work.
-#[test]
-fn test_ed25519_to_x25519_public_conversion() {
-    // Generate an Ed25519 keypair and convert the public key
-    let ed_secret = ed25519_dalek::SigningKey::from_bytes(&rand::random::<[u8; 32]>());
-    let ed_public = ed_secret.verifying_key();
-    let ed_public_bytes: [u8; 32] = ed_public.to_bytes();
-
-    let x25519_result = envelope_crypto::ed25519_to_x25519_public(&ed_public_bytes);
-    assert!(x25519_result.is_ok(), "Ed25519→X25519 conversion should succeed");
-
-    let x25519_pk = x25519_result.unwrap();
-    assert_ne!(x25519_pk, [0u8; 32], "Converted key should not be all zeros");
-    assert_ne!(x25519_pk, ed_public_bytes, "X25519 key differs from Ed25519 key");
-}
-
-/// Ed25519 to X25519 conversion is deterministic.
-#[test]
-fn test_ed25519_to_x25519_deterministic() {
-    let ed_secret = ed25519_dalek::SigningKey::from_bytes(&rand::random::<[u8; 32]>());
-    let ed_public_bytes = ed_secret.verifying_key().to_bytes();
-
-    let x1 = envelope_crypto::ed25519_to_x25519_public(&ed_public_bytes).unwrap();
-    let x2 = envelope_crypto::ed25519_to_x25519_public(&ed_public_bytes).unwrap();
-    assert_eq!(x1, x2, "Same Ed25519 key must produce same X25519 key");
-}
-
-/// Envelope encryption roundtrip via the full NDSS'21 path.
-///
-/// Security property: ECDH shared secret + HKDF + XChaCha20-Poly1305 provides
-///   confidentiality, integrity, and forward secrecy per message. The sender
-///   half of the ECDH is a fresh per-envelope ephemeral key, so the envelope
-///   carries no long-term sender identifier.
+/// Security property: RFC 9180 HPKE (libsignal, X25519/HKDF-SHA256/AES-256-GCM) provides
+///   confidentiality and integrity per message. The sender half of the ECDH is a
+///   fresh per-envelope ephemeral key, so the envelope carries no long-term
+///   sender identifier.
 #[test]
 fn test_envelope_encrypt_decrypt_roundtrip() {
-    // Recipient: Ed25519 mailbox keypair
-    let recipient_ed = ed25519_dalek::SigningKey::from_bytes(&rand::random::<[u8; 32]>());
-    let recipient_ed_pk_bytes = recipient_ed.verifying_key().to_bytes();
-
+    let (private, public) = envelope_crypto::generate_mailbox_encryption_key();
     let plaintext = b"Envelope encrypted message for NDSS'21 mailbox";
-
-    // encrypt_envelope takes Ed25519 public key (converts to X25519 internally)
-    let envelope = envelope_crypto::encrypt_envelope(plaintext, &recipient_ed_pk_bytes)
+    let envelope = envelope_crypto::encrypt_envelope(plaintext, &public)
         .expect("Envelope encryption should succeed");
-
-    // Decrypt with recipient's Ed25519 seed (decrypt_envelope converts internally)
-    let recipient_seed = recipient_ed.to_bytes();
-
-    let decrypted = envelope_crypto::decrypt_envelope(&envelope, &recipient_seed)
+    let decrypted = envelope_crypto::decrypt_envelope(&envelope, &private)
         .expect("Envelope decryption should succeed");
-
     assert_eq!(decrypted, plaintext, "Decrypted should match original");
+}
+
+/// The mailbox's Ed25519 signing key alone cannot open its envelopes.
+#[test]
+fn test_envelope_signing_key_cannot_open() {
+    let signing = ed25519_dalek::SigningKey::from_bytes(&rand::random::<[u8; 32]>());
+    let (_, public) = envelope_crypto::generate_mailbox_encryption_key();
+    let envelope = envelope_crypto::encrypt_envelope(b"secret", &public).unwrap();
+    assert!(envelope_crypto::decrypt_envelope(&envelope, &signing.to_bytes()).is_err());
 }
 
 /// Envelope: wrong recipient key cannot decrypt.
 #[test]
 fn test_envelope_wrong_recipient_fails() {
-    let recipient_ed = ed25519_dalek::SigningKey::from_bytes(&rand::random::<[u8; 32]>());
-    let recipient_ed_pk = recipient_ed.verifying_key().to_bytes();
-
-    let wrong_recipient = ed25519_dalek::SigningKey::from_bytes(&rand::random::<[u8; 32]>());
-    let wrong_seed = wrong_recipient.to_bytes();
-
-    let envelope = envelope_crypto::encrypt_envelope(b"secret", &recipient_ed_pk).unwrap();
-
-    let result = envelope_crypto::decrypt_envelope(&envelope, &wrong_seed);
+    let (_, public) = envelope_crypto::generate_mailbox_encryption_key();
+    let (wrong_private, _) = envelope_crypto::generate_mailbox_encryption_key();
+    let envelope = envelope_crypto::encrypt_envelope(b"secret", &public).unwrap();
+    let result = envelope_crypto::decrypt_envelope(&envelope, &wrong_private);
     assert!(result.is_err(), "Wrong recipient key must fail decryption");
 }
 
 /// Envelope: tampered ciphertext detected.
 #[test]
 fn test_envelope_tampered_ciphertext_detected() {
-    let recipient_ed = ed25519_dalek::SigningKey::from_bytes(&rand::random::<[u8; 32]>());
-    let recipient_ed_pk = recipient_ed.verifying_key().to_bytes();
-    let recipient_seed = recipient_ed.to_bytes();
-
-    let mut envelope = envelope_crypto::encrypt_envelope(b"tamper test", &recipient_ed_pk).unwrap();
-
-    // Flip a byte in the ciphertext
+    let (private, public) = envelope_crypto::generate_mailbox_encryption_key();
+    let mut envelope = envelope_crypto::encrypt_envelope(b"tamper test", &public).unwrap();
     if let Some(byte) = envelope.last_mut() {
         *byte ^= 0xFF;
     }
-
-    let result = envelope_crypto::decrypt_envelope(&envelope, &recipient_seed);
+    let result = envelope_crypto::decrypt_envelope(&envelope, &private);
     assert!(result.is_err(), "Tampered envelope must be rejected");
 }
 

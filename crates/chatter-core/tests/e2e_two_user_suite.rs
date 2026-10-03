@@ -38,6 +38,7 @@ const PASSWORD: &str = "TestPass123!";
 
 /// Build a fresh ChatterClient with an isolated data directory.
 fn build_client(dir: &tempfile::TempDir) -> Arc<ChatterClient> {
+    common::headless(dir.path());
     ChatterClient::builder()
         .server_url(SERVER_URL)
         .data_dir(dir.path().to_str().unwrap())

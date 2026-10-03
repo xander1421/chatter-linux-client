@@ -15,7 +15,7 @@ async fn test_settings_change_password_callback_flow() {
 
     // Mock UI state
     let mut settings_current_password = user.password.clone();
-    let (new_password, new_password_hash) = random_password();
+    let (new_password, _) = random_password();
     let mut settings_new_password = new_password.clone();
     let mut settings_confirm_password = new_password.clone();
     let mut settings_password_changing = false;
@@ -30,16 +30,36 @@ async fn test_settings_change_password_callback_flow() {
     // Simulate: on_settings_change_password callback
     settings_password_changing = true;
 
+    use chatter_core::crypto::opaque;
     use chatter_core::network::grpc::AuthClient;
-    use sha2::{Digest, Sha256};
 
-    let current_hash = Sha256::digest(settings_current_password.as_bytes()).to_vec();
-
+    // What the SDK sends: an OPAQUE proof of the current password and an
+    // OPAQUE registration of the new one (AuthService::change_password).
     let mut auth_client = AuthClient::new(pool.channel(), pool.auth_clone());
-
-    let result = auth_client
-        .change_password(&current_hash, &new_password_hash)
-        .await;
+    let result: Result<(), String> = async {
+        let proof = opaque::login_start(&settings_current_password).map_err(|e| e.to_string())?;
+        let reg = opaque::registration_start(&settings_new_password).map_err(|e| e.to_string())?;
+        let started = auth_client
+            .change_password_start(&proof.ke1, &reg.request)
+            .await
+            .map_err(|e| e.to_string())?;
+        let done = opaque::login_finish_async(proof, &settings_current_password, started.ke2)
+            .await
+            .map_err(|e| e.to_string())?;
+        let record = opaque::registration_finish_async(
+            reg,
+            &settings_new_password,
+            started.registration_response,
+        )
+        .await
+        .map_err(|e| e.to_string())?;
+        auth_client
+            .change_password_finish(&started.flow_id, &done.ke3, &record)
+            .await
+            .map_err(|e| e.to_string())
+    }
+    .await;
+    let new_password = settings_new_password.clone();
 
     match result {
         Ok(_) => {
@@ -50,13 +70,33 @@ async fn test_settings_change_password_callback_flow() {
         }
         Err(e) => {
             settings_password_changing = false;
-            settings_password_error = Some(e.to_string());
+            settings_password_error = Some(e);
         }
     }
 
-    // Verify
     assert!(!settings_password_changing);
-    // Password change may fail depending on server validation
+    assert!(
+        settings_password_error.is_none(),
+        "password change failed: {settings_password_error:?}"
+    );
+
+    // Log in again with the new password (same login identifier).
+    let response = assert_ok(
+        opaque_login(
+            &mut auth_client,
+            &user.username,
+            &new_password,
+            "test-device-after-password-change",
+            &random_svr_public_key(),
+            &user.device_auth_token,
+            Some(user.device_id),
+        )
+        .await,
+    );
+    assert_eq!(
+        response.user_profile.expect("login returns the profile").user_id,
+        user.user_id
+    );
 }
 
 #[tokio::test]

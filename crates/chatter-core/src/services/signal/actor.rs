@@ -19,7 +19,6 @@ use crate::error::{ServiceError, CryptoError};
 use crate::crypto::{
     SignalStore, SessionManager, SealedSenderManager,
     signal::sender_key::SenderKeyManager,
-    signal::sesame::ConvergenceResult,
 };
 use crate::storage::KeyStore;
 use crate::storage::repositories::settings_repo::SettingsRepository;
@@ -44,38 +43,28 @@ fn map_identified_decrypt_err(
     ServiceError::Crypto(CryptoError::Protocol(e.to_string()))
 }
 
-/// Record one convergence attempt's failure, keeping the FIRST identity-key
-/// verdict.
-///
-/// No candidate session can fix a changed identity key — every one of them
-/// fails the same trust check — so that verdict, not a generic "all sessions
-/// failed", is what the caller needs in order to offer the accept path.
-fn note_convergence_failure(
-    e: libsignal_protocol::SignalProtocolError,
-    new_identity_key: Option<Vec<u8>>,
-    identity_change: &mut Option<CryptoError>,
-    errors: &mut Vec<String>,
-) {
-    if identity_change.is_none()
-        && let libsignal_protocol::SignalProtocolError::UntrustedIdentity(ref address) = e
-    {
-        // Identified sender: the peer id is envelope metadata the server
-        // supplied, not proven.
-        *identity_change = Some(crate::crypto::signal::untrusted_identity(
-            address,
-            new_identity_key,
-            crate::error::IdentityChangeSource::ServerClaimed,
-        ));
-    }
-    errors.push(e.to_string());
-}
-
 /// Commands sent to the Signal Actor.
 pub enum SignalCommand {
     GetIdentityFingerprint { response: oneshot::Sender<Result<String, ServiceError>> },
     GetIdentityPublicKey { response: oneshot::Sender<Result<[u8; 33], ServiceError>> },
-    /// Get the identity private key (32 bytes X25519 scalar) for ECIES decryption.
+    /// Get the identity private key (32 bytes X25519 scalar) for the key
+    /// backups. HPKE opens use `OpenIdentityHpke` instead.
     GetIdentityPrivateKey { response: oneshot::Sender<Result<[u8; 32], ServiceError>> },
+    /// Open an HPKE message sealed to our identity key (`crypto::ecies`)
+    /// here, so the identity secret never leaves the actor for it.
+    OpenIdentityHpke {
+        purpose: crate::crypto::ecies::IdentityHpkeUse,
+        ciphertext: Vec<u8>,
+        response: oneshot::Sender<Result<Vec<u8>, ServiceError>>,
+    },
+    /// Sign a channel membership change (`crypto::signal::identity::sign_channel_change`):
+    /// the only identity signature besides prekeys and the registration
+    /// challenge. Takes typed `Actions`, never bytes. Returns
+    /// `(actions_bytes, signature)`.
+    SignChannelChange {
+        actions: crate::proto::chat_v1::channel_change::Actions,
+        response: oneshot::Sender<Result<(Vec<u8>, Vec<u8>), ServiceError>>,
+    },
     RefreshPrekeys { count: u32, response: oneshot::Sender<Result<Vec<crate::proto::chat_v1::signal_pre_key_bundle::PreKeyRecord>, ServiceError>> },
     /// Generate `count` one-time Kyber prekeys (PQOPK) signed by the IK and
     /// return their proto-encoded form for upload via RefreshPreKeys. PQOPKs
@@ -101,9 +90,15 @@ pub enum SignalCommand {
     /// The `CiphertextMessageType` rides back with the plaintext on purpose:
     /// `Plaintext` means the bytes bypassed the Double Ratchet entirely and
     /// only the DecryptionErrorMessage handler may accept them.
+    ///
+    /// `validation_time` is the envelope's SERVER timestamp: the sender
+    /// certificate is checked against when the server accepted the message,
+    /// not when this device got round to reading it (Signal-Desktop
+    /// `MessageReceiver.preload.ts` passes `envelope.serverTimestamp`).
     DecryptSealed {
         ciphertext: Vec<u8>,
         trust_root: PublicKey,
+        validation_time: libsignal_protocol::Timestamp,
         local_uuid: String,
         local_device_id: DeviceId,
         response: oneshot::Sender<
@@ -115,18 +110,10 @@ pub enum SignalCommand {
         sender_address: ProtocolAddress,
         response: oneshot::Sender<Result<Vec<u8>, ServiceError>>,
     },
-    DecryptWithConvergence {
-        envelope: Vec<u8>,
-        sender_id: String,
-        sender_device_id: u32,
-        sessions: Vec<(Vec<u8>, SessionRecord)>,
-        response: oneshot::Sender<Result<ConvergenceResult, ServiceError>>,
-    },
     CreateSenderKey { channel_id: ChannelId, our_address: ProtocolAddress, response: oneshot::Sender<Result<Vec<u8>, ServiceError>> },
     ProcessSenderKey { channel_id: ChannelId, sender_address: ProtocolAddress, skdm_bytes: Vec<u8>, response: oneshot::Sender<Result<(), ServiceError>> },
     EncryptForGroup { channel_id: ChannelId, our_address: ProtocolAddress, plaintext: Vec<u8>, response: oneshot::Sender<Result<Vec<u8>, ServiceError>> },
     DecryptFromGroup { channel_id: ChannelId, sender_address: ProtocolAddress, ciphertext: Vec<u8>, response: oneshot::Sender<Result<Vec<u8>, ServiceError>> },
-    DeriveCallEncryptionKey { peer_id: UserId, peer_device_id: u32, response: oneshot::Sender<Result<[u8; 32], ServiceError>> },
     /// Derive an ephemeral call key with identity binding (for DM calls with PFS).
     ///
     /// Completes ephemeral call key exchange: ECDH + identity lookup + HKDF.
@@ -293,6 +280,28 @@ impl SignalActorHandle {
                             let _ = response.send(res);
                         }
 
+                        SignalCommand::SignChannelChange { actions, response } => {
+                            use libsignal_protocol::IdentityKeyStore;
+                            let res = store.get_identity_key_pair().await
+                                .map_err(|e| ServiceError::Crypto(CryptoError::Protocol(e.to_string())))
+                                .and_then(|identity| {
+                                    crate::crypto::signal::identity::sign_channel_change(&identity, &actions)
+                                        .map_err(ServiceError::Crypto)
+                                });
+                            let _ = response.send(res);
+                        }
+
+                        SignalCommand::OpenIdentityHpke { purpose, ciphertext, response } => {
+                            use libsignal_protocol::IdentityKeyStore;
+                            let res = store.get_identity_key_pair().await
+                                .map_err(|e| ServiceError::Crypto(CryptoError::Protocol(e.to_string())))
+                                .and_then(|identity| {
+                                    crate::crypto::ecies::open_with_identity(&identity, purpose, &ciphertext)
+                                        .map_err(ServiceError::Crypto)
+                                });
+                            let _ = response.send(res);
+                        }
+
                         SignalCommand::RefreshPrekeys { count, response } => {
                             use crate::crypto::signal::PreKeyManager;
                             let prekey_manager = PreKeyManager::new(store.key_store());
@@ -388,14 +397,13 @@ impl SignalActorHandle {
                             let _ = response.send(res);
                         }
 
-                        SignalCommand::DecryptSealed { ciphertext, trust_root, local_uuid, local_device_id, response } => {
+                        SignalCommand::DecryptSealed { ciphertext, trust_root, validation_time, local_uuid, local_device_id, response } => {
                             let mut store2 = store.clone();
                             let mut store3 = store.clone();
                             let mut store4 = store.clone();
                             let store6 = store.clone();
                             let res = match SealedSenderManager::decrypt(
-                                &ciphertext, &trust_root,
-                                libsignal_protocol::Timestamp::from_epoch_millis(std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis() as u64),
+                                &ciphertext, &trust_root, validation_time,
                                 None, local_uuid, local_device_id,
                                 &mut store, &mut store2, &mut store3, &store6, &mut store4,
                             ).await {
@@ -433,104 +441,6 @@ impl SignalActorHandle {
                             let _ = response.send(res);
                         }
 
-                        SignalCommand::DecryptWithConvergence { envelope, sender_id, sender_device_id, sessions, response } => {
-                            let local_address = match local_protocol_address(&settings_repo) {
-                                Ok(a) => a,
-                                Err(e) => { let _ = response.send(Err(e)); continue; }
-                            };
-                            let device_id_struct = match DeviceId::try_from(sender_device_id).map_err(|e| ServiceError::Validation(e.to_string())) {
-                                Ok(id) => id,
-                                Err(e) => { let _ = response.send(Err(e)); continue; }
-                            };
-                            let sender_address = ProtocolAddress::new(sender_id, device_id_struct);
-
-                            let mut store2 = store.clone();
-                            let mut store3 = store.clone();
-                            let mut store4 = store.clone();
-                            let store6 = store.clone();
-
-                            // SECURITY: snapshot the currently-persisted session before
-                            // the convergence trial loop. Each candidate has to be written
-                            // to the SessionStore for libsignal to consume, but on
-                            // AllFailed we MUST restore the prior session - otherwise a
-                            // crafted envelope that fails every candidate replaces the
-                            // active session with whichever inactive candidate was tried
-                            // last. That breaks message ordering and forces a prekey
-                            // fetch on next send (sealed-sender side-channel).
-                            let session_key = format!(
-                                "{}:{}",
-                                sender_address.name(),
-                                sender_address.device_id()
-                            );
-                            let prior_session: Option<Vec<u8>> = store2
-                                .key_store()
-                                .load_session(&session_key)
-                                .ok()
-                                .flatten();
-
-                            let mut errors: Vec<String> = Vec::new();
-                            let mut final_res = Ok(ConvergenceResult::AllFailed { errors: vec!["No sessions to try".into()] });
-                            let mut committed = false;
-                            // A changed identity key is not a session problem, so no
-                            // candidate session can fix it — every one of them fails
-                            // the same trust check. Previously every per-attempt error
-                            // was dropped by `if let Ok(..)` and the caller got a
-                            // generic "convergence failed", which is why the wedge was
-                            // invisible on this path. Keep the FIRST such verdict and
-                            // return it instead of AllFailed.
-                            let mut identity_change: Option<CryptoError> = None;
-                            for (session_id, record) in sessions {
-                                let mut rng = rand::rngs::OsRng.unwrap_err();
-                                if let Ok(serialized) = record.serialize() {
-                                    if store2.key_store().store_session(&session_key, &serialized).is_ok() {
-                                        if let Ok(prekey_msg) = libsignal_protocol::PreKeySignalMessage::try_from(envelope.as_slice()) {
-                                            let new_key = prekey_msg.identity_key().serialize().to_vec();
-                                            match libsignal_protocol::message_decrypt_prekey(&prekey_msg, &sender_address, &local_address, &mut store, &mut store2, &mut store3, &store6, &mut store4, &mut rng).await {
-                                                Ok(plaintext) => {
-                                                    final_res = Ok(ConvergenceResult::ActiveSession { plaintext, session_id });
-                                                    committed = true;
-                                                    break;
-                                                }
-                                                Err(e) => note_convergence_failure(e, Some(new_key), &mut identity_change, &mut errors),
-                                            }
-                                        } else if let Ok(signal_msg) = libsignal_protocol::SignalMessage::try_from(envelope.as_slice()) {
-                                            match libsignal_protocol::message_decrypt_signal(&signal_msg, &sender_address, &local_address, &mut store, &mut store2, &mut rng).await {
-                                                Ok(plaintext) => {
-                                                    final_res = Ok(ConvergenceResult::ActiveSession { plaintext, session_id });
-                                                    committed = true;
-                                                    break;
-                                                }
-                                                Err(e) => note_convergence_failure(e, None, &mut identity_change, &mut errors),
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-
-                            if !committed {
-                                // Restore prior session (or delete if none existed).
-                                match prior_session {
-                                    Some(bytes) => {
-                                        let _ = store2.key_store().store_session(&session_key, &bytes);
-                                    }
-                                    None => {
-                                        let _ = store2.key_store().delete_session(&session_key);
-                                    }
-                                }
-                                // Restore first, THEN report: the identity error must
-                                // not leave a losing candidate installed as the session.
-                                final_res = match identity_change {
-                                    Some(err) => Err(ServiceError::Crypto(err)),
-                                    None if !errors.is_empty() => {
-                                        Ok(ConvergenceResult::AllFailed { errors })
-                                    }
-                                    None => final_res,
-                                };
-                            }
-
-                            let _ = response.send(final_res);
-                        }
-
                         SignalCommand::CreateSenderKey { channel_id, our_address, response } => {
                             let distribution_id = Uuid::parse_str(&channel_id.to_string()).unwrap();
                             let res = SenderKeyManager::create_distribution_message(&our_address, distribution_id, &mut store).await
@@ -562,46 +472,6 @@ impl SignalActorHandle {
                             let res = SenderKeyManager::decrypt(&ciphertext, &sender_address, &mut store).await
                                 .map_err(ServiceError::Crypto);
                             let _ = response.send(res);
-                        }
-
-                        SignalCommand::DeriveCallEncryptionKey { peer_id, peer_device_id, response } => {
-                            use libsignal_protocol::IdentityKeyStore;
-                            let peer_address = ProtocolAddress::new(peer_id.to_string(), DeviceId::try_from(peer_device_id).unwrap());
-                            
-                            let our_identity = match store.get_identity_key_pair().await.map_err(|e| ServiceError::Crypto(CryptoError::Protocol(e.to_string()))) {
-                                Ok(id) => id,
-                                Err(e) => { let _ = response.send(Err(e)); continue; }
-                            };
-                            let peer_identity = match store.get_identity(&peer_address).await.map_err(|e| ServiceError::Crypto(CryptoError::Protocol(e.to_string()))) {
-                                Ok(Some(id)) => id,
-                                Ok(None) => { let _ = response.send(Err(ServiceError::Crypto(CryptoError::SessionNotFound(peer_address.to_string())))); continue; }
-                                Err(e) => { let _ = response.send(Err(e)); continue; }
-                            };
-
-                            use x25519_dalek::{PublicKey as X25519PublicKey, StaticSecret as X25519PrivateKey};
-                            let mut our_scalar = [0u8; 32];
-                            our_scalar.copy_from_slice(&our_identity.private_key().serialize());
-                            let our_x25519_private = X25519PrivateKey::from(our_scalar);
-
-                            let mut peer_point = [0u8; 32];
-                            peer_point.copy_from_slice(&peer_identity.public_key().serialize()[1..33]);
-                            let peer_x25519_public = X25519PublicKey::from(peer_point);
-
-                            let shared_secret = our_x25519_private.diffie_hellman(&peer_x25519_public);
-
-                            // RFC 7748 §6.1: reject low-order peer keys that collapse ECDH to a
-                            // constant. The peer public is server-relayed and untrusted, so a
-                            // low-order point would otherwise force a predictable call key.
-                            if !shared_secret.was_contributory() {
-                                let _ = response.send(Err(ServiceError::Crypto(
-                                    CryptoError::KeyDerivationFailed(
-                                        "non-contributory ECDH (low-order public key)".into(),
-                                    ),
-                                )));
-                                continue;
-                            }
-
-                            let _ = response.send(Ok(*shared_secret.as_bytes()));
                         }
 
                         SignalCommand::CompleteCallKeyExchange { our_ephemeral_private, peer_ephemeral_public, peer_id, call_id, we_are_caller, response } => {
@@ -930,9 +800,28 @@ impl SignalActorHandle {
         self.send(|tx| SignalCommand::GetIdentityPublicKey { response: tx }).await?
     }
 
-    /// Get the identity private key (32 bytes X25519 scalar) for ECIES decryption.
+    /// Get the identity private key (32 bytes X25519 scalar) for the key
+    /// backups. HPKE opens use [`Self::open_identity_hpke`] instead.
     pub async fn get_identity_private_key(&self) -> Result<[u8; 32], ServiceError> {
         self.send(|tx| SignalCommand::GetIdentityPrivateKey { response: tx }).await?
+    }
+
+    /// Sign a channel membership change with the identity key, inside the
+    /// actor. Returns `(actions_bytes, signature)`.
+    pub async fn sign_channel_change(
+        &self,
+        actions: crate::proto::chat_v1::channel_change::Actions,
+    ) -> Result<(Vec<u8>, Vec<u8>), ServiceError> {
+        self.send(|tx| SignalCommand::SignChannelChange { actions, response: tx }).await?
+    }
+
+    /// Open an HPKE message sealed to our identity key, inside the actor.
+    pub async fn open_identity_hpke(
+        &self,
+        purpose: crate::crypto::ecies::IdentityHpkeUse,
+        ciphertext: Vec<u8>,
+    ) -> Result<Vec<u8>, ServiceError> {
+        self.send(|tx| SignalCommand::OpenIdentityHpke { purpose, ciphertext, response: tx }).await?
     }
 
     pub async fn refresh_prekeys(&self, count: u32) -> Result<Vec<crate::proto::chat_v1::signal_pre_key_bundle::PreKeyRecord>, ServiceError> {
@@ -956,16 +845,12 @@ impl SignalActorHandle {
         self.send(|tx| SignalCommand::EncryptIdentified { plaintext, recipient_address, response: tx }).await?
     }
 
-    pub async fn decrypt_sealed(&self, ciphertext: Vec<u8>, trust_root: libsignal_protocol::PublicKey, local_uuid: String, local_device_id: DeviceId) -> Result<(ProtocolAddress, Vec<u8>, CiphertextMessageType), ServiceError> {
-        self.send(|tx| SignalCommand::DecryptSealed { ciphertext, trust_root, local_uuid, local_device_id, response: tx }).await?
+    pub async fn decrypt_sealed(&self, ciphertext: Vec<u8>, trust_root: libsignal_protocol::PublicKey, validation_time: libsignal_protocol::Timestamp, local_uuid: String, local_device_id: DeviceId) -> Result<(ProtocolAddress, Vec<u8>, CiphertextMessageType), ServiceError> {
+        self.send(|tx| SignalCommand::DecryptSealed { ciphertext, trust_root, validation_time, local_uuid, local_device_id, response: tx }).await?
     }
 
     pub async fn decrypt_identified(&self, ciphertext: Vec<u8>, sender_address: ProtocolAddress) -> Result<Vec<u8>, ServiceError> {
         self.send(|tx| SignalCommand::DecryptIdentified { ciphertext, sender_address, response: tx }).await?
-    }
-
-    pub async fn decrypt_with_convergence(&self, envelope: Vec<u8>, sender_id: String, sender_device_id: u32, sessions: Vec<(Vec<u8>, SessionRecord)>) -> Result<ConvergenceResult, ServiceError> {
-        self.send(|tx| SignalCommand::DecryptWithConvergence { envelope, sender_id, sender_device_id, sessions, response: tx }).await?
     }
 
     pub async fn create_sender_key(&self, channel_id: ChannelId, our_address: ProtocolAddress) -> Result<Vec<u8>, ServiceError> {
@@ -982,10 +867,6 @@ impl SignalActorHandle {
 
     pub async fn decrypt_from_group(&self, channel_id: ChannelId, sender_address: ProtocolAddress, ciphertext: Vec<u8>) -> Result<Vec<u8>, ServiceError> {
         self.send(|tx| SignalCommand::DecryptFromGroup { channel_id, sender_address, ciphertext, response: tx }).await?
-    }
-
-    pub async fn derive_call_encryption_key(&self, peer_id: UserId, peer_device_id: u32) -> Result<[u8; 32], ServiceError> {
-        self.send(|tx| SignalCommand::DeriveCallEncryptionKey { peer_id, peer_device_id, response: tx }).await?
     }
 
     /// Derive an ephemeral call key with identity binding (for DM calls with PFS).

@@ -55,8 +55,12 @@ impl SignalService {
             channel_id: channel_id.to_string(),
             distribution_message: skdm_bytes,
             timestamp: TimestampNanos::now().as_u64(),
-            // Attached per recipient by `MessageService::skdm_plaintext`.
+            // Attached per recipient by `MessageService::skdm_plaintext`,
+            // with the verified membership stamp: the SKDM is stamped when it
+            // goes out, against the state it is distributed under.
             profile_key: None,
+            state_revision: 0,
+            state_hash: Vec::new(),
         })
     }
 
@@ -213,14 +217,14 @@ impl SignalService {
                 &channel_id.to_string(),
             )
             .map_err(ServiceError::Storage)?;
-        self.reset_sender_key_recipients(channel_id)
+        self.reset_sender_key_holders(channel_id)
     }
 
     /// Clear all sender keys for a channel — ours and every member's. Only for
     /// leaving the channel; a rotation uses [`Self::rotate_sender_key`].
     pub async fn clear_channel_sender_keys(&self, channel_id: &ChannelId) -> Result<(), ServiceError> {
         self.actor.clear_channel_sender_keys(*channel_id).await?;
-        self.reset_sender_key_recipients(channel_id)
+        self.reset_sender_key_holders(channel_id)
     }
 
     // =========================================================================
@@ -234,42 +238,58 @@ impl SignalService {
     // everything we send is to get the SKDM BEFORE the first message they are
     // meant to read — so we record who has it and top up the rest pre-send.
     //
-    // tracked per user, not per device (the device list costs a
-    // prekey fetch). A member's newly linked device heals through its
-    // SenderKeyRequest; per-device tracking if that proves too lossy.
+    // Tracked per DEVICE, for every member and our own other devices alike,
+    // as `(user, device, registration id)` — Signal-Desktop compares devices
+    // on (serviceId, id, registrationId) (`sendToGroup.preload.ts`
+    // `deviceComparator`), so a re-registered device under a reused id counts
+    // as new. Stored as comma-separated `user.device.registration_id`; an
+    // entry in any other shape is not recognized.
 
-    fn sender_key_recipients_key(channel_id: &ChannelId) -> String {
+    fn sender_key_holders_key(channel_id: &ChannelId) -> String {
         format!("sender_key_delivered:{}", channel_id)
     }
 
-    /// Users that have received an SKDM for our CURRENT sender key.
-    pub fn sender_key_recipients(
+    /// Devices that have received an SKDM for our CURRENT sender key.
+    pub fn sender_key_holders(
         &self,
         channel_id: &ChannelId,
-    ) -> Result<std::collections::HashSet<String>, ServiceError> {
+    ) -> Result<std::collections::HashSet<SenderKeyHolder>, ServiceError> {
         Ok(self
             .settings_repo
-            .get_string(&Self::sender_key_recipients_key(channel_id))
+            .get_string(&Self::sender_key_holders_key(channel_id))
             .map_err(ServiceError::Storage)?
-            .map(|v| v.split(',').filter(|s| !s.is_empty()).map(str::to_string).collect())
+            .map(|v| v.split(',').filter_map(parse_holder).collect())
             .unwrap_or_default())
     }
 
-    /// Record that `user_id` now holds our current sender key.
-    pub fn mark_sender_key_delivered(&self, channel_id: &ChannelId, user_id: &str) -> Result<(), ServiceError> {
-        let mut recipients = self.sender_key_recipients(channel_id)?;
-        if !recipients.insert(user_id.to_string()) {
+    /// Record that these `(device, registration id)`s of `user_id` now hold
+    /// our current sender key. Replaces any entry for the same device under
+    /// another registration id: that install is gone.
+    pub fn mark_sender_key_held(
+        &self,
+        channel_id: &ChannelId,
+        user_id: &str,
+        devices: &[(u32, u32)],
+    ) -> Result<(), ServiceError> {
+        if devices.is_empty() {
             return Ok(());
         }
-        let joined = recipients.into_iter().collect::<Vec<_>>().join(",");
+        let mut holders = self.sender_key_holders(channel_id)?;
+        holders.retain(|(u, d, _)| u != user_id || !devices.iter().any(|(device, _)| device == d));
+        holders.extend(devices.iter().map(|&(d, r)| (user_id.to_string(), d, r)));
+        let joined = holders
+            .into_iter()
+            .map(|(u, d, r)| format!("{u}.{d}.{r}"))
+            .collect::<Vec<_>>()
+            .join(",");
         self.settings_repo
-            .set_string(&Self::sender_key_recipients_key(channel_id), &joined)
+            .set_string(&Self::sender_key_holders_key(channel_id), &joined)
             .map_err(ServiceError::Storage)
     }
 
-    fn reset_sender_key_recipients(&self, channel_id: &ChannelId) -> Result<(), ServiceError> {
+    fn reset_sender_key_holders(&self, channel_id: &ChannelId) -> Result<(), ServiceError> {
         self.settings_repo
-            .delete(&Self::sender_key_recipients_key(channel_id))
+            .delete(&Self::sender_key_holders_key(channel_id))
             .map_err(ServiceError::Storage)?;
         Ok(())
     }
@@ -324,4 +344,15 @@ impl SignalService {
             .map(|v| v == "1")
             .unwrap_or(false))
     }
+}
+
+/// One device holding our current sender key: `(user, device, registration id)`.
+pub type SenderKeyHolder = (String, u32, u32);
+
+fn parse_holder(entry: &str) -> Option<SenderKeyHolder> {
+    let mut parts = entry.rsplitn(3, '.');
+    let registration_id = parts.next()?.parse().ok()?;
+    let device = parts.next()?.parse().ok()?;
+    let user = parts.next().filter(|u| !u.is_empty())?;
+    Some((user.to_string(), device, registration_id))
 }

@@ -1,138 +1,117 @@
 //! Sender half of Signal's 1:1 retry: a friend's device could not decrypt a
 //! DM we sent and said so with a `DecryptionErrorMessage`; send it again.
 //!
-//! Signal-Desktop `ts/util/handleRetry.preload.ts` `onRetryRequest`: archive
-//! the session when the report's ratchet key matches our current one
-//! (`archiveSessionOnMatch` — here the gateway's
-//! `handle_decryption_error_report`, which runs first), then look the message
-//! up in the send log by the timestamp the report names and send it to the
-//! requester again, whether or not a session was archived.
+//! Signal-Desktop `ts/util/handleRetry.preload.ts` `onRetryRequest`
+//! (:172-260): archive the session when the report's ratchet key matches our
+//! current one (`archiveSessionOnMatch` — here the gateway's
+//! `handle_decryption_error_report`, which runs first), then look the exact
+//! sent `Content` up in the message send log and send those bytes again to
+//! the requesting device, or — too old, or not found — a `NullMessage`, so
+//! the session the report broke is rebuilt either way
+//! (`sendDistributionMessageOrNullMessage`).
 //!
 //! The timestamp a report names here is the SERVER's for the failed envelope
 //! (`DeviceMessage.server_timestamp`): the receiver could not open the
 //! content, so it never saw the message's own. The same value comes back to
-//! the sender in `SendSealedMessageResponse.server_timestamp`, and
-//! [`DmSentLog`] maps it to the message it was a deposit of.
-
-use std::collections::VecDeque;
-use std::sync::Arc;
+//! the sender in `SendSealedMessageResponse.server_timestamp`, and the send
+//! log ([`SendLogRepository`]) is keyed by it per (peer, device).
 
 use prost::Message as _;
-use serde::{Deserialize, Serialize};
 
 use super::{MessageError, MessageService};
 use crate::domain::ids::UserId;
-use crate::domain::message::{ConversationType, Message};
 use crate::proto::content_v1::{content, Content, DataMessage};
 use crate::services::current_user::CurrentUserProvider;
-use crate::storage::repositories::settings_repo::{keys, SettingsRepository};
+use crate::storage::repositories::send_log_repo::SendLogRepository;
 use crate::util::time::TimestampNanos;
 
-/// How long a message is sent again on request, the window the group resend
-/// uses (`group_resend_content`). Signal-Desktop's `retryRespondMaxAge`
-/// defaults to 14 days.
-const RESEND_MAX_AGE_NS: u64 = 24 * 60 * 60 * 1_000_000_000;
+/// How long a sent `Content` is resent on request: Signal-Desktop's
+/// `retryRespondMaxAge` default (`handleRetry.preload.ts:172`, 14 days). Our
+/// server queues a message for 30 days, so a device offline longer than this
+/// gets a `NullMessage` instead — its session still heals, the message is
+/// not repeated.
+pub(crate) const RESEND_MAX_AGE_NS: u64 = 14 * 24 * 60 * 60 * 1_000_000_000;
 
-/// Deposits remembered. The whole log is rewritten on every send, so this
-/// bounds that write; a deposit older than the newest 512 is answered like a
-/// message we no longer hold. A table keyed (peer, device, server_ts) would
-/// lift the bound.
-const MAX_ENTRIES: usize = 512;
-
-/// One deposit of a friend DM in one peer device's inbox.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-struct SentDm {
-    peer: UserId,
-    device: u32,
-    /// The server's timestamp for the deposit, epoch millis — what the
-    /// device's `DecryptionErrorMessage` names.
-    server_ts_ms: u64,
-    /// The message's own `sent_at` (epoch nanos), the key of our stored row.
-    sent_at: u64,
+/// What a retry request is answered with.
+#[derive(Debug, PartialEq, Eq)]
+pub(super) enum Resend {
+    /// The bytes we sent, exactly.
+    Original(Vec<u8>),
+    /// Nothing we may send again: a `NullMessage`, to heal the session.
+    NullMessage(Vec<u8>),
 }
 
-/// Which message each recent friend-DM deposit carried: Signal's send log,
-/// holding a pointer to the stored row instead of the proto.
-///
-/// Persisted (settings key `DM_SENT_LOG`) so a retry request that arrives
-/// after an app restart is still answered.
-#[derive(Clone)]
-pub(crate) struct DmSentLog {
-    entries: Arc<parking_lot::Mutex<VecDeque<SentDm>>>,
-    settings: Arc<SettingsRepository>,
+/// Whether `content` goes in the send log, and the `sent_at` of our own
+/// stored message it carries or edits (checked again before a resend, so a
+/// message deleted or expired since is not repeated). Signal logs every send
+/// but typing, calling and retries (`handleMessageSend.preload.ts:93`
+/// `shouldSaveProto`); the session-heal `NullMessage` is a retry here.
+fn loggable(content: &Content) -> Option<Option<u64>> {
+    let has_payload = |dm: &DataMessage| !dm.body.is_empty() || !dm.attachments.is_empty();
+    match content.content.as_ref()? {
+        content::Content::Typing(_)
+        | content::Content::NullMessage(_)
+        | content::Content::CallKey(_)
+        | content::Content::CallHangup(_)
+        | content::Content::GroupCallKey(_)
+        | content::Content::AnonCallOffer(_)
+        | content::Content::AnonCallAnswer(_)
+        | content::Content::AnonCallHangup(_) => None,
+        content::Content::DataMessage(dm) => Some(has_payload(dm).then_some(dm.timestamp)),
+        content::Content::SyncSent(sync) => {
+            Some(sync.message.as_ref().is_some_and(has_payload).then_some(sync.timestamp))
+        }
+        content::Content::Edit(edit) => Some(Some(edit.target_sent_timestamp)),
+        _ => Some(None),
+    }
 }
 
-impl DmSentLog {
-    pub(crate) fn load(settings: Arc<SettingsRepository>) -> Self {
-        let stored: Vec<SentDm> = settings
-            .get(keys::DM_SENT_LOG)
-            .inspect_err(|e| tracing::warn!(error = %e, "Could not load the DM send log"))
-            .ok()
-            .flatten()
-            .unwrap_or_default();
-        Self { entries: Arc::new(parking_lot::Mutex::new(stored.into())), settings }
-    }
-
-    /// Record that `content` was deposited for `peer` (ourselves, for the
-    /// `SyncSent` copy our other devices get): `deposits` is
-    /// `(device, server timestamp in epoch nanos)` per device reached. Only a
-    /// message with a body or attachments is recorded — the content a stored
-    /// row can rebuild. Receipts and typing are not resent by Signal either
-    /// (`ContentHint.IMPLICIT`); reactions, edits and deletes are not resent
-    /// HERE, because nothing keeps their wire form.
-    pub(crate) fn record(&self, peer: UserId, content: &Content, deposits: &[(u32, u64)]) {
-        let has_payload = |dm: &DataMessage| !dm.body.is_empty() || !dm.attachments.is_empty();
-        let sent_at = match &content.content {
-            Some(content::Content::DataMessage(dm)) if has_payload(dm) => dm.timestamp,
-            Some(content::Content::SyncSent(sync)) if sync.message.as_ref().is_some_and(has_payload) => {
-                sync.timestamp
-            }
-            _ => return,
-        };
-        if deposits.is_empty() {
-            return;
-        }
-        let mut entries = self.entries.lock();
-        for &(device, server_ts_ns) in deposits {
-            entries.push_back(SentDm { peer, device, server_ts_ms: server_ts_ns / 1_000_000, sent_at });
-        }
-        self.persist(&mut entries);
-    }
-
-    /// The `sent_at` of the message deposited for `(peer, device)` at
-    /// `server_ts_ms`, consumed: one resend per deposit, so a peer cannot
-    /// make us send the same message without end.
-    pub(crate) fn take(&self, peer: &UserId, device: u32, server_ts_ms: u64) -> Option<u64> {
-        let mut entries = self.entries.lock();
-        let at = entries
-            .iter()
-            .position(|e| e.peer == *peer && e.device == device && e.server_ts_ms == server_ts_ms)?;
-        let sent_at = entries.remove(at)?.sent_at;
-        self.persist(&mut entries);
-        Some(sent_at)
-    }
-
-    /// Drop what is past the resend window or over the cap and write the
-    /// rest. A failed write only costs the answers to requests that arrive
-    /// after a restart.
-    fn persist(&self, entries: &mut VecDeque<SentDm>) {
-        let now = TimestampNanos::now().as_u64();
-        entries.retain(|e| now.saturating_sub(e.sent_at) < RESEND_MAX_AGE_NS);
-        while entries.len() > MAX_ENTRIES {
-            entries.pop_front();
-        }
-        if let Err(e) = self.settings.set(keys::DM_SENT_LOG, &*entries) {
-            tracing::warn!(error = %e, "Could not persist the DM send log");
-        }
-    }
+/// When a logged `content` stops being resendable: the resend window, or
+/// sooner for a disappearing message — its plaintext must not outlive it here.
+fn expires_at(content: &Content, now: u64) -> u64 {
+    let dm = match content.content.as_ref() {
+        Some(content::Content::DataMessage(dm)) => Some(dm),
+        Some(content::Content::SyncSent(sync)) => sync.message.as_ref(),
+        Some(content::Content::Edit(edit)) => edit.data_message.as_ref(),
+        _ => None,
+    };
+    let ttl_ns = dm
+        .filter(|dm| dm.ephemeral && dm.ephemeral_ttl_seconds > 0)
+        .map(|dm| u64::from(dm.ephemeral_ttl_seconds) * 1_000_000_000);
+    now.saturating_add(ttl_ns.map_or(RESEND_MAX_AGE_NS, |ttl| ttl.min(RESEND_MAX_AGE_NS)))
 }
 
 impl MessageService {
+    fn send_log(&self) -> SendLogRepository {
+        SendLogRepository::new(self.database.clone())
+    }
+
+    /// Log `content` as deposited for `peer` (ourselves, for the copy our
+    /// other devices get): `deposits` is `(device, server timestamp in epoch
+    /// nanos)` per device reached. The bytes logged are the ones every one of
+    /// those devices was sent (`encode_to_vec` of this same `content`).
+    pub(crate) fn record_dm_send(&self, peer: UserId, content: &Content, deposits: &[(u32, u64)]) {
+        let Some(message_ts) = loggable(content) else { return };
+        if deposits.is_empty() {
+            return;
+        }
+        let now = TimestampNanos::now().as_u64();
+        if let Err(e) = self.send_log().record(
+            &peer,
+            &content.encode_to_vec(),
+            message_ts,
+            now,
+            expires_at(content, now),
+            deposits,
+        ) {
+            tracing::warn!(%peer, error = %e, "Could not log a DM send; a retry request for it gets a NullMessage");
+        }
+    }
+
     /// Answer `peer_id`'s retry request for the DM we deposited for its
-    /// device at `timestamp_ms` (server time, epoch millis): send the message
-    /// again, to that one device, on the session the next encrypt
-    /// establishes. The recipient files it under the message's own
-    /// `(sender, sent_at)`, where it would have been.
+    /// device at `timestamp_ms` (server time, epoch millis): send the logged
+    /// bytes again, or a `NullMessage`, to that one device, on the session
+    /// the next encrypt establishes (the report may just have archived ours).
     pub async fn resend_dm_on_decryption_error(
         &self,
         peer_id: &UserId,
@@ -140,12 +119,14 @@ impl MessageService {
         timestamp_ms: u64,
     ) {
         match self.resend_dm(peer_id, peer_device_id, timestamp_ms).await {
-            Ok(true) => tracing::info!(%peer_id, peer_device_id, timestamp_ms,
+            Ok(Some(Resend::Original(_))) => tracing::info!(%peer_id, peer_device_id, timestamp_ms,
                 "Resent a DM after the peer's DecryptionErrorMessage"),
-            Ok(false) => tracing::info!(%peer_id, peer_device_id, timestamp_ms,
-                "DM resend request matched nothing we may resend"),
+            Ok(Some(Resend::NullMessage(_))) => tracing::info!(%peer_id, peer_device_id, timestamp_ms,
+                "DM retry request matched nothing we may resend; sent a NullMessage"),
+            Ok(None) => tracing::info!(%peer_id, peer_device_id, timestamp_ms,
+                "DM retry request not answered in Shield mode"),
             Err(e) => tracing::warn!(%peer_id, peer_device_id, timestamp_ms, error = %e,
-                "Failed to resend a DM"),
+                "Failed to answer a DM retry request"),
         }
     }
 
@@ -154,246 +135,179 @@ impl MessageService {
         peer_id: &UserId,
         peer_device_id: u32,
         timestamp_ms: u64,
-    ) -> Result<bool, MessageError> {
+    ) -> Result<Option<Resend>, MessageError> {
         // This transport names the recipient to the server, which Shield mode
-        // must never do (`send_sealed_dm_content`). Checked before the entry
-        // is consumed.
+        // must never do (`send_sealed_dm_content`). Checked before the log
+        // entry is consumed.
         if self.shield_mode.load(std::sync::atomic::Ordering::Acquire) {
-            return Ok(false);
+            return Ok(None);
         }
-        let Some(sent_at) = self.dm_sent_log.take(peer_id, peer_device_id, timestamp_ms) else {
-            return Ok(false);
+        let resend = self.dm_resend_plaintext(peer_id, peer_device_id, timestamp_ms)?;
+        let plaintext = match &resend {
+            Resend::Original(bytes) | Resend::NullMessage(bytes) => bytes,
         };
-        let Some(content) = self.dm_resend_content(peer_id, sent_at)? else {
-            return Ok(false);
-        };
-        let to_ourselves = matches!(&content.content, Some(content::Content::SyncSent(_)));
         let sealed_body = self
             .signal_service
-            .encrypt_message(
-                &mut self.auth_client(),
-                &peer_id.to_string(),
-                peer_device_id,
-                &content.encode_to_vec(),
-            )
+            .encrypt_message(&mut self.auth_client(), &peer_id.to_string(), peer_device_id, plaintext)
             .await
             .map_err(|e| match e {
                 crate::error::ServiceError::Network(e) => MessageError::Network(e),
                 e => MessageError::EncryptionFailed(e.to_string()),
             })?;
-        if to_ourselves {
+        if *peer_id == self.settings_repo.current_user_id()? {
             // Identified on the authenticated channel, as every own-device
             // copy is (`sync_to_own_devices`).
             let ciphertexts = std::collections::HashMap::from([(peer_device_id, sealed_body)]);
             let outcome = self
                 .deposit_sealed_ciphertexts(&mut self.message_client(), &peer_id.to_string(), ciphertexts, None)
                 .await;
-            return Ok(outcome.delivered > 0);
+            if outcome.delivered == 0 {
+                return Err(outcome
+                    .error
+                    .unwrap_or_else(|| MessageError::DmError("own-device resend reached no device".into())));
+            }
+        } else {
+            self.deposit_sealed_to_device(peer_id, peer_device_id, sealed_body).await?;
         }
-        self.deposit_sealed_to_device(peer_id, peer_device_id, sealed_body).await?;
-        Ok(true)
+        Ok(Some(resend))
     }
 
-    /// What `requester` may have back for the DM we sent at `sent_at`: our
-    /// own message, not deleted, within the resend window — the message
-    /// itself for the peer it was sent to, its `SyncSent` copy for ourselves
-    /// (another of our devices), nothing for anyone else.
-    pub(super) fn dm_resend_content(
+    /// The plaintext that answers `requester`'s report about our deposit for
+    /// its `device` at `server_ts_ms`: the logged bytes, consumed, while the
+    /// message they carry or edit is still ours to show (not deleted, not
+    /// disappeared); a `NullMessage` otherwise.
+    pub(super) fn dm_resend_plaintext(
         &self,
         requester: &UserId,
-        sent_at: u64,
-    ) -> Result<Option<Content>, MessageError> {
-        let us = self.settings_repo.current_user_id()?;
-        let Some(message) = self.message_repo.get_by_sender_timestamp(&us, sent_at)? else {
-            return Ok(None);
+        device: u32,
+        server_ts_ms: u64,
+    ) -> Result<Resend, MessageError> {
+        let now = TimestampNanos::now().as_u64();
+        let null = || Resend::NullMessage(super::null_message_content().encode_to_vec());
+        let Some(payload) = self.send_log().take(requester, device, server_ts_ms, now)? else {
+            return Ok(null());
         };
-        if message.conversation_type != ConversationType::ServerDm
-            || message.is_deleted
-            || TimestampNanos::now().as_u64().saturating_sub(sent_at) > RESEND_MAX_AGE_NS
-        {
-            return Ok(None);
+        if let Some(sent_at) = payload.message_ts {
+            let us = self.settings_repo.current_user_id()?;
+            let still_ours = self
+                .message_repo
+                .get_by_sender_timestamp(&us, sent_at)?
+                .is_some_and(|m| !m.is_deleted);
+            if !still_ours {
+                return Ok(null());
+            }
         }
-        let peer = UserId::from_uuid(*message.conversation_id.as_uuid());
-        let content = self.stored_server_dm_content(&peer, &message)?;
-        if *requester == peer {
-            return Ok(Some(content));
-        }
-        if *requester != us {
-            return Ok(None);
-        }
-        let Some(mut copy) = super::dm::sync_sent_copy(&peer, &content) else {
-            return Ok(None);
-        };
-        self.populate_sync_receipt_targets(&mut copy)?;
-        Self::pad_content_to_bucket(&mut copy);
-        Ok(Some(copy))
-    }
-
-    /// The wire `Content` of one of our stored friend DMs, as it was first
-    /// sent: same `sent_at`, so the recipient sees one message.
-    pub(super) fn stored_server_dm_content(
-        &self,
-        peer_id: &UserId,
-        message: &Message,
-    ) -> Result<Content, MessageError> {
-        let pointers = message
-            .attachments
-            .iter()
-            .map(|id| {
-                self.attachment_repo
-                    .get(id)?
-                    .and_then(|a| a.to_pointer())
-                    .ok_or_else(|| MessageError::InvalidContent(format!("attachment {id} can no longer be sent")))
-            })
-            .collect::<Result<Vec<_>, MessageError>>()?;
-        let quote = match (message.reply_to_author_id, message.reply_to) {
-            (Some(author), Some(parent_id)) => self.message_repo.get(&parent_id)?.map(|parent| {
-                crate::services::gateway::outgoing::QuoteIntent {
-                    target_author_id: author,
-                    target_timestamp: parent.sent_at,
-                    target_preview: message.reply_to_text.clone(),
-                }
-            }),
-            _ => None,
-        };
-        let (mut content, _, _) = self.server_dm_content(
-            peer_id,
-            message.as_text().unwrap_or(""),
-            pointers,
-            message.sent_at,
-            quote.as_ref(),
-        )?;
-        // The timer THIS message was sent under, not the conversation's
-        // current one.
-        if let Some(content::Content::DataMessage(dm)) = content.content.as_mut() {
-            let ttl = self
-                .ephemeral_service
-                .get_state(&message.id)
-                .ok()
-                .flatten()
-                .map(|e| e.ttl.as_secs() as u32);
-            dm.ephemeral = ttl.is_some();
-            dm.ephemeral_ttl_seconds = ttl.unwrap_or(0);
-        }
-        Ok(content)
+        Ok(Resend::Original(payload.content))
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::storage::Database;
+    use crate::domain::message::{ConversationType, Message, MessageContent};
+    use crate::proto::content_v1::Reaction;
+    use crate::storage::repositories::settings_repo::keys;
 
-    fn settings() -> (tempfile::TempDir, Arc<SettingsRepository>) {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let db = Arc::new(Database::open(&dir.path().join("s.db"), "testpass").expect("open"));
-        db.run_migrations().expect("migrations");
-        (dir, Arc::new(SettingsRepository::new(db)))
-    }
-
-    fn text(body: &str, sent_at: u64) -> Content {
-        crate::services::build_data_message_content(body, vec![], sent_at)
-    }
-
-    #[test]
-    fn a_deposit_is_answered_once_to_the_device_it_went_to_and_survives_a_restart() {
-        let (_dir, settings) = settings();
-        let peer = UserId::new();
-        let now = TimestampNanos::now().as_u64();
-        let server_ts = now + 1_234_567;
-
-        let log = DmSentLog::load(settings.clone());
-        log.record(peer, &text("hi", now), &[(1, server_ts), (2, server_ts + 5_000_000)]);
-        // Nothing to rebuild from a row: a profile-key handshake, a receipt.
-        log.record(peer, &text("", now + 1), &[(1, server_ts + 9_000_000)]);
-        log.record(peer, &Content::default(), &[(1, server_ts + 10_000_000)]);
-        // Past the resend window.
-        log.record(peer, &text("old", now - RESEND_MAX_AGE_NS - 1), &[(1, 42_000_000)]);
-
-        let log = DmSentLog::load(settings.clone());
-        let ms = server_ts / 1_000_000;
-        assert_eq!(log.take(&UserId::new(), 1, ms), None, "another peer naming our deposit");
-        assert_eq!(log.take(&peer, 2, ms), None, "device 2's deposit has its own timestamp");
-        assert_eq!(log.take(&peer, 1, ms), Some(now));
-        assert_eq!(log.take(&peer, 1, ms), None, "one resend per deposit");
-        assert_eq!(log.take(&peer, 1, (server_ts + 9_000_000) / 1_000_000), None);
-        assert_eq!(log.take(&peer, 1, (server_ts + 10_000_000) / 1_000_000), None);
-        assert_eq!(log.take(&peer, 1, 42), None);
-
-        let log = DmSentLog::load(settings);
-        assert_eq!(log.take(&peer, 1, ms), None, "consumed entries stay consumed");
-        assert_eq!(log.take(&peer, 2, (server_ts + 5_000_000) / 1_000_000), Some(now));
-
-        // The copy for our own other device is recorded under ourselves.
-        let me = UserId::new();
-        let sync = crate::services::message::dm::sync_sent_copy(&peer, &text("hi", now)).unwrap();
-        log.record(me, &sync, &[(3, server_ts)]);
-        assert_eq!(log.take(&me, 3, ms), Some(now));
-    }
-
-    #[test]
-    fn the_log_is_bounded() {
-        let (_dir, settings) = settings();
-        let peer = UserId::new();
-        let now = TimestampNanos::now().as_u64();
-        let log = DmSentLog::load(settings);
-        for i in 0..=MAX_ENTRIES as u64 {
-            log.record(peer, &text("m", now + i), &[(1, (i + 1) * 1_000_000)]);
-        }
-        assert_eq!(log.entries.lock().len(), MAX_ENTRIES);
-        assert_eq!(log.take(&peer, 1, 1), None, "the oldest deposit was dropped");
-        assert_eq!(log.take(&peer, 1, 2), Some(now + 1));
-    }
-
-    /// Bob could not decrypt Alice's DM; Alice's resend carries the message
-    /// as she sent it, and only to the peer she sent it to.
-    #[tokio::test]
-    async fn a_stored_dm_is_rebuilt_for_the_peer_it_was_sent_to() {
-        use crate::client::ChatterClient;
-
+    fn client() -> (tempfile::TempDir, std::sync::Arc<crate::client::ChatterClient>, UserId) {
         static MOCK_KEYRING: std::sync::Once = std::sync::Once::new();
         MOCK_KEYRING.call_once(|| {
             keyring::set_default_credential_builder(keyring::mock::default_credential_builder());
         });
         let dir = tempfile::tempdir().unwrap();
-        let alice = ChatterClient::builder()
+        let client = crate::client::ChatterClient::builder()
             .server_url("http://localhost:1")
             .data_dir(dir.path().to_str().unwrap())
             .build()
             .expect("build client");
-        let (alice_id, bob_id) = (UserId::new(), UserId::new());
+        let me = UserId::new();
+        client.messages().settings_repo.set(keys::CURRENT_USER_ID, &me.to_string()).unwrap();
+        client.messages().settings_repo.set(keys::CURRENT_DEVICE_ID, &1u32).unwrap();
+        (dir, client, me)
+    }
+
+    fn is_null_message(resend: &Resend) -> bool {
+        let Resend::NullMessage(bytes) = resend else { return false };
+        matches!(Content::decode(bytes.as_slice()).unwrap().content, Some(content::Content::NullMessage(_)))
+    }
+
+    /// Bob could not decrypt Alice's DM; Alice has edited it since. The
+    /// resend is the bytes Bob was sent, not a rebuild of the edited row.
+    #[tokio::test]
+    async fn the_resend_is_the_original_bytes_after_a_local_edit() {
+        let (_dir, alice, alice_id) = client();
         let m = alice.messages();
-        m.settings_repo.set(keys::CURRENT_USER_ID, &alice_id.to_string()).unwrap();
-        m.settings_repo.set(keys::CURRENT_DEVICE_ID, &1u32).unwrap();
-
+        let bob = UserId::new();
         let sent_at = TimestampNanos::now().as_u64();
-        m.message_repo
-            .insert_outgoing(&Message::new_text(
-                bob_id.into(),
-                ConversationType::ServerDm,
-                Some(alice_id),
-                "did this arrive?".into(),
-                sent_at,
-            ))
-            .unwrap();
+        let mut message =
+            Message::new_text(bob.into(), ConversationType::ServerDm, Some(alice_id), "did this arrive?".into(), sent_at);
+        m.message_repo.insert_outgoing(&message).unwrap();
+        let mut content = crate::services::build_data_message_content("did this arrive?", vec![], sent_at);
+        MessageService::pad_content_to_bucket(&mut content);
+        let server_ts = sent_at + 5_000_000;
+        m.record_dm_send(bob, &content, &[(1, server_ts), (2, server_ts + 1_000_000)]);
 
-        let content = m.dm_resend_content(&bob_id, sent_at).unwrap().expect("the message Alice sent Bob");
-        let Some(content::Content::DataMessage(dm)) = content.content else {
-            panic!("resend is not a DataMessage");
+        message.content = MessageContent::Text("edited".into());
+        m.message_repo.update(&message).unwrap();
+
+        let ms = server_ts / 1_000_000;
+        assert!(is_null_message(&m.dm_resend_plaintext(&UserId::new(), 1, ms).unwrap()), "not theirs to ask for");
+        assert!(is_null_message(&m.dm_resend_plaintext(&bob, 2, ms).unwrap()), "device 2's deposit has its own timestamp");
+        assert_eq!(m.dm_resend_plaintext(&bob, 1, ms).unwrap(), Resend::Original(content.encode_to_vec()));
+        assert!(is_null_message(&m.dm_resend_plaintext(&bob, 1, ms).unwrap()), "one resend per deposit");
+
+        // Deleted for everyone since: device 2 gets a NullMessage, not the text.
+        m.message_repo.delete(&message.id).unwrap();
+        assert!(is_null_message(&m.dm_resend_plaintext(&bob, 2, ms + 1).unwrap()));
+    }
+
+    /// A reaction has no stored row to rebuild from; the send log still has
+    /// its bytes. So does the copy our own other device was sent.
+    #[tokio::test]
+    async fn a_reaction_and_an_own_device_copy_are_resent() {
+        let (_dir, alice, alice_id) = client();
+        let m = alice.messages();
+        let bob = UserId::new();
+        let now = TimestampNanos::now().as_u64();
+        let reaction = Content {
+            timestamp: now,
+            content: Some(content::Content::Reaction(Reaction {
+                emoji: "+1".into(),
+                target_author_aci: bob.to_string(),
+                target_sent_timestamp: now - 1,
+                timestamp: now,
+                ..Default::default()
+            })),
+            ..Default::default()
         };
-        assert_eq!(dm.body, "did this arrive?");
-        assert_eq!(dm.timestamp, sent_at, "filed by the recipient where the lost copy would have been");
+        m.record_dm_send(bob, &reaction, &[(1, 9_000_000)]);
+        m.record_dm_send(alice_id, &reaction, &[(2, 9_000_000)]);
+        assert_eq!(m.dm_resend_plaintext(&bob, 1, 9).unwrap(), Resend::Original(reaction.encode_to_vec()));
+        assert_eq!(m.dm_resend_plaintext(&alice_id, 2, 9).unwrap(), Resend::Original(reaction.encode_to_vec()));
 
-        assert!(m.dm_resend_content(&UserId::new(), sent_at).unwrap().is_none(), "not theirs to ask for");
-        assert!(m.dm_resend_content(&bob_id, sent_at + 1).unwrap().is_none());
-
-        // Another of Alice's devices gets the copy it files under Bob.
-        let copy = m.dm_resend_content(&alice_id, sent_at).unwrap().expect("Alice's own copy");
-        let Some(content::Content::SyncSent(sync)) = copy.content else {
-            panic!("an own-device resend is a SyncSent");
+        // Typing is never logged.
+        let typing = Content {
+            content: Some(content::Content::Typing(Default::default())),
+            ..Default::default()
         };
-        assert_eq!(sync.destination_user_id, bob_id.to_string());
-        assert_eq!(sync.timestamp, sent_at);
-        assert_eq!(sync.message.unwrap().body, "did this arrive?");
+        m.record_dm_send(bob, &typing, &[(1, 10_000_000)]);
+        assert!(is_null_message(&m.dm_resend_plaintext(&bob, 1, 10).unwrap()));
+    }
+
+    #[tokio::test]
+    async fn a_miss_is_answered_with_a_null_message() {
+        let (_dir, alice, _) = client();
+        let resend = alice.messages().dm_resend_plaintext(&UserId::new(), 1, 42).unwrap();
+        assert!(is_null_message(&resend));
+    }
+
+    #[test]
+    fn a_disappearing_message_leaves_the_log_with_its_timer() {
+        let mut dm = crate::services::build_data_message_content("poof", vec![], 1);
+        assert_eq!(expires_at(&dm, 0), RESEND_MAX_AGE_NS);
+        if let Some(content::Content::DataMessage(d)) = dm.content.as_mut() {
+            d.ephemeral = true;
+            d.ephemeral_ttl_seconds = 30;
+        }
+        assert_eq!(expires_at(&dm, 0), 30_000_000_000);
     }
 }

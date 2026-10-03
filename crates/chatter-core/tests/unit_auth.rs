@@ -44,7 +44,7 @@ async fn test_user_builder_creates_valid_credentials() {
     assert!(!user.username.is_empty(), "Username should be generated");
     assert!(!user.display_name.is_empty(), "Display name should be generated");
     assert!(user.device_id > 0, "Device ID should be positive");
-    assert!(!user.password_hash.is_empty(), "Password hash should be generated");
+    assert!(!user.password.is_empty(), "Password should be generated");
 }
 
 #[tokio::test]
@@ -105,15 +105,8 @@ async fn test_login_returns_correct_user_info() {
 }
 
 #[tokio::test]
-async fn test_password_hash_is_deterministic() {
-    // Same password should produce same hash
-    let (password1, hash1) = random_password();
-
-    // Different passwords should produce different hashes
-    let (password2, hash2) = random_password();
-
-    assert_ne!(password1, password2, "Random passwords should differ");
-    assert_ne!(hash1, hash2, "Different passwords should have different hashes");
+async fn test_random_passwords_differ() {
+    assert_ne!(random_password(), random_password(), "Random passwords should differ");
 }
 
 // ============================================================================

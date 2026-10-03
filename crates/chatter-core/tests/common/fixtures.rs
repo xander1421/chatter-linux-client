@@ -8,14 +8,13 @@ use std::sync::Arc;
 use base64::engine::general_purpose::STANDARD as BASE64;
 use base64::Engine;
 use rand::RngCore;
-use sha2::{Digest, Sha256};
 
 use chatter_core::error::NetworkError;
 use chatter_core::network::grpc::{AuthClient, GrpcClientPool};
 use chatter_core::proto::chat_v1::signal_pre_key_bundle::{
     KyberPreKeyRecord as ProtoKyberPreKey, PreKeyRecord, SignedPreKeyRecord,
 };
-use chatter_core::proto::chat_v1::SignalPreKeyBundle;
+use chatter_core::proto::chat_v1::{AuthResponse, SignalPreKeyBundle};
 use libsignal_protocol::{kem, IdentityKeyPair, KeyPair, KyberPreKeyId, KyberPreKeyRecord, GenericSignedPreKey};
 
 /// Test user data returned after registration.
@@ -31,9 +30,8 @@ pub struct TestUser {
     pub display_name: String,
     /// Encrypted display name (nonce || ciphertext || auth_tag).
     pub encrypted_display_name: Vec<u8>,
-    /// SHA-256 hashed password.
-    pub password_hash: Vec<u8>,
-    /// Plain password (for re-login tests).
+    /// Plain password (for re-login tests). The server only ever saw an
+    /// OPAQUE registration record for it.
     pub password: String,
     /// 32-byte Ed25519 public key.
     pub public_key: Vec<u8>,
@@ -104,20 +102,48 @@ pub fn unique_username() -> String {
     format!("test_user_{}_{}", random_hex, timestamp % 100000)
 }
 
-/// Generate a random password and return (password, sha256_hash).
-pub fn random_password() -> (String, Vec<u8>) {
+/// Generate a random password.
+pub fn random_password() -> String {
     let mut random_bytes = [0u8; 16];
     rand::rng().fill_bytes(&mut random_bytes);
-    let password = format!("TestPass_{}", hex::encode(random_bytes));
-    let hash = Sha256::digest(password.as_bytes()).to_vec();
-    (password, hash)
+    format!("TestPass_{}", hex::encode(random_bytes))
 }
 
-/// Generate a random 32-byte hash (for password_hash parameter).
-pub fn random_password_hash() -> Vec<u8> {
-    let mut hash = vec![0u8; 32];
-    rand::rng().fill_bytes(&mut hash);
-    hash
+/// OPAQUE login through a raw [`AuthClient`] — exactly what
+/// `AuthService::login` sends: `LoginStart` with the nickname-derived
+/// identifier and KE1, then `LoginFinish` with KE3 and the device fields.
+///
+/// A wrong password never reaches `LoginFinish`: the client cannot open KE2,
+/// which surfaces here as [`NetworkError::Unauthenticated`] so callers can
+/// treat it like the server's rejection.
+pub async fn opaque_login(
+    auth_client: &mut AuthClient,
+    username: &str,
+    password: &str,
+    device_info: &str,
+    svr_public_key: &[u8],
+    device_auth_token: &[u8],
+    device_id: Option<u32>,
+) -> Result<AuthResponse, NetworkError> {
+    use chatter_core::crypto::opaque;
+    let identifier = chatter_core::crypto::auth_crypto::login_identifier(username);
+    let start = opaque::login_start(password).map_err(|e| NetworkError::Unknown(e.to_string()))?;
+    let started = auth_client.login_start(&identifier, &start.ke1).await?;
+    let done = match opaque::login_finish_async(start, password, started.ke2).await {
+        Ok(d) => d,
+        Err(opaque::OpaqueError::InvalidLogin) => return Err(NetworkError::Unauthenticated),
+        Err(e) => return Err(NetworkError::Unknown(e.to_string())),
+    };
+    auth_client
+        .login_finish(&started.login_id, &done.ke3, device_info, svr_public_key, device_auth_token, device_id)
+        .await
+}
+
+/// An X25519 SVR public key from a random secret (what a PIN would derive).
+pub fn random_svr_public_key() -> Vec<u8> {
+    let mut secret = [0u8; 32];
+    rand::rng().fill_bytes(&mut secret);
+    chatter_core::crypto::svr::SvrKeypair::from_secret(&secret).public_key_bytes().to_vec()
 }
 
 /// Generate a random 32-byte Ed25519-like public key.
@@ -197,7 +223,7 @@ pub async fn register_test_user(pool: &GrpcClientPool) -> Result<TestUser, Netwo
         .next()
         .ok_or_else(|| NetworkError::Unknown("no username candidates".to_string()))?;
     let display_name = format!("Test User {}", &username[10..18]);
-    let (password, password_hash) = random_password();
+    let password = random_password();
     let device_auth_token = random_device_auth_token();
     let profile_key = random_profile_key();
 
@@ -272,25 +298,46 @@ pub async fn register_test_user(pool: &GrpcClientPool) -> Result<TestUser, Netwo
 
     // Server now requires a registration challenge proving identity-key
     // possession. Mirror what `AuthService::register` does in the SDK:
-    // hash the (password_hash, username) pair, request a challenge, sign
-    // the returned nonce with our identity private key (XEdDSA).
-    let auth_lookup_hash =
-        chatter_core::crypto::auth_crypto::derive_login_auth_hash(&password_hash, &username);
-    let username_hash_hex = hex::encode(auth_lookup_hash);
+    // the nickname-derived login identifier, an OPAQUE RegistrationRequest
+    // riding the challenge, the domain-separated challenge message
+    // (registration_challenge_message) signed with our identity key (XEdDSA),
+    // and the finalized OPAQUE record uploaded with Register.
+    let username_hash_hex = chatter_core::crypto::auth_crypto::login_identifier(&username);
     // SDK strips the leading 0x05 type byte before sending; match that.
     let identity_public_key_stripped = &identity_public_key[1..];
+    let opaque_reg = chatter_core::crypto::opaque::registration_start(&password)
+        .map_err(|e| NetworkError::Unknown(e.to_string()))?;
     let challenge = auth_client
-        .request_registration_challenge(&username_hash_hex, identity_public_key_stripped)
+        .request_registration_challenge(
+            &username_hash_hex,
+            identity_public_key_stripped,
+            &opaque_reg.request,
+        )
         .await?;
+    let opaque_record = chatter_core::crypto::opaque::registration_finish_async(
+        opaque_reg,
+        &password,
+        challenge.opaque_registration_response.clone(),
+    )
+    .await
+    .map_err(|e| NetworkError::Unknown(e.to_string()))?;
     let challenge_response = identity_key_pair
         .private_key()
-        .calculate_signature(&challenge.challenge_nonce, &mut rand::rng())
+        .calculate_signature(
+            &chatter_core::crypto::signal::identity::registration_challenge_message(
+                &challenge.challenge_nonce,
+            )
+            .expect("server nonce must be REGISTRATION_CHALLENGE_NONCE_LEN bytes"),
+            &mut rand::rng(),
+        )
         .expect("XEdDSA challenge signing should succeed");
 
     // Ristretto255 lookup hash over the full `name.discriminator` —
     // server's LookupUsername RPC matches against THIS column.
-    let username_lookup = chatter_core::crypto::auth_crypto::hash_username_lookup(&full_username)
-        .map_err(|e| NetworkError::Unknown(format!("hash_username_lookup failed: {e}")))?;
+    // The server verifies the accompanying ZK proof before storing the hash.
+    let (username_lookup, username_proof) =
+        chatter_core::crypto::auth_crypto::username_claim(&full_username)
+            .map_err(|e| NetworkError::Unknown(format!("username_claim failed: {e}")))?;
 
     // The SVR public key is an X25519 key derived from the account PIN — 32 raw
     // bytes, no type prefix (`crypto/svr.rs:394`). This fixture used to pass
@@ -309,7 +356,7 @@ pub async fn register_test_user(pool: &GrpcClientPool) -> Result<TestUser, Netwo
     let result = auth_client
         .register_and_wait(
             &username_hash_hex,        // PRIVACY: Send hash, matches SDK (server stores hash, not plaintext)
-            &password_hash,
+            &opaque_record,
             &encrypted_display_name,
             &svr_public_key,
             "integration-test-device",
@@ -320,7 +367,8 @@ pub async fn register_test_user(pool: &GrpcClientPool) -> Result<TestUser, Netwo
             &challenge.challenge_id,
             &challenge_response,
             &[0u8; 32],         // Empty registration lock for tests
-            &username_lookup,   // hash_username_lookup(full_username) for the discovery RPC
+            &username_lookup,   // username_claim(full_username): discovery hash
+            &username_proof,    // ...and the proof the server verifies it against
         )
         .await?;
 
@@ -329,7 +377,6 @@ pub async fn register_test_user(pool: &GrpcClientPool) -> Result<TestUser, Netwo
         full_username,
         display_name,
         encrypted_display_name,
-        password_hash,
         password,
         public_key: identity_public_key.as_ref().to_vec(),
         identity_key_pair_bytes: identity_key_pair.serialize().into_vec(),
@@ -359,7 +406,7 @@ pub async fn setup_authenticated_test(
 /// Create a test user fixture without registering (for unit tests).
 pub fn mock_test_user() -> TestUser {
     let username = unique_username();
-    let (password, password_hash) = random_password();
+    let password = random_password();
     let profile_key = random_profile_key();
     let display_name = format!("Mock User {}", &username[10..18.min(username.len())]);
 
@@ -376,7 +423,6 @@ pub fn mock_test_user() -> TestUser {
         full_username,
         display_name,
         encrypted_display_name,
-        password_hash,
         password,
         public_key: random_public_key(),
         identity_key_pair_bytes: Vec::new(),

@@ -127,7 +127,6 @@ pub fn domain_config_to_proto(config: &ChannelConfig) -> chat_v1::channel::Confi
         // Proto requires 0 < max_members <= 10000; None means "no user-set limit" → cap at max.
         max_members: config.max_members.unwrap_or(10000),
         encrypted: config.require_encryption,
-        password_hash: String::new(),
         friends_only: false,
     }
 }
@@ -335,7 +334,6 @@ mod tests {
             }),
             max_members: 100,
             encrypted: true,
-            password_hash: String::new(),
             friends_only: false,
         };
 
@@ -380,7 +378,6 @@ mod tests {
                 ttl: None,
                 max_members: 100,
                 encrypted: false,
-                password_hash: String::new(),
                 friends_only: false,
             }),
             owner_id: "00000000-0000-0000-0000-000000000002".to_string(),

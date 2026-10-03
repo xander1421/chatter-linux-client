@@ -649,10 +649,10 @@ async fn test_request_sender_certificate() {
 
     let mut auth_client = AuthClient::new(pool.channel(), pool.auth_clone());
 
-    // Request a new sender certificate (valid for 7 days). Server reads
+    // Request a new sender certificate (the server sets its lifetime). Server reads
     // the requesting device_id from the authenticated session.
     let result = auth_client
-        .request_sender_certificate(Some(std::time::Duration::from_secs(7 * 24 * 60 * 60)))
+        .request_sender_certificate()
         .await;
 
     assert!(

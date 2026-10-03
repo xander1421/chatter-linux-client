@@ -24,7 +24,7 @@ async fn test_e2e_user_registration_flow() {
         .build();
 
     assert!(!user.user_id.is_empty(), "User should have an ID");
-    assert!(!user.password_hash.is_empty(), "User should have password hash");
+    assert!(!user.password.is_empty(), "User should have a password");
 
     // Step 2: Generate prekey bundle for registration
     let (bundle, identity_key) = generate_prekey_bundle();

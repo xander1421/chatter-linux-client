@@ -13,7 +13,6 @@ pub mod shared;
 
 use std::sync::Arc;
 
-use crate::crypto::signal::sesame::{SesameManager, SqliteSesameStore};
 use crate::domain::ids::{ChannelId, MessageId, UserId};
 use crate::domain::message::{ConversationType, Message, MessageContent};
 use crate::proto::content_v1::DataMessage;
@@ -118,7 +117,6 @@ pub struct MessageGateway {
     /// decrypted later.
     pub(crate) user_repo: Arc<crate::storage::repositories::UserRepository>,
     pub(crate) settings_repo: Arc<crate::storage::repositories::settings_repo::SettingsRepository>,
-    pub(crate) sesame_manager: Option<Arc<SesameManager<SqliteSesameStore>>>,
     /// Local disappearing-message TTL tracking. Set on the production gateway
     /// so an INBOUND message that arrives with an armed `ephemeral_ttl`
     /// (V29 wire marker) tracks the RECIPIENT's local copy for reaping. `None`
@@ -146,20 +144,19 @@ impl MessageGateway {
             channel_repo,
             user_repo,
             settings_repo,
-            sesame_manager: None,
             ephemeral_repo: None,
             solicited_resends,
         }
     }
 
-    /// Create a new MessageGateway with Sesame session management.
-    pub fn with_sesame(
+    /// Create the production MessageGateway, which also arms disappearing
+    /// timers on inbound messages.
+    pub fn with_ephemeral(
         signal_service: SignalService,
         message_repo: Arc<MessageRepository>,
         channel_repo: Arc<crate::storage::repositories::channel_repo::ChannelRepository>,
         user_repo: Arc<crate::storage::repositories::UserRepository>,
         settings_repo: Arc<crate::storage::repositories::settings_repo::SettingsRepository>,
-        sesame_manager: Arc<SesameManager<SqliteSesameStore>>,
         ephemeral_repo: Arc<crate::storage::repositories::ephemeral_repo::EphemeralRepository>,
         solicited_resends: crate::services::message::SolicitedResends,
     ) -> Self {
@@ -169,7 +166,6 @@ impl MessageGateway {
             user_repo,
             settings_repo,
             channel_repo,
-            sesame_manager: Some(sesame_manager),
             ephemeral_repo: Some(ephemeral_repo),
             solicited_resends,
         }
@@ -219,8 +215,9 @@ impl MessageGateway {
                 }
 
                 // Disappearing-messages timer (Signal's expireTimer): a timer
-                // update announces it, and every visible message restates it,
-                // so adopt whatever differs from ours. An update message has
+                // update announces it, and every visible message restates it
+                // with its version; adopt it by Signal's version rule
+                // (`services::disappearing`). An update message has
                 // nothing else to show: surface the notice in its place.
                 let timer_update = crate::services::disappearing::is_timer_update(&data_message);
                 let visible = !data_message.body.is_empty() || !data_message.attachments.is_empty();
@@ -375,8 +372,13 @@ impl MessageGateway {
             }
         }
 
-        // Store in repository
-        self.message_repo.insert(&message)?;
+        // Store in repository. What is announced is what was stored: an edit
+        // that arrived first is already applied, and a message its author
+        // deleted for everyone before it got here is not stored at all.
+        let Some(stored) = self.message_repo.insert_received(&message)? else {
+            tracing::info!(message_id = %message.id, "Inbound message was deleted for everyone before it arrived");
+            return Ok(SealedSenderResult::MessageStored);
+        };
 
         // Disappearing messages — RECIPIENT local half. When the inbound
         // DataMessage carries an armed ephemeral marker (V29 wire fields set by
@@ -419,7 +421,7 @@ impl MessageGateway {
             sender_id: sender_id.unwrap_or_else(|| UserId::from_uuid(uuid::Uuid::nil())),
             channel_id,
             message_id,
-            body: data_message.body,
+            body: announced_body(&stored, data_message.body),
             timestamp: data_message.timestamp,
             attachments: data_message.attachments,
             profile_key_changed,
@@ -574,16 +576,29 @@ impl MessageGateway {
             &self.message_repo,
         );
 
+        // Already held: a resend after our DecryptionErrorMessage, or a sync a
+        // device-set retry queued twice. The unique (conversation, sender,
+        // sent_at) row exists, so the insert would fail into a delivery issue.
+        if let Ok(Some(existing)) = self.message_repo.get_by_sender_timestamp(&current_user, message.sent_at) {
+            if existing.conversation_id == message.conversation_id {
+                return Ok(SealedSenderResult::MessageStored);
+            }
+        }
+
         crate::storage::repositories::message_receipt_repo::MessageReceiptRepository::new(
             self.settings_repo.database().clone(),
         ).snapshot_for_send(channel_id, ConversationType::ServerDm, current_user,
             data_message.timestamp, &targets)?;
 
-        self.message_repo.insert(&message)?;
+        // As for an inbound message: announce what was stored.
+        let Some(stored) = self.message_repo.insert_received(&message)? else {
+            tracing::info!(message_id = %message.id, "Synced sent message was deleted for everyone before it arrived");
+            return Ok(SealedSenderResult::MessageStored);
+        };
 
         // Our copy on this device disappears on the same timer as the one we
         // sent from.
-        let ttl = crate::services::disappearing::stated_timer(&data_message);
+        let ttl = crate::services::disappearing::message_ttl(&data_message);
         if ttl > 0 {
             self.arm_disappearing(&message.id, ttl);
         }
@@ -599,7 +614,7 @@ impl MessageGateway {
             sender_id: current_user,
             channel_id,
             message_id,
-            body: data_message.body,
+            body: announced_body(&stored, data_message.body),
             timestamp: data_message.timestamp,
             attachments: data_message.attachments,
             profile_key_changed: false,
@@ -614,20 +629,27 @@ impl MessageGateway {
         &self,
         peer_id: &UserId,
         author: &UserId,
-        seconds: u32,
+        stated: Option<crate::services::disappearing::DmTimer>,
         sent_at: u64,
     ) -> Option<Message> {
+        // A message stating no timer (version 0) says nothing about it.
+        let stated = stated?;
         match crate::services::disappearing::adopt_server_dm_timer(
             &self.settings_repo,
             &self.message_repo,
             peer_id,
             author,
-            seconds,
+            stated,
             sent_at,
         ) {
             Ok(notice) => {
                 if notice.is_some() {
-                    tracing::info!(peer_id = %peer_id, seconds, "adopted a new disappearing timer");
+                    tracing::info!(
+                        peer_id = %peer_id,
+                        seconds = stated.seconds,
+                        version = stated.version,
+                        "adopted a new disappearing timer"
+                    );
                 }
                 notice
             }
@@ -651,11 +673,20 @@ impl MessageGateway {
         }
     }
 
-    /// Get the local identity private key for ECIES decryption.
-    ///
-    /// Returns the 32-byte X25519 private scalar used to decrypt
-    /// NDSS'21 initial contact messages.
-    pub async fn get_identity_key(&self) -> Result<[u8; 32], crate::error::ServiceError> {
-        self.signal_service.get_identity_private_key().await
+    /// Open an NDSS'21 initial contact message sealed to our identity key.
+    /// The open runs inside the Signal actor; no identity secret crosses here.
+    pub async fn open_anon_dm_init(&self, ciphertext: &[u8]) -> Result<Vec<u8>, crate::error::ServiceError> {
+        self.signal_service
+            .open_identity_hpke(crate::crypto::ecies::IdentityHpkeUse::AnonDmInit, ciphertext.to_vec())
+            .await
+    }
+}
+
+/// The body to announce for a message just stored: the stored text (an early
+/// edit already applied), else what was decoded.
+fn announced_body(stored: &crate::domain::message::Message, decoded: String) -> String {
+    match &stored.content {
+        crate::domain::message::MessageContent::Text(text) => text.clone(),
+        _ => decoded,
     }
 }

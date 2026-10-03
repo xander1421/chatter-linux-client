@@ -11,6 +11,7 @@ pub mod disappearing;
 pub(crate) mod edit;
 mod helpers;
 pub mod identity_change;
+pub mod membership;
 mod pin;
 mod reactions;
 mod selection;
@@ -51,4 +52,5 @@ pub fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     identity_change::wire_accept(window, ui_ctx);
     emoji_loader::wire_emoji_loader(window, ui_ctx);
     disappearing::wire(window, ui_ctx);
+    membership::wire(window, ui_ctx);
 }

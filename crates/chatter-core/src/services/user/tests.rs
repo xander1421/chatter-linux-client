@@ -139,7 +139,6 @@ mod tests {
             encrypted_name: Vec::new(),
             encrypted_about: Vec::new(),
             encrypted_avatar: Vec::new(),
-            profile_key_version: String::new(),
         };
 
         let profile = proto_to_domain_profile(&proto).unwrap();
@@ -161,7 +160,6 @@ mod tests {
             encrypted_name: Vec::new(),
             encrypted_about: Vec::new(),
             encrypted_avatar: Vec::new(),
-            profile_key_version: String::new(),
         };
 
         let profile = proto_to_domain_profile(&proto).unwrap();

@@ -48,7 +48,7 @@ async fn test_registration_with_challenge_verification() {
     // Step 1: Request registration challenge
     println!("→ Requesting registration challenge...");
     let challenge_response = match auth_client
-        .request_registration_challenge(&test_username, &test_identity_key)
+        .request_registration_challenge(&test_username, &test_identity_key, &opaque_request())
         .await
     {
         Ok(response) => {
@@ -115,7 +115,7 @@ async fn test_challenge_request_validation() {
     println!("→ Testing invalid public key length...");
     let invalid_key = vec![0u8; 16]; // Wrong length (should be 32)
     let result = auth_client
-        .request_registration_challenge("test_user", &invalid_key)
+        .request_registration_challenge("test_user", &invalid_key, &opaque_request())
         .await;
 
     if result.is_err() {
@@ -129,7 +129,7 @@ async fn test_challenge_request_validation() {
     println!("→ Testing empty username...");
     let valid_key = generate_test_identity_key();
     let result = auth_client
-        .request_registration_challenge("", &valid_key)
+        .request_registration_challenge("", &valid_key, &opaque_request())
         .await;
 
     if result.is_err() {
@@ -164,7 +164,7 @@ async fn test_multiple_independent_challenges() {
 
         println!("→ Requesting challenge {} for user {}", i + 1, username);
         let challenge = match auth_client
-            .request_registration_challenge(&username, &identity_key)
+            .request_registration_challenge(&username, &identity_key, &opaque_request())
             .await
         {
             Ok(challenge) => challenge,
@@ -229,6 +229,16 @@ async fn check_server_health() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 /// Generate a test identity key (32 bytes for Curve25519)
+
+/// A well-formed OPAQUE RegistrationRequest for a throwaway password: the
+/// challenge RPC requires one (the server answers it under a fresh
+/// credential identifier).
+fn opaque_request() -> Vec<u8> {
+    chatter_core::crypto::opaque::registration_start("throwaway password")
+        .expect("blinding cannot fail")
+        .request
+}
+
 fn generate_test_identity_key() -> Vec<u8> {
     use rand::RngCore;
     let mut key = vec![0u8; 32];

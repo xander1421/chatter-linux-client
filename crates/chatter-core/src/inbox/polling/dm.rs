@@ -265,7 +265,7 @@ pub async fn poll_dm_mailboxes(
                     } else if let Some((sender_device_id, secret)) = opening.or(recv_keys.first().copied()) {
                         // Decrypt with Signal Protocol (forward secrecy via Double Ratchet)
                         match message_gateway
-                            .process_dm_message(&msg.encrypted_envelope, &secret)
+                            .process_dm_message(&msg.encrypted_envelope, &secret, msg.server_timestamp)
                             .await
                         {
                             // Blocked sender: the gateway authenticated them
@@ -286,23 +286,24 @@ pub async fn poll_dm_mailboxes(
                                 let disappearing = match &dm_content {
                                     DmContent::Text {
                                         expire_timer: Some(secs),
+                                        timer_version,
                                         timer_update,
                                         body,
                                         attachments,
                                         timestamp,
                                         ..
                                     } => Some((
-                                        *secs,
+                                        crate::services::disappearing::DmTimer { seconds: *secs, version: *timer_version },
                                         if *timestamp > 0 { *timestamp } else { msg.server_timestamp },
                                         *timer_update,
                                         !body.is_empty() || !attachments.is_empty(),
                                     )),
                                     _ => None,
                                 };
-                                if let Some((secs, sent_at, update, visible)) = disappearing {
+                                if let Some((timer, sent_at, update, visible)) = disappearing {
                                     if update || visible {
                                         let notice = message_gateway
-                                            .adopt_server_dm_timer(&peer_id, &sender_id, secs, sent_at);
+                                            .adopt_server_dm_timer(&peer_id, &sender_id, Some(timer), sent_at);
                                         if let (Some(notice), Some(tx)) = (notice, domain_tx) {
                                             let _ = tx.send(DomainEvent::MessageReceived { message: notice });
                                         }
@@ -327,7 +328,8 @@ pub async fn poll_dm_mailboxes(
                                 // Arm the copy just stored (filed under the
                                 // sender's (id, sent_at) key) so the reaper
                                 // removes it when the timer runs out.
-                                if let Some((secs, sent_at, _, true)) = disappearing {
+                                if let Some((timer, sent_at, _, true)) = disappearing {
+                                    let secs = timer.seconds;
                                     if secs > 0 {
                                         if let Ok(Some(stored)) =
                                             message_repo.get_by_sender_timestamp(&sender_id, sent_at)
@@ -347,18 +349,27 @@ pub async fn poll_dm_mailboxes(
                             }
                             Err(e) => {
                                 let error_str = e.to_string();
-                                let convergence_failed = error_str.contains("convergence failed");
+                                // The session's ratchet state is gone and this
+                                // path sends no DecryptionErrorMessage, so the
+                                // session is reset instead (Signal's
+                                // lightSessionReset).
+                                let session_desync = matches!(
+                                    e,
+                                    crate::error::ServiceError::Crypto(
+                                        crate::error::CryptoError::SessionDesync { .. }
+                                    )
+                                );
                                 tracing::error!(
                                     peer_id = %peer_id,
                                     message_id = %msg.message_id,
                                     error = %e,
-                                    convergence_failed,
+                                    session_desync,
                                     "DM decryption failed"
                                 );
                                 let _ = event_tx.send(InboxEvent::DmDecryptionFailed {
                                     peer_id,
                                     error: error_str,
-                                    convergence_failed,
+                                    session_desync,
                                 });
                                 dm_failure_decision(
                                     peer_id,
@@ -381,7 +392,7 @@ pub async fn poll_dm_mailboxes(
                         let _ = event_tx.send(InboxEvent::DmDecryptionFailed {
                             peer_id,
                             error: "No shared secret established".to_string(),
-                            convergence_failed: false, // Not a convergence failure - no session exists
+                            session_desync: false, // No session to reset
                         });
                         // TRANSIENT, and the clearest case of it: we have no
                         // session yet. The bootstrap can still complete via
@@ -469,6 +480,7 @@ fn dispatch_dm_content(
         DmContent::DeleteForEveryone { .. } => "DeleteForEveryone",
         DmContent::KeyExchange { .. } => "KeyExchange",
         DmContent::MailboxRotation { .. } => "MailboxRotation",
+        DmContent::NullMessage => "NullMessage",
         _ => "Other",
     };
     tracing::info!(
@@ -569,8 +581,10 @@ fn dispatch_dm_content(
                     message_repo,
                 );
 
-                match message_repo.insert_or_ignore(&message) {
-                    Ok(true) => {
+                // Announce the row as stored (an early edit, reaction or pin
+                // applied); an early delete-for-everyone stores nothing.
+                match message_repo.insert_or_ignore_received(&message) {
+                    Ok(Some(message)) => {
                         tracing::debug!(
                             peer_id = %peer_id,
                             channel_id = %dm_channel_id,
@@ -582,7 +596,7 @@ fn dispatch_dm_content(
                         // UI message-state handler, and any other domain
                         // subscribers learn about the new message. Fresh
                         // (non-duplicate) inserts only — duplicates fall
-                        // through the Ok(false) arm. Previously this
+                        // through the Ok(None) arm. Previously this
                         // branch only emitted the lower-level
                         // InboxEvent::DmReceived, which the notification
                         // listener doesn't subscribe to, so identified
@@ -593,8 +607,8 @@ fn dispatch_dm_content(
                             });
                         }
                     }
-                    Ok(false) => {
-                        tracing::debug!(peer_id = %peer_id, "DM duplicate skipped");
+                    Ok(None) => {
+                        tracing::debug!(peer_id = %peer_id, "DM duplicate, or deleted before it arrived — not announced");
                     }
                     Err(e) => {
                         tracing::warn!(peer_id = %peer_id, error = %e, "Failed to store DM");
@@ -653,6 +667,7 @@ fn dispatch_dm_content(
             remove,
             target_author_aci,
             target_sent_timestamp,
+            timestamp,
         } => {
             tracing::debug!(peer_id = %peer_id, emoji = %emoji, remove, "DM reaction");
             let _ = event_tx.send(InboxEvent::DmReaction {
@@ -661,6 +676,7 @@ fn dispatch_dm_content(
                 remove,
                 target_author_aci,
                 target_sent_timestamp,
+                timestamp: if timestamp > 0 { timestamp } else { server_timestamp },
             });
         }
 
@@ -668,6 +684,7 @@ fn dispatch_dm_content(
             target_author_aci,
             target_sent_timestamp,
             unpin,
+            timestamp,
         } => {
             tracing::debug!(peer_id = %peer_id, unpin, "DM pin");
             let _ = event_tx.send(InboxEvent::DmPin {
@@ -675,18 +692,22 @@ fn dispatch_dm_content(
                 target_author_aci,
                 target_sent_timestamp,
                 unpin,
+                timestamp: if timestamp > 0 { timestamp } else { server_timestamp },
             });
         }
 
         DmContent::Edit {
             target_sent_timestamp,
             new_body,
+            edit_timestamp,
         } => {
             tracing::debug!(peer_id = %peer_id, target = target_sent_timestamp, "DM edit");
             let _ = event_tx.send(InboxEvent::DmEdit {
                 peer_id,
                 target_sent_timestamp,
                 new_body,
+                edit_timestamp,
+                server_timestamp,
             });
         }
 
@@ -1124,13 +1145,16 @@ fn dispatch_dm_content(
         // sender's message" must have exactly one possible meaning if a future
         // caller does reach here: do nothing.
         DmContent::DroppedBlockedSender => {}
+        // The peer reset its sessions with us; decrypting this moved us onto
+        // the new one. Nothing to store, nothing for the UI — the poll loop acks.
+        DmContent::NullMessage => {}
     }
 }
 
 /// Try to parse a mailbox message as a bootstrap response.
 ///
 /// Per NDSS '21, the bootstrap response has TWO encryption layers:
-/// 1. **Transport Layer (Envelope)**: ECDH(sender_identity, our_mailbox_ephemeral)
+/// 1. **Transport Layer (Envelope)**: HPKE to our mailbox's X25519 encryption key
 /// 2. **Content Layer (Signal)**: Signal Protocol (X3DH/Double Ratchet)
 ///
 /// We must:
@@ -1183,17 +1207,9 @@ async fn try_parse_bootstrap_response(
         }
     };
 
-    // Step 2: Decrypt the envelope layer
-    // The mailbox private key is stored as 64 bytes (Ed25519 keypair: 32-byte seed + 32-byte public)
-    // We need the 32-byte seed for envelope decryption
-    let mailbox_seed: [u8; 32] = mailbox.private_key[..32]
-        .try_into()
-        .map_err(|_| {
-            tracing::error!(peer_id = %peer_id, "Invalid mailbox private key format");
-        })
-        .ok()?;
-
-    let signal_ciphertext = match decrypt_envelope(envelope, &mailbox_seed) {
+    // Step 2: Decrypt the envelope layer with the mailbox's ENCRYPTION key
+    // (its Ed25519 signing key only signs poll/ack challenges).
+    let signal_ciphertext = match decrypt_envelope(envelope, &mailbox.encryption_private_key) {
         Ok(result) => result,
         Err(e) => {
             tracing::warn!(
@@ -1236,7 +1252,7 @@ async fn try_parse_bootstrap_response(
                     tracing::info!(
                         peer_id = %peer_id,
                         key_len = ephemeral_public_key.len(),
-                        "BOOTSTRAP[4/4] Layer 2 (Signal) decrypted - got 64-byte KeyExchange"
+                        "BOOTSTRAP[4/4] Layer 2 (Signal) decrypted - got KeyExchange"
                     );
 
                     // Process the KeyExchange
@@ -1323,25 +1339,25 @@ fn process_bootstrap_key_exchange(
     peer_device_id: u32,
     conversation_manager: &DmConversationManager,
 ) -> Option<Vec<u8>> {
-    if ephemeral_pk.len() != 64 {
+    // The RESPONSE's encryption key goes unused: nothing is HPKE-sealed to
+    // the responder's mailbox after the bootstrap (deposits there use the
+    // conversation key). It is announced so both directions share one layout.
+    let Some(announcement) = crate::mailbox::dm::bootstrap::MailboxAnnouncement::parse(ephemeral_pk) else {
         tracing::error!(
             peer_id = %peer_id,
             key_len = ephemeral_pk.len(),
             "Invalid bootstrap key length"
         );
         return None;
-    }
+    };
 
     tracing::info!(
         peer_id = %peer_id,
         "Processing bootstrap key exchange from peer"
     );
 
-    // Extract peer's mailbox pk (first 32 bytes) and conversation ephemeral pk (next 32 bytes)
-    let mut peer_mailbox_pk = [0u8; 32];
-    let mut peer_conversation_pk = [0u8; 32];
-    peer_mailbox_pk.copy_from_slice(&ephemeral_pk[0..32]);
-    peer_conversation_pk.copy_from_slice(&ephemeral_pk[32..64]);
+    let peer_mailbox_pk = announcement.mailbox_pk;
+    let peer_conversation_pk = announcement.conversation_pk;
 
     // That device's half only: a late device adds its own mailbox and
     // secret beside the others', never over them. Our half must exist — we
@@ -1430,6 +1446,7 @@ mod tests {
             quote: None,
             thread_id: None,
             expire_timer: None,
+            timer_version: 0,
             timer_update: false,
         };
         for (content, id) in [(text("via mailbox", 2), "m-1"), (text("", 3), "m-2")] {

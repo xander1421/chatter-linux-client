@@ -242,6 +242,9 @@ fn wire_chat_settings_clicked(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) 
                                 can_ban: false,
                                 can_mute: false,
                                 can_make_owner: false,
+                                // Anon-group membership is owner-authoritative,
+                                // not the signed channel log.
+                                unverified: false,
                             })
                             .collect();
                         w.set_channel_settings_members(ModelRc::new(VecModel::from(rows)));

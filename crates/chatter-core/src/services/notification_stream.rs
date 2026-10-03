@@ -11,7 +11,10 @@
 //!
 //! The server emits two typed events the client must act on:
 //!   * `DEVICE_LINKED`          — toast + refresh device list UI.
-//!   * `PEER_DEVICES_CHANGED`   — invalidate peer session cache + rekey groups.
+//!   * `PEER_DEVICES_CHANGED`   — added: open a session with the new device;
+//!     revoked: archive that device's session; reregistered: archive all of
+//!     the peer's sessions and rotate shared channels
+//!     (`MessageService::handle_peer_device_change`).
 //!
 //! Desynced 1:1 ratchets self-heal E2E via Signal `DecryptionErrorMessage`
 //! (see `MessageGateway::process_incoming_message`) — there is no
@@ -89,8 +92,6 @@ struct DeviceLinkedMeta {
     linked_device_id: u32,
     #[serde(default)]
     device_info: Option<String>,
-    #[serde(default)]
-    device_name: Option<String>,
 }
 
 /// Metadata payload for PEER_DEVICES_CHANGED notifications.
@@ -219,7 +220,9 @@ fn dispatch_notification(
             };
             let _ = sender.send(DomainEvent::DeviceLinked {
                 device_id,
-                device_name: meta.device_name.filter(|s| !s.is_empty()),
+                // The server cannot read device names (encrypted to the
+                // account identity key), so its notification carries none.
+                device_name: None,
                 device_info: meta.device_info.filter(|s| !s.is_empty()),
                 // approved_by_self cannot be known from the gRPC stream
                 // alone — the provisioning path sets this true when the
@@ -385,12 +388,12 @@ mod tests {
     #[test]
     fn dispatch_device_linked_emits_event() {
         let (bus, mut rx) = bus_with_receiver();
-        let meta = r#"{"device_id":7,"linked_device_id":7,"device_info":"chrome-linux","device_name":"Alex Desktop"}"#;
+        let meta = r#"{"device_id":7,"linked_device_id":7,"device_info":"chrome-linux"}"#;
         dispatch_notification(&bus, &recording_service().0, notif(NotificationType::DeviceLinked, meta));
         match rx.try_recv().expect("event expected") {
             DomainEvent::DeviceLinked { device_id, device_name, device_info, approved_by_self } => {
                 assert_eq!(device_id, 7);
-                assert_eq!(device_name.as_deref(), Some("Alex Desktop"));
+                assert_eq!(device_name, None, "the server never carries a device name");
                 assert_eq!(device_info.as_deref(), Some("chrome-linux"));
                 assert!(!approved_by_self, "stream-side receiver is never the approver");
             }

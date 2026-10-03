@@ -75,6 +75,12 @@ mod v073_former_channels;
 mod v074_message_receipts;
 mod v075_message_failure_reason;
 mod v076_own_device_send_targets;
+mod v077_pending_dm_messages;
+mod v078_send_log_and_pending_modifiers;
+mod v079_message_deletion_token;
+mod v080_pending_reactions_and_pins;
+mod v081_dm_mailbox_encryption_key;
+mod v082_verified_channel_membership;
 
 use crate::error::StorageError;
 use chrono::Utc;
@@ -153,6 +159,12 @@ pub use v073_former_channels::V073FormerChannels;
 pub use v074_message_receipts::V074MessageReceipts;
 pub use v075_message_failure_reason::V075MessageFailureReason;
 pub use v076_own_device_send_targets::V076OwnDeviceSendTargets;
+pub use v077_pending_dm_messages::V077PendingDmMessages;
+pub use v078_send_log_and_pending_modifiers::V078SendLogAndPendingModifiers;
+pub use v079_message_deletion_token::V079MessageDeletionToken;
+pub use v080_pending_reactions_and_pins::V080PendingReactionsAndPins;
+pub use v081_dm_mailbox_encryption_key::V081DmMailboxEncryptionKey;
+pub use v082_verified_channel_membership::V082VerifiedChannelMembership;
 
 /// Trait for database migrations.
 ///
@@ -356,4 +368,10 @@ pub fn default_migrations() -> MigrationRunner {
         .register(V074MessageReceipts)
         .register(V075MessageFailureReason)
         .register(V076OwnDeviceSendTargets)
+        .register(V077PendingDmMessages)
+        .register(V078SendLogAndPendingModifiers)
+        .register(V079MessageDeletionToken)
+        .register(V080PendingReactionsAndPins)
+        .register(V081DmMailboxEncryptionKey)
+        .register(V082VerifiedChannelMembership)
 }

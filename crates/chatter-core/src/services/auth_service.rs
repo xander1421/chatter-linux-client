@@ -4,11 +4,9 @@
 //!
 //! # Privacy
 //!
-//! Usernames are hashed with HMAC-SHA256 using a profile key derived from the password.
-//! This ensures:
-//! 1. Server never sees actual usernames
-//! 2. Username hash is deterministic (same password → same hash on any device)
-//! 3. Rainbow table attacks are infeasible (password acts as secret)
+//! The server sees a hash of the nickname (`auth_crypto::login_identifier`),
+//! never the nickname, and never the password or anything password-equivalent:
+//! every password check is an OPAQUE (RFC 9807) exchange (`crypto::opaque`).
 
 use base64::Engine;
 use rand::TryRngCore;
@@ -16,9 +14,9 @@ use std::sync::Arc;
 use zeroize::Zeroize;
 
 use crate::crypto::auth_crypto::{
-    derive_login_auth_hash, generate_profile_key, hash_password, hash_username_lookup,
-    username_candidates,
+    generate_profile_key, login_identifier, username_candidates, username_claim,
 };
+use crate::crypto::opaque::{self, OpaqueError};
 use crate::crypto::signal::identity::IdentityKeyManager;
 use crate::crypto::signal::prekey::PreKeyManager;
 use crate::crypto::DeviceCredentials;
@@ -71,6 +69,31 @@ pub enum AuthError {
     /// Caller-provided input violated a constraint (e.g. avatar too large).
     #[error("invalid input: {0}")]
     InvalidInput(String),
+}
+
+impl From<OpaqueError> for AuthError {
+    fn from(e: OpaqueError) -> Self {
+        match e {
+            OpaqueError::InvalidLogin => AuthError::InvalidCredentials,
+            OpaqueError::Protocol(m) => AuthError::Crypto(CryptoError::Protocol(m)),
+        }
+    }
+}
+
+/// Prove the current password to the server for the authenticated account
+/// (OPAQUE KE1 -> KE2 -> KE3 against its own record). The returned proof is
+/// single-use and is spent by the RPC it rides in (RegenerateRecoveryCodes,
+/// DeleteAccount, VerifyPassword). A wrong password fails HERE, client-side,
+/// with [`AuthError::InvalidCredentials`]: KE2 does not open, so there is no
+/// KE3 to send.
+pub(crate) async fn prove_password(
+    auth_client: &mut AuthClient,
+    password: &str,
+) -> Result<crate::proto::chat_v1::PasswordProof, AuthError> {
+    let start = opaque::login_start(password)?;
+    let opened = auth_client.password_proof_start(&start.ke1).await?;
+    let done = opaque::login_finish_async(start, password, opened.ke2).await?;
+    Ok(crate::proto::chat_v1::PasswordProof { proof_id: opened.proof_id, ke3: done.ke3 })
 }
 
 impl AuthError {
@@ -361,9 +384,9 @@ impl AuthService {
             return Err(AuthError::AlreadyLoggedIn);
         }
 
-        let password_hash = hash_password(password);
-        let auth_lookup_hash = derive_login_auth_hash(&password_hash, username);
-        let username_hash = hex::encode(auth_lookup_hash);
+        // PRIVACY: the server sees only the nickname-derived identifier, and
+        // the password only through OPAQUE (`crypto::opaque`).
+        let identifier = login_identifier(username);
 
         // Profile key: existing-device login loads it from local settings; a
         // fresh device has none here and recovers it from SVR backup AFTER
@@ -440,11 +463,19 @@ impl AuthService {
             }
         };
 
-        // Call server login with hashed username
+        // OPAQUE login: KE1 -> KE2, then KE3 -> session. A wrong password
+        // (or an unknown nickname, answered from a fake record) fails while
+        // opening KE2, before anything else is sent.
+        let opaque_start = opaque::login_start(password)?;
+        let started = auth_client
+            .login_start(&identifier, &opaque_start.ke1)
+            .await
+            .map_err(AuthError::Network)?;
+        let opaque_done = opaque::login_finish_async(opaque_start, password, started.ke2).await?;
         let response = auth_client
-            .login(
-                &username_hash, // PRIVACY: password-keyed login lookup, not plaintext username
-                password_hash.as_slice(),
+            .login_finish(
+                &started.login_id,
+                &opaque_done.ke3,
                 device_info,
                 &svr_public_key, // Derived from PIN
                 credentials.auth_token().as_bytes(),
@@ -529,8 +560,6 @@ impl AuthService {
         // by SVR restore. Overwriting from login would either be a no-op or
         // corrupt state.
         self.settings_repo.set_bytes(keys::DEVICE_AUTH_TOKEN, credentials.auth_token().as_bytes())?;
-        // Persist login-auth fingerprint for offline password re-auth.
-        self.settings_repo.set_bytes(keys::AUTH_LOOKUP_HASH, &auth_lookup_hash)?;
 
         // Refresh local PIN fingerprint (re-auth gate for linked-device approval).
         // Reuses the SVR secret already derived above.
@@ -664,10 +693,8 @@ impl AuthService {
         // derived from password. See `crypto::auth_crypto::generate_profile_key`.
         // SVR backup uploads the wrapped profile_key after registration so
         // other devices can recover it via PIN.
-        let password_hash = hash_password(password);
         let profile_key = generate_profile_key();
-        let auth_lookup_hash = derive_login_auth_hash(&password_hash, username);
-        let username_hash = hex::encode(auth_lookup_hash);
+        let username_hash = login_identifier(username);
 
         // Pick a Signal-style `nickname.discriminator` candidate. The random
         // discriminator binds into the Ristretto255 lookup hash so wordlist
@@ -750,8 +777,6 @@ impl AuthService {
         // Store profile key locally (needed for profile encryption)
         // Stored in SQLCipher encrypted database
         self.settings_repo.set_bytes(keys::PROFILE_KEY, &profile_key)?;
-        // Store login-auth fingerprint for offline password re-auth gates.
-        self.settings_repo.set_bytes(keys::AUTH_LOOKUP_HASH, &auth_lookup_hash)?;
         // Persist the chosen nickname.discriminator so discovery / lookup
         // flows can reproduce the Ristretto255 hash without prompting.
         self.settings_repo
@@ -800,20 +825,32 @@ impl AuthService {
             username_hash,
             identity_public_key.len()
         );
+        // OPAQUE registration rides the challenge round trip: the server
+        // answers our RegistrationRequest under a fresh credential identifier
+        // bound to this challenge, and Register uploads the record.
+        let opaque_reg = opaque::registration_start(password)?;
         let challenge = auth_client
-            .request_registration_challenge(&username_hash, identity_public_key)
+            .request_registration_challenge(&username_hash, identity_public_key, &opaque_reg.request)
             .await
             .map_err(|e| {
                 tracing::error!("Challenge request failed: {}", e);
                 AuthError::RegistrationFailed(format!("challenge request failed: {}", e))
             })?;
+        let opaque_record = opaque::registration_finish_async(
+            opaque_reg,
+            password,
+            challenge.opaque_registration_response.clone(),
+        )
+        .await?;
 
-        // SECURITY: Sign the challenge nonce with our identity private key using XEdDSA
-        // This proves we actually possess the private key for the public key we're uploading
+        // SECURITY: prove possession of the identity key we're uploading. The
+        // signature is over a domain-separated message and a wrong-length nonce
+        // is refused, so the server cannot use this as a prekey signing oracle
+        // (see IdentityKeyManager::sign_registration_challenge).
         let challenge_response = self
             .identity_manager
-            .sign(&challenge.challenge_nonce)
-            .map_err(|e| AuthError::Crypto(e))?;
+            .sign_registration_challenge(&challenge.challenge_nonce)
+            .map_err(AuthError::Crypto)?;
 
         // Build Signal Protocol prekey bundle for server
         use crate::proto::chat_v1::signal_pre_key_bundle::{
@@ -912,13 +949,14 @@ impl AuthService {
         // SECURITY: challenge_id and response prove identity key possession
         //
         // Signal-style discovery hash: Ristretto255 commitment over the
-        // already-chosen `nickname.discriminator` (see `full_username` above).
-        let username_lookup = hash_username_lookup(&full_username)
+        // already-chosen `nickname.discriminator` (see `full_username` above),
+        // plus the zero-knowledge proof the server verifies it against.
+        let (username_lookup, username_proof) = username_claim(&full_username)
             .map_err(|e| AuthError::RegistrationFailed(format!("lookup hash failed: {e}")))?;
         let result = auth_client
             .register_and_wait(
                 &username_hash, // PRIVACY: Send hash, not plaintext username
-                password_hash.as_slice(),
+                &opaque_record, // OPAQUE RegistrationRecord: nothing password-equivalent
                 &encrypted_display_name,
                 &svr_public_key, // Derived from PIN
                 device_info,
@@ -930,6 +968,7 @@ impl AuthService {
                 &challenge_response,
                 &registration_lock, // SECURITY: Prevents account takeover without PIN
                 &username_lookup,
+                &username_proof,
             )
             .await;
 
@@ -1123,8 +1162,10 @@ impl AuthService {
 
     /// Change the user's password.
     ///
-    /// Requires the current password for verification and a new password.
-    /// Both passwords are hashed with SHA256 before sending to the server.
+    /// One OPAQUE exchange proving the current password and one OPAQUE
+    /// registration for the new one, in two round trips. The login identifier
+    /// does not change (it is nickname-derived). The server revokes every
+    /// other device session on success.
     pub async fn change_password(
         &self,
         current_password: &str,
@@ -1133,17 +1174,9 @@ impl AuthService {
         if !self.is_logged_in() {
             return Err(AuthError::NotLoggedIn);
         }
-
-        let current_hash = hash_password(current_password);
-        let new_hash = hash_password(new_password);
-
         let mut auth_client = self.try_auth_client()
             .ok_or_else(|| AuthError::Network(NetworkError::ConnectionFailed("Not connected to server".to_string())))?;
-        auth_client
-            .change_password(&current_hash, &new_hash)
-            .await?;
-
-        Ok(())
+        change_password_with(&mut auth_client, current_password, new_password).await
     }
 
     /// Clean up partial state after a failed registration attempt.
@@ -1180,9 +1213,10 @@ impl AuthService {
 
     /// Redeem a recovery code to reset password + PIN.
     ///
-    /// Validates inputs, derives the new SVR material + username hash from
-    /// `(new_password, new_pin, username)`, and calls the server's
-    /// recovery-code redemption RPC. Returns the number of recovery codes
+    /// Validates inputs, derives the new SVR material from `(new_pin,
+    /// username)` (`username` is the bare nickname, still needed to salt it),
+    /// and runs the two-step redemption: the code plus a fresh OPAQUE
+    /// registration for `new_password`. Returns the number of recovery codes
     /// that remain on the account. All sensitive intermediates are zeroized
     /// before return.
     pub async fn use_recovery_code(
@@ -1197,57 +1231,126 @@ impl AuthService {
 
         crate::crypto::svr::validate_pin(new_pin)
             .map_err(|e| AuthError::InvalidInput(e.to_string()))?;
-        // Recovery codes are 12 chars from the safe alphabet (~59.5 bits).
-        // Accept 12-char alphanumeric input and let the server reject any
-        // code that is no longer in its hash store.
-        if recovery_code.len() != 12 || !recovery_code.chars().all(|c| c.is_ascii_alphanumeric()) {
-            return Err(AuthError::InvalidInput(
-                "Recovery code must be exactly 12 alphanumeric characters".into(),
-            ));
-        }
-
-        let mut password_hash = hash_password(new_password).to_vec();
+        let recovery_code = normalize_recovery_code(recovery_code).ok_or_else(|| {
+            AuthError::InvalidInput(format!(
+                "Recovery code must be {RECOVERY_CODE_LEN} characters (letters and digits 2-9)"
+            ))
+        })?;
 
         let keypair = crate::crypto::svr::SvrKeypair::new_from_pin(new_pin, username)?;
         let svr_public_key = keypair.public_key_bytes();
 
         let mut registration_lock = crate::crypto::svr::derive_registration_lock(new_pin, username)?;
 
-        // Login lookup hash is profile-key-free (HKDF over SHA-256(password)),
-        // matching what the server stores in the username column.
-        let username_hash = hex::encode(derive_login_auth_hash(&password_hash, username));
+        // The server finds the account by the code itself. The new password is
+        // a fresh OPAQUE registration; the login identifier stays as it was.
+        let opaque_reg = opaque::registration_start(new_password)?;
+        let result = async {
+            let started = auth_client
+                .use_recovery_code_start(&recovery_code, &opaque_reg.request)
+                .await?;
+            let record =
+                opaque::registration_finish_async(opaque_reg, new_password, started.registration_response)
+                    .await?;
+            auth_client
+                .use_recovery_code_finish(&started.recovery_id, &record, &svr_public_key, &registration_lock)
+                .await
+                .map_err(AuthError::Network)
+        }
+        .await;
 
-        let result = auth_client
-            .use_recovery_code(
-                &username_hash,
-                recovery_code,
-                &password_hash,
-                &svr_public_key,
-                &registration_lock,
-            )
-            .await;
-
-        password_hash.zeroize();
         registration_lock.zeroize();
 
-        Ok(result.map_err(AuthError::Network)?)
+        result
     }
 
     /// Regenerate the caller's recovery codes.
     ///
-    /// Hashes the password, calls the server RPC, zeroizes the hash. Returns
-    /// the newly issued codes (caller must display them exactly once — codes
-    /// are never recoverable from the server).
+    /// Proves the password (OPAQUE, [`prove_password`]) and spends the proof
+    /// on the server RPC. Returns the newly issued codes (caller must display
+    /// them exactly once — codes are never recoverable from the server).
     pub async fn regenerate_recovery_codes(
         &self,
         auth_client: &mut AuthClient,
         password: &str,
     ) -> Result<Vec<String>, AuthError> {
-        use zeroize::Zeroize;
+        let proof = prove_password(auth_client, password).await?;
+        auth_client
+            .regenerate_recovery_codes(proof)
+            .await
+            .map_err(AuthError::Network)
+    }
+}
 
-        let mut password_hash = hash_password(password).to_vec();
-        let result = auth_client.regenerate_recovery_codes(&password_hash).await;
-        password_hash.zeroize();
-        result.map_err(AuthError::Network)
+/// Password change against `auth_client` (authenticated): KE1 for the current
+/// password plus the new password's RegistrationRequest, then KE3 plus the new
+/// RegistrationRecord. A wrong current password fails client-side, before the
+/// second round trip, with [`AuthError::InvalidCredentials`].
+pub(crate) async fn change_password_with(
+    auth_client: &mut AuthClient,
+    current_password: &str,
+    new_password: &str,
+) -> Result<(), AuthError> {
+    let proof = opaque::login_start(current_password)?;
+    let reg = opaque::registration_start(new_password)?;
+    let started = auth_client.change_password_start(&proof.ke1, &reg.request).await?;
+    let done = opaque::login_finish_async(proof, current_password, started.ke2).await?;
+    let record =
+        opaque::registration_finish_async(reg, new_password, started.registration_response).await?;
+    auth_client
+        .change_password_finish(&started.flow_id, &done.ke3, &record)
+        .await
+        .map_err(|e| match &e {
+            NetworkError::Unauthenticated => AuthError::InvalidCredentials,
+            _ => AuthError::Network(e),
+        })
+}
+
+/// Length of a recovery code (server `recoveryCodeLength`): 26 symbols from a
+/// 31-symbol alphabet, ~128.8 bits. The code alone identifies the account at
+/// recovery, so it has to be a full-strength secret.
+pub const RECOVERY_CODE_LEN: usize = 26;
+const RECOVERY_CODE_ALPHABET: &str = "ABCDEFGHJKMNPQRSTUVWXYZ23456789";
+
+/// Reduce a typed recovery code to the canonical form the server stores a
+/// digest of: separators (`-`, spaces) dropped, letters uppercased. `None`
+/// when the result is not exactly [`RECOVERY_CODE_LEN`] alphabet symbols.
+pub fn normalize_recovery_code(input: &str) -> Option<String> {
+    let code: String = input
+        .chars()
+        .filter(|c| !c.is_whitespace() && *c != '-')
+        .map(|c| c.to_ascii_uppercase())
+        .collect();
+    (code.len() == RECOVERY_CODE_LEN && code.chars().all(|c| RECOVERY_CODE_ALPHABET.contains(c)))
+        .then_some(code)
+}
+
+#[cfg(test)]
+mod recovery_code_tests {
+    use super::*;
+
+    #[test]
+    fn normalize_accepts_grouped_lowercase_and_spaced_input() {
+        let canonical = "ABCDEFGHJKMNPQRSTUVWXYZ234";
+        assert_eq!(normalize_recovery_code(canonical).as_deref(), Some(canonical));
+        assert_eq!(
+            normalize_recovery_code(" abcde-fghjk-mnpqr-stuvw-xyz234 ").as_deref(),
+            Some(canonical)
+        );
+        assert_eq!(
+            normalize_recovery_code("ABCDE FGHJK MNPQR STUVW XYZ234").as_deref(),
+            Some(canonical)
+        );
+    }
+
+    #[test]
+    fn normalize_rejects_wrong_length_and_ambiguous_symbols() {
+        // The old 12-character format is no longer a code.
+        assert!(normalize_recovery_code("ABCDEFGHJKMN").is_none());
+        assert!(normalize_recovery_code("ABCDEFGHJKMNPQRSTUVWXYZ2345").is_none());
+        // 0/O/1/I/L are excluded from the alphabet.
+        assert!(normalize_recovery_code("0BCDEFGHJKMNPQRSTUVWXYZ234").is_none());
+        assert!(normalize_recovery_code("IBCDEFGHJKMNPQRSTUVWXYZ234").is_none());
+        assert!(normalize_recovery_code("").is_none());
     }
 }

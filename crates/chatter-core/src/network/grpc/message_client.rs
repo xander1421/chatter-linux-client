@@ -32,7 +32,7 @@ use crate::proto::chat_v1::{
 /// pool.connect().await?;
 ///
 /// let mut client = MessageClient::new(pool.channel(), pool.auth_clone());
-/// let message = client.send_message("channel-123", content, None, false, None, vec![], false, vec![]).await?;
+/// let message = client.send_message("channel-123", content, None, false, None, vec![], false, vec![], Vec::new()).await?;
 /// ```
 pub struct MessageClient {
     inner: MessageServiceClient<InterceptedService<GrpcTransport, AuthInterceptor>>,
@@ -60,6 +60,8 @@ impl MessageClient {
     /// * `mentioned_integrations` - Integration IDs mentioned in message
     /// * `targets_ai_bot` - Whether message targets AI bot
     /// * `mentioned_file_ids` - File IDs mentioned in message
+    /// * `deletion_token_hash` - SHA-256 of this message's deletion token;
+    ///   required (32 bytes) for sealed-sender content, empty otherwise
     #[allow(clippy::too_many_arguments)]
     pub async fn send_message(
         &mut self,
@@ -71,6 +73,7 @@ impl MessageClient {
         mentioned_integrations: Vec<String>,
         targets_ai_bot: bool,
         mentioned_file_ids: Vec<String>,
+        deletion_token_hash: Vec<u8>,
     ) -> Result<Message, NetworkError> {
         let request = SendMessageRequest {
             channel_id: channel_id.to_string(),
@@ -82,6 +85,7 @@ impl MessageClient {
             mentioned_integrations,
             targets_ai_bot,
             mentioned_file_ids,
+            deletion_token_hash,
         };
 
         self.inner
@@ -124,15 +128,19 @@ impl MessageClient {
     ///
     /// * `message_id` - ID of message to delete
     /// * `channel_id` - Channel containing the message
+    /// * `deletion_token` - the sealed-sender message's deletion token (the
+    ///   preimage of the hash sent with it); empty for other messages
     pub async fn delete_message(
         &mut self,
         message_id: &str,
         channel_id: &str,
+        deletion_token: Vec<u8>,
     ) -> Result<(), NetworkError> {
         let request = DeleteMessageRequest {
             message_id: message_id.to_string(),
             channel_id: channel_id.to_string(),
             request_id: uuid::Uuid::new_v4().to_string(),
+            deletion_token,
         };
 
         self.inner
@@ -323,77 +331,6 @@ impl MessageClient {
         .await
     }
 
-    /// Send a sealed sender message to a group of recipients.
-    ///
-    /// For group messaging, the server validates that the sender knows all
-    /// recipients' UAKs by verifying a combined (XORed) UAK. This proves the
-    /// sender has legitimate access to send to all recipients.
-    ///
-    /// # Arguments
-    ///
-    /// * `recipient_user_ids` - List of recipient user IDs
-    /// * `sealed_messages` - Per-recipient sealed sender envelopes (same index as user IDs)
-    /// * `recipient_uaks` - Per-recipient 16-byte UAKs (same index as user IDs)
-    ///
-    /// # Returns
-    ///
-    /// Results for each recipient (success or failure).
-    ///
-    /// # Note
-    ///
-    /// This sends to all devices of each recipient (destination_device_id = 0).
-    /// The server handles fan-out to individual devices.
-    pub async fn send_sealed_message_to_group(
-        &mut self,
-        recipient_user_ids: &[&str],
-        sealed_messages: Vec<SealedSenderMessage>,
-        recipient_uaks: &[[u8; 16]],
-    ) -> Result<Vec<Result<SendSealedMessageResponse, NetworkError>>, NetworkError> {
-        use crate::crypto::signal::sealed_sender::combine_uaks_for_group;
-
-        if recipient_user_ids.len() != sealed_messages.len()
-            || recipient_user_ids.len() != recipient_uaks.len()
-        {
-            return Err(NetworkError::InvalidRequest(
-                "recipient_user_ids, sealed_messages, and recipient_uaks must have same length"
-                    .into(),
-            ));
-        }
-
-        if recipient_user_ids.is_empty() {
-            return Ok(vec![]);
-        }
-
-        // Combine all UAKs using XOR (Signal's group send validation)
-        let combined_uak = combine_uaks_for_group(recipient_uaks);
-
-        let mut results = Vec::with_capacity(recipient_user_ids.len());
-
-        // Send to each recipient with the combined UAK
-        for (i, (user_id, sealed_message)) in recipient_user_ids
-            .iter()
-            .zip(sealed_messages.into_iter())
-            .enumerate()
-        {
-            // For group sends, we use the combined UAK for all recipients
-            // The server validates XOR(all_recipient_uaks) == combined_uak
-            let result = self
-                .send_sealed_message_with_uak_and_group(
-                    user_id,
-                    0, // All devices
-                    sealed_message,
-                    &combined_uak,
-                    recipient_user_ids,
-                    i,
-                )
-                .await;
-
-            results.push(result);
-        }
-
-        Ok(results)
-    }
-
     /// Internal helper to send sealed message with UAK header.
     async fn send_sealed_message_with_uak(
         &mut self,
@@ -433,63 +370,6 @@ impl MessageClient {
                 .parse()
                 .map_err(|_| NetworkError::InvalidRequest("invalid user ID".into()))?,
         );
-
-        self.inner
-            .send_sealed_message(request)
-            .await
-            .map(|r| r.into_inner())
-            .map_err(|s| NetworkError::from_status(&s))
-    }
-
-    /// Internal helper for group sealed sender with combined UAK.
-    #[allow(clippy::too_many_arguments)]
-    async fn send_sealed_message_with_uak_and_group(
-        &mut self,
-        destination_user_id: &str,
-        destination_device_id: u32,
-        sealed_message: SealedSenderMessage,
-        combined_uak: &[u8],
-        all_recipients: &[&str],
-        _recipient_index: usize,
-    ) -> Result<SendSealedMessageResponse, NetworkError> {
-        use base64::Engine;
-        use tonic::Request;
-
-        let proto_request = SendSealedMessageRequest {
-            destination_user_id: destination_user_id.to_string(),
-            destination_device_id,
-            sealed_message: Some(sealed_message),
-            client_request_id: uuid::Uuid::new_v4().to_string(),
-            envelope_type: 0, // Default: server determines from content
-            device_set: Vec::new(),
-        };
-
-        let mut request = Request::new(proto_request);
-
-        // Add combined UAK for group validation
-        let uak_b64 = base64::engine::general_purpose::STANDARD.encode(combined_uak);
-        request.metadata_mut().insert(
-            "unidentified-access-key",
-            uak_b64
-                .parse()
-                .map_err(|_| NetworkError::InvalidRequest("invalid UAK encoding".into()))?,
-        );
-
-        // Add destination user header
-        request.metadata_mut().insert(
-            "x-destination-user-id",
-            destination_user_id
-                .parse()
-                .map_err(|_| NetworkError::InvalidRequest("invalid user ID".into()))?,
-        );
-
-        // Add group recipients header for server-side XOR validation
-        let recipients_json = serde_json::to_string(all_recipients).unwrap_or_default();
-        if let Ok(header_value) = recipients_json.parse() {
-            request
-                .metadata_mut()
-                .insert("x-group-recipients", header_value);
-        }
 
         self.inner
             .send_sealed_message(request)
@@ -878,29 +758,6 @@ mod tests {
 
         assert_eq!(sealed_msg.server_key_id, 1);
         assert_eq!(sealed_msg.sealed_body.len(), 128);
-    }
-
-    #[test]
-    fn test_uak_for_sealed_sender() {
-        use crate::crypto::derive_uak;
-        use crate::crypto::signal::sealed_sender::{combine_uaks_for_group, UAK_LENGTH};
-
-        let profile_key_1 = [0x11u8; 32];
-        let profile_key_2 = [0x22u8; 32];
-
-        let uak1 = derive_uak(&profile_key_1);
-        let uak2 = derive_uak(&profile_key_2);
-
-        assert_eq!(uak1.len(), UAK_LENGTH);
-        assert_eq!(uak2.len(), UAK_LENGTH);
-        assert_ne!(uak1, uak2);
-
-        let combined = combine_uaks_for_group(&[uak1, uak2]);
-        assert_eq!(combined.len(), UAK_LENGTH);
-
-        // XOR is reversible: combined XOR uak1 == uak2
-        let reversed: [u8; 16] = std::array::from_fn(|i| combined[i] ^ uak1[i]);
-        assert_eq!(reversed, uak2);
     }
 }
 

@@ -113,13 +113,14 @@ async fn rotating_our_key_keeps_the_keys_members_sent_us() {
 
     // Bob has his own key, handed to Alice; then rotates it (member left).
     let _ = send(&bob, &channel, b"bob0").await;
-    bob.svc.mark_sender_key_delivered(&channel, &alice.user_id.to_string()).unwrap();
+    bob.svc.mark_sender_key_held(&channel, &alice.user_id.to_string(), &[(1, 7)]).unwrap();
+    assert!(!bob.svc.sender_key_holders(&channel).unwrap().is_empty());
     let old_bob_skdm = bob.svc.create_sender_key(&channel).await.unwrap();
     let new_bob_skdm = bob.svc.rotate_sender_key(&channel).await.unwrap();
     assert_ne!(old_bob_skdm.distribution_message, new_bob_skdm.distribution_message);
 
     // A fresh key has reached nobody yet.
-    assert!(bob.svc.sender_key_recipients(&channel).unwrap().is_empty());
+    assert!(bob.svc.sender_key_holders(&channel).unwrap().is_empty());
 
     // Alice's chain did not rotate, so Bob still reads her.
     let m = send(&alice, &channel, b"after bob rotated").await;

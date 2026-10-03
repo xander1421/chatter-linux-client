@@ -1,14 +1,15 @@
 //! DM bootstrap event handler.
 //!
 //! Subscribes to domain events and handles KeyExchangeReceived events
-//! to complete the DM bootstrap protocol. When a bootstrap message (64 bytes)
-//! is received, creates our mailbox and sends response to peer.
+//! to complete the DM bootstrap protocol. When a bootstrap message (a
+//! `MailboxAnnouncement`) is received, creates our mailbox and sends response to peer.
 //!
 //! # Protocol (NDSS '21)
 //!
 //! The response uses two encryption layers:
 //! 1. **Content Layer**: Signal Protocol (X3DH/Double Ratchet) with peer's identity
-//! 2. **Transport Layer**: Envelope encryption using ECDH(our_identity, peer_mailbox_ephemeral)
+//! 2. **Transport Layer**: HPKE envelope sealed to the peer mailbox's X25519
+//!    encryption key (fresh ephemeral per seal; never the mailbox signing key)
 //!
 //! The transport layer is stateless and ensures only the mailbox owner can decrypt.
 //!
@@ -115,10 +116,11 @@ pub fn spawn_dm_bootstrap_handler_with_receiver(
                         timestamp: _,
                     }) => {
                         // Check key length to determine message type:
-                        // - 64 bytes = bootstrap message (mailbox + conversation key)
+                        // - MailboxAnnouncement::LEN = bootstrap message
+                        //   (mailbox + conversation key + mailbox encryption key)
                         // - 0 bytes = bootstrap REQUEST (peer wants us to initiate)
                         // - 32 bytes = regular key exchange response
-                        if ephemeral_public_key.len() == 64 {
+                        if DmBootstrap::is_bootstrap_message(&ephemeral_public_key) {
                         // Check if bootstrap is already in progress for this peer
                         {
                             let mut guard = in_progress.lock().await;
@@ -135,7 +137,7 @@ pub fn spawn_dm_bootstrap_handler_with_receiver(
                         tracing::info!(
                             peer = %sender_id,
                             key_len = ephemeral_public_key.len(),
-                            "BOOTSTRAP[3/4] Received 64-byte KeyExchange = bootstrap MESSAGE from peer"
+                            "BOOTSTRAP[3/4] Received mailbox-announcement KeyExchange = bootstrap MESSAGE from peer"
                         );
 
                         let database = database.clone();
@@ -357,7 +359,7 @@ async fn handle_bootstrap_request_async(
         peer = %peer_id,
         mailbox_id = %bootstrap_result.our_mailbox.id,
         bootstrap_msg_len = bootstrap_result.bootstrap_message.len(),
-        "BOOTSTRAP[2/4] Created mailbox, now encrypting 64-byte MESSAGE for peer"
+        "BOOTSTRAP[2/4] Created mailbox, now encrypting announcement MESSAGE for peer"
     );
 
     // Encrypt bootstrap message with Signal Protocol
@@ -402,7 +404,7 @@ async fn handle_bootstrap_request_async(
 
     tracing::info!(
         peer = %peer_id,
-        "BOOTSTRAP[2/4] SUCCESS - 64-byte MESSAGE sent to peer's device inbox"
+        "BOOTSTRAP[2/4] SUCCESS - announcement MESSAGE sent to peer's device inbox"
     );
     tracing::info!(
         peer = %peer_id,
@@ -428,7 +430,7 @@ async fn handle_bootstrap_async(
     tracing::info!(
         peer = %peer_id,
         key_len = ephemeral_public_key.len(),
-        "BOOTSTRAP[3/4] Processing 64-byte MESSAGE - will send RESPONSE"
+        "BOOTSTRAP[3/4] Processing announcement MESSAGE - will send RESPONSE"
     );
 
     // Get channel and auth interceptor from pool
@@ -542,11 +544,10 @@ pub(crate) async fn send_pending_messages_after_bootstrap(
     message_service: &MessageService,
 ) -> Option<PendingFlush> {
     use prost::Message as ProstMessage;
-    use crate::crypto::signal::sesame::{SesameManager, SqliteSesameStore};
     use crate::mailbox::dm::DmConversationManager;
+    use crate::storage::repositories::PendingDmRepository;
 
-    let sesame_manager = SesameManager::new(SqliteSesameStore::new(database.clone()));
-    let pending = match sesame_manager.drain_pending_messages(&peer_id) {
+    let pending = match PendingDmRepository::new(database.clone()).drain(&peer_id) {
         Ok(msgs) => msgs,
         Err(e) => {
             tracing::error!(peer = %peer_id, error = %e, "BOOTSTRAP[3/4] Failed to drain pending messages");
@@ -700,7 +701,8 @@ pub async fn seal_for_peer_mailbox(
 /// Send bootstrap response with proper two-layer encryption.
 ///
 /// Layer 1 (Content): Signal Protocol encryption to peer's identity
-/// Layer 2 (Transport): Envelope encryption using ECDH(fresh_ephemeral, peer_mailbox)
+/// Layer 2 (Transport): HPKE envelope sealed to the peer mailbox's X25519
+/// encryption key (not its Ed25519 address)
 ///
 /// IMPORTANT: Uses the shared SignalService instance to ensure session counters
 /// stay in sync with pending message sending.
@@ -734,7 +736,8 @@ async fn send_bootstrap_response_with_envelope(
         "Encrypted bootstrap response content with Signal Protocol"
     );
 
-    // Layer 2: Wrap in an envelope encrypted with ECDH(fresh_ephemeral, peer_mailbox).
+    // Layer 2: Wrap in an HPKE envelope sealed to the peer mailbox's
+    // encryption key (announced beside its address in the bootstrap MESSAGE).
     // The envelope carries NO long-term key: its 32-byte prefix is a per-message
     // ephemeral public key, so the unauthenticated deposit below does not name us.
     // The initiator can only decrypt the Signal layer against OUR device's
@@ -745,7 +748,7 @@ async fn send_bootstrap_response_with_envelope(
         signal_ciphertext,
     }
     .encode_to_vec();
-    let envelope = encrypt_envelope(&frame, &response.peer_mailbox_public_key)
+    let envelope = encrypt_envelope(&frame, &response.peer_mailbox_encryption_key)
         .map_err(|e| format!("Failed to encrypt envelope: {}", e))?;
 
     tracing::debug!(
@@ -773,18 +776,4 @@ async fn send_bootstrap_response_with_envelope(
     );
 
     Ok(())
-}
-
-#[cfg(test)]
-mod tests {
-    #[test]
-    fn test_bootstrap_message_detection() {
-        // 64-byte keys are bootstrap messages
-        let bootstrap_key = vec![0u8; 64];
-        assert_eq!(bootstrap_key.len(), 64);
-
-        // 32-byte keys are regular key exchanges
-        let regular_key = vec![0u8; 32];
-        assert_eq!(regular_key.len(), 32);
-    }
 }

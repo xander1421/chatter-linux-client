@@ -114,10 +114,9 @@ async fn test_e2e_channel_message_reaches_device() {
             &channel_name,
             ChannelType::ChannelPublic,
             None,
-            vec![],
-            None,
             Some("E2E multi-device test"),
             None,
+            Some(membership::genesis(&user, true).1),
         )
         .await
         .expect("Create channel");
@@ -144,7 +143,7 @@ async fn test_e2e_channel_message_reaches_device() {
 
     let message = assert_ok(
         msg_client
-            .send_message(&channel_id, content, None, false, None, vec![], false, vec![])
+            .send_message(&channel_id, content, None, false, None, vec![], false, vec![], Vec::new())
             .await,
     );
 

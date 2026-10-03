@@ -68,8 +68,8 @@ pub enum InboxEvent {
         peer_id: UserId,
         /// Error description.
         error: String,
-        /// Whether all sessions were tried (Sesame convergence failed).
-        convergence_failed: bool,
+        /// The session with this peer is desynced: reset it (archive, rebuild).
+        session_desync: bool,
     },
     /// A 1:1 inner decrypt failed (desynced session) and a
     /// `DecryptionErrorMessage` must be shipped back to the sender so their
@@ -143,6 +143,9 @@ pub enum InboxEvent {
         target_author_aci: String,
         /// Target message timestamp.
         target_sent_timestamp: u64,
+        /// When the action was made (its own `timestamp`, else the server's;
+        /// epoch nanos): orders actions held for a message not here yet.
+        timestamp: u64,
     },
     /// Pin/unpin received.
     DmPin {
@@ -154,6 +157,9 @@ pub enum InboxEvent {
         target_sent_timestamp: u64,
         /// True if unpinning.
         unpin: bool,
+        /// When the action was made (its own `timestamp`, else the server's;
+        /// epoch nanos): orders actions held for a message not here yet.
+        timestamp: u64,
     },
     /// Message edit received.
     DmEdit {
@@ -163,6 +169,12 @@ pub enum InboxEvent {
         target_sent_timestamp: u64,
         /// New message body.
         new_body: String,
+        /// The edit's own time (`EditMessage.data_message.timestamp`, epoch
+        /// nanos): orders edits and dates the bubble.
+        edit_timestamp: u64,
+        /// When the server received the edit (epoch nanos; 0 if unknown):
+        /// the 48h edit window is measured on it, as Signal does.
+        server_timestamp: u64,
     },
     /// Saved message synced from another device (Note to Self). `sender_id`
     /// is the sealed-sender identity; only our own is accepted.
@@ -228,6 +240,9 @@ pub enum InboxEvent {
         target_author_aci: String,
         /// Target message timestamp.
         target_sent_timestamp: u64,
+        /// When the action was made (its own `timestamp`, else the server's;
+        /// epoch nanos): orders actions held for a message not here yet.
+        timestamp: u64,
     },
     /// Pin/unpin received from channel member.
     ChannelPin {
@@ -241,6 +256,9 @@ pub enum InboxEvent {
         target_sent_timestamp: u64,
         /// True if unpinning.
         unpin: bool,
+        /// When the action was made (its own `timestamp`, else the server's;
+        /// epoch nanos): orders actions held for a message not here yet.
+        timestamp: u64,
     },
     /// Message edit received from channel member.
     ChannelEdit {
@@ -252,6 +270,10 @@ pub enum InboxEvent {
         target_sent_timestamp: u64,
         /// New message body.
         new_body: String,
+        /// The edit's own time; see [`InboxEvent::DmEdit`].
+        edit_timestamp: u64,
+        /// When the server received the edit; see [`InboxEvent::DmEdit`].
+        server_timestamp: u64,
     },
     /// Delete for everyone received from channel member.
     ChannelDeleteForEveryone {
@@ -273,6 +295,12 @@ pub enum InboxEvent {
     ProfileKeySync {
         sender_id: UserId,
         sync: crate::proto::content_v1::ProfileKeySync,
+    },
+    /// Our privacy settings from another of our devices
+    /// (`ConfigurationSync`). Only our own user may send one.
+    ConfigurationSync {
+        sender_id: UserId,
+        sync: crate::proto::content_v1::ConfigurationSync,
     },
     /// Delete-for-me from another of our devices (DM or channel).
     /// `sender_id` is the sealed sender: only our own user may send one.

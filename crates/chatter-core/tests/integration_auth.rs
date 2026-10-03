@@ -5,7 +5,6 @@
 
 use crate::{common, skip_if_no_server};
 
-use sha2::{Digest, Sha256};
 use tokio_stream::StreamExt;
 
 use chatter_core::error::NetworkError;
@@ -71,34 +70,56 @@ async fn test_register_user_stream() {
         unrestricted_unidentified_access: Some(false),
     };
 
-    let password_hash = random_password_hash();
-    // libsignal's `Username::new` requires `nickname.discriminator` grammar
-    // and `register_test_user` skips it by using the (permissive) login auth
-    // hash as the username-lookup hash. Mirror that here so the test username
-    // doesn't need Signal grammar.
-    let username_lookup_hash =
-        chatter_core::crypto::auth_crypto::derive_login_auth_hash(&password_hash, &username);
-    let username_hash_hex = hex::encode(username_lookup_hash);
+    let password = random_password();
+    let username_hash_hex = chatter_core::crypto::auth_crypto::login_identifier(&username);
+    // Discovery hash + the ZK proof the server verifies it against, over a
+    // Signal-grammar `nickname.discriminator` (as `register_test_user` does).
+    let full_username = chatter_core::crypto::auth_crypto::username_candidates(&username)
+        .expect("test nickname is Signal-grammar")
+        .remove(0);
+    let (username_lookup_hash, username_proof) =
+        chatter_core::crypto::auth_crypto::username_claim(&full_username)
+            .expect("candidate is Signal-grammar");
 
     // Server now requires a registration challenge proving identity-key
-    // possession. Mirror what `register_test_user` does: request a nonce and
-    // sign it with the identity private key.
+    // possession, and the OPAQUE registration rides it. Mirror what
+    // `register_test_user` does: request a nonce with the RegistrationRequest
+    // and sign the domain-separated message (registration_challenge_message).
     let identity_public_key_stripped = &identity_public_key[1..]; // strip 0x05 type byte
+    let opaque_reg = chatter_core::crypto::opaque::registration_start(&password).unwrap();
     let challenge = assert_ok(
         auth_client
-            .request_registration_challenge(&username_hash_hex, identity_public_key_stripped)
+            .request_registration_challenge(
+                &username_hash_hex,
+                identity_public_key_stripped,
+                &opaque_reg.request,
+            )
             .await,
     );
+    let opaque_record = chatter_core::crypto::opaque::registration_finish_async(
+        opaque_reg,
+        &password,
+        challenge.opaque_registration_response.clone(),
+    )
+    .await
+    .expect("OPAQUE registration finishes against the server's response");
+    assert_eq!(opaque_record.len(), 192);
     let challenge_response = identity_key_pair
         .private_key()
-        .calculate_signature(&challenge.challenge_nonce, &mut rand::rng())
+        .calculate_signature(
+            &chatter_core::crypto::signal::identity::registration_challenge_message(
+                &challenge.challenge_nonce,
+            )
+            .expect("server nonce must be REGISTRATION_CHALLENGE_NONCE_LEN bytes"),
+            &mut rand::rng(),
+        )
         .expect("XEdDSA challenge signing should succeed");
 
     let stream = assert_ok(
         auth_client
             .register(
                 &username_hash_hex,
-                &password_hash,
+                &opaque_record,
                 &encrypted_display_name,
                 identity_public_key.as_ref(),
                 "integration-test",
@@ -110,6 +131,7 @@ async fn test_register_user_stream() {
                 &challenge_response,
                 &[0u8; 32], // Empty registration lock for tests
                 &username_lookup_hash,
+                &username_proof,
             )
             .await,
     );
@@ -201,26 +223,43 @@ async fn test_register_duplicate_username() {
     let dup_profile_key = random_profile_key();
     let dup_encrypted_name = encrypt_test_display_name(&dup_profile_key, "Duplicate User");
     let dup_uak = chatter_core::crypto::derive_uak(&dup_profile_key);
-    // Mirror `register_test_user`: use the login auth hash as the username
-    // lookup hash so non-Signal-grammar test usernames are accepted. The
-    // server enforces uniqueness on the lookup hash, so we must reuse the
-    // first user's password hash here — otherwise the second hash differs
-    // and the server treats it as a brand-new account.
-    let dup_password_hash = user.password_hash.clone();
-    let dup_username_lookup_hash =
-        chatter_core::crypto::auth_crypto::derive_login_auth_hash(&dup_password_hash, &user.username);
-    let dup_username_hash_hex = hex::encode(dup_username_lookup_hash);
+    // Same nickname => same login identifier (the `username` field the
+    // registration-lock check keys on). The discovery hash must carry a
+    // verifying username proof or the server rejects the request before it
+    // reaches the registration-lock check.
+    let dup_username_hash_hex = chatter_core::crypto::auth_crypto::login_identifier(&user.username);
+    let (dup_username_lookup_hash, dup_username_proof) =
+        chatter_core::crypto::auth_crypto::username_claim(&user.full_username)
+            .expect("fixture full_username is Signal-grammar");
 
     // Registration challenge required by server.
     let identity_public_key_stripped = &identity_public_key[1..]; // strip 0x05 type byte
+    let dup_reg = chatter_core::crypto::opaque::registration_start("another password").unwrap();
     let challenge = assert_ok(
         auth_client
-            .request_registration_challenge(&dup_username_hash_hex, identity_public_key_stripped)
+            .request_registration_challenge(
+                &dup_username_hash_hex,
+                identity_public_key_stripped,
+                &dup_reg.request,
+            )
             .await,
     );
+    let dup_record = chatter_core::crypto::opaque::registration_finish_async(
+        dup_reg,
+        "another password",
+        challenge.opaque_registration_response.clone(),
+    )
+    .await
+    .unwrap();
     let challenge_response = identity_key_pair
         .private_key()
-        .calculate_signature(&challenge.challenge_nonce, &mut rand::rng())
+        .calculate_signature(
+            &chatter_core::crypto::signal::identity::registration_challenge_message(
+                &challenge.challenge_nonce,
+            )
+            .expect("server nonce must be REGISTRATION_CHALLENGE_NONCE_LEN bytes"),
+            &mut rand::rng(),
+        )
         .expect("XEdDSA challenge signing should succeed");
 
     // Use a DIFFERENT registration lock than the original. The server treats
@@ -232,7 +271,7 @@ async fn test_register_duplicate_username() {
     let result = auth_client
         .register_and_wait(
             &dup_username_hash_hex,
-            &dup_password_hash,
+            &dup_record,
             &dup_encrypted_name,
             identity_public_key.as_ref(),
             "test-device",
@@ -244,6 +283,7 @@ async fn test_register_duplicate_username() {
             &challenge_response,
             &dup_registration_lock,
             &dup_username_lookup_hash,
+            &dup_username_proof,
         )
         .await;
 
@@ -279,27 +319,19 @@ async fn test_login_success() {
     let pool = assert_ok(create_test_pool().await);
     let user = assert_ok(register_test_user(&pool).await);
 
-    // Login with the same credentials. Server expects the password-keyed
-    // login lookup hash (hex), not the plaintext username — mirror what
-    // `AuthService::login` does in the SDK.
-    let username_hash = hex::encode(
-        chatter_core::crypto::auth_crypto::derive_login_auth_hash(
-            &user.password_hash,
-            &user.username,
-        ),
-    );
+    // OPAQUE login with the same nickname + password, as `AuthService::login`.
     let mut auth_client = AuthClient::new(pool.channel(), pool.auth_clone());
     let response = assert_ok(
-        auth_client
-            .login(
-                &username_hash,
-                &user.password_hash,
-                "test-device-login",
-                &user.public_key,
-                &user.device_auth_token,
-                Some(user.device_id),
-            )
-            .await,
+        opaque_login(
+            &mut auth_client,
+            &user.username,
+            &user.password,
+            "test-device-login",
+            &random_svr_public_key(),
+            &user.device_auth_token,
+            Some(user.device_id),
+        )
+        .await,
     );
 
     // AuthResponse contains session and user_profile
@@ -316,48 +348,79 @@ async fn test_login_wrong_password() {
     let pool = assert_ok(create_test_pool().await);
     let user = assert_ok(register_test_user(&pool).await);
 
-    // Login with wrong password
-    let wrong_password = Sha256::digest(b"wrong_password").to_vec();
     let mut auth_client = AuthClient::new(pool.channel(), pool.auth_clone());
-    let result = auth_client
-        .login(
-            &user.username,
-            &wrong_password,
-            "test-device",
-            &user.public_key,
-            &user.device_auth_token,
-            None,
-        )
-        .await;
+    let result = opaque_login(
+        &mut auth_client,
+        &user.username,
+        "wrong_password",
+        "test-device",
+        &random_svr_public_key(),
+        &user.device_auth_token,
+        None,
+    )
+    .await;
 
-    // Should fail with auth error
+    // The client cannot open KE2 with a wrong password.
     assert_auth_error(result);
 }
 
+/// An unknown nickname is answered exactly like a real one: LoginStart
+/// succeeds with a full-size KE2 (from the server's fake record), and the
+/// login then fails the same way a wrong password does.
 #[tokio::test]
-async fn test_login_nonexistent_user() {
+async fn test_login_nonexistent_user_is_indistinguishable() {
     skip_if_no_server!();
 
     let pool = assert_ok(create_test_pool().await);
     let mut auth_client = AuthClient::new(pool.channel(), pool.auth_clone());
 
-    let result = auth_client
-        .login(
-            "nonexistent_user_12345",
-            &random_password_hash(),
-            "test-device",
-            &random_public_key(),
-            &random_device_auth_token(),
-            None,
-        )
-        .await;
+    let start = chatter_core::crypto::opaque::login_start("any password").unwrap();
+    let identifier = chatter_core::crypto::auth_crypto::login_identifier(&unique_username());
+    let started = assert_ok(auth_client.login_start(&identifier, &start.ke1).await);
+    assert_eq!(started.ke2.len(), 320, "fake KE2 has the real KE2's size");
+    assert!(matches!(
+        chatter_core::crypto::opaque::login_finish_async(start, "any password", started.ke2).await,
+        Err(chatter_core::crypto::opaque::OpaqueError::InvalidLogin)
+    ));
 
-    // Should fail with not found or auth error
-    match result {
-        Err(NetworkError::NotFound(_)) | Err(NetworkError::Unauthenticated) => {}
-        Err(e) => panic!("Expected NotFound or Unauthenticated, got: {:?}", e),
-        Ok(_) => panic!("Expected error, got Ok"),
-    }
+    let result = opaque_login(
+        &mut auth_client,
+        &unique_username(),
+        "any password",
+        "test-device",
+        &random_svr_public_key(),
+        &random_device_auth_token(),
+        None,
+    )
+    .await;
+    assert_auth_error(result);
+}
+
+/// A LoginFinish is single-use: replaying the same login_id + KE3 fails.
+#[tokio::test]
+async fn test_login_finish_replay_rejected() {
+    skip_if_no_server!();
+
+    let pool = assert_ok(create_test_pool().await);
+    let user = assert_ok(register_test_user(&pool).await);
+    let mut auth_client = AuthClient::new(pool.channel(), pool.auth_clone());
+
+    let start = chatter_core::crypto::opaque::login_start(&user.password).unwrap();
+    let identifier = chatter_core::crypto::auth_crypto::login_identifier(&user.username);
+    let started = assert_ok(auth_client.login_start(&identifier, &start.ke1).await);
+    let done = chatter_core::crypto::opaque::login_finish_async(start, &user.password, started.ke2)
+        .await
+        .expect("right password opens KE2");
+    let svr = random_svr_public_key();
+    assert_ok(
+        auth_client
+            .login_finish(&started.login_id, &done.ke3, "d1", &svr, &random_device_auth_token(), None)
+            .await,
+    );
+    let replay = auth_client
+        .login_finish(&started.login_id, &done.ke3, "d2", &svr, &random_device_auth_token(), None)
+        .await;
+    assert_auth_error(replay);
 }
 
 // ============================================================================
@@ -453,7 +516,7 @@ async fn test_request_sender_certificate() {
     let _ = user.device_id; // server reads device_id from auth session
     let response = assert_ok(
         auth_client
-            .request_sender_certificate(None)
+            .request_sender_certificate()
             .await,
     );
 
@@ -475,24 +538,53 @@ async fn test_change_password() {
 
     let pool = assert_ok(create_test_pool().await);
     let user = assert_ok(setup_authenticated_test(&pool).await);
-
-    let new_password_hash = Sha256::digest(b"new_secure_password").to_vec();
-
+    let new_password = "new_secure_password";
     let mut auth_client = AuthClient::new(pool.channel(), pool.auth_clone());
-    let result = auth_client
-        .change_password(&user.password_hash, &new_password_hash)
-        .await;
 
-    assert!(result.is_ok(), "Password change should succeed: {:?}", result.err());
+    // OPAQUE: KE1 for the current password + RegistrationRequest for the new,
+    // then KE3 + RegistrationRecord.
+    let proof = chatter_core::crypto::opaque::login_start(&user.password).unwrap();
+    let reg = chatter_core::crypto::opaque::registration_start(new_password).unwrap();
+    let started = assert_ok(auth_client.change_password_start(&proof.ke1, &reg.request).await);
+    let done = chatter_core::crypto::opaque::login_finish_async(proof, &user.password, started.ke2)
+        .await
+        .expect("current password opens KE2");
+    let record = chatter_core::crypto::opaque::registration_finish_async(
+        reg,
+        new_password,
+        started.registration_response,
+    )
+    .await
+    .unwrap();
+    assert_ok(auth_client.change_password_finish(&started.flow_id, &done.ke3, &record).await);
 
-    // NOTE: We deliberately do NOT verify we can log in again with the new
-    // password here. The server's `username` lookup column is the *password-
-    // keyed* login auth hash (hex(derive_login_auth_hash(password, name))),
-    // and `UpdateUserPassword` only rotates the password column — it does
-    // not rewrite that lookup row. After a password change, login with the
-    // newly-derived username hash returns Unauthenticated until the SDK
-    // adds an explicit "rotate-username-hash" step on password change.
-    // That gap is tracked separately; it is not what this test exercises.
+    // The account must now be reachable with the new password only, under
+    // the SAME login identifier (it is nickname-derived).
+    let old = opaque_login(
+        &mut auth_client,
+        &user.username,
+        &user.password,
+        "test-device-old-password",
+        &random_svr_public_key(),
+        &user.device_auth_token,
+        Some(user.device_id),
+    )
+    .await;
+    assert_auth_error(old);
+    let response = assert_ok(
+        opaque_login(
+            &mut auth_client,
+            &user.username,
+            new_password,
+            "test-device-after-password-change",
+            &random_svr_public_key(),
+            &user.device_auth_token,
+            Some(user.device_id),
+        )
+        .await,
+    );
+    let profile = response.user_profile.expect("login returns the profile");
+    assert_eq!(profile.user_id, user.user_id);
 }
 
 // ============================================================================

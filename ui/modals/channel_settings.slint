@@ -11,6 +11,7 @@ import { Input } from "../components/input.slint";
 import { ToggleRow } from "../components/toggle_row.slint";
 import { DisappearingGlobal } from "../chat/disappearing_global.slint";
 import { ScrollView } from "std-widgets.slint";
+import { MembershipGlobal } from "../chat/membership_global.slint";
 
 // Member data for the member list
 export struct ChannelMemberData {
@@ -28,6 +29,9 @@ export struct ChannelMemberData {
     can-mute: bool,
     // Only the owner may hand the channel to this member.
     can-make-owner: bool,
+    // Listed by the server but outside the verified membership: gets no
+    // sender keys. Decided in core (`is_unverified_channel_member`).
+    unverified: bool,
 }
 
 // A banned user in the members pane's Banned list.
@@ -162,6 +166,12 @@ export component ChannelSettingsModal inherits Rectangle {
         }
     }
 
+    // Channels with a signed membership log get the Access pane.
+    property <bool> has-access-pane: root.channel-type == "public" || root.channel-type == "private";
+    // Approval toggle for the next link created.
+    property <bool> link-needs-approval: false;
+    changed channel-id => { self.link-needs-approval = false; }
+
     // Phone-width layout switch. No media queries in Slint; this is the one
     // place the breakpoint is decided (§112z).
     property <bool> narrow: root.width < 560px;
@@ -288,6 +298,37 @@ export component ChannelSettingsModal inherits Rectangle {
                                 if !root.narrow: Text {
                                     text: "Members";
                                     color: root.active-section == "members" ? Colors.text-primary : Colors.text-secondary;
+                                    font-size: Typography.sm;
+                                    vertical-alignment: center;
+                                }
+                            }
+                        }
+                    }
+
+                    // Access section — join links, join requests, who can read.
+                    if root.has-access-pane: Rectangle {
+                        height: root.narrow ? Spacing.touch-target-min : Spacing.button-height;
+                        background: root.active-section == "access" ? Colors.surface-hover : transparent;
+                        border-radius: Spacing.radius-sm;
+
+                        TouchArea {
+                            clicked => { root.active-section = "access"; }
+
+                            HorizontalLayout {
+                                padding-left: Spacing.sm;
+                                padding-right: Spacing.sm;
+                                alignment: start;
+
+                                Image {
+                                    source: Icons.link;
+                                    width: 14px;
+                                    height: 14px;
+                                    colorize: root.active-section == "access" ? Colors.text-primary : Colors.text-secondary;
+                                }
+                                Rectangle { width: Spacing.sm; }
+                                if !root.narrow: Text {
+                                    text: "Access";
+                                    color: root.active-section == "access" ? Colors.text-primary : Colors.text-secondary;
                                     font-size: Typography.sm;
                                     vertical-alignment: center;
                                 }
@@ -723,6 +764,199 @@ export component ChannelSettingsModal inherits Rectangle {
                             }
                         }
 
+                        // ========== Access Section ==========
+                        // Everything here is shaped by chatter-core
+                        // (`ChatterClient::channel_access_view`).
+                        if root.active-section == "access": VerticalLayout {
+                            spacing: Spacing.md;
+
+                            Text {
+                                text: "Access";
+                                color: Colors.text-primary;
+                                font-size: Typography.lg;
+                                font-weight: Typography.semibold;
+                                wrap: word-wrap;
+                            }
+
+                            if MembershipGlobal.access-public-badge != "": Rectangle {
+                                height: public-text.preferred-height + Spacing.sm * 2;
+                                background: Colors.warning.with-alpha(0.12);
+                                border-radius: Spacing.radius-sm;
+                                public-text := Text {
+                                    x: Spacing.sm;
+                                    width: parent.width - Spacing.sm * 2;
+                                    text: MembershipGlobal.access-public-badge;
+                                    color: Colors.text-primary;
+                                    font-size: Typography.sm;
+                                    vertical-alignment: center;
+                                    wrap: word-wrap;
+                                }
+                            }
+
+                            // Server-run readers (AI integrations): not members
+                            // anyone signed in, but they read this channel.
+                            for bot in MembershipGlobal.server-operated: HorizontalLayout {
+                                spacing: Spacing.sm;
+                                Image {
+                                    source: Icons.sparkles;
+                                    width: 16px;
+                                    height: 16px;
+                                    y: (parent.height - self.height) / 2;
+                                    colorize: Colors.warning;
+                                }
+                                VerticalLayout {
+                                    horizontal-stretch: 1;
+                                    min-width: 0px;
+                                    Text {
+                                        text: bot.name;
+                                        color: Colors.text-primary;
+                                        font-size: Typography.sm;
+                                        overflow: elide;
+                                    }
+                                    Text {
+                                        text: bot.label;
+                                        color: Colors.warning;
+                                        font-size: Typography.xs;
+                                        wrap: word-wrap;
+                                    }
+                                }
+                            }
+
+                            // ---- Join links ----
+                            if MembershipGlobal.can-manage-invites: VerticalLayout {
+                                spacing: Spacing.sm;
+
+                                Text {
+                                    text: "Join links";
+                                    color: Colors.text-secondary;
+                                    font-size: Typography.sm;
+                                    font-weight: Typography.medium;
+                                }
+                                Text {
+                                    text: "Anyone with a link can join. The link can be copied only now, when it is created.";
+                                    color: Colors.text-muted;
+                                    font-size: Typography.xs;
+                                    wrap: word-wrap;
+                                }
+
+                                ToggleRow {
+                                    checked <=> root.link-needs-approval;
+                                    accessible-text: "Require approval";
+                                    Text {
+                                        text: "Require approval";
+                                        color: Colors.text-primary;
+                                        font-size: Typography.sm;
+                                        wrap: word-wrap;
+                                    }
+                                    Text {
+                                        text: "People who use the link wait until an admin lets them in";
+                                        color: Colors.text-muted;
+                                        font-size: Typography.xs;
+                                        wrap: word-wrap;
+                                    }
+                                }
+
+                                HorizontalLayout {
+                                    alignment: start;
+                                    Button {
+                                        text: "Create link";
+                                        variant: "primary";
+                                        disabled: MembershipGlobal.access-busy;
+                                        loading: MembershipGlobal.access-busy;
+                                        clicked => { MembershipGlobal.create-link(root.channel-id, root.link-needs-approval); }
+                                    }
+                                }
+
+                                if MembershipGlobal.new-link != "": Rectangle {
+                                    height: new-link-col.preferred-height + Spacing.sm * 2;
+                                    background: Colors.neo-inset-bg;
+                                    border-radius: Spacing.radius-sm;
+                                    new-link-col := VerticalLayout {
+                                        padding: Spacing.sm;
+                                        spacing: Spacing.sm;
+                                        Text {
+                                            text: MembershipGlobal.new-link;
+                                            color: Colors.text-primary;
+                                            font-size: Typography.xs;
+                                            wrap: char-wrap;
+                                        }
+                                        HorizontalLayout {
+                                            alignment: start;
+                                            Button {
+                                                text: "Copy link";
+                                                variant: "secondary";
+                                                clicked => { MembershipGlobal.copy-link(MembershipGlobal.new-link); }
+                                            }
+                                        }
+                                    }
+                                }
+
+                                for link in MembershipGlobal.invite-links: HorizontalLayout {
+                                    spacing: Spacing.sm;
+                                    min-height: Spacing.touch-target-min;
+                                    Text {
+                                        horizontal-stretch: 1;
+                                        text: link.summary;
+                                        color: Colors.text-primary;
+                                        font-size: Typography.xs;
+                                        vertical-alignment: center;
+                                        wrap: word-wrap;
+                                    }
+                                    Button {
+                                        text: "Revoke";
+                                        variant: "destructive";
+                                        disabled: MembershipGlobal.access-busy;
+                                        clicked => { MembershipGlobal.revoke-link(root.channel-id, link.id); }
+                                    }
+                                }
+                            }
+
+                            // ---- Join requests ----
+                            if MembershipGlobal.can-approve-joins: VerticalLayout {
+                                spacing: Spacing.sm;
+
+                                Text {
+                                    text: MembershipGlobal.join-requests.length == 0 ? "No join requests" : "Join requests";
+                                    color: Colors.text-secondary;
+                                    font-size: Typography.sm;
+                                    font-weight: Typography.medium;
+                                }
+
+                                for req in MembershipGlobal.join-requests: VerticalLayout {
+                                    spacing: Spacing.xs;
+                                    Text {
+                                        text: req.display-name;
+                                        color: Colors.text-primary;
+                                        font-size: Typography.sm;
+                                        overflow: elide;
+                                    }
+                                    HorizontalLayout {
+                                        spacing: Spacing.sm;
+                                        alignment: start;
+                                        Button {
+                                            text: "Approve";
+                                            variant: "primary";
+                                            disabled: MembershipGlobal.access-busy;
+                                            clicked => { MembershipGlobal.approve-request(root.channel-id, req.user-id); }
+                                        }
+                                        Button {
+                                            text: "Reject";
+                                            variant: "secondary";
+                                            disabled: MembershipGlobal.access-busy;
+                                            clicked => { MembershipGlobal.reject-request(root.channel-id, req.user-id); }
+                                        }
+                                    }
+                                }
+                            }
+
+                            if MembershipGlobal.access-status != "": Text {
+                                text: MembershipGlobal.access-status;
+                                color: Colors.text-secondary;
+                                font-size: Typography.xs;
+                                wrap: word-wrap;
+                            }
+                        }
+
                         // ========== Members Section ==========
                         if root.active-section == "members": VerticalLayout {
                             spacing: Spacing.md;
@@ -825,7 +1059,7 @@ export component ChannelSettingsModal inherits Rectangle {
                                                 overflow: elide;
                                             }
 
-                                            if member.role != "member" || member.username != "" || member.muted: HorizontalLayout {
+                                            if member.role != "member" || member.username != "" || member.muted || member.unverified: HorizontalLayout {
                                                 spacing: Spacing.xs;
 
                                                 if member.role != "member": Rectangle {
@@ -856,6 +1090,24 @@ export component ChannelSettingsModal inherits Rectangle {
                                                         x: Spacing.xs;
                                                         text: "muted";
                                                         color: Colors.error;
+                                                        font-size: Typography.xs;
+                                                        font-weight: Typography.medium;
+                                                        vertical-alignment: center;
+                                                        height: 100%;
+                                                    }
+                                                }
+
+                                                // Outside the verified membership: no sender keys.
+                                                if member.unverified: Rectangle {
+                                                    width: unverified-text.preferred-width + Spacing.sm;
+                                                    height: Spacing.badge-md;
+                                                    background: Colors.warning.with-alpha(0.15);
+                                                    border-radius: Spacing.radius-sm;
+
+                                                    unverified-text := Text {
+                                                        x: Spacing.xs;
+                                                        text: "unverified";
+                                                        color: Colors.warning;
                                                         font-size: Typography.xs;
                                                         font-weight: Typography.medium;
                                                         vertical-alignment: center;

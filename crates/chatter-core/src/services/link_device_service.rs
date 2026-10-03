@@ -25,7 +25,8 @@ use tokio::sync::mpsc;
 use url::Url;
 use zeroize::{Zeroize, Zeroizing};
 
-use crate::crypto::auth_crypto::{derive_login_auth_hash, hash_password};
+use crate::network::grpc::auth_client::AuthClient;
+use crate::services::auth_service::{prove_password, AuthError};
 use crate::crypto::provisioning::{
     decrypt_envelope, encrypt_envelope, ProvisioningKeypair,
 };
@@ -379,11 +380,11 @@ impl LinkDeviceService {
         Ok(derived.ct_eq(stored.as_slice()).unwrap_u8() == 1)
     }
 
-    /// Convenience: verify EITHER a password OR a PIN against local
-    /// material. Tries the cheaper PIN check first when the input looks like
-    /// a PIN; otherwise falls through to the password check. Lets the UI keep
-    /// a single "confirm with password or PIN" input.
-    pub fn verify_password_or_pin(&self, secret: &str) -> Result<bool, LinkDeviceError> {
+    /// Convenience: verify EITHER a password OR a PIN. Tries the local PIN
+    /// check first when the input looks like a PIN; otherwise falls through to
+    /// the password check (a server OPAQUE proof). Lets the UI keep a single
+    /// "confirm with password or PIN" input.
+    pub async fn verify_password_or_pin(&self, secret: &str) -> Result<bool, LinkDeviceError> {
         // Try PIN first (cheap local HMAC compare against the stored
         // fingerprint). PIN and password share format constraints now (both
         // are 8+ printable ASCII), so we can't tell them apart by shape -
@@ -394,48 +395,34 @@ impl LinkDeviceService {
                 return Ok(true);
             }
         }
-        self.verify_password(secret)
+        self.verify_password(secret).await
     }
 
-    /// Re-auth gate. Validates the user's password against the locally-stored
-    /// login-auth fingerprint. **Local-only check** — does not contact the
-    /// server. Constant-time comparison.
+    /// Re-auth gate for the password: an OPAQUE login against the account's
+    /// own record (PasswordProofStart), spent on VerifyPassword.
     ///
-    /// Returns `Ok(false)` if no fingerprint is stored (nothing to match
-    /// against). Caller may fall back to [`Self::verify_pin`].
-    pub fn verify_password(&self, password: &str) -> Result<bool, LinkDeviceError> {
-        use subtle::ConstantTimeEq;
-
-        let user_id_str = self
-            .settings_repo
-            .get_string(keys::CURRENT_USER_ID)?
-            .ok_or(LinkDeviceError::NotLoggedIn)?;
-        let user_id: crate::domain::ids::UserId = user_id_str
-            .parse()
-            .map_err(|e| LinkDeviceError::Invalid(format!("stored user_id parse: {e}")))?;
-
-        let user = self
-            .user_repo
-            .get(&user_id)?
-            .ok_or(LinkDeviceError::NotLoggedIn)?;
-
-        // Re-auth via login_auth_hash: derive from entered password and
-        // compare to the stored fingerprint. Profile_key cannot be used here
-        // any more (it is random, not derivable from password).
-        let stored_auth_hash = match self.settings_repo.get_bytes(keys::AUTH_LOOKUP_HASH)? {
-            Some(h) => h,
-            None => return Ok(false),
-        };
-        if stored_auth_hash.len() != 32 {
-            return Err(LinkDeviceError::Invalid(
-                "stored auth_lookup_hash has wrong length".into(),
-            ));
+    /// The device holds nothing that could check a password offline: OPAQUE
+    /// needs the server's OPRF evaluation, and keeping a local
+    /// password-derived fingerprint would put an offline-crackable value on
+    /// the device. Each attempt is one guess on the account's server-side
+    /// lockout, like a login. `Ok(false)` for a wrong password; network
+    /// failures are errors, never a silent "no".
+    pub async fn verify_password(&self, password: &str) -> Result<bool, LinkDeviceError> {
+        let channel = self.grpc_pool.try_channel().ok_or(LinkDeviceError::Network(
+            NetworkError::ConnectionFailed("Not connected to server".into()),
+        ))?;
+        let mut auth = AuthClient::new(channel, self.grpc_pool.auth_clone());
+        match prove_password(&mut auth, password).await {
+            Ok(proof) => match auth.verify_password(proof).await {
+                Ok(()) => Ok(true),
+                Err(NetworkError::Unauthenticated) => Ok(false),
+                Err(e) => Err(e.into()),
+            },
+            Err(AuthError::InvalidCredentials) => Ok(false),
+            Err(AuthError::Network(e)) => Err(e.into()),
+            Err(AuthError::Crypto(e)) => Err(e.into()),
+            Err(e) => Err(LinkDeviceError::Invalid(e.to_string())),
         }
-
-        let password_hash = hash_password(password);
-        let derived = derive_login_auth_hash(&password_hash, &user.username);
-
-        Ok(derived.ct_eq(stored_auth_hash.as_slice()).unwrap_u8() == 1)
     }
 
     fn provisioning_client(&self) -> Result<ProvisioningClient, LinkDeviceError> {
@@ -467,7 +454,7 @@ impl LinkDeviceService {
 
         let mut client = self.provisioning_client()?;
         let response = client
-            .start_provisioning(device_info, device_name)
+            .start_provisioning(device_info)
             .await?;
 
         let server_url = self.grpc_pool.endpoint();
@@ -812,13 +799,20 @@ impl LinkDeviceService {
             });
         }
 
+        // Encrypted to the account identity key we were just handed, so only
+        // the account's own devices can read it (Signal's encryptDeviceName).
+        let encrypted_name = crate::crypto::device_name::encrypt_device_name(
+            &session.device_name,
+            identity_pair.identity_key(),
+        )?;
+
         let mut client = self.provisioning_client()?;
         let response = client
             .complete_device_linking(
                 &provision.provisioning_code,
                 device_auth_token,
                 &session.device_info,
-                &session.device_name,
+                encrypted_name,
                 prekey_bundle,
                 initial_one_time,
             )
@@ -846,6 +840,7 @@ impl LinkDeviceService {
             .set_string(keys::SVR_SALT_USERNAME, &provision.svr_salt_username)?;
         self.settings_repo
             .set_string(keys::FULL_USERNAME, &provision.full_username)?;
+        adopt_provisioned_settings(&self.settings_repo, &user_id, &provision)?;
 
         // The server sends our display_name ENCRYPTED with our profile key.
         // Decrypt with the key we just provisioned (line above) before
@@ -1176,6 +1171,7 @@ impl LinkDeviceService {
                 .expect("OS CSPRNG must not fail");
         }
 
+        let settings = crate::services::configuration_sync::current(&self.settings_repo);
         let message = ProvisionMessage {
             aci_identity_key_private: priv_bytes,
             pni_identity_key_private: vec![],
@@ -1185,10 +1181,12 @@ impl LinkDeviceService {
             provisioning_code,
             profile_key,
             master_key: vec![],
-            // TODO: pull these from settings once we expose them
-            read_receipts: true,
-            typing_indicators: true,
-            link_previews: true,
+            // The privacy settings as they stand here, which the new device
+            // adopts (`complete_linking`), as a ConfigurationSync would.
+            read_receipts: settings.read_receipts,
+            typing_indicators: settings.typing_indicators,
+            // Chatter has no link-preview setting (see `configuration_sync`):
+            // left at the proto3 default, which is not encoded, and never read.
             provisioning_user_agent: format!(
                 "chatter-linux/{}",
                 env!("CARGO_PKG_VERSION"),
@@ -1362,7 +1360,7 @@ impl LinkDeviceService {
         secret: SecretString,
     ) -> Result<ApprovedDevice, LinkDeviceError> {
         let req = pending.inner;
-        if !self.verify_password_or_pin(secret.expose_secret())? {
+        if !self.verify_password_or_pin(secret.expose_secret()).await? {
             return Err(LinkDeviceError::ReauthFailed);
         }
         self.install_envelope(&req).await?;
@@ -1422,7 +1420,9 @@ pub fn pending_links(sessions: Vec<ProvisioningSession>, now_ns: u64) -> Vec<Pen
         .into_iter()
         .filter(|s| s.status == Status::Provisioned as i32 && s.expires_at > now_ns)
         .map(|s| PendingLink {
-            device_name: if s.device_name.is_empty() { s.device_info } else { s.device_name },
+            // The server holds no name for a pending link (the new device
+            // only encrypts one once it has the identity key); label by info.
+            device_name: s.device_info,
             uuid: s.provisioning_uuid,
             expires_at: s.expires_at,
         })
@@ -1576,29 +1576,47 @@ fn random_provisioning_code() -> String {
     base64_url(&bytes)
 }
 
+/// Adopt the primary's privacy settings a [`ProvisionMessage`] carries, as
+/// from a `ConfigurationSync` of our own: call once `user_id` is stored as the
+/// current user.
+fn adopt_provisioned_settings(
+    settings: &SettingsRepository,
+    user_id: &crate::domain::ids::UserId,
+    provision: &ProvisionMessage,
+) -> Result<(), StorageError> {
+    crate::services::configuration_sync::apply(
+        settings,
+        user_id,
+        &crate::proto::content_v1::ConfigurationSync {
+            read_receipts: provision.read_receipts,
+            typing_indicators: provision.typing_indicators,
+        },
+    )?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    /// Only approved-and-still-open sessions are pending; the name falls
-    /// back to the device info.
+    /// Only approved-and-still-open sessions are pending, labelled by their
+    /// device info (the server holds no name for a pending link).
     #[test]
     fn pending_links_keeps_only_open_approved_sessions() {
         use crate::proto::provisioning_v1::provisioning_session::Status;
-        let s = |uuid: &str, status: Status, expires_at: u64, name: &str| ProvisioningSession {
+        let s = |uuid: &str, status: Status, expires_at: u64| ProvisioningSession {
             provisioning_uuid: uuid.into(),
             device_info: "android".into(),
-            device_name: name.into(),
             status: status as i32,
             created_at: 0,
             expires_at,
         };
         let links = pending_links(
             vec![
-                s("open", Status::Provisioned, 200, ""),
-                s("expired", Status::Provisioned, 100, "Tab"),
-                s("waiting", Status::Pending, 200, "Tab"),
-                s("done", Status::Completed, 200, "Tab"),
+                s("open", Status::Provisioned, 200),
+                s("expired", Status::Provisioned, 100),
+                s("waiting", Status::Pending, 200),
+                s("done", Status::Completed, 200),
             ],
             150,
         );
@@ -1702,7 +1720,6 @@ mod tests {
     // verify_password / verify_pin / verify_password_or_pin
     // ========================================================================
 
-    use crate::crypto::auth_crypto::{derive_login_auth_hash, hash_password};
     use crate::crypto::svr::derive_pin_fingerprint;
     use crate::domain::ids::UserId;
     use crate::domain::user::User;
@@ -1715,11 +1732,11 @@ mod tests {
 
     /// Build a fully-initialised LinkDeviceService backed by a fresh
     /// in-memory database, registered with the given username + (optional)
-    /// password + (optional) PIN. Returns the service plus a kept-alive
-    /// tempfile so the SQLite-backed DB survives.
+    /// PIN. Returns the service plus a kept-alive tempfile so the
+    /// SQLite-backed DB survives. The gRPC pool is never connected: the
+    /// password path (a server OPAQUE proof) has nothing to talk to.
     fn setup_service(
         username: &str,
-        password: Option<&str>,
         pin: Option<&str>,
     ) -> (Arc<LinkDeviceService>, NamedTempFile) {
         let db_file = NamedTempFile::new().unwrap();
@@ -1746,13 +1763,6 @@ mod tests {
         };
         user_repo.insert(&user).unwrap();
 
-        if let Some(pw) = password {
-            let pw_hash = hash_password(pw);
-            let auth_hash = derive_login_auth_hash(&pw_hash, username);
-            settings_repo
-                .set_bytes(keys::AUTH_LOOKUP_HASH, &auth_hash)
-                .unwrap();
-        }
         settings_repo
             .set_string(keys::SVR_SALT_USERNAME, username)
             .unwrap();
@@ -1783,40 +1793,33 @@ mod tests {
         (svc, db_file)
     }
 
-    #[test]
-    fn verify_password_accepts_correct_password() {
-        let (svc, _db) = setup_service("alice", Some("hunter2"), None);
-        assert_eq!(svc.verify_password("hunter2").unwrap(), true);
-    }
-
-    #[test]
-    fn verify_password_rejects_wrong_password() {
-        let (svc, _db) = setup_service("alice", Some("hunter2"), None);
-        assert_eq!(svc.verify_password("wrong-pw").unwrap(), false);
-    }
-
-    #[test]
-    fn verify_password_without_stored_hash_returns_false() {
-        // No AUTH_LOOKUP_HASH persisted — nothing to match, so not a match.
-        let (svc, _db) = setup_service("alice", None, None);
-        assert_eq!(svc.verify_password("anything").unwrap(), false);
+    /// The password check is a server OPAQUE proof: with no server it is an
+    /// error, never a silent `false` (or `true`). The proof itself is covered
+    /// by crypto/opaque.rs and the server's opaque_flows_test.go.
+    #[tokio::test]
+    async fn verify_password_without_server_is_an_error() {
+        let (svc, _db) = setup_service("alice", None);
+        assert!(matches!(
+            svc.verify_password("hunter2").await,
+            Err(LinkDeviceError::Network(_))
+        ));
     }
 
     #[test]
     fn verify_pin_accepts_correct_pin() {
-        let (svc, _db) = setup_service("alice", None, Some("devpin123"));
+        let (svc, _db) = setup_service("alice", Some("devpin123"));
         assert_eq!(svc.verify_pin("devpin123").unwrap(), true);
     }
 
     #[test]
     fn verify_pin_rejects_wrong_pin() {
-        let (svc, _db) = setup_service("alice", None, Some("devpin123"));
+        let (svc, _db) = setup_service("alice", Some("devpin123"));
         assert_eq!(svc.verify_pin("wrongpin1").unwrap(), false);
     }
 
     #[test]
     fn verify_pin_format_validation() {
-        let (svc, _db) = setup_service("alice", None, Some("devpin123"));
+        let (svc, _db) = setup_service("alice", Some("devpin123"));
         // Too short (< MIN_PIN_LENGTH).
         assert!(matches!(
             svc.verify_pin("1234567").unwrap_err(),
@@ -1832,33 +1835,54 @@ mod tests {
     #[test]
     fn verify_pin_no_fingerprint_errors() {
         // Password-only account, no PIN persisted.
-        let (svc, _db) = setup_service("alice", Some("hunter2-strong"), None);
+        let (svc, _db) = setup_service("alice", None);
         assert!(matches!(
             svc.verify_pin("devpin123").unwrap_err(),
             LinkDeviceError::Invalid(_)
         ));
     }
 
-    #[test]
-    fn verify_password_or_pin_routes_pin_first() {
-        let (svc, _db) = setup_service("alice", Some("hunter2-strong"), Some("devpin123"));
-        // Correct PIN matches via PIN path.
-        assert_eq!(svc.verify_password_or_pin("devpin123").unwrap(), true);
-        // Correct password also matches via password fallback.
-        assert_eq!(svc.verify_password_or_pin("hunter2-strong").unwrap(), true);
+    #[tokio::test]
+    async fn verify_password_or_pin_routes_pin_first() {
+        // Correct PIN matches locally, without the (absent) server.
+        let (svc, _db) = setup_service("alice", Some("devpin123"));
+        assert_eq!(svc.verify_password_or_pin("devpin123").await.unwrap(), true);
     }
 
-    #[test]
-    fn verify_password_or_pin_pin_only_account_works() {
-        // No password fingerprint stored, but a PIN is configured.
-        let (svc, _db) = setup_service("alice", None, Some("devpin123"));
-        assert_eq!(svc.verify_password_or_pin("devpin123").unwrap(), true);
+    #[tokio::test]
+    async fn verify_password_or_pin_wrong_pin_falls_through_to_server() {
+        let (svc, _db) = setup_service("alice", Some("devpin123"));
+        // PIN mismatch => the password path, which needs the server: an
+        // error here, never an accidental match.
+        assert!(svc.verify_password_or_pin("anything-long-wrong").await.is_err());
     }
 
+    /// The new device takes the primary's read-receipt and typing settings
+    /// from the ProvisionMessage, not the defaults.
     #[test]
-    fn verify_password_or_pin_no_password_wrong_secret_returns_false() {
-        let (svc, _db) = setup_service("alice", None, Some("devpin123"));
-        // Wrong secret => PIN mismatch + no password fingerprint => false.
-        assert_eq!(svc.verify_password_or_pin("anything-long-wrong").unwrap(), false);
+    fn linked_device_adopts_the_primarys_privacy_settings() {
+        use crate::services::configuration_sync::current;
+        let me = crate::domain::ids::UserId::new();
+        let open = || {
+            let dir = tempfile::tempdir().expect("tempdir");
+            let db = Arc::new(Database::open(&dir.path().join("s.db"), "testpass").expect("db"));
+            db.run_migrations().expect("migrations");
+            (dir, SettingsRepository::new(db))
+        };
+        let (_p, primary) = open();
+        primary.set_bool(keys::SEND_READ_RECEIPTS, false).unwrap();
+        let sent = current(&primary);
+        let provision = ProvisionMessage {
+            read_receipts: sent.read_receipts,
+            typing_indicators: sent.typing_indicators,
+            ..Default::default()
+        };
+
+        let (_n, linked) = open();
+        assert!(current(&linked).read_receipts, "defaults on before the link");
+        linked.set_string(keys::CURRENT_USER_ID, &me.to_string()).unwrap();
+        adopt_provisioned_settings(&linked, &me, &provision).unwrap();
+        assert_eq!(current(&linked), sent);
+        assert!(!current(&linked).read_receipts && current(&linked).typing_indicators);
     }
 }

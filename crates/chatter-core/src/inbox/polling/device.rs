@@ -771,9 +771,11 @@ fn process_decrypted_data_message(
                 message_repo,
             );
 
-            // Store message with deduplication
-            match message_repo.insert_or_ignore(&message) {
-                Ok(true) => {
+            // Store message with deduplication. Everything below announces
+            // the row as stored (an early edit, reaction or pin applied), not
+            // the decoded one; an early delete stores nothing.
+            match message_repo.insert_or_ignore_received(&message) {
+                Ok(Some(message)) => {
                     tracing::debug!(
                         message_id = %message.id,
                         channel_id = %channel_id,
@@ -811,7 +813,10 @@ fn process_decrypted_data_message(
                         channel_id,
                         sender_id: *sender_id,
                         message_id: msg.message_guid.clone(),
-                        text: data_message.body.clone(),
+                        text: match &message.content {
+                            crate::domain::message::MessageContent::Text(text) => text.clone(),
+                            _ => data_message.body.clone(),
+                        },
                         timestamp: data_message.timestamp,
                         attachments: data_message.attachments.clone(),
                     });
@@ -841,10 +846,10 @@ fn process_decrypted_data_message(
                     s.messages_received += 1;
                     s.messages_processed += 1;
                 }
-                Ok(false) => {
+                Ok(None) => {
                     tracing::debug!(
                         message_id = %message.id,
-                        "Channel message already exists (skipped duplicate)"
+                        "Channel message already exists, or was deleted before it arrived — not announced"
                     );
                 }
                 Err(e) => {
@@ -1218,12 +1223,26 @@ async fn process_ecies_init_message(
     domain_tx: Option<&broadcast::Sender<DomainEvent>>,
 ) -> crate::inbox::ack_policy::AckDecision {
     use crate::inbox::ack_policy::AckDecision;
-    use crate::crypto::ecies;
     use crate::domain::anon_dm_init::AnonDmInitMessage;
+    use crate::error::{CryptoError, ServiceError};
 
-    // Get our identity key for decryption
-    let identity_key = match message_gateway.get_identity_key().await {
-        Ok(key) => key,
+    // HPKE open against our identity key, inside the Signal actor. A failed
+    // open is a property of the bytes; any other error is reading our key.
+    let plaintext = match message_gateway.open_anon_dm_init(&msg.envelope).await {
+        Ok(p) => p,
+        Err(ServiceError::Crypto(CryptoError::DecryptionFailed(e))) => {
+            tracing::error!(
+                message_guid = %msg.message_guid,
+                error = %e,
+                "[INBOX_ECIES] Failed to open HPKE init message"
+            );
+            let _ = event_tx.send(InboxEvent::MessageFailed {
+                message_id: msg.message_guid.clone(),
+                error: format!("ECIES decryption failed: {}", e),
+            });
+            stats.write().messages_failed += 1;
+            return ecies_init_decision(&EciesInitFailure::Malformed("HPKE open failed against our identity key"));
+        }
         Err(e) => {
             tracing::error!(
                 message_guid = %msg.message_guid,
@@ -1236,42 +1255,6 @@ async fn process_ecies_init_message(
             });
             stats.write().messages_failed += 1;
             return ecies_init_decision(&EciesInitFailure::IdentityKeyUnavailable(&e));
-        }
-    };
-
-    // Parse ECIES message structure
-    let ecies_msg = match ecies::EciesMessage::from_bytes(&msg.envelope) {
-        Ok(m) => m,
-        Err(e) => {
-            tracing::error!(
-                message_guid = %msg.message_guid,
-                error = %e,
-                "[INBOX_ECIES] Failed to parse ECIES message"
-            );
-            let _ = event_tx.send(InboxEvent::MessageFailed {
-                message_id: msg.message_guid.clone(),
-                error: format!("Invalid ECIES message: {}", e),
-            });
-            stats.write().messages_failed += 1;
-            return ecies_init_decision(&EciesInitFailure::Malformed("ECIES envelope would not parse"));
-        }
-    };
-
-    // Decrypt using our X25519 private key (already 32 bytes from get_identity_key)
-    let plaintext = match ecies::decrypt(&identity_key, &ecies_msg) {
-        Ok(p) => p,
-        Err(e) => {
-            tracing::error!(
-                message_guid = %msg.message_guid,
-                error = %e,
-                "[INBOX_ECIES] Failed to decrypt ECIES message"
-            );
-            let _ = event_tx.send(InboxEvent::MessageFailed {
-                message_id: msg.message_guid.clone(),
-                error: format!("ECIES decryption failed: {}", e),
-            });
-            stats.write().messages_failed += 1;
-            return ecies_init_decision(&EciesInitFailure::Malformed("HPKE open failed against our identity key"));
         }
     };
 
@@ -1859,7 +1842,7 @@ pub fn dispatch_control_content(
     sender_id: &UserId,
     sender_device_id: u32,
     message_guid: &str,
-    // When the server received the envelope (ns); ages call offers.
+    // When the server received the envelope (ns); ages call offers and edits.
     server_timestamp: u64,
     event_tx: &broadcast::Sender<InboxEvent>,
     stats: &Arc<RwLock<InboxStats>>,
@@ -1910,6 +1893,7 @@ pub fn dispatch_control_content(
                 target_ts = reaction.target_sent_timestamp,
                 "Channel reaction received"
             );
+            let reaction_ts = if reaction.timestamp > 0 { reaction.timestamp } else { server_timestamp };
             // Parse channel_id from encoded target_author_aci if present
             if let Some((channel_id_str, actual_author)) =
                 parse_channel_reaction_author(&reaction.target_author_aci)
@@ -1922,6 +1906,7 @@ pub fn dispatch_control_content(
                         remove: reaction.remove,
                         target_author_aci: actual_author,
                         target_sent_timestamp: reaction.target_sent_timestamp,
+                        timestamp: reaction_ts,
                     });
                 } else {
                     tracing::warn!(
@@ -1938,11 +1923,13 @@ pub fn dispatch_control_content(
                     remove: reaction.remove,
                     target_author_aci: reaction.target_author_aci,
                     target_sent_timestamp: reaction.target_sent_timestamp,
+                    timestamp: reaction_ts,
                 });
             }
             stats.write().messages_processed += 1;
         }
         content::Content::Pin(pin) => {
+            let pin_ts = if pin.timestamp > 0 { pin.timestamp } else { server_timestamp };
             if pin.channel_id.is_empty() {
                 // Empty channel_id => channel-free DM (ServerDm) pin.
                 let _ = event_tx.send(InboxEvent::DmPin {
@@ -1950,6 +1937,7 @@ pub fn dispatch_control_content(
                     target_author_aci: pin.target_author_aci,
                     target_sent_timestamp: pin.target_sent_timestamp,
                     unpin: pin.unpin,
+                    timestamp: pin_ts,
                 });
             } else if let Ok(channel_id) = pin.channel_id.parse::<ChannelId>() {
                 tracing::debug!(
@@ -1966,6 +1954,7 @@ pub fn dispatch_control_content(
                     target_author_aci: pin.target_author_aci,
                     target_sent_timestamp: pin.target_sent_timestamp,
                     unpin: pin.unpin,
+                    timestamp: pin_ts,
                 });
             } else {
                 tracing::warn!(
@@ -1982,10 +1971,10 @@ pub fn dispatch_control_content(
                 .as_ref()
                 .map(|dm| dm.channel_id.clone())
                 .unwrap_or_default();
-            let new_body = edit
+            let (new_body, edit_timestamp) = edit
                 .data_message
                 .as_ref()
-                .map(|dm| dm.body.clone())
+                .map(|dm| (dm.body.clone(), dm.timestamp))
                 .unwrap_or_default();
             let new_body_preview = if new_body.len() > 50 {
                 format!("{}...", &new_body[..47])
@@ -1999,6 +1988,8 @@ pub fn dispatch_control_content(
                     peer_id: *sender_id,
                     target_sent_timestamp: edit.target_sent_timestamp,
                     new_body,
+                    edit_timestamp,
+                    server_timestamp,
                 });
             } else if let Ok(channel_id) = channel_id_str.parse::<ChannelId>() {
                 tracing::debug!(
@@ -2013,6 +2004,8 @@ pub fn dispatch_control_content(
                     sender_id: *sender_id,
                     target_sent_timestamp: edit.target_sent_timestamp,
                     new_body,
+                    edit_timestamp,
+                    server_timestamp,
                 });
             } else {
                 tracing::warn!(
@@ -2064,6 +2057,10 @@ pub fn dispatch_control_content(
         }
         content::Content::ProfileKeySync(sync) => {
             let _ = event_tx.send(InboxEvent::ProfileKeySync { sender_id: *sender_id, sync });
+            stats.write().messages_processed += 1;
+        }
+        content::Content::ConfigurationSync(sync) => {
+            let _ = event_tx.send(InboxEvent::ConfigurationSync { sender_id: *sender_id, sync });
             stats.write().messages_processed += 1;
         }
         content::Content::SavedMessageSync(msg) => {
@@ -2232,6 +2229,53 @@ mod call_control_tests {
                 assert_eq!(channel_id, caller.to_string());
             }
             other => panic!("expected CallKeyOfferReceived, got {other:?}"),
+        }
+    }
+
+    /// An edit carries its own timestamp and the server's to the processor;
+    /// a reaction or pin with no timestamp of its own takes the server's.
+    #[test]
+    fn edits_reactions_and_pins_carry_their_timestamps() {
+        use crate::proto::content_v1::{EditMessage, PinMessage, Reaction};
+        let (event_tx, mut event_rx) = broadcast::channel(8);
+        let stats = Arc::new(RwLock::new(InboxStats::default()));
+        let peer = UserId::new();
+        let channel = ChannelId::new();
+
+        let edit = |channel_id: String| content::Content::Edit(EditMessage {
+            target_sent_timestamp: 100,
+            data_message: Some(DataMessage { body: "new".into(), timestamp: 150, channel_id, ..Default::default() }),
+        });
+        dispatch_control_content(edit(String::new()), &peer, 1, "g", 42, &event_tx, &stats);
+        match event_rx.try_recv().expect("an event") {
+            InboxEvent::DmEdit { edit_timestamp, server_timestamp, target_sent_timestamp, .. } => {
+                assert_eq!((edit_timestamp, server_timestamp, target_sent_timestamp), (150, 42, 100));
+            }
+            other => panic!("expected DmEdit, got {other:?}"),
+        }
+        dispatch_control_content(edit(channel.to_string()), &peer, 1, "g", 42, &event_tx, &stats);
+        match event_rx.try_recv().expect("an event") {
+            InboxEvent::ChannelEdit { edit_timestamp, server_timestamp, channel_id, .. } => {
+                assert_eq!((edit_timestamp, server_timestamp, channel_id), (150, 42, channel));
+            }
+            other => panic!("expected ChannelEdit, got {other:?}"),
+        }
+
+        let reaction = content::Content::Reaction(Reaction {
+            emoji: "x".into(), target_author_aci: peer.to_string(), target_sent_timestamp: 100, ..Default::default()
+        });
+        dispatch_control_content(reaction, &peer, 1, "g", 42, &event_tx, &stats);
+        match event_rx.try_recv().expect("an event") {
+            InboxEvent::DmReaction { timestamp, .. } => assert_eq!(timestamp, 42, "unstamped: the server's"),
+            other => panic!("expected DmReaction, got {other:?}"),
+        }
+        let pin = content::Content::Pin(PinMessage {
+            target_author_aci: peer.to_string(), target_sent_timestamp: 100, timestamp: 77, ..Default::default()
+        });
+        dispatch_control_content(pin, &peer, 1, "g", 42, &event_tx, &stats);
+        match event_rx.try_recv().expect("an event") {
+            InboxEvent::DmPin { timestamp, .. } => assert_eq!(timestamp, 77),
+            other => panic!("expected DmPin, got {other:?}"),
         }
     }
 }

@@ -327,8 +327,6 @@ impl AttachmentService {
             thumbnail_height: media_meta.thumbnail_height.unwrap_or(0),
             width: media_meta.width.unwrap_or(0),
             height: media_meta.height.unwrap_or(0),
-            incremental_mac: encrypt_result.incremental_mac.clone(),
-            chunk_size: encrypt_result.incremental_chunk_size,
             ciphertext_size: encrypt_result.ciphertext_size,
         })
     }
@@ -667,9 +665,6 @@ impl AttachmentService {
             thumbnail_height: media_meta.thumbnail_height.unwrap_or(0),
             width: media_meta.width.unwrap_or(0),
             height: media_meta.height.unwrap_or(0),
-            // In-memory encryption path: no incremental MAC (used for small content like GIFs)
-            incremental_mac: vec![],
-            chunk_size: 0,
             ciphertext_size: encrypted.ciphertext.len() as u64,
         })
     }

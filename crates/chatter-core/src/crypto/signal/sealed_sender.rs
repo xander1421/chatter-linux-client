@@ -473,35 +473,6 @@ pub const UAK_LENGTH: usize = 16;
 /// Profile key length in bytes.
 pub const PROFILE_KEY_LENGTH: usize = 32;
 
-/// Combine multiple UAKs for group sealed sender.
-///
-/// For group messages, the sender must prove knowledge of all recipients' UAKs
-/// by XORing them together. The server validates by computing the same XOR
-/// and comparing.
-///
-/// # Arguments
-///
-/// * `uaks` - Slice of 16-byte UAKs from all group recipients
-///
-/// # Returns
-///
-/// Combined 16-byte UAK (XOR of all input UAKs).
-///
-/// # Signal Reference
-///
-/// See `Signal-server/service/.../UnidentifiedAccessUtil.java#combineUnidentifiedAccessKeys`
-pub fn combine_uaks_for_group(uaks: &[[u8; UAK_LENGTH]]) -> [u8; UAK_LENGTH] {
-    let mut combined = [0u8; UAK_LENGTH];
-
-    for uak in uaks {
-        for (i, byte) in uak.iter().enumerate() {
-            combined[i] ^= byte;
-        }
-    }
-
-    combined
-}
-
 // ============================================================================
 // Certificate Validation Functions
 // ============================================================================
@@ -1046,50 +1017,105 @@ mod tests {
         );
     }
 
-    #[test]
-    fn test_combine_uaks_for_group() {
-        let uak1 = [0x11u8; UAK_LENGTH];
-        let uak2 = [0x22u8; UAK_LENGTH];
-        let uak3 = [0x33u8; UAK_LENGTH];
+    /// The sender certificate is judged at the envelope's SERVER timestamp,
+    /// which the actor's `DecryptSealed` now carries (Signal-Desktop
+    /// `MessageReceiver.preload.ts` validates against `serverTimestamp`).
+    /// A message deposited while its cert was live must open however late it
+    /// is read; one deposited after expiry must not.
+    #[tokio::test]
+    async fn sealed_sender_cert_is_validated_at_envelope_time_not_now() {
+        use libsignal_protocol::{
+            IdentityKeyPair, InMemSignalProtocolStore, KeyPair, sealed_sender_encrypt_from_usmc,
+        };
 
-        // XOR of the three UAKs
-        let combined = combine_uaks_for_group(&[uak1, uak2, uak3]);
+        let mut rng = OsRng.unwrap_err();
+        let now_ms =
+            SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).unwrap().as_millis() as u64;
+        let hour = 3_600_000;
 
-        // 0x11 XOR 0x22 XOR 0x33 = 0x00
-        let expected = [0x00u8; UAK_LENGTH];
-        assert_eq!(combined, expected);
-    }
+        let root = KeyPair::generate(&mut rng);
+        let server_keys = KeyPair::generate(&mut rng);
+        let server_cert =
+            ServerCertificate::new(1, server_keys.public_key, &root.private_key, &mut rng)
+                .expect("server certificate");
+        let sender_identity = IdentityKeyPair::generate(&mut rng);
+        // Expired an hour ago, relative to the local clock.
+        let expiration = Timestamp::from_epoch_millis(now_ms - hour);
+        let sender_cert = SenderCertificate::new(
+            "11111111-1111-4111-8111-111111111111".to_string(),
+            None,
+            *sender_identity.public_key(),
+            DeviceId::new(1).expect("device id"),
+            expiration,
+            server_cert,
+            &server_keys.private_key,
+            &mut rng,
+        )
+        .expect("sender certificate");
 
-    #[test]
-    fn test_combine_uaks_single() {
-        let uak = [0x42u8; UAK_LENGTH];
-        let combined = combine_uaks_for_group(&[uak]);
+        let body = b"\xc0sealed body".to_vec();
+        let usmc = UnidentifiedSenderMessageContent::new(
+            CiphertextMessageType::Plaintext,
+            sender_cert,
+            body.clone(),
+            ContentHint::Implicit,
+            None,
+        )
+        .expect("usmc");
 
-        // Single UAK should return itself
-        assert_eq!(combined, uak);
-    }
+        let recipient_uuid = "22222222-2222-4222-8222-222222222222";
+        let recipient_device = DeviceId::new(1).expect("device id");
+        let recipient_address = ProtocolAddress::new(recipient_uuid.to_string(), recipient_device);
+        let recipient_identity = IdentityKeyPair::generate(&mut rng);
+        let recipient_store =
+            InMemSignalProtocolStore::new(recipient_identity, 1234).expect("recipient store");
+        let mut sender_store =
+            InMemSignalProtocolStore::new(sender_identity, 5678).expect("sender store");
+        sender_store
+            .save_identity(&recipient_address, recipient_identity.identity_key())
+            .await
+            .expect("save recipient identity");
+        let sealed = sealed_sender_encrypt_from_usmc(&recipient_address, &usmc, &sender_store, &mut rng)
+            .await
+            .expect("seal");
 
-    #[test]
-    fn test_combine_uaks_empty() {
-        let combined = combine_uaks_for_group(&[]);
+        let open_at = |at_ms: u64| {
+            let mut s1 = recipient_store.clone();
+            let mut s2 = recipient_store.clone();
+            let mut s3 = recipient_store.clone();
+            let mut s4 = recipient_store.clone();
+            let s6 = recipient_store.clone();
+            let sealed = sealed.clone();
+            let trust_root = root.public_key;
+            async move {
+                SealedSenderManager::decrypt(
+                    &sealed,
+                    &trust_root,
+                    Timestamp::from_epoch_millis(at_ms),
+                    None,
+                    recipient_uuid.to_string(),
+                    recipient_device,
+                    &mut s1,
+                    &mut s2,
+                    &mut s3,
+                    &s6,
+                    &mut s4,
+                )
+                .await
+            }
+        };
 
-        // Empty should return all zeros
-        assert_eq!(combined, [0u8; UAK_LENGTH]);
-    }
+        // Deposited two hours ago, while the cert was live: opens.
+        let (result, _) = open_at(now_ms - 2 * hour)
+            .await
+            .expect("cert valid at the envelope's server timestamp must decrypt");
+        assert_eq!(result.message, body);
 
-    #[test]
-    fn test_combine_uaks_order_independent() {
-        let uak1 = [0x11u8; UAK_LENGTH];
-        let uak2 = [0x22u8; UAK_LENGTH];
-        let uak3 = [0x33u8; UAK_LENGTH];
-
-        let combined1 = combine_uaks_for_group(&[uak1, uak2, uak3]);
-        let combined2 = combine_uaks_for_group(&[uak3, uak1, uak2]);
-        let combined3 = combine_uaks_for_group(&[uak2, uak3, uak1]);
-
-        // XOR is commutative - order shouldn't matter
-        assert_eq!(combined1, combined2);
-        assert_eq!(combined2, combined3);
+        // Deposited after expiry: refused, even though nothing else changed.
+        assert!(
+            open_at(now_ms).await.is_err(),
+            "cert expired at the envelope's server timestamp must be refused"
+        );
     }
 
     /// The sender's own cache check (`get_cached_sender_certificate`) relies on

@@ -707,7 +707,7 @@ impl GrpcClientPool {
     /// ```ignore
     /// let events = pool.call_with_retry("CreateChannel", |p| {
     ///     let mut client = p.channel_client();
-    ///     async move { client.create_channel("test", ChannelType::ChannelPublic, None, vec![], None, None, None).await }
+    ///     async move { client.create_channel("test", ChannelType::ChannelPublic, None, None, None, None).await }
     /// }).await?;
     /// ```
     pub async fn call_with_retry<F, Fut, T>(

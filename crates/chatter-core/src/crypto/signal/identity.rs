@@ -119,10 +119,19 @@ impl IdentityKeyManager {
         Ok(registration_id)
     }
 
-    /// Sign data using the local identity private key.
+    /// Answer a server registration challenge with the identity key.
     ///
-    /// Returns the 64-byte Ed25519 signature.
-    pub fn sign(&self, data: &[u8]) -> Result<Vec<u8>, CryptoError> {
+    /// The identity key also signs signed prekeys and Kyber prekeys over their
+    /// raw serialized public keys, so signing an arbitrary server-chosen
+    /// "nonce" would let a hostile server obtain a valid prekey signature over
+    /// a key of its choosing (`0x05 || pub`, or a Kyber key) and strip PQXDH's
+    /// post-quantum protection. There is deliberately no general-purpose
+    /// identity `sign(data)`: the only thing signed here is
+    /// [`registration_challenge_message`], which refuses any nonce that is not
+    /// exactly [`REGISTRATION_CHALLENGE_NONCE_LEN`] bytes and domain-separates
+    /// the rest.
+    pub fn sign_registration_challenge(&self, nonce: &[u8]) -> Result<Vec<u8>, CryptoError> {
+        let message = registration_challenge_message(nonce)?;
         let (_, key_pair) = self
             .get_identity()?
             .ok_or(CryptoError::NoIdentity)?;
@@ -133,8 +142,128 @@ impl IdentityKeyManager {
         // recover the identity private key from the signature.
         use rand::TryRngCore;
         let mut rng = rand::rngs::OsRng.unwrap_err();
-        key_pair.private_key().calculate_signature(data, &mut rng)
+        key_pair.private_key().calculate_signature(&message, &mut rng)
             .map(|sig| sig.into_vec())
             .map_err(|e| CryptoError::Protocol(e.to_string()))
+    }
+}
+
+/// Length of the nonce the server issues (`RegistrationChallengeNonceSize`,
+/// internal/services/auth/service/registration_challenge.go).
+pub const REGISTRATION_CHALLENGE_NONCE_LEN: usize = 32;
+
+/// Domain prefix of the registration-challenge signature; must match the
+/// server's `registrationChallengeDomain`.
+const REGISTRATION_CHALLENGE_DOMAIN: &[u8] = b"chatter-reg-challenge-v1\0";
+
+/// The exact bytes the identity key signs for a registration challenge:
+/// domain prefix || nonce. Rejects a nonce of any other length — a 33-byte
+/// serialized Curve25519 key or a Kyber key is not a nonce.
+pub fn registration_challenge_message(nonce: &[u8]) -> Result<Vec<u8>, CryptoError> {
+    if nonce.len() != REGISTRATION_CHALLENGE_NONCE_LEN {
+        return Err(CryptoError::Protocol(format!(
+            "registration challenge nonce must be {} bytes, got {}",
+            REGISTRATION_CHALLENGE_NONCE_LEN,
+            nonce.len()
+        )));
+    }
+    let mut message = Vec::with_capacity(REGISTRATION_CHALLENGE_DOMAIN.len() + nonce.len());
+    message.extend_from_slice(REGISTRATION_CHALLENGE_DOMAIN);
+    message.extend_from_slice(nonce);
+    Ok(message)
+}
+
+/// Domain prefix of a channel membership change signature
+/// (`channel.proto`, "Signatures"; server `membership.ChangeDomain`).
+pub const CHANNEL_CHANGE_DOMAIN: &[u8] = b"chatter-channel-change-v1\0";
+
+/// Serialise a channel change's `Actions` and sign
+/// `"chatter-channel-change-v1\0" || actions` with the identity key. Returns
+/// `(actions_bytes, signature)`: the bytes go into `ChannelChange.actions`
+/// exactly as signed.
+///
+/// Like the registration challenge, this is not a general `sign(data)`: the
+/// caller hands over a typed `Actions`, never bytes, and the signed message
+/// always starts with the domain prefix, so it can never be a prekey
+/// (`0x05 || pub`, `0x08 || kyber`) or another protocol's message.
+pub fn sign_channel_change(
+    identity: &libsignal_protocol::IdentityKeyPair,
+    actions: &crate::proto::chat_v1::channel_change::Actions,
+) -> Result<(Vec<u8>, Vec<u8>), CryptoError> {
+    let bytes = prost::Message::encode_to_vec(actions);
+    let mut message = Vec::with_capacity(CHANNEL_CHANGE_DOMAIN.len() + bytes.len());
+    message.extend_from_slice(CHANNEL_CHANGE_DOMAIN);
+    message.extend_from_slice(&bytes);
+    // OS randomness for the XEdDSA nonce, as for the registration challenge.
+    use rand::TryRngCore;
+    let mut rng = rand::rngs::OsRng.unwrap_err();
+    let sig = identity
+        .private_key()
+        .calculate_signature(&message, &mut rng)
+        .map_err(|e| CryptoError::Protocol(e.to_string()))?;
+    Ok((bytes, sig.into_vec()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::storage::Database;
+    use tempfile::NamedTempFile;
+
+    /// The change signature covers prefix || actions bytes and returns those
+    /// exact bytes.
+    #[test]
+    fn channel_change_signature_is_domain_separated() {
+        let identity = IdentityKeyPair::generate(&mut rand::rng());
+        let actions = crate::proto::chat_v1::channel_change::Actions {
+            channel_id: "c".into(),
+            revision: 1,
+            ..Default::default()
+        };
+        let (bytes, sig) = sign_channel_change(&identity, &actions).unwrap();
+        assert_eq!(bytes, prost::Message::encode_to_vec(&actions));
+        let mut message = CHANNEL_CHANGE_DOMAIN.to_vec();
+        message.extend_from_slice(&bytes);
+        assert!(identity.public_key().verify_signature(&message, &sig));
+        assert!(!identity.public_key().verify_signature(&bytes, &sig));
+    }
+
+    fn manager_with_identity() -> (IdentityKeyManager, NamedTempFile) {
+        let db_file = NamedTempFile::new().unwrap();
+        let db = Arc::new(Database::open(db_file.path(), "test_passphrase").unwrap());
+        db.run_migrations().unwrap();
+        let mgr = IdentityKeyManager::new(Arc::new(KeyStore::new(db)));
+        mgr.generate_identity(&mut rand::rng()).unwrap();
+        (mgr, db_file)
+    }
+
+    /// A prekey-shaped "nonce" (0x05 || 32-byte public key) is refused before
+    /// the identity key is touched — the server cannot use the challenge as a
+    /// signed-prekey signing oracle. Same for a Kyber-sized blob and an empty one.
+    #[test]
+    fn refuses_non_nonce_lengths() {
+        let (mgr, _db) = manager_with_identity();
+        let mut prekey_shaped = vec![0x05u8];
+        prekey_shaped.extend_from_slice(&[0x42; 32]);
+        for bad in [prekey_shaped, vec![0x08; 1569], vec![0; 31], Vec::new()] {
+            assert!(
+                mgr.sign_registration_challenge(&bad).is_err(),
+                "signed a {}-byte challenge",
+                bad.len()
+            );
+        }
+    }
+
+    /// The signature is over prefix || nonce, never the raw nonce.
+    #[test]
+    fn signs_domain_separated_message() {
+        let (mgr, _db) = manager_with_identity();
+        let nonce = [7u8; REGISTRATION_CHALLENGE_NONCE_LEN];
+        let sig = mgr.sign_registration_challenge(&nonce).unwrap();
+        let public = mgr.get_public_key().unwrap();
+        let message = registration_challenge_message(&nonce).unwrap();
+        assert!(message.starts_with(b"chatter-reg-challenge-v1\0"));
+        assert!(public.public_key().verify_signature(&message, &sig));
+        assert!(!public.public_key().verify_signature(&nonce, &sig));
     }
 }

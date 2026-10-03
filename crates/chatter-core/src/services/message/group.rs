@@ -9,6 +9,138 @@ use crate::storage::repositories::settings_repo::keys;
 use crate::util::time::TimestampNanos;
 
 use super::{MessageError, MessageService};
+use crate::services::channel::verified_state::{
+    compare_peer_state, PeerStateCheck, VerificationStatus, VerifiedChannel, VerifiedMembership,
+};
+use crate::storage::repositories::settings_repo::SettingsRepository;
+use crate::storage::repositories::verified_membership_repo::VerifiedMembershipRepository;
+use std::sync::Arc;
+
+/// The channel service's half of the `(revision, state_hash)` cross-check
+/// (Design B): a peer stamped a revision above our verified state, so fetch
+/// `GetChannelChanges(local + 1)`, verify and commit. Registered with
+/// [`MessageService::set_channel_state_sync`]. Called on a spawned task;
+/// `peer_revision` is the highest revision a peer has shown us.
+#[async_trait::async_trait]
+pub trait ChannelStateSync: Send + Sync {
+    async fn fetch_channel_changes(&self, channel_id: ChannelId, peer_revision: u64);
+}
+
+/// Every sender-key decision reads the channel's VERIFIED membership
+/// (`verified_membership_repo`), never `channel_repo`, which mirrors whatever
+/// the server says. Shared by the send side (`MessageService`) and the receive
+/// side (`MessageGateway`); both reach the database through their settings repo.
+pub(crate) struct GroupStateGate {
+    repo: VerifiedMembershipRepository,
+    settings: Arc<SettingsRepository>,
+}
+
+impl GroupStateGate {
+    pub(crate) fn new(settings: &Arc<SettingsRepository>) -> Self {
+        Self { repo: VerifiedMembershipRepository::new(settings.database().clone()), settings: settings.clone() }
+    }
+
+    fn peer_ahead_key(channel_id: &ChannelId) -> String {
+        format!("channel_state_peer_ahead:{channel_id}")
+    }
+
+    /// The verified state, when it allows sender-key traffic: present and
+    /// neither failed nor forked. Anything else is send-blocked, like a
+    /// pending rotation (`is_channel_send_blocked`).
+    pub(crate) fn for_distribution(&self, channel_id: &ChannelId) -> Result<VerifiedChannel, MessageError> {
+        match self.repo.load(channel_id)? {
+            Some(v) if v.status == VerificationStatus::Ok => Ok(v),
+            other => Err(MessageError::MembershipNotVerified {
+                channel_id: *channel_id,
+                status: other.map(|v| v.status),
+            }),
+        }
+    }
+
+    /// The verified state whatever its status (receiving is not distributing).
+    pub(crate) fn load(&self, channel_id: &ChannelId) -> Option<VerifiedChannel> {
+        self.repo
+            .load(channel_id)
+            .inspect_err(|e| tracing::warn!(%channel_id, error = %e, "Could not load verified membership"))
+            .ok()
+            .flatten()
+    }
+
+    /// Whether group content or an SKDM from `sender` is accepted: a member
+    /// of the verified distribution set. Signal drops group messages from
+    /// non-members. Fails closed.
+    pub(crate) fn admits(&self, channel_id: &ChannelId, sender: &UserId) -> bool {
+        self.repo
+            .is_distribution_member(channel_id, &sender.to_string())
+            .inspect_err(|e| tracing::warn!(%channel_id, %sender, error = %e, "Verified membership lookup failed"))
+            .unwrap_or(false)
+    }
+
+    /// Check a peer's `(revision, state_hash)` stamp against our verified
+    /// state. A fork marks the channel `Fork` (send-blocked until the user
+    /// acknowledges it) — only on the word of a verified member, or anyone
+    /// the server invents could block the channel. A peer ahead records its
+    /// revision for [`Self::take_peer_ahead`]. `None` when there is nothing
+    /// to compare (no stamp, or no verified state and no revision claimed).
+    pub(crate) fn cross_check(
+        &self,
+        channel_id: &ChannelId,
+        sender_is_member: bool,
+        peer_revision: u64,
+        peer_hash: &[u8],
+    ) -> Option<PeerStateCheck> {
+        let check = match self.load(channel_id) {
+            None if peer_revision == 0 => return None,
+            None => PeerStateCheck::PeerAhead,
+            Some(local) => {
+                let local_revision = local.revision();
+                let at_peer = (peer_revision < local_revision)
+                    .then(|| self.repo.state_hash_at(channel_id, peer_revision).ok().flatten())
+                    .flatten();
+                compare_peer_state(local_revision, &local.state_hash(), peer_revision, peer_hash, at_peer.as_ref())
+            }
+        };
+        match check {
+            PeerStateCheck::Fork if sender_is_member => {
+                tracing::error!(%channel_id, peer_revision,
+                    "Membership FORK: a member's state hash differs from ours; channel send-blocked");
+                if let Err(e) = self.repo.set_status(channel_id, VerificationStatus::Fork) {
+                    tracing::warn!(%channel_id, error = %e, "Could not record membership fork");
+                }
+            }
+            PeerStateCheck::Fork => {
+                tracing::warn!(%channel_id, peer_revision, "Fork claim from a non-member ignored");
+            }
+            PeerStateCheck::PeerAhead => {
+                let key = Self::peer_ahead_key(channel_id);
+                let known = self.settings.get::<u64>(&key).ok().flatten().unwrap_or(0);
+                if peer_revision > known {
+                    if let Err(e) = self.settings.set(&key, &peer_revision) {
+                        tracing::warn!(%channel_id, error = %e, "Could not record a peer's newer revision");
+                    }
+                }
+            }
+            PeerStateCheck::InSync | PeerStateCheck::PeerBehind => {}
+        }
+        Some(check)
+    }
+
+    /// The highest revision a peer showed above ours since the last call,
+    /// cleared on read (the receive paths that have no `MessageService`
+    /// record it; [`MessageService::sync_channel_state_if_behind`] drains it).
+    pub(crate) fn take_peer_ahead(&self, channel_id: &ChannelId) -> Option<u64> {
+        let key = Self::peer_ahead_key(channel_id);
+        let rev = self.settings.get::<u64>(&key).ok().flatten()?;
+        let _ = self.settings.delete(&key);
+        Some(rev)
+    }
+}
+
+/// Stamp our verified `(revision, state_hash)` into a group DataMessage.
+pub(crate) fn stamp_group_data_message(dm: &mut crate::proto::content_v1::DataMessage, state: &VerifiedChannel) {
+    dm.group_state_revision = state.revision();
+    dm.group_state_hash = state.state_hash().to_vec();
+}
 
 fn sender_key_distribution_result(
     delivered: usize,
@@ -44,15 +176,13 @@ impl MessageService {
             .map_err(MessageError::Storage)?
             .ok_or(MessageError::NotLoggedIn)?;
 
-        // Fan SKDM to ALL members including our own user's OTHER linked
-        // devices. Own device on this client is the only one excluded —
+        // Fan SKDM to ALL verified members including our own user's OTHER
+        // linked devices. Own device on this client is the only one excluded —
         // multi-device sync requires every other device that might receive
-        // this channel's messages to hold our sender key.
-        let members = self.channel_repo.list_members(channel_id).unwrap_or_default();
-        let fanout_user_ids: Vec<String> = members
-            .iter()
-            .map(|m| m.user_id.to_string())
-            .collect();
+        // this channel's messages to hold our sender key. The server's member
+        // list is not consulted: a member it alone asserts gets nothing.
+        let verified = self.group_gate().for_distribution(channel_id)?;
+        let fanout_user_ids: Vec<String> = verified.members();
 
         if fanout_user_ids.is_empty() {
             tracing::debug!(
@@ -71,7 +201,7 @@ impl MessageService {
 
         for member_id in &fanout_user_ids {
             let is_self = member_id == &our_user_id;
-            let plaintext = self.skdm_plaintext(channel_id, skdm, member_id);
+            let plaintext = self.skdm_plaintext(channel_id, &verified, skdm, member_id);
 
             // Sender keys are per (user, device), so every device gets its own
             // ciphertext. Our own current device already holds the sender key.
@@ -84,17 +214,11 @@ impl MessageService {
                 )
                 .await;
             success_count += outcome.delivered;
+            self.record_sender_key_holders(channel_id, member_id, &outcome);
             if outcome.delivered == 0 && !is_self {
                 error_count += 1;
                 if let Some(error) = outcome.error {
                     super::server_dm::record_deposit_error(&mut failure, error);
-                }
-            }
-            if outcome.delivered > 0 {
-                if is_self {
-                    self.record_own_devices_hold_sender_key(channel_id, &our_user_id).await;
-                } else {
-                    self.record_sender_key_delivered(channel_id, member_id);
                 }
             }
         }
@@ -125,11 +249,14 @@ impl MessageService {
             .map(|mailbox| mailbox.public_key.to_vec())
     }
 
-    /// The padded, encoded SKDM Content for one recipient: the SKDM, our
-    /// mailbox announcement, and our profile key (see [`Self::skdm_profile_key`]).
+    /// The padded, encoded SKDM Content for one recipient: the SKDM stamped
+    /// with our verified `(revision, state_hash)` for the receiver's fork /
+    /// staleness cross-check, our mailbox announcement, and our profile key
+    /// (see [`Self::skdm_profile_key`]).
     fn skdm_plaintext(
         &self,
         channel_id: &ChannelId,
+        verified: &VerifiedChannel,
         skdm: &crate::proto::content_v1::SenderKeyDistribution,
         recipient: &str,
     ) -> Vec<u8> {
@@ -137,7 +264,9 @@ impl MessageService {
         use prost::Message;
 
         let mut skdm = skdm.clone();
-        skdm.profile_key = self.skdm_profile_key(channel_id, recipient);
+        skdm.state_revision = verified.revision();
+        skdm.state_hash = verified.state_hash().to_vec();
+        skdm.profile_key = self.skdm_profile_key(verified, recipient);
         let mut skdm_content = content_v1::Content {
             ephemeral_reply_to: self.our_group_mailbox_pk(channel_id),
             timestamp: TimestampNanos::now().as_u64(),
@@ -151,35 +280,94 @@ impl MessageService {
     /// Our profile key for a channel member's SKDM, so they can decrypt our
     /// name and avatar without being our friend — Signal shares every group
     /// member's profile key with the group. The SKDM is pairwise-encrypted,
-    /// so it reaches only this member; `None` for anyone this device does not
-    /// hold as a member of `channel_id` — an SKDM also answers a
+    /// so it reaches only this member; `None` for anyone not in the channel's
+    /// verified distribution set — an SKDM also answers a
     /// `SenderKeyRequest`, which anyone can send — and for whoever the
     /// visibility setting keeps it from (ourselves, a member we blocked, a
     /// non-friend under "my contacts", everyone under "nobody"). Fails
     /// closed: a lookup error shares nothing.
-    fn skdm_profile_key(&self, channel_id: &ChannelId, recipient: &str) -> Option<Vec<u8>> {
-        let recipient: UserId = recipient.parse().ok()?;
-        if !matches!(self.channel_repo.get_membership(channel_id, &recipient), Ok(Some(_))) {
+    fn skdm_profile_key(&self, verified: &VerifiedChannel, recipient: &str) -> Option<Vec<u8>> {
+        if !verified.contains(recipient) {
             return None;
         }
+        let recipient: UserId = recipient.parse().ok()?;
         crate::services::profile_visibility::shareable_profile_key(&self.settings_repo, &self.user_repo, &recipient)
             .map(|k| k.to_vec())
     }
 
-    fn record_sender_key_delivered(&self, channel_id: &ChannelId, member_id: &str) {
-        if let Err(e) = self.signal_service.mark_sender_key_delivered(channel_id, member_id) {
+    /// Record exactly the devices an SKDM deposit reached (`deposits` of its
+    /// [`super::server_dm::DepositOutcome`]), each under the registration id
+    /// of the session it was encrypted with (`registration_ids`). A device
+    /// without one is not recorded, so it still counts as lacking our key.
+    fn record_sender_key_holders(
+        &self,
+        channel_id: &ChannelId,
+        member_id: &str,
+        outcome: &super::server_dm::DepositOutcome,
+    ) {
+        let devices: Vec<(u32, u32)> = outcome
+            .deposits
+            .iter()
+            .filter_map(|&(device, _)| {
+                let registration_id = outcome.registration_ids.get(&device).copied();
+                if registration_id.is_none() {
+                    tracing::warn!(%channel_id, member_id, device, "SKDM deposit without a registration id — not recorded as held");
+                }
+                registration_id.map(|r| (device, r))
+            })
+            .collect();
+        if let Err(e) = self.signal_service.mark_sender_key_held(channel_id, member_id, &devices) {
             tracing::warn!(%channel_id, member_id, error = %e, "Failed to record SKDM delivery");
         }
     }
 
-    /// Our own other devices are tracked per DEVICE (`"{user}.{device}"`), not
-    /// per user like other members: a device linked after our key went out
-    /// must get it too, or it cannot read what this device sends to the
-    /// channel (Signal-Desktop fans the SKDM to the sender's own devices).
-    async fn record_own_devices_hold_sender_key(&self, channel_id: &ChannelId, our_user_id: &str) {
-        for device_id in self.own_device_ids().await.unwrap_or_default() {
-            self.record_sender_key_delivered(channel_id, &format!("{our_user_id}.{device_id}"));
+    /// `(device, registration id)` of each device of `member` that must hold
+    /// our sender key, from local state only (no prekey fetch per send, as
+    /// Signal-Desktop reads its open sessions): the devices we hold a usable
+    /// session with — a peer's added device gets one from its
+    /// `PEER_DEVICES_CHANGED` (`handle_peer_device_change`), a removed one is
+    /// archived there or on the server's mismatch answer to a send. For our
+    /// own user, our live device list (no device change notification reaches
+    /// us for our own links) minus this device, falling back to our sessions
+    /// when it cannot be fetched. A device we have no session with has no
+    /// registration id (`None`), which no delivery records, so it counts as new.
+    async fn sender_key_devices(&self, member: &str, our_user_id: &str, our_device_id: u32) -> Vec<(u32, Option<u32>)> {
+        let own = if member == our_user_id { self.own_device_ids().await } else { None };
+        let devices = match own {
+            Some(ids) => ids.into_iter().collect(),
+            None => self.signal_service.session_devices(member).await.unwrap_or_default(),
+        };
+        devices
+            .into_iter()
+            .filter(|&d| member != our_user_id || d != our_device_id)
+            .map(|d| (d, self.signal_service.session_registration_id(member, d)))
+            .collect()
+    }
+
+    /// Verified channel members (our own user included, for our other devices)
+    /// with a device that does not hold our CURRENT sender key — Signal-Desktop's
+    /// `newToMemberServiceIds`. A member other than us with no known device
+    /// is one we have never reached; it is included so the fan-out
+    /// establishes its sessions (Signal fetches prekeys for such members).
+    pub(crate) async fn members_lacking_sender_key(
+        &self,
+        channel_id: &ChannelId,
+        our_user_id: &str,
+        our_device_id: u32,
+    ) -> Result<Vec<UserId>, MessageError> {
+        let holders = self
+            .signal_service
+            .sender_key_holders(channel_id)
+            .map_err(|e| MessageError::EncryptionFailed(e.to_string()))?;
+        let mut lacking = Vec::new();
+        for user in self.group_gate().for_distribution(channel_id)?.members() {
+            let Ok(user_id) = user.parse::<UserId>() else { continue };
+            let devices = self.sender_key_devices(&user, our_user_id, our_device_id).await;
+            if lacks_sender_key(&holders, &user, &devices, user == our_user_id) {
+                lacking.push(user_id);
+            }
         }
+        Ok(lacking)
     }
 
     /// Our live device ids, from the `own_devices` cache (refetched when
@@ -206,12 +394,11 @@ impl MessageService {
     }
 
     /// Our devices that can still send and receive: the ones with a prekey
-    /// bundle, the same set every own-user fan-out encrypts to. Not
-    /// `ListDevices` — an identity republish drops every bundle but leaves the
-    /// old `user_devices` rows (server `republish_identity.go`), so a dead
-    /// install stays listed there forever and its channel messages were parked
-    /// and re-requested from it on every launch. The wildcard fetch pops no
-    /// one-time prekeys.
+    /// bundle, the same set every own-user fan-out encrypts to, so "a device
+    /// of ours" means one thing everywhere. (An identity republish drops every
+    /// other device's bundle and its `user_devices` row together — server
+    /// `republish_identity.go` — so this and `ListDevices` agree.) The
+    /// wildcard fetch pops no one-time prekeys.
     async fn fetch_own_device_ids(&self) -> Result<std::collections::HashSet<u32>, crate::error::NetworkError> {
         use crate::services::current_user::CurrentUserProvider;
         let me = self.settings_repo.current_user_id()
@@ -220,8 +407,12 @@ impl MessageService {
         Ok(bundle_device_ids(resp))
     }
 
-    /// Hand our CURRENT sender key to every channel member that does not hold
-    /// it yet. MUST run before the message is encrypted: the SKDM carries the
+    /// Hand our CURRENT sender key to every channel member with a device that
+    /// does not hold it yet ([`Self::members_lacking_sender_key`]): a member
+    /// newly added, a member's newly linked or re-registered device, our own
+    /// newly linked device. The SKDM goes to all of that member's devices, as
+    /// Signal-Desktop's does; a device that already held it keeps its chain
+    /// (`add_sender_key_state` ignores a known chain id). MUST run before the message is encrypted: the SKDM carries the
     /// chain's current iteration, so one built after `group_encrypt` would
     /// start one past the message it was meant to unlock (Signal-Desktop
     /// `sendToGroup` sends to `newToMemberDevices` first for the same reason).
@@ -253,46 +444,17 @@ impl MessageService {
             .get::<u32>(keys::CURRENT_DEVICE_ID)
             .map_err(MessageError::Storage)?
             .ok_or(MessageError::NotLoggedIn)?;
-        let holders = self.signal_service.sender_key_recipients(channel_id).map_err(crypto)?;
-        let members: Vec<UserId> = self
-            .channel_repo
-            .list_members(channel_id)
-            .unwrap_or_default()
-            .into_iter()
-            .map(|m| m.user_id)
-            .collect();
-        let missing: Vec<UserId> = members
-            .iter()
-            .copied()
-            .filter(|u| {
-                let u = u.to_string();
-                u != our_user_id && !holders.contains(&u)
-            })
-            .collect();
-        // Our own other devices (e.g. one linked since our key went out).
-        let own_missing = members.iter().any(|u| u.to_string() == our_user_id)
-            && self.own_device_ids().await.is_some_and(|ids| {
-                ids.iter()
-                    .any(|d| *d != our_device_id && !holders.contains(&format!("{our_user_id}.{d}")))
-            });
-        if missing.is_empty() && !own_missing {
+        let lacking = self.members_lacking_sender_key(channel_id, &our_user_id, our_device_id).await?;
+        if lacking.is_empty() {
             return Ok(());
         }
 
         let skdm = self.create_sender_key_for_channel(channel_id).await?;
-        if own_missing {
-            if let Ok(our_id) = our_user_id.parse::<UserId>() {
-                if let Err(e) = self.send_skdm_to_member(channel_id, &our_id, &skdm).await {
-                    tracing::warn!(%channel_id, error = %e,
-                        "Could not hand our sender key to our own other devices before sending");
-                }
-            }
-        }
-        for member_id in &missing {
+        for member_id in &lacking {
             if let Err(e) = self.send_skdm_to_member(channel_id, member_id, &skdm).await {
                 tracing::warn!(
                     %channel_id, %member_id, error = %e,
-                    "Could not hand our sender key to a member before sending; \
+                    "Could not hand our sender key to a member's new devices before sending; \
                      they cannot read this message unless it lands first"
                 );
             }
@@ -481,7 +643,16 @@ impl MessageService {
                 .collect()
         };
 
+        // The SKDM's stamp may have shown a peer ahead of us.
+        self.sync_channel_state_if_behind(&channel_id);
+
         if pending.is_empty() {
+            return;
+        }
+        // Admitted when parked; the verified state may have dropped the sender since.
+        if !self.group_gate().admits(&channel_id, &sender_id) {
+            tracing::warn!(%channel_id, %sender_id, count = pending.len(),
+                "Dropping parked group messages: sender is no longer a verified member");
             return;
         }
 
@@ -530,6 +701,7 @@ impl MessageService {
                             continue;
                         }
                     };
+                    self.check_group_stamp(&channel_id, &dm);
 
                     // Persist incoming attachment pointers so the receiver can
                     // download + decrypt (parity with the stream path).
@@ -617,7 +789,9 @@ impl MessageService {
         }
     }
 
-    /// Ask every other current member for their SKDM.
+    /// Ask every other verified member for their SKDM (asking leaks nothing,
+    /// so a forked or failed state still asks; only verified members' SKDMs
+    /// are accepted). Nothing without a verified state.
     ///
     /// Called right after joining an encrypted channel so we can start
     /// decrypting messages the existing members send — without this step
@@ -633,15 +807,19 @@ impl MessageService {
             .get_string(keys::CURRENT_USER_ID)
             .map_err(MessageError::Storage)?
             .ok_or(MessageError::NotLoggedIn)?;
-        let members = self.channel_repo.list_members(channel_id).unwrap_or_default();
-        for member in &members {
-            if member.user_id.to_string() == current_user {
+        let Some(verified) = self.group_gate().load(channel_id) else {
+            tracing::debug!(%channel_id, "No verified membership yet; not requesting SKDMs");
+            return Ok(());
+        };
+        for member in verified.members() {
+            if member == current_user {
                 continue;
             }
-            if let Err(e) = self.send_sender_key_request(channel_id, &member.user_id).await {
+            let Ok(member_id) = member.parse::<UserId>() else { continue };
+            if let Err(e) = self.send_sender_key_request(channel_id, &member_id).await {
                 tracing::warn!(
                     channel_id = %channel_id,
-                    member_id = %member.user_id,
+                    member_id = %member_id,
                     error = %e,
                     "Failed to request SKDM from existing member"
                 );
@@ -673,19 +851,18 @@ impl MessageService {
         member_id: &UserId,
         skdm: &crate::proto::content_v1::SenderKeyDistribution,
     ) -> Result<(), MessageError> {
-        if !self.may_hold_sender_key(channel_id, member_id) {
+        let verified = self.group_gate().for_distribution(channel_id)?;
+        let member_id_str = member_id.to_string();
+        if !verified.contains(&member_id_str) {
             return Err(MessageError::EncryptionFailed(format!(
-                "{member_id} is not a current member of {channel_id}; refusing to hand it our sender key"
+                "{member_id} is not a verified member of {channel_id}; refusing to hand it our sender key"
             )));
         }
         let mut auth_client = self.auth_client();
 
-        let member_id_str = member_id.to_string();
-        let plaintext = self.skdm_plaintext(channel_id, skdm, &member_id_str);
+        let plaintext = self.skdm_plaintext(channel_id, &verified, skdm, &member_id_str);
         // To ourselves (our other devices asking, or a newly linked one) the
         // deposit leaves out this device, which already holds the key.
-        let is_self = self.settings_repo.get_string(keys::CURRENT_USER_ID).ok().flatten().as_deref()
-            == Some(member_id_str.as_str());
 
         // Per-device sealed deposit, UAK-authorized: sender keys are keyed by
         // (user, device), so each device needs its own ciphertext.
@@ -699,11 +876,7 @@ impl MessageService {
                 "SKDM delivery to new member failed on every device".into()
             ));
         }
-        if is_self {
-            self.record_own_devices_hold_sender_key(channel_id, &member_id_str).await;
-        } else {
-            self.record_sender_key_delivered(channel_id, &member_id_str);
-        }
+        self.record_sender_key_holders(channel_id, &member_id_str, &outcome);
 
         tracing::info!(
             channel_id = %channel_id,
@@ -715,12 +888,118 @@ impl MessageService {
     }
 
     /// Whether `user` may be handed our sender key for `channel_id`: only a
-    /// CURRENT member per our local membership, the same rows every SKDM
-    /// fan-out iterates (a kick/ban deletes the row and marks the key for
-    /// rotation). Signal distributes sender keys to current group members
-    /// only. Fails closed: a lookup error hands out nothing.
+    /// member of the VERIFIED distribution set, the same set every SKDM
+    /// fan-out iterates (a verified removal drops them and marks the key for
+    /// rotation), and only while the state is neither failed nor forked.
+    /// Signal distributes sender keys to current group members only. Fails
+    /// closed: a lookup error hands out nothing.
     fn may_hold_sender_key(&self, channel_id: &ChannelId, user: &UserId) -> bool {
-        matches!(self.channel_repo.get_membership(channel_id, user), Ok(Some(_)))
+        self.group_gate()
+            .for_distribution(channel_id)
+            .is_ok_and(|v| v.contains(&user.to_string()))
+    }
+
+    /// The key-gating reads of the verified membership state.
+    pub(crate) fn group_gate(&self) -> GroupStateGate {
+        GroupStateGate::new(&self.settings_repo)
+    }
+
+    /// Register the channel service's change fetcher (W4).
+    pub fn set_channel_state_sync(&self, sync: Arc<dyn ChannelStateSync>) {
+        *self.channel_state_sync.write() = Some(sync);
+    }
+
+    /// Act on a peer's stamp: a peer ahead of us (recorded by any receive
+    /// path) has the channel service fetch the changes we lack. A recorded
+    /// revision is left for later when no fetcher is registered.
+    pub(crate) fn sync_channel_state_if_behind(&self, channel_id: &ChannelId) {
+        let Some(sync) = self.channel_state_sync.read().clone() else { return };
+        let Some(peer_revision) = self.group_gate().take_peer_ahead(channel_id) else { return };
+        let channel_id = *channel_id;
+        tokio::spawn(async move { sync.fetch_channel_changes(channel_id, peer_revision).await });
+    }
+
+    /// Cross-check a received group DataMessage's stamp from a verified
+    /// member ([`GroupStateGate::cross_check`]), then fetch if it is ahead.
+    pub(crate) fn check_group_stamp(&self, channel_id: &ChannelId, dm: &crate::proto::content_v1::DataMessage) {
+        self.group_gate().cross_check(channel_id, true, dm.group_state_revision, &dm.group_state_hash);
+        self.sync_channel_state_if_behind(channel_id);
+    }
+
+    /// A peer sharing a channel with us added or removed a device
+    /// (`PEER_DEVICES_CHANGED`, server `peerfanout.go`: `change_type` is
+    /// `added`, `revoked`, or `reregistered` for a whole account).
+    ///
+    /// As Signal-Desktop `sendToGroup`: a device change of a member who stays
+    /// needs no sender-key reset — an added device only needs our SKDM, and a
+    /// removed one is just dropped (`removedFromMemberDevices` without a
+    /// reset). So `added` opens a session with that one device, which makes
+    /// the next group send's top-up ([`Self::members_lacking_sender_key`])
+    /// hand it our current key; `revoked` archives that one device's session
+    /// so nothing is encrypted to it again, and leaves the peer's other
+    /// sessions alone. `reregistered` deletes the account: like a removed
+    /// member, every shared channel's key is reset and its sessions archived.
+    pub async fn handle_peer_device_change(&self, peer: UserId, device_id: u32, change_type: &str) {
+        let peer_str = peer.to_string();
+        match change_type {
+            "added" => {
+                let result = self
+                    .signal_service
+                    .ensure_session(&mut self.auth_client(), &peer_str, device_id)
+                    .await;
+                match result {
+                    Ok(()) => tracing::info!(peer = %peer_str, device_id,
+                        "Opened a session with a peer's new device; next group send hands it our sender key"),
+                    Err(e) => tracing::warn!(peer = %peer_str, device_id, error = %e,
+                        "Could not open a session with a peer's new device; it heals via its SenderKeyRequest"),
+                }
+            }
+            "revoked" => {
+                if let Err(e) = self
+                    .signal_service
+                    .actor
+                    .archive_session_for_resend(peer_str.clone(), device_id, None)
+                    .await
+                {
+                    tracing::warn!(peer = %peer_str, device_id, error = %e,
+                        "Failed to archive the session of a peer's removed device");
+                }
+            }
+            other => {
+                if other != "reregistered" {
+                    tracing::warn!(peer = %peer_str, change_type = other,
+                        "Unknown peer device change; treating it as an account reset");
+                }
+                if let Err(e) = self.signal_service.actor.invalidate_peer_sessions(peer_str.clone()).await {
+                    tracing::warn!(peer = %peer_str, error = %e, "Failed to archive peer sessions");
+                }
+                // The verified channels that hand them our key. A server-only
+                // removal is applied to the distribution set as fail-safe and
+                // stays "pending signature" in the verified state (Design B):
+                // only a signed RemoveMember + AddMember re-admits them.
+                let repo = VerifiedMembershipRepository::new(self.database.clone());
+                let channels = match repo.channels_distributing_to(&peer_str) {
+                    Ok(channels) => channels,
+                    Err(e) => {
+                        tracing::warn!(peer = %peer_str, error = %e,
+                            "Could not list the peer's channels; no sender-key rotation marked");
+                        return;
+                    }
+                };
+                for channel_id in &channels {
+                    if let Err(e) = repo.exclude(channel_id, &peer_str) {
+                        tracing::warn!(%channel_id, peer = %peer_str, error = %e,
+                            "Failed to exclude a re-registered peer from distribution");
+                    }
+                    if let Err(e) = self.signal_service.mark_channel_for_rotation(channel_id) {
+                        tracing::warn!(%channel_id, peer = %peer_str, error = %e,
+                            "Failed to mark channel for sender-key rotation");
+                    }
+                }
+                tracing::info!(peer = %peer_str, channels_marked = channels.len(),
+                    "Peer account re-registered: shared channels marked for sender-key rotation");
+            }
+        }
     }
 
     /// Answer a `SenderKeyRequest` from `requester` — the authenticated sender
@@ -1004,7 +1283,7 @@ impl MessageService {
             return retired.contains_key(&(user_id, device_id));
         }
         // Held across the fetch: a history sync full of one retired device's
-        // messages costs one ListDevices, not one per message.
+        // messages costs one device-list fetch, not one per message.
         let mut cache = self.own_devices.lock().await;
         let now = TimestampNanos::now().as_u64();
         if let Some((fetched_at, ids)) = cache.as_ref() {
@@ -1127,12 +1406,12 @@ impl MessageService {
             us,
             message.sent_at,
         )?;
-        let current = self
-            .channel_repo
-            .list_members(&message.conversation_id)?
-            .into_iter()
-            .map(|member| member.user_id)
-            .collect::<Vec<_>>();
+        // Still a member = in the verified distribution set; nothing while
+        // the state is failed or forked.
+        let Ok(verified) = self.group_gate().for_distribution(&message.conversation_id) else {
+            return Ok(None);
+        };
+        let current = verified_user_ids(&verified);
         let device = DeviceId(peer_device_id);
         // Our own other devices are not receipt targets, yet they read our
         // channel messages through the same sender key. Their own snapshot
@@ -1149,7 +1428,7 @@ impl MessageService {
         if !allowed {
             return Ok(None);
         }
-        Ok(self.rebuild_group_content(&message))
+        Ok(self.rebuild_group_content(&message, &verified))
     }
 
     /// User-initiated retry of a stored private channel message: the same
@@ -1172,19 +1451,14 @@ impl MessageService {
             us,
             message.sent_at,
         )?;
-        let current = self
-            .channel_repo
-            .list_members(&message.conversation_id)?
-            .into_iter()
-            .map(|member| member.user_id)
-            .collect::<Vec<_>>();
-        let targets = resend_targets(&original, &current);
+        let verified = self.group_gate().for_distribution(&message.conversation_id)?;
+        let targets = resend_targets(&original, &verified_user_ids(&verified));
         if targets.is_empty() {
             return Err(MessageError::InvalidContent(
                 "no original recipient of this message is still in the channel".into(),
             ));
         }
-        let plaintext = self.rebuild_group_content(message).ok_or_else(|| {
+        let plaintext = self.rebuild_group_content(message, &verified).ok_or_else(|| {
             MessageError::InvalidContent("message cannot be resent".into())
         })?;
         self.deliver_group_resend_to(&plaintext, &targets).await
@@ -1232,7 +1506,11 @@ impl MessageService {
     /// fields the original sender-key `DataMessage` carried (`core.rs`
     /// `send_message`), rebuilt from the local row. `None` for content that
     /// is not a user message.
-    fn rebuild_group_content(&self, message: &crate::domain::message::Message) -> Option<Vec<u8>> {
+    fn rebuild_group_content(
+        &self,
+        message: &crate::domain::message::Message,
+        verified: &VerifiedChannel,
+    ) -> Option<Vec<u8>> {
         use crate::domain::message::MessageContent;
         use crate::proto::content_v1::{content, Content, DataMessage};
         use prost::Message as _;
@@ -1265,7 +1543,7 @@ impl MessageService {
             .flatten()
             .map(|e| e.ttl.as_secs() as u32);
 
-        let dm = DataMessage {
+        let mut dm = DataMessage {
             body,
             attachments,
             channel_id: message.conversation_id.to_string(),
@@ -1284,6 +1562,7 @@ impl MessageService {
             message_id: message.id.to_string(),
             ..Default::default()
         };
+        stamp_group_data_message(&mut dm, verified);
         let mut content = Content {
             timestamp: dm.timestamp,
             content: Some(content::Content::DataMessage(dm)),
@@ -1347,7 +1626,7 @@ impl MessageService {
     ///
     /// The server validates that sealed sender ciphertexts match one of these plaintext bucket
     /// sizes: 256, 512, 1024, 4096 bytes. Without padding, message sizes leak event type info.
-    pub(super) fn pad_content_to_bucket(content: &mut crate::proto::content_v1::Content) {
+    pub(crate) fn pad_content_to_bucket(content: &mut crate::proto::content_v1::Content) {
         use prost::Message;
         const BUCKETS: [usize; 4] = [256, 512, 1024, 4096];
 
@@ -1393,6 +1672,11 @@ pub(super) fn resend_targets(
         .copied()
         .filter(|(user, _)| current_members.contains(user))
         .collect()
+}
+
+/// The verified distribution set as user ids.
+fn verified_user_ids(verified: &VerifiedChannel) -> Vec<UserId> {
+    verified.members().iter().filter_map(|u| u.parse().ok()).collect()
 }
 
 /// Device ids in a prekey-bundle response (multi-device list or the
@@ -1444,6 +1728,24 @@ pub(crate) fn eviction_resend_due(gate: &mut EvictionResendGate, sender: UserId,
 /// out, and how many have gone out without an answer.
 pub(crate) type SenderKeyRequestGate =
     std::collections::HashMap<(ChannelId, UserId, u32), (std::time::Instant, u32)>;
+
+/// Whether `user` (whose sender-key devices are `devices`) has a device that
+/// does not hold our current sender key, compared on (user, device,
+/// registration id). A member other than us with no known device has never
+/// been reached and lacks it; our own user with none has no other device.
+fn lacks_sender_key(
+    holders: &std::collections::HashSet<(String, u32, u32)>,
+    user: &str,
+    devices: &[(u32, Option<u32>)],
+    is_self: bool,
+) -> bool {
+    if devices.is_empty() {
+        return !is_self;
+    }
+    devices
+        .iter()
+        .any(|&(d, r)| r.is_none_or(|r| !holders.contains(&(user.to_string(), d, r))))
+}
 
 /// 30s, 60s, 120s ... capped at 15 min between unanswered requests.
 fn sender_key_request_due(
@@ -1583,7 +1885,54 @@ mod tests {
             }
         }
 
+        // Both hold the same verified state: Alice and Bob, revision 1.
+        for c in [&alice, &bob] {
+            seed_verified(c, channel_id, 1, &[alice_id, bob_id]);
+        }
+
         TwoMembers { alice, bob, alice_id, bob_id, channel_id, _dirs: (da, db) }
+    }
+
+    /// Commit `members` as the channel's verified state at `revision` (the
+    /// verifier itself is W2's and tested there; this only seeds storage).
+    /// Returns the state hash.
+    fn seed_verified(
+        c: &crate::client::ChatterClient,
+        channel_id: ChannelId,
+        revision: u64,
+        members: &[UserId],
+    ) -> crate::services::channel::verified_state::StateHash {
+        use crate::proto::chat_v1 as pb;
+        use crate::services::channel::verified_state::{
+            ChannelRole, Member, MemberStatus, MembershipState, PendingChange, Policy, VerifiedChange,
+        };
+        let state = MembershipState {
+            channel_id: channel_id.to_string(),
+            revision,
+            members: members
+                .iter()
+                .map(|u| (u.to_string(), Member { role: ChannelRole::Member, status: MemberStatus::Active, identity_key: [5; 33] }))
+                .collect(),
+            policy: Policy::defaults(false),
+            invites: Default::default(),
+            disappearing_seconds: 0,
+        };
+        let hash = state.hash();
+        let change = pb::ChannelChange { actions: vec![revision as u8], signature: vec![], invite_proof: vec![] };
+        VerifiedMembershipRepository::new(c.messages().database.clone())
+            .commit(
+                &channel_id,
+                &change,
+                &VerifiedChange(PendingChange {
+                    author_user_id: members[0].to_string(),
+                    author_identity_key: [5; 33],
+                    timestamp: 0,
+                    new_state: state,
+                    new_state_hash: hash,
+                }),
+            )
+            .unwrap();
+        hash
     }
 
     /// Signal hands sender keys to current group members only: a request from
@@ -1605,8 +1954,8 @@ mod tests {
         assert!(matches!(answered, Err(MessageError::EncryptionFailed(ref e)) if !e.contains("not a current member")),
             "a member's request goes to delivery: {answered:?}");
 
-        // Removed (kick/ban deletes the row): no longer answered.
-        alice.channel_repo.delete_membership(&t.channel_id, &t.bob_id).unwrap();
+        // Removed by a verified change: no longer answered.
+        seed_verified(&t.alice, t.channel_id, 2, &[t.alice_id]);
         assert!(matches!(alice.answer_sender_key_request(&t.channel_id, &t.bob_id, &[]).await, Ok(false)));
     }
 
@@ -1778,7 +2127,6 @@ mod tests {
     /// recipient, and Bob himself is excluded once he leaves.
     #[tokio::test]
     async fn resend_refuses_a_later_joiner_a_later_device_and_a_departed_member() {
-        use crate::domain::channel::{MemberRole, Membership, NotificationPreference};
         use crate::domain::ids::DeviceId;
         use crate::domain::message::{ConversationType, Message};
         use crate::storage::repositories::message_receipt_repo::MessageReceiptRepository;
@@ -1807,19 +2155,7 @@ mod tests {
             .unwrap();
 
         let carol = UserId::new();
-        alice
-            .channel_repo
-            .insert_membership(&Membership {
-                channel_id: t.channel_id,
-                user_id: carol,
-                role: MemberRole::Member,
-                joined_at: chrono::Utc::now(),
-                last_read_message_id: None,
-                is_muted: false,
-                muted_until: None,
-                notification_preference: NotificationPreference::default(),
-            })
-            .unwrap();
+        seed_verified(&t.alice, t.channel_id, 2, &[t.alice_id, t.bob_id, carol]);
 
         let ts_ms = sent_at / 1_000_000;
         assert!(
@@ -1857,7 +2193,7 @@ mod tests {
             "this device never asks itself"
         );
 
-        alice.channel_repo.delete_membership(&t.channel_id, &t.bob_id).unwrap();
+        seed_verified(&t.alice, t.channel_id, 3, &[t.alice_id, carol]);
         assert!(
             alice.group_resend_content(&t.bob_id, 1, ts_ms).unwrap().is_none(),
             "a member who left since the send gets nothing"
@@ -1890,7 +2226,8 @@ mod tests {
         alice.messages().settings_repo.set_bytes(keys::PROFILE_KEY, &[9; 32]).unwrap();
         let skdm = alice.signal().create_sender_key(&t.channel_id).await.unwrap();
         let carried = |to: &UserId| {
-            let bytes = alice.messages().skdm_plaintext(&t.channel_id, &skdm, &to.to_string());
+            let verified = alice.messages().group_gate().for_distribution(&t.channel_id).unwrap();
+            let bytes = alice.messages().skdm_plaintext(&t.channel_id, &verified, &skdm, &to.to_string());
             match content_v1::Content::decode(bytes.as_slice()).unwrap().content {
                 Some(content_v1::content::Content::SenderKey(s)) => s.profile_key,
                 _ => panic!("not an SKDM"),
@@ -2049,6 +2386,33 @@ mod tests {
             .collect();
         assert_eq!(issues.len(), 1);
         assert_eq!(issues[0].sender_id, Some(t.alice_id));
+    }
+
+    /// An identified sender is the server's claim alone, and a first identity
+    /// key is trusted on first use: the identified path must never start a
+    /// session, or the server could pin its own key for a peer we never met.
+    #[tokio::test]
+    async fn identified_message_never_starts_a_session() {
+        let t = two_members();
+        let m = t.bob.messages();
+        let gateway = crate::services::gateway::MessageGateway::new(
+            (*m.signal_service).clone(),
+            m.message_repo.clone(),
+            m.channel_repo.clone(),
+            m.user_repo.clone(),
+            m.settings_repo.clone(),
+            m.solicited_resends.clone(),
+        );
+        let refused = |r: Result<_, crate::error::ServiceError>| {
+            matches!(r, Err(crate::error::ServiceError::Crypto(crate::error::CryptoError::Protocol(ref e)))
+                if e.contains("No session available for an identified sender"))
+        };
+        assert!(refused(gateway.decrypt_identified_message(b"any", &t.alice_id, 1).await));
+
+        // Positive control: with a session the message reaches libsignal.
+        let record = libsignal_protocol::SessionRecord::new_fresh().serialize().unwrap();
+        m.signal_service.key_store.store_session(&format!("{}:1", t.alice_id), &record).unwrap();
+        assert!(!refused(gateway.decrypt_identified_message(b"any", &t.alice_id, 1).await));
     }
 
     #[test]
@@ -2235,5 +2599,375 @@ mod tests {
         }
         assert!(m.group_retry_requests.lock().contains(&oldest),
             "the evicted message is handed to request_group_resend");
+    }
+
+    /// Give `client` a usable session with `(user, device)` whose remote
+    /// registration id is `registration_id`, as a bundle fetch would.
+    async fn store_session(client: &crate::client::ChatterClient, user: UserId, device: u32, registration_id: u32) {
+        use libsignal_protocol::{
+            kem, process_prekey_bundle, DeviceId, IdentityKeyPair, InMemSignalProtocolStore,
+            KeyPair, PreKeyBundle, ProtocolAddress, SessionStore,
+        };
+        use rand::SeedableRng;
+        let mut rng = rand::rngs::StdRng::seed_from_u64(u64::from(registration_id) << 8 | u64::from(device));
+        let mut ours = InMemSignalProtocolStore::new(IdentityKeyPair::generate(&mut rng), 1).unwrap();
+        let theirs = IdentityKeyPair::generate(&mut rng);
+        let signed = KeyPair::generate(&mut rng);
+        let kyber = kem::KeyPair::generate(kem::KeyType::Kyber1024, &mut rng);
+        let sign = |key: &[u8], rng: &mut rand::rngs::StdRng| theirs.private_key().calculate_signature(key, rng).unwrap().to_vec();
+        let device_id = DeviceId::try_from(device).unwrap();
+        let bundle = PreKeyBundle::new(
+            registration_id, device_id, None,
+            1u32.into(), signed.public_key, sign(&signed.public_key.serialize(), &mut rng),
+            1u32.into(), kyber.public_key.clone(), sign(&kyber.public_key.serialize(), &mut rng),
+            *theirs.identity_key(),
+        )
+        .unwrap();
+        let address = ProtocolAddress::new(user.to_string(), device_id);
+        let local = ProtocolAddress::new("me".into(), DeviceId::try_from(1u32).unwrap());
+        let mut identities = ours.clone();
+        process_prekey_bundle(&address, &local, &mut ours, &mut identities, &bundle, std::time::SystemTime::now(), &mut rng)
+            .await
+            .unwrap();
+        let record = ours.load_session(&address).await.unwrap().unwrap();
+        client.signal().key_store
+            .store_session(&format!("{user}:{device}"), &record.serialize().unwrap())
+            .unwrap();
+    }
+
+    /// The outcome of an SKDM deposit that reached `devices`, each
+    /// `(device, registration id of the session that encrypted to it)`.
+    fn reached(devices: &[(u32, u32)]) -> super::super::server_dm::DepositOutcome {
+        super::super::server_dm::DepositOutcome {
+            delivered: devices.len(),
+            deposits: devices.iter().map(|&(d, _)| (d, 0)).collect(),
+            registration_ids: devices.iter().copied().collect(),
+            ..Default::default()
+        }
+    }
+
+    /// The registration id comes from the session itself — the bundle's,
+    /// for a session we initiated — and a device with no session has none,
+    /// never 0 (0 would switch off the server's stale-device check).
+    #[tokio::test]
+    async fn session_registration_id_is_the_sessions_and_absent_without_one() {
+        let t = two_members();
+        let signal = &t.alice.messages().signal_service;
+        let bob = t.bob_id.to_string();
+        assert_eq!(signal.session_registration_id(&bob, 1), None);
+        store_session(&t.alice, t.bob_id, 1, 4321).await;
+        assert_eq!(signal.session_registration_id(&bob, 1), Some(4321));
+        assert_eq!(signal.session_registration_id(&bob, 2), None);
+    }
+
+    /// A device whose registration id is unknown lacks our key, and an
+    /// SKDM deposit without one is not recorded as held.
+    #[tokio::test]
+    async fn device_without_registration_id_is_never_a_holder() {
+        let t = two_members();
+        let alice = t.alice.messages();
+        let (channel, bob) = (t.channel_id, t.bob_id.to_string());
+        let holders = [(bob.clone(), 1, 101)].into();
+        assert!(lacks_sender_key(&holders, &bob, &[(1, None)], false));
+        assert!(!lacks_sender_key(&holders, &bob, &[(1, Some(101))], false));
+
+        let mut outcome = reached(&[(1, 101)]);
+        outcome.registration_ids.clear();
+        alice.record_sender_key_holders(&channel, &bob, &outcome);
+        assert!(alice.signal_service.sender_key_holders(&channel).unwrap().is_empty());
+    }
+
+    /// Our own device list, as `own_device_ids` would have fetched it.
+    async fn set_own_devices(client: &crate::client::ChatterClient, ids: &[u32]) {
+        *client.messages().own_devices.lock().await =
+            Some((TimestampNanos::now().as_u64(), ids.iter().copied().collect()));
+    }
+
+    /// Per-device holders, Signal's `memberDevices`: a member's device that
+    /// does not hold our current key puts the member up for the pre-send
+    /// SKDM; one whose every device holds it is left alone. Our own other
+    /// devices are tracked the same way.
+    #[tokio::test]
+    async fn member_device_without_our_key_gets_the_skdm_and_holders_do_not() {
+        let t = two_members();
+        let alice = t.alice.messages();
+        let (channel, bob) = (t.channel_id, t.bob_id.to_string());
+        let me = t.alice_id.to_string();
+        set_own_devices(&t.alice, &[1]).await;
+        let lacking = || async { alice.members_lacking_sender_key(&channel, &me, 1).await.unwrap() };
+
+        // Never reached (no session): the fan-out establishes Bob's sessions.
+        assert_eq!(lacking().await, vec![t.bob_id]);
+
+        store_session(&t.alice, t.bob_id, 1, 101).await;
+        store_session(&t.alice, t.bob_id, 2, 202).await;
+        // The SKDM reached device 1 only: device 2 still lacks the key.
+        alice.record_sender_key_holders(&channel, &bob, &reached(&[(1, 101)]));
+        assert_eq!(alice.signal_service.sender_key_holders(&channel).unwrap(), [(bob.clone(), 1, 101)].into());
+        assert_eq!(lacking().await, vec![t.bob_id], "Bob's device 2 gets the SKDM on the next send");
+        alice.record_sender_key_holders(&channel, &bob, &reached(&[(2, 202)]));
+        assert!(lacking().await.is_empty(), "every device of Bob's holds it: no SKDM");
+
+        // Our own newly linked device 3 (no session yet), then reached.
+        set_own_devices(&t.alice, &[1, 3]).await;
+        assert_eq!(lacking().await, vec![t.alice_id]);
+        store_session(&t.alice, t.alice_id, 3, 303).await;
+        alice.record_sender_key_holders(&channel, &me, &reached(&[(3, 303)]));
+        assert!(lacking().await.is_empty());
+    }
+
+    /// Signal compares devices on (id, registration id): a device that
+    /// re-registered under the same id is a new device and gets the SKDM;
+    /// its delivery replaces the old install's entry.
+    #[tokio::test]
+    async fn re_registered_device_counts_as_new() {
+        let t = two_members();
+        let alice = t.alice.messages();
+        let (channel, bob) = (t.channel_id, t.bob_id.to_string());
+        let me = t.alice_id.to_string();
+        set_own_devices(&t.alice, &[1]).await;
+        store_session(&t.alice, t.bob_id, 1, 101).await;
+        alice.record_sender_key_holders(&channel, &bob, &reached(&[(1, 101)]));
+        assert!(alice.members_lacking_sender_key(&channel, &me, 1).await.unwrap().is_empty());
+
+        store_session(&t.alice, t.bob_id, 1, 909).await;
+        assert_eq!(alice.members_lacking_sender_key(&channel, &me, 1).await.unwrap(), vec![t.bob_id]);
+        alice.record_sender_key_holders(&channel, &bob, &reached(&[(1, 909)]));
+        assert_eq!(alice.signal_service.sender_key_holders(&channel).unwrap(), [(bob, 1, 909)].into());
+        assert!(alice.members_lacking_sender_key(&channel, &me, 1).await.unwrap().is_empty());
+    }
+
+    /// A new key has reached nobody: rotation clears every holder. The old
+    /// per-user entries are not recognized.
+    #[tokio::test]
+    async fn rotation_clears_the_holder_set() {
+        let t = two_members();
+        let alice = t.alice.messages();
+        let (channel, bob) = (t.channel_id, t.bob_id.to_string());
+        let me = t.alice_id.to_string();
+        set_own_devices(&t.alice, &[1]).await;
+        store_session(&t.alice, t.bob_id, 1, 101).await;
+        t.alice.signal().create_sender_key(&channel).await.unwrap();
+        alice.record_sender_key_holders(&channel, &bob, &reached(&[(1, 101)]));
+        assert!(alice.members_lacking_sender_key(&channel, &me, 1).await.unwrap().is_empty());
+
+        t.alice.signal().rotate_sender_key(&channel).await.unwrap();
+        assert!(alice.signal_service.sender_key_holders(&channel).unwrap().is_empty());
+        assert_eq!(alice.members_lacking_sender_key(&channel, &me, 1).await.unwrap(), vec![t.bob_id]);
+
+        alice.settings_repo
+            .set_string(&format!("sender_key_delivered:{channel}"), &format!("{bob},{me}.3"))
+            .unwrap();
+        assert!(alice.signal_service.sender_key_holders(&channel).unwrap().is_empty());
+    }
+
+    // ---------------------------------------------------- verified key gating
+
+    fn bob_gateway(t: &TwoMembers) -> crate::services::gateway::MessageGateway {
+        let m = t.bob.messages();
+        crate::services::gateway::MessageGateway::new(
+            (*m.signal_service).clone(),
+            m.message_repo.clone(),
+            m.channel_repo.clone(),
+            m.user_repo.clone(),
+            m.settings_repo.clone(),
+            m.solicited_resends.clone(),
+        )
+    }
+
+    /// Alice's SKDM exactly as it leaves for Bob: stamped with her verified state.
+    async fn stamped_skdm(t: &TwoMembers) -> crate::proto::content_v1::SenderKeyDistribution {
+        use crate::proto::content_v1;
+        use prost::Message as _;
+        let alice = t.alice.messages();
+        let skdm = t.alice.signal().create_sender_key(&t.channel_id).await.unwrap();
+        let verified = alice.group_gate().for_distribution(&t.channel_id).unwrap();
+        let bytes = alice.skdm_plaintext(&t.channel_id, &verified, &skdm, &t.bob_id.to_string());
+        match content_v1::Content::decode(bytes.as_slice()).unwrap().content {
+            Some(content_v1::content::Content::SenderKey(s)) => s,
+            _ => panic!("not an SKDM"),
+        }
+    }
+
+    /// The ghost acceptance test (Design B): a user the server lists as a
+    /// member, but who is not in the verified state, gets no SKDM, its
+    /// SenderKeyRequest is not answered, and no profile key reaches it.
+    #[tokio::test]
+    async fn server_only_member_gets_no_sender_key() {
+        use crate::domain::channel::{MemberRole, Membership, NotificationPreference};
+        let t = two_members();
+        let alice = t.alice.messages();
+        let ghost = UserId::new();
+        alice
+            .channel_repo
+            .insert_membership(&Membership {
+                channel_id: t.channel_id,
+                user_id: ghost,
+                role: MemberRole::Admin,
+                joined_at: chrono::Utc::now(),
+                last_read_message_id: None,
+                is_muted: false,
+                muted_until: None,
+                notification_preference: NotificationPreference::default(),
+            })
+            .unwrap();
+        assert!(alice.channel_repo.get_membership(&t.channel_id, &ghost).unwrap().is_some(), "the server's view has the ghost");
+
+        set_own_devices(&t.alice, &[1]).await;
+        let me = t.alice_id.to_string();
+        assert_eq!(alice.members_lacking_sender_key(&t.channel_id, &me, 1).await.unwrap(), vec![t.bob_id],
+            "the pre-send top-up names verified members only");
+        let mut fanout = alice.group_gate().for_distribution(&t.channel_id).unwrap().members();
+        fanout.sort();
+        let mut expected = vec![t.alice_id.to_string(), t.bob_id.to_string()];
+        expected.sort();
+        assert_eq!(fanout, expected, "the SKDM fan-out set excludes the ghost");
+
+        assert!(matches!(alice.answer_sender_key_request(&t.channel_id, &ghost, &[]).await, Ok(false)));
+        assert!(!t.alice.signal().has_sender_key(&t.channel_id).await.unwrap(),
+            "the ghost's request must not even create our key");
+        let skdm = t.alice.signal().create_sender_key(&t.channel_id).await.unwrap();
+        assert!(matches!(alice.send_skdm_to_member(&t.channel_id, &ghost, &skdm).await,
+            Err(MessageError::EncryptionFailed(ref e)) if e.contains("not a verified member")));
+        let verified = alice.group_gate().for_distribution(&t.channel_id).unwrap();
+        alice.settings_repo.set_bytes(keys::PROFILE_KEY, &[9; 32]).unwrap();
+        assert!(alice.skdm_profile_key(&verified, &ghost.to_string()).is_none());
+        assert!(alice.skdm_profile_key(&verified, &t.bob_id.to_string()).is_some());
+    }
+
+    /// No verified state yet: nothing is distributed and nothing may be sent.
+    #[tokio::test]
+    async fn channel_without_verified_state_is_send_blocked() {
+        let t = two_members();
+        let alice = t.alice.messages();
+        let other = ChannelId::new();
+        let err = alice.group_gate().for_distribution(&other).unwrap_err();
+        assert!(matches!(err, MessageError::MembershipNotVerified { status: None, .. }));
+        assert_eq!(err.permanent_send_failure_reason(), Some("Membership not verified"));
+        assert!(alice.members_lacking_sender_key(&other, &t.alice_id.to_string(), 1).await.is_err());
+        assert!(matches!(alice.answer_sender_key_request(&other, &t.bob_id, &[]).await, Ok(false)));
+    }
+
+    /// An SKDM from a sender outside the verified state is not stored; a
+    /// verified member's is.
+    #[tokio::test]
+    async fn skdm_from_a_non_member_is_not_stored() {
+        use crate::proto::content_v1;
+        use prost::Message as _;
+        let t = two_members();
+        let skdm = stamped_skdm(&t).await;
+        let ghost = UserId::new();
+        let gateway = bob_gateway(&t);
+        let plaintext = content_v1::Content {
+            content: Some(content_v1::content::Content::DataMessage(content_v1::DataMessage::default())),
+            ..Default::default()
+        }
+        .encode_to_vec();
+        let (ge, _) = t.alice.signal().encrypt_for_group(&t.channel_id, &plaintext).await.unwrap();
+
+        assert_eq!(gateway.accept_skdm(&ghost, 1, &t.channel_id, &skdm).await.unwrap(), None);
+        assert!(t.bob.signal().decrypt_from_group(&ghost, 1, &ge).await.is_err(), "nothing stored for the ghost");
+
+        assert!(gateway.accept_skdm(&t.alice_id, 1, &t.channel_id, &skdm).await.unwrap().is_some());
+        assert!(t.bob.signal().decrypt_from_group(&t.alice_id, 1, &ge).await.is_ok());
+    }
+
+    /// Same revision, different hash from a verified member: Fork. The
+    /// channel stops distributing and sending until acknowledged.
+    #[tokio::test]
+    async fn fork_from_a_member_blocks_distribution_and_send() {
+        use crate::services::channel::verified_state::VerificationStatus;
+        let t = two_members();
+        // Alice and Bob diverge at revision 2 (the server showed them different changes).
+        seed_verified(&t.alice, t.channel_id, 2, &[t.alice_id, t.bob_id]);
+        seed_verified(&t.bob, t.channel_id, 2, &[t.alice_id, t.bob_id, UserId::new()]);
+        let skdm = stamped_skdm(&t).await;
+        let gateway = bob_gateway(&t);
+        let bob = t.bob.messages();
+
+        // A non-member claiming a fork changes nothing.
+        assert_eq!(gateway.accept_skdm(&UserId::new(), 1, &t.channel_id, &skdm).await.unwrap(), None);
+        assert!(bob.group_gate().for_distribution(&t.channel_id).is_ok());
+
+        assert!(gateway.accept_skdm(&t.alice_id, 1, &t.channel_id, &skdm).await.unwrap().is_some(),
+            "a member's key is still installed: receiving is not distributing");
+        assert!(matches!(bob.group_gate().for_distribution(&t.channel_id),
+            Err(MessageError::MembershipNotVerified { status: Some(VerificationStatus::Fork), .. })));
+        assert!(matches!(bob.answer_sender_key_request(&t.channel_id, &t.alice_id, &[]).await, Ok(false)));
+        assert!(bob.members_lacking_sender_key(&t.channel_id, &t.bob_id.to_string(), 1).await.is_err(),
+            "the pre-send top-up (and with it the send) is refused");
+        let skdm = t.bob.signal().create_sender_key(&t.channel_id).await.unwrap();
+        assert!(matches!(bob.send_skdm_to_member(&t.channel_id, &t.alice_id, &skdm).await,
+            Err(MessageError::MembershipNotVerified { .. })));
+    }
+
+    struct RecordingSync(tokio::sync::mpsc::UnboundedSender<(ChannelId, u64)>);
+
+    #[async_trait::async_trait]
+    impl ChannelStateSync for RecordingSync {
+        async fn fetch_channel_changes(&self, channel_id: ChannelId, peer_revision: u64) {
+            let _ = self.0.send((channel_id, peer_revision));
+        }
+    }
+
+    /// Stamps round-trip: an SKDM and a group DataMessage carry the sender's
+    /// verified (revision, state_hash); equal state is in sync, and a peer
+    /// ahead of us has the channel service fetch the changes.
+    #[tokio::test]
+    async fn stamps_round_trip_and_a_peer_ahead_triggers_a_fetch() {
+        use crate::services::channel::verified_state::PeerStateCheck;
+        let t = two_members();
+        let alice_state = t.alice.messages().group_gate().for_distribution(&t.channel_id).unwrap();
+        let skdm = stamped_skdm(&t).await;
+        assert_eq!((skdm.state_revision, skdm.state_hash.clone()), (1, alice_state.state_hash().to_vec()));
+
+        let mut dm = crate::proto::content_v1::DataMessage::default();
+        stamp_group_data_message(&mut dm, &alice_state);
+        let dm = <crate::proto::content_v1::DataMessage as prost::Message>::decode(
+            prost::Message::encode_to_vec(&dm).as_slice(),
+        )
+        .unwrap();
+        assert_eq!((dm.group_state_revision, dm.group_state_hash.as_slice()), (1, alice_state.state_hash().as_slice()));
+
+        let bob = t.bob.messages();
+        let gate = bob.group_gate();
+        assert_eq!(gate.cross_check(&t.channel_id, true, dm.group_state_revision, &dm.group_state_hash),
+            Some(PeerStateCheck::InSync));
+        assert!(gate.take_peer_ahead(&t.channel_id).is_none());
+
+        // Alice moves to revision 3; Bob is still at 1.
+        seed_verified(&t.alice, t.channel_id, 2, &[t.alice_id, t.bob_id]);
+        seed_verified(&t.alice, t.channel_id, 3, &[t.alice_id, t.bob_id]);
+        let skdm = stamped_skdm(&t).await;
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+        bob.set_channel_state_sync(Arc::new(RecordingSync(tx)));
+        bob_gateway(&t).accept_skdm(&t.alice_id, 1, &t.channel_id, &skdm).await.unwrap();
+        // The SKDM's SenderKeyReceived drains the parked queue, and the record.
+        bob.retry_pending_group_decrypts(t.channel_id, t.alice_id, 1).await;
+        assert_eq!(rx.recv().await, Some((t.channel_id, 3)));
+        assert!(gate.take_peer_ahead(&t.channel_id).is_none(), "drained once");
+        assert!(bob.group_gate().for_distribution(&t.channel_id).is_ok(), "ahead is not a fork");
+
+        // A peer behind with a hash we recorded for that revision: in sync
+        // with its past, no alert.
+        let back = t.alice.messages().group_gate();
+        assert_eq!(back.cross_check(&t.channel_id, true, 1, &alice_state.state_hash()), Some(PeerStateCheck::PeerBehind));
+    }
+
+    /// A group message from a sender outside the verified state is dropped
+    /// before decrypting (no SenderKeyRequest, no resend request).
+    #[tokio::test]
+    async fn group_message_from_a_non_member_is_dropped() {
+        use crate::domain::ids::MessageId;
+        use crate::services::message::channel_inbound::{ChannelInbound, Ingested};
+        let t = two_members();
+        let plaintext = b"from the server's ghost";
+        let (ge, _) = t.alice.signal().encrypt_for_group(&t.channel_id, plaintext).await.unwrap();
+        let mut copy = server_copy(&t, &MessageId::new(), TimestampNanos::now().as_u64(), &ge);
+        let ghost = UserId::new();
+        copy.author_id = ghost.to_string();
+        let inbound = ChannelInbound::new(t.bob.messages().clone(), t.bob.attachments().clone());
+        assert_eq!(inbound.ingest(&copy, t.channel_id, false).await, Ingested::Dropped);
+        assert!(t.bob.messages().pending_group_decrypts.lock().is_empty(), "not parked for an SKDM");
     }
 }

@@ -558,9 +558,9 @@ impl KeyStore {
     ///
     /// This is NOT how sessions are invalidated — identity changes and peer
     /// device-roster changes ARCHIVE via `SessionRecord::archive_current_state`
-    /// so in-transit messages under the old ratchet still decrypt. The one
-    /// production use is the convergence rollback in `services/signal/actor.rs`:
-    /// removing a candidate session that did not exist before the attempt.
+    /// so in-transit messages under the old ratchet still decrypt. No
+    /// production caller: the live proofs (`tests/validated.rs`) use it to
+    /// simulate a device that lost its session.
     pub fn delete_session(&self, address: &str) -> Result<bool, StorageError> {
         let conn = self.db.connection()?;
         let rows_affected = conn.execute(

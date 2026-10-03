@@ -167,10 +167,7 @@ proptest! {
 // a "prekey bundle / envelope parser" — it's the entry point that ingests
 // untrusted bytes off the wire for the NDSS '21 mailbox transport.
 //
-// Note: `EciesMessage::from_bytes` (also public) is too lenient to be a
-// useful target — it only length-checks and slices, with no chance to
-// panic. `decrypt_envelope` exercises real curve-point decompression,
-// HKDF, and AEAD code paths.
+// `decrypt_envelope` exercises real key parsing, HKDF, and AEAD code paths.
 
 proptest! {
     #![proptest_config(ProptestConfig::with_cases(100))]

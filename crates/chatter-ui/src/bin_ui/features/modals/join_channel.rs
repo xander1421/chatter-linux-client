@@ -10,11 +10,10 @@ use tokio::time::{sleep, Duration};
 
 use chatter_core::client::ChatterClient;
 use chatter_core::domain::channel::ChannelType;
-use chatter_core::domain::ids::ChannelId;
 
 use crate::bin_ui::converters::avatar_bytes_to_image;
 use crate::bin_ui::features::sidebar::load_channel_into_ui;
-use crate::{MainWindow, SearchResultChannel};
+use crate::{MainWindow, MembershipGlobal, SearchResultChannel};
 
 pub fn wire_join_channel(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     let search_counter = Arc::new(AtomicU64::new(0));
@@ -33,6 +32,20 @@ pub fn wire_join_channel(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
 
         // Increment counter for this search
         let search_id = counter.fetch_add(1, Ordering::SeqCst) + 1;
+
+        // A pasted join link is not a search: select it so Join uses it.
+        // Core decides what a link is. This callback runs on the UI thread.
+        let is_link = ChatterClient::is_channel_join_link(&query);
+        if let Some(w) = weak.upgrade() {
+            w.global::<MembershipGlobal>().set_join_input_is_link(is_link);
+            if is_link {
+                w.set_join_channel_results(ModelRc::new(VecModel::from(Vec::<SearchResultChannel>::new())));
+                w.set_join_channel_searching(false);
+                w.set_join_channel_error("".into());
+                w.set_join_channel_selected_id(query.as_str().into());
+                return;
+            }
+        }
 
         tokio::spawn(async move {
             // Debounce: wait 300ms before searching
@@ -161,24 +174,9 @@ pub fn wire_join_channel(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                 }
             });
 
-            // Parse channel ID
-            let channel_id: ChannelId = match channel_id_str.parse() {
-                Ok(id) => id,
-                Err(e) => {
-                    let error_msg = format!("Invalid channel ID: {}", e);
-                    tracing::error!("{}", error_msg);
-                    let _ = slint::invoke_from_event_loop(move || {
-                        if let Some(w) = weak.upgrade() {
-                            w.set_join_channel_joining(false);
-                            w.set_join_channel_error(error_msg.into());
-                        }
-                    });
-                    return;
-                }
-            };
-
-            // Join channel via ChatterClient (handles mailbox + SKDM automatically)
-            match ui_ctx.join_channel(&channel_id, None).await {
+            // A channel id or a join link; core tells them apart and sets up
+            // group encryption either way.
+            match ui_ctx.join_channel_from_input(&channel_id_str).await {
                 Ok(channel) => {
                     let channel_id = channel.id;
                     let channel_id_str: SharedString = channel_id.to_string().into();
@@ -196,6 +194,7 @@ pub fn wire_join_channel(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                             w.set_join_channel_joining(false);
                             w.set_join_channel_search_query("".into());
                             w.set_join_channel_selected_id("".into());
+                            w.global::<MembershipGlobal>().set_join_input_is_link(false);
                             w.set_join_channel_results(ModelRc::new(VecModel::from(
                                 Vec::<SearchResultChannel>::new(),
                             )));

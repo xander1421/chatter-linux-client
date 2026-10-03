@@ -329,33 +329,6 @@ impl AnonGroupService {
         Ok(())
     }
 
-    /// Update message text (for handling edits from peer).
-    ///
-    /// Only updates if sender_id matches the message author (security).
-    /// Returns `Ok(true)` if a message was updated, `Ok(false)` if message not found
-    /// or sender doesn't match author.
-    pub fn update_message_text_by_sender(
-        &self,
-        group_id: &AnonGroupId,
-        sender_id: &UserId,
-        sent_timestamp: u64,
-        new_text: &str,
-    ) -> Result<bool, AnonGroupError> {
-        let channel_id: ChannelId = (*group_id).into();
-        // Verify sender matches message author before updating
-        if let Some(msg) = self.message_service.message_repo
-            .get_by_conversation_sender_timestamp(&channel_id, sender_id, sent_timestamp)?
-        {
-            if msg.sender_id.as_ref() != Some(sender_id) {
-                return Ok(false);
-            }
-            Ok(self.message_service.message_repo
-                .update_text_by_timestamp(&channel_id, &ConversationType::AnonGroup, sent_timestamp, new_text)?)
-        } else {
-            Ok(false)
-        }
-    }
-
     /// Add a reaction to a message in the DB.
     ///
     /// Uses (sender_id, sent_at_ns) to identify the target message (Signal-style).

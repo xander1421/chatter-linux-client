@@ -35,7 +35,7 @@ async fn test_start_provisioning_creates_session() {
     // New device starts provisioning (unauthenticated)
     let response = assert_ok(
         provisioning_client
-            .start_provisioning("Linux x86_64", "Test Desktop")
+            .start_provisioning("Linux x86_64")
             .await,
     );
 
@@ -60,7 +60,7 @@ async fn test_poll_provisioning_returns_pending_initially() {
     // Start a provisioning session
     let start_response = assert_ok(
         provisioning_client
-            .start_provisioning("Linux x86_64", "Test Desktop")
+            .start_provisioning("Linux x86_64")
             .await,
     );
 
@@ -140,7 +140,7 @@ async fn test_complete_provisioning_flow() {
 
     let start_response = assert_ok(
         new_device_client
-            .start_provisioning("Linux x86_64", "Work Laptop")
+            .start_provisioning("Linux x86_64")
             .await,
     );
     let provisioning_uuid = start_response.provisioning_uuid.clone();
@@ -205,7 +205,9 @@ async fn test_complete_provisioning_flow() {
                 "test-code-1234567890",
                 &device_auth_token,
                 "Linux x86_64",
-                "Work Laptop",
+                // The server stores the name encrypted to the account identity
+                // key (crypto/device_name.rs); this test links without one.
+                Vec::new(),
                 prekey_bundle,
                 Vec::new(),
             )
@@ -240,7 +242,7 @@ async fn test_cancel_provisioning_session() {
 
     let start_response = assert_ok(
         new_device_client
-            .start_provisioning("Linux x86_64", "Test Device")
+            .start_provisioning("Linux x86_64")
             .await,
     );
     let provisioning_uuid = start_response.provisioning_uuid.clone();
@@ -303,7 +305,7 @@ async fn test_list_provisioning_sessions() {
 
     let start_response = assert_ok(
         new_device_client
-            .start_provisioning("Linux x86_64", "Test Device")
+            .start_provisioning("Linux x86_64")
             .await,
     );
 
@@ -363,7 +365,7 @@ async fn test_provision_device_requires_authentication() {
 
     let start_response = assert_ok(
         client
-            .start_provisioning("Linux x86_64", "Test Device")
+            .start_provisioning("Linux x86_64")
             .await,
     );
 
@@ -391,7 +393,7 @@ async fn test_cancel_provisioning_requires_authentication() {
 
     let start_response = assert_ok(
         client
-            .start_provisioning("Linux x86_64", "Test Device")
+            .start_provisioning("Linux x86_64")
             .await,
     );
 
@@ -431,7 +433,7 @@ async fn test_cannot_reprovision_already_provisioned_session() {
 
     let start_response = assert_ok(
         new_device_client
-            .start_provisioning("Linux x86_64", "Test Device")
+            .start_provisioning("Linux x86_64")
             .await,
     );
 
@@ -514,7 +516,6 @@ fn test_provision_envelope_roundtrip_with_real_proto() {
         master_key: vec![],
         read_receipts: true,
         typing_indicators: false,
-        link_previews: true,
         provisioning_user_agent: "chatter-test/0.0".into(),
         primary_device_registration_id: 1234,
         ephemeral_backup_key: None,
@@ -538,7 +539,6 @@ fn test_provision_envelope_roundtrip_with_real_proto() {
     assert_eq!(decoded.aci_identity_key_private, identity_priv);
     assert_eq!(decoded.profile_key, msg.profile_key);
     assert_eq!(decoded.read_receipts, true);
-    assert_eq!(decoded.link_previews, true);
     assert_eq!(decoded.primary_device_registration_id, 1234);
 }
 
@@ -567,7 +567,7 @@ async fn test_full_link_flow_with_real_envelope_crypto() {
     let mut new_device_client = ProvisioningClient::new(pool.channel(), pool.auth_clone());
     let start = assert_ok(
         new_device_client
-            .start_provisioning("Linux x86_64", "Real-Crypto Test")
+            .start_provisioning("Linux x86_64")
             .await,
     );
     let uuid = start.provisioning_uuid.clone();
@@ -596,7 +596,6 @@ async fn test_full_link_flow_with_real_envelope_crypto() {
         master_key: vec![],
         read_receipts: true,
         typing_indicators: true,
-        link_previews: true,
         provisioning_user_agent: "primary-test/0.0".into(),
         primary_device_registration_id: 42,
         ephemeral_backup_key: None,
@@ -636,7 +635,7 @@ async fn test_full_link_flow_with_real_envelope_crypto() {
                 &decoded.provisioning_code,
                 &device_auth_token,
                 "Linux x86_64",
-                "Real-Crypto Test",
+                Vec::new(),
                 prekey_bundle,
                 Vec::new(),
             )

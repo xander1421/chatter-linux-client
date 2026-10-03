@@ -261,6 +261,10 @@ pub struct MemberWithProfile {
     pub avatar_bytes: Option<Vec<u8>>,
     /// What the viewing user may do to this member.
     pub moderation: MemberModeration,
+    /// Listed by the server but outside this device's verified membership
+    /// (nobody signed them in, or only the server removed them): they get no
+    /// sender keys. Decided by `ChatterClient::is_unverified_channel_member`.
+    pub unverified: bool,
 }
 
 /// What the viewing user may do to one channel member.

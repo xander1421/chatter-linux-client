@@ -58,11 +58,13 @@ async fn setup_users(count: usize) -> Vec<TestUserContext> {
 /// Helper to create a channel and wait for completion.
 async fn create_channel_and_wait(
     channel_client: &mut ChannelClient,
+    user: &TestUser,
     name: &str,
     channel_type: ChannelType,
 ) -> String {
+    let (_, genesis) = membership::genesis(user, channel_type == ChannelType::ChannelPublic);
     let stream = channel_client
-        .create_channel(name, channel_type, None, vec![], None, Some("E2E test channel"), None)
+        .create_channel(name, channel_type, None, Some("E2E test channel"), None, Some(genesis))
         .await
         .expect("Failed to start channel creation");
 
@@ -92,9 +94,11 @@ async fn create_channel_and_wait(
 }
 
 /// Helper for a user to join a channel and wait for completion.
-async fn join_channel_and_wait(channel_client: &mut ChannelClient, channel_id: &str, user_id: &str) {
+async fn join_channel_and_wait(channel_client: &mut ChannelClient, channel_id: &str, user: &TestUser) {
+    let user_id = &user.user_id;
+    let join = membership::open_join(user, channel_client, channel_id).await;
     let join_stream = channel_client
-        .join_channel(channel_id, None, false)
+        .join_channel(channel_id, join, false)
         .await
         .expect("Failed to start join");
 
@@ -106,14 +110,7 @@ async fn join_channel_and_wait(channel_client: &mut ChannelClient, channel_id: &
         if let Some(payload) = event.event {
             use chatter_core::proto::chat_v1::channel_event::Event;
             match payload {
-                Event::MemberAdded(member) => {
-                    tracing::info!(
-                        user_id = %user_id,
-                        member_id = %member.user_id,
-                        "Member added to channel"
-                    );
-                    joined = true;
-                }
+                Event::ChannelChange(_) => joined = true,
                 Event::OperationFailed(e) => {
                     let msg = e.error.map(|err| err.message).unwrap_or_default();
                     panic!("Join failed for user {}: {}", user_id, msg);
@@ -123,8 +120,7 @@ async fn join_channel_and_wait(channel_client: &mut ChannelClient, channel_id: &
         }
     }
 
-    // Creator might already be a member, so MemberAdded might not fire
-    let _ = joined;
+    assert!(joined, "join was not relayed as a signed change");
 }
 
 // ============================================================================
@@ -151,7 +147,7 @@ async fn test_e2e_multiple_users_create_and_join_channel() {
     let channel_name = format!("e2e_test_{}", unique_username());
     let mut creator_channel_client = users[0].channel_client();
     let channel_id =
-        create_channel_and_wait(&mut creator_channel_client, &channel_name, ChannelType::ChannelPublic)
+        create_channel_and_wait(&mut creator_channel_client, &users[0].user, &channel_name, ChannelType::ChannelPublic)
             .await;
 
     tracing::info!(
@@ -164,7 +160,7 @@ async fn test_e2e_multiple_users_create_and_join_channel() {
     // Step 3: Users 1-4 join the channel
     for (i, user_ctx) in users.iter().enumerate().skip(1) {
         let mut channel_client = user_ctx.channel_client();
-        join_channel_and_wait(&mut channel_client, &channel_id, &user_ctx.user.user_id).await;
+        join_channel_and_wait(&mut channel_client, &channel_id, &user_ctx.user).await;
         tracing::info!(
             user_index = i,
             username = %user_ctx.user.username,
@@ -224,13 +220,13 @@ async fn test_e2e_users_send_messages_in_channel() {
     let channel_name = format!("e2e_msg_test_{}", unique_username());
     let mut creator_channel_client = users[0].channel_client();
     let channel_id =
-        create_channel_and_wait(&mut creator_channel_client, &channel_name, ChannelType::ChannelPublic)
+        create_channel_and_wait(&mut creator_channel_client, &users[0].user, &channel_name, ChannelType::ChannelPublic)
             .await;
 
     // All other users join
     for user_ctx in users.iter().skip(1) {
         let mut channel_client = user_ctx.channel_client();
-        join_channel_and_wait(&mut channel_client, &channel_id, &user_ctx.user.user_id).await;
+        join_channel_and_wait(&mut channel_client, &channel_id, &user_ctx.user).await;
     }
 
     // Each user sends a message
@@ -254,6 +250,7 @@ async fn test_e2e_users_send_messages_in_channel() {
                     vec![], // mentioned_integrations
                     false,  // targets_ai_bot
                     vec![], // mentioned_file_ids
+                    vec![], // deletion_token_hash
                 )
                 .await,
         );
@@ -342,13 +339,13 @@ async fn test_e2e_user_leaves_channel() {
     let channel_name = format!("e2e_leave_test_{}", unique_username());
     let mut creator_channel_client = users[0].channel_client();
     let channel_id =
-        create_channel_and_wait(&mut creator_channel_client, &channel_name, ChannelType::ChannelPublic)
+        create_channel_and_wait(&mut creator_channel_client, &users[0].user, &channel_name, ChannelType::ChannelPublic)
             .await;
 
     // Users 1 and 2 join
     for user_ctx in users.iter().skip(1) {
         let mut channel_client = user_ctx.channel_client();
-        join_channel_and_wait(&mut channel_client, &channel_id, &user_ctx.user.user_id).await;
+        join_channel_and_wait(&mut channel_client, &channel_id, &user_ctx.user).await;
     }
 
     // Verify 3 members
@@ -361,8 +358,9 @@ async fn test_e2e_user_leaves_channel() {
 
     // User 2 leaves
     let mut leaver_channel_client = users[2].channel_client();
+    let leave = membership::leave(&users[2].user, &mut leaver_channel_client, &channel_id).await;
     let leave_stream = leaver_channel_client
-        .leave_channel(&channel_id)
+        .leave_channel(&channel_id, leave)
         .await
         .expect("Failed to start leave");
 
@@ -372,12 +370,7 @@ async fn test_e2e_user_leaves_channel() {
         if let Some(payload) = event.event {
             use chatter_core::proto::chat_v1::channel_event::Event;
             match payload {
-                Event::MemberRemoved(removed) => {
-                    tracing::info!(
-                        removed_user = %removed.user_id,
-                        "Member left channel"
-                    );
-                }
+                Event::ChannelChange(_) => tracing::info!("Member left channel"),
                 Event::OperationFailed(e) => {
                     let msg = e.error.map(|err| err.message).unwrap_or_default();
                     panic!("Leave failed: {}", msg);

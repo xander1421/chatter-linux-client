@@ -15,11 +15,13 @@ use common::*;
 /// Helper to create a channel and wait for completion, returning the channel ID.
 async fn create_channel_and_wait(
     channel_client: &mut ChannelClient,
+    user: &TestUser,
     name: &str,
     channel_type: ChannelType,
 ) -> String {
+    let (_, genesis) = membership::genesis(user, channel_type == ChannelType::ChannelPublic);
     let stream = channel_client
-        .create_channel(name, channel_type, None, vec![], None, Some("Test channel"), None)
+        .create_channel(name, channel_type, None, Some("Test channel"), None, Some(genesis))
         .await
         .expect("Failed to start channel creation");
 
@@ -57,13 +59,13 @@ async fn test_create_and_get_channel() {
     skip_if_no_server!();
 
     let pool = assert_ok(create_test_pool().await);
-    let _user = assert_ok(setup_authenticated_test(&pool).await);
+    let user = assert_ok(setup_authenticated_test(&pool).await);
 
     let mut channel_client = ChannelClient::new(pool.channel(), pool.auth_clone());
     let channel_name = format!("test_ch_{}", unique_username());
 
     let channel_id =
-        create_channel_and_wait(&mut channel_client, &channel_name, ChannelType::ChannelPublic)
+        create_channel_and_wait(&mut channel_client, &user, &channel_name, ChannelType::ChannelPublic)
             .await;
 
     // Get the channel
@@ -79,14 +81,14 @@ async fn test_list_channels() {
     skip_if_no_server!();
 
     let pool = assert_ok(create_test_pool().await);
-    let _user = assert_ok(setup_authenticated_test(&pool).await);
+    let user = assert_ok(setup_authenticated_test(&pool).await);
 
     let mut channel_client = ChannelClient::new(pool.channel(), pool.auth_clone());
     let channel_name = format!("list_test_{}", unique_username());
 
     // Create a channel
     let channel_id =
-        create_channel_and_wait(&mut channel_client, &channel_name, ChannelType::ChannelPublic)
+        create_channel_and_wait(&mut channel_client, &user, &channel_name, ChannelType::ChannelPublic)
             .await;
 
     // List channels
@@ -102,7 +104,7 @@ async fn test_search_channels() {
     skip_if_no_server!();
 
     let pool = assert_ok(create_test_pool().await);
-    let _user = assert_ok(setup_authenticated_test(&pool).await);
+    let user = assert_ok(setup_authenticated_test(&pool).await);
 
     let mut channel_client = ChannelClient::new(pool.channel(), pool.auth_clone());
 
@@ -111,7 +113,7 @@ async fn test_search_channels() {
     let channel_name = format!("searchable_{}", unique_part);
 
     let channel_id =
-        create_channel_and_wait(&mut channel_client, &channel_name, ChannelType::ChannelPublic)
+        create_channel_and_wait(&mut channel_client, &user, &channel_name, ChannelType::ChannelPublic)
             .await;
 
     // Search for it
@@ -138,55 +140,46 @@ async fn test_join_leave_channel() {
     skip_if_no_server!();
 
     let pool = assert_ok(create_test_pool().await);
-    let _user = assert_ok(setup_authenticated_test(&pool).await);
+    let user = assert_ok(setup_authenticated_test(&pool).await);
 
     let mut channel_client = ChannelClient::new(pool.channel(), pool.auth_clone());
 
     // Create a public channel
     let channel_name = format!("joinable_{}", unique_username());
     let channel_id =
-        create_channel_and_wait(&mut channel_client, &channel_name, ChannelType::ChannelPublic)
+        create_channel_and_wait(&mut channel_client, &user, &channel_name, ChannelType::ChannelPublic)
             .await;
 
-    // Leave the channel first (we're the creator so we're already a member)
-    // Wrap in a block to ensure stream is dropped before next borrow
-    {
-        let leave_stream = channel_client.leave_channel(&channel_id).await;
-        if let Ok(stream) = leave_stream {
-            tokio::pin!(stream);
-            while let Some(_event) = stream.next().await {
-                // Consume events
-            }
-        }
+    // A second user joins the OPEN channel with a signed JoinViaInvite,
+    // leaves with a signed RemoveMember, and joins again. (The creator is the
+    // OWNER and may not leave without transferring ownership.)
+    let pool2 = assert_ok(create_test_pool().await);
+    let user2 = assert_ok(setup_authenticated_test(&pool2).await);
+    let mut client2 = ChannelClient::new(pool2.channel(), pool2.auth_clone());
+    for _ in 0..2 {
+        let join = membership::open_join(&user2, &mut client2, &channel_id).await;
+        let stream = assert_ok(client2.join_channel(&channel_id, join, false).await);
+        drain(stream).await;
+        let leave = membership::leave(&user2, &mut client2, &channel_id).await;
+        let stream = assert_ok(client2.leave_channel(&channel_id, leave).await);
+        drain(stream).await;
     }
+    let join = membership::open_join(&user2, &mut client2, &channel_id).await;
+    let stream = assert_ok(client2.join_channel(&channel_id, join, false).await);
+    drain(stream).await;
+    let members = assert_ok(channel_client.get_channel_members(&channel_id, 100, 0).await);
+    assert!(members.members.iter().any(|m| m.user_id == user2.user_id), "rejoined user is a member");
+}
 
-    // Now join it again
-    let join_stream = assert_ok(
-        channel_client
-            .join_channel(&channel_id, None, false)
-            .await,
-    );
-
-    tokio::pin!(join_stream);
-    let mut joined = false;
-    while let Some(result) = join_stream.next().await {
+/// Run a membership RPC's event stream to its end, failing on OperationFailed.
+async fn drain(stream: impl tokio_stream::Stream<Item = Result<chatter_core::proto::chat_v1::ChannelEvent, NetworkError>>) {
+    tokio::pin!(stream);
+    while let Some(result) = stream.next().await {
         let event = result.expect("Stream error");
-        if let Some(payload) = event.event {
-            use chatter_core::proto::chat_v1::channel_event::Event;
-            match payload {
-                Event::MemberAdded(_) => joined = true,
-                Event::OperationFailed(e) => {
-                    let msg = e.error.map(|err| err.message).unwrap_or_default();
-                    panic!("Join failed: {}", msg);
-                }
-                _ => {}
-            }
+        if let Some(chatter_core::proto::chat_v1::channel_event::Event::OperationFailed(e)) = event.event {
+            panic!("operation failed: {:?}", e.error);
         }
     }
-
-    // Note: Creator might already be a member, so join might not emit MemberAdded
-    // Just verify no error occurred
-    let _ = joined;
 }
 
 #[tokio::test]
@@ -200,7 +193,7 @@ async fn test_get_channel_members() {
     let channel_name = format!("members_{}", unique_username());
 
     let channel_id =
-        create_channel_and_wait(&mut channel_client, &channel_name, ChannelType::ChannelPublic)
+        create_channel_and_wait(&mut channel_client, &user, &channel_name, ChannelType::ChannelPublic)
             .await;
 
     // Get members
@@ -224,13 +217,13 @@ async fn test_archive_unarchive_channel() {
     skip_if_no_server!();
 
     let pool = assert_ok(create_test_pool().await);
-    let _user = assert_ok(setup_authenticated_test(&pool).await);
+    let user = assert_ok(setup_authenticated_test(&pool).await);
 
     let mut channel_client = ChannelClient::new(pool.channel(), pool.auth_clone());
     let channel_name = format!("archive_{}", unique_username());
 
     let channel_id =
-        create_channel_and_wait(&mut channel_client, &channel_name, ChannelType::ChannelPublic)
+        create_channel_and_wait(&mut channel_client, &user, &channel_name, ChannelType::ChannelPublic)
             .await;
 
     // Archive it
@@ -279,13 +272,13 @@ async fn test_delete_channel() {
     skip_if_no_server!();
 
     let pool = assert_ok(create_test_pool().await);
-    let _user = assert_ok(setup_authenticated_test(&pool).await);
+    let user = assert_ok(setup_authenticated_test(&pool).await);
 
     let mut channel_client = ChannelClient::new(pool.channel(), pool.auth_clone());
     let channel_name = format!("delete_{}", unique_username());
 
     let channel_id =
-        create_channel_and_wait(&mut channel_client, &channel_name, ChannelType::ChannelPublic)
+        create_channel_and_wait(&mut channel_client, &user, &channel_name, ChannelType::ChannelPublic)
             .await;
 
     // Delete it
@@ -320,7 +313,7 @@ async fn test_get_nonexistent_channel() {
     skip_if_no_server!();
 
     let pool = assert_ok(create_test_pool().await);
-    let _user = assert_ok(setup_authenticated_test(&pool).await);
+    let user = assert_ok(setup_authenticated_test(&pool).await);
 
     let mut channel_client = ChannelClient::new(pool.channel(), pool.auth_clone());
 
@@ -337,13 +330,13 @@ async fn test_stream_channel_events() {
     skip_if_no_server!();
 
     let pool = assert_ok(create_test_pool().await);
-    let _user = assert_ok(setup_authenticated_test(&pool).await);
+    let user = assert_ok(setup_authenticated_test(&pool).await);
 
     let mut channel_client = ChannelClient::new(pool.channel(), pool.auth_clone());
     let channel_name = format!("stream_{}", unique_username());
 
     let channel_id =
-        create_channel_and_wait(&mut channel_client, &channel_name, ChannelType::ChannelPublic)
+        create_channel_and_wait(&mut channel_client, &user, &channel_name, ChannelType::ChannelPublic)
             .await;
 
     // Start streaming channel events

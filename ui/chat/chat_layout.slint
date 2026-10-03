@@ -12,6 +12,8 @@ import { MessageList, MessageItemData, MessageAttachmentData, ReactionEntry } fr
 import { MessageComposer, PendingAttachmentData } from "message_composer.slint";
 import { PinnedBar } from "pinned_bar.slint";
 import { IdentityChangeBar } from "identity_change_bar.slint";
+import { MembershipBar } from "membership_bar.slint";
+import { MembershipGlobal } from "membership_global.slint";
 import { MeshGlobal } from "../mesh/mesh_global.slint";
 import { MeshContextBar } from "../mesh/mesh_context_bar.slint";
 
@@ -314,6 +316,15 @@ export component ChatLayout inherits Rectangle {
             accept-clicked => {
                 root.identity-change-accept-clicked();
             }
+        }
+
+        // Channel membership not verified (failed, fork, or no verified state
+        // yet): sending is paused, and this says why. Core decides whether it
+        // shows and what it says (`channel_membership_header`).
+        if root.conversation-kind == ConversationKind.channel
+            && MembershipGlobal.banner-severity != "": MembershipBar {
+            width: 100%;
+            vertical-stretch: 0;
         }
 
         // Mesh strip — only while a mesh conversation is open *and* it has

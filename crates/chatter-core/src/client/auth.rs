@@ -188,8 +188,23 @@ impl ChatterClient {
             Err(e) => tracing::warn!(error = %e, "login: own profile restore failed"),
         }
 
+        self.name_this_device(device_name).await;
         self.start().await?;
         Ok(result)
+    }
+
+    /// Give this device its name on the server, encrypted to the account
+    /// identity key (Signal's encryptDeviceName). The server creates the
+    /// device row unnamed — it may not read the name, so it cannot write it.
+    /// Best-effort: an unnamed device is labelled by its platform string.
+    async fn name_this_device(&self, device_name: &str) {
+        let Some(mut auth_client) = self.auth().try_auth_client() else {
+            tracing::warn!("no auth client; this device stays unnamed");
+            return;
+        };
+        if let Err(e) = self.devices().name_this_device(&mut auth_client, device_name).await {
+            tracing::warn!(error = %e, "could not set this device's encrypted name");
+        }
     }
 
     /// Accept a NEW Signal identity key after key recovery has been ruled out.
@@ -324,6 +339,7 @@ impl ChatterClient {
             result.device_id,
             result.display_name.clone(),
         );
+        self.name_this_device(device_name).await;
 
         // Create SVR backup after successful registration (non-blocking on failure)
         if let Some(p) = pin {

@@ -48,8 +48,10 @@ impl AnonInboxBackend for AnonDmService {
         self.delete_message_by_timestamp(id, sender, ts).map_err(|e| e.to_string())
     }
 
-    fn update_message_text(&self, id: &Self::Id, sender: &UserId, ts: u64, text: &str) -> Result<bool, String> {
-        self.update_message_text_by_sender(id, sender, ts, text).map_err(|e| e.to_string())
+    fn apply_edit(&self, id: &Self::Id, sender: &UserId, target_ts: u64, text: &str, edit_ts: u64) -> Result<Option<crate::domain::message::Message>, String> {
+        crate::storage::repositories::message_modifier_repo::MessageModifierRepository::new(self.settings_repo.database().clone())
+            .apply_received_edit(&self.message_repo, sender, Some((*id).into()), target_ts, text, edit_ts, 0)
+            .map_err(|e| e.to_string())
     }
 
     fn add_reaction(
@@ -499,30 +501,5 @@ impl AnonDmService {
     ) -> Result<usize, AnonDmError> {
         let channel_id: ChannelId = (*conversation_id).into();
         Ok(self.message_repo.update_delivery_status_by_timestamps(&channel_id, &ConversationType::AnonDm, timestamps, status)?)
-    }
-
-    /// Update message text (for handling edits from peer).
-    ///
-    /// Only updates if sender_id matches the message author (security).
-    /// Returns `Ok(true)` if a message was updated, `Ok(false)` if message not found
-    /// or sender doesn't match author.
-    pub fn update_message_text_by_sender(
-        &self,
-        conversation_id: &AnonDmId,
-        sender_id: &UserId,
-        sent_timestamp: u64,
-        new_text: &str,
-    ) -> Result<bool, AnonDmError> {
-        // Verify the sender is the author by looking up the message first
-        let channel_id: ChannelId = (*conversation_id).into();
-        if let Some(existing) = self.message_repo.get_by_conversation_sender_timestamp(&channel_id, sender_id, sent_timestamp)? {
-            // Sender matches - update the text
-            self.message_repo.update_text_by_timestamp(&channel_id, &ConversationType::AnonDm, sent_timestamp, new_text)?;
-            let _ = existing; // Confirm message existed and sender matched
-            Ok(true)
-        } else {
-            // Message not found or sender doesn't match
-            Ok(false)
-        }
     }
 }

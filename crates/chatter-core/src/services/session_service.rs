@@ -8,6 +8,8 @@ use std::sync::Arc;
 use crate::error::{NetworkError, StorageError};
 use crate::network::grpc::auth_client::AuthClient;
 use crate::network::grpc::client_pool::GrpcClientPool;
+use crate::services::device_service::readable_device_name;
+use crate::storage::key_store::KeyStore;
 use crate::storage::repositories::settings_repo::{keys, SettingsRepository};
 
 /// Session information for a device.
@@ -15,7 +17,8 @@ use crate::storage::repositories::settings_repo::{keys, SettingsRepository};
 pub struct Session {
     /// Signal device ID.
     pub device_id: u32,
-    /// Device description (e.g., "Linux Desktop", "iPhone 15").
+    /// The row's label: the device's name (decrypted with the account
+    /// identity key), else its description (e.g. "Android (0.1.0)").
     pub device_info: String,
     /// IP address of the last connection.
     pub ip_address: String,
@@ -62,12 +65,18 @@ pub enum SessionError {
 pub struct SessionService {
     grpc_pool: Arc<GrpcClientPool>,
     settings_repo: Arc<SettingsRepository>,
+    /// Holds the account identity key the device names are encrypted to.
+    key_store: Arc<KeyStore>,
 }
 
 impl SessionService {
     /// Create a new SessionService with dependencies.
-    pub fn new(grpc_pool: Arc<GrpcClientPool>, settings_repo: Arc<SettingsRepository>) -> Self {
-        Self { grpc_pool, settings_repo }
+    pub fn new(
+        grpc_pool: Arc<GrpcClientPool>,
+        settings_repo: Arc<SettingsRepository>,
+        key_store: Arc<KeyStore>,
+    ) -> Self {
+        Self { grpc_pool, settings_repo, key_store }
     }
 
     /// Create an auth client for network operations.
@@ -111,18 +120,22 @@ impl SessionService {
             .sessions
             .into_iter()
             .map(|s| {
-                // This device's own row is named from what this build IS, not
-                // what the server stored: sessions created before login sent
-                // `current_device_name` still say "linux-client" on a phone.
-                let device_info = if s.is_current_session {
+                // The platform string: this device's own from what this build
+                // IS (an older session's stored info may say "linux-client" on
+                // a phone), every other device's from the server.
+                let platform = if s.is_current_session {
                     crate::services::link_device_service::LinkDeviceService::current_device_name()
                 } else {
                     s.device_info
                 };
+                // The server cannot read names (they are encrypted to our
+                // identity key), so the name-else-info choice it used to make
+                // is made here.
+                let name = readable_device_name(&self.key_store, &s.encrypted_name);
                 Session {
                     device_id: s.device_id,
-                    is_mobile: is_mobile_device_name(&device_info),
-                    device_info,
+                    is_mobile: is_mobile_device_name(&platform),
+                    device_info: name.unwrap_or(platform),
                     ip_address: s.ip_address,
                     // NANOSECONDS, not millis. auth.proto:371-372 says so
                     // ("Unix timestamp in nanoseconds") and the server sends

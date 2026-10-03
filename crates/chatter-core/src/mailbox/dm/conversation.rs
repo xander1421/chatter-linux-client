@@ -43,8 +43,13 @@ pub struct DmMailbox {
     pub id: String,
     /// Ed25519 public key (32 bytes) - mailbox address.
     pub public_key: [u8; 32],
-    /// Ed25519 private key (64 bytes) - for signing challenges.
+    /// Ed25519 private key (64 bytes) - for signing challenges. Signing
+    /// only: envelopes are sealed to `encryption_private_key`'s public half.
     pub private_key: [u8; 64],
+    /// X25519 encryption private key (32 bytes), generated alongside the
+    /// signing key. Opens the HPKE envelopes sealed to this mailbox
+    /// (`crypto::envelope_crypto`); never sent to the server.
+    pub encryption_private_key: [u8; 32],
     /// Unblinded RSA signature over the public key.
     pub signature: Vec<u8>,
     /// Message randomizer for signature verification (optional).
@@ -201,6 +206,12 @@ impl DmMailbox {
         let signature: Signature = signing_key.sign(challenge);
 
         Ok(signature.to_bytes().to_vec())
+    }
+
+    /// The X25519 encryption public key peers seal envelopes to.
+    pub fn encryption_public_key(&self) -> Result<[u8; 32], MailboxError> {
+        crate::crypto::envelope_crypto::mailbox_encryption_public_key(&self.encryption_private_key)
+            .map_err(|e| MailboxError::InvalidServerKey(format!("Invalid encryption key: {e}")))
     }
 
     /// Get the verifying (public) key for this mailbox.
@@ -429,7 +440,8 @@ impl DmConversationManager {
                 // NEWEST is the active one that sends must target. (All non-expired
                 // rows are still polled for receive via get_active_mailbox_keys.)
                 "SELECT id, mailbox_public_key, mailbox_private_key, signature, randomizer,
-                        token_id, created_at, expires_at, last_polled_at
+                        token_id, created_at, expires_at, last_polled_at,
+                        mailbox_encryption_private_key
                  FROM dm_mailboxes WHERE conversation_id = ?1
                  ORDER BY created_at DESC LIMIT 1",
             )
@@ -445,6 +457,7 @@ impl DmConversationManager {
             let created_at: String = row.get(6)?;
             let expires_at: String = row.get(7)?;
             let last_polled_at: Option<String> = row.get(8)?;
+            let encryption_private_key: Vec<u8> = row.get(9)?;
 
             Ok((
                 id,
@@ -456,6 +469,7 @@ impl DmConversationManager {
                 created_at,
                 expires_at,
                 last_polled_at,
+                encryption_private_key,
             ))
         });
 
@@ -470,6 +484,7 @@ impl DmConversationManager {
                 created_at,
                 expires_at,
                 last_polled_at,
+                encryption_private_key,
             )) => {
                 let public_key_arr: [u8; 32] = public_key
                     .try_into()
@@ -477,6 +492,9 @@ impl DmConversationManager {
                 let private_key_arr: [u8; 64] = private_key
                     .try_into()
                     .map_err(|_| MailboxError::Storage("Invalid private key length".into()))?;
+                let encryption_private_key: [u8; 32] = encryption_private_key
+                    .try_into()
+                    .map_err(|_| MailboxError::Storage("Invalid encryption key length".into()))?;
 
                 let created_at = DateTime::parse_from_rfc3339(&created_at)
                     .map_err(|e| MailboxError::Storage(format!("Invalid created_at: {}", e)))?
@@ -495,6 +513,7 @@ impl DmConversationManager {
                     id,
                     public_key: public_key_arr,
                     private_key: private_key_arr,
+                    encryption_private_key,
                     signature,
                     randomizer,
                     token_id,
@@ -604,8 +623,9 @@ impl DmConversationManager {
         conn.execute(
             "INSERT OR REPLACE INTO dm_mailboxes
              (id, conversation_id, mailbox_public_key, mailbox_private_key, signature,
-              randomizer, token_id, created_at, expires_at, last_polled_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+              randomizer, token_id, created_at, expires_at, last_polled_at,
+              mailbox_encryption_private_key)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
             rusqlite::params![
                 mailbox.id,
                 peer_id_str,
@@ -616,7 +636,8 @@ impl DmConversationManager {
                 mailbox.token_id,
                 mailbox.created_at.to_rfc3339(),
                 mailbox.expires_at.to_rfc3339(),
-                mailbox.last_polled_at.map(|dt| dt.to_rfc3339())
+                mailbox.last_polled_at.map(|dt| dt.to_rfc3339()),
+                mailbox.encryption_private_key.as_slice()
             ],
         )
         .map_err(|e| MailboxError::Storage(e.to_string()))?;
@@ -1079,8 +1100,9 @@ impl DmConversationManager {
 
 impl Drop for DmMailbox {
     fn drop(&mut self) {
-        // Zeroize the Ed25519 private key
+        // Zeroize the Ed25519 signing and X25519 encryption private keys
         self.private_key.zeroize();
+        self.encryption_private_key.zeroize();
     }
 }
 
@@ -1185,6 +1207,7 @@ mod tests {
             id: "test".to_string(),
             public_key: [0u8; 32],
             private_key: [0u8; 64],
+            encryption_private_key: [0u8; 32],
             signature: vec![],
             randomizer: None,
             token_id: "token".to_string(),
@@ -1204,6 +1227,7 @@ mod tests {
             id: "test".to_string(),
             public_key: [0u8; 32],
             private_key: [0u8; 64],
+            encryption_private_key: [0u8; 32],
             signature: vec![],
             randomizer: None,
             token_id: "token".to_string(),
@@ -1225,6 +1249,7 @@ mod tests {
             id: "test".to_string(),
             public_key: [0u8; 32],
             private_key: [0u8; 64],
+            encryption_private_key: [0u8; 32],
             signature: vec![],
             randomizer: None,
             token_id: "token".to_string(),
@@ -1296,6 +1321,7 @@ mod tests {
             // Distinct public key per id so callers can assert which row won.
             public_key: [id.as_bytes()[0]; 32],
             private_key: [7u8; 64],
+            encryption_private_key: [7u8; 32],
             signature: vec![1, 2, 3],
             randomizer: None,
             token_id: TEST_TOKEN_ID.to_string(),

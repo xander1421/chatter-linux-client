@@ -20,8 +20,22 @@ compile_error!(
 
 pub mod assertions;
 pub mod config;
+
+/// Keep a test client off the OS keyring. Without the opt-out marker beside
+/// its database, every client a test builds asks Secret Service for a fresh
+/// passphrase entry — a desktop prompt on a developer machine, a hang in CI.
+pub fn headless(base_dir: &std::path::Path) {
+    let db_path = chatter_core::system::Directories::with_base_dir(base_dir.to_path_buf())
+        .expect("create test directories")
+        .database_path();
+    let db_dir = db_path.parent().expect("database path has a parent");
+    std::fs::write(db_dir.join(chatter_core::system::keyring::NO_KEYRING_MARKER), b"")
+        .expect("write no-keyring marker");
+}
+
 pub mod fixtures;
 pub mod groups;
+pub mod membership;
 
 // Re-export commonly used items
 pub use assertions::*;

@@ -46,6 +46,10 @@ pub mod shared_content_repo;
 pub mod unified_conversation_repo;
 pub mod unified_message_repo;
 pub mod message_receipt_repo;
+pub mod pending_dm_repo;
+pub mod message_modifier_repo;
+pub mod send_log_repo;
+pub mod verified_membership_repo;
 pub mod vector_repo;
 
 pub use attachment_repo::AttachmentRepository;
@@ -71,5 +75,6 @@ pub use mesh_favorites_repo::MeshFavoritesRepository;
 pub use jarvis_memory_repo::JarvisMemoryRepository;
 #[cfg(feature = "jarvis")]
 pub use jarvis_graph_repo::JarvisGraphRepository;
+pub use pending_dm_repo::{PendingDm, PendingDmRepository};
 pub use section_repo::SectionRepository;
 pub use vector_repo::{VectorRepository, StoredEmbedding, EmbeddingSourceType};

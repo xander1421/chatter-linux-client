@@ -25,6 +25,7 @@ mod jarvis;
 #[cfg(feature = "jarvis")]
 pub use jarvis::{is_jarvis_channel, jarvis_channel_id, JARVIS_CHANNEL_NAME};
 mod link_device;
+pub mod membership;
 mod messaging;
 mod receipts;
 pub use messaging::{InviteCandidate, ReplyParentMedia, SectionRowExtras};
@@ -3044,8 +3045,10 @@ impl ChatterClient {
                     is_me,
                     membership.role,
                 );
+                let unverified = self.is_unverified_channel_member(channel_id, &membership.user_id);
                 let mut row = self.member_with_profile(membership);
                 row.moderation = moderation;
+                row.unverified = unverified;
                 // Our own row reads "You", as in Signal's member list.
                 if is_me {
                     row.display_name = "You".into();
@@ -3068,6 +3071,7 @@ impl ChatterClient {
             username: self.known_username(&uid).unwrap_or_default(),
             avatar_bytes: self.user_avatar(&uid),
             moderation: crate::domain::channel::MemberModeration::default(),
+            unverified: false,
             membership,
         }
     }
@@ -3102,27 +3106,26 @@ impl ChatterClient {
     }
 
     /// Decrypt an incoming friend-request envelope and return the sender's
-    /// profile for the Received-requests tab. Fetches our identity private key
-    /// (the facade's only signal touch) and delegates the protocol work —
-    /// ECIES decrypt, profile-key persistence, profile decrypt — to
+    /// profile for the Received-requests tab. Opens the envelope in the
+    /// Signal actor (the facade's only signal touch; the identity secret
+    /// never leaves the actor) and delegates the protocol work — profile-key
+    /// persistence, profile decrypt — to
     /// [`UserService::ingest_received_friend_request`].
     pub async fn ingest_received_friend_request(
         &self,
         sender_id: &crate::domain::ids::UserId,
         ciphertext: &[u8],
     ) -> ReceivedFriendRequestProfile {
-        use zeroize::Zeroize;
-
-        let mut secret = match self.signal().actor.get_identity_private_key().await {
-            Ok(s) => s,
-            Err(_) => return ReceivedFriendRequestProfile::default(),
+        let plaintext = if ciphertext.is_empty() {
+            None
+        } else {
+            self.signal()
+                .actor
+                .open_identity_hpke(crate::crypto::ecies::IdentityHpkeUse::FriendRequest, ciphertext.to_vec())
+                .await
+                .ok()
         };
-        let out = self
-            .users()
-            .ingest_received_friend_request(sender_id, ciphertext, &secret)
-            .await;
-        secret.zeroize();
-        out
+        self.users().ingest_received_friend_request(sender_id, plaintext).await
     }
 
     /// Accept or decline a friend request.
@@ -3744,14 +3747,35 @@ impl ChatterClient {
 
     // ── Settings ────────────────────────────────────────────────────
 
-    /// Enable or disable sending read receipts.
+    /// Enable or disable sending read receipts, on every one of our devices.
     pub fn set_read_receipts_enabled(&self, enabled: bool) -> Result<(), SessionError> {
-        self.sessions().set_bool_setting(settings_keys::SEND_READ_RECEIPTS, enabled)
+        self.sessions().set_bool_setting(settings_keys::SEND_READ_RECEIPTS, enabled)?;
+        self.sync_configuration_to_own_devices();
+        Ok(())
     }
 
-    /// Enable or disable typing indicators.
+    /// Enable or disable typing indicators, on every one of our devices.
     pub fn set_typing_indicators_enabled(&self, enabled: bool) -> Result<(), SessionError> {
-        self.sessions().set_bool_setting(settings_keys::SHOW_TYPING_INDICATORS, enabled)
+        self.sessions().set_bool_setting(settings_keys::SHOW_TYPING_INDICATORS, enabled)?;
+        self.sync_configuration_to_own_devices();
+        Ok(())
+    }
+
+    /// Send the current privacy settings to our other devices
+    /// (`services::configuration_sync`). Runs on the client runtime: the
+    /// setters are called from the UI thread. Best effort, like every
+    /// own-device sync; a device that misses it keeps the old values until
+    /// the next change.
+    fn sync_configuration_to_own_devices(&self) {
+        let messages = Arc::clone(self.messages());
+        let content = crate::services::configuration_sync::content(
+            &messages.settings_repo,
+            crate::util::time::TimestampNanos::now().as_u64(),
+        );
+        self.services.runtime_handle.spawn(async move {
+            let devices = messages.sync_to_own_devices(&mut messages.auth_client(), content).await;
+            tracing::info!(devices, "ConfigurationSync sent to our other devices");
+        });
     }
 
     /// Check if read receipts are enabled (defaults to true).
@@ -4206,7 +4230,7 @@ mod transport_switch_tests {
     //! stop/restart bookkeeping directly instead.
     use super::*;
 
-    fn build_test_client() -> Arc<ChatterClient> {
+    fn build_test_client() -> (Arc<ChatterClient>, tempfile::TempDir) {
         // These tests build a real ChatterClient, which stores the DB passphrase
         // in the OS keyring. A headless/CI session has no Secret Service, so point
         // keyring at its in-memory mock backend (process-global, set once) — the
@@ -4217,11 +4241,14 @@ mod transport_switch_tests {
         });
 
         let dir = tempfile::tempdir().unwrap();
-        ChatterClient::builder()
+        let client = ChatterClient::builder()
             .server_url("http://localhost:1")
             .data_dir(dir.path().to_str().unwrap())
             .build()
-            .expect("build client")
+            .expect("build client");
+        // The directory must outlive the client: dropping it deletes the
+        // database under a live connection.
+        (client, dir)
     }
 
     /// Entering anon mode must fire the ntfy push shutdown and clear the slot
@@ -4229,7 +4256,7 @@ mod transport_switch_tests {
     /// enter with no listener is a clean no-op.
     #[tokio::test]
     async fn anon_enter_suspends_push_and_is_idempotent() {
-        let client = build_test_client();
+        let (client, _dir) = build_test_client();
 
         // Simulate a configured push listener with anon mode enabled — the
         // rebuild reads the LIVE atomic (Fix 3), not a param, so set it first.
@@ -4257,7 +4284,7 @@ mod transport_switch_tests {
     /// stale captured param.
     #[tokio::test]
     async fn push_decision_follows_live_atomic_not_stale_param() {
-        let client = build_test_client();
+        let (client, _dir) = build_test_client();
         client.anon_mode.store(false, Ordering::Release);
         let (tx, mut rx) = tokio::sync::broadcast::channel::<()>(1);
         *client.push_shutdown.lock() = Some(tx);
@@ -4273,7 +4300,7 @@ mod transport_switch_tests {
     /// idempotent under repeated invocation (rapid toggle). Uses the live pool.
     #[tokio::test]
     async fn group_fanout_refresh_is_idempotent() {
-        let client = build_test_client();
+        let (client, _dir) = build_test_client();
         client.ctx.init_group_fanout();
         let fanout = client.ctx.get_group_fanout().expect("fanout initialized");
 
@@ -4289,7 +4316,7 @@ mod transport_switch_tests {
     /// installed.
     #[tokio::test]
     async fn notification_respawn_is_noop_before_login() {
-        let client = build_test_client();
+        let (client, _dir) = build_test_client();
         assert!(!client.authed_notif_started.load(Ordering::SeqCst));
 
         client.respawn_notification_stream();
@@ -4307,7 +4334,7 @@ mod transport_switch_tests {
     /// converge without panicking or hanging the caller.
     #[tokio::test]
     async fn rapid_toggle_converges_without_hang() {
-        let client = build_test_client();
+        let (client, _dir) = build_test_client();
         for _ in 0..10 {
             client.set_anon_mode_enabled(true);
             client.set_anon_mode_enabled(false);
@@ -4326,22 +4353,26 @@ mod unread_badge_tests {
     use std::sync::atomic::Ordering;
 
     use super::*;
-    use crate::domain::anon_dm::AnonDmId;
     use crate::domain::ids::{ChannelId, UserId};
     use crate::domain::message::{ConversationType, Message};
     use crate::state::ActiveConversation;
 
-    fn build_test_client() -> Arc<ChatterClient> {
+    /// The `TempDir` must outlive the client: the database's reader pool
+    /// opens connections lazily BY PATH (`ReaderPool::open_reader`), so once
+    /// the directory is deleted any read that needs a fresh reader fails, and
+    /// `server_dm_timer` swallows a failed read as "timer 0".
+    fn build_test_client() -> (Arc<ChatterClient>, tempfile::TempDir) {
         static MOCK_KEYRING: std::sync::Once = std::sync::Once::new();
         MOCK_KEYRING.call_once(|| {
             keyring::set_default_credential_builder(keyring::mock::default_credential_builder());
         });
         let dir = tempfile::tempdir().unwrap();
-        ChatterClient::builder()
+        let client = ChatterClient::builder()
             .server_url("http://localhost:1")
             .data_dir(dir.path().to_str().unwrap())
             .build()
-            .expect("build client")
+            .expect("build client");
+        (client, dir)
     }
 
     fn receive(client: &ChatterClient, id: ChannelId, kind: ConversationType, sent_at: u64) {
@@ -4369,7 +4400,7 @@ mod unread_badge_tests {
 
     #[tokio::test]
     async fn badges_are_absolute_and_follow_the_mode() {
-        let client = build_test_client();
+        let (client, _dir) = build_test_client();
         let peer = UserId::new();
         befriend(&client, peer);
         let mut anon_dm = crate::domain::anon_dm::AnonDm::new_initiated(UserId::new());
@@ -4399,7 +4430,7 @@ mod unread_badge_tests {
     #[tokio::test]
     async fn rowless_conversations_and_call_records_never_badge() {
         use crate::domain::message::{CallMessage, CallMessageType, MessageContent};
-        let client = build_test_client();
+        let (client, _dir) = build_test_client();
         let friend = UserId::new();
         befriend(&client, friend);
 
@@ -4441,7 +4472,7 @@ mod unread_badge_tests {
     #[tokio::test]
     async fn timer_changes_fire_when_a_message_heals_the_timer() {
         use std::time::Duration;
-        let client = build_test_client();
+        let (client, _dir) = build_test_client();
         let mut changes = client.subscribe_disappearing_timer_changes();
         let peer = UserId::new();
         let dm = |sent_at| DomainEvent::MessageReceived {
@@ -4472,7 +4503,10 @@ mod unread_badge_tests {
         client
             .channels()
             .settings_repo
-            .set(&format!("conv.disappearing.server_dm.{peer}"), &3_600u32)
+            .set(
+                &format!("conv.disappearing.server_dm.{peer}"),
+                &crate::services::disappearing::DmTimer { seconds: 3_600, version: 2 },
+            )
             .expect("set timer");
         bus.emit_domain(dm(3)); // healed to 1 hour: fires
         assert_eq!(next_change(&mut changes).await, ChannelId::from(peer));

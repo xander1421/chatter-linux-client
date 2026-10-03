@@ -275,7 +275,7 @@ fn test_prekey_requires_sender_context() {
 // ============================================================================
 
 /// Helper to create a test channel and return its ID.
-async fn create_test_channel(pool: &chatter_core::network::grpc::GrpcClientPool) -> String {
+async fn create_test_channel(pool: &chatter_core::network::grpc::GrpcClientPool, user: &TestUser) -> String {
     let mut channel_client = ChannelClient::new(pool.channel(), pool.auth_clone());
     let channel_name = format!("content_test_{}", unique_username());
 
@@ -284,12 +284,10 @@ async fn create_test_channel(pool: &chatter_core::network::grpc::GrpcClientPool)
             &channel_name,
             ChannelType::ChannelPublic,
             None,
-            vec![],
-            None,
             Some("Test channel for content processing"),
             None,
-        )
-        .await
+            Some(membership::genesis(user, true).1),
+        ).await
         .expect("Failed to create channel");
 
     tokio::pin!(stream);
@@ -322,8 +320,8 @@ async fn test_server_text_message_roundtrip() {
     skip_if_no_server!();
 
     let pool = assert_ok(create_test_pool().await);
-    let _user = assert_ok(setup_authenticated_test(&pool).await);
-    let channel_id = create_test_channel(&pool).await;
+    let user = assert_ok(setup_authenticated_test(&pool).await);
+    let channel_id = create_test_channel(&pool, &user).await;
 
     let mut msg_client = MessageClient::new(pool.channel(), pool.auth_clone());
 
@@ -334,7 +332,7 @@ async fn test_server_text_message_roundtrip() {
 
     let sent_message = assert_ok(
         msg_client
-            .send_message(&channel_id, content, None, false, None, vec![], false, vec![])
+            .send_message(&channel_id, content, None, false, None, vec![], false, vec![], Vec::new())
             .await,
     );
 

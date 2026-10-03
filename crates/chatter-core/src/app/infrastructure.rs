@@ -8,16 +8,14 @@ use std::sync::Arc;
 
 use zeroize::Zeroize;
 
-use crate::crypto::signal::{
-    IdentityKeyManager, PreKeyManager, SesameManager, SqliteSesameStore,
-};
+use crate::crypto::signal::{IdentityKeyManager, PreKeyManager};
 use crate::mailbox::group::{GroupCoordinator, GroupMailboxManager};
 use crate::mailbox::token_manager::TokenManager;
 use crate::network::grpc::client_pool::GrpcClientPool;
 use crate::network::grpc::interceptors::AuthInterceptor;
 use crate::storage::repositories::{
-    AnonDmRepository, AnonGroupRepository, EphemeralRepository, SectionRepository,
-    UnifiedConversationRepository, VectorRepository,
+    AnonDmRepository, AnonGroupRepository, EphemeralRepository, PendingDmRepository,
+    SectionRepository, UnifiedConversationRepository, VectorRepository,
 };
 #[cfg(feature = "jarvis")]
 use crate::storage::repositories::{JarvisGraphRepository, JarvisMemoryRepository};
@@ -99,14 +97,14 @@ pub struct InfrastructureContainer {
     pub(crate) section_repo: Arc<SectionRepository>,
     /// Vector embedding repository for semantic search.
     pub(crate) vector_repo: Arc<VectorRepository>,
+    /// DMs held back until a first-contact bootstrap completes.
+    pub(crate) pending_dm_repo: Arc<PendingDmRepository>,
 
     // Crypto managers - pub(crate)
     /// Identity key management.
     pub(crate) identity_manager: Arc<IdentityKeyManager>,
     /// PreKey bundle management.
     pub(crate) prekey_manager: Arc<PreKeyManager>,
-    /// Sesame session management with message queueing.
-    pub(crate) sesame_manager: Arc<SesameManager<SqliteSesameStore>>,
 
     // Network - pub for post-boot initialization
     /// gRPC connection pool.
@@ -261,19 +259,11 @@ impl InfrastructureContainer {
         let jarvis_graph_repo = Arc::new(JarvisGraphRepository::new(database.clone()));
         let section_repo = Arc::new(SectionRepository::new(database.clone()));
         let vector_repo = Arc::new(VectorRepository::new(database.clone()));
+        let pending_dm_repo = Arc::new(PendingDmRepository::new(database.clone()));
 
         // 8. Create crypto managers
         let identity_manager = Arc::new(IdentityKeyManager::new(key_store.clone()));
         let prekey_manager = Arc::new(PreKeyManager::new(key_store.clone()));
-
-        // 8b. Create Sesame manager for multi-session handling and message queueing.
-        // The sesame_* tables are migration v065; they are already there by the
-        // time we get here. This used to call init_tables() and log a warning on
-        // failure, which meant a database that could not hold Sesame state still
-        // produced a fully constructed manager -- startup succeeded and every
-        // session operation afterwards failed with nothing pointing at the cause.
-        let sesame_store = SqliteSesameStore::new(database.clone());
-        let sesame_manager = Arc::new(SesameManager::new(sesame_store));
 
         // 9. Create network pool.
         // No request timeout: this one pool serves long-lived server-streams
@@ -326,7 +316,7 @@ impl InfrastructureContainer {
             search_index,
             identity_manager,
             prekey_manager,
-            sesame_manager,
+            pending_dm_repo,
             grpc_pool,
             auth_interceptor,
             group_mailbox_manager,

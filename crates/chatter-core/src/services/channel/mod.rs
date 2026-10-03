@@ -4,7 +4,9 @@
 
 pub mod converters;
 pub mod error;
+pub mod membership_log;
 pub mod service;
+pub mod verified_state;
 
 // Re-export main types for convenience
 pub use converters::proto_to_domain_channel;
@@ -13,8 +15,7 @@ pub use service::ChannelService;
 
 /// Record a completed ownership transfer locally: the channel's `owner_id`
 /// (which every owner-only permission reads) and the two members' roles. Run
-/// by the transferring client after its RPC succeeds and by every member on
-/// the server's `OwnershipTransferred`; idempotent. A membership not stored
+/// for every verified `TransferOwnershipAction` (ours included); idempotent. A membership not stored
 /// here is skipped (the next roster sync brings it with its role).
 pub(crate) fn apply_ownership_transfer(
     repo: &crate::storage::repositories::channel_repo::ChannelRepository,

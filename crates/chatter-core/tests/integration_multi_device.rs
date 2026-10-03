@@ -31,16 +31,16 @@ async fn test_register_second_device() {
     let identity_key_pair = IdentityKeyPair::generate(&mut rand::rng());
     let identity_public_key = identity_key_pair.identity_key().serialize();
 
-    let response = auth_client
-        .login(
-            &user.username,
-            &user.password_hash,
-            "second-test-device",
-            identity_public_key.as_ref(),
-            &random_device_auth_token(),
-            None, // New device ID
-        )
-        .await;
+    let response = opaque_login(
+        &mut auth_client,
+        &user.username,
+        &user.password,
+        "second-test-device",
+        identity_public_key.as_ref(),
+        &random_device_auth_token(),
+        None, // New device ID
+    )
+    .await;
 
     match response {
         Ok(resp) => {
@@ -249,12 +249,10 @@ async fn test_messages_visible_across_devices() {
             &channel_name,
             ChannelType::ChannelPublic,
             None,
-            vec![],
-            None,
             Some("Multi-device sync test"),
             None,
-        )
-        .await
+            Some(membership::genesis(&user, true).1),
+        ).await
         .expect("Failed to create channel");
 
     tokio::pin!(stream);
@@ -287,6 +285,7 @@ async fn test_messages_visible_across_devices() {
                 vec![],
                 false,
                 vec![],
+                Vec::new(),
             )
             .await,
     );
@@ -329,7 +328,7 @@ async fn test_sender_certificate_per_device() {
     let _ = user.device_id;
     let response = assert_ok(
         auth_client
-            .request_sender_certificate(None)
+            .request_sender_certificate()
             .await,
     );
 
@@ -351,7 +350,7 @@ async fn test_revoke_device_session() {
     skip_if_no_server!();
 
     let pool = assert_ok(create_test_pool().await);
-    let _user = assert_ok(setup_authenticated_test(&pool).await);
+    let user = assert_ok(setup_authenticated_test(&pool).await);
 
     let mut auth_client = AuthClient::new(pool.channel(), pool.auth_clone());
 
@@ -387,12 +386,10 @@ async fn test_concurrent_device_operations() {
             &channel_name,
             ChannelType::ChannelPublic,
             None,
-            vec![],
             None,
             None,
-            None,
-        )
-        .await
+            Some(membership::genesis(&user, true).1),
+        ).await
         .expect("Failed to create channel");
 
     tokio::pin!(stream);
@@ -430,6 +427,7 @@ async fn test_concurrent_device_operations() {
                     vec![],
                     false,
                     vec![],
+                    Vec::new(),
                 )
                 .await
         });
@@ -533,7 +531,7 @@ async fn test_prekey_bundles_have_required_fields() {
     skip_if_no_server!();
 
     let pool = assert_ok(create_test_pool().await);
-    let _user = assert_ok(setup_authenticated_test(&pool).await);
+    let user = assert_ok(setup_authenticated_test(&pool).await);
 
     // Create target user
     let pool2 = assert_ok(create_test_pool().await);

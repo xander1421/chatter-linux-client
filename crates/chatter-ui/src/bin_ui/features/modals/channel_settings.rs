@@ -102,6 +102,7 @@ pub fn open_channel_settings(
             .is_conversation_muted(chatter_core::state::ActiveConversation::Channel(channel_id))
             .unwrap_or(false);
 
+        let weak_access = weak_window.clone();
         let _ = slint::invoke_from_event_loop(move || {
             if let Some(w) = weak_window.upgrade() {
                 w.set_channel_settings_id(channel_id_str.into());
@@ -126,10 +127,13 @@ pub fn open_channel_settings(
                 w.set_channel_settings_is_owner(is_owner);
                 w.set_channel_settings_can_leave(can_leave);
                 apply_member_lists(&w, &members, bans.as_deref());
+                crate::bin_ui::features::chat::membership::reset_access(&w);
                 w.set_channel_settings_loading(false);
                 crate::bin_ui::features::back::push(&w, "channel-settings");
             }
         });
+        // Queued after the reset above, so its answer is not wiped by it.
+        crate::bin_ui::features::chat::membership::load_access(weak_access, ui_ctx, channel_id);
     });
 }
 

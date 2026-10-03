@@ -216,9 +216,10 @@ impl AnonDmService {
         let plaintext = init_message.to_bytes()
             .map_err(|e| AnonDmError::CryptoError(e.to_string()))?;
 
-        // Encrypt with ECIES to recipient's identity key (no prekey fetch!)
-        let recipient_x25519 = friend_code.x25519_public_key();
-        let ecies_message = ecies::encrypt(&recipient_x25519, &plaintext)
+        // HPKE to recipient's identity key (no prekey fetch!)
+        let recipient_identity = libsignal_protocol::IdentityKey::decode(&friend_code.identity_key)
+            .map_err(|e| AnonDmError::CryptoError(format!("friend code identity key: {e}")))?;
+        let sealed_body = ecies::seal_to_identity(&recipient_identity, ecies::IdentityHpkeUse::AnonDmInit, &plaintext)
             .map_err(|e| AnonDmError::CryptoError(e.to_string()))?;
 
         // Get blind signature token for anonymous delivery
@@ -238,7 +239,7 @@ impl AnonDmService {
 
         // ECIES_INIT requires server_key_id == 0 (server rejects non-zero, see sealed_sender.go:66-68)
         let sealed_message = SealedSenderMessage {
-            sealed_body: ecies_message.to_bytes(),
+            sealed_body,
             timestamp: timestamp_nanos,
             server_key_id: 0,
         };

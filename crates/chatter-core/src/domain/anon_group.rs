@@ -132,14 +132,6 @@ impl AnonGroupRole {
         matches!(self, Self::Admin | Self::Owner)
     }
 
-    /// Check if this role can broadcast member lists.
-    ///
-    /// Only admins and owners can send authoritative member list updates.
-    /// This prevents regular members from spoofing other members' profiles.
-    pub fn can_broadcast_member_list(&self) -> bool {
-        matches!(self, Self::Admin | Self::Owner)
-    }
-
     /// Check if this role can pin or unpin messages.
     ///
     /// Only admins and owners can pin messages for everyone in the group.

@@ -1,7 +1,7 @@
 //! User gRPC client.
 //!
 //! Client for user service operations including profile management,
-//! presence, friends, blocking, and channel navigation.
+//! presence, friends, and blocking.
 
 use tokio_stream::{Stream, StreamExt};
 use tonic::service::interceptor::InterceptedService;
@@ -11,17 +11,16 @@ use crate::error::NetworkError;
 use crate::network::grpc::interceptors::AuthInterceptor;
 use crate::proto::chat_v1::{
     friend_requests_filter, user_service_client::UserServiceClient, BlockUserRequest,
-    ClearNavigationHistoryRequest, FriendRequest, FriendRequestsFilter, FriendResponse,
-    FriendStatus, GetNavigationHistoryRequest, GetNavigationHistoryResponse,
+    FriendRequest, FriendRequestsFilter, FriendResponse, FriendStatus,
     DeleteUsernameLinkRequest, GetUserProfileRequest, GetUsernameDiscoverabilityRequest,
     GetUsernameDiscoverabilityResponse, GetUsernameLinkRequest,
     GetUsernameLinkResponse, ListBlockedUsersRequest, ListBlockedUsersResponse,
     ListFriendRequestsRequest, ListFriendRequestsResponse, ListFriendsRequest, ListFriendsResponse,
-    LookupUsernameRequest, LookupUsernameResponse, PinChannelRequest, PinChannelResponse,
-    RemoveFriendRequest, ReorderPinnedChannelsRequest, SetUsernameDiscoverabilityRequest,
+    LookupUsernameRequest, LookupUsernameResponse,
+    RemoveFriendRequest, SetUsernameDiscoverabilityRequest,
     SetUsernameDiscoverabilityResponse, SetUsernameLinkRequest,
     SetUsernameLinkResponse,
-    TrackChannelVisitRequest, UnblockUserRequest, UnpinChannelRequest, UnpinChannelResponse,
+    UnblockUserRequest,
     UpdatePresenceRequest, UpdateUserProfileRequest, UserEvent, UserEventRequest, UserPresence,
     UserProfile,
 };
@@ -401,128 +400,6 @@ impl UserClient {
             .into_inner()
             .map(|r| r.map_err(|s| NetworkError::from_status(&s))))
     }
-
-    // ==================== Channel Navigation History ====================
-
-    /// Track a channel visit for navigation history.
-    pub async fn track_channel_visit(&mut self, channel_id: &str) -> Result<(), NetworkError> {
-        let request = TrackChannelVisitRequest {
-            channel_id: channel_id.to_string(),
-            request_id: uuid::Uuid::new_v4().to_string(),
-        };
-
-        self.inner
-            .track_channel_visit(request)
-            .await
-            .map(|_| ())
-            .map_err(|s| NetworkError::from_status(&s))
-    }
-
-    /// Get recent channel navigation history.
-    ///
-    /// # Arguments
-    ///
-    /// * `limit` - Max channels to return (default: 50)
-    /// * `include_pinned` - Include pinned channels (default: true)
-    /// * `only_pinned` - Only return pinned channels
-    pub async fn get_navigation_history(
-        &mut self,
-        limit: i32,
-        include_pinned: bool,
-        only_pinned: bool,
-    ) -> Result<GetNavigationHistoryResponse, NetworkError> {
-        let request = GetNavigationHistoryRequest {
-            limit,
-            include_pinned,
-            only_pinned,
-        };
-
-        self.inner
-            .get_navigation_history(request)
-            .await
-            .map(|r| r.into_inner())
-            .map_err(|s| NetworkError::from_status(&s))
-    }
-
-    /// Clear navigation history.
-    ///
-    /// # Arguments
-    ///
-    /// * `keep_pinned` - Keep pinned channels (default: true)
-    pub async fn clear_navigation_history(&mut self, keep_pinned: bool) -> Result<(), NetworkError> {
-        let request = ClearNavigationHistoryRequest {
-            keep_pinned,
-            request_id: uuid::Uuid::new_v4().to_string(),
-        };
-
-        self.inner
-            .clear_navigation_history(request)
-            .await
-            .map(|_| ())
-            .map_err(|s| NetworkError::from_status(&s))
-    }
-
-    /// Pin a channel.
-    ///
-    /// # Arguments
-    ///
-    /// * `channel_id` - Channel to pin
-    /// * `position` - Optional position (0-based), defaults to end
-    pub async fn pin_channel(
-        &mut self,
-        channel_id: &str,
-        position: i32,
-    ) -> Result<PinChannelResponse, NetworkError> {
-        let request = PinChannelRequest {
-            channel_id: channel_id.to_string(),
-            position,
-            request_id: uuid::Uuid::new_v4().to_string(),
-        };
-
-        self.inner
-            .pin_channel(request)
-            .await
-            .map(|r| r.into_inner())
-            .map_err(|s| NetworkError::from_status(&s))
-    }
-
-    /// Unpin a channel.
-    pub async fn unpin_channel(
-        &mut self,
-        channel_id: &str,
-    ) -> Result<UnpinChannelResponse, NetworkError> {
-        let request = UnpinChannelRequest {
-            channel_id: channel_id.to_string(),
-            request_id: uuid::Uuid::new_v4().to_string(),
-        };
-
-        self.inner
-            .unpin_channel(request)
-            .await
-            .map(|r| r.into_inner())
-            .map_err(|s| NetworkError::from_status(&s))
-    }
-
-    /// Reorder pinned channels.
-    ///
-    /// # Arguments
-    ///
-    /// * `channel_ids` - Channel IDs in desired order
-    pub async fn reorder_pinned_channels(
-        &mut self,
-        channel_ids: Vec<String>,
-    ) -> Result<(), NetworkError> {
-        let request = ReorderPinnedChannelsRequest {
-            channel_ids,
-            request_id: uuid::Uuid::new_v4().to_string(),
-        };
-
-        self.inner
-            .reorder_pinned_channels(request)
-            .await
-            .map(|_| ())
-            .map_err(|s| NetworkError::from_status(&s))
-    }
 }
 
 #[cfg(test)]
@@ -585,7 +462,6 @@ mod tests {
             encrypted_name: Vec::new(),
             encrypted_about: Vec::new(),
             encrypted_avatar: Vec::new(),
-            profile_key_version: String::new(),
         };
 
         assert_eq!(profile.user_id, "user-123");

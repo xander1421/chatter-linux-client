@@ -189,6 +189,34 @@ async fn test_has_session_returns_true_after_session_created() {
     assert!(has_session, "Should have session after storing one");
 }
 
+/// A session reset must archive the peer's sessions, or it is a no-op:
+/// `ensure_sessions_all_devices` reuses every device `session_devices` lists
+/// and fetches no bundle, so the broken sessions survive the "reset".
+#[tokio::test]
+async fn archive_peer_sessions_leaves_no_reusable_session_for_that_peer_only() {
+    let (service, key_store, _settings, _db_file) = setup_test_service().await;
+
+    for (peer, device) in [("peer-uuid", 1u32), ("peer-uuid", 2), ("other-uuid", 1)] {
+        let address = ProtocolAddress::new(peer.to_string(), DeviceId::try_from(device).unwrap());
+        key_store
+            .store_session(&format!("{peer}:{device}"), &usable_session_bytes(&address).await)
+            .unwrap();
+    }
+    assert_eq!(service.session_devices("peer-uuid").await.unwrap(), vec![1, 2]);
+
+    assert_eq!(service.archive_peer_sessions("peer-uuid").await.unwrap(), 2);
+
+    assert!(
+        service.session_devices("peer-uuid").await.unwrap().is_empty(),
+        "an archived session still reads as usable, so the rebuild would skip it"
+    );
+    assert!(
+        key_store.load_session("peer-uuid:1").unwrap().is_some(),
+        "archived, not deleted: in-flight messages under the old state still decrypt"
+    );
+    assert_eq!(service.session_devices("other-uuid").await.unwrap(), vec![1]);
+}
+
 /// Test that actor operations are serialized through the message channel.
 /// This verifies the actor pattern is being used correctly.
 #[tokio::test]
@@ -447,21 +475,13 @@ async fn prekey_message_from(sender_identity: IdentityKeyPair, seed: u64) -> Vec
     msg.serialize().to_vec()
 }
 
-/// RECEIVE sibling: the Sesame convergence path must surface a changed identity
-/// key too.
-///
-/// `decrypt_identified_message` routes through convergence whenever the peer has
-/// any sesame session, and that loop used to swallow every per-attempt
-/// `SignalProtocolError` with `if let Ok(..)`, reporting only a generic
-/// `AllFailed`. So on the single most common route for a peer reinstall the
-/// wedge was invisible: no candidate session can ever fix a changed identity
-/// key — every one of them fails the same trust check — yet the caller was told
-/// "session convergence failed" and offered a session-level remedy that cannot
-/// converge.
+/// RECEIVE sibling: identified-sender decrypt must surface a changed identity
+/// key as `UntrustedIdentity`, not a generic protocol failure — no session
+/// remedy can fix a changed key, and the accept path is offered only on this
+/// error.
 #[tokio::test]
-async fn convergence_surfaces_a_changed_identity_instead_of_a_generic_failure() {
+async fn identified_decrypt_surfaces_a_changed_identity_instead_of_a_generic_failure() {
     use chatter_core::error::{CryptoError, ServiceError};
-    use libsignal_protocol::SessionRecord;
 
     let (service, key_store, _settings, _db_file) = setup_test_service().await;
 
@@ -473,14 +493,8 @@ async fn convergence_surfaces_a_changed_identity_instead_of_a_generic_failure() 
     key_store.save_identity("alice_uuid", &old.serialize()).unwrap();
     let envelope = prekey_message_from(reinstalled_pair, 0xBEEF).await;
 
-    // Alice has sesame sessions, which is what routes this through convergence.
-    let candidates = vec![
-        (vec![1u8; 8], SessionRecord::new_fresh()),
-        (vec![2u8; 8], SessionRecord::new_fresh()),
-    ];
-
     match service
-        .decrypt_with_convergence(&envelope, "alice_uuid", 1, candidates)
+        .decrypt_message_identified(&envelope, "alice_uuid", 1)
         .await
     {
         Err(ServiceError::Crypto(CryptoError::UntrustedIdentity {
@@ -500,10 +514,7 @@ async fn convergence_surfaces_a_changed_identity_instead_of_a_generic_failure() 
                 "an identified-sender peer id is server-claimed and must never read as proven"
             );
         }
-        Ok(other) => panic!(
-            "convergence reported {other:?} instead of the identity change — the user is \
-             offered a session-level remedy that can never converge"
-        ),
+        Ok(_) => panic!("decrypted under a changed identity key instead of refusing it"),
         Err(e) => panic!("expected UntrustedIdentity, got {e:?}"),
     }
 }

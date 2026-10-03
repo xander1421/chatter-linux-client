@@ -86,74 +86,57 @@ impl UnifiedMessageRepository {
     }
 
     /// Insert a new message.
+    ///
+    /// An edit, delete-for-everyone, reaction or pin that arrived first is
+    /// applied here (`message_modifier_repo::take_on_arrival`); a message
+    /// deleted before it arrived is tombstoned and not stored. A caller that
+    /// announces the message uses [`insert_received`](Self::insert_received).
     pub fn insert(&self, message: &Message) -> Result<(), StorageError> {
-        let is_read = self.stored_is_read(message);
-        let conn = self.db.connection()?;
-        let content_json = serde_json::to_string(&message.content)
-            .map_err(|e| StorageError::InvalidData(format!("serialize content: {}", e)))?;
-        let attachments_blob = db_serialize(&message.attachments)?;
-        let reaction_counts_blob = db_serialize(&message.reaction_counts)?;
-        let current_user_reactions_blob = db_serialize(&message.current_user_reactions)?;
-        let mentioned_integrations_blob = db_serialize(&message.mentioned_integrations)?;
+        self.store(message, false).map(|_| ())
+    }
 
-        conn.execute(
-            "INSERT INTO messages (
-                id, conversation_id, conversation_type, sender_id, device_id,
-                content_type, content_json, encrypted_content,
-                thread_id, reply_to, attachments_blob,
-                is_pinned, is_edited, is_deleted, is_read,
-                sent_at, created_at, updated_at, edited_at,
-                reaction_counts_blob, current_user_reactions_blob,
-                mentioned_integrations_blob, targets_ai_bot, delivery_status,
-                reply_to_author_id, reply_to_text,
-                reply_to_thumbnail, reply_to_thumbnail_mime, failure_reason
-            ) VALUES (
-                ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10,
-                ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19,
-                ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29
-            )",
-            params![
-                message.id.to_string(),
-                message.conversation_id.to_string(),
-                message.conversation_type.as_str(),
-                message.sender_id.map(|id| id.to_string()),
-                message.device_id.map(|d| d as i64),
-                content_type_discriminant(&message.content),
-                content_json,
-                message.encrypted_content.as_deref(),
-                message.thread_id.map(|id| id.to_string()),
-                message.reply_to.map(|id| id.to_string()),
-                attachments_blob,
-                message.is_pinned as i32,
-                message.is_edited as i32,
-                message.is_deleted as i32,
-                is_read as i32,
-                message.sent_at as i64,
-                message.created_at.to_rfc3339(),
-                message.updated_at.to_rfc3339(),
-                message.edited_at.map(|dt| dt.to_rfc3339()),
-                reaction_counts_blob,
-                current_user_reactions_blob,
-                mentioned_integrations_blob,
-                message.targets_ai_bot as i32,
-                &message.delivery_status,
-                message.reply_to_author_id.map(|id| id.to_string()),
-                message.reply_to_text.as_deref(),
-                message.reply_to_thumbnail.as_deref(),
-                message.reply_to_thumbnail_mime.as_deref(),
-                message.failure_reason.as_deref(),
-            ],
-        )?;
-        index_shared_content(&conn, message);
-        Ok(())
+    /// [`insert`](Self::insert), returning the message as stored — with any
+    /// early modifier applied — or `None` when an early delete-for-everyone
+    /// kept it out. What a receive path must announce, not what it decoded.
+    pub fn insert_received(&self, message: &Message) -> Result<Option<Message>, StorageError> {
+        if !self.store(message, false)? {
+            return Ok(None);
+        }
+        self.get(&message.id)
     }
 
     /// Insert a message, ignoring duplicates (Signal dedup on primary key + sender_id/sent_at).
     ///
     /// Returns `true` if inserted, `false` if skipped.
+    /// `false` too for a message its author deleted for everyone before it
+    /// arrived (see [`insert`](Self::insert)).
     pub fn insert_or_ignore(&self, message: &Message) -> Result<bool, StorageError> {
+        self.store(message, true)
+    }
+
+    /// [`insert_or_ignore`](Self::insert_or_ignore), returning the message as
+    /// stored when it was inserted (see [`insert_received`](Self::insert_received)).
+    pub fn insert_or_ignore_received(&self, message: &Message) -> Result<Option<Message>, StorageError> {
+        if !self.store(message, true)? {
+            return Ok(None);
+        }
+        self.get(&message.id)
+    }
+
+    /// The one write behind every insert: `true` when a row was written.
+    fn store(&self, message: &Message, or_ignore: bool) -> Result<bool, StorageError> {
         let is_read = self.stored_is_read(message);
         let conn = self.db.connection()?;
+        let tx = conn.unchecked_transaction()?;
+        let (message, reactions) = match super::message_modifier_repo::take_on_arrival(&tx, message)? {
+            super::message_modifier_repo::Arrival::Store { message, reactions } => (message, reactions),
+            super::message_modifier_repo::Arrival::Deleted => {
+                tx.execute("INSERT OR IGNORE INTO deleted_messages (id) VALUES (?1)", params![message.id.to_string()])?;
+                tx.commit()?;
+                return Ok(false);
+            }
+        };
+        let message = &*message;
         let content_json = serde_json::to_string(&message.content)
             .map_err(|e| StorageError::InvalidData(format!("serialize content: {}", e)))?;
         let attachments_blob = db_serialize(&message.attachments)?;
@@ -161,8 +144,8 @@ impl UnifiedMessageRepository {
         let current_user_reactions_blob = db_serialize(&message.current_user_reactions)?;
         let mentioned_integrations_blob = db_serialize(&message.mentioned_integrations)?;
 
-        let rows = conn.execute(
-            "INSERT OR IGNORE INTO messages (
+        let rows = tx.execute(
+            &format!("INSERT {} INTO messages (
                 id, conversation_id, conversation_type, sender_id, device_id,
                 content_type, content_json, encrypted_content,
                 thread_id, reply_to, attachments_blob,
@@ -176,7 +159,7 @@ impl UnifiedMessageRepository {
                 ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10,
                 ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19,
                 ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29
-            )",
+            )", if or_ignore { "OR IGNORE" } else { "" }),
             params![
                 message.id.to_string(),
                 message.conversation_id.to_string(),
@@ -210,9 +193,49 @@ impl UnifiedMessageRepository {
             ],
         )?;
         if rows > 0 {
-            index_shared_content(&conn, message);
+            index_shared_content(&tx, message);
+            self.apply_held_reactions(&tx, message, &reactions)?;
         }
+        tx.commit()?;
         Ok(rows > 0)
+    }
+
+    /// Record the reactions that waited for `message` (now stored).
+    fn apply_held_reactions(
+        &self,
+        conn: &rusqlite::Connection,
+        message: &Message,
+        reactions: &[super::message_modifier_repo::PendingReaction],
+    ) -> Result<(), StorageError> {
+        use crate::services::current_user::CurrentUserProvider;
+        let (Some(author), false) = (message.sender_id, reactions.is_empty()) else {
+            return Ok(());
+        };
+        let Ok(me) = super::settings_repo::SettingsRepository::new(self.db.clone()).current_user_id() else {
+            return Ok(());
+        };
+        for r in reactions {
+            if r.remove {
+                conn.execute(
+                    "DELETE FROM unified_reactions WHERE sender_id = ?1 AND sent_at_ns = ?2 AND user_id = ?3 AND emoji = ?4",
+                    params![author.to_string(), message.sent_at as i64, r.reactor.to_string(), r.emoji],
+                )?;
+            } else {
+                conn.execute(
+                    "INSERT OR IGNORE INTO unified_reactions (id, sender_id, sent_at_ns, user_id, emoji, created_at)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                    params![
+                        ReactionId::new().to_string(),
+                        author.to_string(),
+                        message.sent_at as i64,
+                        r.reactor.to_string(),
+                        r.emoji,
+                        Utc::now().to_rfc3339(),
+                    ],
+                )?;
+            }
+        }
+        self.rebuild_reaction_blobs_with_conn(conn, &author, message.sent_at, &me)
     }
 
     /// Get a message by ID.
@@ -227,6 +250,33 @@ impl UnifiedMessageRepository {
             Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
             Err(e) => Err(StorageError::Database(e)),
         }
+    }
+
+    /// Store the sealed-sender deletion token of a message we sent.
+    pub fn set_deletion_token(&self, id: &MessageId, token: &[u8; 32]) -> Result<(), StorageError> {
+        let rows = self.db.connection()?.execute(
+            "UPDATE messages SET deletion_token = ?1 WHERE id = ?2",
+            params![&token[..], id.to_string()],
+        )?;
+        if rows == 0 {
+            return Err(StorageError::NotFound(format!("Message {}", id)));
+        }
+        Ok(())
+    }
+
+    /// The sealed-sender deletion token of a message we sent, if it has one.
+    pub fn deletion_token(&self, id: &MessageId) -> Result<Option<[u8; 32]>, StorageError> {
+        let conn = self.db.connection()?;
+        let token: Option<Vec<u8>> = match conn.query_row(
+            "SELECT deletion_token FROM messages WHERE id = ?1",
+            params![id.to_string()],
+            |row| row.get(0),
+        ) {
+            Ok(t) => t,
+            Err(rusqlite::Error::QueryReturnedNoRows) => None,
+            Err(e) => return Err(StorageError::Database(e)),
+        };
+        Ok(token.and_then(|t| <[u8; 32]>::try_from(t.as_slice()).ok()))
     }
 
     pub fn update_reply_parent(&self, id: &MessageId, parent: &MessageId) -> Result<(), StorageError> {
@@ -1828,6 +1878,26 @@ mod tests {
             message_type: EncryptedMessageType::Signal,
         });
         assert_eq!(content_type_discriminant(&encrypted), 1);
+    }
+
+    #[test]
+    fn deletion_token_round_trips_through_the_message_row() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let db = Arc::new(Database::open(&dir.path().join("m.db"), "testpass").expect("open"));
+        db.run_migrations().expect("migrations");
+        let repo = UnifiedMessageRepository::new(db);
+        let msg = Message::new_text(ChannelId::new(), ConversationType::ServerDm,
+            Some(UserId::new()), "hi".into(), 1);
+        repo.insert(&msg).unwrap();
+
+        assert_eq!(repo.deletion_token(&msg.id).unwrap(), None, "no token until one is set");
+        repo.set_deletion_token(&msg.id, &[3u8; 32]).unwrap();
+        assert_eq!(repo.deletion_token(&msg.id).unwrap(), Some([3u8; 32]));
+        // A full-row update must not clobber it.
+        repo.update(&msg).unwrap();
+        assert_eq!(repo.deletion_token(&msg.id).unwrap(), Some([3u8; 32]));
+        assert!(repo.set_deletion_token(&MessageId::new(), &[1u8; 32]).is_err());
+        assert_eq!(repo.deletion_token(&MessageId::new()).unwrap(), None);
     }
 
     #[test]

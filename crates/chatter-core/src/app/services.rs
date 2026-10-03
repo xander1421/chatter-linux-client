@@ -141,7 +141,7 @@ impl ServiceContainer {
             infra.ephemeral_repo.clone(),
         ));
 
-        // 3. Message service with group mailbox support and Sesame
+        // 3. Message service with group mailbox support
         let message_service = Arc::new(MessageService::new(
             infra.grpc_pool.clone(),
             infra.database.clone(),
@@ -152,7 +152,7 @@ impl ServiceContainer {
             infra.user_repo.clone(),
             signal_service.clone(),
             infra.group_mailbox_manager.clone(),
-            infra.sesame_manager.clone(),
+            infra.pending_dm_repo.clone(),
             infra.search_index.clone(),
             infra.token_manager.clone(),
             infra.event_bus.clone(),
@@ -160,14 +160,13 @@ impl ServiceContainer {
             mailbox_manager.clone(),
         ));
 
-        // 4. Message gateway with Sesame
-        let message_gateway = Arc::new(MessageGateway::with_sesame(
+        // 4. Message gateway
+        let message_gateway = Arc::new(MessageGateway::with_ephemeral(
             (*signal_service).clone(),
             infra.message_repo.clone(),
             infra.channel_repo.clone(),
             infra.user_repo.clone(),
             infra.settings_repo.clone(),
-            infra.sesame_manager.clone(),
             infra.ephemeral_repo.clone(),
             message_service.solicited_resends.clone(),
         ));
@@ -201,7 +200,23 @@ impl ServiceContainer {
             infra.anon_group_repo.clone(),
         ));
 
-        // 8. Channel service
+        // 8. Channel service, on the signed membership log
+        let membership_log = Arc::new(crate::services::channel::membership_log::MembershipLog::new(
+            Arc::new(crate::services::channel::membership_log::SignalLogBackend::new(
+                infra.grpc_pool.clone(),
+                signal_service.clone(),
+                infra.settings_repo.clone(),
+            )),
+            Arc::new(crate::services::channel::membership_log::SignalKtVerifier::cached(
+                infra.grpc_pool.clone(),
+                signal_service.clone(),
+                infra.settings_repo.clone(),
+            )),
+            crate::storage::repositories::verified_membership_repo::VerifiedMembershipRepository::new(
+                infra.database.clone(),
+            ),
+        ));
+        message_service.set_channel_state_sync(membership_log.clone());
         let channel_service = Arc::new(ChannelService::new(
             infra.grpc_pool.clone(),
             infra.settings_repo.clone(),
@@ -210,12 +225,14 @@ impl ServiceContainer {
             signal_service.clone(),
             infra.group_coordinator.clone(),
             message_service.clone(),
+            membership_log.clone(),
         ));
 
         // 9. Session service
         let session_service = Arc::new(SessionService::new(
             infra.grpc_pool.clone(),
             infra.settings_repo.clone(),
+            infra.key_store.clone(),
         ));
 
         // 10. Attachment service
@@ -229,7 +246,9 @@ impl ServiceContainer {
             infra.grpc_pool.clone(),
             infra.event_bus.clone(),
             infra.settings_repo.clone(),
+            membership_log.clone(),
         ));
+        membership_log.set_observer(Arc::downgrade(&channel_event_service) as std::sync::Weak<dyn crate::services::channel::membership_log::LogObserver>);
 
         // 12. AI service for AI integrations
         let ai_service = Arc::new(AIService::new(

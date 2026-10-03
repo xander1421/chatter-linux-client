@@ -48,6 +48,20 @@ impl From<CurrentUserError> for ChannelError {
     }
 }
 
+impl From<super::membership_log::LogError> for ChannelError {
+    fn from(err: super::membership_log::LogError) -> Self {
+        use super::membership_log::LogError;
+        use super::verified_state::VerifyError;
+        match err {
+            LogError::Network(e) => Self::Network(e),
+            LogError::Storage(e) => Self::Storage(e),
+            LogError::Intent(VerifyError::NotPermitted(_)) => Self::NotAuthorized,
+            LogError::Intent(e) => Self::InvalidInput(e.to_string()),
+            other => Self::InvalidInput(other.to_string()),
+        }
+    }
+}
+
 impl ChannelError {
     /// Text for a toast or status line; the `Display` chain
     /// ("network error: invalid request: precondition failed: ...") is for logs.

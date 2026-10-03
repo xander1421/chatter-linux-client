@@ -227,17 +227,14 @@ fn dropped_tables_are_not_referenced_anywhere_in_storage() {
     );
     assert!(live.contains("unified_reactions"));
 
-    // The Sesame tables used to be created at runtime by SqliteSesameStore,
-    // outside the migration system entirely (INFRA-12). v065 moved them here.
+    // v077 replaced the Sesame tables (v065) with the pending-DM queue.
+    assert!(live.contains("pending_dm_messages"));
     for t in [
         "sesame_users",
         "sesame_devices",
         "sesame_sessions",
         "sesame_pending_messages",
     ] {
-        assert!(
-            live.contains(t),
-            "{t} must come from a migration, not a runtime CREATE TABLE IF NOT EXISTS"
-        );
+        assert!(!live.contains(t), "migration v077 drops {t}");
     }
 }

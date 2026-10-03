@@ -41,6 +41,7 @@ pub mod outgoing_typing;
 pub mod presence_service;
 pub mod ephemeral_service;
 pub mod disappearing;
+pub mod configuration_sync;
 // Removed - gif_service.rs file was deleted
 pub mod quick_switcher;
 pub mod search;

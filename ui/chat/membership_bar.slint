@@ -1,0 +1,104 @@
+// The strip under a channel's header while its membership is not verified
+// (failed verification, a fork, or no verified state yet). Sending is paused
+// for exactly these states (`GroupStateGate::for_distribution`).
+//
+// Wording comes from chatter-core (`ChatterClient::channel_membership_header`).
+// Not dismissable: it explains why the channel will not send. "Details" only
+// reveals the core-supplied explanation and state code; there is no action
+// that lifts the block from here.
+
+import { Colors } from "../theme/colors.slint";
+import { Spacing } from "../theme/spacing.slint";
+import { Typography } from "../theme/typography.slint";
+import { Icons } from "../theme/icons.slint";
+import { MembershipGlobal } from "membership_global.slint";
+
+export component MembershipBar inherits Rectangle {
+    property <bool> alert: MembershipGlobal.banner-severity == "alert";
+    property <color> accent: root.alert ? Colors.error : Colors.warning;
+    property <bool> expanded: false;
+
+    changed alert => { self.expanded = false; }
+
+    min-height: 24px;
+    background: root.accent.with-alpha(root.alert ? 0.16 : 0.10);
+
+    Rectangle {
+        y: parent.height - 1px;
+        width: 100%;
+        height: 1px;
+        background: root.accent.with-alpha(0.35);
+    }
+
+    HorizontalLayout {
+        padding-left: Spacing.md;
+        padding-right: Spacing.md;
+        padding-top: Spacing.sm;
+        padding-bottom: Spacing.sm;
+        spacing: Spacing.sm;
+
+        VerticalLayout {
+            alignment: start;
+            horizontal-stretch: 0;
+            Image {
+                source: root.alert ? Icons.alert-triangle : Icons.shield;
+                width: 16px;
+                height: 16px;
+                colorize: root.accent;
+            }
+        }
+
+        VerticalLayout {
+            horizontal-stretch: 1;
+            alignment: center;
+            spacing: Spacing.xxs;
+
+            Text {
+                text: MembershipGlobal.banner-title;
+                color: Colors.text-primary;
+                font-size: Typography.sm;
+                font-weight: 600;
+                wrap: word-wrap;
+                accessible-role: text;
+                accessible-label: MembershipGlobal.banner-title;
+            }
+
+            if root.expanded: Text {
+                text: MembershipGlobal.banner-detail;
+                color: Colors.text-muted;
+                font-size: Typography.xs;
+                wrap: word-wrap;
+                accessible-role: text;
+                accessible-label: MembershipGlobal.banner-detail;
+            }
+        }
+
+        VerticalLayout {
+            alignment: center;
+            horizontal-stretch: 0;
+            Rectangle {
+                width: details-label.preferred-width + Spacing.lg;
+                height: Spacing.touch-target-min;
+                border-radius: Spacing.radius-sm;
+                background: details-touch.has-hover ? root.accent.with-alpha(0.28) : root.accent.with-alpha(0.16);
+
+                details-label := Text {
+                    text: root.expanded ? "Hide" : "Details";
+                    color: Colors.text-primary;
+                    font-size: Typography.xs;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                    width: 100%;
+                    height: 100%;
+                }
+
+                details-touch := TouchArea {
+                    mouse-cursor: pointer;
+                    accessible-role: button;
+                    accessible-label: root.expanded ? "Hide membership details" : "Show membership details";
+                    clicked => { root.expanded = !root.expanded; }
+                }
+            }
+        }
+    }
+}

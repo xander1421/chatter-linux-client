@@ -1,9 +1,8 @@
 //! Identity and key management operations.
 //!
-//! Handles identity fingerprints, prekey refresh, and call encryption key derivation.
+//! Handles identity fingerprints and prekey refresh.
 //! All operations are delegated to the SignalActor for thread-safety.
 
-use libsignal_protocol::ProtocolAddress;
 use crate::network::grpc::auth_client::AuthClient;
 use crate::domain::ids::UserId;
 use crate::error::{CryptoError, IdentityChangeSource, ServiceError};
@@ -34,11 +33,23 @@ impl SignalService {
         self.actor.get_identity_public_key().await
     }
 
-    /// Get the local identity private key (32 bytes X25519 scalar).
-    ///
-    /// This is used for ECIES decryption of NDSS'21 initial contact messages.
-    pub async fn get_identity_private_key(&self) -> Result<[u8; 32], ServiceError> {
-        self.actor.get_identity_private_key().await
+    /// Sign a channel membership change's `Actions` with the identity key
+    /// (inside the Signal actor). Returns `(actions_bytes, signature)`.
+    pub async fn sign_channel_change(
+        &self,
+        actions: crate::proto::chat_v1::channel_change::Actions,
+    ) -> Result<(Vec<u8>, Vec<u8>), ServiceError> {
+        self.actor.sign_channel_change(actions).await
+    }
+
+    /// Open an HPKE message sealed to our identity key (`crypto::ecies`).
+    /// The open runs inside the Signal actor; the secret never leaves it.
+    pub async fn open_identity_hpke(
+        &self,
+        purpose: crate::crypto::ecies::IdentityHpkeUse,
+        ciphertext: Vec<u8>,
+    ) -> Result<Vec<u8>, ServiceError> {
+        self.actor.open_identity_hpke(purpose, ciphertext).await
     }
 
     /// Check if we have a trusted identity key for a peer.
@@ -251,17 +262,6 @@ impl SignalService {
         })
     }
 
-    /// Derive a shared secret for call encryption with a peer.
-    pub async fn derive_call_encryption_key(
-        &self,
-        peer_address: &ProtocolAddress,
-    ) -> Result<[u8; 32], ServiceError> {
-        let peer_id = peer_address.name().parse().map_err(|_| ServiceError::Validation("Invalid peer ID".into()))?;
-        let device_id = peer_address.device_id().into();
-        
-        self.actor.derive_call_encryption_key(peer_id, device_id).await
-    }
-
     /// Generate a 60-digit safety number for a peer.
     ///
     /// Returns a numeric string that both parties should compare to verify
@@ -354,9 +354,9 @@ impl SignalService {
     /// **A trust decision — only ever reach this from an explicit user action.**
     /// A reinstall and an active MITM are indistinguishable from here.
     ///
-    /// Mirrors this repo's existing response to a peer identity/device change
-    /// (`spawn_notification_listener`'s PEER_DEVICES_CHANGED arm), which is two
-    /// phases, not one: pairwise sessions are invalidated AND every shared
+    /// Mirrors this repo's response to a peer re-registering
+    /// (`MessageService::handle_peer_device_change`, `reregistered`), which is
+    /// two phases, not one: pairwise sessions are invalidated AND every shared
     /// channel is marked for sender-key rotation. Without the second phase the
     /// peer keeps holding a live sender key and group messages keep flowing to
     /// the identity that just changed.
@@ -431,20 +431,5 @@ impl SignalService {
         );
 
         Ok(dropped)
-    }
-
-    /// Derive a call key for a specific call with a peer.
-    pub async fn derive_call_key(
-        &self,
-        peer_address: &ProtocolAddress,
-        call_id: &str,
-    ) -> Result<[u8; 32], ServiceError> {
-        use crate::crypto::call_key_provider;
-
-        let shared_secret = self.derive_call_encryption_key(peer_address).await?;
-        let call_key = call_key_provider::derive_call_key(&shared_secret, call_id)
-            .map_err(ServiceError::Crypto)?;
-
-        Ok(call_key)
     }
 }

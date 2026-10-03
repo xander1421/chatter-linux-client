@@ -77,13 +77,7 @@ impl UserBuilder {
                 format!("Test User {}", &username)
             }
         });
-        let (password, password_hash) = self.password
-            .map(|p| {
-                use sha2::{Digest, Sha256};
-                let hash = Sha256::digest(p.as_bytes()).to_vec();
-                (p, hash)
-            })
-            .unwrap_or_else(random_password);
+        let password = self.password.unwrap_or_else(random_password);
 
         let profile_key = self.profile_key.unwrap_or_else(random_profile_key);
 
@@ -101,7 +95,6 @@ impl UserBuilder {
             display_name,
             encrypted_display_name, // Vec<u8>
             password,
-            password_hash,
             public_key: random_public_key(),
             identity_key_pair_bytes: Vec::new(),
             device_auth_token: random_device_auth_token(),

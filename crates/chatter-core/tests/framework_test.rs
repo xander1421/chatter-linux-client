@@ -332,9 +332,8 @@ fn test_fixtures() {
     let username = unique_username();
     assert!(username.starts_with("test_user_"));
 
-    let (password, hash) = random_password();
+    let password = random_password();
     assert!(password.starts_with("TestPass_"));
-    assert_eq!(hash.len(), 32);
 
     let uak = random_uak();
     assert_eq!(uak.len(), 16);

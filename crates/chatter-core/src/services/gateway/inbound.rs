@@ -92,6 +92,8 @@ pub fn content_type_name(content: &Option<content::Content>) -> &'static str {
         Some(content::Content::SyncSent(_)) => "SyncSent",
         Some(content::Content::ReadSync(_)) => "ReadSync",
         Some(content::Content::ProfileKeySync(_)) => "ProfileKeySync",
+        Some(content::Content::ConfigurationSync(_)) => "ConfigurationSync",
+        Some(content::Content::NullMessage(_)) => "NullMessage",
         None => "None",
     }
 }
@@ -124,11 +126,15 @@ pub enum DmContent {
         /// of the main channel — mirrors the ServerDm inbound path in
         /// `gateway/mod.rs`, which already carries this through.
         thread_id: Option<String>,
-        /// The disappearing timer this message states for the conversation
-        /// (`DataMessage.ephemeral_ttl_seconds`, `0` = off). `None` when the
-        /// payload could not carry one (the legacy fallbacks), which must not
-        /// be read as "off".
+        /// The ttl this message was sent under (`DataMessage
+        /// .ephemeral_ttl_seconds`, `0` = off). `None` when the payload could
+        /// not carry one (the legacy fallbacks), which must not be read as
+        /// "off".
         expire_timer: Option<u32>,
+        /// The version at which it states that ttl as the conversation's
+        /// timer (`DataMessage.expire_timer_version`); `0` = it states none
+        /// (a resend of an old message), so the timer is not adopted from it.
+        timer_version: u32,
         /// A timer-update announcement (Signal's `EXPIRATION_TIMER_UPDATE`):
         /// nothing to show but the timer change.
         timer_update: bool,
@@ -149,17 +155,23 @@ pub enum DmContent {
         remove: bool,
         target_author_aci: String,
         target_sent_timestamp: u64,
+        /// When the reaction was made (`Reaction.timestamp`, epoch nanos).
+        timestamp: u64,
     },
     /// Pin/unpin message
     Pin {
         target_author_aci: String,
         target_sent_timestamp: u64,
         unpin: bool,
+        /// When the pin was made (`PinMessage.timestamp`, epoch nanos).
+        timestamp: u64,
     },
     /// Edit message
     Edit {
         target_sent_timestamp: u64,
         new_body: String,
+        /// `EditMessage.data_message.timestamp` (epoch nanos).
+        edit_timestamp: u64,
     },
     /// Delete for everyone (peer notification)
     DeleteForEveryone {
@@ -275,6 +287,11 @@ pub enum DmContent {
         conversation_id: Vec<u8>,
         inner_content: Box<crate::proto::content_v1::Content>,
     },
+    /// Session-switch carrier with nothing to show (Signal's `NullMessage`):
+    /// the peer reset its sessions with us and sent this so the new session
+    /// takes over now. Decrypting it already did that; dispatching it must do
+    /// nothing, and the caller acks.
+    NullMessage,
     /// Not content at all: the authenticated sender is blocked, so the
     /// envelope was never parsed. The DM-mailbox twin of
     /// [`SealedSenderResult::DroppedBlockedSender`] — same decision, same

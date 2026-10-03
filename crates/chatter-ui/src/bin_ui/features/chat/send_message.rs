@@ -98,11 +98,15 @@ fn set_send_notice(
         return;
     }
     let read_only = ui_ctx.is_former_channel(&channel_id);
+    // The membership banner and public badge travel with the notice: both say
+    // whether (and why) this channel can be posted to.
+    let membership = ui_ctx.channel_membership_header(&channel_id);
     let weak = weak.clone();
     let _ = slint::invoke_from_event_loop(move || {
         if let Some(w) = weak.upgrade() {
             w.set_composer_notice(notice.into());
             w.set_conversation_read_only(read_only);
+            super::membership::apply_header(&w, &membership);
         }
     });
 }
@@ -132,6 +136,7 @@ fn wire_send_notice(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                 if let Some(w) = weak_clear.upgrade() {
                     w.set_composer_notice("".into());
                     w.set_conversation_read_only(false);
+                    super::membership::apply_header(&w, &Default::default());
                 }
             });
             if let Some(channel_id) = current {

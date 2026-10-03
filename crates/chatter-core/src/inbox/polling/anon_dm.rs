@@ -323,7 +323,7 @@ pub async fn process_anon_dm_results(
 
             // Decrypt using pairwise service (sealed sender)
             let (sender_uuid, plaintext) = match pairwise_service
-                .decrypt_sealed_sender(&msg.encrypted_envelope)
+                .decrypt_sealed_sender(&msg.encrypted_envelope, msg.server_timestamp)
                 .await
             {
                 Ok(result) => result,

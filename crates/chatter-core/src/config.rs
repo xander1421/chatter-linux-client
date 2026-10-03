@@ -22,9 +22,9 @@
 //!   builds but PANICS the moment anything needs the trust root — which is
 //!   during `SignalService` construction, i.e. at startup.
 //! - **`--features dev-trust-root`**: the development trust root matching the
-//!   local docker-compose Vault. Its private key is committed in plaintext at
-//!   `deploy/vault/init-and-unseal.sh`, so this build trusts certificates
-//!   anyone can forge. Local development only.
+//!   local docker-compose Vault. Its private key is SHA-256 of a public string
+//!   documented in `deploy/vault/init-and-unseal.sh`, so this build trusts
+//!   certificates anyone can forge. Local development only.
 //!
 //! Configuring production:
 //!
@@ -32,22 +32,27 @@
 //! CHATTER_TRUST_ROOT_PUBLIC_KEY_HEX=<64 hex chars> cargo build --release
 //! ```
 //!
-//! The value is the public half of the Curve25519 keypair the server signs
-//! sealed-sender certificates with — `public_key` under
-//! `sealed-sender/signing-keys/current` in Vault, base64 there, hex here. A
-//! malformed value, or one equal to the dev key, fails the BUILD.
+//! The value is the public half of the sealed-sender TRUST ROOT. The server
+//! never holds the root's private key: Vault has one secret,
+//! `sealed-sender/server-certificate` (a ServerCertificate the root signed
+//! offline with `cmd/sealed-sender-cert`, plus the intermediate's private key),
+//! and the server signs sender certificates with the intermediate.
+//! `scripts/provision-trust-root.sh` generates the root and writes this value
+//! (hex) to `.env`; the secret's `trust_root_public_key` field carries it in
+//! base64. A malformed value, or one equal to the dev key, fails the BUILD.
 
 use libsignal_protocol::PublicKey;
 
 // ─── Sealed sender trust root ──────────────────────────────────────────────
 
-/// Public half of the development keypair provisioned by
-/// `deploy/vault/init-and-unseal.sh` when `VAULT_GENERATE_KEYS` is not `true`.
+/// Public half of the development trust root that signed the development
+/// ServerCertificate `deploy/vault/init-and-unseal.sh` stores when
+/// `VAULT_GENERATE_KEYS` is not `true`.
 ///
 /// Base64: `yknZaqZBfXJLRTHfxsvcjikbUjHKrAiKMJLeUSC+aDM=`
 ///
-/// The matching PRIVATE key is committed next to it in that script, so this key
-/// authenticates nobody. Kept here so the production path can refuse to equal
+/// The matching PRIVATE key is SHA-256 of a public string documented in that
+/// script, so this key authenticates nobody. Kept here so the production path can refuse to equal
 /// it, and so `--features dev-trust-root` can select it on purpose.
 const DEV_TRUST_ROOT_BYTES: [u8; 32] = [
     0xca, 0x49, 0xd9, 0x6a, 0xa6, 0x41, 0x7d, 0x72,
@@ -133,7 +138,7 @@ const _: () = {
             assert!(
                 !same,
                 "CHATTER_TRUST_ROOT_PUBLIC_KEY_HEX is the publicly-known development \
-                 trust root, whose private key is committed in deploy/vault/init-and-unseal.sh. \
+                 trust root, whose private key is derivable from deploy/vault/init-and-unseal.sh. \
                  Use --features dev-trust-root if that is what you meant."
             );
         }
@@ -182,15 +187,15 @@ const MISSING_TRUST_ROOT: &str = "\n\
     \n\
       CHATTER_TRUST_ROOT_PUBLIC_KEY_HEX=<64 hex chars> cargo build --release\n\
     \n\
-    That value is the public half of the Curve25519 keypair the SERVER signs\n\
-    sealed-sender certificates with: the `public_key` field of\n\
-    `sealed-sender/signing-keys/current` in Vault (base64 there, hex here).\n\
-    Provision it with VAULT_GENERATE_KEYS=true deploy/vault/init-and-unseal.sh,\n\
-    which generates a fresh random keypair, then read the public half back out.\n\
-    Client and server MUST be built/provisioned from the same keypair.\n\
+    That value is the public half of the sealed-sender TRUST ROOT, which signs\n\
+    the server's certificate OFFLINE (cmd/sealed-sender-cert); the server holds\n\
+    only `sealed-sender/server-certificate` in Vault (certificate + intermediate\n\
+    key; `trust_root_public_key` there is base64, hex here). Provision it with\n\
+    ./scripts/provision-trust-root.sh, which writes this value to .env.\n\
+    Client and server MUST be built/provisioned from the same trust root.\n\
     \n\
     For local development against the docker-compose Vault, build with\n\
-    `--features dev-trust-root` instead. That key's PRIVATE half is committed in\n\
+    `--features dev-trust-root` instead. That key's PRIVATE half is derivable from\n\
     this repository and anyone can forge certificates under it — never ship it.\n\
     ==============================================================================\n";
 
@@ -495,8 +500,8 @@ mod tests {
     use super::*;
     use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
 
-    /// The DEV trust root's private key is committed in plaintext at
-    /// `deploy/vault/init-and-unseal.sh`, so anyone can mint a sender
+    /// The DEV trust root's private key is SHA-256 of a public string
+    /// documented in `deploy/vault/init-and-unseal.sh`, so anyone can mint a sender
     /// certificate under it. Selecting it must require an explicit opt-in
     /// feature — a debug build must never silently become an insecure build.
     /// (`android/build-android.sh` is the only Android build path and builds

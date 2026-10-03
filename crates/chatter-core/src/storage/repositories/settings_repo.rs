@@ -101,12 +101,6 @@ pub mod keys {
     /// Set on register / change-pin via `crypto::svr::derive_pin_fingerprint`.
     /// Never sent to the server. Used by [`LinkDeviceService::verify_pin`].
     pub const PIN_FINGERPRINT: &str = "crypto.pin_fingerprint";
-    /// Local-only password re-auth fingerprint (32 bytes, encrypted-at-rest).
-    /// Equal to `derive_login_auth_hash(SHA-256(password), username)`. Lets
-    /// [`LinkDeviceService::verify_password`] re-check the user password
-    /// without a network round-trip. Same value (hex-encoded) is what the
-    /// server stores in the `username` column for login lookup.
-    pub const AUTH_LOOKUP_HASH: &str = "crypto.auth_lookup_hash";
 
     // UI settings
     pub const WINDOW_WIDTH: &str = "ui.window_width";
@@ -122,9 +116,6 @@ pub mod keys {
 
     /// Group resends this device asked for — see `SolicitedResends`.
     pub const SOLICITED_RESENDS: &str = "message.solicited_resends";
-
-    /// Friend-DM deposits a peer may ask us to send again — see `DmSentLog`.
-    pub const DM_SENT_LOG: &str = "message.dm_sent_log";
 
     // Notification privacy settings
     // Controls what metadata leaks to the OS notification system.

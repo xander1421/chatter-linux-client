@@ -1,227 +1,116 @@
 //! Channel moderation operations.
 //!
-//! Kick, ban, and unban methods for ChannelService.
+//! Kick and ban are signed `RemoveMember` changes; unban, mute and unmute
+//! stay unsigned server actions (they do not change who holds keys).
 
 use tokio_stream::StreamExt;
 
 use crate::domain::ids::{ChannelId, UserId};
-use crate::proto::chat_v1::channel_event;
+use crate::proto::chat_v1::{self as pb, channel_event};
 use crate::proto::content_v1::SenderKeyDistribution;
+use crate::services::channel::membership_log::AuthorBase;
 use crate::services::current_user::CurrentUserProvider;
 
 use crate::services::channel::error::ChannelError;
 
+use super::membership::{action, drain};
 use super::ChannelService;
+use pb::channel_action::Action;
+use pb::remove_member::Reason;
 
 impl ChannelService {
     /// Kick a user from a channel.
     ///
     /// Returns the rotated SKDM which MUST be distributed to remaining members
-    /// to maintain forward secrecy. The departed user won't be able to decrypt
-    /// future messages encrypted with the new sender key.
-    ///
-    /// # Atomicity
-    ///
-    /// Message sending is blocked on this channel BEFORE the kick to prevent
-    /// any messages from being encrypted with the old key. The caller MUST
-    /// distribute the returned SKDM and then call
-    /// `signal_service.unblock_channel_send()` to resume message sending.
+    /// to maintain forward secrecy. Sending is blocked first; the caller MUST
+    /// distribute the SKDM and then `signal_service.unblock_channel_send()`.
     pub async fn kick_user(
         &self,
         channel_id: &ChannelId,
         user_id: &UserId,
         reason: Option<&str>,
     ) -> Result<SenderKeyDistribution, ChannelError> {
-        let _ = self.settings_repo.current_user_id()?;
-
-        // Block message sending BEFORE kick to prevent encryption with old key.
-        // The kicked user still has the old key — any message encrypted with it
-        // would violate forward secrecy.
-        if let Err(e) = self.signal_service.block_channel_send(channel_id) {
-            tracing::error!(
-                channel_id = %channel_id,
-                error = %e,
-                "Failed to block channel send before kick"
-            );
-        }
-
-        let channel_id_str = channel_id.to_string();
-        let user_id_str = user_id.to_string();
-        let mut channel_client = self.channel_client();
-        let mut stream = channel_client
-            .kick_user(&channel_id_str, &user_id_str, reason)
-            .await?;
-
-        let mut kicked = false;
-        while let Some(event_result) = stream.next().await {
-            let event = event_result?;
-            match event.event {
-                Some(channel_event::Event::MemberRemoved(removed)) => {
-                    if removed.user_id == user_id.to_string() {
-                        kicked = true;
-                        break;
-                    }
-                }
-                Some(channel_event::Event::OperationFailed(failure)) => {
-                    // Kick failed — unblock sending since no member was removed
-                    let _ = self.signal_service.unblock_channel_send(channel_id);
-                    let err_msg = failure
-                        .error
-                        .map(|e| format!("kick failed: {:?} - {}", e.code, e.message))
-                        .unwrap_or_else(|| "kick failed: unknown error".to_string());
-                    return Err(ChannelError::InvalidInput(err_msg));
-                }
-                _ => continue,
-            }
-        }
-
-        if !kicked {
-            let _ = self.signal_service.unblock_channel_send(channel_id);
-            return Err(ChannelError::InvalidInput(
-                "no member_removed event received".to_string(),
-            ));
-        }
-
-        // Remove local membership BEFORE rotating/distributing. If this fails
-        // with anything other than NotFound (membership already absent), bail
-        // out — otherwise `distribute_skdm` would fan the rotated sender key
-        // back to the kicked user via the stale local membership row.
-        match self.channel_repo.delete_membership(channel_id, user_id) {
-            Ok(()) => {}
-            Err(crate::error::StorageError::NotFound(_)) => {}
-            Err(e) => {
-                tracing::error!(
-                    channel_id = %channel_id,
-                    kicked_user = %user_id,
-                    error = %e,
-                    "CRITICAL: Failed to remove local membership after kick — aborting before sender-key rotation to prevent leaking the new key to the removed user"
-                );
-                return Err(ChannelError::Storage(e));
-            }
-        }
-
-        // Defense in depth: verify the kicked user is no longer listed locally
-        // before we rotate + distribute the new sender key.
-        if let Ok(members) = self.channel_repo.list_members(channel_id) {
-            if members.iter().any(|m| &m.user_id == user_id) {
-                tracing::error!(
-                    channel_id = %channel_id,
-                    kicked_user = %user_id,
-                    "CRITICAL: kicked user still present in local memberships after delete — aborting rotation"
-                );
-                return Err(ChannelError::InvalidInput(format!(
-                    "local membership for kicked user {} still present",
-                    user_id
-                )));
-            }
-        }
-
-        // Rotate sender key — this is MANDATORY after member removal.
-        // If rotation fails, sending stays blocked to prevent forward secrecy violation.
-        let skdm = self.signal_service.rotate_sender_key(channel_id).await
-            .map_err(|e| {
-                tracing::error!(
-                    channel_id = %channel_id,
-                    kicked_user = %user_id,
-                    error = %e,
-                    "CRITICAL: Sender key rotation failed after kick — sending remains blocked"
-                );
-                // Mark for rotation so it will be forced on next unblock attempt
-                let _ = self.signal_service.mark_channel_for_rotation(channel_id);
-                ChannelError::SenderKeyRotationFailed(format!(
-                    "rotation failed after kicking {}: {} — message sending blocked until resolved",
-                    user_id, e
-                ))
-            })?;
-
-        tracing::info!(
-            channel_id = %channel_id,
-            kicked_user = %user_id,
-            "Rotated sender key after kick — caller MUST distribute SKDM then unblock"
-        );
-
-        Ok(skdm)
+        self.remove_member(channel_id, user_id, Reason::Kicked, reason).await
     }
 
-    /// Ban a user from a channel, permanently until unbanned.
-    ///
-    /// Like kick, banning removes a member and MUST rotate the sender key
-    /// to maintain forward secrecy. The caller MUST distribute the returned
-    /// SKDM and then call `signal_service.unblock_channel_send()`.
+    /// Ban a user from a channel, permanently until unbanned. Like kick, the
+    /// sender key is rotated and the caller distributes the returned SKDM.
     pub async fn ban_user(
         &self,
         channel_id: &ChannelId,
         user_id: &UserId,
         reason: Option<&str>,
     ) -> Result<SenderKeyDistribution, ChannelError> {
+        self.remove_member(channel_id, user_id, Reason::Banned, reason).await
+    }
+
+    /// Signed `RemoveMember{KICKED|BANNED}`, then rotate. The rotation is
+    /// only done once our VERIFIED state no longer lists the target — that
+    /// set, not the server roster, is who the new key goes to.
+    async fn remove_member(
+        &self,
+        channel_id: &ChannelId,
+        user_id: &UserId,
+        why: Reason,
+        reason: Option<&str>,
+    ) -> Result<SenderKeyDistribution, ChannelError> {
         let _ = self.settings_repo.current_user_id()?;
-
-        // Block message sending BEFORE ban (same rationale as kick)
         if let Err(e) = self.signal_service.block_channel_send(channel_id) {
-            tracing::error!(
-                channel_id = %channel_id,
-                error = %e,
-                "Failed to block channel send before ban"
-            );
+            tracing::error!(%channel_id, error = %e, "Failed to block channel send before removal");
         }
-
-        let channel_id_str = channel_id.to_string();
-        let user_id_str = user_id.to_string();
-        let mut channel_client = self.channel_client();
-        if let Err(e) = channel_client
-            .ban_user(&channel_id_str, &user_id_str, reason)
-            .await
-        {
+        let target = user_id.to_string();
+        let cid = channel_id.to_string();
+        let reason = reason.map(str::to_string);
+        let removed = self
+            .membership_log
+            .author(
+                channel_id,
+                AuthorBase::Verified,
+                None,
+                |_| Ok(vec![action(Action::RemoveMember(pb::RemoveMember { user_id: target.clone(), reason: why as i32 }))]),
+                |change| {
+                    let mut client = self.channel_client();
+                    let (cid, reason) = (cid.clone(), reason.clone());
+                    async move {
+                        if why == Reason::Banned {
+                            client.ban_user(&cid, change, reason.as_deref()).await
+                        } else {
+                            drain(client.kick_user(&cid, change, reason.as_deref()).await?, "kick").await
+                        }
+                    }
+                },
+            )
+            .await;
+        if let Err(e) = removed {
+            // Nobody was removed: nothing to rotate.
             let _ = self.signal_service.unblock_channel_send(channel_id);
             return Err(e.into());
         }
 
-        // Same membership-removal guard as kick_user — otherwise distribute_skdm
-        // would leak the rotated sender key back to the banned user.
-        match self.channel_repo.delete_membership(channel_id, user_id) {
-            Ok(()) => {}
-            Err(crate::error::StorageError::NotFound(_)) => {}
-            Err(e) => {
-                tracing::error!(
-                    channel_id = %channel_id,
-                    banned_user = %user_id,
-                    error = %e,
-                    "CRITICAL: Failed to remove local membership after ban — aborting before sender-key rotation"
-                );
-                return Err(ChannelError::Storage(e));
+        // Our accepted change is committed by `author`; if that failed, catch
+        // up before trusting the distribution set.
+        let still_listed = |log: &crate::services::channel::membership_log::MembershipLog| {
+            log.load(channel_id).ok().flatten().is_some_and(|v| v.state.members.contains_key(&target))
+        };
+        if still_listed(&self.membership_log) {
+            if let Err(e) = self.membership_log.catch_up(channel_id).await {
+                tracing::warn!(%channel_id, error = %e, "Catch-up after removal failed");
             }
         }
-        if let Ok(members) = self.channel_repo.list_members(channel_id) {
-            if members.iter().any(|m| &m.user_id == user_id) {
-                return Err(ChannelError::InvalidInput(format!(
-                    "local membership for banned user {} still present",
-                    user_id
-                )));
-            }
+        if still_listed(&self.membership_log) {
+            let _ = self.signal_service.mark_channel_for_rotation(channel_id);
+            return Err(ChannelError::SenderKeyRotationFailed(format!(
+                "{user_id} is still in the verified membership — not rotating to a set that includes them"
+            )));
         }
 
-        // Rotate sender key — mandatory after member removal
-        let skdm = self.signal_service.rotate_sender_key(channel_id).await
-            .map_err(|e| {
-                tracing::error!(
-                    channel_id = %channel_id,
-                    banned_user = %user_id,
-                    error = %e,
-                    "CRITICAL: Sender key rotation failed after ban — sending remains blocked"
-                );
-                let _ = self.signal_service.mark_channel_for_rotation(channel_id);
-                ChannelError::SenderKeyRotationFailed(format!(
-                    "rotation failed after banning {}: {} — message sending blocked until resolved",
-                    user_id, e
-                ))
-            })?;
-
-        tracing::info!(
-            channel_id = %channel_id,
-            banned_user = %user_id,
-            "Rotated sender key after ban — caller MUST distribute SKDM then unblock"
-        );
-
+        let skdm = self.signal_service.rotate_sender_key(channel_id).await.map_err(|e| {
+            tracing::error!(%channel_id, removed = %user_id, error = %e, "CRITICAL: Sender key rotation failed after removal — sending remains blocked");
+            let _ = self.signal_service.mark_channel_for_rotation(channel_id);
+            ChannelError::SenderKeyRotationFailed(format!(
+                "rotation failed after removing {user_id}: {e} — message sending blocked until resolved"
+            ))
+        })?;
         Ok(skdm)
     }
 

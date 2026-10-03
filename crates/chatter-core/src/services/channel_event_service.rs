@@ -20,6 +20,7 @@ use crate::proto::chat_v1::channel_event;
 use crate::events::EventBus;
 use crate::inbox::DomainEvent;
 use crate::error::NetworkError;
+use crate::services::channel::membership_log::{Applied, LogObserver, MembershipLog, MembershipNotice};
 use tokio_stream::StreamExt;
 
 #[derive(Debug, thiserror::Error)]
@@ -50,6 +51,9 @@ pub struct ChannelEventService {
     /// Pending invites the UI has already been told about, so a reconnect
     /// refetch announces only the ones it missed.
     announced_invites: parking_lot::Mutex<std::collections::HashSet<ChannelId>>,
+    /// Verifies and commits every relayed `ChannelChange`; tells this
+    /// service (as its [`LogObserver`]) what to display.
+    membership_log: Arc<MembershipLog>,
 }
 
 /// Keep `announced` equal to the server's current pending set and return the
@@ -72,6 +76,7 @@ impl ChannelEventService {
         grpc_pool: Arc<GrpcClientPool>,
         event_bus: EventBus,
         settings_repo: Arc<crate::storage::repositories::settings_repo::SettingsRepository>,
+        membership_log: Arc<MembershipLog>,
     ) -> Self {
         Self {
             message_repo,
@@ -81,6 +86,7 @@ impl ChannelEventService {
             event_bus,
             settings_repo,
             announced_invites: Default::default(),
+            membership_log,
         }
     }
     
@@ -121,16 +127,15 @@ impl ChannelEventService {
         // invisible until the next start. Refetch after subscribing, so
         // nothing falls between the fetch and the stream.
         self.announce_missed_invites().await;
+        // Membership changes relayed while the stream was down: fetch and
+        // verify them now, in the background, ahead of their messages.
+        self.catch_up_membership_logs();
 
         while let Some(result) = stream.next().await {
             match result {
                 Ok(event) => {
                     if let Some(event_data) = event.event {
-                        self.handle_stream_event(
-                            event_data,
-                            &event.channel_id,
-                            event.timestamp,
-                        ).await;
+                        self.handle_stream_event(event_data, &event.channel_id).await;
                     }
                 }
                 Err(e) => {
@@ -143,6 +148,31 @@ impl ChannelEventService {
         Ok(())
     }
     
+    /// `GetChannelChanges` for every server channel we are in.
+    fn catch_up_membership_logs(&self) {
+        use crate::domain::channel::ChannelType;
+        let Ok(me) = self.settings_repo.current_user_id() else { return };
+        let channels: Vec<ChannelId> = match self.channel_repo.list_for_user(&me) {
+            Ok(list) => list
+                .into_iter()
+                .filter(|c| matches!(c.channel_type, ChannelType::Public | ChannelType::Private))
+                .map(|c| c.id)
+                .collect(),
+            Err(e) => {
+                tracing::warn!(error = %e, "Cannot list channels for membership catch-up");
+                return;
+            }
+        };
+        let log = self.membership_log.clone();
+        tokio::spawn(async move {
+            for channel_id in channels {
+                if let Err(e) = log.catch_up(&channel_id).await {
+                    tracing::warn!(%channel_id, error = %e, "Membership catch-up failed");
+                }
+            }
+        });
+    }
+
     /// Emit `ChannelInviteReceived` for every pending invite not yet announced.
     async fn announce_missed_invites(&self) {
         let invites = match self.grpc_pool.channel_client().list_pending_invites().await {
@@ -174,10 +204,8 @@ impl ChannelEventService {
         &self,
         event: channel_event::Event,
         channel_id: &str,
-        timestamp: u64,
     ) {
         use channel_event::Event;
-        use crate::domain::channel::{MemberRole, NotificationPreference};
         
         let channel_id = match channel_id.parse::<uuid::Uuid>() {
             Ok(uuid) => ChannelId::from(uuid),
@@ -188,33 +216,12 @@ impl ChannelEventService {
         };
         
         match event {
-            Event::MemberAdded(member) => {
-                let user_id = match member.user_id.parse::<uuid::Uuid>() {
-                    Ok(uuid) => UserId::from(uuid),
-                    Err(e) => {
-                        tracing::error!("Invalid user ID {}: {}", member.user_id, e);
-                        return;
-                    }
-                };
-                
-                // The server's join time is the join's identity: the live
-                // event and a later roster sync key the notice on it, so the
-                // same join is filed once whichever path sees it first.
-                let joined_at = (member.joined_at > 0)
-                    .then(|| chrono::DateTime::from_timestamp_nanos(member.joined_at as i64))
-                    .unwrap_or_else(Utc::now);
-                let membership = Membership {
-                    channel_id,
-                    user_id,
-                    role: MemberRole::Member,
-                    notification_preference: NotificationPreference::All,
-                    joined_at,
-                    last_read_message_id: None,
-                    is_muted: false,
-                    muted_until: None,
-                };
-                let key = if member.joined_at > 0 { membership_ts(&membership) } else { timestamp };
-                self.publish_member_joined(&membership, key);
+            // A signed membership change: verified against our own state
+            // before anything is applied (MembershipLog -> `applied`).
+            Event::ChannelChange(change) => {
+                if let Err(e) = self.membership_log.ingest(&channel_id, &change).await {
+                    tracing::warn!(%channel_id, error = %e, "Channel membership change not applied");
+                }
             }
             Event::ChannelUpdated(proto_channel) => {
                 use crate::services::channel::converters::proto_to_domain_channel;
@@ -266,91 +273,6 @@ impl ChannelEventService {
                 }
                 tracing::info!("Channel updated: channel={}, name={}", channel_id, updated.name);
             }
-            Event::MemberUpdated(proto_member) => {
-                use crate::services::channel::converters::{mute_expiry, proto_role_to_domain};
-
-                let user_id = match proto_member.user_id.parse::<uuid::Uuid>() {
-                    Ok(uuid) => UserId::from(uuid),
-                    Err(e) => {
-                        tracing::error!("Invalid user ID {}: {}", proto_member.user_id, e);
-                        return;
-                    }
-                };
-                let new_role = proto_role_to_domain(proto_member.role);
-                // The server sends the whole member on a role change and on a
-                // mute, unmute or mute expiry, so take its moderator mute too.
-                let (is_muted, muted_until) = (proto_member.muted, mute_expiry(&proto_member));
-
-                // Update the cached membership role. If we don't have the target
-                // member cached (e.g. an admin changed a THIRD user's role and we
-                // never fetched that membership), insert a minimal record so the
-                // member list reflects the new role.
-                match self.channel_repo.get_membership(&channel_id, &user_id) {
-                    Ok(Some(mut membership)) => {
-                        membership.role = new_role;
-                        membership.is_muted = is_muted;
-                        membership.muted_until = muted_until;
-                        if let Err(e) = self.channel_repo.update_membership(&membership) {
-                            tracing::warn!("Failed to persist member role change locally: {}", e);
-                            return;
-                        }
-                    }
-                    Ok(None) => {
-                        let membership = Membership {
-                            channel_id,
-                            user_id,
-                            role: new_role,
-                            notification_preference: NotificationPreference::All,
-                            joined_at: Utc::now(),
-                            last_read_message_id: None,
-                            is_muted,
-                            muted_until,
-                        };
-                        if let Err(e) = self.channel_repo.insert_membership(&membership) {
-                            tracing::warn!("Failed to insert member for role change locally: {}", e);
-                            return;
-                        }
-                    }
-                    Err(e) => {
-                        tracing::warn!("Failed to read membership for role change: {}", e);
-                        return;
-                    }
-                }
-
-                let event = DomainEvent::ChannelMemberUpdated {
-                    channel_id,
-                    user_id,
-                    role: new_role,
-                };
-                if let Err(e) = self.event_bus.domain_sender().send(event) {
-                    tracing::warn!("Failed to publish ChannelMemberUpdated event: {}", e);
-                }
-                tracing::info!(
-                    "Channel member role changed: channel={}, user={}, role={:?}",
-                    channel_id, user_id, new_role
-                );
-            }
-            Event::MemberRemoved(removed) => {
-                let user_id = match removed.user_id.parse::<uuid::Uuid>() {
-                    Ok(uuid) => UserId::from(uuid),
-                    Err(e) => {
-                        tracing::error!("Invalid user ID {}: {}", removed.user_id, e);
-                        return;
-                    }
-                };
-                let reason = member_removal_reason(&removed);
-                self.publish_member_removed(&channel_id, &user_id, reason, timestamp);
-            }
-            Event::OwnershipTransferred(transfer) => {
-                let (Ok(from), Ok(to)) = (
-                    transfer.from_user_id.parse::<uuid::Uuid>(),
-                    transfer.to_user_id.parse::<uuid::Uuid>(),
-                ) else {
-                    tracing::error!(?transfer, "Invalid user ID in OwnershipTransferred");
-                    return;
-                };
-                self.record_ownership_transferred(&channel_id, &UserId::from(from), &UserId::from(to), timestamp);
-            }
             // ── INFRA-29: the arms that used to fall into a silent
             // `_ => debug!("Unhandled channel event type")`.
 
@@ -387,16 +309,17 @@ impl ChannelEventService {
             Event::ChannelArchived(id) => self.apply_archive_state(&id, channel_id, true),
             Event::ChannelUnarchived(id) => self.apply_archive_state(&id, channel_id, false),
 
+            // Unsigned, routing-only server actions (unban, mute, unmute and
+            // a mute's expiry). Kicks and bans arrive as signed changes.
             Event::ModerationAction(action) => {
-                let (Ok(user_uuid), Ok(mod_uuid)) = (
-                    action.user_id.parse::<uuid::Uuid>(),
-                    action.moderator_id.parse::<uuid::Uuid>(),
-                ) else {
-                    tracing::error!("Moderation event with unparseable user ids");
+                let Ok(user_uuid) = action.user_id.parse::<uuid::Uuid>() else {
+                    tracing::error!("Moderation event with an unparseable user id");
                     return;
                 };
                 let user_id = UserId::from(user_uuid);
-                let moderator_id = UserId::from(mod_uuid);
+                // Empty for a mute the server's expiry sweep lifted.
+                let moderator_id =
+                    UserId::from(action.moderator_id.parse::<uuid::Uuid>().unwrap_or(uuid::Uuid::nil()));
                 let action_name = proto_moderation_action_name(action.action);
                 let is_self = self
                     .settings_repo
@@ -404,13 +327,8 @@ impl ChannelEventService {
                     .map(|me| me == user_id)
                     .unwrap_or(false);
 
-                // A kick or ban that targets US means we are out of the
-                // channel: drop the local membership so the roster and the
-                // send path stop pretending otherwise.
-                if is_self && matches!(action_name, "KICK" | "BAN") {
-                    if let Err(e) = self.channel_repo.delete_membership(&channel_id, &user_id) {
-                        tracing::warn!("Failed to remove own membership after {}: {}", action_name, e);
-                    }
+                if matches!(action_name, "MUTE" | "UNMUTE") {
+                    self.mirror_mute(&channel_id, &user_id, action_name == "MUTE", action.duration.as_ref());
                 }
 
                 let reason = (!action.reason.is_empty()).then(|| action.reason.clone());
@@ -492,6 +410,26 @@ impl ChannelEventService {
                 });
             }
         }
+    }
+
+    /// Mirror a server mute onto the local roster row (display only; the
+    /// server enforces it). `duration` unset = until lifted.
+    fn mirror_mute(&self, channel_id: &ChannelId, user_id: &UserId, muted: bool, duration: Option<&prost_types::Duration>) {
+        let Ok(Some(mut membership)) = self.channel_repo.get_membership(channel_id, user_id) else { return };
+        membership.is_muted = muted;
+        membership.muted_until = duration
+            .filter(|_| muted)
+            .and_then(|d| chrono::Duration::try_seconds(d.seconds))
+            .map(|d| Utc::now() + d);
+        if let Err(e) = self.channel_repo.update_membership(&membership) {
+            tracing::warn!(%channel_id, %user_id, error = %e, "Failed to mirror mute locally");
+            return;
+        }
+        let _ = self.event_bus.domain_sender().send(DomainEvent::ChannelMemberUpdated {
+            channel_id: *channel_id,
+            user_id: *user_id,
+            role: membership.role,
+        });
     }
 
     /// Persist a channel's archived flag and announce it.
@@ -600,19 +538,33 @@ impl ChannelEventService {
         }
     }
 
-    /// A roster sync found `membership` on the server but not locally: the
-    /// `MemberAdded` event was missed (app backgrounded, stream down). Files
-    /// the notice the event would have. Keyed on the server's `joined_at`, so
-    /// every sync that sees this join files it once.
+    /// A roster sync found `membership` on the server but not locally. The
+    /// roster is display only: the user is shown, but unless the verified
+    /// state has them ACTIVE they are an unsigned add — ignored for keys and
+    /// surfaced (`MembershipLog::apply_unsigned`). The notice is keyed on the
+    /// server's `joined_at`, so every sync that sees this join files it once.
     pub fn record_synced_join(&self, membership: &Membership) {
+        self.classify_unsigned(&membership.channel_id, &membership.user_id, true);
         self.publish_member_joined(membership, membership_ts(membership));
     }
 
-    /// A sync found `membership` gone from the server: the `MemberRemoved`
-    /// event was missed. `reason` is what the server still records
+    fn classify_unsigned(&self, channel_id: &ChannelId, user_id: &UserId, added: bool) {
+        use crate::services::channel::verified_state::UnsignedEvent;
+        let user_id = user_id.to_string();
+        let event = if added { UnsignedEvent::Added { user_id } } else { UnsignedEvent::Removed { user_id } };
+        if let Err(e) = self.membership_log.apply_unsigned(channel_id, event) {
+            tracing::warn!(%channel_id, error = %e, "Could not apply an unsigned roster change");
+        }
+    }
+
+    /// A sync found `membership` gone from the server. Unless a signed change
+    /// already removed them, this is an unsigned removal: they leave the
+    /// distribution set at once (fail-safe) and stay in the verified state
+    /// pending a signed change. `reason` is what the server still records
     /// (`GetDeparture`: a ban, else [`MemberRemoval::Unexplained`]). Keyed on
     /// the membership that ended, so every sync that sees it files it once.
     pub fn record_synced_departure(&self, membership: &Membership, reason: MemberRemoval) {
+        self.classify_unsigned(&membership.channel_id, &membership.user_id, false);
         self.publish_member_removed(
             &membership.channel_id,
             &membership.user_id,
@@ -662,9 +614,9 @@ impl ChannelEventService {
         Ok(())
     }
 
-    /// The owner handed the channel to `to`: record the new owner and roles
-    /// (the two `MemberUpdated` events carry the roles too, but not
-    /// `owner_id`) and file "{from} made {to} the owner" once per event.
+    /// The owner handed the channel to `to` (a verified
+    /// `TransferOwnershipAction`): record the new owner and roles and file
+    /// "{from} made {to} the owner" once per change.
     fn record_ownership_transferred(&self, channel_id: &ChannelId, from: &UserId, to: &UserId, event_ts: u64) {
         if let Err(e) = crate::services::channel::apply_ownership_transfer(&self.channel_repo, channel_id, from, to) {
             tracing::warn!(%channel_id, error = %e, "Failed to record ownership transfer");
@@ -874,6 +826,114 @@ impl ChannelEventService {
     }
 }
 
+/// Display of verified membership changes: the roster rows, the member
+/// notices and the domain events the UI reacts to. Key decisions never read
+/// any of this; they read the verified state `MembershipLog` just committed.
+impl LogObserver for ChannelEventService {
+    fn applied(&self, a: &Applied) {
+        use crate::domain::channel::NotificationPreference;
+        use crate::proto::chat_v1::{channel_action::Action, remove_member::Reason};
+        use crate::services::channel::converters::proto_role_to_domain;
+        use crate::services::channel::verified_state::MemberStatus;
+
+        let parse = |u: &str| u.parse::<uuid::Uuid>().ok().map(UserId::from);
+        let Some(author) = parse(&a.author) else { return };
+        let ts = a.timestamp;
+        let active = |s: Option<&crate::services::channel::verified_state::MembershipState>, u: &str| {
+            s.and_then(|s| s.members.get(u)).filter(|m| m.status == MemberStatus::Active).map(|m| m.role)
+        };
+        let genesis = a.actions.iter().any(|x| matches!(x.action, Some(Action::Genesis(_))));
+        let notify = !a.backfill;
+
+        // Departures, with the signed reason.
+        if let Some(prev) = &a.prev {
+            for (uid, _) in prev.active_members() {
+                if active(Some(&a.new), uid).is_some() {
+                    continue;
+                }
+                let Some(user) = parse(uid) else { continue };
+                let reason = a
+                    .actions
+                    .iter()
+                    .find_map(|x| match &x.action {
+                        Some(Action::RemoveMember(r)) if r.user_id == *uid => Some(r.reason),
+                        _ => None,
+                    })
+                    .map_or(MemberRemoval::Unexplained, |r| match Reason::try_from(r) {
+                        Ok(Reason::Kicked) => MemberRemoval::Kicked(author),
+                        Ok(Reason::Banned) => MemberRemoval::Banned(author),
+                        _ => MemberRemoval::Left,
+                    });
+                if notify {
+                    self.publish_member_removed(&a.channel_id, &user, reason, ts);
+                } else if let Err(e) = self.channel_repo.delete_membership(&a.channel_id, &user) {
+                    tracing::debug!(channel_id = %a.channel_id, %user, error = %e, "No roster row to drop");
+                }
+            }
+        }
+
+        // Arrivals, and role changes of those who stayed.
+        for (uid, m) in a.new.active_members() {
+            let Some(user) = parse(uid) else { continue };
+            let role = proto_role_to_domain(m.role as i32);
+            match active(a.prev.as_ref(), uid) {
+                None => {
+                    let membership = Membership {
+                        channel_id: a.channel_id,
+                        user_id: user,
+                        role,
+                        notification_preference: NotificationPreference::All,
+                        joined_at: chrono::DateTime::from_timestamp_nanos(ts as i64),
+                        last_read_message_id: None,
+                        is_muted: false,
+                        muted_until: None,
+                    };
+                    if notify && !(genesis && user == author) {
+                        self.publish_member_joined(&membership, ts);
+                    } else if let Err(e) = self.channel_repo.insert_or_ignore_membership(&membership) {
+                        tracing::warn!(channel_id = %a.channel_id, %user, error = %e, "Failed to store member");
+                    }
+                }
+                Some(old) if old != m.role => {
+                    if let Ok(Some(mut row)) = self.channel_repo.get_membership(&a.channel_id, &user) {
+                        row.role = role;
+                        if let Err(e) = self.channel_repo.update_membership(&row) {
+                            tracing::warn!(channel_id = %a.channel_id, %user, error = %e, "Failed to store role change");
+                        }
+                    }
+                    let _ = self.event_bus.domain_sender().send(DomainEvent::ChannelMemberUpdated {
+                        channel_id: a.channel_id,
+                        user_id: user,
+                        role,
+                    });
+                }
+                Some(_) => {}
+            }
+        }
+
+        for x in &a.actions {
+            if let Some(Action::TransferOwnership(t)) = &x.action {
+                if let Some(to) = parse(&t.new_owner_user_id) {
+                    if notify {
+                        self.record_ownership_transferred(&a.channel_id, &author, &to, ts);
+                    } else if let Err(e) =
+                        crate::services::channel::apply_ownership_transfer(&self.channel_repo, &a.channel_id, &author, &to)
+                    {
+                        tracing::warn!(channel_id = %a.channel_id, error = %e, "Failed to record ownership transfer");
+                    }
+                }
+            }
+        }
+    }
+
+    fn notice(&self, channel_id: &ChannelId, notice: MembershipNotice) {
+        let _ = self
+            .event_bus
+            .domain_sender()
+            .send(DomainEvent::ChannelMembershipNotice { channel_id: *channel_id, notice });
+    }
+}
+
 /// The member notice's primary key, derived from the server event it records.
 ///
 /// The server publishes one membership `ChannelEvent` to the channel's stream
@@ -896,7 +956,8 @@ fn membership_ts(membership: &Membership) -> u64 {
     membership.joined_at.timestamp_nanos_opt().unwrap_or(0) as u64
 }
 
-/// Why a member dropped off the roster, from the server's `MemberRemoved`.
+/// Why a member dropped off the roster: the signed `RemoveMember.reason`, or
+/// what a roster sync can still learn.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum MemberRemoval {
     Left,
@@ -906,18 +967,6 @@ pub enum MemberRemoval {
     /// the event is left with after a kick (the server keeps none) or a leave.
     /// Another member's reads as a leave; ours as "no longer a member".
     Unexplained,
-}
-
-/// A removal whose moderator id is missing or unparseable is reported as a
-/// leave: the roster change is still applied, only the wording is generic.
-fn member_removal_reason(removed: &crate::proto::chat_v1::MemberRemoved) -> MemberRemoval {
-    use crate::proto::chat_v1::member_removed::Reason;
-    let by = removed.moderator_id.parse::<uuid::Uuid>().ok().map(UserId::from);
-    match (Reason::try_from(removed.reason), by) {
-        (Ok(Reason::Kicked), Some(by)) => MemberRemoval::Kicked(by),
-        (Ok(Reason::Banned), Some(by)) => MemberRemoval::Banned(by),
-        _ => MemberRemoval::Left,
-    }
 }
 
 /// Proto `ChannelModeration.Action` -> stable name for the UI.
@@ -974,30 +1023,20 @@ mod tests {
         assert_eq!(unannounced_invites(&mut announced, vec![(a, ()), (b, ())]).len(), 1);
     }
 
-    #[test]
-    fn a_removal_keeps_its_reason_and_moderator() {
-        use crate::proto::chat_v1::{member_removed::Reason, MemberRemoved};
-        let by = UserId::new();
-        let ev = |reason: Reason, moderator_id: String| MemberRemoved {
-            user_id: UserId::new().to_string(),
-            reason: reason as i32,
-            moderator_id,
-        };
-        assert_eq!(member_removal_reason(&ev(Reason::Banned, by.to_string())), MemberRemoval::Banned(by));
-        assert_eq!(member_removal_reason(&ev(Reason::Kicked, by.to_string())), MemberRemoval::Kicked(by));
-        assert_eq!(member_removal_reason(&ev(Reason::Left, String::new())), MemberRemoval::Left);
-        // No moderator to name: fall back to the neutral wording.
-        assert_eq!(member_removal_reason(&ev(Reason::Banned, String::new())), MemberRemoval::Left);
+    fn setup() -> (Arc<ChannelEventService>, EventBus, Arc<ChannelRepository>) {
+        let db = crate::services::channel::membership_log::test_support::test_db();
+        let (service, bus, repo, _) = setup_on(db, &crate::services::channel::membership_log::test_support::who(0xfe), &Default::default(), &[]);
+        (service, bus, repo)
     }
 
-    fn setup() -> (Arc<ChannelEventService>, EventBus, Arc<ChannelRepository>) {
-        // SQLCipher needs a real path (see call_repo tests).
-        let temp_dir = tempfile::tempdir().unwrap();
-        let db_path = temp_dir.path().join("channel_events_test.db");
-        let db = Arc::new(Database::open(&db_path, "testpass").unwrap());
-        db.run_migrations().unwrap();
-        Box::leak(Box::new(temp_dir));
-
+    /// The service on `db`, its membership log signing as `me` against
+    /// `server`, registered as the log's observer.
+    fn setup_on(
+        db: Arc<Database>,
+        me: &crate::services::channel::membership_log::test_support::Who,
+        server: &Arc<crate::services::channel::membership_log::test_support::FakeServer>,
+        people: &[&crate::services::channel::membership_log::test_support::Who],
+    ) -> (Arc<ChannelEventService>, EventBus, Arc<ChannelRepository>, Arc<MembershipLog>) {
         let channel_repo = Arc::new(ChannelRepository::new(db.clone()));
         let event_bus = EventBus::new();
         // Never reachable: the rollback fetch is expected to fail, which is
@@ -1005,6 +1044,7 @@ mod tests {
         let grpc_pool = Arc::new(
             crate::network::grpc::client_pool::GrpcClientPool::new("http://127.0.0.1:1").unwrap(),
         );
+        let (log, _, _) = crate::services::channel::membership_log::test_support::device_on(db.clone(), me, server, people);
 
         let service = Arc::new(ChannelEventService::new(
             Arc::new(MessageRepository::new(db.clone())),
@@ -1013,9 +1053,11 @@ mod tests {
             grpc_pool,
             event_bus.clone(),
             Arc::new(crate::storage::repositories::settings_repo::SettingsRepository::new(db)),
+            log.clone(),
         ));
+        log.set_observer(Arc::downgrade(&(service.clone() as Arc<dyn LogObserver>)));
 
-        (service, event_bus, channel_repo)
+        (service, event_bus, channel_repo, log)
     }
 
     /// INFRA-29 regression: `OperationFailed` is the saga-compensation signal.
@@ -1041,7 +1083,6 @@ mod tests {
                     }),
                 }),
                 &channel_id.to_string(),
-                0,
             )
             .await;
 
@@ -1084,7 +1125,7 @@ mod tests {
         channel_repo.insert_or_ignore_membership(&own).unwrap();
 
         let deleted = || channel_event::Event::ChannelDeleted(channel_id.to_string());
-        service.handle_stream_event(deleted(), &channel_id.to_string(), 0).await;
+        service.handle_stream_event(deleted(), &channel_id.to_string()).await;
         service.record_channel_deleted(&channel_id); // the sync finding it too
 
         assert!(channel_repo.get(&channel_id).unwrap().is_some(), "history must stay");
@@ -1111,52 +1152,205 @@ mod tests {
         assert_eq!(channel_repo.former_state(&unknown).unwrap(), None);
     }
 
-    /// F77: the server delivers one membership event on two paths (channel
-    /// stream + per-user stream). Each must file exactly one notice and tell
-    /// the UI once; a later event for the same user is a new notice.
-    #[tokio::test]
-    async fn a_membership_event_delivered_twice_files_one_notice() {
-        use crate::proto::chat_v1::{channel::ChannelMember as ProtoMember, member_removed::Reason, MemberRemoved};
-        let (service, bus, channel_repo) = setup();
-        let mut rx = bus.domain_sender().subscribe();
+    use crate::proto::chat_v1::{self as pb, channel_action::Action, remove_member::Reason as RmReason};
+    use crate::services::channel::membership_log::test_support::{who, FakeServer, Who};
+    use crate::services::channel::membership_log::AuthorBase;
+    use crate::services::channel::verified_state::{ChannelRole, Policy};
 
-        let channel = crate::domain::channel::Channel::new(
-            ChannelId::from(uuid::Uuid::new_v4()),
-            "invtest".to_string(),
-            crate::domain::channel::ChannelType::Public,
-            UserId::from(uuid::Uuid::new_v4()),
-        );
-        let channel_id = channel.id;
-        channel_repo.upsert(&channel).unwrap();
-        let joiner = UserId::from(uuid::Uuid::new_v4());
-        let count = || service.message_repo.count(&channel_id, &ConversationType::Channel).unwrap();
-        let added = || channel_event::Event::MemberAdded(ProtoMember {
-            user_id: joiner.to_string(),
-            ..Default::default()
-        });
-        let left = || channel_event::Event::MemberRemoved(MemberRemoved {
-            user_id: joiner.to_string(),
-            reason: Reason::Left as i32,
-            moderator_id: String::new(),
-        });
+    fn act(a: Action) -> pb::ChannelAction {
+        pb::ChannelAction { action: Some(a) }
+    }
 
-        for _ in 0..2 {
-            service.handle_stream_event(added(), &channel_id.to_string(), 1_000).await;
+    /// A private channel owned by `owner` on a fake server, and this
+    /// device's event service logged in as `me`, an ACTIVE member.
+    struct World {
+        server: Arc<FakeServer>,
+        owner: Who,
+        me: Who,
+        other: Who,
+        o_log: Arc<MembershipLog>,
+        my_log: Arc<MembershipLog>,
+        service: Arc<ChannelEventService>,
+        bus: EventBus,
+        channel_repo: Arc<ChannelRepository>,
+        ch: ChannelId,
+    }
+
+    impl World {
+        async fn new() -> Self {
+            let (owner, me, other) = (who(1), who(2), who(3));
+            let people = [&owner, &me, &other];
+            let server = Arc::new(FakeServer::default());
+            let db = crate::services::channel::membership_log::test_support::test_db();
+            let (service, bus, channel_repo, my_log) = setup_on(db, &me, &server, &people);
+            service
+                .settings_repo
+                .set_string(crate::storage::repositories::settings_repo::keys::CURRENT_USER_ID, &me.id)
+                .unwrap();
+            let (o_log, _, _) = crate::services::channel::membership_log::test_support::device(&owner, &server, &people);
+            let ch = ChannelId::from(uuid::Uuid::new_v4());
+            let channel = crate::domain::channel::Channel::new(
+                ch,
+                "verified".into(),
+                crate::domain::channel::ChannelType::Private,
+                UserId::from(owner.id.parse::<uuid::Uuid>().unwrap()),
+            );
+            channel_repo.upsert(&channel).unwrap();
+            let w = World { server, owner, me, other, o_log, my_log, service, bus, channel_repo, ch };
+            w.by_owner(vec![act(Action::Genesis(pb::Genesis {
+                policy: Some(Policy::defaults(false).to_proto()),
+                disappearing_seconds: 0,
+            }))])
+            .await;
+            w.by_owner(vec![w.add(&w.me)]).await;
+            w.relay_last().await;
+            w.author(&w.my_log, vec![act(Action::AcceptInvite(pb::AcceptInvite {}))]).await;
+            w
         }
-        assert_eq!(count(), 1, "one join filed two notices");
+
+        fn add(&self, who: &Who) -> pb::ChannelAction {
+            act(Action::AddMember(pb::AddMember {
+                user_id: who.id.clone(),
+                role: ChannelRole::Member as i32,
+                identity_key: who.key().to_vec(),
+                pending: true,
+            }))
+        }
+
+        async fn author(&self, log: &MembershipLog, acts: Vec<pb::ChannelAction>) {
+            let base = if acts.iter().any(|a| matches!(a.action, Some(Action::Genesis(_)))) {
+                AuthorBase::Genesis
+            } else {
+                AuthorBase::Verified
+            };
+            log.author(&self.ch, base, None, |_| Ok(acts.clone()), |c| {
+                let r = self.server.append(&self.ch, c);
+                async move { r }
+            })
+            .await
+            .unwrap();
+        }
+
+        async fn by_owner(&self, acts: Vec<pb::ChannelAction>) {
+            self.o_log.catch_up(&self.ch).await.unwrap();
+            self.author(&self.o_log, acts).await;
+        }
+
+        fn last(&self) -> pb::ChannelChange {
+            self.server.log.lock().last().unwrap().clone()
+        }
+
+        async fn relay(&self, change: pb::ChannelChange) {
+            self.service.handle_stream_event(channel_event::Event::ChannelChange(change), &self.ch.to_string()).await;
+        }
+
+        async fn relay_last(&self) {
+            self.relay(self.last()).await;
+        }
+
+        fn count(&self) -> u64 {
+            self.service.message_repo.count(&self.ch, &ConversationType::Channel).unwrap()
+        }
+
+        fn uid(w: &Who) -> UserId {
+            UserId::from(w.id.parse::<uuid::Uuid>().unwrap())
+        }
+    }
+
+    /// F77 on the verified path: the server relays one change on two paths
+    /// (channel stream + per-user stream). It is applied once, files one
+    /// notice and tells the UI once; a later change is a new notice.
+    #[tokio::test]
+    async fn a_membership_change_delivered_twice_files_one_notice() {
+        let w = World::new().await;
+        let mut rx = w.bus.domain_sender().subscribe();
+        let base = w.count();
+
+        // Other is invited (no notice) and accepts: "joined".
+        w.by_owner(vec![w.add(&w.other)]).await;
+        let (x_log, _, _) = crate::services::channel::membership_log::test_support::device(
+            &w.other,
+            &w.server,
+            &[&w.owner, &w.me, &w.other],
+        );
+        w.author(&x_log, vec![act(Action::AcceptInvite(pb::AcceptInvite {}))]).await;
+        let accept = w.last();
+        for _ in 0..2 {
+            w.relay(accept.clone()).await;
+        }
+        assert_eq!(w.count(), base + 1, "one join filed two notices");
         assert!(matches!(rx.try_recv(), Ok(DomainEvent::ChannelMemberJoined { .. })));
         assert!(rx.try_recv().is_err(), "the duplicate reached the UI");
+        assert!(w.channel_repo.get_membership(&w.ch, &World::uid(&w.other)).unwrap().is_some());
 
+        // Other leaves: "left", once.
+        w.author(&x_log, vec![act(Action::RemoveMember(pb::RemoveMember { user_id: w.other.id.clone(), reason: RmReason::Left as i32 }))]).await;
+        let leave = w.last();
         for _ in 0..2 {
-            service.handle_stream_event(left(), &channel_id.to_string(), 2_000).await;
+            w.relay(leave.clone()).await;
         }
-        assert_eq!(count(), 2, "one leave filed two notices");
+        assert_eq!(w.count(), base + 2, "one leave filed two notices");
         assert!(matches!(rx.try_recv(), Ok(DomainEvent::ChannelMemberLeft { .. })));
         assert!(rx.try_recv().is_err(), "the duplicate reached the UI");
+        assert!(w.channel_repo.get_membership(&w.ch, &World::uid(&w.other)).unwrap().is_none());
+    }
 
-        // Re-joining later is a new event and a new notice.
-        service.handle_stream_event(added(), &channel_id.to_string(), 3_000).await;
-        assert_eq!(count(), 3);
+    /// A signed kick is shown as a kick by its author, and the kicked
+    /// member's roster row goes.
+    #[tokio::test]
+    async fn a_verified_kick_names_its_moderator() {
+        let w = World::new().await;
+        w.by_owner(vec![w.add(&w.other)]).await;
+        let (x_log, _, _) = crate::services::channel::membership_log::test_support::device(
+            &w.other,
+            &w.server,
+            &[&w.owner, &w.me, &w.other],
+        );
+        w.author(&x_log, vec![act(Action::AcceptInvite(pb::AcceptInvite {}))]).await;
+        w.by_owner(vec![act(Action::RemoveMember(pb::RemoveMember { user_id: w.other.id.clone(), reason: RmReason::Kicked as i32 }))]).await;
+        let mut rx = w.bus.domain_sender().subscribe();
+        w.relay_last().await; // gap: catches up the accept, then the kick
+        let notices = w.service.message_repo.list(&w.ch, &ConversationType::Channel, None, 20).unwrap();
+        assert!(notices.iter().any(|m| matches!(&m.content,
+            MessageContent::System(SystemMessage::UserRemoved { by, removed, .. })
+                if *by == World::uid(&w.owner) && *removed == World::uid(&w.other))));
+        let mut left = false;
+        while let Ok(ev) = rx.try_recv() {
+            left |= matches!(ev, DomainEvent::ChannelMemberLeft { .. });
+        }
+        assert!(left);
+        assert!(!w.my_log.load(&w.ch).unwrap().unwrap().state.members.contains_key(&w.other.id));
+    }
+
+    /// The old unsigned path is gone: a roster sync naming a user nobody in
+    /// the channel signed in shows them, but they never enter the verified
+    /// distribution set, and the user is told.
+    #[tokio::test]
+    async fn an_unsigned_roster_add_is_ignored_for_keys_and_surfaced() {
+        let w = World::new().await;
+        let mut rx = w.bus.domain_sender().subscribe();
+        let ghost = UserId::from(uuid::Uuid::new_v4());
+        let row = Membership {
+            channel_id: w.ch,
+            user_id: ghost,
+            role: crate::domain::channel::MemberRole::Admin,
+            notification_preference: crate::domain::channel::NotificationPreference::All,
+            joined_at: Utc::now(),
+            last_read_message_id: None,
+            is_muted: false,
+            muted_until: None,
+        };
+        w.service.record_synced_join(&row);
+        let v = w.my_log.load(&w.ch).unwrap().unwrap();
+        use crate::services::channel::verified_state::VerifiedMembership;
+        assert!(!v.contains(&ghost.to_string()));
+        let mut surfaced = false;
+        while let Ok(ev) = rx.try_recv() {
+            surfaced |= matches!(ev, DomainEvent::ChannelMembershipNotice {
+                notice: MembershipNotice::UnverifiedMember { .. }, ..
+            });
+        }
+        assert!(surfaced, "the unsigned add was not surfaced");
     }
 
     /// Our own leave files "left the channel" even though the leave already
@@ -1212,34 +1406,21 @@ mod tests {
         channel.id
     }
 
-    /// F79: our own leave arrives from the leave RPC and from the channel
-    /// stream's broadcast, with unrelated timestamps, in either order. One
-    /// "You left" and one UI event; leaving again after a re-join is new.
+    /// F79: our own leave arrives as our own committed change and from the
+    /// leave RPC's `record_own_leave`, in either order. One "You left" and
+    /// one UI event.
     #[tokio::test]
     async fn own_leave_seen_on_both_paths_files_one_notice() {
-        use crate::proto::chat_v1::{channel::ChannelMember as ProtoMember, member_removed::Reason, MemberRemoved};
-        let (service, bus, channel_repo) = setup();
-        let mut rx = bus.domain_sender().subscribe();
-        let me = as_me(&service);
-        let channel_id = private_channel(&channel_repo);
-        let count = || service.message_repo.count(&channel_id, &ConversationType::Channel).unwrap();
-        let broadcast = || channel_event::Event::MemberRemoved(MemberRemoved {
-            user_id: me.to_string(),
-            reason: Reason::Left as i32,
-            moderator_id: String::new(),
-        });
-
-        service.handle_stream_event(broadcast(), &channel_id.to_string(), 1_000).await;
-        service.record_own_leave(&channel_id);
-        assert_eq!(count(), 1, "broadcast then RPC filed two notices");
+        let w = World::new().await;
+        let mut rx = w.bus.domain_sender().subscribe();
+        let base = w.count();
+        w.author(&w.my_log, vec![act(Action::RemoveMember(pb::RemoveMember { user_id: w.me.id.clone(), reason: RmReason::Left as i32 }))]).await;
+        w.relay_last().await; // the server's echo: a duplicate
+        w.service.record_own_leave(&w.ch);
+        assert_eq!(w.count(), base + 1, "our leave filed two notices");
         assert!(matches!(rx.try_recv(), Ok(DomainEvent::ChannelMemberLeft { .. })));
         assert!(rx.try_recv().is_err(), "the duplicate reached the UI");
-
-        let rejoin = channel_event::Event::MemberAdded(ProtoMember { user_id: me.to_string(), ..Default::default() });
-        service.handle_stream_event(rejoin, &channel_id.to_string(), 2_000).await;
-        service.record_own_leave(&channel_id);
-        service.handle_stream_event(broadcast(), &channel_id.to_string(), 3_000).await;
-        assert_eq!(count(), 3, "join + second leave, the RPC-first order deduped");
+        assert_eq!(w.channel_repo.former_state(&w.ch).unwrap(), Some(false));
     }
 
     /// F80: our own Leave (the RPC path: `leave_channel` deletes our
@@ -1355,30 +1536,14 @@ mod tests {
         assert_eq!(channel_repo.list_former_for_user(&me).unwrap().len(), 2);
     }
 
-    /// A ban on the local user drops our own membership and surfaces to the UI.
+    /// Mute is an unsigned server action (routing only): it is mirrored onto
+    /// the roster row and reaches the UI; the member stays a member.
     #[tokio::test]
-    async fn moderation_ban_on_self_is_applied_and_announced() {
+    async fn moderation_mute_is_mirrored_and_announced() {
         let (service, bus, channel_repo) = setup();
         let mut rx = bus.domain_sender().subscribe();
-
-        let me = UserId::from(uuid::Uuid::new_v4());
-        // Pretend we are logged in as `me`.
-        let settings = &service.settings_repo;
-        settings
-            .set_string(
-                crate::storage::repositories::settings_repo::keys::CURRENT_USER_ID,
-                &me.to_string(),
-            )
-            .unwrap();
-
-        let channel = crate::domain::channel::Channel::new(
-            ChannelId::from(uuid::Uuid::new_v4()),
-            "banned-from".to_string(),
-            crate::domain::channel::ChannelType::Public,
-            me,
-        );
-        let channel_id = channel.id;
-        channel_repo.upsert(&channel).unwrap();
+        let me = as_me(&service);
+        let channel_id = private_channel(&channel_repo);
         channel_repo
             .insert_membership(&Membership {
                 channel_id,
@@ -1398,26 +1563,26 @@ mod tests {
                     channel_id: channel_id.to_string(),
                     user_id: me.to_string(),
                     moderator_id: uuid::Uuid::new_v4().to_string(),
-                    action: crate::proto::chat_v1::channel_moderation::Action::Ban as i32,
-                    duration: None,
+                    action: crate::proto::chat_v1::channel_moderation::Action::Mute as i32,
+                    duration: Some(prost_types::Duration { seconds: 600, nanos: 0 }),
                     reason: "spam".to_string(),
                 }),
                 &channel_id.to_string(),
-                0,
             )
             .await;
 
-        assert!(
-            channel_repo.get_membership(&channel_id, &me).unwrap().is_none(),
-            "own membership survived a ban"
-        );
-        match rx.try_recv() {
-            Ok(DomainEvent::ChannelModerationAction { action, is_self, reason, .. }) => {
-                assert_eq!(action, "BAN");
-                assert!(is_self);
-                assert_eq!(reason.as_deref(), Some("spam"));
+        let row = channel_repo.get_membership(&channel_id, &me).unwrap().expect("still a member");
+        assert!(row.is_muted);
+        assert!(row.muted_until.is_some());
+        let mut moderation = None;
+        while let Ok(ev) = rx.try_recv() {
+            if let DomainEvent::ChannelModerationAction { action, is_self, reason, .. } = ev {
+                moderation = Some((action, is_self, reason));
             }
-            other => panic!("ModerationAction did not reach the domain bus: {:?}", other),
         }
+        let (action, is_self, reason) = moderation.expect("ModerationAction did not reach the domain bus");
+        assert_eq!(action, "MUTE");
+        assert!(is_self);
+        assert_eq!(reason.as_deref(), Some("spam"));
     }
 }

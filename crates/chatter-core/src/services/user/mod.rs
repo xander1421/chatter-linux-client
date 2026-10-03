@@ -608,7 +608,6 @@ impl UserService {
             encrypted_name: Vec::new(),
             encrypted_about: Vec::new(),
             encrypted_avatar: encrypted_avatar.clone(),
-            profile_key_version: String::new(),
         };
 
         let mut paths = Vec::new();
@@ -761,10 +760,8 @@ impl UserService {
             .auth_client()
             .get_pre_key_bundles_all_devices(&recipient.to_string())
             .await?;
-        let identity_key = friend_request_identity_key(resp)?;
-
-        let x25519_pub = ecies::signal_identity_to_x25519(&identity_key)
-            .map_err(|e| UserError::InvalidInput(format!("identity key convert failed: {e}")))?;
+        let identity_key = libsignal_protocol::IdentityKey::decode(&friend_request_identity_key(resp)?)
+            .map_err(|e| UserError::InvalidInput(format!("identity key decode failed: {e}")))?;
 
         let mut plaintext = Vec::with_capacity(1 + 32 + note.len());
         plaintext.push(u8::from(profile_key.is_some()));
@@ -773,39 +770,28 @@ impl UserService {
         }
         plaintext.extend_from_slice(note.as_bytes());
 
-        let msg = ecies::encrypt(&x25519_pub, &plaintext)
-            .map_err(|e| UserError::InvalidInput(format!("envelope encryption failed: {e}")))?;
-
-        Ok(msg.to_bytes())
+        ecies::seal_to_identity(&identity_key, ecies::IdentityHpkeUse::FriendRequest, &plaintext)
+            .map_err(|e| UserError::InvalidInput(format!("envelope encryption failed: {e}")))
     }
 
-    /// Decrypt an incoming friend-request envelope and resolve the sender's
-    /// profile. Protocol logic (ECIES decrypt with our identity key, profile-key
-    /// extraction, key persistence, profile decrypt) lives here in the service;
-    /// the facade only fetches `identity_secret` and delegates.
+    /// Resolve the sender's profile from an opened friend-request envelope.
+    /// Protocol logic (profile-key extraction, key persistence, profile
+    /// decrypt) lives here in the service; the facade opens the envelope in
+    /// the Signal actor (the identity secret never leaves it) and delegates.
     ///
-    /// Envelope plaintext = `has_key (1) || [profile_key (32)] || note (UTF-8)`
-    /// (see `encrypt_friend_request_envelope`). Everything
-    /// is best-effort: undecryptable/empty → all-`None` (never surface
-    /// ciphertext). The caller owns zeroizing `identity_secret`.
+    /// `plaintext` = `has_key (1) || [profile_key (32)] || note (UTF-8)`
+    /// (see `encrypt_friend_request_envelope`); `None` when there was no
+    /// envelope or it would not open. Everything is best-effort: unopened or
+    /// malformed → all-`None` (never surface ciphertext).
     pub async fn ingest_received_friend_request(
         &self,
         sender_id: &UserId,
-        ciphertext: &[u8],
-        identity_secret: &[u8; 32],
+        plaintext: Option<Vec<u8>>,
     ) -> ReceivedFriendRequestProfile {
-        use crate::crypto::ecies;
         use zeroize::Zeroize;
 
         let mut out = ReceivedFriendRequestProfile::default();
-        if ciphertext.is_empty() {
-            return out;
-        }
-
-        let Some(plaintext) = ecies::EciesMessage::from_bytes(ciphertext)
-            .ok()
-            .and_then(|m| ecies::decrypt(identity_secret, &m).ok())
-        else {
+        let Some(plaintext) = plaintext else {
             return out;
         };
         let (profile_key, note) = match plaintext.split_first() {

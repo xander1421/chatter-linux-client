@@ -6,8 +6,16 @@
 //!   side may change it; the change is announced with an empty-bodied
 //!   `DataMessage` carrying the timer-update flag.
 //! - Every visible message also carries the sender's current timer
-//!   (`ephemeral_ttl_seconds`, 0 = off), and a receiver whose own value
-//!   differs adopts it — so a lost update message heals on the next message.
+//!   (`ephemeral_ttl_seconds`, 0 = off) and its version
+//!   (`expire_timer_version`, Signal's `expireTimerVersion`), so a lost
+//!   update message heals on the next message.
+//! - The version orders changes (Signal-Desktop
+//!   `ConversationModel.updateExpirationTimer`): a conversation starts at
+//!   version 1 and each LOCAL change increments it. A received timer is
+//!   ignored when its version is 0 or below ours — a late or replayed message
+//!   (a resend, an offline backlog, a stale linked device) cannot revert a
+//!   newer setting — adopted with its version when higher, and on an equal
+//!   version ("glare": both sides changed it at once) its timer is taken.
 //! - Each change leaves a conversation notice ("Alice set disappearing
 //!   messages to 1 hour") in the transcript on both sides.
 //!
@@ -80,10 +88,11 @@ pub fn is_timer_update(dm: &crate::proto::content_v1::DataMessage) -> bool {
     dm.flags & TIMER_UPDATE_FLAG != 0
 }
 
-/// The timer a received `DataMessage` states for its conversation (`0` =
-/// off). Every visible friend-DM message and every timer update carries it.
+/// The ttl a `DataMessage` was sent under (`0` = off): how long THIS
+/// message's copies live. Not a statement about the conversation's timer —
+/// see [`stated_timer`].
 #[must_use]
-pub fn stated_timer(dm: &crate::proto::content_v1::DataMessage) -> u32 {
+pub fn message_ttl(dm: &crate::proto::content_v1::DataMessage) -> u32 {
     if dm.ephemeral {
         dm.ephemeral_ttl_seconds
     } else {
@@ -91,19 +100,46 @@ pub fn stated_timer(dm: &crate::proto::content_v1::DataMessage) -> u32 {
     }
 }
 
+/// A conversation timer as stated by a message: the value and its version.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct DmTimer {
+    /// Seconds; `0` = off.
+    pub seconds: u32,
+    /// Signal's `expireTimerVersion`; [`INITIAL_TIMER_VERSION`] for a
+    /// conversation nobody has changed.
+    pub version: u32,
+}
+
+/// The version of a conversation whose timer was never changed (Signal's
+/// `INITIAL_EXPIRE_TIMER_VERSION`).
+pub const INITIAL_TIMER_VERSION: u32 = 1;
+
+/// The timer a received `DataMessage` states for its conversation, or `None`
+/// when it states none (version 0: a resend of an old message, a channel
+/// message). Every visible friend-DM message and every timer update carries
+/// one.
+#[must_use]
+pub fn stated_timer(dm: &crate::proto::content_v1::DataMessage) -> Option<DmTimer> {
+    (dm.expire_timer_version > 0).then(|| DmTimer { seconds: message_ttl(dm), version: dm.expire_timer_version })
+}
+
+/// Stamp `dm` with the conversation's timer: the ttl this message is sent
+/// under and the version a receiver orders it by.
+pub fn stamp_timer(dm: &mut crate::proto::content_v1::DataMessage, timer: DmTimer) {
+    dm.ephemeral = timer.seconds > 0;
+    dm.ephemeral_ttl_seconds = timer.seconds;
+    dm.expire_timer_version = timer.version;
+}
+
 /// The empty-bodied announcement of a new timer for a friend DM.
 #[must_use]
-pub fn timer_update_content(seconds: u32, sent_at: u64) -> crate::proto::content_v1::Content {
+pub fn timer_update_content(timer: DmTimer, sent_at: u64) -> crate::proto::content_v1::Content {
     use crate::proto::content_v1::{content, Content, DataMessage};
+    let mut dm = DataMessage { timestamp: sent_at, flags: TIMER_UPDATE_FLAG, ..Default::default() };
+    stamp_timer(&mut dm, timer);
     Content {
         timestamp: sent_at,
-        content: Some(content::Content::DataMessage(DataMessage {
-            timestamp: sent_at,
-            flags: TIMER_UPDATE_FLAG,
-            ephemeral: seconds > 0,
-            ephemeral_ttl_seconds: seconds,
-            ..Default::default()
-        })),
+        content: Some(content::Content::DataMessage(dm)),
         ..Default::default()
     }
 }
@@ -112,20 +148,49 @@ fn server_dm_key(peer_id: &UserId) -> String {
     format!("conv.disappearing.server_dm.{peer_id}")
 }
 
+/// This DM's timer and version (`0` seconds at [`INITIAL_TIMER_VERSION`]
+/// when nothing was ever set).
+#[must_use]
+pub fn server_dm_state(settings: &SettingsRepository, peer_id: &UserId) -> DmTimer {
+    settings
+        .get::<DmTimer>(&server_dm_key(peer_id))
+        .ok()
+        .flatten()
+        .unwrap_or(DmTimer { seconds: 0, version: INITIAL_TIMER_VERSION })
+}
+
 /// This DM's timer in seconds; `0` = off (also when nothing was ever set).
 #[must_use]
 pub fn server_dm_timer(settings: &SettingsRepository, peer_id: &UserId) -> u32 {
-    settings
-        .get::<u32>(&server_dm_key(peer_id))
-        .ok()
-        .flatten()
-        .unwrap_or(0)
+    server_dm_state(settings, peer_id).seconds
 }
 
-/// Make `seconds` this DM's timer. If that CHANGED it, persist the
-/// conversation notice authored by `author` (us for our own change, the peer
-/// for one they announced) and return it; `None` means the timer already had
-/// that value and nothing was written.
+/// Our own change of this DM's timer to `seconds`: if that CHANGES it, bump
+/// the version (Signal's `incrementExpireTimerVersion`), persist the notice
+/// authored by `me`, and return it with the new state to announce. `None`
+/// means the timer already had that value; nothing was written.
+pub fn change_server_dm_timer(
+    settings: &SettingsRepository,
+    message_repo: &MessageRepository,
+    peer_id: &UserId,
+    me: &UserId,
+    seconds: u32,
+    sent_at: u64,
+) -> Result<Option<(Message, DmTimer)>, StorageError> {
+    let current = server_dm_state(settings, peer_id);
+    if current.seconds == seconds {
+        return Ok(None);
+    }
+    let next = DmTimer { seconds, version: current.version.saturating_add(1) };
+    settings.set(&server_dm_key(peer_id), &next)?;
+    Ok(Some((file_notice(message_repo, peer_id, me, seconds, sent_at)?, next)))
+}
+
+/// Adopt a timer `stated` by a received message (the peer's, or our own from
+/// another device), by Signal's version rule — see the module doc. If that
+/// CHANGED the timer, persist the notice authored by `author` and return it;
+/// `None` means the timer kept its value (an older or redelivered statement)
+/// and no notice was written.
 ///
 /// `sent_at` is the announcing message's timestamp. The notice is filed one
 /// nanosecond before it, so it sorts just ahead of a visible message that
@@ -136,14 +201,31 @@ pub fn adopt_server_dm_timer(
     message_repo: &MessageRepository,
     peer_id: &UserId,
     author: &UserId,
-    seconds: u32,
+    stated: DmTimer,
     sent_at: u64,
 ) -> Result<Option<Message>, StorageError> {
-    if server_dm_timer(settings, peer_id) == seconds {
+    let current = server_dm_state(settings, peer_id);
+    if stated.version == 0 || stated.version < current.version {
         return Ok(None);
     }
-    settings.set(&server_dm_key(peer_id), &seconds)?;
+    if stated == current {
+        return Ok(None);
+    }
+    settings.set(&server_dm_key(peer_id), &stated)?;
+    if stated.seconds == current.seconds {
+        // Only the version moved on.
+        return Ok(None);
+    }
+    Ok(Some(file_notice(message_repo, peer_id, author, stated.seconds, sent_at)?))
+}
 
+fn file_notice(
+    message_repo: &MessageRepository,
+    peer_id: &UserId,
+    author: &UserId,
+    seconds: u32,
+    sent_at: u64,
+) -> Result<Message, StorageError> {
     let mut notice = Message::new_text(
         ChannelId::from(*peer_id),
         ConversationType::ServerDm,
@@ -156,7 +238,7 @@ pub fn adopt_server_dm_timer(
     // unread badge.
     notice.is_read = true;
     message_repo.insert_or_ignore(&notice)?;
-    Ok(Some(notice))
+    Ok(notice)
 }
 
 /// Delete every message whose disappearing timer has run out, with the
@@ -253,37 +335,105 @@ mod tests {
         assert!(messages.get(&received).expect("get").is_none(), "deleted from storage");
     }
 
-    #[test]
-    fn adopting_a_timer_writes_one_notice_per_change() {
+    fn repos() -> (tempfile::TempDir, SettingsRepository, MessageRepository) {
         let dir = tempfile::tempdir().expect("tempdir");
         let db = Arc::new(Database::open(&dir.path().join("t.db"), "testpass").expect("db"));
         db.run_migrations().expect("migrations");
-        let settings = SettingsRepository::new(db.clone());
-        let messages = MessageRepository::new(db);
+        (dir, SettingsRepository::new(db.clone()), MessageRepository::new(db))
+    }
+
+    const fn t(seconds: u32, version: u32) -> DmTimer {
+        DmTimer { seconds, version }
+    }
+
+    #[test]
+    fn a_newer_version_is_adopted_with_one_notice_per_change() {
+        let (_dir, settings, messages) = repos();
         let peer = UserId::new();
+        assert_eq!(server_dm_state(&settings, &peer), t(0, INITIAL_TIMER_VERSION));
 
-        assert_eq!(server_dm_timer(&settings, &peer), 0);
-
-        let notice = adopt_server_dm_timer(&settings, &messages, &peer, &peer, 3_600, 1_000)
+        let notice = adopt_server_dm_timer(&settings, &messages, &peer, &peer, t(3_600, 2), 1_000)
             .expect("adopt")
             .expect("a change writes a notice");
-        assert_eq!(server_dm_timer(&settings, &peer), 3_600);
+        assert_eq!(server_dm_state(&settings, &peer), t(3_600, 2));
         assert_eq!(
             notice.content,
             MessageContent::System(SystemMessage::DisappearingTimerChanged { seconds: 3_600 })
         );
         assert_eq!(notice.sent_at, 999, "filed just before the announcing message");
 
-        // The same value again (a redelivery, or every later message carrying
-        // it) is not a change.
-        assert!(adopt_server_dm_timer(&settings, &messages, &peer, &peer, 3_600, 2_000)
+        // The same statement again (a redelivery, or every later message
+        // carrying it) is not a change.
+        assert!(adopt_server_dm_timer(&settings, &messages, &peer, &peer, t(3_600, 2), 2_000)
             .expect("adopt")
             .is_none());
 
-        // Turning it off is a change.
-        assert!(adopt_server_dm_timer(&settings, &messages, &peer, &peer, 0, 3_000)
+        // A newer version turning it off is a change.
+        assert!(adopt_server_dm_timer(&settings, &messages, &peer, &peer, t(0, 3), 3_000)
             .expect("adopt")
             .is_some());
-        assert_eq!(server_dm_timer(&settings, &peer), 0);
+        assert_eq!(server_dm_state(&settings, &peer), t(0, 3));
+    }
+
+    /// The bug the version exists for: a late message (a send-log resend,
+    /// offline backlog, stale linked device) stating an older timer must not
+    /// revert a newer one, nor log a notice.
+    #[test]
+    fn an_older_or_absent_version_is_ignored() {
+        let (_dir, settings, messages) = repos();
+        let peer = UserId::new();
+        adopt_server_dm_timer(&settings, &messages, &peer, &peer, t(86_400, 5), 1_000).expect("adopt");
+
+        assert!(adopt_server_dm_timer(&settings, &messages, &peer, &peer, t(0, 4), 2_000)
+            .expect("adopt")
+            .is_none());
+        assert!(adopt_server_dm_timer(&settings, &messages, &peer, &peer, t(30, 0), 3_000)
+            .expect("adopt")
+            .is_none());
+        assert_eq!(server_dm_state(&settings, &peer), t(86_400, 5), "unchanged");
+    }
+
+    /// Signal's "glare": both ends changed the timer at the same version; the
+    /// stated timer is taken, the version stays.
+    #[test]
+    fn an_equal_version_takes_the_stated_timer() {
+        let (_dir, settings, messages) = repos();
+        let (me, peer) = (UserId::new(), UserId::new());
+        change_server_dm_timer(&settings, &messages, &peer, &me, 300, 1_000).expect("change");
+        assert_eq!(server_dm_state(&settings, &peer), t(300, 2));
+
+        let notice = adopt_server_dm_timer(&settings, &messages, &peer, &peer, t(3_600, 2), 2_000)
+            .expect("adopt");
+        assert!(notice.is_some(), "a different timer at the same version is adopted");
+        assert_eq!(server_dm_state(&settings, &peer), t(3_600, 2));
+    }
+
+    #[test]
+    fn a_local_change_increments_the_version() {
+        let (_dir, settings, messages) = repos();
+        let (me, peer) = (UserId::new(), UserId::new());
+
+        let (notice, announced) = change_server_dm_timer(&settings, &messages, &peer, &me, 3_600, 1_000)
+            .expect("change")
+            .expect("a change");
+        assert_eq!(announced, t(3_600, 2));
+        assert_eq!(notice.sender_id, Some(me));
+        assert!(change_server_dm_timer(&settings, &messages, &peer, &me, 3_600, 2_000)
+            .expect("change")
+            .is_none(), "same value: no change, no bump");
+        assert_eq!(server_dm_state(&settings, &peer), t(3_600, 2));
+
+        let (_, announced) = change_server_dm_timer(&settings, &messages, &peer, &me, 0, 3_000)
+            .expect("change")
+            .expect("a change");
+        assert_eq!(announced, t(0, 3));
+
+        // What goes on the wire states that version, and reads back as it.
+        let content = timer_update_content(announced, 3_000);
+        let Some(crate::proto::content_v1::content::Content::DataMessage(dm)) = content.content else {
+            panic!("a DataMessage");
+        };
+        assert!(is_timer_update(&dm));
+        assert_eq!(stated_timer(&dm), Some(announced));
     }
 }

@@ -19,8 +19,16 @@ use crate::proto::chat_v1::{
     ListBannedUsersRequest, MuteUserRequest, UnmuteUserRequest,
     ListArchivedChannelsResponse, ListChannelsRequest, ListChannelsResponse, UnarchiveChannelRequest,
     TransferOwnershipRequest, UnarchiveChannelResponse, UnbanUserRequest, UpdateChannelRequest, UpdateMemberRoleRequest,
-    ChannelRole,
+    ChannelChange, GetChannelChangesRequest, GetChannelChangesResponse, GetChannelStateRequest, MembershipState,
+    SubmitChannelChangeRequest,
 };
+
+/// Whether a membership RPC was refused because its change is not chained to
+/// the server's current head (`ABORTED` + `ChannelChangeConflict`): fetch the
+/// missing changes, re-validate, re-sign and retry.
+pub fn is_change_conflict(e: &NetworkError) -> bool {
+    matches!(e, NetworkError::ServerError(m) if m.starts_with("aborted:"))
+}
 
 /// Channel service client wrapper.
 ///
@@ -33,7 +41,7 @@ use crate::proto::chat_v1::{
 /// pool.connect().await?;
 ///
 /// let mut channel = ChannelClient::new(pool.channel(), pool.auth_clone());
-/// let channel_events = channel.create_channel("my-channel", ChannelType::ChannelPublic, None, vec![], None, None, None).await?;
+/// let channel_events = channel.create_channel("my-channel", ChannelType::ChannelPublic, None, None, None, genesis).await?;
 /// ```
 pub struct ChannelClient {
     inner: ChannelServiceClient<InterceptedService<GrpcTransport, AuthInterceptor>>,
@@ -58,27 +66,26 @@ impl ChannelClient {
     /// * `name` - Channel name
     /// * `channel_type` - Channel type (Public, Private, DirectMessage)
     /// * `config` - Optional channel configuration
-    /// * `initial_member_ids` - Optional list of initial member IDs
-    /// * `password` - Optional password for private channels
     /// * `description` - Optional channel description
     /// * `icon` - Optional raw image bytes for the channel icon (≤64KB)
+    /// * `genesis` - Revision 1 of the membership log (public/private
+    ///   channels; it names the channel id). Initial members are invited
+    ///   afterwards with signed `InviteUser` changes.
     #[allow(clippy::too_many_arguments)]
     pub async fn create_channel(
         &mut self,
         name: &str,
         channel_type: ChannelType,
         config: Option<channel::Config>,
-        initial_member_ids: Vec<String>,
-        password: Option<&str>,
         description: Option<&str>,
         icon: Option<&[u8]>,
+        genesis: Option<ChannelChange>,
     ) -> Result<impl Stream<Item = Result<ChannelEvent, NetworkError>> + use<>, NetworkError> {
         let request = CreateChannelRequest {
             name: name.to_string(),
             r#type: channel_type.into(),
             config,
-            initial_member_ids,
-            password: password.unwrap_or("").to_string(),
+            genesis,
             request_id: uuid::Uuid::new_v4().to_string(),
             description: description.unwrap_or("").to_string(),
             icon: icon.map(<[u8]>::to_vec).unwrap_or_default(),
@@ -231,19 +238,19 @@ impl ChannelClient {
     /// # Arguments
     ///
     /// * `channel_id` - Channel to join
-    /// * `password` - Optional password for password-protected channels
+    /// * `change` - The joiner's signed `JoinViaInvite` (or `AcceptInvite`)
     /// * `start_streaming` - Whether to start streaming channel events after joining
     pub async fn join_channel(
         &mut self,
         channel_id: &str,
-        password: Option<&str>,
+        change: ChannelChange,
         start_streaming: bool,
     ) -> Result<impl Stream<Item = Result<ChannelEvent, NetworkError>>, NetworkError> {
         let request = ChannelJoinRequest {
             channel_id: channel_id.to_string(),
-            password: password.unwrap_or("").to_string(),
             start_streaming,
             request_id: uuid::Uuid::new_v4().to_string(),
+            change: Some(change),
         };
 
         let response = self
@@ -263,10 +270,12 @@ impl ChannelClient {
     pub async fn leave_channel(
         &mut self,
         channel_id: &str,
+        change: ChannelChange,
     ) -> Result<impl Stream<Item = Result<ChannelEvent, NetworkError>>, NetworkError> {
         let request = LeaveChannelRequest {
             channel_id: channel_id.to_string(),
             request_id: uuid::Uuid::new_v4().to_string(),
+            change: Some(change),
         };
 
         let response = self
@@ -287,19 +296,19 @@ impl ChannelClient {
     /// # Arguments
     ///
     /// * `channel_id` - Channel to invite to
-    /// * `invitee_id` - User ID to invite
+    /// * `change` - The inviter's signed `AddMember{pending: true}` (names the invitee)
     /// * `message` - Optional invitation message
     pub async fn invite_user(
         &mut self,
         channel_id: &str,
-        invitee_id: &str,
+        change: ChannelChange,
         message: Option<&str>,
     ) -> Result<impl Stream<Item = Result<ChannelEvent, NetworkError>>, NetworkError> {
         let request = InviteUserRequest {
             channel_id: channel_id.to_string(),
-            invitee_id: invitee_id.to_string(),
             message: message.unwrap_or("").to_string(),
             request_id: uuid::Uuid::new_v4().to_string(),
+            change: Some(change),
         };
 
         let response = self
@@ -320,16 +329,16 @@ impl ChannelClient {
     /// # Arguments
     ///
     /// * `channel_id` - Channel being invited to
-    /// * `accept` - True to accept, false to decline
+    /// * `change` - Our signed `AcceptInvite`, or `RemoveMember{self, LEFT}` to decline
     pub async fn respond_to_invite(
         &mut self,
         channel_id: &str,
-        accept: bool,
+        change: ChannelChange,
     ) -> Result<impl Stream<Item = Result<ChannelEvent, NetworkError>>, NetworkError> {
         let request = InviteResponse {
             channel_id: channel_id.to_string(),
-            accept,
             request_id: uuid::Uuid::new_v4().to_string(),
+            change: Some(change),
         };
 
         let response = self
@@ -364,19 +373,19 @@ impl ChannelClient {
     /// # Arguments
     ///
     /// * `channel_id` - Channel to kick from
-    /// * `user_id` - User to kick
+    /// * `change` - The moderator's signed `RemoveMember{KICKED}` (names the target)
     /// * `reason` - Optional kick reason
     pub async fn kick_user(
         &mut self,
         channel_id: &str,
-        user_id: &str,
+        change: ChannelChange,
         reason: Option<&str>,
     ) -> Result<impl Stream<Item = Result<ChannelEvent, NetworkError>>, NetworkError> {
         let request = KickUserRequest {
             channel_id: channel_id.to_string(),
-            user_id: user_id.to_string(),
             reason: reason.unwrap_or("").to_string(),
             request_id: uuid::Uuid::new_v4().to_string(),
+            change: Some(change),
         };
 
         let response = self
@@ -397,22 +406,22 @@ impl ChannelClient {
     /// # Arguments
     ///
     /// * `channel_id` - Channel to ban from
-    /// * `user_id` - User to ban
+    /// * `change` - The moderator's signed `RemoveMember{BANNED}` (names the target)
     /// * `reason` - Optional ban reason
     ///
     /// Always permanent (until unbanned): no caller offers a timed ban.
     pub async fn ban_user(
         &mut self,
         channel_id: &str,
-        user_id: &str,
+        change: ChannelChange,
         reason: Option<&str>,
     ) -> Result<(), NetworkError> {
         let request = BanUserRequest {
             channel_id: channel_id.to_string(),
-            user_id: user_id.to_string(),
             duration: None,
             reason: reason.unwrap_or("").to_string(),
             request_id: uuid::Uuid::new_v4().to_string(),
+            change: Some(change),
         };
 
         self.inner
@@ -422,12 +431,12 @@ impl ChannelClient {
             .map_err(|s| NetworkError::from_status(&s))
     }
 
-    /// Hand the channel to `new_owner_id`; the caller (the owner) becomes an
-    /// admin. The role changes arrive as `MemberUpdated` + `OwnershipTransferred`.
-    pub async fn transfer_ownership(&mut self, channel_id: &str, new_owner_id: &str) -> Result<(), NetworkError> {
+    /// Hand the channel to the member `change` names; the caller (the owner)
+    /// becomes an admin. Everyone learns it from the relayed `ChannelChange`.
+    pub async fn transfer_ownership(&mut self, channel_id: &str, change: ChannelChange) -> Result<(), NetworkError> {
         let request = TransferOwnershipRequest {
             channel_id: channel_id.to_string(),
-            new_owner_id: new_owner_id.to_string(),
+            change: Some(change),
         };
         self.inner
             .transfer_ownership(request)
@@ -590,19 +599,16 @@ impl ChannelClient {
     /// # Arguments
     ///
     /// * `channel_id` - Channel containing the member
-    /// * `user_id` - User whose role to update
-    /// * `new_role` - The new role to assign
+    /// * `change` - The admin's signed `SetRole` (names target and role)
     pub async fn update_member_role(
         &mut self,
         channel_id: &str,
-        user_id: &str,
-        new_role: ChannelRole,
+        change: ChannelChange,
     ) -> Result<impl Stream<Item = Result<ChannelEvent, NetworkError>>, NetworkError> {
         let request = UpdateMemberRoleRequest {
             channel_id: channel_id.to_string(),
-            user_id: user_id.to_string(),
-            new_role: new_role.into(),
             request_id: uuid::Uuid::new_v4().to_string(),
+            change: Some(change),
         };
 
         let response = self
@@ -614,6 +620,58 @@ impl ChannelClient {
         Ok(response
             .into_inner()
             .map(|r| r.map_err(|s| NetworkError::from_status(&s))))
+    }
+
+    // ==================== Membership log ====================
+
+    /// Append a log-only change (invites, policy, timer) or any single-action
+    /// change. Returns the accepted revision.
+    pub async fn submit_channel_change(&mut self, change: ChannelChange) -> Result<u64, NetworkError> {
+        self.inner
+            .submit_channel_change(SubmitChannelChangeRequest { change: Some(change) })
+            .await
+            .map(|r| r.into_inner().revision)
+            .map_err(|s| NetworkError::from_status(&s))
+    }
+
+    /// Up to `limit` changes from `from_revision` (inclusive), ascending.
+    /// `invite_pub` authorises a join-link holder who is not yet a member.
+    pub async fn get_channel_changes(
+        &mut self,
+        channel_id: &str,
+        from_revision: u64,
+        limit: i32,
+        invite_pub: &[u8],
+    ) -> Result<GetChannelChangesResponse, NetworkError> {
+        self.inner
+            .get_channel_changes(GetChannelChangesRequest {
+                channel_id: channel_id.to_string(),
+                from_revision,
+                limit,
+                invite_pub: invite_pub.to_vec(),
+            })
+            .await
+            .map(|r| r.into_inner())
+            .map_err(|s| NetworkError::from_status(&s))
+    }
+
+    /// The server's membership state at `revision` (0 = current). Untrusted
+    /// until a verified change chains to its hash.
+    pub async fn get_channel_state(
+        &mut self,
+        channel_id: &str,
+        revision: u64,
+        invite_pub: &[u8],
+    ) -> Result<MembershipState, NetworkError> {
+        self.inner
+            .get_channel_state(GetChannelStateRequest {
+                channel_id: channel_id.to_string(),
+                revision,
+                invite_pub: invite_pub.to_vec(),
+            })
+            .await
+            .map(|r| r.into_inner())
+            .map_err(|s| NetworkError::from_status(&s))
     }
 
     // ==================== Event Streaming ====================
@@ -723,6 +781,7 @@ fn fetch_next_members_page(page_len: usize, page_size: i32, fetched: usize, tota
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::proto::chat_v1::ChannelRole;
 
     // Note: Full integration tests require a running server.
     // These tests verify compilation and basic structure.
@@ -827,7 +886,6 @@ mod tests {
             ttl: None,
             max_members: 100,
             encrypted: true,
-            password_hash: "".to_string(),
             friends_only: false,
         };
 

@@ -59,6 +59,8 @@ tower = "0.5"
 libsignal-protocol = { git = "https://github.com/signalapp/libsignal", rev = "8fc2113bda042fc972a166a24b974b0d34155c6c" }
 libsignal-core = { git = "https://github.com/signalapp/libsignal", rev = "8fc2113bda042fc972a166a24b974b0d34155c6c" }
 signal-media = { git = "https://github.com/signalapp/libsignal", rev = "8fc2113bda042fc972a166a24b974b0d34155c6c" }
+# RFC 9180 HPKE (base, X25519/HKDF-SHA256/AES-256-GCM) for the mailbox envelope.
+signal-crypto = { git = "https://github.com/signalapp/libsignal", rev = "8fc2113bda042fc972a166a24b974b0d34155c6c" }
 # Same versions signal-media pins; used directly for the sync (file-streaming)
 # sanitize path, which signal-media's async-only wrapper doesn't expose.
 mp4san = "0.5.3"
@@ -67,6 +69,9 @@ webpsan = { version = "0.5.3", default-features = false }
 # discovery hash). NOTE: licensed AGPL-3.0; combining with the rest of
 # chatter (GPL-3.0) means the combined work is effectively AGPL.
 usernames = { git = "https://github.com/signalapp/libsignal", rev = "8fc2113bda042fc972a166a24b974b0d34155c6c" }
+# KT query-privacy VRF verifier (ECVRF-EDWARDS25519-SHA512-TAI, RFC 9381):
+# used as-is via its public `VrfPublicKey`. Also AGPL-3.0, same as `usernames`.
+libsignal-keytrans = { git = "https://github.com/signalapp/libsignal", rev = "8fc2113bda042fc972a166a24b974b0d34155c6c" }
 rand = { version = "0.9", features = ["os_rng"] }
 rand_core_06 = { package = "rand_core", version = "0.6", features = ["getrandom"] }
 blind-rsa-signatures = "0.14"
@@ -77,6 +82,8 @@ rayon = "1.10"
 hkdf = "0.12"
 aes-gcm = "0.10"
 aes = { version = "0.8", features = ["zeroize"] }
+# AES-256-CTR for Signal encrypted device names (crypto/device_name.rs).
+ctr = "0.9"
 # `alloc` gives cipher's encrypt_padded_vec_mut / decrypt_padded_vec_mut, which
 # crypto/provisioning.rs uses. It used to arrive transitively; a dependency
 # update stopped some other crate from enabling it, so it is named here rather
@@ -84,11 +91,9 @@ aes = { version = "0.8", features = ["zeroize"] }
 cbc = { version = "0.1", features = ["alloc", "zeroize"] }
 block-padding = "0.3"
 chacha20poly1305 = "0.10"
-hpke = "0.12"
 x25519-dalek = { version = "2", features = ["static_secrets", "zeroize"] }
 ed25519-dalek = { version = "2", features = ["rand_core", "pem"] }
 xeddsa = "1.0"
-curve25519-dalek = { version = "4", features = ["digest"] }
 subtle = "2.5"
 base64 = "0.22"
 base32 = "0.5"
@@ -206,6 +211,11 @@ webpki-roots = { version = "1", optional = true }
 tokio-tungstenite = { version = "0.28", default-features = false, features = ["handshake"], optional = true }
 unicode-segmentation = "1.12.0"
 argon2 = "0.5.3"
+# OPAQUE (RFC 9807) password authentication, client side (crypto/opaque.rs).
+# 4.0.x is the release synced to the final RFC; the server is
+# github.com/bytemare/opaque v0.18.0 and interop is pinned by tests on both
+# sides. ristretto255 only; the Argon2id KSF is ours (crypto/opaque.rs).
+opaque-ke = { version = "4.0.1", default-features = false, features = ["ristretto255"] }
 tempfile = "3"
 
 # ============================================================================

@@ -149,10 +149,15 @@ impl KeyRollingService {
         let mut private_key = [0u8; 64];
         public_key.copy_from_slice(&token.public_key);
         private_key.copy_from_slice(&token.private_key);
+        // A fresh X25519 encryption key for the new mailbox, never the
+        // signing key's conversion.
+        let (encryption_private_key, _) =
+            crate::crypto::envelope_crypto::generate_mailbox_encryption_key();
         let new_mailbox = DmMailbox {
             id: response.mailbox_id.clone(),
             public_key,
             private_key,
+            encryption_private_key,
             signature: token.signature.clone(),
             randomizer: token.randomizer.clone(),
             token_id: token.id.clone(),
@@ -396,29 +401,8 @@ pub fn group_mailbox_rotation_plaintext(group_id: &ChannelId, new_mailbox_pk: &[
         timestamp: now,
         padding: vec![],
     };
-    pad_sealed_content(&mut content);
+    crate::services::message::MessageService::pad_content_to_bucket(&mut content);
     content.encode_to_vec()
-}
-
-/// Same buckets as `MessageService::pad_content_to_bucket`. The server
-/// rejects a sealed-sender body whose plaintext length is not one of these.
-fn pad_sealed_content(content: &mut crate::proto::content_v1::Content) {
-    use prost::Message;
-    const BUCKETS: [usize; 4] = [256, 512, 1024, 4096];
-    content.padding = vec![];
-    let base_size = content.encoded_len();
-    let target = BUCKETS.iter().copied().find(|&b| b >= base_size).unwrap_or(4096);
-    if base_size >= target {
-        return;
-    }
-    let estimate = target.saturating_sub(base_size);
-    content.padding = vec![0u8; estimate];
-    while content.encoded_len() > target && !content.padding.is_empty() {
-        content.padding.pop();
-    }
-    while content.encoded_len() < target {
-        content.padding.push(0);
-    }
 }
 
 #[cfg(test)]
@@ -598,6 +582,7 @@ mod tests {
                 id: "dm-old".into(),
                 public_key: [1u8; 32],
                 private_key: [2u8; 64],
+                encryption_private_key: [2u8; 32],
                 signature: vec![1, 2, 3],
                 randomizer: None,
                 token_id: TEST_TOKEN_ID.into(),

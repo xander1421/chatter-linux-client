@@ -14,6 +14,7 @@ import { JarvisGlobal } from "../jarvis/jarvis_global.slint";
 import { MeshGlobal } from "../mesh/mesh_global.slint";
 import { ConversationKind } from "conversation_kind.slint";
 import { DisappearingGlobal } from "disappearing_global.slint";
+import { MembershipGlobal } from "membership_global.slint";
 
 // Data struct for chat header (mirrors Rust ChatHeaderData)
 export struct ChatHeaderData {
@@ -329,7 +330,10 @@ export component ChatHeader inherits GlassSurface {
                     }
                     // Keep member count in the title column at every width.
                     if root.typing-indicator == "" && has-channel && !root.read-only && (is-channel || is-private-group) && member-count > 0: Text {
-                        text: root.member-count == 1 ? "1 member" : "\{root.member-count} members";
+                        // The public badge (core-worded) rides on the count
+                        // line, so every open public channel says it.
+                        text: (root.member-count == 1 ? "1 member" : "\{root.member-count} members")
+                            + (root.is-channel && MembershipGlobal.public-badge != "" ? " \u{b7} " + MembershipGlobal.public-badge : "");
                         color: Colors.text-muted;
                         font-size: Typography.xs;
                         overflow: elide;

@@ -27,8 +27,6 @@ impl ChatterClient {
             Arc::downgrade(self),
             self.users().clone(),
             self.notifications().clone(),
-            self.signal().clone(),
-            self.services.channel_repo.clone(),
         );
         self.tasks.lock().push(handle);
     }
