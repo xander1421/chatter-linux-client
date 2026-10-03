@@ -11357,3 +11357,564 @@ async fn v56_linked_device_restricts_profile_visibility_with_pin() {
     client_s.shutdown().await;
     client_p.shutdown().await;
 }
+
+/// Wait until `client`'s own store holds `want` in channel `conv`.
+///
+/// `wait_for_stored_text`'s channel twin: the stored row is the terminal state
+/// a lagged broadcast receiver cannot lose.
+async fn wait_for_channel_text(client: &Arc<ChatterClient>, conv: &ChannelId, want: &str) -> bool {
+    let deadline = Instant::now() + CONDITION_TIMEOUT;
+    loop {
+        let stored = client
+            .get_messages_local(conv, &chatter_core::domain::message::ConversationType::Channel, None, 50)
+            .unwrap_or_default();
+        if stored.iter().any(|m| m.as_text() == Some(want)) {
+            return true;
+        }
+        if Instant::now() >= deadline {
+            return false;
+        }
+        tokio::time::sleep(POLL_INTERVAL).await;
+    }
+}
+
+/// Bring `path`'s account back CONNECTED but not started: it can send, but no
+/// inbox poller drains its device queue, so whatever is addressed to it SITS
+/// in `device_messages` where the harness can count it.
+async fn connect_without_inbox(path: &std::path::Path, label: &str) -> Arc<ChatterClient> {
+    let c = build_client(path);
+    c.connect()
+        .await
+        .unwrap_or_else(|e| panic!("{label} reconnect failed: {e:?}"));
+    assert!(c.restore_session(), "{label} failed to restore its persisted session");
+    c
+}
+
+/// v57 — A GROUP RESEND GOES ONLY TO AN ORIGINAL RECIPIENT WHO IS STILL A MEMBER.
+///
+/// The claim (`group.rs` `resend_on_decryption_error` / `group_resend_content`
+/// / `resend_targets`): when a member's device cannot decrypt our sender-key
+/// message and sends a `DecryptionErrorMessage` naming it, we resend the
+/// content pairwise to THAT device — but only if it was in the recipient
+/// snapshot taken at send time and its user is still a member. A later joiner
+/// naming the message gets nothing; a member who left since gets nothing.
+///
+/// Three halves, live against the server:
+///   1. HEAL (natural path, nothing called by hand): B loses A's sender key,
+///      A sends m1, B parks it, asks for the SKDM, finds the SKDM starts after
+///      m1 ("old counter"), sends a DEM, and A's pairwise resend lands — B's
+///      own store holds m1.
+///   2. POSITIVE CONTROL (same instrument as the negatives): B, C and D are
+///      taken offline so nothing drains their device queues; B sends another
+///      DEM naming m1 and a NEW envelope appears in B's queue — A's resend.
+///   3. NEGATIVE: C (joined after m1, in A's local member list) and D (a
+///      recipient of m1 who left) each send the same DEM, BEFORE B's. Neither
+///      queue grows: A addressed nothing to them.
+///
+/// Not proven here: what a DEM from a device of a member's that was linked
+/// after the send gets (the unit test
+/// `resend_refuses_a_later_joiner_a_later_device_and_a_departed_member`
+/// covers that branch of `group_resend_content`), nor the 24h retention bound.
+///
+/// MUTATION (expected, NOT yet run — the checkout is shared): make
+/// `resend_targets` return `original.to_vec()` (ignore membership) → D's queue
+/// should grow; skip the `allowed` check in `group_resend_content` → C's and
+/// D's should.
+#[tokio::test]
+async fn v57_group_resend_reaches_only_original_recipients_still_in_the_channel() {
+    use chatter_core::domain::channel::ChannelType;
+
+    skip_if_no_server!();
+    no_keyring_prompts();
+    println!("\n=== V57: group resend scope — original recipients still in the channel only ===\n");
+
+    let dir_a = tempfile::tempdir().unwrap();
+    let client_a = build_client(dir_a.path());
+    let uid_a = register_and_start(&client_a, &unique_user("v57a"), "V57 Alice").await;
+    let dir_b = tempfile::tempdir().unwrap();
+    let client_b = build_client(dir_b.path());
+    let uid_b = register_and_start(&client_b, &unique_user("v57b"), "V57 Bob").await;
+    let dir_c = tempfile::tempdir().unwrap();
+    let client_c = build_client(dir_c.path());
+    let uid_c = register_and_start(&client_c, &unique_user("v57c"), "V57 Carol").await;
+    let dir_d = tempfile::tempdir().unwrap();
+    let client_d = build_client(dir_d.path());
+    let uid_d = register_and_start(&client_d, &unique_user("v57d"), "V57 Dave").await;
+
+    // C is NOT invited yet: she joins after m1.
+    let name = format!(
+        "v57-resend-{}",
+        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis() % 1_000_000
+    );
+    let group = common::create_group_with_members(
+        &client_a,
+        &name,
+        ChannelType::Private,
+        None,
+        Some("V57 resend scope"),
+        &[(&client_b, &uid_b), (&client_d, &uid_d)],
+    )
+    .await;
+    let gid = group.id.clone();
+    client_b.resubscribe_channel_messages();
+    client_d.resubscribe_channel_messages();
+    tokio::time::sleep(Duration::from_secs(3)).await;
+
+    // ---- warm-up: the sender-key path works for B and D ---------------------
+    let m0 = unique_marker();
+    client_a
+        .send_text(ActiveConversation::Channel(gid.clone()), &m0)
+        .await
+        .expect("A warm-up send failed");
+    assert!(
+        wait_for_channel_text(&client_b, &gid, &m0).await
+            && wait_for_channel_text(&client_d, &gid, &m0).await,
+        "POSITIVE CONTROL FAILED: B or D never decrypted A's warm-up message — the \
+         sender-key path is broken independent of the resend"
+    );
+    println!("  warm-up: B and D decrypted m0 on A's sender key");
+
+    // ---- B loses A's sender key (the pre-SKDM / lost-key state) -------------
+    let a_addr = format!("{uid_a}:1");
+    let dist = gid.to_string();
+    let b_keys = client_b.signal().key_store();
+    assert!(
+        matches!(b_keys.load_sender_key(&a_addr, &dist), Ok(Some(_))),
+        "PRECONDITION FAILED: B holds no sender key from A after decrypting m0"
+    );
+    b_keys.delete_sender_key(&a_addr, &dist).expect("delete B's copy of A's sender key");
+    assert!(
+        matches!(b_keys.load_sender_key(&a_addr, &dist), Ok(None)),
+        "PRECONDITION FAILED: A's sender key is still on B after deleting it"
+    );
+    println!("  B deleted its copy of A's sender key");
+
+    // ---- m1: B cannot decrypt it on the stream ------------------------------
+    let m1 = unique_marker();
+    println!("  m1: {m1}");
+    client_a
+        .send_text(ActiveConversation::Channel(gid.clone()), &m1)
+        .await
+        .expect("A send of m1 failed");
+    let m1_sent_at = client_a
+        .get_messages_local(&gid, &chatter_core::domain::message::ConversationType::Channel, None, 50)
+        .unwrap()
+        .into_iter()
+        .find(|m| m.as_text() == Some(m1.as_str()))
+        .expect("A has no local row for its own m1")
+        .sent_at;
+
+    // HALF 1: the natural heal. A's answer to B's SenderKeyRequest is an SKDM
+    // at A's CURRENT iteration (libsignal create_sender_key_distribution_message),
+    // i.e. after m1, so the only route to m1's plaintext on B is A's resend.
+    assert!(
+        wait_for_channel_text(&client_b, &gid, &m1).await,
+        "HEAL FAILED: B lost A's sender key, and m1 never reached B's store within \
+         {CONDITION_TIMEOUT:?}. The receiver's DEM (request_group_resend) or A's pairwise \
+         resend (resend_on_decryption_error) is broken."
+    );
+    assert!(
+        wait_for_channel_text(&client_d, &gid, &m1).await,
+        "POSITIVE CONTROL FAILED: D (key intact) never decrypted m1"
+    );
+    println!("  HALF 1: B recovered m1 through A's resend; D decrypted it on the stream");
+
+    // ---- membership changes AFTER m1 ----------------------------------------
+    client_a
+        .invite_user_to_channel(&gid, &uid_c, None)
+        .await
+        .expect("A failed to invite C");
+    common::accept_channel_invite(&client_c, &uid_c, &gid).await;
+    client_d.leave_channel(&gid).await.expect("D failed to leave");
+
+    // The resend decision reads A's LOCAL member list, so C must be in it
+    // (else C's refusal is the membership check, not the snapshot) and D must
+    // be out of it, both reached by A's own event handling.
+    let deadline = Instant::now() + CONDITION_TIMEOUT;
+    let (c_in, d_out) = loop {
+        let local: Vec<UserId> = client_a
+            .list_channel_members_local(&gid)
+            .into_iter()
+            .map(|m| m.user_id)
+            .collect();
+        let state = (local.contains(&uid_c), !local.contains(&uid_d));
+        if state == (true, true) || Instant::now() >= deadline {
+            break state;
+        }
+        tokio::time::sleep(POLL_INTERVAL).await;
+    };
+    assert!(c_in, "PRECONDITION FAILED: A's local member list never gained C, so a refusal \
+                   of C would not be about the send-time snapshot");
+    assert!(d_out, "PRECONDITION FAILED: A's local member list still has D after D left");
+    println!("  C joined after m1 and D left after m1 (A's local member list agrees)");
+
+    // ---- take B, C, D offline: their queues only grow from here --------------
+    for c in [&client_b, &client_c, &client_d] {
+        c.shutdown().await;
+    }
+    drop((client_b, client_c, client_d));
+    tokio::time::sleep(Duration::from_secs(2)).await;
+    let base_b = quiesced_row_ids(&uid_b).await;
+    let base_c = quiesced_row_ids(&uid_c).await;
+    let base_d = quiesced_row_ids(&uid_d).await;
+
+    // The DEM each of them would send for m1: named by A's sent_at, A's device
+    // 1. libsignal ignores the ciphertext for a SenderKey DEM (protocol.rs
+    // `for_original`: SenderKey => no ratchet key).
+    let dem = chatter_core::services::signal::SignalService::group_decryption_error(&[], m1_sent_at, 1)
+        .expect("build the DecryptionErrorMessage");
+
+    // NEGATIVES first, so by the time the positive control's resend has landed
+    // A has already handled both.
+    let off_c = connect_without_inbox(dir_c.path(), "C").await;
+    off_c
+        .messages()
+        .send_decryption_error_report(&uid_a, 1, dem.clone())
+        .await
+        .expect("C's DEM was not delivered to A");
+    let off_d = connect_without_inbox(dir_d.path(), "D").await;
+    off_d
+        .messages()
+        .send_decryption_error_report(&uid_a, 1, dem.clone())
+        .await
+        .expect("D's DEM was not delivered to A");
+    let off_b = connect_without_inbox(dir_b.path(), "B").await;
+    off_b
+        .messages()
+        .send_decryption_error_report(&uid_a, 1, dem)
+        .await
+        .expect("B's DEM was not delivered to A");
+
+    // HALF 2: positive control on the same instrument.
+    let rows_b = wait_for_device_envelope(&uid_b, &base_b, 1).await;
+    assert!(
+        rows_b.iter().any(|f| f[1] == "1"),
+        "POSITIVE CONTROL FAILED: B (an original recipient, still a member) sent a DEM for \
+         m1 and A queued nothing for B's device within {CONDITION_TIMEOUT:?}. Without this, \
+         'C and D got nothing' proves nothing."
+    );
+    println!("  HALF 2: B's DEM got a resend queued to B's device ({} new row(s))", rows_b.len());
+
+    // HALF 3: give A the same time again, then C's and D's queues must be unchanged.
+    tokio::time::sleep(Duration::from_secs(5)).await;
+    let new_c: Vec<_> = envelope_rows(&uid_c).into_iter().filter(|f| !base_c.contains(&f[0])).collect();
+    let new_d: Vec<_> = envelope_rows(&uid_d).into_iter().filter(|f| !base_d.contains(&f[0])).collect();
+    assert!(
+        new_c.is_empty(),
+        "RESEND SCOPE VIOLATED: C joined AFTER m1, asked for it, and A queued {} envelope(s) \
+         for C: {new_c:?}",
+        new_c.len()
+    );
+    assert!(
+        new_d.is_empty(),
+        "RESEND SCOPE VIOLATED: D LEFT after m1, asked for it, and A queued {} envelope(s) \
+         for D: {new_d:?}",
+        new_d.len()
+    );
+    println!("  HALF 3: C (later joiner) and D (departed) got nothing");
+
+    // And C's own store never held m1 (C was never sent its key or its content).
+    let c_rows = off_c
+        .get_messages_local(&gid, &chatter_core::domain::message::ConversationType::Channel, None, 50)
+        .unwrap_or_default();
+    assert!(
+        !c_rows.iter().any(|m| m.as_text() == Some(m1.as_str())),
+        "C holds m1's plaintext although it joined after m1 was sent"
+    );
+
+    println!("\n  V57 PASS — resend reaches the original recipient still in the channel, and \
+              neither a later joiner nor a departed member.\n");
+    client_a.shutdown().await;
+}
+
+/// `(epoch, current, next)` as LiveKit's `KeyProvider` on `client` holds them:
+/// the key at the epoch's ring slot and the pre-installed `epoch + 1` key.
+/// `None` when the client is not in a call.
+async fn call_key_view(client: &Arc<ChatterClient>) -> Option<(u32, Vec<u8>, Option<Vec<u8>>, Vec<Vec<u8>>)> {
+    let (epoch, ring) = client.call_service_handle_opt()?.installed_key_ring().await?;
+    let slot = |e: u32| ring[(e % ring.len() as u32) as usize].clone();
+    let current = slot(epoch)?;
+    let next = slot(epoch.wrapping_add(1));
+    let all = ring.into_iter().flatten().collect();
+    Some((epoch, current, next, all))
+}
+
+/// The call key chain from `key` at `epoch`, `steps` ratchets on — every key
+/// a holder of `key` can derive (`CallKeyState::ratchet`, the same HKDF the
+/// clients run).
+fn derivable_call_keys(call_id: &str, key: &[u8], epoch: u32, steps: u32) -> Vec<Vec<u8>> {
+    let mut state = chatter_core::crypto::CallKeyState::new(&[0u8; 32], call_id).unwrap();
+    let key: [u8; 32] = key.try_into().expect("call key is 32 bytes");
+    assert!(
+        state.adopt(key, epoch).unwrap(),
+        "harness: could not seat the chain at epoch {epoch} (adopt bounds) — the derivation \
+         check would be vacuous"
+    );
+    let mut out = vec![state.current_key_vec()];
+    for _ in 0..steps {
+        state.ratchet().unwrap();
+        out.push(state.current_key_vec());
+    }
+    out
+}
+
+/// Wait until every client in `clients` holds the same `(epoch, current key)`
+/// and `fresh(current)` holds. Panics with what each held at the deadline.
+async fn wait_for_call_key_agreement(
+    clients: &[(&str, &Arc<ChatterClient>)],
+    fresh: impl Fn(&[u8]) -> bool,
+    what: &str,
+) -> (u32, Vec<u8>) {
+    let deadline = Instant::now() + Duration::from_secs(60);
+    loop {
+        let mut views = Vec::new();
+        for (_, c) in clients {
+            views.push(call_key_view(c).await);
+        }
+        if let Some(Some((e0, k0, _, _))) = views.first() {
+            let agreed = views
+                .iter()
+                .all(|v| matches!(v, Some((e, k, _, _)) if e == e0 && k == k0));
+            if agreed && fresh(k0) {
+                return (*e0, k0.clone());
+            }
+        }
+        if Instant::now() >= deadline {
+            let held: Vec<String> = clients
+                .iter()
+                .zip(&views)
+                .map(|((n, _), v)| match v {
+                    Some((e, k, _, _)) => format!("{n}: epoch {e} key {}", hex::encode(&k[..4])),
+                    None => format!("{n}: not in a call"),
+                })
+                .collect();
+            panic!("{what}: no agreement on a fresh key within 60s — {held:?}");
+        }
+        tokio::time::sleep(POLL_INTERVAL).await;
+    }
+}
+
+/// Accept the ring for `call_id` on `client` once the orchestrator presents it.
+async fn accept_group_ring(
+    client: &Arc<ChatterClient>,
+    events: &mut tokio::sync::broadcast::Receiver<chatter_core::services::call_worker::CallOrchestratorEvent>,
+    call_id: &str,
+    label: &str,
+) {
+    use chatter_core::services::call_worker::CallOrchestratorEvent;
+    let deadline = Instant::now() + EVENT_TIMEOUT;
+    loop {
+        match tokio::time::timeout_at(deadline.into(), events.recv()).await {
+            Ok(Ok(CallOrchestratorEvent::IncomingPresented { call, .. })) if call.as_str() == call_id => break,
+            Ok(Ok(_)) | Ok(Err(tokio::sync::broadcast::error::RecvError::Lagged(_))) => continue,
+            Ok(Err(e)) => panic!("{label}: orchestrator event stream closed: {e:?}"),
+            Err(_) => panic!("{label} was never rung for group call {call_id} within {EVENT_TIMEOUT:?}"),
+        }
+    }
+    client
+        .accept_presented_incoming_call(call_id, false)
+        .await
+        .unwrap_or_else(|e| panic!("{label} failed to join group call {call_id}: {e:?}"));
+}
+
+/// v58 — GROUP-CALL KEYS ROTATE ON EVERY JOIN AND LEAVE, DECIDED BY THE MOST
+/// SENIOR PARTICIPANT, AND NEVER REACH THE WRONG SIDE OF THE CHANGE.
+///
+/// Live: three clients, the dev server and the dev LiveKit (real room joins,
+/// real `ParticipantJoined`/`ParticipantLeft`, real pairwise `GroupCallKey`
+/// sends). Assertions are on the key material LiveKit's `KeyProvider` holds on
+/// each client (`CallWorkerHandle::installed_key_ring`, `testing` only) — not
+/// on epochs or our own bookkeeping.
+///
+///   1. A starts a call in a channel with B and C. B joins; A and B converge.
+///   2. JOIN: C joins. A, B and C converge on one key at a new epoch that is
+///      not on the chain A was using before C joined (no ratchet of it), and
+///      C's key ring never holds any key of that pre-join chain.
+///   3. AUTHORITY: in every client's room roster, A is the most senior (the
+///      earliest LiveKit join) — the participant whose rotations are installed.
+///   4. LEAVE: B leaves. A and C converge on a key that is not on the chain B
+///      held when it left — B cannot derive it.
+///
+/// Positive controls: the harness's chain derivation reproduces the `epoch+1`
+/// key each client pre-installs (else "not derivable" would be vacuous), and B
+/// held A's pre-join key (the instrument sees a key when it IS distributed).
+///
+/// MUTATION (expected, NOT yet run — the checkout is shared): make
+/// `handle_participants_joined` return `Ok(())` → the JOIN half times out;
+/// make `handle_participant_departed` return `Ok(())` → the LEAVE half does.
+///
+/// Not proven: that media frames decrypt with these keys (the harness checks
+/// what is installed, not a decrypted frame), and that a non-senior
+/// participant's key is REFUSED (`only_the_rotators_keys_are_installed`,
+/// `client/calls.rs` unit test, covers that).
+#[tokio::test]
+async fn v58_group_call_key_rotates_on_join_and_leave() {
+    use chatter_core::domain::channel::ChannelType;
+
+    skip_if_no_server!();
+    no_keyring_prompts();
+    println!("\n=== V58: group-call key rotation on join and leave (live LiveKit) ===\n");
+
+    let dir_a = tempfile::tempdir().unwrap();
+    let client_a = build_client(dir_a.path());
+    let uid_a = register_and_start(&client_a, &unique_user("v58a"), "V58 Alice").await;
+    let dir_b = tempfile::tempdir().unwrap();
+    let client_b = build_client(dir_b.path());
+    let uid_b = register_and_start(&client_b, &unique_user("v58b"), "V58 Bob").await;
+    let dir_c = tempfile::tempdir().unwrap();
+    let client_c = build_client(dir_c.path());
+    let uid_c = register_and_start(&client_c, &unique_user("v58c"), "V58 Carol").await;
+
+    let name = format!(
+        "v58-call-{}",
+        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis() % 1_000_000
+    );
+    let group = common::create_group_with_members(
+        &client_a,
+        &name,
+        ChannelType::Private,
+        None,
+        Some("V58 call key rotation"),
+        &[(&client_b, &uid_b), (&client_c, &uid_c)],
+    )
+    .await;
+    let mut ev_b = client_b.subscribe_call_orchestrator_events().expect("B has no call service");
+    let mut ev_c = client_c.subscribe_call_orchestrator_events().expect("C has no call service");
+
+    let setup = client_a
+        .start_group_call(group.id.clone(), chatter_core::domain::call::CallType::Voice, uid_a)
+        .await
+        .expect("A failed to start the group call");
+    let call_id = setup.call_id.to_string();
+    println!("  A started group call {call_id}");
+
+    // ---- 1. B joins ---------------------------------------------------------
+    accept_group_ring(&client_b, &mut ev_b, &call_id, "B").await;
+    // B's join is itself rotated (ROSTER_SETTLE 2s + 1s propagation, then the
+    // send). Watch A for 8s past agreement so that rotation is on the pre-join
+    // chain too: everything A keyed the call with from here to C's join is
+    // "before C". Epoch 0 is the ring's root chain, which every channel member
+    // was sent at the start by design, so it is not part of that set.
+    let (e_ab, _) = wait_for_call_key_agreement(
+        &[("A", &client_a), ("B", &client_b)],
+        |_| true,
+        "A+B after B joined",
+    )
+    .await;
+    println!("  A and B agree at epoch {e_ab}");
+    let mut pre_chain: Vec<Vec<u8>> = Vec::new();
+    let mut a_samples = std::collections::HashSet::new();
+    let window = Instant::now() + Duration::from_secs(8);
+    while Instant::now() < window || a_samples.is_empty() {
+        let (e, k, next, _) = call_key_view(&client_a).await.expect("A left the call");
+        if e > 0 && a_samples.insert((e, k.clone())) {
+            let chain = derivable_call_keys(&call_id, &k, e, 20);
+            // POSITIVE CONTROL: the harness derivation matches what A pre-installs.
+            assert_eq!(
+                next.as_ref(),
+                Some(&chain[1]),
+                "POSITIVE CONTROL FAILED: the harness's chain step does not reproduce A's \
+                 pre-installed epoch+1 key — every 'not derivable' check below would be vacuous"
+            );
+            pre_chain.extend(chain);
+        }
+        tokio::time::sleep(POLL_INTERVAL).await;
+    }
+    let (e_pre, k_pre, _, _) = call_key_view(&client_a).await.expect("A left the call");
+    let (e_b_pre, k_b_pre, _, _) = call_key_view(&client_b).await.expect("B left the call");
+    assert!(
+        e_b_pre != e_pre || k_b_pre == k_pre,
+        "POSITIVE CONTROL FAILED: B does not hold A's pre-join key at epoch {e_pre}"
+    );
+
+    // ---- 2. C joins ---------------------------------------------------------
+    accept_group_ring(&client_c, &mut ev_c, &call_id, "C").await;
+    // Sample C's ring while the join rotation lands, so a pre-join key that
+    // C held even briefly is caught.
+    let mut c_seen: Vec<Vec<u8>> = Vec::new();
+    let all_three = [("A", &client_a), ("B", &client_b), ("C", &client_c)];
+    let (e_join, k_join) = {
+        let deadline = Instant::now() + Duration::from_secs(60);
+        loop {
+            if let Some((_, _, _, ring)) = call_key_view(&client_c).await {
+                c_seen.extend(ring);
+            }
+            let views = futures::future::join_all(all_three.iter().map(|(_, c)| call_key_view(c))).await;
+            if let Some(Some((e0, k0, _, _))) = views.first() {
+                if views.iter().all(|v| matches!(v, Some((e, k, _, _)) if e == e0 && k == k0))
+                    && !pre_chain.contains(k0)
+                {
+                    break (*e0, k0.clone());
+                }
+            }
+            assert!(Instant::now() < deadline, "JOIN ROTATION FAILED: A, B and C never agreed on a \
+                key off A's pre-join chain within 60s of C joining");
+            tokio::time::sleep(POLL_INTERVAL).await;
+        }
+    };
+    if let Some((_, _, _, ring)) = call_key_view(&client_c).await {
+        c_seen.extend(ring);
+    }
+    assert!(e_join > e_pre, "the join rotation must move the call to a later epoch ({e_join} <= {e_pre})");
+    let leaked: Vec<_> = c_seen.iter().filter(|k| pre_chain.contains(k)).collect();
+    assert!(
+        leaked.is_empty(),
+        "JOINER GOT A PRE-JOIN KEY: C's KeyProvider held {} key(s) on the chain A was using \
+         before C joined — C could decrypt what was said before it joined",
+        leaked.len()
+    );
+    println!("  JOIN: A, B, C rotated to one fresh key at epoch {e_join}; C never held a pre-join key \
+              ({} ring samples)", c_seen.len());
+
+    // ---- 3. authority = most senior -----------------------------------------
+    for (label, c, me) in [("A", &client_a, &uid_a), ("B", &client_b, &uid_b), ("C", &client_c, &uid_c)] {
+        let s = c
+            .call_service_handle_opt()
+            .unwrap()
+            .room_seniority()
+            .await
+            .unwrap_or_else(|| panic!("{label} has no room roster"));
+        let mut all: Vec<(i64, String)> = s.remote.iter().map(|(id, at)| (*at, id.clone())).collect();
+        all.push((s.local_joined_at_ms, me.to_string()));
+        assert_eq!(all.len(), 3, "{label} does not see all three participants: {all:?}");
+        let senior = all.iter().min().unwrap();
+        assert_eq!(
+            senior.1,
+            uid_a.to_string(),
+            "{label}'s roster does not make A (the first to join) the key authority: {all:?}"
+        );
+    }
+    println!("  AUTHORITY: every roster ranks A most senior");
+
+    // ---- 4. B leaves --------------------------------------------------------
+    let (e_b, k_b, next_b, _) = call_key_view(&client_b).await.expect("B left the call early");
+    let b_chain = derivable_call_keys(&call_id, &k_b, e_b, 20);
+    assert_eq!(next_b.as_ref(), Some(&b_chain[1]), "POSITIVE CONTROL FAILED: B's pre-installed key \
+        is not the harness's chain step");
+    client_b.call_leave_room().await.expect("B failed to leave the call");
+    let (e_leave, k_leave) = wait_for_call_key_agreement(
+        &[("A", &client_a), ("C", &client_c)],
+        |k| !b_chain.contains(&k.to_vec()),
+        "LEAVE ROTATION FAILED: A+C after B left",
+    )
+    .await;
+    assert_ne!(k_leave, k_b, "the departed participant's last key is the call's key");
+    assert!(e_leave > e_b, "the leave rotation must move the call to a later epoch");
+    for (label, c) in [("A", &client_a), ("C", &client_c)] {
+        let (_, cur, next, _) = call_key_view(c).await.unwrap_or_else(|| panic!("{label} left the call"));
+        assert!(
+            !b_chain.contains(&cur) && next.as_ref().is_none_or(|n| !b_chain.contains(n)),
+            "DEPARTED PARTICIPANT CAN DERIVE THE KEY: {label}'s current or next key is on B's chain"
+        );
+    }
+    println!("  LEAVE: A and C rotated to epoch {e_leave}; B's chain (20 ratchets) reaches neither key");
+
+    println!("\n  V58 PASS — join and leave each rotate the call to a fresh key, set by the most \
+              senior participant; the joiner never held a pre-join key, the leaver can't derive \
+              the new one.\n");
+    let _ = client_a.call_leave_room().await;
+    let _ = client_c.call_leave_room().await;
+    for c in [&client_a, &client_b, &client_c] {
+        c.shutdown().await;
+    }
+}

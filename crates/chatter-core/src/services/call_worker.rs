@@ -435,6 +435,11 @@ enum CallCommand {
     GetKeyEpoch {
         response: oneshot::Sender<u32>,
     },
+    /// Test-only: the epoch and the whole shared-key ring LiveKit holds.
+    #[cfg(feature = "testing")]
+    GetInstalledKeyRing {
+        response: oneshot::Sender<Option<(u32, Vec<Option<Vec<u8>>>)>>,
+    },
     /// Attempt reconnection to the call.
     Reconnect {
         response: oneshot::Sender<Result<(), CallError>>,
@@ -1170,6 +1175,16 @@ impl CallWorkerHandle {
         rx.await.unwrap_or(0)
     }
 
+    /// Test-only: `(epoch, ring)` where `ring[i]` is the shared key LiveKit's
+    /// `KeyProvider` holds at key index `i` — the material frames are actually
+    /// encrypted with, not our own bookkeeping. `None` when not connected.
+    #[cfg(feature = "testing")]
+    pub async fn installed_key_ring(&self) -> Option<(u32, Vec<Option<Vec<u8>>>)> {
+        let (tx, rx) = oneshot::channel();
+        self.cmd_tx.try_send(CallCommand::GetInstalledKeyRing { response: tx }).ok()?;
+        rx.await.ok().flatten()
+    }
+
     /// Attempt to reconnect to the current call.
     ///
     /// This requests a new token from the server and reconnects to LiveKit.
@@ -1658,6 +1673,11 @@ fn run_call_worker(
                 CallCommand::GetKeyEpoch { response } => {
                     let epoch = room_manager.key_epoch();
                     let _ = response.send(epoch);
+                }
+
+                #[cfg(feature = "testing")]
+                CallCommand::GetInstalledKeyRing { response } => {
+                    let _ = response.send(room_manager.installed_key_ring());
                 }
 
                 CallCommand::Reconnect { response } => {

@@ -975,6 +975,15 @@ impl RoomManager {
         self.e2ee.read().epoch
     }
 
+    /// Test-only: the current epoch and every slot of the shared-key ring, as
+    /// LiveKit's `KeyProvider` returns them. `None` without a key provider.
+    #[cfg(feature = "testing")]
+    pub fn installed_key_ring(&self) -> Option<(u32, Vec<Option<Vec<u8>>>)> {
+        let e2ee = self.e2ee.read();
+        let provider = e2ee.provider.as_ref()?;
+        Some((e2ee.epoch, (0..KEY_RING_SIZE).map(|i| provider.get_shared_key(i)).collect()))
+    }
+
     /// Install an externally-ratcheted shared key for `epoch`, pre-installing
     /// `epoch + 1` so a peer whose 30 s ratchet timer fires slightly ahead can
     /// still decrypt immediately.
