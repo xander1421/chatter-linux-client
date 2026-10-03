@@ -230,7 +230,7 @@ impl MessageService {
     /// the whole send would let one unreachable member mute the channel. That
     /// member reads this message only if its SKDM lands before the next one.
     ///
-    /// ponytail: an unreachable member costs a prekey fetch per send; add a
+    /// an unreachable member costs a prekey fetch per send; add a
     /// per-member backoff if that shows up against the fetch limiter.
     pub(crate) async fn distribute_sender_key_to_new_members(
         &self,
@@ -911,7 +911,7 @@ impl MessageService {
             .insert((channel_id, sender_id, named_ns / 1_000_000));
         {
             let mut asked = self.group_retry_requests.lock();
-            // ponytail: cleared wholesale at 4096 entries; a forgotten entry
+            // cleared wholesale at 4096 entries; a forgotten entry
             // costs at most one repeat request, which the sender answers again.
             if asked.len() >= 4096 {
                 asked.clear();
@@ -1077,7 +1077,7 @@ impl MessageService {
         const RETENTION_NS: u64 = 24 * 60 * 60 * 1_000_000_000;
 
         let us = self.settings_repo.current_user_id()?;
-        // ponytail: scans our newest 1000 messages; add a (sender, sent_at
+        // scans our newest 1000 messages; add a (sender, sent_at
         // range) repo query if one user sends more than that within 24h.
         let Some(message) = self.message_repo.list_by_sender(&us, 1000)?.into_iter().find(|m| {
             m.sent_at / 1_000_000 == timestamp_ms
@@ -1390,7 +1390,7 @@ pub(crate) type EvictionResendGate = std::collections::HashMap<UserId, (std::tim
 pub(crate) fn eviction_resend_due(gate: &mut EvictionResendGate, sender: UserId, now: std::time::Instant) -> bool {
     const WINDOW: std::time::Duration = std::time::Duration::from_secs(60);
     const PER_WINDOW: u32 = 10;
-    // ponytail: never pruned; one entry per sender that ever overflowed the cap.
+    // never pruned; one entry per sender that ever overflowed the cap.
     let entry = gate.entry(sender).or_insert((now, 0));
     if now.duration_since(entry.0) >= WINDOW {
         *entry = (now, 0);

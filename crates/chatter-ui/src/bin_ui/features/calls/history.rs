@@ -23,7 +23,7 @@ use crate::{CallHistoryRow, MainWindow};
 /// One screenful and then some. Pagination exists in the repository but the
 /// screen has no "load more" affordance yet, so a fixed page is the whole
 /// list as far as the UI is concerned.
-// ponytail: fixed page, wire the repo's cursor when someone has 200 calls.
+// fixed page, wire the repo's cursor when someone has 200 calls.
 const HISTORY_PAGE: u32 = 200;
 
 /// Wire the Calls tab and everything on the screen it opens.

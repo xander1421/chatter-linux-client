@@ -21,7 +21,7 @@ export component Input inherits Rectangle {
     // input method's preedit. `text` excludes the preedit, so on Android a
     // word being composed is not in it yet — a primary action enabled on
     // `text != ""` looked dead until the word was committed.
-    // ponytail: preedit appended at the end; mid-text composition is rare.
+    // preedit appended at the end; mid-text composition is rare.
     out property <string> composed-text: root.text + input.preedit-text;
 
     callback accepted(string);

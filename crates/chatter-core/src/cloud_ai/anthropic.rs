@@ -206,7 +206,7 @@ impl LocalAIBackend for AnthropicBackend {
             ));
         }
 
-        // ponytail: temperature/top_p/top_k are deliberately not sent. Haiku 4.5
+        // temperature/top_p/top_k are deliberately not sent. Haiku 4.5
         // accepts them, but every current Opus/Sonnet rejects them with a 400,
         // and this backend must keep working when the user switches model.
         // Steer with the system prompt instead.

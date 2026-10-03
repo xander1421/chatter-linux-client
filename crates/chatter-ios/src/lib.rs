@@ -7,7 +7,7 @@
 //!     device.
 //!   * `ui` feature — hands control to chatter-ui's Slint event loop.
 //!
-//! ponytail: the smoke harness exists only because the Slint UI's iOS port is
+//! the smoke harness exists only because the Slint UI's iOS port is
 //! unfinished. Delete this file's `smoke` half once `--features ui` links.
 
 use std::ffi::{CString, c_char};

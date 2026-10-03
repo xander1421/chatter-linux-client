@@ -998,7 +998,7 @@ fn wire_invite_member_search(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                                         display_name: profile.display_name,
                                         username,
                                         avatar_bytes: profile.avatar_bytes.unwrap_or_default(),
-                                        // ponytail: non-contact found by exact username; if already a
+                                        // non-contact found by exact username; if already a
                                         // member or banned the invite RPC rejects it server-side.
                                         already_member: false,
                                         banned: false,

@@ -13,7 +13,7 @@
 //! only constructor is [`AnyCloudBackend::for_kind`], which needs
 //! [`CloudSettings`] and an API key.
 //!
-//! ponytail: silo boundary is module + type level. If you want a hard one,
+//! silo boundary is module + type level. If you want a hard one,
 //! lift this module into its own crate that `chatter-core` depends on
 //! optionally — then a build without the feature physically cannot link an
 //! egress path. Worth doing if cloud AI ever gains more than one provider.

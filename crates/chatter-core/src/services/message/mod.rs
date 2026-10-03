@@ -369,7 +369,7 @@ impl SolicitedResends {
     /// Record a request for `(channel, sender, sent_at ms)`.
     pub(crate) fn insert(&self, entry: SolicitedResend) {
         let mut set = self.set.lock();
-        // ponytail: cleared wholesale at 4096 entries; a forgotten entry
+        // cleared wholesale at 4096 entries; a forgotten entry
         // files that one resend under a fresh local id.
         if set.len() >= 4096 {
             set.clear();

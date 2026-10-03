@@ -1308,7 +1308,7 @@ fn run_call_worker(
                     // lifecycle side-effects in one place.
                     if result.is_ok() {
                         start_key_ratchet_timer(&room_manager, &ratchet_cancel, &active_call);
-                        // ponytail: the DM caller connects under an all-zero
+                        // the DM caller connects under an all-zero
                         // placeholder key — its real ECDH key only lands later
                         // in complete_dm_call. Publishing here would leak live
                         // mic/cam to the SFU under a fully server-derivable key.
@@ -2823,7 +2823,7 @@ fn handle_domain_event(
                 true,
                 String::new(),
                 None,
-                // ponytail: group name would read "X is calling in <group>", but no
+                // group name would read "X is calling in <group>", but no
                 // resolver wired yet — None beats leaking the raw group UUID. Pass a
                 // resolved name here when a group-name lookup exists.
                 None,

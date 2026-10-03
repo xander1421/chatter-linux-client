@@ -18,7 +18,7 @@ pub const DEFAULT_THUMBNAIL_SIZE: u32 = 256;
 /// and holds enough resolution to read small text in screenshots. This is what
 /// both sender and receiver see inline (the full image is only fetched on tap).
 ///
-/// ponytail: WebP-lossless keeps screenshot text crisp but is heavy for photos;
+/// WebP-lossless keeps screenshot text crisp but is heavy for photos;
 /// if the inline payload gets too big, switch these paths to lossy JPEG q90.
 const INLINE_THUMBNAIL_MAX_SIZE: u32 = 768;
 

@@ -567,7 +567,7 @@ impl VideoCapture {
 
                     // Tee to the self-preview tile. Every other frame (~12fps)
                     // keeps the extra RGBA convert off the capture hot path.
-                    // ponytail: fixed /2 throttle; make it fps-relative if the
+                    // fixed /2 throttle; make it fps-relative if the
                     // preview looks choppy on low-fps cameras.
                     if let Some(ref preview) = local_preview {
                         if win_frames % 2 == 0 {
@@ -949,7 +949,7 @@ impl VideoCapture {
 
     /// Decode an MJPG (JPEG) frame and convert RGB -> I420 (YUV 4:2:0, BT.601 limited range).
     /// Returns false if decode fails or dimensions mismatch, so the caller can skip the frame.
-    /// ponytail: per-frame JPEG decode + scalar RGB->YUV. CPU is proven free here (screen
+    /// per-frame JPEG decode + scalar RGB->YUV. CPU is proven free here (screen
     /// capture converts 5120x1440 in ~3ms); switch to libyuv/SIMD only if a profiler says so.
     #[cfg(target_os = "linux")]
     fn mjpeg_to_i420(

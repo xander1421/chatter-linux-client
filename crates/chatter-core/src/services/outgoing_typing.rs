@@ -52,7 +52,7 @@ impl Drop for State {
 /// Enqueue happens under the state lock (see callers), so queue order is
 /// state order even when the refresh / pause timers race each other.
 ///
-/// ponytail: one queue for all conversations, so a slow send delays the next
+/// one queue for all conversations, so a slow send delays the next
 /// conversation's too. Typing runs in one conversation at a time; go
 /// per-conversation if that stops being true.
 #[derive(Clone)]

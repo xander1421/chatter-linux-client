@@ -387,7 +387,7 @@ impl CoreServices {
         /// spends one token per member it has no session with yet (first
         /// contact), so a fresh join of an N-member group spends N at once.
         /// Members past the batch are parked and retried below.
-        // ponytail: fixed batch; size to the group roster if the parked
+        // fixed batch; size to the group roster if the parked
         // backlog bites. Server daily budget is 48 + 2/conversation.
         const BATCH: u32 = 20;
         /// …once fewer than this remain.

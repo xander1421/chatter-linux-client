@@ -602,7 +602,7 @@ pub fn messages_to_display_batch(
 ) -> Vec<MessageDisplayData> {
     let mut display_messages = Vec::with_capacity(messages.len());
     // One profile read per sender, not per message.
-    // ponytail: each row still decodes its own copy of the avatar; share one
+    // each row still decodes its own copy of the avatar; share one
     // `slint::Image` per sender if long histories make that show up.
     let mut avatars: std::collections::HashMap<Option<chatter_core::domain::ids::UserId>, Option<Vec<u8>>> =
         std::collections::HashMap::new();

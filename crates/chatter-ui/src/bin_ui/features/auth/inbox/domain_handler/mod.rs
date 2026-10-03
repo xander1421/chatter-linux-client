@@ -148,7 +148,7 @@ pub async fn handle_domain_event(
             // just stored it. Re-sync the sidebar so list_friends_with_profiles
             // decrypts + persists the peer's real display name + avatar and the
             // row re-renders (fallback "User <id>" → real name, initials →
-            // avatar). ponytail: refreshes on every DM receive; fine for
+            // avatar). Refreshes on every DM receive; fine for
             // low-volume friend DMs, revisit if it shows up in profiling.
             // This runs on the runtime, where a Weak never upgrades — the
             // refresh has to be scheduled onto the UI thread.

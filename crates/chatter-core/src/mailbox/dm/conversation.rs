@@ -789,7 +789,7 @@ impl DmConversationManager {
             .db
             .connection()
             .map_err(|e| MailboxError::Storage(e.to_string()))?;
-        // ponytail: owed copies older than a mailbox lifetime are dropped, so a
+        // owed copies older than a mailbox lifetime are dropped, so a
         // device that never answers (logged out, keys still published) costs
         // bounded storage; per-device delivery receipts if that matters.
         let cutoff = (Utc::now()

@@ -775,7 +775,7 @@ impl ChannelEventService {
 
     /// Whether our newest membership notice in `channel_id` is a leave filed
     /// in the last two minutes: then a second own-leave is the same one.
-    // ponytail: time window, because the RPC and the broadcast carry no shared
+    // time window, because the RPC and the broadcast carry no shared
     // id; a server-issued departure id on both would make this exact.
     fn recently_recorded_own_leave(&self, channel_id: &ChannelId, me: &UserId) -> bool {
         let conv_type = crate::services::message::conversion::conversation_type_for_channel(&self.channel_repo, channel_id);

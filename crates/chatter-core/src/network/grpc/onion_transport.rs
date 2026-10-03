@@ -46,7 +46,7 @@ use tower::Service;
 /// so it MUST be spawned onto this runtime (see `call`). The app runtime then
 /// only awaits a `JoinHandle` — a channel wake, never the Tor CPU work.
 ///
-/// ponytail: 2 worker threads — ample for one/two onion connections' directory
+/// 2 worker threads — ample for one/two onion connections' directory
 /// + circuit work. Bump if many concurrent circuits ever contend.
 pub(crate) fn tor_runtime() -> &'static tokio::runtime::Handle {
     static RT: OnceLock<tokio::runtime::Runtime> = OnceLock::new();

@@ -1232,7 +1232,7 @@ impl UserService {
         let _ = self.user_repo.update_friendship(&accepted);
 
         // Someone who was never a friend has no business in the friends list.
-        // ponytail: judged on the first page only; with a full page (or
+        // judged on the first page only; with a full page (or
         // offline) the next `UserSync::sync_friends` prune removes the row.
         match self.list_friends_with_profiles(100, 0).await {
             Ok(friends)

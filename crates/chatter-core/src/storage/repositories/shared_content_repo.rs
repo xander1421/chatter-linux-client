@@ -125,7 +125,7 @@ impl SharedContentRepository {
     /// genuinely has nothing to share would otherwise be rescanned on every
     /// open, forever.
     ///
-    /// ponytail: O(messages) once per conversation. If a conversation ever
+    /// O(messages) once per conversation. If a conversation ever
     /// gets big enough for that pause to show, move it to a background pass
     /// over all conversations at first launch after upgrade.
     pub fn backfill(

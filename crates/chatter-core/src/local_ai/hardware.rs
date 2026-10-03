@@ -136,7 +136,7 @@ fn parse_nvidia_smi_csv(csv: &str) -> Vec<GpuInfo> {
         .collect()
 }
 
-// ponytail: best-effort AMD probe — silent skip when rocm-smi absent or its
+// best-effort AMD probe — silent skip when rocm-smi absent or its
 // output shape differs. NVIDIA path is the tested one.
 fn detect_amd() -> Vec<GpuInfo> {
     let Ok(output) = Command::new("rocm-smi")

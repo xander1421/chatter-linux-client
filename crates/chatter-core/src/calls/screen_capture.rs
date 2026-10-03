@@ -389,7 +389,7 @@ impl ScreenCapture {
         // Self-preview tee runs at most a few times a second: a full-res screen
         // RGBA convert (e.g. 30 MB at 5120×1440) is far too costly per frame, and
         // the preview tile is tiny. Throttle by wall-clock.
-        // ponytail: 400ms fixed; downsample before convert if even this shows on a profile.
+        // 400ms fixed; downsample before convert if even this shows on a profile.
         let preview_min_interval = Duration::from_millis(400);
         let mut last_preview = Instant::now()
             .checked_sub(preview_min_interval)

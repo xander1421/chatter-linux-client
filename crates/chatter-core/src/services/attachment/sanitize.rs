@@ -17,7 +17,7 @@
 //! Detection is content-based (magic bytes), not MIME-based, because our
 //! renderers also sniff content — a lying MIME type must not bypass validation.
 //!
-//! ponytail: coverage ceiling — sanitized: ISO-BMFF MP4 (isom brands), WebP
+//! coverage ceiling — sanitized: ISO-BMFF MP4 (isom brands), WebP
 //! (validate), JPEG, PNG. Passes through byte-identical: GIF, MOV, HEIC, MKV,
 //! PDF, …; non-`isom` ftyp is outside mp4san's scope and passes unchanged.
 //! Filenames are NOT metadata we strip: `FileMetadata.filename` is E2E-

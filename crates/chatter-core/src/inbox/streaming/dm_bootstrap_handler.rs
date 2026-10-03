@@ -78,7 +78,7 @@ pub fn spawn_dm_bootstrap_handler_with_receiver(
     let in_progress: Arc<Mutex<HashSet<(UserId, u32)>>> = Arc::new(Mutex::new(HashSet::new()));
     // One bootstrap task per peer at a time: two devices answering together
     // must not both find no mailbox of ours and each spend a token on one.
-    // ponytail: one entry per peer ever bootstrapped, never pruned.
+    // one entry per peer ever bootstrapped, never pruned.
     let peer_turns: Arc<Mutex<HashMap<UserId, Arc<Mutex<()>>>>> = Arc::new(Mutex::new(HashMap::new()));
 
     // Get user ID from grpc_pool for UUID comparison

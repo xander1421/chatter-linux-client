@@ -234,7 +234,7 @@ impl SignalService {
     // everything we send is to get the SKDM BEFORE the first message they are
     // meant to read — so we record who has it and top up the rest pre-send.
     //
-    // ponytail: tracked per user, not per device (the device list costs a
+    // tracked per user, not per device (the device list costs a
     // prekey fetch). A member's newly linked device heals through its
     // SenderKeyRequest; per-device tracking if that proves too lossy.
 

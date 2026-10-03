@@ -393,7 +393,7 @@ pub struct ChatterClient {
     server_monitor_started: AtomicBool,
     /// Unsent composer text per conversation id, so a draft stays with the
     /// conversation it was typed in. See `swap_composer_draft`.
-    // ponytail: in-memory, lost on restart. DraftService persists but its
+    // in-memory, lost on restart. DraftService persists but its
     // table FKs `channels(id)`, which DM / saved / anon ids are not in.
     composer_drafts: Mutex<std::collections::HashMap<String, String>>,
     /// Messages the disappearing-messages reaper just deleted. See
@@ -2922,7 +2922,7 @@ impl ChatterClient {
                 continue;
             }
             let (id, kind) = key;
-            // ponytail: mesh rows are desktop-only and keyed by the mesh repo;
+            // mesh rows are desktop-only and keyed by the mesh repo;
             // they count whenever the mode shows them, as before.
             let mesh = matches!(kind, ConversationType::Mesh | ConversationType::MeshDm);
             if rows.contains(key) || (mesh && self.visible_in_mode(kind)) {

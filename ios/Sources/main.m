@@ -7,7 +7,7 @@
 //                              report, so we can see the core working on device
 //                              while the Slint iOS port is unfinished.
 //
-// ponytail: the smoke half goes away with CHATTER_RUST_UI. Don't grow it.
+// the smoke half goes away with CHATTER_RUST_UI. Don't grow it.
 
 #import <UIKit/UIKit.h>
 

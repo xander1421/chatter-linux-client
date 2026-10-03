@@ -318,7 +318,7 @@ impl ChannelSync {
 /// Whether a member the sync is adding locally joined while we weren't
 /// looking: after the last sync and after our own join. A first sync, or a
 /// channel we just joined, backfills its roster without announcing anyone.
-// ponytail: compares the server's joined_at with this device's clock; a skewed
+// compares the server's joined_at with this device's clock; a skewed
 // clock can drop or add an announcement near the boundary.
 fn join_is_news(
     joined_at: DateTime<Utc>,

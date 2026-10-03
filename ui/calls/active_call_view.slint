@@ -173,7 +173,7 @@ export component ActiveCallView inherits Rectangle {
     property <int> user-focus: -2;
     // Index of the first screen-sharing tile, else -1. Slint has no array-find
     // in expressions, so this is a bounded manual scan.
-    // ponytail: capped at 6 tiles — the grid renders at most 4 cameras plus a
+    // capped at 6 tiles — the grid renders at most 4 cameras plus a
     // screen tile; widen the ladder if calls ever show more tiles at once.
     property <int> screen-share-index:
           (call-data.participants.length > 0 && call-data.participants[0].is-screen-sharing) ? 0
@@ -197,7 +197,7 @@ export component ActiveCallView inherits Rectangle {
         && call-data.duration-seconds == 0;
     // Any live video (camera or screen) in the call? Voice-only calls collapse
     // to a compact dock instead of a tall grid of empty avatar tiles.
-    // ponytail: bounded 6-tile scan, same cap as screen-share-index above.
+    // bounded 6-tile scan, same cap as screen-share-index above.
     property <bool> any-video: is-video-enabled || is-screen-sharing
         || (call-data.participants.length > 0 && (call-data.participants[0].is-video-enabled || call-data.participants[0].is-screen-sharing))
         || (call-data.participants.length > 1 && (call-data.participants[1].is-video-enabled || call-data.participants[1].is-screen-sharing))

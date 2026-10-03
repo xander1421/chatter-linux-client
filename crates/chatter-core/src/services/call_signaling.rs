@@ -597,7 +597,7 @@ impl CallSignalingService {
             .set_encryption_key(call_key.to_vec())
             .await;
 
-        // ponytail: the DM caller's auto-publish was deferred at initiate time
+        // the DM caller's auto-publish was deferred at initiate time
         // (media would otherwise have leaked under the all-zero placeholder
         // key). Now that the real ECDH key is installed at LiveKit index 0,
         // this is the first safe moment to publish — do it exactly once here.

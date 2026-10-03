@@ -77,7 +77,7 @@ impl AttachmentService {
         if attachment.metadata.is_audio()
             && crate::media::waveform::needs_waveform_repair(attachment.metadata.waveform_samples.as_deref())
         {
-            // ponytail: inline, voice notes are small (seconds of audio); move
+            // inline, voice notes are small (seconds of audio); move
             // to spawn_blocking with an owned service if long audio shows up here.
             let result = self
                 .decrypt_to_memory(attachment_id)

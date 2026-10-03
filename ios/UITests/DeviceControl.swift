@@ -24,7 +24,7 @@
 // into. A human typing works fine — the software keyboard's insertText: path
 // is unaffected. Type by hand, automate everything around it.
 //
-// ponytail: normalized coordinates, not points. They survive a device swap,
+// normalized coordinates, not points. They survive a device swap,
 // and every caller so far is eyeballing a screenshot anyway. Switch to
 // XCUICoordinate offsets in points if something needs pixel accuracy.
 

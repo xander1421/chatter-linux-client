@@ -123,7 +123,7 @@ pub fn shareable_profile_key(
 /// Our profile key for an anon DM / anon group peer. Those peers are
 /// strangers by design, so only "everyone" shares with them.
 pub fn anon_shareable_profile_key(settings: &SettingsRepository) -> Option<[u8; 32]> {
-    // ponytail: no per-peer friend check — an anon peer is not addressed as a
+    // no per-peer friend check — an anon peer is not addressed as a
     // contact; add one if anon conversations with friends must see the profile.
     if rotation_pending(settings) || ProfileVisibility::load(settings) != ProfileVisibility::Everyone {
         return None;

@@ -314,7 +314,7 @@ impl ChatterClient {
     /// server: on channel open and after a refused send, in case a live
     /// `MemberUpdated` was missed. A failed fetch keeps the local
     /// answer.
-    // ponytail: refetches the full roster; a "my membership" RPC if that
+    // refetches the full roster; a "my membership" RPC if that
     // shows up in large channels.
     pub async fn refresh_channel_send_notice(&self, channel_id: &crate::domain::ids::ChannelId) -> String {
         if !self.is_moderated_channel(channel_id) {

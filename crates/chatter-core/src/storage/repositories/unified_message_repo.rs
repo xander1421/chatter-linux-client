@@ -500,7 +500,7 @@ impl UnifiedMessageRepository {
 
     /// Whether this message id was deleted locally (see `delete`). Ingest
     /// checks it so a re-fetched copy stays deleted.
-    // ponytail: tombstones are never pruned; one short row per deleted message.
+    // tombstones are never pruned; one short row per deleted message.
     pub fn is_tombstoned(&self, id: &MessageId) -> Result<bool, StorageError> {
         let conn = self.db.read_connection()?;
         let found = conn.query_row(
