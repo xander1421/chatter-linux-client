@@ -50,7 +50,7 @@ use crate::proto::chat_v1::{
 /// pool.connect().await?;
 ///
 /// let mut auth = AuthClient::new(pool.channel(), pool.auth_clone());
-/// let started = auth.login_start(&identifier, &ke1).await?;
+/// let started = auth.login_start(&identifier, &ke1, None).await?;
 /// ```
 pub struct AuthClient {
     inner: AuthServiceClient<InterceptedService<GrpcTransport, AuthInterceptor>>,
@@ -115,13 +115,22 @@ impl AuthClient {
         }
     }
 
-    /// OPAQUE login, first round trip: KE1 for the login identifier.
+    /// OPAQUE login, first round trip: KE1 for the login identifier. The
+    /// answer is a KE2, or a `pow_challenge` to repeat the call with: `pow`
+    /// is `(challenge nonce, solution)` for that repeat, `None` first.
     pub async fn login_start(
         &mut self,
         identifier: &str,
         ke1: &[u8],
+        pow: Option<(&[u8], u64)>,
     ) -> Result<LoginStartResponse, NetworkError> {
-        let request = LoginStartRequest { username: identifier.to_string(), ke1: ke1.to_vec() };
+        let (pow_nonce, pow_solution) = pow.map_or((Vec::new(), 0), |(n, s)| (n.to_vec(), s));
+        let request = LoginStartRequest {
+            username: identifier.to_string(),
+            ke1: ke1.to_vec(),
+            pow_nonce,
+            pow_solution,
+        };
         self.inner
             .login_start(request)
             .await

@@ -112,7 +112,15 @@ impl ChatterClient {
         // SVR_SALT_USERNAME) must see the nickname registration used, not
         // the `@nick.1234` handle the app displays.
         let username = crate::crypto::auth_crypto::login_nickname(username);
-        let mut result = self.auth().do_login(username, password, device_name, pin).await?;
+        // A priced login (server proof of work) takes seconds on a phone;
+        // the login screen shows `AuthStateData::login_verifying` meanwhile.
+        let auth_state = self.auth_state().clone();
+        let login = self
+            .auth()
+            .do_login(username, password, device_name, pin, &move || auth_state.set_login_verifying(true))
+            .await;
+        self.auth_state().set_login_verifying(false);
+        let mut result = login?;
         self.auth_state().set_logged_in(
             result.user_id,
             result.device_id,

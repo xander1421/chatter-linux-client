@@ -206,6 +206,9 @@ export component App inherits Rectangle {
     in-out property <string> login-pin: "";
     in property <bool> login-loading: false;
     in property <string> login-error: "";
+    // The login is solving the server's proof of work (chatter-core
+    // AuthStateData::login_verifying). Set from Rust.
+    in property <bool> login-verifying: false;
     in property <bool> login-identity-reset-available: false;
     callback accept-new-identity();
 
@@ -1238,6 +1241,7 @@ export component App inherits Rectangle {
             pin <=> root.login-pin;
             loading: root.login-loading;
             error: root.login-error;
+            verifying: root.login-verifying;
             identity-reset-available: root.login-identity-reset-available;
             accept-new-identity => { root.accept-new-identity(); }
 

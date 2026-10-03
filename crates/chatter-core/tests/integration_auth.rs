@@ -388,7 +388,7 @@ async fn test_login_nonexistent_user_is_indistinguishable() {
 
     let start = chatter_core::crypto::opaque::login_start("any password").unwrap();
     let identifier = chatter_core::crypto::auth_crypto::login_identifier(&unique_username());
-    let started = assert_ok(auth_client.login_start(&identifier, &start.ke1).await);
+    let started = assert_ok(auth_client.login_start(&identifier, &start.ke1, None).await);
     assert_eq!(started.ke2.len(), 320, "fake KE2 has the real KE2's size");
     assert!(matches!(
         chatter_core::crypto::opaque::login_finish_async(start, "any password", started.ke2).await,
@@ -408,6 +408,80 @@ async fn test_login_nonexistent_user_is_indistinguishable() {
     assert_auth_error(result);
 }
 
+/// Login is priced, not locked (server OPEN-ITEMS §133): after the free
+/// attempts the server answers LoginStart with a proof-of-work challenge and
+/// no KE2; a bad solution is refused; `login_start_paying_pow` solves, retries
+/// once, and the owner still logs in with the right password.
+#[tokio::test]
+async fn test_login_priced_by_proof_of_work_not_locked() {
+    use chatter_core::crypto::opaque;
+    use chatter_core::services::auth_service::login_start_paying_pow;
+    use std::sync::atomic::{AtomicU32, Ordering};
+    skip_if_no_server!();
+
+    let pool = assert_ok(create_test_pool().await);
+    let user = assert_ok(register_test_user(&pool).await);
+    let mut auth_client = AuthClient::new(pool.channel(), pool.auth_clone());
+    let identifier = chatter_core::crypto::auth_crypto::login_identifier(&user.username);
+
+    // A stranger's guesses: KE2s until the free tier runs out, then a price.
+    let mut challenge = None;
+    for _ in 0..10 {
+        let ke1 = opaque::login_start("wrong guess").unwrap().ke1;
+        let r = assert_ok(auth_client.login_start(&identifier, &ke1, None).await);
+        if let Some(c) = r.pow_challenge {
+            assert!(r.ke2.is_empty() && r.login_id.is_empty(), "a challenge carries no KE2");
+            challenge = Some(c);
+            break;
+        }
+        assert_eq!(r.ke2.len(), 320);
+    }
+    let challenge = challenge.expect("repeated failures must price the login");
+    assert!(challenge.difficulty >= 16 && challenge.difficulty <= 26, "{}", challenge.difficulty);
+
+    // A solution for the sign-up puzzle over the raw nonce is not a login
+    // solution (unless by chance it is both; skip those).
+    let reg = (0u64..)
+        .find(|s| {
+            chatter_core::crypto::registration_pow::verify(&challenge.nonce, *s, challenge.difficulty)
+                && !chatter_core::crypto::registration_pow::verify(
+                    &chatter_core::crypto::registration_pow::login_seed(&challenge.nonce, &identifier),
+                    *s,
+                    challenge.difficulty,
+                )
+        })
+        .unwrap();
+    let ke1 = opaque::login_start("wrong guess").unwrap().ke1;
+    let refused = auth_client.login_start(&identifier, &ke1, Some((&challenge.nonce, reg))).await;
+    assert!(
+        matches!(&refused, Err(NetworkError::PermissionDenied)),
+        "sign-up-domain solution must be refused: {refused:?}"
+    );
+
+    // The owner: solved transparently, then a normal login.
+    let paid = AtomicU32::new(0);
+    let start = opaque::login_start(&user.password).unwrap();
+    let started = login_start_paying_pow(&mut auth_client, &identifier, &start.ke1, &|| {
+        paid.fetch_add(1, Ordering::Relaxed);
+    })
+    .await
+    .expect("priced LoginStart must be paid and answered");
+    assert_eq!(paid.load(Ordering::Relaxed), 1, "the solve was announced once");
+    let done = opaque::login_finish_async(start, &user.password, started.ke2)
+        .await
+        .expect("right password opens KE2");
+    assert_ok(
+        auth_client
+            .login_finish(&started.login_id, &done.ke3, "d1", &random_svr_public_key(), &random_device_auth_token(), None)
+            .await,
+    );
+
+    // A verified login wipes the count: the next attempt is free again.
+    let ke1 = opaque::login_start(&user.password).unwrap().ke1;
+    let r = assert_ok(auth_client.login_start(&identifier, &ke1, None).await);
+    assert!(r.pow_challenge.is_none());
+}
+
 /// A LoginFinish is single-use: replaying the same login_id + KE3 fails.
 #[tokio::test]
 async fn test_login_finish_replay_rejected() {
@@ -419,7 +493,7 @@ async fn test_login_finish_replay_rejected() {
 
     let start = chatter_core::crypto::opaque::login_start(&user.password).unwrap();
     let identifier = chatter_core::crypto::auth_crypto::login_identifier(&user.username);
-    let started = assert_ok(auth_client.login_start(&identifier, &start.ke1).await);
+    let started = assert_ok(auth_client.login_start(&identifier, &start.ke1, None).await);
     let done = chatter_core::crypto::opaque::login_finish_async(start, &user.password, started.ke2)
         .await
         .expect("right password opens KE2");

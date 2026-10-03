@@ -101,6 +101,7 @@ export component MainWindow inherits Window {
     in-out property <string> login-pin <=> app.login-pin;
     in property <bool> login-loading <=> app.login-loading;
     in property <string> login-error <=> app.login-error;
+    in property <bool> login-verifying <=> app.login-verifying;
     in property <bool> login-identity-reset-available <=> app.login-identity-reset-available;
     callback accept-new-identity <=> app.accept-new-identity;
 

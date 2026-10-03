@@ -14,6 +14,12 @@
 //! (`internal/services/auth/service/registration_pow.go`).
 //!
 //! Domain + nonce + solution is 55 bytes: one SHA-256 block per attempt.
+//!
+//! Login (server OPEN-ITEMS §133) reuses the same puzzle over a derived seed:
+//! when an account has recent unverified login attempts, `LoginStart` answers
+//! with a `LoginPowChallenge` instead of a KE2, and the solution is searched
+//! over [`login_seed`]`(nonce, identifier)`. The seed's own domain keeps login
+//! and sign-up solutions apart and binds the work to one login identifier.
 
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::Instant;
@@ -24,6 +30,18 @@ use super::signal::identity::REGISTRATION_CHALLENGE_NONCE_LEN;
 use crate::error::CryptoError;
 
 const POW_DOMAIN: &[u8] = b"chatter-pow-v1\0";
+const LOGIN_SEED_DOMAIN: &[u8] = b"chatter-login-pow-v1\0";
+
+/// The puzzle input for a login challenge:
+/// `SHA-256("chatter-login-pow-v1\0" || nonce || identifier)`. Must match the
+/// server (`internal/services/auth/service/login_pow.go` `LoginPoWSeed`).
+pub fn login_seed(nonce: &[u8], identifier: &str) -> [u8; 32] {
+    let mut h = Sha256::new();
+    h.update(LOGIN_SEED_DOMAIN);
+    h.update(nonce);
+    h.update(identifier.as_bytes());
+    h.finalize().into()
+}
 
 /// The most a server may ask for (the proto caps `pow_difficulty` at it).
 /// 32 bits is ~4.3e9 hashes: well past what the challenge's 5-minute expiry
@@ -92,13 +110,13 @@ fn search(
 pub fn solve(nonce: &[u8], bits: u32, deadline: Instant) -> Result<u64, CryptoError> {
     if nonce.len() != REGISTRATION_CHALLENGE_NONCE_LEN {
         return Err(CryptoError::Protocol(format!(
-            "registration challenge nonce must be {REGISTRATION_CHALLENGE_NONCE_LEN} bytes, got {}",
+            "proof-of-work nonce must be {REGISTRATION_CHALLENGE_NONCE_LEN} bytes, got {}",
             nonce.len()
         )));
     }
     if bits > MAX_POW_BITS {
         return Err(CryptoError::Protocol(format!(
-            "registration proof of work of {bits} bits exceeds the {MAX_POW_BITS}-bit maximum"
+            "proof of work of {bits} bits exceeds the {MAX_POW_BITS}-bit maximum"
         )));
     }
     if bits == 0 {
@@ -125,7 +143,7 @@ pub fn solve(nonce: &[u8], bits: u32, deadline: Instant) -> Result<u64, CryptoEr
         Ok(found.load(Ordering::Acquire))
     } else {
         Err(CryptoError::Protocol(
-            "registration proof of work not found before the challenge expired".into(),
+            "proof of work not found before the challenge expired".into(),
         ))
     }
 }
@@ -163,6 +181,32 @@ mod tests {
         assert!(verify(&nonce, s, 16));
         assert!(!verify(&nonce, s, 17));
         assert!(!verify(&nonce, 28974, 16));
+    }
+
+    /// Shared with the server: login_pow_test.go (loginVector*). Nonce 00..1f,
+    /// identifier "a1" x 32, 16 bits, smallest solution.
+    #[test]
+    fn login_go_vector() {
+        let nonce = vector_nonce();
+        let identifier = "a1".repeat(32);
+        let seed = login_seed(&nonce, &identifier);
+        assert_eq!(
+            hex::encode(seed),
+            "6f82deaabc897dfe501e033dc87ab197cea759060a1c9b018f9251715bcc82fb"
+        );
+        let stop = AtomicBool::new(false);
+        let far = Instant::now() + Duration::from_secs(60);
+        let s = search(&seed, 16, 0, 1, &stop, far).unwrap();
+        assert_eq!(s, 35123);
+        assert_eq!(
+            hex::encode(pow_hash(&seed, s)),
+            "000083b40170283b4fe52d94b40d20393d3531d38ebbe1c62c2174bad9d97b0d"
+        );
+        // Not interchangeable with the sign-up puzzle over the raw nonce,
+        // and bound to the identifier.
+        assert!(verify(&nonce, 28975, 16));
+        assert!(!verify(&seed, 28975, 16));
+        assert!(!verify(&login_seed(&nonce, &"b2".repeat(32)), s, 16));
     }
 
     #[test]

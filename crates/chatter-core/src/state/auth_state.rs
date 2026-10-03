@@ -23,6 +23,10 @@ pub struct AuthStateData {
     pub is_logging_in: bool,
     /// Login error message, if the last login attempt failed.
     pub login_error: Option<String>,
+    /// The login in flight is solving the server's proof of work (an account
+    /// with recent failed attempts; server OPEN-ITEMS §133). Seconds of
+    /// work on a phone, so the login screen says so instead of looking stuck.
+    pub login_verifying: bool,
 }
 
 /// Reactive authentication state manager.
@@ -92,7 +96,13 @@ impl AuthState {
             state.display_name = Some(display_name);
             state.is_logging_in = false;
             state.login_error = None;
+            state.login_verifying = false;
         });
+    }
+
+    /// Mark the in-flight login as solving (or done solving) a proof of work.
+    pub fn set_login_verifying(&self, verifying: bool) {
+        self.store.update(|state| state.login_verifying = verifying);
     }
 
     /// Update state after logout.

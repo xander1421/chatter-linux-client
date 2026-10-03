@@ -128,7 +128,18 @@ pub async fn opaque_login(
     use chatter_core::crypto::opaque;
     let identifier = chatter_core::crypto::auth_crypto::login_identifier(username);
     let start = opaque::login_start(password).map_err(|e| NetworkError::Unknown(e.to_string()))?;
-    let started = auth_client.login_start(&identifier, &start.ke1).await?;
+    // Pays the server's login proof of work when it asks one, as the app does.
+    let started = chatter_core::services::auth_service::login_start_paying_pow(
+        auth_client,
+        &identifier,
+        &start.ke1,
+        &|| {},
+    )
+    .await
+    .map_err(|e| match e {
+        chatter_core::services::auth_service::AuthError::Network(n) => n,
+        other => NetworkError::Unknown(other.to_string()),
+    })?;
     let done = match opaque::login_finish_async(start, password, started.ke2).await {
         Ok(d) => d,
         Err(opaque::OpaqueError::InvalidLogin) => return Err(NetworkError::Unauthenticated),

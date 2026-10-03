@@ -96,6 +96,56 @@ pub(crate) async fn prove_password(
     Ok(crate::proto::chat_v1::PasswordProof { proof_id: opened.proof_id, ke3: done.ke3 })
 }
 
+/// How long a login proof of work may run. The server keeps the challenge
+/// 3 minutes; the cap difficulty (26 bits) is ~5 s mean, ~15 s p90 on a
+/// Galaxy S9 (server `login_pow.go` `LoginPoWCapBits`).
+const LOGIN_POW_DEADLINE: std::time::Duration = std::time::Duration::from_secs(150);
+
+/// OPAQUE LoginStart, paying the server's price when it names one (server
+/// OPEN-ITEMS §133). An account with recent unverified login attempts is
+/// answered with a `pow_challenge` instead of a KE2; this solves it off the
+/// async runtime (every core, [`registration_pow::solve_async`]) over
+/// [`registration_pow::login_seed`] and repeats the call once with the
+/// solution. `on_verifying` fires before the solve so the caller can show
+/// that the login is working, not stuck. A second challenge is an error:
+/// the server prices a challenge when it issues it, so a correct solution
+/// always buys the KE2.
+///
+/// [`registration_pow::solve_async`]: crate::crypto::registration_pow::solve_async
+/// [`registration_pow::login_seed`]: crate::crypto::registration_pow::login_seed
+pub async fn login_start_paying_pow(
+    auth_client: &mut AuthClient,
+    identifier: &str,
+    ke1: &[u8],
+    on_verifying: &(dyn Fn() + Send + Sync),
+) -> Result<crate::proto::chat_v1::LoginStartResponse, AuthError> {
+    use crate::crypto::registration_pow;
+    let first = auth_client.login_start(identifier, ke1, None).await?;
+    let Some(challenge) = first.pow_challenge else {
+        return Ok(first);
+    };
+    on_verifying();
+    let started = std::time::Instant::now();
+    let seed = registration_pow::login_seed(&challenge.nonce, identifier);
+    let solution =
+        registration_pow::solve_async(seed.to_vec(), challenge.difficulty, started + LOGIN_POW_DEADLINE)
+            .await?;
+    tracing::info!(
+        pow_bits = challenge.difficulty,
+        solve_ms = started.elapsed().as_millis() as u64,
+        "login proof of work solved"
+    );
+    let second = auth_client
+        .login_start(identifier, ke1, Some((&challenge.nonce, solution)))
+        .await?;
+    if second.pow_challenge.is_some() {
+        return Err(AuthError::LoginFailed(
+            "the server asked for a second proof of work; try again".to_string(),
+        ));
+    }
+    Ok(second)
+}
+
 impl AuthError {
     /// Text for the login/register screen: the `Display` chain
     /// ("login failed: ...") is for logs, not for people.
@@ -378,6 +428,7 @@ impl AuthService {
         password: &str,
         device_info: &str,
         pin: Option<&str>,
+        on_verifying: &(dyn Fn() + Send + Sync),
     ) -> Result<LoginResult, AuthError> {
         // Check not already logged in
         if self.is_logged_in() {
@@ -465,12 +516,11 @@ impl AuthService {
 
         // OPAQUE login: KE1 -> KE2, then KE3 -> session. A wrong password
         // (or an unknown nickname, answered from a fake record) fails while
-        // opening KE2, before anything else is sent.
+        // opening KE2, before anything else is sent. KE2 may first cost a
+        // proof of work when the account has recent failed attempts.
         let opaque_start = opaque::login_start(password)?;
-        let started = auth_client
-            .login_start(&identifier, &opaque_start.ke1)
-            .await
-            .map_err(AuthError::Network)?;
+        let started =
+            login_start_paying_pow(auth_client, &identifier, &opaque_start.ke1, on_verifying).await?;
         let opaque_done = opaque::login_finish_async(opaque_start, password, started.ke2).await?;
         let response = auth_client
             .login_finish(
@@ -1146,10 +1196,11 @@ impl AuthService {
         password: &str,
         device_name: &str,
         pin: Option<&str>,
+        on_verifying: &(dyn Fn() + Send + Sync),
     ) -> Result<LoginResult, AuthError> {
         let mut auth_client = self.try_auth_client()
             .ok_or_else(|| AuthError::Network(NetworkError::ConnectionFailed("Not connected to server".to_string())))?;
-        self.login(&mut auth_client, username, password, device_name, pin)
+        self.login(&mut auth_client, username, password, device_name, pin, on_verifying)
             .await
     }
 

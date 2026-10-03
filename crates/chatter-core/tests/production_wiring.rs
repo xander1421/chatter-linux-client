@@ -328,6 +328,16 @@ const TABLE: &[Entry] = &[
               the onion service fails with PermissionDenied while clearnet sign-up \
               (difficulty 0) keeps passing every test.",
     },
+    Entry {
+        symbol: "login_seed",
+        defined_in: "chatter-core/src/crypto/registration_pow.rs",
+        expect: Expect::Wired,
+        why: "The login proof-of-work seed (OPEN-ITEMS §133), called from \
+              auth_service::login_start_paying_pow, which AuthService::login runs \
+              for every LoginStart. The server answers a priced LoginStart with a \
+              challenge and no KE2, so without this caller any account with three \
+              recent failed attempts (anyone's guesses) cannot log in a new device.",
+    },
 ];
 
 // ============================================================================

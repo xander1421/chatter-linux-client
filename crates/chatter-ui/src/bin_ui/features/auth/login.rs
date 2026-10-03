@@ -72,6 +72,41 @@ fn wire_accept_new_identity(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
 static PENDING_RECOVERY: std::sync::Mutex<Option<KeyRecoveryNeed>> =
     std::sync::Mutex::new(None);
 
+/// Mirror chatter-core's `AuthStateData::login_verifying` (the login is
+/// solving the server's proof of work) onto the login screen while a login
+/// runs. Aborted when the login returns; core clears the flag itself.
+fn forward_login_verifying(
+    weak: slint::Weak<MainWindow>,
+    ui_ctx: &Arc<ChatterClient>,
+) -> tokio::task::JoinHandle<()> {
+    let auth_state = ui_ctx.auth_state().clone();
+    tokio::spawn(async move {
+        let mut rx = auth_state.subscribe();
+        let mut last = None;
+        let mut push = |v: bool| {
+            if last != Some(v) {
+                last = Some(v);
+                let weak = weak.clone();
+                let _ = slint::invoke_from_event_loop(move || {
+                    if let Some(w) = weak.upgrade() {
+                        w.set_login_verifying(v);
+                    }
+                });
+            }
+        };
+        push(auth_state.get().login_verifying);
+        loop {
+            match rx.recv().await {
+                Ok(s) => push(s.login_verifying),
+                Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
+                    push(auth_state.get().login_verifying);
+                }
+                Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+            }
+        }
+    })
+}
+
 fn wire_password_login(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     let ui_ctx = ui_ctx.clone();
     let weak_window = window.as_weak();
@@ -124,7 +159,10 @@ fn wire_password_login(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
 
             // Login via SDK (handles auth + state + inbox + presence)
             let pin_opt = if pin.is_empty() { None } else { Some(pin.as_str()) };
-            match ui_ctx.login(&username, &password, &chatter_core::services::link_device_service::LinkDeviceService::current_device_name(), pin_opt).await {
+            let verifying = forward_login_verifying(weak.clone(), &ui_ctx);
+            let outcome = ui_ctx.login(&username, &password, &chatter_core::services::link_device_service::LinkDeviceService::current_device_name(), pin_opt).await;
+            verifying.abort();
+            match outcome {
                 Ok(_result) => {
                     // Spawn UI-only event handlers (need slint::Weak<MainWindow>)
                     crate::bin_ui::features::modals::spawn_anon_group_invite_handler(weak.clone(), &ui_ctx);

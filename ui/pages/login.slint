@@ -20,6 +20,9 @@ export component LoginPage inherits Rectangle {
     in property <string> configured-server-url: "";
     in property <bool> loading: false;
     in property <string> error: "";
+    // The server asked this login for a proof of work (an account with recent
+    // failed attempts); the device is solving it, which can take seconds.
+    in property <bool> verifying: false;
     // Live server reachability and the mesh escape hatch — see
     // `components/offline_mesh_notice.slint` for why this screen needs a way out
     // of itself at all.
@@ -163,6 +166,14 @@ export component LoginPage inherits Rectangle {
                         color: Colors.error;
                         font-size: Typography.sm;
                         wrap: word-wrap;
+                    }
+
+                    if root.loading && root.verifying: Text {
+                        text: "Verifying this sign-in on your device… this can take a few seconds.";
+                        color: Colors.text-secondary;
+                        font-size: Typography.sm;
+                        wrap: word-wrap;
+                        horizontal-alignment: center;
                     }
 
                     // Destructive and irreversible, so it is a deliberate
