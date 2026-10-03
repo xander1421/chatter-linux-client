@@ -32,14 +32,16 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use serde::Deserialize;
-use tokio_stream::StreamExt;
 use tracing::{debug, error, info, warn};
 
 use crate::domain::UserId;
 use crate::events::bus::EventBus;
 use crate::inbox::handlers::DomainEvent;
 use crate::network::grpc::GrpcClientPool;
-use crate::proto::chat_v1::{Notification, NotificationType};
+use crate::network::streaming::heartbeat::{self, Next};
+use crate::proto::chat_v1::{
+    stream_notifications_response::Item, Notification, NotificationType, StreamNotificationsResponse,
+};
 
 /// Bounded LRU set of recently-seen notification IDs. Used to short-circuit
 /// duplicate server deliveries (e.g. server retries the same notification
@@ -134,28 +136,18 @@ pub fn spawn_grpc_notification_consumer(
                     backoff = Duration::from_secs(1);
                     tokio::pin!(stream);
 
-                    while let Some(item) = stream.next().await {
-                        match item {
-                            Ok(resp) => {
-                                if let Some(notif) = resp.notification {
-                                    // Empty ID on the proto means the
-                                    // server didn't populate one; fall
-                                    // through without dedup so we don't
-                                    // drop legitimate events. Server
-                                    // always assigns IDs today, but this
-                                    // keeps the consumer forward-compat.
-                                    if notif.id.is_empty() || recent_ids.insert(notif.id.clone()) {
-                                        dispatch_notification(&event_bus, &notifications, notif);
-                                    } else {
-                                        debug!(
-                                            notif_id = %notif.id,
-                                            "notification_stream: duplicate notification, skipping"
-                                        );
-                                    }
-                                }
+                    loop {
+                        match heartbeat::next_or_silent(&mut stream, heartbeat::STREAM_SILENCE_LIMIT).await {
+                            Next::Item(Ok(resp)) => {
+                                route_item(&event_bus, &notifications, &mut recent_ids, resp);
                             }
-                            Err(e) => {
+                            Next::Item(Err(e)) => {
                                 warn!(error = %e, "notification_stream: item error, reconnecting");
+                                break;
+                            }
+                            Next::Ended => break,
+                            Next::Silent => {
+                                warn!("notification_stream: missed its heartbeats, reconnecting");
                                 break;
                             }
                         }
@@ -171,6 +163,29 @@ pub fn spawn_grpc_notification_consumer(
             backoff = (backoff * 2).min(MAX_BACKOFF);
         }
     })
+}
+
+/// Handle one stream item: the server's keepalive is dropped (it is also the
+/// first item, once subscribed), a notification is deduplicated and routed.
+fn route_item(
+    event_bus: &EventBus,
+    notifications: &Arc<crate::services::notification_service::NotificationService>,
+    recent_ids: &mut RecentIds,
+    resp: StreamNotificationsResponse,
+) {
+    match resp.item {
+        Some(Item::Notification(notif)) => {
+            // Empty ID on the proto means the server didn't populate one; fall
+            // through without dedup so we don't drop legitimate events.
+            if notif.id.is_empty() || recent_ids.insert(notif.id.clone()) {
+                dispatch_notification(event_bus, notifications, notif);
+            } else {
+                debug!(notif_id = %notif.id, "notification_stream: duplicate notification, skipping");
+            }
+        }
+        Some(Item::Heartbeat(_)) => tracing::trace!("notification_stream: heartbeat"),
+        None => debug!("notification_stream: empty item"),
+    }
 }
 
 /// Route one server-sent [`Notification`].
@@ -363,6 +378,37 @@ mod tests {
             expires_at: 0,
             action_url: String::new(),
         }
+    }
+
+    #[test]
+    fn a_heartbeat_routes_nowhere() {
+        let (bus, mut rx) = bus_with_receiver();
+        let (service, sink) = recording_service();
+        let mut recent = RecentIds::new();
+        route_item(
+            &bus,
+            &service,
+            &mut recent,
+            StreamNotificationsResponse {
+                item: Some(Item::Heartbeat(crate::proto::chat_v1::StreamHeartbeat {})),
+            },
+        );
+        assert!(matches!(rx.try_recv(), Err(TryRecvError::Empty)), "a heartbeat produced a domain event");
+        assert!(sink.0.lock().unwrap().is_empty(), "a heartbeat produced a toast");
+
+        // And a real notification still gets through the same path.
+        route_item(
+            &bus,
+            &service,
+            &mut recent,
+            StreamNotificationsResponse {
+                item: Some(Item::Notification(notif(
+                    NotificationType::DeviceLinked,
+                    r#"{"device_id":7,"linked_device_id":7}"#,
+                ))),
+            },
+        );
+        assert!(matches!(rx.try_recv(), Ok(DomainEvent::DeviceLinked { .. })));
     }
 
     #[test]

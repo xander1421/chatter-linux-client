@@ -2932,6 +2932,7 @@ pub mod integration_service_client {
                 );
             self.inner.unary(req, path, codec).await
         }
+        ///
         pub async fn test_integration(
             &mut self,
             request: impl tonic::IntoRequest<super::TestIntegrationRequest>,
@@ -3568,7 +3569,7 @@ pub mod message_service_client {
             &mut self,
             request: impl tonic::IntoRequest<super::StreamMessagesRequest>,
         ) -> std::result::Result<
-            tonic::Response<tonic::codec::Streaming<super::Message>>,
+            tonic::Response<tonic::codec::Streaming<super::StreamMessagesResponse>>,
             tonic::Status,
         > {
             self.inner
@@ -3669,8 +3670,6 @@ pub mod message_service_client {
                 );
             self.inner.unary(req, path, codec).await
         }
-        /** Pin/Unpin Messages
-*/
         pub async fn pin_message(
             &mut self,
             request: impl tonic::IntoRequest<super::MessageUpdate>,

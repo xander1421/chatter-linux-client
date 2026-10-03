@@ -18,7 +18,7 @@ use crate::proto::chat_v1::{
     MessageSortDirection, MessageUpdate, SealedSenderMessage,
     DestinationDevice, SendMessageRequest, SendSealedMessageRequest, SendSealedMessageResponse,
     StreamGlobalEventsRequest, StreamMessageEventsRequest,
-    StreamMessagesRequest,
+    StreamMessagesRequest, StreamMessagesResponse,
 };
 
 /// Message service client wrapper.
@@ -222,11 +222,15 @@ impl MessageClient {
     ///
     /// * `channel_id` - Channel to stream from
     /// * `resume_from` - Optional message ID to resume from
+    ///
+    /// Items are messages or the server's `StreamHeartbeat` keepalive (the
+    /// first item, then about one a minute); see
+    /// `network::streaming::heartbeat`.
     pub async fn stream_messages(
         &mut self,
         channel_id: &str,
         resume_from: Option<&str>,
-    ) -> Result<impl Stream<Item = Result<Message, NetworkError>>, NetworkError> {
+    ) -> Result<impl Stream<Item = Result<StreamMessagesResponse, NetworkError>>, NetworkError> {
         let request = StreamMessagesRequest {
             channel_id: channel_id.to_string(),
             resume_from_message_id: resume_from.unwrap_or("").to_string(),

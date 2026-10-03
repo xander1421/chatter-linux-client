@@ -6,7 +6,6 @@
 use std::sync::Arc;
 use std::time::Instant;
 
-use futures::StreamExt;
 use tokio::sync::broadcast;
 use tokio::sync::watch;
 
@@ -14,6 +13,7 @@ use crate::inbox::events::{FriendRequestInfo, InboxEvent};
 use crate::inbox::handlers::DomainEvent;
 use crate::proto::chat_v1::FriendStatus;
 use crate::network::grpc::client_pool::GrpcClientPool;
+use crate::network::streaming::heartbeat::{self, Next};
 use crate::proto::chat_v1::{friend_requests_filter, user_event};
 use crate::proto::UserPresence;
 use crate::domain::ids::UserId;
@@ -62,8 +62,10 @@ pub async fn spawn_user_events_stream(
             // Subscribe to user events stream
             let mut user_client = grpc_pool.user_client();
 
+            let mut connected_at = None;
             match user_client.stream_user_events(&user_id).await {
                 Ok(mut stream) => {
+                    connected_at = Some(Instant::now());
                     tracing::info!("Subscribed to user events stream");
 
                     // Friend requests and profile edits arrive only as pushes
@@ -93,9 +95,9 @@ pub async fn spawn_user_events_stream(
                                     return;
                                 }
                             }
-                            event = stream.next() => {
+                            event = heartbeat::next_or_silent(&mut stream, heartbeat::STREAM_SILENCE_LIMIT) => {
                                 match event {
-                                    Some(Ok(user_event)) => {
+                                    Next::Item(Ok(user_event)) => {
                                         handle_user_event(
                                             user_event,
                                             &grpc_pool,
@@ -105,12 +107,16 @@ pub async fn spawn_user_events_stream(
                                             domain_tx.as_ref(),
                                         ).await;
                                     }
-                                    Some(Err(e)) => {
+                                    Next::Item(Err(e)) => {
                                         tracing::warn!("Error receiving user event: {}", e);
                                         break; // Reconnect
                                     }
-                                    None => {
+                                    Next::Ended => {
                                         tracing::debug!("User events stream ended");
+                                        break; // Reconnect
+                                    }
+                                    Next::Silent => {
+                                        tracing::warn!("User events stream missed its heartbeats; reconnecting");
                                         break; // Reconnect
                                     }
                                 }
@@ -123,14 +129,22 @@ pub async fn spawn_user_events_stream(
                 }
             }
 
-            // Wait before reconnecting (unless shutting down)
+            // Wait before reconnecting (unless shutting down). A stream that had
+            // been healthy for a while reconnects at once: its loss is routine
+            // (server close, network change), and friend requests and presence
+            // pushed in the gap are only refetched once we are back.
+            let wait = if connected_at.is_some_and(|t: Instant| t.elapsed() >= heartbeat::HEALTHY_STREAM_AFTER) {
+                std::time::Duration::from_millis(250)
+            } else {
+                std::time::Duration::from_secs(5)
+            };
             tokio::select! {
                 _ = shutdown_rx.changed() => {
                     if *shutdown_rx.borrow() {
                         return;
                     }
                 }
-                _ = tokio::time::sleep(std::time::Duration::from_secs(5)) => {}
+                _ = tokio::time::sleep(wait) => {}
             }
         }
     })
@@ -177,6 +191,10 @@ async fn handle_user_event(
     domain_tx: Option<&broadcast::Sender<DomainEvent>>,
 ) {
     match event.event {
+        // The server's keepalive (also its first item once subscribed): not data.
+        Some(user_event::Event::Heartbeat(_)) => {
+            tracing::trace!("User events stream heartbeat");
+        }
         Some(user_event::Event::FriendStatusChanged(status)) => {
             tracing::debug!(
                 user_id = %status.user_id,
@@ -420,4 +438,35 @@ async fn refresh_friend_requests(
     // Emit event
     let _ = event_tx.send(InboxEvent::FriendRequestsUpdated { received, sent });
     tracing::debug!("Friend requests refreshed via stream event");
+}
+
+#[cfg(test)]
+mod heartbeat_tests {
+    use super::*;
+    use crate::proto::chat_v1::{StreamHeartbeat, UserEvent};
+
+    /// The server's keepalive must not touch state: no inbox event (which
+    /// would refetch friend requests every minute), no domain event.
+    #[tokio::test]
+    async fn a_heartbeat_changes_nothing() {
+        let db = crate::services::channel::membership_log::test_support::test_db();
+        let user_repo = Arc::new(UserRepository::new(db));
+        // Never reachable; a heartbeat must not make any request.
+        let pool = Arc::new(GrpcClientPool::new("http://127.0.0.1:1").unwrap());
+        let (event_tx, mut event_rx) = broadcast::channel(4);
+        let (domain_tx, mut domain_rx) = broadcast::channel(4);
+
+        handle_user_event(
+            UserEvent { timestamp: 1, event: Some(user_event::Event::Heartbeat(StreamHeartbeat {})) },
+            &pool,
+            &event_tx,
+            &user_repo,
+            None,
+            Some(&domain_tx),
+        )
+        .await;
+
+        assert!(event_rx.try_recv().is_err(), "a heartbeat produced an inbox event");
+        assert!(domain_rx.try_recv().is_err(), "a heartbeat produced a domain event");
+    }
 }

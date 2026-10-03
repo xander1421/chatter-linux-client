@@ -328,6 +328,10 @@ impl AIService {
     ///   "all integrations" mode: the server rejects an empty list, because it
     ///   used to mean every integration on the server, for every user
     ///   (INFRA-38).
+    ///
+    /// The server's heartbeats are filtered out here, so the caller sees only
+    /// events; one that holds the stream open should still treat a silence of
+    /// `network::streaming::heartbeat::STREAM_SILENCE_LIMIT` as a dead stream.
     pub async fn subscribe_events(
         &self,
         client: &mut IntegrationClient,
@@ -339,16 +343,8 @@ impl AIService {
         // Call server
         let stream = client.stream_integration_events(integration_ids).await?;
 
-        // Map stream items to extract event and convert errors
-        Ok(stream.map(|result| {
-            result
-                .map_err(AIError::Network)
-                .and_then(|response| {
-                    response
-                        .event
-                        .ok_or_else(|| AIError::ConfigurationError("empty event".to_string()))
-                })
-        }))
+        // Extract events, drop the server's keepalives, convert errors.
+        Ok(stream.filter_map(integration_event_of))
     }
 
     /// Map a provider id string to the proto enum. Unknown strings map to
@@ -411,9 +407,38 @@ impl AIService {
     }
 }
 
+/// One integration stream item: an event, nothing for the server's keepalive
+/// (it is also the first item, once subscribed), or an error.
+fn integration_event_of(
+    result: Result<crate::proto::chat_v1::StreamIntegrationEventsResponse, NetworkError>,
+) -> Option<Result<IntegrationEvent, AIError>> {
+    use crate::proto::chat_v1::stream_integration_events_response::Item;
+    match result {
+        Err(e) => Some(Err(AIError::Network(e))),
+        Ok(response) => match response.item {
+            Some(Item::Event(event)) => Some(Ok(event)),
+            Some(Item::Heartbeat(_)) => None,
+            None => Some(Err(AIError::ConfigurationError("empty event".to_string()))),
+        },
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_heartbeat_is_not_an_integration_event() {
+        use crate::proto::chat_v1::{
+            stream_integration_events_response::Item, StreamHeartbeat, StreamIntegrationEventsResponse,
+        };
+        let beat = StreamIntegrationEventsResponse { item: Some(Item::Heartbeat(StreamHeartbeat {})) };
+        assert!(integration_event_of(Ok(beat)).is_none());
+        let event = StreamIntegrationEventsResponse {
+            item: Some(Item::Event(IntegrationEvent { id: "e1".into(), ..Default::default() })),
+        };
+        assert!(matches!(integration_event_of(Ok(event)), Some(Ok(e)) if e.id == "e1"));
+    }
 
     #[test]
     fn test_ai_error_display() {

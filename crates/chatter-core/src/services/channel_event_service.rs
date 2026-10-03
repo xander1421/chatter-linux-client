@@ -21,7 +21,7 @@ use crate::events::EventBus;
 use crate::inbox::DomainEvent;
 use crate::error::NetworkError;
 use crate::services::channel::membership_log::{Applied, LogObserver, MembershipLog, MembershipNotice};
-use tokio_stream::StreamExt;
+use crate::network::streaming::heartbeat::{self, Next};
 
 #[derive(Debug, thiserror::Error)]
 pub enum ChannelEventError {
@@ -97,22 +97,33 @@ impl ChannelEventService {
     pub fn start_event_stream(self: Arc<Self>) -> tokio::task::JoinHandle<()> {
         tokio::spawn(async move {
             loop {
-                match self.run_stream_with_retry().await {
-                    Ok(()) => {
-                        tracing::info!("Channel event stream ended normally");
-                        break;
-                    }
-                    Err(e) => {
-                        tracing::warn!("Channel event stream error: {}. Reconnecting in 5s...", e);
-                        tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
-                    }
+                let mut connected_at = None;
+                let outcome = self.run_stream_with_retry(&mut connected_at).await;
+                // The server ending a subscription is not the end of it: it used
+                // to `break` here, leaving this client without channel events
+                // until restart. A stream that had been healthy reconnects at
+                // once; failures to (re)connect wait 5 s.
+                let healthy = connected_at
+                    .is_some_and(|t: std::time::Instant| t.elapsed() >= heartbeat::HEALTHY_STREAM_AFTER);
+                match outcome {
+                    Ok(()) => tracing::info!("Channel event stream ended; reconnecting"),
+                    Err(e) => tracing::warn!("Channel event stream error: {}; reconnecting", e),
                 }
+                let wait = if healthy {
+                    std::time::Duration::from_millis(250)
+                } else {
+                    std::time::Duration::from_secs(5)
+                };
+                tokio::time::sleep(wait).await;
             }
         })
     }
     
     /// Run the event stream with automatic retry on failure.
-    async fn run_stream_with_retry(&self) -> Result<(), ChannelEventError> {
+    async fn run_stream_with_retry(
+        &self,
+        connected_at: &mut Option<std::time::Instant>,
+    ) -> Result<(), ChannelEventError> {
         let mut channel_client = self.grpc_pool.channel_client();
         
         // Stream events for all channels
@@ -120,6 +131,7 @@ impl ChannelEventService {
             .stream_channel_events(None)
             .await?;
         
+        *connected_at = Some(std::time::Instant::now());
         tracing::info!("Channel event stream started");
 
         // Invitations reach an invitee only as a live push on this stream, so
@@ -131,21 +143,23 @@ impl ChannelEventService {
         // verify them now, in the background, ahead of their messages.
         self.catch_up_membership_logs();
 
-        while let Some(result) = stream.next().await {
-            match result {
-                Ok(event) => {
+        loop {
+            match heartbeat::next_or_silent(&mut stream, heartbeat::STREAM_SILENCE_LIMIT).await {
+                Next::Item(Ok(event)) => {
                     if let Some(event_data) = event.event {
                         self.handle_stream_event(event_data, &event.channel_id).await;
                     }
                 }
-                Err(e) => {
+                Next::Item(Err(e)) => {
                     tracing::error!("Channel event stream error: {}", e);
                     return Err(ChannelEventError::Stream(e.to_string()));
                 }
+                Next::Ended => return Ok(()),
+                Next::Silent => {
+                    return Err(ChannelEventError::Stream("missed its heartbeats".to_string()));
+                }
             }
         }
-        
-        Ok(())
     }
     
     /// `GetChannelChanges` for every server channel we are in.
@@ -206,7 +220,15 @@ impl ChannelEventService {
         channel_id: &str,
     ) {
         use channel_event::Event;
-        
+
+        // The server's keepalive (also its first item once subscribed). It
+        // carries no channel_id when subscribed to all channels, so it goes
+        // before the parse that would log it as invalid every minute.
+        if matches!(event, Event::Heartbeat(_)) {
+            tracing::trace!("Channel event stream heartbeat");
+            return;
+        }
+
         let channel_id = match channel_id.parse::<uuid::Uuid>() {
             Ok(uuid) => ChannelId::from(uuid),
             Err(e) => {
@@ -409,6 +431,9 @@ impl ChannelEventService {
                     message: error.message.clone(),
                 });
             }
+
+            // Returned above, before the channel_id parse.
+            Event::Heartbeat(_) => {}
         }
     }
 
@@ -1058,6 +1083,21 @@ mod tests {
         log.set_observer(Arc::downgrade(&(service.clone() as Arc<dyn LogObserver>)));
 
         (service, event_bus, channel_repo, log)
+    }
+
+    /// The keepalive changes nothing and says nothing, even with the empty
+    /// channel_id an all-channels subscription sends it with.
+    #[tokio::test]
+    async fn a_heartbeat_changes_nothing() {
+        let (service, bus, _) = setup();
+        let mut rx = bus.domain_sender().subscribe();
+        service
+            .handle_stream_event(
+                channel_event::Event::Heartbeat(crate::proto::chat_v1::StreamHeartbeat {}),
+                "",
+            )
+            .await;
+        assert!(rx.try_recv().is_err(), "a heartbeat produced a domain event");
     }
 
     /// INFRA-29 regression: `OperationFailed` is the saga-compensation signal.

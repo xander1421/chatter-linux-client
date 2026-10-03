@@ -37,12 +37,12 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use tokio_stream::StreamExt;
 
 use crate::domain::ids::{ChannelId, MessageId};
 use crate::events::EventBus;
 use crate::inbox::DomainEvent;
 use crate::network::grpc::client_pool::GrpcClientPool;
+use crate::network::streaming::heartbeat::{self, IsHeartbeat, Next};
 use crate::proto::chat_v1::{self, message_event::Event as MsgEventType};
 use crate::services::message::channel_inbound::ChannelInbound;
 use crate::services::message::MessageService;
@@ -51,10 +51,6 @@ use crate::storage::repositories::settings_repo::SettingsRepository;
 
 /// Settings key holding the last delivered `event_id` (a resume cursor).
 const CURSOR_KEY: &str = "stream:global_events:cursor";
-
-/// Sentinel `event_id` the server sends first to flush HTTP/2 headers.
-/// Carries no payload and must never be treated as data or as a cursor.
-const STREAM_READY_EVENT_ID: &str = "STREAM_READY";
 
 const INITIAL_BACKOFF: Duration = Duration::from_secs(1);
 const MAX_BACKOFF: Duration = Duration::from_secs(30);
@@ -139,7 +135,18 @@ impl ChannelStreamService {
             // actually run. See the `is_no_channels` arm for why it matters.
             let mut nudged = false;
             loop {
-                match self.run_once().await {
+                let mut connected_at = None;
+                let outcome = self.run_once(&mut connected_at).await;
+                // A stream that had been up for a while and then dropped (the
+                // server closed it, a network change, a missed heartbeat) is
+                // the ordinary case, not a failure streak: reconnect on the
+                // shortest backoff. Without this the ladder kept climbing across
+                // healthy streams, and every ~5 min server cut cost 30 s of
+                // silence (2026-10-03, "backoff_secs=30").
+                if connected_at.is_some_and(|t: std::time::Instant| t.elapsed() >= heartbeat::HEALTHY_STREAM_AFTER) {
+                    backoff = INITIAL_BACKOFF;
+                }
+                match outcome {
                     Ok(()) => {
                         tracing::info!("Channel message stream ended; reconnecting");
                         backoff = INITIAL_BACKOFF;
@@ -192,8 +199,9 @@ impl ChannelStreamService {
         })
     }
 
-    /// One connect → consume → disconnect cycle.
-    async fn run_once(&self) -> Result<(), crate::error::NetworkError> {
+    /// One connect → consume → disconnect cycle. `connected_at` is set once
+    /// the subscription is established.
+    async fn run_once(&self, connected_at: &mut Option<std::time::Instant>) -> Result<(), crate::error::NetworkError> {
         let cursor = self.cursor();
         let mut client = self.grpc_pool.message_client();
         // Empty channel_ids => the server subscribes us to every non-archived
@@ -216,6 +224,7 @@ impl ChannelStreamService {
             }
         };
 
+        *connected_at = Some(std::time::Instant::now());
         tracing::info!(
             resume_from = cursor.as_deref().unwrap_or("<none>"),
             "Channel message stream connected"
@@ -249,9 +258,13 @@ impl ChannelStreamService {
         tokio::pin!(stream);
         loop {
             tokio::select! {
-                item = stream.next() => match item {
-                    Some(result) => self.handle_event(result?).await?,
-                    None => return Ok(()),
+                item = heartbeat::next_or_silent(&mut stream, heartbeat::STREAM_SILENCE_LIMIT) => match item {
+                    Next::Item(result) => self.handle_event(result?).await?,
+                    Next::Ended => return Ok(()),
+                    Next::Silent => {
+                        tracing::warn!("Channel message stream missed its heartbeats; reconnecting");
+                        return Err(crate::error::NetworkError::Timeout);
+                    }
                 },
                 _ = self.resubscribe.notified() => {
                     tracing::info!("Channel membership changed; resubscribing global stream");
@@ -294,7 +307,7 @@ impl ChannelStreamService {
     }
 
     fn store_cursor(&self, event_id: &str) {
-        if event_id.is_empty() || event_id == STREAM_READY_EVENT_ID {
+        if event_id.is_empty() {
             return;
         }
         if let Err(e) = self.settings_repo.set(CURSOR_KEY, &event_id.to_string()) {
@@ -365,8 +378,10 @@ impl ChannelStreamService {
     /// so edits, deletions and reactions from other members were received and
     /// dropped on the floor. This match is exhaustive.
     async fn handle_event(&self, event: chat_v1::MessageEvent) -> Result<(), crate::error::NetworkError> {
-        if event.event_id == STREAM_READY_EVENT_ID {
-            tracing::debug!("Channel message stream ready");
+        // The server's keepalive (also its first item, once subscribed). Not
+        // data and never a cursor, so it goes before anything else.
+        if event.is_heartbeat() {
+            tracing::trace!("Channel message stream heartbeat");
             return Ok(());
         }
         // Before anything that reads channel_id: a resync covers several
@@ -407,7 +422,7 @@ impl ChannelStreamService {
                 self.handle_reaction(update, channel_id, true, event.timestamp);
             }
             // Handled above, before the channel_id parse.
-            Some(MsgEventType::ResyncRequired(_)) => {}
+            Some(MsgEventType::ResyncRequired(_)) | Some(MsgEventType::Heartbeat(_)) => {}
             None => {
                 tracing::warn!(
                     %channel_id,
@@ -600,6 +615,35 @@ mod subscribe_before_backfill {
              synced within MIN_CATCHUP_INTERVAL, so throttling it would skip precisely the \
              sync that closes the subscribe window (§103)."
         );
+    }
+}
+
+/// The heartbeat is the first thing `handle_event` looks at: it carries no
+/// event_id and no channel_id, so letting it past would store an empty cursor
+/// attempt and log every minute as an "unparseable channel_id" drop.
+#[cfg(test)]
+mod heartbeat_dispatch {
+    #[test]
+    fn a_heartbeat_returns_before_the_cursor_and_the_channel_parse() {
+        let src = include_str!("channel_stream.rs");
+        let body = src
+            .split_once("async fn handle_event")
+            .expect("handle_event still exists")
+            .1;
+        let body = body.split_once("\n    fn ").map(|(b, _)| b).unwrap_or(body);
+        let beat = body.find("event.is_heartbeat()").expect("handle_event must drop heartbeats");
+        let cursor = body.find("self.store_cursor(").expect("handle_event still stores cursors");
+        let parse = body.find("event.channel_id.parse").expect("handle_event still parses channel_id");
+        assert!(beat < cursor && beat < parse);
+    }
+
+    #[test]
+    fn a_heartbeat_is_never_mistaken_for_an_event() {
+        use crate::network::streaming::heartbeat::IsHeartbeat;
+        use crate::proto::chat_v1::{message_event::Event, MessageEvent, StreamHeartbeat};
+        let beat = MessageEvent { event: Some(Event::Heartbeat(StreamHeartbeat {})), ..Default::default() };
+        assert!(beat.is_heartbeat());
+        assert!(beat.event_id.is_empty(), "the server sends no cursor on a heartbeat");
     }
 }
 

@@ -192,11 +192,20 @@ impl ChannelService {
         let proto_members = channel_client.get_all_channel_members(&channel_id.to_string()).await?;
         let memberships = full_member_list(channel_id, &proto_members)?;
         let refresh = self.channel_repo.replace_memberships(channel_id, &memberships)?;
-        self.classify_roster_changes(channel_id, &refresh.added, &refresh.removed);
+        self.classify_roster_changes(channel_id, &refresh.added, &refresh.removed).await;
         Ok(proto_members.len())
     }
 
-    pub(super) fn classify_roster_changes(&self, channel_id: &ChannelId, added: &[Membership], removed: &[Membership]) {
+    pub(super) async fn classify_roster_changes(&self, channel_id: &ChannelId, added: &[Membership], removed: &[Membership]) {
+        // A legitimate joiner shows up in the roster a moment before their
+        // signed change reaches us. Fetch the signed log first, as Signal
+        // fetches group changes before trusting a roster, so only an add that
+        // is STILL unsigned afterwards is surfaced.
+        if !added.is_empty() {
+            if let Err(e) = self.membership_log.catch_up(channel_id).await {
+                tracing::debug!(%channel_id, error = %e, "Membership catch-up before classifying the roster failed");
+            }
+        }
         let events = added
             .iter()
             .map(|m| UnsignedEvent::Added { user_id: m.user_id.to_string() })
@@ -441,6 +450,7 @@ impl ChannelService {
             .await?;
 
         let mut memberships = Vec::with_capacity(response.members.len());
+        let mut added = Vec::new();
         for proto_member in &response.members {
             let membership = proto_to_domain_membership(channel_id, proto_member)?;
 
@@ -449,11 +459,18 @@ impl ChannelService {
                 .get_membership(channel_id, &membership.user_id)?
             {
                 Some(_) => self.channel_repo.update_membership(&membership)?,
-                None => self.channel_repo.insert_membership(&membership)?,
+                None => {
+                    self.channel_repo.insert_membership(&membership)?;
+                    added.push(membership.clone());
+                }
             }
 
             memberships.push(membership);
         }
+        // A row this page adds locally is an unsigned roster fact, as in a
+        // full sync: once it is stored here no later sync sees it as added,
+        // so classify it now or an unsigned add is never surfaced.
+        self.classify_roster_changes(channel_id, &added, &[]).await;
 
         Ok(memberships)
     }
@@ -473,7 +490,7 @@ impl ChannelService {
 
         let memberships = full_member_list(channel_id, &proto_members)?;
         let refresh = self.channel_repo.replace_memberships(channel_id, &memberships)?;
-        self.classify_roster_changes(channel_id, &refresh.added, &refresh.removed);
+        self.classify_roster_changes(channel_id, &refresh.added, &refresh.removed).await;
 
         Ok(memberships)
     }

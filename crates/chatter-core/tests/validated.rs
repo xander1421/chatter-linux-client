@@ -11918,3 +11918,665 @@ async fn v58_group_call_key_rotates_on_join_and_leave() {
         c.shutdown().await;
     }
 }
+
+// ============================================================================
+// V59–V62 — verifiable channel membership (Design B), live.
+//
+// Shared instruments:
+//   * `verified_of` — the client's VERIFIED membership state (what every key
+//     decision reads; `GroupStateGate`), never the server roster.
+//   * `server_group_ciphertexts` + `try_group_decrypt` — pull a sender-key
+//     ciphertext out of the server's `messages` table and try it against a
+//     client's own sender-key store. A kicked member that cannot decrypt is a
+//     statement about keys, not about the server's routing.
+//   * `redis_relay_channel_event` — publish a ChannelEvent exactly where the
+//     server publishes one (`user:{id}:channel_events` on redis_async_ops,
+//     `changes.go` publishChannelChange); the server's StreamChannelEvents
+//     relays it to the live client. That is "the server relays a change".
+// ============================================================================
+
+use chatter_core::services::channel::membership_log::MembershipNotice;
+use chatter_core::services::channel::verified_state::{MemberStatus, VerifiedChannel};
+
+fn verified_of(client: &Arc<ChatterClient>, gid: &ChannelId) -> Option<VerifiedChannel> {
+    client.channels().membership_log().load(gid).ok().flatten()
+}
+
+fn active_in(v: &VerifiedChannel, uid: &UserId) -> bool {
+    v.state.members.get(&uid.to_string()).is_some_and(|m| m.status == MemberStatus::Active)
+}
+
+/// Wait until `client`'s verified state for `gid` satisfies `pred`.
+async fn wait_verified<F: Fn(&VerifiedChannel) -> bool>(
+    client: &Arc<ChatterClient>,
+    gid: &ChannelId,
+    pred: F,
+) -> Option<VerifiedChannel> {
+    let deadline = Instant::now() + CONDITION_TIMEOUT;
+    loop {
+        let v = verified_of(client, gid);
+        if v.as_ref().is_some_and(&pred) {
+            return v;
+        }
+        if Instant::now() >= deadline {
+            return v;
+        }
+        tokio::time::sleep(POLL_INTERVAL).await;
+    }
+}
+
+/// `(server message id, GroupEncrypted bytes)` of every encrypted message
+/// `author` stored in channel `gid`, oldest first.
+fn server_group_ciphertexts(gid: &ChannelId, author: &UserId) -> Vec<(String, Vec<u8>)> {
+    psql(&format!(
+        "select id || '|' || encode(content, 'hex') from messages where channel_id = '{gid}' \
+         and author_id = '{author}' and content_type = 'ENCRYPTED' order by created_at, id"
+    ))
+    .lines()
+    .filter_map(|l| {
+        let (id, hexed) = l.trim().split_once('|')?;
+        Some((id.to_string(), hex::decode(hexed).ok()?))
+    })
+    .collect()
+}
+
+/// Wait until `author` has a stored encrypted message in `gid` that is not in
+/// `before`, and return the new ones.
+async fn wait_new_server_ciphertexts(
+    gid: &ChannelId,
+    author: &UserId,
+    before: &std::collections::HashSet<String>,
+) -> Vec<(String, Vec<u8>)> {
+    let deadline = Instant::now() + CONDITION_TIMEOUT;
+    loop {
+        let new: Vec<_> = server_group_ciphertexts(gid, author)
+            .into_iter()
+            .filter(|(id, _)| !before.contains(id))
+            .collect();
+        if !new.is_empty() || Instant::now() >= deadline {
+            return new;
+        }
+        tokio::time::sleep(POLL_INTERVAL).await;
+    }
+}
+
+/// Try `content` (a server-stored GroupEncrypted) against `client`'s own
+/// sender-key store, as sent by `sender`'s device 1.
+async fn try_group_decrypt(client: &Arc<ChatterClient>, sender: &UserId, content: &[u8]) -> Result<Vec<u8>, String> {
+    use prost::Message as _;
+    let ge = chatter_core::proto::content_v1::GroupEncrypted::decode(content)
+        .map_err(|e| format!("not a GroupEncrypted: {e}"))?;
+    client.signal().decrypt_from_group(sender, 1, &ge).await.map_err(|e| format!("{e}"))
+}
+
+/// PUBLISH a protojson ChannelEvent on `user:{user}:channel_events`, the
+/// server's own relay channel. Returns how many subscribers received it.
+fn redis_relay_channel_event(user: &UserId, event_json: &str) -> i64 {
+    let path = std::env::temp_dir().join(format!("v62-event-{}.json", uuid::Uuid::new_v4()));
+    std::fs::write(&path, event_json).expect("write event json");
+    let out = sh(&format!(
+        "docker compose exec -T -e REDISCLI_AUTH=\"$(grep -m1 '^REDIS_PASSWORD=' .env | cut -d= -f2-)\" \
+         redis_async_ops redis-cli -x PUBLISH user:{user}:channel_events < '{}'",
+        path.display()
+    ));
+    let _ = std::fs::remove_file(&path);
+    out.trim().parse().unwrap_or_else(|_| panic!("redis PUBLISH failed: {out}"))
+}
+
+/// Send `text` into channel `gid` and require it to have LEFT this device: a
+/// refused channel send comes back `Ok` with a stored "failed" bubble
+/// (`MessageService::send`), which a decrypt-wait downstream would only report
+/// as a 90 s timeout.
+async fn send_delivered(client: &Arc<ChatterClient>, gid: &ChannelId, text: &str, who: &str) {
+    let r = client
+        .send_text(ActiveConversation::Channel(gid.clone()), text)
+        .await
+        .unwrap_or_else(|e| panic!("{who}'s send errored: {e}"));
+    if let Some(m) = r.message {
+        assert_ne!(m.delivery_status, "failed",
+            "{who}'s channel send was stored as FAILED ({:?}) — not delivered", m.failure_reason);
+    }
+}
+
+fn unique_channel_name(tag: &str) -> String {
+    format!(
+        "{tag}-{}",
+        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis() % 1_000_000
+    )
+}
+
+async fn fresh_user(tag: &str, display: &str) -> (tempfile::TempDir, Arc<ChatterClient>, UserId) {
+    let dir = tempfile::tempdir().unwrap();
+    common::headless(dir.path());
+    let client = build_client(dir.path());
+    let uid = register_and_start(&client, &unique_user(tag), display).await;
+    (dir, client, uid)
+}
+
+/// v59 — A MEMBER THE SERVER ALONE ASSERTS GETS NO SENDER KEY.
+///
+/// A owns a private channel with B (signed invite, signed accept). The server
+/// — here the test, with the schema-owner role — INSERTs a third registered
+/// account M into `channel_members` as ADMIN. No `channel_changes` row:
+/// nobody signed it. Then, live:
+///   1. A's member list (the roster sync the member screen does) lists M,
+///      flagged `unverified`, and A's client raises
+///      `ChannelMembershipNotice::UnverifiedMember{M}`.
+///   2. A's next send is forced to distribute a FRESH sender key (rotation
+///      flag set): B decrypts it — so an SKDM went out on that send — while
+///      M's device queue (M offline, nothing drains it) gains nothing, M
+///      holds no sender key from A, and M cannot decrypt the server-stored
+///      ciphertext.
+///   3. M sends A a SenderKeyRequest: nothing comes back. Positive control on
+///      the same instrument: B's SenderKeyRequest, sent after M's, gets an
+///      SKDM queued to B's device.
+///
+/// MUTATION (expected, NOT run — shared checkout): make
+/// `GroupStateGate::for_distribution` read `channel_repo.list_members`
+/// instead of the verified state → M's queue gains the SKDM in step 2; drop
+/// the `may_hold_sender_key` check in `answer_sender_key_request` → step 3.
+#[tokio::test]
+async fn v59_server_injected_member_gets_no_skdm() {
+    use chatter_core::domain::channel::ChannelType;
+    skip_if_no_server!();
+    no_keyring_prompts();
+    println!("\n=== V59: a server-injected channel member gets no sender key ===\n");
+
+    let (_dir_a, client_a, uid_a) = fresh_user("v59a", "V59 Alice").await;
+    let (dir_b, client_b, uid_b) = fresh_user("v59b", "V59 Bob").await;
+    let (dir_m, client_m, uid_m) = fresh_user("v59m", "V59 Mallory").await;
+
+    let group = common::create_group_with_members(
+        &client_a,
+        &unique_channel_name("v59-ghost"),
+        ChannelType::Private,
+        None,
+        Some("V59 ghost member"),
+        &[(&client_b, &uid_b)],
+    )
+    .await;
+    let gid = group.id.clone();
+    client_b.resubscribe_channel_messages();
+
+    // Both hold the same verified state (signed genesis + invite + accept).
+    let va = wait_verified(&client_a, &gid, |v| active_in(v, &uid_b)).await.expect("A has no verified state");
+    let vb = wait_verified(&client_b, &gid, |v| v.state.revision == va.state.revision).await
+        .expect("B has no verified state");
+    assert!(active_in(&va, &uid_b), "PRECONDITION FAILED: B is not ACTIVE in A's verified state");
+    assert_eq!(va.state_hash, vb.state_hash, "PRECONDITION FAILED: A and B verified different states");
+    println!("  A and B hold the same verified state (revision {})", va.state.revision);
+
+    // ---- positive control: both directions decrypt ---------------------------
+    let m0 = unique_marker();
+    send_delivered(&client_a, &gid, &m0, "A").await;
+    assert!(wait_for_channel_text(&client_b, &gid, &m0).await, "POSITIVE CONTROL FAILED: B never decrypted A's m0");
+    let b0 = unique_marker();
+    send_delivered(&client_b, &gid, &b0, "B").await;
+    assert!(wait_for_channel_text(&client_a, &gid, &b0).await, "POSITIVE CONTROL FAILED: A never decrypted B's b0");
+    println!("  positive control: A->B and B->A both decrypt");
+
+    // ---- M offline: its device queue only grows from here ------------------
+    client_m.shutdown().await;
+    drop(client_m);
+    let off_m = connect_without_inbox(dir_m.path(), "M").await;
+    let base_m = quiesced_row_ids(&uid_m).await;
+
+    // ---- THE INJECTION: the server's routing table, nobody's signature -------
+    let mut events_a = client_a.subscribe_events();
+    let ins = psql(&format!(
+        "insert into channel_members (channel_id, user_id, role, joined_at, invitation_status) \
+         values ('{gid}', '{uid_m}', 'ADMIN', now(), 'ACCEPTED') returning user_id"
+    ));
+    assert!(ins.contains(&uid_m.to_string()), "ghost INSERT failed: {ins}");
+    // The server reads members through a Redis cache of the channel row
+    // (`repository/redis` ListMembers -> GetChannel); a server-side add
+    // refreshes it, so drop it as the server would.
+    sh(&format!(
+        "docker compose exec -T -e REDISCLI_AUTH=\"$(grep -m1 '^REDIS_PASSWORD=' .env | cut -d= -f2-)\" \
+         redis redis-cli DEL channel:{gid} channel:member:{gid}:{uid_m}"
+    ));
+    let signed_rows = psql(&format!(
+        "select count(*) from channel_changes where channel_id = '{gid}'"
+    ));
+    println!("  INSERTed M ({uid_m}) into channel_members as ADMIN; channel_changes rows unchanged ({signed_rows})");
+
+    // POSITIVE CONTROL: the server really does assert M now.
+    let server_members: Vec<UserId> = client_a
+        .get_channel_members(&gid, 100, 0)
+        .await
+        .expect("GetChannelMembers")
+        .into_iter()
+        .map(|m| m.user_id)
+        .collect();
+    assert!(server_members.contains(&uid_m),
+        "POSITIVE CONTROL FAILED: the server does not list the injected M — the test injected nothing");
+
+    // ---- 1. A surfaces M as unverified --------------------------------------
+    let rows = client_a.list_members_with_profiles(&gid, 100, 0).await.expect("A's member list");
+    let row_m = rows.iter().find(|r| r.membership.user_id == uid_m).expect("A's member list does not show M at all");
+    let row_b = rows.iter().find(|r| r.membership.user_id == uid_b).expect("A's member list does not show B");
+    assert!(row_m.unverified, "GHOST NOT FLAGGED: A's member list shows the server-injected M as a verified member");
+    assert!(!row_b.unverified, "B (signed in) is flagged unverified — the marker is not discriminating");
+    let m_str = uid_m.to_string();
+    let g = gid.clone();
+    let notice = wait_for_event(&mut events_a, EVENT_TIMEOUT, move |e| {
+        matches!(e, DomainEvent::ChannelMembershipNotice { channel_id, notice: MembershipNotice::UnverifiedMember { user_id } }
+            if *channel_id == g && *user_id == m_str)
+    })
+    .await;
+    assert!(notice.is_some(), "A never raised ChannelMembershipNotice::UnverifiedMember for M");
+    let va_now = verified_of(&client_a, &gid).unwrap();
+    assert!(!va_now.state.members.contains_key(&uid_m.to_string()), "M reached A's VERIFIED state");
+    assert!(!client_a.channel_verification(&gid).blocks_sending(), "the ghost blocked A's sending");
+    println!("  1: A lists M flagged unverified and raised UnverifiedMember; M is not in A's verified state");
+
+    // ---- 2. A's next send distributes a fresh key: B yes, M no ---------------
+    client_a.signal().mark_channel_for_rotation(&gid).expect("mark rotation");
+    let before_ct: std::collections::HashSet<String> =
+        server_group_ciphertexts(&gid, &uid_a).into_iter().map(|(id, _)| id).collect();
+    let m1 = unique_marker();
+    send_delivered(&client_a, &gid, &m1, "A").await;
+    assert!(wait_for_channel_text(&client_b, &gid, &m1).await,
+        "POSITIVE CONTROL FAILED: B never decrypted m1, sent on a freshly rotated key — the SKDM this \
+         send distributes never reached B, so 'M got none' would prove nothing");
+    let m1_ct = wait_new_server_ciphertexts(&gid, &uid_a, &before_ct).await;
+    assert!(!m1_ct.is_empty(), "m1 is not in the server's messages table");
+    tokio::time::sleep(Duration::from_secs(5)).await;
+    let new_m: Vec<_> = envelope_rows(&uid_m).into_iter().filter(|f| !base_m.contains(&f[0])).collect();
+    assert!(new_m.is_empty(),
+        "GHOST GOT KEY MATERIAL: A's rotated send queued {} envelope(s) for the server-injected M: {new_m:?}",
+        new_m.len());
+    let a_addr = format!("{uid_a}:1");
+    assert!(matches!(off_m.signal().key_store().load_sender_key(&a_addr, &gid.to_string()), Ok(None)),
+        "M holds a sender key from A");
+    for (id, ct) in &m1_ct {
+        let r = try_group_decrypt(&off_m, &uid_a, ct).await;
+        assert!(r.is_err(), "M DECRYPTED A's message {id} from the server's store");
+    }
+    println!("  2: B decrypted m1 on A's rotated key; M's queue is unchanged, M has no key and cannot decrypt m1");
+
+    // ---- 3. M's SenderKeyRequest goes unanswered; B's is answered ------------
+    off_m.messages().send_sender_key_request(&gid, &uid_a).await.expect("M's SenderKeyRequest was not delivered");
+    client_b.shutdown().await;
+    drop(client_b);
+    let off_b = connect_without_inbox(dir_b.path(), "B").await;
+    let base_b = quiesced_row_ids(&uid_b).await;
+    off_b.messages().send_sender_key_request(&gid, &uid_a).await.expect("B's SenderKeyRequest was not delivered");
+    let rows_b = wait_for_device_envelope(&uid_b, &base_b, 1).await;
+    assert!(rows_b.iter().any(|f| f[1] == "1"),
+        "POSITIVE CONTROL FAILED: A did not answer verified member B's SenderKeyRequest within \
+         {CONDITION_TIMEOUT:?} — 'M got no answer' would prove nothing");
+    tokio::time::sleep(Duration::from_secs(5)).await;
+    let new_m: Vec<_> = envelope_rows(&uid_m).into_iter().filter(|f| !base_m.contains(&f[0])).collect();
+    assert!(new_m.is_empty(), "GHOST'S SENDER-KEY REQUEST ANSWERED: {} envelope(s) queued for M: {new_m:?}", new_m.len());
+    assert!(matches!(off_m.signal().key_store().load_sender_key(&a_addr, &gid.to_string()), Ok(None)),
+        "M holds a sender key from A after asking");
+    println!("  3: B's SenderKeyRequest got an SKDM queued ({} row(s)); M's got nothing", rows_b.len());
+
+    println!("\n  V59 PASS — the server-injected member is shown unverified, gets no SKDM on a rotated send, \
+              and its sender-key request is ignored.\n");
+    client_a.shutdown().await;
+}
+
+/// v60 — SIGNED LIFECYCLE: INVITE → ACCEPT → KICK, AND THE KICK ROTATES.
+///
+/// A, B, C in a private channel by signed invite + signed accept. C is taken
+/// offline once it holds A's sender key, so the harness — not C's stream —
+/// decides which ciphertexts C's key store is tried on.
+///   * POSITIVE CONTROL: m0 (pre-kick), pulled from the server's store,
+///     decrypts on C's own key store to the exact marker.
+///   * A kicks C (signed RemoveMember{KICKED}). B's verified state drops C.
+///   * m1 (post-kick): B decrypts it live; C's key store fails on the
+///     server-stored ciphertext, and no SKDM was queued for C.
+///
+/// MUTATION (expected, NOT run): drop `mark_for_rotation` in
+/// `MembershipLog::commit` and the `rotate_sender_key` in the kick path →
+/// m1 reuses A's old chain and C decrypts it.
+#[tokio::test]
+async fn v60_signed_kick_rotates_the_sender_key() {
+    use chatter_core::domain::channel::ChannelType;
+    skip_if_no_server!();
+    no_keyring_prompts();
+    println!("\n=== V60: invite -> accept -> kick; the kicked member cannot read the next message ===\n");
+
+    let (_dir_a, client_a, uid_a) = fresh_user("v60a", "V60 Alice").await;
+    let (_dir_b, client_b, uid_b) = fresh_user("v60b", "V60 Bob").await;
+    let (dir_c, client_c, uid_c) = fresh_user("v60c", "V60 Carol").await;
+
+    let group = common::create_group_with_members(
+        &client_a,
+        &unique_channel_name("v60-kick"),
+        ChannelType::Private,
+        None,
+        Some("V60 signed lifecycle"),
+        &[(&client_b, &uid_b), (&client_c, &uid_c)],
+    )
+    .await;
+    let gid = group.id.clone();
+    client_b.resubscribe_channel_messages();
+    let va = wait_verified(&client_a, &gid, |v| active_in(v, &uid_b) && active_in(v, &uid_c)).await.unwrap();
+    assert!(active_in(&va, &uid_b) && active_in(&va, &uid_c),
+        "PRECONDITION FAILED: invite+accept did not make B and C verified members on A");
+    println!("  invite + accept: B and C are ACTIVE in A's verified state (revision {})", va.state.revision);
+
+    assert!(wait_for_sender_key(&client_c, &uid_a, &gid).await, "PRECONDITION FAILED: C never got A's sender key");
+    client_c.shutdown().await;
+    drop(client_c);
+    let off_c = connect_without_inbox(dir_c.path(), "C").await;
+
+    // ---- positive control: C's key store reads a pre-kick ciphertext -------
+    let before: std::collections::HashSet<String> =
+        server_group_ciphertexts(&gid, &uid_a).into_iter().map(|(id, _)| id).collect();
+    let m0 = unique_marker();
+    send_delivered(&client_a, &gid, &m0, "A").await;
+    assert!(wait_for_channel_text(&client_b, &gid, &m0).await, "POSITIVE CONTROL FAILED: B never decrypted m0");
+    let m0_ct = wait_new_server_ciphertexts(&gid, &uid_a, &before).await;
+    let mut c_read_m0 = false;
+    for (_, ct) in &m0_ct {
+        if let Ok(pt) = try_group_decrypt(&off_c, &uid_a, ct).await {
+            c_read_m0 |= contains_bytes(&pt, m0.as_bytes());
+        }
+    }
+    assert!(c_read_m0,
+        "POSITIVE CONTROL FAILED: C's own key store could not decrypt the pre-kick m0 from the server's \
+         store — the post-kick 'C cannot decrypt' would prove nothing");
+    println!("  positive control: C's key store decrypts pre-kick m0 (server ciphertext) to the exact marker");
+
+    // ---- the signed kick ----------------------------------------------------
+    let base_c = quiesced_row_ids(&uid_c).await;
+    client_a.kick_user(&gid, &uid_c, None).await.expect("A failed to kick C");
+    let va = wait_verified(&client_a, &gid, |v| !active_in(v, &uid_c)).await.unwrap();
+    assert!(!active_in(&va, &uid_c), "C is still ACTIVE in A's verified state after the kick");
+    let vb = wait_verified(&client_b, &gid, |v| !active_in(v, &uid_c)).await.unwrap();
+    assert!(!active_in(&vb, &uid_c), "B never verified the kick (C still ACTIVE in B's verified state)");
+    assert_eq!(va.state_hash, vb.state_hash, "A and B verified different post-kick states");
+    println!("  kick verified on A and B (revision {}, same state hash)", va.state.revision);
+
+    // ---- m1: B reads it, C cannot -------------------------------------------
+    let before: std::collections::HashSet<String> =
+        server_group_ciphertexts(&gid, &uid_a).into_iter().map(|(id, _)| id).collect();
+    let m1 = unique_marker();
+    send_delivered(&client_a, &gid, &m1, "A").await;
+    assert!(wait_for_channel_text(&client_b, &gid, &m1).await,
+        "REMAINING MEMBER LOCKED OUT: B never decrypted A's first post-kick message");
+    let m1_ct = wait_new_server_ciphertexts(&gid, &uid_a, &before).await;
+    assert!(!m1_ct.is_empty(), "m1 is not in the server's messages table");
+    for (id, ct) in &m1_ct {
+        match try_group_decrypt(&off_c, &uid_a, ct).await {
+            Ok(pt) => panic!(
+                "KICKED MEMBER READS POST-KICK TRAFFIC: C's key store decrypted {id} ({} bytes, marker present: {})",
+                pt.len(), contains_bytes(&pt, m1.as_bytes())),
+            Err(e) => println!("  C on m1 ({id}): {e}"),
+        }
+    }
+    tokio::time::sleep(Duration::from_secs(3)).await;
+    let new_c: Vec<_> = envelope_rows(&uid_c).into_iter().filter(|f| !base_c.contains(&f[0])).collect();
+    assert!(new_c.is_empty(), "A queued {} envelope(s) for the kicked C after the kick: {new_c:?}", new_c.len());
+    println!("  m1: B decrypted it; C's key store cannot, and nothing was queued for C");
+
+    println!("\n  V60 PASS — after a verified kick the kicked member cannot decrypt the next message; the \
+              remaining member can.\n");
+    client_a.shutdown().await;
+    client_b.shutdown().await;
+}
+
+/// v61 — JOIN BY INVITE LINK, AND A REVOKED LINK IS REFUSED.
+///
+/// A creates a link (`needs_approval = false`); N joins with nothing but the
+/// URL; messages flow both ways. A revokes it; P's join with the same URL
+/// fails and the server never lists P. POSITIVE CONTROL: P joins at once with
+/// a second, live link — so the refusal is the revocation, not P.
+///
+/// MUTATION (expected, NOT run): make the verifier ignore `RevokeInvite`
+/// (`rules.rs`) on both sides → P's join with the revoked URL succeeds.
+#[tokio::test]
+async fn v61_invite_link_join_and_revocation() {
+    use chatter_core::domain::channel::ChannelType;
+    skip_if_no_server!();
+    no_keyring_prompts();
+    println!("\n=== V61: join by invite link; a revoked link is refused ===\n");
+
+    let (_dir_a, client_a, uid_a) = fresh_user("v61a", "V61 Alice").await;
+    let (_dir_n, client_n, uid_n) = fresh_user("v61n", "V61 Nina").await;
+    let (_dir_p, client_p, uid_p) = fresh_user("v61p", "V61 Pete").await;
+
+    let group = common::create_group_with_members(
+        &client_a,
+        &unique_channel_name("v61-link"),
+        ChannelType::Private,
+        None,
+        Some("V61 invite link"),
+        &[],
+    )
+    .await;
+    let gid = group.id.clone();
+
+    let url = client_a.create_channel_invite_link(&gid, false).await.expect("A failed to create a link");
+    assert!(url.starts_with("chatter://join/") && url.contains('#'), "unexpected link shape: {url}");
+    assert!(ChatterClient::is_channel_join_link(&url), "the client does not recognise its own link");
+    println!("  A created a link (chatter://join/<channel>#<key>)");
+
+    let joined = client_n.join_channel_via_link(&url).await.expect("N failed to join through the link");
+    assert_eq!(joined.id, gid, "N joined some other channel");
+    let vn = wait_verified(&client_n, &gid, |v| active_in(v, &uid_n)).await;
+    assert!(vn.as_ref().is_some_and(|v| active_in(v, &uid_n)), "N is not ACTIVE in its own verified state");
+    let va = wait_verified(&client_a, &gid, |v| active_in(v, &uid_n)).await;
+    assert!(va.as_ref().is_some_and(|v| active_in(v, &uid_n)), "A never verified N's link join");
+    println!("  N joined with the URL alone (needs_approval=false): ACTIVE on both sides");
+    // Precondition, as `create_group_with_members` waits for it: the join's
+    // SenderKeyRequest has been answered, so A's first send does not also
+    // have to open A's first session with N. In the 12-thread suite that
+    // session waits on the process-wide KT pin lock (`kt_anchor.rs` PIN_LOCK)
+    // behind every other test's KT check and the send hits its 30 s timeout.
+    if !wait_for_sender_key(&client_n, &uid_a, &gid).await {
+        eprintln!("  note: N holds no sender key from A yet; the first message will race the SKDM");
+    }
+
+    let m0 = unique_marker();
+    send_delivered(&client_a, &gid, &m0, "A").await;
+    assert!(wait_for_channel_text(&client_n, &gid, &m0).await, "N never decrypted A's message after joining by link");
+    let n0 = unique_marker();
+    send_delivered(&client_n, &gid, &n0, "N").await;
+    assert!(wait_for_channel_text(&client_a, &gid, &n0).await, "A never decrypted N's message");
+    println!("  messages flow A->N and N->A");
+
+    // ---- revoke --------------------------------------------------------------
+    let view = client_a.channel_access_view(&gid).await;
+    assert!(view.can_manage_invites, "the owner may not manage invites?");
+    assert_eq!(view.invite_links.len(), 1, "expected exactly the one link, got {:?}", view.invite_links);
+    let link_id = view.invite_links[0].id.clone();
+    client_a.revoke_channel_invite_link(&gid, &link_id).await.expect("A failed to revoke the link");
+    let view = client_a.channel_access_view(&gid).await;
+    assert!(view.invite_links.iter().all(|l| l.id != link_id), "the revoked link is still listed");
+    println!("  A revoked the link");
+
+    let refused = client_p.join_channel_via_link(&url).await;
+    assert!(refused.is_err(), "REVOKED LINK ADMITTED P: {:?}", refused.map(|c| c.id));
+    println!("  P with the revoked URL: refused ({})", refused.unwrap_err());
+    let p_rows = psql(&format!(
+        "select count(*) from channel_members where channel_id = '{gid}' and user_id = '{uid_p}'"
+    ));
+    assert_eq!(p_rows.trim(), "0", "the server has a channel_members row for P after a refused join");
+    let va = verified_of(&client_a, &gid).unwrap();
+    assert!(!va.state.members.contains_key(&uid_p.to_string()), "P is in A's verified state");
+
+    // POSITIVE CONTROL: the same P joins with a live link.
+    let url2 = client_a.create_channel_invite_link(&gid, false).await.expect("A failed to create a second link");
+    client_p.join_channel_via_link(&url2).await.expect(
+        "POSITIVE CONTROL FAILED: P cannot join with a LIVE link either — the refusal above is not about revocation");
+    let va = wait_verified(&client_a, &gid, |v| active_in(v, &uid_p)).await;
+    assert!(va.as_ref().is_some_and(|v| active_in(v, &uid_p)), "A never verified P's join through the live link");
+    println!("  positive control: P joins at once with a second, live link");
+
+    println!("\n  V61 PASS — a link admits a new member without approval and messages flow; a revoked link \
+              is refused.\n");
+    let _ = uid_a;
+    for c in [&client_a, &client_n, &client_p] {
+        c.shutdown().await;
+    }
+}
+
+/// v62 — AN UNVERIFIABLE CHANGE SEND-BLOCKS; A GENUINE ONE CLEARS IT.
+///
+/// Server half (raw RPC): a signed SetDisappearing with ONE signature bit
+/// flipped is refused by SubmitChannelChange; the unmodified change is then
+/// accepted at the next revision (positive control: same bytes, same caller).
+///
+/// Client half (live relay): the server's relay channel carries to B a change
+/// at revision N+1 "by A" whose signature is not A's. B marks the channel
+/// VerificationFailed, raises the notice, does not apply it, and refuses to
+/// send. A genuine signed change (A invites C) then reaches B: B verifies it,
+/// raises `Verified`, and B's next message decrypts on A.
+///
+/// MUTATION (expected, NOT run): skip the signature check in
+/// `verify::check_change` → the forged change applies (B's revision moves,
+/// disappearing becomes 3600 s) and nothing is blocked.
+#[tokio::test]
+async fn v62_unverifiable_change_send_blocks_until_a_genuine_one() {
+    use base64::Engine as _;
+    use chatter_core::domain::channel::ChannelType;
+    use chatter_core::proto::chat_v1::{self as pb, channel_action::Action};
+    use chatter_core::services::channel::verified_state::rules;
+    use tokio_stream::StreamExt as _;
+    skip_if_no_server!();
+    no_keyring_prompts();
+    println!("\n=== V62: an unverifiable change send-blocks; a genuine one clears it ===\n");
+
+    let disappearing = |s| pb::ChannelAction { action: Some(Action::SetDisappearing(pb::SetDisappearing { seconds: s })) };
+
+    // ---- server half: raw SubmitChannelChange ------------------------------
+    let pool = common::create_test_pool().await.expect("pool");
+    let owner = common::setup_authenticated_test(&pool).await.expect("raw owner");
+    let mut cc = chatter_core::network::grpc::ChannelClient::new(pool.channel(), pool.auth_clone());
+    let (_, genesis) = common::membership::genesis(&owner, false);
+    let stream = cc
+        .create_channel(&unique_channel_name("v62-raw"), pb::ChannelType::ChannelPrivate, None, Some("V62 raw"), None, Some(genesis))
+        .await
+        .expect("raw create_channel");
+    tokio::pin!(stream);
+    let mut raw_id = String::new();
+    while let Some(ev) = stream.next().await {
+        match ev.expect("create stream").event {
+            Some(pb::channel_event::Event::ChannelCreated(c)) => raw_id = c.id,
+            Some(pb::channel_event::Event::OperationFailed(f)) => panic!("raw create failed: {:?}", f.error),
+            _ => {}
+        }
+    }
+    assert!(!raw_id.is_empty(), "raw channel was not created");
+    let state = common::membership::current_state(&mut cc, &raw_id).await;
+    let good = common::membership::signed(&owner, &raw_id, Some(&state), vec![disappearing(3600)]);
+    let mut bad = good.clone();
+    bad.signature[10] ^= 0x01;
+    let refused = cc.submit_channel_change(bad).await;
+    assert!(refused.is_err(), "SERVER ACCEPTED A FORGED SIGNATURE: revision {:?}", refused.ok());
+    println!("  server refused a one-bit-forged signature: {}", refused.unwrap_err());
+    let rev = cc.submit_channel_change(good).await.expect(
+        "POSITIVE CONTROL FAILED: the server refused the genuine change too — the refusal is not about the signature");
+    assert_eq!(rev, state.revision + 1, "genuine change landed at an unexpected revision");
+    println!("  positive control: the same change, correctly signed, accepted at revision {rev}");
+
+    // ---- client half: relay a forged change to B ------------------------------
+    let (_dir_a, client_a, uid_a) = fresh_user("v62a", "V62 Alice").await;
+    let (_dir_b, client_b, uid_b) = fresh_user("v62b", "V62 Bob").await;
+    let (_dir_c, client_c, uid_c) = fresh_user("v62c", "V62 Carol").await;
+    let group = common::create_group_with_members(
+        &client_a,
+        &unique_channel_name("v62-forged"),
+        ChannelType::Private,
+        None,
+        Some("V62 forged change"),
+        &[(&client_b, &uid_b)],
+    )
+    .await;
+    let gid = group.id.clone();
+    client_b.resubscribe_channel_messages();
+    let vb = wait_verified(&client_b, &gid, |v| active_in(v, &uid_b)).await.expect("B has no verified state");
+    assert_eq!(client_b.channel_verification(&gid), chatter_core::client::membership::ChannelVerification::Ok,
+        "PRECONDITION FAILED: B's channel is not verified before the forgery");
+    let rev_before = vb.state.revision;
+
+    // A change B would accept in every respect but the signature.
+    let key = vb.state.members[&uid_a.to_string()].identity_key;
+    let ts = chrono::Utc::now().timestamp_nanos_opt().unwrap() as u64;
+    let actions = vec![disappearing(3600)];
+    let new = rules::preview(Some(&vb.state), &actions, &gid.to_string(), rev_before + 1, &uid_a.to_string(), key, ts)
+        .expect("the forged action is one A may take");
+    let signed_bytes = prost::Message::encode_to_vec(&pb::channel_change::Actions {
+        channel_id: gid.to_string(),
+        revision: rev_before + 1,
+        prev_state_hash: vb.state.hash().to_vec(),
+        author_user_id: uid_a.to_string(),
+        author_identity_key: key.to_vec(),
+        timestamp: ts,
+        actions,
+        new_state_hash: new.hash().to_vec(),
+    });
+    let mut sig = [0u8; 64];
+    rand::RngCore::fill_bytes(&mut rand::rng(), &mut sig);
+    let b64 = base64::engine::general_purpose::STANDARD;
+    let event = format!(
+        r#"{{"timestamp":"{}","channelId":"{gid}","channelChange":{{"actions":"{}","signature":"{}"}}}}"#,
+        ts,
+        b64.encode(&signed_bytes),
+        b64.encode(sig)
+    );
+
+    let mut events_b = client_b.subscribe_events();
+    let receivers = redis_relay_channel_event(&uid_b, &event);
+    assert!(receivers >= 1, "nobody is subscribed to user:{uid_b}:channel_events — B's stream is not up");
+    let g = gid.clone();
+    let failed = wait_for_event(&mut events_b, EVENT_TIMEOUT, move |e| {
+        matches!(e, DomainEvent::ChannelMembershipNotice { channel_id, notice: MembershipNotice::VerificationFailed { .. } }
+            if *channel_id == g)
+    })
+    .await;
+    let reason = match failed {
+        Some(DomainEvent::ChannelMembershipNotice { notice: MembershipNotice::VerificationFailed { reason }, .. }) => reason,
+        _ => panic!("B never raised VerificationFailed for the relayed forged change"),
+    };
+    assert!(reason.contains("signature"), "B failed the change for another reason: {reason}");
+    assert_eq!(client_b.channel_verification(&gid), chatter_core::client::membership::ChannelVerification::VerificationFailed);
+    let vb = verified_of(&client_b, &gid).unwrap();
+    assert_eq!(vb.state.revision, rev_before, "B APPLIED the forged change");
+    assert_eq!(vb.state.disappearing_seconds, 0, "B applied the forged timer");
+    // A refused channel send is stored as a FAILED bubble and returned Ok
+    // (`MessageService::send`, core.rs), so assert on the stored outcome and
+    // on the server: nothing reached `messages`.
+    let blocked = client_b
+        .send_text(ActiveConversation::Channel(gid.clone()), &unique_marker())
+        .await
+        .expect("send_text errored before the gate")
+        .message
+        .expect("no stored message for the refused send");
+    assert_eq!(blocked.delivery_status, "failed", "B SENT while its membership failed verification");
+    assert_eq!(blocked.failure_reason.as_deref(), Some("Membership not verified"),
+        "B's send failed for another reason: {:?}", blocked.failure_reason);
+    tokio::time::sleep(Duration::from_secs(2)).await;
+    assert!(server_group_ciphertexts(&gid, &uid_b).is_empty(), "the server stored a message from send-blocked B");
+    println!("  forged change relayed to B: VerificationFailed ({reason}); not applied; B's send stored as \
+              failed (\"{}\"), nothing reached the server", blocked.failure_reason.as_deref().unwrap_or(""));
+
+    // ---- a genuine change clears it ------------------------------------------
+    client_a.invite_user_to_channel(&gid, &uid_c, None).await.expect("A failed to invite C");
+    let g = gid.clone();
+    let cleared = wait_for_event(&mut events_b, Duration::from_secs(60), move |e| {
+        matches!(e, DomainEvent::ChannelMembershipNotice { channel_id, notice: MembershipNotice::Verified } if *channel_id == g)
+    })
+    .await;
+    assert!(cleared.is_some(), "B never raised Verified after A's genuine signed invite");
+    assert_eq!(client_b.channel_verification(&gid), chatter_core::client::membership::ChannelVerification::Ok);
+    let vb = verified_of(&client_b, &gid).unwrap();
+    assert_eq!(vb.state.revision, rev_before + 1, "B is not at the genuine change's revision");
+    assert!(vb.state.members.get(&uid_c.to_string()).is_some_and(|m| m.status == MemberStatus::Invited),
+        "B's state does not carry the genuine invite of C");
+    let b1 = unique_marker();
+    send_delivered(&client_b, &gid, &b1, "B").await;
+    assert!(wait_for_channel_text(&client_a, &gid, &b1).await, "A never decrypted B's post-recovery message");
+    println!("  genuine invite of C verified on B: Verified notice, status Ok, B's next message decrypts on A");
+
+    println!("\n  V62 PASS — the server refuses a forged signature; a relayed unverifiable change send-blocks \
+              the client until a genuine change verifies.\n");
+    for c in [&client_a, &client_b, &client_c] {
+        c.shutdown().await;
+    }
+}
