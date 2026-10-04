@@ -404,8 +404,10 @@ impl LinkDeviceService {
     /// The device holds nothing that could check a password offline: OPAQUE
     /// needs the server's OPRF evaluation, and keeping a local
     /// password-derived fingerprint would put an offline-crackable value on
-    /// the device. Each attempt is one guess on the account's server-side
-    /// lockout, like a login. `Ok(false)` for a wrong password; network
+    /// the device. Each attempt is one guess on this device's own server-side
+    /// password-proof budget (not the account's login guess ceiling, so
+    /// approving a link keeps working while logins are capped; server
+    /// OPEN-ITEMS §133). `Ok(false)` for a wrong password; network
     /// failures are errors, never a silent "no".
     pub async fn verify_password(&self, password: &str) -> Result<bool, LinkDeviceError> {
         let channel = self.grpc_pool.try_channel().ok_or(LinkDeviceError::Network(

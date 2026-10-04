@@ -69,6 +69,23 @@ pub enum AuthError {
     /// Caller-provided input violated a constraint (e.g. avatar too large).
     #[error("invalid input: {0}")]
     InvalidInput(String),
+
+    /// The account's login guess ceiling is reached (server OPEN-ITEMS §133):
+    /// no password login until it lapses. The ways in that do not use it are
+    /// a recovery code and linking from a device that is already signed in.
+    #[error("login guess limit reached")]
+    LoginGuessLimit,
+}
+
+/// The server's stable token for [`AuthError::LoginGuessLimit`]
+/// (auth.proto `LoginStartResponse`), carried in a FAILED_PRECONDITION.
+const LOGIN_GUESS_LIMIT_TOKEN: &str = "login_guess_limit:";
+
+fn login_start_error(e: NetworkError) -> AuthError {
+    match &e {
+        NetworkError::InvalidRequest(m) if m.contains(LOGIN_GUESS_LIMIT_TOKEN) => AuthError::LoginGuessLimit,
+        _ => AuthError::Network(e),
+    }
 }
 
 impl From<OpaqueError> for AuthError {
@@ -113,14 +130,29 @@ const LOGIN_POW_DEADLINE: std::time::Duration = std::time::Duration::from_secs(1
 ///
 /// [`registration_pow::solve_async`]: crate::crypto::registration_pow::solve_async
 /// [`registration_pow::login_seed`]: crate::crypto::registration_pow::login_seed
+///
+/// `login_grant` is a recovery's grant (`UseRecoveryCodeFinish`): it skips the
+/// price and the account's guess ceiling. A refused grant (expired, already
+/// used) falls back to an ordinary attempt. The ceiling itself surfaces as
+/// [`AuthError::LoginGuessLimit`].
 pub async fn login_start_paying_pow(
     auth_client: &mut AuthClient,
     identifier: &str,
     ke1: &[u8],
+    login_grant: Option<&[u8]>,
     on_verifying: &(dyn Fn() + Send + Sync),
 ) -> Result<crate::proto::chat_v1::LoginStartResponse, AuthError> {
     use crate::crypto::registration_pow;
-    let first = auth_client.login_start(identifier, ke1, None).await?;
+    if let Some(grant) = login_grant {
+        match auth_client.login_start(identifier, ke1, None, grant).await {
+            Ok(r) => return Ok(r),
+            Err(NetworkError::PermissionDenied) => {
+                tracing::warn!("recovery login grant refused; logging in without it");
+            }
+            Err(e) => return Err(login_start_error(e)),
+        }
+    }
+    let first = auth_client.login_start(identifier, ke1, None, &[]).await.map_err(login_start_error)?;
     let Some(challenge) = first.pow_challenge else {
         return Ok(first);
     };
@@ -136,8 +168,9 @@ pub async fn login_start_paying_pow(
         "login proof of work solved"
     );
     let second = auth_client
-        .login_start(identifier, ke1, Some((&challenge.nonce, solution)))
-        .await?;
+        .login_start(identifier, ke1, Some((&challenge.nonce, solution)), &[])
+        .await
+        .map_err(login_start_error)?;
     if second.pow_challenge.is_some() {
         return Err(AuthError::LoginFailed(
             "the server asked for a second proof of work; try again".to_string(),
@@ -153,6 +186,10 @@ impl AuthError {
     pub fn user_message(&self) -> String {
         match self {
             Self::InvalidCredentials => "Incorrect username or password.".to_string(),
+            Self::LoginGuessLimit => "Too many password attempts on this account, so password sign-in \
+                is paused for now. Sign in with a recovery code, or link this device from one that is \
+                already signed in."
+                .to_string(),
             Self::LoginFailed(m) | Self::RegistrationFailed(m) | Self::InvalidInput(m) => {
                 let mut c = m.chars();
                 c.next()
@@ -202,6 +239,10 @@ pub struct AuthService {
     #[allow(dead_code)] // Reserved for future key management operations
     key_store: Arc<KeyStore>,
     pub(crate) auth_interceptor: AuthInterceptor,
+    /// `(login identifier, grant)` from the last recovery, spent by the next
+    /// login for that identifier (server OPEN-ITEMS §133). Memory only: it
+    /// lives 10 minutes on the server.
+    recovery_login_grant: parking_lot::Mutex<Option<(String, Vec<u8>)>>,
 }
 
 impl AuthService {
@@ -223,6 +264,7 @@ impl AuthService {
             settings_repo,
             key_store,
             auth_interceptor,
+            recovery_login_grant: parking_lot::Mutex::new(None),
         }
     }
 
@@ -519,8 +561,24 @@ impl AuthService {
         // opening KE2, before anything else is sent. KE2 may first cost a
         // proof of work when the account has recent failed attempts.
         let opaque_start = opaque::login_start(password)?;
-        let started =
-            login_start_paying_pow(auth_client, &identifier, &opaque_start.ke1, on_verifying).await?;
+        let grant = {
+            let mut g = self.recovery_login_grant.lock();
+            match g.take() {
+                Some((id, grant)) if id == identifier => Some(grant),
+                other => {
+                    *g = other;
+                    None
+                }
+            }
+        };
+        let started = login_start_paying_pow(
+            auth_client,
+            &identifier,
+            &opaque_start.ke1,
+            grant.as_deref(),
+            on_verifying,
+        )
+        .await?;
         let opaque_done = opaque::login_finish_async(opaque_start, password, started.ke2).await?;
         let response = auth_client
             .login_finish(
@@ -1332,7 +1390,14 @@ impl AuthService {
 
         registration_lock.zeroize();
 
-        result
+        // The grant lets the login with the new password through even while
+        // someone keeps the account's login guess ceiling full.
+        let finished = result?;
+        if !finished.login_grant.is_empty() {
+            *self.recovery_login_grant.lock() =
+                Some((login_identifier(username), finished.login_grant));
+        }
+        Ok(finished.remaining_codes)
     }
 
     /// Regenerate the caller's recovery codes.

@@ -33,7 +33,7 @@ use crate::proto::chat_v1::{
     RenameDeviceRequest, RequestSenderCertificateRequest, RequestSenderCertificateResponse,
     RepublishIdentityKeyRequest, RepublishIdentityKeyResponse,
     RevokeDeviceRequest, SignalPreKeyBundle,
-    UploadPreKeyBundleRequest, UseRecoveryCodeFinishRequest, UseRecoveryCodeStartRequest,
+    UploadPreKeyBundleRequest, UseRecoveryCodeFinishRequest, UseRecoveryCodeFinishResponse, UseRecoveryCodeStartRequest,
     UseRecoveryCodeStartResponse,
 };
 // NOTE: ServerTrustRootResponse removed - trust root is hardcoded in config.rs per Signal's security model
@@ -50,7 +50,7 @@ use crate::proto::chat_v1::{
 /// pool.connect().await?;
 ///
 /// let mut auth = AuthClient::new(pool.channel(), pool.auth_clone());
-/// let started = auth.login_start(&identifier, &ke1, None).await?;
+/// let started = auth.login_start(&identifier, &ke1, None, &[]).await?;
 /// ```
 pub struct AuthClient {
     inner: AuthServiceClient<InterceptedService<GrpcTransport, AuthInterceptor>>,
@@ -118,11 +118,13 @@ impl AuthClient {
     /// OPAQUE login, first round trip: KE1 for the login identifier. The
     /// answer is a KE2, or a `pow_challenge` to repeat the call with: `pow`
     /// is `(challenge nonce, solution)` for that repeat, `None` first.
+    /// `login_grant` is a recovery's grant (empty for none).
     pub async fn login_start(
         &mut self,
         identifier: &str,
         ke1: &[u8],
         pow: Option<(&[u8], u64)>,
+        login_grant: &[u8],
     ) -> Result<LoginStartResponse, NetworkError> {
         let (pow_nonce, pow_solution) = pow.map_or((Vec::new(), 0), |(n, s)| (n.to_vec(), s));
         let request = LoginStartRequest {
@@ -130,6 +132,7 @@ impl AuthClient {
             ke1: ke1.to_vec(),
             pow_nonce,
             pow_solution,
+            login_grant: login_grant.to_vec(),
         };
         self.inner
             .login_start(request)
@@ -884,7 +887,7 @@ impl AuthClient {
         registration_record: &[u8],
         new_svr_public_key: &[u8],
         new_registration_lock: &[u8],
-    ) -> Result<i32, NetworkError> {
+    ) -> Result<UseRecoveryCodeFinishResponse, NetworkError> {
         let request = UseRecoveryCodeFinishRequest {
             recovery_id: recovery_id.to_string(),
             registration_record: registration_record.to_vec(),
@@ -898,7 +901,7 @@ impl AuthClient {
             .await
             .map(|r| r.into_inner())
             .map_err(|s| NetworkError::from_status(&s))?;
-        Ok(response.remaining_codes)
+        Ok(response)
     }
 
     /// Regenerate recovery codes for the authenticated user.

@@ -388,7 +388,7 @@ async fn test_login_nonexistent_user_is_indistinguishable() {
 
     let start = chatter_core::crypto::opaque::login_start("any password").unwrap();
     let identifier = chatter_core::crypto::auth_crypto::login_identifier(&unique_username());
-    let started = assert_ok(auth_client.login_start(&identifier, &start.ke1, None).await);
+    let started = assert_ok(auth_client.login_start(&identifier, &start.ke1, None, &[]).await);
     assert_eq!(started.ke2.len(), 320, "fake KE2 has the real KE2's size");
     assert!(matches!(
         chatter_core::crypto::opaque::login_finish_async(start, "any password", started.ke2).await,
@@ -428,7 +428,7 @@ async fn test_login_priced_by_proof_of_work_not_locked() {
     let mut challenge = None;
     for _ in 0..10 {
         let ke1 = opaque::login_start("wrong guess").unwrap().ke1;
-        let r = assert_ok(auth_client.login_start(&identifier, &ke1, None).await);
+        let r = assert_ok(auth_client.login_start(&identifier, &ke1, None, &[]).await);
         if let Some(c) = r.pow_challenge {
             assert!(r.ke2.is_empty() && r.login_id.is_empty(), "a challenge carries no KE2");
             challenge = Some(c);
@@ -452,7 +452,7 @@ async fn test_login_priced_by_proof_of_work_not_locked() {
         })
         .unwrap();
     let ke1 = opaque::login_start("wrong guess").unwrap().ke1;
-    let refused = auth_client.login_start(&identifier, &ke1, Some((&challenge.nonce, reg))).await;
+    let refused = auth_client.login_start(&identifier, &ke1, Some((&challenge.nonce, reg)), &[]).await;
     assert!(
         matches!(&refused, Err(NetworkError::PermissionDenied)),
         "sign-up-domain solution must be refused: {refused:?}"
@@ -461,7 +461,7 @@ async fn test_login_priced_by_proof_of_work_not_locked() {
     // The owner: solved transparently, then a normal login.
     let paid = AtomicU32::new(0);
     let start = opaque::login_start(&user.password).unwrap();
-    let started = login_start_paying_pow(&mut auth_client, &identifier, &start.ke1, &|| {
+    let started = login_start_paying_pow(&mut auth_client, &identifier, &start.ke1, None, &|| {
         paid.fetch_add(1, Ordering::Relaxed);
     })
     .await
@@ -478,8 +478,96 @@ async fn test_login_priced_by_proof_of_work_not_locked() {
 
     // A verified login wipes the count: the next attempt is free again.
     let ke1 = opaque::login_start(&user.password).unwrap().ke1;
-    let r = assert_ok(auth_client.login_start(&identifier, &ke1, None).await);
+    let r = assert_ok(auth_client.login_start(&identifier, &ke1, None, &[]).await);
     assert!(r.pow_challenge.is_none());
+}
+
+/// The login guess ceiling (server OPEN-ITEMS §133): paid guesses are
+/// hard-capped per account and the client gets `AuthError::LoginGuessLimit`
+/// with text pointing at the ways in. Those ways in work while it is full: a
+/// signed-in device still proves the password, and a recovery code needs no
+/// password and returns a grant that gets the new password through a ceiling
+/// someone burnt again right after.
+#[tokio::test]
+async fn test_login_guess_ceiling_and_its_bypasses() {
+    use chatter_core::crypto::opaque;
+    use chatter_core::services::auth_service::{login_start_paying_pow, AuthError};
+    skip_if_no_server!();
+
+    // A signed-in device with fresh recovery codes.
+    let device_pool = assert_ok(create_test_pool().await);
+    let user = assert_ok(setup_authenticated_test(&device_pool).await);
+    let mut device = AuthClient::new(device_pool.channel(), device_pool.auth_clone());
+    let prove = |pw: String| {
+        let mut device = AuthClient::new(device_pool.channel(), device_pool.auth_clone());
+        async move {
+            let start = opaque::login_start(&pw).unwrap();
+            let opened = device.password_proof_start(&start.ke1).await?;
+            let done = opaque::login_finish_async(start, &pw, opened.ke2).await.unwrap();
+            Ok::<_, NetworkError>(chatter_core::proto::chat_v1::PasswordProof {
+                proof_id: opened.proof_id,
+                ke3: done.ke3,
+            })
+        }
+    };
+    let codes = assert_ok(device.regenerate_recovery_codes(assert_ok(prove(user.password.clone()).await)).await);
+
+    // A stranger burns the account's guesses, paying for each.
+    let pool = assert_ok(create_test_pool().await);
+    let mut stranger = AuthClient::new(pool.channel(), pool.auth_clone());
+    let identifier = chatter_core::crypto::auth_crypto::login_identifier(&user.username);
+    let burn = || {
+        let mut stranger = AuthClient::new(pool.channel(), pool.auth_clone());
+        let identifier = identifier.clone();
+        async move {
+            for _ in 0..30 {
+                let ke1 = opaque::login_start("wrong guess").unwrap().ke1;
+                match login_start_paying_pow(&mut stranger, &identifier, &ke1, None, &|| {}).await {
+                    Ok(_) => continue,
+                    Err(e) => return e,
+                }
+            }
+            panic!("30 paid guesses and no ceiling");
+        }
+    };
+    let err = burn().await;
+    assert!(matches!(err, AuthError::LoginGuessLimit), "{err:?}");
+    let text = err.user_message();
+    assert!(text.contains("recovery code") && text.contains("link"), "{text}");
+
+    // The owner's password, too, gets no KE2 now...
+    let ke1 = opaque::login_start(&user.password).unwrap().ke1;
+    let refused = login_start_paying_pow(&mut stranger, &identifier, &ke1, None, &|| {}).await;
+    assert!(matches!(refused, Err(AuthError::LoginGuessLimit)), "{refused:?}");
+    // ...but the signed-in device still proves it (per-device budget).
+    assert_ok(device.verify_password(assert_ok(prove(user.password.clone()).await)).await);
+
+    // Recovery: no password, not gated, returns a grant.
+    let new_pw = "a brand new passphrase 77";
+    let reg = opaque::registration_start(new_pw).unwrap();
+    let started = assert_ok(stranger.use_recovery_code_start(&codes[0], &reg.request).await);
+    let record = opaque::registration_finish_async(reg, new_pw, started.registration_response)
+        .await
+        .unwrap();
+    let finished = assert_ok(
+        stranger
+            .use_recovery_code_finish(&started.recovery_id, &record, &random_svr_public_key(), &[7u8; 32])
+            .await,
+    );
+    assert_eq!(finished.login_grant.len(), 32);
+
+    // Burnt again straight after; the grant still gets the owner in.
+    assert!(matches!(burn().await, AuthError::LoginGuessLimit));
+    let start = opaque::login_start(new_pw).unwrap();
+    let started = login_start_paying_pow(&mut stranger, &identifier, &start.ke1, Some(&finished.login_grant), &|| {})
+        .await
+        .expect("the recovery grant skips the ceiling");
+    let done = opaque::login_finish_async(start, new_pw, started.ke2).await.expect("new password opens KE2");
+    assert_ok(
+        stranger
+            .login_finish(&started.login_id, &done.ke3, "d1", &random_svr_public_key(), &random_device_auth_token(), None)
+            .await,
+    );
 }
 
 /// A LoginFinish is single-use: replaying the same login_id + KE3 fails.
@@ -493,7 +581,7 @@ async fn test_login_finish_replay_rejected() {
 
     let start = chatter_core::crypto::opaque::login_start(&user.password).unwrap();
     let identifier = chatter_core::crypto::auth_crypto::login_identifier(&user.username);
-    let started = assert_ok(auth_client.login_start(&identifier, &start.ke1, None).await);
+    let started = assert_ok(auth_client.login_start(&identifier, &start.ke1, None, &[]).await);
     let done = chatter_core::crypto::opaque::login_finish_async(start, &user.password, started.ke2)
         .await
         .expect("right password opens KE2");

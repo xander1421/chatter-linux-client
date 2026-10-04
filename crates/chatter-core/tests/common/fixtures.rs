@@ -133,6 +133,7 @@ pub async fn opaque_login(
         auth_client,
         &identifier,
         &start.ke1,
+        None,
         &|| {},
     )
     .await
