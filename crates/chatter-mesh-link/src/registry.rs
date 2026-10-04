@@ -300,15 +300,16 @@ pub enum RebindOutcome {
     Refused(RebindRefusal),
 }
 
+#[cfg(test)]
 impl RebindOutcome {
-    pub fn rebound(&self) -> Option<&Rebind> {
+    fn rebound(&self) -> Option<&Rebind> {
         match self {
             Self::Rebound(r) => Some(r),
             Self::Refused(_) => None,
         }
     }
 
-    pub fn refusal(&self) -> Option<&RebindRefusal> {
+    fn refusal(&self) -> Option<&RebindRefusal> {
         match self {
             Self::Rebound(_) => None,
             Self::Refused(r) => Some(r),
@@ -336,7 +337,7 @@ impl RebindOutcome {
 pub struct LinkStateStore {
     links: BTreeMap<LinkId, LinkState>,
     /// Peer → the outbound link directed sends should prefer. Mirrors
-    /// `peerToPeripheralUUID`; see [`LinkStateStore::preferred_link`].
+    /// `peerToPeripheralUUID`; see [`LinkStateStore::preferred_links`].
     preferred: BTreeMap<PeerId, LinkId>,
     /// Link → when it was last rebound. Mirrors `BLEService.lastLinkRebindAt`.
     last_rebind_ms: BTreeMap<LinkId, u64>,
@@ -373,9 +374,6 @@ impl LinkStateStore {
         self.links.get(link)
     }
 
-    pub fn role(&self, link: &LinkId) -> Option<LinkRole> {
-        self.links.get(link).map(|s| s.role)
-    }
 
     /// Every live link, in a stable order.
     pub fn links(&self) -> impl Iterator<Item = (&LinkId, &LinkState)> {
@@ -463,17 +461,6 @@ impl LinkStateStore {
         out
     }
 
-    /// The outbound link a peer's directed traffic should use when it holds more
-    /// than one.
-    ///
-    /// Only outbound ([`LinkRole::Central`]) links are candidates, matching
-    /// `preferredPeripheralBindings`: inbound links are the peer's to consolidate,
-    /// not ours. Its purpose is to keep duplicate-link collapse deterministic —
-    /// without a single agreed choice, fanout can pick a different link per packet
-    /// and deliver every message several times.
-    pub fn preferred_link(&self, peer: &PeerId) -> Option<&LinkId> {
-        self.preferred.get(peer)
-    }
 
     /// The whole preferred map, for the fanout selector.
     pub fn preferred_links(&self) -> &BTreeMap<PeerId, LinkId> {
@@ -509,18 +496,6 @@ impl LinkStateStore {
         }
     }
 
-    /// Removes a link's binding without removing the link.
-    ///
-    /// For an identity that announced a leave, or a link whose owner turned out
-    /// to be wrong. The link stays live and unowned.
-    pub fn unbind(&mut self, link: &LinkId) -> Option<PeerId> {
-        let previous = self.links.get_mut(link).and_then(|s| {
-            s.noise_authenticated_owner = None;
-            s.peer.take()
-        })?;
-        self.repair_preferred(&previous, link);
-        Some(previous)
-    }
 
     /// Moves a bound link to a new identity, applying every containment check.
     ///
@@ -848,9 +823,6 @@ impl PeerRegistry {
         self.peers.is_empty()
     }
 
-    pub fn peer_ids(&self) -> Vec<PeerId> {
-        self.peers.keys().cloned().collect()
-    }
 
     pub fn records(&self) -> impl Iterator<Item = &PeerRecord> {
         self.peers.values()
@@ -874,15 +846,6 @@ impl PeerRegistry {
             .collect()
     }
 
-    /// The 8-byte routing forms of every connected peer, for topology TLVs.
-    /// Peers with no routable form are skipped, as in Swift's `compactMap`.
-    pub fn connected_routing_ids(&self) -> Vec<[u8; 8]> {
-        self.peers
-            .values()
-            .filter(|p| p.connected)
-            .filter_map(|p| p.peer.to_routing_bytes())
-            .collect()
-    }
 
     /// Lookups that a caller may reach with a full Noise key go through
     /// [`PeerId::to_short`], matching Swift's `peers[peerID.toShort()]`.
@@ -892,29 +855,6 @@ impl PeerRegistry {
             .is_some_and(|p| p.connected)
     }
 
-    pub fn capabilities(&self, peer: &PeerId) -> PeerCapabilities {
-        self.peers
-            .get(&peer.to_short())
-            .map(|p| p.capabilities)
-            .unwrap_or_default()
-    }
-
-    /// A rendezvous cell advertised by any bridge-capable peer, letting a
-    /// location-less device join the island's rendezvous.
-    pub fn advertised_bridge_geohash(&self) -> Option<&str> {
-        self.peers
-            .values()
-            .filter(|p| p.capabilities.contains(PeerCapabilities::BRIDGE))
-            .find_map(|p| p.bridge_geohash.as_deref())
-    }
-
-    pub fn peers_advertising(&self, mask: u64) -> Vec<PeerId> {
-        self.peers
-            .values()
-            .filter(|p| p.capabilities.contains(mask))
-            .map(|p| p.peer.clone())
-            .collect()
-    }
 
     /// Whether we can still plausibly route to this peer.
     ///
@@ -1049,24 +989,6 @@ impl PeerRegistry {
         Ok(())
     }
 
-    /// Flips a known peer to connected. False when it is unknown or already
-    /// connected — i.e. false means "nothing changed", so callers can skip the
-    /// republish.
-    pub fn mark_connected(&mut self, peer: &PeerId) -> bool {
-        match self.peers.get_mut(peer) {
-            Some(record) if !record.connected => {
-                record.connected = true;
-                true
-            }
-            _ => false,
-        }
-    }
-
-    pub fn mark_disconnected(&mut self, peer: &PeerId) {
-        if let Some(record) = self.peers.get_mut(peer) {
-            record.connected = false;
-        }
-    }
 
     pub fn update_last_seen(&mut self, peer: &PeerId, now_unix_millis: u64) {
         if let Some(record) = self.peers.get_mut(peer) {
@@ -1199,40 +1121,6 @@ pub struct IngressRecord {
     pub recorded_at_ms: u64,
 }
 
-/// How a packet's sender should be read, once the link it arrived on is taken
-/// into account. Ported from `BLEIngressPacketContext`.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct IngressPacketContext {
-    /// Who handed us this packet — the link's owner when it has one, otherwise
-    /// the claimed sender. This is the last hop for relay bookkeeping.
-    pub received_from: PeerId,
-    /// Whose key the payload should be validated against.
-    pub validation_peer: PeerId,
-}
-
-/// Why a packet was dropped at the link boundary.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum IngressRejection {
-    /// Our own packet came back to us. Normal in a flood; dropped silently.
-    SelfLoopback { packet_type: u8 },
-    /// The packet claims a sender the link does not belong to, in a case where
-    /// the claim is not allowed to differ. See
-    /// [`IngressRegistry::packet_context`].
-    DirectSenderMismatch { bound: PeerId, claimed: PeerId },
-}
-
-impl core::fmt::Display for IngressRejection {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        match self {
-            Self::SelfLoopback { packet_type } => {
-                write!(f, "self-loopback packet of type {packet_type}")
-            }
-            Self::DirectSenderMismatch { bound, claimed } => {
-                write!(f, "link is bound to {bound} but packet claims {claimed}")
-            }
-        }
-    }
-}
 
 /// Which link each recently seen packet arrived on. Ported from
 /// `BLEIngressLinkRegistry`.
@@ -1330,105 +1218,6 @@ impl IngressRegistry {
         self.by_message
             .retain(|_, r| now_unix_millis.saturating_sub(r.recorded_at_ms) <= lifetime_ms);
     }
-
-    /// Links this packet must not be sent back out on.
-    ///
-    /// The union of the ingress link itself and every link bound to the peer that
-    /// handed it to us. The second half is what makes split-horizon correct when a
-    /// peer holds several links: sending the packet back on its *other* link is
-    /// the same wasted round trip, just harder to see.
-    ///
-    /// Empty when the packet is not remembered — an ingress record older than its
-    /// lifetime stops suppressing echoes, which is the intended trade: the window
-    /// covers forwarding, and after that a re-arrival is genuinely new.
-    pub fn split_horizon_links(
-        &self,
-        packet: &BitchatPacket,
-        links: &LinkStateStore,
-    ) -> BTreeSet<LinkId> {
-        let Some(record) = self.record(packet) else {
-            return BTreeSet::new();
-        };
-        let mut excluded = links.links_to(&record.peer);
-        if links.contains(&record.link) {
-            excluded.insert(record.link.clone());
-        }
-        excluded
-    }
-
-    /// Decides who a packet arriving on a link should be attributed to, or that
-    /// it must be dropped.
-    ///
-    /// Ported from `BLEIngressLinkRegistry.packetContext`. Three rules:
-    ///
-    /// 1. **Self-loopback.** A packet claiming to be from us is our own flood
-    ///    coming back, and dropped — except a self-authored sync response, which
-    ///    is us asking for our own message back and must survive.
-    /// 2. **Sender mismatch on a bound link.** When the claimed sender is not the
-    ///    link's owner, `REQUEST_SYNC` is rejected outright: it is never relayed,
-    ///    so on a bound link the claimed sender *must* be the link peer — and it
-    ///    elicits a full store replay addressed to whoever the sender claims to
-    ///    be, which is a spoofed-sender amplifier if allowed through.
-    /// 3. **Direct announce on a bound link.** Attributed to the claimed sender
-    ///    rather than rejected, because it is either a spoof or a legitimate
-    ///    peer-ID rotation on a connection that outlived the old ID. Letting it
-    ///    through costs nothing: announces are self-authenticating, and only
-    ///    [`LinkStateStore::rebind_after_verified_direct`] can act on it.
-    ///
-    /// Everything else is attributed to the link's owner when it has one, since
-    /// the owner is the last hop regardless of whose message it carries.
-    pub fn packet_context(
-        packet: &BitchatPacket,
-        claimed_sender: &PeerId,
-        bound_peer: Option<&PeerId>,
-        local_peer: &PeerId,
-        direct_announce_ttl: u8,
-    ) -> Result<IngressPacketContext, IngressRejection> {
-        if claimed_sender == local_peer && !is_self_authored_sync_response(packet) {
-            return Err(IngressRejection::SelfLoopback {
-                packet_type: packet.msg_type,
-            });
-        }
-
-        if let Some(bound) = bound_peer {
-            if bound != claimed_sender {
-                if requires_direct_sender_binding(packet) {
-                    return Err(IngressRejection::DirectSenderMismatch {
-                        bound: bound.clone(),
-                        claimed: claimed_sender.clone(),
-                    });
-                }
-                if is_direct_announce(packet, direct_announce_ttl) {
-                    return Ok(IngressPacketContext {
-                        received_from: claimed_sender.clone(),
-                        validation_peer: claimed_sender.clone(),
-                    });
-                }
-            }
-        }
-
-        let received_from = bound_peer.unwrap_or(claimed_sender).clone();
-        let validation_peer = if packet.is_rsr {
-            received_from.clone()
-        } else {
-            claimed_sender.clone()
-        };
-        Ok(IngressPacketContext {
-            received_from,
-            validation_peer,
-        })
-    }
-}
-
-/// `REQUEST_SYNC` is link-local and never relayed, so its claimed sender has to
-/// be the link's owner.
-fn requires_direct_sender_binding(packet: &BitchatPacket) -> bool {
-    packet.message_type() == Some(MessageType::RequestSync)
-}
-
-/// Our own message coming back inside a sync response we asked for.
-fn is_self_authored_sync_response(packet: &BitchatPacket) -> bool {
-    packet.is_rsr && packet.ttl == 0
 }
 
 #[cfg(test)]
@@ -1577,14 +1366,14 @@ mod tests {
         store.link_up(link("in"), LinkRole::Peripheral);
 
         store.bind_if_unbound(&link("out1"), &peer(0xAA));
-        assert_eq!(store.preferred_link(&peer(0xAA)), Some(&link("out1")));
+        assert_eq!(store.preferred_links().get(&peer(0xAA)), Some(&link("out1")));
         store.bind_if_unbound(&link("out2"), &peer(0xAA));
-        assert_eq!(store.preferred_link(&peer(0xAA)), Some(&link("out2")));
+        assert_eq!(store.preferred_links().get(&peer(0xAA)), Some(&link("out2")));
 
         // Inbound links are the peer's to consolidate; they never become the
         // preferred outbound target.
         store.bind_if_unbound(&link("in"), &peer(0xBB));
-        assert_eq!(store.preferred_link(&peer(0xBB)), None);
+        assert_eq!(store.preferred_links().get(&peer(0xBB)), None);
     }
 
     #[test]
@@ -1595,12 +1384,12 @@ mod tests {
             store.bind_if_unbound(&link(id), &peer(0xAA));
         }
         store.set_writable(&link("s2"), true);
-        assert_eq!(store.preferred_link(&peer(0xAA)), Some(&link("preferred")));
+        assert_eq!(store.preferred_links().get(&peer(0xAA)), Some(&link("preferred")));
 
         assert_eq!(store.link_down(&link("preferred")), Some(peer(0xAA)));
         // s2 is writable, s1 is not: repairing onto s1 would strand directed
         // sends until its characteristic came back.
-        assert_eq!(store.preferred_link(&peer(0xAA)), Some(&link("s2")));
+        assert_eq!(store.preferred_links().get(&peer(0xAA)), Some(&link("s2")));
     }
 
     #[test]
@@ -1610,17 +1399,17 @@ mod tests {
         store.bind_if_unbound(&link("dup"), &peer(0xAA));
         store.link_up(link("main"), LinkRole::Central);
         store.bind_if_unbound(&link("main"), &peer(0xAA));
-        assert_eq!(store.preferred_link(&peer(0xAA)), Some(&link("main")));
+        assert_eq!(store.preferred_links().get(&peer(0xAA)), Some(&link("main")));
 
         let _ = store.link_down(&link("dup"));
-        assert_eq!(store.preferred_link(&peer(0xAA)), Some(&link("main")));
+        assert_eq!(store.preferred_links().get(&peer(0xAA)), Some(&link("main")));
     }
 
     #[test]
     fn dropping_the_last_link_clears_the_preference() {
         let mut store = store_with_bound_link("l1", LinkRole::Central, &peer(0xAA));
         let _ = store.link_down(&link("l1"));
-        assert_eq!(store.preferred_link(&peer(0xAA)), None);
+        assert_eq!(store.preferred_links().get(&peer(0xAA)), None);
         assert!(store.links_to(&peer(0xAA)).is_empty());
     }
 
@@ -1646,19 +1435,9 @@ mod tests {
 
         assert_eq!(store.clear(), BTreeSet::from([peer(0xAA)]));
         assert!(store.is_empty());
-        assert_eq!(store.preferred_link(&peer(0xAA)), None);
+        assert_eq!(store.preferred_links().get(&peer(0xAA)), None);
     }
 
-    #[test]
-    fn unbind_leaves_the_link_live_but_unowned() {
-        let mut store = store_with_bound_link("l1", LinkRole::Central, &peer(0xAA));
-        store.mark_noise_authenticated(&link("l1"), &peer(0xAA));
-        assert_eq!(store.unbind(&link("l1")), Some(peer(0xAA)));
-        assert!(store.contains(&link("l1")));
-        assert_eq!(store.peer_for(&link("l1")), None);
-        assert_eq!(store.noise_authenticated_owner(&link("l1")), None);
-        assert_eq!(store.preferred_link(&peer(0xAA)), None);
-    }
 
     // -- LinkStateStore: the rebind guards --------------------------------
 
@@ -1708,8 +1487,8 @@ mod tests {
 
         assert_eq!(store.peer_for(&link("l1")), Some(&peer(0xBB)));
         assert!(store.links_to(&peer(0xAA)).is_empty());
-        assert_eq!(store.preferred_link(&peer(0xBB)), Some(&link("l1")));
-        assert_eq!(store.preferred_link(&peer(0xAA)), None);
+        assert_eq!(store.preferred_links().get(&peer(0xBB)), Some(&link("l1")));
+        assert_eq!(store.preferred_links().get(&peer(0xAA)), None);
     }
 
     #[test]
@@ -1919,8 +1698,7 @@ mod tests {
             BTreeSet::from([link("l1")])
         );
 
-        // An unbound link with a lingering proof is not somewhere to send.
-        let _ = store.unbind(&link("l1"));
+        let _ = store.link_down(&link("l1"));
         assert!(!store.is_noise_authenticated(&link("l1"), &peer(0xAA)));
         assert!(!store.mark_noise_authenticated(&link("ghost"), &peer(0xAA)));
     }
@@ -1966,12 +1744,11 @@ mod tests {
     #[test]
     fn a_verified_announce_records_the_peer_and_reports_what_changed() {
         let mut registry = PeerRegistry::new();
-        let first = registry.upsert_verified_announce(&peer(0xAA), &announcement("alice"), true, 10);
+        let first = registry.upsert_verified_announce(&peer(0xAA), &announcement("alice"), false, 10);
         assert!(first.is_new_peer);
         assert!(!first.was_disconnected);
         assert_eq!(first.previous_nickname, None);
 
-        registry.mark_disconnected(&peer(0xAA));
         let second =
             registry.upsert_verified_announce(&peer(0xAA), &announcement("alice2"), true, 20);
         assert!(!second.is_new_peer);
@@ -1986,13 +1763,6 @@ mod tests {
         assert_eq!(registry.connected_count(), 1);
     }
 
-    #[test]
-    fn mark_connected_reports_whether_anything_changed() {
-        let mut registry = registry_with(peer(0xAA), true, false, 0);
-        assert!(registry.mark_connected(&peer(0xAA)));
-        assert!(!registry.mark_connected(&peer(0xAA)));
-        assert!(!registry.mark_connected(&peer(0xBB)));
-    }
 
     #[test]
     fn a_connected_peer_is_reachable_regardless_of_age() {
@@ -2149,21 +1919,9 @@ mod tests {
         announcement.bridge_geohash = Some("u4pruy".into());
         registry.upsert_verified_announce(&peer(0xAA), &announcement, true, 0);
 
-        assert!(
-            registry
-                .capabilities(&peer(0xAA))
-                .contains(PeerCapabilities::BRIDGE)
-        );
-        assert_eq!(registry.advertised_bridge_geohash(), Some("u4pruy"));
-        assert_eq!(
-            registry.peers_advertising(PeerCapabilities::PREKEYS),
-            vec![peer(0xAA)]
-        );
-        assert!(
-            registry
-                .peers_advertising(PeerCapabilities::GATEWAY)
-                .is_empty()
-        );
+        let record = registry.info(&peer(0xAA)).unwrap();
+        assert!(record.capabilities.contains(PeerCapabilities::BRIDGE));
+        assert_eq!(record.bridge_geohash.as_deref(), Some("u4pruy"));
     }
 
     /// An announce whose peer ID really is derived from its Noise key, which
@@ -2310,31 +2068,14 @@ mod tests {
 
     #[test]
     fn nickname_can_be_restricted_to_connected_peers() {
-        let mut registry = registry_with(peer(0xAA), true, false, 0);
+        let registry = registry_with(peer(0xAA), true, false, 0);
         assert_eq!(registry.nickname(&peer(0xAA), false), Some("nick"));
         assert_eq!(registry.nickname(&peer(0xAA), true), None);
-        registry.mark_connected(&peer(0xAA));
-        assert_eq!(registry.nickname(&peer(0xAA), true), Some("nick"));
+        let connected = registry_with(peer(0xAA), true, true, 0);
+        assert_eq!(connected.nickname(&peer(0xAA), true), Some("nick"));
         assert_eq!(registry.nickname(&peer(0xBB), false), None);
     }
 
-    #[test]
-    fn connected_routing_ids_skip_peers_with_no_routable_form() {
-        let mut registry = registry_with(peer(0xAA), true, true, 0);
-        registry.upsert(PeerRecord {
-            peer: PeerId::from_str("name:alice"),
-            nickname: "alice".into(),
-            connected: true,
-            noise_public_key: None,
-            signing_public_key: None,
-            verified_nickname: true,
-            last_seen_ms: 0,
-            capabilities: PeerCapabilities::default(),
-            bridge_geohash: None,
-        });
-        assert_eq!(registry.connected_routing_ids(), vec![[0xAA; 8]]);
-        assert_eq!(registry.connected_peer_ids().len(), 2);
-    }
 
     #[test]
     fn update_last_seen_and_remove() {
@@ -2442,68 +2183,6 @@ mod tests {
         assert_eq!(ingress.link_for(&relayed), Some(&link("l1")));
     }
 
-    #[test]
-    fn split_horizon_excludes_the_ingress_link() {
-        let mut store = LinkStateStore::new();
-        store.link_up(link("in"), LinkRole::Peripheral);
-        store.link_up(link("out"), LinkRole::Central);
-
-        let mut ingress = IngressRegistry::new();
-        let pkt = packet(MessageType::Message, 0xAA, 5, b"hello");
-        ingress.record_if_new(&pkt, link("in"), peer(0xBB), 0, INGRESS_RECORD_LIFETIME_MS);
-
-        // Even with the ingress link unbound, the packet never goes back out on it.
-        assert_eq!(
-            ingress.split_horizon_links(&pkt, &store),
-            BTreeSet::from([link("in")])
-        );
-    }
-
-    #[test]
-    fn split_horizon_excludes_every_link_the_last_hop_owns() {
-        let mut store = LinkStateStore::new();
-        for id in ["in", "other", "unrelated"] {
-            store.link_up(link(id), LinkRole::Central);
-        }
-        store.bind_if_unbound(&link("in"), &peer(0xBB));
-        store.bind_if_unbound(&link("other"), &peer(0xBB));
-        store.bind_if_unbound(&link("unrelated"), &peer(0xCC));
-
-        let mut ingress = IngressRegistry::new();
-        let pkt = packet(MessageType::Message, 0xAA, 5, b"hello");
-        ingress.record_if_new(&pkt, link("in"), peer(0xBB), 0, INGRESS_RECORD_LIFETIME_MS);
-
-        assert_eq!(
-            ingress.split_horizon_links(&pkt, &store),
-            BTreeSet::from([link("in"), link("other")])
-        );
-    }
-
-    #[test]
-    fn split_horizon_is_empty_once_the_record_expires() {
-        let mut store = LinkStateStore::new();
-        store.link_up(link("in"), LinkRole::Central);
-        let mut ingress = IngressRegistry::new();
-        let pkt = packet(MessageType::Message, 0xAA, 5, b"hello");
-        ingress.record_if_new(&pkt, link("in"), peer(0xBB), 0, INGRESS_RECORD_LIFETIME_MS);
-
-        ingress.prune(INGRESS_RECORD_LIFETIME_MS + 1, INGRESS_RECORD_LIFETIME_MS);
-        assert!(ingress.split_horizon_links(&pkt, &store).is_empty());
-    }
-
-    #[test]
-    fn split_horizon_ignores_a_link_that_has_since_gone_away() {
-        let mut store = LinkStateStore::new();
-        let mut ingress = IngressRegistry::new();
-        let pkt = packet(MessageType::Message, 0xAA, 5, b"hello");
-        ingress.record_if_new(&pkt, link("gone"), peer(0xBB), 0, INGRESS_RECORD_LIFETIME_MS);
-        assert!(ingress.split_horizon_links(&pkt, &store).is_empty());
-        store.link_up(link("gone"), LinkRole::Central);
-        assert_eq!(
-            ingress.split_horizon_links(&pkt, &store),
-            BTreeSet::from([link("gone")])
-        );
-    }
 
     #[test]
     fn clear_empties_the_ingress_memory() {
@@ -2515,124 +2194,6 @@ mod tests {
         assert!(ingress.record(&pkt).is_none());
     }
 
-    // -- IngressRegistry::packet_context ----------------------------------
-
-    #[test]
-    fn our_own_packet_coming_back_is_dropped() {
-        let local = peer(0xAA);
-        let pkt = packet(MessageType::Message, 0xAA, 5, b"mine");
-        assert_eq!(
-            IngressRegistry::packet_context(&pkt, &local, None, &local, DIRECT_TTL),
-            Err(IngressRejection::SelfLoopback {
-                packet_type: MessageType::Message.as_u8()
-            })
-        );
-    }
-
-    #[test]
-    fn our_own_message_inside_a_sync_response_survives() {
-        // We asked for it back; dropping it would defeat the request.
-        let local = peer(0xAA);
-        let mut pkt = packet(MessageType::Message, 0xAA, 0, b"mine");
-        pkt.is_rsr = true;
-        let context = IngressRegistry::packet_context(&pkt, &local, None, &local, DIRECT_TTL)
-            .expect("accepted");
-        assert_eq!(context.received_from, local);
-    }
-
-    #[test]
-    fn a_request_sync_claiming_someone_else_on_a_bound_link_is_rejected() {
-        // REQUEST_SYNC is never relayed and elicits a full store replay addressed
-        // to the claimed sender: a spoofed one is an amplifier.
-        let pkt = packet(MessageType::RequestSync, 0xCC, 0, b"sync");
-        assert_eq!(
-            IngressRegistry::packet_context(
-                &pkt,
-                &peer(0xCC),
-                Some(&peer(0xBB)),
-                &peer(0xAA),
-                DIRECT_TTL
-            ),
-            Err(IngressRejection::DirectSenderMismatch {
-                bound: peer(0xBB),
-                claimed: peer(0xCC)
-            })
-        );
-    }
-
-    #[test]
-    fn a_direct_announce_claiming_a_new_id_on_a_bound_link_is_attributed_to_the_claim() {
-        // Either a spoof or a real rotation. Attribution is harmless because only
-        // a verified announce can act on it — the rebind path, with its guards.
-        let pkt = announce_packet(0xCC);
-        let context = IngressRegistry::packet_context(
-            &pkt,
-            &peer(0xCC),
-            Some(&peer(0xBB)),
-            &peer(0xAA),
-            DIRECT_TTL,
-        )
-        .expect("accepted");
-        assert_eq!(context.received_from, peer(0xCC));
-        assert_eq!(context.validation_peer, peer(0xCC));
-    }
-
-    #[test]
-    fn an_ordinary_packet_on_a_bound_link_is_attributed_to_the_link_owner() {
-        let pkt = packet(MessageType::Message, 0xCC, 5, b"relayed");
-        let context = IngressRegistry::packet_context(
-            &pkt,
-            &peer(0xCC),
-            Some(&peer(0xBB)),
-            &peer(0xAA),
-            DIRECT_TTL,
-        )
-        .expect("accepted");
-        // Last hop is the link owner; the payload is still validated against the
-        // sender who signed it.
-        assert_eq!(context.received_from, peer(0xBB));
-        assert_eq!(context.validation_peer, peer(0xCC));
-    }
-
-    #[test]
-    fn a_sync_response_is_validated_against_the_link_owner_not_the_claim() {
-        let mut pkt = packet(MessageType::Message, 0xCC, 5, b"rsr");
-        pkt.is_rsr = true;
-        let context = IngressRegistry::packet_context(
-            &pkt,
-            &peer(0xCC),
-            Some(&peer(0xBB)),
-            &peer(0xAA),
-            DIRECT_TTL,
-        )
-        .expect("accepted");
-        assert_eq!(context.validation_peer, peer(0xBB));
-    }
-
-    #[test]
-    fn an_unbound_link_attributes_everything_to_the_claimed_sender() {
-        let pkt = packet(MessageType::Message, 0xCC, 5, b"hello");
-        let context =
-            IngressRegistry::packet_context(&pkt, &peer(0xCC), None, &peer(0xAA), DIRECT_TTL)
-                .expect("accepted");
-        assert_eq!(context.received_from, peer(0xCC));
-        assert_eq!(context.validation_peer, peer(0xCC));
-    }
-
-    #[test]
-    fn a_relayed_announce_on_a_bound_link_stays_attributed_to_the_link_owner() {
-        let mut pkt = announce_packet(0xCC);
-        pkt.ttl = DIRECT_TTL - 1;
-        let context = IngressRegistry::packet_context(
-            &pkt,
-            &peer(0xCC),
-            Some(&peer(0xBB)),
-            &peer(0xAA),
-            DIRECT_TTL,
-        )
-        .expect("accepted");
-        assert_eq!(context.received_from, peer(0xBB));
-    }
 
     #[test]
     fn refusal_and_rejection_render_for_logs() {
@@ -2645,11 +2206,6 @@ mod tests {
             RebindRefusal::CooldownActive { remaining_ms: 5 }
                 .to_string()
                 .contains('5')
-        );
-        assert!(
-            IngressRejection::SelfLoopback { packet_type: 2 }
-                .to_string()
-                .contains("self-loopback")
         );
     }
 

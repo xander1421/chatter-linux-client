@@ -421,11 +421,6 @@ impl BlueZLink {
         Self::for_adapter(None)
     }
 
-    /// Use a named adapter, e.g. `hci1`.
-    pub fn with_adapter(name: impl Into<String>) -> Self {
-        Self::for_adapter(Some(name.into()))
-    }
-
     fn for_adapter(adapter_name: Option<String>) -> Self {
         let (events_tx, events_rx) = mpsc::unbounded_channel();
         let (shutdown_tx, shutdown_rx) = watch::channel(false);

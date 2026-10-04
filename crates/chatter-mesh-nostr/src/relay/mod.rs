@@ -303,28 +303,6 @@ impl RelayFilter {
         }
     }
 
-    /// Persistent location notes (kind 1) for one or more cells.
-    pub fn geohash_notes(geohashes: &[String], since: Option<i64>, limit: usize) -> Self {
-        Self {
-            kinds: vec![1],
-            tags: vec![("g".to_string(), geohashes.to_vec())],
-            since,
-            limit: Some(limit),
-            ..Self::default()
-        }
-    }
-
-    /// Mesh-bridge rendezvous, tagged `#r` with the cell and its neighbours.
-    pub fn bridge_rendezvous(cells: &[String], since: Option<i64>, limit: usize) -> Self {
-        Self {
-            kinds: vec![20000, 20001],
-            tags: vec![("r".to_string(), cells.to_vec())],
-            since,
-            limit: Some(limit),
-            ..Self::default()
-        }
-    }
-
     /// Courier drops (kind 1401) parked under rotating `#x` recipient tags.
     pub fn courier_drops(recipient_tags_hex: &[String], since: Option<i64>, limit: usize) -> Self {
         Self {
@@ -1355,14 +1333,6 @@ mod tests {
         assert_eq!(
             RelayFilter::geohash_ephemeral("u4pruy", None, GEOHASH_INITIAL_LIMIT).to_json(),
             serde_json::json!({ "kinds": [20000, 20001], "#g": ["u4pruy"], "limit": 200 })
-        );
-        assert_eq!(
-            RelayFilter::geohash_notes(&["u4p".to_string()], None, 200).to_json(),
-            serde_json::json!({ "kinds": [1], "#g": ["u4p"], "limit": 200 })
-        );
-        assert_eq!(
-            RelayFilter::bridge_rendezvous(&["u4p".to_string()], None, 200).to_json(),
-            serde_json::json!({ "kinds": [20000, 20001], "#r": ["u4p"], "limit": 200 })
         );
         assert_eq!(
             RelayFilter::courier_drops(&["ff".to_string()], None, 100).to_json(),

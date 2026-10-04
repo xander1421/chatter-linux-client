@@ -58,7 +58,6 @@ pub const FRAGMENT_HEADER_LEN: usize = 13;
 
 /// `RequestSyncPacket.maxFragmentIdFilterCount` — the wire filter cannot name
 /// more streams than this in one request.
-pub const MAX_STALLED_STREAM_IDS: usize = 60;
 
 /// The fixed prefix every fragment payload carries.
 ///
@@ -379,41 +378,6 @@ impl FragmentAssembler {
         expired
     }
 
-    /// Stream IDs of incomplete *broadcast* reassemblies that have seen no new
-    /// fragment for `stall_secs` — candidates for a targeted REQUEST_SYNC.
-    ///
-    /// Oldest stall first, capped at [`MAX_STALLED_STREAM_IDS`] because the wire
-    /// filter cannot carry more. Directed reassemblies are excluded: peers
-    /// archive only broadcast fragments for gossip sync, so a targeted request
-    /// could not recover them.
-    ///
-    /// The Swift also stamps each returned stream with a `lastResyncRequestAt`
-    /// so it is not re-requested within a retry window. That bookkeeping cannot
-    /// live here — the frozen signature takes `&self` — so spacing repeat
-    /// requests (`TransportConfig.bleFragmentResyncRetrySeconds`, 10 s) is the
-    /// caller's job.
-    pub fn stalled_stream_ids(&self, now_unix_secs: u64, stall_secs: u64) -> Vec<[u8; 8]> {
-        let mut candidates: Vec<(u64, StreamKey)> = self
-            .streams
-            .iter()
-            .filter(|(_, assembly)| {
-                assembly.is_broadcast
-                    && assembly.chunks.len() < assembly.total as usize
-                    && now_unix_secs.saturating_sub(assembly.last_fragment_at) >= stall_secs
-            })
-            .map(|(key, assembly)| (assembly.last_fragment_at, *key))
-            .collect();
-
-        // Oldest stall first; the key breaks ties so the result is deterministic
-        // (the Swift's dictionary order is not).
-        candidates.sort_unstable();
-        candidates
-            .into_iter()
-            .take(MAX_STALLED_STREAM_IDS)
-            .map(|(_, key)| key.id)
-            .collect()
-    }
-
     /// Evicts the oldest reassembly when the in-flight cap is already reached.
     fn make_room(&mut self) {
         if self.streams.len() < MAX_IN_FLIGHT_ASSEMBLIES {
@@ -723,13 +687,11 @@ mod tests {
     }
 
     #[test]
-    fn duplicate_fragments_neither_complete_nor_reset_the_stall_clock() {
+    fn duplicate_fragments_do_not_complete_the_stream() {
         let make = stream(0x02, 0xAA, 2);
         let mut assembler = FragmentAssembler::new();
         assert_eq!(assembler.accept(&make(0, b"aa"), 100).expect("ok"), None);
-        // A relayed duplicate at t=200 must not look like progress.
         assert_eq!(assembler.accept(&make(0, b"aa"), 200).expect("ok"), None);
-        assert_eq!(assembler.stalled_stream_ids(205, 5), vec![[0x02; 8]]);
         assert_eq!(
             assembler.accept(&make(1, b"bb"), 205).expect("ok"),
             Some(b"aabb".to_vec())
@@ -871,74 +833,6 @@ mod tests {
         assert!(assembler.is_empty(), "a stream that stopped is dropped");
     }
 
-    #[test]
-    fn stall_detection_covers_only_incomplete_broadcast_streams() {
-        let mut assembler = FragmentAssembler::new();
-
-        let broadcast = stream(0x06, 0xAA, 2);
-        assembler.accept(&broadcast(0, b"a"), 100).expect("ok");
-
-        let directed_header = FragmentHeader {
-            fragment_id: [0x07; 8],
-            index: 0,
-            total: 2,
-            original_type: MessageType::Message.as_u8(),
-        };
-        let mut directed = fragment_of(&directed_header, b"a", [0xAA; SENDER_ID_LEN]);
-        directed.recipient_id = Some([0x33; SENDER_ID_LEN]);
-        assembler.accept(&directed, 100).expect("ok");
-
-        // Not stalled yet.
-        assert!(assembler.stalled_stream_ids(104, 5).is_empty());
-        // Stalled: only the broadcast stream is recoverable by a resync.
-        assert_eq!(assembler.stalled_stream_ids(105, 5), vec![[0x06; 8]]);
-
-        // An explicit all-0xFF recipient counts as broadcast too.
-        let explicit_header = FragmentHeader {
-            fragment_id: [0x08; 8],
-            ..directed_header
-        };
-        let mut explicit = fragment_of(&explicit_header, b"a", [0xAA; SENDER_ID_LEN]);
-        explicit.recipient_id = Some(BROADCAST_RECIPIENT);
-        assembler.accept(&explicit, 100).expect("ok");
-        assert_eq!(
-            assembler.stalled_stream_ids(105, 5),
-            vec![[0x06; 8], [0x08; 8]]
-        );
-    }
-
-    #[test]
-    fn stalled_streams_are_ordered_oldest_first_and_capped() {
-        let mut assembler = FragmentAssembler::new();
-        for i in 0..(MAX_STALLED_STREAM_IDS as u64 + 5) {
-            let header = FragmentHeader {
-                fragment_id: i.to_be_bytes(),
-                index: 0,
-                total: 2,
-                original_type: MessageType::Message.as_u8(),
-            };
-            // Later i = later last_fragment_at = less stalled.
-            assembler
-                .accept(&fragment_of(&header, b"x", [0xAA; SENDER_ID_LEN]), 1_000 + i)
-                .expect("ok");
-        }
-
-        let stalled = assembler.stalled_stream_ids(2_000, 5);
-        assert_eq!(stalled.len(), MAX_STALLED_STREAM_IDS);
-        assert_eq!(stalled[0], 0u64.to_be_bytes(), "oldest stall first");
-        assert_eq!(stalled[MAX_STALLED_STREAM_IDS - 1], 59u64.to_be_bytes());
-    }
-
-    #[test]
-    fn completed_streams_never_appear_as_stalled() {
-        let make = stream(0x0A, 0xAA, 1);
-        let mut assembler = FragmentAssembler::new();
-        assert_eq!(
-            assembler.accept(&make(0, b"whole"), 10).expect("ok"),
-            Some(b"whole".to_vec())
-        );
-        assert!(assembler.stalled_stream_ids(1_000, 5).is_empty());
-    }
 
     #[test]
     fn clear_drops_everything() {
