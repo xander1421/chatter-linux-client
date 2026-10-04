@@ -103,7 +103,7 @@ pub async fn handle_domain_event(
         // =========================================================================
         #[cfg(feature = "call-ui")]
         DomainEvent::CallHangupReceived { call_id, peer_id, reason } => {
-            calls::handle_call_hangup(window, ui_ctx, call_id, peer_id, reason);
+            calls::handle_call_hangup(window, call_id, peer_id, reason);
         }
         #[cfg(not(feature = "call-ui"))]
         DomainEvent::CallHangupReceived { .. } => {

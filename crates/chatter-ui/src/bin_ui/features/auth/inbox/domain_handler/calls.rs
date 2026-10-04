@@ -48,13 +48,11 @@ pub(super) fn handle_call_key_offer(
 /// Handle call hangup received — hide call UI.
 pub(super) fn handle_call_hangup(
     window: &Weak<MainWindow>,
-    ui_ctx: &Arc<ChatterClient>,
     call_id: String,
     peer_id: UserId,
     reason: chatter_core::services::gateway::CallHangupReason,
 ) {
     let weak = window.clone();
-    let ui_ctx = ui_ctx.clone();
 
     let _ = slint::invoke_from_event_loop(move || {
         if let Some(w) = weak.upgrade() {
