@@ -28,12 +28,10 @@ pub mod call_verification;
 pub mod server_records;
 pub mod notification_service;
 pub mod notification_stream;
-pub mod search_service;
 pub mod semantic_search;
 pub mod sync_service;
 pub mod ai_service;
 pub mod local_ai_service;
-pub mod ai_summarize;
 pub mod draft_service;
 pub mod pin_service;
 pub mod profile_visibility;
@@ -51,7 +49,6 @@ pub mod channel_event_service;
 pub mod channel_stream;
 pub mod dm_bootstrap_service;
 pub mod pairwise;
-pub mod sealed_sender;
 pub mod fanout;
 pub mod anon_group;
 pub mod anon_dm;
@@ -79,14 +76,8 @@ pub use call_verification::{CallVerification, CallVerificationData, VERIFICATION
 // Re-export ReactionEvent from aggregator for convenience
 pub use crate::network::streaming::reaction_stream::ReactionEvent;
 
-// Re-exports for search service
-pub use search_service::{CombinedSearchResults, SearchError, SearchService};
-
 // Re-exports for AI service
 pub use ai_service::{AIError, AIService};
-
-// Re-exports for AI summarization service
-pub use ai_summarize::{AISummarizeService, SummarizeError};
 
 pub mod signal_service;
 pub mod mailbox_manager;
@@ -131,9 +122,6 @@ pub use call_worker::CallWorkerHandle;
 
 // Re-exports for pairwise encryption service
 pub use pairwise::{PairwiseService, PairwiseError};
-
-// Re-exports for sealed sender service
-pub use sealed_sender::{SealedSenderService, SealedSenderError};
 
 // Re-exports for fanout utilities
 pub use fanout::{fanout, fanout_simple, FanoutOptions, FanoutResult};
