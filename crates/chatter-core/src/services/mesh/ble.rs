@@ -2739,6 +2739,10 @@ impl BleRuntime {
 
         self.report_throughput(now_ms);
 
+        // Every tick, not on the cleanup cadence: the stall window is 250 ms and
+        // the tick 500 ms, so this is the coarsest sweep that still enforces it.
+        self.reap_stalled_partials(now_ms);
+
         // Scan duty cycle. Scanning is the expensive half of BLE, so it runs
         // intermittently while advertising stays up continuously.
         let configured_duty = self.config.scan_duty_cycle;
@@ -2879,6 +2883,27 @@ impl BleRuntime {
         }
 
         let _ = self.router.send(RouterCommand::Maintenance);
+    }
+
+    /// Drop partial inbound frames that have sat past the stall window.
+    ///
+    /// `append` only discards a stalled frame when the same link writes again, so
+    /// a peer that sends one byte and goes silent — still connected, never
+    /// writing — would pin its partial until disconnect. This is the sweep that
+    /// reclaims it.
+    fn reap_stalled_partials(&mut self, now_ms: u64) {
+        let reaped = self
+            .state
+            .with(|state| state.assembler.reap_stalled(InboundLimits::default(), now_ms));
+        for stalled in reaped {
+            tracing::warn!(
+                target: "mesh::ble",
+                link = %stalled.link,
+                discarded_bytes = stalled.discarded_bytes,
+                idle_ms = stalled.idle_ms,
+                "a partial inbound frame stalled past its window and was reclaimed"
+            );
+        }
     }
 
     fn cleanup(&mut self, now_ms: u64, now_s: u64) {
@@ -4839,6 +4864,51 @@ mod tests {
         let link = writable_link(state, name, max_write);
         radio.set_max_write(&link, max_write);
         link
+    }
+
+    #[tokio::test]
+    async fn the_tick_reclaims_a_partial_frame_from_a_peer_that_goes_silent() {
+        // One byte in through the real inbound path, then silence on a link that
+        // stays up. `append` would only reclaim it on the next write, which never
+        // comes; the tick has to.
+        let (mut runtime, _radio, state, _timeline) = runtime_parts();
+        let link = writable_link(&state, "silent", 512);
+
+        runtime.on_data(&link, vec![0x01]).await;
+        assert_eq!(state.with(|s| s.assembler.buffered_bytes(&link)), 1);
+
+        tokio::time::sleep(Duration::from_millis(
+            InboundLimits::default().stall_reset_ms + 50,
+        ))
+        .await;
+        runtime.on_tick().await;
+
+        assert_eq!(
+            state.with(|s| s.assembler.total_buffered_bytes()),
+            0,
+            "a stalled partial survived the tick"
+        );
+        assert!(state.with(|s| s.assembler.is_empty()));
+    }
+
+    #[tokio::test]
+    async fn the_tick_leaves_a_partial_frame_that_is_still_inside_its_window() {
+        // Stamped in the future so idle time is zero however slow the machine
+        // is: the sweep must not eat frames that are still arriving.
+        let (mut runtime, _radio, state, _timeline) = runtime_parts();
+        let link = writable_link(&state, "busy", 512);
+        let _ = state.with(|s| {
+            s.assembler.append(
+                &link,
+                &[InboundChunk { offset: 0, bytes: vec![0x01, 0x02] }],
+                InboundLimits::default(),
+                now_millis() + 60_000,
+            )
+        });
+
+        runtime.on_tick().await;
+
+        assert_eq!(state.with(|s| s.assembler.buffered_bytes(&link)), 2);
     }
 
     #[tokio::test]
