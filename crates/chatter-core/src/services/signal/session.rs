@@ -13,6 +13,7 @@ use crate::network::grpc::auth_client::AuthClient;
 use crate::storage::repositories::settings_repo::keys;
 use crate::error::{CryptoError, ServiceError};
 use super::{kt_anchor, SignalService};
+#[cfg(feature = "dev-trust-root")]
 use crate::crypto::keytransparency::KtError;
 
 /// Maximum number of encrypt locks to keep in cache.

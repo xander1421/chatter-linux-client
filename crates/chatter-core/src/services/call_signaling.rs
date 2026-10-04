@@ -46,6 +46,7 @@ use crate::services::gateway::{
     CallHangupReason,
 };
 use crate::services::message::MessageService;
+#[cfg(feature = "media")]
 use crate::services::signal::SignalService;
 
 /// Errors from call signaling operations.
