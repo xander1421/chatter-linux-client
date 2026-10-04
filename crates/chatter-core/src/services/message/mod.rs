@@ -22,6 +22,8 @@ pub mod conversion;
 mod server_dm;
 mod pin;
 mod saved;
+mod call_event;
+pub use call_event::ChannelCallPhase;
 mod receipts;
 pub use receipts::advance_delivery_status;
 

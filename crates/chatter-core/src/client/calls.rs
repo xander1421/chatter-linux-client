@@ -336,6 +336,21 @@ impl ChatterClient {
             }
         });
 
+        // Tell the channel a call started (O9): every member device files the
+        // Call row, joined or not. Fire-and-forget like the key fan-out.
+        let messages = self.messages().clone();
+        let started_id = call.id.to_string();
+        let is_video = matches!(call_type, crate::domain::call::CallType::Video);
+        tokio::spawn(async move {
+            use crate::services::message::ChannelCallPhase;
+            if let Err(e) = messages
+                .post_channel_call_event(&ch_id, &started_id, ChannelCallPhase::Started, 0, is_video)
+                .await
+            {
+                tracing::warn!(error = %e, "Channel call STARTED not posted");
+            }
+        });
+
         let verification = CallVerification::derive_verification_emojis(&group_key, &call.id.to_string());
         let emojis = CallVerification::to_slint_tuple(&verification);
 

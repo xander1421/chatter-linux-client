@@ -2121,6 +2121,32 @@ pub fn dispatch_control_content(
             }
             stats.write().messages_processed += 1;
         }
+        content::Content::CallEvent(ev) => {
+            use crate::proto::content_v1::call_event::Type;
+            use crate::services::message::ChannelCallPhase;
+            let phase = match Type::try_from(ev.r#type) {
+                Ok(Type::Started) => Some(ChannelCallPhase::Started),
+                Ok(Type::Ended) => Some(ChannelCallPhase::Ended),
+                _ => None,
+            };
+            match (phase, ev.channel_id.parse::<ChannelId>()) {
+                (Some(phase), Ok(channel_id)) => {
+                    let _ = event_tx.send(InboxEvent::ChannelCallEvent {
+                        channel_id,
+                        sender_id: *sender_id,
+                        call_id: ev.call_id,
+                        phase,
+                        duration_secs: ev.duration_secs,
+                        timestamp: if ev.timestamp > 0 { ev.timestamp } else { server_timestamp },
+                    });
+                    stats.write().messages_processed += 1;
+                }
+                _ => {
+                    tracing::warn!(sender_id = %sender_id, "Malformed channel call event");
+                    stats.write().messages_failed += 1;
+                }
+            }
+        }
         // Normal-mode call signaling: friend DMs (and so calls) ride sealed-
         // sender streaming there. Same events as the mailbox path
         // (inbox/polling/dm.rs); a friend DM's conversation id is the peer's.

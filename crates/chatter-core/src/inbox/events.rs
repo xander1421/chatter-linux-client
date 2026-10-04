@@ -260,6 +260,21 @@ pub enum InboxEvent {
         /// epoch nanos): orders actions held for a message not here yet.
         timestamp: u64,
     },
+    /// A channel call started or ended (`content_v1::CallEvent`).
+    ChannelCallEvent {
+        /// Channel ID.
+        channel_id: ChannelId,
+        /// Member who posted it (not yet checked against the roster).
+        sender_id: UserId,
+        /// The call's id as sent.
+        call_id: String,
+        /// Started or ended.
+        phase: crate::services::message::ChannelCallPhase,
+        /// Ended only: seconds the call ran.
+        duration_secs: u32,
+        /// Sender's timestamp, else the server's (epoch nanos).
+        timestamp: u64,
+    },
     /// Message edit received from channel member.
     ChannelEdit {
         /// Channel ID.

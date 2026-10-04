@@ -1212,33 +1212,53 @@ impl CallSignalingService {
         Ok(())
     }
 
-    /// End an active group/channel call: store history, then leave the room.
+    /// End an active group/channel call: file its Call row, then leave the
+    /// room.
     ///
     /// No DM hangup is sent — a channel call has many members, not a single
     /// peer. Departure is signalled by the LiveKit `ParticipantDisconnected`
     /// event when we leave the room; the initiator rekeys for the remaining
-    /// members via the participant-departed path.
+    /// members via the participant-departed path. The last participant out
+    /// posts ENDED to the channel (O9), so members who never joined see the
+    /// call end too; anyone else only files their own row.
     #[cfg(feature = "media")]
     pub async fn end_group_call(
         &self,
         call_worker: &CallWorkerHandle,
         duration_secs: i64,
     ) -> Result<(), CallSignalingError> {
+        use crate::services::message::ChannelCallPhase;
+
         let call = call_worker.active_call().await
             .ok_or(CallSignalingError::NoPendingCall)?;
+        let last_out = call_worker.remote_participant_identities().await.is_empty();
+        let call_id = call.id.to_string();
+        let duration = u32::try_from(duration_secs.max(0)).unwrap_or(u32::MAX);
+        let is_video = matches!(call.call_type, crate::domain::call::CallType::Video);
 
-        let current_user = self.channel_service.current_user_id()
-            .unwrap_or_else(|_| UserId::from_uuid(uuid::Uuid::nil()));
-        let is_outgoing = call.initiator_id == current_user;
+        if last_out {
+            // Our row is filed first, inside; the fan-out runs detached so a
+            // slow member list never holds the hangup.
+            let messages = self.message_service.clone();
+            let channel = call.channel_id;
+            tokio::spawn(async move {
+                if let Err(e) = messages
+                    .post_channel_call_event(&channel, &call_id, ChannelCallPhase::Ended, duration, is_video)
+                    .await
+                {
+                    tracing::warn!(error = %e, "Channel call ENDED not posted");
+                }
+            });
+        } else if let Ok(me) = self.message_service.current_user_id() {
+            let now = crate::util::time::TimestampNanos::now().as_u64();
+            if let Err(e) = self.message_service.file_channel_call_event(
+                &call.channel_id, &me, &call_id, ChannelCallPhase::Ended, duration, now,
+            ) {
+                tracing::warn!(error = %e, "Failed to file group call row");
+            }
+        }
 
-        self.store_group_call_history(
-            &call.channel_id, &call.id.to_string(),
-            &call.initiator_id, &call.initiator_id.to_string(),
-            is_outgoing, duration_secs, false,
-        );
-
-        // Leave the room — this is what tears down media + audio. Done last so
-        // history is recorded even if the worker shut down early.
+        // Leave the room — this is what tears down media + audio.
         if let Err(e) = call_worker.leave_call(CallEndReason::LocalHangup).await {
             tracing::error!(error = %e, "Failed to leave group call");
         }
@@ -1449,76 +1469,6 @@ impl CallSignalingService {
         Ok(())
     }
 
-    /// Store a group/channel call history message. (A DM call's bubble is
-    /// filed by `call_history_recorder`.)
-    #[cfg(feature = "media")]
-    fn store_group_call_history(
-        &self,
-        channel_id: &ChannelId,
-        call_id: &str,
-        initiator_id: &UserId,
-        initiator_name: &str,
-        _is_outgoing: bool,
-        duration_secs: i64,
-        is_missed: bool,
-    ) {
-        use crate::domain::message::*;
-
-        let call_type = if is_missed { CallMessageType::Missed } else { CallMessageType::Ended };
-        let duration = if duration_secs > 0 {
-            Some(chrono::Duration::seconds(duration_secs))
-        } else {
-            None
-        };
-
-        let call_msg = CallMessage {
-            call_id: call_id.to_string(),
-            call_type,
-            initiator_id: *initiator_id,
-            initiator_name: initiator_name.to_string(),
-            started_at: None,
-            ended_at: Some(chrono::Utc::now()),
-            duration,
-            participant_count: 2,
-        };
-
-        let message = Message {
-            id: crate::domain::ids::MessageId::new(),
-            conversation_id: *channel_id,
-            // Derive from the channel row, so a hardcoded type can't
-            // mislabel the call's conversation.
-            conversation_type: self.message_service.conversation_type(channel_id),
-            sender_id: Some(*initiator_id),
-            device_id: None,
-            content: MessageContent::Call(call_msg),
-            encrypted_content: None,
-            thread_id: None,
-            reply_to: None,
-            reply_to_author_id: None,
-            reply_to_text: None,
-            reply_to_thumbnail: None,
-            reply_to_thumbnail_mime: None,
-            attachments: vec![],
-            is_pinned: false,
-            is_edited: false,
-            is_deleted: false,
-            is_read: false,
-            sent_at: crate::util::time::TimestampNanos::now().as_u64(),
-            created_at: chrono::Utc::now(),
-            updated_at: chrono::Utc::now(),
-            edited_at: None,
-            reaction_counts: vec![],
-            current_user_reactions: vec![],
-            mentioned_integrations: vec![],
-            targets_ai_bot: false,
-            delivery_status: String::new(),
-            failure_reason: None,
-        };
-
-        if let Err(e) = self.message_service.store_message_local(&message) {
-            tracing::error!(error = %e, "Failed to save call history");
-        }
-    }
 }
 
 /// Recipients for a rotated group call key.

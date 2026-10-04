@@ -872,6 +872,15 @@ impl InboxEventProcessor {
                 }
             }
 
+            InboxEvent::ChannelCallEvent { channel_id, sender_id, call_id, phase, duration_secs, timestamp } => {
+                // Files the row and tells the UI; a non-member's is dropped there.
+                if let Err(e) = self.message_service.file_channel_call_event(
+                    channel_id, sender_id, call_id, *phase, *duration_secs, *timestamp,
+                ) {
+                    tracing::warn!(error = %e, channel_id = %channel_id, "Channel call event not filed");
+                }
+            }
+
             InboxEvent::ChannelPin { channel_id, sender_id, target_sent_timestamp, unpin, target_author_aci, timestamp } => {
                 let target = target_author_aci.parse().ok().and_then(|author| {
                     self.message_service.resolve_inbound_pin(

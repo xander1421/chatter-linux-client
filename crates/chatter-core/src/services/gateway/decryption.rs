@@ -549,6 +549,7 @@ impl MessageGateway {
                     | Some(content::Content::CallKey(_))
                     | Some(content::Content::CallHangup(_))
                     | Some(content::Content::GroupCallKey(_))
+                    | Some(content::Content::CallEvent(_))
             );
             if is_control {
                 tracing::info!(
