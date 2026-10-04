@@ -3,8 +3,6 @@
 //! Provides server configuration and macros for conditionally
 //! skipping tests when the server is not available.
 
-use std::time::Duration;
-
 /// Default server URL for integration tests.
 /// TLS became mandatory in `4bc9aa51`: the server will not start without
 /// `certs/server.crt` and answers a plaintext h2c connection by closing it
@@ -23,12 +21,6 @@ use std::time::Duration;
 /// unit variant, and no subscriber was installed on this path anyway. Both are
 /// fixed alongside this.
 pub const SERVER_URL: &str = "https://localhost:50051";
-
-/// Connection timeout for tests.
-pub const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
-
-/// Request timeout for tests.
-pub const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// Check if integration tests should be skipped.
 ///

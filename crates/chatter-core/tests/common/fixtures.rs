@@ -62,11 +62,6 @@ impl TestUser {
         .expect("Display name encryption should succeed")
     }
 
-    /// Get encrypted display name as base64 string (for API calls).
-    pub fn encrypted_display_name_base64(&self) -> String {
-        BASE64.encode(&self.encrypted_display_name)
-    }
-
     /// Decrypt an encrypted display name with the user's profile key.
     pub fn decrypt_display_name(&self, encrypted: &[u8]) -> Option<String> {
         chatter_core::crypto::profile_crypto::decrypt_display_name(
@@ -414,36 +409,6 @@ pub async fn setup_authenticated_test(
     pool.auth().set_basic(username, token);
 
     Ok(user)
-}
-
-/// Create a test user fixture without registering (for unit tests).
-pub fn mock_test_user() -> TestUser {
-    let username = unique_username();
-    let password = random_password();
-    let profile_key = random_profile_key();
-    let display_name = format!("Mock User {}", &username[10..18.min(username.len())]);
-
-    // Encrypt the display name with the profile key
-    let encrypted_display_name = chatter_core::crypto::profile_crypto::encrypt_display_name(
-        &profile_key,
-        &display_name,
-    )
-    .expect("Display name encryption should succeed");
-
-    let full_username = format!("{}.42", &username);
-    TestUser {
-        username,
-        full_username,
-        display_name,
-        encrypted_display_name,
-        password,
-        public_key: random_public_key(),
-        identity_key_pair_bytes: Vec::new(),
-        device_auth_token: random_device_auth_token(),
-        profile_key,
-        user_id: uuid::Uuid::new_v4().to_string(),
-        device_id: 1,
-    }
 }
 
 /// Encrypt a display name for testing.

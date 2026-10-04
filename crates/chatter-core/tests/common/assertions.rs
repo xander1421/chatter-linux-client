@@ -24,42 +24,10 @@ pub fn assert_not_found<T>(result: Result<T, NetworkError>) {
     }
 }
 
-/// Assert that an error is NotFound and contains the expected message.
-pub fn assert_not_found_with_message<T>(result: Result<T, NetworkError>, expected: &str) {
-    match result {
-        Err(NetworkError::NotFound(msg)) => {
-            assert!(
-                msg.contains(expected),
-                "NotFound message '{}' does not contain '{}'",
-                msg,
-                expected
-            );
-        }
-        Err(e) => panic!("Expected NotFound, got: {:?}", e),
-        Ok(_) => panic!("Expected NotFound error, but got Ok"),
-    }
-}
-
 /// Assert that an error is InvalidRequest.
 pub fn assert_invalid_request<T>(result: Result<T, NetworkError>) {
     match result {
         Err(NetworkError::InvalidRequest(_)) => {}
-        Err(e) => panic!("Expected InvalidRequest, got: {:?}", e),
-        Ok(_) => panic!("Expected InvalidRequest error, but got Ok"),
-    }
-}
-
-/// Assert that an error is InvalidRequest and contains the expected message.
-pub fn assert_invalid_request_with_message<T>(result: Result<T, NetworkError>, expected: &str) {
-    match result {
-        Err(NetworkError::InvalidRequest(msg)) => {
-            assert!(
-                msg.contains(expected),
-                "InvalidRequest message '{}' does not contain '{}'",
-                msg,
-                expected
-            );
-        }
         Err(e) => panic!("Expected InvalidRequest, got: {:?}", e),
         Ok(_) => panic!("Expected InvalidRequest error, but got Ok"),
     }
