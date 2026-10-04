@@ -125,6 +125,10 @@ async fn pg_dump_locked(_guard: &tokio::sync::MutexGuard<'_, ()>) -> String {
 /// own Redis calls are not stalled behind one long one. A failed page (auth,
 /// script error) prints `REDIS DUMP FAILED` instead of an empty haystack,
 /// and V0 still requires a planted marker to be found.
+///
+/// Streams (the `chan:*` channel event logs) are dumped too — every entry's
+/// id, field names and values. They used to fall through to "unhandled type",
+/// so no plaintext check ever looked inside them; V0 plants a stream marker.
 fn redis_dump_all() -> String {
     const DUMP_PAGE_LUA: &str = r#"
 local r = redis.call("SCAN", ARGV[1], "COUNT", 1000)
@@ -138,6 +142,12 @@ for _, k in ipairs(r[2]) do
   elseif t == "list" then vals = redis.call("LRANGE", k, 0, -1)
   elseif t == "set" then vals = redis.call("SMEMBERS", k)
   elseif t == "zset" then vals = redis.call("ZRANGE", k, 0, -1)
+  elseif t == "stream" then
+    vals = {}
+    for _, e in ipairs(redis.call("XRANGE", k, "-", "+")) do
+      vals[#vals + 1] = e[1]
+      for _, fv in ipairs(e[2]) do vals[#vals + 1] = fv end
+    end
   else vals = {"(unhandled type: " .. t .. ")"} end
   for _, v in ipairs(vals) do out[#out + 1] = v end
 end
@@ -935,14 +945,26 @@ async fn v0_detector_self_check() {
     let marker = unique_marker();
 
     // ---- Redis: plant in a hash, the type the real envelopes use ----------
-    let probe_key = format!("validated_probe:{marker}");
+    // The key names carry only part of the marker: a key containing the whole
+    // marker would let the `--- KEY` header line satisfy the search even if the
+    // dump never read a single value.
+    let probe_key = format!("validated_probe:{}", &marker[17..33]);
+    // ...and in a stream, the type of the `chan:*` channel event logs. Field
+    // NAME and VALUE carry separate markers so both halves of each entry are
+    // proven to be in the haystack.
+    let stream_key = format!("validated_probe_stream:{}", &marker[17..33]);
+    let stream_field_marker = unique_marker();
+    let stream_value_marker = unique_marker();
+    sh(&format!(
+        "docker compose exec -T -e REDISCLI_AUTH=\"$(grep -m1 '^REDIS_PASSWORD=' .env | cut -d= -f2-)\" redis redis-cli XADD '{stream_key}' '*' '{stream_field_marker}' '{stream_value_marker}' >/dev/null 2>&1"
+    ));
     sh(&format!(
         "docker compose exec -T -e REDISCLI_AUTH=\"$(grep -m1 '^REDIS_PASSWORD=' .env | cut -d= -f2-)\" redis redis-cli HSET '{probe_key}' payload '{marker}' >/dev/null 2>&1"
     ));
     let redis_all = redis_dump_all();
     let found_redis = redis_all.matches(&marker).count();
     sh(&format!(
-        "docker compose exec -T -e REDISCLI_AUTH=\"$(grep -m1 '^REDIS_PASSWORD=' .env | cut -d= -f2-)\" redis redis-cli DEL '{probe_key}' >/dev/null 2>&1"
+        "docker compose exec -T -e REDISCLI_AUTH=\"$(grep -m1 '^REDIS_PASSWORD=' .env | cut -d= -f2-)\" redis redis-cli DEL '{probe_key}' '{stream_key}' >/dev/null 2>&1"
     ));
     assert!(
         found_redis > 0,
@@ -950,6 +972,15 @@ async fn v0_detector_self_check() {
          find it. Every 'plaintext absent from Redis' claim is therefore vacuous."
     );
     println!("  redis detector: found planted marker {found_redis}x — detector works");
+    let found_stream_field = redis_all.matches(&stream_field_marker).count();
+    let found_stream_value = redis_all.matches(&stream_value_marker).count();
+    assert!(
+        found_stream_field > 0 && found_stream_value > 0,
+        "DETECTOR BROKEN: planted markers in a Redis STREAM entry (field name \
+         found {found_stream_field}x, value found {found_stream_value}x) and the \
+         dump did not find both. The chan:* streams are unaudited."
+    );
+    println!("  redis detector: stream entry field + value markers found — streams covered");
 
     // ---- Postgres: plant in a real table so pg_dump must carry it ---------
     // A unique name alone does not protect other full dumps from our DROP.
