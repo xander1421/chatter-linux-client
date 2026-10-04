@@ -9,9 +9,7 @@ use crate::domain::ids::ChannelId;
 use crate::network::grpc::client_pool::GrpcClientPool;
 use crate::proto::chat_v1::MessageSortDirection;
 use crate::services::message::channel_inbound::{ChannelInbound, Ingested};
-use crate::storage::repositories::channel_repo::ChannelRepository;
 use crate::storage::repositories::settings_repo::SettingsRepository;
-use crate::storage::repositories::unified_message_repo::UnifiedMessageRepository;
 
 use super::channel_sync::SyncError;
 
@@ -20,11 +18,7 @@ const PAGE_SIZE: i32 = 50;
 /// Message sync handler.
 pub struct MessageSync {
     grpc_pool: Arc<GrpcClientPool>,
-    #[allow(dead_code)]
-    message_repo: Arc<UnifiedMessageRepository>,
     settings_repo: Arc<SettingsRepository>,
-    #[allow(dead_code)]
-    channel_repo: Arc<ChannelRepository>,
     /// Shared decrypt → persist path. Without it this sync wrote every
     /// sender-key encrypted channel message to disk as the literal string
     /// "[Encrypted message]" (`proto_content_to_domain`'s placeholder), so
@@ -53,16 +47,12 @@ pub struct FullMessageSyncResult {
 impl MessageSync {
     pub fn new(
         grpc_pool: Arc<GrpcClientPool>,
-        message_repo: Arc<UnifiedMessageRepository>,
         settings_repo: Arc<SettingsRepository>,
-        channel_repo: Arc<ChannelRepository>,
         inbound: Arc<ChannelInbound>,
     ) -> Self {
         Self {
             grpc_pool,
-            message_repo,
             settings_repo,
-            channel_repo,
             inbound,
         }
     }

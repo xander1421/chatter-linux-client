@@ -15,25 +15,22 @@ use crate::services::link_device_service::{
     PendingDeviceLink, PendingLink,
 };
 use crate::storage::repositories::settings_repo::SettingsRepository;
-use crate::storage::repositories::user_repo::UserRepository;
 
 use super::{ChatterClient, ClientError};
 
 impl ChatterClient {
     /// Lazy accessor for the device-linking service.
     ///
-    /// Constructed on first use because the deps (settings repo, user repo)
+    /// Constructed on first use because the deps (settings repo, key store)
     /// are read-only and only touched when the user opens the link-device
     /// flow. Cheap to call repeatedly thereafter.
     pub(crate) fn link_device(&self) -> &Arc<LinkDeviceService> {
         self.link_device_service.get_or_init(|| {
             let settings = Arc::new(SettingsRepository::new(self.services.database.clone()));
-            let user_repo = Arc::new(UserRepository::new(self.services.database.clone()));
             let key_store = self.signal().key_store.clone();
             Arc::new(LinkDeviceService::new(
                 self.services.grpc_pool.clone(),
                 settings,
-                user_repo,
                 key_store,
                 self.services.database.clone(),
                 self.services.event_bus.clone(),

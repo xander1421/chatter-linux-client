@@ -13,7 +13,6 @@ use crate::inbox::handlers::DomainEvent;
 use crate::services::anon_dm::AnonDmService;
 use crate::services::anon_group::AnonGroupService;
 use crate::services::attachment::AttachmentService;
-use crate::services::channel::ChannelService;
 use crate::services::conversation::ConversationHandle;
 use crate::services::dm_bootstrap_service::DmBootstrapService;
 use crate::services::message::MessageService;
@@ -25,12 +24,9 @@ use crate::util::time::TimestampNanos;
 /// Processes inbox events and handles protocol-level concerns.
 pub struct InboxEventProcessor {
     message_service: Arc<MessageService>,
-    #[allow(dead_code)] // Kept on the constructor surface for future channel-side handlers
-    channel_service: Arc<ChannelService>,
     dm_bootstrap_service: Arc<DmBootstrapService>,
     anon_dm_service: Arc<AnonDmService>,
     anon_group_service: Arc<AnonGroupService>,
-    #[allow(dead_code)] // Reserved for future identity validation in call handling
     signal_service: Arc<SignalService>,
     user_service: Arc<UserService>,
     attachment_service: Arc<AttachmentService>,
@@ -40,38 +36,11 @@ pub struct InboxEventProcessor {
 }
 
 impl InboxEventProcessor {
-    /// Create a new inbox event processor.
-    pub fn new(
-        message_service: Arc<MessageService>,
-        channel_service: Arc<ChannelService>,
-        dm_bootstrap_service: Arc<DmBootstrapService>,
-        anon_dm_service: Arc<AnonDmService>,
-        anon_group_service: Arc<AnonGroupService>,
-        signal_service: Arc<SignalService>,
-        user_service: Arc<UserService>,
-        attachment_service: Arc<AttachmentService>,
-        event_bus: EventBus,
-        client: Arc<crate::client::ChatterClient>,
-    ) -> Self {
-        Self {
-            message_service,
-            channel_service,
-            dm_bootstrap_service,
-            anon_dm_service,
-            anon_group_service,
-            signal_service,
-            user_service,
-            attachment_service,
-            event_bus,
-            client,
-        }
-    }
 
     /// Create from a CoreServices (convenience constructor).
     pub fn from_client(client: &Arc<crate::client::ChatterClient>) -> Self {
         Self {
             message_service: client.messages().clone(),
-            channel_service: client.channels().clone(),
             dm_bootstrap_service: client.dm_bootstrap().clone(),
             anon_dm_service: client.anon_dms().clone(),
             anon_group_service: client.anon_groups().clone(),

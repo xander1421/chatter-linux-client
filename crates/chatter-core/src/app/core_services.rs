@@ -167,11 +167,6 @@ impl CoreServices {
         let sync_service = Arc::new(crate::services::sync_service::SyncService::new(
             infra.grpc_pool.clone(),
             infra.channel_repo.clone(),
-            Arc::new(
-                crate::storage::repositories::unified_message_repo::UnifiedMessageRepository::new(
-                    infra.database.clone(),
-                ),
-            ),
             infra.user_repo.clone(),
             infra.settings_repo.clone(),
             infra.event_bus.clone(),

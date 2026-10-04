@@ -244,12 +244,9 @@ struct PendingOutgoing {
 /// orchestrator-level identity so remote hangups and replacements can find
 /// the right slot to clear.
 #[derive(Debug, Clone)]
-#[allow(dead_code)] // peer_id/kind/is_video consumed by phase-2 UI migration
 struct OrchestratedActive {
     call: CallHandle,
     kind: OrchestratedCallKind,
-    peer_id: UserId,
-    is_video: bool,
 }
 
 /// Mutable orchestration state owned by the worker task.
@@ -1710,8 +1707,6 @@ fn run_call_worker(
                     orchestrator.active = Some(OrchestratedActive {
                         call: call.clone(),
                         kind,
-                        peer_id,
-                        is_video,
                     });
                     let _ = call_events_tx.send(CallOrchestratorEvent::ActiveConnected {
                         call,
@@ -1840,7 +1835,6 @@ struct ActiveCallState {
     /// Key state for Signal-based key derivation and ratcheting.
     key_state: CallKeyState,
     /// Room name for potential future UI display during reconnection.
-    #[allow(dead_code)]
     room_name: String,
     /// LiveKit server URL for reconnection.
     livekit_url: String,
@@ -3006,7 +3000,7 @@ mod orchestrator_kind_tests {
 
         // Connected: the active slot is what counts.
         orch.outgoing.remove(&call);
-        orch.active = Some(OrchestratedActive { call, kind: K::DmStandard, peer_id: UserId::new(), is_video: false });
+        orch.active = Some(OrchestratedActive { call, kind: K::DmStandard });
         assert_eq!(orch.call_kind(), Some(K::DmStandard));
     }
 }

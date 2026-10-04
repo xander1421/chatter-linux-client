@@ -48,7 +48,6 @@ use crate::network::grpc::provisioning_client::{
 use crate::proto::provisioning_v1::{ProvisionEnvelope, ProvisionMessage, ProvisioningSession};
 use crate::storage::backup_data::ImportSummary;
 use crate::storage::repositories::settings_repo::{keys, SettingsRepository};
-use crate::storage::repositories::user_repo::UserRepository;
 use crate::storage::{Database, KeyStore};
 
 /// URL scheme prefix for QR payloads.
@@ -228,7 +227,6 @@ pub enum LinkProgress {
 pub struct LinkDeviceService {
     grpc_pool: Arc<GrpcClientPool>,
     settings_repo: Arc<SettingsRepository>,
-    user_repo: Arc<UserRepository>,
     key_store: Arc<KeyStore>,
     /// Backs the Link'n'Sync transfer archive (§30): the primary exports message
     /// history from it, the new device imports into it. Held so the linking flow
@@ -245,7 +243,6 @@ impl LinkDeviceService {
     pub fn new(
         grpc_pool: Arc<GrpcClientPool>,
         settings_repo: Arc<SettingsRepository>,
-        user_repo: Arc<UserRepository>,
         key_store: Arc<KeyStore>,
         database: Arc<Database>,
         event_bus: EventBus,
@@ -254,7 +251,6 @@ impl LinkDeviceService {
         Self {
             grpc_pool,
             settings_repo,
-            user_repo,
             key_store,
             database,
             event_bus,
@@ -1786,7 +1782,6 @@ mod tests {
         let svc = Arc::new(LinkDeviceService::new(
             grpc_pool,
             settings_repo,
-            user_repo,
             key_store,
             db,
             event_bus,

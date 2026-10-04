@@ -248,7 +248,6 @@ pub struct AuthService {
     prekey_manager: Arc<PreKeyManager>,
     user_repo: Arc<UserRepository>,
     pub(crate) settings_repo: Arc<SettingsRepository>,
-    #[allow(dead_code)] // Reserved for future key management operations
     key_store: Arc<KeyStore>,
     pub(crate) auth_interceptor: AuthInterceptor,
     /// `(login identifier, grant)` from the last recovery, spent by the next

@@ -24,7 +24,6 @@ use crate::inbox::DomainEvent;
 use crate::network::grpc::client_pool::GrpcClientPool;
 use crate::storage::repositories::channel_repo::ChannelRepository;
 use crate::storage::repositories::settings_repo::SettingsRepository;
-use crate::storage::repositories::unified_message_repo::UnifiedMessageRepository;
 use crate::services::message::channel_inbound::ChannelInbound;
 use crate::storage::repositories::user_repo::UserRepository;
 
@@ -98,8 +97,6 @@ pub struct SyncEngine {
     message_sync: MessageSync,
     user_sync: UserSync,
     event_bus: EventBus,
-    #[allow(dead_code)]
-    settings_repo: Arc<SettingsRepository>,
     coalescer: Coalescer,
     /// Set at the end of every cycle, including one this engine did not start
     /// (the channel stream's catch-up shares the coalescer). The retry loop
@@ -136,7 +133,6 @@ impl SyncEngine {
     pub fn new(
         grpc_pool: Arc<GrpcClientPool>,
         channel_repo: Arc<ChannelRepository>,
-        message_repo: Arc<UnifiedMessageRepository>,
         user_repo: Arc<UserRepository>,
         settings_repo: Arc<SettingsRepository>,
         event_bus: EventBus,
@@ -150,20 +146,13 @@ impl SyncEngine {
                 settings_repo.clone(),
                 channel_events,
             ),
-            message_sync: MessageSync::new(
-                grpc_pool.clone(),
-                message_repo,
-                settings_repo.clone(),
-                channel_repo,
-                inbound,
-            ),
+            message_sync: MessageSync::new(grpc_pool.clone(), settings_repo.clone(), inbound),
             user_sync: UserSync::new(
                 grpc_pool,
                 user_repo,
                 settings_repo.clone(),
             ),
             event_bus,
-            settings_repo,
             coalescer: Coalescer::new(),
             needs_retry: AtomicBool::new(false),
         }
