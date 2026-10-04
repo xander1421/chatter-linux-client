@@ -11,8 +11,6 @@ use uuid::Uuid;
 
 use crate::domain::{ChannelId, UserId};
 use crate::error::MailboxError;
-use crate::mailbox::dm::ReceivedMessage;
-use crate::network::grpc::MailboxClient;
 use crate::storage::Database;
 
 /// Our ephemeral mailbox for a specific group.
@@ -865,79 +863,6 @@ impl GroupMailboxManager {
         }
 
         Ok(results)
-    }
-
-    /// Poll a group's mailbox for messages.
-    ///
-    /// Performs challenge-response authentication against the server and
-    /// fetches pending encrypted envelopes for this group's mailbox.
-    ///
-    /// # Arguments
-    ///
-    /// * `group_id` - Group to poll
-    /// * `client` - Mailbox client for server communication
-    ///
-    /// # Returns
-    ///
-    /// Vector of received encrypted messages and a boolean indicating more messages may be available.
-    pub async fn poll_group_mailbox(
-        &self,
-        group_id: &ChannelId,
-        client: &mut MailboxClient,
-    ) -> Result<(Vec<ReceivedMessage>, bool), MailboxError> {
-        // Load our mailbox state for this group
-        let group_state = self
-            .load_group_state(group_id)?
-            .ok_or(MailboxError::GroupNotFound)?;
-
-        let our_mailbox = group_state
-            .our_mailbox
-            .ok_or(MailboxError::NoMailboxConfigured)?;
-
-        // Check expiration
-        if our_mailbox.is_expired() {
-            return Err(MailboxError::TokenExpired);
-        }
-
-        // Challenge-response authentication
-        let challenge_response = client
-            .get_mailbox_challenge(our_mailbox.public_key.to_vec())
-            .await
-            .map_err(|e| MailboxError::Network(e.to_string()))?;
-
-        let signature = our_mailbox.sign_challenge(&challenge_response.challenge)?;
-
-        // Poll for messages
-        let poll_limit = 50i32;
-        let poll_response = client
-            .poll_ephemeral_mailbox(
-                our_mailbox.public_key.to_vec(),
-                signature,
-                challenge_response.challenge,
-                None,
-                poll_limit,
-            )
-            .await
-            .map_err(|e| MailboxError::Network(e.to_string()))?;
-
-        // Update poll timestamp
-        self.update_poll_time(&our_mailbox.id)?;
-
-        // Convert to ReceivedMessage
-        let messages: Vec<ReceivedMessage> = poll_response
-            .messages
-            .into_iter()
-            .map(|m| ReceivedMessage {
-                message_id: m.id,
-                encrypted_envelope: m.encrypted_envelope,
-                envelope_type: m.envelope_type,
-                server_timestamp: m.timestamp,
-            })
-            .collect();
-
-        let has_more = messages.len() == poll_limit as usize;
-
-        Ok((messages, has_more))
     }
 
     /// Delete all state for a group.
