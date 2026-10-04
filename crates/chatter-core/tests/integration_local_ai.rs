@@ -68,31 +68,6 @@ mod local_ai_tests {
         }
     }
 
-    /// Quick test to check CUDA availability.
-    #[test]
-    fn test_cuda_available() {
-        #[cfg(feature = "cuda")]
-        {
-            // Check if CUDA is available via candle
-            println!("CUDA feature is enabled");
-            println!("Checking CUDA device...");
-
-            // This will panic if CUDA isn't properly set up
-            match candle_core::Device::new_cuda(0) {
-                Ok(device) => {
-                    println!("✅ CUDA device 0 available: {:?}", device);
-                }
-                Err(e) => {
-                    println!("❌ CUDA device not available: {}", e);
-                }
-            }
-        }
-
-        #[cfg(not(feature = "cuda"))]
-        {
-            println!("CUDA feature not enabled - using CPU");
-        }
-    }
 }
 
 /// Stub tests when local-ai feature is disabled.

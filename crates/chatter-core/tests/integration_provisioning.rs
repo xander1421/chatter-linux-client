@@ -467,29 +467,6 @@ async fn test_cannot_reprovision_already_provisioned_session() {
 }
 
 // ============================================================================
-// Helper Functions
-// ============================================================================
-
-/// Helper to get provisioning code for testing.
-/// In a real implementation, this would be decrypted from the envelope.
-/// For testing, we query the server directly.
-async fn get_provisioning_code_for_test(
-    pool: &std::sync::Arc<chatter_core::network::grpc::GrpcClientPool>,
-    _provisioning_uuid: &str,
-) -> String {
-    // In a real test against a real server, we'd need to:
-    // 1. Have the server expose a test endpoint, OR
-    // 2. Actually implement ECDH decryption of the envelope
-    //
-    // For now, we'll skip the complete_device_linking test if we can't get the code.
-    // The functional tests on the Go side already verify this works.
-    //
-    // This is a placeholder that will cause the test to fail gracefully.
-    // Real integration would require the crypto flow.
-    "test-provisioning-code-placeholder".to_string()
-}
-
-// ============================================================================
 // End-to-end envelope crypto round-trip (no server required for the crypto
 // itself; this exercises the encrypt + decrypt halves on real keys with the
 // real ProvisionMessage proto).
