@@ -22,7 +22,7 @@ use crate::error::NetworkError;
 use crate::mailbox::token_manager::MailboxToken;
 use crate::network::grpc::auth_client::AuthClient;
 use crate::network::grpc::client_pool::GrpcClientPool;
-use crate::services::signal_service::SignalService;
+use crate::services::signal::SignalService;
 
 /// Errors from pairwise encryption operations.
 #[derive(Debug, thiserror::Error)]

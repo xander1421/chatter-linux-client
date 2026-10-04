@@ -28,7 +28,7 @@ use crate::services::gateway::MessageGateway;
 use crate::services::pairwise::PairwiseService;
 use crate::services::pin_service::PinService;
 use crate::services::session_service::SessionService;
-use crate::services::signal_service::SignalService;
+use crate::services::signal::SignalService;
 use crate::services::conversation_pins::ConversationPins;
 use crate::services::section_service::SectionService;
 use crate::services::device_service::DeviceService;

@@ -34,7 +34,7 @@ use crate::services::message::MessageService;
 use crate::services::gateway::MessageGateway;
 use crate::services::pin_service::PinService;
 use crate::services::session_service::SessionService;
-use crate::services::signal_service::SignalService;
+use crate::services::signal::SignalService;
 use crate::services::conversation_pins::ConversationPins;
 use crate::services::section_service::SectionService;
 use crate::services::user::UserService;
@@ -748,7 +748,7 @@ async fn announce_rotated_group_mailbox(
     new_mailbox_pk: &[u8; 32],
     svc: &crate::mailbox::key_rolling::KeyRollingService,
     channel_repo: &crate::storage::ChannelRepository,
-    signal_service: &crate::services::signal_service::SignalService,
+    signal_service: &crate::services::signal::SignalService,
     message_service: &crate::services::message::MessageService,
     grpc_pool: &crate::network::grpc::client_pool::GrpcClientPool,
 ) {

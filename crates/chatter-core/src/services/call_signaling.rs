@@ -46,7 +46,7 @@ use crate::services::gateway::{
     CallHangupReason,
 };
 use crate::services::message::MessageService;
-use crate::services::signal_service::SignalService;
+use crate::services::signal::SignalService;
 
 /// Errors from call signaling operations.
 #[derive(Debug, thiserror::Error)]

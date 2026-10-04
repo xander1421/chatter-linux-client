@@ -28,7 +28,7 @@ use crate::network::grpc::channel_client::is_change_conflict;
 use crate::network::grpc::client_pool::GrpcClientPool;
 use crate::proto::chat_v1 as pb;
 use crate::services::current_user::CurrentUserProvider;
-use crate::services::signal_service::SignalService;
+use crate::services::signal::SignalService;
 use crate::storage::repositories::settings_repo::SettingsRepository;
 use crate::storage::repositories::verified_membership_repo::VerifiedMembershipRepository;
 use pb::channel_action::Action;

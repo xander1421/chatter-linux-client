@@ -95,7 +95,7 @@ pub struct RestoreResult {
 pub struct SvrBackupService {
     grpc_pool: Arc<GrpcClientPool>,
     settings: Arc<SettingsRepository>,
-    signal_service: Arc<crate::services::signal_service::SignalService>,
+    signal_service: Arc<crate::services::signal::SignalService>,
 }
 
 impl SvrBackupService {
@@ -109,7 +109,7 @@ impl SvrBackupService {
     pub fn new(
         grpc_pool: Arc<GrpcClientPool>,
         settings: Arc<SettingsRepository>,
-        signal_service: Arc<crate::services::signal_service::SignalService>,
+        signal_service: Arc<crate::services::signal::SignalService>,
     ) -> Self {
         Self {
             grpc_pool,

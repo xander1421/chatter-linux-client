@@ -49,7 +49,7 @@ pub struct ChannelService {
     pub(crate) settings_repo: Arc<SettingsRepository>,
     pub(crate) channel_repo: Arc<ChannelRepository>,
     pub(crate) section_repo: Arc<SectionRepository>,
-    pub(crate) signal_service: Arc<crate::services::signal_service::SignalService>,
+    pub(crate) signal_service: Arc<crate::services::signal::SignalService>,
     pub(crate) group_coordinator: Arc<GroupCoordinator>,
     /// For SKDM redistribution after kick/leave; set after MessageService
     /// exists. Read access via `message_service()`.
@@ -65,7 +65,7 @@ impl ChannelService {
         settings_repo: Arc<SettingsRepository>,
         channel_repo: Arc<ChannelRepository>,
         section_repo: Arc<SectionRepository>,
-        signal_service: Arc<crate::services::signal_service::SignalService>,
+        signal_service: Arc<crate::services::signal::SignalService>,
         group_coordinator: Arc<GroupCoordinator>,
         message_service: Arc<crate::services::message::MessageService>,
         membership_log: Arc<MembershipLog>,

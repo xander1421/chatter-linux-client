@@ -13,7 +13,7 @@ use crate::domain::ids::ChannelId;
 use crate::error::{CryptoError, NetworkError, StorageError};
 use crate::network::grpc::auth_client::AuthClient;
 use crate::services::channel::ChannelService;
-use crate::services::signal_service::SignalService;
+use crate::services::signal::SignalService;
 use crate::storage::key_store::KeyStore;
 use crate::storage::repositories::settings_repo::{keys, SettingsRepository};
 

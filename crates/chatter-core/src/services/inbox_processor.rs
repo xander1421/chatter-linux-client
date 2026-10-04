@@ -16,7 +16,7 @@ use crate::services::attachment::AttachmentService;
 use crate::services::conversation::ConversationHandle;
 use crate::services::dm_bootstrap_service::DmBootstrapService;
 use crate::services::message::MessageService;
-use crate::services::signal_service::SignalService;
+use crate::services::signal::SignalService;
 use crate::services::user::UserService;
 use crate::state::ActiveConversation;
 use crate::util::time::TimestampNanos;

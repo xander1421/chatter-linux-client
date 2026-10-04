@@ -40,7 +40,7 @@ use crate::network::grpc::message_client::MessageClient;
 use crate::services::current_user::CurrentUserError;
 use crate::services::ephemeral_service::EphemeralService;
 use crate::services::mailbox_manager::MailboxManager;
-use crate::services::signal_service::SignalService;
+use crate::services::signal::SignalService;
 use crate::storage::Database;
 use crate::storage::repositories::attachment_repo::AttachmentRepository;
 use crate::storage::repositories::channel_repo::ChannelRepository;

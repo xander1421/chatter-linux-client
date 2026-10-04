@@ -39,7 +39,6 @@ pub mod presence_service;
 pub mod ephemeral_service;
 pub mod disappearing;
 pub mod configuration_sync;
-// Removed - gif_service.rs file was deleted
 pub mod quick_switcher;
 pub mod search;
 pub mod section_service;
@@ -77,7 +76,6 @@ pub use crate::network::streaming::reaction_stream::ReactionEvent;
 // Re-exports for AI service
 pub use ai_service::{AIError, AIService};
 
-pub mod signal_service;
 pub mod mailbox_manager;
 pub mod inbox_processor;
 pub mod channel_bootstrap_service;
@@ -85,7 +83,7 @@ pub mod channel_bootstrap_service;
 // Re-exports for user service
 pub use user::{FriendResponseResult, UserError, UserService};
 
-pub use signal_service::SignalService;
+pub use signal::SignalService;
 pub use mailbox_manager::{MailboxManager, MailboxError};
 pub use inbox_processor::InboxEventProcessor;
 pub use gateway::{

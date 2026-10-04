@@ -77,7 +77,7 @@ pub struct EventHandlers {
     /// Anon DM service for conversation creation from ECIES init messages.
     anon_dm_service: Option<Arc<crate::services::anon_dm::AnonDmService>>,
     /// Signal service for sender key rotation on member departure.
-    signal_service: Option<Arc<crate::services::signal_service::SignalService>>,
+    signal_service: Option<Arc<crate::services::signal::SignalService>>,
 }
 
 impl EventHandlers {
@@ -127,7 +127,7 @@ impl EventHandlers {
     }
 
     /// Set the signal service for sender key rotation on member departure.
-    pub fn with_signal_service(mut self, service: Arc<crate::services::signal_service::SignalService>) -> Self {
+    pub fn with_signal_service(mut self, service: Arc<crate::services::signal::SignalService>) -> Self {
         self.signal_service = Some(service);
         self
     }
