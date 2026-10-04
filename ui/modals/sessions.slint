@@ -185,6 +185,10 @@ export component SessionsModal inherits Rectangle {
                             background: session-touch.has-hover ? Colors.surface-hover : Colors.surface;
                             border-radius: Spacing.radius-md;
 
+                            // Hover only. Declared before the row content so the
+                            // Revoke button stays on top of it and gets the tap.
+                            session-touch := TouchArea {}
+
                             HorizontalLayout {
                                 padding: Spacing.md;
                                 spacing: Spacing.md;
@@ -282,8 +286,6 @@ export component SessionsModal inherits Rectangle {
                                     }
                                 }
                             }
-
-                            session-touch := TouchArea {}
                         }
                     }
                 }
