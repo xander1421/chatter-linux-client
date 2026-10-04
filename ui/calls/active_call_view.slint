@@ -106,7 +106,7 @@ component ParticipantTile inherits Rectangle {
             height: 12px;
             x: (parent.width - self.width) / 2;
             y: (parent.height - self.height) / 2;
-            colorize: Colors.text-primary;
+            colorize: Colors.on-error;
         }
     }
 
@@ -560,14 +560,16 @@ export component ActiveCallView inherits Rectangle {
                         height: Spacing.button-height;
                         y: (parent.height - self.height) / 2;
                         border-radius: 10px;
-                        background: stop-touch.has-hover ? Colors.error-hover : Colors.error;
+                        // Small text needs 4.5:1: white on `error` is 3.63:1 in
+                        // dark, so the label sits on the deeper red step.
+                        background: stop-touch.has-hover ? Colors.error-hover.darker(0.2) : Colors.error-hover;
 
                         stop-text := Text {
                             x: Spacing.sm;
                             text: "Stop";
                             font-size: Typography.xs;
                             font-weight: Typography.semibold;
-                            color: Colors.text-primary;
+                            color: Colors.on-error;
                             vertical-alignment: center;
                         }
 

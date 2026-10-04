@@ -201,7 +201,7 @@ export component IncomingCallModal inherits Rectangle {
                         height: 28px;
                         x: (parent.width - self.width) / 2;
                         y: (parent.height - self.height) / 2;
-                        colorize: Colors.text-primary;
+                        colorize: Colors.on-error;
                     }
                 }
 
@@ -210,11 +210,11 @@ export component IncomingCallModal inherits Rectangle {
                     width: 64px;
                     height: 64px;
                     border-radius: 32px;
-                    background: accept-hover.has-hover ? Colors.success-hover : Colors.success;
+                    background: accept-hover.has-hover ? Colors.success-fill-hover : Colors.success-fill;
                     drop-shadow-blur: accept-hover.has-hover ? Spacing.neo-blur-md : Spacing.neo-blur-sm;
                     drop-shadow-offset-x: Spacing.neo-offset-sm;
                     drop-shadow-offset-y: Spacing.neo-offset-sm;
-                    drop-shadow-color: Colors.success.with-alpha(0.4);
+                    drop-shadow-color: Colors.success-fill.with-alpha(0.4);
 
                     accept-hover := TouchArea {
                         clicked => { accept-call(); }
@@ -226,7 +226,7 @@ export component IncomingCallModal inherits Rectangle {
                         height: 28px;
                         x: (parent.width - self.width) / 2;
                         y: (parent.height - self.height) / 2;
-                        colorize: Colors.text-primary;
+                        colorize: Colors.on-success;
                     }
                 }
             }
