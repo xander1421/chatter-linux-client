@@ -14,7 +14,10 @@ import android.provider.OpenableColumns
 import android.text.Selection
 import android.util.Log
 import android.view.ActionMode
+import android.view.Display
 import android.view.KeyEvent
+import android.view.Surface
+import android.view.SurfaceHolder
 import android.view.View
 import android.view.ViewGroup
 import android.view.WindowManager
@@ -66,6 +69,13 @@ class MainActivity : GameActivity() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             window.isStatusBarContrastEnforced = false
             window.isNavigationBarContrastEnforced = false
+        }
+        // An app that does not vote is left at the panel's default mode, which
+        // on a 120 Hz LTPO phone is often 60 Hz, so a fling never reaches the
+        // rate the hardware offers. Ask for the fastest mode at the current
+        // resolution; the surface votes the same rate in voteFrameRate.
+        fastestDisplayMode()?.let { mode ->
+            window.attributes = window.attributes.apply { preferredDisplayModeId = mode.modeId }
         }
         // Hand the Activity to Rust. ndk-context only exposes the Application,
         // which lacks our Activity methods (launchFilePicker, requestPermissions),
@@ -298,6 +308,37 @@ class MainActivity : GameActivity() {
      */
     override fun createSurfaceView(): InputEnabledSurfaceView =
         BackHidesImeSurfaceView().also { launchCover = it }
+
+    override fun surfaceCreated(holder: SurfaceHolder) {
+        super.surfaceCreated(holder)
+        voteFrameRate(holder.surface)
+    }
+
+    override fun surfaceChanged(holder: SurfaceHolder, format: Int, width: Int, height: Int) {
+        super.surfaceChanged(holder, format, width, height)
+        voteFrameRate(holder.surface)
+    }
+
+    /** Highest-refresh mode at the display's current resolution; null below API 30. */
+    private fun fastestDisplayMode(): Display.Mode? {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) return null
+        val display = display ?: return null
+        val current = display.mode
+        return display.supportedModes
+            .filter { it.physicalWidth == current.physicalWidth && it.physicalHeight == current.physicalHeight }
+            .maxByOrNull { it.refreshRate }
+    }
+
+    /**
+     * Tell SurfaceFlinger the Slint surface wants the panel's top rate.
+     * preferredDisplayModeId alone picks the mode; without a per-surface vote
+     * the frame-rate arbiter may still settle lower for this layer.
+     */
+    private fun voteFrameRate(surface: Surface) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R || !surface.isValid) return
+        val mode = fastestDisplayMode() ?: return
+        surface.setFrameRate(mode.refreshRate, Surface.FRAME_RATE_COMPATIBILITY_DEFAULT)
+    }
 
     private inner class BackHidesImeSurfaceView : InputEnabledSurfaceView(this@MainActivity) {
         /** The current Back press started while the keyboard was up. */
