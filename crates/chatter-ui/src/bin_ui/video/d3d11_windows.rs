@@ -150,13 +150,11 @@ fn fetch_next_frame_d3d11(state: &mut D3D11VideoState) -> Option<slint::Image> {
         state.width = frame.width;
         state.height = frame.height;
 
-        // Convert RGBA bytes to Slint image
-        let buffer = slint::SharedPixelBuffer::clone_from_slice(
+        return Some(crate::bin_ui::slint_conversions::rgba_to_slint_image(
             &frame.rgba_data,
             frame.width,
             frame.height,
-        );
-        return Some(slint::Image::from_rgba8(buffer));
+        ));
     }
     None
 }

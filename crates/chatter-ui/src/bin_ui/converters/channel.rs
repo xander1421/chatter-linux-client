@@ -1,6 +1,6 @@
 //! Channel and DM converters.
 
-use super::get_initials;
+use chatter_core::ui::initials_from_name;
 
 use chatter_core::ui::sidebar_data::{ChatRowSendData, FriendRequestSendData};
 
@@ -14,10 +14,7 @@ impl ChatRowExt for ChatRowSendData {
     /// UI thread only: builds the row's `slint::Image`.
     fn to_slint(self) -> crate::ChatRowData {
         let (avatar_source, has_avatar) = if let Some((w, h, pixels)) = self.avatar_decoded {
-            let buffer = slint::SharedPixelBuffer::<slint::Rgba8Pixel>::clone_from_slice(
-                &pixels, w, h
-            );
-            (slint::Image::from_rgba8(buffer), true)
+            (crate::bin_ui::slint_conversions::rgba_to_slint_image(&pixels, w, h), true)
         } else if let Some(bytes) = &self.avatar_bytes {
             match avatar_bytes_to_image(bytes) {
                 Some(img) => (img, true),
@@ -58,10 +55,7 @@ pub trait FriendDataExt {
 impl FriendDataExt for chatter_core::ui::sidebar_data::FriendDataSendData {
     fn to_slint(self) -> crate::FriendData {
         let (avatar_source, has_avatar) = if let Some((w, h, pixels)) = self.avatar_decoded {
-            let buffer = slint::SharedPixelBuffer::<slint::Rgba8Pixel>::clone_from_slice(
-                &pixels, w, h,
-            );
-            (slint::Image::from_rgba8(buffer), true)
+            (crate::bin_ui::slint_conversions::rgba_to_slint_image(&pixels, w, h,), true)
         } else if let Some(bytes) = &self.avatar_bytes {
             match avatar_bytes_to_image(bytes) {
                 Some(img) => (img, true),
@@ -71,7 +65,7 @@ impl FriendDataExt for chatter_core::ui::sidebar_data::FriendDataSendData {
             (slint::Image::default(), false)
         };
         crate::FriendData {
-            initials: get_initials(&self.display_name).into(),
+            initials: initials_from_name(&self.display_name).into(),
             user_id: self.user_id.into(),
             display_name: self.display_name.into(),
             username: self.username.into(),
@@ -91,10 +85,7 @@ pub trait FriendRequestExt {
 impl FriendRequestExt for FriendRequestSendData {
     fn to_slint(self) -> crate::FriendRequestData {
         let (avatar_source, has_avatar) = if let Some((w, h, pixels)) = self.avatar_decoded {
-            let buffer = slint::SharedPixelBuffer::<slint::Rgba8Pixel>::clone_from_slice(
-                &pixels, w, h
-            );
-            (slint::Image::from_rgba8(buffer), true)
+            (crate::bin_ui::slint_conversions::rgba_to_slint_image(&pixels, w, h), true)
         } else if let Some(bytes) = &self.avatar_bytes {
             match avatar_bytes_to_image(bytes) {
                 Some(img) => (img, true),

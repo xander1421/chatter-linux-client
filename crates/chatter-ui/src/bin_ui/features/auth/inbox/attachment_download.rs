@@ -141,12 +141,9 @@ fn handle_gif(
     let conv_id_first = conv_id.clone();
 
     let _ = slint::invoke_from_event_loop(move || {
-        let buffer = slint::SharedPixelBuffer::<slint::Rgba8Pixel>::clone_from_slice(
-            &first_rgba,
+        let first_image = crate::bin_ui::slint_conversions::rgba_to_slint_image(&first_rgba,
             first_width,
-            first_height,
-        );
-        let first_image = slint::Image::from_rgba8(buffer);
+            first_height,);
 
         if let Some(window) = weak_first.upgrade() {
             update_attachment_thumbnail(&window, &ui_ctx_gif, &att_id_first, first_image, &conv_id_first);

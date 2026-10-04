@@ -19,7 +19,8 @@ use chatter_core::services::call_worker::{
     CallEndReason, CallOrchestratorEvent, OrchestratedCallKind,
 };
 use crate::{ActiveCallData, CallParticipantData, MainWindow};
-use crate::bin_ui::converters::{avatar_bytes_to_image, get_initials};
+use chatter_core::ui::initials_from_name;
+use crate::bin_ui::converters::avatar_bytes_to_image;
 
 use super::timers::{start_call_timer, start_video_frame_timer, stop_call_timer, stop_video_frame_timer};
 
@@ -165,8 +166,8 @@ fn render_accepted_call(
             let ui_ctx = ui_ctx.clone();
             let _ = slint::invoke_from_event_loop(move || {
                 let Some(w) = weak.upgrade() else { return };
-                let local_initials = get_initials(&my_display_name);
-                let remote_initials = get_initials(&peer_name);
+                let local_initials = initials_from_name(&my_display_name);
+                let remote_initials = initials_from_name(&peer_name);
                 let remote_avatar = peer_avatar_bytes
                     .as_deref()
                     .and_then(avatar_bytes_to_image)
@@ -239,14 +240,13 @@ fn render_accepted_call(
                 // already in the room that landed before this repaint. Each
                 // later joiner adds its own tile (room_events.rs).
                 let existing = w.get_active_call_data().participants;
-                let mut participants: Vec<CallParticipantData> = (0..existing.row_count())
-                    .filter_map(|i| existing.row_data(i))
+                let mut participants: Vec<CallParticipantData> = existing.iter()
                     .collect();
                 participants.pop(); // the local tile, pinned last; rebuilt below
                 participants.push(CallParticipantData {
                     user_id: current_user_id.clone().into(),
                     display_name: my_display_name.clone().into(),
-                    initials: get_initials(&my_display_name).into(),
+                    initials: initials_from_name(&my_display_name).into(),
                     avatar_source: w.get_user_avatar_source(),
                     is_muted: false,
                     is_video_enabled: setup.is_video,
@@ -343,7 +343,7 @@ fn show_answering(w: &MainWindow) {
     let local = participant(
         "You".into(),
         my_display_name.clone(),
-        get_initials(&my_display_name).into(),
+        initials_from_name(&my_display_name).into(),
         w.get_user_avatar_source(),
     );
     w.set_active_call_data(ActiveCallData {
@@ -431,8 +431,7 @@ fn render_active_anon_call(
         // no identity, so a join after this render added a second remote
         // tile and the peer's frames never reached this one.
         let existing = w.get_active_call_data().participants;
-        let preserved_remote_user_id: Option<slint::SharedString> = (0..existing.row_count())
-            .filter_map(|i| existing.row_data(i))
+        let preserved_remote_user_id: Option<slint::SharedString> = existing.iter()
             .find(|p| {
                 let uid = p.user_id.as_str();
                 !uid.is_empty() && uid != "You"
@@ -451,7 +450,7 @@ fn render_active_anon_call(
             is_audio_muted_locally: false,
             is_video_paused_locally: false,
         };
-        let remote_initials = get_initials(&peer_display_name);
+        let remote_initials = initials_from_name(&peer_display_name);
         let remote_avatar_source = peer_avatar
             .as_deref()
             .and_then(avatar_bytes_to_image)

@@ -378,12 +378,9 @@ fn poll_streaming_frames() -> usize {
                     }
 
                     // Convert to Slint Image and add to state
-                    let buffer = slint::SharedPixelBuffer::<slint::Rgba8Pixel>::clone_from_slice(
-                        &data,
+                    let image = crate::bin_ui::slint_conversions::rgba_to_slint_image(&data,
                         width,
-                        height,
-                    );
-                    let image = slint::Image::from_rgba8(buffer);
+                        height,);
 
                     VIEWER_GIF_STATE.with(|state_cell| {
                         if let Some(ref mut state) = *state_cell.borrow_mut() {

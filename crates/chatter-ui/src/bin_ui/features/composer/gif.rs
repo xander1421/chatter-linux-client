@@ -259,12 +259,9 @@ fn load_gif_previews(
 
                 let _ = slint::invoke_from_event_loop(move || {
                     if let Some(w) = weak.upgrade() {
-                        let buffer = slint::SharedPixelBuffer::<slint::Rgba8Pixel>::clone_from_slice(
-                            &frame_bytes,
+                        let first_image = crate::bin_ui::slint_conversions::rgba_to_slint_image(&frame_bytes,
                             width,
-                            height,
-                        );
-                        let first_image = slint::Image::from_rgba8(buffer);
+                            height,);
 
                         let model = w.get_composer_gif_picker_results();
                         for i in 0..model.row_count() {

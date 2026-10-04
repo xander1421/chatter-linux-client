@@ -78,10 +78,7 @@ pub(super) async fn handle_friend_requests_updated(
                 .map(|(r, p)| {
                     let (avatar_source, has_avatar) = match p.avatar {
                         Some((aw, ah, px)) => {
-                            let buf = slint::SharedPixelBuffer::<slint::Rgba8Pixel>::clone_from_slice(
-                                &px, aw, ah,
-                            );
-                            (slint::Image::from_rgba8(buf), true)
+                            (crate::bin_ui::slint_conversions::rgba_to_slint_image(&px, aw, ah,), true)
                         }
                         None => (slint::Image::default(), false),
                     };
@@ -408,9 +405,7 @@ pub(super) fn handle_user_profile_updated(
         let Some(w) = weak.upgrade() else { return };
 
         let avatar_img: Option<slint::Image> = avatar_decoded.as_ref().map(|(aw, ah, px)| {
-            let buf =
-                slint::SharedPixelBuffer::<slint::Rgba8Pixel>::clone_from_slice(px, *aw, *ah);
-            slint::Image::from_rgba8(buf)
+            crate::bin_ui::slint_conversions::rgba_to_slint_image(px, *aw, *ah)
         });
 
         // 1. Sidebar DM rows — update display name + initials + avatar for matching peer.

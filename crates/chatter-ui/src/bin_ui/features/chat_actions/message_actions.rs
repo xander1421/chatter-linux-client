@@ -67,8 +67,7 @@ pub fn wire_message_clicked(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
 /// `sent_at` of our own bubble `message_id` when it says "not sent".
 fn own_failed_timestamp(w: &MainWindow, message_id: &str) -> Option<u64> {
     let messages = w.get_messages();
-    (0..messages.row_count())
-        .filter_map(|i| messages.row_data(i))
+    messages.iter()
         .find(|m| m.message_id.as_str() == message_id)
         .filter(|m| m.is_own && m.delivery_status == "failed")
         .and_then(|m| m.timestamp_ns.parse().ok())

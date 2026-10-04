@@ -12,6 +12,36 @@ use chatter_core::domain::ids::UserId;
 use crate::bin_ui::features::sidebar::load_channel_into_ui;
 use crate::{AIModelOption, CreateChannelConfig, MainWindow, PrivateGroupFriend};
 
+fn toggle_selected(friend: &mut PrivateGroupFriend) {
+    friend.selected = !friend.selected;
+    if friend.selected && friend.role.is_empty() {
+        friend.role = "member".into();
+    }
+}
+
+fn toggle_role(friend: &mut PrivateGroupFriend) {
+    if friend.selected {
+        friend.role = if friend.role == "admin" {
+            "member".into()
+        } else {
+            "admin".into()
+        };
+    }
+}
+
+/// One editor for the create-channel and invite friend lists.
+fn edit_private_friend(
+    friends: &ModelRc<PrivateGroupFriend>,
+    idx: i32,
+    edit: fn(&mut PrivateGroupFriend),
+) -> i32 {
+    if let Some(mut friend) = friends.row_data(idx as usize) {
+        edit(&mut friend);
+        friends.set_row_data(idx as usize, friend);
+    }
+    friends.iter().filter(|f| f.selected).count() as i32
+}
+
 pub fn wire_create_channel(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     let weak_window = window.as_weak();
     let ctx = ui_ctx.clone();
@@ -273,17 +303,8 @@ pub fn wire_create_channel(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
         let _ = slint::invoke_from_event_loop(move || {
             if let Some(w) = weak.upgrade() {
                 let friends = w.get_create_channel_available_friends();
-                let mut friends_vec: Vec<PrivateGroupFriend> = (0..friends.row_count()).filter_map(|i| friends.row_data(i)).collect();
-                if let Some(friend) = friends_vec.get_mut(idx as usize) {
-                    friend.selected = !friend.selected;
-                    // Default to member role when selecting
-                    if friend.selected && friend.role.is_empty() {
-                        friend.role = "member".into();
-                    }
-                }
-                let selected_count = friends_vec.iter().filter(|f| f.selected).count() as i32;
+                let selected_count = edit_private_friend(&friends, idx, toggle_selected);
                 w.set_create_channel_selected_friend_count(selected_count);
-                w.set_create_channel_available_friends(ModelRc::new(VecModel::from(friends_vec)));
             }
         });
     });
@@ -295,18 +316,7 @@ pub fn wire_create_channel(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
         let _ = slint::invoke_from_event_loop(move || {
             if let Some(w) = weak.upgrade() {
                 let friends = w.get_create_channel_available_friends();
-                let mut friends_vec: Vec<PrivateGroupFriend> = (0..friends.row_count()).filter_map(|i| friends.row_data(i)).collect();
-                if let Some(friend) = friends_vec.get_mut(idx as usize) {
-                    if friend.selected {
-                        // Toggle between member and admin
-                        friend.role = if friend.role == "admin" {
-                            "member".into()
-                        } else {
-                            "admin".into()
-                        };
-                    }
-                }
-                w.set_create_channel_available_friends(ModelRc::new(VecModel::from(friends_vec)));
+                edit_private_friend(&friends, idx, toggle_role);
             }
         });
     });
@@ -319,8 +329,7 @@ pub fn wire_create_channel(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
         let name = name.to_string();
 
         // Extract selected friends with their roles
-        let selected_friends: Vec<(UserId, chatter_core::domain::anon_group::AnonGroupRole)> = (0..friends.row_count())
-            .filter_map(|i| friends.row_data(i))
+        let selected_friends: Vec<(UserId, chatter_core::domain::anon_group::AnonGroupRole)> = friends.iter()
             .filter(|f| f.selected)
             .filter_map(|f| {
                 let user_id = f.user_id.to_string().parse::<UserId>().ok()?;
@@ -403,19 +412,8 @@ pub fn wire_invite_to_private_group(window: &MainWindow, ui_ctx: &Arc<ChatterCli
         let _ = slint::invoke_from_event_loop(move || {
             if let Some(w) = weak.upgrade() {
                 let friends = w.get_invite_private_group_friends();
-                let mut friends_vec: Vec<PrivateGroupFriend> = (0..friends.row_count())
-                    .filter_map(|i| friends.row_data(i))
-                    .collect();
-                if let Some(friend) = friends_vec.get_mut(idx as usize) {
-                    friend.selected = !friend.selected;
-                    // Default to member role when selecting
-                    if friend.selected && friend.role.is_empty() {
-                        friend.role = "member".into();
-                    }
-                }
-                let selected_count = friends_vec.iter().filter(|f| f.selected).count() as i32;
+                let selected_count = edit_private_friend(&friends, idx, toggle_selected);
                 w.set_invite_private_group_selected_count(selected_count);
-                w.set_invite_private_group_friends(ModelRc::new(VecModel::from(friends_vec)));
             }
         });
     });
@@ -427,19 +425,7 @@ pub fn wire_invite_to_private_group(window: &MainWindow, ui_ctx: &Arc<ChatterCli
         let _ = slint::invoke_from_event_loop(move || {
             if let Some(w) = weak.upgrade() {
                 let friends = w.get_invite_private_group_friends();
-                let mut friends_vec: Vec<PrivateGroupFriend> = (0..friends.row_count())
-                    .filter_map(|i| friends.row_data(i))
-                    .collect();
-                if let Some(friend) = friends_vec.get_mut(idx as usize) {
-                    if friend.selected {
-                        friend.role = if friend.role == "admin" {
-                            "member".into()
-                        } else {
-                            "admin".into()
-                        };
-                    }
-                }
-                w.set_invite_private_group_friends(ModelRc::new(VecModel::from(friends_vec)));
+                edit_private_friend(&friends, idx, toggle_role);
             }
         });
     });
@@ -457,8 +443,7 @@ pub fn wire_invite_to_private_group(window: &MainWindow, ui_ctx: &Arc<ChatterCli
             .unwrap_or_default();
 
         // Extract selected friends with their roles
-        let selected_friends: Vec<(UserId, chatter_core::domain::anon_group::AnonGroupRole)> = (0..friends.row_count())
-            .filter_map(|i| friends.row_data(i))
+        let selected_friends: Vec<(UserId, chatter_core::domain::anon_group::AnonGroupRole)> = friends.iter()
             .filter(|f| f.selected)
             .filter_map(|f| {
                 let user_id = f.user_id.to_string().parse::<UserId>().ok()?;

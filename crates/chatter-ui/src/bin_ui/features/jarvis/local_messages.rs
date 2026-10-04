@@ -21,46 +21,17 @@ pub fn add_jarvis_thinking_placeholder(window: &MainWindow) -> String {
         sender_id: "jarvis".into(),
         sender_name: "Jarvis".into(),
         sender_initials: "J".into(),
-        sender_avatar_source: slint::Image::default(),
-        has_avatar: false,
         content: "_Thinking..._".into(),
-        rich_content: ModelRc::default(),
         timestamp: timestamp.into(),
         timestamp_ns: timestamp_ns.to_string().into(),
-        is_own: false,
-        is_edited: false,
-        is_deleted: false,
-        is_system: false,
         is_ai: true,
-        has_attachments: false,
-        attachment_count: 0,
-        attachments: ModelRc::default(),
-        has_reactions: false,
-        reaction_summary: "".into(),
-        reactions: ModelRc::default(),
-        reply_count: 0,
-        reply_count_text: "".into(),
-        is_thread_reply: false,
-        is_reply: false,
-        reply_to_sender_name: "".into(),
-        reply_to_preview: "".into(),
-        reply_to_has_thumbnail: false,
-        reply_to_thumbnail: slint::Image::default(),
         show_sender: true,
         delivery_status: "thinking".into(),
-        is_pinned: false,
-        is_call: false,
-        call_type: "".into(),
-        call_duration: "".into(),
-        date_separator_text: Default::default(),
-        is_continuation: false,
-        show_date_separator: false,
         ..Default::default()
     };
 
     let model = window.get_messages();
-    let mut messages: Vec<_> = (0..model.row_count())
-        .filter_map(|i| model.row_data(i))
+    let mut messages: Vec<_> = model.iter()
         .collect();
     messages.push(msg_item);
     window.set_is_at_bottom(true);
@@ -80,8 +51,7 @@ pub fn replace_thinking_with_response(
     let timestamp_ns = chrono::Utc::now().timestamp_nanos_opt().unwrap_or(0) as u64;
 
     let model = window.get_messages();
-    let mut messages: Vec<_> = (0..model.row_count())
-        .filter_map(|i| model.row_data(i))
+    let mut messages: Vec<_> = model.iter()
         .filter(|m| m.message_id.as_str() != thinking_id) // Remove thinking placeholder
         .collect();
 
@@ -91,40 +61,12 @@ pub fn replace_thinking_with_response(
         sender_id: "jarvis".into(),
         sender_name: "Jarvis".into(),
         sender_initials: "J".into(),
-        sender_avatar_source: slint::Image::default(),
-        has_avatar: false,
         content: format!("**Q:** {}\n\n{}", query, response).into(),
-        rich_content: ModelRc::default(),
         timestamp: timestamp.into(),
         timestamp_ns: timestamp_ns.to_string().into(),
-        is_own: false,
-        is_edited: false,
-        is_deleted: false,
-        is_system: false,
         is_ai: true,
-        has_attachments: false,
-        attachment_count: 0,
-        attachments: ModelRc::default(),
-        has_reactions: false,
-        reaction_summary: "".into(),
-        reactions: ModelRc::default(),
-        reply_count: 0,
-        reply_count_text: "".into(),
-        is_thread_reply: false,
-        is_reply: false,
-        reply_to_sender_name: "".into(),
-        reply_to_preview: "".into(),
-        reply_to_has_thumbnail: false,
-        reply_to_thumbnail: slint::Image::default(),
         show_sender: true,
         delivery_status: "local".into(),
-        is_pinned: false,
-        is_call: false,
-        call_type: "".into(),
-        call_duration: "".into(),
-        date_separator_text: Default::default(),
-        is_continuation: false,
-        show_date_separator: false,
         ..Default::default()
     };
 

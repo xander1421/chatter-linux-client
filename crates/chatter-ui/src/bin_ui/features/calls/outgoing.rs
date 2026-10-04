@@ -14,7 +14,8 @@ use chatter_core::client::ChatterClient;
 use chatter_core::client::calls::OutgoingCallStart;
 use chatter_core::domain::call::CallType;
 use chatter_core::state::ActiveConversation;
-use crate::bin_ui::converters::{avatar_bytes_to_image, get_initials};
+use chatter_core::ui::initials_from_name;
+use crate::bin_ui::converters::avatar_bytes_to_image;
 use crate::{ActiveCallData, CallParticipantData, MainWindow};
 
 use super::timers::{start_call_timer, start_video_frame_timer};
@@ -62,7 +63,7 @@ fn show_dialling(weak: &slint::Weak<MainWindow>, call_type: CallType, ui_ctx: &A
     let Some(w) = weak.upgrade() else { return };
     let is_video = matches!(call_type, CallType::Video);
     let display_name = ui_ctx.my_display_name().unwrap_or_else(|| "Anonymous".to_string());
-    let initials = get_initials(&display_name);
+    let initials = initials_from_name(&display_name);
 
     let local_participant = CallParticipantData {
         user_id: "".into(),
@@ -224,7 +225,7 @@ fn render_calling_placeholder(
 ) {
     let Some(w) = weak.upgrade() else { return };
 
-    let local_initials = get_initials(&display_name);
+    let local_initials = initials_from_name(&display_name);
     let local_participant = CallParticipantData {
         user_id: user_id.to_string().into(),
         display_name: display_name.into(),

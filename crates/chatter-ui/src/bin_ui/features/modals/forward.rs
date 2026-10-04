@@ -22,8 +22,7 @@ pub fn wire_forward_message(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
         let Some(w) = weak.upgrade() else { return };
         let target_type = {
             let targets = w.get_forward_targets();
-            (0..targets.row_count())
-                .filter_map(|i| targets.row_data(i))
+            targets.iter()
                 .find(|t| t.id.as_str() == target_id_str)
                 .map(|t| t.target_type.to_string())
         };

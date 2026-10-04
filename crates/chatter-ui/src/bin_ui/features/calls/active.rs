@@ -28,8 +28,7 @@ fn set_local_participant_screen_sharing(window: &MainWindow, local_user_id: &str
     // keyed the same way picks them up via the by-user_id texture lookup.
     let screen_id = chatter_core::calls::screen_share_frame_id(local_user_id, true);
     let mut data = window.get_active_call_data();
-    let mut participants: Vec<CallParticipantData> = (0..data.participants.row_count())
-        .filter_map(|i| data.participants.row_data(i))
+    let mut participants: Vec<CallParticipantData> = data.participants.iter()
         .collect();
     // Always drop any existing local screen tile first (idempotent).
     participants.retain(|p| p.user_id.as_str() != screen_id);

@@ -117,7 +117,7 @@ fn wire_load_more_thread_replies(window: &MainWindow, ui_ctx: &Arc<ChatterClient
                 let current = w.get_thread_replies();
                 let mut rows: Vec<MessageItemData> =
                     display.iter().map(|d| d.to_slint_with_user(&current_user_id)).collect();
-                rows.extend((0..current.row_count()).filter_map(|i| current.row_data(i)));
+                rows.extend(current.iter());
                 w.set_thread_replies(ModelRc::new(VecModel::from(rows)));
             });
         });
@@ -138,15 +138,14 @@ pub fn apply_live_thread_reply(
 ) {
     if panel_shows_this_thread {
         let replies = w.get_thread_replies();
-        let already_present = (0..replies.row_count())
-            .filter_map(|i| replies.row_data(i))
+        let already_present = replies.iter()
             .any(|m| m.message_id == reply.message_id);
         if !already_present {
             match replies.as_any().downcast_ref::<VecModel<MessageItemData>>() {
                 Some(model) => model.push(reply),
                 None => {
                     let mut all: Vec<MessageItemData> =
-                        (0..replies.row_count()).filter_map(|i| replies.row_data(i)).collect();
+                        replies.iter().collect();
                     all.push(reply);
                     w.set_thread_replies(ModelRc::new(VecModel::from(all)));
                 }

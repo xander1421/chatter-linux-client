@@ -57,38 +57,22 @@ pub fn build_own_message_item(
 
     crate::MessageItemData {
         // See converters::message — selection marking is applied afterwards.
-        selected: false,
         message_id: message_id.into(),
         sender_id: sender_id.into(),
         sender_name: sender_name.into(),
-        sender_initials: crate::bin_ui::converters::get_initials(sender_name).into(),
-        sender_avatar_source: slint::Image::default(),
-        has_avatar: false,
+        sender_initials: chatter_core::ui::initials_from_name(sender_name).into(),
         content: text.into(),
-        rich_content: slint::ModelRc::default(),
         timestamp: timestamp.into(),
         timestamp_ns: timestamp_ns.to_string().into(),
         is_own: true,
-        is_edited: false,
-        is_deleted: false,
-        is_system: false,
-        is_ai: false,
         has_attachments: !slint_attachments.is_empty(),
         attachment_count: slint_attachments.len() as i32,
         attachments: ModelRc::new(VecModel::from(slint_attachments)),
-        has_reactions: false,
-        reaction_summary: "".into(),
-        reactions: ModelRc::default(),
-        reply_count: 0,
-        reply_count_text: "".into(),
-        is_thread_reply: false,
         is_reply,
         // Optimistic echo identifies its reply by (sender, timestamp), not a
-        // parent MessageId; leave empty (tap-to-jump suppressed) until the
+        // parent MessageId; the id stays empty (tap-to-jump suppressed) until the
         // canonical DB-converted message — which carries reply_to — replaces it.
-        reply_to_message_id: "".into(),
         // Own outgoing reply: the parent existed at send time.
-        reply_to_not_found: false,
         reply_to_sender_name: reply_to_sender_name.into(),
         reply_to_preview: reply_to_preview.into(),
         // Parent-media snapshot (resolved at send time) so the echo shows the
@@ -108,15 +92,9 @@ pub fn build_own_message_item(
         reply_to_thumbnail_height,
         show_sender: true,
         delivery_status: delivery_status.into(),
-        failure_reason: Default::default(),
-        is_pinned: false,
-        is_call: false,
-        call_type: "".into(),
-        call_duration: "".into(),
         // Just sent, so today's chip.
         date_separator_text: chatter_core::ui::chat_data::day_label(chrono::Utc::now()).into(),
-        is_continuation: false,
-        show_date_separator: false,
+        ..Default::default()
     }
 }
 

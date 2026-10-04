@@ -395,10 +395,7 @@ pub fn wire_send(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                         .as_ref()
                         .map(|rgba| {
                             let (w, h) = rgba.dimensions();
-                            let buf = slint::SharedPixelBuffer::<slint::Rgba8Pixel>::clone_from_slice(
-                                rgba.as_raw(), w, h,
-                            );
-                            (slint::Image::from_rgba8(buf), true, w as i32, h as i32)
+                            (crate::bin_ui::slint_conversions::rgba_to_slint_image(rgba.as_raw(), w, h,), true, w as i32, h as i32)
                         })
                         .unwrap_or_else(|| (slint::Image::default(), false, 0, 0));
                     let mut msg_item = super::helpers::build_own_message_item(

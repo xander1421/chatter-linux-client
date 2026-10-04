@@ -30,12 +30,9 @@ pub fn register_picker_gif(
     let frames: Vec<Image> = raw_frames
         .iter()
         .map(|(data, width, height, _)| {
-            let buffer = slint::SharedPixelBuffer::<slint::Rgba8Pixel>::clone_from_slice(
-                data,
+            crate::bin_ui::slint_conversions::rgba_to_slint_image(data,
                 *width,
-                *height,
-            );
-            slint::Image::from_rgba8(buffer)
+                *height,)
         })
         .collect();
 

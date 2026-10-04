@@ -2,8 +2,6 @@
 
 use slint::{ModelRc, VecModel};
 
-use chatter_core::domain::anon_dm::AnonDmMessage;
-use chatter_core::domain::anon_group::AnonGroupMessage;
 use chatter_core::domain::attachment::Attachment;
 use chatter_core::domain::message::{Message, MessageContent};
 
@@ -12,8 +10,8 @@ use crate::{MessageItemData, RichTextSpan};
 use super::attachment::{attachment_to_display_data, AttachmentDisplayData};
 use super::markdown::{parse_markdown, strip_markdown};
 use super::utils::{
-    avatar_bytes_to_image, extract_quote_from_content_json, format_count, get_initials,
-    insert_word_breaks, reaction_counts_to_entries,
+    avatar_bytes_to_image, format_count, insert_word_breaks,
+    reaction_counts_to_entries,
 };
 
 /// A message body as a row renders it: `rich_content` is the markdown spans
@@ -198,10 +196,7 @@ impl MessageDisplayData {
         };
 
         let (sender_avatar_source, has_avatar) = if let Some((ref pixels, w, h)) = self.sender_avatar_decoded {
-            let buffer = slint::SharedPixelBuffer::<slint::Rgba8Pixel>::clone_from_slice(
-                pixels, w, h
-            );
-            (slint::Image::from_rgba8(buffer), true)
+            (crate::bin_ui::slint_conversions::rgba_to_slint_image(pixels, w, h), true)
         } else if let Some(bytes) = &self.sender_avatar_bytes {
             match avatar_bytes_to_image(bytes) {
                 Some(img) => (img, true),
@@ -213,10 +208,7 @@ impl MessageDisplayData {
 
         let (reply_to_thumbnail, reply_to_has_thumbnail, reply_to_thumb_w, reply_to_thumb_h) =
             if let Some((ref pixels, w, h)) = self.reply_to_thumbnail_decoded {
-                let buffer = slint::SharedPixelBuffer::<slint::Rgba8Pixel>::clone_from_slice(
-                    pixels, w, h,
-                );
-                (slint::Image::from_rgba8(buffer), true, w as i32, h as i32)
+                (crate::bin_ui::slint_conversions::rgba_to_slint_image(pixels, w, h,), true, w as i32, h as i32)
             } else {
                 (slint::Image::default(), false, 0, 0)
             };
@@ -232,7 +224,6 @@ impl MessageDisplayData {
     MessageItemData {
         // Multi-select marking is applied by features::chat::selection after
         // conversion; a freshly converted row is never pre-selected.
-        selected: false,
         message_id: self.message_id.clone().into(),
         sender_id: self.sender_id.clone().into(),
         sender_name: self.sender_name.clone().into(),
@@ -287,8 +278,7 @@ impl MessageDisplayData {
         call_type: call_type.into(),
         call_duration: self.call_duration.clone().into(),
         date_separator_text: self.day_label.clone().into(),
-        is_continuation: false,
-        show_date_separator: false,
+        ..Default::default()
     }
 }
 }
@@ -355,7 +345,7 @@ pub fn message_to_display_data_with_replies(
         message_id: msg.id.to_string(),
         sender_id: msg.sender_id.map(|id| id.to_string()).unwrap_or_default(),
         sender_name: sender_name.to_string(),
-        sender_initials: get_initials(sender_name),
+        sender_initials: chatter_core::ui::initials_from_name(sender_name),
         content,
         timestamp: {
             // Convert UTC to local time for display (consistent with sidebar)
@@ -400,123 +390,6 @@ pub fn message_to_display_data_with_replies(
     }
 }
 
-// ============================================================================
-// Shared trait for anonymous message conversion
-// ============================================================================
-
-use chatter_core::domain::message::ReactionCount;
-
-/// Trait for anonymous message types that can be converted to display data.
-///
-/// Implemented by both `AnonDmMessage` and `AnonGroupMessage` to eliminate
-/// the duplicated converter functions.
-pub trait AnonMessageFields {
-    fn message_id_str(&self) -> &str;
-    fn sender_id(&self) -> &chatter_core::domain::UserId;
-    fn content_json(&self) -> &str;
-    fn is_deleted(&self) -> bool;
-    fn is_pinned(&self) -> bool;
-    fn reaction_counts(&self) -> &[ReactionCount];
-    fn delivery_status(&self) -> &str;
-    fn sent_at(&self) -> u64;
-    fn created_at(&self) -> &chrono::DateTime<chrono::Utc>;
-    fn is_edited(&self) -> bool;
-    fn as_text(&self) -> Option<String>;
-}
-
-impl AnonMessageFields for AnonGroupMessage {
-    fn message_id_str(&self) -> &str { self.id.as_str() }
-    fn sender_id(&self) -> &chatter_core::domain::UserId { &self.sender_id }
-    fn content_json(&self) -> &str { &self.content_json }
-    fn is_deleted(&self) -> bool { self.is_deleted }
-    fn is_pinned(&self) -> bool { self.is_pinned }
-    fn reaction_counts(&self) -> &[ReactionCount] { &self.reaction_counts }
-    fn delivery_status(&self) -> &str { &self.delivery_status }
-    fn sent_at(&self) -> u64 { self.sent_at }
-    fn created_at(&self) -> &chrono::DateTime<chrono::Utc> { &self.created_at }
-    fn is_edited(&self) -> bool { self.is_edited }
-    fn as_text(&self) -> Option<String> { AnonGroupMessage::as_text(self) }
-}
-
-impl AnonMessageFields for AnonDmMessage {
-    fn message_id_str(&self) -> &str { self.id.as_str() }
-    fn sender_id(&self) -> &chatter_core::domain::UserId { &self.sender_id }
-    fn content_json(&self) -> &str { &self.content_json }
-    fn is_deleted(&self) -> bool { self.is_deleted }
-    fn is_pinned(&self) -> bool { self.is_pinned }
-    fn reaction_counts(&self) -> &[ReactionCount] { &self.reaction_counts }
-    fn delivery_status(&self) -> &str { &self.delivery_status }
-    fn sent_at(&self) -> u64 { self.sent_at }
-    fn created_at(&self) -> &chrono::DateTime<chrono::Utc> { &self.created_at }
-    fn is_edited(&self) -> bool { self.is_edited }
-    fn as_text(&self) -> Option<String> { AnonDmMessage::as_text(self) }
-}
-
-/// Convert any anonymous message (DM or Group) to MessageDisplayData.
-pub fn anon_message_to_display_data(
-    msg: &impl AnonMessageFields,
-    sender_name: &str,
-    sender_avatar: Option<Vec<u8>>,
-    resolved_attachments: &[Attachment],
-) -> MessageDisplayData {
-    use chrono::Local;
-
-    let content = msg.as_text().unwrap_or_default();
-    let quote_data = extract_quote_from_content_json(msg.content_json());
-    let attachment_data: Vec<AttachmentDisplayData> = resolved_attachments
-        .iter()
-        .map(attachment_to_display_data)
-        .collect();
-
-    MessageDisplayData {
-        message_id: msg.message_id_str().to_string(),
-        sender_id: msg.sender_id().to_string(),
-        sender_name: sender_name.to_string(),
-        sender_initials: get_initials(sender_name),
-        content: content.to_string(),
-        timestamp: msg.created_at().with_timezone(&Local).format("%H:%M").to_string(),
-        timestamp_ns: msg.sent_at().to_string(),
-        day_label: chatter_core::ui::chat_data::day_label(*msg.created_at()),
-        is_edited: msg.is_edited(),
-        is_deleted: msg.is_deleted(),
-        is_system: false,
-        is_ai: false,
-        has_attachments: !attachment_data.is_empty(),
-        attachment_count: attachment_data.len() as i32,
-        attachments: attachment_data,
-        has_reactions: !msg.reaction_counts().is_empty(),
-        reaction_counts: msg.reaction_counts().to_vec(),
-        reply_count: 0,
-        reply_count_text: String::new(),
-        is_thread_reply: false,
-        is_reply: quote_data.is_some(),
-        // Anon replies embed the quote in content_json with no parent MessageId
-        // reference — there is no parent row to jump to, so leave the id empty
-        // (tap-to-jump stays suppressed) and never "not found".
-        reply_to_message_id: String::new(),
-        reply_to_not_found: false,
-        reply_to_sender_name: quote_data.as_ref().map(|q| q.0.clone()).unwrap_or_default(),
-        reply_to_preview: quote_data.as_ref().map(|q| q.1.clone()).unwrap_or_default(),
-        // Anon quotes carry a self-contained snapshot with no parent row to
-        // resolve, so there is no inline media player — text/thumbnail only.
-        reply_to_category: String::new(),
-        reply_to_attachment_id: String::new(),
-        reply_to_duration: String::new(),
-        reply_to_filename: String::new(),
-        reply_to_waveform: Vec::new(),
-        reply_to_thumbnail_bytes: None,
-        reply_to_thumbnail_decoded: None,
-        delivery_status: msg.delivery_status().to_string(),
-        failure_reason: String::new(),
-        sender_avatar_bytes: sender_avatar,
-        sender_avatar_decoded: None,
-        is_pinned: msg.is_pinned(),
-        is_call: false,
-        call_message_type: String::new(),
-        call_initiator_id: String::new(),
-        call_duration: String::new(),
-    }
-}
 
 /// Convert a batch of domain Messages to display data, resolving sender names,
 /// attachments, reply-to context, and pre-decoding thumbnails.

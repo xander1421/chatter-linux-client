@@ -225,8 +225,7 @@ pub fn start_video_frame_timer(window: &MainWindow, shared_frames: SharedVideoFr
                         // path does — so a video-off peer can't shift everyone
                         // else's frame onto the wrong tile.
                         let participants = w.get_active_call_data().participants;
-                        let tile_ids: Vec<String> = (0..participants.row_count())
-                            .filter_map(|i| participants.row_data(i))
+                        let tile_ids: Vec<String> = participants.iter()
                             .map(|p| p.user_id.to_string())
                             .collect();
                         let mut frames: std::collections::HashMap<String, _> = buffers.into_iter().collect();

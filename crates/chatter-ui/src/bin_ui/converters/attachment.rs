@@ -106,12 +106,9 @@ impl AttachmentDisplayData {
         // Priority 2: Load from local path after download
         let (has_thumbnail, thumbnail, img_width, img_height) = if let Some((ref pixels, w, h)) = self.thumbnail_pixels {
             // Use pre-decoded pixels (fast - just wrap in Slint buffer)
-            let buffer = slint::SharedPixelBuffer::<slint::Rgba8Pixel>::clone_from_slice(
-                pixels,
+            let slint_img = crate::bin_ui::slint_conversions::rgba_to_slint_image(pixels,
                 w,
-                h,
-            );
-            let slint_img = Image::from_rgba8(buffer);
+                h,);
             (true, slint_img, w as i32, h as i32)
         } else if !self.thumbnail_bytes.is_empty() {
             // Fallback: decode on UI thread (should be avoided - call decode_thumbnail() first)
@@ -123,12 +120,9 @@ impl AttachmentDisplayData {
                 Ok(img) => {
                     let rgba = img.to_rgba8();
                     let (w, h) = rgba.dimensions();
-                    let buffer = slint::SharedPixelBuffer::<slint::Rgba8Pixel>::clone_from_slice(
-                        rgba.as_raw(),
+                    let slint_img = crate::bin_ui::slint_conversions::rgba_to_slint_image(rgba.as_raw(),
                         w,
-                        h,
-                    );
-                    let slint_img = Image::from_rgba8(buffer);
+                        h,);
                     (true, slint_img, w as i32, h as i32)
                 }
                 Err(e) => {

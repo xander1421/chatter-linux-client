@@ -215,10 +215,7 @@ pub async fn load_channel_into_ui(
         w.set_header_presence_status("offline".into());
         match channel_icon_pixels {
             Some((rgba, w_px, h_px)) => {
-                let buffer = slint::SharedPixelBuffer::<slint::Rgba8Pixel>::clone_from_slice(
-                    &rgba, w_px, h_px,
-                );
-                w.set_channel_avatar_source(slint::Image::from_rgba8(buffer));
+                w.set_channel_avatar_source(crate::bin_ui::slint_conversions::rgba_to_slint_image(&rgba, w_px, h_px,));
                 w.set_channel_has_avatar(true);
             }
             None => {

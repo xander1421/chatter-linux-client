@@ -336,8 +336,7 @@ pub fn wire_dm_selected(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                 w.set_topic("".into());
                 w.set_header_presence_status(status_str.into());
                 if let Some((aw, ah, px)) = &header_avatar {
-                    let buf = slint::SharedPixelBuffer::<slint::Rgba8Pixel>::clone_from_slice(px, *aw, *ah);
-                    w.set_channel_avatar_source(slint::Image::from_rgba8(buf));
+                    w.set_channel_avatar_source(crate::bin_ui::slint_conversions::rgba_to_slint_image(px, *aw, *ah));
                     w.set_channel_has_avatar(true);
                 } else {
                     w.set_channel_has_avatar(false);

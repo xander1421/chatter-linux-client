@@ -4,13 +4,14 @@
 
 use std::sync::Arc;
 
-use slint::{ComponentHandle, Image, ModelRc, VecModel, Weak, Model};
+use slint::{ComponentHandle, ModelRc, VecModel, Weak, Model};
 
 use chatter_core::client::ChatterClient;
 use chatter_core::domain::ids::ChannelId;
 
+use chatter_core::ui::initials_from_name;
 use crate::bin_ui::converters::{
-    get_initials, messages_to_display_batch, ChatRowExt, FriendDataExt,
+    messages_to_display_batch, ChatRowExt, FriendDataExt,
     FriendRequestExt, FriendRequestSendData,
 };
 use crate::{ChatRowData, FriendData, FriendRequestData, MainWindow};
@@ -137,7 +138,7 @@ pub async fn load_initial_data(window_weak: Weak<MainWindow>, ui_ctx: &Arc<Chatt
         .display_name
         .clone()
         .unwrap_or_default();
-    let user_initials = get_initials(&user_display_name);
+    let user_initials = initials_from_name(&user_display_name);
 
     // Load user's own avatar from settings (stored during registration)
     // Pre-decode before entering UI thread to avoid blocking
@@ -248,10 +249,7 @@ pub async fn load_initial_data(window_weak: Weak<MainWindow>, ui_ctx: &Arc<Chatt
 
             // Set user's own avatar if available
             if let Some((pixels, width, height)) = user_avatar_decoded {
-                let buffer = slint::SharedPixelBuffer::<slint::Rgba8Pixel>::clone_from_slice(
-                    &pixels, width, height,
-                );
-                w.set_user_avatar_source(Image::from_rgba8(buffer));
+                w.set_user_avatar_source(crate::bin_ui::slint_conversions::rgba_to_slint_image(&pixels, width, height,));
             }
 
             // Set friend requests (including private/anonymous DM requests)
@@ -429,7 +427,7 @@ pub fn show_incoming_call(
         call_id: call_id.into(),
         caller_id: peer_id.into(),
         caller_name: caller_name.into(),
-        caller_initials: crate::bin_ui::converters::get_initials(caller_name).into(),
+        caller_initials: initials_from_name(caller_name).into(),
         caller_avatar: String::new().into(),
         caller_avatar_source,
         channel_name: String::new().into(),

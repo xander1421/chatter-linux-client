@@ -55,22 +55,12 @@ pub fn reactions_model_to_counts(
     model: &slint::ModelRc<ReactionEntry>,
 ) -> Vec<chatter_core::domain::message::ReactionCount> {
     use slint::Model;
-    (0..model.row_count())
-        .filter_map(|i| model.row_data(i))
+    model.iter()
         .map(|entry| chatter_core::domain::message::ReactionCount::new(
             entry.emoji.to_string(),
             entry.count.max(0) as u32,
         ))
         .collect()
-}
-
-/// Extract initials from a display name (first letter of each word, max 2).
-pub fn get_initials(name: &str) -> String {
-    name.split_whitespace()
-        .filter_map(|word| word.chars().next())
-        .take(2)
-        .collect::<String>()
-        .to_uppercase()
 }
 
 /// Convert avatar bytes to a Slint Image.
@@ -84,12 +74,9 @@ pub fn avatar_bytes_to_image(bytes: &[u8]) -> Option<slint::Image> {
         Ok(img) => {
             let rgba = img.to_rgba8();
             let (w, h) = rgba.dimensions();
-            let buffer = slint::SharedPixelBuffer::<slint::Rgba8Pixel>::clone_from_slice(
-                rgba.as_raw(),
+            Some(crate::bin_ui::slint_conversions::rgba_to_slint_image(rgba.as_raw(),
                 w,
-                h,
-            );
-            Some(slint::Image::from_rgba8(buffer))
+                h,))
         }
         Err(e) => {
             tracing::warn!("Failed to decode avatar image: {:?}", e);
@@ -162,5 +149,3 @@ pub(crate) fn format_count(count: i32, singular: &str, plural: &str) -> String {
         format!("{} {}", count, plural)
     }
 }
-
-pub(crate) use chatter_core::services::message::conversion::extract_quote_from_content_json;

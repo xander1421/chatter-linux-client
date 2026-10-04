@@ -2,7 +2,7 @@
 
 use std::sync::{Arc, Mutex, OnceLock};
 
-use slint::{ComponentHandle, Image};
+use slint::ComponentHandle;
 
 use chatter_core::client::ChatterClient;
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
@@ -53,10 +53,7 @@ pub fn wire_register(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                             w.set_register_selected_default_idx(idx as i32);
 
                             if let Some((pixels, width, height)) = decoded {
-                                let buffer = slint::SharedPixelBuffer::<slint::Rgba8Pixel>::clone_from_slice(
-                                    &pixels, width, height,
-                                );
-                                w.set_register_avatar_source(Image::from_rgba8(buffer));
+                                w.set_register_avatar_source(crate::bin_ui::slint_conversions::rgba_to_slint_image(&pixels, width, height,));
                             }
                         }
                     });
@@ -116,10 +113,7 @@ pub fn wire_register(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
 
                                         // Create slint::Image from pre-decoded pixels
                                         if let Some((pixels, width, height)) = decoded {
-                                            let buffer = slint::SharedPixelBuffer::<slint::Rgba8Pixel>::clone_from_slice(
-                                                &pixels, width, height,
-                                            );
-                                            w.set_register_avatar_source(Image::from_rgba8(buffer));
+                                            w.set_register_avatar_source(crate::bin_ui::slint_conversions::rgba_to_slint_image(&pixels, width, height,));
                                             w.set_register_has_avatar(true);
                                         } else {
                                             tracing::error!("Failed to decode selected avatar for preview");

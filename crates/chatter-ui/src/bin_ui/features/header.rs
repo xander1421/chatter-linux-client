@@ -390,8 +390,7 @@ fn load_older(w: &MainWindow, ui_ctx: &Arc<ChatterClient>, until: Option<Message
             let slint_messages: Vec<_> = display_messages.iter().map(|d| d.to_slint_with_user(&current_user_id)).collect();
 
             let current_model = w.get_messages();
-            let current_ids: std::collections::HashSet<String> = (0..current_model.row_count())
-                .filter_map(|i| current_model.row_data(i))
+            let current_ids: std::collections::HashSet<String> = current_model.iter()
                 .map(|msg| msg.message_id.to_string())
                 .collect();
 

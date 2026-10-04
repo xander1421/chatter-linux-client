@@ -8,7 +8,7 @@ use slint::{ComponentHandle, Model, ModelRc, VecModel};
 
 use chatter_core::client::ChatterClient;
 use chatter_core::calls::LiveKitRoomEvent;
-use crate::bin_ui::converters::get_initials;
+use chatter_core::ui::initials_from_name;
 use crate::{CallParticipantData, MainWindow};
 
 /// The local participant is pinned to the LAST tile (the layout treats the last
@@ -208,7 +208,7 @@ pub fn wire_room_events(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                                 .iter()
                                 .find(|p| p.user_id.to_string() == identity)
                                 .map(|p| (p.display_name.to_string(), p.initials.to_string()))
-                                .unwrap_or_else(|| (identity.clone(), get_initials(&identity)));
+                                .unwrap_or_else(|| (identity.clone(), initials_from_name(&identity)));
                             remotes.push(CallParticipantData {
                                 user_id: screen_id.into(),
                                 display_name: format!("{name} (screen)").into(),

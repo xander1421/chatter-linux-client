@@ -318,8 +318,7 @@ fn deselect_rows(window: &MainWindow) {
     use slint::Model;
 
     let model = window.global::<MeshGlobal>().get_conversations();
-    let rows: Vec<MeshConversationData> = (0..model.row_count())
-        .filter_map(|i| model.row_data(i))
+    let rows: Vec<MeshConversationData> = model.iter()
         .map(|mut row| {
             row.is_selected = false;
             row

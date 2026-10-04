@@ -342,10 +342,7 @@ fn show_image_preview(
         if let Some(w) = weak_loading.upgrade() {
             if let Some((rgba, width, height)) = preview_data {
                 // Show thumbnail preview immediately
-                let buffer = slint::SharedPixelBuffer::<slint::Rgba8Pixel>::clone_from_slice(
-                    &rgba, width, height
-                );
-                w.set_image_viewer_source(slint::Image::from_rgba8(buffer));
+                w.set_image_viewer_source(crate::bin_ui::slint_conversions::rgba_to_slint_image(&rgba, width, height));
                 w.set_image_viewer_filename(format!("{} (loading...)", preview_filename).into());
                 w.set_image_viewer_size(preview_size.into());
             } else {
@@ -556,8 +553,8 @@ fn display_image_from_buffer(
                     let invoke_latency = queued.elapsed();
                     if let Some(w) = weak.upgrade() {
                         let clone_start = std::time::Instant::now();
-                        let img = slint::Image::from_rgba8(
-                            slint::SharedPixelBuffer::clone_from_slice(&rgba_data, width, height)
+                        let img = crate::bin_ui::slint_conversions::rgba_to_slint_image(
+                            &rgba_data, width, height,
                         );
                         let clone_ms = clone_start.elapsed();
                         w.set_image_viewer_source(img);

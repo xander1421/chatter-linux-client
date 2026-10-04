@@ -11,7 +11,7 @@ use slint::{ComponentHandle, Model, ModelRc, VecModel};
 use chatter_core::client::ChatterClient;
 use chatter_core::domain::ids::UserId;
 
-use crate::bin_ui::converters::get_initials;
+use chatter_core::ui::initials_from_name;
 use crate::{MainWindow, SharedContentItem, SharedTab};
 
 /// Bytes of an avatar picked in the Edit Profile modal, held until Save.
@@ -86,7 +86,7 @@ pub fn open_user_profile(
             .or_else(|| user_state.get_user(user_id).map(|u| u.username.clone()))
             .filter(|u| !u.is_empty())
             .unwrap_or_default();
-        let initials = get_initials(&display_name);
+        let initials = initials_from_name(&display_name);
 
         w.set_profile_display_name(display_name.into());
         w.set_profile_username(username.into());
@@ -142,7 +142,7 @@ pub fn open_user_profile(
         // lookup hash); show none rather than the user id dressed up as one.
         let username = ui_ctx.and_then(|ctx| ctx.known_username(user_id)).unwrap_or_default();
 
-        let initials = get_initials(&display_name);
+        let initials = initials_from_name(&display_name);
 
         // Same source as core's `peer_last_seen_label` (the local user
         // directory): `user_state` is not populated for peers, so the dot read
@@ -328,7 +328,7 @@ fn request_shared_page(
             // `slint::Image` cannot cross threads.
             let mut rows: Vec<SharedContentItem> = if append {
                 let cur = w.get_profile_shared_items();
-                (0..cur.row_count()).filter_map(|i| cur.row_data(i)).collect()
+                cur.iter().collect()
             } else {
                 Vec::new()
             };
@@ -382,8 +382,7 @@ fn wire_shared_content(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             // For a link the title IS the URL; find it in the painted model
             // rather than re-querying.
             let items = w.get_profile_shared_items();
-            let url = (0..items.row_count())
-                .filter_map(|i| items.row_data(i))
+            let url = items.iter()
                 .find(|i| i.message_id == message_id)
                 .map(|i| i.subtitle.to_string());
             if let Some(url) = url {

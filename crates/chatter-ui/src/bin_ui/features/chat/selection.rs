@@ -101,8 +101,7 @@ pub fn wire_selection(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             let targets: Vec<(String, String)> = {
                 let set = selected_ids.borrow();
                 let model = w.get_messages();
-                (0..model.row_count())
-                    .filter_map(|i| model.row_data(i))
+                model.iter()
                     .filter(|row| set.contains(row.message_id.as_str()))
                     .map(|row| (row.sender_id.to_string(), row.timestamp_ns.to_string()))
                     .collect()
@@ -136,8 +135,7 @@ pub fn wire_selection(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             let sources: Vec<String> = {
                 let set = selected_ids.borrow();
                 let model = w.get_messages();
-                (0..model.row_count())
-                    .filter_map(|i| model.row_data(i))
+                model.iter()
                     .filter(|row| set.contains(row.message_id.as_str()))
                     .map(|row| format!("{}:{}", row.sender_id, row.timestamp_ns))
                     .collect()
@@ -168,8 +166,7 @@ pub fn wire_selection(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             let targets: Vec<(SharedString, SharedString)> = {
                 let set = selected_ids.borrow();
                 let model = w.get_messages();
-                (0..model.row_count())
-                    .filter_map(|i| model.row_data(i))
+                model.iter()
                     .filter(|row| set.contains(row.message_id.as_str()))
                     .map(|row| (row.sender_id.clone(), row.timestamp_ns.clone()))
                     .collect()

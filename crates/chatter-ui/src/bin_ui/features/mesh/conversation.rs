@@ -175,8 +175,7 @@ pub(super) fn append_incoming(
     let id = message.message.id.to_string();
 
     let model = window.get_messages();
-    let mut items: Vec<MessageItemData> = (0..model.row_count())
-        .filter_map(|i| model.row_data(i))
+    let mut items: Vec<MessageItemData> = model.iter()
         .collect();
     // A courier resend maps onto the id it already had, so the same message
     // can legitimately arrive twice. Show it once.
@@ -215,8 +214,7 @@ pub(super) fn append_incoming(
 pub(super) fn apply_delivery(window: &MainWindow, message_id: &str, label: &str) {
     let model = window.get_messages();
     let mut changed = false;
-    let items: Vec<MessageItemData> = (0..model.row_count())
-        .filter_map(|i| model.row_data(i))
+    let items: Vec<MessageItemData> = model.iter()
         .map(|mut item| {
             if item.message_id.as_str() == message_id && item.delivery_status.as_str() != label {
                 item.delivery_status = label.into();

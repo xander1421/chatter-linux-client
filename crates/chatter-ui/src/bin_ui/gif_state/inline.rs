@@ -524,12 +524,9 @@ pub fn register_gif_attachment(
 
         let _ = slint::invoke_from_event_loop(move || {
             // Show first frame immediately
-            let buffer = slint::SharedPixelBuffer::<slint::Rgba8Pixel>::clone_from_slice(
-                &first_rgba,
+            let first_image = crate::bin_ui::slint_conversions::rgba_to_slint_image(&first_rgba,
                 first_width,
-                first_height,
-            );
-            let first_image = slint::Image::from_rgba8(buffer);
+                first_height,);
 
             if let Some(w) = window_weak_clone.upgrade() {
                 update_message_attachment_thumbnails(&w, &[(att_id_for_ui.clone(), first_image)]);

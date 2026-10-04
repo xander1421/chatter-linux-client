@@ -114,18 +114,14 @@ fn spawn_request_stream(
                             // Create slint::Image on UI thread from pre-decoded pixels
                             let (avatar_source, has_avatar) = match avatar_pixels {
                                 Some((pixels, width, height)) => {
-                                    let buffer = slint::SharedPixelBuffer::<slint::Rgba8Pixel>::clone_from_slice(
-                                        &pixels, width, height,
-                                    );
-                                    (slint::Image::from_rgba8(buffer), true)
+                                    (crate::bin_ui::slint_conversions::rgba_to_slint_image(&pixels, width, height,), true)
                                 }
                                 None => (slint::Image::default(), false),
                             };
 
                             // Add to private requests list
                             let current_requests = w.get_friends_private_requests();
-                            let mut requests: Vec<FriendRequestData> = (0..current_requests.row_count())
-                                .filter_map(|i| current_requests.row_data(i))
+                            let mut requests: Vec<FriendRequestData> = current_requests.iter()
                                 .collect();
 
                             // Add new request
@@ -250,18 +246,14 @@ fn spawn_request_stream(
                             // Create Slint Image from pre-decoded pixels (fast)
                             let (avatar_source, has_avatar) = match avatar_pixels {
                                 Some((pixels, width, height)) => {
-                                    let buffer = slint::SharedPixelBuffer::<slint::Rgba8Pixel>::clone_from_slice(
-                                        &pixels, width, height,
-                                    );
-                                    (slint::Image::from_rgba8(buffer), true)
+                                    (crate::bin_ui::slint_conversions::rgba_to_slint_image(&pixels, width, height,), true)
                                 }
                                 None => (slint::Image::default(), false),
                             };
 
                             // Add to private requests list
                             let current_requests = w.get_friends_private_requests();
-                            let mut requests: Vec<FriendRequestData> = (0..current_requests.row_count())
-                                .filter_map(|i| current_requests.row_data(i))
+                            let mut requests: Vec<FriendRequestData> = current_requests.iter()
                                 .collect();
 
                             // Add new request with sender's identity (revealed after ECIES decryption)

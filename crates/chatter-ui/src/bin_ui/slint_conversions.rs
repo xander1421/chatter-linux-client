@@ -3,8 +3,6 @@
 //! Converts raw pixel data from core types into Slint Image for UI display.
 //! These functions were extracted from core to keep it Slint-free.
 
-#[cfg(feature = "call-ui")]
-use chatter_core::calls::shared_frames::VideoFrameData;
 use chatter_core::error::MediaError;
 use chatter_core::media::gif::GifFrame;
 use chatter_core::media::ImageProcessor;
@@ -26,10 +24,7 @@ pub fn rgb_to_slint_image(width: u32, height: u32, rgb_data: &[u8]) -> slint::Im
 /// Convert a DynamicImage to Slint Image for display.
 pub fn dynamic_image_to_slint(image: &image::DynamicImage) -> slint::Image {
     let rgba = image.to_rgba8();
-    let width = rgba.width();
-    let height = rgba.height();
-    let data = rgba.into_raw();
-    slint::Image::from_rgba8(slint::SharedPixelBuffer::clone_from_slice(&data, width, height))
+    rgba_to_slint_image(rgba.as_raw(), rgba.width(), rgba.height())
 }
 
 /// Load an image from memory bytes and convert directly to Slint Image.
@@ -41,10 +36,4 @@ pub fn memory_to_slint_image(data: &[u8]) -> Result<slint::Image, MediaError> {
 /// Convert a GIF frame to a Slint Image.
 pub fn gif_frame_to_slint_image(frame: &GifFrame) -> slint::Image {
     rgba_to_slint_image(&frame.data, frame.width, frame.height)
-}
-
-/// Convert a VideoFrameData to a Slint Image.
-#[cfg(feature = "call-ui")]
-pub fn video_frame_to_slint_image(frame: &VideoFrameData) -> slint::Image {
-    rgba_to_slint_image(&frame.rgba_data, frame.width, frame.height)
 }

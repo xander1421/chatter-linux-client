@@ -7,7 +7,7 @@
 
 use std::sync::Arc;
 
-use slint::{ComponentHandle, Image};
+use slint::ComponentHandle;
 
 use chatter_core::client::ChatterClient;
 use chatter_core::services::link_device_service::LinkProgress;
@@ -55,12 +55,11 @@ fn wire_start(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                         let _ = slint::invoke_from_event_loop(move || {
                             if let Some(w) = weak_for_ui.upgrade() {
                                 if let Some((px, ww, hh)) = pixels {
-                                    let buffer = slint::SharedPixelBuffer::<
-                                        slint::Rgba8Pixel,
-                                    >::clone_from_slice(
-                                        &px, ww, hh
+                                    w.set_link_device_qr(
+                                        crate::bin_ui::slint_conversions::rgba_to_slint_image(
+                                            &px, ww, hh,
+                                        ),
                                     );
-                                    w.set_link_device_qr(Image::from_rgba8(buffer));
                                 }
                                 w.set_link_device_url(url_for_ui.into());
                             }

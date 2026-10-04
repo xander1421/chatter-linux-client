@@ -14,7 +14,7 @@ use chatter_core::domain::section::SectionSortMode;
 
 use chatter_core::services::attachment::DecodedImagePixels;
 
-use crate::bin_ui::converters::get_initials;
+use chatter_core::ui::initials_from_name;
 use crate::{ChatRowData, CustomSectionData, MainWindow, run_ui};
 
 /// Send-safe intermediate for a folder's `ChatRowData`.
@@ -35,10 +35,7 @@ impl SectionConvSendData {
     fn to_slint(self) -> ChatRowData {
         let (avatar_source, has_avatar) = match self.avatar_decoded {
             Some(pixels) => {
-                let buffer = slint::SharedPixelBuffer::<slint::Rgba8Pixel>::clone_from_slice(
-                    &pixels.rgba, pixels.width, pixels.height,
-                );
-                (slint::Image::from_rgba8(buffer), true)
+                (crate::bin_ui::slint_conversions::rgba_to_slint_image(&pixels.rgba, pixels.width, pixels.height,), true)
             }
             None => (slint::Image::default(), false),
         };
@@ -465,7 +462,7 @@ fn enrich_conversation_send(
     let mut data = SectionConvSendData {
         conversation_id: conv.conversation_id.clone(),
         conversation_type: conv.conversation_type.clone(),
-        initials: get_initials(&display_name),
+        initials: initials_from_name(&display_name),
         display_name,
         avatar_decoded: None,
         unread_count: conv.unread_count as i32,

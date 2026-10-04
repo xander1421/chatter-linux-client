@@ -174,8 +174,7 @@ pub(super) fn handle_message_received(
             let new_ts = new_msg.timestamp_ns.to_string().parse::<u64>().unwrap_or(0);
             let new_sender = new_msg.sender_id.to_string();
 
-            let keys: Vec<(u64, String)> = (0..current_model.row_count())
-                .filter_map(|i| current_model.row_data(i))
+            let keys: Vec<(u64, String)> = current_model.iter()
                 .map(|m| (m.timestamp_ns.to_string().parse::<u64>().unwrap_or(0), m.sender_id.to_string()))
                 .collect();
             let key_refs: Vec<(u64, &str)> = keys.iter().map(|(t, s)| (*t, s.as_str())).collect();
@@ -189,8 +188,7 @@ pub(super) fn handle_message_received(
                         vec_model.insert(insert_pos, new_msg);
                         tracing::info!(insert_pos, "[UI_RECV] inserted via VecModel.insert");
                     } else {
-                        let mut messages: Vec<MessageItemData> = (0..current_model.row_count())
-                            .filter_map(|i| current_model.row_data(i))
+                        let mut messages: Vec<MessageItemData> = current_model.iter()
                             .collect();
                         messages.insert(insert_pos, new_msg);
                         w.set_messages(ModelRc::new(VecModel::from(messages)));

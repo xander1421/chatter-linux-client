@@ -87,40 +87,13 @@ pub fn conversation_item(
         sender_id: if is_own { "me" } else { "jarvis" }.into(),
         sender_name: sender_name.into(),
         sender_initials: sender_name.chars().next().unwrap_or('J').to_string().into(),
-        sender_avatar_source: slint::Image::default(),
-        has_avatar: false,
         content: content.into(),
-        rich_content: ModelRc::default(),
         timestamp: ts.with_timezone(&chrono::Local).format("%H:%M").to_string().into(),
         timestamp_ns: timestamp_ns.to_string().into(),
         is_own,
-        is_edited: false,
-        is_deleted: false,
-        is_system: false,
         is_ai: !is_own,
-        has_attachments: false,
-        attachment_count: 0,
-        attachments: ModelRc::default(),
-        has_reactions: false,
-        reaction_summary: "".into(),
-        reactions: ModelRc::default(),
-        reply_count: 0,
-        reply_count_text: "".into(),
-        is_thread_reply: false,
-        is_reply: false,
-        reply_to_sender_name: "".into(),
-        reply_to_preview: "".into(),
-        reply_to_has_thumbnail: false,
-        reply_to_thumbnail: slint::Image::default(),
         show_sender: true,
         delivery_status: "local".into(),
-        is_pinned: false,
-        is_call: false,
-        call_type: "".into(),
-        call_duration: "".into(),
-        date_separator_text: Default::default(),
-        is_continuation: false,
-        show_date_separator: false,
         ..Default::default()
     }
 }
@@ -151,7 +124,7 @@ pub async fn handle_jarvis_channel_send(
                 use slint::Model;
                 let now_ns = chrono::Utc::now().timestamp_nanos_opt().unwrap_or(0) as u64;
                 let model = w.get_messages();
-                let mut messages: Vec<_> = (0..model.row_count()).filter_map(|i| model.row_data(i)).collect();
+                let mut messages: Vec<_> = model.iter().collect();
                 messages.push(conversation_item(
                     &format!("jarvis-user-{}", uuid::Uuid::new_v4()),
                     true,
@@ -190,8 +163,7 @@ pub async fn handle_jarvis_channel_send(
             w.set_jarvis_thinking(false);
             let now_ns = chrono::Utc::now().timestamp_nanos_opt().unwrap_or(0) as u64;
             let model = w.get_messages();
-            let mut messages: Vec<_> = (0..model.row_count())
-                .filter_map(|i| model.row_data(i))
+            let mut messages: Vec<_> = model.iter()
                 .filter(|m| thinking_id.as_deref() != Some(m.message_id.as_str()))
                 .collect();
             messages.push(conversation_item(

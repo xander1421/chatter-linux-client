@@ -897,8 +897,7 @@ fn wire_invite_channel_members(window: &MainWindow, ui_ctx: &Arc<ChatterClient>)
                     users.set_row_data(index, user);
 
                     // Recalculate selected count
-                    let count = (0..users.row_count())
-                        .filter_map(|i| users.row_data(i))
+                    let count = users.iter()
                         .filter(|u| u.selected)
                         .count() as i32;
                     w.set_invite_member_selected_count(count);
@@ -923,8 +922,7 @@ fn wire_invite_channel_members(window: &MainWindow, ui_ctx: &Arc<ChatterClient>)
             let Some(w) = weak.upgrade() else { return };
             let channel_id = w.get_invite_member_channel_id().to_string();
             let users = w.get_invite_member_users();
-            let selected_vec: Vec<String> = (0..users.row_count())
-                .filter_map(|i| users.row_data(i))
+            let selected_vec: Vec<String> = users.iter()
                 .filter(|u| u.selected && !u.already_member && !u.banned)
                 .map(|u| u.id.to_string())
                 .collect();

@@ -124,8 +124,7 @@ pub(crate) fn refresh_section_selection(window: &MainWindow, ui_ctx: &Arc<Chatte
 
     let active = ui_ctx.active_conversation();
     let sections = window.get_custom_sections();
-    let updated: Vec<_> = (0..sections.row_count())
-        .filter_map(|i| sections.row_data(i))
+    let updated: Vec<_> = sections.iter()
         .map(|mut section| {
             let rows = section.conversations.clone();
             let marked: Vec<_> = (0..rows.row_count())
