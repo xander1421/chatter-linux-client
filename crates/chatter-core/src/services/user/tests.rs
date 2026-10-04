@@ -240,7 +240,7 @@ mod tests {
         });
         let dir = tempfile::tempdir().unwrap();
         let client = ChatterClient::builder()
-            .server_url("http://localhost:1")
+            .server_url("https://localhost:1")
             .data_dir(dir.path().to_str().unwrap())
             .build()
             .expect("build client");
@@ -284,7 +284,7 @@ mod tests {
         });
         let dir = tempfile::tempdir().unwrap();
         let client = ChatterClient::builder()
-            .server_url("http://localhost:1")
+            .server_url("https://localhost:1")
             .data_dir(dir.path().to_str().unwrap())
             .build()
             .expect("build client");
@@ -327,7 +327,7 @@ mod tests {
         });
         let dir = tempfile::tempdir().unwrap();
         let client = ChatterClient::builder()
-            .server_url("http://localhost:1")
+            .server_url("https://localhost:1")
             .data_dir(dir.path().to_str().unwrap())
             .build()
             .expect("build client");

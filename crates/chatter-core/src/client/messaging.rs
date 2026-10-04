@@ -1666,7 +1666,7 @@ mod shield_mode_tests {
         });
         let dir = tempfile::tempdir().unwrap();
         ChatterClient::builder()
-            .server_url("http://localhost:1")
+            .server_url("https://localhost:1")
             .data_dir(dir.path().to_str().unwrap())
             .build()
             .expect("build client")
@@ -1847,7 +1847,7 @@ mod search_hit_tests {
         });
         let dir = tempfile::tempdir().unwrap();
         let client = ChatterClient::builder()
-            .server_url("http://localhost:1")
+            .server_url("https://localhost:1")
             .data_dir(dir.path().to_str().unwrap())
             .build()
             .expect("build client");
@@ -1888,7 +1888,7 @@ mod new_channel_row_tests {
         });
         let dir = tempfile::tempdir().unwrap();
         let client = ChatterClient::builder()
-            .server_url("http://localhost:1")
+            .server_url("https://localhost:1")
             .data_dir(dir.path().to_str().unwrap())
             .build()
             .expect("build client");
@@ -1941,7 +1941,7 @@ mod older_messages_tests {
         });
         let dir = tempfile::tempdir().unwrap();
         let client = ChatterClient::builder()
-            .server_url("http://localhost:1")
+            .server_url("https://localhost:1")
             .data_dir(dir.path().to_str().unwrap())
             .build()
             .expect("build client");

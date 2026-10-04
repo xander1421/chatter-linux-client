@@ -282,7 +282,7 @@ mod tests {
         let tablet_dir = tempfile::tempdir().unwrap();
         let build = |path: &std::path::Path| {
             crate::client::ChatterClient::builder()
-                .server_url("http://localhost:1")
+                .server_url("https://localhost:1")
                 .data_dir(path.to_str().unwrap())
                 .build()
                 .unwrap()

@@ -4215,7 +4215,7 @@ mod transport_switch_tests {
 
         let dir = tempfile::tempdir().unwrap();
         let client = ChatterClient::builder()
-            .server_url("http://localhost:1")
+            .server_url("https://localhost:1")
             .data_dir(dir.path().to_str().unwrap())
             .build()
             .expect("build client");
@@ -4431,7 +4431,7 @@ mod transport_switch_tests {
         // goes to this client's pool only.
         let dir = tempfile::tempdir().unwrap();
         let client = ChatterClient::builder()
-            .server_url("http://localhost:1")
+            .server_url("https://localhost:1")
             .data_dir(dir.path().to_str().unwrap())
             .build()
             .expect("build client");
@@ -4510,7 +4510,7 @@ mod unread_badge_tests {
         });
         let dir = tempfile::tempdir().unwrap();
         let client = ChatterClient::builder()
-            .server_url("http://localhost:1")
+            .server_url("https://localhost:1")
             .data_dir(dir.path().to_str().unwrap())
             .build()
             .expect("build client");
