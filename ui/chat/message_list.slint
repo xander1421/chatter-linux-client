@@ -528,8 +528,14 @@ export component MessageList inherits Rectangle {
                         root.load-more-armed = true;
                     }
                 }
+                // Row 0 is read only when the row count moved (`prepended`
+                // above short-circuits the same way): reading it copies a whole
+                // MessageItemData out of the model, and a scroll frame cannot
+                // change which row is first — a prepend changes the count.
+                if (root.messages.length != root.seen-rows) {
+                    root.seen-first = root.messages[0].message-id;
+                }
                 root.seen-rows = root.messages.length;
-                root.seen-first = root.messages[0].message-id;
                 root.seen-height = self.viewport-height;
                 root.seen-y = self.viewport-y;
                 root.seen-top = self.top-row();

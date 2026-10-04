@@ -112,7 +112,67 @@ fn message_list_navigation() {
     pill_only_when_unread_is_below_the_viewport(&w);
     let row_height = jumps_land_on_their_row(&w);
     new_messages_are_followed_only_from_the_bottom(&w);
+    scrolling_does_not_read_row_zero(&w);
     older_history_loads_to_the_beginning(&w, row_height);
+}
+
+/// The message rows, counting how often row 0 is copied out.
+struct RowZeroReads {
+    rows: VecModel<MessageItemData>,
+    reads: Cell<usize>,
+}
+
+impl Model for RowZeroReads {
+    type Data = MessageItemData;
+    fn row_count(&self) -> usize {
+        self.rows.row_count()
+    }
+    fn row_data(&self, row: usize) -> Option<MessageItemData> {
+        if row == 0 {
+            self.reads.set(self.reads.get() + 1);
+        }
+        self.rows.row_data(row)
+    }
+    fn model_tracker(&self) -> &dyn slint::ModelTracker {
+        self.rows.model_tracker()
+    }
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+}
+
+/// PERF: the list's per-layout-pass bookkeeping (`settle`) runs on every
+/// scroll frame. Row 0 can only become a different row when the row count
+/// changes, so a scroll that leaves the count alone must not copy it out of
+/// the model — a whole MessageItemData per frame.
+fn scrolling_does_not_read_row_zero(w: &MainWindow) {
+    let model = Rc::new(RowZeroReads {
+        rows: VecModel::from((0..300).map(row).collect::<Vec<_>>()),
+        reads: Cell::new(0),
+    });
+    w.set_loading_messages(true);
+    pump(w);
+    w.set_unread_index(-1);
+    w.set_unread_count(0);
+    w.set_is_at_bottom(true);
+    w.set_messages(ModelRc::from(model.clone()));
+    w.set_loading_messages(false);
+    lay_out(w);
+    assert!(model.reads.get() > 0, "the open never recorded row 0: the counter is not wired");
+
+    // Far from the top throughout: row 0 is never live, nor the row under it
+    // (whose date separator compares against row 0).
+    wheel(w, 600.0);
+    let (reads, start) = (model.reads.get(), pos(w));
+    for _ in 0..5 {
+        wheel(w, 300.0);
+    }
+    assert!(start - pos(w) > 500.0, "the wheel did not scroll: {start} → {}", pos(w));
+    assert_eq!(
+        model.reads.get(),
+        reads,
+        "scrolling copied row 0 out of the model on its layout passes"
+    );
 }
 
 /// Regression (device sweep, client 8adfb834): a conversation opened on an
