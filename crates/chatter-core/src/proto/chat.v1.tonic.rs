@@ -915,6 +915,7 @@ pub mod auth_service_client {
                 );
             self.inner.unary(req, path, codec).await
         }
+        ///
         pub async fn get_pre_key_bundle(
             &mut self,
             request: impl tonic::IntoRequest<super::GetPreKeyBundleRequest>,
@@ -939,6 +940,7 @@ pub mod auth_service_client {
                 .insert(GrpcMethod::new("chat.v1.AuthService", "GetPreKeyBundle"));
             self.inner.unary(req, path, codec).await
         }
+        ///
         pub async fn refresh_pre_keys(
             &mut self,
             request: impl tonic::IntoRequest<super::RefreshPreKeysRequest>,
@@ -1077,34 +1079,6 @@ pub mod internal_auth_service_client {
         pub fn max_encoding_message_size(mut self, limit: usize) -> Self {
             self.inner = self.inner.max_encoding_message_size(limit);
             self
-        }
-        /** Compensates a failed/aborted registration saga
-*/
-        pub async fn compensate_registration(
-            &mut self,
-            request: impl tonic::IntoRequest<super::CompensateRegistrationRequest>,
-        ) -> std::result::Result<tonic::Response<()>, tonic::Status> {
-            self.inner
-                .ready()
-                .await
-                .map_err(|e| {
-                    tonic::Status::unknown(
-                        format!("Service was not ready: {}", e.into()),
-                    )
-                })?;
-            let codec = tonic_prost::ProstCodec::default();
-            let path = http::uri::PathAndQuery::from_static(
-                "/chat.v1.InternalAuthService/CompensateRegistration",
-            );
-            let mut req = request.into_request();
-            req.extensions_mut()
-                .insert(
-                    GrpcMethod::new(
-                        "chat.v1.InternalAuthService",
-                        "CompensateRegistration",
-                    ),
-                );
-            self.inner.unary(req, path, codec).await
         }
         /** Creates a new session for internal service-to-service communication
 */
@@ -3670,6 +3644,8 @@ pub mod message_service_client {
                 );
             self.inner.unary(req, path, codec).await
         }
+        /** Pin/Unpin Messages
+*/
         pub async fn pin_message(
             &mut self,
             request: impl tonic::IntoRequest<super::MessageUpdate>,

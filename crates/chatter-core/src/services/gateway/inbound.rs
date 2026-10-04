@@ -94,6 +94,7 @@ pub fn content_type_name(content: &Option<content::Content>) -> &'static str {
         Some(content::Content::ProfileKeySync(_)) => "ProfileKeySync",
         Some(content::Content::ConfigurationSync(_)) => "ConfigurationSync",
         Some(content::Content::NullMessage(_)) => "NullMessage",
+        Some(content::Content::CallEvent(_)) => "CallEvent",
         None => "None",
     }
 }

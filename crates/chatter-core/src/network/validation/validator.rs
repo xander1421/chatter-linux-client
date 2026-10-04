@@ -211,7 +211,6 @@ impl ContentValidator {
             Some(Type::AiBot(ai)) => ai.text.len(),
             Some(Type::SignalEncrypted(sig)) => sig.body.len(),
             Some(Type::SealedSender(sealed)) => sealed.sealed_body.len(),
-            Some(Type::Call(_)) => 0, // Call notifications are small, skip size check
             None => 0,
         }
     }
