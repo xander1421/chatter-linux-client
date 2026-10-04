@@ -1,73 +1,34 @@
-//! Shared emoji loading logic for composer and reactions.
+//! Emoji picker callbacks for the composer and reactions. The table, search,
+//! skin tones and recents are core's (`chatter_core::ui::emoji_data`).
 
 use std::sync::Arc;
 
 use slint::{ComponentHandle, ModelRc, VecModel};
 
 use chatter_core::client::ChatterClient;
+use chatter_core::ui::emoji_data::{self, PickerEmoji, PEOPLE_CATEGORY};
 use chatter_core::ui::recent_emoji::RecentEmojiStore;
 
 use crate::{EmojiData, MainWindow};
 
-/// Category index reserved for "Recent" emoji (displayed as first tab).
-const RECENT_CATEGORY: i32 = -1;
-
-/// Fitzpatrick skin tone modifiers (indices 1-5). Index 0 = no modifier (default yellow).
-const SKIN_TONE_MODIFIERS: [&str; 5] = [
-    "\u{1F3FB}", // Light
-    "\u{1F3FC}", // Medium-Light
-    "\u{1F3FD}", // Medium
-    "\u{1F3FE}", // Medium-Dark
-    "\u{1F3FF}", // Dark
-];
-
-/// SMP code points with Emoji_Presentation=No (Unicode `emoji-data.txt`).
-/// Being ≥ U+1F000 does not make an emoji colour-default: these are text-style
-/// even with VS16 on older fonts, and rendered as tofu on Android 10 (🛡️).
-const SMP_TEXT_DEFAULT: &[(u32, u32)] = &[
-    (0x1F170, 0x1F171), (0x1F17E, 0x1F17F), (0x1F202, 0x1F202), (0x1F237, 0x1F237),
-    (0x1F321, 0x1F321), (0x1F324, 0x1F32C), (0x1F336, 0x1F336), (0x1F37D, 0x1F37D),
-    (0x1F396, 0x1F397), (0x1F399, 0x1F39B), (0x1F39E, 0x1F39F), (0x1F3CB, 0x1F3CE),
-    (0x1F3D4, 0x1F3DF), (0x1F3F3, 0x1F3F3), (0x1F3F5, 0x1F3F5), (0x1F3F7, 0x1F3F7),
-    (0x1F43F, 0x1F43F), (0x1F441, 0x1F441), (0x1F4FD, 0x1F4FD), (0x1F549, 0x1F54A),
-    (0x1F56F, 0x1F570), (0x1F573, 0x1F579), (0x1F587, 0x1F587), (0x1F58A, 0x1F58D),
-    (0x1F590, 0x1F590), (0x1F5A5, 0x1F5A5), (0x1F5A8, 0x1F5A8), (0x1F5B1, 0x1F5B2),
-    (0x1F5BC, 0x1F5BC), (0x1F5C2, 0x1F5C4), (0x1F5D1, 0x1F5D3), (0x1F5DC, 0x1F5DE),
-    (0x1F5E1, 0x1F5E1), (0x1F5E3, 0x1F5E3), (0x1F5E8, 0x1F5E8), (0x1F5EF, 0x1F5EF),
-    (0x1F5F3, 0x1F5F3), (0x1F5FA, 0x1F5FA), (0x1F6CB, 0x1F6CB), (0x1F6CD, 0x1F6CF),
-    (0x1F6E0, 0x1F6E5), (0x1F6E9, 0x1F6E9), (0x1F6F0, 0x1F6F0), (0x1F6F3, 0x1F6F3),
-];
-
-/// True if emoji renders in color by default (Emoji_Presentation=Yes).
-///
-/// First char must be in the SMP emoji range (≥ U+1F000) and not one of the
-/// SMP text-default exceptions. BMP emoji (e.g. ✈, ⚽, ❤, ☝) default to
-/// monochrome text presentation and render grey without VS16 — we exclude
-/// them entirely for visual consistency. A ZWJ sequence (🏳️‍🌈) is its own
-/// colour glyph in the emoji font, so the exception list does not apply.
-fn is_color_default(emoji: &str) -> bool {
-    let zwj_sequence = emoji.contains('\u{200D}');
-    emoji.chars().next().is_some_and(|c| {
-        let c = c as u32;
-        c >= 0x1F000
-            && (zwj_sequence || !SMP_TEXT_DEFAULT.iter().any(|&(lo, hi)| (lo..=hi).contains(&c)))
-    })
+fn model(emojis: Vec<PickerEmoji>) -> ModelRc<EmojiData> {
+    ModelRc::new(VecModel::from(
+        emojis
+            .into_iter()
+            .map(|e| EmojiData { emoji: e.emoji.into(), name: e.name.into(), category: e.category })
+            .collect::<Vec<_>>(),
+    ))
 }
 
-/// Apply a skin tone modifier to an emoji if it supports it (People & Body category).
-fn apply_skin_tone(emoji: &str, tone: i32) -> String {
-    if tone == 0 || tone < 0 || tone > 5 {
-        return emoji.to_string();
-    }
-    let modifier = SKIN_TONE_MODIFIERS[(tone - 1) as usize];
-    // Insert modifier after the base emoji character (before any variant selectors)
-    let mut chars = emoji.chars();
-    if let Some(first) = chars.next() {
-        let rest: String = chars.collect();
-        format!("{first}{modifier}{rest}")
-    } else {
-        emoji.to_string()
-    }
+/// Reset the reaction picker to its first tab (Smileys) as it opens.
+pub fn show_reaction_picker_start(w: &MainWindow) {
+    w.set_reaction_picker_emojis(model(emoji_data::category_emojis(0)));
+}
+
+/// Reset the composer picker to its first tab (Smileys) as it opens.
+pub fn show_composer_picker_start(w: &MainWindow) {
+    w.set_composer_emoji_list(model(emoji_data::category_emojis(0)));
+    w.set_composer_emoji_category(0);
 }
 
 /// Wire emoji loader callbacks.
@@ -77,9 +38,8 @@ pub fn wire_emoji_loader(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
 
     // Initial load — show smileys (category 0) by default
     if let Some(w) = weak.upgrade() {
-        let emojis = get_emoji_list(0);
-        w.set_composer_emoji_list(ModelRc::new(VecModel::from(emojis.clone())));
-        w.set_reaction_picker_emojis(ModelRc::new(VecModel::from(emojis)));
+        w.set_composer_emoji_list(model(emoji_data::category_emojis(0)));
+        w.set_reaction_picker_emojis(model(emoji_data::category_emojis(0)));
     }
 
     window.on_composer_emoji_category_changed({
@@ -88,12 +48,7 @@ pub fn wire_emoji_loader(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
         move |category| {
             if let Some(w) = weak.upgrade() {
                 let tone = w.get_composer_emoji_skin_tone();
-                let emojis = if category == RECENT_CATEGORY {
-                    recent_to_emoji_data(&store)
-                } else {
-                    get_emoji_list_with_tone(category, tone)
-                };
-                w.set_composer_emoji_list(ModelRc::new(VecModel::from(emojis)));
+                w.set_composer_emoji_list(model(emoji_data::listing(category, tone, &store)));
             }
         }
     });
@@ -103,18 +58,12 @@ pub fn wire_emoji_loader(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
         let store = store.clone();
         move |query| {
             if let Some(w) = weak.upgrade() {
-                if query.is_empty() {
-                    let cat = w.get_composer_emoji_category();
-                    let emojis = if cat == RECENT_CATEGORY {
-                        recent_to_emoji_data(&store)
-                    } else {
-                        get_emoji_list(cat)
-                    };
-                    w.set_composer_emoji_list(ModelRc::new(VecModel::from(emojis)));
+                let emojis = if query.is_empty() {
+                    emoji_data::listing(w.get_composer_emoji_category(), 0, &store)
                 } else {
-                    let emojis = search_emojis(&query);
-                    w.set_composer_emoji_list(ModelRc::new(VecModel::from(emojis)));
-                }
+                    emoji_data::search(&query)
+                };
+                w.set_composer_emoji_list(model(emojis));
             }
         }
     });
@@ -125,12 +74,7 @@ pub fn wire_emoji_loader(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
         let store = store.clone();
         move |category| {
             if let Some(w) = weak.upgrade() {
-                let emojis = if category == RECENT_CATEGORY {
-                    recent_to_emoji_data(&store)
-                } else {
-                    get_emoji_list(category)
-                };
-                w.set_reaction_picker_emojis(ModelRc::new(VecModel::from(emojis)));
+                w.set_reaction_picker_emojis(model(emoji_data::listing(category, 0, &store)));
             }
         }
     });
@@ -140,18 +84,12 @@ pub fn wire_emoji_loader(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
         let store = store.clone();
         move |query| {
             if let Some(w) = weak.upgrade() {
-                if query.is_empty() {
-                    let cat = w.get_reaction_picker_selected_category();
-                    let emojis = if cat == RECENT_CATEGORY {
-                        recent_to_emoji_data(&store)
-                    } else {
-                        get_emoji_list(cat)
-                    };
-                    w.set_reaction_picker_emojis(ModelRc::new(VecModel::from(emojis)));
+                let emojis = if query.is_empty() {
+                    emoji_data::listing(w.get_reaction_picker_selected_category(), 0, &store)
                 } else {
-                    let emojis = search_emojis(&query);
-                    w.set_reaction_picker_emojis(ModelRc::new(VecModel::from(emojis)));
-                }
+                    emoji_data::search(&query)
+                };
+                w.set_reaction_picker_emojis(model(emojis));
             }
         }
     });
@@ -181,181 +119,11 @@ pub fn wire_emoji_loader(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
         move |tone| {
             if let Some(w) = weak.upgrade() {
                 let category = w.get_composer_emoji_category();
-                if category == 1 {
-                    // People & Body — apply skin tone
-                    let emojis = get_emoji_list_with_tone(category, tone);
-                    w.set_composer_emoji_list(ModelRc::new(VecModel::from(emojis)));
+                if category == PEOPLE_CATEGORY {
+                    w.set_composer_emoji_list(model(emoji_data::listing(category, tone, &store)));
                 }
             }
         }
     });
 }
 
-/// Get the `RecentEmojiStore` as a standalone helper for other modules.
-fn recent_to_emoji_data(store: &RecentEmojiStore) -> Vec<EmojiData> {
-    store
-        .get_recent()
-        .into_iter()
-        // Picks saved before the text-default filter must not bring tofu back.
-        .filter(|emoji| is_color_default(emoji))
-        .map(|emoji| EmojiData {
-            emoji: emoji.into(),
-            name: "recent".into(),
-            category: RECENT_CATEGORY,
-        })
-        .collect()
-}
-
-/// Get emoji list with skin tone applied (only affects People & Body, category 1).
-fn get_emoji_list_with_tone(category: i32, tone: i32) -> Vec<EmojiData> {
-    let base = get_emoji_list(category);
-    if category != 1 || tone == 0 {
-        return base;
-    }
-    base.into_iter()
-        .map(|mut e| {
-            e.emoji = apply_skin_tone(&e.emoji, tone).into();
-            e
-        })
-        .collect()
-}
-
-/// Categories: 0=Smileys, 1=People, 2=Animals, 3=Food, 4=Travel, 5=Activities, 6=Objects, 7=Symbols, 8=Flags
-pub fn get_emoji_list(category: i32) -> Vec<EmojiData> {
-    let emojis: &[(&str, &str)] = match category {
-        0 => &[ // Smileys & Emotion
-            ("😀", "grinning"), ("😃", "smiley"), ("😄", "smile"), ("😁", "grin"),
-            ("😅", "sweat_smile"), ("😂", "joy"), ("🤣", "rofl"), ("😊", "blush"),
-            ("😇", "innocent"), ("🙂", "slight_smile"), ("😉", "wink"), ("😍", "heart_eyes"),
-            ("🥰", "smiling_hearts"), ("😘", "kissing_heart"), ("😋", "yum"), ("😜", "stuck_out_tongue_winking"),
-            ("🤪", "zany"), ("🤨", "raised_eyebrow"), ("🧐", "monocle"), ("🤓", "nerd"),
-            ("😎", "sunglasses"), ("🥳", "partying"), ("😏", "smirk"), ("😒", "unamused"),
-            ("😞", "disappointed"), ("😔", "pensive"), ("😟", "worried"), ("😕", "confused"),
-            ("🙁", "slightly_frowning"), ("😣", "persevere"), ("😖", "confounded"), ("😫", "tired"),
-            ("😩", "weary"), ("🥺", "pleading"), ("😢", "cry"), ("😭", "sob"),
-            ("😤", "triumph"), ("😠", "angry"), ("😡", "rage"), ("🤬", "cursing"),
-        ],
-        1 => &[ // People & Body
-            ("👋", "wave"), ("🤚", "raised_back"), ("🖐️", "hand_splayed"), ("✋", "hand"),
-            ("🖖", "vulcan"), ("👌", "ok_hand"), ("🤌", "pinched"), ("🤏", "pinching"),
-            ("✌️", "v"), ("🤞", "crossed_fingers"), ("🤟", "love_you"), ("🤘", "metal"),
-            ("🤙", "call_me"), ("👈", "point_left"), ("👉", "point_right"), ("👆", "point_up"),
-            ("👇", "point_down"), ("☝️", "point_up_2"), ("👍", "thumbsup"), ("👎", "thumbsdown"),
-            ("✊", "fist"), ("👊", "punch"), ("🤛", "left_fist"), ("🤜", "right_fist"),
-            ("👏", "clap"), ("🙌", "raised_hands"), ("👐", "open_hands"), ("🤲", "palms_up"),
-            ("🤝", "handshake"), ("🙏", "pray"), ("💪", "muscle"), ("🦾", "mechanical_arm"),
-        ],
-        2 => &[ // Animals & Nature
-            ("🐱", "cat"), ("🐶", "dog"), ("🐭", "mouse"), ("🐹", "hamster"),
-            ("🐰", "rabbit"), ("🦊", "fox"), ("🐻", "bear"), ("🐼", "panda"),
-            ("🐨", "koala"), ("🐯", "tiger"), ("🦁", "lion"), ("🐮", "cow"),
-            ("🐷", "pig"), ("🐸", "frog"), ("🐵", "monkey"), ("🐔", "chicken"),
-            ("🐧", "penguin"), ("🐦", "bird"), ("🐤", "baby_chick"), ("🦆", "duck"),
-            ("🦅", "eagle"), ("🦉", "owl"), ("🦇", "bat"), ("🐺", "wolf"),
-            ("🐗", "boar"), ("🐴", "horse"), ("🦄", "unicorn"), ("🐝", "bee"),
-            ("🐛", "bug"), ("🦋", "butterfly"), ("🐌", "snail"), ("🐞", "ladybug"),
-        ],
-        3 => &[ // Food & Drink
-            ("🍎", "apple"), ("🍐", "pear"), ("🍊", "orange"), ("🍋", "lemon"),
-            ("🍌", "banana"), ("🍉", "watermelon"), ("🍇", "grapes"), ("🍓", "strawberry"),
-            ("🫐", "blueberries"), ("🍈", "melon"), ("🍒", "cherries"), ("🍑", "peach"),
-            ("🥭", "mango"), ("🍍", "pineapple"), ("🥥", "coconut"), ("🥝", "kiwi"),
-            ("🍅", "tomato"), ("🥑", "avocado"), ("🥦", "broccoli"), ("🥬", "leafy_green"),
-            ("🥒", "cucumber"), ("🌶️", "hot_pepper"), ("🫑", "bell_pepper"), ("🌽", "corn"),
-            ("🥕", "carrot"), ("🧄", "garlic"), ("🧅", "onion"), ("🥔", "potato"),
-            ("🍞", "bread"), ("🥐", "croissant"), ("🥖", "baguette"), ("🍕", "pizza"),
-        ],
-        4 => &[ // Travel & Places
-            ("✈️", "airplane"), ("🚀", "rocket"), ("🚁", "helicopter"), ("🛸", "flying_saucer"),
-            ("🚂", "steam_locomotive"), ("🚃", "railway_car"), ("🚄", "bullet_train"), ("🚅", "train"),
-            ("🚆", "train2"), ("🚇", "metro"), ("🚈", "light_rail"), ("🚉", "station"),
-            ("🚊", "tram"), ("🚝", "monorail"), ("🚞", "mountain_railway"), ("🚋", "train_car"),
-            ("🚌", "bus"), ("🚍", "oncoming_bus"), ("🚎", "trolleybus"), ("🚐", "minibus"),
-            ("🚑", "ambulance"), ("🚒", "fire_engine"), ("🚓", "police_car"), ("🚕", "taxi"),
-            ("🚖", "oncoming_taxi"), ("🚗", "car"), ("🚘", "oncoming_car"), ("🚙", "suv"),
-            ("🏠", "house"), ("🏡", "house_garden"), ("🏢", "office"), ("🏰", "castle"),
-        ],
-        5 => &[ // Activities
-            ("⚽", "soccer"), ("🏀", "basketball"), ("🏈", "football"), ("⚾", "baseball"),
-            ("🥎", "softball"), ("🎾", "tennis"), ("🏐", "volleyball"), ("🏉", "rugby"),
-            ("🥏", "flying_disc"), ("🎱", "8ball"), ("🪀", "yo_yo"), ("🏓", "ping_pong"),
-            ("🏸", "badminton"), ("🏒", "ice_hockey"), ("🏑", "field_hockey"), ("🥍", "lacrosse"),
-            ("🏏", "cricket game"), ("🪃", "boomerang"), ("🥅", "goal_net"), ("⛳", "golf"),
-            ("🪁", "kite"), ("🏹", "bow and arrow"), ("🎣", "fishing pole"), ("🤿", "diving mask"),
-            ("🥊", "boxing glove"), ("🥋", "martial arts uniform"), ("🎿", "skis"), ("⛷️", "skier"),
-            ("🏂", "snowboarder"), ("🪂", "parachute"), ("🏋️", "person lifting weights"), ("🤸", "person cartwheeling"),
-        ],
-        6 => &[ // Objects
-            ("💡", "bulb"), ("🔦", "flashlight"), ("🏮", "lantern"), ("🪔", "diya_lamp"),
-            ("📱", "iphone"), ("📲", "calling"), ("💻", "computer"), ("🖥️", "desktop"),
-            ("🖨️", "printer"), ("⌨️", "keyboard"), ("🖱️", "mouse_computer"), ("💽", "minidisc"),
-            ("💾", "floppy_disk"), ("💿", "cd"), ("📀", "dvd"), ("🎥", "movie_camera"),
-            ("📷", "camera"), ("📸", "camera_flash"), ("📹", "video_camera"), ("📼", "vhs"),
-            ("🔍", "mag"), ("🔎", "mag_right"), ("💰", "moneybag"), ("💳", "credit_card"),
-            ("💎", "gem"), ("⚖️", "scales"), ("🔧", "wrench"), ("🔨", "hammer"),
-            ("⚒️", "hammer_pick"), ("🛠️", "tools"), ("⛏️", "pick"), ("🔩", "nut_and_bolt"),
-        ],
-        7 => &[ // Symbols
-            ("❤️", "heart"), ("🧡", "orange_heart"), ("💛", "yellow_heart"), ("💚", "green_heart"),
-            ("💙", "blue_heart"), ("💜", "purple_heart"), ("🖤", "black_heart"), ("🤍", "white_heart"),
-            ("🤎", "brown_heart"), ("💔", "broken_heart"), ("❣️", "heart_exclamation"), ("💕", "two_hearts"),
-            ("💞", "revolving_hearts"), ("💓", "heartbeat"), ("💗", "heartpulse"), ("💖", "sparkling_heart"),
-            ("💘", "cupid"), ("💝", "gift_heart"), ("✅", "white_check_mark"), ("❌", "x"),
-            ("⭕", "o"), ("❗", "exclamation"), ("❓", "question"), ("⚠️", "warning"),
-            ("🔴", "red_circle"), ("🟠", "orange_circle"), ("🟡", "yellow_circle"), ("🟢", "green_circle"),
-            ("🔵", "blue_circle"), ("🟣", "purple_circle"), ("⚫", "black_circle"), ("⚪", "white_circle"),
-        ],
-        8 => &[ // Flags
-            ("🏳️", "white_flag"), ("🏴", "black_flag"), ("🏁", "checkered_flag"), ("🚩", "triangular_flag"),
-            ("🏳️‍🌈", "rainbow_flag"), ("🏳️‍⚧️", "transgender_flag"), ("🏴‍☠️", "pirate_flag"),
-            ("🇺🇸", "us"), ("🇬🇧", "gb"), ("🇨🇦", "ca"), ("🇦🇺", "au"),
-            ("🇩🇪", "de"), ("🇫🇷", "fr"), ("🇮🇹", "it"), ("🇪🇸", "es"),
-            ("🇯🇵", "jp"), ("🇰🇷", "kr"), ("🇨🇳", "cn"), ("🇮🇳", "in"),
-            ("🇧🇷", "br"), ("🇲🇽", "mx"), ("🇷🇺", "ru"), ("🇿🇦", "za"),
-            ("🇳🇱", "nl"), ("🇧🇪", "be"), ("🇨🇭", "ch"), ("🇦🇹", "at"),
-            ("🇸🇪", "se"), ("🇳🇴", "no"), ("🇩🇰", "dk"), ("🇫🇮", "fi"),
-        ],
-        _ => &[],
-    };
-
-    emojis
-        .iter()
-        .filter(|(emoji, _)| is_color_default(emoji))
-        .map(|(emoji, name)| EmojiData {
-            emoji: emoji.to_string().into(),
-            name: name.to_string().into(),
-            category,
-        })
-        .collect()
-}
-
-/// Search emojis by name across all categories.
-pub fn search_emojis(query: &str) -> Vec<EmojiData> {
-    let mut results = Vec::new();
-    for category in 0..=8 {
-        let emojis = get_emoji_list(category);
-        for emoji in emojis {
-            if emoji.name.to_lowercase().contains(query) {
-                results.push(emoji);
-            }
-        }
-    }
-    results.truncate(50); // Limit results
-    results
-}
-
-#[cfg(test)]
-mod color_default_tests {
-    use super::is_color_default;
-
-    #[test]
-    fn smp_text_default_emoji_are_excluded() {
-        assert!(is_color_default("\u{1F600}")); // 😀
-        assert!(is_color_default("\u{1F3C1}")); // 🏁
-        assert!(!is_color_default("\u{1F6E1}\u{FE0F}")); // 🛡️
-        assert!(!is_color_default("\u{1F3F3}\u{FE0F}")); // 🏳️
-        assert!(!is_color_default("\u{1F441}")); // 👁
-        assert!(!is_color_default("\u{2708}\u{FE0F}")); // ✈️ (BMP)
-        assert!(is_color_default("\u{1F3F3}\u{FE0F}\u{200D}\u{1F308}")); // 🏳️‍🌈
-    }
-}

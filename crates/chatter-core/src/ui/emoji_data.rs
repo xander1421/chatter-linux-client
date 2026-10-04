@@ -1,953 +1,280 @@
-//! Emoji data for the emoji picker.
+//! The emoji picker's data: the table, search, skin tones and recents, shared
+//! by the composer picker and the reaction picker. The UI renders what these
+//! return.
 //!
-//! Provides a static list of commonly used emoji organized by category,
-//! with search functionality for filtering by name and keywords.
+//! Only colour-default emoji are offered (see [`is_color_default`]): a
+//! text-default one renders grey, or as tofu on older Android fonts.
 
-use crate::domain::reaction::EmojiCategory;
+use super::recent_emoji::RecentEmojiStore;
 
-/// A single emoji entry for the picker.
-#[derive(Clone, Debug)]
-pub struct EmojiEntry {
-    /// The emoji character(s).
+/// Category index reserved for "Recent" emoji (displayed as first tab).
+pub const RECENT_CATEGORY: i32 = -1;
+/// People & Body: the one category skin tones apply to.
+pub const PEOPLE_CATEGORY: i32 = 1;
+
+/// One picker cell.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PickerEmoji {
     pub emoji: String,
-    /// Human-readable name (e.g., "grinning face").
     pub name: String,
-    /// Searchable keywords (e.g., ["smile", "happy"]).
-    pub keywords: Vec<String>,
-    /// Category for grouping.
-    pub category: EmojiCategory,
+    pub category: i32,
 }
 
-impl EmojiEntry {
-    /// Create a new emoji entry.
-    fn new(emoji: &str, name: &str, keywords: &[&str], category: EmojiCategory) -> Self {
-        Self {
-            emoji: emoji.to_string(),
-            name: name.to_string(),
-            keywords: keywords.iter().map(|s| s.to_string()).collect(),
-            category,
-        }
+/// Fitzpatrick skin tone modifiers (indices 1-5). Index 0 = no modifier (default yellow).
+const SKIN_TONE_MODIFIERS: [&str; 5] = [
+    "\u{1F3FB}", // Light
+    "\u{1F3FC}", // Medium-Light
+    "\u{1F3FD}", // Medium
+    "\u{1F3FE}", // Medium-Dark
+    "\u{1F3FF}", // Dark
+];
+
+/// SMP code points with Emoji_Presentation=No (Unicode `emoji-data.txt`).
+/// Being ≥ U+1F000 does not make an emoji colour-default: these are text-style
+/// even with VS16 on older fonts, and rendered as tofu on Android 10 (🛡️).
+const SMP_TEXT_DEFAULT: &[(u32, u32)] = &[
+    (0x1F170, 0x1F171), (0x1F17E, 0x1F17F), (0x1F202, 0x1F202), (0x1F237, 0x1F237),
+    (0x1F321, 0x1F321), (0x1F324, 0x1F32C), (0x1F336, 0x1F336), (0x1F37D, 0x1F37D),
+    (0x1F396, 0x1F397), (0x1F399, 0x1F39B), (0x1F39E, 0x1F39F), (0x1F3CB, 0x1F3CE),
+    (0x1F3D4, 0x1F3DF), (0x1F3F3, 0x1F3F3), (0x1F3F5, 0x1F3F5), (0x1F3F7, 0x1F3F7),
+    (0x1F43F, 0x1F43F), (0x1F441, 0x1F441), (0x1F4FD, 0x1F4FD), (0x1F549, 0x1F54A),
+    (0x1F56F, 0x1F570), (0x1F573, 0x1F579), (0x1F587, 0x1F587), (0x1F58A, 0x1F58D),
+    (0x1F590, 0x1F590), (0x1F5A5, 0x1F5A5), (0x1F5A8, 0x1F5A8), (0x1F5B1, 0x1F5B2),
+    (0x1F5BC, 0x1F5BC), (0x1F5C2, 0x1F5C4), (0x1F5D1, 0x1F5D3), (0x1F5DC, 0x1F5DE),
+    (0x1F5E1, 0x1F5E1), (0x1F5E3, 0x1F5E3), (0x1F5E8, 0x1F5E8), (0x1F5EF, 0x1F5EF),
+    (0x1F5F3, 0x1F5F3), (0x1F5FA, 0x1F5FA), (0x1F6CB, 0x1F6CB), (0x1F6CD, 0x1F6CF),
+    (0x1F6E0, 0x1F6E5), (0x1F6E9, 0x1F6E9), (0x1F6F0, 0x1F6F0), (0x1F6F3, 0x1F6F3),
+];
+
+/// True if emoji renders in color by default (Emoji_Presentation=Yes).
+///
+/// First char must be in the SMP emoji range (≥ U+1F000) and not one of the
+/// SMP text-default exceptions. BMP emoji (e.g. ✈, ⚽, ❤, ☝) default to
+/// monochrome text presentation and render grey without VS16 — we exclude
+/// them entirely for visual consistency. A ZWJ sequence (🏳️‍🌈) is its own
+/// colour glyph in the emoji font, so the exception list does not apply.
+pub fn is_color_default(emoji: &str) -> bool {
+    let zwj_sequence = emoji.contains('\u{200D}');
+    emoji.chars().next().is_some_and(|c| {
+        let c = c as u32;
+        c >= 0x1F000
+            && (zwj_sequence || !SMP_TEXT_DEFAULT.iter().any(|&(lo, hi)| (lo..=hi).contains(&c)))
+    })
+}
+
+/// Apply a skin tone modifier to an emoji if it supports it (People & Body category).
+fn apply_skin_tone(emoji: &str, tone: i32) -> String {
+    if tone == 0 || tone < 0 || tone > 5 {
+        return emoji.to_string();
+    }
+    let modifier = SKIN_TONE_MODIFIERS[(tone - 1) as usize];
+    // Insert modifier after the base emoji character (before any variant selectors)
+    let mut chars = emoji.chars();
+    if let Some(first) = chars.next() {
+        let rest: String = chars.collect();
+        format!("{first}{modifier}{rest}")
+    } else {
+        emoji.to_string()
     }
 }
 
-/// Get the full list of available emoji.
-#[must_use]
-pub fn get_emoji_list() -> Vec<EmojiEntry> {
-    let mut emoji = Vec::with_capacity(300);
-
-    // Smileys and emotion
-    emoji.extend(smileys_emoji());
-
-    // People and body
-    emoji.extend(people_emoji());
-
-    // Animals and nature
-    emoji.extend(animals_emoji());
-
-    // Food and drink
-    emoji.extend(food_emoji());
-
-    // Travel and places
-    emoji.extend(travel_emoji());
-
-    // Activities
-    emoji.extend(activities_emoji());
-
-    // Objects
-    emoji.extend(objects_emoji());
-
-    // Symbols
-    emoji.extend(symbols_emoji());
-
-    // Flags
-    emoji.extend(flags_emoji());
-
-    emoji
+/// What a picker tab shows: the recents for [`RECENT_CATEGORY`], otherwise
+/// the category with skin `tone` applied (People & Body only; 0 = none).
+pub fn listing(category: i32, tone: i32, recent: &RecentEmojiStore) -> Vec<PickerEmoji> {
+    if category == RECENT_CATEGORY {
+        return recent_emojis(recent);
+    }
+    let base = category_emojis(category);
+    if category != PEOPLE_CATEGORY || tone == 0 {
+        return base;
+    }
+    base.into_iter()
+        .map(|mut e| {
+            e.emoji = apply_skin_tone(&e.emoji, tone);
+            e
+        })
+        .collect()
 }
 
-// ============================================================================
-// Emoji Data by Category
-// ============================================================================
-
-fn smileys_emoji() -> Vec<EmojiEntry> {
-    use EmojiCategory::Smileys;
-    vec![
-        EmojiEntry::new("😀", "grinning face", &["smile", "happy", "joy"], Smileys),
-        EmojiEntry::new("😃", "grinning face with big eyes", &["smile", "happy", "joy"], Smileys),
-        EmojiEntry::new("😄", "grinning face with smiling eyes", &["smile", "happy", "joy", "laugh"], Smileys),
-        EmojiEntry::new("😁", "beaming face with smiling eyes", &["smile", "happy", "grin"], Smileys),
-        EmojiEntry::new("😆", "grinning squinting face", &["laugh", "happy", "haha"], Smileys),
-        EmojiEntry::new("😅", "grinning face with sweat", &["hot", "happy", "nervous"], Smileys),
-        EmojiEntry::new("🤣", "rolling on the floor laughing", &["laugh", "lol", "rofl", "funny"], Smileys),
-        EmojiEntry::new("😂", "face with tears of joy", &["laugh", "cry", "happy", "lol"], Smileys),
-        EmojiEntry::new("🙂", "slightly smiling face", &["smile", "happy"], Smileys),
-        EmojiEntry::new("🙃", "upside-down face", &["silly", "sarcasm"], Smileys),
-        EmojiEntry::new("😉", "winking face", &["wink", "flirt"], Smileys),
-        EmojiEntry::new("😊", "smiling face with smiling eyes", &["smile", "blush", "happy"], Smileys),
-        EmojiEntry::new("😇", "smiling face with halo", &["angel", "innocent", "good"], Smileys),
-        EmojiEntry::new("🥰", "smiling face with hearts", &["love", "adore", "hearts"], Smileys),
-        EmojiEntry::new("😍", "smiling face with heart-eyes", &["love", "crush", "hearts"], Smileys),
-        EmojiEntry::new("🤩", "star-struck", &["wow", "amazing", "stars"], Smileys),
-        EmojiEntry::new("😘", "face blowing a kiss", &["kiss", "love", "flirt"], Smileys),
-        EmojiEntry::new("😗", "kissing face", &["kiss"], Smileys),
-        EmojiEntry::new("☺️", "smiling face", &["smile", "happy", "blush"], Smileys),
-        EmojiEntry::new("😚", "kissing face with closed eyes", &["kiss", "love"], Smileys),
-        EmojiEntry::new("😋", "face savoring food", &["yum", "delicious", "hungry"], Smileys),
-        EmojiEntry::new("😛", "face with tongue", &["tongue", "silly", "playful"], Smileys),
-        EmojiEntry::new("😜", "winking face with tongue", &["tongue", "wink", "silly"], Smileys),
-        EmojiEntry::new("🤪", "zany face", &["crazy", "silly", "wild"], Smileys),
-        EmojiEntry::new("😝", "squinting face with tongue", &["tongue", "silly"], Smileys),
-        EmojiEntry::new("🤑", "money-mouth face", &["money", "rich", "dollar"], Smileys),
-        EmojiEntry::new("🤗", "hugging face", &["hug", "embrace", "care"], Smileys),
-        EmojiEntry::new("🤭", "face with hand over mouth", &["oops", "giggle", "shy"], Smileys),
-        EmojiEntry::new("🤫", "shushing face", &["quiet", "secret", "shh"], Smileys),
-        EmojiEntry::new("🤔", "thinking face", &["think", "hmm", "consider"], Smileys),
-        EmojiEntry::new("🤐", "zipper-mouth face", &["secret", "quiet", "zip"], Smileys),
-        EmojiEntry::new("🤨", "face with raised eyebrow", &["skeptical", "doubt"], Smileys),
-        EmojiEntry::new("😐", "neutral face", &["meh", "indifferent"], Smileys),
-        EmojiEntry::new("😑", "expressionless face", &["blank", "meh"], Smileys),
-        EmojiEntry::new("😶", "face without mouth", &["silent", "speechless"], Smileys),
-        EmojiEntry::new("😏", "smirking face", &["smirk", "smug", "flirt"], Smileys),
-        EmojiEntry::new("😒", "unamused face", &["meh", "annoyed", "bored"], Smileys),
-        EmojiEntry::new("🙄", "face with rolling eyes", &["eyeroll", "annoyed", "whatever"], Smileys),
-        EmojiEntry::new("😬", "grimacing face", &["awkward", "nervous"], Smileys),
-        EmojiEntry::new("😮‍💨", "face exhaling", &["sigh", "relief", "tired"], Smileys),
-        EmojiEntry::new("🤥", "lying face", &["lie", "pinocchio"], Smileys),
-        EmojiEntry::new("😌", "relieved face", &["relief", "calm", "peaceful"], Smileys),
-        EmojiEntry::new("😔", "pensive face", &["sad", "thoughtful"], Smileys),
-        EmojiEntry::new("😪", "sleepy face", &["tired", "sleep"], Smileys),
-        EmojiEntry::new("🤤", "drooling face", &["drool", "hungry", "yum"], Smileys),
-        EmojiEntry::new("😴", "sleeping face", &["sleep", "zzz", "tired"], Smileys),
-        EmojiEntry::new("😷", "face with medical mask", &["sick", "mask", "covid"], Smileys),
-        EmojiEntry::new("🤒", "face with thermometer", &["sick", "fever", "ill"], Smileys),
-        EmojiEntry::new("🤕", "face with head-bandage", &["hurt", "injured"], Smileys),
-        EmojiEntry::new("🤢", "nauseated face", &["sick", "vomit", "gross"], Smileys),
-        EmojiEntry::new("🤮", "face vomiting", &["sick", "vomit", "puke"], Smileys),
-        EmojiEntry::new("🤧", "sneezing face", &["sneeze", "sick", "cold"], Smileys),
-        EmojiEntry::new("🥵", "hot face", &["hot", "heat", "sweating"], Smileys),
-        EmojiEntry::new("🥶", "cold face", &["cold", "freezing", "ice"], Smileys),
-        EmojiEntry::new("🥴", "woozy face", &["drunk", "dizzy", "tipsy"], Smileys),
-        EmojiEntry::new("😵", "face with crossed-out eyes", &["dizzy", "dead"], Smileys),
-        EmojiEntry::new("🤯", "exploding head", &["mind blown", "shocked", "wow"], Smileys),
-        EmojiEntry::new("🤠", "cowboy hat face", &["cowboy", "western"], Smileys),
-        EmojiEntry::new("🥳", "partying face", &["party", "celebrate", "birthday"], Smileys),
-        EmojiEntry::new("🥸", "disguised face", &["disguise", "incognito"], Smileys),
-        EmojiEntry::new("😎", "smiling face with sunglasses", &["cool", "awesome", "sunglasses"], Smileys),
-        EmojiEntry::new("🤓", "nerd face", &["nerd", "geek", "glasses"], Smileys),
-        EmojiEntry::new("🧐", "face with monocle", &["fancy", "classy", "inspect"], Smileys),
-        EmojiEntry::new("😕", "confused face", &["confused", "puzzled"], Smileys),
-        EmojiEntry::new("😟", "worried face", &["worried", "concerned", "anxious"], Smileys),
-        EmojiEntry::new("🙁", "slightly frowning face", &["sad", "frown"], Smileys),
-        EmojiEntry::new("☹️", "frowning face", &["sad", "frown", "unhappy"], Smileys),
-        EmojiEntry::new("😮", "face with open mouth", &["surprised", "wow", "shocked"], Smileys),
-        EmojiEntry::new("😯", "hushed face", &["surprised", "stunned"], Smileys),
-        EmojiEntry::new("😲", "astonished face", &["surprised", "shocked", "amazed"], Smileys),
-        EmojiEntry::new("😳", "flushed face", &["embarrassed", "blush", "shy"], Smileys),
-        EmojiEntry::new("🥺", "pleading face", &["puppy eyes", "please", "beg"], Smileys),
-        EmojiEntry::new("😦", "frowning face with open mouth", &["sad", "shocked"], Smileys),
-        EmojiEntry::new("😧", "anguished face", &["distressed", "worried"], Smileys),
-        EmojiEntry::new("😨", "fearful face", &["scared", "afraid", "fear"], Smileys),
-        EmojiEntry::new("😰", "anxious face with sweat", &["nervous", "anxious", "worried"], Smileys),
-        EmojiEntry::new("😥", "sad but relieved face", &["sad", "relieved", "disappointed"], Smileys),
-        EmojiEntry::new("😢", "crying face", &["sad", "cry", "tear"], Smileys),
-        EmojiEntry::new("😭", "loudly crying face", &["cry", "sob", "sad", "tears"], Smileys),
-        EmojiEntry::new("😱", "face screaming in fear", &["scared", "scream", "horror"], Smileys),
-        EmojiEntry::new("😖", "confounded face", &["frustrated", "confused"], Smileys),
-        EmojiEntry::new("😣", "persevering face", &["struggle", "frustrated"], Smileys),
-        EmojiEntry::new("😞", "disappointed face", &["sad", "disappointed"], Smileys),
-        EmojiEntry::new("😓", "downcast face with sweat", &["sad", "disappointed", "tired"], Smileys),
-        EmojiEntry::new("😩", "weary face", &["tired", "frustrated", "exhausted"], Smileys),
-        EmojiEntry::new("😫", "tired face", &["exhausted", "tired", "frustrated"], Smileys),
-        EmojiEntry::new("🥱", "yawning face", &["yawn", "tired", "sleepy", "bored"], Smileys),
-        EmojiEntry::new("😤", "face with steam from nose", &["angry", "frustrated", "triumph"], Smileys),
-        EmojiEntry::new("😡", "pouting face", &["angry", "mad", "rage"], Smileys),
-        EmojiEntry::new("😠", "angry face", &["angry", "mad"], Smileys),
-        EmojiEntry::new("🤬", "face with symbols on mouth", &["angry", "swear", "curse"], Smileys),
-        EmojiEntry::new("😈", "smiling face with horns", &["devil", "evil", "mischief"], Smileys),
-        EmojiEntry::new("👿", "angry face with horns", &["devil", "angry", "evil"], Smileys),
-        EmojiEntry::new("💀", "skull", &["death", "dead", "skeleton"], Smileys),
-        EmojiEntry::new("☠️", "skull and crossbones", &["death", "danger", "poison"], Smileys),
-        EmojiEntry::new("💩", "pile of poo", &["poop", "crap", "shit"], Smileys),
-        EmojiEntry::new("🤡", "clown face", &["clown", "circus", "funny"], Smileys),
-        EmojiEntry::new("👹", "ogre", &["monster", "japanese", "demon"], Smileys),
-        EmojiEntry::new("👺", "goblin", &["monster", "japanese", "demon"], Smileys),
-        EmojiEntry::new("👻", "ghost", &["spooky", "halloween", "boo"], Smileys),
-        EmojiEntry::new("👽", "alien", &["ufo", "space", "extraterrestrial"], Smileys),
-        EmojiEntry::new("👾", "alien monster", &["game", "space invader"], Smileys),
-        EmojiEntry::new("🤖", "robot", &["bot", "machine", "ai"], Smileys),
-    ]
+/// Recently used emoji, newest first.
+fn recent_emojis(store: &RecentEmojiStore) -> Vec<PickerEmoji> {
+    store
+        .get_recent()
+        .into_iter()
+        // Picks saved before the text-default filter must not bring tofu back.
+        .filter(|emoji| is_color_default(emoji))
+        .map(|emoji| PickerEmoji { emoji, name: "recent".into(), category: RECENT_CATEGORY })
+        .collect()
 }
 
-fn people_emoji() -> Vec<EmojiEntry> {
-    use EmojiCategory::People;
-    vec![
-        EmojiEntry::new("👋", "waving hand", &["hello", "hi", "bye", "wave"], People),
-        EmojiEntry::new("🤚", "raised back of hand", &["backhand", "stop"], People),
-        EmojiEntry::new("🖐️", "hand with fingers splayed", &["hand", "five", "high five"], People),
-        EmojiEntry::new("✋", "raised hand", &["stop", "high five", "hand"], People),
-        EmojiEntry::new("🖖", "vulcan salute", &["spock", "star trek", "live long"], People),
-        EmojiEntry::new("👌", "ok hand", &["ok", "okay", "perfect", "good"], People),
-        EmojiEntry::new("🤌", "pinched fingers", &["italian", "chef kiss", "perfect"], People),
-        EmojiEntry::new("🤏", "pinching hand", &["small", "tiny", "little"], People),
-        EmojiEntry::new("✌️", "victory hand", &["peace", "victory", "two"], People),
-        EmojiEntry::new("🤞", "crossed fingers", &["luck", "hope", "fingers crossed"], People),
-        EmojiEntry::new("🤟", "love-you gesture", &["love", "ily", "rock"], People),
-        EmojiEntry::new("🤘", "sign of the horns", &["rock", "metal", "horns"], People),
-        EmojiEntry::new("🤙", "call me hand", &["call", "shaka", "hang loose"], People),
-        EmojiEntry::new("👈", "backhand index pointing left", &["left", "point", "direction"], People),
-        EmojiEntry::new("👉", "backhand index pointing right", &["right", "point", "direction"], People),
-        EmojiEntry::new("👆", "backhand index pointing up", &["up", "point", "direction"], People),
-        EmojiEntry::new("🖕", "middle finger", &["rude", "finger", "flip off"], People),
-        EmojiEntry::new("👇", "backhand index pointing down", &["down", "point", "direction"], People),
-        EmojiEntry::new("☝️", "index pointing up", &["one", "point", "up"], People),
-        EmojiEntry::new("👍", "thumbs up", &["like", "yes", "good", "approve"], People),
-        EmojiEntry::new("👎", "thumbs down", &["dislike", "no", "bad", "disapprove"], People),
-        EmojiEntry::new("✊", "raised fist", &["fist", "power", "solidarity"], People),
-        EmojiEntry::new("👊", "oncoming fist", &["punch", "fist bump"], People),
-        EmojiEntry::new("🤛", "left-facing fist", &["fist bump", "punch"], People),
-        EmojiEntry::new("🤜", "right-facing fist", &["fist bump", "punch"], People),
-        EmojiEntry::new("👏", "clapping hands", &["clap", "applause", "bravo"], People),
-        EmojiEntry::new("🙌", "raising hands", &["celebration", "praise", "hooray"], People),
-        EmojiEntry::new("👐", "open hands", &["hands", "jazz hands"], People),
-        EmojiEntry::new("🤲", "palms up together", &["prayer", "cupped hands"], People),
-        EmojiEntry::new("🤝", "handshake", &["deal", "agreement", "shake"], People),
-        EmojiEntry::new("🙏", "folded hands", &["pray", "please", "thank you", "namaste"], People),
-        EmojiEntry::new("✍️", "writing hand", &["write", "pen", "sign"], People),
-        EmojiEntry::new("💅", "nail polish", &["nails", "beauty", "manicure"], People),
-        EmojiEntry::new("🤳", "selfie", &["phone", "camera", "selfie"], People),
-        EmojiEntry::new("💪", "flexed biceps", &["strong", "muscle", "flex", "workout"], People),
-        EmojiEntry::new("🦾", "mechanical arm", &["robot", "prosthetic", "cyborg"], People),
-        EmojiEntry::new("🦿", "mechanical leg", &["robot", "prosthetic", "cyborg"], People),
-        EmojiEntry::new("🦵", "leg", &["kick", "limb"], People),
-        EmojiEntry::new("🦶", "foot", &["kick", "stomp"], People),
-        EmojiEntry::new("👂", "ear", &["hear", "listen", "sound"], People),
-        EmojiEntry::new("👃", "nose", &["smell", "sniff"], People),
-        EmojiEntry::new("🧠", "brain", &["think", "smart", "mind"], People),
-        EmojiEntry::new("🫀", "anatomical heart", &["heart", "organ", "cardio"], People),
-        EmojiEntry::new("🫁", "lungs", &["breathe", "organ", "respiratory"], People),
-        EmojiEntry::new("🦷", "tooth", &["dentist", "teeth"], People),
-        EmojiEntry::new("🦴", "bone", &["skeleton", "dog"], People),
-        EmojiEntry::new("👀", "eyes", &["look", "see", "watch"], People),
-        EmojiEntry::new("👁️", "eye", &["see", "look", "watch"], People),
-        EmojiEntry::new("👅", "tongue", &["taste", "lick"], People),
-        EmojiEntry::new("👄", "mouth", &["lips", "kiss"], People),
-        EmojiEntry::new("👶", "baby", &["child", "infant", "newborn"], People),
-        EmojiEntry::new("🧒", "child", &["kid", "young"], People),
-        EmojiEntry::new("👦", "boy", &["male", "child", "kid"], People),
-        EmojiEntry::new("👧", "girl", &["female", "child", "kid"], People),
-        EmojiEntry::new("🧑", "person", &["adult", "gender neutral"], People),
-        EmojiEntry::new("👨", "man", &["male", "adult", "guy"], People),
-        EmojiEntry::new("👩", "woman", &["female", "adult", "lady"], People),
-        EmojiEntry::new("🧓", "older person", &["elder", "senior"], People),
-        EmojiEntry::new("👴", "old man", &["grandpa", "elder", "senior"], People),
-        EmojiEntry::new("👵", "old woman", &["grandma", "elder", "senior"], People),
-    ]
+/// Categories: 0=Smileys, 1=People, 2=Animals, 3=Food, 4=Travel, 5=Activities, 6=Objects, 7=Symbols, 8=Flags
+pub fn category_emojis(category: i32) -> Vec<PickerEmoji> {
+    let emojis: &[(&str, &str)] = match category {
+        0 => &[ // Smileys & Emotion
+            ("😀", "grinning"), ("😃", "smiley"), ("😄", "smile"), ("😁", "grin"),
+            ("😅", "sweat_smile"), ("😂", "joy"), ("🤣", "rofl"), ("😊", "blush"),
+            ("😇", "innocent"), ("🙂", "slight_smile"), ("😉", "wink"), ("😍", "heart_eyes"),
+            ("🥰", "smiling_hearts"), ("😘", "kissing_heart"), ("😋", "yum"), ("😜", "stuck_out_tongue_winking"),
+            ("🤪", "zany"), ("🤨", "raised_eyebrow"), ("🧐", "monocle"), ("🤓", "nerd"),
+            ("😎", "sunglasses"), ("🥳", "partying"), ("😏", "smirk"), ("😒", "unamused"),
+            ("😞", "disappointed"), ("😔", "pensive"), ("😟", "worried"), ("😕", "confused"),
+            ("🙁", "slightly_frowning"), ("😣", "persevere"), ("😖", "confounded"), ("😫", "tired"),
+            ("😩", "weary"), ("🥺", "pleading"), ("😢", "cry"), ("😭", "sob"),
+            ("😤", "triumph"), ("😠", "angry"), ("😡", "rage"), ("🤬", "cursing"),
+        ],
+        1 => &[ // People & Body
+            ("👋", "wave"), ("🤚", "raised_back"), ("🖐️", "hand_splayed"), ("✋", "hand"),
+            ("🖖", "vulcan"), ("👌", "ok_hand"), ("🤌", "pinched"), ("🤏", "pinching"),
+            ("✌️", "v"), ("🤞", "crossed_fingers"), ("🤟", "love_you"), ("🤘", "metal"),
+            ("🤙", "call_me"), ("👈", "point_left"), ("👉", "point_right"), ("👆", "point_up"),
+            ("👇", "point_down"), ("☝️", "point_up_2"), ("👍", "thumbsup"), ("👎", "thumbsdown"),
+            ("✊", "fist"), ("👊", "punch"), ("🤛", "left_fist"), ("🤜", "right_fist"),
+            ("👏", "clap"), ("🙌", "raised_hands"), ("👐", "open_hands"), ("🤲", "palms_up"),
+            ("🤝", "handshake"), ("🙏", "pray"), ("💪", "muscle"), ("🦾", "mechanical_arm"),
+        ],
+        2 => &[ // Animals & Nature
+            ("🐱", "cat"), ("🐶", "dog"), ("🐭", "mouse"), ("🐹", "hamster"),
+            ("🐰", "rabbit"), ("🦊", "fox"), ("🐻", "bear"), ("🐼", "panda"),
+            ("🐨", "koala"), ("🐯", "tiger"), ("🦁", "lion"), ("🐮", "cow"),
+            ("🐷", "pig"), ("🐸", "frog"), ("🐵", "monkey"), ("🐔", "chicken"),
+            ("🐧", "penguin"), ("🐦", "bird"), ("🐤", "baby_chick"), ("🦆", "duck"),
+            ("🦅", "eagle"), ("🦉", "owl"), ("🦇", "bat"), ("🐺", "wolf"),
+            ("🐗", "boar"), ("🐴", "horse"), ("🦄", "unicorn"), ("🐝", "bee"),
+            ("🐛", "bug"), ("🦋", "butterfly"), ("🐌", "snail"), ("🐞", "ladybug"),
+        ],
+        3 => &[ // Food & Drink
+            ("🍎", "apple"), ("🍐", "pear"), ("🍊", "orange"), ("🍋", "lemon"),
+            ("🍌", "banana"), ("🍉", "watermelon"), ("🍇", "grapes"), ("🍓", "strawberry"),
+            ("🫐", "blueberries"), ("🍈", "melon"), ("🍒", "cherries"), ("🍑", "peach"),
+            ("🥭", "mango"), ("🍍", "pineapple"), ("🥥", "coconut"), ("🥝", "kiwi"),
+            ("🍅", "tomato"), ("🥑", "avocado"), ("🥦", "broccoli"), ("🥬", "leafy_green"),
+            ("🥒", "cucumber"), ("🌶️", "hot_pepper"), ("🫑", "bell_pepper"), ("🌽", "corn"),
+            ("🥕", "carrot"), ("🧄", "garlic"), ("🧅", "onion"), ("🥔", "potato"),
+            ("🍞", "bread"), ("🥐", "croissant"), ("🥖", "baguette"), ("🍕", "pizza"),
+        ],
+        4 => &[ // Travel & Places
+            ("✈️", "airplane"), ("🚀", "rocket"), ("🚁", "helicopter"), ("🛸", "flying_saucer"),
+            ("🚂", "steam_locomotive"), ("🚃", "railway_car"), ("🚄", "bullet_train"), ("🚅", "train"),
+            ("🚆", "train2"), ("🚇", "metro"), ("🚈", "light_rail"), ("🚉", "station"),
+            ("🚊", "tram"), ("🚝", "monorail"), ("🚞", "mountain_railway"), ("🚋", "train_car"),
+            ("🚌", "bus"), ("🚍", "oncoming_bus"), ("🚎", "trolleybus"), ("🚐", "minibus"),
+            ("🚑", "ambulance"), ("🚒", "fire_engine"), ("🚓", "police_car"), ("🚕", "taxi"),
+            ("🚖", "oncoming_taxi"), ("🚗", "car"), ("🚘", "oncoming_car"), ("🚙", "suv"),
+            ("🏠", "house"), ("🏡", "house_garden"), ("🏢", "office"), ("🏰", "castle"),
+        ],
+        5 => &[ // Activities
+            ("⚽", "soccer"), ("🏀", "basketball"), ("🏈", "football"), ("⚾", "baseball"),
+            ("🥎", "softball"), ("🎾", "tennis"), ("🏐", "volleyball"), ("🏉", "rugby"),
+            ("🥏", "flying_disc"), ("🎱", "8ball"), ("🪀", "yo_yo"), ("🏓", "ping_pong"),
+            ("🏸", "badminton"), ("🏒", "ice_hockey"), ("🏑", "field_hockey"), ("🥍", "lacrosse"),
+            ("🏏", "cricket game"), ("🪃", "boomerang"), ("🥅", "goal_net"), ("⛳", "golf"),
+            ("🪁", "kite"), ("🏹", "bow and arrow"), ("🎣", "fishing pole"), ("🤿", "diving mask"),
+            ("🥊", "boxing glove"), ("🥋", "martial arts uniform"), ("🎿", "skis"), ("⛷️", "skier"),
+            ("🏂", "snowboarder"), ("🪂", "parachute"), ("🏋️", "person lifting weights"), ("🤸", "person cartwheeling"),
+        ],
+        6 => &[ // Objects
+            ("💡", "bulb"), ("🔦", "flashlight"), ("🏮", "lantern"), ("🪔", "diya_lamp"),
+            ("📱", "iphone"), ("📲", "calling"), ("💻", "computer"), ("🖥️", "desktop"),
+            ("🖨️", "printer"), ("⌨️", "keyboard"), ("🖱️", "mouse_computer"), ("💽", "minidisc"),
+            ("💾", "floppy_disk"), ("💿", "cd"), ("📀", "dvd"), ("🎥", "movie_camera"),
+            ("📷", "camera"), ("📸", "camera_flash"), ("📹", "video_camera"), ("📼", "vhs"),
+            ("🔍", "mag"), ("🔎", "mag_right"), ("💰", "moneybag"), ("💳", "credit_card"),
+            ("💎", "gem"), ("⚖️", "scales"), ("🔧", "wrench"), ("🔨", "hammer"),
+            ("⚒️", "hammer_pick"), ("🛠️", "tools"), ("⛏️", "pick"), ("🔩", "nut_and_bolt"),
+        ],
+        7 => &[ // Symbols
+            ("❤️", "heart"), ("🧡", "orange_heart"), ("💛", "yellow_heart"), ("💚", "green_heart"),
+            ("💙", "blue_heart"), ("💜", "purple_heart"), ("🖤", "black_heart"), ("🤍", "white_heart"),
+            ("🤎", "brown_heart"), ("💔", "broken_heart"), ("❣️", "heart_exclamation"), ("💕", "two_hearts"),
+            ("💞", "revolving_hearts"), ("💓", "heartbeat"), ("💗", "heartpulse"), ("💖", "sparkling_heart"),
+            ("💘", "cupid"), ("💝", "gift_heart"), ("✅", "white_check_mark"), ("❌", "x"),
+            ("⭕", "o"), ("❗", "exclamation"), ("❓", "question"), ("⚠️", "warning"),
+            ("🔴", "red_circle"), ("🟠", "orange_circle"), ("🟡", "yellow_circle"), ("🟢", "green_circle"),
+            ("🔵", "blue_circle"), ("🟣", "purple_circle"), ("⚫", "black_circle"), ("⚪", "white_circle"),
+        ],
+        8 => &[ // Flags
+            ("🏳️", "white_flag"), ("🏴", "black_flag"), ("🏁", "checkered_flag"), ("🚩", "triangular_flag"),
+            ("🏳️‍🌈", "rainbow_flag"), ("🏳️‍⚧️", "transgender_flag"), ("🏴‍☠️", "pirate_flag"),
+            ("🇺🇸", "us"), ("🇬🇧", "gb"), ("🇨🇦", "ca"), ("🇦🇺", "au"),
+            ("🇩🇪", "de"), ("🇫🇷", "fr"), ("🇮🇹", "it"), ("🇪🇸", "es"),
+            ("🇯🇵", "jp"), ("🇰🇷", "kr"), ("🇨🇳", "cn"), ("🇮🇳", "in"),
+            ("🇧🇷", "br"), ("🇲🇽", "mx"), ("🇷🇺", "ru"), ("🇿🇦", "za"),
+            ("🇳🇱", "nl"), ("🇧🇪", "be"), ("🇨🇭", "ch"), ("🇦🇹", "at"),
+            ("🇸🇪", "se"), ("🇳🇴", "no"), ("🇩🇰", "dk"), ("🇫🇮", "fi"),
+        ],
+        _ => &[],
+    };
+
+    emojis
+        .iter()
+        .filter(|(emoji, _)| is_color_default(emoji))
+        .map(|(emoji, name)| PickerEmoji {
+            emoji: (*emoji).to_string(),
+            name: (*name).to_string(),
+            category,
+        })
+        .collect()
 }
 
-fn animals_emoji() -> Vec<EmojiEntry> {
-    use EmojiCategory::Animals;
-    vec![
-        EmojiEntry::new("🐶", "dog face", &["puppy", "pet", "dog"], Animals),
-        EmojiEntry::new("🐱", "cat face", &["kitty", "pet", "cat", "meow"], Animals),
-        EmojiEntry::new("🐭", "mouse face", &["mouse", "rodent"], Animals),
-        EmojiEntry::new("🐹", "hamster", &["pet", "rodent"], Animals),
-        EmojiEntry::new("🐰", "rabbit face", &["bunny", "pet"], Animals),
-        EmojiEntry::new("🦊", "fox", &["cunning", "animal"], Animals),
-        EmojiEntry::new("🐻", "bear", &["teddy", "animal"], Animals),
-        EmojiEntry::new("🐼", "panda", &["animal", "cute"], Animals),
-        EmojiEntry::new("🐨", "koala", &["animal", "australia"], Animals),
-        EmojiEntry::new("🐯", "tiger face", &["animal", "cat", "wild"], Animals),
-        EmojiEntry::new("🦁", "lion", &["animal", "king", "wild"], Animals),
-        EmojiEntry::new("🐮", "cow face", &["animal", "moo", "farm"], Animals),
-        EmojiEntry::new("🐷", "pig face", &["animal", "oink", "farm"], Animals),
-        EmojiEntry::new("🐸", "frog", &["animal", "toad", "ribbit"], Animals),
-        EmojiEntry::new("🐵", "monkey face", &["animal", "primate"], Animals),
-        EmojiEntry::new("🙈", "see-no-evil monkey", &["monkey", "blind", "hide"], Animals),
-        EmojiEntry::new("🙉", "hear-no-evil monkey", &["monkey", "deaf"], Animals),
-        EmojiEntry::new("🙊", "speak-no-evil monkey", &["monkey", "mute", "quiet"], Animals),
-        EmojiEntry::new("🐔", "chicken", &["animal", "bird", "farm"], Animals),
-        EmojiEntry::new("🐧", "penguin", &["animal", "bird", "cold"], Animals),
-        EmojiEntry::new("🐦", "bird", &["animal", "fly"], Animals),
-        EmojiEntry::new("🐤", "baby chick", &["bird", "chicken", "cute"], Animals),
-        EmojiEntry::new("🦆", "duck", &["bird", "quack", "water"], Animals),
-        EmojiEntry::new("🦅", "eagle", &["bird", "america", "freedom"], Animals),
-        EmojiEntry::new("🦉", "owl", &["bird", "night", "wise"], Animals),
-        EmojiEntry::new("🦇", "bat", &["animal", "vampire", "night"], Animals),
-        EmojiEntry::new("🐺", "wolf", &["animal", "howl", "wild"], Animals),
-        EmojiEntry::new("🐴", "horse face", &["animal", "pony"], Animals),
-        EmojiEntry::new("🦄", "unicorn", &["magic", "fantasy", "horse"], Animals),
-        EmojiEntry::new("🐝", "honeybee", &["insect", "bee", "honey"], Animals),
-        EmojiEntry::new("🐛", "bug", &["insect", "caterpillar"], Animals),
-        EmojiEntry::new("🦋", "butterfly", &["insect", "pretty", "nature"], Animals),
-        EmojiEntry::new("🐌", "snail", &["slow", "animal"], Animals),
-        EmojiEntry::new("🐞", "lady beetle", &["insect", "ladybug", "bug"], Animals),
-        EmojiEntry::new("🐜", "ant", &["insect", "bug"], Animals),
-        EmojiEntry::new("🐢", "turtle", &["slow", "animal", "shell"], Animals),
-        EmojiEntry::new("🐍", "snake", &["animal", "reptile"], Animals),
-        EmojiEntry::new("🦎", "lizard", &["reptile", "animal"], Animals),
-        EmojiEntry::new("🐙", "octopus", &["animal", "sea", "tentacle"], Animals),
-        EmojiEntry::new("🦑", "squid", &["animal", "sea", "ocean"], Animals),
-        EmojiEntry::new("🦐", "shrimp", &["seafood", "animal"], Animals),
-        EmojiEntry::new("🦀", "crab", &["animal", "sea", "beach"], Animals),
-        EmojiEntry::new("🐡", "blowfish", &["fish", "sea"], Animals),
-        EmojiEntry::new("🐠", "tropical fish", &["fish", "sea", "nemo"], Animals),
-        EmojiEntry::new("🐟", "fish", &["sea", "animal", "swim"], Animals),
-        EmojiEntry::new("🐬", "dolphin", &["animal", "sea", "smart"], Animals),
-        EmojiEntry::new("🐳", "spouting whale", &["animal", "sea", "ocean"], Animals),
-        EmojiEntry::new("🐋", "whale", &["animal", "sea", "ocean", "big"], Animals),
-        EmojiEntry::new("🦈", "shark", &["animal", "sea", "danger"], Animals),
-        EmojiEntry::new("🐊", "crocodile", &["animal", "reptile", "danger"], Animals),
-        EmojiEntry::new("🐘", "elephant", &["animal", "big", "trunk"], Animals),
-        EmojiEntry::new("🦛", "hippopotamus", &["animal", "hippo"], Animals),
-        EmojiEntry::new("🦏", "rhinoceros", &["animal", "rhino", "horn"], Animals),
-        EmojiEntry::new("🐪", "camel", &["animal", "desert", "hump"], Animals),
-        EmojiEntry::new("🦒", "giraffe", &["animal", "tall", "spots"], Animals),
-        EmojiEntry::new("🐕", "dog", &["pet", "puppy", "animal"], Animals),
-        EmojiEntry::new("🐈", "cat", &["pet", "kitty", "animal"], Animals),
-        EmojiEntry::new("🌸", "cherry blossom", &["flower", "spring", "pink"], Animals),
-        EmojiEntry::new("🌹", "rose", &["flower", "love", "romantic"], Animals),
-        EmojiEntry::new("🌻", "sunflower", &["flower", "sun", "yellow"], Animals),
-        EmojiEntry::new("🌺", "hibiscus", &["flower", "tropical"], Animals),
-        EmojiEntry::new("🌷", "tulip", &["flower", "spring"], Animals),
-        EmojiEntry::new("🌱", "seedling", &["plant", "grow", "nature"], Animals),
-        EmojiEntry::new("🌲", "evergreen tree", &["tree", "nature", "forest"], Animals),
-        EmojiEntry::new("🌳", "deciduous tree", &["tree", "nature", "forest"], Animals),
-        EmojiEntry::new("🌴", "palm tree", &["tree", "tropical", "beach"], Animals),
-        EmojiEntry::new("🌵", "cactus", &["plant", "desert"], Animals),
-        EmojiEntry::new("🍀", "four leaf clover", &["luck", "lucky", "irish"], Animals),
-        EmojiEntry::new("🍁", "maple leaf", &["fall", "autumn", "canada"], Animals),
-        EmojiEntry::new("🍂", "fallen leaf", &["fall", "autumn", "nature"], Animals),
-        EmojiEntry::new("🍃", "leaf fluttering in wind", &["nature", "wind", "green"], Animals),
-    ]
-}
-
-fn food_emoji() -> Vec<EmojiEntry> {
-    use EmojiCategory::Food;
-    vec![
-        EmojiEntry::new("🍏", "green apple", &["fruit", "healthy", "apple"], Food),
-        EmojiEntry::new("🍎", "red apple", &["fruit", "healthy", "apple"], Food),
-        EmojiEntry::new("🍐", "pear", &["fruit", "healthy"], Food),
-        EmojiEntry::new("🍊", "tangerine", &["fruit", "orange", "citrus"], Food),
-        EmojiEntry::new("🍋", "lemon", &["fruit", "citrus", "sour"], Food),
-        EmojiEntry::new("🍌", "banana", &["fruit", "monkey"], Food),
-        EmojiEntry::new("🍉", "watermelon", &["fruit", "summer"], Food),
-        EmojiEntry::new("🍇", "grapes", &["fruit", "wine"], Food),
-        EmojiEntry::new("🍓", "strawberry", &["fruit", "berry"], Food),
-        EmojiEntry::new("🫐", "blueberries", &["fruit", "berry"], Food),
-        EmojiEntry::new("🍈", "melon", &["fruit"], Food),
-        EmojiEntry::new("🍒", "cherries", &["fruit", "cherry"], Food),
-        EmojiEntry::new("🍑", "peach", &["fruit", "butt"], Food),
-        EmojiEntry::new("🥭", "mango", &["fruit", "tropical"], Food),
-        EmojiEntry::new("🍍", "pineapple", &["fruit", "tropical"], Food),
-        EmojiEntry::new("🥥", "coconut", &["fruit", "tropical"], Food),
-        EmojiEntry::new("🥝", "kiwi fruit", &["fruit", "kiwi"], Food),
-        EmojiEntry::new("🍅", "tomato", &["vegetable", "fruit", "red"], Food),
-        EmojiEntry::new("🍆", "eggplant", &["vegetable", "aubergine"], Food),
-        EmojiEntry::new("🥑", "avocado", &["fruit", "guacamole", "healthy"], Food),
-        EmojiEntry::new("🥦", "broccoli", &["vegetable", "healthy", "green"], Food),
-        EmojiEntry::new("🥬", "leafy green", &["vegetable", "salad", "healthy"], Food),
-        EmojiEntry::new("🥒", "cucumber", &["vegetable", "pickle"], Food),
-        EmojiEntry::new("🌶️", "hot pepper", &["spicy", "chili", "hot"], Food),
-        EmojiEntry::new("🌽", "ear of corn", &["vegetable", "corn", "maize"], Food),
-        EmojiEntry::new("🥕", "carrot", &["vegetable", "orange"], Food),
-        EmojiEntry::new("🧄", "garlic", &["vegetable", "cooking"], Food),
-        EmojiEntry::new("🧅", "onion", &["vegetable", "cooking", "cry"], Food),
-        EmojiEntry::new("🥔", "potato", &["vegetable", "starch"], Food),
-        EmojiEntry::new("🍠", "roasted sweet potato", &["vegetable", "yam"], Food),
-        EmojiEntry::new("🥐", "croissant", &["bread", "french", "pastry"], Food),
-        EmojiEntry::new("🍞", "bread", &["food", "loaf", "toast"], Food),
-        EmojiEntry::new("🥖", "baguette", &["bread", "french"], Food),
-        EmojiEntry::new("🧀", "cheese wedge", &["cheese", "dairy"], Food),
-        EmojiEntry::new("🥚", "egg", &["food", "breakfast"], Food),
-        EmojiEntry::new("🍳", "cooking", &["egg", "breakfast", "frying pan"], Food),
-        EmojiEntry::new("🥞", "pancakes", &["breakfast", "food", "stack"], Food),
-        EmojiEntry::new("🧇", "waffle", &["breakfast", "food"], Food),
-        EmojiEntry::new("🥓", "bacon", &["meat", "breakfast", "pork"], Food),
-        EmojiEntry::new("🥩", "cut of meat", &["steak", "beef", "meat"], Food),
-        EmojiEntry::new("🍗", "poultry leg", &["chicken", "meat", "drumstick"], Food),
-        EmojiEntry::new("🍖", "meat on bone", &["meat", "ribs"], Food),
-        EmojiEntry::new("🌭", "hot dog", &["food", "sausage", "frankfurter"], Food),
-        EmojiEntry::new("🍔", "hamburger", &["burger", "food", "fast food"], Food),
-        EmojiEntry::new("🍟", "french fries", &["fries", "chips", "fast food"], Food),
-        EmojiEntry::new("🍕", "pizza", &["food", "italian", "slice"], Food),
-        EmojiEntry::new("🥪", "sandwich", &["food", "lunch", "bread"], Food),
-        EmojiEntry::new("🥙", "stuffed flatbread", &["pita", "gyro", "falafel"], Food),
-        EmojiEntry::new("🌮", "taco", &["mexican", "food"], Food),
-        EmojiEntry::new("🌯", "burrito", &["mexican", "food", "wrap"], Food),
-        EmojiEntry::new("🥗", "green salad", &["healthy", "vegetable", "diet"], Food),
-        EmojiEntry::new("🍝", "spaghetti", &["pasta", "italian", "noodles"], Food),
-        EmojiEntry::new("🍜", "steaming bowl", &["noodles", "ramen", "pho"], Food),
-        EmojiEntry::new("🍲", "pot of food", &["stew", "soup", "cooking"], Food),
-        EmojiEntry::new("🍛", "curry rice", &["indian", "food", "rice"], Food),
-        EmojiEntry::new("🍣", "sushi", &["japanese", "food", "fish"], Food),
-        EmojiEntry::new("🍱", "bento box", &["japanese", "food", "lunch"], Food),
-        EmojiEntry::new("🥟", "dumpling", &["food", "asian", "gyoza"], Food),
-        EmojiEntry::new("🍤", "fried shrimp", &["seafood", "tempura"], Food),
-        EmojiEntry::new("🍙", "rice ball", &["onigiri", "japanese", "food"], Food),
-        EmojiEntry::new("🍚", "cooked rice", &["food", "asian", "bowl"], Food),
-        EmojiEntry::new("🍧", "shaved ice", &["dessert", "cold"], Food),
-        EmojiEntry::new("🍨", "ice cream", &["dessert", "cold", "sweet"], Food),
-        EmojiEntry::new("🍦", "soft ice cream", &["dessert", "cone", "sweet"], Food),
-        EmojiEntry::new("🥧", "pie", &["dessert", "food", "thanksgiving"], Food),
-        EmojiEntry::new("🧁", "cupcake", &["dessert", "sweet", "cake"], Food),
-        EmojiEntry::new("🍰", "shortcake", &["dessert", "cake", "sweet"], Food),
-        EmojiEntry::new("🎂", "birthday cake", &["birthday", "celebration", "party"], Food),
-        EmojiEntry::new("🍮", "custard", &["dessert", "pudding", "flan"], Food),
-        EmojiEntry::new("🍭", "lollipop", &["candy", "sweet"], Food),
-        EmojiEntry::new("🍬", "candy", &["sweet", "treat"], Food),
-        EmojiEntry::new("🍫", "chocolate bar", &["sweet", "candy", "dessert"], Food),
-        EmojiEntry::new("🍿", "popcorn", &["movie", "snack", "cinema"], Food),
-        EmojiEntry::new("🍩", "doughnut", &["donut", "sweet", "dessert"], Food),
-        EmojiEntry::new("🍪", "cookie", &["sweet", "dessert", "biscuit"], Food),
-        EmojiEntry::new("☕", "hot beverage", &["coffee", "tea", "drink"], Food),
-        EmojiEntry::new("🍵", "teacup without handle", &["tea", "drink", "green tea"], Food),
-        EmojiEntry::new("🥤", "cup with straw", &["drink", "soda", "beverage"], Food),
-        EmojiEntry::new("🧋", "bubble tea", &["boba", "drink", "tea"], Food),
-        EmojiEntry::new("🍺", "beer mug", &["drink", "alcohol", "bar"], Food),
-        EmojiEntry::new("🍻", "clinking beer mugs", &["cheers", "drink", "alcohol", "celebrate"], Food),
-        EmojiEntry::new("🥂", "clinking glasses", &["cheers", "celebrate", "champagne", "toast"], Food),
-        EmojiEntry::new("🍷", "wine glass", &["drink", "alcohol", "wine"], Food),
-        EmojiEntry::new("🍸", "cocktail glass", &["drink", "alcohol", "martini"], Food),
-        EmojiEntry::new("🍹", "tropical drink", &["cocktail", "drink", "vacation"], Food),
-    ]
-}
-
-fn travel_emoji() -> Vec<EmojiEntry> {
-    use EmojiCategory::Travel;
-    vec![
-        EmojiEntry::new("🚗", "automobile", &["car", "drive", "vehicle"], Travel),
-        EmojiEntry::new("🚕", "taxi", &["cab", "car", "ride"], Travel),
-        EmojiEntry::new("🚙", "sport utility vehicle", &["car", "suv", "vehicle"], Travel),
-        EmojiEntry::new("🚌", "bus", &["vehicle", "transport", "public"], Travel),
-        EmojiEntry::new("🏎️", "racing car", &["car", "fast", "race"], Travel),
-        EmojiEntry::new("🚓", "police car", &["car", "cop", "emergency"], Travel),
-        EmojiEntry::new("🚑", "ambulance", &["emergency", "hospital", "medical"], Travel),
-        EmojiEntry::new("🚒", "fire engine", &["emergency", "fire", "truck"], Travel),
-        EmojiEntry::new("🚐", "minibus", &["van", "vehicle", "transport"], Travel),
-        EmojiEntry::new("🛻", "pickup truck", &["truck", "vehicle"], Travel),
-        EmojiEntry::new("🚚", "delivery truck", &["truck", "shipping", "moving"], Travel),
-        EmojiEntry::new("🚛", "articulated lorry", &["truck", "semi", "18 wheeler"], Travel),
-        EmojiEntry::new("🚜", "tractor", &["farm", "vehicle"], Travel),
-        EmojiEntry::new("🛴", "kick scooter", &["scooter", "transport"], Travel),
-        EmojiEntry::new("🚲", "bicycle", &["bike", "cycling", "ride"], Travel),
-        EmojiEntry::new("🛵", "motor scooter", &["scooter", "vespa", "moped"], Travel),
-        EmojiEntry::new("🏍️", "motorcycle", &["bike", "vehicle", "ride"], Travel),
-        EmojiEntry::new("🚨", "police car light", &["emergency", "siren", "alert"], Travel),
-        EmojiEntry::new("🚃", "railway car", &["train", "transport"], Travel),
-        EmojiEntry::new("🚄", "high-speed train", &["train", "fast", "transport"], Travel),
-        EmojiEntry::new("🚅", "bullet train", &["train", "shinkansen", "fast"], Travel),
-        EmojiEntry::new("🚆", "train", &["railway", "transport"], Travel),
-        EmojiEntry::new("🚇", "metro", &["subway", "underground", "train"], Travel),
-        EmojiEntry::new("✈️", "airplane", &["plane", "flight", "travel"], Travel),
-        EmojiEntry::new("🛫", "airplane departure", &["plane", "takeoff", "flight"], Travel),
-        EmojiEntry::new("🛬", "airplane arrival", &["plane", "landing", "flight"], Travel),
-        EmojiEntry::new("💺", "seat", &["airplane", "travel", "sit"], Travel),
-        EmojiEntry::new("🚀", "rocket", &["space", "launch", "fast"], Travel),
-        EmojiEntry::new("🛸", "flying saucer", &["ufo", "alien", "space"], Travel),
-        EmojiEntry::new("🚁", "helicopter", &["aircraft", "fly", "chopper"], Travel),
-        EmojiEntry::new("⛵", "sailboat", &["boat", "sail", "water"], Travel),
-        EmojiEntry::new("🚤", "speedboat", &["boat", "water", "fast"], Travel),
-        EmojiEntry::new("🛥️", "motor boat", &["boat", "water"], Travel),
-        EmojiEntry::new("🛳️", "passenger ship", &["cruise", "boat", "ship"], Travel),
-        EmojiEntry::new("🚢", "ship", &["boat", "cruise", "travel"], Travel),
-        EmojiEntry::new("⚓", "anchor", &["ship", "boat", "nautical"], Travel),
-        EmojiEntry::new("⛽", "fuel pump", &["gas", "petrol", "station"], Travel),
-        EmojiEntry::new("🚧", "construction", &["barrier", "road", "work"], Travel),
-        EmojiEntry::new("🚦", "vertical traffic light", &["traffic", "signal", "stop"], Travel),
-        EmojiEntry::new("🚥", "horizontal traffic light", &["traffic", "signal"], Travel),
-        EmojiEntry::new("🗺️", "world map", &["map", "travel", "globe"], Travel),
-        EmojiEntry::new("🗿", "moai", &["statue", "easter island"], Travel),
-        EmojiEntry::new("🗽", "statue of liberty", &["america", "new york", "usa"], Travel),
-        EmojiEntry::new("🗼", "tokyo tower", &["japan", "landmark"], Travel),
-        EmojiEntry::new("🏰", "castle", &["building", "fairy tale", "europe"], Travel),
-        EmojiEntry::new("🏯", "japanese castle", &["building", "japan"], Travel),
-        EmojiEntry::new("🎡", "ferris wheel", &["amusement", "park", "ride"], Travel),
-        EmojiEntry::new("🎢", "roller coaster", &["amusement", "park", "ride"], Travel),
-        EmojiEntry::new("⛲", "fountain", &["water", "park"], Travel),
-        EmojiEntry::new("🏖️", "beach with umbrella", &["beach", "vacation", "sun"], Travel),
-        EmojiEntry::new("🏝️", "desert island", &["island", "vacation", "tropical"], Travel),
-        EmojiEntry::new("🏜️", "desert", &["sand", "dry", "hot"], Travel),
-        EmojiEntry::new("🌋", "volcano", &["mountain", "lava", "eruption"], Travel),
-        EmojiEntry::new("⛰️", "mountain", &["nature", "hiking", "climb"], Travel),
-        EmojiEntry::new("🏔️", "snow-capped mountain", &["mountain", "snow", "winter"], Travel),
-        EmojiEntry::new("🏕️", "camping", &["tent", "outdoors", "nature"], Travel),
-        EmojiEntry::new("🏠", "house", &["home", "building"], Travel),
-        EmojiEntry::new("🏡", "house with garden", &["home", "building", "suburb"], Travel),
-        EmojiEntry::new("🏢", "office building", &["building", "work", "business"], Travel),
-        EmojiEntry::new("🏥", "hospital", &["building", "medical", "health"], Travel),
-        EmojiEntry::new("🏦", "bank", &["building", "money", "finance"], Travel),
-        EmojiEntry::new("🏪", "convenience store", &["shop", "store", "building"], Travel),
-        EmojiEntry::new("🏫", "school", &["building", "education", "learn"], Travel),
-        EmojiEntry::new("⛪", "church", &["building", "religion", "christian"], Travel),
-        EmojiEntry::new("🕌", "mosque", &["building", "religion", "islam"], Travel),
-        EmojiEntry::new("🌅", "sunrise", &["sun", "morning", "dawn"], Travel),
-        EmojiEntry::new("🌄", "sunrise over mountains", &["sun", "morning", "mountain"], Travel),
-        EmojiEntry::new("🌇", "sunset", &["sun", "evening", "city"], Travel),
-        EmojiEntry::new("🌆", "cityscape at dusk", &["city", "evening", "buildings"], Travel),
-        EmojiEntry::new("🏙️", "cityscape", &["city", "buildings", "urban"], Travel),
-        EmojiEntry::new("🌃", "night with stars", &["night", "city", "stars"], Travel),
-        EmojiEntry::new("🌉", "bridge at night", &["bridge", "night", "city"], Travel),
-        EmojiEntry::new("🌌", "milky way", &["space", "stars", "galaxy"], Travel),
-    ]
-}
-
-fn activities_emoji() -> Vec<EmojiEntry> {
-    use EmojiCategory::Activities;
-    vec![
-        EmojiEntry::new("⚽", "soccer ball", &["football", "sport", "ball"], Activities),
-        EmojiEntry::new("🏀", "basketball", &["sport", "ball", "nba"], Activities),
-        EmojiEntry::new("🏈", "american football", &["sport", "ball", "nfl"], Activities),
-        EmojiEntry::new("⚾", "baseball", &["sport", "ball", "mlb"], Activities),
-        EmojiEntry::new("🥎", "softball", &["sport", "ball"], Activities),
-        EmojiEntry::new("🎾", "tennis", &["sport", "ball", "racket"], Activities),
-        EmojiEntry::new("🏐", "volleyball", &["sport", "ball"], Activities),
-        EmojiEntry::new("🏉", "rugby football", &["sport", "ball"], Activities),
-        EmojiEntry::new("🥏", "flying disc", &["frisbee", "sport"], Activities),
-        EmojiEntry::new("🎱", "pool 8 ball", &["billiards", "game", "8ball"], Activities),
-        EmojiEntry::new("🏓", "ping pong", &["table tennis", "sport", "paddle"], Activities),
-        EmojiEntry::new("🏸", "badminton", &["sport", "racket", "shuttlecock"], Activities),
-        EmojiEntry::new("🏒", "ice hockey", &["sport", "hockey", "stick"], Activities),
-        EmojiEntry::new("🏑", "field hockey", &["sport", "hockey", "stick"], Activities),
-        EmojiEntry::new("🥍", "lacrosse", &["sport", "stick"], Activities),
-        EmojiEntry::new("🏏", "cricket game", &["sport", "bat"], Activities),
-        EmojiEntry::new("🥅", "goal net", &["sport", "soccer", "hockey"], Activities),
-        EmojiEntry::new("⛳", "flag in hole", &["golf", "sport"], Activities),
-        EmojiEntry::new("🏹", "bow and arrow", &["archery", "sport"], Activities),
-        EmojiEntry::new("🎣", "fishing pole", &["fish", "sport", "hobby"], Activities),
-        EmojiEntry::new("🤿", "diving mask", &["scuba", "diving", "snorkel"], Activities),
-        EmojiEntry::new("🥊", "boxing glove", &["sport", "fight", "punch"], Activities),
-        EmojiEntry::new("🥋", "martial arts uniform", &["karate", "judo", "sport"], Activities),
-        EmojiEntry::new("🎽", "running shirt", &["sport", "marathon", "race"], Activities),
-        EmojiEntry::new("🛹", "skateboard", &["sport", "skate"], Activities),
-        EmojiEntry::new("🛼", "roller skate", &["skate", "sport"], Activities),
-        EmojiEntry::new("🛷", "sled", &["winter", "snow", "slide"], Activities),
-        EmojiEntry::new("⛸️", "ice skate", &["winter", "skating", "ice"], Activities),
-        EmojiEntry::new("🥌", "curling stone", &["winter", "sport", "ice"], Activities),
-        EmojiEntry::new("🎿", "skis", &["winter", "skiing", "snow"], Activities),
-        EmojiEntry::new("⛷️", "skier", &["winter", "skiing", "snow"], Activities),
-        EmojiEntry::new("🏂", "snowboarder", &["winter", "snowboarding", "snow"], Activities),
-        EmojiEntry::new("🏋️", "person lifting weights", &["gym", "workout", "exercise", "fitness"], Activities),
-        EmojiEntry::new("🤼", "people wrestling", &["sport", "fight"], Activities),
-        EmojiEntry::new("🤸", "person cartwheeling", &["gymnastics", "sport"], Activities),
-        EmojiEntry::new("🤺", "person fencing", &["sport", "sword"], Activities),
-        EmojiEntry::new("⛹️", "person bouncing ball", &["basketball", "sport"], Activities),
-        EmojiEntry::new("🤾", "person playing handball", &["sport"], Activities),
-        EmojiEntry::new("🏌️", "person golfing", &["golf", "sport"], Activities),
-        EmojiEntry::new("🏇", "horse racing", &["sport", "race", "jockey"], Activities),
-        EmojiEntry::new("🧘", "person in lotus position", &["yoga", "meditation", "zen"], Activities),
-        EmojiEntry::new("🏄", "person surfing", &["surf", "beach", "wave"], Activities),
-        EmojiEntry::new("🏊", "person swimming", &["swim", "pool", "water"], Activities),
-        EmojiEntry::new("🤽", "person playing water polo", &["sport", "water"], Activities),
-        EmojiEntry::new("🚣", "person rowing boat", &["boat", "row", "water"], Activities),
-        EmojiEntry::new("🧗", "person climbing", &["climb", "rock", "sport"], Activities),
-        EmojiEntry::new("🚵", "person mountain biking", &["bike", "cycling", "sport"], Activities),
-        EmojiEntry::new("🚴", "person biking", &["bike", "cycling", "sport"], Activities),
-        EmojiEntry::new("🏆", "trophy", &["winner", "award", "prize", "champion"], Activities),
-        EmojiEntry::new("🥇", "1st place medal", &["gold", "winner", "first"], Activities),
-        EmojiEntry::new("🥈", "2nd place medal", &["silver", "second"], Activities),
-        EmojiEntry::new("🥉", "3rd place medal", &["bronze", "third"], Activities),
-        EmojiEntry::new("🏅", "sports medal", &["medal", "award", "winner"], Activities),
-        EmojiEntry::new("🎖️", "military medal", &["medal", "award", "honor"], Activities),
-        EmojiEntry::new("🎗️", "reminder ribbon", &["ribbon", "awareness"], Activities),
-        EmojiEntry::new("🎫", "ticket", &["event", "admission", "pass"], Activities),
-        EmojiEntry::new("🎪", "circus tent", &["circus", "show", "entertainment"], Activities),
-        EmojiEntry::new("🤹", "person juggling", &["juggle", "circus"], Activities),
-        EmojiEntry::new("🎭", "performing arts", &["theater", "drama", "masks"], Activities),
-        EmojiEntry::new("🎨", "artist palette", &["art", "paint", "creative"], Activities),
-        EmojiEntry::new("🎬", "clapper board", &["movie", "film", "cinema"], Activities),
-        EmojiEntry::new("🎤", "microphone", &["sing", "karaoke", "music"], Activities),
-        EmojiEntry::new("🎧", "headphone", &["music", "listen", "audio"], Activities),
-        EmojiEntry::new("🎼", "musical score", &["music", "notes", "sheet"], Activities),
-        EmojiEntry::new("🎹", "musical keyboard", &["piano", "music", "keys"], Activities),
-        EmojiEntry::new("🥁", "drum", &["music", "percussion", "beat"], Activities),
-        EmojiEntry::new("🎷", "saxophone", &["music", "jazz", "instrument"], Activities),
-        EmojiEntry::new("🎺", "trumpet", &["music", "brass", "instrument"], Activities),
-        EmojiEntry::new("🎸", "guitar", &["music", "rock", "instrument"], Activities),
-        EmojiEntry::new("🎻", "violin", &["music", "classical", "instrument"], Activities),
-        EmojiEntry::new("🎲", "game die", &["dice", "game", "random", "luck"], Activities),
-        EmojiEntry::new("♟️", "chess pawn", &["chess", "game", "strategy"], Activities),
-        EmojiEntry::new("🎯", "bullseye", &["target", "darts", "goal"], Activities),
-        EmojiEntry::new("🎳", "bowling", &["sport", "game", "strike"], Activities),
-        EmojiEntry::new("🎮", "video game", &["game", "controller", "play"], Activities),
-        EmojiEntry::new("🎰", "slot machine", &["casino", "gambling", "luck"], Activities),
-        EmojiEntry::new("🧩", "puzzle piece", &["puzzle", "game", "jigsaw"], Activities),
-    ]
-}
-
-fn objects_emoji() -> Vec<EmojiEntry> {
-    use EmojiCategory::Objects;
-    vec![
-        EmojiEntry::new("⌚", "watch", &["time", "clock", "wrist"], Objects),
-        EmojiEntry::new("📱", "mobile phone", &["phone", "cell", "smartphone"], Objects),
-        EmojiEntry::new("📲", "mobile phone with arrow", &["phone", "call", "incoming"], Objects),
-        EmojiEntry::new("💻", "laptop", &["computer", "pc", "work"], Objects),
-        EmojiEntry::new("⌨️", "keyboard", &["computer", "type", "input"], Objects),
-        EmojiEntry::new("🖥️", "desktop computer", &["computer", "pc", "monitor"], Objects),
-        EmojiEntry::new("🖨️", "printer", &["computer", "print", "office"], Objects),
-        EmojiEntry::new("🖱️", "computer mouse", &["computer", "click", "input"], Objects),
-        EmojiEntry::new("🕹️", "joystick", &["game", "controller", "play"], Objects),
-        EmojiEntry::new("💽", "computer disk", &["storage", "save", "data"], Objects),
-        EmojiEntry::new("💾", "floppy disk", &["save", "storage", "retro"], Objects),
-        EmojiEntry::new("💿", "optical disk", &["cd", "dvd", "storage"], Objects),
-        EmojiEntry::new("📀", "dvd", &["disk", "movie", "storage"], Objects),
-        EmojiEntry::new("📷", "camera", &["photo", "picture", "photography"], Objects),
-        EmojiEntry::new("📸", "camera with flash", &["photo", "picture", "flash"], Objects),
-        EmojiEntry::new("📹", "video camera", &["video", "record", "film"], Objects),
-        EmojiEntry::new("🎥", "movie camera", &["film", "cinema", "record"], Objects),
-        EmojiEntry::new("📽️", "film projector", &["movie", "cinema", "film"], Objects),
-        EmojiEntry::new("📞", "telephone receiver", &["phone", "call", "talk"], Objects),
-        EmojiEntry::new("☎️", "telephone", &["phone", "call", "landline"], Objects),
-        EmojiEntry::new("📟", "pager", &["beeper", "message", "retro"], Objects),
-        EmojiEntry::new("📠", "fax machine", &["fax", "office", "document"], Objects),
-        EmojiEntry::new("📺", "television", &["tv", "watch", "screen"], Objects),
-        EmojiEntry::new("📻", "radio", &["music", "listen", "broadcast"], Objects),
-        EmojiEntry::new("🎙️", "studio microphone", &["mic", "podcast", "record"], Objects),
-        EmojiEntry::new("🎚️", "level slider", &["audio", "volume", "control"], Objects),
-        EmojiEntry::new("🎛️", "control knobs", &["audio", "mixer", "dj"], Objects),
-        EmojiEntry::new("⏱️", "stopwatch", &["time", "timer", "speed"], Objects),
-        EmojiEntry::new("⏲️", "timer clock", &["time", "countdown", "alarm"], Objects),
-        EmojiEntry::new("⏰", "alarm clock", &["time", "wake", "morning"], Objects),
-        EmojiEntry::new("🕰️", "mantelpiece clock", &["time", "antique"], Objects),
-        EmojiEntry::new("⌛", "hourglass done", &["time", "sand", "timer"], Objects),
-        EmojiEntry::new("⏳", "hourglass not done", &["time", "sand", "waiting"], Objects),
-        EmojiEntry::new("🔋", "battery", &["power", "energy", "charge"], Objects),
-        EmojiEntry::new("🔌", "electric plug", &["power", "electricity", "charge"], Objects),
-        EmojiEntry::new("💡", "light bulb", &["idea", "light", "bright"], Objects),
-        EmojiEntry::new("🔦", "flashlight", &["light", "torch", "dark"], Objects),
-        EmojiEntry::new("🕯️", "candle", &["light", "flame", "romantic"], Objects),
-        EmojiEntry::new("💸", "money with wings", &["money", "spend", "flying"], Objects),
-        EmojiEntry::new("💵", "dollar banknote", &["money", "cash", "usd"], Objects),
-        EmojiEntry::new("💴", "yen banknote", &["money", "japan", "cash"], Objects),
-        EmojiEntry::new("💶", "euro banknote", &["money", "europe", "cash"], Objects),
-        EmojiEntry::new("💷", "pound banknote", &["money", "uk", "cash"], Objects),
-        EmojiEntry::new("💰", "money bag", &["money", "rich", "dollar"], Objects),
-        EmojiEntry::new("💳", "credit card", &["money", "pay", "card"], Objects),
-        EmojiEntry::new("💎", "gem stone", &["diamond", "jewel", "precious"], Objects),
-        EmojiEntry::new("⚖️", "balance scale", &["justice", "law", "weight"], Objects),
-        EmojiEntry::new("🧰", "toolbox", &["tools", "repair", "fix"], Objects),
-        EmojiEntry::new("🔧", "wrench", &["tool", "fix", "repair"], Objects),
-        EmojiEntry::new("🔩", "nut and bolt", &["tool", "hardware"], Objects),
-        EmojiEntry::new("⚙️", "gear", &["settings", "mechanical", "cog"], Objects),
-        EmojiEntry::new("🔫", "water pistol", &["gun", "toy", "squirt"], Objects),
-        EmojiEntry::new("💣", "bomb", &["explosive", "danger"], Objects),
-        EmojiEntry::new("🔪", "kitchen knife", &["knife", "cut", "cooking"], Objects),
-        EmojiEntry::new("🗡️", "dagger", &["knife", "sword", "weapon"], Objects),
-        EmojiEntry::new("⚔️", "crossed swords", &["battle", "fight", "war"], Objects),
-        EmojiEntry::new("🛡️", "shield", &["defense", "protect", "security"], Objects),
-        EmojiEntry::new("💊", "pill", &["medicine", "drug", "health"], Objects),
-        EmojiEntry::new("💉", "syringe", &["medicine", "vaccine", "injection"], Objects),
-        EmojiEntry::new("🩸", "drop of blood", &["blood", "donate", "medical"], Objects),
-        EmojiEntry::new("🧬", "dna", &["genetics", "biology", "science"], Objects),
-        EmojiEntry::new("🔬", "microscope", &["science", "lab", "research"], Objects),
-        EmojiEntry::new("🔭", "telescope", &["space", "astronomy", "stars"], Objects),
-        EmojiEntry::new("🚽", "toilet", &["bathroom", "restroom", "wc"], Objects),
-        EmojiEntry::new("🚿", "shower", &["bathroom", "clean", "water"], Objects),
-        EmojiEntry::new("🛁", "bathtub", &["bath", "clean", "relax"], Objects),
-        EmojiEntry::new("🧼", "soap", &["clean", "wash", "hygiene"], Objects),
-        EmojiEntry::new("🪥", "toothbrush", &["clean", "teeth", "hygiene"], Objects),
-        EmojiEntry::new("🛎️", "bellhop bell", &["hotel", "service", "ring"], Objects),
-        EmojiEntry::new("🔑", "key", &["lock", "unlock", "security"], Objects),
-        EmojiEntry::new("🗝️", "old key", &["key", "antique", "lock"], Objects),
-        EmojiEntry::new("🚪", "door", &["entrance", "exit", "room"], Objects),
-        EmojiEntry::new("🪑", "chair", &["seat", "sit", "furniture"], Objects),
-        EmojiEntry::new("🛋️", "couch and lamp", &["sofa", "living room", "furniture"], Objects),
-        EmojiEntry::new("🛏️", "bed", &["sleep", "bedroom", "furniture"], Objects),
-        EmojiEntry::new("🧸", "teddy bear", &["toy", "stuffed", "cute"], Objects),
-        EmojiEntry::new("🖼️", "framed picture", &["art", "painting", "frame"], Objects),
-        EmojiEntry::new("🎁", "wrapped gift", &["present", "birthday", "gift"], Objects),
-        EmojiEntry::new("🎈", "balloon", &["party", "birthday", "celebration"], Objects),
-        EmojiEntry::new("🎀", "ribbon", &["bow", "gift", "decoration"], Objects),
-        EmojiEntry::new("🎊", "confetti ball", &["party", "celebrate", "confetti"], Objects),
-        EmojiEntry::new("🎉", "party popper", &["party", "celebrate", "tada"], Objects),
-        EmojiEntry::new("✉️", "envelope", &["mail", "letter", "message"], Objects),
-        EmojiEntry::new("📩", "envelope with arrow", &["mail", "send", "email"], Objects),
-        EmojiEntry::new("📨", "incoming envelope", &["mail", "receive", "email"], Objects),
-        EmojiEntry::new("📧", "e-mail", &["email", "mail", "message"], Objects),
-        EmojiEntry::new("📦", "package", &["box", "delivery", "shipping"], Objects),
-        EmojiEntry::new("📋", "clipboard", &["document", "list", "paste"], Objects),
-        EmojiEntry::new("📁", "file folder", &["folder", "directory", "organize"], Objects),
-        EmojiEntry::new("📂", "open file folder", &["folder", "directory", "open"], Objects),
-        EmojiEntry::new("📰", "newspaper", &["news", "press", "media"], Objects),
-        EmojiEntry::new("📓", "notebook", &["book", "notes", "journal"], Objects),
-        EmojiEntry::new("📕", "closed book", &["book", "read", "red"], Objects),
-        EmojiEntry::new("📗", "green book", &["book", "read"], Objects),
-        EmojiEntry::new("📘", "blue book", &["book", "read"], Objects),
-        EmojiEntry::new("📙", "orange book", &["book", "read"], Objects),
-        EmojiEntry::new("📚", "books", &["library", "read", "study"], Objects),
-        EmojiEntry::new("📖", "open book", &["read", "book", "study"], Objects),
-        EmojiEntry::new("🔖", "bookmark", &["book", "save", "mark"], Objects),
-        EmojiEntry::new("📎", "paperclip", &["attach", "office", "clip"], Objects),
-        EmojiEntry::new("📐", "triangular ruler", &["ruler", "measure", "math"], Objects),
-        EmojiEntry::new("📏", "straight ruler", &["ruler", "measure", "line"], Objects),
-        EmojiEntry::new("✂️", "scissors", &["cut", "craft"], Objects),
-        EmojiEntry::new("🖊️", "pen", &["write", "sign", "ballpoint"], Objects),
-        EmojiEntry::new("🖋️", "fountain pen", &["write", "calligraphy"], Objects),
-        EmojiEntry::new("✒️", "black nib", &["pen", "write", "sign"], Objects),
-        EmojiEntry::new("🖌️", "paintbrush", &["art", "paint", "draw"], Objects),
-        EmojiEntry::new("🖍️", "crayon", &["draw", "color", "art"], Objects),
-        EmojiEntry::new("📝", "memo", &["note", "write", "pencil"], Objects),
-        EmojiEntry::new("✏️", "pencil", &["write", "draw", "edit"], Objects),
-        EmojiEntry::new("🔍", "magnifying glass tilted left", &["search", "find", "zoom"], Objects),
-        EmojiEntry::new("🔎", "magnifying glass tilted right", &["search", "find", "zoom"], Objects),
-        EmojiEntry::new("🔏", "locked with pen", &["security", "private", "lock"], Objects),
-        EmojiEntry::new("🔐", "locked with key", &["security", "private", "lock"], Objects),
-        EmojiEntry::new("🔒", "locked", &["security", "private", "lock"], Objects),
-        EmojiEntry::new("🔓", "unlocked", &["security", "open", "unlock"], Objects),
-    ]
-}
-
-fn symbols_emoji() -> Vec<EmojiEntry> {
-    use EmojiCategory::Symbols;
-    vec![
-        EmojiEntry::new("❤️", "red heart", &["love", "heart", "like"], Symbols),
-        EmojiEntry::new("🧡", "orange heart", &["love", "heart"], Symbols),
-        EmojiEntry::new("💛", "yellow heart", &["love", "heart"], Symbols),
-        EmojiEntry::new("💚", "green heart", &["love", "heart"], Symbols),
-        EmojiEntry::new("💙", "blue heart", &["love", "heart"], Symbols),
-        EmojiEntry::new("💜", "purple heart", &["love", "heart"], Symbols),
-        EmojiEntry::new("🖤", "black heart", &["love", "heart", "dark"], Symbols),
-        EmojiEntry::new("🤍", "white heart", &["love", "heart", "pure"], Symbols),
-        EmojiEntry::new("🤎", "brown heart", &["love", "heart"], Symbols),
-        EmojiEntry::new("💔", "broken heart", &["sad", "heartbreak", "love"], Symbols),
-        EmojiEntry::new("❣️", "heart exclamation", &["love", "heart"], Symbols),
-        EmojiEntry::new("💕", "two hearts", &["love", "heart", "couple"], Symbols),
-        EmojiEntry::new("💞", "revolving hearts", &["love", "heart"], Symbols),
-        EmojiEntry::new("💓", "beating heart", &["love", "heart", "pulse"], Symbols),
-        EmojiEntry::new("💗", "growing heart", &["love", "heart"], Symbols),
-        EmojiEntry::new("💖", "sparkling heart", &["love", "heart", "shine"], Symbols),
-        EmojiEntry::new("💘", "heart with arrow", &["love", "cupid", "valentine"], Symbols),
-        EmojiEntry::new("💝", "heart with ribbon", &["love", "gift", "valentine"], Symbols),
-        EmojiEntry::new("💟", "heart decoration", &["love", "heart"], Symbols),
-        EmojiEntry::new("☮️", "peace symbol", &["peace", "hippie"], Symbols),
-        EmojiEntry::new("✝️", "latin cross", &["christian", "religion", "cross"], Symbols),
-        EmojiEntry::new("☪️", "star and crescent", &["islam", "muslim", "religion"], Symbols),
-        EmojiEntry::new("🕉️", "om", &["hindu", "religion", "buddhism"], Symbols),
-        EmojiEntry::new("☸️", "wheel of dharma", &["buddhism", "religion"], Symbols),
-        EmojiEntry::new("✡️", "star of david", &["jewish", "judaism", "religion"], Symbols),
-        EmojiEntry::new("🔯", "dotted six-pointed star", &["star", "fortune"], Symbols),
-        EmojiEntry::new("☯️", "yin yang", &["balance", "tao", "harmony"], Symbols),
-        EmojiEntry::new("⛎", "ophiuchus", &["zodiac", "astrology"], Symbols),
-        EmojiEntry::new("♈", "aries", &["zodiac", "astrology", "horoscope"], Symbols),
-        EmojiEntry::new("♉", "taurus", &["zodiac", "astrology", "horoscope"], Symbols),
-        EmojiEntry::new("♊", "gemini", &["zodiac", "astrology", "horoscope"], Symbols),
-        EmojiEntry::new("♋", "cancer", &["zodiac", "astrology", "horoscope"], Symbols),
-        EmojiEntry::new("♌", "leo", &["zodiac", "astrology", "horoscope"], Symbols),
-        EmojiEntry::new("♍", "virgo", &["zodiac", "astrology", "horoscope"], Symbols),
-        EmojiEntry::new("♎", "libra", &["zodiac", "astrology", "horoscope"], Symbols),
-        EmojiEntry::new("♏", "scorpio", &["zodiac", "astrology", "horoscope"], Symbols),
-        EmojiEntry::new("♐", "sagittarius", &["zodiac", "astrology", "horoscope"], Symbols),
-        EmojiEntry::new("♑", "capricorn", &["zodiac", "astrology", "horoscope"], Symbols),
-        EmojiEntry::new("♒", "aquarius", &["zodiac", "astrology", "horoscope"], Symbols),
-        EmojiEntry::new("♓", "pisces", &["zodiac", "astrology", "horoscope"], Symbols),
-        EmojiEntry::new("🆔", "id button", &["id", "identity"], Symbols),
-        EmojiEntry::new("⚛️", "atom symbol", &["science", "atom", "physics"], Symbols),
-        EmojiEntry::new("☢️", "radioactive", &["nuclear", "radiation", "danger"], Symbols),
-        EmojiEntry::new("☣️", "biohazard", &["danger", "toxic", "warning"], Symbols),
-        EmojiEntry::new("✴️", "eight-pointed star", &["star"], Symbols),
-        EmojiEntry::new("🆚", "vs button", &["versus", "vs", "against"], Symbols),
-        EmojiEntry::new("💮", "white flower", &["flower", "japanese"], Symbols),
-        EmojiEntry::new("🉐", "japanese bargain button", &["japanese", "kanji"], Symbols),
-        EmojiEntry::new("㊙️", "japanese secret button", &["japanese", "secret"], Symbols),
-        EmojiEntry::new("㊗️", "japanese congratulations button", &["japanese", "congratulations"], Symbols),
-        EmojiEntry::new("🈴", "japanese passing grade button", &["japanese", "pass"], Symbols),
-        EmojiEntry::new("🈵", "japanese no vacancy button", &["japanese", "full"], Symbols),
-        EmojiEntry::new("🈹", "japanese discount button", &["japanese", "discount"], Symbols),
-        EmojiEntry::new("🈲", "japanese prohibited button", &["japanese", "prohibited"], Symbols),
-        EmojiEntry::new("🅰️", "a button", &["blood type", "a"], Symbols),
-        EmojiEntry::new("🅱️", "b button", &["blood type", "b"], Symbols),
-        EmojiEntry::new("🆎", "ab button", &["blood type", "ab"], Symbols),
-        EmojiEntry::new("🆑", "cl button", &["clear"], Symbols),
-        EmojiEntry::new("🅾️", "o button", &["blood type", "o"], Symbols),
-        EmojiEntry::new("🆘", "sos button", &["help", "emergency", "sos"], Symbols),
-        EmojiEntry::new("❌", "cross mark", &["no", "wrong", "x", "delete"], Symbols),
-        EmojiEntry::new("⭕", "hollow red circle", &["circle", "o", "correct"], Symbols),
-        EmojiEntry::new("🛑", "stop sign", &["stop", "halt"], Symbols),
-        EmojiEntry::new("⛔", "no entry", &["stop", "prohibited", "forbidden"], Symbols),
-        EmojiEntry::new("📛", "name badge", &["name", "badge", "tag"], Symbols),
-        EmojiEntry::new("🚫", "prohibited", &["no", "forbidden", "stop"], Symbols),
-        EmojiEntry::new("💯", "hundred points", &["100", "perfect", "score"], Symbols),
-        EmojiEntry::new("💢", "anger symbol", &["angry", "mad"], Symbols),
-        EmojiEntry::new("♨️", "hot springs", &["hot", "steam", "bath"], Symbols),
-        EmojiEntry::new("🚷", "no pedestrians", &["prohibited", "walking"], Symbols),
-        EmojiEntry::new("🚯", "no littering", &["prohibited", "trash"], Symbols),
-        EmojiEntry::new("🚳", "no bicycles", &["prohibited", "bike"], Symbols),
-        EmojiEntry::new("🚱", "non-potable water", &["water", "prohibited"], Symbols),
-        EmojiEntry::new("🔞", "no one under eighteen", &["18", "adult", "nsfw"], Symbols),
-        EmojiEntry::new("📵", "no mobile phones", &["prohibited", "phone", "silent"], Symbols),
-        EmojiEntry::new("🚭", "no smoking", &["prohibited", "smoke"], Symbols),
-        EmojiEntry::new("❗", "exclamation mark", &["exclamation", "warning", "important"], Symbols),
-        EmojiEntry::new("❕", "white exclamation mark", &["exclamation", "warning"], Symbols),
-        EmojiEntry::new("❓", "question mark", &["question", "what", "confused"], Symbols),
-        EmojiEntry::new("❔", "white question mark", &["question", "what"], Symbols),
-        EmojiEntry::new("‼️", "double exclamation mark", &["exclamation", "warning", "important"], Symbols),
-        EmojiEntry::new("⁉️", "exclamation question mark", &["exclamation", "question", "what"], Symbols),
-        EmojiEntry::new("⚠️", "warning", &["warning", "caution", "alert"], Symbols),
-        EmojiEntry::new("🚸", "children crossing", &["warning", "school", "kids"], Symbols),
-        EmojiEntry::new("🔱", "trident emblem", &["trident", "poseidon"], Symbols),
-        EmojiEntry::new("⚜️", "fleur-de-lis", &["french", "scout"], Symbols),
-        EmojiEntry::new("♻️", "recycling symbol", &["recycle", "green", "environment"], Symbols),
-        EmojiEntry::new("✅", "check mark button", &["yes", "correct", "done", "complete"], Symbols),
-        EmojiEntry::new("☑️", "check box with check", &["yes", "check", "done"], Symbols),
-        EmojiEntry::new("🔘", "radio button", &["button", "select"], Symbols),
-        EmojiEntry::new("🔴", "red circle", &["circle", "red"], Symbols),
-        EmojiEntry::new("🟠", "orange circle", &["circle", "orange"], Symbols),
-        EmojiEntry::new("🟡", "yellow circle", &["circle", "yellow"], Symbols),
-        EmojiEntry::new("🟢", "green circle", &["circle", "green"], Symbols),
-        EmojiEntry::new("🔵", "blue circle", &["circle", "blue"], Symbols),
-        EmojiEntry::new("🟣", "purple circle", &["circle", "purple"], Symbols),
-        EmojiEntry::new("⚫", "black circle", &["circle", "black"], Symbols),
-        EmojiEntry::new("⚪", "white circle", &["circle", "white"], Symbols),
-        EmojiEntry::new("🟤", "brown circle", &["circle", "brown"], Symbols),
-        EmojiEntry::new("🔺", "red triangle pointed up", &["triangle", "up", "red"], Symbols),
-        EmojiEntry::new("🔻", "red triangle pointed down", &["triangle", "down", "red"], Symbols),
-        EmojiEntry::new("🔸", "small orange diamond", &["diamond", "orange"], Symbols),
-        EmojiEntry::new("🔹", "small blue diamond", &["diamond", "blue"], Symbols),
-        EmojiEntry::new("🔶", "large orange diamond", &["diamond", "orange"], Symbols),
-        EmojiEntry::new("🔷", "large blue diamond", &["diamond", "blue"], Symbols),
-        EmojiEntry::new("▶️", "play button", &["play", "start", "video"], Symbols),
-        EmojiEntry::new("⏸️", "pause button", &["pause", "video"], Symbols),
-        EmojiEntry::new("⏹️", "stop button", &["stop", "video"], Symbols),
-        EmojiEntry::new("⏺️", "record button", &["record", "video"], Symbols),
-        EmojiEntry::new("⏭️", "next track button", &["next", "skip", "video"], Symbols),
-        EmojiEntry::new("⏮️", "last track button", &["previous", "back", "video"], Symbols),
-        EmojiEntry::new("⏩", "fast-forward button", &["fast", "forward", "video"], Symbols),
-        EmojiEntry::new("⏪", "fast reverse button", &["fast", "rewind", "video"], Symbols),
-        EmojiEntry::new("🔼", "upwards button", &["up", "arrow"], Symbols),
-        EmojiEntry::new("🔽", "downwards button", &["down", "arrow"], Symbols),
-        EmojiEntry::new("➡️", "right arrow", &["arrow", "right", "direction"], Symbols),
-        EmojiEntry::new("⬅️", "left arrow", &["arrow", "left", "direction"], Symbols),
-        EmojiEntry::new("⬆️", "up arrow", &["arrow", "up", "direction"], Symbols),
-        EmojiEntry::new("⬇️", "down arrow", &["arrow", "down", "direction"], Symbols),
-        EmojiEntry::new("↗️", "up-right arrow", &["arrow", "direction"], Symbols),
-        EmojiEntry::new("↘️", "down-right arrow", &["arrow", "direction"], Symbols),
-        EmojiEntry::new("↙️", "down-left arrow", &["arrow", "direction"], Symbols),
-        EmojiEntry::new("↖️", "up-left arrow", &["arrow", "direction"], Symbols),
-        EmojiEntry::new("↕️", "up-down arrow", &["arrow", "direction"], Symbols),
-        EmojiEntry::new("↔️", "left-right arrow", &["arrow", "direction"], Symbols),
-        EmojiEntry::new("🔀", "shuffle tracks button", &["shuffle", "random"], Symbols),
-        EmojiEntry::new("🔁", "repeat button", &["repeat", "loop"], Symbols),
-        EmojiEntry::new("🔂", "repeat single button", &["repeat", "one"], Symbols),
-        EmojiEntry::new("🔄", "counterclockwise arrows button", &["refresh", "sync", "reload"], Symbols),
-        EmojiEntry::new("🎵", "musical note", &["music", "note", "song"], Symbols),
-        EmojiEntry::new("🎶", "musical notes", &["music", "notes", "song"], Symbols),
-        EmojiEntry::new("➕", "plus", &["add", "plus", "more"], Symbols),
-        EmojiEntry::new("➖", "minus", &["subtract", "minus", "less"], Symbols),
-        EmojiEntry::new("➗", "divide", &["divide", "math"], Symbols),
-        EmojiEntry::new("✖️", "multiply", &["multiply", "times", "x"], Symbols),
-        EmojiEntry::new("♾️", "infinity", &["infinite", "forever", "loop"], Symbols),
-        EmojiEntry::new("💲", "heavy dollar sign", &["money", "dollar", "usd"], Symbols),
-        EmojiEntry::new("💱", "currency exchange", &["money", "exchange", "forex"], Symbols),
-        EmojiEntry::new("™️", "trade mark", &["trademark", "brand"], Symbols),
-        EmojiEntry::new("©️", "copyright", &["copyright", "legal"], Symbols),
-        EmojiEntry::new("®️", "registered", &["registered", "brand", "legal"], Symbols),
-        EmojiEntry::new("🔚", "end arrow", &["end", "arrow"], Symbols),
-        EmojiEntry::new("🔙", "back arrow", &["back", "arrow", "return"], Symbols),
-        EmojiEntry::new("🔛", "on arrow", &["on", "arrow"], Symbols),
-        EmojiEntry::new("🔝", "top arrow", &["top", "arrow", "up"], Symbols),
-        EmojiEntry::new("🔜", "soon arrow", &["soon", "arrow", "coming"], Symbols),
-        EmojiEntry::new("✔️", "check mark", &["check", "yes", "done", "correct"], Symbols),
-        EmojiEntry::new("💬", "speech balloon", &["comment", "chat", "message", "talk"], Symbols),
-        EmojiEntry::new("💭", "thought balloon", &["think", "thought", "bubble"], Symbols),
-        EmojiEntry::new("🗯️", "right anger bubble", &["angry", "speech", "yell"], Symbols),
-        EmojiEntry::new("♠️", "spade suit", &["cards", "spade", "poker"], Symbols),
-        EmojiEntry::new("♣️", "club suit", &["cards", "club", "poker"], Symbols),
-        EmojiEntry::new("♥️", "heart suit", &["cards", "heart", "poker"], Symbols),
-        EmojiEntry::new("♦️", "diamond suit", &["cards", "diamond", "poker"], Symbols),
-        EmojiEntry::new("🃏", "joker", &["cards", "joker", "wild"], Symbols),
-        EmojiEntry::new("🔈", "speaker low volume", &["sound", "volume", "audio"], Symbols),
-        EmojiEntry::new("🔇", "muted speaker", &["mute", "silent", "sound"], Symbols),
-        EmojiEntry::new("🔉", "speaker medium volume", &["sound", "volume", "audio"], Symbols),
-        EmojiEntry::new("🔊", "speaker high volume", &["sound", "volume", "loud"], Symbols),
-        EmojiEntry::new("🔔", "bell", &["notification", "alert", "ring"], Symbols),
-        EmojiEntry::new("🔕", "bell with slash", &["mute", "silent", "notification"], Symbols),
-        EmojiEntry::new("📣", "megaphone", &["announcement", "loud", "speak"], Symbols),
-        EmojiEntry::new("📢", "loudspeaker", &["announcement", "loud", "public"], Symbols),
-    ]
-}
-
-fn flags_emoji() -> Vec<EmojiEntry> {
-    use EmojiCategory::Flags;
-    vec![
-        EmojiEntry::new("🏳️", "white flag", &["flag", "surrender", "peace"], Flags),
-        EmojiEntry::new("🏴", "black flag", &["flag"], Flags),
-        EmojiEntry::new("🏴‍☠️", "pirate flag", &["pirate", "skull", "jolly roger"], Flags),
-        EmojiEntry::new("🏁", "chequered flag", &["race", "finish", "racing"], Flags),
-        EmojiEntry::new("🚩", "triangular flag", &["flag", "red flag", "warning"], Flags),
-        EmojiEntry::new("🏳️‍🌈", "rainbow flag", &["pride", "lgbtq", "gay"], Flags),
-        EmojiEntry::new("🏳️‍⚧️", "transgender flag", &["trans", "pride", "lgbtq"], Flags),
-        EmojiEntry::new("🇺🇳", "united nations", &["flag", "un", "international"], Flags),
-        EmojiEntry::new("🇦🇺", "australia", &["flag", "aussie", "au"], Flags),
-        EmojiEntry::new("🇦🇹", "austria", &["flag", "at"], Flags),
-        EmojiEntry::new("🇧🇪", "belgium", &["flag", "be"], Flags),
-        EmojiEntry::new("🇧🇷", "brazil", &["flag", "br"], Flags),
-        EmojiEntry::new("🇨🇦", "canada", &["flag", "ca", "maple"], Flags),
-        EmojiEntry::new("🇨🇳", "china", &["flag", "cn", "prc"], Flags),
-        EmojiEntry::new("🇩🇰", "denmark", &["flag", "dk"], Flags),
-        EmojiEntry::new("🇪🇬", "egypt", &["flag", "eg"], Flags),
-        EmojiEntry::new("🇫🇮", "finland", &["flag", "fi"], Flags),
-        EmojiEntry::new("🇫🇷", "france", &["flag", "fr", "french"], Flags),
-        EmojiEntry::new("🇩🇪", "germany", &["flag", "de", "german"], Flags),
-        EmojiEntry::new("🇬🇷", "greece", &["flag", "gr"], Flags),
-        EmojiEntry::new("🇭🇰", "hong kong", &["flag", "hk"], Flags),
-        EmojiEntry::new("🇮🇳", "india", &["flag", "in"], Flags),
-        EmojiEntry::new("🇮🇩", "indonesia", &["flag", "id"], Flags),
-        EmojiEntry::new("🇮🇪", "ireland", &["flag", "ie", "irish"], Flags),
-        EmojiEntry::new("🇮🇱", "israel", &["flag", "il"], Flags),
-        EmojiEntry::new("🇮🇹", "italy", &["flag", "it", "italian"], Flags),
-        EmojiEntry::new("🇯🇵", "japan", &["flag", "jp", "japanese"], Flags),
-        EmojiEntry::new("🇰🇷", "south korea", &["flag", "kr", "korean"], Flags),
-        EmojiEntry::new("🇲🇽", "mexico", &["flag", "mx"], Flags),
-        EmojiEntry::new("🇳🇱", "netherlands", &["flag", "nl", "dutch"], Flags),
-        EmojiEntry::new("🇳🇿", "new zealand", &["flag", "nz", "kiwi"], Flags),
-        EmojiEntry::new("🇳🇴", "norway", &["flag", "no"], Flags),
-        EmojiEntry::new("🇵🇭", "philippines", &["flag", "ph"], Flags),
-        EmojiEntry::new("🇵🇱", "poland", &["flag", "pl"], Flags),
-        EmojiEntry::new("🇵🇹", "portugal", &["flag", "pt"], Flags),
-        EmojiEntry::new("🇷🇺", "russia", &["flag", "ru"], Flags),
-        EmojiEntry::new("🇸🇦", "saudi arabia", &["flag", "sa"], Flags),
-        EmojiEntry::new("🇸🇬", "singapore", &["flag", "sg"], Flags),
-        EmojiEntry::new("🇿🇦", "south africa", &["flag", "za"], Flags),
-        EmojiEntry::new("🇪🇸", "spain", &["flag", "es", "spanish"], Flags),
-        EmojiEntry::new("🇸🇪", "sweden", &["flag", "se"], Flags),
-        EmojiEntry::new("🇨🇭", "switzerland", &["flag", "ch", "swiss"], Flags),
-        EmojiEntry::new("🇹🇼", "taiwan", &["flag", "tw"], Flags),
-        EmojiEntry::new("🇹🇭", "thailand", &["flag", "th"], Flags),
-        EmojiEntry::new("🇹🇷", "turkey", &["flag", "tr"], Flags),
-        EmojiEntry::new("🇺🇦", "ukraine", &["flag", "ua"], Flags),
-        EmojiEntry::new("🇦🇪", "united arab emirates", &["flag", "ae", "uae"], Flags),
-        EmojiEntry::new("🇬🇧", "united kingdom", &["flag", "uk", "gb", "british", "britain"], Flags),
-        EmojiEntry::new("🏴󠁧󠁢󠁥󠁮󠁧󠁿", "england", &["flag", "english"], Flags),
-        EmojiEntry::new("🏴󠁧󠁢󠁳󠁣󠁴󠁿", "scotland", &["flag", "scottish"], Flags),
-        EmojiEntry::new("🏴󠁧󠁢󠁷󠁬󠁳󠁿", "wales", &["flag", "welsh"], Flags),
-        EmojiEntry::new("🇺🇸", "united states", &["flag", "us", "usa", "america", "american"], Flags),
-        EmojiEntry::new("🇻🇳", "vietnam", &["flag", "vn"], Flags),
-    ]
+/// Search emoji by name across all categories, ignoring case (at most 50).
+pub fn search(query: &str) -> Vec<PickerEmoji> {
+    let query = query.to_lowercase();
+    let mut results: Vec<PickerEmoji> = (0..=8)
+        .flat_map(category_emojis)
+        .filter(|e| e.name.to_lowercase().contains(&query))
+        .collect();
+    results.truncate(50);
+    results
 }
 
 #[cfg(test)]
-mod tests {
+mod color_default_tests {
+    use super::is_color_default;
+
+    #[test]
+    fn smp_text_default_emoji_are_excluded() {
+        assert!(is_color_default("\u{1F600}")); // 😀
+        assert!(is_color_default("\u{1F3C1}")); // 🏁
+        assert!(!is_color_default("\u{1F6E1}\u{FE0F}")); // 🛡️
+        assert!(!is_color_default("\u{1F3F3}\u{FE0F}")); // 🏳️
+        assert!(!is_color_default("\u{1F441}")); // 👁
+        assert!(!is_color_default("\u{2708}\u{FE0F}")); // ✈️ (BMP)
+        assert!(is_color_default("\u{1F3F3}\u{FE0F}\u{200D}\u{1F308}")); // 🏳️‍🌈
+    }
+}
+
+#[cfg(test)]
+mod picker_tests {
     use super::*;
 
     #[test]
-    fn test_get_emoji_list_has_items() {
-        let list = get_emoji_list();
-        assert!(list.len() >= 200, "Expected at least 200 emoji, got {}", list.len());
+    fn skin_tone_applies_to_people_only() {
+        let dir = tempfile::tempdir().unwrap();
+        let recent = RecentEmojiStore::load(dir.path());
+        let plain = listing(PEOPLE_CATEGORY, 0, &recent);
+        let toned = listing(PEOPLE_CATEGORY, 3, &recent);
+        assert_eq!(plain.len(), toned.len());
+        assert_eq!(toned[0].emoji, format!("👋{}", SKIN_TONE_MODIFIERS[2]));
+        assert_eq!(listing(0, 3, &recent), listing(0, 0, &recent));
+        // Out-of-range tones are ignored.
+        assert_eq!(listing(PEOPLE_CATEGORY, 9, &recent), plain);
     }
 
     #[test]
-    fn test_get_emoji_list_has_all_categories() {
-        let list = get_emoji_list();
-        let categories: std::collections::HashSet<_> = list.iter().map(|e| e.category).collect();
+    fn recents_and_search() {
+        let dir = tempfile::tempdir().unwrap();
+        let recent = RecentEmojiStore::load(dir.path());
+        recent.record("😀");
+        recent.record("\u{1F6E1}\u{FE0F}"); // 🛡️, text-default: never offered
+        let tab = listing(RECENT_CATEGORY, 0, &recent);
+        assert_eq!(tab.iter().map(|e| e.emoji.as_str()).collect::<Vec<_>>(), ["😀"]);
+        assert!(tab.iter().all(|e| e.category == RECENT_CATEGORY));
 
-        assert!(categories.contains(&EmojiCategory::Smileys));
-        assert!(categories.contains(&EmojiCategory::People));
-        assert!(categories.contains(&EmojiCategory::Animals));
-        assert!(categories.contains(&EmojiCategory::Food));
-        assert!(categories.contains(&EmojiCategory::Travel));
-        assert!(categories.contains(&EmojiCategory::Activities));
-        assert!(categories.contains(&EmojiCategory::Objects));
-        assert!(categories.contains(&EmojiCategory::Symbols));
-        assert!(categories.contains(&EmojiCategory::Flags));
+        assert_eq!(search("HEART"), search("heart"));
+        let hits = search("heart");
+        assert!(hits.iter().any(|e| e.name == "heart_eyes"));
+        assert!(hits.iter().all(|e| e.name.contains("heart")));
+        assert!(search("").len() <= 50);
+        assert!(listing(42, 0, &recent).is_empty());
     }
-
 }

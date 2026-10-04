@@ -19,9 +19,7 @@ pub(crate) fn wire_emoji_clicked(window: &MainWindow) {
                 // Visibility is handled by Slint ChatLayout.
                 // Load initial emoji list if opening
                 if w.get_composer_emoji_picker_visible() {
-                    let emojis = emoji_loader::get_emoji_list(0); // Category 0 = Smileys
-                    w.set_composer_emoji_list(slint::ModelRc::new(slint::VecModel::from(emojis)));
-                    w.set_composer_emoji_category(0);
+                    emoji_loader::show_composer_picker_start(&w);
                     w.set_composer_emoji_search("".into());
                 }
             }
