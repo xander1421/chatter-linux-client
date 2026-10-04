@@ -30,6 +30,20 @@ debug = 0              # No debug symbols (faster linking)
 incremental = true     # Incremental compilation
 codegen-units = 256    # More parallelism
 
+# chatter-ui-slint gets NO per-package override, and that is measured, not an
+# oversight (OPEN-ITEMS §101, 2026-10-04). It is a workspace member, so the
+# `"*"` opt-level = 2 below never applied to it: it already builds at O0 with
+# debug = 0. Its rustc compiles ~50 MB of generated Rust for one edited .slint
+# file: ~117 s, 8.9 GB peak RSS. Per-crate settings tried, edit-one-.slint
+# rebuilds of that crate (±5 s noise):
+#   codegen-units 16 / 64           111 s / 113 s, 8.8-8.9 GB  (no change)
+#   debug-assertions + overflow off 108 s, 8.9 GB              (noise-level)
+#   opt-level = 1                   285 s, 11.1 GB             (much worse)
+#   incremental (no sccache)        58-123 s, 7.0-13.2 GB      (erratic; sccache forbids it)
+#   -Zthreads=8 (nightly rustc)     75 s, 9.2 GB               (-36% wall)
+# Only -Zthreads helps, and it is nightly-only, so it cannot live here (CI
+# builds this workspace on stable). Opt in per machine, see §101.
+
 # chatter-core is opted OUT of the workspace-member opt-level = 0 above.
 #
 # Why (OPEN-ITEMS §109): attachment crypto is `cbc::Decryptor<aes::Aes256>` --
