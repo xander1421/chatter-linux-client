@@ -7,6 +7,7 @@
 
 import { Colors } from "../theme/colors.slint";
 import { GlassSurface } from "../components/glass_surface.slint";
+import { Materials } from "../theme/materials.slint";
 import { Spacing } from "../theme/spacing.slint";
 import { Typography } from "../theme/typography.slint";
 import { Icons } from "../theme/icons.slint";
@@ -601,9 +602,12 @@ export component MessageList inherits Rectangle {
                         opacity: 0.5;
                     }
 
-                    GlassSurface {
-                        elevation: 0;
+                    // A row, so no glass (glass_surface.slint:1): the chip is a
+                    // plain fill in the material's tint, which over the flat list
+                    // background is what the glass rendered anyway.
+                    Rectangle {
                         border-radius: 12px;
+                        background: Materials.regular;
                         min-width: unread-label.preferred-width + Spacing.md * 2;
                         height: 24px;
                         unread-label := Text {
@@ -642,9 +646,12 @@ export component MessageList inherits Rectangle {
                         background: Colors.surface-hover;
                     }
 
-                    GlassSurface {
-                        elevation: 0;
+                    // A row, so no glass (glass_surface.slint:1): the chip is a
+                    // plain fill in the material's tint, which over the flat list
+                    // background is what the glass rendered anyway.
+                    Rectangle {
                         border-radius: 12px;
+                        background: Materials.regular;
                         min-width: date-label.preferred-width + Spacing.md * 2;
                         height: 24px;
                         date-label := Text {

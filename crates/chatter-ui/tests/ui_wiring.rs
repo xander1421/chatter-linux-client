@@ -4668,7 +4668,10 @@ fn secondary_chrome_exposes_its_shared_material() {
     let reaction = include_str!("../../../ui/chat/reaction_picker.slint");
     assert!(reaction.contains("material-enabled: false;"), "embedded emoji picker must not stack glass");
     let list = include_str!("../../../ui/chat/message_list.slint");
-    assert_eq!(list.matches("GlassSurface {").count(), 3, "date, unread and jump capsules");
+    assert_eq!(list.matches("GlassSurface {").count(), 1, "only the jump capsule floats over the list");
+    // The date and unread chips are row content: a plain tinted fill, never a
+    // backdrop sample per row (glass_surface.slint:1).
+    assert_eq!(list.matches("background: Materials.regular;").count(), 2, "date and unread chips");
     assert!(!list.contains("Colors.action-fill.with-alpha(0.97)"));
     let profile = include_str!("../../../ui/modals/user_profile.slint");
     assert!(profile.contains("height: parent.height - self.y;"));
