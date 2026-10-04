@@ -15,6 +15,10 @@
 //! Selective, Signal-style: user-visible history and social graph only.
 //! - `messages` / `threads` / `unified_reactions` — full history including
 //!   pins (`is_pinned`), edits (`is_edited`/`edited_at`) and reaction state.
+//! - `attachments` referenced by those messages, as pointers (CDN key, key,
+//!   digest, metadata) — never the bytes or this device's file paths. Without
+//!   them a restored or linked device had attachment ids it could not
+//!   describe or fetch: a GIF previewed as "📎 1 attachment" (§138).
 //! - `channels` / `memberships` — conversation metadata (channels, server
 //!   DMs, saved-messages).
 //! - `users` / `profiles` / `friendships` — contact + friend list.
@@ -64,6 +68,7 @@ pub const BACKUP_TABLES: &[&str] = &[
     "channels",
     "memberships",
     "messages",
+    "attachments",
     "threads",
     "unified_reactions",
 ];
@@ -199,6 +204,7 @@ fn dump_table(
     select_sql: &str,
     params: &[&dyn rusqlite::ToSql],
     rows_out: &mut usize,
+    keep: &dyn Fn(&rusqlite::Row<'_>) -> rusqlite::Result<bool>,
 ) -> Result<(), StorageError> {
     let columns = table_columns(conn, table)?;
     push_frame(
@@ -212,6 +218,9 @@ fn dump_table(
     let ncols = columns.len();
     let mut rows = stmt.query(params)?;
     while let Some(row) = rows.next()? {
+        if !keep(row)? {
+            continue;
+        }
         let mut values = Vec::with_capacity(ncols);
         for i in 0..ncols {
             values.push(value_ref_to_column(row.get_ref(i)?));
@@ -237,6 +246,10 @@ pub fn dump_frames(conn: &Connection, user_id: &str) -> Result<(Vec<u8>, usize),
     );
 
     for &table in BACKUP_TABLES {
+        if table == "attachments" {
+            dump_attachments(conn, &mut out, &mut rows)?;
+            continue;
+        }
         // SELECT * would also work, but naming the PRAGMA columns pins the
         // value order to the emitted TableHeader.
         let cols = table_columns(conn, table)?.join(", ");
@@ -248,7 +261,7 @@ pub fn dump_frames(conn: &Connection, user_id: &str) -> Result<(Vec<u8>, usize),
         } else {
             format!("SELECT {cols} FROM {table}")
         };
-        dump_table(conn, &mut out, table, &select, &[], &mut rows)?;
+        dump_table(conn, &mut out, table, &select, &[], &mut rows, &|_| Ok(true))?;
     }
 
     // Own-profile settings subset (never the whole settings table — see
@@ -270,9 +283,67 @@ pub fn dump_frames(conn: &Connection, user_id: &str) -> Result<(Vec<u8>, usize),
         &format!("SELECT {cols} FROM settings WHERE key IN ({placeholders})"),
         &params,
         &mut rows,
+        &|_| Ok(true),
     )?;
 
     Ok((out, rows))
+}
+
+/// Dump the attachment rows the backed-up messages reference, as pointers.
+///
+/// The ciphertext stays on the CDN; the importing device fetches it the way
+/// it fetches a freshly received attachment. So the device-local columns are
+/// reset rather than copied: file paths and the inline ciphertext cache name
+/// THIS device's storage, and the download state must read "not downloaded"
+/// (`AttachmentStatus::Pending` = 0, `ContentLocation::NotDownloaded` = 0 in
+/// `attachment_repo`). Rows only referenced by excluded (anon) conversations
+/// stay out, with those conversations.
+fn dump_attachments(
+    conn: &Connection,
+    out: &mut Vec<u8>,
+    rows_out: &mut usize,
+) -> Result<(), StorageError> {
+    use crate::domain::ids::AttachmentId;
+    use crate::storage::serialization::db_deserialize;
+
+    let mut referenced = std::collections::HashSet::new();
+    {
+        let mut stmt = conn.prepare(&format!(
+            "SELECT attachments_blob FROM messages \
+             WHERE conversation_type IN {MESSAGE_CONVERSATION_TYPES}"
+        ))?;
+        let mut rows = stmt.query([])?;
+        while let Some(row) = rows.next()? {
+            let blob: Vec<u8> = row.get(0)?;
+            if let Ok(ids) = db_deserialize::<Vec<AttachmentId>>(&blob) {
+                referenced.extend(ids.iter().map(ToString::to_string));
+            }
+        }
+    }
+
+    let columns = table_columns(conn, "attachments")?;
+    let id_index = columns
+        .iter()
+        .position(|c| c == "id")
+        .ok_or_else(|| StorageError::InvalidData("attachments table has no id column".into()))?;
+    let select = columns
+        .iter()
+        .map(|c| match c.as_str() {
+            "local_path" | "file_path" | "encrypted_content" => "NULL".to_string(),
+            "status" | "content_location" => "0".to_string(),
+            other => other.to_string(),
+        })
+        .collect::<Vec<_>>()
+        .join(", ");
+    dump_table(
+        conn,
+        out,
+        "attachments",
+        &format!("SELECT {select} FROM attachments"),
+        &[],
+        rows_out,
+        &|row| Ok(referenced.contains(&row.get::<_, String>(id_index)?)),
+    )
 }
 
 /// Import a decrypted payload. Idempotent: `INSERT OR IGNORE` everywhere, so
@@ -511,6 +582,104 @@ mod tests {
                 "import must never clobber existing local rows"
             );
         }
+    }
+
+    /// §138: a GIF in channel history previewed as "📎 1 attachment" on a
+    /// freshly linked device, because the archive carried the message's
+    /// attachment ids but not the attachment rows. The rows must ride as
+    /// pointers (metadata + CDN key + key), with this device's file path and
+    /// download state reset; rows only an anon conversation references stay out.
+    /// MUTATION: dropping "attachments" from BACKUP_TABLES fails the preview
+    /// assertion; copying status/file_path verbatim fails the reset assertions.
+    #[test]
+    fn attachment_pointers_ride_the_archive_so_previews_survive() {
+        use crate::domain::attachment::{
+            Attachment, AttachmentStatus, ContentLocation, FileMetadata,
+        };
+        use crate::domain::ids::{AttachmentId, ChannelId, UserId};
+        use crate::domain::message::{ConversationType, Message};
+        use crate::storage::repositories::attachment_repo::AttachmentRepository;
+        use crate::storage::repositories::unified_message_repo::UnifiedMessageRepository;
+        use std::sync::Arc;
+
+        let src_dir = tempfile::tempdir().unwrap();
+        let dst_dir = tempfile::tempdir().unwrap();
+        let src = Arc::new(test_db(src_dir.path()));
+        let dst = Arc::new(test_db(dst_dir.path()));
+
+        // Sender side: an uploaded GIF, stored the way upload.rs stores it.
+        let gif_id = AttachmentId::from_cdn_key("cdn/gif-1");
+        let mut gif = Attachment::new(
+            gif_id,
+            FileMetadata::new("".into(), "image/gif".into(), 4096),
+        );
+        gif.status = AttachmentStatus::Ready;
+        gif.content_location = ContentLocation::OnFilesystem;
+        gif.remote_url = Some("cdn/gif-1".into());
+        gif.encryption_key = Some(vec![7; 64]);
+        gif.encryption_iv = Some(vec![9; 32]);
+        AttachmentRepository::new(src.clone())
+            .insert_with_file_path(&gif, std::path::Path::new("/src-device/attachments/gif.enc"))
+            .unwrap();
+        // An attachment only an anon DM references: excluded with the DM.
+        let anon_id = AttachmentId::from_cdn_key("cdn/anon-1");
+        AttachmentRepository::new(src.clone())
+            .insert(&Attachment::new(
+                anon_id,
+                FileMetadata::new("secret.pdf".into(), "application/pdf".into(), 1),
+            ))
+            .unwrap();
+
+        let sender = UserId::new();
+        let mut channel_msg = Message::new_text(
+            ChannelId::new(),
+            ConversationType::Channel,
+            Some(sender),
+            String::new(),
+            1_000,
+        );
+        channel_msg.attachments = vec![gif_id];
+        let mut anon_msg = Message::new_text(
+            ChannelId::new(),
+            ConversationType::AnonDm,
+            Some(sender),
+            String::new(),
+            2_000,
+        );
+        anon_msg.attachments = vec![anon_id];
+        let msgs = UnifiedMessageRepository::new(src.clone());
+        msgs.insert(&channel_msg).unwrap();
+        msgs.insert(&anon_msg).unwrap();
+
+        let (payload, _) = dump_frames(&src.connection().unwrap(), "user-a").unwrap();
+        import_frames(&mut dst.connection().unwrap(), &payload).unwrap();
+
+        let repo = AttachmentRepository::new(dst.clone());
+        let restored = repo.get(&gif_id).unwrap().expect("GIF attachment row must ride the archive");
+        let label = restored.metadata.preview_label();
+        assert_eq!(
+            channel_msg.sidebar_preview(None, Some(&label)),
+            "\u{1F39E}\u{FE0F} GIF",
+            "a GIF must preview as GIF on the linked device, not as a bare attachment count"
+        );
+        assert!(restored.is_downloadable(), "pointer (CDN key + key) must survive");
+        assert_eq!(restored.encryption_iv, Some(vec![9; 32]), "digest must survive");
+        assert_eq!(restored.status, AttachmentStatus::Pending, "download state must reset");
+        assert_eq!(restored.content_location, ContentLocation::NotDownloaded);
+        let file_path: Option<String> = dst
+            .connection()
+            .unwrap()
+            .query_row(
+                "SELECT file_path FROM attachments WHERE id = ?1",
+                [gif_id.to_string()],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(file_path, None, "the source device's file path must not ride");
+        assert!(
+            repo.get(&anon_id).unwrap().is_none(),
+            "an attachment only an anon conversation references must stay out"
+        );
     }
 
     /// Garbage and truncated payloads are rejected, never partially applied.
