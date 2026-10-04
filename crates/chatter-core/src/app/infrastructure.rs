@@ -20,7 +20,7 @@ use crate::storage::repositories::{
 #[cfg(feature = "jarvis")]
 use crate::storage::repositories::{JarvisGraphRepository, JarvisMemoryRepository};
 use crate::storage::{
-    AttachmentRepository, ChannelRepository, Database, DraftRepository, KeyStore,
+    AttachmentRepository, ChannelRepository, Database, KeyStore,
     MessageRepository, SearchIndex, SettingsRepository, UserRepository,
 };
 use crate::system::{Directories, Keyring};
@@ -70,8 +70,6 @@ pub struct InfrastructureContainer {
     pub(crate) settings_repo: Arc<SettingsRepository>,
     /// File attachment metadata repository.
     pub(crate) attachment_repo: Arc<AttachmentRepository>,
-    /// Message draft repository.
-    pub(crate) draft_repo: Arc<DraftRepository>,
     /// Full-text search index for messages.
     pub(crate) search_index: Arc<SearchIndex>,
     /// Anonymous group repository.
@@ -250,7 +248,6 @@ impl InfrastructureContainer {
         let message_repo = Arc::new(MessageRepository::new(database.clone()));
         let settings_repo = Arc::new(SettingsRepository::new(database.clone()));
         let attachment_repo = Arc::new(AttachmentRepository::new(database.clone()));
-        let draft_repo = Arc::new(DraftRepository::new(database.clone()));
         let search_index = Arc::new(SearchIndex::new(database.clone()));
         let anon_group_repo = Arc::new(AnonGroupRepository::new(database.clone()));
         let anon_dm_repo = Arc::new(AnonDmRepository::new(database.clone()));
@@ -316,7 +313,6 @@ impl InfrastructureContainer {
             message_repo,
             settings_repo,
             attachment_repo,
-            draft_repo,
             search_index,
             identity_manager,
             prekey_manager,

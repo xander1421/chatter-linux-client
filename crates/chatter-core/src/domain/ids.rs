@@ -47,10 +47,6 @@ pub struct IntegrationId(pub Uuid);
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, Serialize, Deserialize)]
 pub struct NotificationId(pub Uuid);
 
-/// Unique identifier for a draft (UUID v4).
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, Serialize, Deserialize)]
-pub struct DraftId(pub Uuid);
-
 /// Unique identifier for a saved message in personal vault (UUID v4).
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, Serialize, Deserialize)]
 pub struct SavedMessageId(pub Uuid);
@@ -156,7 +152,6 @@ impl_uuid_id!(
     ReactionId,
     IntegrationId,
     NotificationId,
-    DraftId,
     SavedMessageId,
     SectionId
 );

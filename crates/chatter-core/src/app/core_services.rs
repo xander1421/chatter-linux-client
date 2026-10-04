@@ -28,7 +28,6 @@ use crate::services::channel::ChannelService;
 use crate::services::channel_event_service::ChannelEventService;
 use crate::services::dm_bootstrap_service::DmBootstrapService;
 use crate::services::device_service::DeviceService;
-use crate::services::draft_service::DraftService;
 use crate::services::ephemeral_service::EphemeralService;
 use crate::services::mailbox_manager::MailboxManager;
 use crate::services::message::MessageService;
@@ -74,7 +73,6 @@ pub struct CoreServices {
     pub signal_service: Arc<SignalService>,
     pub channel_event_service: Arc<ChannelEventService>,
     pub ai_service: Arc<AIService>,
-    pub draft_service: Arc<DraftService>,
     pub pin_service: Arc<PinService>,
     /// Ephemeral (disappearing-message) local-expiry engine — drives the
     /// periodic reaper started in `ChatterClient::start`.
@@ -198,7 +196,6 @@ impl CoreServices {
             signal_service: services.signal_service.clone(),
             channel_event_service: services.channel_event_service.clone(),
             ai_service: services.ai_service.clone(),
-            draft_service: services.draft_service.clone(),
             pin_service: services.pin_service.clone(),
             ephemeral_service: services.ephemeral_service.clone(),
             anon_group_service: services.anon_group_service.clone(),

@@ -17,7 +17,6 @@ pub use key_store::KeyStore;
 pub use mesh_identity_store::MeshIdentityStore;
 pub use repositories::AttachmentRepository;
 pub use repositories::ChannelRepository;
-pub use repositories::DraftRepository;
 pub use repositories::MessageRepository;
 pub use repositories::SearchIndex;
 pub use repositories::SearchResult;

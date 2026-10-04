@@ -7,7 +7,6 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use chrono::{DateTime, Utc};
 use tokio::sync::broadcast;
 
-use crate::domain::draft::{Draft, DraftKey};
 use crate::domain::ids::{ChannelId, MessageId};
 use crate::domain::message::Message;
 use crate::state::store::Store;
@@ -55,14 +54,12 @@ impl PaginationCursor {
 
 /// Message state data.
 ///
-/// Caches messages per channel, tracks drafts and pagination state.
+/// Caches messages per channel and tracks pagination state.
 /// Uses LRU eviction to bound memory usage.
 #[derive(Clone, Debug, Default)]
 pub struct MessageStateData {
     /// Cached messages per channel.
     pub messages: HashMap<ChannelId, Vec<Message>>,
-    /// Drafts keyed by channel + optional thread.
-    pub drafts: HashMap<DraftKey, Draft>,
     /// Pagination cursors per channel.
     pub cursors: HashMap<ChannelId, PaginationCursor>,
     /// Channels currently loading messages.
@@ -118,10 +115,6 @@ impl MessageStateData {
 ///
 /// // Add a new incoming message
 /// message_state.append_message(channel_id, new_message);
-///
-/// // Manage drafts
-/// message_state.set_draft(draft);
-/// let draft = message_state.get_draft(&draft_key);
 /// ```
 #[derive(Clone)]
 pub struct MessageState {
@@ -309,44 +302,6 @@ impl MessageState {
     }
 
     // ========================================================================
-    // Draft Operations
-    // ========================================================================
-
-    /// Get a draft by its key.
-    #[must_use]
-    pub fn get_draft(&self, key: &DraftKey) -> Option<Draft> {
-        self.store.get().drafts.get(key).cloned()
-    }
-
-    /// Set or update a draft.
-    pub fn set_draft(&self, draft: Draft) {
-        self.store.update(|state| {
-            state.drafts.insert(draft.key.clone(), draft);
-        });
-    }
-
-    /// Remove a draft and return it if it existed.
-    pub fn remove_draft(&self, key: &DraftKey) -> Option<Draft> {
-        let mut removed = None;
-        self.store.update(|state| {
-            removed = state.drafts.remove(key);
-        });
-        removed
-    }
-
-    /// Get all drafts for a specific channel (main channel and all threads).
-    #[must_use]
-    pub fn get_drafts_for_channel(&self, channel_id: &ChannelId) -> Vec<Draft> {
-        self.store
-            .get()
-            .drafts
-            .values()
-            .filter(|d| &d.key.channel_id == channel_id)
-            .cloned()
-            .collect()
-    }
-
-    // ========================================================================
     // Pagination Operations
     // ========================================================================
 
@@ -396,7 +351,6 @@ impl std::fmt::Debug for MessageState {
         let data = self.get();
         f.debug_struct("MessageState")
             .field("channel_count", &data.messages.len())
-            .field("draft_count", &data.drafts.len())
             .field("loading_channels", &data.loading_channels.len())
             .finish()
     }
@@ -418,7 +372,6 @@ mod tests {
         let data = state.get();
 
         assert!(data.messages.is_empty());
-        assert!(data.drafts.is_empty());
         assert!(data.cursors.is_empty());
         assert!(data.loading_channels.is_empty());
     }
@@ -542,47 +495,6 @@ mod tests {
         assert!(state.get_messages(&channel_id).is_empty());
         assert!(state.get_cursor(&channel_id).is_none());
         assert!(!state.is_loading(&channel_id));
-    }
-
-    #[test]
-    fn test_draft_operations() {
-        let state = MessageState::new();
-        let channel_id = ChannelId::new();
-        let key = DraftKey::for_channel(channel_id);
-        let draft = Draft::new(key.clone(), "Hello world".to_string());
-
-        // Set draft
-        state.set_draft(draft.clone());
-        let retrieved = state.get_draft(&key);
-        assert!(retrieved.is_some());
-        assert_eq!(retrieved.unwrap().content, "Hello world");
-
-        // Remove draft
-        let removed = state.remove_draft(&key);
-        assert!(removed.is_some());
-        assert!(state.get_draft(&key).is_none());
-    }
-
-    #[test]
-    fn test_get_drafts_for_channel() {
-        let state = MessageState::new();
-        let channel1 = ChannelId::new();
-        let channel2 = ChannelId::new();
-        let thread_id = MessageId::new();
-
-        let draft1 = Draft::new(DraftKey::for_channel(channel1), "Draft 1".to_string());
-        let draft2 = Draft::new(DraftKey::for_thread(channel1, thread_id), "Draft 2".to_string());
-        let draft3 = Draft::new(DraftKey::for_channel(channel2), "Draft 3".to_string());
-
-        state.set_draft(draft1);
-        state.set_draft(draft2);
-        state.set_draft(draft3);
-
-        let channel1_drafts = state.get_drafts_for_channel(&channel1);
-        assert_eq!(channel1_drafts.len(), 2);
-
-        let channel2_drafts = state.get_drafts_for_channel(&channel2);
-        assert_eq!(channel2_drafts.len(), 1);
     }
 
     #[test]

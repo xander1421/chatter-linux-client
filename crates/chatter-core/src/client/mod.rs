@@ -398,8 +398,7 @@ pub struct ChatterClient {
     server_contact_deferred: AtomicBool,
     /// Unsent composer text per conversation id, so a draft stays with the
     /// conversation it was typed in. See `swap_composer_draft`.
-    // in-memory, lost on restart. DraftService persists but its
-    // table FKs `channels(id)`, which DM / saved / anon ids are not in.
+    // in-memory, lost on restart.
     composer_drafts: Mutex<std::collections::HashMap<String, String>>,
     /// Messages the disappearing-messages reaper just deleted. See
     /// `subscribe_expired_messages`.
@@ -2949,38 +2948,6 @@ impl ChatterClient {
             }
         }
         drafts.remove(entering).unwrap_or_default()
-    }
-
-    /// Save or update a draft for a conversation root (no thread).
-    pub fn save_draft(
-        &self,
-        channel_id: crate::domain::ids::ChannelId,
-        content: String,
-    ) -> Result<crate::domain::draft::Draft, crate::services::draft_service::DraftError> {
-        self.services.draft_service.save_draft(channel_id, None, content, None, vec![])
-    }
-
-    /// Get the root-level draft for a channel (or None).
-    pub fn get_draft(
-        &self,
-        channel_id: crate::domain::ids::ChannelId,
-    ) -> Result<Option<crate::domain::draft::Draft>, crate::services::draft_service::DraftError> {
-        self.services.draft_service.get_draft(channel_id, None)
-    }
-
-    /// Delete the root-level draft for a channel.
-    pub fn delete_draft(
-        &self,
-        channel_id: crate::domain::ids::ChannelId,
-    ) -> Result<(), crate::services::draft_service::DraftError> {
-        self.services.draft_service.delete_draft(channel_id, None)
-    }
-
-    /// List every draft for the current user across all conversations.
-    pub fn list_all_drafts(
-        &self,
-    ) -> Result<Vec<crate::domain::draft::Draft>, crate::services::draft_service::DraftError> {
-        self.services.draft_service.list_all_drafts()
     }
 
     // ── Conversation listing ────────────────────────────────────────

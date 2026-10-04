@@ -19,7 +19,6 @@ use crate::services::channel::ChannelService;
 use crate::services::channel_bootstrap_service::ChannelBootstrapService;
 use crate::services::channel_event_service::ChannelEventService;
 use crate::services::dm_bootstrap_service::DmBootstrapService;
-use crate::services::draft_service::DraftService;
 use crate::services::ephemeral_service::EphemeralService;
 use crate::services::mailbox_manager::MailboxManager;
 #[cfg(feature = "mesh")]
@@ -74,8 +73,6 @@ pub struct ServiceContainer {
     pub channel_event_service: Arc<ChannelEventService>,
     /// AI service for AI integrations.
     pub ai_service: Arc<AIService>,
-    /// Draft service for message drafts.
-    pub draft_service: Arc<DraftService>,
     /// Ephemeral (disappearing-message) local-expiry engine.
     pub ephemeral_service: Arc<EphemeralService>,
     /// Pin service for pinned messages.
@@ -251,12 +248,6 @@ impl ServiceContainer {
         let ai_service = Arc::new(AIService::new(
             infra.settings_repo.clone(),
             infra.grpc_pool.clone(),
-        ));
-
-        // 14. Draft service for message drafts
-        let draft_service = Arc::new(DraftService::new(
-            infra.settings_repo.clone(),
-            infra.draft_repo.clone(),
         ));
 
         // 15. Pin service for pinned messages
@@ -486,7 +477,6 @@ impl ServiceContainer {
             attachment_service,
             channel_event_service,
             ai_service,
-            draft_service,
             pin_service,
             ephemeral_service,
             pairwise_service,

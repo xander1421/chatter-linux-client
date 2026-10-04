@@ -13,7 +13,6 @@ pub mod call;
 pub mod notification;
 pub mod moderation;
 pub mod saved_message;
-pub mod draft;
 pub mod ephemeral;
 pub mod mention;
 pub mod anon_primitives;
@@ -29,7 +28,7 @@ pub mod unified_conversation;
 
 // Re-export core types for convenience
 pub use ids::{
-    AttachmentId, CallId, ChannelId, DeviceId, DraftId, IntegrationId, MessageId, NotificationId,
+    AttachmentId, CallId, ChannelId, DeviceId, IntegrationId, MessageId, NotificationId,
     ReactionId, SavedMessageId, SessionId, ThreadId, UserId,
 };
 pub use unified_conversation::UnifiedConversation;
@@ -56,7 +55,6 @@ pub use call::{
     CallResult, CallState, CallType, Participant, VerificationBadge,
 };
 pub use moderation::{Ban, ModerationAction, ModerationLogEntry, Mute};
-pub use draft::{Draft, DraftKey};
 pub use ephemeral::{EphemeralMessage, EphemeralState, MessageTTL};
 pub use saved_message::{SavedContent, SavedMessage};
 pub use mention::{Mention, MentionExtractor, MentionSuggestion, MentionType};

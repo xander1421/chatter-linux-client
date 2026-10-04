@@ -32,7 +32,6 @@ pub mod semantic_search;
 pub mod sync_service;
 pub mod ai_service;
 pub mod local_ai_service;
-pub mod draft_service;
 pub mod pin_service;
 pub mod profile_visibility;
 pub mod outgoing_typing;

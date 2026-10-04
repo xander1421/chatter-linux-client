@@ -8,7 +8,6 @@
 //! - [`ChannelRepository`] - Channel and membership CRUD
 //! - [`MessageRepository`] - Message storage with cursor pagination
 //! - [`AttachmentRepository`] - File attachment metadata
-//! - [`DraftRepository`] - Message draft persistence
 //! - [`SettingsRepository`] - Key-value application settings
 //! - [`SearchIndex`] - FTS5 full-text message search
 //!
@@ -25,7 +24,6 @@
 pub mod attachment_repo;
 pub mod call_repo;
 pub mod channel_repo;
-pub mod draft_repo;
 pub mod ephemeral_repo;
 // message_repo.rs deleted — all callers now use UnifiedMessageRepository via `MessageRepository` alias.
 pub mod search_index;
@@ -55,7 +53,6 @@ pub mod vector_repo;
 pub use attachment_repo::AttachmentRepository;
 pub use call_repo::CallHistoryRepository;
 pub use channel_repo::ChannelRepository;
-pub use draft_repo::DraftRepository;
 pub use ephemeral_repo::EphemeralRepository;
 pub use unified_conversation_repo::UnifiedConversationRepository;
 /// Re-export `UnifiedMessageRepository` as `MessageRepository` — all code now uses the
