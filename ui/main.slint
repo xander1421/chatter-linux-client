@@ -181,6 +181,9 @@ export component MainWindow inherits Window {
     in property <int> scroll-to-message-index <=> app.scroll-to-message-index;
     in property <string> highlighted-message-id <=> app.highlighted-message-id;
     in-out property <length> message-scroll-position <=> app.message-scroll-position;
+    // Rows the message list has on screen; inline GIFs animate only there.
+    in-out property <int> message-first-visible-row <=> app.message-first-visible-row;
+    in-out property <int> message-last-visible-row <=> app.message-last-visible-row;
     in-out property <bool> is-at-bottom <=> app.is-at-bottom;  // True when scrolled to bottom
     // Unread boundary from core — where the conversation opens, and the pill count.
     in-out property <int> unread-index <=> app.unread-index;

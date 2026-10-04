@@ -4633,6 +4633,24 @@ fn repeated_chat_rows_never_sample_glass() {
     }
 }
 
+/// Inline GIFs animate only on the rows the list has on screen: the list
+/// reports its range up the alias chain and the GIF tick walks only that.
+#[test]
+fn inline_gifs_animate_only_visible_rows() {
+    let list = include_str!("../../../ui/chat/message_list.slint");
+    assert!(list.contains("root.first-visible-row = root.seen-top;"));
+    assert!(list.contains("root.last-visible-row = Math.min(self.bottom-row(), root.messages.length - 1);"));
+    let layout = include_str!("../../../ui/chat/chat_layout.slint");
+    assert!(layout.contains("last-visible-row <=> root.message-last-visible-row;"));
+    let app = include_str!("../../../ui/app.slint");
+    assert!(app.contains("message-last-visible-row <=> root.message-last-visible-row;"));
+    let main = include_str!("../../../ui/main.slint");
+    assert!(main.contains("message-last-visible-row <=> app.message-last-visible-row;"));
+    let gifs = include_str!("../src/bin_ui/gif_state/inline.rs");
+    assert!(gifs.contains("for msg_idx in first..=last {"), "the tick must walk only the visible rows");
+    assert!(!gifs.contains("for msg_idx in 0..msg_count"), "a whole-model scan per tick is back");
+}
+
 /// Chrome over the message list stops re-blurring the moving rows every frame
 /// while the list scrolls, and keeps its at-rest material unchanged.
 #[test]

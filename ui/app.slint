@@ -337,6 +337,8 @@ export component App inherits Rectangle {
     in property <int> scroll-to-message-index: -1;  // Set to scroll to a specific message
     in property <string> highlighted-message-id: "";  // Message id to briefly flash (quote jump)
     in-out property <length> message-scroll-position: 0px;  // Scroll position for message list
+    in-out property <int> message-first-visible-row: 0;  // See MessageList.first-visible-row
+    in-out property <int> message-last-visible-row: -1;
     in-out property <bool> is-at-bottom: true;  // True when message list is scrolled to bottom
     // Unread boundary from core — see MessageList.
     in-out property <int> unread-index: -1;
@@ -1696,6 +1698,8 @@ export component App inherits Rectangle {
                     scroll-to-message-index: root.scroll-to-message-index;
                     highlighted-message-id: root.highlighted-message-id;
                     message-scroll-position <=> root.message-scroll-position;
+                    message-first-visible-row <=> root.message-first-visible-row;
+                    message-last-visible-row <=> root.message-last-visible-row;
                     is-at-bottom <=> root.is-at-bottom;
                     unread-index <=> root.unread-index;
                     unread-count <=> root.unread-count;

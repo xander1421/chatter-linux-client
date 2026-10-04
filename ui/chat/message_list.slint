@@ -55,6 +55,11 @@ export component MessageList inherits Rectangle {
     // (the ListView runtime's and the Flickable's own — each checks
     // `has_binding` first).
     in-out property <length> scroll-position: 0;
+    // Rows on screen as of the last layout pass, by the same estimate (each
+    // within a row). Written here, read by Rust, which animates inline GIFs
+    // only on these rows. -1 = no list.
+    in-out property <int> first-visible-row: 0;
+    in-out property <int> last-visible-row: -1;
     in property <int> scroll-to-index: -1;  // Set to message index to scroll to it
     in property <string> highlighted-message-id: "";  // Message id to briefly flash (quote jump)
     in property <string> current-playing-attachment-id: "";
@@ -100,6 +105,7 @@ export component MessageList inherits Rectangle {
             root.scrolling = false;
             root.load-more-armed = true;
             root.seen-rows = 0;
+            root.last-visible-row = -1;
         }
     }
 
@@ -383,6 +389,11 @@ export component MessageList inherits Rectangle {
                 return Math.floor(-self.viewport-y * root.messages.length / self.viewport-height);
             }
 
+            // Likewise for the row at the bottom edge.
+            pure function bottom-row() -> int {
+                return Math.floor((self.height - self.viewport-y) * root.messages.length / self.viewport-height);
+            }
+
             // Row `i` starts below the bottom edge.
             pure function is-below(i: int) -> bool {
                 return i * self.viewport-height / root.messages.length > self.height - root.bottom-inset - self.viewport-y;
@@ -539,6 +550,8 @@ export component MessageList inherits Rectangle {
                 root.seen-height = self.viewport-height;
                 root.seen-y = self.viewport-y;
                 root.seen-top = self.top-row();
+                root.first-visible-row = root.seen-top;
+                root.last-visible-row = Math.min(self.bottom-row(), root.messages.length - 1);
             }
 
             changed viewport-y => {

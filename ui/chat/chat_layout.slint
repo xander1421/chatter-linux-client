@@ -64,6 +64,8 @@ export component ChatLayout inherits Rectangle {
     in property <int> scroll-to-message-index: -1;  // Set to scroll to a specific message
     in property <string> highlighted-message-id: "";  // Message id to briefly flash (quote jump)
     in-out property <length> message-scroll-position: 0px;  // Scroll position for message list
+    in-out property <int> message-first-visible-row: 0;  // See MessageList.first-visible-row
+    in-out property <int> message-last-visible-row: -1;
     // Two-way: the open path resets it so a conversation left scrolled up
     // does not decide where the NEXT conversation opens.
     in-out property <bool> is-at-bottom <=> message-list.is-at-bottom;
@@ -209,6 +211,8 @@ export component ChatLayout inherits Rectangle {
         scroll-to-index: root.scroll-to-message-index;
         highlighted-message-id: root.highlighted-message-id;
         scroll-position <=> root.message-scroll-position;
+        first-visible-row <=> root.message-first-visible-row;
+        last-visible-row <=> root.message-last-visible-row;
         should-auto-scroll: root.should-auto-scroll;
         unread-index <=> root.unread-index;
         unread-count <=> root.unread-count;
