@@ -9,6 +9,9 @@ client; `android-client/` was deleted and `ios-client/` is empty.
 cargo run -p chatter-ui
 ```
 
+Agents never launch it bare (a bare run pops a keyring prompt on the desktop):
+`CHATTER_NO_KEYRING=1 XDG_DATA_HOME=$(mktemp -d) timeout 120 cargo run -p chatter-ui`.
+
 Use `cargo run` for verification, not `cargo build` / `cargo check` — Slint codegen + linker errors only surface at run.
 
 ## Workspace
@@ -54,7 +57,7 @@ this prose, which has already gone stale once.
 - **CORRECTED (was wrong here):** the announce trust policy
   (`chatter-mesh-link/src/announce.rs`: `preflight_announce`,
   `evaluate_announce_trust`, `evaluate_announce`) **is** wired now —
-  `services/mesh/ble.rs:823` calls `evaluate_announce`, which drives the other
+  `services/mesh/ble.rs:922` calls `evaluate_announce`, which drives the other
   two. Mesh peers are authenticated on the live path, including the
   sender-ID-equals-`SHA256(noise key)[..8]` derivation check.
 - Announce authentication on that path is `verify_packet`
@@ -70,9 +73,9 @@ this prose, which has already gone stale once.
   now rejected rather than invisible.
 - **CORRECTED (was wrong here, in the dangerous direction):**
   `services/signal/identity.rs::accept_peer_identity_change` **is** wired now,
-  end to end: `ui/chat/identity_change_bar.slint:35` → `chat_layout.slint:213`
-  → `app.slint:1464` → `features/chat/identity_change.rs:75,84` →
-  `client/mod.rs:931` → `identity.rs:227`. A peer reinstalling no longer wedges
+  end to end: `ui/chat/identity_change_bar.slint:35` → `chat_layout.slint:316`
+  → `app.slint:1734` → `features/chat/identity_change.rs:75,84` →
+  `client/mod.rs:994` → `identity.rs:380`. A peer reinstalling no longer wedges
   the conversation permanently. `production_wiring.rs` pins both directions.
 
 The full list, with citations, is `docs/OPEN-ITEMS.md` in the server repo.
