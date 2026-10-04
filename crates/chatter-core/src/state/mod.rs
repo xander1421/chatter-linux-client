@@ -8,25 +8,11 @@
 //!
 //! - **Store<T>**: Generic reactive container with subscription support
 //! - **AuthState**: Authentication status (logged in user, device, progress)
-//! - **UIState**: UI preferences (theme, compact mode, modals)
-//!
-//! # Usage
-//!
-//! ```ignore
-//! use chatter_core::state::{AuthState, UIState, ModalType};
-//!
-//! // Create state managers
-//! let auth_state = AuthState::new();
-//! let ui_state = UIState::new();
-//!
-//! // Subscribe to changes
-//! let mut auth_rx = auth_state.subscribe();
-//! let mut ui_rx = ui_state.subscribe();
-//!
-//! // Update state (triggers subscriber notifications)
-//! auth_state.set_logged_in(user_id, device_id, "Alice".to_string());
-//! ui_state.open_modal(ModalType::Settings);
-//! ```
+//! - **ChatState**: Active conversation, thread panels, pinned bar, typing/reactions
+//! - **MessageState**: Per-channel message cache and pagination
+//! - **OfflineState**: Server reachability for the connection banner
+//! - **UserState** / **PrivacyState**: User cache and privacy settings
+//! - **JarvisState** (`jarvis` feature): Jarvis conversation history
 
 pub mod auth_state;
 pub mod chat_state;
