@@ -33,6 +33,8 @@ export component HeaderButton inherits Rectangle {
     in property <bool> active: false;
     in property <bool> destructive: false;
     in property <bool> enabled: true;
+    // Forwarded to the glass shell; see GlassSurface.backdrop-paused.
+    in property <bool> backdrop-paused: false;
 
     callback clicked();
 
@@ -50,6 +52,7 @@ export component HeaderButton inherits Rectangle {
         opacity: root.enabled ? 1.0 : 0.4;
         material-level: 1;
         elevation: 0;
+        backdrop-paused: root.backdrop-paused;
         width: parent.width;
         height: self.width;
         y: (parent.height - self.height) / 2;

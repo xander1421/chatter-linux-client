@@ -264,6 +264,7 @@ export component ChatLayout inherits Rectangle {
         // dock already shows channel name/encryption/timer.
         if !root.hide-header: ChatHeader {
             mobile: root.mobile;
+            backdrop-paused: message-list.scrolling;
             pinned-bar-shown: root.has-pinned-messages;
             channel-id: root.channel-id;
             channel-name: root.channel-name;
@@ -339,6 +340,7 @@ export component ChatLayout inherits Rectangle {
 
         // Pinned messages bar (Telegram-style, always visible when pinned messages exist)
         if root.has-pinned-messages: PinnedBar {
+            backdrop-paused: message-list.scrolling;
             message-preview: root.pinned-message-preview;
             current-index: root.pinned-current-index;
             total-count: root.pinned-total-count;
@@ -377,6 +379,7 @@ export component ChatLayout inherits Rectangle {
             vertical-stretch: 0;
             height: notice-text.preferred-height + 2 * Spacing.md;
             elevation: 0;
+            backdrop-paused: message-list.scrolling;
 
             Rectangle {
                 y: 0;
@@ -401,6 +404,7 @@ export component ChatLayout inherits Rectangle {
             width: 100%;
             vertical-stretch: 0;
             mobile: root.mobile;
+            backdrop-paused: message-list.scrolling;
             text <=> root.composer-text;
             placeholder: root.composer-placeholder;
             send-status: root.composer-send-status;

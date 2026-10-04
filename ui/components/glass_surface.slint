@@ -12,6 +12,15 @@ component GlassMaterial inherits Rectangle {
     in property <int> material-level;
     in property <color> material-tint;
     in property <int> elevation;
+    in property <bool> backdrop-paused;
+    // 1 = the material as designed, 0 = neutral filter values, for which the
+    // renderer draws no backdrop layer at all (i-slint-renderer-skia
+    // backdrop.rs `filter` returns None). Drops at once, eases back at rest.
+    property <float> sampling: root.backdrop-paused ? 0 : 1;
+    animate sampling {
+        duration: root.backdrop-paused || Appearance.reduce-motion ? 0ms : 160ms;
+        easing: ease-out;
+    }
 
     if root.material-enabled && Appearance.glass-effects && root.elevation >= 2: Rectangle {
         border-radius: root.border-radius;
@@ -31,13 +40,13 @@ component GlassMaterial inherits Rectangle {
     // SLINT1 builtin integration is intentionally confined to this one element.
     if root.material-enabled: Backdrop {
         border-radius: root.border-radius;
-        blur: Appearance.glass-effects ? (root.material-level == 3
-            ? Materials.blur-thick : Materials.blur-regular) : 0px;
-        saturation: Appearance.glass-effects ? Materials.saturation : 1.0;
+        blur: (Appearance.glass-effects ? (root.material-level == 3
+            ? Materials.blur-thick : Materials.blur-regular) : 0px) * root.sampling;
+        saturation: 1.0 + ((Appearance.glass-effects ? Materials.saturation : 1.0) - 1.0) * root.sampling;
         brightness: 0.0;
         // Liquid Glass lenses its backdrop at the edges; keep it subtle so
         // text under chrome stays legible.
-        refraction: Appearance.glass-effects ? Materials.refraction : 0.0;
+        refraction: (Appearance.glass-effects ? Materials.refraction : 0.0) * root.sampling;
         Rectangle {
             border-radius: root.border-radius;
             background: root.material-tint;
@@ -68,6 +77,10 @@ export component GlassSurface inherits Rectangle {
     in property <int> material-level: 2;
     // 0 flat pill, 1 attached chrome, 2 floating chrome, 3 dialog.
     in property <int> elevation: 1;
+    // Set while content under this surface is scrolling (the chat chrome
+    // binds MessageList.scrolling): the tint stays, the per-frame backdrop
+    // blur + refraction of moving pixels stops, and fades back in at rest.
+    in property <bool> backdrop-paused: false;
     in property <color> material-tint: material-level == 0 ? Materials.ultra-thin
         : material-level == 1 ? Materials.thin
         : material-level == 3 ? Materials.thick : Materials.regular;
@@ -95,6 +108,7 @@ export component GlassSurface inherits Rectangle {
         material-level: root.material-level;
         material-tint: root.material-tint;
         elevation: root.elevation;
+        backdrop-paused: root.backdrop-paused;
     }
     @children
 }

@@ -187,6 +187,7 @@ export component ChatHeader inherits GlassSurface {
             // Mobile back button (returns to chat list)
             if root.show-back-button: HeaderButton {
                 touch: root.mobile;
+                backdrop-paused: root.backdrop-paused;
                 icon: Icons.chevron-left;
                 label: "Back";
                 clicked => { root.back-clicked(); }
@@ -456,12 +457,14 @@ export component ChatHeader inherits GlassSurface {
                 alignment: center;
                 HeaderButton {
                     touch: root.mobile;
+                    backdrop-paused: root.backdrop-paused;
                     icon: Icons.phone;
                     label: "Voice call";
                     clicked => { root.voice-call-clicked(); }
                 }
                 HeaderButton {
                     touch: root.mobile;
+                    backdrop-paused: root.backdrop-paused;
                     icon: Icons.video;
                     label: "Video call";
                     clicked => { root.video-call-clicked(); }
@@ -529,18 +532,21 @@ export component ChatHeader inherits GlassSurface {
                 alignment: center;
                 if root.show-invite: HeaderButton {
                     touch: root.mobile;
+                    backdrop-paused: root.backdrop-paused;
                     icon: Icons.user-plus;
                     label: "Invite";
                     clicked => { root.invite-clicked(); }
                 }
                 if root.show-pin: HeaderButton {
                     touch: root.mobile;
+                    backdrop-paused: root.backdrop-paused;
                     icon: Icons.pin;
                     label: "Pinned messages";
                     clicked => { root.pin-clicked(); }
                 }
                 if root.show-settings: HeaderButton {
                     touch: root.mobile;
+                    backdrop-paused: root.backdrop-paused;
                     icon: Icons.more-vertical;
                     label: "Conversation settings";
                     clicked => { root.settings-clicked(); }

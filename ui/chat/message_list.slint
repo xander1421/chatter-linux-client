@@ -119,7 +119,9 @@ export component MessageList inherits Rectangle {
     private property <bool> load-more-armed: true;
     // The user is scrolling: a finger, the wheel, or the fling either leaves
     // behind (Flickable `flicked`, until the viewport has been still a moment).
-    private property <bool> scrolling: false;
+    // Out so the chrome floating over the list can stop sampling its backdrop
+    // while the rows move (GlassSurface.backdrop-paused).
+    out property <bool> scrolling: false;
     // What the last layout pass saw, so the next one can tell a message
     // arriving or a page of history from a scroll. 0 rows = no pass yet.
     private property <int> seen-rows: 0;
@@ -787,6 +789,7 @@ export component MessageList inherits Rectangle {
             height: 44px;
             border-radius: 22px;
             material-level: 3;
+            backdrop-paused: root.scrolling;
             accessible-role: button;
             accessible-label: root.unread-count > 0
                 ? root.unread-count + " new messages, jump to newest"

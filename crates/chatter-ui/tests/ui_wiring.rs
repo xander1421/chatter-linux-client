@@ -4637,6 +4637,35 @@ fn repeated_chat_rows_never_sample_glass() {
     }
 }
 
+/// Chrome over the message list stops re-blurring the moving rows every frame
+/// while the list scrolls, and keeps its at-rest material unchanged.
+#[test]
+fn chrome_over_the_list_pauses_backdrop_while_scrolling() {
+    let glass = squash(include_str!("../../../ui/components/glass_surface.slint"));
+    // Neutral values at 0 (no backdrop layer), the designed values at 1.
+    assert!(glass.contains("property <float> sampling: root.backdrop-paused ? 0 : 1;"));
+    assert!(glass.contains(": Materials.blur-regular) : 0px) * root.sampling;"));
+    assert!(glass.contains("saturation: 1.0 + ((Appearance.glass-effects ? Materials.saturation : 1.0) - 1.0) * root.sampling;"));
+    assert!(glass.contains("refraction: (Appearance.glass-effects ? Materials.refraction : 0.0) * root.sampling;"));
+    // Stops at once, fades back in at rest (no pop), honours reduce-motion.
+    assert!(glass.contains("duration: root.backdrop-paused || Appearance.reduce-motion ? 0ms : 160ms;"));
+    let list = include_str!("../../../ui/chat/message_list.slint");
+    assert!(list.contains("out property <bool> scrolling: false;"));
+    assert!(list.contains("backdrop-paused: root.scrolling;"), "jump pill");
+    let layout = include_str!("../../../ui/chat/chat_layout.slint");
+    assert_eq!(
+        layout.matches("backdrop-paused: message-list.scrolling;").count(),
+        4,
+        "header, pinned bar, composer notice and composer"
+    );
+    let header = include_str!("../../../ui/chat/chat_header.slint");
+    assert_eq!(
+        header.matches("HeaderButton {").count(),
+        header.matches("backdrop-paused: root.backdrop-paused;").count(),
+        "every header button samples the header's backdrop too"
+    );
+}
+
 #[test]
 fn fine_glass_rim_preserves_shared_childless_material() {
     let materials = include_str!("../../../ui/theme/materials.slint");
