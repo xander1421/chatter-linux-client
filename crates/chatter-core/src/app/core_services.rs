@@ -39,7 +39,7 @@ use crate::services::conversation_pins::ConversationPins;
 use crate::services::section_service::SectionService;
 use crate::services::user::UserService;
 use crate::state::{
-    AuthState, ChatState, MessageState, OfflineState, PrivacyState, UserState,
+    AuthState, ChatState, MessageState, OfflineState, UserState,
 };
 #[cfg(feature = "jarvis")]
 use crate::state::JarvisState;
@@ -113,7 +113,6 @@ pub struct CoreServices {
     pub chat_state: ChatState,
     pub message_state: MessageState,
     pub user_state: UserState,
-    pub privacy_state: PrivacyState,
     pub offline_state: OfflineState,
     #[cfg(feature = "jarvis")]
     pub jarvis_state: JarvisState,
@@ -245,7 +244,6 @@ impl CoreServices {
             chat_state: ChatState::new(),
             message_state: MessageState::new(),
             user_state: UserState::new(),
-            privacy_state: PrivacyState::new(),
             offline_state: OfflineState::new(),
             #[cfg(feature = "jarvis")]
             jarvis_state: JarvisState::new(),

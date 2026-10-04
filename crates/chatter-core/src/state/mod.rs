@@ -11,14 +11,13 @@
 //! - **ChatState**: Active conversation, thread panels, pinned bar, typing/reactions
 //! - **MessageState**: Per-channel message cache and pagination
 //! - **OfflineState**: Server reachability for the connection banner
-//! - **UserState** / **PrivacyState**: User cache and privacy settings
+//! - **UserState**: User cache
 //! - **JarvisState** (`jarvis` feature): Jarvis conversation history
 
 pub mod auth_state;
 pub mod chat_state;
 pub mod message_state;
 pub mod offline_state;
-pub mod privacy_state;
 pub mod store;
 pub mod user_state;
 #[cfg(feature = "jarvis")]
@@ -31,7 +30,6 @@ pub use chat_state::{
     ReactionSummary, StreamingSubstate, ThreadPanel,
 };
 pub use message_state::{MessageState, MessageStateData, PaginationCursor};
-pub use privacy_state::{ConversationPrivacySettings, PrivacyState, PrivacyStateData};
 pub use store::{StateSnapshot, Store};
 pub use user_state::{UserState, UserStateData};
 

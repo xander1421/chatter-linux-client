@@ -101,7 +101,7 @@ use crate::services::user::UserService;
 use crate::services::conversation::ConversationHandle;
 use crate::state::{
     ActiveConversation, AuthState, ChatState, MessageState, OfflineState,
-    PrivacyState, UserState,
+    UserState,
 };
 #[cfg(feature = "jarvis")]
 use crate::state::JarvisState;
@@ -2103,7 +2103,6 @@ impl ChatterClient {
     }
 
     pub fn offline_state(&self) -> &OfflineState { &self.services.offline_state }
-    pub fn privacy_state(&self) -> &PrivacyState { &self.services.privacy_state }
     #[cfg(feature = "jarvis")]
     pub fn jarvis_state(&self) -> &JarvisState { &self.services.jarvis_state }
 
