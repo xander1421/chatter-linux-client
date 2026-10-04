@@ -1,8 +1,10 @@
-//! Leave and kick operations for anonymous groups.
+//! Leave, kick and ownership hand-off for anonymous groups.
 
-use crate::domain::anon_group::AnonGroupId;
+use crate::domain::anon_group::{AnonGroupId, AnonGroupRole};
 use crate::domain::UserId;
-use crate::proto::content_v1::{self, AnonGroupKick, AnonGroupLeave, Content};
+use crate::proto::content_v1::{
+    self, anon_group_update, AnonGroupKick, AnonGroupLeave, AnonGroupRoleChange, AnonGroupUpdate, Content,
+};
 use crate::util::time::TimestampNanos;
 
 use super::{AnonGroupError, AnonGroupService};
@@ -12,11 +14,14 @@ impl AnonGroupService {
     pub async fn leave_group(&self, group_id: &AnonGroupId) -> Result<(), AnonGroupError> {
         let current_user = self.current_user_id()?;
 
-        // Verify group exists
-        let _group = self
+        let group = self
             .anon_group_repo
             .get_group(group_id)?
             .ok_or(AnonGroupError::GroupNotFound(*group_id))?;
+
+        if !self.may_leave(&group, &current_user)? {
+            return Err(AnonGroupError::OwnerMustTransfer);
+        }
 
         // Get confirmed members before we remove ourselves
         let members = self.anon_group_repo.get_members_with_mailbox(group_id)?;
@@ -58,6 +63,113 @@ impl AnonGroupService {
         self.held_posts.forget(group_id);
 
         tracing::info!("Left group {}", group_id);
+        Ok(())
+    }
+
+    /// Whether `me` may leave `group` now. The owner is the only one who can
+    /// issue member lists, kicks and role changes, so leaving without a
+    /// successor would freeze the group for everyone else; the owner must
+    /// [`transfer_ownership`](Self::transfer_ownership) first. A last
+    /// remaining member may always leave.
+    pub(crate) fn may_leave(
+        &self,
+        group: &crate::domain::anon_group::AnonGroup,
+        me: &UserId,
+    ) -> Result<bool, AnonGroupError> {
+        Ok(group.owner_id != *me
+            || !self.anon_group_repo.get_members(&group.id)?.iter().any(|m| m.user_id != *me))
+    }
+
+    /// [`may_leave`](Self::may_leave) for the signed-in user; false when the
+    /// group or the session cannot be read (the leave itself would fail).
+    pub fn can_leave(&self, group_id: &AnonGroupId) -> bool {
+        let (Ok(me), Ok(Some(group))) = (self.current_user_id(), self.anon_group_repo.get_group(group_id)) else {
+            return false;
+        };
+        self.may_leave(&group, &me).unwrap_or(false)
+    }
+
+    /// Hand the group to `new_owner` (owner only). Every member is told by
+    /// an owner-sent `AnonGroupUpdate` role change to Owner, which
+    /// `handle_update` applies as a transfer; we become an admin.
+    pub async fn transfer_ownership(
+        &self,
+        group_id: &AnonGroupId,
+        new_owner: &UserId,
+    ) -> Result<(), AnonGroupError> {
+        let current_user = self.current_user_id()?;
+        let group = self
+            .anon_group_repo
+            .get_group(group_id)?
+            .ok_or(AnonGroupError::GroupNotFound(*group_id))?;
+        if group.owner_id != current_user {
+            return Err(AnonGroupError::InsufficientPermissions(
+                "Only the owner can transfer ownership".to_string(),
+            ));
+        }
+        if *new_owner == current_user || !self.anon_group_repo.is_member(group_id, new_owner)? {
+            return Err(AnonGroupError::MemberNotFound(*new_owner));
+        }
+
+        let timestamp = TimestampNanos::now().as_u64();
+        let content = Content {
+            content: Some(content_v1::content::Content::AnonGroupUpdate(AnonGroupUpdate {
+                group_id: group_id.to_vec(),
+                timestamp,
+                update: Some(anon_group_update::Update::RoleChange(AnonGroupRoleChange {
+                    user_id: new_owner.as_bytes().to_vec(),
+                    new_role: AnonGroupRole::Owner.to_i32(),
+                    timestamp,
+                })),
+            })),
+            ephemeral_reply_to: None,
+            timestamp,
+            padding: Self::generate_padding(160),
+        };
+        for member in self.anon_group_repo.get_members_with_mailbox(group_id)? {
+            if member.user_id == current_user {
+                continue;
+            }
+            let mailbox_pk = member
+                .mailbox_pk
+                .expect("get_members_with_mailbox guarantees mailbox_pk");
+            if let Err(e) = self
+                .send_to_anon_mailbox(&member.user_id, &mailbox_pk, content.clone())
+                .await
+            {
+                tracing::warn!("Failed to notify {} of ownership transfer: {}", member.user_id, e);
+            }
+        }
+
+        self.apply_ownership_transfer(group_id, &current_user, new_owner, &current_user)?;
+        tracing::info!("Transferred group {} to {}", group_id, new_owner);
+        Ok(())
+    }
+
+    /// Record that `from` handed `group_id` to `to`, as seen by `me`.
+    pub(crate) fn apply_ownership_transfer(
+        &self,
+        group_id: &AnonGroupId,
+        from: &UserId,
+        to: &UserId,
+        me: &UserId,
+    ) -> Result<(), AnonGroupError> {
+        let group = self
+            .anon_group_repo
+            .get_group(group_id)?
+            .ok_or(AnonGroupError::GroupNotFound(*group_id))?;
+        let my_role = if to == me {
+            AnonGroupRole::Owner
+        } else if from == me {
+            AnonGroupRole::Admin
+        } else {
+            group.my_role
+        };
+        self.anon_group_repo.set_owner(group_id, to, my_role)?;
+        self.anon_group_repo.update_member_role(group_id, to, AnonGroupRole::Owner)?;
+        if self.anon_group_repo.is_member(group_id, from)? {
+            self.anon_group_repo.update_member_role(group_id, from, AnonGroupRole::Admin)?;
+        }
         Ok(())
     }
 
@@ -380,6 +492,72 @@ mod tests {
         assert_eq!(stored(&f), 1);
     }
 
+    fn transfer_to(f: &Fixture, to: UserId) -> Content {
+        use crate::proto::content_v1::{anon_group_update, AnonGroupRoleChange, AnonGroupUpdate};
+        Content {
+            content: Some(content_v1::content::Content::AnonGroupUpdate(AnonGroupUpdate {
+                group_id: f.group_id.to_vec(),
+                timestamp: 1,
+                update: Some(anon_group_update::Update::RoleChange(AnonGroupRoleChange {
+                    user_id: to.as_bytes().to_vec(),
+                    new_role: AnonGroupRole::Owner.to_i32(),
+                    timestamp: 1,
+                })),
+            })),
+            ..Default::default()
+        }
+    }
+
+    /// The owner of a group with other members must hand it on first; after
+    /// the hand-off (applied locally even with no server to tell the others)
+    /// they are an admin and may leave.
+    #[tokio::test]
+    async fn the_owner_leaves_only_after_transferring() {
+        let f = fixture(AnonGroupRole::Member);
+        let svc = f.client.anon_groups();
+        let me = svc.current_user_id().unwrap();
+        // Make us the owner of the fixture's group.
+        svc.apply_ownership_transfer(&f.group_id, &f.owner, &me, &me).unwrap();
+        let conv = ActiveConversation::AnonGroup(f.group_id);
+        assert!(!svc.can_leave(&f.group_id));
+        let row = f.client.sidebar_rows().into_iter().find(|r| r.id == f.group_id.to_string()).unwrap();
+        assert!(!row.can_leave, "the owner is not offered Leave while others remain");
+        let res = f.client.leave_conversation(conv).await;
+        assert!(matches!(res, Err(ConversationError::AnonGroup(AnonGroupError::OwnerMustTransfer))), "{res:?}");
+
+        // Only a member can receive it.
+        assert!(f.client.transfer_conversation_ownership(conv, &UserId::new()).await.is_err());
+        f.client.transfer_conversation_ownership(conv, &f.mallory).await.unwrap();
+        let group = svc.get_group(&f.group_id).unwrap().unwrap();
+        assert_eq!(group.owner_id, f.mallory);
+        assert_eq!(group.my_role, AnonGroupRole::Admin);
+        assert!(svc.can_leave(&f.group_id));
+        f.client.leave_conversation(conv).await.unwrap();
+    }
+
+    /// A member applies the owner's hand-off; anyone else's is refused.
+    #[tokio::test]
+    async fn only_the_owner_can_hand_the_group_on() {
+        let f = fixture(AnonGroupRole::Member);
+        let svc = f.client.anon_groups();
+        let repo = &svc.anon_group_repo;
+
+        let events = svc.process_incoming_content(&f.group_id, &f.mallory, &transfer_to(&f, f.mallory)).unwrap();
+        assert!(events.is_empty(), "{events:?}");
+        assert_eq!(svc.get_group(&f.group_id).unwrap().unwrap().owner_id, f.owner);
+
+        let events = svc.process_incoming_content(&f.group_id, &f.owner, &transfer_to(&f, f.mallory)).unwrap();
+        assert!(matches!(events.as_slice(), [DomainEvent::AnonGroupUpdated { .. }]), "{events:?}");
+        assert_eq!(svc.get_group(&f.group_id).unwrap().unwrap().owner_id, f.mallory);
+        assert_eq!(repo.get_member_role(&f.group_id, &f.mallory).unwrap(), Some(AnonGroupRole::Owner));
+        assert_eq!(repo.get_member_role(&f.group_id, &f.owner).unwrap(), Some(AnonGroupRole::Admin));
+
+        // The new owner's member list is now the authoritative one.
+        let newbie = UserId::new();
+        svc.process_incoming_content(&f.group_id, &f.mallory, &member_list(&f, &[f.mallory, newbie])).unwrap();
+        assert!(is_member(&f, &newbie));
+    }
+
     #[tokio::test]
     async fn forged_kick_is_neither_applied_nor_announced() {
         let f = fixture(AnonGroupRole::Member);
@@ -473,7 +651,7 @@ mod tests {
     async fn leaving_drops_the_group_from_this_device() {
         let f = fixture(AnonGroupRole::Member);
         let row = f.client.sidebar_rows().into_iter().find(|r| r.id == f.group_id.to_string()).unwrap();
-        assert!(row.can_leave, "every member is offered Leave");
+        assert!(row.can_leave, "a non-owner member is offered Leave");
 
         let conv = f.client
             .resolve_row_conversation(&row.id, &crate::domain::message::ConversationType::AnonGroup)

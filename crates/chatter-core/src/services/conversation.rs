@@ -884,6 +884,46 @@ impl ConversationHandle {
         }
     }
 
+    /// Hand this channel or private group to `new_owner`; we become an admin
+    /// and may then leave. The last owner of a group with other members
+    /// cannot leave without doing this first (`leave_group`).
+    pub async fn transfer_ownership(&self, new_owner: &UserId) -> ConversationResult {
+        match &self.conversation {
+            ActiveConversation::Channel(id) => {
+                Ok(self.client.transfer_channel_ownership(id, new_owner).await?)
+            }
+            ActiveConversation::AnonGroup(id) => {
+                Ok(self.client.anon_groups().transfer_ownership(id, new_owner).await?)
+            }
+            _ => Err(ConversationError::Other("only channels and groups have owners".into())),
+        }
+    }
+
+    /// Block or unblock this private group on this device: a blocked group's
+    /// content is dropped on receive (`process_incoming_content`).
+    pub fn set_blocked(&self, blocked: bool) -> ConversationResult {
+        let ActiveConversation::AnonGroup(id) = &self.conversation else {
+            return Err(ConversationError::Other("only private groups can be blocked here".into()));
+        };
+        let groups = self.client.anon_groups();
+        Ok(if blocked { groups.block_group(id)? } else { groups.unblock_group(id)? })
+    }
+
+    /// Block or unblock `user` within this private group: their posts,
+    /// reactions, typing, calls and profile shares are dropped; their leave
+    /// still applies.
+    pub fn set_member_blocked(&self, user: &UserId, blocked: bool) -> ConversationResult {
+        let ActiveConversation::AnonGroup(id) = &self.conversation else {
+            return Err(ConversationError::Other("only private-group members can be blocked here".into()));
+        };
+        let groups = self.client.anon_groups();
+        Ok(if blocked {
+            groups.block_user_in_group(id, user, None)?
+        } else {
+            groups.unblock_user_in_group(id, user)?
+        })
+    }
+
     /// Delete a DM on this device (the sidebar's "Delete chat"). Local only;
     /// the peer is not told, as in Signal.
     ///

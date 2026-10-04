@@ -435,8 +435,11 @@ impl ChatterClient {
             unread_count: conv.unread_count,
             is_pinned: conv.is_pinned,
             can_leave: match conv.conversation_type {
-                // Any member may leave a private group (as `private_group_row`).
-                CT::AnonGroup => true,
+                // As `private_group_row`.
+                CT::AnonGroup => conv
+                    .conversation_id
+                    .parse()
+                    .is_ok_and(|id| self.anon_groups().can_leave(&id)),
                 CT::Channel => channel_id.is_some_and(|id| self.can_leave_channel(&id)),
                 _ => false,
             },
@@ -752,8 +755,9 @@ impl ChatterClient {
             unread_count: self.anon_group_unread_count(&group.id),
             member_count: self.get_anon_group_members(&group.id).len() as u32,
             is_pinned: self.is_conversation_pinned(&group.id.to_string()),
-            // Any member may leave a private group, the owner included.
-            can_leave: true,
+            // Any member may leave; the owner only once someone else owns it
+            // or nobody else is left (`AnonGroupService::can_leave`).
+            can_leave: self.anon_groups().can_leave(&group.id),
             last_activity: Some(last_activity),
             ..ChatRowSendData::new(crate::domain::message::ConversationType::AnonGroup, group.id.to_string(), group.name.clone())
         }

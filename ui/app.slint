@@ -713,6 +713,7 @@ export component App inherits Rectangle {
     in property <bool> channel-settings-can-delete: false;
     in property <bool> channel-settings-is-owner: false;
     in property <bool> channel-settings-can-leave: false;
+    in property <bool> channel-settings-group-blocked: false;
     in-out property <string> channel-settings-notification-pref: "all";
     in-out property <bool> channel-settings-muted: false;
     in-out property <bool> channel-settings-ai-enabled: false;
@@ -1083,6 +1084,8 @@ export component App inherits Rectangle {
     callback channel-settings-set-member-muted(string, bool, int);  // user-id, muted, minutes (0 = until unmuted)
     callback channel-settings-unban-member(string);  // user-id
     callback channel-settings-transfer-ownership(string);  // new owner's user-id
+    callback channel-settings-block-member(string, bool);  // user-id, block
+    callback channel-settings-block-group(bool);  // block
     callback channel-settings-invite-members();  // opens invite modal for private groups
     callback channel-settings-invite-channel-members();  // opens invite modal for regular channels
     callback invite-member-toggle-user(int);  // index - toggles selection
@@ -2422,6 +2425,7 @@ export component App inherits Rectangle {
         can-delete: root.channel-settings-can-delete;
         is-owner: root.channel-settings-is-owner;
         can-leave: root.channel-settings-can-leave;
+        group-blocked: root.channel-settings-group-blocked;
         notification-preference <=> root.channel-settings-notification-pref;
         is-muted <=> root.channel-settings-muted;
         ai-enabled <=> root.channel-settings-ai-enabled;
@@ -2458,6 +2462,12 @@ export component App inherits Rectangle {
         }
         transfer-ownership(user-id) => {
             root.channel-settings-transfer-ownership(user-id);
+        }
+        block-member(user-id, block) => {
+            root.channel-settings-block-member(user-id, block);
+        }
+        block-group(block) => {
+            root.channel-settings-block-group(block);
         }
         remove-member(user-id) => {
             root.channel-settings-remove-member(user-id);

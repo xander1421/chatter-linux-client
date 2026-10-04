@@ -2779,6 +2779,36 @@ impl ChatterClient {
         self.conversation(conv).remove_member(user).await
     }
 
+    /// Make `new_owner` the owner of a channel or private group. See
+    /// `ConversationHandle::transfer_ownership`.
+    pub async fn transfer_conversation_ownership(
+        self: &Arc<Self>,
+        conv: ActiveConversation,
+        new_owner: &crate::domain::ids::UserId,
+    ) -> Result<(), crate::services::conversation::ConversationError> {
+        self.conversation(conv).transfer_ownership(new_owner).await
+    }
+
+    /// Block or unblock a private group. See `ConversationHandle::set_blocked`.
+    pub fn set_conversation_blocked(
+        self: &Arc<Self>,
+        conv: ActiveConversation,
+        blocked: bool,
+    ) -> Result<(), crate::services::conversation::ConversationError> {
+        self.conversation(conv).set_blocked(blocked)
+    }
+
+    /// Block or unblock a member within a private group. See
+    /// `ConversationHandle::set_member_blocked`.
+    pub fn set_conversation_member_blocked(
+        self: &Arc<Self>,
+        conv: ActiveConversation,
+        user: &crate::domain::ids::UserId,
+        blocked: bool,
+    ) -> Result<(), crate::services::conversation::ConversationError> {
+        self.conversation(conv).set_member_blocked(user, blocked)
+    }
+
     /// Delete a conversation from local storage.
     pub fn delete_conversation(
         self: &Arc<Self>,

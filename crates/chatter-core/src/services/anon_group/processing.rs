@@ -298,12 +298,21 @@ impl AnonGroupService {
                 tracing::debug!(group_id = %group_id, sender_id = %peer_id, "Processed profile share");
             }
             Some(ContentType::AnonGroupUpdate(update)) => {
-                events.push(DomainEvent::AnonGroupUpdated {
-                    group_id: *group_id,
-                    update: update.clone(),
-                    updated_by: *peer_id,
-                });
-                tracing::info!(group_id = %group_id, sender_id = %peer_id, "Group updated");
+                // Applied here too: updates (renames, roles, the ownership
+                // hand-off) ride the group mailbox, not only DMs. Announced
+                // only when authorized and applied.
+                match self.handle_update(*group_id, *peer_id, update) {
+                    Ok(true) => {
+                        events.push(DomainEvent::AnonGroupUpdated {
+                            group_id: *group_id,
+                            update: update.clone(),
+                            updated_by: *peer_id,
+                        });
+                        tracing::info!(group_id = %group_id, sender_id = %peer_id, "Group updated");
+                    }
+                    Ok(false) => {}
+                    Err(e) => tracing::warn!(group_id = %group_id, error = %e, "Failed to handle group update"),
+                }
             }
             _ => {
                 tracing::debug!(group_id = %group_id, "Ignoring unhandled inner content type");

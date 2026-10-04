@@ -82,6 +82,24 @@ impl AnonGroupRepository {
         Ok(())
     }
 
+    /// Record a new owner, and our own role after the hand-off.
+    pub fn set_owner(
+        &self,
+        id: &AnonGroupId,
+        owner: &UserId,
+        my_role: crate::domain::anon_group::AnonGroupRole,
+    ) -> Result<(), StorageError> {
+        let conn = self.db.connection()?;
+        let rows = conn.execute(
+            "UPDATE anon_groups SET owner_id = ?1, my_role = ?2, updated_at = ?3 WHERE id = ?4",
+            params![owner.to_string(), my_role.to_i32(), chrono::Utc::now().to_rfc3339(), id.to_string()],
+        )?;
+        if rows == 0 {
+            return Err(StorageError::NotFound(format!("AnonGroup {}", id)));
+        }
+        Ok(())
+    }
+
     /// Delete an anonymous group.
     pub fn delete_group(&self, id: &AnonGroupId) -> Result<(), StorageError> {
         let conn = self.db.connection()?;

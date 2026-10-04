@@ -31,6 +31,11 @@ pub enum AnonGroupError {
     #[error("cannot kick the owner")]
     CannotKickOwner,
 
+    /// The owner tried to leave while other members remain: nobody could
+    /// issue member lists, kicks or role changes after them.
+    #[error("make another member the owner before leaving")]
+    OwnerMustTransfer,
+
     /// Storage error.
     #[error("storage error: {0}")]
     Storage(#[from] StorageError),

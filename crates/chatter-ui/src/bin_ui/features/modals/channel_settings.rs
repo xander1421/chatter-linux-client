@@ -21,6 +21,7 @@ pub fn wire_channel_settings(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     wire_member_management(window, ui_ctx);
     wire_moderation(window, ui_ctx);
     wire_transfer_ownership(window, ui_ctx);
+    wire_group_blocking(window, ui_ctx);
     wire_channel_actions(window, ui_ctx);
     wire_invite_members(window, ui_ctx);
     wire_invite_channel_members(window, ui_ctx);
@@ -234,8 +235,10 @@ pub struct PrivateGroupRoster {
     pub name: String,
     is_owner: bool,
     can_manage_members: bool,
-    /// (user id, display name, role, avatar bytes)
-    members: Vec<(String, String, &'static str, Option<Vec<u8>>)>,
+    can_leave: bool,
+    blocked: bool,
+    /// (user id, display name, role, avatar bytes, is us, blocked in group)
+    members: Vec<(String, String, &'static str, Option<Vec<u8>>, bool, bool)>,
 }
 
 /// Blocking DB reads — call off the UI thread. `None` when the group is not
@@ -247,6 +250,7 @@ pub fn load_private_group_roster(ui_ctx: &ChatterClient, group_id: AnonGroupId) 
     };
     let current_user_id = ui_ctx.session_current_user_id()?;
     let channel_id: ChannelId = group_id.into();
+    let blocked_members = ui_ctx.anon_group_blocked_members(&group_id);
     let members = ui_ctx
         .get_anon_group_members(&group_id)
         .into_iter()
@@ -256,12 +260,21 @@ pub fn load_private_group_roster(ui_ctx: &ChatterClient, group_id: AnonGroupId) 
                 &channel_id,
                 &member.user_id,
             );
-            (member.user_id.to_string(), display_name, member.role.as_str(), member.avatar)
+            (
+                member.user_id.to_string(),
+                display_name,
+                member.role.as_str(),
+                member.avatar,
+                member.user_id == current_user_id,
+                blocked_members.contains(&member.user_id),
+            )
         })
         .collect();
     Some(PrivateGroupRoster {
         is_owner: group.is_current_user_owner(&current_user_id),
         can_manage_members: group.can_manage_members(),
+        can_leave: ui_ctx.can_leave_anon_group(&group_id),
+        blocked: group.is_blocked(),
         name: group.name,
         members,
     })
@@ -270,21 +283,23 @@ pub fn load_private_group_roster(ui_ctx: &ChatterClient, group_id: AnonGroupId) 
 /// UI thread only (decodes avatars into `slint::Image`s). Fills the members
 /// pane and the General pane's count; leaves the name field (a draft) alone.
 pub fn apply_private_group_roster(w: &MainWindow, roster: PrivateGroupRoster) {
-    // A group has no server-side edit/archive/delete; any member may leave
-    // (as core's group row says). Set every time: these properties are
-    // shared with channel settings and would otherwise keep a channel's
+    // A group has no server-side edit/archive/delete; Leave is core's call
+    // (not the owner while others remain). Set every time: these properties
+    // are shared with channel settings and would otherwise keep a channel's
     // values, offering server RPCs keyed by the group id.
     w.set_channel_settings_can_edit(false);
     w.set_channel_settings_can_archive(false);
     w.set_channel_settings_can_delete(false);
-    w.set_channel_settings_can_leave(true);
+    w.set_channel_settings_can_leave(roster.can_leave);
+    w.set_channel_settings_group_blocked(roster.blocked);
     w.set_channel_settings_member_count(roster.members.len() as i32);
     w.set_channel_settings_is_owner(roster.is_owner);
     w.set_channel_settings_can_manage_members(roster.can_manage_members);
+    let is_owner = roster.is_owner;
     let rows: Vec<ChannelMemberData> = roster
         .members
         .into_iter()
-        .map(|(user_id, display_name, role, avatar)| ChannelMemberData {
+        .map(|(user_id, display_name, role, avatar, is_me, blocked)| ChannelMemberData {
             user_id: user_id.into(),
             display_name: display_name.into(),
             username: "".into(),
@@ -298,10 +313,12 @@ pub fn apply_private_group_roster(w: &MainWindow, roster: PrivateGroupRoster) {
             muted: false,
             can_ban: false,
             can_mute: false,
-            can_make_owner: false,
+            can_make_owner: is_owner && !is_me,
             // Anon-group membership is owner-authoritative,
             // not the signed channel log.
             unverified: false,
+            can_block: !is_me,
+            blocked,
         })
         .collect();
     w.set_channel_settings_members(ModelRc::new(VecModel::from(rows)));
@@ -639,9 +656,9 @@ fn wire_moderation(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     });
 }
 
-/// Members › ⋮ › "Make owner…" (confirmed in the pane). On success we are an
-/// admin, so the whole modal is reloaded: the owner-only controls go and
-/// Leave appears.
+/// Members › ⋮ › "Make owner…" (confirmed in the pane), for a channel or a
+/// private group. On success we are an admin, so the modal is reloaded: the
+/// owner-only controls go and Leave appears.
 fn wire_transfer_ownership(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     let weak_window = window.as_weak();
     let ui_ctx = ui_ctx.clone();
@@ -649,14 +666,17 @@ fn wire_transfer_ownership(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
         let weak = weak_window.clone();
         let ui_ctx = ui_ctx.clone();
         // Read on the UI thread: a Slint Weak never upgrades inside tokio::spawn.
-        let channel_id = weak.upgrade().map(|w| w.get_channel_settings_id().to_string()).unwrap_or_default();
-        let (Ok(channel_uuid), Ok(new_owner)) =
-            (channel_id.parse::<ChannelId>(), user_id.as_str().parse::<UserId>())
-        else {
+        let Some(w) = weak.upgrade() else { return };
+        let channel_id = w.get_channel_settings_id().to_string();
+        let (Some(conv), Ok(channel_uuid), Ok(new_owner)) = (
+            settings_conversation(&w, &ui_ctx),
+            channel_id.parse::<ChannelId>(),
+            user_id.as_str().parse::<UserId>(),
+        ) else {
             return;
         };
         tokio::spawn(async move {
-            let result = ui_ctx.transfer_channel_ownership(&channel_uuid, &new_owner).await;
+            let result = ui_ctx.transfer_conversation_ownership(conv, &new_owner).await;
             let _ = slint::invoke_from_event_loop(move || {
                 let Some(w) = weak.upgrade() else { return };
                 match result {
@@ -664,7 +684,9 @@ fn wire_transfer_ownership(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                         w.set_channel_settings_error("".into());
                         let still_open = w.get_channel_settings_id() == channel_id.as_str()
                             && w.get_modal_stack().iter().any(|s| s == "channel-settings");
-                        if still_open {
+                        if still_open && matches!(conv, ActiveConversation::AnonGroup(_)) {
+                            refresh_members_if_open(weak.clone(), ui_ctx, channel_uuid);
+                        } else if still_open {
                             open_channel_settings(weak.clone(), ui_ctx, channel_uuid);
                         }
                     }
@@ -675,6 +697,48 @@ fn wire_transfer_ownership(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                 }
             });
         });
+    });
+}
+
+/// Private group › Danger Zone › Block group, and Members › ⋮ › Block in
+/// group (and their Unblock). Core stores the block and enforces it on
+/// receive; this only forwards the choice and re-reads the roster.
+fn wire_group_blocking(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
+    let (weak, ctx) = (window.as_weak(), ui_ctx.clone());
+    window.on_channel_settings_block_group(move |block| {
+        change_group_block(&weak, &ctx, move |ctx, conv| ctx.set_conversation_blocked(conv, block));
+    });
+    let (weak, ctx) = (window.as_weak(), ui_ctx.clone());
+    window.on_channel_settings_block_member(move |user_id, block| {
+        let Ok(user) = user_id.as_str().parse::<UserId>() else { return };
+        change_group_block(&weak, &ctx, move |ctx, conv| ctx.set_conversation_member_blocked(conv, &user, block));
+    });
+}
+
+/// Apply a block change to the private group the settings modal shows (off
+/// the event loop: it writes the store), then re-read its roster, or show
+/// why it failed.
+fn change_group_block(
+    weak: &slint::Weak<MainWindow>,
+    ui_ctx: &Arc<ChatterClient>,
+    change: impl FnOnce(&Arc<ChatterClient>, ActiveConversation) -> Result<(), chatter_core::services::conversation::ConversationError>
+        + Send
+        + 'static,
+) {
+    // Read on the UI thread: a Slint Weak never upgrades off it.
+    let Some(w) = weak.upgrade() else { return };
+    let Some(conv @ ActiveConversation::AnonGroup(group_id)) = settings_conversation(&w, ui_ctx) else { return };
+    let (weak, ui_ctx) = (weak.clone(), ui_ctx.clone());
+    std::thread::spawn(move || match change(&ui_ctx, conv) {
+        Ok(()) => refresh_members_if_open(weak, ui_ctx, group_id.into()),
+        Err(e) => {
+            tracing::warn!(error = %e, "Group block change failed");
+            let _ = slint::invoke_from_event_loop(move || {
+                if let Some(w) = weak.upgrade() {
+                    w.set_channel_settings_error(format!("Couldn't change the block: {e}").into());
+                }
+            });
+        }
     });
 }
 

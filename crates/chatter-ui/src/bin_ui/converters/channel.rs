@@ -126,6 +126,9 @@ pub fn member_to_slint(m: &chatter_core::domain::channel::MemberWithProfile) -> 
         can_mute: m.moderation.can_mute,
         can_make_owner: m.moderation.can_make_owner,
         unverified: m.unverified,
+        // Blocking within a conversation is a private-group control.
+        can_block: false,
+        blocked: false,
     }
 }
 

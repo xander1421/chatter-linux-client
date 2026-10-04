@@ -576,6 +576,7 @@ export component MainWindow inherits Window {
     in property <bool> channel-settings-can-delete <=> app.channel-settings-can-delete;
     in property <bool> channel-settings-is-owner <=> app.channel-settings-is-owner;
     in property <bool> channel-settings-can-leave <=> app.channel-settings-can-leave;
+    in property <bool> channel-settings-group-blocked <=> app.channel-settings-group-blocked;
     in-out property <string> channel-settings-notification-pref <=> app.channel-settings-notification-pref;
     in-out property <bool> channel-settings-muted <=> app.channel-settings-muted;
     in-out property <bool> channel-settings-ai-enabled <=> app.channel-settings-ai-enabled;
@@ -841,6 +842,8 @@ export component MainWindow inherits Window {
     callback channel-settings-set-member-muted <=> app.channel-settings-set-member-muted;
     callback channel-settings-unban-member <=> app.channel-settings-unban-member;
     callback channel-settings-transfer-ownership <=> app.channel-settings-transfer-ownership;
+    callback channel-settings-block-member <=> app.channel-settings-block-member;
+    callback channel-settings-block-group <=> app.channel-settings-block-group;
     callback channel-settings-invite-members <=> app.channel-settings-invite-members;
     callback channel-settings-invite-channel-members <=> app.channel-settings-invite-channel-members;
     callback invite-member-toggle-user <=> app.invite-member-toggle-user;

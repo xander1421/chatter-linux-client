@@ -42,6 +42,20 @@ impl ChatterClient {
         self.anon_groups().get_members(group_id).unwrap_or_default()
     }
 
+    /// Whether to offer Leave for a private group: not to its owner while
+    /// others remain (they must make someone else owner first).
+    pub fn can_leave_anon_group(&self, group_id: &crate::domain::anon_group::AnonGroupId) -> bool {
+        self.anon_groups().can_leave(group_id)
+    }
+
+    /// Members blocked within `group_id` on this device.
+    pub fn anon_group_blocked_members(
+        &self,
+        group_id: &crate::domain::anon_group::AnonGroupId,
+    ) -> Vec<crate::domain::ids::UserId> {
+        self.anon_groups().get_blocked_users(group_id).unwrap_or_default()
+    }
+
     pub fn get_anon_group_member_display_name(
         &self,
         group_id: &crate::domain::anon_group::AnonGroupId,

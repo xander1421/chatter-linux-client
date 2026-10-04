@@ -134,13 +134,14 @@ impl AnonGroupService {
         Ok(true)
     }
 
-    /// Handle an incoming group update message (name change, role change).
+    /// Handle an incoming group update message (name change, role change,
+    /// ownership hand-off). `Ok(true)` when it was authorized and applied.
     pub fn handle_update(
         &self,
         group_id: AnonGroupId,
         sender_id: UserId,
         update: &AnonGroupUpdate,
-    ) -> Result<(), AnonGroupError> {
+    ) -> Result<bool, AnonGroupError> {
         // Verify group exists
         let group = self
             .anon_group_repo
@@ -162,7 +163,7 @@ impl AnonGroupService {
                         sender_id,
                         group_id
                     );
-                    return Ok(());
+                    return Ok(false);
                 }
 
                 self.anon_group_repo
@@ -184,7 +185,7 @@ impl AnonGroupService {
                         group_id = %group_id,
                         "Rejected role change from non-owner"
                     );
-                    return Ok(());
+                    return Ok(false);
                 }
 
                 let target_user_id = UserId::try_from_slice(&role_change.user_id).ok_or_else(|| {
@@ -202,7 +203,21 @@ impl AnonGroupService {
                         group_id = %group_id,
                         "Owner received role change from another member - ignoring"
                     );
-                    return Ok(());
+                    return Ok(false);
+                }
+
+                // Role Owner is the hand-off (`transfer_ownership`): the
+                // new owner takes over member lists, kicks and roles.
+                if new_role == AnonGroupRole::Owner {
+                    if target_user_id == sender_id
+                        || !self.anon_group_repo.is_member(&group_id, &target_user_id)?
+                    {
+                        tracing::warn!(group_id = %group_id, "Ownership transfer to a non-member - ignoring");
+                        return Ok(false);
+                    }
+                    self.apply_ownership_transfer(&group_id, &sender_id, &target_user_id, &current_user)?;
+                    tracing::info!("Group {} handed from {} to {}", group_id, sender_id, target_user_id);
+                    return Ok(true);
                 }
 
                 self.anon_group_repo
@@ -217,9 +232,10 @@ impl AnonGroupService {
             }
             None => {
                 tracing::debug!("Empty update for group {} - ignoring", group_id);
+                return Ok(false);
             }
         }
 
-        Ok(())
+        Ok(true)
     }
 }

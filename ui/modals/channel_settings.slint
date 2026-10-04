@@ -32,6 +32,10 @@ export struct ChannelMemberData {
     // Listed by the server but outside the verified membership: gets no
     // sender keys. Decided in core (`is_unverified_channel_member`).
     unverified: bool,
+    // Private groups: anyone but us may be blocked in the group (their
+    // posts are dropped on this device), and is shown so.
+    can-block: bool,
+    blocked: bool,
 }
 
 // A banned user in the members pane's Banned list.
@@ -68,6 +72,8 @@ export component ChannelSettingsModal inherits Rectangle {
     in property <bool> is-owner: false;
     // Core's answer (`can_leave_channel`): a member who is not the owner.
     in property <bool> can-leave: false;
+    // Private group blocked on this device (Danger Zone toggles it).
+    in property <bool> group-blocked: false;
 
     // Notification settings (per user)
     in-out property <string> notification-preference: "all";  // "all", "mentions", "none"
@@ -113,6 +119,8 @@ export component ChannelSettingsModal inherits Rectangle {
     callback set-member-muted(string, bool, int);  // user-id, muted, minutes (0 = until unmuted)
     callback unban-member(string);  // user-id
     callback transfer-ownership(string);  // user-id of the new owner
+    callback block-member(string, bool);  // user-id, block (false = unblock)
+    callback block-group(bool);  // block (false = unblock)
     callback invite-members();  // opens invite modal (private groups)
     callback invite-channel-members();  // opens invite modal (regular channels)
     callback archive-channel();
@@ -335,8 +343,9 @@ export component ChannelSettingsModal inherits Rectangle {
                         }
                     }
 
-                    // Danger zone section: every member can at least leave.
-                    if root.can-archive || root.can-delete || root.can-leave: Rectangle {
+                    // Danger zone section: every member can at least leave
+                    // (a group's owner can transfer, and block, there).
+                    if root.can-archive || root.can-delete || root.can-leave || root.is-private-group: Rectangle {
                         height: root.narrow ? Spacing.touch-target-min : Spacing.button-height;
                         background: root.active-section == "destructive" ? Colors.error.with-alpha(0.1) : transparent;
                         border-radius: Spacing.radius-sm;
@@ -1134,7 +1143,7 @@ export component ChannelSettingsModal inherits Rectangle {
                                         // squeezed the name to "…". Tapping it expands the
                                         // action row below. Only if can manage and not owner.
                                         // Also for a moderator/admin who can only mute or ban.
-                                        if (root.can-manage-members && member.role != "owner") || member.can-ban || member.can-mute || member.can-make-owner: Rectangle {
+                                        if (root.can-manage-members && member.role != "owner") || member.can-ban || member.can-mute || member.can-make-owner || member.can-block: Rectangle {
                                             width: 44px;
                                             height: 44px;
                                             border-radius: Spacing.radius-sm;
@@ -1171,8 +1180,8 @@ export component ChannelSettingsModal inherits Rectangle {
                                             text: root.confirm-action == "ban"
                                                 ? "Ban " + member.display-name + "? They will be removed and can't rejoin."
                                                 : root.confirm-action == "owner"
-                                                ? "Make " + member.display-name + " the owner of #" + root.channel-name + "? You'll become an admin."
-                                                : "Remove " + member.display-name + " from this channel?";
+                                                ? "Make " + member.display-name + " the owner of " + (root.is-private-group ? "" : "#") + root.channel-name + "? You'll become an admin."
+                                                : "Remove " + member.display-name + (root.is-private-group ? " from this group?" : " from this channel?");
                                             color: Colors.text-primary;
                                             font-size: Typography.sm;
                                             wrap: word-wrap;
@@ -1277,8 +1286,18 @@ export component ChannelSettingsModal inherits Rectangle {
                                             clicked => { root.confirm-action = "owner"; }
                                         }
 
-                                        if root.can-manage-members: Button {
-                                            text: "Remove from channel";
+                                        if member.can-block: Button {
+                                            text: member.blocked ? "Unblock in group" : "Block in group";
+                                            variant: "secondary";
+
+                                            clicked => {
+                                                root.role-picker-user = "";
+                                                root.block-member(member.user-id, !member.blocked);
+                                            }
+                                        }
+
+                                        if root.can-manage-members && member.role != "owner": Button {
+                                            text: root.is-private-group ? "Remove from group" : "Remove from channel";
                                             variant: "destructive";
 
                                             clicked => { root.confirm-action = "remove"; }
@@ -1356,11 +1375,25 @@ export component ChannelSettingsModal inherits Rectangle {
                                             }
                                         }
 
-                                        if root.can-manage-members || member.can-ban: HorizontalLayout {
+                                        if member.can-block: HorizontalLayout {
+                                            alignment: end;
+
+                                            Button {
+                                                text: member.blocked ? "Unblock in group" : "Block in group";
+                                                variant: "secondary";
+
+                                                clicked => {
+                                                    root.role-picker-user = "";
+                                                    root.block-member(member.user-id, !member.blocked);
+                                                }
+                                            }
+                                        }
+
+                                        if (root.can-manage-members && member.role != "owner") || member.can-ban: HorizontalLayout {
                                             spacing: Spacing.xs;
                                             alignment: end;
 
-                                            if root.can-manage-members: Button {
+                                            if root.can-manage-members && member.role != "owner": Button {
                                                 text: "Remove";
                                                 variant: "destructive";
 
@@ -1460,14 +1493,14 @@ export component ChannelSettingsModal inherits Rectangle {
                                     min-width: 0px;
 
                                     Text {
-                                        text: "Leave Channel";
+                                        text: root.is-private-group ? "Leave Group" : "Leave Channel";
                                         color: Colors.text-primary;
                                         font-size: Typography.sm;
                                         wrap: word-wrap;
                                         height: self.preferred-height;
                                     }
                                     Text {
-                                        text: "You will lose access to this channel's messages";
+                                        text: root.is-private-group ? "The group and its messages are removed from this device" : "You will lose access to this channel's messages";
                                         color: Colors.text-muted;
                                         font-size: Typography.xs;
                                         wrap: word-wrap;
@@ -1489,7 +1522,9 @@ export component ChannelSettingsModal inherits Rectangle {
                                 spacing: Spacing.sm;
 
                                 Text {
-                                    text: "Leave #" + root.channel-name + "? You won't get new messages, and an invite-only channel cannot be rejoined on your own.";
+                                    text: root.is-private-group
+                                        ? "Leave " + root.channel-name + "? You can only come back if a member invites you again."
+                                        : "Leave #" + root.channel-name + "? You won't get new messages, and an invite-only channel cannot be rejoined on your own.";
                                     color: Colors.error;
                                     font-size: Typography.sm;
                                     wrap: word-wrap;
@@ -1507,7 +1542,7 @@ export component ChannelSettingsModal inherits Rectangle {
                                     }
 
                                     Button {
-                                        text: "Leave channel";
+                                        text: root.is-private-group ? "Leave group" : "Leave channel";
                                         variant: "destructive";
                                         clicked => {
                                             root.show-leave-confirm = false;
@@ -1517,10 +1552,11 @@ export component ChannelSettingsModal inherits Rectangle {
                                 }
                             }
 
-                            // The server refuses an owner's leave while others
-                            // remain, so say why the Leave row is missing and
+                            // An owner may not leave while others remain (the
+                            // server refuses it for a channel, core for a
+                            // group), so say why the Leave row is missing and
                             // point at the way out: Members › ⋮ › Make owner.
-                            if root.is-owner && root.can-delete: HorizontalLayout {
+                            if root.is-owner && (root.can-delete || (root.is-private-group && !root.can-leave)): HorizontalLayout {
                                 spacing: Spacing.sm;
 
                                 VerticalLayout {
@@ -1535,7 +1571,7 @@ export component ChannelSettingsModal inherits Rectangle {
                                         height: self.preferred-height;
                                     }
                                     Text {
-                                        text: "Transfer ownership to leave, or delete the channel.";
+                                        text: root.is-private-group ? "Make another member the owner to leave." : "Transfer ownership to leave, or delete the channel.";
                                         color: Colors.text-muted;
                                         font-size: Typography.xs;
                                         wrap: word-wrap;
@@ -1550,6 +1586,41 @@ export component ChannelSettingsModal inherits Rectangle {
                                     clicked => {
                                         root.active-section = "members";
                                     }
+                                }
+                            }
+
+                            // Block this private group on this device: everything
+                            // it sends is dropped until unblocked here.
+                            if root.is-private-group: HorizontalLayout {
+                                spacing: Spacing.sm;
+
+                                VerticalLayout {
+                                    horizontal-stretch: 1;
+                                    min-width: 0px;
+
+                                    Text {
+                                        text: root.group-blocked ? "Unblock Group" : "Block Group";
+                                        color: Colors.text-primary;
+                                        font-size: Typography.sm;
+                                        wrap: word-wrap;
+                                        height: self.preferred-height;
+                                    }
+                                    Text {
+                                        text: root.group-blocked
+                                            ? "Messages from this group are being dropped on this device"
+                                            : "Drop everything this group sends, on this device";
+                                        color: Colors.text-muted;
+                                        font-size: Typography.xs;
+                                        wrap: word-wrap;
+                                        height: self.preferred-height;
+                                    }
+                                }
+
+                                Button {
+                                    text: root.group-blocked ? "Unblock" : "Block";
+                                    variant: root.group-blocked ? "secondary" : "destructive";
+
+                                    clicked => { root.block-group(!root.group-blocked); }
                                 }
                             }
 
