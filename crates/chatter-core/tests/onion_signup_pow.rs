@@ -142,7 +142,7 @@ async fn onion_challenge(
         .request_registration_challenge(&auth_crypto::login_identifier(&nick), identity_key, &reg.request)
         .await
         .expect("challenge over onion");
-    check_difficulty(challenge.pow_difficulty);
+    check_difficulty(challenge.challenge.as_ref().expect("challenge token").difficulty);
     let record = opaque::registration_finish(reg, PASSWORD, &challenge.opaque_registration_response)
         .expect("OPAQUE registration record");
     (auth, nick, record, challenge)
@@ -158,7 +158,7 @@ async fn onion_register_solves_the_onion_pow() {
     // transport the client below registers over.
     let pool = onion_pool().await;
     let (_, _, _, challenge) = onion_challenge(&pool, &random32()).await;
-    let bits = challenge.pow_difficulty;
+    let bits = challenge.challenge.as_ref().expect("challenge token").difficulty;
     pool.disconnect();
 
     // A real client, on onion before it has said a word to the server.
@@ -234,7 +234,7 @@ async fn onion_register_without_pow_is_refused() {
         device_auth_token: random32().to_vec(),
         registration_lock: vec![0u8; 32],
         prekey_bundle: Some(bundle),
-        challenge_id: challenge.challenge_id.clone(),
+        challenge_token: challenge.challenge.as_ref().expect("challenge token").token.clone(),
         challenge_response: vec![0u8; 64],
         username_lookup_hash: lookup.to_vec(),
         username_proof: proof,

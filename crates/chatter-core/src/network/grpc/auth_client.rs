@@ -117,7 +117,7 @@ impl AuthClient {
 
     /// OPAQUE login, first round trip: KE1 for the login identifier. The
     /// answer is a KE2, or a `pow_challenge` to repeat the call with: `pow`
-    /// is `(challenge nonce, solution)` for that repeat, `None` first.
+    /// is `(challenge token, solution)` for that repeat, `None` first.
     /// `login_grant` is a recovery's grant (empty for none).
     pub async fn login_start(
         &mut self,
@@ -126,11 +126,11 @@ impl AuthClient {
         pow: Option<(&[u8], u64)>,
         login_grant: &[u8],
     ) -> Result<LoginStartResponse, NetworkError> {
-        let (pow_nonce, pow_solution) = pow.map_or((Vec::new(), 0), |(n, s)| (n.to_vec(), s));
+        let (pow_token, pow_solution) = pow.map_or((Vec::new(), 0), |(t, s)| (t.to_vec(), s));
         let request = LoginStartRequest {
             username: identifier.to_string(),
             ke1: ke1.to_vec(),
-            pow_nonce,
+            pow_token,
             pow_solution,
             login_grant: login_grant.to_vec(),
         };
@@ -312,9 +312,9 @@ impl AuthClient {
     /// * `unidentified_access_key` - 16-byte UAK derived client-side from profile_key
     /// * `prekey_bundle` - Optional Signal Protocol prekey bundle for sealed sender
     /// * `initial_one_time_prekeys` - Initial batch of one-time prekeys (Signal sends 100)
-    /// * `challenge_id` - Challenge ID from request_registration_challenge
+    /// * `challenge_token` - `challenge.token` from request_registration_challenge, echoed
     /// * `challenge_response` - Signature of challenge nonce
-    /// * `pow_solution` - Proof of work for the challenge's `pow_difficulty`
+    /// * `pow_solution` - Proof of work for the challenge's difficulty
     ///
     /// # Security Note
     ///
@@ -333,7 +333,7 @@ impl AuthClient {
         unidentified_access_key: &[u8; 16],
         prekey_bundle: Option<crate::proto::chat_v1::SignalPreKeyBundle>,
         initial_one_time_prekeys: Vec<crate::proto::chat_v1::signal_pre_key_bundle::PreKeyRecord>,
-        challenge_id: &str,
+        challenge_token: &[u8],
         challenge_response: &[u8],
         pow_solution: u64,
         registration_lock: &[u8; 32],
@@ -359,7 +359,7 @@ impl AuthClient {
             prekey_bundle,
             initial_one_time_prekeys,
             challenge_response: challenge_response.to_vec(),
-            challenge_id: challenge_id.to_string(),
+            challenge_token: challenge_token.to_vec(),
             pow_solution,
             username_lookup_hash: username_lookup_hash.to_vec(),
             username_proof: username_proof.to_vec(),
@@ -389,9 +389,9 @@ impl AuthClient {
     /// * `unidentified_access_key` - 16-byte UAK derived client-side from profile_key
     /// * `prekey_bundle` - Optional Signal Protocol prekey bundle for sealed sender
     /// * `initial_one_time_prekeys` - Initial batch of one-time prekeys (Signal sends 100)
-    /// * `challenge_id` - Challenge ID from request_registration_challenge
+    /// * `challenge_token` - `challenge.token` from request_registration_challenge, echoed
     /// * `challenge_response` - Signature of challenge nonce
-    /// * `pow_solution` - Proof of work for the challenge's `pow_difficulty`
+    /// * `pow_solution` - Proof of work for the challenge's difficulty
     ///
     /// # Security Note
     ///
@@ -410,7 +410,7 @@ impl AuthClient {
         unidentified_access_key: &[u8; 16],
         prekey_bundle: Option<crate::proto::chat_v1::SignalPreKeyBundle>,
         initial_one_time_prekeys: Vec<crate::proto::chat_v1::signal_pre_key_bundle::PreKeyRecord>,
-        challenge_id: &str,
+        challenge_token: &[u8],
         challenge_response: &[u8],
         pow_solution: u64,
         registration_lock: &[u8; 32],
@@ -428,7 +428,7 @@ impl AuthClient {
                 unidentified_access_key,
                 prekey_bundle,
                 initial_one_time_prekeys,
-                challenge_id,
+                challenge_token,
                 challenge_response,
                 pow_solution,
                 registration_lock,

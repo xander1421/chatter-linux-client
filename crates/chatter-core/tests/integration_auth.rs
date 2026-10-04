@@ -127,14 +127,9 @@ async fn test_register_user_stream() {
                 &uak,
                 Some(prekey_bundle),
                 Vec::new(),
-                &challenge.challenge_id,
+                &challenge.challenge.as_ref().expect("challenge token").token,
                 &challenge_response,
-                chatter_core::crypto::registration_pow::solve(
-                    &challenge.challenge_nonce,
-                    challenge.pow_difficulty,
-                    std::time::Instant::now() + std::time::Duration::from_secs(240),
-                )
-                .expect("registration proof of work"),
+                common::solve_registration_pow(&challenge),
                 &[0u8; 32], // Empty registration lock for tests
                 &username_lookup_hash,
                 &username_proof,
@@ -285,14 +280,9 @@ async fn test_register_duplicate_username() {
             &dup_uak,
             Some(prekey_bundle),
             Vec::new(),
-            &challenge.challenge_id,
+            &challenge.challenge.as_ref().expect("challenge token").token,
             &challenge_response,
-            chatter_core::crypto::registration_pow::solve(
-                &challenge.challenge_nonce,
-                challenge.pow_difficulty,
-                std::time::Instant::now() + std::time::Duration::from_secs(240),
-            )
-            .expect("registration proof of work"),
+            common::solve_registration_pow(&challenge),
             &dup_registration_lock,
             &dup_username_lookup_hash,
             &dup_username_proof,
@@ -410,8 +400,8 @@ async fn test_login_nonexistent_user_is_indistinguishable() {
 
 /// Login is priced, not locked (server OPEN-ITEMS §133): after the free
 /// attempts the server answers LoginStart with a proof-of-work challenge and
-/// no KE2; a bad solution is refused; `login_start_paying_pow` solves, retries
-/// once, and the owner still logs in with the right password.
+/// no KE2; a bad solution is refused; `login_start_paying_pow` solves, repeats
+/// the call, and the owner still logs in with the right password.
 #[tokio::test]
 async fn test_login_priced_by_proof_of_work_not_locked() {
     use chatter_core::crypto::opaque;
@@ -439,20 +429,17 @@ async fn test_login_priced_by_proof_of_work_not_locked() {
     let challenge = challenge.expect("repeated failures must price the login");
     assert!(challenge.difficulty >= 16 && challenge.difficulty <= 26, "{}", challenge.difficulty);
 
-    // A solution for the sign-up puzzle over the raw nonce is not a login
+    // A solution for the sign-up puzzle over the same token is not a login
     // solution (unless by chance it is both; skip those).
+    use chatter_core::crypto::pow::{self, Purpose};
     let reg = (0u64..)
         .find(|s| {
-            chatter_core::crypto::registration_pow::verify(&challenge.nonce, *s, challenge.difficulty)
-                && !chatter_core::crypto::registration_pow::verify(
-                    &chatter_core::crypto::registration_pow::login_seed(&challenge.nonce, &identifier),
-                    *s,
-                    challenge.difficulty,
-                )
+            pow::verify(Purpose::Register, &challenge.token, *s, challenge.difficulty)
+                && !pow::verify(Purpose::Login, &challenge.token, *s, challenge.difficulty)
         })
         .unwrap();
     let ke1 = opaque::login_start("wrong guess").unwrap().ke1;
-    let refused = auth_client.login_start(&identifier, &ke1, Some((&challenge.nonce, reg)), &[]).await;
+    let refused = auth_client.login_start(&identifier, &ke1, Some((&challenge.token, reg)), &[]).await;
     assert!(
         matches!(&refused, Err(NetworkError::PermissionDenied)),
         "sign-up-domain solution must be refused: {refused:?}"

@@ -53,7 +53,7 @@ async fn test_registration_with_challenge_verification() {
     {
         Ok(response) => {
             println!("✓ Challenge requested successfully");
-            println!("  Challenge ID: {}", response.challenge_id);
+            println!("  Challenge token: {} bytes", response.challenge.as_ref().map_or(0, |c| c.token.len()));
             println!("  Challenge nonce length: {} bytes", response.challenge_nonce.len());
             println!("  Expires at: {}", response.expires_at);
             response
@@ -71,7 +71,11 @@ async fn test_registration_with_challenge_verification() {
     };
 
     // Verify challenge response structure
-    assert!(!challenge_response.challenge_id.is_empty(), "Challenge ID should not be empty");
+    assert_eq!(
+        challenge_response.challenge.as_ref().map(|c| c.token.len()),
+        Some(chatter_core::crypto::pow::TOKEN_LEN),
+        "challenge token should be present"
+    );
     assert_eq!(challenge_response.challenge_nonce.len(), 32, "Challenge nonce should be 32 bytes");
     assert!(challenge_response.expires_at > 0, "Expires at should be set");
 
@@ -92,7 +96,7 @@ async fn test_registration_with_challenge_verification() {
 
     // Note: We don't actually register the user here to avoid polluting the database
     // In a full registration, the client would include:
-    // - challenge_id: challenge_response.challenge_id
+    // - challenge_token: challenge_response.challenge.token
     // - challenge_response: signature
     // in the RegisterRequest
 }
@@ -187,8 +191,8 @@ async fn test_multiple_independent_challenges() {
         for (j, (challenge_j, _, _)) in challenges.iter().enumerate() {
             if i != j {
                 assert_ne!(
-                    challenge_i.challenge_id, challenge_j.challenge_id,
-                    "Challenge IDs should be unique"
+                    challenge_i.challenge, challenge_j.challenge,
+                    "Challenge tokens should be unique"
                 );
                 assert_ne!(
                     challenge_i.challenge_nonce, challenge_j.challenge_nonce,

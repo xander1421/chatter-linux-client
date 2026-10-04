@@ -114,22 +114,26 @@ pub(crate) async fn prove_password(
 }
 
 /// How long a login proof of work may run. The server keeps the challenge
-/// 3 minutes; the cap difficulty (26 bits) is ~5 s mean, ~15 s p90 on a
-/// Galaxy S9 (server `login_pow.go` `LoginPoWCapBits`).
+/// 3 minutes; the cap difficulty (26 bits) measured mean 1.27 s, p90 2.85 s
+/// on a Galaxy S9 with the ARMv8 SHA2 instructions (server `login_pow.go`
+/// `LoginPoWCapBits`).
 const LOGIN_POW_DEADLINE: std::time::Duration = std::time::Duration::from_secs(150);
 
+/// Most proofs of work one login pays. The server can ask twice: under onion
+/// load it prices the first attempt at the transport's effort without looking
+/// at the account, and the account's own price (or a price that rose while
+/// solving) comes back as a second challenge. A third means something is
+/// wrong; give up rather than spin.
+const LOGIN_POW_ROUNDS: usize = 3;
+
 /// OPAQUE LoginStart, paying the server's price when it names one (server
-/// OPEN-ITEMS §133). An account with recent unverified login attempts is
-/// answered with a `pow_challenge` instead of a KE2; this solves it off the
-/// async runtime (every core, [`registration_pow::solve_async`]) over
-/// [`registration_pow::login_seed`] and repeats the call once with the
-/// solution. `on_verifying` fires before the solve so the caller can show
-/// that the login is working, not stuck. A second challenge is an error:
-/// the server prices a challenge when it issues it, so a correct solution
-/// always buys the KE2.
+/// OPEN-ITEMS §133, §134). A `pow_challenge` instead of a KE2 is solved off
+/// the async runtime (every core, [`pow::solve_async`]) and the call repeated
+/// with the token and solution, up to [`LOGIN_POW_ROUNDS`] times.
+/// `on_verifying` fires before the first solve so the caller can show that
+/// the login is working, not stuck.
 ///
-/// [`registration_pow::solve_async`]: crate::crypto::registration_pow::solve_async
-/// [`registration_pow::login_seed`]: crate::crypto::registration_pow::login_seed
+/// [`pow::solve_async`]: crate::crypto::pow::solve_async
 ///
 /// `login_grant` is a recovery's grant (`UseRecoveryCodeFinish`): it skips the
 /// price and the account's guess ceiling. A refused grant (expired, already
@@ -142,7 +146,7 @@ pub async fn login_start_paying_pow(
     login_grant: Option<&[u8]>,
     on_verifying: &(dyn Fn() + Send + Sync),
 ) -> Result<crate::proto::chat_v1::LoginStartResponse, AuthError> {
-    use crate::crypto::registration_pow;
+    use crate::crypto::pow;
     if let Some(grant) = login_grant {
         match auth_client.login_start(identifier, ke1, None, grant).await {
             Ok(r) => return Ok(r),
@@ -152,31 +156,39 @@ pub async fn login_start_paying_pow(
             Err(e) => return Err(login_start_error(e)),
         }
     }
-    let first = auth_client.login_start(identifier, ke1, None, &[]).await.map_err(login_start_error)?;
-    let Some(challenge) = first.pow_challenge else {
-        return Ok(first);
-    };
-    on_verifying();
+    let mut response = auth_client.login_start(identifier, ke1, None, &[]).await.map_err(login_start_error)?;
     let started = std::time::Instant::now();
-    let seed = registration_pow::login_seed(&challenge.nonce, identifier);
-    let solution =
-        registration_pow::solve_async(seed.to_vec(), challenge.difficulty, started + LOGIN_POW_DEADLINE)
-            .await?;
-    tracing::info!(
-        pow_bits = challenge.difficulty,
-        solve_ms = started.elapsed().as_millis() as u64,
-        "login proof of work solved"
-    );
-    let second = auth_client
-        .login_start(identifier, ke1, Some((&challenge.nonce, solution)), &[])
-        .await
-        .map_err(login_start_error)?;
-    if second.pow_challenge.is_some() {
+    for round in 0..LOGIN_POW_ROUNDS {
+        let Some(challenge) = response.pow_challenge.take() else {
+            return Ok(response);
+        };
+        if round == 0 {
+            on_verifying();
+        }
+        let solve_started = std::time::Instant::now();
+        let solution = pow::solve_async(
+            pow::Purpose::Login,
+            challenge.token.clone(),
+            challenge.difficulty,
+            started + LOGIN_POW_DEADLINE,
+        )
+        .await?;
+        tracing::info!(
+            pow_bits = challenge.difficulty,
+            solve_ms = solve_started.elapsed().as_millis() as u64,
+            "login proof of work solved"
+        );
+        response = auth_client
+            .login_start(identifier, ke1, Some((&challenge.token, solution)), &[])
+            .await
+            .map_err(login_start_error)?;
+    }
+    if response.pow_challenge.is_some() {
         return Err(AuthError::LoginFailed(
-            "the server asked for a second proof of work; try again".to_string(),
+            "the server kept asking for proof of work; try again".to_string(),
         ));
     }
-    Ok(second)
+    Ok(response)
 }
 
 impl AuthError {
@@ -961,20 +973,25 @@ impl AuthService {
             .map_err(AuthError::Crypto)?;
 
         // Proof of work the server set for this transport (required over the
-        // onion service, 0 on clearnet), bound to this challenge's nonce.
-        // Solved on the blocking pool on every core. Given up after 4 min:
-        // the challenge lives 5 min on the server, and measuring from our own
-        // clock (not `expires_at`) keeps a skewed phone clock out of it.
+        // onion service and rising with its load, 0 on clearnet), over the
+        // challenge token. Solved on the blocking pool on every core. Given
+        // up after 4 min: the challenge lives 5 min on the server, and
+        // measuring from our own clock (not `expires_at`) keeps a skewed
+        // phone clock out of it.
+        let pow_challenge = challenge.challenge.clone().ok_or_else(|| {
+            AuthError::RegistrationFailed("challenge carries no proof-of-work token".to_string())
+        })?;
         let pow_started = std::time::Instant::now();
-        let pow_solution = crate::crypto::registration_pow::solve_async(
-            challenge.challenge_nonce.clone(),
-            challenge.pow_difficulty,
+        let pow_solution = crate::crypto::pow::solve_async(
+            crate::crypto::pow::Purpose::Register,
+            pow_challenge.token.clone(),
+            pow_challenge.difficulty,
             pow_started + std::time::Duration::from_secs(240),
         )
         .await
         .map_err(AuthError::Crypto)?;
         tracing::info!(
-            pow_bits = challenge.pow_difficulty,
+            pow_bits = pow_challenge.difficulty,
             solve_ms = pow_started.elapsed().as_millis() as u64,
             "registration proof of work solved"
         );
@@ -1073,7 +1090,7 @@ impl AuthService {
         // SECURITY: Send UAK (16 bytes), NOT profile_key (32 bytes)
         // Profile key stays client-side for profile encryption
         // SECURITY: display_name is encrypted with profile key (server sees only ciphertext)
-        // SECURITY: challenge_id and response prove identity key possession
+        // SECURITY: the challenge token and response prove identity key possession
         //
         // Signal-style discovery hash: Ristretto255 commitment over the
         // already-chosen `nickname.discriminator` (see `full_username` above),
@@ -1091,7 +1108,7 @@ impl AuthService {
                 &uak,
                 Some(prekey_bundle),
                 initial_prekeys,
-                &challenge.challenge_id,
+                &pow_challenge.token,
                 &challenge_response,
                 pow_solution,
                 &registration_lock, // SECURITY: Prevents account takeover without PIN

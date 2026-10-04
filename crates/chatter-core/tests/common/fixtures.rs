@@ -376,14 +376,9 @@ pub async fn register_test_user(pool: &GrpcClientPool) -> Result<TestUser, Netwo
             &uak,
             Some(prekey_bundle),
             Vec::new(), // No additional one-time prekeys for tests
-            &challenge.challenge_id,
+            &challenge.challenge.as_ref().expect("challenge token").token,
             &challenge_response,
-            chatter_core::crypto::registration_pow::solve(
-                &challenge.challenge_nonce,
-                challenge.pow_difficulty,
-                std::time::Instant::now() + std::time::Duration::from_secs(240),
-            )
-            .expect("registration proof of work"),
+            solve_registration_pow(&challenge),
             &[0u8; 32],         // Empty registration lock for tests
             &username_lookup,   // username_claim(full_username): discovery hash
             &username_proof,    // ...and the proof the server verifies it against
@@ -540,4 +535,17 @@ pub fn generate_prekey_bundle() -> (SignalPreKeyBundle, Vec<u8>) {
     };
 
     (prekey_bundle, identity_public_key.as_ref().to_vec())
+}
+
+/// Pays a registration challenge's proof of work (whatever the transport's
+/// difficulty; 0 on clearnet).
+pub fn solve_registration_pow(challenge: &chatter_core::proto::chat_v1::RequestRegistrationChallengeResponse) -> u64 {
+    let c = challenge.challenge.as_ref().expect("challenge token");
+    chatter_core::crypto::pow::solve(
+        chatter_core::crypto::pow::Purpose::Register,
+        &c.token,
+        c.difficulty,
+        std::time::Instant::now() + std::time::Duration::from_secs(240),
+    )
+    .expect("registration proof of work")
 }
