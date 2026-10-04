@@ -15,6 +15,8 @@
 set -euo pipefail
 cd "$(dirname "$0")"
 PROJECT_ROOT="$(cd .. && pwd)"
+# Cargo honours CARGO_TARGET_DIR (a worktree sharing one build cache); so must we.
+TARGET_DIR="${CARGO_TARGET_DIR:-$PROJECT_ROOT/target}"
 
 # ── Toolchain / cross-compile env ───────────────────────────────────────────
 export ANDROID_HOME="${ANDROID_HOME:-$HOME/Android/Sdk}"
@@ -43,15 +45,15 @@ export PKG_CONFIG_PATH="$GSTREAMER_ROOT_ANDROID/arm64/lib/pkgconfig"
 # needs (EVP_*, HMAC, PKCS5_PBKDF2_HMAC, RAND_bytes — verified).
 setup_boringssl_for_sqlcipher() {
     local webrtc_a webrtc_inc stage
-    webrtc_a="$(find "$PROJECT_ROOT/target" -name libwebrtc.a -path '*android-arm64-release*' 2>/dev/null | head -1)"
-    webrtc_inc="$(find "$PROJECT_ROOT/target" -type d -path '*android-arm64-release*/third_party/boringssl/src/include' 2>/dev/null | head -1)"
+    webrtc_a="$(find "$TARGET_DIR" -name libwebrtc.a -path '*android-arm64-release*' 2>/dev/null | head -1)"
+    webrtc_inc="$(find "$TARGET_DIR" -type d -path '*android-arm64-release*/third_party/boringssl/src/include' 2>/dev/null | head -1)"
     if [ -z "$webrtc_a" ] || [ -z "$webrtc_inc" ]; then
         echo "ERROR: webrtc BoringSSL artifacts not found under target/."
         echo "       Run a normal cargo-ndk build once so webrtc-sys downloads libwebrtc.a, then re-run."
         echo "       (looked for libwebrtc.a + third_party/boringssl/src/include)"
         exit 1
     fi
-    stage="$PROJECT_ROOT/target/boringssl-sqlcipher"
+    stage="$TARGET_DIR/boringssl-sqlcipher"
     mkdir -p "$stage/lib"
     # -lcrypto resolves to webrtc's BoringSSL. Duplicate of the main libwebrtc.a
     # link is collapsed by -Wl,--allow-multiple-definition (set in build.rs).
@@ -200,7 +202,7 @@ fi
 # ── 2. Stage the .so into the Gradle module ─────────────────────────────────
 JNI_DIR="app/src/main/jniLibs/arm64-v8a"
 mkdir -p "$JNI_DIR"
-cp "$PROJECT_ROOT/target/aarch64-linux-android/$RUST_PROFILE/libchatter_ui.so" "$JNI_DIR/"
+cp "$TARGET_DIR/aarch64-linux-android/$RUST_PROFILE/libchatter_ui.so" "$JNI_DIR/"
 # Strip only the staged copy; target/ retains symbols for native diagnostics.
 # --strip-debug leaves the enormous .symtab/.strtab in place. --strip-unneeded
 # removes them while preserving dynamic exports (including WebRTC JNI).
