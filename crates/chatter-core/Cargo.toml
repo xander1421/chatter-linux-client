@@ -62,10 +62,10 @@ libsignal-core = { git = "https://github.com/signalapp/libsignal", rev = "8fc211
 signal-media = { git = "https://github.com/signalapp/libsignal", rev = "8fc2113bda042fc972a166a24b974b0d34155c6c" }
 # RFC 9180 HPKE (base, X25519/HKDF-SHA256/AES-256-GCM) for the mailbox envelope.
 signal-crypto = { git = "https://github.com/signalapp/libsignal", rev = "8fc2113bda042fc972a166a24b974b0d34155c6c" }
-# Same versions signal-media pins; used directly for the sync (file-streaming)
-# sanitize path, which signal-media's async-only wrapper doesn't expose.
+# Same version signal-media pins; used directly for the sync (file-streaming)
+# sanitize path, which signal-media's async-only wrapper doesn't expose. WebP
+# goes through signal_media::sanitize::webp, so webpsan is not a direct dep.
 mp4san = "0.5.3"
-webpsan = { version = "0.5.3", default-features = false }
 # Signal usernames crate (Ristretto255 + ZK proof of ownership for the
 # discovery hash). NOTE: licensed AGPL-3.0; combining with the rest of
 # chatter (GPL-3.0) means the combined work is effectively AGPL.
