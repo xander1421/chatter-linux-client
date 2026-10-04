@@ -18,11 +18,6 @@ path = "src/lib.rs"
 name = "chatter-ui"
 path = "src/main.rs"
 
-[[bin]]
-name = "test_thumbnail"
-path = "src/bin/test_thumbnail.rs"
-required-features = ["desktop-media"]
-
 [[example]]
 name = "video_present_bench"
 path = "examples/video_present_bench.rs"
@@ -70,12 +65,9 @@ pdfium-render = { version = "0.9", optional = true }
 dirs = "5"
 chrono = { version = "0.4", features = ["serde"] }
 uuid = { version = "1", features = ["v4", "v5", "serde"] }
-serde_json = "1"
-base64 = "0.22"
 mime_guess = "2"
 # once_cell + lazy_static removed — migrated to std::sync::LazyLock
 zeroize = { version = "1.8", features = ["derive"] }
-open = "5"
 arboard = { version = "3", features = ["wayland-data-control"], optional = true }
 
 # ============================================================================
@@ -96,7 +88,6 @@ glutin_egl_sys = { version = "0.7", optional = true }
 # this doesn't add a new crate family, just a direct edge to one already present.
 objc2 = { version = "0.6", optional = true }
 objc2-app-kit = { version = "0.3", default-features = false, features = ["NSWindow", "NSResponder", "NSView"], optional = true }
-objc2-foundation = { version = "0.3", optional = true }
 raw-window-handle = { version = "0.6", optional = true }
 
 # ============================================================================
@@ -145,13 +136,11 @@ desktop = [
     "dep:i-slint-backend-winit", "dep:winit", "dep:arboard", "slint/backend-winit",
     "slint/renderer-skia", "chatter-core/desktop-system", "chatter-core/desktop-media",
     "dep:pdfium-render", "desktop-media",
-    "dep:objc2", "dep:objc2-app-kit", "dep:objc2-foundation", "dep:raw-window-handle"
+    "dep:objc2", "dep:objc2-app-kit", "dep:raw-window-handle"
 ]
 # windows-cross: No LiveKit (webrtc-sys requires MSVC, can't cross-compile with MinGW).
 # GStreamer still links (unconditional dep in chatter-ui). For full features, build
 # natively on Windows with the 'desktop' feature.
-# windows-cross: GStreamer only, no LiveKit (webrtc-sys requires MSVC, can't cross-compile
-# with MinGW). For full features including calls, build natively on Windows.
 windows-cross = [
     "dep:i-slint-backend-winit", "dep:winit", "dep:arboard", "slint/backend-winit",
     "slint/renderer-software", "chatter-core/desktop-system", "chatter-core/desktop-gstreamer",

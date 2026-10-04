@@ -50,8 +50,6 @@ pub fn wire_audio_seek(window: &MainWindow) {
                         if let Err(e) = player.seek(seek_duration) {
                             tracing::error!("Failed to seek audio: {}", e);
                         } else {
-                            // Update position tracking in audio_state
-                            audio_state::set_seek_position(seek_duration);
                             tracing::info!("Audio seek successful to {:?}", seek_duration);
                         }
                     } else {

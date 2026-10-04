@@ -29,7 +29,6 @@ pub mod jarvis;
 pub mod mesh;
 pub mod modals;
 pub mod navigation;
-pub mod notifications;
 pub mod server_records;
 pub mod sidebar;
 pub mod status;
@@ -64,7 +63,7 @@ pub fn wire_all(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     status::wire(window, ui_ctx);
     connection::wire(window, ui_ctx);
     unified_search::wire(window, ui_ctx);
-    notifications::wire(window, ui_ctx);
+    ui_ctx.start_notification_listener();
     server_records::wire(window, ui_ctx);
 
     // Initialize inline GIF animation system
