@@ -244,7 +244,9 @@ lto = "thin"
 # with its caret instead of a Slint pre-edit, which core 1.17 paints in
 # selection colours (androidwindowadapter.rs, game-activity path — the one
 # chatter-ui builds). Also paces animation frames on the vsync'd swap instead
-# of a hardcoded 10 ms tick. See vendor/i-slint-backend-android-activity/PATCHES.md.
+# of a hardcoded 10 ms tick (with a floor so it never spins), and votes the
+# panel's top refresh rate only while the UI moves.
+# See vendor/i-slint-backend-android-activity/PATCHES.md.
 [patch.crates-io]
 i-slint-backend-android-activity = { path = "vendor/i-slint-backend-android-activity" }
 

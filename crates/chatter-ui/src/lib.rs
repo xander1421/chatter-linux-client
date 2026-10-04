@@ -95,7 +95,8 @@ fn android_main(app: i_slint_backend_android_activity::AndroidApp) {
                 let _rt = rt_handle().enter();
                 client.set_app_visible(visible);
             }
-        }),
+        })
+        .with_refresh_rate_vote(crate::platform::android::activity::set_ui_moving),
     ))
     .expect("Failed to set Android platform");
 

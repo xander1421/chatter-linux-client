@@ -97,6 +97,23 @@ pub fn set_secure(secure: bool) {
     }
 }
 
+/// Refresh-rate vote (`MainActivity.setUiMoving`): the vendored Android
+/// backend calls this when the UI starts moving and again once it is at rest
+/// (`AndroidPlatform::with_refresh_rate_vote`). Returns the panel's top rate
+/// in Hz (0 if unknown), or `None` if the call did not land.
+pub fn set_ui_moving(moving: bool) -> Option<f32> {
+    let result = (|| -> Result<f32, String> {
+        let act = activity()?;
+        let mut env = jni_env()?;
+        let res = env.call_method(act, "setUiMoving", "(Z)F", &[jni::objects::JValue::Bool(moving.into())]);
+        if res.is_err() {
+            clear_exception(&mut env);
+        }
+        res.and_then(|v| v.f()).map_err(|e| e.to_string())
+    })();
+    result.inspect_err(|e| tracing::warn!("Android: setUiMoving({moving}) failed: {e}")).ok()
+}
+
 /// Mirror Settings › Appearance › Theme into `MainActivity`
 /// (`setThemeMode`), whose `onCreate` paints the pre-first-frame window
 /// background from it — it runs before the native side can say anything.

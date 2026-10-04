@@ -14,7 +14,6 @@ import android.provider.OpenableColumns
 import android.text.Selection
 import android.util.Log
 import android.view.ActionMode
-import android.view.Display
 import android.view.KeyEvent
 import android.view.Surface
 import android.view.SurfaceHolder
@@ -69,13 +68,6 @@ class MainActivity : GameActivity() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             window.isStatusBarContrastEnforced = false
             window.isNavigationBarContrastEnforced = false
-        }
-        // An app that does not vote is left at the panel's default mode, which
-        // on a 120 Hz LTPO phone is often 60 Hz, so a fling never reaches the
-        // rate the hardware offers. Ask for the fastest mode at the current
-        // resolution; the surface votes the same rate in voteFrameRate.
-        fastestDisplayMode()?.let { mode ->
-            window.attributes = window.attributes.apply { preferredDisplayModeId = mode.modeId }
         }
         // Hand the Activity to Rust. ndk-context only exposes the Application,
         // which lacks our Activity methods (launchFilePicker, requestPermissions),
@@ -309,35 +301,79 @@ class MainActivity : GameActivity() {
     override fun createSurfaceView(): InputEnabledSurfaceView =
         BackHidesImeSurfaceView().also { launchCover = it }
 
+    // --- Refresh rate ----------------------------------------------------------
+    // An app that does not vote is left at the panel's default rate, which on a
+    // 120 Hz LTPO phone is often 60 Hz, so a fling never reaches the rate the
+    // hardware offers. A vote held all the time would keep the panel at its top
+    // rate over an idle chat, so the Slint surface votes only while the UI
+    // moves: Rust (run_event_loop in the vendored android backend) calls
+    // setUiMoving(true) when an animation, fling or touch drag starts and
+    // setUiMoving(false) once the UI has been at rest for a moment.
+
+    /** Fastest rate the panel offers at its current resolution; 0 below API 30. */
+    @Volatile private var panelRefreshRate = 0f
+
+    /** UI thread only. */
+    private var uiMoving = false
+    private var frameRateSurface: Surface? = null
+
     override fun surfaceCreated(holder: SurfaceHolder) {
         super.surfaceCreated(holder)
-        voteFrameRate(holder.surface)
+        trackFrameRateSurface(holder.surface)
     }
 
     override fun surfaceChanged(holder: SurfaceHolder, format: Int, width: Int, height: Int) {
         super.surfaceChanged(holder, format, width, height)
-        voteFrameRate(holder.surface)
+        // Rotation, a fold or a resolution change can change the modes on offer.
+        trackFrameRateSurface(holder.surface)
     }
 
-    /** Highest-refresh mode at the display's current resolution; null below API 30. */
-    private fun fastestDisplayMode(): Display.Mode? {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) return null
-        val display = display ?: return null
-        val current = display.mode
-        return display.supportedModes
-            .filter { it.physicalWidth == current.physicalWidth && it.physicalHeight == current.physicalHeight }
-            .maxByOrNull { it.refreshRate }
+    private fun trackFrameRateSurface(surface: Surface) {
+        frameRateSurface = surface
+        panelRefreshRate = fastestRefreshRate()
+        applyFrameRate()
     }
 
     /**
-     * Tell SurfaceFlinger the Slint surface wants the panel's top rate.
-     * preferredDisplayModeId alone picks the mode; without a per-surface vote
-     * the frame-rate arbiter may still settle lower for this layer.
+     * Called from Rust (JNI) on each transition between moving and at rest, never
+     * per frame. Returns the panel's top rate (0 if unknown) so Rust can floor
+     * its frame loop at half a vsync.
      */
-    private fun voteFrameRate(surface: Surface) {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R || !surface.isValid) return
-        val mode = fastestDisplayMode() ?: return
-        surface.setFrameRate(mode.refreshRate, Surface.FRAME_RATE_COMPATIBILITY_DEFAULT)
+    @Suppress("unused")
+    fun setUiMoving(moving: Boolean): Float {
+        runOnUiThread {
+            uiMoving = moving
+            applyFrameRate()
+        }
+        return panelRefreshRate
+    }
+
+    /** Highest refresh rate at the display's current resolution; 0 below API 30. */
+    private fun fastestRefreshRate(): Float {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) return 0f
+        val display = display ?: return 0f
+        val current = display.mode
+        return display.supportedModes
+            .filter { it.physicalWidth == current.physicalWidth && it.physicalHeight == current.physicalHeight }
+            .maxOfOrNull { it.refreshRate } ?: 0f
+    }
+
+    /**
+     * Vote the panel's top rate while moving; clear the vote at rest so an LTPO
+     * panel can drop back down. API 36 asks UI (scrolling, flings) to vote
+     * FRAME_RATE_COMPATIBILITY_AT_LEAST; DEFAULT is the game compatibility,
+     * which is all API 30-35 offers.
+     */
+    private fun applyFrameRate() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) return
+        val surface = frameRateSurface?.takeIf { it.isValid } ?: return
+        val rate = if (uiMoving) panelRefreshRate else 0f
+        val compatibility = if (rate > 0f && Build.VERSION.SDK_INT >= API_36) {
+            FRAME_RATE_COMPATIBILITY_AT_LEAST
+        } else {
+            Surface.FRAME_RATE_COMPATIBILITY_DEFAULT
+        }
+        surface.setFrameRate(rate, compatibility)
     }
 
     private inner class BackHidesImeSurfaceView : InputEnabledSurfaceView(this@MainActivity) {
@@ -602,5 +638,10 @@ class MainActivity : GameActivity() {
         const val THEME_PREFS = "chatter_theme"
         const val THEME_MODE = "mode"
         const val LAUNCH_COVER_TIMEOUT_MS = 5_000L
+
+        // compileSdk is 35; these are Build.VERSION_CODES.BAKLAVA and
+        // Surface.FRAME_RATE_COMPATIBILITY_AT_LEAST from the API 36 SDK.
+        const val API_36 = 36
+        const val FRAME_RATE_COMPATIBILITY_AT_LEAST = 2
     }
 }

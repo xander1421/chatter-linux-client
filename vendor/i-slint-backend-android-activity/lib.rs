@@ -29,6 +29,14 @@ use std::cell::RefCell;
 use std::rc::{Rc, Weak};
 use std::sync::{Arc, Mutex};
 
+/// Chatter patch: shortest time one iteration of the render loop may take
+/// (see `run_event_loop`), used until the panel's refresh rate is known.
+const FRAME_FLOOR: Duration = Duration::from_millis(4);
+
+/// Chatter patch: how long the UI must be at rest before the refresh-rate
+/// vote is cleared (see `AndroidPlatform::with_refresh_rate_vote`).
+const MOTION_IDLE: Duration = Duration::from_millis(400);
+
 thread_local! {
     static CURRENT_WINDOW: RefCell<Weak<AndroidWindowAdapter>> = RefCell::new(Default::default());
 }
@@ -37,6 +45,12 @@ pub struct AndroidPlatform {
     app: AndroidApp,
     window: Rc<AndroidWindowAdapter>,
     event_listener: Option<Box<dyn Fn(&PollEvent<'_>)>>,
+    /// Chatter patch: see `with_refresh_rate_vote`.
+    refresh_rate_vote: Option<Box<dyn Fn(bool) -> Option<f32>>>,
+    /// Whether the last vote that landed was "moving".
+    voting: core::cell::Cell<bool>,
+    /// Half a vsync at the panel's top rate, once known; see `run_event_loop`.
+    frame_floor: core::cell::Cell<Duration>,
 }
 
 impl AndroidPlatform {
@@ -59,7 +73,50 @@ impl AndroidPlatform {
     pub fn new(app: AndroidApp) -> Self {
         let window = AndroidWindowAdapter::new(app.clone());
         CURRENT_WINDOW.set(Rc::downgrade(&window));
-        Self { app, window, event_listener: None }
+        Self {
+            app,
+            window,
+            event_listener: None,
+            refresh_rate_vote: None,
+            voting: Default::default(),
+            frame_floor: core::cell::Cell::new(FRAME_FLOOR),
+        }
+    }
+
+    /// Chatter patch: vote for the panel's top refresh rate only while the UI
+    /// moves.
+    ///
+    /// `vote(true)` is called when an animation (a fling, a transition) or a
+    /// touch drag starts, and `vote(false)` once neither has happened for
+    /// `MOTION_IDLE`; only on those transitions, never per frame. It returns
+    /// the panel's top rate in Hz (0 if unknown), which sets the frame floor,
+    /// or `None` if the vote did not land, in which case it is retried.
+    pub fn with_refresh_rate_vote(mut self, vote: impl Fn(bool) -> Option<f32> + 'static) -> Self {
+        self.refresh_rate_vote = Some(Box::new(vote));
+        self
+    }
+
+    /// Chatter patch: edge-triggered refresh-rate vote; see
+    /// `with_refresh_rate_vote`.
+    fn update_refresh_rate_vote(&self, animating: bool) {
+        let Some(vote) = &self.refresh_rate_vote else { return };
+        let now = std::time::Instant::now();
+        if animating {
+            self.window.last_motion.set(Some(now));
+        }
+        let moving = self.window.last_motion.get().is_some_and(|t| now - t < MOTION_IDLE);
+        if moving == self.voting.get() {
+            return;
+        }
+        let Some(hz) = vote(moving) else { return };
+        self.voting.set(moving);
+        if moving {
+            self.frame_floor.set(if hz > 0. {
+                Duration::from_secs_f32(0.5 / hz)
+            } else {
+                FRAME_FLOOR
+            });
+        }
     }
 
     /// Instantiate a new Android backend given the [`android_activity::AndroidApp`]
@@ -120,6 +177,14 @@ impl i_slint_core::platform::Platform for AndroidPlatform {
                     None => frame_duration,
                 })
             }
+            // Chatter patch: wake when the UI has been at rest for MOTION_IDLE,
+            // so the refresh-rate vote is cleared without waiting for an event.
+            if self.voting.get()
+                && let Some(t) = self.window.last_motion.get()
+            {
+                let left = (t + MOTION_IDLE).saturating_duration_since(std::time::Instant::now());
+                timeout = Some(timeout.map_or(left, |x| x.min(left)));
+            }
             let mut r = Ok(ControlFlow::Continue(()));
             self.app.poll_events(timeout, |e| {
                 i_slint_core::platform::update_timers_and_animations();
@@ -136,8 +201,20 @@ impl i_slint_core::platform::Platform for AndroidPlatform {
             let animating = self.window.window.has_active_animations()
                 && self.app.native_window().is_some();
             if self.window.pending_redraw.take() || animating {
-                self.window.do_render()?;
+                let started = std::time::Instant::now();
+                let presented = self.window.do_render()?;
+                // Chatter patch: a frame floor under the vsync pacing. If the
+                // swap does not block (swap interval refused, a driver that
+                // queues ahead) or nothing was presented, the zero timeout
+                // above would spin. A presented frame takes at least half a
+                // vsync of the panel's top rate (4 ms until that is known); a
+                // skipped one waits twice that.
+                let floor = self.frame_floor.get() * if presented { 1 } else { 2 };
+                if let Some(rest) = floor.checked_sub(started.elapsed()) {
+                    std::thread::sleep(rest);
+                }
             }
+            self.update_refresh_rate_vote(animating);
         }
         Ok(())
     }

@@ -37,6 +37,9 @@ pub struct AndroidWindowAdapter {
     requested_graphics_api: RefCell<Option<i_slint_core::graphics::RequestedGraphicsAPI>>,
     pub(crate) event_queue: EventQueue,
     pub(crate) pending_redraw: Cell<bool>,
+    /// Chatter patch: when a touch last moved; feeds the refresh-rate vote
+    /// (`AndroidPlatform::with_refresh_rate_vote`).
+    pub(crate) last_motion: Cell<Option<std::time::Instant>>,
     pub(super) java_helper: JavaHelper,
     pub(crate) fullscreen: Cell<bool>,
     /// The offset at which the Slint view is drawn in the native window (account for status bar)
@@ -585,6 +588,7 @@ impl AndroidWindowAdapter {
             requested_graphics_api: RefCell::new(None),
             event_queue: Default::default(),
             pending_redraw: Default::default(),
+            last_motion: Default::default(),
             java_helper,
             fullscreen: Cell::new(false),
             offset: Default::default(),
@@ -887,6 +891,7 @@ impl AndroidWindowAdapter {
                             }
                             drop(lp);
 
+                            self.last_motion.set(Some(std::time::Instant::now()));
                             let runtime_window = WindowInner::from_pub(&self.window);
                             for p in motion_event.pointers() {
                                 runtime_window.process_touch_input(
@@ -1086,17 +1091,19 @@ impl AndroidWindowAdapter {
         Ok(())
     }
 
-    pub fn do_render(&self) -> Result<(), PlatformError> {
-        if let Some(win) = self.app.native_window() {
-            let o = self.offset.get();
-            let _ = self.renderer.render_transformed_with_post_callback(
-                0.,
-                (o.x as f32, o.y as f32),
-                PhysicalSize { width: win.width() as _, height: win.height() as _ },
-                None,
-            )?;
-        }
-        Ok(())
+    /// Chatter patch: reports whether a frame reached the screen, so the event
+    /// loop can tell a presented frame from one that was skipped (no native
+    /// window, an occluded or timed-out surface) and pace itself either way.
+    pub fn do_render(&self) -> Result<bool, PlatformError> {
+        let Some(win) = self.app.native_window() else { return Ok(false) };
+        let o = self.offset.get();
+        let outcome = self.renderer.render_transformed_with_post_callback(
+            0.,
+            (o.x as f32, o.y as f32),
+            PhysicalSize { width: win.width() as _, height: win.height() as _ },
+            None,
+        )?;
+        Ok(matches!(outcome, i_slint_core::renderer::DrawOutcome::Success))
     }
 
     pub fn set_requested_graphics_api(
