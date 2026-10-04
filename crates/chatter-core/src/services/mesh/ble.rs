@@ -2591,8 +2591,16 @@ impl BleRuntime {
 
     async fn announce(&mut self) {
         let now_ms = now_millis();
-        let last_ms = self.state.with(|state| state.last_announce_ms);
-        if !duty::announce_floor_passed(last_ms, now_ms) {
+        let passed = self.state.with(|state| {
+            let passed = duty::announce_floor_passed(state.last_announce_ms, now_ms);
+            // Inside the floor the request is deferred, not dropped: a peer that
+            // connected a moment after another must still hear us, and
+            // `flush_deferred_announce` sends one at expiry. One flag, so any
+            // number of requests inside a floor coalesce into that one.
+            state.announce_deferred = !passed;
+            passed
+        });
+        if !passed {
             return;
         }
         let nickname = self.config.nickname.clone();
@@ -2647,6 +2655,17 @@ impl BleRuntime {
     }
 
     /// Every *other* link bound to the peer a packet arrived on.
+    /// Send the announce that was requested inside the floor, once it expires.
+    async fn flush_deferred_announce(&mut self, now_ms: u64) {
+        let due = self.state.with(|state| {
+            state.announce_deferred
+                && duty::announce_floor_passed(state.last_announce_ms, now_ms)
+        });
+        if due {
+            self.announce().await;
+        }
+    }
+
     fn sibling_links_of(&self, ingress_link: Option<&LinkId>) -> Vec<LinkId> {
         let Some(ingress) = ingress_link else {
             return Vec::new();
@@ -2874,6 +2893,8 @@ impl BleRuntime {
     async fn on_tick(&mut self) {
         let now_ms = now_millis();
         let now_s = now_secs();
+
+        self.flush_deferred_announce(now_ms).await;
 
         self.report_throughput(now_ms);
 
@@ -4427,17 +4448,38 @@ mod tests {
         runtime.announce().await;
         runtime.announce().await;
         runtime.drain_writes().await;
-        assert_eq!(radio.writes().len(), 1, "announces inside the floor are dropped");
+        assert_eq!(radio.writes().len(), 1, "announces inside the floor are held");
 
-        // Once the floor has passed, the next one goes out.
-        state.with(|inner| {
-            inner.last_announce_ms = inner
-                .last_announce_ms
-                .saturating_sub(chatter_mesh_link::duty::ANNOUNCE_MIN_INTERVAL_MS);
-        });
-        runtime.announce().await;
+        // Still inside the floor: the deferred one waits.
+        runtime.flush_deferred_announce(now_millis()).await;
+        runtime.drain_writes().await;
+        assert_eq!(radio.writes().len(), 1);
+
+        // At expiry the held requests go out as exactly one announce, so a peer
+        // that connected inside the floor still hears us.
+        let rewind = |state: &MeshState| {
+            state.with(|inner| {
+                inner.last_announce_ms = inner
+                    .last_announce_ms
+                    .saturating_sub(chatter_mesh_link::duty::ANNOUNCE_MIN_INTERVAL_MS);
+            });
+        };
+        rewind(&state);
+        runtime.flush_deferred_announce(now_millis()).await;
+        runtime.flush_deferred_announce(now_millis()).await;
+        runtime.drain_writes().await;
+        assert_eq!(radio.writes().len(), 2, "one deferred announce, coalesced");
+
+        // Nothing deferred: expiry alone sends nothing.
+        rewind(&state);
+        runtime.flush_deferred_announce(now_millis()).await;
         runtime.drain_writes().await;
         assert_eq!(radio.writes().len(), 2);
+
+        // Once the floor has passed, a direct request goes out.
+        runtime.announce().await;
+        runtime.drain_writes().await;
+        assert_eq!(radio.writes().len(), 3);
     }
 
     #[tokio::test]

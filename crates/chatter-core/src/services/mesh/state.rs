@@ -80,6 +80,8 @@ pub struct LinkStateInner {
     /// Messages waiting for a Noise session to finish, keyed by peer.
     pub pending_dms: BTreeMap<PeerId, Vec<PendingDm>>,
     pub last_announce_ms: u64,
+    /// An announce was requested inside the floor and is owed at its expiry.
+    pub announce_deferred: bool,
     pub last_traffic_ms: u64,
     pub maintenance_cycle: u32,
     pub adapter_powered: bool,
@@ -120,6 +122,7 @@ impl Default for LinkStateInner {
             connecting: BTreeSet::new(),
             pending_dms: BTreeMap::new(),
             last_announce_ms: 0,
+            announce_deferred: false,
             last_traffic_ms: 0,
             maintenance_cycle: 0,
             adapter_powered: true,
