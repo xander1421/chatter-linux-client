@@ -9,10 +9,7 @@ use crate::{MessageItemData, RichTextSpan};
 
 use super::attachment::{attachment_to_display_data, AttachmentDisplayData};
 use super::markdown::{parse_markdown, strip_markdown};
-use super::utils::{
-    avatar_bytes_to_image, format_count, insert_word_breaks,
-    reaction_counts_to_entries,
-};
+use super::utils::{avatar_bytes_to_image, format_count, reaction_counts_to_entries};
 
 /// A message body as a row renders it: `rich_content` is the markdown spans
 /// the bubble draws, `content` the stripped text used for empty checks and the
@@ -31,7 +28,7 @@ fn body_fields(raw: &str) -> (slint::SharedString, ModelRc<RichTextSpan>) {
         })
         .collect();
     (
-        insert_word_breaks(&strip_markdown(trimmed)).into(),
+        strip_markdown(trimmed).into(),
         ModelRc::new(VecModel::from(spans)),
     )
 }

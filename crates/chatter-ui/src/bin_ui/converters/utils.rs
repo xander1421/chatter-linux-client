@@ -3,37 +3,6 @@
 
 use crate::ReactionEntry;
 
-/// Maximum characters in a word before inserting a break point.
-/// Slint's word-wrap only breaks at spaces, so we insert zero-width spaces
-/// to allow long strings without spaces to wrap.
-pub(crate) const MAX_WORD_LENGTH: usize = 50;
-
-/// Insert zero-width spaces (U+200B) into long sequences without whitespace.
-/// This allows Slint's word-wrap to break long strings that have no natural break points.
-pub(crate) fn insert_word_breaks(text: &str) -> String {
-    const ZWSP: char = '\u{200B}';  // Zero-width space
-
-    let mut result = String::with_capacity(text.len() + text.len() / MAX_WORD_LENGTH);
-    let mut word_len = 0;
-
-    for ch in text.chars() {
-        if ch.is_whitespace() {
-            word_len = 0;
-            result.push(ch);
-        } else {
-            word_len += 1;
-            result.push(ch);
-            // Insert zero-width space after MAX_WORD_LENGTH consecutive non-whitespace chars
-            if word_len >= MAX_WORD_LENGTH {
-                result.push(ZWSP);
-                word_len = 0;
-            }
-        }
-    }
-
-    result
-}
-
 /// Convert typed reaction counts into Slint `ReactionEntry` pills for
 /// rendering. This is the only direction: `ReactionCount` (core, source of
 /// truth) → `ReactionEntry` (Slint view). No string round-trips.

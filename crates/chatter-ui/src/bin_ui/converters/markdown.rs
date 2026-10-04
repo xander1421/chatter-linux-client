@@ -7,8 +7,6 @@
 //! Since Slint doesn't support inline rich text (mixed styles in a single wrapped
 //! text flow), each span is rendered as a separate element.
 
-use super::insert_word_breaks;
-
 /// A parsed rich text span for Slint rendering.
 ///
 /// Each span maps to one Slint `RichTextSpan` struct element.
@@ -25,8 +23,7 @@ pub(crate) struct MarkdownSpan {
 
 /// Parse markdown text into styled spans.
 ///
-/// Returns a vector of spans with word breaks already inserted (for Slint wrapping).
-/// Code block content preserves original whitespace and does NOT get word breaks.
+/// Code block content preserves original whitespace.
 pub(crate) fn parse_markdown(input: &str) -> Vec<MarkdownSpan> {
     let trimmed = input.trim();
     if trimmed.is_empty() {
@@ -43,7 +40,7 @@ pub(crate) fn parse_markdown(input: &str) -> Vec<MarkdownSpan> {
 
     for block in blocks {
         if block.is_code_block {
-            // Code blocks: preserve whitespace, no word breaks
+            // Code blocks: preserve whitespace
             result.push(MarkdownSpan {
                 text: block.text,
                 code_block: true,
@@ -58,7 +55,7 @@ pub(crate) fn parse_markdown(input: &str) -> Vec<MarkdownSpan> {
 
     if result.is_empty() {
         result.push(MarkdownSpan {
-            text: insert_word_breaks(trimmed),
+            text: trimmed.to_string(),
             ..Default::default()
         });
     }
@@ -161,7 +158,6 @@ fn split_code_blocks(input: &str) -> Vec<TextBlock> {
 /// Parse inline markdown formatting within a text block.
 ///
 /// Handles: `**bold**`, `*italic*`, `~~strikethrough~~`, `` `code` ``
-/// Returns spans with word breaks inserted for non-code spans.
 fn parse_inline(text: &str) -> Vec<MarkdownSpan> {
     let chars: Vec<char> = text.chars().collect();
     let len = chars.len();
@@ -176,7 +172,7 @@ fn parse_inline(text: &str) -> Vec<MarkdownSpan> {
                 flush_normal(&mut current, &mut spans);
                 let inner: String = chars[i + 2..end].iter().collect();
                 spans.push(MarkdownSpan {
-                    text: insert_word_breaks(&inner),
+                    text: inner,
                     bold: true,
                     ..Default::default()
                 });
@@ -191,7 +187,7 @@ fn parse_inline(text: &str) -> Vec<MarkdownSpan> {
                 flush_normal(&mut current, &mut spans);
                 let inner: String = chars[i + 2..end].iter().collect();
                 spans.push(MarkdownSpan {
-                    text: insert_word_breaks(&inner),
+                    text: inner,
                     strikethrough: true,
                     ..Default::default()
                 });
@@ -208,7 +204,7 @@ fn parse_inline(text: &str) -> Vec<MarkdownSpan> {
                     flush_normal(&mut current, &mut spans);
                     let inner: String = chars[i + 1..end].iter().collect();
                     spans.push(MarkdownSpan {
-                        text: insert_word_breaks(&inner),
+                        text: inner,
                         italic: true,
                         ..Default::default()
                     });
@@ -224,7 +220,7 @@ fn parse_inline(text: &str) -> Vec<MarkdownSpan> {
                 flush_normal(&mut current, &mut spans);
                 let inner: String = chars[i + 1..end].iter().collect();
                 spans.push(MarkdownSpan {
-                    text: inner, // no word breaks in code
+                    text: inner,
                     code: true,
                     ..Default::default()
                 });
@@ -241,11 +237,11 @@ fn parse_inline(text: &str) -> Vec<MarkdownSpan> {
     spans
 }
 
-/// Flush accumulated normal text into a span (with word breaks).
+/// Flush accumulated normal text into a span.
 fn flush_normal(buf: &mut String, spans: &mut Vec<MarkdownSpan>) {
     if !buf.is_empty() {
         spans.push(MarkdownSpan {
-            text: insert_word_breaks(buf),
+            text: buf.clone(),
             ..Default::default()
         });
         buf.clear();

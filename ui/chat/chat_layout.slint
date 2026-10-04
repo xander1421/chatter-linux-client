@@ -167,7 +167,6 @@ export component ChatLayout inherits Rectangle {
     callback mention-triggered(string);
     callback remove-attachment(string);
     callback typing-changed(bool);  // true when started typing, false when stopped
-    callback process-text(string) -> string;  // Insert word breaks for text wrapping
 
     // Layout — Neo 2.0 surface continuity: deepest background as base plane
     background: Colors.background;
@@ -464,9 +463,6 @@ export component ChatLayout inherits Rectangle {
             }
             typing-changed(is-typing) => {
                 root.typing-changed(is-typing);
-            }
-            process-text(text) => {
-                return root.process-text(text);
             }
         }
 

@@ -164,7 +164,6 @@ export component MessageComposer inherits GlassSurface {
     callback mention-triggered(string);
     callback remove-attachment(string);
     callback typing-changed(bool);  // true when started typing, false when stopped
-    callback process-text(string) -> string;  // Insert word breaks for wrapping
 
     // Wrap the current selection (or insert markers at the cursor) with the
     // markdown for `fmt`, then re-select the inner text. Byte offsets captured
