@@ -171,7 +171,7 @@ async fn test_channel_event_stream() {
     skip_if_no_server!();
 
     let pool = assert_ok(create_streaming_test_pool().await);
-    let user = assert_ok(setup_authenticated_test(&pool).await);
+    let _user = assert_ok(setup_authenticated_test(&pool).await);
 
     let mut channel_client = ChannelClient::new(pool.channel(), pool.auth_clone());
 
@@ -278,7 +278,7 @@ async fn test_presence_update() {
     skip_if_no_server!();
 
     let pool = assert_ok(create_streaming_test_pool().await);
-    let user = assert_ok(setup_authenticated_test(&pool).await);
+    let _user = assert_ok(setup_authenticated_test(&pool).await);
 
     let mut user_client = UserClient::new(pool.channel(), pool.auth_clone());
 

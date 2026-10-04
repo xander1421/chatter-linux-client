@@ -8,7 +8,7 @@ use std::sync::Arc;
 use tempfile::TempDir;
 
 use chatter_core::domain::jarvis::{
-    ContextType, EntityType, JarvisContext, JarvisConversation, JarvisEntity,
+    EntityType, JarvisContext, JarvisConversation, JarvisEntity,
     JarvisFact, JarvisRelationship, Role, SubjectType,
 };
 use chatter_core::domain::{ChannelId, UserId};

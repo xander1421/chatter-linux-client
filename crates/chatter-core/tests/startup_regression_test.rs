@@ -324,7 +324,7 @@ fn test_10_keyring_no_retry_block() {
 #[test]
 #[ignore = "requires an unlocked D-Bus Secret Service; run serially"]
 fn test_11_keyring_real_path() {
-    use chatter_core::system::{Directories, Keyring};
+    use chatter_core::system::Keyring;
     use std::sync::mpsc;
     use std::thread;
 

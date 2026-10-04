@@ -13,8 +13,8 @@
 //! conversation_type instead of the old AnonDmMessageReceived variant.
 
 use chatter_core::domain::anon_dm::AnonDmId;
-use chatter_core::domain::ids::{ChannelId, MessageId, UserId};
-use chatter_core::domain::message::{ConversationType, Message, MessageContent};
+use chatter_core::domain::ids::{ChannelId, UserId};
+use chatter_core::domain::message::{ConversationType, Message};
 use chatter_core::events::EventBus;
 use chatter_core::inbox::handlers::DomainEvent;
 

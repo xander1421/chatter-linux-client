@@ -3,7 +3,6 @@
 //! Tests network conditions, mock server behavior,
 //! and error handling using the testing framework.
 
-use crate::common;
 use crate::framework;
 
 use framework::prelude::*;

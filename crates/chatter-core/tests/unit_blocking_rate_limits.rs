@@ -6,7 +6,6 @@
 //! - Group blocking/muting status
 //! - Rate limiting for message sends
 
-use crate::common;
 
 use std::sync::Arc;
 use chrono::{Duration, Utc};

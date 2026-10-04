@@ -77,10 +77,10 @@ async fn test_create_group_with_initial_members() {
 
     // Create additional users
     pool.auth().clear();
-    let user2 = assert_ok(register_test_user(&pool).await);
+    let _user2 = assert_ok(register_test_user(&pool).await);
 
     pool.auth().clear();
-    let user3 = assert_ok(register_test_user(&pool).await);
+    let _user3 = assert_ok(register_test_user(&pool).await);
 
     // Re-auth as user1
     pool.auth().set_basic(

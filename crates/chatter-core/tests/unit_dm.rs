@@ -3,7 +3,6 @@
 //! Tests DM channel creation, encrypted message exchange,
 //! session establishment, and DM-specific features.
 
-use crate::common;
 use crate::framework;
 
 use framework::prelude::*;

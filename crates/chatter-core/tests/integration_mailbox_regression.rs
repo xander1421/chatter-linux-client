@@ -34,7 +34,6 @@ use common::*;
 struct MailboxTestContext {
     user: TestUser,
     pool: Arc<GrpcClientPool>,
-    db: Arc<Database>,
     mailbox_manager: Arc<GroupMailboxManager>,
     token_manager: TokenManager,
     group_coordinator: GroupCoordinator,
@@ -58,7 +57,6 @@ impl MailboxTestContext {
         Ok(Self {
             user,
             pool,
-            db,
             mailbox_manager,
             token_manager,
             group_coordinator,
@@ -67,10 +65,6 @@ impl MailboxTestContext {
 
     fn channel_client(&self) -> ChannelClient {
         ChannelClient::new(self.pool.channel(), self.pool.auth_clone())
-    }
-
-    fn message_client(&self) -> MessageClient {
-        MessageClient::new(self.pool.channel(), self.pool.auth_clone())
     }
 
     fn mailbox_client(&self) -> MailboxClient {

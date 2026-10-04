@@ -205,7 +205,7 @@ async fn test_multiple_independent_challenges() {
     println!("✓ All challenges are unique");
 
     // Verify we can sign all challenges independently
-    for (challenge, identity_key, username) in challenges {
+    for (challenge, _identity_key, username) in challenges {
         let signature = sign_challenge_nonce(&challenge.challenge_nonce);
         println!("✓ Successfully signed challenge for {}", username);
         
@@ -246,7 +246,7 @@ fn opaque_request() -> Vec<u8> {
 fn generate_test_identity_key() -> Vec<u8> {
     use rand::RngCore;
     let mut key = vec![0u8; 32];
-    rand::thread_rng().fill_bytes(&mut key);
+    rand::rng().fill_bytes(&mut key);
     key
 }
 
@@ -258,7 +258,7 @@ fn sign_challenge_nonce(nonce: &[u8]) -> Vec<u8> {
     // This is a mock signature for testing purposes
     // Real implementation would use ed25519_dalek or similar to actually sign
     let mut signature = vec![0u8; 64]; // Ed25519 signature is 64 bytes
-    rand::thread_rng().fill_bytes(&mut signature);
+    rand::rng().fill_bytes(&mut signature);
     
     // Add some deterministic content based on the nonce to make it look realistic
     for (i, &byte) in nonce.iter().enumerate().take(32) {

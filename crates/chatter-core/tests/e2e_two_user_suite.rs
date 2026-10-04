@@ -13,6 +13,9 @@
 //!   T7: File Transfer
 
 #[macro_use]
+// Shared with tests/it.rs, which uses nearly all of it and stays the
+// dead-code check for it; this target uses a subset.
+#[allow(dead_code, unused_imports)]
 mod common;
 
 use std::sync::Arc;

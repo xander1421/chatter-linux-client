@@ -41,5 +41,6 @@ pub mod membership;
 pub use assertions::*;
 pub use config::*;
 pub use fixtures::*;
+#[allow(unused_imports)] // used only by tests/validated.rs
 pub use groups::*;
 

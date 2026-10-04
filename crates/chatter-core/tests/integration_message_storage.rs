@@ -7,7 +7,6 @@
 //! - Saved messages (Note to Self)
 //! - Signal-style (sender_id, sent_at) lookups
 
-use crate::common;
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -847,7 +846,7 @@ fn test_signal_style_deduplication_same_sender_timestamp() {
     // This simulates the same message arriving twice with different server-assigned IDs
     let sent_at = 1_700_000_001_234_567_890u64;
 
-    let mut msg1 = Message::new_text(channel.id, ConversationType::Channel, Some(sender), "Original message".to_string(), sent_at);
+    let msg1 = Message::new_text(channel.id, ConversationType::Channel, Some(sender), "Original message".to_string(), sent_at);
     let original_id = msg1.id;
 
     let mut msg2 = Message::new_text(channel.id, ConversationType::Channel, Some(sender), "Duplicate delivery".to_string(), sent_at);

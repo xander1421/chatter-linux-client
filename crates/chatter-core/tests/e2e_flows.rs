@@ -3,7 +3,6 @@
 //! Tests complete user workflows from registration through
 //! messaging, using the full testing framework stack.
 
-use crate::common;
 use crate::framework;
 
 use framework::prelude::*;
@@ -385,12 +384,12 @@ async fn test_e2e_crypto_key_lifecycle() {
     assert_eq!(public.len(), 33);
 
     // Step 2: Generate prekeys
-    let (prekey_id, prekey_priv, prekey_pub) = CryptoBuilder::prekey(1);
+    let (prekey_id, prekey_priv, _prekey_pub) = CryptoBuilder::prekey(1);
     assert_eq!(prekey_id, 1);
     assert_eq!(prekey_priv.len(), 32);
 
     // Step 3: Generate signed prekey
-    let (spk_id, spk_priv, spk_pub, signature) = CryptoBuilder::signed_prekey(1);
+    let (spk_id, _spk_priv, _spk_pub, signature) = CryptoBuilder::signed_prekey(1);
     assert_eq!(spk_id, 1);
     assert_eq!(signature.len(), 64);
 

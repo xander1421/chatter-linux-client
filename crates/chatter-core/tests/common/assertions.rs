@@ -24,15 +24,6 @@ pub fn assert_not_found<T>(result: Result<T, NetworkError>) {
     }
 }
 
-/// Assert that an error is InvalidRequest.
-pub fn assert_invalid_request<T>(result: Result<T, NetworkError>) {
-    match result {
-        Err(NetworkError::InvalidRequest(_)) => {}
-        Err(e) => panic!("Expected InvalidRequest, got: {:?}", e),
-        Ok(_) => panic!("Expected InvalidRequest error, but got Ok"),
-    }
-}
-
 /// Assert that an error is Unauthenticated.
 pub fn assert_unauthenticated<T>(result: Result<T, NetworkError>) {
     match result {
@@ -42,39 +33,12 @@ pub fn assert_unauthenticated<T>(result: Result<T, NetworkError>) {
     }
 }
 
-/// Assert that an error is PermissionDenied.
-pub fn assert_permission_denied<T>(result: Result<T, NetworkError>) {
-    match result {
-        Err(NetworkError::PermissionDenied) => {}
-        Err(e) => panic!("Expected PermissionDenied, got: {:?}", e),
-        Ok(_) => panic!("Expected PermissionDenied error, but got Ok"),
-    }
-}
-
 /// Assert that an error is an authentication error (Unauthenticated or PermissionDenied).
 pub fn assert_auth_error<T>(result: Result<T, NetworkError>) {
     match result {
         Err(ref e) if e.is_auth_error() => {}
         Err(e) => panic!("Expected auth error, got: {:?}", e),
         Ok(_) => panic!("Expected auth error, but got Ok"),
-    }
-}
-
-/// Assert that an error is retryable.
-pub fn assert_retryable<T>(result: Result<T, NetworkError>) {
-    match result {
-        Err(ref e) if e.is_retryable() => {}
-        Err(e) => panic!("Expected retryable error, got: {:?}", e),
-        Ok(_) => panic!("Expected retryable error, but got Ok"),
-    }
-}
-
-/// Assert that an error is ServerError.
-pub fn assert_server_error<T>(result: Result<T, NetworkError>) {
-    match result {
-        Err(NetworkError::ServerError(_)) => {}
-        Err(e) => panic!("Expected ServerError, got: {:?}", e),
-        Ok(_) => panic!("Expected ServerError, but got Ok"),
     }
 }
 

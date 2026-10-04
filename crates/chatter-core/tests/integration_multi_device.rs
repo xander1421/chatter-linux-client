@@ -350,7 +350,7 @@ async fn test_revoke_device_session() {
     skip_if_no_server!();
 
     let pool = assert_ok(create_test_pool().await);
-    let user = assert_ok(setup_authenticated_test(&pool).await);
+    let _user = assert_ok(setup_authenticated_test(&pool).await);
 
     let mut auth_client = AuthClient::new(pool.channel(), pool.auth_clone());
 
@@ -478,7 +478,7 @@ async fn test_fetch_prekeys_all_devices() {
     skip_if_no_server!();
 
     let pool = assert_ok(create_test_pool().await);
-    let user = assert_ok(setup_authenticated_test(&pool).await);
+    let _user = assert_ok(setup_authenticated_test(&pool).await);
 
     // Create a second test user (target)
     let pool2 = assert_ok(create_test_pool().await);
@@ -531,7 +531,7 @@ async fn test_prekey_bundles_have_required_fields() {
     skip_if_no_server!();
 
     let pool = assert_ok(create_test_pool().await);
-    let user = assert_ok(setup_authenticated_test(&pool).await);
+    let _user = assert_ok(setup_authenticated_test(&pool).await);
 
     // Create target user
     let pool2 = assert_ok(create_test_pool().await);

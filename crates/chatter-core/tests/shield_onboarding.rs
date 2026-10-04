@@ -21,6 +21,9 @@
 //!     --test shield_onboarding -- --nocapture --test-threads=1
 //! ```
 
+// Shared with tests/it.rs, which uses nearly all of it and stays the
+// dead-code check for it; this target uses a subset.
+#[allow(dead_code, unused_imports)]
 mod common;
 
 use std::sync::atomic::{AtomicUsize, Ordering};

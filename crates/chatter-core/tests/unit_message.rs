@@ -3,7 +3,6 @@
 //! Tests message sending, receiving, editing, deleting,
 //! reactions, pins, and threading using mocked services.
 
-use crate::common;
 use crate::framework;
 
 use framework::prelude::*;

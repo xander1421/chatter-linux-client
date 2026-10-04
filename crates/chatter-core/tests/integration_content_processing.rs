@@ -133,64 +133,6 @@ fn test_encryption_content_structure() {
 }
 
 // ============================================================================
-// Multi-Device Sync Detection Tests
-// ============================================================================
-
-/// Test that we can detect when multi-device sync is needed.
-#[test]
-fn test_multi_device_detection() {
-    // Simulate device list response
-    struct MockDevice {
-        device_id: u32,
-        name: String,
-    }
-
-    let devices = vec![
-        MockDevice {
-            device_id: 1,
-            name: "Primary".to_string(),
-        },
-        MockDevice {
-            device_id: 2,
-            name: "Laptop".to_string(),
-        },
-        MockDevice {
-            device_id: 3,
-            name: "Tablet".to_string(),
-        },
-    ];
-
-    let current_device_id = 1;
-    let device_count = devices.len();
-
-    // Multi-device sync needed when count > 1
-    let needs_sync = device_count > 1;
-    assert!(needs_sync);
-
-    // Get other device IDs for sync
-    let other_device_ids: Vec<u32> = devices
-        .iter()
-        .filter(|d| d.device_id != current_device_id)
-        .map(|d| d.device_id)
-        .collect();
-
-    assert_eq!(other_device_ids, vec![2, 3]);
-}
-
-/// Test single device doesn't need sync.
-#[test]
-fn test_single_device_no_sync() {
-    struct MockDevice {
-        device_id: u32,
-    }
-
-    let devices = vec![MockDevice { device_id: 1 }];
-
-    let needs_sync = devices.len() > 1;
-    assert!(!needs_sync);
-}
-
-// ============================================================================
 // Inbox Processor Message Type Tests
 // ============================================================================
 

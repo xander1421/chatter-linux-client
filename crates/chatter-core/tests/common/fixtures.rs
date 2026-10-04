@@ -28,12 +28,11 @@ pub struct TestUser {
     pub full_username: String,
     /// Display name (plaintext).
     pub display_name: String,
-    /// Encrypted display name (nonce || ciphertext || auth_tag).
-    pub encrypted_display_name: Vec<u8>,
     /// Plain password (for re-login tests). The server only ever saw an
     /// OPAQUE registration record for it.
     pub password: String,
     /// 32-byte Ed25519 public key.
+    #[allow(dead_code)] // read only by tests/validated.rs
     pub public_key: Vec<u8>,
     /// Serialized identity key pair (private + public) for tests that need to
     /// upload follow-on prekey bundles signed by the same identity. The
@@ -50,38 +49,6 @@ pub struct TestUser {
     pub device_id: u32,
 }
 
-impl TestUser {
-    /// Encrypt the display name with the user's profile key.
-    ///
-    /// Returns raw encrypted bytes (nonce || ciphertext || auth_tag).
-    pub fn encrypt_display_name(&self) -> Vec<u8> {
-        chatter_core::crypto::profile_crypto::encrypt_display_name(
-            &self.profile_key,
-            &self.display_name,
-        )
-        .expect("Display name encryption should succeed")
-    }
-
-    /// Decrypt an encrypted display name with the user's profile key.
-    pub fn decrypt_display_name(&self, encrypted: &[u8]) -> Option<String> {
-        chatter_core::crypto::profile_crypto::decrypt_display_name(
-            &self.profile_key,
-            encrypted,
-        )
-        .ok()
-    }
-
-    /// Decrypt a base64-encoded encrypted display name.
-    pub fn decrypt_display_name_base64(&self, encrypted_base64: &str) -> Option<String> {
-        let encrypted = BASE64.decode(encrypted_base64).ok()?;
-        self.decrypt_display_name(&encrypted)
-    }
-
-    /// Derive Unidentified Access Key from profile key.
-    pub fn derive_uak(&self) -> [u8; 16] {
-        chatter_core::crypto::derive_uak(&self.profile_key)
-    }
-}
 
 /// Generate a unique username for testing.
 ///
@@ -384,7 +351,6 @@ pub async fn register_test_user(pool: &GrpcClientPool) -> Result<TestUser, Netwo
         username,
         full_username,
         display_name,
-        encrypted_display_name,
         password,
         public_key: identity_public_key.as_ref().to_vec(),
         identity_key_pair_bytes: identity_key_pair.serialize().into_vec(),
@@ -418,26 +384,6 @@ pub async fn setup_authenticated_test(
 pub fn encrypt_test_display_name(profile_key: &[u8; 32], display_name: &str) -> Vec<u8> {
     chatter_core::crypto::profile_crypto::encrypt_display_name(profile_key, display_name)
         .expect("Display name encryption should succeed")
-}
-
-/// Encrypt a display name for testing and return as base64.
-pub fn encrypt_test_display_name_base64(profile_key: &[u8; 32], display_name: &str) -> String {
-    BASE64.encode(&encrypt_test_display_name(profile_key, display_name))
-}
-
-/// Create a fake encrypted display name (valid format, random content).
-///
-/// Returns raw bytes (156 bytes = 12 nonce + 128 padded + 16 tag).
-/// Useful for tests that need valid-looking encrypted display names.
-pub fn fake_encrypted_display_name() -> Vec<u8> {
-    let mut fake_ciphertext = vec![0u8; 156];
-    rand::rng().fill_bytes(&mut fake_ciphertext);
-    fake_ciphertext
-}
-
-/// Create a fake encrypted display name as base64 string.
-pub fn fake_encrypted_display_name_base64() -> String {
-    BASE64.encode(&fake_encrypted_display_name())
 }
 
 /// Generate a valid Signal Protocol prekey bundle with real cryptographic signatures.

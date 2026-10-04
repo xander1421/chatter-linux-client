@@ -72,12 +72,6 @@ impl NetworkSimulator {
         self
     }
 
-    /// Set failure rate.
-    pub fn with_failure_rate(mut self, rate: f32) -> Self {
-        self.failure_rate = rate.clamp(0.0, 1.0);
-        self
-    }
-
     /// Set bandwidth limit.
     pub fn with_bandwidth_limit(mut self, bytes_per_sec: u64) -> Self {
         self.bandwidth_limit = Some(bytes_per_sec);

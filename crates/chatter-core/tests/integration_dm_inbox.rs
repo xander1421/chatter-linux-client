@@ -5,14 +5,13 @@
 //! - Message decryption with shared secrets
 //! - Event emission for UI updates
 
-use crate::common;
 
 use std::sync::Arc;
 use tempfile::TempDir;
 
 use chatter_core::crypto::dm_crypto::{decrypt_dm_message, encrypt_dm_message};
 use chatter_core::domain::UserId;
-use chatter_core::inbox::{InboxConfig, InboxEvent};
+use chatter_core::inbox::InboxEvent;
 use chatter_core::mailbox::dm::{
     ConversationKey, DmConversation, DmConversationManager, DmMailbox, PeerMailbox, TwoWayAnonymity,
 };

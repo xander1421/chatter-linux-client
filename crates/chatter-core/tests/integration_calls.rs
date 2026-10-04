@@ -2,8 +2,6 @@
 //!
 //! Tests screen capture, audio capture, and call timer functionality.
 
-use std::time::{Duration, Instant};
-
 use chatter_core::calls::{
     AudioCapture, AudioDevice,
     ScreenCapture, ScreenCaptureConfig, ScreenSource, ScreenSourceType,

@@ -16,7 +16,6 @@ use chatter_core::proto::{
 };
 use common::*;
 use ed25519_dalek::{Signer, SigningKey};
-use rand::RngCore;
 
 // ============================================================================
 // Sealed Sender Message Tests

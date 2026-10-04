@@ -3,7 +3,6 @@
 //! Tests channel creation, membership management, settings,
 //! and channel types using the testing framework.
 
-use crate::common;
 use crate::framework;
 
 use framework::prelude::*;

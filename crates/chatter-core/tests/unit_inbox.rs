@@ -3,7 +3,6 @@
 //! Tests inbox message processing, event handlers,
 //! and message routing using the testing framework.
 
-use crate::common;
 use crate::framework;
 
 use framework::prelude::*;

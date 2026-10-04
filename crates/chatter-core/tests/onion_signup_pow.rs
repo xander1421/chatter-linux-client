@@ -30,6 +30,9 @@
 //!
 //! `CHATTER_EXPECT_ONION_POW_BITS`, if set, pins the exact difficulty expected.
 
+// Shared with tests/it.rs, which uses nearly all of it and stays the
+// dead-code check for it; this target uses a subset.
+#[allow(dead_code, unused_imports)]
 mod common;
 
 use std::sync::Arc;

@@ -42,7 +42,7 @@
 
 use libsignal_protocol::{
     kem, message_decrypt, message_encrypt, process_prekey_bundle, CiphertextMessage,
-    DeviceId, GenericSignedPreKey, IdentityKey, IdentityKeyPair, InMemSignalProtocolStore,
+    DeviceId, GenericSignedPreKey, IdentityKeyPair, InMemSignalProtocolStore,
     KeyPair, KyberPreKeyRecord, PreKeyBundle, PreKeyId, PreKeyRecord, PreKeySignalMessage,
     PreKeyStore, ProtocolAddress, SenderCertificate, SenderKeyDistributionMessage,
     ServerCertificate, SignedPreKeyId, SignedPreKeyRecord, Timestamp,
@@ -352,10 +352,3 @@ fn skdm_parse_pins_distribution_id() {
         "SKDM canonical serialization must be stable across parse"
     );
 }
-
-// Suppress unused-import lint when only some tests are compiled. The
-// `IdentityKey` re-export is kept so future tests that build a bundle from
-// raw bytes (rather than a generated `IdentityKeyPair`) don't have to amend
-// the import list.
-#[allow(dead_code)]
-fn _unused_imports_anchor(_: IdentityKey) {}

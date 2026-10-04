@@ -1,7 +1,6 @@
 //! Framework tests - verifies the testing framework compiles and works.
 
-use crate::common;
-use crate::{assert_none, assert_ok, assert_some, framework};
+use crate::framework;
 
 use framework::prelude::*;
 
@@ -297,30 +296,6 @@ async fn test_harness_builder() {
         .await;
 
     assert!(harness.mock_server.is_some());
-}
-
-// ============================================================================
-// Macro Tests
-// ============================================================================
-
-#[test]
-fn test_assert_ok_macro() {
-    let result: Result<i32, &str> = Ok(42);
-    let value = assert_ok!(result);
-    assert_eq!(value, 42);
-}
-
-#[test]
-fn test_assert_some_macro() {
-    let option: Option<i32> = Some(42);
-    let value = assert_some!(option);
-    assert_eq!(value, 42);
-}
-
-#[test]
-fn test_assert_none_macro() {
-    let option: Option<i32> = None;
-    assert_none!(option);
 }
 
 // ============================================================================

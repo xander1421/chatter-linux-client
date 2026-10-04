@@ -6,7 +6,6 @@
 //! - Device revocation handling
 
 use crate::{common, skip_if_no_server};
-use crate::framework;
 
 use chatter_core::proto::chat_v1::{
     get_pre_key_bundle_response, ChannelType, MessageSortDirection,
@@ -75,7 +74,7 @@ async fn test_e2e_session_establishment_with_prekey_bundle() {
 
     // Setup users
     let pool1 = assert_ok(create_test_pool().await);
-    let user1 = assert_ok(setup_authenticated_test(&pool1).await);
+    let _user1 = assert_ok(setup_authenticated_test(&pool1).await);
 
     let pool2 = assert_ok(create_test_pool().await);
     let user2 = assert_ok(setup_authenticated_test(&pool2).await);

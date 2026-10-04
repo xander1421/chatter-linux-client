@@ -3,7 +3,6 @@
 //! Tests device list extraction, multi-device encryption fanout,
 //! self-device exclusion, and error handling for edge cases.
 
-use crate::common;
 use crate::framework;
 
 use std::collections::{HashMap, HashSet};

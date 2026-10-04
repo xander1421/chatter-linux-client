@@ -36,6 +36,9 @@
 //!     --test validated -- --nocapture --test-threads=1
 
 #[macro_use]
+// Shared with tests/it.rs, which uses nearly all of it and stays the
+// dead-code check for it; this target uses a subset.
+#[allow(dead_code, unused_imports)]
 mod common;
 
 use std::sync::Arc;
@@ -4435,7 +4438,7 @@ async fn v15_post_compromise_security_heals_after_dh_ratchet() {
     let dir_b = tempfile::tempdir().unwrap();
     let path_b = dir_b.path().to_path_buf();
     let client_a = build_client(dir_a.path());
-    let mut client_b = build_client(&path_b);
+    let client_b = build_client(&path_b);
 
     let uid_a = register_and_start(&client_a, &unique_user("v15a"), "Alice").await;
     let uid_b = register_and_start(&client_b, &unique_user("v15b"), "Bob").await;
@@ -11887,7 +11890,7 @@ async fn v58_group_call_key_rotates_on_join_and_leave() {
     // C held even briefly is caught.
     let mut c_seen: Vec<Vec<u8>> = Vec::new();
     let all_three = [("A", &client_a), ("B", &client_b), ("C", &client_c)];
-    let (e_join, k_join) = {
+    let (e_join, _k_join) = {
         let deadline = Instant::now() + Duration::from_secs(60);
         loop {
             if let Some((_, _, _, ring)) = call_key_view(&client_c).await {

@@ -1,87 +1,8 @@
-//! Mock storage implementations.
-//!
-//! Provides in-memory storage for testing without SQLite.
-//! Note: Uses owned types instead of references for mockall compatibility.
+//! In-memory storage for testing without SQLite.
 
-use mockall::automock;
 use std::collections::HashMap;
 use std::sync::RwLock;
 use crate::framework::fixtures::{TestMessage, TestChannel, TestUser};
-use super::services::{MockError, MockResult};
-
-// ============================================================================
-// Storage Trait
-// ============================================================================
-
-/// Mockable storage trait.
-#[automock]
-pub trait StorageTrait: Send + Sync {
-    // Messages
-    fn save_message(
-        &self,
-        message: TestMessage,
-    ) -> impl std::future::Future<Output = MockResult<()>> + Send;
-
-    fn get_message(
-        &self,
-        id: String,
-    ) -> impl std::future::Future<Output = MockResult<Option<TestMessage>>> + Send;
-
-    fn get_messages_by_channel(
-        &self,
-        channel_id: String,
-        limit: u32,
-        before: Option<String>,
-    ) -> impl std::future::Future<Output = MockResult<Vec<TestMessage>>> + Send;
-
-    fn delete_message(
-        &self,
-        id: String,
-    ) -> impl std::future::Future<Output = MockResult<()>> + Send;
-
-    // Channels
-    fn save_channel(
-        &self,
-        channel: TestChannel,
-    ) -> impl std::future::Future<Output = MockResult<()>> + Send;
-
-    fn get_channel(
-        &self,
-        id: String,
-    ) -> impl std::future::Future<Output = MockResult<Option<TestChannel>>> + Send;
-
-    fn get_all_channels(
-        &self,
-    ) -> impl std::future::Future<Output = MockResult<Vec<TestChannel>>> + Send;
-
-    fn delete_channel(
-        &self,
-        id: String,
-    ) -> impl std::future::Future<Output = MockResult<()>> + Send;
-
-    // Users
-    fn save_user(
-        &self,
-        user: TestUser,
-    ) -> impl std::future::Future<Output = MockResult<()>> + Send;
-
-    fn get_user(
-        &self,
-        id: String,
-    ) -> impl std::future::Future<Output = MockResult<Option<TestUser>>> + Send;
-
-    // Settings
-    fn get_setting(
-        &self,
-        key: String,
-    ) -> impl std::future::Future<Output = MockResult<Option<String>>> + Send;
-
-    fn set_setting(
-        &self,
-        key: String,
-        value: String,
-    ) -> impl std::future::Future<Output = MockResult<()>> + Send;
-}
 
 // ============================================================================
 // In-Memory Storage
@@ -165,26 +86,6 @@ impl InMemoryStorage {
         self.channels.write().unwrap().remove(id).is_some()
     }
 
-    /// Save a user.
-    pub fn save_user(&self, user: TestUser) {
-        self.users.write().unwrap().insert(user.user_id.clone(), user);
-    }
-
-    /// Get a user by ID.
-    pub fn get_user(&self, id: &str) -> Option<TestUser> {
-        self.users.read().unwrap().get(id).cloned()
-    }
-
-    /// Get a setting.
-    pub fn get_setting(&self, key: &str) -> Option<String> {
-        self.settings.read().unwrap().get(key).cloned()
-    }
-
-    /// Set a setting.
-    pub fn set_setting(&self, key: &str, value: &str) {
-        self.settings.write().unwrap().insert(key.to_string(), value.to_string());
-    }
-
     /// Clear all data.
     pub fn clear(&self) {
         self.messages.write().unwrap().clear();
@@ -203,82 +104,10 @@ impl InMemoryStorage {
         self.channels.read().unwrap().len()
     }
 
-    /// Get user count.
-    pub fn user_count(&self) -> usize {
-        self.users.read().unwrap().len()
-    }
 }
 
 impl Default for InMemoryStorage {
     fn default() -> Self {
         Self::new()
     }
-}
-
-// ============================================================================
-// Repository Traits
-// ============================================================================
-
-/// Mockable message repository.
-#[automock]
-pub trait MessageRepositoryTrait: Send + Sync {
-    fn insert(
-        &self,
-        message: TestMessage,
-    ) -> impl std::future::Future<Output = MockResult<()>> + Send;
-
-    fn find_by_id(
-        &self,
-        id: String,
-    ) -> impl std::future::Future<Output = MockResult<Option<TestMessage>>> + Send;
-
-    fn find_by_channel(
-        &self,
-        channel_id: String,
-        limit: u32,
-        offset: u32,
-    ) -> impl std::future::Future<Output = MockResult<Vec<TestMessage>>> + Send;
-
-    fn update(
-        &self,
-        message: TestMessage,
-    ) -> impl std::future::Future<Output = MockResult<()>> + Send;
-
-    fn delete(
-        &self,
-        id: String,
-    ) -> impl std::future::Future<Output = MockResult<()>> + Send;
-
-    fn count_by_channel(
-        &self,
-        channel_id: String,
-    ) -> impl std::future::Future<Output = MockResult<u64>> + Send;
-}
-
-/// Mockable channel repository.
-#[automock]
-pub trait ChannelRepositoryTrait: Send + Sync {
-    fn insert(
-        &self,
-        channel: TestChannel,
-    ) -> impl std::future::Future<Output = MockResult<()>> + Send;
-
-    fn find_by_id(
-        &self,
-        id: String,
-    ) -> impl std::future::Future<Output = MockResult<Option<TestChannel>>> + Send;
-
-    fn find_all(
-        &self,
-    ) -> impl std::future::Future<Output = MockResult<Vec<TestChannel>>> + Send;
-
-    fn update(
-        &self,
-        channel: TestChannel,
-    ) -> impl std::future::Future<Output = MockResult<()>> + Send;
-
-    fn delete(
-        &self,
-        id: String,
-    ) -> impl std::future::Future<Output = MockResult<()>> + Send;
 }
