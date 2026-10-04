@@ -1,8 +1,8 @@
 //! Store and forward for the bitchat mesh.
 //!
 //! Everything that answers "the recipient is not here right now": a retained sender
-//! outbox, opportunistic couriers with a spray-and-wait copy budget, gossip-synced
-//! public history, and sealed drops parked on Nostr relays.
+//! outbox, couriers that deposit and take envelopes, gossip-synced public history,
+//! and sealed drops parked on Nostr relays.
 //!
 //! The primitives live elsewhere — [`chatter_mesh`] has the GCS filter, the courier
 //! envelope and the rotating recipient tag; [`chatter_mesh_noise`] has the seals.
@@ -32,7 +32,6 @@ pub mod archive;
 pub mod bridge_drop;
 pub mod courier;
 pub mod error;
-pub mod metrics;
 pub mod outbox;
 pub mod router;
 pub mod storage;
