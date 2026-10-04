@@ -2817,8 +2817,13 @@ export component SettingsScreen inherits Rectangle {
         } // HorizontalLayout
     } // VerticalLayout
 
-    // Compact navigation floats over the full-height content scroll.
+    // Compact navigation floats over the full-height content scroll, pinned
+    // to the top edge where `content-layout`'s padding-top reserves its room.
+    // Explicit x/y: a sized child of a plain Rectangle is CENTRED by default,
+    // which put this bar mid-screen over the content on phones (§138).
     if compact-mode: GlassSurface {
+        x: 0px;
+        y: 0px;
         width: root.width;
         material-level: 2;
         elevation: 1;
