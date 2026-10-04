@@ -2103,16 +2103,15 @@ impl BleRuntime {
         }
     }
 
-    /// Renegotiate a session that has spent 90% of its nonce budget, before
-    /// encryption hard-fails at the limit. The old session keeps carrying
-    /// traffic until the new handshake completes and replaces it; the peer
-    /// treats our opening message as a restart and does the same.
-    ///
-    /// Only the message-count half of bitchat's `needsRenegotiation()` is
-    /// checked; its 24-hour idle half is not implemented here.
+    /// Renegotiate a session that has spent 90% of its nonce budget (before
+    /// encryption hard-fails at the limit) or was just used after more than
+    /// 24 h idle — both halves of bitchat's `needsRenegotiation()`. The old
+    /// session keeps carrying traffic until the new handshake completes and
+    /// replaces it; the peer treats our opening message as a restart and does
+    /// the same.
     async fn rekey_if_due(&mut self, peer: &PeerId) {
         if self.state.with(|state| state.sessions.needs_rekey(peer)) {
-            tracing::info!(target: "mesh::ble", %peer, "session near its nonce budget; rekeying");
+            tracing::info!(target: "mesh::ble", %peer, "session due for renegotiation; rekeying");
             self.start_handshake(peer).await;
         }
     }

@@ -16,6 +16,7 @@
 //! [`RouterTransport::can_deliver_securely`]: chatter_mesh_store::RouterTransport::can_deliver_securely
 
 use std::collections::BTreeMap;
+use std::time::{Duration, Instant};
 
 use chatter_mesh::ids::PeerId;
 use chatter_mesh_noise::identity::MeshIdentity;
@@ -29,6 +30,11 @@ use chatter_mesh_noise::{NoiseError, fingerprint_of};
 /// empty payloads we send. A wrong guess here costs a handshake round trip, not
 /// correctness: the handshake state machine rejects anything it cannot read.
 const OPENING_MESSAGE_LEN: usize = 32;
+
+/// A session unused this long is renegotiated on its next use (bitchat
+/// `NoiseSecurityConstants.sessionTimeout`, the idle half of
+/// `needsRenegotiation()`; the other half is the nonce budget).
+pub const IDLE_REKEY_AFTER: Duration = Duration::from_secs(24 * 60 * 60);
 
 /// What a handshake message produced.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -47,6 +53,9 @@ pub struct HandshakeStep {
 pub struct SessionManager {
     handshakes: BTreeMap<PeerId, (NoiseHandshake, HandshakeRole)>,
     sessions: BTreeMap<PeerId, NoiseSession>,
+    /// Per session: when it last carried a message, and whether a use found
+    /// it idle past [`IDLE_REKEY_AFTER`] (a rekey is then due).
+    activity: BTreeMap<PeerId, (Instant, bool)>,
 }
 
 impl SessionManager {
@@ -218,28 +227,50 @@ impl SessionManager {
             ));
         }
         self.sessions.insert(peer.clone(), session);
+        self.activity.insert(peer.clone(), (Instant::now(), false));
         Ok(remote)
+    }
+
+    /// Record a use of `peer`'s session at `now`, flagging a rekey when the
+    /// session had sat idle past [`IDLE_REKEY_AFTER`].
+    fn touch(&mut self, peer: &PeerId, now: Instant) {
+        let (last, idle) = self.activity.entry(peer.clone()).or_insert((now, false));
+        if now.saturating_duration_since(*last) > IDLE_REKEY_AFTER {
+            *idle = true;
+        }
+        *last = now;
     }
 
     /// Encrypt for an established session.
     pub fn encrypt(&mut self, peer: &PeerId, plaintext: &[u8]) -> Result<Vec<u8>, NoiseError> {
-        self.sessions
+        self.encrypt_at(peer, plaintext, Instant::now())
+    }
+
+    fn encrypt_at(&mut self, peer: &PeerId, plaintext: &[u8], now: Instant) -> Result<Vec<u8>, NoiseError> {
+        let sealed = self
+            .sessions
             .get_mut(peer)
             .ok_or(NoiseError::WrongState("no session for peer"))?
-            .encrypt(plaintext)
+            .encrypt(plaintext)?;
+        self.touch(peer, now);
+        Ok(sealed)
     }
 
     /// Decrypt for an established session.
     pub fn decrypt(&mut self, peer: &PeerId, ciphertext: &[u8]) -> Result<Vec<u8>, NoiseError> {
-        self.sessions
+        let opened = self
+            .sessions
             .get_mut(peer)
             .ok_or(NoiseError::WrongState("no session for peer"))?
-            .decrypt(ciphertext)
+            .decrypt(ciphertext)?;
+        self.touch(peer, Instant::now());
+        Ok(opened)
     }
 
     /// Whether to open a renegotiation with this peer now: its session has
-    /// spent 90% of its nonce budget (bitchat `needsRenegotiation()`) and no
-    /// handshake is already replacing it.
+    /// spent 90% of its nonce budget, or was used after sitting idle past
+    /// [`IDLE_REKEY_AFTER`] (both halves of bitchat `needsRenegotiation()`),
+    /// and no handshake is already replacing it.
     ///
     /// The handshake check matters: [`initiate`](Self::initiate) restarts a
     /// handshake in flight, so re-opening on every send past the threshold would
@@ -251,7 +282,9 @@ impl SessionManager {
             && self
                 .sessions
                 .get(peer)
-                .is_some_and(NoiseSession::needs_rekey)
+                .is_some_and(|session| {
+                    session.needs_rekey() || self.activity.get(peer).is_some_and(|(_, idle)| *idle)
+                })
     }
 
     /// Set a session's sent-message count, so tests can reach the rekey
@@ -267,12 +300,14 @@ impl SessionManager {
     pub fn forget(&mut self, peer: &PeerId) {
         self.handshakes.remove(peer);
         self.sessions.remove(peer);
+        self.activity.remove(peer);
     }
 
     /// Forget every session. Used by the panic wipe and on shutdown.
     pub fn clear(&mut self) {
         self.handshakes.clear();
         self.sessions.clear();
+        self.activity.clear();
     }
 }
 
@@ -547,6 +582,32 @@ mod tests {
         assert!(!alice.needs_rekey(&bob_peer));
         let sealed = alice.encrypt(&bob_peer, b"rekeyed").expect("new session");
         assert_eq!(bob.decrypt(&alice_peer, &sealed).expect("opens"), b"rekeyed");
+    }
+
+    /// bitchat's idle half: a session first used again after more than
+    /// 24 h asks for a rekey on that use, and a completed renegotiation
+    /// clears it. A use inside the window does not.
+    #[test]
+    fn a_session_used_after_24h_idle_is_rekeyed() {
+        let (alice_id, bob_id) = (identity(), identity());
+        let (mut alice, mut bob) = (SessionManager::new(), SessionManager::new());
+        let (alice_peer, bob_peer) = complete(&mut alice, &alice_id, &mut bob, &bob_id);
+        let start = alice.activity[&bob_peer].0;
+
+        alice.encrypt_at(&bob_peer, b"soon", start + IDLE_REKEY_AFTER).expect("in window");
+        assert!(!alice.needs_rekey(&bob_peer), "exactly 24 h is not idle past it");
+
+        let later = start + IDLE_REKEY_AFTER * 2 + Duration::from_secs(1);
+        let sealed = alice.encrypt_at(&bob_peer, b"after a day", later).expect("still usable");
+        assert_eq!(bob.decrypt(&alice_peer, &sealed).expect("opens"), b"after a day");
+        assert!(alice.needs_rekey(&bob_peer));
+
+        let m1 = alice.initiate(&bob_peer, &alice_id).expect("m1");
+        assert!(!alice.needs_rekey(&bob_peer), "one renegotiation at a time");
+        let m2 = bob.on_handshake(&alice_peer, &bob_peer, &bob_id, &m1).expect("m1").reply.expect("m2");
+        let m3 = alice.on_handshake(&bob_peer, &alice_peer, &alice_id, &m2).expect("m2").reply.expect("m3");
+        bob.on_handshake(&alice_peer, &bob_peer, &bob_id, &m3).expect("bob completes");
+        assert!(!alice.needs_rekey(&bob_peer), "the new session starts fresh");
     }
 
     #[test]
