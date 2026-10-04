@@ -2,10 +2,9 @@
 //!
 //! Every module here ports one Swift type byte-for-byte. They share nothing but
 //! the cursor helpers below, because the formats genuinely disagree with each
-//! other: `AnnouncementPacket` writes 1-byte TLV lengths, `CourierEnvelope` and
-//! `BoardWire` write 2-byte big-endian ones, `BitchatFilePacket` writes 2 bytes
-//! for metadata and 4 for content, and `BitchatMessage` isn't TLV at all — it is
-//! a flags bitfield followed by positional fields. Do not "unify" them.
+//! other: `AnnouncementPacket` writes 1-byte TLV lengths, `CourierEnvelope`
+//! writes 2-byte big-endian ones, and `BitchatFilePacket` writes 2 bytes
+//! for metadata and 4 for content. Do not "unify" them.
 //!
 //! # Uniform surface
 //!
@@ -29,16 +28,12 @@
 //! so the divergence is unreachable for honest peers. Each site is commented.
 
 pub mod announce;
-pub mod board;
 pub mod capabilities;
 pub mod courier_envelope;
 pub mod file;
 pub mod file_stream;
-pub mod message;
-pub mod ping;
 pub mod private_message;
 pub mod request_sync;
-pub mod voice_burst;
 
 use crate::error::MeshError;
 
@@ -176,7 +171,7 @@ pub fn put_tlv_u8_len(out: &mut Vec<u8>, tag: u8, value: &[u8]) -> Result<(), Me
     Ok(())
 }
 
-/// `tag ‖ len:u16be ‖ value` — the `CourierEnvelope` / `BoardWire` / `RequestSync` shape.
+/// `tag ‖ len:u16be ‖ value` — the `CourierEnvelope` / `RequestSync` shape.
 pub fn put_tlv_u16_len(out: &mut Vec<u8>, tag: u8, value: &[u8]) -> Result<(), MeshError> {
     if value.len() > u16::MAX as usize {
         return Err(MeshError::LengthExceeded {

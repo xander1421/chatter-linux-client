@@ -21,8 +21,7 @@
 //! three are *one protocol* with no upstream: they share the transfer id width,
 //! the chunk size, and the caps, and splitting them would mean importing
 //! constants across modules in a directory that has deliberately never done
-//! that. `voice_burst.rs` is the closest precedent — one module, several packet
-//! shapes, one protocol.
+//! that.
 //!
 //! # Message types, and a real collision risk
 //!
@@ -83,9 +82,9 @@ const TLV_MIME_TYPE: u8 = 0x07;
 
 /// Width of a transfer identifier.
 ///
-/// Eight bytes, matching `voice_burst::BURST_ID_LEN` and the fragmenter's stream
-/// id, so every "which stream is this" field in the crate is the same width and
-/// the same hex length in a log line.
+/// Eight bytes, matching the fragmenter's stream id, so every "which stream is
+/// this" field in the crate is the same width and the same hex length in a log
+/// line.
 pub const TRANSFER_ID_LEN: usize = 8;
 
 /// Fixed header of a [`FileChunk`]: transfer id and chunk index.

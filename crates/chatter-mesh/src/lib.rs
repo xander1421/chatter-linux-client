@@ -20,7 +20,7 @@
 //!
 //! - [`packet`], [`codec`], [`padding`], [`compress`] — the frame itself
 //! - [`tlv`] — the payload formats carried inside frames
-//! - [`relay`], [`dedup`], [`fragment`], [`topology`] — forwarding policy
+//! - [`relay`], [`dedup`], [`fragment`] — forwarding policy
 //! - [`gcs`], [`sync_flags`] — gossip-sync set reconciliation
 //! - [`ids`] — peer and packet identity
 
@@ -47,7 +47,6 @@ pub mod padding;
 pub mod relay;
 pub mod sync_flags;
 pub mod tlv;
-pub mod topology;
 
 pub use error::MeshError;
 pub use packet::{

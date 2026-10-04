@@ -37,7 +37,6 @@ use chatter_mesh::packet::{BitchatPacket, SENDER_ID_LEN, SIGNATURE_LEN};
 use chatter_mesh::padding;
 use chatter_mesh::tlv::capabilities::PeerCapabilities;
 use chatter_mesh::tlv::courier_envelope::{self, CourierEnvelope};
-use chatter_mesh::tlv::ping::MeshPingPayload;
 
 // ---------------------------------------------------------------------------
 // Loading
@@ -935,108 +934,6 @@ fn peer_capabilities_vectors() {
         let got = PeerCapabilities::decode(&unhex(&c.encoded_hex))
             .unwrap_or_else(|e| panic!("[caps::{}] decode failed: {e}", c.name));
         assert_eq!(got.bits(), c.bits, "[caps::{}] {}", c.name, c.note);
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Mesh ping / pong payload
-// ---------------------------------------------------------------------------
-
-#[derive(Debug, Deserialize)]
-struct PingVector {
-    name: String,
-    nonce_hex: String,
-    origin_ttl: u8,
-    encoded_hex: String,
-    note: String,
-}
-
-#[derive(Debug, Deserialize)]
-struct PingDecodeExtra {
-    name: String,
-    input_hex: String,
-    nonce_hex: String,
-    origin_ttl: u8,
-    note: String,
-}
-
-#[derive(Debug, Deserialize)]
-struct PingReject {
-    name: String,
-    input_hex: String,
-    note: String,
-}
-
-#[derive(Debug, Deserialize)]
-struct HopCountCase {
-    origin_ttl: u8,
-    received_ttl: u8,
-    hops: Option<u32>,
-    note: String,
-}
-
-#[derive(Debug, Deserialize)]
-struct PingFile {
-    vectors: Vec<PingVector>,
-    decode_extra: Vec<PingDecodeExtra>,
-    decode_rejects: Vec<PingReject>,
-    hop_count: Vec<HopCountCase>,
-}
-
-#[test]
-fn mesh_ping_payload_vectors() {
-    let file: PingFile = load("ping.json");
-
-    for v in &file.vectors {
-        let payload = MeshPingPayload::new(unhex_n::<8>(&v.nonce_hex), v.origin_ttl);
-        let got = payload
-            .encode()
-            .unwrap_or_else(|e| panic!("[ping::{}] encode failed: {e}", v.name));
-        assert_eq!(
-            hex::encode(&got),
-            v.encoded_hex,
-            "[ping::{}] {}",
-            v.name,
-            v.note
-        );
-        assert_eq!(
-            MeshPingPayload::decode(&got).ok(),
-            Some(payload),
-            "[ping::{}] round trip",
-            v.name
-        );
-    }
-
-    for v in &file.decode_extra {
-        let got = MeshPingPayload::decode(&unhex(&v.input_hex))
-            .unwrap_or_else(|e| panic!("[ping::{}] decode failed: {e}", v.name));
-        assert_eq!(
-            got,
-            MeshPingPayload::new(unhex_n::<8>(&v.nonce_hex), v.origin_ttl),
-            "[ping::{}] {}",
-            v.name,
-            v.note
-        );
-    }
-
-    for v in &file.decode_rejects {
-        assert!(
-            MeshPingPayload::decode(&unhex(&v.input_hex)).is_err(),
-            "[ping::reject::{}] {}",
-            v.name,
-            v.note
-        );
-    }
-
-    for c in &file.hop_count {
-        assert_eq!(
-            MeshPingPayload::hop_count(c.origin_ttl, c.received_ttl),
-            c.hops,
-            "hop_count({}, {}): {}",
-            c.origin_ttl,
-            c.received_ttl,
-            c.note
-        );
     }
 }
 
