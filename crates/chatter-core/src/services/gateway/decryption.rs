@@ -450,7 +450,7 @@ impl MessageGateway {
                 // everyone"). Hand it to the control dispatcher instead, which
                 // already turns it into DmDeleteForEveryone / ChannelDeleteForEveryone
                 // (inbox/polling/device.rs::dispatch_control_content) and reuses
-                // the existing MessageDeleted -> delete_message_local handler.
+                // the existing delete path (`MessageService::apply_delete`).
                 if data_message.delete.is_some() {
                     return Ok(SealedSenderResult::ControlContent {
                         sender_id,

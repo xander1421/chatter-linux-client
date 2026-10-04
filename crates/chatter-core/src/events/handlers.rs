@@ -225,17 +225,14 @@ impl EventHandlers {
                     ?channel_id,
                     "Inbox event: MessageDeleted received"
                 );
-                // Remove from in-memory state
+                // Remove from in-memory state. Storage is already final:
+                // every emitter deletes the row before announcing it
+                // (`MessageService::apply_delete`, `channel_stream`, the anon
+                // backends), so a UI rebuild on this event cannot race it.
                 if let Some(ch_id) = channel_id {
                     self.message_state.remove_message(&ch_id, &message_id);
                 } else if let Some(ch_id) = self.message_state.find_channel_for_message(&message_id) {
                     self.message_state.remove_message(&ch_id, &message_id);
-                }
-                // Persist deletion to DB
-                if let Some(ref svc) = self.message_service {
-                    if let Err(e) = svc.delete_message_local(&message_id) {
-                        tracing::warn!(?message_id, error = %e, "Failed to persist delete to DB");
-                    }
                 }
             }
 

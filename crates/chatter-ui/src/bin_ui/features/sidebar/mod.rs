@@ -357,6 +357,16 @@ pub(crate) fn rebuild_chat_list(weak: &slint::Weak<MainWindow>, ui_ctx: &Arc<Cha
     });
 }
 
+/// A conversation's stored history changed without a new message arriving —
+/// an edit, a delete for everyone or for me — so its row's preview (and, for
+/// a deleted last message, its place in the list) may be stale. Rows are
+/// rebuilt from core, which reads storage; core has applied the change before
+/// announcing it. Runtime thread, like [`rebuild_chat_list`].
+pub(crate) fn history_changed(weak: &slint::Weak<MainWindow>, ui_ctx: &Arc<ChatterClient>) {
+    sections::refresh_sections_ui(weak, ui_ctx);
+    rebuild_chat_list(weak, ui_ctx);
+}
+
 /// `conv` no longer exists on this device (a deleted chat, a left or
 /// kicked-from group): empty the chat pane if it was open, then rebuild the
 /// folders and the chat list. Runtime thread, like [`rebuild_chat_list`].

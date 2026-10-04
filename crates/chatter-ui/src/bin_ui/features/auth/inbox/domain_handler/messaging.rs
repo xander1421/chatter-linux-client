@@ -346,6 +346,8 @@ pub(super) fn handle_message_edit(
     target_sent_timestamp: u64,
     new_text: &str,
 ) {
+    // The chat-list row previews the edited text too, open or not.
+    crate::bin_ui::features::sidebar::history_changed(window, ui_ctx);
     if !ui_ctx.is_showing_conversation(conversation_id) {
         return;
     }
@@ -382,6 +384,8 @@ pub(super) fn handle_message_delete(
     conversation_id: ChannelId,
     target: DeleteTarget,
 ) {
+    // A deleted last message takes the row's preview with it, open or not.
+    crate::bin_ui::features::sidebar::history_changed(window, ui_ctx);
     if !ui_ctx.is_showing_conversation(conversation_id) {
         return;
     }

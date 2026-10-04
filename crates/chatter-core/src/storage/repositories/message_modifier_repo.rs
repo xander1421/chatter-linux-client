@@ -476,6 +476,8 @@ mod tests {
         // Someone else's DM cannot name it.
         assert!(m.apply_dm_delete(&UserId::new(), sent).unwrap().is_none());
         assert!(m.apply_dm_delete(&peer, sent).unwrap().is_some());
+        // Deleted before it is announced, not by a later event subscriber.
+        assert!(m.message_repo.get_by_sender_timestamp(&peer, sent).unwrap().is_none());
     }
 
     /// What a receive path announces is the row as stored: an early edit

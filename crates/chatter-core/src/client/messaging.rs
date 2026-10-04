@@ -2086,6 +2086,46 @@ mod section_row_tests {
         assert!(!row.can_leave);
     }
 
+    /// The chat-list preview follows an edit and a delete-for-everyone of the
+    /// conversation's last message, on both ends: each is in storage before
+    /// its `MessageEdited` / `MessageDeleted` goes out, so the row rebuild the
+    /// UI runs on those events shows it. The received delete used to leave
+    /// the row for a separate event subscriber to remove, racing the rebuild.
+    #[tokio::test]
+    async fn dm_preview_follows_edits_and_a_deleted_last_message() {
+        use crate::storage::repositories::settings_repo::keys::CURRENT_USER_ID;
+        let (client, _dir) = client();
+        let me = UserId::new();
+        client.messages().settings_repo.set(CURRENT_USER_ID, &me.to_string()).unwrap();
+        client.auth_state().set_logged_in(me, 1, "me".into());
+        let peer = UserId::new();
+        let id: ChannelId = peer.into();
+        let sent = 1_700_000_000_000_000_000u64;
+        let store = |from: UserId, text: &str, at: u64| {
+            let msg = Message::new_text(id, ConversationType::ServerDm, Some(from), text.into(), at);
+            client.messages().store_message_local(&msg).unwrap();
+            msg
+        };
+        let preview = || client.section_row(&conv(peer.to_string(), ConversationType::ServerDm, "")).last_message;
+
+        // Receiver: the peer edits, then deletes, its last message.
+        store(peer, "earlier", sent);
+        store(peer, "routing check harmless", sent + 1_000);
+        assert_eq!(preview(), "routing check harmless");
+        let m = client.messages();
+        m.apply_dm_edit(&peer, sent + 1_000, "edited from S9", sent + 2_000, sent + 2_000).unwrap().expect("applied");
+        assert_eq!(preview(), "edited from S9");
+        m.apply_dm_delete(&peer, sent + 1_000).unwrap().expect("matched");
+        assert_eq!(preview(), "earlier");
+
+        // Sender: our own edit is persisted the way `send_edit` does it.
+        let own = store(me, "routing check harmless", sent + 3_000);
+        assert_eq!(preview(), "You: routing check harmless");
+        let edited = crate::domain::message::MessageContent::Text("edited from S9".into());
+        m.update_message_body(&own.id, &edited).unwrap();
+        assert_eq!(preview(), "You: edited from S9");
+    }
+
     /// The invite search: a newer keystroke during the pre-lookup pause
     /// retires a complete-handle search before it reaches the server; a
     /// partial handle never pauses or looks up.

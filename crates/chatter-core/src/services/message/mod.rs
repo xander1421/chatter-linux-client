@@ -898,10 +898,13 @@ impl MessageService {
         self.apply_delete(sender, Some(*channel_id), target_sent_at)
     }
 
-    /// The message `author`'s delete-for-everyone names, for the caller to
-    /// delete (`DomainEvent::MessageDeleted`). One not here yet is held
-    /// (Signal-Desktop `Deletes.preload.ts:28`), so it is never stored when
-    /// it arrives (`message_modifier_repo`).
+    /// Delete the message `author`'s delete-for-everyone names and return it,
+    /// for the caller to announce (`DomainEvent::MessageDeleted`). The row is
+    /// gone BEFORE the announcement, as an edit is applied before its
+    /// `MessageEdited`: a subscriber that rebuilds the chat-list preview from
+    /// storage on the event must not still find the deleted message there.
+    /// One not here yet is held (Signal-Desktop `Deletes.preload.ts:28`), so
+    /// it is never stored when it arrives (`message_modifier_repo`).
     fn apply_delete(
         &self,
         author: &UserId,
@@ -909,7 +912,10 @@ impl MessageService {
         target_sent_at: u64,
     ) -> Result<Option<Message>, MessageError> {
         match self.message_repo.get_by_sender_timestamp(author, target_sent_at)? {
-            Some(message) if conversation.is_none_or(|c| c == message.conversation_id) => Ok(Some(message)),
+            Some(message) if conversation.is_none_or(|c| c == message.conversation_id) => {
+                self.message_repo.delete(&message.id)?;
+                Ok(Some(message))
+            }
             Some(_) => Ok(None),
             None => {
                 crate::storage::repositories::message_modifier_repo::MessageModifierRepository::new(

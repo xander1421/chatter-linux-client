@@ -76,6 +76,9 @@ pub fn wire_delete_message(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                 "Delete-for-me completed"
             );
 
+            // Our own delete raises no domain event; the row's preview has
+            // to follow it here.
+            crate::bin_ui::features::sidebar::history_changed(&weak, &ui_ctx_spawn);
             run_ui!(weak, |w| {
                 super::helpers::remove_message_from_ui(&w, &sender_for_ui, &timestamp_for_ui, unregister_message_gifs);
             });
@@ -123,6 +126,9 @@ pub fn wire_delete_everyone_message(window: &MainWindow, ui_ctx: &Arc<ChatterCli
             // Persistence is handled by ConversationHandle::send_delete()
 
             // Update UI — remove message from model
+            // Our own delete raises no domain event; the row's preview has
+            // to follow it here.
+            crate::bin_ui::features::sidebar::history_changed(&weak, &ui_ctx_spawn);
             run_ui!(weak, |w| {
                 super::helpers::remove_message_from_ui(&w, &sender_for_ui, &timestamp_for_ui, unregister_message_gifs);
             });
