@@ -1167,7 +1167,9 @@ mod tests {
         let bytes = body(4_096);
         let manifest = manifest_for(&bytes, 1_024);
         let sender = PeerId::from_str("aaaaaaaaaaaaaaaa");
-        spool.begin(manifest.clone(), sender.clone(), "WIRE".into(), 0, 0);
+        spool
+            .begin(manifest.clone(), sender.clone(), "WIRE".into(), 0, 0)
+            .expect("begin");
 
         // First ask comes after the floor, not the ceiling.
         let mut now = CHUNK_REQUEST_MIN_QUIET_SECS;
@@ -1283,7 +1285,9 @@ mod tests {
         let manifest = manifest_for(&bytes, 1_024);
         let sender = PeerId::from_str("aaaaaaaaaaaaaaaa");
 
-        spool.begin(manifest.clone(), sender, "WIRE".into(), 0, 100);
+        spool
+            .begin(manifest.clone(), sender, "WIRE".into(), 0, 100)
+            .expect("begin");
 
         // Nothing has arrived and nothing has been asked for: the first request
         // goes out.

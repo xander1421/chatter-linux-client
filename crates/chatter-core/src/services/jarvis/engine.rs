@@ -494,7 +494,7 @@ mod tests {
 mod silo_selection_tests {
     use super::*;
     use crate::ai_policy::policy::Silo;
-    use crate::cloud_ai::{AnyCloudBackend, CloudSettings};
+    use crate::cloud_ai::CloudSettings;
 
     fn shared_local() -> SharedJarvisEngine {
         let settings = LocalAISettings::default();

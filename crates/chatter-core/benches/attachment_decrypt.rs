@@ -278,7 +278,7 @@ fn bench_single_pass_decrypt(c: &mut Criterion) {
                     digest_hasher.update(expected_hmac);
 
                     let actual_digest: [u8; 32] = digest_hasher.finalize().into();
-                    let computed_hmac = mac.finalize();
+                    black_box(mac.finalize());
                     assert_eq!(&actual_digest, expected_digest);
 
                     // Decrypt

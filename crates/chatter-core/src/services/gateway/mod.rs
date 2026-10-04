@@ -129,8 +129,9 @@ pub struct MessageGateway {
 }
 
 impl MessageGateway {
-    /// Create a new MessageGateway.
-    pub fn new(
+    /// Create a MessageGateway without disappearing-message timers (tests).
+    #[cfg(test)]
+    pub(crate) fn new(
         signal_service: SignalService,
         message_repo: Arc<MessageRepository>,
         channel_repo: Arc<crate::storage::repositories::channel_repo::ChannelRepository>,
@@ -151,7 +152,7 @@ impl MessageGateway {
 
     /// Create the production MessageGateway, which also arms disappearing
     /// timers on inbound messages.
-    pub fn with_ephemeral(
+    pub(crate) fn with_ephemeral(
         signal_service: SignalService,
         message_repo: Arc<MessageRepository>,
         channel_repo: Arc<crate::storage::repositories::channel_repo::ChannelRepository>,

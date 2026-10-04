@@ -5292,13 +5292,6 @@ mod tests {
     /// a handful of kilobytes exercises several chunks without a megabyte of IO.
     const TEST_CHUNK: u32 = 1024;
 
-    /// Milliseconds to advance between pumps so chunk pacing never gates a test.
-    ///
-    /// `AIR_BYTES_PER_SEC` turns a chunk's encoded length into a hold-off, and a
-    /// `TEST_CHUNK` chunk is well under a second of air time. Rounded up to a
-    /// second so the figure stays correct if either constant moves.
-    const CHUNK_AIR_MS_FOR_TESTS: u64 = 1_000;
-
     /// Point one runtime's receive spool at a directory of its own.
     ///
     /// The attachments base is a process-wide `OnceLock`, so every test in the
@@ -6159,7 +6152,7 @@ mod tests {
         // reassemblies of its *own* chunks against 14 real ones, roughly seventeen
         // thousand fragments of its own traffic returning to occupy the air its
         // transfer needed.
-        let (mut runtime, radio, state, _timeline) = runtime_parts();
+        let (runtime, radio, state, _timeline) = runtime_parts();
         let neighbour = PeerId::from_str("bbbbbbbbbbbbbbbb");
         let identity = register_verified_peer(&state, &neighbour, "twolinks");
 
@@ -6313,17 +6306,13 @@ mod tests {
         );
 
         // Then one chunk at a time, in order, each signed in its own right —
-        // and each only once the previous one has had time on the air. The clock
-        // is advanced explicitly rather than slept through: the interval is the
-        // contract, so the test states it instead of waiting for it.
+        // and each only once the previous one has had time on the air.
         let mut seen = Vec::new();
         let mut rebuilt = Vec::new();
-        let mut now_ms = 1_000_000u64;
         for _ in 0..manifest.chunk_count {
             let before = radio.write_count();
             runtime.pump_streamed_files(now_secs()).await;
             runtime.drain_writes().await;
-            now_ms += CHUNK_AIR_MS_FOR_TESTS;
             let writes = radio.writes();
             assert_eq!(
                 writes.len(),

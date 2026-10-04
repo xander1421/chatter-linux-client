@@ -5,14 +5,9 @@
 //! genuinely needs a radio or a relay is verified by running it, not by a test
 //! that pretends.
 
-// A test double exposes the whole seam it stands in for, and not every test
-// needs every accessor. Trimming to whatever the current tests happen to call
-// would make the next test start by re-adding one.
-#![allow(dead_code)]
-
 use std::collections::BTreeMap;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use chatter_mesh_link::link::{BoxFuture, LinkEvent, LinkId, MeshLink};
 use chatter_mesh_link::LinkError;
@@ -26,13 +21,12 @@ use tokio::sync::mpsc;
 
 /// A radio that records what was written to it and replays scripted events.
 pub struct MockLink {
-    events_tx: Mutex<Option<mpsc::UnboundedSender<LinkEvent>>>,
+    /// Held so `next_event` pends instead of reporting the radio closed.
+    _events_tx: mpsc::UnboundedSender<LinkEvent>,
     events_rx: AsyncMutex<mpsc::UnboundedReceiver<LinkEvent>>,
     writes: Mutex<Vec<(LinkId, Vec<u8>)>>,
     max_write: Mutex<BTreeMap<LinkId, usize>>,
     started: AtomicBool,
-    scanning: AtomicBool,
-    scan_changes: AtomicUsize,
     connects: Mutex<Vec<String>>,
     /// Every write is rejected while set, so the backpressure path can be driven.
     reject_writes: AtomicBool,
@@ -52,13 +46,11 @@ impl MockLink {
     pub fn new() -> Self {
         let (events_tx, events_rx) = mpsc::unbounded_channel();
         Self {
-            events_tx: Mutex::new(Some(events_tx)),
+            _events_tx: events_tx,
             events_rx: AsyncMutex::new(events_rx),
             writes: Mutex::new(Vec::new()),
             max_write: Mutex::new(BTreeMap::new()),
             started: AtomicBool::new(false),
-            scanning: AtomicBool::new(false),
-            scan_changes: AtomicUsize::new(0),
             connects: Mutex::new(Vec::new()),
             reject_writes: AtomicBool::new(false),
             links_gone: AtomicBool::new(false),
@@ -72,38 +64,9 @@ impl MockLink {
         Arc::new(Self::new())
     }
 
-    /// Queue an event for the driver to observe.
-    pub fn push(&self, event: LinkEvent) {
-        if let LinkEvent::Connected {
-            link, max_write, ..
-        } = &event
-        {
-            self.max_write.lock().insert(link.clone(), *max_write);
-        }
-        if let Some(tx) = self.events_tx.lock().as_ref() {
-            let _ = tx.send(event);
-        }
-    }
-
-    /// Close the event stream, which is how a radio reports it has shut down
-    /// for good: `next_event` resolves to `None`.
-    pub fn close(&self) {
-        self.events_tx.lock().take();
-    }
-
     #[must_use]
     pub fn is_started(&self) -> bool {
         self.started.load(Ordering::SeqCst)
-    }
-
-    #[must_use]
-    pub fn is_scanning(&self) -> bool {
-        self.scanning.load(Ordering::SeqCst)
-    }
-
-    #[must_use]
-    pub fn scan_changes(&self) -> usize {
-        self.scan_changes.load(Ordering::SeqCst)
     }
 
     #[must_use]
@@ -126,13 +89,6 @@ impl MockLink {
         self.reject_writes.store(reject, Ordering::SeqCst);
     }
 
-    /// Refuse writes with a *terminal* error, as a disconnected link does.
-    ///
-    /// Distinct from `set_reject_writes` because the two are handled in opposite
-    /// ways and `should_buffer` is what tells them apart: a retryable refusal goes
-    /// back on the queue, a terminal one takes the queue with it.
-    /// Tell the mock a link's negotiated write ceiling, as a `Connected` event
-    /// would.
     /// Make `connect` fail with this error, as a real radio can.
     ///
     /// A connect that always succeeds cannot exercise the scheduler's backoff, and
@@ -178,14 +134,10 @@ impl MeshLink for MockLink {
     fn stop(&self) -> BoxFuture<'_, Result<(), LinkError>> {
         self.stopped_once.store(true, Ordering::SeqCst);
         self.started.store(false, Ordering::SeqCst);
-        self.scanning.store(false, Ordering::SeqCst);
         Box::pin(async { Ok(()) })
     }
 
-    fn set_scanning(&self, on: bool) -> BoxFuture<'_, Result<(), LinkError>> {
-        if self.scanning.swap(on, Ordering::SeqCst) != on {
-            self.scan_changes.fetch_add(1, Ordering::SeqCst);
-        }
+    fn set_scanning(&self, _on: bool) -> BoxFuture<'_, Result<(), LinkError>> {
         Box::pin(async { Ok(()) })
     }
 
@@ -258,9 +210,6 @@ impl RelayConnector for OfflineConnector {
 pub struct LoopbackConnector {
     /// Frames the client wrote.
     pub sent: Arc<Mutex<Vec<String>>>,
-    /// Frames to feed back, in order, per connection.
-    inbound: Arc<Mutex<Vec<String>>>,
-    connects: AtomicUsize,
 }
 
 impl Default for LoopbackConnector {
@@ -274,19 +223,9 @@ impl LoopbackConnector {
     pub fn new() -> Self {
         Self {
             sent: Arc::new(Mutex::new(Vec::new())),
-            inbound: Arc::new(Mutex::new(Vec::new())),
-            connects: AtomicUsize::new(0),
         }
     }
 
-    pub fn queue_inbound(&self, frame: impl Into<String>) {
-        self.inbound.lock().push(frame.into());
-    }
-
-    #[must_use]
-    pub fn connect_count(&self) -> usize {
-        self.connects.load(Ordering::SeqCst)
-    }
 }
 
 struct LoopbackSink {
@@ -327,12 +266,11 @@ impl RelayStream for LoopbackStream {
 
 impl RelayConnector for LoopbackConnector {
     fn connect<'a>(&'a self, _url: &'a str) -> RelayBoxFuture<'a, Result<RelayConnection, NostrError>> {
-        self.connects.fetch_add(1, Ordering::SeqCst);
         let sink = LoopbackSink {
             sent: Arc::clone(&self.sent),
         };
         let stream = LoopbackStream {
-            frames: self.inbound.lock().iter().cloned().collect(),
+            frames: Default::default(),
         };
         Box::pin(async move {
             Ok((
