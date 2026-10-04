@@ -2,7 +2,6 @@
 //!
 //! Application error types and recovery.
 
-pub mod app_error;
 pub mod call_error;
 pub mod crypto_error;
 pub mod mailbox_error;

@@ -231,34 +231,9 @@ impl SharedJarvisEngine {
         self.local.read().expect("engine lock poisoned").clone()
     }
 
-    /// Single-shot completion (entity extraction, summaries).
-    pub async fn complete(&self, prompt: String, params: SampleParams) -> Result<String, JarvisError> {
-        self.complete_conversation(
-            vec![ChatMessage {
-                role: ChatRole::User,
-                content: prompt,
-            }],
-            params,
-        )
-        .await
-    }
-
-    /// Full multi-turn completion: `[system, user, assistant, …, user]`.
-    /// HTTP providers get real roles (what chat models are trained on); the
-    /// in-process actor gets the turns rendered as text.
-    pub async fn complete_conversation(
-        &self,
-        messages: Vec<ChatMessage>,
-        params: SampleParams,
-    ) -> Result<String, JarvisError> {
-        let engine = self.local.read().expect("engine lock poisoned").clone();
-        engine.complete(messages, params).await
-    }
-
     /// Single-shot completion gated by a conversation's AI policy.
     ///
-    /// The gated twin of [`Self::complete`], for extraction and summarisation
-    /// which run over message content.
+    /// For extraction and summarisation, which run over message content.
     pub async fn complete_gated(
         &self,
         access: AiAccess,
@@ -311,9 +286,6 @@ impl SharedJarvisEngine {
     /// content is sent when the active engine is a cloud provider and the
     /// conversation only permits local inference (DMs, anon transports), or
     /// when AI is denied outright (mesh-delivered traffic).
-    ///
-    /// Prefer this over [`Self::complete_conversation`] for anything driven by
-    /// message content.
     pub async fn complete_conversation_gated(
         &self,
         access: AiAccess,
@@ -482,28 +454,6 @@ mod tests {
         };
         let engine = JarvisEngine::from_settings(&settings, LocalAIActorHandle::spawn());
         assert!(matches!(engine, JarvisEngine::InProcess(_)));
-    }
-
-    /// Live: configured model absent → engine self-heals to an installed one.
-    /// `cargo test -p chatter-core --lib live_ -- --ignored --nocapture`
-    #[tokio::test]
-    #[ignore = "needs a running Ollama on localhost:11434 with ≥1 chat model"]
-    async fn live_missing_model_self_heals() {
-        let settings = LocalAISettings {
-            chat_model: "definitely-not-installed:1b".into(),
-            ..LocalAISettings::default()
-        };
-        let shared = SharedJarvisEngine::new(JarvisEngine::from_settings(
-            &settings,
-            LocalAIActorHandle::spawn(),
-        ));
-        let reply = shared
-            .complete("Reply with exactly one word: ping".into(), crate::services::ai::SampleParams::default())
-            .await
-            .expect("self-heal fallback failed");
-        println!("self-healed reply: {reply:?}; engine now {}", shared.describe());
-        assert!(!reply.trim().is_empty());
-        assert!(!shared.describe().contains("definitely-not-installed"));
     }
 
     #[test]

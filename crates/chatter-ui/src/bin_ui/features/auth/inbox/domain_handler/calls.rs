@@ -68,7 +68,6 @@ pub(super) fn handle_call_hangup(
                 tracing::info!(call_id = %call_id, "Hangup for a call not on screen; ignored");
                 return;
             }
-            ui_ctx.chat_state().clear_call_state();
             if ringing {
                 super::super::super::initial_data::hide_incoming_call(&w);
             }
