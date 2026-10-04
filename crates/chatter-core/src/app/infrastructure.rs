@@ -229,7 +229,7 @@ impl InfrastructureContainer {
         // Run migrations
         database.run_migrations()?;
 
-        // 5b. Set attachments base dir (critical for Android where dirs::data_local_dir is read-only)
+        // 5b. Set attachments base dir (critical for Android where the platform data-local dir is read-only)
         crate::services::attachment::set_attachments_base_dir(directories.data_dir().to_path_buf());
 
         // 5c. Ensure attachments directory exists for filesystem-based storage

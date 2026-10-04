@@ -148,7 +148,7 @@ impl CdnUploadResult {
 // ============================================================================
 
 /// Override for the attachments base directory.
-/// Set during init on Android where `dirs::data_local_dir()` is read-only.
+/// Set during init on Android where the platform data-local dir is read-only.
 static ATTACHMENTS_BASE: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
 
 /// Set the base directory for attachment storage.
@@ -165,7 +165,8 @@ pub fn attachments_dir() -> PathBuf {
     if let Some(base) = ATTACHMENTS_BASE.get() {
         base.join("attachments")
     } else {
-        dirs::data_local_dir()
+        directories::BaseDirs::new()
+            .map(|d| d.data_local_dir().to_path_buf())
             .unwrap_or_else(|| PathBuf::from("."))
             .join("chatter")
             .join("attachments")

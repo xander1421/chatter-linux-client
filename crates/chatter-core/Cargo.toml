@@ -111,7 +111,6 @@ memmap2 = "0.9"
 # ============================================================================
 keyring = { version = "3", default-features = false }
 directories = "6"
-dirs = "5"
 
 # ============================================================================
 # Serialization
@@ -131,7 +130,6 @@ parking_lot = "0.12"
 thiserror = "2"
 anyhow = "1"
 tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 chrono = { version = "0.4", features = ["serde"] }
 uuid = { version = "1", features = ["v4", "v5", "serde"] }
 bytes = "1"
@@ -143,7 +141,6 @@ rodio = "0.21.1"
 cpal = "0.15"
 hound = "3.5"
 image = { version = "0.25.9", default-features = false, features = ["png", "jpeg", "gif", "webp"] }
-ringbuf = "0.5.2"
 # smol removed — was unused
 
 # ============================================================================
@@ -152,15 +149,11 @@ ringbuf = "0.5.2"
 gstreamer = { version = "0.23", optional = true }
 gstreamer-app = { version = "0.23", optional = true }
 gstreamer-video = { version = "0.23", optional = true }
-gstreamer-audio = { version = "0.23", optional = true }
 gstreamer-pbutils = { version = "0.23", optional = true }
-gstreamer-gl = { version = "0.23", optional = true }
-gstreamer-play = { version = "0.23", optional = true }
 
 # ============================================================================
 # Media Utilities
 # ============================================================================
-bytemuck = { version = "1", features = ["derive"] }
 # once_cell removed — migrated to std::sync::LazyLock
 moka = { version = "0.12", features = ["sync"] }
 zeroize = { version = "1.8", features = ["derive"] }
@@ -178,7 +171,6 @@ livekit = { version = "0.7.52", default-features = false, features = ["tokio", "
 # its published version skews against livekit 0.7.52's livekit-protocol. The one
 # consumer (examples/screenshare_wire_bench) hand-mints its JWT via hmac+sha2.
 # lazy_static removed — migrated to std::sync::LazyLock
-async-stream = "0.3.6"
 
 # ============================================================================
 # Local AI (optional; CPU by default, CUDA is an explicit opt-in)
@@ -209,7 +201,6 @@ webpki-roots = { version = "1", optional = true }
 # hand-rolled RFC 6455 implementation: this code parses frames from relays we
 # neither control nor authenticate, which is not a place for bespoke framing.
 tokio-tungstenite = { version = "0.28", default-features = false, features = ["handshake"], optional = true }
-unicode-segmentation = "1.12.0"
 argon2 = "0.5.3"
 # OPAQUE (RFC 9807) password authentication, client side (crypto/opaque.rs).
 # 4.0.x is the release synced to the final RFC; the server is
@@ -254,8 +245,6 @@ open = "5.3.3"
 chatter-mesh-ble = { path = "../chatter-mesh-ble" }
 ksni = "0.2"
 v4l = "0.14"
-gstreamer-gl-egl = { version = "0.23", optional = true }
-glutin_egl_sys = { version = "0.7", optional = true }
 
 # ============================================================================
 # Platform-specific: Windows
@@ -283,8 +272,6 @@ chatter-mesh-android = { path = "../chatter-mesh-android" }
 # same crate) so it can declare USAGE_VOICE_COMMUNICATION: only that usage
 # follows the call route (earpiece / speaker / headset) AudioManager selects.
 oboe = { version = "0.6", features = ["java-interface"] }
-gstreamer-gl-egl = { version = "0.23", optional = true }
-glutin_egl_sys = { version = "0.7", optional = true }
 
 # Android aarch64: SHA-256 on the ARMv8 SHA2 instructions for the anti-abuse
 # proof of work (crypto/pow.rs). sha2 0.10 uses them only with `asm`
@@ -296,7 +283,9 @@ glutin_egl_sys = { version = "0.7", optional = true }
 sha2 = { version = "0.10", features = ["asm"] }
 
 [dev-dependencies]
-tokio-test = "0.4"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+# Paused-clock tests (heartbeat.rs `start_paused`).
+tokio = { version = "1", features = ["test-util"] }
 tempfile = "3"
 criterion = { version = "0.5", features = ["html_reports"] }
 mockall = "0.13"
@@ -345,11 +334,9 @@ media = [
 ]
 # GStreamer — inline video playback, avatar decode, etc. Desktop-only.
 desktop-gstreamer = [
-    "dep:gstreamer", "dep:gstreamer-app", "dep:gstreamer-video",
-    "dep:gstreamer-audio", "dep:gstreamer-pbutils", "dep:gstreamer-gl",
-    "dep:gstreamer-play", "dep:gstreamer-gl-egl", "dep:glutin_egl_sys",
+    "dep:gstreamer", "dep:gstreamer-app", "dep:gstreamer-video", "dep:gstreamer-pbutils",
 ]
-# Compat alias — previous callers (desktop-cli, chatter-ui) keep working.
+# The full desktop media stack: calls (LiveKit) plus GStreamer.
 desktop-media = ["media", "desktop-gstreamer"]
 # iOS: no desktop system deps; keyring must use the Keychain, otherwise
 # keyring silently falls back to an in-memory mock (keyring lib.rs:286).
