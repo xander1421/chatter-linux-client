@@ -35,7 +35,6 @@ pub mod domain;
 pub mod events;
 pub mod state;
 pub mod error;
-pub mod service_types;
 pub mod wire;
 pub mod media;
 #[cfg(feature = "media")]
