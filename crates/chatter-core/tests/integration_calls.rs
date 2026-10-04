@@ -5,7 +5,7 @@
 use std::time::{Duration, Instant};
 
 use chatter_core::calls::{
-    AudioCapture, AudioDevice, AudioOutputDevice,
+    AudioCapture, AudioDevice,
     ScreenCapture, ScreenCaptureConfig, ScreenSource, ScreenSourceType,
 };
 
@@ -210,28 +210,6 @@ fn test_audio_device_properties() {
     };
 
     assert!(!secondary.is_default);
-}
-
-#[test]
-fn test_audio_output_device_properties() {
-    let device = AudioOutputDevice {
-        name: "Speakers".to_string(),
-        id: "alsa:output:0".to_string(),
-        is_default: true,
-    };
-
-    assert_eq!(device.name, "Speakers");
-    assert_eq!(device.id, "alsa:output:0");
-    assert!(device.is_default);
-
-    // Headphones
-    let headphones = AudioOutputDevice {
-        name: "Bluetooth Headphones".to_string(),
-        id: "bluez:output:1".to_string(),
-        is_default: false,
-    };
-
-    assert!(!headphones.is_default);
 }
 
 #[test]

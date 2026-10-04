@@ -20,17 +20,6 @@ use parking_lot::RwLock;
 
 use crate::error::CallError;
 
-/// Audio output device info.
-#[derive(Debug, Clone)]
-pub struct AudioOutputDevice {
-    /// Device name for display.
-    pub name: String,
-    /// Internal device identifier.
-    pub id: String,
-    /// Whether this is the default device.
-    pub is_default: bool,
-}
-
 /// Manages audio playback for remote participants.
 ///
 /// Uses lazy initialization - the CPAL output stream is only created when
@@ -437,48 +426,10 @@ impl AudioPlayback {
         tracing::info!("Audio playback stopped");
     }
 
-    /// List available audio output devices.
-    pub fn list_devices() -> Result<Vec<AudioOutputDevice>, CallError> {
-        let host = cpal::default_host();
-        let default_device = host.default_output_device();
-        let default_name = default_device
-            .as_ref()
-            .and_then(|d| d.name().ok());
-
-        let devices: Vec<AudioOutputDevice> = host
-            .output_devices()
-            .map_err(|e| CallError::DeviceError(format!("Failed to list output devices: {}", e)))?
-            .filter_map(|device: Device| {
-                let name = device.name().ok()?;
-                let is_default = default_name.as_ref() == Some(&name);
-                // Use device name as ID (CPAL doesn't provide a separate stable ID)
-                let id = name.clone();
-                Some(AudioOutputDevice { name, id, is_default })
-            })
-            .collect();
-
-        Ok(devices)
-    }
 }
 
 impl Drop for AudioPlayback {
     fn drop(&mut self) {
         self.stop();
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_list_output_devices() {
-        let devices = AudioPlayback::list_devices();
-        assert!(devices.is_ok());
-        let devices = devices.unwrap();
-        println!("Found {} output devices", devices.len());
-        for device in &devices {
-            println!("  - {} (default: {})", device.name, device.is_default);
-        }
     }
 }

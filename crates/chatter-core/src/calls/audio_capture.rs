@@ -15,20 +15,9 @@ use tokio::sync::mpsc;
 
 use crate::error::CallError;
 
-/// Information about an available audio input device.
+/// Information about an available audio device (input or output).
 #[derive(Debug, Clone)]
 pub struct AudioDevice {
-    /// Device name for display.
-    pub name: String,
-    /// Internal device identifier.
-    pub id: String,
-    /// Whether this is the default device.
-    pub is_default: bool,
-}
-
-/// Information about an available audio output device.
-#[derive(Debug, Clone)]
-pub struct AudioOutputDevice {
     /// Device name for display.
     pub name: String,
     /// Internal device identifier.
@@ -101,7 +90,7 @@ impl AudioCapture {
     }
 
     /// List available audio output devices (speakers/headphones).
-    pub fn list_output_devices() -> Result<Vec<AudioOutputDevice>, CallError> {
+    pub fn list_output_devices() -> Result<Vec<AudioDevice>, CallError> {
         let host = cpal::default_host();
         let default_device = host.default_output_device();
         let default_name = default_device.as_ref().and_then(|d| d.name().ok());
@@ -113,7 +102,7 @@ impl AudioCapture {
         })? {
             if let Ok(name) = device.name() {
                 let is_default = default_name.as_ref() == Some(&name);
-                devices.push(AudioOutputDevice {
+                devices.push(AudioDevice {
                     id: name.clone(),
                     name: name.clone(),
                     is_default,
@@ -356,19 +345,6 @@ mod tests {
     }
 
     #[test]
-    fn test_audio_output_device_creation() {
-        let device = AudioOutputDevice {
-            name: "Test Speakers".to_string(),
-            id: "test-speakers-456".to_string(),
-            is_default: false,
-        };
-
-        assert_eq!(device.name, "Test Speakers");
-        assert_eq!(device.id, "test-speakers-456");
-        assert!(!device.is_default);
-    }
-
-    #[test]
     fn test_audio_capture_new() {
         let capture = AudioCapture::new();
         assert!(!capture.is_running());
@@ -455,20 +431,6 @@ mod tests {
             name: "Test".to_string(),
             id: "id".to_string(),
             is_default: true,
-        };
-
-        let cloned = device.clone();
-        assert_eq!(device.name, cloned.name);
-        assert_eq!(device.id, cloned.id);
-        assert_eq!(device.is_default, cloned.is_default);
-    }
-
-    #[test]
-    fn test_audio_output_device_clone() {
-        let device = AudioOutputDevice {
-            name: "Test Output".to_string(),
-            id: "output-id".to_string(),
-            is_default: false,
         };
 
         let cloned = device.clone();
