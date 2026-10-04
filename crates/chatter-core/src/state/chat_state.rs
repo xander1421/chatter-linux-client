@@ -140,11 +140,6 @@ impl ActiveConversation {
         matches!(self, Self::AnonDm(_) | Self::AnonGroup(_))
     }
 
-    /// Check if this is a DM-style conversation (1:1).
-    pub fn is_dm(&self) -> bool {
-        matches!(self, Self::ServerDm { .. } | Self::AnonDm(_))
-    }
-
     /// Get the ConversationType for this active conversation.
     ///
     /// Returns None for ActiveConversation::None.
@@ -289,15 +284,6 @@ impl ThreadPanel {
         }
     }
 
-    /// Create a thread panel with a known reply count.
-    #[must_use]
-    pub fn with_reply_count(channel_id: ChannelId, root_message_id: MessageId, reply_count: u32) -> Self {
-        Self {
-            channel_id,
-            root_message_id,
-            reply_count,
-        }
-    }
 }
 
 // ============================================================================
@@ -446,14 +432,6 @@ impl ChatState {
         });
     }
 
-    /// Clear the active channel.
-    pub fn clear_active_channel(&self) {
-        self.store.update(|state| {
-            state.active_channel_id = None;
-            state.active_thread_index = None;
-        });
-    }
-
     /// Set the typed active conversation.
     ///
     /// Also updates `active_channel_id` for backward compatibility.
@@ -528,27 +506,6 @@ impl ChatState {
         });
     }
 
-    /// Close all open thread panels.
-    pub fn close_all_threads(&self) {
-        self.store.update(|state| {
-            state.open_threads.clear();
-            state.active_thread_index = None;
-        });
-    }
-
-    /// Set the active thread index.
-    ///
-    /// Validates that the index is within bounds.
-    pub fn set_active_thread_index(&self, index: Option<usize>) {
-        self.store.update(|state| {
-            state.active_thread_index = match index {
-                Some(idx) if idx < state.open_threads.len() => Some(idx),
-                Some(_) => None, // Invalid index
-                None => None,
-            };
-        });
-    }
-
     /// Get the currently active thread panel, if any.
     #[must_use]
     pub fn active_thread(&self) -> Option<ThreadPanel> {
@@ -576,12 +533,6 @@ impl ChatState {
         self.store.update(|state| {
             state.pending_attachments.push(attachment);
         });
-    }
-
-    /// Get all pending attachment IDs.
-    #[must_use]
-    pub fn get_pending_attachment_ids(&self) -> Vec<AttachmentId> {
-        self.store.get().pending_attachments.iter().map(|a| a.id).collect()
     }
 
     /// Get all pending attachments.
@@ -687,12 +638,6 @@ impl ChatState {
         });
     }
 
-    /// Check if the pinned bar is dismissed.
-    #[must_use]
-    pub fn pinned_is_dismissed(&self) -> bool {
-        self.store.get().pinned.is_dismissed
-    }
-
     /// Check if the pinned bar should be visible.
     ///
     /// Returns true if there are pinned messages and the bar is not dismissed.
@@ -717,14 +662,6 @@ impl ChatState {
     #[must_use]
     pub fn pinned_total_count(&self) -> usize {
         self.store.get().pinned.pinned_message_ids.len()
-    }
-
-    /// Check if there are multiple pinned messages (2 or more).
-    ///
-    /// Useful for showing navigation controls.
-    #[must_use]
-    pub fn pinned_has_multiple(&self) -> bool {
-        self.store.get().pinned.pinned_message_ids.len() >= 2
     }
 
     /// Add a pinned message to the list (deduped, appended at end).
@@ -828,12 +765,6 @@ impl ChatState {
         }
     }
 
-    /// Get the last typing update time.
-    #[must_use]
-    pub fn last_typing_update(&self) -> Option<Instant> {
-        self.store.get().streaming.last_typing_update
-    }
-
     // ========================================================================
     // Streaming ephemera: reactions cache
     // ========================================================================
@@ -847,17 +778,6 @@ impl ChatState {
             .recent_reactions
             .get(message_id)
             .cloned()
-    }
-
-    /// Set reactions for a message (replaces the current list).
-    pub fn set_reactions(&self, message_id: MessageId, reactions: Vec<ReactionSummary>) {
-        self.store.update(|state| {
-            if reactions.is_empty() {
-                state.streaming.recent_reactions.remove(&message_id);
-            } else {
-                state.streaming.recent_reactions.insert(message_id, reactions);
-            }
-        });
     }
 
     /// Update a single reaction on a message.
@@ -910,12 +830,6 @@ impl ChatState {
         });
     }
 
-    /// Clear all streaming ephemera (typing + reactions cache).
-    pub fn clear_streaming(&self) {
-        self.store.update(|state| {
-            state.streaming = StreamingSubstate::default();
-        });
-    }
 }
 
 impl Default for ChatState {
@@ -1000,17 +914,6 @@ mod tests {
     }
 
     #[test]
-    fn test_clear_active_channel() {
-        let state = ChatState::new();
-        let channel_id = ChannelId::new();
-
-        state.set_active_channel(channel_id);
-        state.clear_active_channel();
-
-        assert!(state.get().active_channel_id.is_none());
-    }
-
-    #[test]
     fn test_open_thread() {
         let state = ChatState::new();
         let channel_id = ChannelId::new();
@@ -1086,61 +989,6 @@ mod tests {
     }
 
     #[test]
-    fn test_close_active_thread_adjusts_index() {
-        let state = ChatState::new();
-        let channel_id = ChannelId::new();
-
-        let id1 = MessageId::new();
-        let id2 = MessageId::new();
-
-        state.open_thread(channel_id, id1);
-        state.open_thread(channel_id, id2);
-        // Active is now 1 (id2)
-
-        state.set_active_thread_index(Some(0)); // Focus id1
-        state.close_thread(id1); // Close active thread
-
-        let data = state.get();
-        assert_eq!(data.open_threads.len(), 1);
-        assert_eq!(data.active_thread_index, Some(0)); // Should now be id2
-    }
-
-    #[test]
-    fn test_close_all_threads() {
-        let state = ChatState::new();
-        let channel_id = ChannelId::new();
-
-        state.open_thread(channel_id, MessageId::new());
-        state.open_thread(channel_id, MessageId::new());
-        state.close_all_threads();
-
-        let data = state.get();
-        assert!(data.open_threads.is_empty());
-        assert!(data.active_thread_index.is_none());
-    }
-
-    #[test]
-    fn test_set_active_thread_index_bounds() {
-        let state = ChatState::new();
-        let channel_id = ChannelId::new();
-
-        state.open_thread(channel_id, MessageId::new());
-        state.open_thread(channel_id, MessageId::new());
-
-        // Valid index
-        state.set_active_thread_index(Some(1));
-        assert_eq!(state.get().active_thread_index, Some(1));
-
-        // Invalid index (out of bounds)
-        state.set_active_thread_index(Some(5));
-        assert!(state.get().active_thread_index.is_none());
-
-        // None
-        state.set_active_thread_index(None);
-        assert!(state.get().active_thread_index.is_none());
-    }
-
-    #[test]
     fn test_active_thread() {
         let state = ChatState::new();
         let channel_id = ChannelId::new();
@@ -1188,17 +1036,6 @@ mod tests {
 
         state1.set_active_channel(channel_id);
         assert_eq!(state2.get().active_channel_id, Some(channel_id));
-    }
-
-    #[test]
-    fn test_thread_panel_with_reply_count() {
-        let channel_id = ChannelId::new();
-        let root_id = MessageId::new();
-        let panel = ThreadPanel::with_reply_count(channel_id, root_id, 10);
-
-        assert_eq!(panel.channel_id, channel_id);
-        assert_eq!(panel.root_message_id, root_id);
-        assert_eq!(panel.reply_count, 10);
     }
 
     // ========================================================================
@@ -1328,19 +1165,6 @@ mod tests {
         }
 
         #[test]
-        fn test_dismiss() {
-            let state = ChatState::new();
-
-            state.set_pinned_messages(vec![MessageId::new()]);
-            assert!(!state.pinned_is_dismissed());
-            assert!(state.pinned_should_show());
-
-            state.pinned_dismiss();
-            assert!(state.pinned_is_dismissed());
-            assert!(!state.pinned_should_show());
-        }
-
-        #[test]
         fn test_should_show() {
             let state = ChatState::new();
 
@@ -1377,19 +1201,6 @@ mod tests {
             state.set_pinned_messages(vec![MessageId::new(), MessageId::new()]);
 
             assert_eq!(state.pinned_total_count(), 2);
-        }
-
-        #[test]
-        fn test_has_multiple() {
-            let state = ChatState::new();
-
-            assert!(!state.pinned_has_multiple());
-
-            state.set_pinned_messages(vec![MessageId::new()]);
-            assert!(!state.pinned_has_multiple());
-
-            state.set_pinned_messages(vec![MessageId::new(), MessageId::new()]);
-            assert!(state.pinned_has_multiple());
         }
 
         #[test]
@@ -1569,127 +1380,7 @@ mod tests {
             assert!(state.get().streaming.typing_by_channel.get(&channel_id).is_none());
         }
 
-        #[test]
-        fn test_last_typing_update() {
-            let state = ChatState::new();
-            let channel_id = make_channel_id();
-
-            // Initially none
-            assert!(state.last_typing_update().is_none());
-
-            // After setting typing users
-            state.set_typing_users(channel_id.clone(), vec![make_user_id()]);
-            assert!(state.last_typing_update().is_some());
-
-            // After clearing
-            let before_clear = state.last_typing_update();
-            state.clear_typing(&channel_id);
-            let after_clear = state.last_typing_update();
-
-            // Should have updated the timestamp
-            assert!(after_clear >= before_clear);
-        }
-
         // ==================== Reaction Tests ====================
-
-        #[test]
-        fn test_set_and_get_reactions() {
-            let state = ChatState::new();
-            let message_id = make_message_id();
-
-            // Initially none
-            assert!(state.get_reactions(&message_id).is_none());
-
-            // Set reactions
-            let reactions = vec![
-                ReactionSummary {
-                    emoji: "\u{1f44d}".to_string(),
-                    count: 5,
-                    user_reacted: true,
-                },
-                ReactionSummary {
-                    emoji: "\u{2764}\u{fe0f}".to_string(),
-                    count: 3,
-                    user_reacted: false,
-                },
-            ];
-
-            state.set_reactions(message_id.clone(), reactions.clone());
-
-            let retrieved = state.get_reactions(&message_id).unwrap();
-            assert_eq!(retrieved.len(), 2);
-            assert_eq!(retrieved[0].emoji, "\u{1f44d}");
-            assert_eq!(retrieved[0].count, 5);
-            assert!(retrieved[0].user_reacted);
-        }
-
-        #[test]
-        fn test_update_reaction_increment() {
-            let state = ChatState::new();
-            let message_id = make_message_id();
-
-            // Set initial reactions
-            state.set_reactions(
-                message_id.clone(),
-                vec![ReactionSummary {
-                    emoji: "\u{1f44d}".to_string(),
-                    count: 2,
-                    user_reacted: false,
-                }],
-            );
-
-            // Increment
-            state.update_reaction(&message_id, "\u{1f44d}".to_string(), 1, None);
-
-            let reactions = state.get_reactions(&message_id).unwrap();
-            assert_eq!(reactions[0].count, 3);
-            assert!(!reactions[0].user_reacted); // Unchanged
-        }
-
-        #[test]
-        fn test_update_reaction_decrement() {
-            let state = ChatState::new();
-            let message_id = make_message_id();
-
-            // Set initial reactions
-            state.set_reactions(
-                message_id.clone(),
-                vec![ReactionSummary {
-                    emoji: "\u{1f44d}".to_string(),
-                    count: 2,
-                    user_reacted: true,
-                }],
-            );
-
-            // Decrement
-            state.update_reaction(&message_id, "\u{1f44d}".to_string(), -1, Some(false));
-
-            let reactions = state.get_reactions(&message_id).unwrap();
-            assert_eq!(reactions[0].count, 1);
-            assert!(!reactions[0].user_reacted); // Changed
-        }
-
-        #[test]
-        fn test_update_reaction_removes_at_zero() {
-            let state = ChatState::new();
-            let message_id = make_message_id();
-
-            // Set initial reactions
-            state.set_reactions(
-                message_id.clone(),
-                vec![ReactionSummary {
-                    emoji: "\u{1f44d}".to_string(),
-                    count: 1,
-                    user_reacted: false,
-                }],
-            );
-
-            // Decrement to zero
-            state.update_reaction(&message_id, "\u{1f44d}".to_string(), -1, None);
-
-            // Should be removed entirely
-            assert!(state.get_reactions(&message_id).is_none());
-        }
 
         #[test]
         fn test_update_reaction_adds_new() {
@@ -1719,32 +1410,6 @@ mod tests {
 
         // ==================== General Tests ====================
 
-        #[test]
-        fn test_clear_streaming() {
-            let state = ChatState::new();
-
-            // Add some data
-            let channel_id = make_channel_id();
-            let message_id = make_message_id();
-
-            state.set_typing_users(channel_id.clone(), vec![make_user_id()]);
-            state.set_reactions(
-                message_id.clone(),
-                vec![ReactionSummary {
-                    emoji: "\u{1f44d}".to_string(),
-                    count: 1,
-                    user_reacted: false,
-                }],
-            );
-
-            // Clear everything
-            state.clear_streaming();
-
-            assert!(state.get_typing_users(&channel_id).is_empty());
-            assert!(state.get_reactions(&message_id).is_none());
-            assert!(state.last_typing_update().is_none());
-        }
-
         #[tokio::test]
         async fn test_subscribe_receives_typing_updates() {
             let state = ChatState::new();
@@ -1759,28 +1424,6 @@ mod tests {
             let typers = received.streaming.typing_by_channel.get(&channel_id).unwrap();
             assert_eq!(typers.len(), 1);
             assert!(typers.contains(&user1));
-        }
-
-        #[tokio::test]
-        async fn test_subscribe_receives_reaction_updates() {
-            let state = ChatState::new();
-            let mut rx = state.subscribe();
-
-            let message_id = make_message_id();
-
-            state.set_reactions(
-                message_id.clone(),
-                vec![ReactionSummary {
-                    emoji: "\u{1f44d}".to_string(),
-                    count: 1,
-                    user_reacted: true,
-                }],
-            );
-
-            let received = rx.recv().await.unwrap();
-            let reactions = received.streaming.recent_reactions.get(&message_id).unwrap();
-            assert_eq!(reactions.len(), 1);
-            assert_eq!(reactions[0].emoji, "\u{1f44d}");
         }
 
         #[test]

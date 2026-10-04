@@ -101,25 +101,6 @@ impl OfflineState {
     }
 
 
-    /// Check if currently connected (online).
-    #[must_use]
-    pub fn is_online(&self) -> bool {
-        self.store.get().is_online
-    }
-
-    /// Set the last connected time.
-    pub fn set_last_connected(&self, time: DateTime<Utc>) {
-        self.store.update(|data| {
-            data.last_connected = Some(time);
-        });
-    }
-
-    /// Get the last connected time.
-    #[must_use]
-    pub fn last_connected(&self) -> Option<DateTime<Utc>> {
-        self.store.get().last_connected
-    }
-
     /// Get the current reconnection attempt number if reconnecting.
     #[must_use]
     pub fn reconnect_attempt(&self) -> Option<u32> {
@@ -134,10 +115,6 @@ impl OfflineState {
         self.store.subscribe()
     }
 
-    /// Clear state to disconnected.
-    pub fn clear(&self) {
-        self.store.set(OfflineStateData::default());
-    }
 }
 
 impl Default for OfflineState {
@@ -149,83 +126,8 @@ impl Default for OfflineState {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::network::connection::FailReason;
 
     // ==================== Connection State Tests ====================
-
-    #[test]
-    fn test_initial_state() {
-        let state = OfflineState::new();
-        assert_eq!(state.connection_state(), ConnectionState::Disconnected);
-        assert!(!state.is_online());
-        assert!(state.last_connected().is_none());
-        assert!(state.reconnect_attempt().is_none());
-    }
-
-    #[test]
-    fn test_set_connection_state_connected() {
-        let state = OfflineState::new();
-
-        state.set_connection_state(ConnectionState::Connected);
-
-        assert_eq!(state.connection_state(), ConnectionState::Connected);
-        assert!(state.is_online());
-        assert!(state.last_connected().is_some());
-        assert!(state.reconnect_attempt().is_none());
-    }
-
-    #[test]
-    fn test_set_connection_state_disconnected() {
-        let state = OfflineState::new();
-
-        // First connect
-        state.set_connection_state(ConnectionState::Connected);
-        assert!(state.is_online());
-
-        // Then disconnect
-        state.set_connection_state(ConnectionState::Disconnected);
-        assert!(!state.is_online());
-        assert_eq!(state.connection_state(), ConnectionState::Disconnected);
-        // last_connected should still have the previous connection time
-        assert!(state.last_connected().is_some());
-    }
-
-    #[test]
-    fn test_set_connection_state_connecting() {
-        let state = OfflineState::new();
-
-        state.set_connection_state(ConnectionState::Connecting);
-
-        assert_eq!(state.connection_state(), ConnectionState::Connecting);
-        assert!(!state.is_online());
-        assert!(state.reconnect_attempt().is_none());
-    }
-
-    #[test]
-    fn test_set_connection_state_reconnecting() {
-        let state = OfflineState::new();
-
-        state.set_connection_state(ConnectionState::Reconnecting { attempt: 3 });
-
-        assert_eq!(
-            state.connection_state(),
-            ConnectionState::Reconnecting { attempt: 3 }
-        );
-        assert!(!state.is_online());
-        assert_eq!(state.reconnect_attempt(), Some(3));
-    }
-
-    #[test]
-    fn test_set_connection_state_failed() {
-        let state = OfflineState::new();
-
-        state.set_connection_state(ConnectionState::Failed {
-            reason: FailReason::AuthExpired,
-        });
-
-        assert!(state.connection_state().is_failed());
-        assert!(!state.is_online());
-    }
 
     #[test]
     fn test_reconnect_attempt_clears_on_connect() {
@@ -241,29 +143,6 @@ mod tests {
     }
 
     // ==================== Last Connected Tests ====================
-
-    #[test]
-    fn test_set_last_connected() {
-        let state = OfflineState::new();
-
-        let time = Utc::now();
-        state.set_last_connected(time);
-
-        assert_eq!(state.last_connected(), Some(time));
-    }
-
-    #[test]
-    fn test_last_connected_updated_on_connect() {
-        let state = OfflineState::new();
-
-        let before = Utc::now();
-        state.set_connection_state(ConnectionState::Connected);
-        let after = Utc::now();
-
-        let last = state.last_connected().unwrap();
-        assert!(last >= before);
-        assert!(last <= after);
-    }
 
     // ==================== Subscription Tests ====================
 
@@ -281,42 +160,8 @@ mod tests {
 
     // ==================== Clear Tests ====================
 
-    #[test]
-    fn test_clear() {
-        let state = OfflineState::new();
-
-        // Set up some state
-        state.set_connection_state(ConnectionState::Connected);
-        state.set_last_connected(Utc::now());
-
-        // Clear everything
-        state.clear();
-
-        assert_eq!(state.connection_state(), ConnectionState::Disconnected);
-        assert!(!state.is_online());
-        assert!(state.last_connected().is_none());
-        assert!(state.reconnect_attempt().is_none());
-    }
-
     // ==================== Clone Tests ====================
-
-    #[test]
-    fn test_clone_shares_state() {
-        let state1 = OfflineState::new();
-        let state2 = state1.clone();
-
-        state1.set_connection_state(ConnectionState::Connected);
-
-        assert!(state2.is_online());
-        assert_eq!(state2.connection_state(), ConnectionState::Connected);
-    }
 
     // ==================== Default Tests ====================
 
-    #[test]
-    fn test_default_impl() {
-        let state = OfflineState::default();
-        assert_eq!(state.connection_state(), ConnectionState::Disconnected);
-        assert!(!state.is_online());
-    }
 }

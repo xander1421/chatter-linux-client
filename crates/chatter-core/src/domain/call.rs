@@ -67,26 +67,7 @@ pub enum CallState {
 }
 
 impl CallState {
-    /// Check if the call is in an active state (connected or reconnecting).
-    #[must_use]
-    pub fn is_active(&self) -> bool {
-        matches!(self, Self::Connected | Self::Reconnecting)
-    }
 
-    /// Check if the call has ended.
-    #[must_use]
-    pub fn is_ended(&self) -> bool {
-        matches!(self, Self::Ended { .. })
-    }
-
-    /// Get the end reason if the call has ended.
-    #[must_use]
-    pub fn end_reason(&self) -> Option<CallEndReason> {
-        match self {
-            Self::Ended { reason } => Some(*reason),
-            _ => None,
-        }
-    }
 }
 
 // ============================================================================
@@ -123,25 +104,6 @@ impl Participant {
         }
     }
 
-    /// Toggle the mute state.
-    pub fn toggle_mute(&mut self) {
-        self.is_muted = !self.is_muted;
-    }
-
-    /// Toggle the video state.
-    pub fn toggle_video(&mut self) {
-        self.is_video_enabled = !self.is_video_enabled;
-    }
-
-    /// Start screen sharing.
-    pub fn start_screen_share(&mut self) {
-        self.is_screen_sharing = true;
-    }
-
-    /// Stop screen sharing.
-    pub fn stop_screen_share(&mut self) {
-        self.is_screen_sharing = false;
-    }
 }
 
 // ============================================================================
@@ -196,26 +158,10 @@ impl Call {
         self.state = CallState::Ringing;
     }
 
-    /// Transition to the Connecting state.
-    pub fn connect(&mut self) {
-        self.state = CallState::Connecting;
-    }
-
     /// Transition to Connected, retaining the first connection timestamp.
     pub fn start(&mut self) {
         self.state = CallState::Connected;
         self.connected_at.get_or_insert_with(Utc::now);
-    }
-
-    /// Transition to the Reconnecting state.
-    pub fn reconnect(&mut self) {
-        self.state = CallState::Reconnecting;
-    }
-
-    /// End the call with the given reason.
-    pub fn end(&mut self, reason: CallEndReason) {
-        self.state = CallState::Ended { reason };
-        self.ended_at = Some(Utc::now());
     }
 
     /// Get the duration of the call.
@@ -238,12 +184,6 @@ impl Call {
         self.duration().map(|duration| duration.num_seconds().max(0)).unwrap_or(0)
     }
 
-    /// Check if the call is currently active (connected or reconnecting).
-    #[must_use]
-    pub fn is_active(&self) -> bool {
-        self.state.is_active()
-    }
-
     /// Add a participant to the call.
     pub fn add_participant(&mut self, participant: Participant) {
         // Don't add duplicates
@@ -252,28 +192,6 @@ impl Call {
         }
     }
 
-    /// Remove a participant from the call by user ID.
-    pub fn remove_participant(&mut self, user_id: UserId) {
-        self.participants.retain(|p| p.user_id != user_id);
-    }
-
-    /// Get a participant by user ID.
-    #[must_use]
-    pub fn get_participant(&self, user_id: UserId) -> Option<&Participant> {
-        self.participants.iter().find(|p| p.user_id == user_id)
-    }
-
-    /// Get a mutable reference to a participant by user ID.
-    #[must_use]
-    pub fn get_participant_mut(&mut self, user_id: UserId) -> Option<&mut Participant> {
-        self.participants.iter_mut().find(|p| p.user_id == user_id)
-    }
-
-    /// Get the number of participants in the call.
-    #[must_use]
-    pub fn participant_count(&self) -> usize {
-        self.participants.len()
-    }
 }
 
 // ============================================================================
@@ -294,180 +212,9 @@ pub struct VerificationBadge {
 }
 
 impl VerificationBadge {
-    /// Create a new unverified verification badge.
-    #[must_use]
-    pub fn new(safety_number: String) -> Self {
-        Self {
-            safety_number,
-            is_verified: false,
-            last_verified_at: None,
-        }
-    }
 
-    /// Mark the safety number as verified.
-    pub fn verify(&mut self) {
-        self.is_verified = true;
-        self.last_verified_at = Some(Utc::now());
-    }
-
-    /// Mark the safety number as unverified.
-    pub fn unverify(&mut self) {
-        self.is_verified = false;
-    }
-
-    /// Get the safety number formatted for display.
-    ///
-    /// Formats the safety number in space-separated groups of 5 digits for readability.
-    #[must_use]
-    pub fn display_code(&self) -> String {
-        self.safety_number
-            .chars()
-            .collect::<Vec<_>>()
-            .chunks(5)
-            .map(|chunk| chunk.iter().collect::<String>())
-            .collect::<Vec<_>>()
-            .join(" ")
-    }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_call_lifecycle() {
-        let channel_id = ChannelId::new();
-        let initiator_id = UserId::new();
-
-        let mut call = Call::new(channel_id, initiator_id, CallType::Voice);
-        assert!(matches!(call.state, CallState::Initiating));
-        assert!(call.started_at.is_some());
-
-        call.ring();
-        assert!(matches!(call.state, CallState::Ringing));
-
-        call.start();
-        assert!(matches!(call.state, CallState::Connected));
-        assert!(call.connected_at.is_some());
-        assert!(call.is_active());
-
-        call.end(CallEndReason::Completed);
-        assert!(matches!(call.state, CallState::Ended { reason: CallEndReason::Completed }));
-        assert!(call.ended_at.is_some());
-        assert!(!call.is_active());
-    }
-
-    #[test]
-    fn test_call_duration() {
-        let channel_id = ChannelId::new();
-        let initiator_id = UserId::new();
-
-        let mut call = Call::new(channel_id, initiator_id, CallType::Video);
-
-        // No duration before connected
-        assert!(call.duration().is_none());
-
-        call.start();
-        // Duration exists once connected
-        assert!(call.duration().is_some());
-
-        call.end(CallEndReason::Completed);
-        // Duration still exists after ended
-        assert!(call.duration().is_some());
-    }
-
-    #[test]
-    fn connected_duration_excludes_ringing_and_freezes_at_hangup() {
-        let mut call = Call::new(ChannelId::new(), UserId::new(), CallType::Voice);
-        let connected = Utc::now() - Duration::seconds(20);
-        call.started_at = Some(connected - Duration::seconds(15));
-        call.ring();
-        assert_eq!(call.duration_seconds(), 0);
-        call.connected_at = Some(connected);
-        call.reconnect();
-        call.start();
-        assert_eq!(call.connected_at, Some(connected), "reconnection must not reset duration");
-        assert!(call.duration_seconds() >= 20);
-        call.ended_at = Some(connected + Duration::milliseconds(12_900));
-        assert_eq!(call.duration_seconds(), 12);
-        call.ended_at = Some(connected - Duration::seconds(1));
-        assert_eq!(call.duration_seconds(), 0);
-    }
-
-    #[test]
-    fn test_participant() {
-        let user_id = UserId::new();
-        let mut participant = Participant::new(user_id);
-
-        assert!(!participant.is_muted);
-        assert!(!participant.is_video_enabled);
-        assert!(!participant.is_screen_sharing);
-
-        participant.toggle_mute();
-        assert!(participant.is_muted);
-
-        participant.toggle_video();
-        assert!(participant.is_video_enabled);
-
-        participant.start_screen_share();
-        assert!(participant.is_screen_sharing);
-    }
-
-    #[test]
-    fn test_call_participants() {
-        let channel_id = ChannelId::new();
-        let initiator_id = UserId::new();
-        let mut call = Call::new(channel_id, initiator_id, CallType::Group);
-
-        let user1 = UserId::new();
-        let user2 = UserId::new();
-
-        call.add_participant(Participant::new(user1));
-        call.add_participant(Participant::new(user2));
-        assert_eq!(call.participant_count(), 2);
-
-        // Adding duplicate should not increase count
-        call.add_participant(Participant::new(user1));
-        assert_eq!(call.participant_count(), 2);
-
-        call.remove_participant(user1);
-        assert_eq!(call.participant_count(), 1);
-        assert!(call.get_participant(user1).is_none());
-        assert!(call.get_participant(user2).is_some());
-    }
-
-    #[test]
-    fn test_verification_badge() {
-        let mut badge = VerificationBadge::new("123456789012345".to_string());
-
-        assert!(!badge.is_verified);
-        assert!(badge.last_verified_at.is_none());
-
-        badge.verify();
-        assert!(badge.is_verified);
-        assert!(badge.last_verified_at.is_some());
-
-        // Test display formatting
-        assert_eq!(badge.display_code(), "12345 67890 12345");
-    }
-
-    #[test]
-    fn test_call_state_helpers() {
-        let initiating = CallState::Initiating;
-        assert!(!initiating.is_active());
-        assert!(!initiating.is_ended());
-        assert!(initiating.end_reason().is_none());
-
-        let connected = CallState::Connected;
-        assert!(connected.is_active());
-        assert!(!connected.is_ended());
-
-        let ended = CallState::Ended { reason: CallEndReason::Missed };
-        assert!(!ended.is_active());
-        assert!(ended.is_ended());
-        assert_eq!(ended.end_reason(), Some(CallEndReason::Missed));
-    }
-}
 
 // ============================================================================
 // DM Call Orchestration Types

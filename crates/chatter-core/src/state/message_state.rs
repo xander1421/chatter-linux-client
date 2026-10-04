@@ -5,7 +5,6 @@
 use std::collections::{HashMap, HashSet, VecDeque};
 
 use chrono::{DateTime, Utc};
-use tokio::sync::broadcast;
 
 use crate::domain::ids::{ChannelId, MessageId};
 use crate::domain::message::Message;
@@ -31,25 +30,7 @@ pub struct PaginationCursor {
 }
 
 impl PaginationCursor {
-    /// Create a new pagination cursor.
-    #[must_use]
-    pub fn new(has_more: bool, oldest_message_id: Option<MessageId>, oldest_timestamp: Option<DateTime<Utc>>) -> Self {
-        Self {
-            has_more,
-            oldest_message_id,
-            oldest_timestamp,
-        }
-    }
 
-    /// Create a cursor indicating no more messages.
-    #[must_use]
-    pub fn exhausted() -> Self {
-        Self {
-            has_more: false,
-            oldest_message_id: None,
-            oldest_timestamp: None,
-        }
-    }
 }
 
 /// Message state data.
@@ -136,12 +117,6 @@ impl MessageState {
         self.store.get()
     }
 
-    /// Subscribe to message state changes (Arc-wrapped for efficiency).
-    #[must_use]
-    pub fn subscribe(&self) -> broadcast::Receiver<super::StateSnapshot<MessageStateData>> {
-        self.store.subscribe()
-    }
-
     // ========================================================================
     // Message Operations
     // ========================================================================
@@ -155,30 +130,6 @@ impl MessageState {
             .get(channel_id)
             .cloned()
             .unwrap_or_default()
-    }
-
-    /// Replace all messages for a channel.
-    pub fn set_messages(&self, channel_id: ChannelId, messages: Vec<Message>) {
-        self.store.update(|state| {
-            state.messages.insert(channel_id, messages);
-            state.touch_channel(channel_id);
-            state.trim_channel_messages(&channel_id);
-            state.evict_lru_channels();
-        });
-    }
-
-    /// Prepend older messages to a channel (for pagination).
-    pub fn prepend_messages(&self, channel_id: ChannelId, messages: Vec<Message>) {
-        self.store.update(|state| {
-            let entry = state.messages.entry(channel_id).or_default();
-            let mut combined = messages;
-            combined.append(entry);
-            *entry = combined;
-            state.touch_channel(channel_id);
-            // After prepending older messages, trim to keep within limits
-            state.trim_channel_messages(&channel_id);
-            state.evict_lru_channels();
-        });
     }
 
     /// Append a new message to a channel.
@@ -213,30 +164,6 @@ impl MessageState {
         self.store.update(|state| {
             if let Some(messages) = state.messages.get_mut(channel_id) {
                 messages.retain(|m| &m.id != message_id);
-            }
-        });
-    }
-
-    /// Update a message by Signal-style (sender_id, sent_at_ns) composite key.
-    ///
-    /// Searches all cached channels for a message matching the composite key.
-    /// This is the preferred lookup method per Signal Protocol spec.
-    pub fn update_message_by_sender_timestamp<F>(
-        &self,
-        sender_id: &crate::domain::ids::UserId,
-        sent_at_ns: u64,
-        f: F,
-    ) where
-        F: FnOnce(&mut Message),
-    {
-        self.store.update(|state| {
-            for messages in state.messages.values_mut() {
-                if let Some(message) = messages.iter_mut().find(|m| {
-                    m.sender_id.as_ref() == Some(sender_id) && m.sent_at == sent_at_ns
-                }) {
-                    f(message);
-                    return;
-                }
             }
         });
     }
@@ -291,32 +218,9 @@ impl MessageState {
         });
     }
 
-    /// Clear all messages for a channel.
-    pub fn clear_channel(&self, channel_id: &ChannelId) {
-        self.store.update(|state| {
-            state.messages.remove(channel_id);
-            state.cursors.remove(channel_id);
-            state.loading_channels.remove(channel_id);
-            state.channel_lru.retain(|id| id != channel_id);
-        });
-    }
-
     // ========================================================================
     // Pagination Operations
     // ========================================================================
-
-    /// Set the pagination cursor for a channel.
-    pub fn set_cursor(&self, channel_id: ChannelId, cursor: PaginationCursor) {
-        self.store.update(|state| {
-            state.cursors.insert(channel_id, cursor);
-        });
-    }
-
-    /// Get the pagination cursor for a channel.
-    #[must_use]
-    pub fn get_cursor(&self, channel_id: &ChannelId) -> Option<PaginationCursor> {
-        self.store.get().cursors.get(channel_id).cloned()
-    }
 
     // ========================================================================
     // Loading State
@@ -377,46 +281,12 @@ mod tests {
     }
 
     #[test]
-    fn test_set_and_get_messages() {
-        let state = MessageState::new();
-        let channel_id = ChannelId::new();
-        let msg1 = create_test_message(channel_id);
-        let msg2 = create_test_message(channel_id);
-
-        state.set_messages(channel_id, vec![msg1.clone(), msg2.clone()]);
-
-        let messages = state.get_messages(&channel_id);
-        assert_eq!(messages.len(), 2);
-        assert_eq!(messages[0].id, msg1.id);
-        assert_eq!(messages[1].id, msg2.id);
-    }
-
-    #[test]
     fn test_get_messages_empty_channel() {
         let state = MessageState::new();
         let channel_id = ChannelId::new();
 
         let messages = state.get_messages(&channel_id);
         assert!(messages.is_empty());
-    }
-
-    #[test]
-    fn test_prepend_messages() {
-        let state = MessageState::new();
-        let channel_id = ChannelId::new();
-
-        let newer = create_test_message(channel_id);
-        let older1 = create_test_message(channel_id);
-        let older2 = create_test_message(channel_id);
-
-        state.set_messages(channel_id, vec![newer.clone()]);
-        state.prepend_messages(channel_id, vec![older1.clone(), older2.clone()]);
-
-        let messages = state.get_messages(&channel_id);
-        assert_eq!(messages.len(), 3);
-        assert_eq!(messages[0].id, older1.id);
-        assert_eq!(messages[1].id, older2.id);
-        assert_eq!(messages[2].id, newer.id);
     }
 
     #[test]
@@ -437,23 +307,6 @@ mod tests {
     }
 
     #[test]
-    fn test_update_message() {
-        let state = MessageState::new();
-        let channel_id = ChannelId::new();
-        let msg = create_test_message(channel_id);
-        let msg_id = msg.id;
-
-        state.set_messages(channel_id, vec![msg]);
-
-        state.update_message(&channel_id, &msg_id, |m| {
-            m.is_pinned = true;
-        });
-
-        let messages = state.get_messages(&channel_id);
-        assert!(messages[0].is_pinned);
-    }
-
-    #[test]
     fn test_update_message_not_found() {
         let state = MessageState::new();
         let channel_id = ChannelId::new();
@@ -463,63 +316,6 @@ mod tests {
         state.update_message(&channel_id, &nonexistent_id, |m| {
             m.is_pinned = true;
         });
-    }
-
-    #[test]
-    fn test_remove_message() {
-        let state = MessageState::new();
-        let channel_id = ChannelId::new();
-        let msg1 = create_test_message(channel_id);
-        let msg2 = create_test_message(channel_id);
-        let msg1_id = msg1.id;
-
-        state.set_messages(channel_id, vec![msg1, msg2.clone()]);
-        state.remove_message(&channel_id, &msg1_id);
-
-        let messages = state.get_messages(&channel_id);
-        assert_eq!(messages.len(), 1);
-        assert_eq!(messages[0].id, msg2.id);
-    }
-
-    #[test]
-    fn test_clear_channel() {
-        let state = MessageState::new();
-        let channel_id = ChannelId::new();
-
-        state.set_messages(channel_id, vec![create_test_message(channel_id)]);
-        state.set_cursor(channel_id, PaginationCursor::new(true, None, None));
-        state.set_loading(channel_id, true);
-
-        state.clear_channel(&channel_id);
-
-        assert!(state.get_messages(&channel_id).is_empty());
-        assert!(state.get_cursor(&channel_id).is_none());
-        assert!(!state.is_loading(&channel_id));
-    }
-
-    #[test]
-    fn test_pagination_cursor() {
-        let state = MessageState::new();
-        let channel_id = ChannelId::new();
-        let msg_id = MessageId::new();
-        let timestamp = Utc::now();
-
-        let cursor = PaginationCursor::new(true, Some(msg_id), Some(timestamp));
-        state.set_cursor(channel_id, cursor);
-
-        let retrieved = state.get_cursor(&channel_id);
-        assert!(retrieved.is_some());
-        let cursor = retrieved.unwrap();
-        assert!(cursor.has_more);
-        assert_eq!(cursor.oldest_message_id, Some(msg_id));
-    }
-
-    #[test]
-    fn test_pagination_cursor_exhausted() {
-        let cursor = PaginationCursor::exhausted();
-        assert!(!cursor.has_more);
-        assert!(cursor.oldest_message_id.is_none());
-        assert!(cursor.oldest_timestamp.is_none());
     }
 
     #[test]
@@ -534,19 +330,6 @@ mod tests {
 
         state.set_loading(channel_id, false);
         assert!(!state.is_loading(&channel_id));
-    }
-
-    #[tokio::test]
-    async fn test_message_state_subscribe() {
-        let state = MessageState::new();
-        let mut rx = state.subscribe();
-        let channel_id = ChannelId::new();
-        let msg = create_test_message(channel_id);
-
-        state.append_message(channel_id, msg.clone());
-
-        let received = rx.recv().await.unwrap();
-        assert_eq!(received.messages.get(&channel_id).unwrap().len(), 1);
     }
 
     #[test]

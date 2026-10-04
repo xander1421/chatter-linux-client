@@ -118,29 +118,6 @@ impl AuthState {
         });
     }
 
-    /// Set whether a login operation is in progress.
-    ///
-    /// UI can use this to show loading indicators.
-    pub fn set_logging_in(&self, is_logging_in: bool) {
-        self.store.update(|state| {
-            state.is_logging_in = is_logging_in;
-            if is_logging_in {
-                // Clear previous error when starting new login attempt
-                state.login_error = None;
-            }
-        });
-    }
-
-    /// Set a login error message.
-    ///
-    /// Also clears `is_logging_in` since the operation has completed (with error).
-    pub fn set_login_error(&self, error: Option<String>) {
-        self.store.update(|state| {
-            state.login_error = error;
-            state.is_logging_in = false;
-        });
-    }
-
     /// Quick check if user is currently logged in.
     #[must_use]
     pub fn is_logged_in(&self) -> bool {
@@ -205,42 +182,6 @@ mod tests {
         assert!(data.current_user_id.is_none());
         assert!(data.device_id.is_none());
         assert!(data.display_name.is_none());
-    }
-
-    #[test]
-    fn test_auth_state_logging_in_progress() {
-        let state = AuthState::new();
-
-        state.set_logging_in(true);
-        assert!(state.get().is_logging_in);
-
-        state.set_logging_in(false);
-        assert!(!state.get().is_logging_in);
-    }
-
-    #[test]
-    fn test_auth_state_login_error_clears_logging_in() {
-        let state = AuthState::new();
-
-        state.set_logging_in(true);
-        state.set_login_error(Some("Invalid password".to_string()));
-
-        let data = state.get();
-        assert!(!data.is_logging_in);
-        assert_eq!(data.login_error, Some("Invalid password".to_string()));
-    }
-
-    #[test]
-    fn test_auth_state_new_login_clears_error() {
-        let state = AuthState::new();
-
-        // Set an error
-        state.set_login_error(Some("Previous error".to_string()));
-        assert!(state.get().login_error.is_some());
-
-        // Start new login attempt
-        state.set_logging_in(true);
-        assert!(state.get().login_error.is_none());
     }
 
     #[tokio::test]
