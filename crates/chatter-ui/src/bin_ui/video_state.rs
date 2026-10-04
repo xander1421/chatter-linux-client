@@ -2,12 +2,12 @@
 //!
 //! Tracks video playback state for the in-app video player.
 //! Supports two rendering modes:
-//! - Hardware mode: Zero-copy GPU rendering (GL on Linux/Android, Metal on iOS)
+//! - Hardware mode: Zero-copy GPU rendering (GL on Linux, D3D11 on Windows)
 //! - Software mode: Frame buffer passing with RGB conversion (fallback)
 
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use chatter_core::media::InAppVideoPlayer as VideoPlayer;
@@ -15,13 +15,20 @@ use chatter_core::media::InAppVideoPlayer as VideoPlayer;
 use super::video as hw_video;
 
 /// Global video player instance (software mode).
-static VIDEO_PLAYER: OnceLock<Arc<Mutex<Option<VideoPlayer>>>> = OnceLock::new();
+static VIDEO_PLAYER: Mutex<Option<VideoPlayer>> = Mutex::new(None);
 
 /// Global state tracking video playback.
-static VIDEO_STATE: OnceLock<Arc<Mutex<VideoState>>> = OnceLock::new();
+static VIDEO_STATE: Mutex<VideoState> = Mutex::new(VideoState {
+    current_path: None,
+    filename: String::new(),
+    is_playing: false,
+    position: 0.0,
+    duration: 0.0,
+    volume: 0.0,
+});
 
 /// Shared frame buffer for cross-thread frame passing (software mode).
-static FRAME_BUFFER: OnceLock<Arc<Mutex<Option<FrameData>>>> = OnceLock::new();
+static FRAME_BUFFER: Mutex<Option<FrameData>> = Mutex::new(None);
 
 /// Whether GL video is being used for current playback.
 static USING_GL_VIDEO: AtomicBool = AtomicBool::new(false);
@@ -51,25 +58,19 @@ pub struct VideoState {
     pub volume: f32,
 }
 
-/// Get or initialize the global video player holder.
-pub fn get_video_player() -> Arc<Mutex<Option<VideoPlayer>>> {
-    VIDEO_PLAYER
-        .get_or_init(|| Arc::new(Mutex::new(None)))
-        .clone()
+/// Get the global video player holder.
+pub fn get_video_player() -> &'static Mutex<Option<VideoPlayer>> {
+    &VIDEO_PLAYER
 }
 
-/// Get or initialize the global video state.
-pub fn get_video_state() -> Arc<Mutex<VideoState>> {
-    VIDEO_STATE
-        .get_or_init(|| Arc::new(Mutex::new(VideoState::default())))
-        .clone()
+/// Get the global video state.
+pub fn get_video_state() -> &'static Mutex<VideoState> {
+    &VIDEO_STATE
 }
 
-/// Get or initialize the frame buffer.
-fn get_frame_buffer() -> Arc<Mutex<Option<FrameData>>> {
-    FRAME_BUFFER
-        .get_or_init(|| Arc::new(Mutex::new(None)))
-        .clone()
+/// Get the frame buffer.
+fn get_frame_buffer() -> &'static Mutex<Option<FrameData>> {
+    &FRAME_BUFFER
 }
 
 /// Take the latest frame from the buffer (called by UI timer on main thread).
@@ -100,7 +101,7 @@ pub fn start_video_from_memory_async<F>(
     // Stop any existing playback
     stop_video();
 
-    // Try hardware-accelerated video first (GL on Linux/Android, Metal on iOS)
+    // Try hardware-accelerated video first (GL on Linux, D3D11 on Windows)
     // IMPORTANT: Check is_hw_connected() on UI thread where GL context lives
     if hw_video::is_hw_available() {
         tracing::info!("HW video available, checking connection on UI thread");

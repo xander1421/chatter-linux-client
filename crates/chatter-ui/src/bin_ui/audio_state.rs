@@ -2,16 +2,20 @@
 //!
 //! Tracks which audio attachment is currently playing so the UI can reflect this.
 
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::Mutex;
 use std::time::Duration;
 
 use chatter_core::media::AudioPlayer;
 
 /// Global audio player instance.
-static AUDIO_PLAYER: OnceLock<Arc<Mutex<Option<AudioPlayer>>>> = OnceLock::new();
+static AUDIO_PLAYER: Mutex<Option<AudioPlayer>> = Mutex::new(None);
 
 /// Global state tracking which attachment is currently playing.
-static AUDIO_STATE: OnceLock<Arc<Mutex<AudioState>>> = OnceLock::new();
+static AUDIO_STATE: Mutex<AudioState> = Mutex::new(AudioState {
+    current_id: None,
+    is_playing: false,
+    total_duration: Duration::ZERO,
+});
 
 /// Audio playback state.
 #[derive(Clone, Debug, Default)]
@@ -31,21 +35,19 @@ impl AudioState {
     }
 }
 
-/// Get or initialize the global audio player.
-pub fn get_audio_player() -> Arc<Mutex<Option<AudioPlayer>>> {
-    AUDIO_PLAYER
-        .get_or_init(|| {
-            let player = AudioPlayer::new().ok();
-            Arc::new(Mutex::new(player))
-        })
-        .clone()
+/// Get the global audio player, creating it on first use.
+pub fn get_audio_player() -> &'static Mutex<Option<AudioPlayer>> {
+    if let Ok(mut guard) = AUDIO_PLAYER.lock() {
+        if guard.is_none() {
+            *guard = AudioPlayer::new().ok();
+        }
+    }
+    &AUDIO_PLAYER
 }
 
-/// Get or initialize the global audio state.
-pub fn get_audio_state() -> Arc<Mutex<AudioState>> {
-    AUDIO_STATE
-        .get_or_init(|| Arc::new(Mutex::new(AudioState::default())))
-        .clone()
+/// Get the global audio state.
+pub fn get_audio_state() -> &'static Mutex<AudioState> {
+    &AUDIO_STATE
 }
 
 /// Check if a specific attachment is currently playing.
@@ -160,16 +162,6 @@ pub fn get_current_duration() -> Option<Duration> {
         }
     }
     None
-}
-
-/// Update position tracking after a seek.
-///
-/// This is a no-op since AudioPlayer.seek() internally handles position reset.
-/// The function exists for semantic clarity at call sites.
-pub fn set_seek_position(_position: Duration) {
-    // AudioPlayer.seek() resets pause_offset and play_start internally,
-    // so we don't need to track position separately here.
-    // This function exists for clarity at call sites.
 }
 
 /// Format duration as "M:SS" string.

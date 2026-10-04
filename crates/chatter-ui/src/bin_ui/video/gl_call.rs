@@ -22,26 +22,22 @@
 //!
 //! The tokio-side frame subscriber (`timers.rs`) never touches GL: it only
 //! publishes the latest `Arc<Vec<u8>>` RGBA + dimensions into
-//! [`publish_frame`] (a cheap Arc clone, no 30 MB copy). [`on_before_rendering`]
+//! [`publish_batch`] (a cheap Arc clone, no 30 MB copy). [`on_before_rendering`]
 //! drains that inbox on the GL thread and does the in-place upload.
 //!
 //! # Fallback
 //!
 //! If the graphics API is not `NativeOpenGL`, or the GL function table fails
-//! to load, this module degrades to a no-op: [`is_active`] stays false,
-//! `timers.rs` keeps publishing into the inbox but nothing is uploaded and
-//! the remote-video model simply isn't updated via GL. We never panic in
-//! the notifier (that would take down rendering). A CPU fallback (the old
-//! `from_rgba8` path) could be reinstated in `timers.rs` keyed off
-//! [`is_active`] if a platform is found where GL texture borrow fails; see
-//! the note in `timers.rs`.
+//! to load, uploads are skipped. `timers.rs` still publishes into the inbox
+//! and nothing is uploaded. We never panic in the notifier (that would take
+//! down rendering).
 
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::ffi::{c_void, CStr, CString};
 use std::num::NonZeroU32;
 use std::rc::Rc;
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Arc, LazyLock, Mutex};
 
 use slint::{Model, ModelRc, VecModel};
 
@@ -197,33 +193,12 @@ thread_local! {
 /// One published frame: (rgba, width, height, rotation_degrees, generation).
 type InboxEntry = (Arc<Vec<u8>>, u32, u32, u32, u64);
 
-static CALL_FRAME_INBOX: OnceLock<Arc<Mutex<HashMap<String, InboxEntry>>>> = OnceLock::new();
+// `HashMap::new` is not const, so the mutex cannot be a plain static.
+static CALL_FRAME_INBOX: LazyLock<Mutex<HashMap<String, InboxEntry>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
 
-fn inbox() -> &'static Arc<Mutex<HashMap<String, InboxEntry>>> {
-    CALL_FRAME_INBOX.get_or_init(|| Arc::new(Mutex::new(HashMap::new())))
-}
-
-/// Publish the latest frame for a single participant into the shared inbox.
-///
-/// Cheap: stores an `Arc` clone + dimensions. The GL upload happens later, on
-/// the render thread, in [`on_before_rendering`]. `timers.rs` uses
-/// [`publish_batch`] instead (so vanished participants are also pruned); this
-/// per-participant variant is retained for callers that update one tile.
-#[allow(dead_code)]
-pub fn publish_frame(
-    participant_id: &str,
-    rgba: Arc<Vec<u8>>,
-    width: u32,
-    height: u32,
-    rotation_degrees: u32,
-    generation: u64,
-) {
-    if let Ok(mut map) = inbox().lock() {
-        map.insert(
-            participant_id.to_string(),
-            (rgba, width, height, rotation_degrees, generation),
-        );
-    }
+fn inbox() -> &'static Mutex<HashMap<String, InboxEntry>> {
+    &CALL_FRAME_INBOX
 }
 
 /// Replace the whole inbox with the given stable-ordered batch.
@@ -248,14 +223,6 @@ pub fn clear_inbox() {
     }
 }
 
-/// Whether the GL uploader is live (function table loaded). When false,
-/// `publish_*` still works but nothing is uploaded. Reserved for a future
-/// CPU fallback in `timers.rs` if a platform is found where GL borrow fails.
-#[allow(dead_code)]
-pub fn is_active() -> bool {
-    CALL_GL.with(|cell| cell.borrow().is_some())
-}
-
 // ---------------------------------------------------------------------------
 // Notifier entry points (called from gl_linux.rs's rendering notifier).
 // ---------------------------------------------------------------------------
@@ -264,7 +231,7 @@ pub fn is_active() -> bool {
 ///
 /// Safe to call repeatedly; only the first successful load takes effect.
 /// On a non-OpenGL graphics API, or if symbol resolution fails, this is a
-/// no-op and [`is_active`] stays false (graceful degrade).
+/// no-op and frames are not uploaded (graceful degrade).
 pub fn on_rendering_setup(graphics_api: &slint::GraphicsAPI<'_>) {
     let already = CALL_GL.with(|cell| cell.borrow().is_some());
     if already {
