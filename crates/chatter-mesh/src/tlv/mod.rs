@@ -199,25 +199,9 @@ pub fn put_tlv_u32_len(out: &mut Vec<u8>, tag: u8, value: &[u8]) -> Result<(), M
     Ok(())
 }
 
-const HEX_DIGITS: &[u8; 16] = b"0123456789abcdef";
-
 /// Lowercase hex, matching `Data.hexEncodedString()`.
 pub fn hex_encode(bytes: &[u8]) -> String {
-    let mut out = String::with_capacity(bytes.len() * 2);
-    for byte in bytes {
-        out.push(HEX_DIGITS[(byte >> 4) as usize] as char);
-        out.push(HEX_DIGITS[(byte & 0x0F) as usize] as char);
-    }
-    out
-}
-
-fn hex_nibble(c: u8) -> Option<u8> {
-    match c {
-        b'0'..=b'9' => Some(c - b'0'),
-        b'a'..=b'f' => Some(c - b'a' + 10),
-        b'A'..=b'F' => Some(c - b'A' + 10),
-        _ => None,
-    }
+    hex::encode(bytes)
 }
 
 /// Parses exactly `2 * N` hex digits. Rejects anything else — including the
@@ -228,17 +212,7 @@ fn hex_nibble(c: u8) -> Option<u8> {
 /// 7-byte value that then masquerades as an 8-byte fragment stream ID. A
 /// fixed-width array cannot represent that, and should not.
 pub fn hex_decode_exact<const N: usize>(text: &str) -> Option<[u8; N]> {
-    let bytes = text.as_bytes();
-    if bytes.len() != N * 2 {
-        return None;
-    }
-    let mut out = [0u8; N];
-    for (i, slot) in out.iter_mut().enumerate() {
-        let hi = hex_nibble(*bytes.get(i * 2)?)?;
-        let lo = hex_nibble(*bytes.get(i * 2 + 1)?)?;
-        *slot = (hi << 4) | lo;
-    }
-    Some(out)
+    hex::decode(text).ok()?.try_into().ok()
 }
 
 #[cfg(test)]

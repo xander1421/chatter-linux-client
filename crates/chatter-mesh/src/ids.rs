@@ -26,7 +26,6 @@
 //! calls them equal, which is the more defensible of the two behaviours.
 
 use core::fmt;
-use core::fmt::Write as _;
 
 use sha2::{Digest, Sha256};
 
@@ -304,50 +303,19 @@ fn to_eight(bytes: &[u8]) -> Option<[u8; 8]> {
 
 /// Lowercase hex, no separators — matches `Data.hexEncodedString()`'s `"%02x"`.
 pub(crate) fn hex_encode<'a, I: IntoIterator<Item = &'a u8>>(bytes: I) -> String {
-    let iter = bytes.into_iter();
-    let (lower, _) = iter.size_hint();
-    let mut out = String::with_capacity(lower * 2);
-    for b in iter {
-        // Writing to a String is infallible; the Result exists only to satisfy
-        // the `fmt::Write` signature.
-        let _ = write!(out, "{b:02x}");
-    }
-    out
+    hex::encode(bytes.into_iter().copied().collect::<Vec<u8>>())
 }
 
 /// Mirrors `Data(hexString:)`: trims surrounding whitespace, accepts an optional
 /// `0x`/`0X` prefix, requires an even length, and rejects any non-hex character.
 /// An empty string decodes to an empty vector, exactly as it does there.
-// `usize::is_multiple_of` would read better but landed in 1.87, and this crate
-// declares `rust-version = "1.85"`.
-#[allow(clippy::manual_is_multiple_of)]
 pub(crate) fn hex_decode(s: &str) -> Option<Vec<u8>> {
     let trimmed = s.trim();
     let body = trimmed
         .strip_prefix("0x")
         .or_else(|| trimmed.strip_prefix("0X"))
         .unwrap_or(trimmed);
-
-    let bytes = body.as_bytes();
-    if bytes.len() % 2 != 0 {
-        return None;
-    }
-    if bytes.is_empty() {
-        return Some(Vec::new());
-    }
-
-    let mut out = Vec::with_capacity(bytes.len() / 2);
-    for pair in bytes.chunks_exact(2) {
-        let (Some(hi), Some(lo)) = (pair.first(), pair.get(1)) else {
-            return None;
-        };
-        // Any byte of a multi-byte UTF-8 character is >= 0x80 and fails here, so
-        // operating on bytes cannot split a character into something decodable.
-        let hi = char::from(*hi).to_digit(16)?;
-        let lo = char::from(*lo).to_digit(16)?;
-        out.push(((hi << 4) | lo) as u8);
-    }
-    Some(out)
+    hex::decode(body).ok()
 }
 
 #[cfg(test)]

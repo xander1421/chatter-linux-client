@@ -22,10 +22,10 @@ hmac = "0.12"
 # DeflateDecoder here, never ZlibEncoder. See the design doc, trap #1.
 flate2 = "1"
 thiserror = "2"
+hex = "0.4"
 
 [dev-dependencies]
 # Conformance vectors are JSON data files transcribed from bitchat's own test
-# suite. Test-only: the production dependency surface stays at four crates.
+# suite.
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-hex = "0.4"
