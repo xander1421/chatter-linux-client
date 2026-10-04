@@ -4,46 +4,53 @@ import { Appearance } from "appearance.slint";
 export global Materials {
     // With real backdrop blur (glass effects on) the tint is see-through like
     // iOS materials. Regular/thick bound backdrop luminance for readable labels.
+    // Dark tints are one slate step above the page (#080d13) so chrome floats
+    // instead of reading as a grey slab; muted text stays >= 5.3:1 over a
+    // white or black backdrop at regular/thick (contrast.py).
     out property <color> ultra-thin: Appearance.glass-effects
-        ? (Appearance.dark ? #10182018 : #ffffff20)
-        : (Appearance.dark ? #172331 : #f8fcff);
+        ? (Appearance.dark ? #16212d1c : #ffffff24)
+        : (Appearance.dark ? #18232f : #fbfdff);
     out property <color> thin: Appearance.glass-effects
-        ? (Appearance.dark ? #10182066 : #ffffff66)
-        : (Appearance.dark ? #172331 : #f8fcff);
+        ? (Appearance.dark ? #16212d70 : #ffffff6c)
+        : (Appearance.dark ? #18232f : #fbfdff);
     out property <color> regular: Appearance.glass-effects
-        ? (Appearance.dark ? #101820e0 : #ffffffec)
-        : (Appearance.dark ? #172331 : #f8fcff);
+        ? (Appearance.dark ? #121c27e6 : #ffffffe8)
+        : (Appearance.dark ? #18232f : #fbfdff);
     // Sheets sample the dimmed backdrop; light mode needs a milkier tint
     // to stay distinct from the scrim while retaining the blurred content.
     out property <color> thick: Appearance.glass-effects
-        ? (Appearance.dark ? #101820eb : #fffffff0)
-        : (Appearance.dark ? #18222f : #fcfdff);
-    out property <color> opaque: Appearance.dark ? #172331 : #f8fcff;
+        ? (Appearance.dark ? #141e29ee : #fffffff2)
+        : (Appearance.dark ? #1a2532 : #fdfeff);
+    out property <color> opaque: Appearance.dark ? #18232f : #fbfdff;
     // The single optical edge is local to GlassSurface, never a row/card stroke.
+    // Dark: a lit top-left arc that fades out. Light: white chrome on a light
+    // page needs a faint cool-ink lower rim to keep its silhouette.
     out property <brush> glass-edge: Appearance.dark
-        ? @linear-gradient(135deg, #ffffff38 0%, #ffffff10 24%, #ffffff00 52%, #ffffff00 72%, #ffffff0c 100%)
-        : @linear-gradient(135deg, #ffffff80 0%, #ffffff24 24%, #ffffff00 52%, #ffffff00 72%, #ffffff18 100%);
+        ? @linear-gradient(160deg, #ffffff4c 0%, #ffffff18 22%, #ffffff00 50%, #ffffff00 74%, #ffffff10 100%)
+        : @linear-gradient(160deg, #ffffffe6 0%, #ffffff60 24%, #ffffff00 48%, #1a2c3e10 76%, #1a2c3e24 100%);
     out property <physical-length> glass-edge-width: 1phx;
     // Physical pixels keep the rim one device pixel even at 2x/3x scale.
     out property <brush> specular: Appearance.dark
-        ? @linear-gradient(135deg, #ffffff08 0%, #ffffff00 32%, #ffffff00 100%)
-        : @linear-gradient(135deg, #ffffff10 0%, #ffffff00 32%, #ffffff00 100%);
+        ? @linear-gradient(170deg, #ffffff0e 0%, #ffffff04 30%, #ffffff00 55%, #ffffff00 100%)
+        : @linear-gradient(170deg, #ffffff30 0%, #ffffff00 45%, #ffffff00 100%);
     // A soft internal falloff, not another stroke around the silhouette.
     out property <brush> inner-shade: Appearance.dark
-        ? @linear-gradient(180deg, #00000000 0%, #00000000 88%, #00000008 100%)
-        : @linear-gradient(180deg, #00000000 0%, #00000000 88%, #00000004 100%);
-    out property <color> shadow-contact: Appearance.dark ? #00000038 : #11233914;
-    out property <color> shadow-float: Appearance.dark ? #00000052 : #1123391c;
-    out property <color> shadow-modal: Appearance.dark ? #00000066 : #11233926;
-    out property <color> scrim: Appearance.dark ? #00000066 : #08111c40;
+        ? @linear-gradient(180deg, #00000000 0%, #00000000 80%, #0000001a 100%)
+        : @linear-gradient(180deg, #00000000 0%, #00000000 84%, #1a2c3e08 100%);
+    out property <color> shadow-contact: Appearance.dark ? #00000040 : #11233914;
+    out property <color> shadow-float: Appearance.dark ? #0000006b : #11233924;
+    out property <color> shadow-modal: Appearance.dark ? #00000080 : #11233930;
+    out property <color> scrim: Appearance.dark ? #02050999 : #08111c40;
     out property <color> hover: Appearance.dark ? #ffffff0c : #15202b0a;
     out property <color> pressed: Appearance.dark ? #ffffff18 : #15202b14;
+    // The page behind every screen: a faint teal wash at the top fading into
+    // the neutral page colour (Colors.background), cool violet at the foot.
     out property <brush> ambient: Appearance.dark
-        ? @linear-gradient(135deg, #000000 0%, #000000 100%)
-        : @linear-gradient(135deg, #eaf4f5 0%, #eff1f8 45%, #f3f5f8 100%);
+        ? @linear-gradient(165deg, #0d1d22 0%, #091118 30%, #080d13 60%, #0a0d17 100%)
+        : @linear-gradient(165deg, #e2f1f0 0%, #eaf0f4 32%, #edf1f5 62%, #efeff7 100%);
     out property <length> blur-regular: 18px;
     out property <length> blur-thick: 24px;
-    out property <float> saturation: 1.25;
+    out property <float> saturation: 1.4;
     // Edge lensing strength for the Backdrop refraction shader (0..1).
     out property <float> refraction: 0.10;
     out property <duration> feedback-duration: Appearance.reduce-motion ? 0ms : 100ms;

@@ -205,9 +205,9 @@ export component MessageList inherits Rectangle {
         if (root.is-at-bottom && !root.scrolling && root.jump-row < 0) { root.go-to-end(); }
     }
 
-    // Layout — flat background to avoid neomorphic fatigue in scrolling content.
-    // The messages themselves carry the depth; the list stays neutral.
-    background: Colors.background;
+    // The same ambient page as the chat list, so a conversation is not a
+    // flat slab; the wash is static, it does not scroll with the rows.
+    background: Materials.ambient;
 
     // Loading state: skeleton placeholders
     if root.loading: VerticalLayout {

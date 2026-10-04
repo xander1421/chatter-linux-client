@@ -2,45 +2,51 @@
 
 import { Appearance } from "appearance.slint";
 
-// Every token has a dark value (left, the OLED design) and a light value
-// (right). `Appearance.dark` picks; nothing outside this file should need a
+// Every token has a dark value (left) and a light value (right). Dark is a
+// blue-slate ink (#080d13), not pure black: elevation reads as lighter steps of
+// one hue. Contrast ratios for every pair are in the 2026-10-04 colour pass
+// (~/.cache/chatter-colors/contrast.py); keep body text >= 4.5:1.
+// `Appearance.dark` picks; nothing outside this file should need a
 // literal colour.
 export global Colors {
     // Filled actions have a stable readable foreground in both themes.
-    out property <color> action-fill: Appearance.dark ? #117d73 : #087c73;
+    out property <color> action-fill: Appearance.dark ? #117d73 : #0f766e;
     out property <color> action-hover: #076b63;
     out property <color> action-active: #065a54;
     out property <color> on-action: #ffffff;
 
-    // Primary colors (dark teal)
-    out property <color> primary: #0d9488;
+    // Primary teal. Light uses teal-700 so primary-coloured text passes AA on
+    // white (#0d9488 was 3.7:1).
+    out property <color> primary: Appearance.dark ? #0d9488 : #0f766e;
     // Includes the selected tab's translucent fill in the contrast budget.
     out property <color> glass-accent: Appearance.dark ? #64ddcc : #07645c;
-    out property <color> primary-hover: #0f766e;
+    out property <color> primary-hover: Appearance.dark ? #0f766e : #115e59;
 
     // Accent color (orange - complements teal)
     out property <color> accent: Appearance.dark ? #f97316 : #ea580c;
 
-    // Background colors — OLED Black
-    out property <color> background: Appearance.dark ? #000000 : #f3f5f8;
-    out property <color> surface: Appearance.dark ? #111820 : #ffffff;
-    out property <color> surface-hover: Appearance.dark ? #1b2632 : #e8edf2;
+    // Neutral elevation: page < surface (cards) < surface-hover < fill-secondary.
+    out property <color> background: Appearance.dark ? #080d13 : #edf1f5;
+    out property <color> surface: Appearance.dark ? #141e29 : #ffffff;
+    out property <color> surface-hover: Appearance.dark ? #1c2734 : #e6ecf2;
     // Secondary-button fill. Its own step, not `surface`: a secondary button
     // sits on the page AND on cards (which are `surface`), and with no stroke
     // a surface-filled button on a card was a bare label (RC24 D2).
-    out property <color> fill-secondary: Appearance.dark ? #253240 : #e1e7ed;
-    out property <color> fill-secondary-hover: Appearance.dark ? #304050 : #d6dee7;
+    out property <color> fill-secondary: Appearance.dark ? #263444 : #dfe6ed;
+    out property <color> fill-secondary-hover: Appearance.dark ? #304050 : #d3dce6;
+    // Off-state track of a switch: >= 3:1 against a card, so "off" is visible.
+    out property <color> control-off: Appearance.dark ? #5f7085 : #8795a5;
 
-    // Text colors (4.5:1 contrast minimum on black)
-    out property <color> text-primary: Appearance.dark ? #f2f6fa : #15202b;
-    out property <color> text-secondary: Appearance.dark ? #b5c3d2 : #445367;
-    out property <color> text-muted: Appearance.dark ? #98a9bc : #596a7c;
+    // Text: muted is >= 4.5:1 on page, card, hovered row and both bubbles.
+    out property <color> text-primary: Appearance.dark ? #eef3f8 : #101a25;
+    out property <color> text-secondary: Appearance.dark ? #b6c4d2 : #3e4d5f;
+    out property <color> text-muted: Appearance.dark ? #97a8ba : #556677;
 
-    // Status colors
-    out property <color> success: Appearance.dark ? #10b981 : #059669;
-    out property <color> warning: Appearance.dark ? #f59e0b : #b45309;
-    out property <color> error: Appearance.dark ? #ef4444 : #dc2626;
-    out property <color> info: Appearance.dark ? #3b82f6 : #2563eb;
+    // Status colors: dark uses the 400 step so status text passes on cards.
+    out property <color> success: Appearance.dark ? #34d399 : #047857;
+    out property <color> warning: Appearance.dark ? #fbbf24 : #b45309;
+    out property <color> error: Appearance.dark ? #f87171 : #dc2626;
+    out property <color> info: Appearance.dark ? #60a5fa : #2563eb;
     out property <color> accent-purple: Appearance.dark ? #8b5cf6 : #7c3aed;
 
     // Presence colors
@@ -50,12 +56,12 @@ export global Colors {
     out property <color> offline: Appearance.dark ? #6b7280 : #9ca3af;
 
     // Borders and dividers
-    out property <color> border: Appearance.dark ? #2a2a2c : #d5d9df;
+    out property <color> border: Appearance.dark ? #243242 : #d2dae3;
 
     // Overlays and tooltips. Content drawn ON an overlay (play buttons, call
     // chips) uses text-primary, so the light overlays are light too.
-    out property <color> overlay: Appearance.dark ? #00000080 : #ffffffa6;
-    out property <color> overlay-heavy: Appearance.dark ? #000000cc : #ffffffd9;
+    out property <color> overlay: Appearance.dark ? #04080c80 : #ffffffa6;
+    out property <color> overlay-heavy: Appearance.dark ? #04080ccc : #ffffffd9;
     out property <color> shadow: Appearance.dark ? #00000060 : #00000026;
 
     // Hover variants for status colors
@@ -63,17 +69,18 @@ export global Colors {
     out property <color> success-hover: Appearance.dark ? #059669 : #047857;
 
     // Code block styling
-    out property <color> code-bg: Appearance.dark ? #050508 : #eceef1;
+    out property <color> code-bg: Appearance.dark ? #0b1118 : #e9edf2;
     out property <color> code-text: Appearance.dark ? #d4d4d4 : #1f2328;
 
     // Group accent (purple for private groups)
     out property <color> group-accent: Appearance.dark ? #9333ea : #7e22ce;
 
-    // Message bubbles — Neo 2.0 tactile depth on OLED
-    out property <color> bubble-own: Appearance.dark ? #062220 : #cdf3ee;           // Dark teal tint on black
-    out property <color> bubble-other: Appearance.dark ? #0d0d0e : #ffffff;         // Near-black surface
-    out property <color> bubble-own-hover: Appearance.dark ? #0a3330 : #b5ece5;     // Lighter teal on hover
-    out property <color> bubble-other-hover: Appearance.dark ? #181819 : #eef0f2;   // Slightly lighter surface
+    // Message bubbles. Own = deep teal, peer = raised slate; both clear the page
+    // and hold muted timestamps >= 4.5:1 and primary ticks/play >= 3:1.
+    out property <color> bubble-own: Appearance.dark ? #0e3f3a : #c8eee5;
+    out property <color> bubble-other: Appearance.dark ? #1a2430 : #ffffff;
+    out property <color> bubble-own-hover: Appearance.dark ? #124b45 : #b6e6db;
+    out property <color> bubble-other-hover: Appearance.dark ? #222e3b : #f0f3f6;
 
     // File category colors
     out property <color> cat-image: Appearance.dark ? #4ade80 : #16a34a;
@@ -98,6 +105,6 @@ export global Colors {
     out property <color> glow-violet: Appearance.dark ? #8b5cf6 : #7c3aed;
 
     // Inset surface — for concave (pressed-in) elements
-    out property <color> neo-inset-bg: Appearance.dark ? #050506 : #e9ebee;          // Near-pure black for pressed-in
+    out property <color> neo-inset-bg: Appearance.dark ? #060a0f : #e6ebf0;          // Near-pure black for pressed-in
     out property <color> neo-inset-shadow: Appearance.dark ? #0000004d : #0000001a;    // Inner shadow (pure black at 30%)
 }
