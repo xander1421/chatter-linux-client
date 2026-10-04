@@ -4650,7 +4650,7 @@ fn fine_glass_rim_preserves_shared_childless_material() {
     let private = glass.split("export component GlassSurface").next().unwrap();
     assert!(private.contains("component GlassMaterial inherits Rectangle"));
     assert!(!private.lines().any(|line| line.trim() == "@children"), "MEM1: material must remain childless");
-    assert!(glass.contains("GlassMaterial {\n        x: 0;\n        y: 0;"));
+    assert!(squash(glass).contains("GlassMaterial { x: 0; y: 0;"));
 }
 
 #[test]
@@ -4677,6 +4677,12 @@ fn secondary_chrome_exposes_its_shared_material() {
     assert!(account.contains("floating-content: root.mobile-mode;"));
     assert!(account.contains("y: root.mobile-mode ? -menu-body.chrome-inset : 0px;"));
     assert!(!account.contains("absolute-position"), "content-sized menus must not derive their padding from their own layout position");
+}
+
+/// `src` with every whitespace run collapsed to one space, so a source pin
+/// survives reindentation and rewrapping.
+fn squash(src: &str) -> String {
+    src.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
 // POLISH1: keep layout rhythm and ordinary controls in the shared primitives.
@@ -4786,7 +4792,7 @@ fn call_duration_uses_core_connection_time() {
     let active = include_str!("../src/bin_ui/features/calls/active.rs");
     assert!(active.contains("ctx.end_active_call().await"), "hangup duration must also come from core");
     let worker = include_str!("../../chatter-core/src/services/call_worker.rs");
-    assert!(worker.contains("if encryption_root_key == &[0u8; 32] {\n        call.ring();"), "a DM room alone is not an answered call");
+    assert!(squash(worker).contains("if encryption_root_key == &[0u8; 32] { call.ring();"), "a DM room alone is not an answered call");
     assert!(worker.contains("derive_call_handle(state) == call && state.call.connected_at.is_none()"), "only the matching first answer starts the core clock");
 }
 
