@@ -52,6 +52,10 @@ pub fn open(window: &MainWindow, ui_ctx: &Arc<ChatterClient>, id: &str) {
         Vec::new(),
     )));
 
+    // Reveal the message pane the way every other conversation does; on a
+    // phone this is the only thing that leaves the chat list.
+    crate::bin_ui::features::sidebar::show_chat_pane(&window.as_weak());
+
     apply_header(window, &row);
     super::refresh_rows(window, ui_ctx);
 
