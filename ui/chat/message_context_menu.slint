@@ -123,11 +123,6 @@ export component MessageContextMenu inherits Rectangle {
     in property <string> sender-id: "";
     in property <string> timestamp-ns: "";
     in property <string> message-id: "";        // Thread + selection are keyed by message id
-    in property <bool> can-retry: false;
-    in property <bool> is-own-message: false;  // Can edit own messages
-    in property <bool> can-delete-for-everyone: false;  // Derived from permissions
-    in property <bool> is-pinned: false;
-    in property <bool> has-attachments: false;  // Show download option when true
     in property <bool> can-thread: false;  // Threads are a channel feature (none in 1:1, as in Signal)
     // Something on the second page is offered. Core decides each flag.
     private property <bool> more-page: MessageMenuActions.react || MessageMenuActions.info

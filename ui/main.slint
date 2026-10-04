@@ -82,7 +82,6 @@ export component MainWindow inherits Window {
     // ========== Connection status ==========
     in property <string> connection-status <=> app.connection-status;
     in property <int> connection-reconnect-attempt <=> app.connection-reconnect-attempt;
-    in property <int> connection-queue-count <=> app.connection-queue-count;
 
     in property <bool> server-unreachable <=> app.server-unreachable;
 
@@ -158,7 +157,6 @@ export component MainWindow inherits Window {
     in property <string> user-initials <=> app.user-initials;
     in property <string> user-presence-status <=> app.user-presence-status;
     in-out property <string> user-presence-mode <=> app.user-presence-mode;
-    in property <string> user-custom-status <=> app.user-custom-status;
     in-out property <bool> sidebar-collapsed <=> app.sidebar-collapsed;
 
     // ========== Custom sections properties ==========
@@ -226,7 +224,6 @@ export component MainWindow inherits Window {
     in property <string> code-preview-filename <=> app.code-preview-filename;
     in property <string> code-preview-language <=> app.code-preview-language;
     in property <int> code-preview-line-count <=> app.code-preview-line-count;
-    in property <image> code-preview-image <=> app.code-preview-image;
     in property <string> code-preview-plain-text <=> app.code-preview-plain-text;
     callback close-code-preview <=> app.close-code-preview;
     callback copy-code <=> app.copy-code;
@@ -302,11 +299,6 @@ export component MainWindow inherits Window {
     in-out property <string> context-menu-timestamp-ns <=> app.context-menu-timestamp-ns;
     in-out property <length> context-menu-x <=> app.context-menu-x;
     in-out property <length> context-menu-y <=> app.context-menu-y;
-    in property <bool> context-menu-can-retry <=> app.context-menu-can-retry;
-    in property <bool> context-menu-is-own-message <=> app.context-menu-is-own-message;
-    in property <bool> context-menu-can-delete-for-everyone <=> app.context-menu-can-delete-for-everyone;
-    in property <bool> context-menu-is-pinned <=> app.context-menu-is-pinned;
-    in property <bool> context-menu-has-attachments <=> app.context-menu-has-attachments;
     callback reply-message <=> app.reply-message;
     callback edit-message <=> app.edit-message;
     callback delete-message <=> app.delete-message;
@@ -447,9 +439,7 @@ export component MainWindow inherits Window {
     in property <bool> edit-profile-loading <=> app.edit-profile-loading;
     in property <string> edit-profile-error <=> app.edit-profile-error;
 
-    // Friend requests modal properties (legacy)
-
-    // Friends modal properties (comprehensive)
+    // Friends modal properties
     in-out property <string> friends-modal-tab <=> app.friends-modal-tab;
     in property <[FriendData]> friends-list <=> app.friends-list;
     in-out property <string> friends-requests-sub-tab <=> app.friends-requests-sub-tab;

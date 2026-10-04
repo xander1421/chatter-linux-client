@@ -113,11 +113,6 @@ fn set_context_menu(
     w.set_context_menu_message_id(find_message_id(w, &sender_id, &timestamp_ns).into());
     w.set_context_menu_sender_id(sender_id.into());
     w.set_context_menu_timestamp_ns(timestamp_ns.into());
-    w.set_context_menu_is_own_message(menu.is_own);
-    w.set_context_menu_can_retry(actions.resend);
-    w.set_context_menu_can_delete_for_everyone(actions.delete_for_everyone);
-    w.set_context_menu_is_pinned(menu.pinned);
-    w.set_context_menu_has_attachments(actions.download);
     w.set_context_menu_x(menu_x);
     w.set_context_menu_y(menu_y);
     w.set_context_menu_visible(true);

@@ -53,7 +53,6 @@ export component ChannelSettingsModal inherits Rectangle {
     in-out property <string> channel-description-draft: "";
     // Icon picker: Rust sets icon-path (chosen file) + icon-preview on pick;
     // Save reads icon-path to upload. Reset by Rust on open.
-    in-out property <string> channel-icon-path: "";
     in-out property <image> channel-icon-preview;
     in-out property <bool> channel-has-icon-preview: false;
     in property <string> channel-type: "public";  // "public", "private", "dm"

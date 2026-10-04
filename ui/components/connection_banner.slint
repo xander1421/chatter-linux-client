@@ -34,7 +34,6 @@ export component ConnectionBanner inherits Rectangle {
     // end up disagreeing about it.
     in property <bool> server-unreachable: false;
     in property <int> reconnect-attempt: 0;
-    in property <int> queue-count: 0;
 
     // Dismissing hides the banner, not the fact. The caller keeps a red dot on
     // the sidebar's settings button for as long as the server is unreachable,
@@ -45,7 +44,6 @@ export component ConnectionBanner inherits Rectangle {
 
     // Internal: tracks "just reconnected" for the green flash
     property <bool> just-reconnected: false;
-    property <bool> was-disconnected: false;
 
     // Narrow screen. Same idiom as `ui/chat/chat_header.slint` (`tight` /
     // `mesh-tight`): a width test, not a platform test.
@@ -205,9 +203,6 @@ export component ConnectionBanner inherits Rectangle {
                           ? "Reconnecting…"
                           : "Reconnecting" + (reconnect-attempt > 0 ? " (attempt " + reconnect-attempt + ")…" : "…")) :
                       connection-state == "failed" ? (root.tight ? "Server unreachable" : "Server unreachable — check your network") :
-                      queue-count > 0 ? (root.tight
-                          ? "No server — " + queue-count + " queued"
-                          : "Server unreachable — " + queue-count + " messages queued") :
                       root.tight ? "No server — messages will send later"
                                  : "Server unreachable — messages to it will be sent when it comes back";
                 color: root.banner-color;

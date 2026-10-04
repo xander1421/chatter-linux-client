@@ -1,50 +1,12 @@
 import { GlassSurface } from "glass_surface.slint";
 // Tooltip components for hover hints
 //
-// Provides both a raw Tooltip and a self-contained TooltipArea that
-// handles hover detection, eliminating the need for signal bubbling.
+// TooltipArea: wraps content and renders its own tooltip on hover, so no
+// signal bubbling is needed.
 
 import { Colors } from "../theme/colors.slint";
 import { Spacing } from "../theme/spacing.slint";
 import { Typography } from "../theme/typography.slint";
-
-// Raw tooltip — positioned absolutely, controlled by parent
-export component Tooltip inherits GlassSurface {
-    material-level: 3;
-    elevation: 1;
-    border-radius: Spacing.radius-xl;
-
-    in property <string> text: "";
-    in property <bool> show: false;
-    in property <length> tip-x: 0px;
-    in property <length> tip-y: 0px;
-
-    // Position at specified coordinates
-    x: root.tip-x;
-    y: root.tip-y;
-
-    // Visibility
-    visible: root.show;
-    opacity: root.show ? 1 : 0;
-
-    // Size based on content with max width
-    width: Math.min(text-content.preferred-width + Spacing.sm * 2, 200px);
-    height: text-content.preferred-height + Spacing.sm * 2;
-    animate opacity { duration: 150ms; }
-
-    // Tooltip background — Neo 2.0 with subtle shadow
-
-    // Tooltip text
-    text-content := Text {
-        x: Spacing.sm;
-        y: Spacing.sm;
-        width: parent.width - Spacing.sm * 2;
-        text: root.text;
-        color: Colors.text-primary;
-        font-size: Typography.xs;
-        wrap: word-wrap;
-    }
-}
 
 // Self-contained tooltip trigger — wraps any content and renders its
 // own tooltip on hover. No signal bubbling needed.

@@ -606,7 +606,6 @@ impl ConversationHandle {
         Ok(MessageMenu {
             actions,
             pinned: message.is_pinned,
-            is_own,
         })
     }
 

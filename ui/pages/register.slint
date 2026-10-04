@@ -46,7 +46,6 @@ export component RegisterPage inherits Rectangle {
     // PIN strength — computed in chatter-core, set from Rust
     in property <int> pin-strength: 0;
     
-    property <bool> show-advanced: false;
 
     callback register(string, string, string, string, string);
     callback password-changed(string);

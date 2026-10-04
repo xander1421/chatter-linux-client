@@ -123,8 +123,6 @@ export component MessageComposer inherits GlassSurface {
     }
     property <bool> has-attachments: pending-attachments.length > 0;
 
-    // Line height and sizing constants
-    property <length> line-height: 22px;
     // The input row's floor, and with it the height of the emoji / attach /
     // send boxes beside it: those are touch targets, so the floor is the touch
     // minimum. A shorter row was what made them 36dp on a phone.

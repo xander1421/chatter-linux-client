@@ -167,7 +167,6 @@ export component App inherits Rectangle {
     // revises it after boot.
     in property <string> connection-status: "connected";
     in property <int> connection-reconnect-attempt: 0;
-    in property <int> connection-queue-count: 0;
 
     // Whether chatter-core considers the server settled-unreachable
     // (`ConnectionState::is_unreachable`) — as opposed to a connect still being
@@ -296,7 +295,6 @@ export component App inherits Rectangle {
     in property <string> user-presence-status: "online";
     // Manual presence mode chosen in the status picker ("auto" default).
     in-out property <string> user-presence-mode: "auto";
-    in property <string> user-custom-status: "";
     in-out property <bool> sidebar-collapsed: false;
     // The ONE definition of "the panel is a rail right now". The Sidebar
     // collapses on either signal, so anything else deciding based on collapse
@@ -385,7 +383,6 @@ export component App inherits Rectangle {
     in property <string> code-preview-filename: "";
     in property <string> code-preview-language: "";
     in property <int> code-preview-line-count: 0;
-    in property <image> code-preview-image;
     in property <string> code-preview-plain-text: "";
     callback close-code-preview();
     callback copy-code();
@@ -484,11 +481,6 @@ export component App inherits Rectangle {
     in-out property <length> context-menu-y: 0px;
     // Where the open conversation's content starts; the menu stays below it.
     in-out property <length> context-menu-content-top: 0px;
-    in property <bool> context-menu-can-retry: false;
-    in property <bool> context-menu-is-own-message: false;
-    in property <bool> context-menu-can-delete-for-everyone: false;
-    in property <bool> context-menu-is-pinned: false;
-    in property <bool> context-menu-has-attachments: false;
     // All callbacks use (sender_id, timestamp_ns) for Signal-style lookups
     callback reply-message(string, string);
     callback edit-message(string, string);
@@ -659,9 +651,7 @@ export component App inherits Rectangle {
     in property <bool> edit-profile-loading: false;
     in property <string> edit-profile-error: "";
 
-    // Friend requests modal properties (legacy)
-
-    // Friends modal properties (comprehensive)
+    // Friends modal properties
     in-out property <string> friends-modal-tab: "find";  // "find", "friends", "requests", "blocked"
     in property <[FriendData]> friends-list: [];
     in-out property <string> friends-requests-sub-tab: "received";
@@ -991,9 +981,7 @@ export component App inherits Rectangle {
     callback edit-profile-save(string, string);
     callback edit-profile-change-avatar();
 
-    // Friend requests (legacy)
-
-    // Friends modal (comprehensive)
+    // Friends modal
     callback friends-modal-switch-tab(string);
     callback friends-view-profile(string);
     callback friends-start-dm(string);
@@ -1362,7 +1350,6 @@ export component App inherits Rectangle {
                 connection-state: root.connection-status;
                 server-unreachable: root.server-unreachable;
                 reconnect-attempt: root.connection-reconnect-attempt;
-                queue-count: root.connection-queue-count;
                 dismissed => { root.connection-banner-dismissed = true; }
             }
 
@@ -2230,8 +2217,7 @@ export component App inherits Rectangle {
         }
     }
 
-    // Friend Requests Modal (legacy)
-    // Friends Modal (comprehensive)
+    // Friends Modal
     if root.active-tab == "contacts": FriendsModal {
         z: -1;
         mobile-mode: root.compact-layout;
@@ -2391,7 +2377,6 @@ export component App inherits Rectangle {
         person-id: root.unified-search-person-id;
         person-name: root.unified-search-person-name;
         person-handle: root.unified-search-person-handle;
-        opened => { root.unified-search-opened(); }
         query-changed(q) => { root.unified-search-changed(q); }
         resolve(q) => { root.unified-search-resolve(q); }
         person-selected(uid) => {
@@ -2424,7 +2409,6 @@ export component App inherits Rectangle {
         channel-description: root.channel-settings-description;
         channel-name-draft <=> root.channel-settings-name-draft;
         channel-description-draft <=> root.channel-settings-description-draft;
-        channel-icon-path <=> root.channel-settings-icon-path;
         channel-icon-preview <=> root.channel-settings-icon-preview;
         channel-has-icon-preview <=> root.channel-settings-has-icon-preview;
         pick-channel-icon => { root.channel-settings-pick-icon(); }
@@ -2976,7 +2960,6 @@ export component App inherits Rectangle {
                 file-name: root.code-preview-filename;
                 language: root.code-preview-language;
                 line-count: root.code-preview-line-count;
-                code-image: root.code-preview-image;
                 plain-text: root.code-preview-plain-text;
 
                 close-clicked => {
@@ -3118,13 +3101,8 @@ export component App inherits Rectangle {
         // composer. Its height already excludes the IME and system bars.
         position-y: root.context-menu-y - root.safe-area-top;
         content-top: root.context-menu-content-top - root.safe-area-top;
-        is-own-message: root.context-menu-is-own-message;
-        can-retry: root.context-menu-can-retry;
         retry-clicked(id) => { root.message-clicked(id); }
         info-clicked(id) => { MessageInfo.open(id); }
-        can-delete-for-everyone: root.context-menu-can-delete-for-everyone;
-        is-pinned: root.context-menu-is-pinned;
-        has-attachments: root.context-menu-has-attachments;
         can-thread: root.conversation-kind == ConversationKind.channel;
 
         close => {

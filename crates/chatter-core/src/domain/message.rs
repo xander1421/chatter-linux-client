@@ -247,13 +247,11 @@ pub struct MessageActions {
     pub select: bool,
 }
 
-/// Menu facts the UI needs beside the action flags: pin state (Pin vs Unpin)
-/// and whether the bubble is ours.
+/// Menu facts the UI needs beside the action flags: pin state (Pin vs Unpin).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct MessageMenu {
     pub actions: MessageActions,
     pub pinned: bool,
-    pub is_own: bool,
 }
 
 impl MessageActions {
