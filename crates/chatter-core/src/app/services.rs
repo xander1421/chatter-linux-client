@@ -325,13 +325,13 @@ impl ServiceContainer {
         #[cfg(feature = "mesh")]
         let mesh_service = {
             let db_path = infra.directories.database_path();
+            let (mesh_storage, mesh_sealer) =
+                crate::storage::mesh_store::sealed_store(infra.database.clone(), &db_path);
             let deps = MeshDeps {
                 identity_store: Arc::new(crate::storage::MeshIdentityStore::new(
                     infra.database.clone(),
                 )),
-                storage: Arc::new(crate::storage::mesh_store::MeshStorage::new(
-                    infra.database.clone(),
-                )),
+                storage: Arc::new(mesh_storage),
                 // Mesh messages are rows in the same unified message store as
                 // every other conversation type. See `MeshTimeline::record` for
                 // why they are stored at all — bitchat's stack is ephemeral by
@@ -358,9 +358,7 @@ impl ServiceContainer {
                 // initialization for the entire client here, so a Secret Service
                 // that did not answer meant nobody could log in — over one
                 // optional feature.
-                sealer: Arc::new(crate::storage::mesh_store::MeshSealer::from_keyring(
-                    &db_path,
-                )),
+                sealer: Arc::new(mesh_sealer),
                 // Relay traffic rides the Tor client the gRPC pool already owns,
                 // on its own isolation group. Without the `onion` feature there is
                 // no connector at all and the mesh runs radio-only.
