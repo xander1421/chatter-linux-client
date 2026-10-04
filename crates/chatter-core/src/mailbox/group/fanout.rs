@@ -13,7 +13,7 @@ use tokio::sync::Mutex;
 use crate::domain::{ChannelId, UserId};
 use crate::error::MailboxError;
 use crate::mailbox::dm::ReceivedMessage;
-use crate::mailbox::group::{GroupMailbox, GroupMailboxManager, MemberMailbox};
+use crate::mailbox::group::{GroupMailboxManager, MemberMailbox};
 use crate::network::grpc::AnonymousMailboxClient;
 use crate::proto::mailbox_v1::EnvelopeType;
 
@@ -294,104 +294,6 @@ impl GroupFanout {
 
     // ==================== Polling Methods ====================
 
-    /// Poll a group's mailbox for new messages.
-    ///
-    /// Authenticates with challenge-response and fetches pending messages
-    /// from our group mailbox.
-    ///
-    /// # Arguments
-    ///
-    /// * `group_id` - The group to poll
-    ///
-    /// # Returns
-    ///
-    /// GroupPollResult with messages and has_more indicator.
-    ///
-    /// # Errors
-    ///
-    /// Returns `MailboxError::GroupNotFound` if no group state exists.
-    /// Returns `MailboxError::NoMailboxConfigured` if we don't have a mailbox for this group.
-    pub async fn poll_group_mailbox(
-        &self,
-        group_id: &ChannelId,
-    ) -> Result<GroupPollResult, MailboxError> {
-        // Load our mailbox for this group
-        let group_state = self
-            .mailbox_manager
-            .load_group_state(group_id)?
-            .ok_or(MailboxError::GroupNotFound)?;
-
-        let our_mailbox = group_state
-            .our_mailbox
-            .ok_or(MailboxError::NoMailboxConfigured)?;
-
-        // Debug: Log our mailbox public key hex
-        tracing::info!(
-            group_id = %group_id,
-            mailbox_id = %our_mailbox.id,
-            our_pk_hex = %hex::encode(our_mailbox.public_key),
-            "[POLL_GROUP] Starting poll"
-        );
-
-        // Check mailbox not expired
-        if our_mailbox.is_expired() {
-            return Err(MailboxError::TokenExpired);
-        }
-
-        // Get challenge from server
-        let mut client = self.mailbox_client.lock().await;
-        let challenge_response = client
-            .get_mailbox_challenge(our_mailbox.public_key.to_vec())
-            .await
-            .map_err(|e| MailboxError::Network(e.to_string()))?;
-
-        // Sign challenge with our mailbox private key
-        let challenge_signature = self.sign_challenge(&our_mailbox, &challenge_response.challenge)?;
-
-        // Poll for messages
-        let poll_response = client
-            .poll_ephemeral_mailbox(
-                our_mailbox.public_key.to_vec(),
-                challenge_signature,
-                challenge_response.challenge,
-                None,
-                DEFAULT_POLL_LIMIT,
-            )
-            .await
-            .map_err(|e| MailboxError::Network(e.to_string()))?;
-
-        tracing::info!(
-            group_id = %group_id,
-            mailbox_id = %our_mailbox.id,
-            message_count = poll_response.messages.len(),
-            "[POLL_GROUP] Poll complete"
-        );
-
-        // Update poll timestamp
-        self.mailbox_manager.update_poll_time(&our_mailbox.id)?;
-
-        // Convert to ReceivedMessage
-        let messages: Vec<ReceivedMessage> = poll_response
-            .messages
-            .into_iter()
-            .map(|m| ReceivedMessage {
-                message_id: m.id,
-                encrypted_envelope: m.encrypted_envelope,
-                envelope_type: m.envelope_type,
-                server_timestamp: m.timestamp,
-            })
-            .collect();
-
-        let has_more = messages.len() == DEFAULT_POLL_LIMIT as usize;
-
-        Ok(GroupPollResult {
-            group_id: *group_id,
-            messages,
-            has_more,
-            mailbox_id: our_mailbox.id.clone(),
-        })
-    }
-
     /// Poll all group mailboxes for new messages.
     ///
     /// Polls each group's mailbox in parallel and returns results per group.
@@ -566,15 +468,6 @@ impl GroupFanout {
             .map_err(|e| MailboxError::Network(e.to_string()))?;
 
         Ok(ack_count)
-    }
-
-    /// Sign a challenge with mailbox private key.
-    fn sign_challenge(
-        &self,
-        mailbox: &GroupMailbox,
-        challenge: &[u8],
-    ) -> Result<Vec<u8>, MailboxError> {
-        mailbox.sign_challenge(challenge)
     }
 
     /// Check if the group is ready for receiving messages.

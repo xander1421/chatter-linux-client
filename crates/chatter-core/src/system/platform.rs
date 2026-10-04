@@ -2,7 +2,7 @@
 //!
 //! Centralized app identity strings that vary by target OS.
 
-/// Application ID used for system integration (keyring service, directories, autostart).
+/// Application ID used for system integration (keyring service, directories).
 ///
 /// - Linux: `chatter-linux`
 /// - Windows: `chatter-windows`
@@ -22,16 +22,6 @@ pub const APP_ID: &str = "chatter";
 /// Human-readable display name shown in notifications, tray tooltips, etc.
 pub const APP_DISPLAY_NAME: &str = "Chatter";
 
-/// Binary/executable name for autostart entries.
-#[cfg(target_os = "linux")]
-pub const APP_BINARY: &str = "chatter-linux";
-
-#[cfg(target_os = "windows")]
-pub const APP_BINARY: &str = "chatter-windows.exe";
-
-#[cfg(not(any(target_os = "linux", target_os = "windows")))]
-pub const APP_BINARY: &str = "chatter";
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -40,13 +30,11 @@ mod tests {
     fn test_constants_not_empty() {
         assert!(!APP_ID.is_empty());
         assert!(!APP_DISPLAY_NAME.is_empty());
-        assert!(!APP_BINARY.is_empty());
     }
 
     #[cfg(target_os = "linux")]
     #[test]
     fn test_linux_identity() {
         assert_eq!(APP_ID, "chatter-linux");
-        assert_eq!(APP_BINARY, "chatter-linux");
     }
 }

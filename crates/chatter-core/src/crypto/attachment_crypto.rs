@@ -594,35 +594,16 @@ impl AttachmentCrypto {
 /// putter) so the whole file never has to fit in RAM. Cap raised from
 /// 100 MiB after users hit the limit on video files, then to 2 GiB once
 /// the client gained a true multipart CDN upload path.
-///
-/// Override at startup via [`set_max_attachment_size`].
-const DEFAULT_MAX_ATTACHMENT_SIZE: u64 = 2 * 1024 * 1024 * 1024;
-
-static MAX_ATTACHMENT_SIZE: std::sync::atomic::AtomicU64 =
-    std::sync::atomic::AtomicU64::new(DEFAULT_MAX_ATTACHMENT_SIZE);
+const MAX_ATTACHMENT_SIZE: u64 = 2 * 1024 * 1024 * 1024;
 
 #[cfg(test)]
 thread_local! {
     /// Test-only override of the cap, scoped to the thread that set it.
     ///
-    /// The cap has to be a process global in production — it is read from deep inside
-    /// the encryptor, configured once at startup. But a test that lowers it to prove
-    /// the too-large path is *also* lowering it for every test running beside it, and
-    /// libtest runs tests in parallel by default.
-    ///
-    /// This was previously handled with a mutex that every cap-touching test was
-    /// expected to take. That only works while every such test remembers to, and the
-    /// set of tests that read the cap is not the set that mentions it: the P9 mesh
-    /// transfer tests read it indirectly, through `store_file_streamed`, several
-    /// layers down. They did not take the lock, so a cap of 100 bytes reached them
-    /// and `store_file_streamed` refused a 4 kB fixture — surfacing as an unrelated
-    /// mesh test failing roughly 3 times in 10, with no mention of attachments
-    /// anywhere in the panic.
-    ///
-    /// A thread-local needs nothing remembered. libtest gives each test its own
-    /// thread, so an override is visible exactly where it was set and nowhere else,
-    /// and a test added tomorrow inherits that for free. Production reads the atomic
-    /// as before — this path does not exist outside `cfg(test)`.
+    /// Lowering a process-wide cap would leak into every test running beside
+    /// it (libtest runs them in parallel); a thread-local is seen only by the
+    /// test that set it. Production reads the constant; this path does not
+    /// exist outside `cfg(test)`.
     static MAX_ATTACHMENT_SIZE_OVERRIDE: std::cell::Cell<Option<u64>> =
         const { std::cell::Cell::new(None) };
 }
@@ -632,12 +613,7 @@ pub fn max_attachment_size() -> u64 {
     if let Some(size) = MAX_ATTACHMENT_SIZE_OVERRIDE.with(std::cell::Cell::get) {
         return size;
     }
-    MAX_ATTACHMENT_SIZE.load(std::sync::atomic::Ordering::Relaxed)
-}
-
-/// Override the attachment size cap. Intended for startup config.
-pub fn set_max_attachment_size(size: u64) {
-    MAX_ATTACHMENT_SIZE.store(size, std::sync::atomic::Ordering::Relaxed);
+    MAX_ATTACHMENT_SIZE
 }
 
 /// Lower (or raise) the cap for the current test only.

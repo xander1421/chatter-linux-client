@@ -32,7 +32,7 @@ pub mod svr;
 pub mod svr_backup;
 pub mod vrf;
 
-pub use attachment_crypto::{AttachmentCrypto, EncryptedAttachment, StreamingEncryptResult, KEY_SET_LENGTH, max_attachment_size, set_max_attachment_size};
+pub use attachment_crypto::{AttachmentCrypto, EncryptedAttachment, StreamingEncryptResult, KEY_SET_LENGTH, max_attachment_size};
 pub use call_key_provider::{
     derive_call_key, CallKeyState,
     // Ephemeral key exchange (Signal-style PFS for DM calls)
