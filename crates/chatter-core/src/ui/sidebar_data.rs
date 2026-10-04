@@ -176,65 +176,6 @@ impl FriendDataSendData {
     }
 }
 
-/// Convert a presence status string to a hex color for Slint.
-///
-/// Returns color values matching Colors.online/away/dnd/offline in Slint.
-#[must_use]
-pub fn presence_color(status: &str) -> &'static str {
-    match status.to_lowercase().as_str() {
-        "online" => "#10b981",
-        "away" => "#f59e0b",
-        "dnd" => "#ef4444",
-        _ => "#6b7280",
-    }
-}
-
-// ============================================================================
-// User Profile Bar Data
-// ============================================================================
-
-/// User profile bar data for Slint model binding.
-///
-/// Maps to the properties of `UserProfileBar` component in Slint.
-#[derive(Clone, Debug, Default)]
-pub struct UserProfileBarData {
-    /// Display name.
-    pub display_name: String,
-    /// Initials for avatar fallback.
-    pub initials: String,
-    /// Presence status: "online", "away", "dnd", "offline".
-    pub presence_status: String,
-    /// Custom status text.
-    pub custom_status: String,
-}
-
-impl UserProfileBarData {
-    /// Create a new user profile bar data entry.
-    #[must_use]
-    pub fn new(display_name: impl Into<String>, initials: impl Into<String>) -> Self {
-        Self {
-            display_name: display_name.into(),
-            initials: initials.into(),
-            presence_status: "online".to_string(),
-            custom_status: String::new(),
-        }
-    }
-
-    /// Set presence status.
-    #[must_use]
-    pub fn with_presence(mut self, status: impl Into<String>) -> Self {
-        self.presence_status = status.into();
-        self
-    }
-
-    /// Set custom status text.
-    #[must_use]
-    pub fn with_custom_status(mut self, status: impl Into<String>) -> Self {
-        self.custom_status = status.into();
-        self
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -266,27 +207,5 @@ mod tests {
         assert_eq!(chat_row_top_slot(false, []), 0);
         assert_eq!(chat_row_top_slot(true, [true, false]), 0);
         assert_eq!(chat_row_top_slot(true, [false, false]), 0);
-    }
-
-    #[test]
-    fn test_presence_color() {
-        assert_eq!(presence_color("online"), "#10b981");
-        assert_eq!(presence_color("away"), "#f59e0b");
-        assert_eq!(presence_color("dnd"), "#ef4444");
-        assert_eq!(presence_color("offline"), "#6b7280");
-        assert_eq!(presence_color("unknown"), "#6b7280");
-        assert_eq!(presence_color("ONLINE"), "#10b981"); // case insensitive
-    }
-
-    #[test]
-    fn test_user_profile_bar_data() {
-        let profile = UserProfileBarData::new("Bob Smith", "BS")
-            .with_presence("away")
-            .with_custom_status("In a meeting");
-
-        assert_eq!(profile.display_name, "Bob Smith");
-        assert_eq!(profile.initials, "BS");
-        assert_eq!(profile.presence_status, "away");
-        assert_eq!(profile.custom_status, "In a meeting");
     }
 }

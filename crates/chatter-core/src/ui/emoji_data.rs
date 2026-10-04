@@ -65,48 +65,6 @@ pub fn get_emoji_list() -> Vec<EmojiEntry> {
     emoji
 }
 
-/// Search emoji by name or keywords (case-insensitive contains).
-#[must_use]
-pub fn search_emoji(query: &str) -> Vec<EmojiEntry> {
-    if query.is_empty() {
-        return get_emoji_list();
-    }
-
-    let query_lower = query.to_lowercase();
-    get_emoji_list()
-        .into_iter()
-        .filter(|e| {
-            e.name.to_lowercase().contains(&query_lower)
-                || e.keywords.iter().any(|k| k.to_lowercase().contains(&query_lower))
-        })
-        .collect()
-}
-
-/// Get emoji filtered by category.
-#[must_use]
-pub fn get_emoji_by_category(category: EmojiCategory) -> Vec<EmojiEntry> {
-    get_emoji_list()
-        .into_iter()
-        .filter(|e| e.category == category)
-        .collect()
-}
-
-/// Get the icon emoji for each category (used in tab bar).
-#[must_use]
-pub fn category_icons() -> Vec<(&'static str, EmojiCategory)> {
-    vec![
-        ("😀", EmojiCategory::Smileys),
-        ("👋", EmojiCategory::People),
-        ("🐱", EmojiCategory::Animals),
-        ("🍎", EmojiCategory::Food),
-        ("✈️", EmojiCategory::Travel),
-        ("⚽", EmojiCategory::Activities),
-        ("💡", EmojiCategory::Objects),
-        ("❤️", EmojiCategory::Symbols),
-        ("🏳️", EmojiCategory::Flags),
-    ]
-}
-
 // ============================================================================
 // Emoji Data by Category
 // ============================================================================
@@ -992,50 +950,4 @@ mod tests {
         assert!(categories.contains(&EmojiCategory::Flags));
     }
 
-    #[test]
-    fn test_search_emoji_by_name() {
-        let results = search_emoji("smile");
-        assert!(!results.is_empty(), "Search for 'smile' should return results");
-        assert!(results.iter().any(|e| e.emoji == "😀" || e.emoji == "😊"));
-    }
-
-    #[test]
-    fn test_search_emoji_by_keyword() {
-        let results = search_emoji("love");
-        assert!(!results.is_empty(), "Search for 'love' should return results");
-        assert!(results.iter().any(|e| e.emoji == "❤️" || e.emoji == "😍"));
-    }
-
-    #[test]
-    fn test_search_emoji_case_insensitive() {
-        let results_lower = search_emoji("happy");
-        let results_upper = search_emoji("HAPPY");
-        let results_mixed = search_emoji("HaPpY");
-
-        assert_eq!(results_lower.len(), results_upper.len());
-        assert_eq!(results_lower.len(), results_mixed.len());
-    }
-
-    #[test]
-    fn test_search_emoji_empty_query() {
-        let results = search_emoji("");
-        assert_eq!(results.len(), get_emoji_list().len());
-    }
-
-    #[test]
-    fn test_get_emoji_by_category() {
-        let smileys = get_emoji_by_category(EmojiCategory::Smileys);
-        assert!(!smileys.is_empty(), "Smileys category should not be empty");
-        assert!(smileys.iter().all(|e| e.category == EmojiCategory::Smileys));
-    }
-
-    #[test]
-    fn test_category_icons() {
-        let icons = category_icons();
-        assert_eq!(icons.len(), 9, "Should have 9 category icons (excluding Custom)");
-
-        // Check first and last categories
-        assert_eq!(icons[0], ("😀", EmojiCategory::Smileys));
-        assert_eq!(icons[8], ("🏳️", EmojiCategory::Flags));
-    }
 }
