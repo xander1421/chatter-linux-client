@@ -1,54 +1,10 @@
 //! profile façade — thin delegates to services.
 
-#![allow(unused_imports)]
-
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 
-use parking_lot::Mutex;
-use tokio::task::JoinHandle;
-
-use crate::app::context::{AppContext, ContextError};
-use crate::app::core_services::CoreServices;
-use crate::domain::attachment::Attachment;
-use crate::domain::channel::{Channel, ChannelType};
-use crate::domain::message::{ConversationType, Message};
-use crate::error::NetworkError;
-use crate::events::{DomainEvent, EventBus};
-use crate::services::auth_service::{AuthError, LoginResult};
-use crate::inbox::DeviceInboxProvider;
-use crate::mailbox::group::GroupFanout;
-use crate::proto::content_v1::AttachmentPointer;
-use crate::services::ai_service::AIService;
-use crate::services::anon_dm::AnonDmService;
-use crate::services::anon_group::AnonGroupService;
-use crate::services::attachment::AttachmentService;
-use crate::services::auth_service::AuthService;
-#[cfg(feature = "media")]
-use crate::services::call_worker::CallWorkerHandle;
-use crate::services::channel::ChannelService;
-use crate::services::dm_bootstrap_service::DmBootstrapService;
-use crate::services::gateway::outgoing::{
-    OwnedOutgoingServices, OutgoingIntent, QuoteIntent, SendError, SendResult,
-    route_outgoing_owned,
-};
-use crate::services::ai::LocalAIService;
-use crate::services::mailbox_manager::MailboxManager;
-use crate::services::message::MessageService;
-use crate::services::pin_service::PinService;
-use crate::services::session_service::{SessionError, SessionService};
-use crate::services::signal::SignalService;
-use crate::services::section_service::SectionService;
-use crate::services::user::UserService;
-use crate::services::conversation::ConversationHandle;
-use crate::state::{
-    ActiveConversation, AuthState, ChatState, MessageState, OfflineState,
-    PrivacyState, UserState,
-};
-use crate::state::chat_state::PendingAttachment;
-use crate::storage::settings_keys;
-use crate::system::Directories;
-use super::{ChatterClient, ClientError};
+use crate::domain::message::ConversationType;
+use crate::state::ActiveConversation;
+use super::ChatterClient;
 
 /// One Friends › Blocked row (`blocked_users`). `anon` marks an anon-DM peer
 /// block; `anon_chat` that its conversation is still stored locally, which is
@@ -865,6 +821,7 @@ impl ChatterClient {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::domain::message::Message;
     use crate::domain::anon_dm::AnonDm;
     use crate::domain::ids::{ChannelId, UserId};
 
