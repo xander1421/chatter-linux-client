@@ -168,10 +168,8 @@ impl ServiceContainer {
         // 5. DM bootstrap service
         let dm_bootstrap_service = Arc::new(DmBootstrapService::new(
             message_service.clone(),
-            infra.channel_repo.clone(),
             infra.grpc_pool.clone(),
             mailbox_manager.clone(),
-            infra.database.clone(),
         ));
 
         // 6. Auth service

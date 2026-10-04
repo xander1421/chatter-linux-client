@@ -60,7 +60,7 @@ pub mod jarvis;
 pub mod validation;
 
 // Re-exports for DM bootstrap service
-pub use dm_bootstrap_service::{DmBootstrapError, DmBootstrapService};
+pub use dm_bootstrap_service::DmBootstrapService;
 
 // Re-exports for channel event service
 pub use channel_event_service::{ChannelEventError, ChannelEventService};

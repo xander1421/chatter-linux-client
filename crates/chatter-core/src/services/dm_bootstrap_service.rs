@@ -4,25 +4,11 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use crate::domain::channel::Channel;
 use crate::domain::ids::UserId;
-use crate::error::StorageError;
 use crate::network::grpc::auth_client::AuthClient;
 use crate::network::grpc::client_pool::GrpcClientPool;
-use crate::proto::chat_v1::channel::ChannelMember;
-use crate::services::channel::converters::proto_to_domain_membership;
 use crate::services::mailbox_manager::MailboxManager;
 use crate::services::message::MessageService;
-use crate::storage::repositories::channel_repo::ChannelRepository;
-#[derive(Debug, thiserror::Error)]
-pub enum DmBootstrapError {
-    #[error("session error: {0}")]
-    Session(String),
-    #[error("storage error: {0}")]
-    Storage(#[from] StorageError),
-    #[error("channel error: {0}")]
-    Channel(String),
-}
 
 /// Service for DM channel establishment and session recovery.
 ///
@@ -30,17 +16,10 @@ pub enum DmBootstrapError {
 /// ensuring consistent handling of:
 /// - Session recovery after decryption failures
 /// - Bootstrap completion and pending message sending
-/// - Channel/membership persistence for new DM channels
 pub struct DmBootstrapService {
     message_service: Arc<MessageService>,
-    channel_repo: Arc<ChannelRepository>,
     grpc_pool: Arc<GrpcClientPool>,
     mailbox_manager: Arc<MailboxManager>,
-    /// Shared database handle for spawning bootstrap event handler.
-    ///
-    /// TODO: Refactor `spawn_dm_bootstrap_handler_from_bus` to take pre-built
-    /// services (SignalService, KeyStore) instead of raw Database, then remove this.
-    database: Arc<crate::storage::Database>,
     /// When each peer's sessions were last reset.
     last_reset: Mutex<HashMap<UserId, Instant>>,
 }
@@ -51,32 +30,15 @@ const SESSION_RESET_INTERVAL: Duration = Duration::from_secs(60 * 60);
 impl DmBootstrapService {
     pub fn new(
         message_service: Arc<MessageService>,
-        channel_repo: Arc<ChannelRepository>,
         grpc_pool: Arc<GrpcClientPool>,
         mailbox_manager: Arc<MailboxManager>,
-        database: Arc<crate::storage::Database>,
     ) -> Self {
         Self {
             message_service,
-            channel_repo,
             grpc_pool,
             mailbox_manager,
-            database,
             last_reset: Mutex::new(HashMap::new()),
         }
-    }
-
-    /// Spawn the DM bootstrap event handler.
-    ///
-    /// Listens for domain events (e.g., incoming prekey messages) and handles
-    /// session establishment. Returns a `JoinHandle` for the background task.
-    pub fn spawn_handler(&self, event_bus: &crate::events::EventBus) -> tokio::task::JoinHandle<()> {
-        crate::inbox::spawn_dm_bootstrap_handler_from_bus(
-            self.database.clone(),
-            self.grpc_pool.clone(),
-            self.message_service.clone(),
-            event_bus,
-        )
     }
 
     /// Reset the sessions with every device of `peer_id` after a session
@@ -229,39 +191,4 @@ impl DmBootstrapService {
         });
     }
 
-    /// Save a DM channel to local storage if it doesn't already exist.
-    pub fn save_dm_channel(&self, channel: &Channel) -> Result<(), DmBootstrapError> {
-        self.channel_repo.insert_or_ignore(channel)?;
-        Ok(())
-    }
-
-    /// Sync DM memberships to local storage.
-    pub fn sync_dm_memberships(
-        &self,
-        channel: &Channel,
-        proto_members: &[ChannelMember],
-    ) -> Result<(), DmBootstrapError> {
-        for proto_member in proto_members {
-            match proto_to_domain_membership(&channel.id, proto_member) {
-                Ok(membership) => {
-                    if let Err(e) = self.channel_repo.insert_or_ignore_membership(&membership) {
-                        tracing::warn!(
-                            channel_id = %channel.id,
-                            user_id = %membership.user_id,
-                            error = %e,
-                            "Failed to sync DM membership"
-                        );
-                    }
-                }
-                Err(e) => {
-                    tracing::warn!(
-                        channel_id = %channel.id,
-                        error = %e,
-                        "Failed to convert proto DM membership"
-                    );
-                }
-            }
-        }
-        Ok(())
-    }
 }
