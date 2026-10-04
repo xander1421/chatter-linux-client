@@ -197,8 +197,7 @@ const TABLE: &[Entry] = &[
               that the sender ID equals SHA256(announced noise key)[..8]. This function \
               HAD zero production callers — mesh peers were unauthenticated on the live \
               path while announce.rs's unit tests passed. It is wired now \
-              (services/mesh/ble.rs); this entry stops it regressing. Note that \
-              CLAUDE.md still describes it as dead.",
+              (services/mesh/ble.rs); this entry stops it regressing.",
     },
     Entry {
         symbol: "verify_packet",
@@ -213,25 +212,6 @@ const TABLE: &[Entry] = &[
         expect: Expect::Wired,
         why: "Records a peer only AFTER verification. bitchat drops an unverified \
               announce outright; recording one would be identity poisoning.",
-    },
-    Entry {
-        symbol: "verify_announce",
-        defined_in: "chatter-mesh-noise/src/sign.rs",
-        expect: Expect::Dead,
-        why: "KNOWN DEAD, and a trap for a reader. `sign_announce`/`verify_announce`/\
-              `canonical_announce_bytes` are a complete, tested, and entirely unused \
-              announce-specific signature scheme. Production authenticates announces \
-              with the PACKET-level `verify_packet` instead. Anyone citing the \
-              announce preimage as what protects the mesh is reading dead code.",
-    },
-    Entry {
-        symbol: "plan_announce_response",
-        defined_in: "chatter-mesh-link/src/announce.rs",
-        expect: Expect::Dead,
-        why: "KNOWN DEAD. The second half of the ported bitchat announce handler \
-              (notify-connected, initial sync, announce-back, afterglow). None of that \
-              follow-up behaviour happens in production even though evaluate_announce \
-              is live.",
     },
     // ---- Blocking: enforced only on the receiving client ------------------
     Entry {

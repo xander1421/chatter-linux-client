@@ -13,10 +13,12 @@ Use `cargo run` for verification, not `cargo build` / `cargo check` — Slint co
 
 ## Workspace
 
-Nine crates (`Cargo.toml` `[workspace]`):
+Eleven crates (`Cargo.toml` `[workspace]`):
 
 - `chatter-core` — headless SDK: crypto, network, storage, services, inbox
 - `chatter-ui` — Slint app + glue (desktop binary and Android library)
+- `chatter-ui-slint` — generated Slint components
+- `chatter-ios` — iOS staticlib entry point
 - `chatter-mesh` — sans-IO bitchat wire format
 - `chatter-mesh-noise` — Noise XX session layer
 - `chatter-mesh-link` — peer registry, ingress guard, announce policy
@@ -46,16 +48,15 @@ this prose, which has already gone stale once.
 - **CORRECTED (was wrong here):** the announce trust policy
   (`chatter-mesh-link/src/announce.rs`: `preflight_announce`,
   `evaluate_announce_trust`, `evaluate_announce`) **is** wired now —
-  `services/mesh/ble.rs:782` calls `evaluate_announce`, which drives the other
+  `services/mesh/ble.rs:823` calls `evaluate_announce`, which drives the other
   two. Mesh peers are authenticated on the live path, including the
   sender-ID-equals-`SHA256(noise key)[..8]` derivation check.
-- Still dead in that crate: `plan_announce_response` and
-  `announce_back_dedup_id` (the announce-back / initial-sync / afterglow half of
-  the ported handler), and the whole
-  `chatter-mesh-noise/src/sign.rs` `sign_announce` / `verify_announce` /
-  `canonical_announce_bytes` trio — production authenticates announces with the
-  packet-level `verify_packet` instead, so anyone citing the announce-specific
-  preimage is reading dead code.
+- Announce authentication on that path is `verify_packet`
+  (`chatter-mesh-noise/src/sign.rs`). The unused announce-specific preimage
+  (`sign_announce` / `verify_announce` / `canonical_announce_bytes`) and the
+  announce-back planner (`plan_announce_response`, `announce_back_dedup_id`)
+  were removed. `ANNOUNCE_CONTEXT` stays so the domain strings remain
+  prefix-free of one another.
 - **CORRECTED:** `crypto/keytransparency.rs::verify_consistency_proof` is wired
   as of 2026-08-03. `services/signal/kt_anchor.rs` pins the highest tree head
   this device has accepted and requires a consistency proof before advancing;
