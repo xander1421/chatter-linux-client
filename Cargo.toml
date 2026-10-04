@@ -243,7 +243,8 @@ lto = "thin"
 # lag, slint-ui/slint #9240), and send the IME's text as a committed state
 # with its caret instead of a Slint pre-edit, which core 1.17 paints in
 # selection colours (androidwindowadapter.rs, game-activity path — the one
-# chatter-ui builds). See vendor/i-slint-backend-android-activity/.
+# chatter-ui builds). Also paces animation frames on the vsync'd swap instead
+# of a hardcoded 10 ms tick. See vendor/i-slint-backend-android-activity/PATCHES.md.
 [patch.crates-io]
 i-slint-backend-android-activity = { path = "vendor/i-slint-backend-android-activity" }
 

@@ -103,8 +103,18 @@ impl i_slint_core::platform::Platform for AndroidPlatform {
         loop {
             let mut timeout = i_slint_core::platform::duration_until_next_timer_update();
             if self.window.window.has_active_animations() {
-                // FIXME: we should not hardcode a value here
-                let frame_duration = Duration::from_millis(10);
+                // Chatter patch: upstream hardcoded a 10 ms frame here, capping
+                // a fling at ~100 fps — below a 120 Hz panel, and out of phase
+                // with any vsync. With a window, don't wait at all: the redraw
+                // forced below blocks in the vsync'd eglSwapBuffers (swap
+                // interval 1), which paces the loop at the display's rate.
+                // Without one there is no swap to block on, so fall back to a
+                // 60 Hz tick rather than spin.
+                let frame_duration = if self.app.native_window().is_some() {
+                    Duration::ZERO
+                } else {
+                    Duration::from_millis(16)
+                };
                 timeout = Some(match timeout {
                     Some(x) => x.min(frame_duration),
                     None => frame_duration,
@@ -121,7 +131,11 @@ impl i_slint_core::platform::Platform for AndroidPlatform {
             if r?.is_break() {
                 break;
             }
-            if self.window.pending_redraw.take() {
+            // Chatter patch: while animating, draw every iteration so the swap
+            // (not a timer) sets the frame rate; see the timeout above.
+            let animating = self.window.window.has_active_animations()
+                && self.app.native_window().is_some();
+            if self.window.pending_redraw.take() || animating {
                 self.window.do_render()?;
             }
         }
