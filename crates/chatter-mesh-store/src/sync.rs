@@ -1316,6 +1316,21 @@ impl GossipSyncManager {
             .collect()
     }
 
+    /// Whether this exact public message or file transfer is already carried,
+    /// by gossip packet ID (so a relayed or RSR copy matches its original).
+    ///
+    /// The "have we already shown this" answer for our own traffic coming
+    /// back: anything we sent or already accepted is filed here, for longer than
+    /// the self-broadcast tracker remembers it. Other types answer `false`.
+    pub fn holds(&self, packet: &BitchatPacket) -> bool {
+        let store = match packet.message_type() {
+            Some(MessageType::Message) => &self.messages,
+            Some(MessageType::FileTransfer) => &self.file_transfers,
+            _ => return false,
+        };
+        store.packets.contains_key(&packet.packet_id())
+    }
+
     pub fn has_announcement(&self, peer: &PeerId) -> bool {
         self.latest_announce_by_peer.contains_key(peer)
     }
@@ -1468,6 +1483,20 @@ mod tests {
 
     fn decode_request(send: &SyncSend) -> RequestSyncPacket {
         RequestSyncPacket::decode(&send.packet.payload).expect("request decodes")
+    }
+
+    #[test]
+    fn holds_matches_a_stored_message_by_id_whatever_its_ttl_or_rsr() {
+        let mut sync = manager();
+        let original = message(b"hello", NOW_MS);
+        assert!(!sync.holds(&original));
+        sync.on_public_packet_seen(&original, NOW);
+
+        let mut response = original.clone();
+        response.ttl = 0;
+        response.is_rsr = true;
+        assert!(sync.holds(&response), "a sync copy is the same packet");
+        assert!(!sync.holds(&message(b"other", NOW_MS)));
     }
 
     // -- solicitation ------------------------------------------------------

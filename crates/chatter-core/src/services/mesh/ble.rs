@@ -241,7 +241,7 @@ impl BleRuntime {
     ///
     /// Persist strictly before publishing. A published prekey whose secret was
     /// never saved is mail that can never be opened.
-    async fn maintain_prekeys(&mut self, now_ms: u64, now_s: u64) {
+    async fn maintain_prekeys(&mut self, now_ms: u64) {
         let changed = self.state.with(|state| {
             state
                 .prekeys
@@ -289,8 +289,7 @@ impl BleRuntime {
             chatter_mesh::relay::MESSAGE_TTL_DEFAULT,
         );
         let packet = self.maybe_sign(packet, true);
-        self.gossip.on_public_packet_seen(&packet, now_s);
-        self.transmit(&packet, None, None).await;
+        self.originate_broadcast(&packet).await;
     }
 
     /// A peer's prekey bundle. Cached and re-gossiped only if it verifies
@@ -369,7 +368,7 @@ impl BleRuntime {
             // to us falls back to the static seal until the next start.
             Err(error) => self.degraded(format!("mesh prekeys could not be restored: {error}")),
         }
-        self.maintain_prekeys(now_millis(), now_secs()).await;
+        self.maintain_prekeys(now_millis()).await;
 
         self.announce().await;
 
@@ -1133,6 +1132,19 @@ impl BleRuntime {
         true
     }
 
+    /// Whether a self-authored packet is one we have already shown.
+    ///
+    /// The self-broadcast tracker covers this session's sends for five
+    /// minutes; the gossip store covers everything we sent or already accepted
+    /// for its whole retention window. The second check is what makes recovery
+    /// happen once: a self-authored TTL-0 sync response bypasses the dedup
+    /// cache by design, so without it every peer that answered a round with the
+    /// same lost message of ours added another copy to the screen.
+    fn is_own_echo(&self, packet: &BitchatPacket) -> bool {
+        self.gossip.holds(packet)
+            || self.state.with(|state| state.self_broadcasts.contains(packet))
+    }
+
     fn on_public_message(&mut self, packet: &BitchatPacket, claimed: &PeerId) {
         // A `Message` addressed to one recipient is a legacy private message. We
         // do not carry those — private traffic is Noise-encrypted — and showing
@@ -1193,7 +1205,7 @@ impl BleRuntime {
         // response — that is how a device with no database recovers its own
         // history — so this is the layer that has to consult it. A self-authored
         // packet the tracker does *not* know is genuine recovery and still lands.
-        if is_self && self.state.with(|state| state.self_broadcasts.contains(packet)) {
+        if is_self && self.is_own_echo(packet) {
             tracing::debug!(
                 target: "mesh::ble",
                 "our own broadcast came back; already shown"
@@ -1312,7 +1324,7 @@ impl BleRuntime {
         // would write a *second encrypted copy of the bytes* to disk under a new
         // attachment id. bitchat suppresses the same case as
         // `BLEFileTransferPolicy.isSelfEcho`.
-        if is_self && self.state.with(|state| state.self_broadcasts.contains(packet)) {
+        if is_self && self.is_own_echo(packet) {
             tracing::debug!(
                 target: "mesh::ble",
                 "our own file came back; already stored"
@@ -2026,7 +2038,7 @@ impl BleRuntime {
             BleCommand::Announce => self.announce().await,
             BleCommand::Broadcast { packet, sign } => {
                 let packet = self.maybe_sign(packet, sign);
-                self.transmit(&packet, None, None).await;
+                self.originate_broadcast(&packet).await;
             }
             BleCommand::Directed { peer, packet, sign } => {
                 let packet = self.maybe_sign(packet, sign);
@@ -2198,7 +2210,7 @@ impl BleRuntime {
         // own rather than displayed twice.
         self.state
             .with(|state| state.self_broadcasts.record(message_id, &packet, now_ms));
-        self.transmit(&packet, None, None).await;
+        self.originate_broadcast(&packet).await;
 
         let local = self.identity.peer_id();
         let message = outbound_message(
@@ -2257,7 +2269,7 @@ impl BleRuntime {
         // than stored a second time under a new attachment id.
         self.state
             .with(|state| state.self_broadcasts.record(message_id, &packet, now_ms));
-        self.transmit(&packet, None, None).await;
+        self.originate_broadcast(&packet).await;
 
         // Our own copy, stored the same way an inbound one is. Without it the row
         // would name an attachment that does not exist, and the sender would be
@@ -2356,7 +2368,7 @@ impl BleRuntime {
         // the same way as they go out — see `pump_streamed_files`.
         self.state
             .with(|state| state.self_broadcasts.record(message_id, &manifest_packet, now_ms));
-        self.transmit(&manifest_packet, None, None).await;
+        self.originate_broadcast(&manifest_packet).await;
 
         tracing::info!(
             target: "mesh::ble",
@@ -2462,7 +2474,7 @@ impl BleRuntime {
                         .self_broadcasts
                         .record("mesh-manifest-repeat", &packet, now_millis())
                 });
-                self.transmit(&packet, None, None).await;
+                self.originate_broadcast(&packet).await;
             }
 
             if congested {
@@ -2525,7 +2537,7 @@ impl BleRuntime {
                         .self_broadcasts
                         .record("mesh-file-chunk", &packet, now_millis())
                 });
-                self.transmit(&packet, None, None).await;
+                self.originate_broadcast(&packet).await;
             }
         }
 
@@ -2591,7 +2603,7 @@ impl BleRuntime {
                 chunks = request.indices.len(),
                 "asking for chunks that never arrived"
             );
-            self.transmit(&packet, None, None).await;
+            self.originate_broadcast(&packet).await;
         }
     }
 
@@ -2657,7 +2669,7 @@ impl BleRuntime {
         let packet = self.maybe_sign(packet, true);
 
         self.state.with(|state| state.last_announce_ms = now_ms);
-        self.transmit(&packet, None, None).await;
+        self.originate_broadcast(&packet).await;
     }
 
     /// Every *other* link bound to the peer a packet arrived on.
@@ -2712,6 +2724,28 @@ impl BleRuntime {
             payload,
             ttl,
         )
+    }
+
+    /// Put one of our own broadcasts on the air, filed in the gossip store first.
+    ///
+    /// Every packet we originate for the room goes through here. Filing it is
+    /// what puts it in our sync filter: without that, each sync round tells
+    /// every peer we lack our own messages, and they send them back — forever,
+    /// because bitchat-android's answers carry no RSR flag and the ingress guard
+    /// drops them as our own traffic before anything could store them. bitchat
+    /// files its own sends the same way (`BluetoothMeshService.kt`,
+    /// `onPublicPacketSeen(signedPacket)`). Types the store does not carry
+    /// (manifests, chunks, chunk requests) are ignored by it.
+    ///
+    /// Our own announce is the one exception, a deliberate departure from
+    /// bitchat: the store's stale-peer sweep purges every carried packet of a
+    /// peer whose announce has aged past a minute, and filing ours would aim
+    /// that sweep at our own messages between announces.
+    async fn originate_broadcast(&mut self, packet: &BitchatPacket) {
+        if packet.message_type() != Some(MessageType::Announce) {
+            self.gossip.on_public_packet_seen(packet, now_secs());
+        }
+        self.transmit(packet, None, None).await;
     }
 
     /// Plan and write one packet.
@@ -3031,7 +3065,7 @@ impl BleRuntime {
         self.pump_streamed_files(now_s).await;
         self.request_missing_chunks(now_s).await;
 
-        self.maintain_prekeys(now_ms, now_s).await;
+        self.maintain_prekeys(now_ms).await;
 
         // Gossip sync, which nothing else can schedule.
         let connected: Vec<PeerId> = self
@@ -4394,6 +4428,128 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn our_own_broadcasts_are_in_our_sync_filter_so_a_peer_does_not_echo_them() {
+        // Seen on devices: bitchat-android answered every one of our sync
+        // rounds with our own public messages. A sent broadcast never reached
+        // the gossip store, so our filter claimed we lacked it; and bitchat's
+        // answer carries no RSR flag, so the ingress guard drops it as our own
+        // traffic before anything can store it. Nothing ever closed the loop.
+        // bitchat files its own sends at send time
+        // (`BluetoothMeshService.kt`, `onPublicPacketSeen(signedPacket)`).
+        let (mut runtime, radio, state) = runtime();
+        let local = runtime.identity.peer_id();
+        let link = LinkId::new("/mock/out");
+        state.with(|inner| {
+            inner.links.link_up(link.clone(), LinkRole::Central);
+            inner.links.set_writable(&link, true);
+            inner.max_write.insert(link.clone(), 512);
+        });
+
+        runtime.broadcast_public("MSG-1", "said once").await;
+        runtime.broadcast_file("MSG-F1", &sample_file()).await;
+        runtime.drain_writes().await;
+        let sent: Vec<BitchatPacket> = radio
+            .writes()
+            .iter()
+            .map(|(_, bytes)| codec::decode(bytes).expect("decodable"))
+            .collect();
+        assert_eq!(sent.len(), 2, "one message and one single-packet file");
+
+        // The peer heard both live, as a real neighbour does.
+        let now = now_secs();
+        let peer = MeshIdentity::generate(&mut OsRng).peer_id();
+        let mut theirs = GossipSyncManager::new(&peer, SyncConfig::default(), None, now);
+        for packet in &sent {
+            theirs.on_public_packet_seen(packet, now);
+        }
+
+        // One full sync round from us to them.
+        let request = runtime.gossip.initial_sync_to(&peer, now).expect("request");
+        let request = RequestSyncPacket::decode(&request.packet.payload).expect("decodes");
+        let answers = theirs.handle_request_sync(&local, &request, now);
+
+        let echoed: Vec<_> = answers
+            .iter()
+            .filter(|send| sent.iter().any(|p| p.packet_id() == send.packet.packet_id()))
+            .collect();
+        assert!(
+            echoed.is_empty(),
+            "a peer must not send our own broadcasts back to us: {echoed:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_recovered_message_of_ours_synced_twice_is_shown_once() {
+        // A self-authored TTL-0 sync response skips both the ingress self
+        // checks and the dedup cache — that is what lets a device that lost its
+        // database recover its own history. It must still be recovered *once*:
+        // two peers answering the same round, or one peer answering two rounds,
+        // must not put the same words on screen twice.
+        let (mut runtime, _radio, state) = runtime();
+        let mut events = runtime.events.subscribe();
+
+        // A peer that announced on its own link, so the link is bound to it and
+        // a response arriving there can be attributed to our request.
+        let subject = MeshIdentity::generate(&mut OsRng);
+        let subject_peer = subject.peer_id();
+        let announcement = AnnouncementPacket::new(
+            "subject".to_string(),
+            subject.static_public().to_vec(),
+            subject.signing_public().to_vec(),
+            None,
+            None,
+            None,
+        );
+        let mut announce = BitchatPacket::new(
+            MessageType::Announce,
+            subject_peer.to_routing_bytes().expect("routing bytes"),
+            None,
+            now_millis(),
+            announcement.encode().expect("encodes"),
+            chatter_mesh::relay::MESSAGE_TTL_DEFAULT,
+        );
+        announce.signature = Some(sign_packet(&subject, &announce).expect("signs"));
+        let link = LinkId::new("/mock/subject");
+        state.with(|inner| {
+            inner.links.link_up(link.clone(), LinkRole::Central);
+            inner.links.set_writable(&link, true);
+            inner.max_write.insert(link.clone(), 512);
+        });
+        runtime.on_packet(&link, announce).await;
+        runtime.drain_writes().await;
+        while events.try_recv().is_ok() {}
+
+        // Ours, from an earlier session: signed by us, unknown to this
+        // session's self-broadcast tracker.
+        let mut packet = runtime.maybe_sign(
+            runtime.build_packet(
+                MessageType::Message,
+                None,
+                b"our own words".to_vec(),
+                chatter_mesh::relay::MESSAGE_TTL_DEFAULT,
+            ),
+            true,
+        );
+        packet.ttl = 0;
+        packet.is_rsr = true;
+
+        runtime
+            .gossip
+            .initial_sync_to(&subject_peer, now_secs())
+            .expect("request");
+        runtime.on_packet(&link, packet.clone()).await;
+        runtime.on_packet(&link, packet).await;
+
+        let mut shown = 0;
+        while let Ok(event) = events.try_recv() {
+            if matches!(event, MeshEvent::Message(_)) {
+                shown += 1;
+            }
+        }
+        assert_eq!(shown, 1, "recovered once, shown once");
+    }
+
+    #[tokio::test]
     async fn an_announce_is_signed_and_carries_both_public_keys() {
         let (mut runtime, radio, state) = runtime();
         // One writable link, so the announce has somewhere to go.
@@ -4860,11 +5016,11 @@ mod tests {
         });
 
         // Not restored: nothing is generated, nothing published.
-        runtime.maintain_prekeys(now_millis(), now_secs()).await;
+        runtime.maintain_prekeys(now_millis()).await;
         assert!(runtime.storage.load(StorageKey::LocalPrekeys).unwrap().is_none());
 
         state.with(|inner| inner.prekeys.local = Some(super::super::prekeys::LocalPrekeys::default()));
-        runtime.maintain_prekeys(now_millis(), now_secs()).await;
+        runtime.maintain_prekeys(now_millis()).await;
         runtime.drain_writes().await;
 
         let saved = runtime.storage.load(StorageKey::LocalPrekeys).unwrap().expect("saved");
@@ -4882,7 +5038,7 @@ mod tests {
         assert!(runtime.gossip.has_prekey_bundle(&runtime.identity.peer_id()));
 
         // Unchanged on the next tick: no second publish.
-        runtime.maintain_prekeys(now_millis(), now_secs()).await;
+        runtime.maintain_prekeys(now_millis()).await;
         runtime.drain_writes().await;
         assert_eq!(radio.writes().len(), 1);
     }
