@@ -49,7 +49,6 @@ pub mod channel_event_service;
 pub mod channel_stream;
 pub mod dm_bootstrap_service;
 pub mod pairwise;
-pub mod fanout;
 pub mod anon_group;
 pub mod anon_dm;
 pub mod mesh;
@@ -122,9 +121,6 @@ pub use call_worker::CallWorkerHandle;
 
 // Re-exports for pairwise encryption service
 pub use pairwise::{PairwiseService, PairwiseError};
-
-// Re-exports for fanout utilities
-pub use fanout::{fanout, fanout_simple, FanoutOptions, FanoutResult};
 
 // Re-exports for anon group service
 pub use anon_group::{AnonGroupError, AnonGroupService};

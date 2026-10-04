@@ -70,36 +70,6 @@ pub struct GroupFanoutResult {
     pub results: Vec<FanoutResult>,
 }
 
-impl GroupFanoutResult {
-    /// Check if all deliveries succeeded.
-    pub fn is_complete_success(&self) -> bool {
-        self.failed == 0
-    }
-
-    /// Check if all deliveries failed.
-    pub fn is_complete_failure(&self) -> bool {
-        self.successful == 0
-    }
-
-    /// Get list of failed member IDs.
-    pub fn failed_members(&self) -> Vec<UserId> {
-        self.results
-            .iter()
-            .filter(|r| !r.success)
-            .map(|r| r.user_id)
-            .collect()
-    }
-
-    /// Get list of successful member IDs.
-    pub fn successful_members(&self) -> Vec<UserId> {
-        self.results
-            .iter()
-            .filter(|r| r.success)
-            .map(|r| r.user_id)
-            .collect()
-    }
-}
-
 /// Result of polling a group mailbox.
 #[derive(Debug)]
 pub struct GroupPollResult {
@@ -171,73 +141,6 @@ impl GroupFanout {
         tracing::info!("group fanout: rebuilt mailbox client for new transport");
     }
 
-    /// Send an encrypted envelope to all group members.
-    ///
-    /// Delivers the message to each member's ephemeral mailbox in parallel.
-    /// The envelope should already be encrypted (sealed sender format).
-    ///
-    /// # Arguments
-    ///
-    /// * `group_id` - The group to send to
-    /// * `encrypted_envelope` - Pre-encrypted message content
-    /// * `envelope_type` - Type of envelope (SealedSender, PreKey, Message)
-    ///
-    /// # Returns
-    ///
-    /// GroupFanoutResult with per-member delivery results.
-    ///
-    /// # Errors
-    ///
-    /// Returns `MailboxError::GroupNotFound` if group state doesn't exist.
-    /// Returns `MailboxError::GroupNotReady` if no member mailboxes are configured.
-    pub async fn send_to_group(
-        &self,
-        group_id: &ChannelId,
-        encrypted_envelope: &[u8],
-        envelope_type: EnvelopeType,
-    ) -> Result<GroupFanoutResult, MailboxError> {
-        // Load group state to get member mailboxes
-        let group_state = self
-            .mailbox_manager
-            .load_group_state(group_id)?
-            .ok_or(MailboxError::GroupNotFound)?;
-
-        // Check we have member mailboxes
-        if group_state.member_mailboxes.is_empty() {
-            return Err(MailboxError::GroupNotReady);
-        }
-
-        let members: Vec<MemberMailbox> =
-            group_state.member_mailboxes.values().cloned().collect();
-        let total_members = members.len();
-
-        // Create futures for parallel delivery
-        let envelope_type_i32 = envelope_type as i32;
-        let futures: Vec<_> = members
-            .into_iter()
-            .map(|member| {
-                let envelope = encrypted_envelope.to_vec();
-                let client = Arc::clone(&self.mailbox_client);
-                async move { Self::send_to_member_internal(client, &member, &envelope, envelope_type_i32).await }
-            })
-            .collect();
-
-        // Execute all deliveries in parallel
-        let results = join_all(futures).await;
-
-        // Count successes and failures
-        let successful = results.iter().filter(|r| r.success).count();
-        let failed = results.iter().filter(|r| !r.success).count();
-
-        Ok(GroupFanoutResult {
-            group_id: *group_id,
-            total_members,
-            successful,
-            failed,
-            results,
-        })
-    }
-
     /// Send pairwise-encrypted messages to group member mailboxes.
     ///
     /// Per NDSS '21, each group message is encrypted separately for each member
@@ -292,82 +195,6 @@ impl GroupFanout {
         let results = join_all(futures).await;
 
         // Count successes and failures
-        let successful = results.iter().filter(|r| r.success).count();
-        let failed = results.iter().filter(|r| !r.success).count();
-
-        Ok(GroupFanoutResult {
-            group_id: *group_id,
-            total_members,
-            successful,
-            failed,
-            results,
-        })
-    }
-
-    /// Send pairwise-encrypted messages to group member mailboxes with multi-device support.
-    ///
-    /// Each member can have multiple devices, each with its own ciphertext.
-    /// Per NDSS '21, each device gets a separate message encrypted with its
-    /// pairwise Double Ratchet session.
-    ///
-    /// # Arguments
-    ///
-    /// * `group_id` - The group channel ID
-    /// * `member_device_ciphertexts` - Map of member UserId to (device_id -> ciphertext)
-    /// * `envelope_type` - Type of message (Message, KeyExchange, etc.)
-    ///
-    /// # Returns
-    ///
-    /// GroupFanoutResult with per-member delivery results.
-    /// Note: Success count reflects total device deliveries, not unique members.
-    pub async fn send_to_group_pairwise_multidevice(
-        &self,
-        group_id: &ChannelId,
-        member_device_ciphertexts: std::collections::HashMap<UserId, std::collections::HashMap<u32, Vec<u8>>>,
-        envelope_type: EnvelopeType,
-    ) -> Result<GroupFanoutResult, MailboxError> {
-        // Load group state to get member mailboxes
-        let group_state = self
-            .mailbox_manager
-            .load_group_state(group_id)?
-            .ok_or(MailboxError::GroupNotFound)?;
-
-        // Check we have member mailboxes
-        if group_state.member_mailboxes.is_empty() {
-            return Err(MailboxError::GroupNotReady);
-        }
-
-        let total_members = member_device_ciphertexts.len();
-        let envelope_type_i32 = envelope_type as i32;
-
-        // Flatten to (user_id, device_id, ciphertext) tuples and create futures
-        let futures: Vec<_> = member_device_ciphertexts
-            .into_iter()
-            .flat_map(|(user_id, device_ciphertexts)| {
-                // Look up member's mailbox
-                group_state.member_mailboxes.get(&user_id).map(|member| {
-                    // For each device, create a delivery future
-                    device_ciphertexts.into_iter().map(|(device_id, ciphertext)| {
-                        let member = member.clone();
-                        let client = Arc::clone(&self.mailbox_client);
-                        async move {
-                            tracing::debug!(
-                                member_id = %member.user_id,
-                                device_id,
-                                "Sending to member device"
-                            );
-                            Self::send_to_member_internal(client, &member, &ciphertext, envelope_type_i32).await
-                        }
-                    }).collect::<Vec<_>>()
-                })
-            })
-            .flatten()
-            .collect();
-
-        // Execute all deliveries in parallel
-        let results = join_all(futures).await;
-
-        // Count successes and failures (per device, not per member)
         let successful = results.iter().filter(|r| r.success).count();
         let failed = results.iter().filter(|r| !r.success).count();
 
@@ -442,42 +269,6 @@ impl GroupFanout {
                     "[FANOUT_SEND] Failed"
                 );
                 FanoutResult::failure(member.user_id, e.to_string())
-            }
-        }
-    }
-
-    /// Get list of members we don't have mailboxes for.
-    ///
-    /// Compares expected member IDs against known mailboxes.
-    /// Used to trigger mailbox exchange for new members.
-    ///
-    /// # Arguments
-    ///
-    /// * `group_id` - The group to check
-    /// * `member_ids` - Expected member IDs (from group membership)
-    ///
-    /// # Returns
-    ///
-    /// List of member IDs we need mailboxes for.
-    pub fn get_missing_member_mailboxes(
-        &self,
-        group_id: &ChannelId,
-        member_ids: &[UserId],
-    ) -> Result<Vec<UserId>, MailboxError> {
-        let group_state = self.mailbox_manager.load_group_state(group_id)?;
-
-        match group_state {
-            Some(state) => {
-                let missing: Vec<UserId> = member_ids
-                    .iter()
-                    .filter(|id| !state.member_mailboxes.contains_key(id))
-                    .copied()
-                    .collect();
-                Ok(missing)
-            }
-            None => {
-                // No state at all - all members are missing
-                Ok(member_ids.to_vec())
             }
         }
     }
@@ -723,63 +514,6 @@ impl GroupFanout {
         })
     }
 
-    /// Acknowledge messages from a group mailbox.
-    ///
-    /// Acknowledges (and deletes) messages from the group mailbox.
-    /// Requires challenge-response authentication.
-    ///
-    /// # Arguments
-    ///
-    /// * `group_id` - The group whose mailbox to acknowledge from
-    /// * `message_ids` - Message IDs to acknowledge (will be deleted)
-    ///
-    /// # Returns
-    ///
-    /// Number of messages acknowledged.
-    pub async fn acknowledge_group_messages(
-        &self,
-        group_id: &ChannelId,
-        message_ids: Vec<String>,
-    ) -> Result<u32, MailboxError> {
-        if message_ids.is_empty() {
-            return Ok(0);
-        }
-
-        // Load our mailbox for this group
-        let group_state = self
-            .mailbox_manager
-            .load_group_state(group_id)?
-            .ok_or(MailboxError::GroupNotFound)?;
-
-        let our_mailbox = group_state
-            .our_mailbox
-            .ok_or(MailboxError::NoMailboxConfigured)?;
-
-        // Get challenge from server
-        let mut client = self.mailbox_client.lock().await;
-        let challenge_response = client
-            .get_mailbox_challenge(our_mailbox.public_key.to_vec())
-            .await
-            .map_err(|e| MailboxError::Network(e.to_string()))?;
-
-        // Sign challenge
-        let challenge_signature = self.sign_challenge(&our_mailbox, &challenge_response.challenge)?;
-
-        // Acknowledge
-        let ack_count = message_ids.len() as u32;
-        client
-            .acknowledge_messages(
-                our_mailbox.public_key.to_vec(),
-                challenge_signature,
-                challenge_response.challenge,
-                message_ids,
-            )
-            .await
-            .map_err(|e| MailboxError::Network(e.to_string()))?;
-
-        Ok(ack_count)
-    }
-
     /// Acknowledge messages by mailbox ID.
     ///
     /// Looks up keys by mailbox_id and acknowledges messages. Works with both
@@ -932,75 +666,6 @@ mod tests {
         assert!(!result.success);
         assert!(result.message_id.is_none());
         assert_eq!(result.error, Some("network error".to_string()));
-    }
-
-    #[test]
-    fn test_group_fanout_result_complete_success() {
-        let group_id = ChannelId::new();
-        let user1 = UserId::new();
-        let user2 = UserId::new();
-
-        let result = GroupFanoutResult {
-            group_id,
-            total_members: 2,
-            successful: 2,
-            failed: 0,
-            results: vec![
-                FanoutResult::success(user1, "msg-1".to_string()),
-                FanoutResult::success(user2, "msg-2".to_string()),
-            ],
-        };
-
-        assert!(result.is_complete_success());
-        assert!(!result.is_complete_failure());
-        assert!(result.failed_members().is_empty());
-        assert_eq!(result.successful_members().len(), 2);
-    }
-
-    #[test]
-    fn test_group_fanout_result_partial_failure() {
-        let group_id = ChannelId::new();
-        let user1 = UserId::new();
-        let user2 = UserId::new();
-
-        let result = GroupFanoutResult {
-            group_id,
-            total_members: 2,
-            successful: 1,
-            failed: 1,
-            results: vec![
-                FanoutResult::success(user1, "msg-1".to_string()),
-                FanoutResult::failure(user2, "network error".to_string()),
-            ],
-        };
-
-        assert!(!result.is_complete_success());
-        assert!(!result.is_complete_failure());
-        assert_eq!(result.failed_members(), vec![user2]);
-        assert_eq!(result.successful_members(), vec![user1]);
-    }
-
-    #[test]
-    fn test_group_fanout_result_complete_failure() {
-        let group_id = ChannelId::new();
-        let user1 = UserId::new();
-        let user2 = UserId::new();
-
-        let result = GroupFanoutResult {
-            group_id,
-            total_members: 2,
-            successful: 0,
-            failed: 2,
-            results: vec![
-                FanoutResult::failure(user1, "error 1".to_string()),
-                FanoutResult::failure(user2, "error 2".to_string()),
-            ],
-        };
-
-        assert!(!result.is_complete_success());
-        assert!(result.is_complete_failure());
-        assert_eq!(result.failed_members().len(), 2);
-        assert!(result.successful_members().is_empty());
     }
 
     #[test]
