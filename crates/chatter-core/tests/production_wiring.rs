@@ -312,6 +312,18 @@ const TABLE: &[Entry] = &[
               guesses) cannot log in a new device, while clearnet sign-up \
               (difficulty 0) keeps passing every test.",
     },
+    // ---- Mesh: inbound memory -------------------------------------------
+    Entry {
+        symbol: "reap_stalled",
+        defined_in: "chatter-mesh-link/src/backpressure.rs",
+        expect: Expect::Wired,
+        why: "The only way a partial inbound BLE frame is reclaimed from a peer that \
+              stays connected and stops writing: InboundAssembler::append discards a \
+              stalled frame only when the same link writes again. Called from the BLE \
+              tick (services/mesh/ble.rs reap_stalled_partials). Dead until \
+              2026-10-04; without this caller one byte per link pins memory until \
+              disconnect.",
+    },
 ];
 
 // ============================================================================
