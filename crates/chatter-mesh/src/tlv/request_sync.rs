@@ -64,10 +64,8 @@ pub const FRAGMENT_ID_LEN: usize = 8;
 /// have no bit — replaying them through gossip sync would be useless or
 /// harmful.
 ///
-/// Duplicated from `SyncTypeFlags.knownTypeMask` rather than imported: this
-/// module must not depend on `crate::sync_flags`, which another author owns.
-/// The mask is load-bearing for the wire format — `SyncTypeFlags.init` applies
-/// it on decode, so an unknown high bit is dropped and never re-serialised.
+/// The byte codec is `encode_sync_types` / `decode_sync_types` in this module.
+/// An unknown high bit is masked off and never re-serialised.
 pub const SYNC_TYPE_KNOWN_MASK: u64 = 0x7FF;
 
 #[derive(Clone, Debug, PartialEq, Eq)]

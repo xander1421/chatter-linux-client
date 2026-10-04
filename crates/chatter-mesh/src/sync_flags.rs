@@ -23,16 +23,11 @@
 
 use crate::packet::MessageType;
 
-/// Wire form is 1–8 bytes; a set with bits above 8 needs no format change.
-const MAX_FLAG_BYTES: usize = 8;
-
 /// A set of syncable message types.
 ///
 /// Every instance is normalized at construction: bits with no known type are
-/// masked off. Without that, a garbled or newer-than-us field would sit in the set
-/// as phantom membership that no [`contains`](Self::contains) check matches while
-/// [`to_data`](Self::to_data) faithfully re-serializes it — accepted, but doing
-/// nothing, and impossible to spot in a log.
+/// masked off, so a garbled or newer-than-us field cannot sit in the set as
+/// phantom membership. The REQUEST_SYNC byte codec lives in `tlv::request_sync`.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub struct SyncTypeFlags(u64);
 
@@ -131,48 +126,6 @@ impl SyncTypeFlags {
         types
     }
 
-    /// Little-endian bytes with trailing zero bytes trimmed.
-    ///
-    /// This is what makes new bits compat-safe: bit 8 (board posts) widens the
-    /// field from one byte to two inside a length-prefixed TLV, and a client that
-    /// predates the bit reads the wider field, finds no type for it, and answers
-    /// with the types it does know.
-    ///
-    /// An empty set encodes to no bytes at all. Swift returns `nil` there, and its
-    /// callers omit the TLV entirely — an empty vector is the same instruction.
-    pub fn to_data(&self) -> Vec<u8> {
-        if self.0 == 0 {
-            return Vec::new();
-        }
-        let mut value = self.0;
-        let mut bytes: Vec<u8> = Vec::with_capacity(MAX_FLAG_BYTES);
-        while value > 0 && bytes.len() < MAX_FLAG_BYTES {
-            bytes.push((value & 0xFF) as u8);
-            value >>= 8;
-        }
-        while bytes.last() == Some(&0) {
-            bytes.pop();
-        }
-        bytes
-    }
-
-    /// Decodes 1–8 little-endian bytes.
-    ///
-    /// Anything else — an empty field, or one longer than the bitfield — is
-    /// rejected as the empty set, where Swift returns `nil`. Callers treat both as
-    /// "no usable type filter"; a partially-read length is never salvaged into a
-    /// set that would then drive a sync round.
-    pub fn from_data(bytes: &[u8]) -> Self {
-        if bytes.is_empty() || bytes.len() > MAX_FLAG_BYTES {
-            return Self(0);
-        }
-        let mut raw: u64 = 0;
-        for (index, byte) in bytes.iter().enumerate() {
-            raw |= u64::from(*byte) << (index * 8);
-        }
-        Self::from_raw(raw)
-    }
-
     /// The bit for a message type, or `None` when the type is not syncable.
     pub const fn bit_index(t: MessageType) -> Option<u32> {
         Some(match t {
@@ -224,49 +177,6 @@ impl SyncTypeFlags {
         })
     }
 
-    /// `"message+fragment"`-style rendering for logs.
-    ///
-    /// bitchat added this because periodic sync rounds otherwise log identical
-    /// lines and read as duplicate sends — a misdiagnosis they made twice.
-    pub fn log_description(&self) -> String {
-        let types = self.to_message_types();
-        if types.is_empty() {
-            return "none".to_string();
-        }
-        types
-            .iter()
-            .map(|t| type_name(*t))
-            .collect::<Vec<_>>()
-            .join("+")
-    }
-}
-
-/// Lowercase-initial names matching Swift's `String(describing:)` on the enum
-/// case, so log lines are diffable against theirs.
-const fn type_name(t: MessageType) -> &'static str {
-    match t {
-        MessageType::Announce => "announce",
-        MessageType::Message => "message",
-        MessageType::Leave => "leave",
-        MessageType::CourierEnvelope => "courierEnvelope",
-        MessageType::NoiseHandshake => "noiseHandshake",
-        MessageType::NoiseEncrypted => "noiseEncrypted",
-        MessageType::Fragment => "fragment",
-        MessageType::RequestSync => "requestSync",
-        MessageType::FileTransfer => "fileTransfer",
-        MessageType::BoardPost => "boardPost",
-        MessageType::PrekeyBundle => "prekeyBundle",
-        MessageType::GroupMessage => "groupMessage",
-        MessageType::Ping => "ping",
-        MessageType::Pong => "pong",
-        MessageType::NostrCarrier => "nostrCarrier",
-        MessageType::VoiceFrame => "voiceFrame",
-        // No Swift case to match: these three are this client's extension. Named
-        // in the same lowercase-initial style so a log line reads consistently.
-        MessageType::FileManifest => "fileManifest",
-        MessageType::FileChunk => "fileChunk",
-        MessageType::FileChunkRequest => "fileChunkRequest",
-    }
 }
 
 /// The named sets Swift exposes as statics.
@@ -361,12 +271,10 @@ mod tests {
 
     #[test]
     fn from_raw_masks_phantom_bits() {
-        // Bit 11 has no type: it must not survive construction, or it would
-        // round-trip through to_data while matching no contains check.
+        // Bit 11 has no type: it must not survive construction.
         let flags = SyncTypeFlags::from_raw((1 << 11) | (1 << 1));
         assert_eq!(flags.raw(), 1 << 1);
         assert!(flags.contains(MessageType::Message));
-        assert_eq!(flags.to_data(), vec![0b10]);
 
         assert_eq!(SyncTypeFlags::from_raw(1 << 63).raw(), 0);
         assert!(SyncTypeFlags::from_raw(1 << 63).is_empty());
@@ -387,69 +295,6 @@ mod tests {
         assert!(!flags.contains(MessageType::Announce));
     }
 
-    #[test]
-    fn one_byte_wire_form_for_low_bits() {
-        let flags = SyncTypeFlags::from_types(&[MessageType::Announce, MessageType::Message]);
-        assert_eq!(flags, SyncTypeFlags::PUBLIC_MESSAGES);
-        assert_eq!(flags.to_data(), vec![0b0000_0011]);
-        assert_eq!(SyncTypeFlags::from_data(&[0b0000_0011]), flags);
-    }
-
-    #[test]
-    fn bit_eight_widens_the_field_to_two_bytes() {
-        // The compat case called out in the Swift: board posts spill into a
-        // second byte, and old clients must survive reading it.
-        let flags = SyncTypeFlags::from_types(&[MessageType::BoardPost]);
-        assert_eq!(flags.to_data(), vec![0x00, 0x01]);
-        assert_eq!(SyncTypeFlags::from_data(&[0x00, 0x01]), flags);
-
-        let group = SyncTypeFlags::from_types(&[MessageType::GroupMessage]);
-        assert_eq!(group.to_data(), vec![0x00, 0x04]);
-        assert_eq!(SyncTypeFlags::from_data(&[0x00, 0x04]), group);
-    }
-
-    #[test]
-    fn encoding_is_little_endian_with_trailing_zeroes_trimmed() {
-        let all = SyncTypeFlags::from_types(&SYNCABLE);
-        assert_eq!(all.raw(), 0b111_1111_1111);
-        assert_eq!(all.to_data(), vec![0xFF, 0x07]);
-        assert_eq!(SyncTypeFlags::from_data(&all.to_data()), all);
-    }
-
-    #[test]
-    fn empty_set_encodes_to_nothing() {
-        assert!(SyncTypeFlags::new().to_data().is_empty());
-        assert!(SyncTypeFlags::from_raw(0).to_data().is_empty());
-    }
-
-    #[test]
-    fn decode_rejects_bad_lengths() {
-        assert!(SyncTypeFlags::from_data(&[]).is_empty());
-        assert!(SyncTypeFlags::from_data(&[0xFF; 9]).is_empty());
-        // Exactly 8 bytes is legal, and the high bytes mask away to nothing.
-        assert_eq!(SyncTypeFlags::from_data(&[0xFF; 8]).raw(), 0b111_1111_1111);
-    }
-
-    #[test]
-    fn decode_tolerates_bits_a_newer_peer_added() {
-        // A peer that syncs a type we do not know sets a bit we have no entry
-        // for. We must answer with the types we do know, not choke.
-        let wire = [0b0000_0011u8, 0x00, 0xFF];
-        let flags = SyncTypeFlags::from_data(&wire);
-        assert!(flags.contains(MessageType::Announce));
-        assert!(flags.contains(MessageType::Message));
-        assert_eq!(flags.raw(), 0b11);
-    }
-
-    #[test]
-    fn round_trips_every_representable_set() {
-        for raw in 0..=SyncTypeFlags::KNOWN_TYPE_MASK {
-            let flags = SyncTypeFlags::from_raw(raw);
-            let data = flags.to_data();
-            assert!(data.len() <= MAX_FLAG_BYTES);
-            assert_eq!(SyncTypeFlags::from_data(&data), flags, "raw {raw:#x}");
-        }
-    }
 
     #[test]
     fn to_message_types_is_in_bit_order() {
@@ -520,13 +365,4 @@ mod tests {
         );
     }
 
-    #[test]
-    fn log_description_joins_type_names() {
-        assert_eq!(SyncTypeFlags::new().log_description(), "none");
-        assert_eq!(
-            SyncTypeFlags::from_types(&[MessageType::Message, MessageType::Fragment])
-                .log_description(),
-            "message+fragment"
-        );
-    }
 }
