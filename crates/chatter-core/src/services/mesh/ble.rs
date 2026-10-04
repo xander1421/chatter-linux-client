@@ -45,7 +45,7 @@ use chatter_mesh_link::backpressure::{
     PENDING_WRITE_BUFFER_CAP_BYTES, should_buffer, WriteEnqueue,
 };
 use chatter_mesh_link::duty::{self, ScanCommand};
-use chatter_mesh_link::guard::{IngressGuard, IngressInput};
+use chatter_mesh_link::guard::{IngressGuard, IngressInput, IngressRejection};
 use chatter_mesh_link::planner::{self, DIRECTED_SPOOL_WINDOW_SECS, OutboundPlanRequest};
 use chatter_mesh_link::registry::VerifiedDirectAnnounce;
 use chatter_mesh_link::scheduler::{
@@ -716,23 +716,46 @@ impl BleRuntime {
             )
         });
 
-        let accepted = match accepted {
-            Ok(accepted) => accepted,
+        let (received_from, stale_sync_answer) = match accepted {
+            Ok(accepted) => (accepted.received_from, false),
             Err(rejection) => {
-                // `pending` is the whole of the RSR decision: a response is
-                // exempt from the freshness check only while we have an
-                // outstanding request to that peer. Printing the count next to
-                // the rejection is what distinguishes "we never asked" from
-                // "we asked and the bookkeeping lost it".
+                // Every check before the timestamp passed: the guard decides
+                // freshness last. See `stale_sync_answer_from` for the one case
+                // let through.
+                let admitted = match &rejection {
+                    IngressRejection::TimestampSkew { .. } => self.stale_sync_answer_from(
+                        bound.as_ref(),
+                        &packet,
+                        &claimed,
+                        now_ms,
+                        now_s,
+                    ),
+                    _ => None,
+                };
+                let Some(peer) = admitted else {
+                    // `pending` is the whole of the RSR decision: a response is
+                    // exempt from the freshness check only while we have an
+                    // outstanding request to that peer. Printing the count next to
+                    // the rejection is what distinguishes "we never asked" from
+                    // "we asked and the bookkeeping lost it".
+                    tracing::debug!(
+                        target: "mesh::ble",
+                        %rejection,
+                        is_rsr = packet.is_rsr,
+                        claimed_sender = %claimed,
+                        pending_sync_peers = ?self.gossip.pending_request_peers(),
+                        "packet rejected at ingress"
+                    );
+                    return;
+                };
                 tracing::debug!(
                     target: "mesh::ble",
-                    %rejection,
-                    is_rsr = packet.is_rsr,
-                    claimed_sender = %claimed,
-                    pending_sync_peers = ?self.gossip.pending_request_peers(),
-                    "packet rejected at ingress"
+                    from = %peer,
+                    author = %claimed,
+                    age_ms = now_ms.saturating_sub(packet.timestamp),
+                    "stale sync answer admitted"
                 );
-                return;
+                (peer, true)
             }
         };
 
@@ -758,11 +781,11 @@ impl BleRuntime {
             state.ingress.record_if_new(
                 &packet,
                 link.clone(),
-                accepted.received_from.clone(),
+                received_from.clone(),
                 now_ms,
                 chatter_mesh_link::registry::INGRESS_RECORD_LIFETIME_MS,
             );
-            state.peers.update_last_seen(&accepted.received_from, now_ms);
+            state.peers.update_last_seen(&received_from, now_ms);
         });
 
         let retainable = self.dispatch(link, &packet, &claimed, now_s).await;
@@ -772,7 +795,72 @@ impl BleRuntime {
         if packet.is_broadcast() {
             self.gossip.on_public_packet_seen(&packet, now_s);
         }
+        // TTL 0 already stops the relay; this does not depend on that.
+        if stale_sync_answer {
+            return;
+        }
         self.relay(link, &packet, &local).await;
+    }
+
+    /// The link peer, when a packet the guard refused only as too old is an
+    /// answer to our sync request from a bitchat-android peer.
+    ///
+    /// bitchat-android answers with TTL 0 and no RSR flag
+    /// (`GossipSyncManager.kt`, `pkt.copy(ttl = SYNC_TTL_HOPS)`), so any public
+    /// message more than two minutes old that we lack failed the skew check,
+    /// was never filed, and came back every round. Admitted only when all hold,
+    /// and refused otherwise:
+    ///
+    /// - TTL 0 and no RSR flag: the shape of that answer. RSR keeps its own path.
+    /// - A broadcast `Message`, the only type bitchat-android serves that we
+    ///   would display. Announces have their own age policy; fragments skip the
+    ///   dedup cache, so a replay of one could not be recognised.
+    /// - In the past. A future timestamp past the skew stays refused.
+    /// - Not our own: the guard has already refused that, checked again here.
+    /// - On a link bound to a peer with a pinned, verified announce, and we have
+    ///   a sync request outstanding to that peer.
+    /// - Inside the retention window our own store keeps for the type.
+    /// - Not already held by the store. With the dedup cache in `on_packet`, a
+    ///   replay is dropped.
+    /// - Signed by its author's announced key, so a forgery is not filed and
+    ///   served onward.
+    ///
+    /// The caller never relays it.
+    fn stale_sync_answer_from(
+        &self,
+        bound: Option<&PeerId>,
+        packet: &BitchatPacket,
+        claimed: &PeerId,
+        now_ms: u64,
+        now_s: u64,
+    ) -> Option<PeerId> {
+        if packet.ttl != 0 || packet.is_rsr {
+            return None;
+        }
+        if packet.message_type() != Some(MessageType::Message) || !packet.is_broadcast() {
+            return None;
+        }
+        if packet.timestamp >= now_ms || *claimed == self.identity.peer_id() {
+            return None;
+        }
+        let peer = bound?;
+        let author_key = self.state.with(|state| {
+            if state.peers.pinned(peer).is_none() {
+                return None;
+            }
+            state
+                .peers
+                .info(claimed)
+                .and_then(|info| info.signing_public_key.clone())
+        })?;
+        if !self.gossip.awaits_answer_from(peer, now_s)
+            || !self.gossip.within_retention(packet, now_s)
+            || self.gossip.holds(packet)
+        {
+            return None;
+        }
+        let key = <[u8; 32]>::try_from(author_key.as_slice()).ok()?;
+        verify_packet(packet, &key).then(|| peer.clone())
     }
 
     /// Unwrap a fragment, then handle whatever it turns out to be.
@@ -4547,6 +4635,157 @@ mod tests {
             }
         }
         assert_eq!(shown, 1, "recovered once, shown once");
+    }
+
+    /// A bitchat-android peer that announced on its own link. Its announce opens
+    /// our initial sync request to it, so its answers are awaited.
+    async fn android_peer_on_its_link(
+        runtime: &mut BleRuntime,
+        state: &MeshState,
+    ) -> (MeshIdentity, LinkId) {
+        let peer = MeshIdentity::generate(&mut OsRng);
+        let announcement = AnnouncementPacket::new(
+            "android".to_string(),
+            peer.static_public().to_vec(),
+            peer.signing_public().to_vec(),
+            None,
+            None,
+            None,
+        );
+        let mut announce = BitchatPacket::new(
+            MessageType::Announce,
+            peer.peer_id().to_routing_bytes().expect("routing bytes"),
+            None,
+            now_millis(),
+            announcement.encode().expect("encodes"),
+            chatter_mesh::relay::MESSAGE_TTL_DEFAULT,
+        );
+        announce.signature = Some(sign_packet(&peer, &announce).expect("signs"));
+        let link = writable_link(state, "/mock/android", 512);
+        runtime.on_packet(&link, announce).await;
+        runtime.drain_writes().await;
+        assert!(runtime.gossip.awaits_answer_from(&peer.peer_id(), now_secs()));
+        (peer, link)
+    }
+
+    /// A public message the way bitchat-android answers a sync round with it:
+    /// signed by its author, TTL 0, no RSR flag.
+    fn android_sync_answer(author: &MeshIdentity, text: &[u8], timestamp: u64) -> BitchatPacket {
+        let mut packet = BitchatPacket::new(
+            MessageType::Message,
+            author.peer_id().to_routing_bytes().expect("routing bytes"),
+            None,
+            timestamp,
+            text.to_vec(),
+            0,
+        );
+        packet.signature = Some(sign_packet(author, &packet).expect("signs"));
+        packet
+    }
+
+    fn messages_shown(events: &mut tokio::sync::broadcast::Receiver<MeshEvent>) -> usize {
+        let mut shown = 0;
+        while let Ok(event) = events.try_recv() {
+            if matches!(event, MeshEvent::Message(_)) {
+                shown += 1;
+            }
+        }
+        shown
+    }
+
+    /// Whether any frame on the radio carries this packet, after the relay
+    /// jitter (220 ms at most) has passed.
+    async fn put_on_air(runtime: &BleRuntime, radio: &MockLink, packet: &BitchatPacket) -> bool {
+        tokio::time::sleep(Duration::from_millis(400)).await;
+        runtime.drain_writes().await;
+        radio.writes().iter().any(|(_, bytes)| {
+            codec::decode(bytes).is_ok_and(|sent| sent.packet_id() == packet.packet_id())
+        })
+    }
+
+    #[tokio::test]
+    async fn a_stale_android_sync_answer_is_accepted_once_and_never_relayed() {
+        // bitchat-android answers sync with TTL 0 and no RSR flag. A message
+        // older than the two-minute skew window failed the freshness check, was
+        // never filed, and came back every round.
+        let (mut runtime, radio, state) = runtime();
+        let (android, link) = android_peer_on_its_link(&mut runtime, &state).await;
+        // Somewhere a relay could go.
+        writable_link(&state, "/mock/bystander", 512);
+        let mut events = runtime.events.subscribe();
+
+        let stale = android_sync_answer(&android, b"from ten minutes ago", now_millis() - 600_000);
+        runtime.on_packet(&link, stale.clone()).await;
+        assert_eq!(messages_shown(&mut events), 1, "accepted");
+        assert!(runtime.gossip.holds(&stale), "filed, so our filter has it next round");
+
+        // Replays: the dedup cache, and past it the store.
+        runtime.on_packet(&link, stale.clone()).await;
+        state.with(|inner| inner.dedup.reset());
+        runtime.on_packet(&link, stale.clone()).await;
+        assert_eq!(messages_shown(&mut events), 0, "a replay is dropped");
+
+        assert!(!put_on_air(&runtime, &radio, &stale).await, "never relayed");
+
+        // Control: the same author's live message is relayed, so the check
+        // above can see a relay.
+        let mut live = android_sync_answer(&android, b"live", now_millis());
+        live.ttl = chatter_mesh::relay::MESSAGE_TTL_DEFAULT;
+        live.signature = Some(sign_packet(&android, &live).expect("signs"));
+        runtime.on_packet(&link, live.clone()).await;
+        assert!(put_on_air(&runtime, &radio, &live).await, "the control relays");
+    }
+
+    #[tokio::test]
+    async fn a_stale_android_sync_answer_past_our_retention_is_dropped() {
+        let (mut runtime, _radio, state) = runtime();
+        let (android, link) = android_peer_on_its_link(&mut runtime, &state).await;
+        let mut events = runtime.events.subscribe();
+
+        let retention_ms = SyncConfig::default().public_message_max_age_secs * 1000;
+        let ancient = android_sync_answer(&android, b"too old", now_millis() - retention_ms - 60_000);
+        runtime.on_packet(&link, ancient.clone()).await;
+
+        assert_eq!(messages_shown(&mut events), 0);
+        assert!(!runtime.gossip.holds(&ancient));
+    }
+
+    #[tokio::test]
+    async fn a_stale_sync_answer_on_an_unverified_link_is_dropped() {
+        let (mut runtime, _radio, state) = runtime();
+        let (android, _link) = android_peer_on_its_link(&mut runtime, &state).await;
+        let mut events = runtime.events.subscribe();
+        let stale = android_sync_answer(&android, b"old", now_millis() - 600_000);
+
+        // A link no announce has bound.
+        let unbound = writable_link(&state, "/mock/unbound", 512);
+        runtime.on_packet(&unbound, stale.clone()).await;
+
+        // A link bound to a peer with no pinned announce, even with a request
+        // of ours out to it.
+        let unpinned = MeshIdentity::generate(&mut OsRng).peer_id();
+        let bound = writable_link(&state, "/mock/unpinned", 512);
+        state.with(|inner| inner.links.bind_if_unbound(&bound, &unpinned));
+        runtime.gossip.initial_sync_to(&unpinned, now_secs()).expect("request");
+        runtime.on_packet(&bound, stale.clone()).await;
+
+        assert_eq!(messages_shown(&mut events), 0);
+        assert!(!runtime.gossip.holds(&stale));
+    }
+
+    #[tokio::test]
+    async fn a_stale_sync_answer_with_a_bad_signature_is_dropped() {
+        let (mut runtime, _radio, state) = runtime();
+        let (android, link) = android_peer_on_its_link(&mut runtime, &state).await;
+        let mut events = runtime.events.subscribe();
+
+        let mut forged = android_sync_answer(&android, b"old", now_millis() - 600_000);
+        let other = MeshIdentity::generate(&mut OsRng);
+        forged.signature = Some(sign_packet(&other, &forged).expect("signs"));
+        runtime.on_packet(&link, forged.clone()).await;
+
+        assert_eq!(messages_shown(&mut events), 0);
+        assert!(!runtime.gossip.holds(&forged), "not filed, so not served onward");
     }
 
     #[tokio::test]

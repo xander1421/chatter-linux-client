@@ -275,11 +275,13 @@ impl RequestSyncTracker {
     /// A non-RSR packet is never "a response" — it takes the ordinary freshness
     /// path and this returns false for it, which is not a rejection.
     pub fn is_valid_response(&self, peer: &PeerId, is_rsr: bool, now_unix_secs: u64) -> bool {
-        if !is_rsr {
-            return false;
-        }
+        is_rsr && self.awaits_answer_from(peer, now_unix_secs)
+    }
+
+    /// Whether a request to `peer` is outstanding, whatever the answer's flags.
+    pub fn awaits_answer_from(&self, peer: &PeerId, now_unix_secs: u64) -> bool {
         let Some(requested_at) = self.pending.get(peer) else {
-            // Unsolicited RSR: a peer we never asked, claiming the exemption.
+            // A peer we never asked.
             return false;
         };
         // Saturating: a clock that jumped backwards makes the age zero rather than
@@ -873,6 +875,18 @@ impl GossipSyncManager {
     /// false answer here is what stops a captured response being replayed forever.
     pub fn is_valid_response(&self, from: &PeerId, is_rsr: bool, now_unix_secs: u64) -> bool {
         self.requests.is_valid_response(from, is_rsr, now_unix_secs)
+    }
+
+    /// Whether we have a request out to `from`, for an answer without the RSR
+    /// flag. bitchat-android answers with TTL 0 and never sets RSR.
+    pub fn awaits_answer_from(&self, from: &PeerId, now_unix_secs: u64) -> bool {
+        self.requests.awaits_answer_from(from, now_unix_secs)
+    }
+
+    /// Whether `packet` is inside the retention window this store keeps for its
+    /// type. One-sided, like the store: a future timestamp is inside.
+    pub fn within_retention(&self, packet: &BitchatPacket, now_unix_secs: u64) -> bool {
+        packet_is_fresh(&self.config, packet, now_unix_secs)
     }
 
     // -- requesting --------------------------------------------------------
@@ -1589,6 +1603,30 @@ mod tests {
         assert_eq!(manager.pending_request_count(), 1);
         assert!(manager.is_valid_response(&them(), true, NOW + 60));
         assert!(!manager.is_valid_response(&them(), true, NOW + 60 + RESPONSE_WINDOW_SECS + 1));
+    }
+
+    #[test]
+    fn an_answer_without_rsr_is_awaited_only_from_the_peer_we_asked_in_the_window() {
+        let mut manager = manager();
+        assert!(!manager.awaits_answer_from(&them(), NOW), "never asked");
+
+        manager.initial_sync_to(&them(), NOW).expect("request");
+        assert!(manager.awaits_answer_from(&them(), NOW));
+        assert!(!manager.is_valid_response(&them(), false, NOW), "RSR path unchanged");
+        let stranger = PeerId::from_bytes(&[0x42; 8]);
+        assert!(!manager.awaits_answer_from(&stranger, NOW));
+        assert!(!manager.awaits_answer_from(&them(), NOW + RESPONSE_WINDOW_SECS + 1));
+    }
+
+    #[test]
+    fn retention_is_the_stores_own_window_for_the_type() {
+        let manager = manager();
+        let window_ms = manager.config().public_message_max_age_secs * 1000;
+        assert!(manager.within_retention(&message(b"edge", NOW_MS - window_ms), NOW));
+        assert!(!manager.within_retention(&message(b"old", NOW_MS - window_ms - 1), NOW));
+        // Announces keep the short window, not the public-message one.
+        let announce = packet_of(MessageType::Announce, b"", NOW_MS - 16 * 60 * 1000);
+        assert!(!manager.within_retention(&announce, NOW));
     }
 
     // -- rate limiting -----------------------------------------------------
