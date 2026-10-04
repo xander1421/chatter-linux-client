@@ -169,8 +169,7 @@ async fn test_oncelock_services_uninitialized_before_login() {
 ///
 /// Architecture reference:
 ///   EventBus is part of Tier 3 (CoreServices).
-///   It has domain_tx (broadcast/64) for DomainEvents
-///   and ui_tx for UiEvents.
+///   It has domain_tx (broadcast/64) for DomainEvents.
 #[tokio::test]
 async fn test_event_bus_created_on_init() {
     let result = chatter_core::client::ChatterClient::builder()
@@ -185,7 +184,6 @@ async fn test_event_bus_created_on_init() {
             // Can create multiple subscribers (broadcast pattern)
             let _rx1 = bus.subscribe_domain();
             let _rx2 = bus.subscribe_domain();
-            let _rx3 = bus.subscribe_ui();
 
             println!("EventBus is functional with multiple subscribers");
         }

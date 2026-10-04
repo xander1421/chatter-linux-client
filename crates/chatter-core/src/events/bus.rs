@@ -1,6 +1,6 @@
-//! Event bus for unified event routing.
+//! Event bus for domain-event routing.
 //!
-//! Provides centralized pub/sub for domain and UI events using broadcast channels.
+//! Provides centralized pub/sub for domain events using a broadcast channel.
 //!
 //! # Architecture
 //!
@@ -9,61 +9,33 @@
 //! | Inbox Handlers | --> | EventBus    | --> | EventHandlers  |
 //! | (emit domain)  |     | (routes)    |     | (updates state)|
 //! +----------------+     +-------------+     +----------------+
-//!                              |
-//!                              v
-//!                        +-------------+
-//!                        | UI Layer    |
-//!                        | (subscribe) |
-//!                        +-------------+
 //! ```
-//!
-//! # Event Types
-//!
-//! - **DomainEvent**: Business logic events (message received, typing, etc.)
-//! - **UiEvent**: UI-specific events (navigation, modals, toasts)
 
 use tokio::sync::broadcast;
 
 use crate::inbox::handlers::DomainEvent;
-use crate::events::ui_events::UiEvent;
 
 /// Channel capacity for domain events.
 ///
 /// Higher capacity to handle bursts of incoming messages.
 const DOMAIN_CHANNEL_CAPACITY: usize = 64;
 
-/// Channel capacity for UI events.
-///
-/// Lower capacity as UI events are typically less frequent.
-const UI_CHANNEL_CAPACITY: usize = 32;
-
-/// Unified event bus for domain and UI events.
-///
-/// The EventBus provides centralized routing for all application events:
-/// - Domain events from inbox handlers (message received, typing, etc.)
-/// - UI events from the view layer (navigation, modals, etc.)
+/// Event bus for domain events from inbox handlers (message received,
+/// typing, etc.).
 ///
 /// # Cloning
 ///
 /// EventBus implements Clone efficiently - all clones share the same
-/// underlying broadcast channels.
+/// underlying broadcast channel.
 ///
 /// # Example
 ///
 /// ```ignore
-/// use chatter_core::events::{EventBus, DomainEvent, UiEvent};
+/// use chatter_core::events::{EventBus, DomainEvent};
 ///
 /// let bus = EventBus::new();
-///
-/// // Subscribe to domain events
 /// let mut domain_rx = bus.subscribe_domain();
-///
-/// // Subscribe to UI events
-/// let mut ui_rx = bus.subscribe_ui();
-///
-/// // Emit events
 /// bus.emit_domain(DomainEvent::TypingStarted { user_id, channel_id, timestamp: 0 });
-/// bus.emit_ui(UiEvent::ChannelSelected { channel_id });
 ///
 /// // Or get the sender for use in other components
 /// let domain_tx = bus.domain_sender();
@@ -73,21 +45,15 @@ const UI_CHANNEL_CAPACITY: usize = 32;
 pub struct EventBus {
     /// Sender for domain events.
     domain_tx: broadcast::Sender<DomainEvent>,
-    /// Sender for UI events.
-    ui_tx: broadcast::Sender<UiEvent>,
 }
 
 impl EventBus {
-    /// Create a new event bus with default channel capacities.
-    ///
-    /// - Domain channel: 64 events
-    /// - UI channel: 32 events
+    /// Create a new event bus (domain channel: 64 events).
     #[must_use]
     pub fn new() -> Self {
         let (domain_tx, _) = broadcast::channel(DOMAIN_CHANNEL_CAPACITY);
-        let (ui_tx, _) = broadcast::channel(UI_CHANNEL_CAPACITY);
 
-        Self { domain_tx, ui_tx }
+        Self { domain_tx }
     }
 
     /// Get the domain event sender.
@@ -97,14 +63,6 @@ impl EventBus {
     #[must_use]
     pub fn domain_sender(&self) -> broadcast::Sender<DomainEvent> {
         self.domain_tx.clone()
-    }
-
-    /// Get the UI event sender.
-    ///
-    /// Use this to pass to UI components that need to emit UI events.
-    #[must_use]
-    pub fn ui_sender(&self) -> broadcast::Sender<UiEvent> {
-        self.ui_tx.clone()
     }
 
     /// Subscribe to domain events.
@@ -121,15 +79,6 @@ impl EventBus {
         self.domain_tx.subscribe()
     }
 
-    /// Subscribe to UI events.
-    ///
-    /// Returns a receiver that will receive all UI events.
-    /// Multiple subscribers can exist simultaneously.
-    #[must_use]
-    pub fn subscribe_ui(&self) -> broadcast::Receiver<UiEvent> {
-        self.ui_tx.subscribe()
-    }
-
     /// Emit a domain event to all subscribers.
     ///
     /// Returns the number of active receivers, or 0 if no subscribers.
@@ -139,23 +88,10 @@ impl EventBus {
         self.domain_tx.send(event).unwrap_or(0)
     }
 
-    /// Emit a UI event to all subscribers.
-    ///
-    /// Returns the number of active receivers, or 0 if no subscribers.
-    pub fn emit_ui(&self, event: UiEvent) -> usize {
-        self.ui_tx.send(event).unwrap_or(0)
-    }
-
     /// Get the number of active domain event subscribers.
     #[must_use]
     pub fn domain_subscriber_count(&self) -> usize {
         self.domain_tx.receiver_count()
-    }
-
-    /// Get the number of active UI event subscribers.
-    #[must_use]
-    pub fn ui_subscriber_count(&self) -> usize {
-        self.ui_tx.receiver_count()
     }
 }
 
@@ -169,7 +105,6 @@ impl std::fmt::Debug for EventBus {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("EventBus")
             .field("domain_subscribers", &self.domain_tx.receiver_count())
-            .field("ui_subscribers", &self.ui_tx.receiver_count())
             .finish()
     }
 }
@@ -184,7 +119,6 @@ mod tests {
     fn test_event_bus_new() {
         let bus = EventBus::new();
         assert_eq!(bus.domain_subscriber_count(), 0);
-        assert_eq!(bus.ui_subscriber_count(), 0);
     }
 
     #[test]
@@ -226,24 +160,6 @@ mod tests {
         } = event
         {
             assert_eq!(u, user_id);
-            assert_eq!(c, channel_id);
-        } else {
-            panic!("Wrong event type");
-        }
-    }
-
-    #[tokio::test]
-    async fn test_emit_ui_event() {
-        let bus = EventBus::new();
-        let mut rx = bus.subscribe_ui();
-
-        let channel_id = ChannelId::new();
-
-        let count = bus.emit_ui(UiEvent::ChannelSelected { channel_id });
-        assert_eq!(count, 1);
-
-        let event = rx.recv().await.unwrap();
-        if let UiEvent::ChannelSelected { channel_id: c } = event {
             assert_eq!(c, channel_id);
         } else {
             panic!("Wrong event type");

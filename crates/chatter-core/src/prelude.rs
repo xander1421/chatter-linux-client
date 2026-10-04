@@ -37,7 +37,7 @@ pub use crate::domain::anon_group::{AnonGroup, AnonGroupId, AnonGroupRole};
 pub use crate::domain::user::{Friendship, StatusMessage};
 
 // Events
-pub use crate::events::{DomainEvent, EventBus, UiEvent};
+pub use crate::events::{DomainEvent, EventBus};
 
 // Conversation operations
 pub use crate::services::conversation::{ConversationHandle, ConversationError};

@@ -52,22 +52,6 @@ fn test_event_bus_multiple_subscribers() {
 }
 
 #[test]
-fn test_event_bus_ui_channel_separate() {
-    let bus = EventBus::new();
-    let mut domain_rx = bus.subscribe_domain();
-    let mut ui_rx = bus.subscribe_ui();
-
-    bus.emit_domain(DomainEvent::TypingStarted {
-        user_id: UserId::new(),
-        channel_id: ChannelId::new(),
-        timestamp: 0,
-    });
-
-    assert!(domain_rx.try_recv().is_ok(), "Domain channel should receive");
-    assert!(ui_rx.try_recv().is_err(), "UI channel should NOT receive domain event");
-}
-
-#[test]
 fn test_event_bus_broadcast_capacity() {
     let bus = EventBus::new();
     let mut rx = bus.subscribe_domain();
