@@ -102,33 +102,6 @@ impl UserRepository {
         Ok(count as u64)
     }
 
-    /// Get a user by username.
-    pub fn get_by_username(&self, username: &str) -> Result<Option<User>, StorageError> {
-        let conn = self.db.connection()?;
-        let mut stmt = conn.prepare(
-            "SELECT id, username, svr_public_key, last_active, created_at
-             FROM users WHERE username = ?1",
-        )?;
-
-        let result = stmt.query_row(params![username], |row| {
-            Ok(User {
-                id: row.get::<_, String>(0)?.parse().map_err(|_| {
-                    rusqlite::Error::InvalidParameterName("Invalid UUID".into())
-                })?,
-                username: row.get(1)?,
-                svr_public_key: row.get(2)?,
-                last_active: parse_datetime(&row.get::<_, String>(3)?),
-                created_at: parse_datetime(&row.get::<_, String>(4)?),
-            })
-        });
-
-        match result {
-            Ok(user) => Ok(Some(user)),
-            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
-            Err(e) => Err(StorageError::Database(e)),
-        }
-    }
-
     /// Update an existing user.
     pub fn update(&self, user: &User) -> Result<(), StorageError> {
         let conn = self.db.connection()?;
@@ -280,56 +253,6 @@ impl UserRepository {
     // Device operations
     // ========================================================================
 
-    /// Insert a new device.
-    pub fn insert_device(&self, device: &Device) -> Result<(), StorageError> {
-        let conn = self.db.connection()?;
-        conn.execute(
-            "INSERT INTO devices (id, user_id, name, registration_id, created_at, last_seen)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-            params![
-                device.id.as_u32(),
-                device.user_id.to_string(),
-                device.name,
-                device.registration_id,
-                device.created_at.to_rfc3339(),
-                device.last_seen.to_rfc3339(),
-            ],
-        )?;
-        Ok(())
-    }
-
-    /// Get a specific device.
-    pub fn get_device(
-        &self,
-        user_id: &UserId,
-        device_id: DeviceId,
-    ) -> Result<Option<Device>, StorageError> {
-        let conn = self.db.connection()?;
-        let mut stmt = conn.prepare(
-            "SELECT id, user_id, name, registration_id, created_at, last_seen
-             FROM devices WHERE user_id = ?1 AND id = ?2",
-        )?;
-
-        let result = stmt.query_row(params![user_id.to_string(), device_id.as_u32()], |row| {
-            Ok(Device {
-                id: DeviceId::new(row.get(0)?),
-                user_id: row.get::<_, String>(1)?.parse().map_err(|_| {
-                    rusqlite::Error::InvalidParameterName("Invalid UUID".into())
-                })?,
-                name: row.get(2)?,
-                registration_id: row.get(3)?,
-                created_at: parse_datetime(&row.get::<_, String>(4)?),
-                last_seen: parse_datetime(&row.get::<_, String>(5)?),
-            })
-        });
-
-        match result {
-            Ok(device) => Ok(Some(device)),
-            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
-            Err(e) => Err(StorageError::Database(e)),
-        }
-    }
-
     /// List all devices for a user.
     pub fn list_devices(&self, user_id: &UserId) -> Result<Vec<Device>, StorageError> {
         let conn = self.db.connection()?;
@@ -355,22 +278,6 @@ impl UserRepository {
         }
 
         Ok(devices)
-    }
-
-    /// Delete a device.
-    pub fn delete_device(&self, user_id: &UserId, device_id: DeviceId) -> Result<(), StorageError> {
-        let conn = self.db.connection()?;
-        let rows = conn.execute(
-            "DELETE FROM devices WHERE user_id = ?1 AND id = ?2",
-            params![user_id.to_string(), device_id.as_u32()],
-        )?;
-        if rows == 0 {
-            return Err(StorageError::NotFound(format!(
-                "Device {} for user {}",
-                device_id, user_id
-            )));
-        }
-        Ok(())
     }
 
     // ========================================================================

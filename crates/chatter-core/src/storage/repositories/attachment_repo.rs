@@ -153,43 +153,6 @@ impl AttachmentRepository {
         }
     }
 
-    /// Store encrypted content for an existing attachment.
-    ///
-    /// Updates the attachment with downloaded encrypted ciphertext and
-    /// marks content_location as InDatabase.
-    pub fn store_encrypted_content(
-        &self,
-        id: &AttachmentId,
-        encrypted_content: &[u8],
-    ) -> Result<(), StorageError> {
-        let conn = self.db.connection()?;
-
-        // Set content_location AND status atomically to avoid race condition
-        // where user clicks attachment between content stored and status update
-        let rows = conn.execute(
-            "UPDATE attachments SET
-                encrypted_content = ?1,
-                content_location = ?2,
-                status = ?3
-             WHERE id = ?4",
-            params![
-                encrypted_content,
-                content_location_to_int(ContentLocation::InDatabase),
-                status_to_int(AttachmentStatus::Ready),
-                id.to_string(),
-            ],
-        )?;
-
-        if rows == 0 {
-            return Err(StorageError::NotFound(format!(
-                "Attachment {} not found",
-                id
-            )));
-        }
-
-        Ok(())
-    }
-
     // ========================================================================
     // Filesystem-based storage methods
     // ========================================================================
@@ -290,56 +253,6 @@ impl AttachmentRepository {
         Ok(())
     }
 
-    /// Update content location for an attachment.
-    ///
-    /// Used when migrating attachments between storage backends.
-    pub fn set_content_location(
-        &self,
-        id: &AttachmentId,
-        location: ContentLocation,
-    ) -> Result<(), StorageError> {
-        let conn = self.db.connection()?;
-
-        let rows = conn.execute(
-            "UPDATE attachments SET content_location = ?1 WHERE id = ?2",
-            params![content_location_to_int(location), id.to_string()],
-        )?;
-
-        if rows == 0 {
-            return Err(StorageError::NotFound(format!(
-                "Attachment {} not found",
-                id
-            )));
-        }
-
-        Ok(())
-    }
-
-    /// List all attachments stored on filesystem.
-    ///
-    /// Returns attachment IDs and their file paths for cleanup operations.
-    pub fn list_filesystem_attachments(&self) -> Result<Vec<(AttachmentId, String)>, StorageError> {
-        let conn = self.db.read_connection()?;
-        let mut stmt = conn.prepare(
-            "SELECT id, file_path FROM attachments
-             WHERE content_location = 2 AND file_path IS NOT NULL",
-        )?;
-
-        let mut rows = stmt.query([])?;
-        let mut results = Vec::new();
-
-        while let Some(row) = rows.next()? {
-            let id_str: String = row.get(0)?;
-            let file_path: String = row.get(1)?;
-
-            if let Ok(id) = id_str.parse() {
-                results.push((id, file_path));
-            }
-        }
-
-        Ok(results)
-    }
-
     /// Whether any stored message still carries this attachment. A forward
     /// reuses the original's attachment id, so deleting one conversation's
     /// messages does not make its attachments unreferenced. Answered from
@@ -437,59 +350,6 @@ impl AttachmentRepository {
     // ========================================================================
     // Queries
     // ========================================================================
-
-    /// List attachments by status.
-    pub fn list_by_status(&self, status: AttachmentStatus) -> Result<Vec<Attachment>, StorageError> {
-        let conn = self.db.read_connection()?;
-        let mut stmt = conn.prepare(
-            "SELECT id, metadata_blob, status, local_path, remote_url,
-                    encryption_key, encryption_iv, thumbnail_bytes, content_location, created_at
-             FROM attachments WHERE status = ?1
-             ORDER BY created_at DESC",
-        )?;
-
-        let mut rows = stmt.query(params![status_to_int(status)])?;
-        collect_attachments(&mut rows)
-    }
-
-    /// List attachments pending upload (Pending or Uploading status).
-    ///
-    /// Note: Excludes thumbnail_bytes for memory efficiency. Use get() for full data.
-    pub fn list_pending_uploads(&self) -> Result<Vec<Attachment>, StorageError> {
-        let conn = self.db.read_connection()?;
-        let mut stmt = conn.prepare(
-            "SELECT id, metadata_blob, status, local_path, remote_url,
-                    encryption_key, encryption_iv, thumbnail_bytes, content_location, created_at
-             FROM attachments WHERE status IN (?1, ?2)
-             ORDER BY created_at ASC",
-        )?;
-
-        let pending = status_to_int(AttachmentStatus::Pending);
-        let uploading = status_to_int(AttachmentStatus::Uploading);
-        let mut rows = stmt.query(params![pending, uploading])?;
-        collect_attachments(&mut rows)
-    }
-
-    /// List attachments that need content downloaded from CDN.
-    ///
-    /// Note: Uses read connection for concurrent access.
-    pub fn list_pending_downloads(&self) -> Result<Vec<Attachment>, StorageError> {
-        let conn = self.db.read_connection()?;
-        let mut stmt = conn.prepare(
-            "SELECT id, metadata_blob, status, local_path, remote_url,
-                    encryption_key, encryption_iv, thumbnail_bytes, content_location, created_at
-             FROM attachments
-             WHERE content_location = 0
-               AND remote_url IS NOT NULL
-               AND encryption_key IS NOT NULL
-               AND status != ?1
-             ORDER BY created_at ASC",
-        )?;
-
-        let failed = status_to_int(AttachmentStatus::Failed);
-        let mut rows = stmt.query(params![failed])?;
-        collect_attachments(&mut rows)
-    }
 
     // ========================================================================
     // Thumbnail operations
@@ -665,16 +525,6 @@ fn row_to_thumbnail(row: &rusqlite::Row<'_>) -> rusqlite::Result<Result<Thumbnai
         height,
         created_at: parse_datetime(&created_at_str),
     }))
-}
-
-/// Collect attachments from a Rows iterator.
-fn collect_attachments(rows: &mut rusqlite::Rows<'_>) -> Result<Vec<Attachment>, StorageError> {
-    let mut attachments = Vec::new();
-    while let Some(row) = rows.next()? {
-        let attachment_result = row_to_attachment(row)?;
-        attachments.push(attachment_result?);
-    }
-    Ok(attachments)
 }
 
 #[cfg(test)]

@@ -112,42 +112,6 @@ impl AnonDmRepository {
         Ok(())
     }
 
-    /// Update peer's display name.
-    pub fn update_peer_display_name(
-        &self,
-        id: &AnonDmId,
-        display_name: &str,
-    ) -> Result<(), StorageError> {
-        let conn = self.db.connection()?;
-        let now = Utc::now();
-        let rows = conn.execute(
-            "UPDATE anon_dm_conversations SET peer_display_name = ?1, updated_at = ?2 WHERE id = ?3",
-            params![display_name, now.to_rfc3339(), id.to_string()],
-        )?;
-        if rows == 0 {
-            return Err(StorageError::NotFound(format!("AnonDm {}", id)));
-        }
-        Ok(())
-    }
-
-    /// Update peer's avatar.
-    pub fn update_peer_avatar(
-        &self,
-        id: &AnonDmId,
-        avatar: &[u8],
-    ) -> Result<(), StorageError> {
-        let conn = self.db.connection()?;
-        let now = Utc::now();
-        let rows = conn.execute(
-            "UPDATE anon_dm_conversations SET peer_avatar = ?1, updated_at = ?2 WHERE id = ?3",
-            params![avatar, now.to_rfc3339(), id.to_string()],
-        )?;
-        if rows == 0 {
-            return Err(StorageError::NotFound(format!("AnonDm {}", id)));
-        }
-        Ok(())
-    }
-
     /// Update conversation status.
     pub fn update_status(&self, id: &AnonDmId, status: AnonDmStatus) -> Result<(), StorageError> {
         let conn = self.db.connection()?;
@@ -155,42 +119,6 @@ impl AnonDmRepository {
         let rows = conn.execute(
             "UPDATE anon_dm_conversations SET status = ?1, updated_at = ?2 WHERE id = ?3",
             params![status.to_i32(), now.to_rfc3339(), id.to_string()],
-        )?;
-        if rows == 0 {
-            return Err(StorageError::NotFound(format!("AnonDm {}", id)));
-        }
-        Ok(())
-    }
-
-    /// Update peer's mailbox public key.
-    pub fn update_peer_mailbox(
-        &self,
-        id: &AnonDmId,
-        mailbox_pk: &[u8; 32],
-    ) -> Result<(), StorageError> {
-        let conn = self.db.connection()?;
-        let now = Utc::now();
-        let rows = conn.execute(
-            "UPDATE anon_dm_conversations SET peer_mailbox_pk = ?1, updated_at = ?2 WHERE id = ?3",
-            params![mailbox_pk.as_slice(), now.to_rfc3339(), id.to_string()],
-        )?;
-        if rows == 0 {
-            return Err(StorageError::NotFound(format!("AnonDm {}", id)));
-        }
-        Ok(())
-    }
-
-    /// Update peer's profile key.
-    pub fn update_peer_profile_key(
-        &self,
-        id: &AnonDmId,
-        profile_key: &[u8; 32],
-    ) -> Result<(), StorageError> {
-        let conn = self.db.connection()?;
-        let now = Utc::now();
-        let rows = conn.execute(
-            "UPDATE anon_dm_conversations SET peer_profile_key = ?1, updated_at = ?2 WHERE id = ?3",
-            params![profile_key.as_slice(), now.to_rfc3339(), id.to_string()],
         )?;
         if rows == 0 {
             return Err(StorageError::NotFound(format!("AnonDm {}", id)));
@@ -320,12 +248,6 @@ impl AnonDmRepository {
         Ok(count as u32)
     }
 
-    /// Increment unread count for a conversation.
-    pub fn increment_unread(&self, _id: &AnonDmId) -> Result<(), StorageError> {
-        // No-op: unread count is computed dynamically from the messages table
-        Ok(())
-    }
-
     // ========================================================================
     // Mailbox CRUD
     // ========================================================================
@@ -374,25 +296,6 @@ impl AnonDmRepository {
             params![conversation_id.to_string()],
         )?;
         Ok(())
-    }
-
-    /// Get expired mailboxes that need renewal.
-    pub fn get_expired_mailboxes(&self) -> Result<Vec<AnonDmMailbox>, StorageError> {
-        let conn = self.db.read_connection()?;
-        let now = Utc::now().to_rfc3339();
-        let mut stmt = conn.prepare(
-            "SELECT id, conversation_id, public_key, private_key, token_id, created_at, expires_at
-             FROM anon_dm_mailboxes WHERE expires_at < ?1",
-        )?;
-
-        let mut rows = stmt.query(params![now])?;
-        let mut mailboxes = Vec::new();
-
-        while let Some(row) = rows.next()? {
-            mailboxes.push(row_to_mailbox(row)?);
-        }
-
-        Ok(mailboxes)
     }
 
     /// Get all active (non-expired) mailboxes for polling.

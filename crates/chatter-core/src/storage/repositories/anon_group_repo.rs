@@ -68,28 +68,6 @@ impl AnonGroupRepository {
         }
     }
 
-    /// Update an anonymous group.
-    pub fn update_group(&self, group: &AnonGroup) -> Result<(), StorageError> {
-        let conn = self.db.connection()?;
-        let rows = conn.execute(
-            "UPDATE anon_groups SET name = ?1, my_role = ?2, bootstrap_complete = ?3, updated_at = ?4, status = ?5, owner_id = ?6
-             WHERE id = ?7",
-            params![
-                group.name,
-                group.my_role.to_i32(),
-                group.bootstrap_complete as i32,
-                group.updated_at.to_rfc3339(),
-                group.status.to_i32(),
-                group.owner_id.to_string(),
-                group.id.to_string(),
-            ],
-        )?;
-        if rows == 0 {
-            return Err(StorageError::NotFound(format!("AnonGroup {}", group.id)));
-        }
-        Ok(())
-    }
-
     /// Update only the group name.
     pub fn update_group_name(&self, id: &AnonGroupId, name: &str) -> Result<(), StorageError> {
         let conn = self.db.connection()?;
@@ -133,23 +111,6 @@ impl AnonGroupRepository {
         }
 
         Ok(groups)
-    }
-
-    /// Set bootstrap complete for a group.
-    pub fn set_bootstrap_complete(&self, id: &AnonGroupId, complete: bool) -> Result<(), StorageError> {
-        let conn = self.db.connection()?;
-        let rows = conn.execute(
-            "UPDATE anon_groups SET bootstrap_complete = ?1, updated_at = ?2 WHERE id = ?3",
-            params![
-                complete as i32,
-                Utc::now().to_rfc3339(),
-                id.to_string(),
-            ],
-        )?;
-        if rows == 0 {
-            return Err(StorageError::NotFound(format!("AnonGroup {}", id)));
-        }
-        Ok(())
     }
 
     // ========================================================================
@@ -554,24 +515,6 @@ impl AnonGroupRepository {
         Ok(())
     }
 
-    /// Get pending actions for a group.
-    pub fn get_pending(&self, group_id: &AnonGroupId) -> Result<Vec<AnonGroupPending>, StorageError> {
-        let conn = self.db.read_connection()?;
-        let mut stmt = conn.prepare(
-            "SELECT id, group_id, user_id, action, created_at, expires_at, retry_count
-             FROM anon_group_pending WHERE group_id = ?1 ORDER BY created_at",
-        )?;
-
-        let mut rows = stmt.query(params![group_id.to_string()])?;
-        let mut pending = Vec::new();
-
-        while let Some(row) = rows.next()? {
-            pending.push(row_to_pending(row)?);
-        }
-
-        Ok(pending)
-    }
-
     /// Delete a pending action.
     pub fn delete_pending(
         &self,
@@ -582,36 +525,6 @@ impl AnonGroupRepository {
         let conn = self.db.connection()?;
         conn.execute(
             "DELETE FROM anon_group_pending WHERE group_id = ?1 AND user_id = ?2 AND action = ?3",
-            params![
-                group_id.to_string(),
-                user_id.to_string(),
-                action.as_str(),
-            ],
-        )?;
-        Ok(())
-    }
-
-    /// Delete expired pending actions.
-    pub fn delete_expired_pending(&self) -> Result<u32, StorageError> {
-        let conn = self.db.connection()?;
-        let rows = conn.execute(
-            "DELETE FROM anon_group_pending WHERE expires_at < ?1",
-            params![Utc::now().to_rfc3339()],
-        )?;
-        Ok(rows as u32)
-    }
-
-    /// Increment retry count for a pending action.
-    pub fn increment_pending_retry(
-        &self,
-        group_id: &AnonGroupId,
-        user_id: &UserId,
-        action: PendingActionType,
-    ) -> Result<(), StorageError> {
-        let conn = self.db.connection()?;
-        conn.execute(
-            "UPDATE anon_group_pending SET retry_count = retry_count + 1
-             WHERE group_id = ?1 AND user_id = ?2 AND action = ?3",
             params![
                 group_id.to_string(),
                 user_id.to_string(),
@@ -936,24 +849,3 @@ fn row_to_mailbox(row: &rusqlite::Row<'_>) -> rusqlite::Result<AnonGroupMailbox>
     })
 }
 
-fn row_to_pending(row: &rusqlite::Row<'_>) -> rusqlite::Result<AnonGroupPending> {
-    let group_id_str: String = row.get(1)?;
-    let group_id = group_id_str.parse().map_err(|_| rusqlite::Error::InvalidQuery)?;
-
-    let user_id_str: String = row.get(2)?;
-    let user_id = user_id_str.parse().map_err(|_| rusqlite::Error::InvalidQuery)?;
-
-    let action_str: String = row.get(3)?;
-    let action = PendingActionType::parse(&action_str)
-        .ok_or_else(|| rusqlite::Error::InvalidParameterName("Invalid action type".into()))?;
-
-    Ok(AnonGroupPending {
-        id: row.get(0)?,
-        group_id,
-        user_id,
-        action,
-        created_at: parse_datetime(&row.get::<_, String>(4)?),
-        expires_at: parse_datetime(&row.get::<_, String>(5)?),
-        retry_count: row.get(6)?,
-    })
-}
