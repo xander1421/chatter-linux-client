@@ -108,11 +108,22 @@ const TABLE: &[Entry] = &[
         expect: Expect::Wired,
         why: "Holds a served tree head to the device's pinned head under the pin lock \
               (classify -> consistency proof -> accept). Called from session.rs for the \
-              identified AND anonymous KT paths (the anon gate is session.rs-internal, so it is \
-              covered by kt_pin_tests, not by this table) and from mailbox/blind_signature.rs for \
+              identified AND anonymous KT paths (the anon gate is session.rs-internal, so its \
+              wiring is pinned by anon_kt_gate_is_anchored_to_the_device_pin) and from mailbox/blind_signature.rs for \
               blind-key manifests. Lose it and inclusion proofs verify against whatever \
               head the server sent, so a forked log goes undetected; before 2026-10-03 the \
               anonymous path never anchored at all.",
+    },
+    Entry {
+        symbol: "ensure_session_with_bundle",
+        defined_in: "chatter-core/src/services/signal/session.rs",
+        expect: Expect::Wired,
+        why: "The anonymous-path session establishment (services/pairwise.rs), and the \
+              only entry to its KT gate: verify_peer_key_transparency_anon -> judge_kt_proof \
+              -> check_tree_head_consistency -> hold_head_locked. That chain is \
+              session.rs-internal, so `anon_kt_gate_is_anchored_to_the_device_pin` pins it; \
+              this entry pins that the chain is reachable at all. Lose it and pairwise \
+              sessions either stop working or establish over an ungated bundle path.",
     },
     // ---- Reactions -------------------------------------------------------
     Entry {
@@ -747,6 +758,82 @@ fn every_sealed_sender_decrypt_consumer_refuses_unratcheted_plaintext() {
              sure the refusal moved with it."
         );
     }
+}
+
+/// Production body of `fn name` in `lines` (already `#[cfg(test)]`-stripped),
+/// comments removed, brace-matched from the signature.
+fn fn_body(lines: &[String], name: &str) -> Option<String> {
+    let start = lines.iter().position(|l| {
+        let code = strip_comments(l);
+        code.contains(&format!("fn {name}(")) || code.contains(&format!("fn {name}<"))
+    })?;
+    let mut body = String::new();
+    let mut depth = 0;
+    let mut started = false;
+    for line in &lines[start..] {
+        let (opens, net) = braces(line);
+        if opens > 0 {
+            started = true;
+        }
+        depth += net;
+        body.push_str(&strip_comments(line));
+        body.push('\n');
+        if started && depth <= 0 {
+            return Some(body);
+        }
+    }
+    None
+}
+
+/// The anonymous KT gate is held to the device's pinned tree head.
+///
+/// Every link of this chain lives in `services/signal/session.rs`, so the table
+/// (which ignores the defining file) cannot see it; `ensure_session_with_bundle`
+/// in the table pins only the outside entry. Before client 4ce51ad3 the anon gate
+/// verified inclusion against whatever head the server sent with the proof.
+///
+/// MUTATION: delete the `verify_peer_key_transparency_anon(` call from
+/// `ensure_session_with_bundle`, or replace its `judge_kt_proof(` with an
+/// unanchored check. This test goes red naming the broken link.
+#[test]
+fn anon_kt_gate_is_anchored_to_the_device_pin() {
+    const SESSION: &str = "chatter-core/src/services/signal/session.rs";
+    // (caller, callee): each caller's production body must call the callee.
+    const CHAIN: &[(&str, &str)] = &[
+        ("ensure_session_with_bundle", "verify_peer_key_transparency_anon"),
+        ("verify_peer_key_transparency_anon", "lock_pin"),
+        ("verify_peer_key_transparency_anon", "judge_kt_proof"),
+        ("judge_kt_proof", "check_tree_head_consistency"),
+        ("check_tree_head_consistency", "hold_head_locked"),
+    ];
+
+    let path = rust_sources()
+        .into_iter()
+        .find(|p| p.to_string_lossy().replace('\\', "/").ends_with(SESSION))
+        .expect("session.rs not found — update SESSION");
+    let lines = strip_cfg_test(&std::fs::read_to_string(&path).expect("read session.rs"));
+
+    let mut broken = Vec::new();
+    for (caller, callee) in CHAIN {
+        match fn_body(&lines, caller) {
+            None => broken.push(format!("\n  fn {caller} not found in {SESSION}")),
+            Some(body) if !body.lines().any(|l| is_call_site(l, callee)) => {
+                broken.push(format!("\n  {caller} no longer calls {callee}"))
+            }
+            Some(_) => {}
+        }
+    }
+
+    assert!(
+        broken.is_empty(),
+        "The anonymous KT gate (pairwise.rs -> ensure_session_with_bundle) is no longer \
+         provably held to this device's pinned tree head:{}\n\nWithout the anchor, an \
+         anonymous lookup verifies inclusion against whatever head the server sent, so a \
+         log forked for anonymous lookups alone goes undetected. If the chain was \
+         refactored, update CHAIN — after confirming the anon path still reaches \
+         hold_head_locked.",
+        broken.join("")
+    );
 }
 
 /// The scanner itself must be able to fail.
