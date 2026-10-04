@@ -73,7 +73,7 @@ impl ChatterClient {
     /// itself), leaving the connection state at `Disconnected`. Without
     /// this self-heal, every auth RPC bounces with "Not connected to
     /// server" until the user manually retries `connect()`.
-    async fn ensure_connected_for_auth(self: &Arc<Self>) -> Result<(), ClientError> {
+    async fn ensure_connected_for_auth(&self) -> Result<(), ClientError> {
         if self.is_connected() {
             return Ok(());
         }
@@ -405,6 +405,8 @@ impl ChatterClient {
         new_password: &str,
         new_pin: &str,
     ) -> Result<RecoveryResult, ClientError> {
+        // A signed-out start no longer connects at boot (`startup_connect`).
+        self.ensure_connected_for_auth().await?;
         let mut auth_client = self.auth().try_auth_client()
             .ok_or_else(|| ClientError::NotConnected)?;
         // Same keying as `login`: the bare nickname, whatever form was typed.

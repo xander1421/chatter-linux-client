@@ -4807,6 +4807,7 @@ fn shield_toggle_on_sign_in_and_create_account() {
     for (page, src) in [
         ("login", include_str!("../../../ui/pages/login.slint")),
         ("register", include_str!("../../../ui/pages/register.slint")),
+        ("link-device", include_str!("../../../ui/pages/link_device.slint")),
     ] {
         assert!(src.contains("ShieldOnboardingToggle {"), "the {page} page lost its Shield toggle");
     }
@@ -4825,7 +4826,7 @@ fn shield_toggle_on_sign_in_and_create_account() {
     let counter = hits.clone();
     w.global::<AnonMode>().on_toggle_before_login(move || counter.set(counter.get() + 1));
 
-    for view in ["login", "register"] {
+    for view in ["login", "register", "link-device"] {
         w.set_current_view(view.into());
         // No onion service in the build: offered, but disabled.
         w.global::<AnonMode>().set_shield_available(false);

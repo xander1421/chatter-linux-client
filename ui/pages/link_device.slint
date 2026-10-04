@@ -8,6 +8,7 @@ import { Colors } from "../theme/colors.slint";
 import { Spacing } from "../theme/spacing.slint";
 import { Typography } from "../theme/typography.slint";
 import { Button } from "../components/button.slint";
+import { ShieldOnboardingToggle } from "../anon_mode/shield_onboarding.slint";
 
 export component LinkDevicePage inherits Rectangle {
     // Inputs from binding
@@ -16,6 +17,8 @@ export component LinkDevicePage inherits Rectangle {
     in property <string> status-text: "Waiting for your other device…";
     in property <string> error: "";
     in property <bool> linking: false;
+    // Touch density for the Shield header control.
+    in property <bool> touch: false;
 
     callback start();          // user clicked "Generate QR" / retry
     callback cancel();         // user wants to bail out
@@ -47,6 +50,13 @@ export component LinkDevicePage inherits Rectangle {
                 VerticalLayout {
                     spacing: Spacing.md;
                     padding: Spacing.lg;
+
+                    // Choose before "Generate QR": linking talks to the server
+                    // from the first step. Fixed while a link is running.
+                    ShieldOnboardingToggle {
+                        busy: root.linking;
+                        touch: root.touch;
+                    }
 
                     Text {
                         text: "Link this device";

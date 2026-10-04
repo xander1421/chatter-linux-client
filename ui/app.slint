@@ -1307,6 +1307,7 @@ export component App inherits Rectangle {
 
         // Link new device (new-device side QR display)
         if current-view == "link-device": LinkDevicePage {
+            touch: root.is-mobile-platform;
             qr-image: root.link-device-qr;
             link-url: root.link-device-url;
             status-text: root.link-device-status;

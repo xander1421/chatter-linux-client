@@ -256,48 +256,12 @@ pub async fn app_init() -> AppState {
     // Restore a saved device-auth session before the first RPC runs.
     ui_ctx.restore_session();
 
-    // Connect to server (reactor is active here inside block_on).
-    //
-    // `connect()` records the outcome in `offline_state` itself, so there is
-    // nothing to mirror here — doing it again is how the two writes that used to
-    // live in this function came to be the *only* reachability writes in the
-    // process. The monitor started below is what keeps them current.
-    //
-    // Bounded, because this is on the critical path to the first frame: nothing
-    // is drawn until `app_init` returns. The pool's own connect timeout is 10s
-    // direct and 60s over onion, so an unroutable server URL — a LAN address on a
-    // network the phone has left, which is exactly the mesh's scenario — meant up
-    // to a minute of black screen before the app admitted anything was wrong.
-    // Giving up early costs nothing: the reachability monitor re-probes, and RPCs
-    // dial on demand.
+    // Server contact at startup — chatter-core decides: signed in, it connects
+    // (bounded, because nothing is drawn until `app_init` returns) and starts
+    // the reachability monitor; signed out, it contacts nothing until a
+    // sign-in action, so choosing Shield on the sign-in screen leaks nothing.
     const BOOT_CONNECT_BUDGET: std::time::Duration = std::time::Duration::from_secs(5);
-    let connected = match tokio::time::timeout(BOOT_CONNECT_BUDGET, client.connect()).await {
-        Ok(Ok(())) => true,
-        Ok(Err(e)) => {
-            tracing::warn!("Could not connect to server: {} (offline mode)", e);
-            false
-        }
-        Err(_) => {
-            tracing::warn!(
-                budget_s = BOOT_CONNECT_BUDGET.as_secs(),
-                "Server did not answer within the startup budget (offline mode)"
-            );
-            // Nothing wrote the outcome, because nothing finished. Record it, or
-            // the UI would render the store's default until the first probe.
-            client.offline_state().set_connection_state(
-                chatter_core::network::connection::ConnectionState::Disconnected,
-            );
-            false
-        }
-    };
-
-    // Keep "is the server reachable" true for the rest of the process, and do it
-    // regardless of login: the user who most needs to be told the server is
-    // unreachable is the one who could not sign in to it. Without this the state
-    // recorded above is a reading of one instant that is never revised — an
-    // offline boot claimed "offline" forever, and an online boot claimed
-    // "connected" long after the server died.
-    client.start_server_monitor();
+    let connected = client.startup_connect(BOOT_CONNECT_BUDGET).await;
 
     let window = MainWindow::new().expect("Failed to create window");
 

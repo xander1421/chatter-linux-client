@@ -203,6 +203,7 @@ impl ClientBuilder {
             push_url: Mutex::new(None),
             transport_switch_lock: tokio::sync::Mutex::new(()),
             server_monitor_started: AtomicBool::new(false),
+            server_contact_deferred: AtomicBool::new(false),
             composer_drafts: Mutex::new(std::collections::HashMap::new()),
             expired_messages: tokio::sync::broadcast::channel(16).0,
         }))
@@ -392,6 +393,9 @@ pub struct ChatterClient {
     /// Guards the server-reachability monitor so it spawns exactly once.
     /// See `start_server_monitor`.
     server_monitor_started: AtomicBool,
+    /// Signed-out startup has not contacted the server yet, and won't until a
+    /// sign-in action calls `connect` — see `startup_connect`.
+    server_contact_deferred: AtomicBool,
     /// Unsent composer text per conversation id, so a draft stays with the
     /// conversation it was typed in. See `swap_composer_draft`.
     // in-memory, lost on restart. DraftService persists but its
@@ -670,6 +674,52 @@ impl ChatterClient {
     ///
     /// Safe to call more than once — extra monitors would only duplicate probes,
     /// so the second call is a no-op.
+    /// App startup's server contact. Signed in: connect (bounded by `budget`)
+    /// and start the reachability monitor, as before. Signed out: contact
+    /// nothing. The user has not chosen Shield yet, and a direct dial now —
+    /// the boot connect or the monitor's probes — would show the server this
+    /// IP opening the app seconds before an onion sign-up from it. Both wait
+    /// for the first `connect`, which every sign-in / create-account /
+    /// recovery / link-device action makes, by then on the chosen transport.
+    ///
+    /// Returns whether the server answered (always false when signed out).
+    pub async fn startup_connect(&self, budget: std::time::Duration) -> bool {
+        if !self.is_logged_in() {
+            self.server_contact_deferred.store(true, Ordering::SeqCst);
+            tracing::info!("signed out: no server contact until a sign-in action");
+            return false;
+        }
+        let connected = match tokio::time::timeout(budget, self.connect()).await {
+            Ok(Ok(())) => true,
+            Ok(Err(e)) => {
+                tracing::warn!("Could not connect to server: {} (offline mode)", e);
+                false
+            }
+            Err(_) => {
+                tracing::warn!(
+                    budget_s = budget.as_secs(),
+                    "Server did not answer within the startup budget (offline mode)"
+                );
+                // Nothing wrote the outcome, because nothing finished. Record
+                // it, or the UI would render the default until the first probe.
+                self.offline_state().set_connection_state(
+                    crate::network::connection::ConnectionState::Disconnected,
+                );
+                false
+            }
+        };
+        self.start_server_monitor();
+        connected
+    }
+
+    /// Whether the sign-in screens should say the server is unreachable. Not
+    /// before anything has tried to reach it: a signed-out start defers all
+    /// contact (`startup_connect`), and "unreachable" would be a guess.
+    pub fn server_unreachable(&self) -> bool {
+        !self.server_contact_deferred.load(Ordering::SeqCst)
+            && self.offline_state().connection_state().is_unreachable()
+    }
+
     pub fn start_server_monitor(&self) {
         if self.server_monitor_started.swap(true, Ordering::SeqCst) {
             return;
@@ -2239,6 +2289,12 @@ impl ChatterClient {
     /// which is what `ensure_connected_for_auth()` used to do.
     pub async fn connect(&self) -> Result<(), ClientError> {
         use crate::network::connection::ConnectionState;
+        // First contact after a signed-out start: the user has acted, on the
+        // transport they chose, so the reachability monitor may run now (it
+        // never probes while the pool is on onion).
+        if self.server_contact_deferred.swap(false, Ordering::SeqCst) {
+            self.start_server_monitor();
+        }
         match self.services.auth_service.connect().await {
             Ok(()) => {
                 self.offline_state().set_connection_state(ConnectionState::Connected);
@@ -4442,6 +4498,67 @@ mod transport_switch_tests {
         assert!(client.set_shield_before_login(true).is_err());
         assert!(!client.anon_mode_enabled());
         assert_eq!(client.services.grpc_pool.transport_mode(), TransportMode::Direct);
+    }
+
+    /// Signed-out startup contacts nothing: no boot connect, no reachability
+    /// monitor, no "unreachable" claim, until a sign-in action connects — so
+    /// a user who then picks Shield has leaked nothing. The first `connect`
+    /// starts the monitor.
+    #[cfg(feature = "onion")]
+    #[tokio::test]
+    async fn signed_out_startup_contacts_nothing_until_a_sign_in_action() {
+        use std::sync::atomic::AtomicUsize;
+        use std::time::Duration;
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let direct_url = format!("http://127.0.0.1:{}", listener.local_addr().unwrap().port());
+        let accepts = Arc::new(AtomicUsize::new(0));
+        let counter = accepts.clone();
+        tokio::spawn(async move {
+            let mut held = Vec::new();
+            while let Ok((sock, _)) = listener.accept().await {
+                counter.fetch_add(1, Ordering::SeqCst);
+                held.push(sock);
+            }
+        });
+
+        let (client, _dir) = build_test_client();
+        client.set_server_url(&direct_url).unwrap();
+        assert!(!client.is_logged_in());
+
+        let started = std::time::Instant::now();
+        assert!(!client.startup_connect(Duration::from_secs(5)).await);
+        assert!(started.elapsed() < Duration::from_secs(1), "signed-out startup must not dial");
+        assert!(!client.server_unreachable(), "no contact yet: unreachable would be a guess");
+        assert!(!client.server_monitor_started.load(Ordering::SeqCst), "monitor must wait");
+        tokio::time::sleep(Duration::from_secs(6)).await; // past one monitor tick
+        assert_eq!(accepts.load(Ordering::SeqCst), 0, "signed-out startup dialled the server");
+
+        // The user picks Shield, then signs up: still nothing direct.
+        client
+            .services
+            .grpc_pool
+            .set_onion_address(Some(format!("http://{}.onion:443", "a".repeat(56))));
+        client.set_shield_before_login(true).unwrap();
+        let _ = tokio::time::timeout(
+            Duration::from_secs(5),
+            client.register("deferred", "pw-123456789012", "D", "dev", None, Some("correct-horse-9")),
+        )
+        .await;
+        assert!(client.server_monitor_started.load(Ordering::SeqCst), "first contact starts the monitor");
+        tokio::time::sleep(Duration::from_secs(6)).await; // monitor never probes on onion
+        assert_eq!(accepts.load(Ordering::SeqCst), 0, "Shield sign-up after a deferred start dialled direct");
+
+        // Control: Shield off, a direct connect does reach the listener.
+        client.set_shield_before_login(false).unwrap();
+        let _ = tokio::time::timeout(Duration::from_secs(5), client.connect()).await;
+        for _ in 0..20 {
+            if accepts.load(Ordering::SeqCst) > 0 {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+        assert!(accepts.load(Ordering::SeqCst) > 0, "listener should see the direct dial");
     }
 
     /// The owner requirement: with Shield chosen before sign-in, onboarding

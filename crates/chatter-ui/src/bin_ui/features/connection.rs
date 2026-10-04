@@ -44,7 +44,7 @@ pub fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     // The present state, before anyone subscribes to changes to it.
     let state = ui_ctx.offline_state().connection_state();
     window.set_connection_status(state_label(state).into());
-    window.set_server_unreachable(state.is_unreachable());
+    window.set_server_unreachable(ui_ctx.server_unreachable());
     window.set_connection_reconnect_attempt(
         ui_ctx.offline_state().reconnect_attempt().unwrap_or(0) as i32,
     );
@@ -73,7 +73,7 @@ pub fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             let state_string = state_label(snapshot.connection_state).to_owned();
             // "Settled-unreachable" is core's distinction, not a `!= connected`
             // test here — see `ConnectionState::is_unreachable`.
-            let unreachable = snapshot.connection_state.is_unreachable();
+            let unreachable = ui_ctx_for_task.server_unreachable();
             let attempt = snapshot.reconnect_attempt.unwrap_or(0) as i32;
             let queue = snapshot.queue_count as i32;
             // Re-read rather than cache: the mesh can start, or fail, after this

@@ -1,4 +1,4 @@
-//! Shield toggle on the sign-in and create-account screens.
+//! Shield toggle on the sign-in, create-account and link-device screens.
 //!
 //! Thin glue over `ChatterClient::set_shield_before_login`, which owns the
 //! decision and fails closed. Turning Shield on also starts the Tor connection
@@ -35,6 +35,7 @@ pub(super) fn wire_shield_before_login(window: &MainWindow, ui_ctx: &Arc<Chatter
                 w.global::<AnonMode>().set_enabled(enable);
                 w.set_login_error("".into());
                 w.set_register_error("".into());
+                w.set_link_device_error("".into());
                 if enable {
                     let ui_ctx = ui_ctx.clone();
                     crate::rt_handle().spawn(async move {
@@ -47,7 +48,8 @@ pub(super) fn wire_shield_before_login(window: &MainWindow, ui_ctx: &Arc<Chatter
             Err(e) => {
                 let message = e.user_message();
                 w.set_login_error(message.clone().into());
-                w.set_register_error(message.into());
+                w.set_register_error(message.clone().into());
+                w.set_link_device_error(message.into());
             }
         }
     });

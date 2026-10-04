@@ -52,8 +52,9 @@ async fn direct_listener() -> (String, Arc<AtomicUsize>) {
     (url, accepts)
 }
 
-/// A fresh client with Shield on before it has said a word to anyone.
-fn shielded_client(direct_url: &str) -> (Arc<ChatterClient>, tempfile::TempDir) {
+/// A fresh client started the way the app starts (signed out: no contact),
+/// then Shield on before it has said a word to anyone.
+async fn shielded_client(direct_url: &str) -> (Arc<ChatterClient>, tempfile::TempDir) {
     let dir = tempfile::tempdir().unwrap();
     common::headless(dir.path());
     let client = ChatterClient::builder()
@@ -61,6 +62,7 @@ fn shielded_client(direct_url: &str) -> (Arc<ChatterClient>, tempfile::TempDir) 
         .data_dir(dir.path().to_str().unwrap())
         .build()
         .expect("build client");
+    assert!(!client.startup_connect(Duration::from_secs(5)).await, "signed-out start must not connect");
     assert!(client.shield_available(), "build with --features onion and CHATTER_ONION_ADDR");
     client.set_shield_before_login(true).expect("Shield before sign-in");
     (client, dir)
@@ -100,7 +102,7 @@ async fn shield_onboarding_never_dials_direct() {
     let (direct_url, accepts) = direct_listener().await;
 
     // ── Create account ────────────────────────────────────────────────
-    let (alice, _alice_dir) = shielded_client(&direct_url);
+    let (alice, _alice_dir) = shielded_client(&direct_url).await;
     connect_over_onion(&alice).await;
     let mut b = [0u8; 4];
     rand::rng().fill_bytes(&mut b);
@@ -121,7 +123,7 @@ async fn shield_onboarding_never_dials_direct() {
     assert_in_shield(&alice, &accepts, "after registration");
 
     // ── Sign in on a second device ────────────────────────────────────
-    let (bob_device, _bob_dir) = shielded_client(&direct_url);
+    let (bob_device, _bob_dir) = shielded_client(&direct_url).await;
     connect_over_onion(&bob_device).await;
     tokio::time::timeout(
         ONION_TIMEOUT,
@@ -139,7 +141,7 @@ async fn shield_onboarding_never_dials_direct() {
         .as_ref()
         .and_then(|c| c.first().cloned())
         .expect("registration returned recovery codes");
-    let (recovering, _rec_dir) = shielded_client(&direct_url);
+    let (recovering, _rec_dir) = shielded_client(&direct_url).await;
     connect_over_onion(&recovering).await;
     tokio::time::timeout(
         ONION_TIMEOUT,
