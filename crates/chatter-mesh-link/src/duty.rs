@@ -70,7 +70,7 @@ pub const MAINTENANCE_RECENT_TRAFFIC_MS: u64 = 5_000;
 pub const ANNOUNCE_INTERVAL_MS: u64 = 4_000;
 
 /// `TransportConfig.bleAnnounceMinInterval` (1 s) — floor between announces from any
-/// cause, enforced by the announce throttle rather than here.
+/// cause. The driver checks [`announce_floor_passed`] before every announce.
 pub const ANNOUNCE_MIN_INTERVAL_MS: u64 = 1_000;
 
 /// `TransportConfig.bleConnectedAnnounceBaseSecondsSparse` (15 s).
@@ -416,8 +416,33 @@ pub fn should_send_announce(
     elapsed_since_last_announce_ms as i64 >= target_ms
 }
 
+/// Whether an announce may go out now, whatever triggered it.
+///
+/// Every cause shares one floor of [`ANNOUNCE_MIN_INTERVAL_MS`]: the cadence, a new
+/// link, and an explicit request. Without it each inbound connection buys one
+/// signed broadcast to every neighbour, so a peer cycling connections makes this
+/// device flood the mesh. A clock that stepped backwards (`now < last`) passes,
+/// rather than silencing the device until the clock catches up.
+pub fn announce_floor_passed(last_announce_ms: u64, now_ms: u64) -> bool {
+    now_ms < last_announce_ms || now_ms - last_announce_ms >= ANNOUNCE_MIN_INTERVAL_MS
+}
+
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn the_announce_floor_is_one_second_from_any_cause() {
+        use super::{ANNOUNCE_MIN_INTERVAL_MS, announce_floor_passed};
+        assert_eq!(ANNOUNCE_MIN_INTERVAL_MS, 1_000);
+        let last = 50_000;
+        assert!(!announce_floor_passed(last, last));
+        assert!(!announce_floor_passed(last, last + 999));
+        assert!(announce_floor_passed(last, last + 1_000));
+        // Never announced: `last` is 0.
+        assert!(announce_floor_passed(0, 10_000));
+        // A clock that stepped backwards does not silence the device.
+        assert!(announce_floor_passed(last, last - 1));
+    }
+
     use super::*;
 
     // -- Duty plan selection ---------------------------------------------------

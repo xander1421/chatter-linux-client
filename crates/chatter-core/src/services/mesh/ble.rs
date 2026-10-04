@@ -2457,6 +2457,10 @@ impl BleRuntime {
 
     async fn announce(&mut self) {
         let now_ms = now_millis();
+        let last_ms = self.state.with(|state| state.last_announce_ms);
+        if !duty::announce_floor_passed(last_ms, now_ms) {
+            return;
+        }
         let nickname = self.config.nickname.clone();
         let mut capabilities = PeerCapabilities::from_bits(0);
         if self.config.bridge_geohash.is_some() {
@@ -4266,6 +4270,34 @@ mod tests {
             packet.recipient_id.is_none(),
             "an announce is addressed to everyone by omitting the recipient"
         );
+    }
+
+    #[tokio::test]
+    async fn announces_from_any_cause_are_floored_at_one_second() {
+        let (mut runtime, radio, state) = runtime();
+        let link = LinkId::new("/mock/one");
+        state.with(|inner| {
+            inner.links.link_up(link.clone(), LinkRole::Central);
+            inner.links.set_writable(&link, true);
+            inner.max_write.insert(link.clone(), 512);
+        });
+
+        // A connect storm or a repeated "announce now" inside the floor: one goes out.
+        runtime.announce().await;
+        runtime.announce().await;
+        runtime.announce().await;
+        runtime.drain_writes().await;
+        assert_eq!(radio.writes().len(), 1, "announces inside the floor are dropped");
+
+        // Once the floor has passed, the next one goes out.
+        state.with(|inner| {
+            inner.last_announce_ms = inner
+                .last_announce_ms
+                .saturating_sub(chatter_mesh_link::duty::ANNOUNCE_MIN_INTERVAL_MS);
+        });
+        runtime.announce().await;
+        runtime.drain_writes().await;
+        assert_eq!(radio.writes().len(), 2);
     }
 
     #[tokio::test]
