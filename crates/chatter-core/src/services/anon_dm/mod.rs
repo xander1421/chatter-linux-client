@@ -205,38 +205,6 @@ impl AnonDmService {
         Ok(())
     }
 
-    /// Store the new avatar then broadcast a profile update over every
-    /// ready anonymous DM.
-    ///
-    /// Best-effort broadcast: failures to push to individual conversations
-    /// are logged — the local store already succeeded, and peers see the
-    /// new avatar on the next profile update that happens to ride along.
-    pub async fn update_avatar_and_broadcast(&self, bytes: &[u8]) -> Result<(), AnonDmError> {
-        self.set_my_avatar_bytes(bytes)?;
-
-        let conversations = match self.list_ready_conversations() {
-            Ok(convs) => convs,
-            Err(e) => {
-                tracing::warn!(error = %e, "Failed to enumerate anon DMs for avatar broadcast");
-                return Ok(());
-            }
-        };
-
-        let total = conversations.len();
-        let mut sent = 0usize;
-        for conv in conversations {
-            match self.send_profile_update(&conv.id, None, None, None).await {
-                Ok(()) => sent += 1,
-                Err(e) => tracing::warn!(
-                    conversation_id = %conv.id,
-                    error = %e,
-                    "Failed to broadcast avatar update to conversation"
-                ),
-            }
-        }
-        tracing::info!(sent, total, "Broadcast avatar update to active anon DMs");
-        Ok(())
-    }
     
     // CRYPTO-2: there used to be `download_avatar_direct` / `download_and_store_avatar`
     // here, which GETted a URL chosen by an anonymous DM peer with no user

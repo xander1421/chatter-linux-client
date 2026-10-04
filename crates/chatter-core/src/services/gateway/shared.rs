@@ -98,15 +98,6 @@ pub fn message_reply_preview(msg: &Message, attachments: &[Attachment]) -> Strin
 // Quote construction
 // =============================================================================
 
-/// Build a Signal-style Quote proto from reply context.
-///
-/// The Quote uses `author_aci` (author's UUID string) and `id` (the original
-/// message's timestamp) for identification — this is how Signal identifies
-/// quoted messages without server-assigned message IDs.
-pub fn build_quote(author_id: &str, timestamp: u64, preview_text: &str) -> Quote {
-    build_quote_with_attachments(author_id, timestamp, preview_text, vec![])
-}
-
 /// Build a Signal-style Quote proto including one or more `QuotedAttachment`s.
 ///
 /// Used for media replies so the receiver can render a thumbnail in the
@@ -188,41 +179,6 @@ pub const CONTENT_TYPE_TEXT: i32 = 1;
 pub const CONTENT_TYPE_ATTACHMENT: i32 = 2;
 pub const CONTENT_TYPE_MIXED: i32 = 3;
 
-/// Determine the content type for a message based on its contents.
-///
-/// Returns one of the `CONTENT_TYPE_*` constants.
-pub fn determine_content_type(has_text: bool, has_attachments: bool) -> i32 {
-    match (has_text, has_attachments) {
-        (true, true) => CONTENT_TYPE_MIXED,
-        (true, false) => CONTENT_TYPE_TEXT,
-        (false, true) => CONTENT_TYPE_ATTACHMENT,
-        (false, false) => CONTENT_TYPE_EMPTY,
-    }
-}
-
-/// Build the `content_json` string for message storage.
-///
-/// The JSON format is used by both anon DM and anon group message tables
-/// to store structured message content alongside the raw proto.
-pub fn build_content_json(text: &str, attachment_ids: &[AttachmentId]) -> String {
-    let has_text = !text.is_empty();
-    let has_attachments = !attachment_ids.is_empty();
-
-    match (has_text, has_attachments) {
-        (true, true) => serde_json::json!({
-            "text": text,
-            "attachments": attachment_ids.iter().map(|id| id.to_string()).collect::<Vec<_>>()
-        })
-        .to_string(),
-        (true, false) => serde_json::json!({ "text": text }).to_string(),
-        (false, true) => serde_json::json!({
-            "attachments": attachment_ids.iter().map(|id| id.to_string()).collect::<Vec<_>>()
-        })
-        .to_string(),
-        (false, false) => "{}".to_string(),
-    }
-}
-
 /// Build `content_json` for a reply message with quote metadata.
 ///
 /// Includes the quote's author, display name, timestamp, and preview text
@@ -244,15 +200,6 @@ pub fn build_reply_content_json(
         }
     })
     .to_string()
-}
-
-/// Serialize attachment IDs to a binary blob for DB storage.
-///
-/// Uses bincode serialization. Returns an empty-vec bincode encoding
-/// (`[8, 0, 0, 0, 0, 0, 0, 0]`) on serialization failure.
-pub fn serialize_attachment_ids(ids: &[AttachmentId]) -> Vec<u8> {
-    crate::storage::serialization::db_serialize(&ids.to_vec())
-        .unwrap_or_else(|_| vec![8, 0, 0, 0, 0, 0, 0, 0])
 }
 
 /// The empty-vec bincode encoding used when there are no attachments.

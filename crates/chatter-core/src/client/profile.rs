@@ -275,20 +275,6 @@ impl ChatterClient {
         self.users().list_friend_requests(filter, limit, offset).await
     }
 
-    /// Convenience: every friend request the server knows about.
-    /// Equivalent to `list_friend_requests(FriendRequestFilter::All, 100, 0)`.
-    /// Use the parameterised variant when you actually need pagination
-    /// or a specific direction (Sent / Received / Pending / Accepted).
-    pub async fn list_all_friend_requests(
-        &self,
-    ) -> Result<Vec<crate::domain::user::Friendship>, crate::services::UserError> {
-        self.users().list_friend_requests(
-            crate::services::user::FriendRequestFilter::All,
-            100,
-            0,
-        ).await
-    }
-
     /// Convenience: incoming-only friend requests.
     pub async fn list_pending_friend_requests(
         &self,
@@ -471,32 +457,6 @@ impl ChatterClient {
         user_id: &crate::domain::ids::UserId,
     ) -> Result<(), crate::services::anon_dm::AnonDmError> {
         self.anon_dms().unblock_user(user_id)
-    }
-
-    /// Try to interpret a UserId as an AnonDmId (conversation ID).
-    /// Returns Some if a conversation with that ID exists.
-    pub fn try_as_anon_dm_conversation_id(
-        &self,
-        maybe_conv_id: &crate::domain::ids::UserId,
-    ) -> Option<crate::domain::anon_dm::AnonDmId> {
-        let conv_id = crate::domain::anon_dm::AnonDmId::from_uuid(maybe_conv_id.0);
-        self.anon_dms()
-            .get_conversation(&conv_id)
-            .ok()
-            .flatten()
-            .map(|_| conv_id)
-    }
-
-    /// Get the peer user ID for an anon DM conversation.
-    pub fn get_anon_dm_peer_id(
-        &self,
-        conversation_id: &crate::domain::anon_dm::AnonDmId,
-    ) -> Option<crate::domain::ids::UserId> {
-        self.anon_dms()
-            .get_conversation(conversation_id)
-            .ok()
-            .flatten()
-            .map(|dm| dm.peer_id)
     }
 
     /// Check if an anon DM conversation is blocked.

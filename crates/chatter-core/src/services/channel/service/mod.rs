@@ -35,7 +35,7 @@ use crate::storage::repositories::settings_repo::SettingsRepository;
 
 use super::converters::{
     domain_channel_type_to_proto, domain_config_to_proto,
-    proto_to_domain_channel, proto_to_domain_membership,
+    proto_to_domain_channel,
 };
 use super::error::ChannelError;
 use super::membership_log::{password_invite_key, AuthorBase, MembershipLog};
@@ -260,50 +260,6 @@ impl ChannelService {
 
         let channel = proto_to_domain_channel(&proto_channel)?;
         self.channel_repo.upsert(&channel)?;
-
-        Ok(channel)
-    }
-
-    /// Get a channel by ID and sync its memberships.
-    ///
-    /// Fetches from server, upserts channel to local storage, and syncs all memberships.
-    /// Useful for DM channels where we need membership info immediately.
-    pub async fn get_channel_with_memberships(
-        &self,
-        channel_id: &ChannelId,
-    ) -> Result<Channel, ChannelError> {
-        let _ = self.settings_repo.current_user_id()?;
-
-        let mut channel_client = self.channel_client();
-        let proto_channel = channel_client
-            .get_channel(&channel_id.to_string())
-            .await?;
-
-        let channel = proto_to_domain_channel(&proto_channel)?;
-        self.channel_repo.upsert(&channel)?;
-
-        // Sync memberships
-        for proto_member in &proto_channel.members {
-            match proto_to_domain_membership(channel_id, proto_member) {
-                Ok(membership) => {
-                    if let Err(e) = self.channel_repo.insert_or_ignore_membership(&membership) {
-                        tracing::warn!(
-                            channel_id = %channel_id,
-                            user_id = %membership.user_id,
-                            error = %e,
-                            "Failed to sync membership"
-                        );
-                    }
-                }
-                Err(e) => {
-                    tracing::warn!(
-                        channel_id = %channel_id,
-                        error = %e,
-                        "Failed to convert proto membership"
-                    );
-                }
-            }
-        }
 
         Ok(channel)
     }

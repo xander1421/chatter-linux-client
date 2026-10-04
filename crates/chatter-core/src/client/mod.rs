@@ -2227,12 +2227,6 @@ impl ChatterClient {
 
     // ── Delegated CoreServices methods ─────────────────────────────────────
 
-    /// Initialize the call service if not already set. Safe to call multiple times.
-    #[cfg(feature = "media")]
-    pub fn ensure_call_service(&self) {
-        self.services.ensure_call_service()
-    }
-
     /// Check if connected to the server.
     pub fn is_connected(&self) -> bool {
         self.services.is_connected()
@@ -3417,36 +3411,10 @@ impl ChatterClient {
 
     // ── Profile ─────────────────────────────────────────────────────
 
-    /// Decode + crop + resize + WebP-encode raw image bytes into a normalised
-    /// avatar. Pure delegation to [`crate::media::ImageProcessor::process_avatar_from_memory`]
-    /// — exposed on the client so the FFI bridge can drive it without
-    /// importing internal modules.
-    ///
-    /// Output is byte-identical regardless of which client calls this, so
-    /// Android, Linux, and any future client all produce the same processed
-    /// bytes from the same source image.
-    pub fn process_avatar(
-        &self,
-        raw: &[u8],
-    ) -> Result<Vec<u8>, crate::error::MediaError> {
-        crate::media::ImageProcessor::process_avatar_from_memory(raw)
-    }
-
     /// Store the user's avatar bytes locally (never uploaded).
     pub fn set_avatar_bytes(&self, bytes: &[u8]) -> Result<(), crate::services::auth_service::AuthError> {
         self.anon_dms()
             .set_my_avatar_bytes(bytes)
-            .map_err(|e| crate::services::auth_service::AuthError::InvalidInput(e.to_string()))
-    }
-
-    /// Update the user's avatar AND broadcast it to every active anon DM.
-    pub async fn update_avatar_and_broadcast(
-        &self,
-        bytes: &[u8],
-    ) -> Result<(), crate::services::auth_service::AuthError> {
-        self.anon_dms()
-            .update_avatar_and_broadcast(bytes)
-            .await
             .map_err(|e| crate::services::auth_service::AuthError::InvalidInput(e.to_string()))
     }
 
@@ -3779,21 +3747,6 @@ impl ChatterClient {
 
     // ── Thread support ─────────────────────────────────────────────
 
-    /// Get messages in a thread.
-    pub async fn get_thread_messages(
-        &self,
-        channel_id: &crate::domain::ids::ChannelId,
-        thread_root_id: &crate::domain::ids::MessageId,
-        limit: u32,
-        before: Option<&crate::domain::ids::MessageId>,
-    ) -> Result<Vec<Message>, ClientError> {
-        let mut msg_client = self.services.grpc_pool.message_client();
-        self.messages()
-            .get_thread_messages(&mut msg_client, channel_id, thread_root_id, limit, before)
-            .await
-            .map_err(|e| ClientError::Inbox(e.to_string()))
-    }
-
     // ── AI Integration ─────────────────────────────────────────────
 
     /// List available AI models for a provider.
@@ -3990,14 +3943,6 @@ impl ChatterClient {
     // `chatter-bridge` crate can reach every operation it needs without
     // widening `pub(crate)` service accessors. Do not expand this block
     // speculatively — add an entry only when a real caller lands.
-
-    pub fn get_pinned_messages_local(
-        &self,
-        channel_id: &crate::domain::ids::ChannelId,
-        conversation_type: &crate::domain::message::ConversationType,
-    ) -> Result<Vec<crate::domain::Message>, crate::services::message::MessageError> {
-        self.services.message_service.get_pinned_messages_local(channel_id, conversation_type)
-    }
 
     /// Persist the notification detail level (Signal's "Show: Name and
     /// message / Name only / No name or message") and apply it now.

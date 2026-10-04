@@ -674,18 +674,6 @@ impl CoreServices {
         })
     }
 
-    /// Initialize the call service if not already set.
-    ///
-    /// Safe to call multiple times — uses `get_or_init` internally.
-    #[cfg(feature = "media")]
-    pub fn ensure_call_service(&self) {
-        use crate::services::call_worker::CallWorkerHandle;
-
-        self.call_service.get_or_init(|| {
-            CallWorkerHandle::spawn(self.grpc_pool.call_client())
-        });
-    }
-
     /// Initialize the device inbox provider if not already set.
     ///
     /// This is safe to call multiple times — uses `get_or_init` internally.

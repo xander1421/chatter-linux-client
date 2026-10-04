@@ -439,8 +439,9 @@ impl ChatterClient {
 
     /// The storage bucket a channel's messages and pins are filed under.
     ///
-    /// Never hardcode `ConversationType::Channel` for a channel — see
-    /// `channel_sidebar_activity` for what that costs.
+    /// Never hardcode `ConversationType::Channel` for a channel: its messages
+    /// are filed under `Channel::conversation_type()` — `Channel`, or
+    /// `SavedMessages` for the vault, or `ServerDm`.
     pub fn channel_conversation_type(
         &self,
         channel_id: &crate::domain::ids::ChannelId,
@@ -448,22 +449,6 @@ impl ChatterClient {
         crate::services::message::conversion::conversation_type_for_channel(
             &self.services.channel_repo,
             channel_id,
-        )
-    }
-
-    /// `sidebar_activity` for a channel row.
-    ///
-    /// Takes the channel rather than an id + type: a channel row's messages are
-    /// filed under `Channel::conversation_type()` — `Channel`, or
-    /// `SavedMessages` for the vault, or `ServerDm` — so deriving it here means
-    /// no caller hardcodes the wrong bucket.
-    pub fn channel_sidebar_activity(
-        &self,
-        channel: &crate::domain::channel::Channel,
-    ) -> (String, String) {
-        self.sidebar_activity(
-            self.latest_message(&channel.id, &channel.conversation_type())
-                .as_ref(),
         )
     }
 
@@ -1406,13 +1391,6 @@ impl ChatterClient {
         Ok(out)
     }
 
-    pub async fn get_channel_with_memberships(
-        &self,
-        channel_id: &crate::domain::ids::ChannelId,
-    ) -> Result<crate::domain::channel::Channel, crate::services::channel::ChannelError> {
-        self.channels().get_channel_with_memberships(channel_id).await
-    }
-
     pub async fn search_channels_filtered(
         &self,
         query: &str,
@@ -1450,15 +1428,6 @@ impl ChatterClient {
     /// remain to be loaded.
     pub fn thread_reply_count(&self, thread_root_id: &crate::domain::ids::MessageId) -> u32 {
         self.messages().count_for_thread(thread_root_id).unwrap_or(0)
-    }
-
-    pub fn search_messages_local(
-        &self,
-        query: &str,
-        channel_id: Option<&crate::domain::ids::ChannelId>,
-        limit: u32,
-    ) -> Result<Vec<crate::storage::repositories::search_index::SearchResult>, crate::services::message::MessageError> {
-        self.messages().search_local(query, channel_id, limit)
     }
 
     /// Send a channel/DM message (convenience façade over `MessageService::send`).

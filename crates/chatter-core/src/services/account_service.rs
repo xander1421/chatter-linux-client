@@ -10,7 +10,7 @@ use crate::network::grpc::auth_client::AuthClient;
 use crate::network::grpc::client_pool::GrpcClientPool;
 use crate::network::grpc::interceptors::AuthInterceptor;
 use crate::proto::chat_v1::account_deletion_event::Status as DeletionStatus;
-use crate::services::auth_service::{change_password_with, prove_password, AuthError};
+use crate::services::auth_service::{prove_password, AuthError};
 use crate::storage::repositories::settings_repo::{keys, SettingsRepository};
 
 /// Account management errors.
@@ -94,33 +94,6 @@ impl AccountService {
             .is_some()
     }
 
-    /// Change the current user's password.
-    ///
-    /// Orchestrates:
-    /// 1. Login state verification
-    /// 2. OPAQUE proof of the current password + OPAQUE registration of the
-    ///    new one (`auth_service::change_password_with`)
-    ///
-    /// # Arguments
-    ///
-    /// * `auth_client` - Mutable reference to auth client for server communication
-    /// * `current_password` - Current password for verification
-    /// * `new_password` - New password to set
-    pub async fn change_password(
-        &self,
-        auth_client: &mut AuthClient,
-        current_password: &str,
-        new_password: &str,
-    ) -> Result<(), AccountError> {
-        // Check is logged in
-        if !self.is_logged_in() {
-            return Err(AccountError::NotLoggedIn);
-        }
-
-        change_password_with(auth_client, current_password, new_password).await?;
-        Ok(())
-    }
-
     /// Delete the current user's account.
     ///
     /// This is an irreversible operation that:
@@ -195,17 +168,6 @@ impl AccountService {
     }
 
     // ==================== Simplified Wrappers ====================
-
-    /// Simplified wrapper for change_password that creates the client internally.
-    pub async fn change_pwd(
-        &self,
-        current_password: &str,
-        new_password: &str,
-    ) -> Result<(), AccountError> {
-        let mut auth_client = self.auth_client();
-        self.change_password(&mut auth_client, current_password, new_password)
-            .await
-    }
 
     /// Simplified wrapper for delete_account that creates the client internally.
     pub async fn delete_acct(&self, password: &str) -> Result<(), AccountError> {

@@ -13,7 +13,6 @@
 //! - AnonGroup: Anonymous mailbox per group
 //! - ServerGroup: Uses sender keys (different service)
 
-use std::collections::HashMap;
 use std::sync::Arc;
 
 use libsignal_protocol::CiphertextMessageType;
@@ -207,45 +206,6 @@ impl PairwiseService {
     // =========================================================================
     // Multi-Device Operations
     // =========================================================================
-
-    /// Encrypt plaintext for ALL devices of a peer.
-    ///
-    /// Establishes sessions with all devices if needed and encrypts the
-    /// plaintext for each device. Returns a map of device_id -> ciphertext.
-    ///
-    /// Use this method when you need to ensure the message reaches all of
-    /// the recipient's devices (e.g., DM messages).
-    ///
-    /// # Arguments
-    /// * `peer_id` - The recipient's user ID
-    /// * `plaintext` - The data to encrypt
-    ///
-    /// # Returns
-    /// A map of device_id -> sealed sender ciphertext for each device.
-    /// Returns error only if ALL devices fail.
-    pub async fn encrypt_all_devices(
-        &self,
-        peer_id: &UserId,
-        plaintext: &[u8],
-    ) -> Result<HashMap<u32, Vec<u8>>, PairwiseError> {
-        let mut auth_client = self.auth_client();
-        self.encrypt_all_devices_with_client(&mut auth_client, peer_id, plaintext).await
-    }
-
-    /// Encrypt for all devices with a provided auth client (for batching).
-    pub async fn encrypt_all_devices_with_client(
-        &self,
-        auth_client: &mut AuthClient,
-        peer_id: &UserId,
-        plaintext: &[u8],
-    ) -> Result<HashMap<u32, Vec<u8>>, PairwiseError> {
-        let peer_id_str = peer_id.to_string();
-
-        self.signal_service
-            .encrypt_message_all_devices(auth_client, &peer_id_str, plaintext)
-            .await
-            .map_err(|e| PairwiseError::EncryptionFailed(e.to_string()))
-    }
 
     /// Ensure sessions exist for all devices of a peer.
     ///

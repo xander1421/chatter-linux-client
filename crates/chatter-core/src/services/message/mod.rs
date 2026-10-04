@@ -6,7 +6,6 @@
 //! - `dm` - DM operations (Signal Protocol encryption)
 //! - `group` - Group/sender key operations
 //! - `core` - Core message operations (send, edit, delete, reply, forward)
-//! - `thread` - Thread operations
 //! - `pin` - Pin operations
 //! - `saved` - Saved messages (Note to Self)
 
@@ -21,7 +20,6 @@ pub mod core;
 pub mod channel_inbound;
 pub mod conversion;
 mod server_dm;
-mod thread;
 mod pin;
 mod saved;
 mod receipts;
