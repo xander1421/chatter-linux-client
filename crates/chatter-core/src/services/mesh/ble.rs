@@ -37,7 +37,8 @@ use chatter_mesh::tlv::hex_encode;
 use chatter_mesh::tlv::private_message::PrivateMessagePacket;
 use chatter_mesh::tlv::request_sync::RequestSyncPacket;
 use chatter_mesh_link::announce::{
-    AnnounceDistrust, AnnounceLinkContext, AnnouncePreflightConfig, evaluate_announce,
+    AnnounceDistrust, AnnounceLinkContext, AnnouncePreflightConfig, AnnounceRejection,
+    evaluate_announce,
 };
 use chatter_mesh_link::backpressure::{
     InboundAppend, InboundAppendMetadata, InboundChunk, InboundLimits,
@@ -932,12 +933,18 @@ impl BleRuntime {
         ) {
             Ok(accepted) => accepted,
             Err(rejection) => {
-                tracing::debug!(
-                    target: "mesh::ble",
-                    peer = %claimed,
-                    ?rejection,
-                    "announce rejected before the trust check"
-                );
+                // Our own announce relayed back is routine; anything else is a
+                // peer we will never show, and the reason is the only clue.
+                if matches!(rejection, AnnounceRejection::SelfAnnounce) {
+                    tracing::debug!(target: "mesh::ble", "own announce relayed back, ignored");
+                } else {
+                    tracing::info!(
+                        target: "mesh::ble",
+                        peer = %claimed,
+                        ?rejection,
+                        "announce rejected before the trust check"
+                    );
+                }
                 return false;
             }
         };
@@ -951,7 +958,7 @@ impl BleRuntime {
             if matches!(accepted.trust.distrust(), Some(AnnounceDistrust::KeyMismatch | AnnounceDistrust::SigningKeyMismatch)) {
                 self.events.send(MeshEvent::IdentityKeyChanged { peer: claimed.clone() });
             }
-            tracing::debug!(
+            tracing::info!(
                 target: "mesh::ble",
                 peer = %claimed,
                 distrust = ?accepted.trust.distrust(),

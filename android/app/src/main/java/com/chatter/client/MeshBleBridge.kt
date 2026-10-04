@@ -128,6 +128,15 @@ object MeshBleBridge {
     private const val MAX_PENDING_INBOUND = 8
 
     /**
+     * How long a writing central may stay unsubscribed before we stop waiting for
+     * its CCCD write and adopt the link anyway. See [adoptStaleSubscription].
+     *
+     * A fresh central subscribes well inside this (measured 0.6 s from connect,
+     * bitchat-android 2.0.1 on an S25), so the normal handshake never reaches it.
+     */
+    private const val SUBSCRIBE_GRACE_MS = 2_000L
+
+    /**
      * How long a central link may take to become writable before we give up.
      * The stack's own connect timeout only covers the ACL; a peer that connects
      * and then never finishes discovery would otherwise leave Rust holding a
@@ -261,6 +270,18 @@ object MeshBleBridge {
     private class PeripheralLink(val id: String, val device: BluetoothDevice) {
         @Volatile var maxWrite = DEFAULT_MAX_WRITE
         @Volatile var announced = false
+        val connectedAt = SystemClock.elapsedRealtime()
+
+        /**
+         * Largest single write this central has made to us. A write of N bytes
+         * proves the connection's ATT MTU is at least N + 3, which is the only MTU
+         * evidence we get on a connection whose `onMtuChanged` fired for a
+         * previous incarnation of this process.
+         */
+        @Volatile var largestInbound = 0
+
+        /** A delayed [adoptStaleSubscription] check is already queued. */
+        val adoptionScheduled = AtomicBoolean(false)
         @Volatile var cccd: ByteArray = BluetoothGattDescriptor.DISABLE_NOTIFICATION_VALUE
         val gate = OpGate()
 
@@ -884,7 +905,17 @@ object MeshBleBridge {
                             }
                             link.pendingInbound.addLast(value.copyOf())
                         }
+                        if (value.size > link.largestInbound) link.largestInbound = value.size
                         Log.d(TAG, "write from $id held until the link is announced")
+                        val waited = SystemClock.elapsedRealtime() - link.connectedAt
+                        if (waited >= SUBSCRIBE_GRACE_MS) {
+                            adoptStaleSubscription(link)
+                        } else if (link.adoptionScheduled.compareAndSet(false, true)) {
+                            handler.postDelayed(
+                                { adoptStaleSubscription(link) },
+                                SUBSCRIBE_GRACE_MS - waited,
+                            )
+                        }
                     } else {
                         // No link object at all: already torn down, nowhere to put it.
                         Log.d(TAG, "write from $id on an unknown link, dropped")
@@ -937,21 +968,7 @@ object MeshBleBridge {
                         value.contentEquals(BluetoothGattDescriptor.ENABLE_INDICATION_VALUE)
                 if (subscribed && !link.announced) {
                     // This is the moment a peripheral link becomes writable.
-                    link.announced = true
-                    emitConnected(id, true, link.maxWrite)
-                    Log.i(TAG, "peripheral link $id writable, maxWrite=${link.maxWrite}")
-                    // Anything they wrote while we could not yet name this link,
-                    // in the order they wrote it. Emitted after Connected so the
-                    // layer above already has the link when the data arrives.
-                    val held = synchronized(link.pendingInbound) {
-                        val frames = link.pendingInbound.toList()
-                        link.pendingInbound.clear()
-                        frames
-                    }
-                    if (held.isNotEmpty()) {
-                        Log.i(TAG, "flushing ${held.size} held frame(s) for $id")
-                        held.forEach { emitData(id, it) }
-                    }
+                    announcePeripheral(link, "subscribed")
                 } else if (!subscribed && link.announced) {
                     // Unsubscribed: still connected, no longer writable, which the
                     // layer above only understands as gone.
@@ -1277,6 +1294,68 @@ object MeshBleBridge {
         // the caller emits the event itself.
         val server = gattServer ?: return
         guard("cancelConnection", Unit) { server.cancelConnection(link.device) }
+    }
+
+    /**
+     * Tell Rust a peripheral link is writable, then replay what it wrote while it
+     * was not. Idempotent: the CCCD write and [adoptStaleSubscription] can race.
+     */
+    private fun announcePeripheral(link: PeripheralLink, why: String) {
+        synchronized(link) {
+            if (link.announced || peripheralLinks[link.id] !== link) return
+            link.announced = true
+        }
+        emitConnected(link.id, true, link.maxWrite)
+        Log.i(TAG, "peripheral link ${link.id} writable ($why), maxWrite=${link.maxWrite}")
+        // Anything they wrote while we could not yet name this link, in the
+        // order they wrote it. Emitted after Connected so the layer above
+        // already has the link when the data arrives.
+        val held = synchronized(link.pendingInbound) {
+            val frames = link.pendingInbound.toList()
+            link.pendingInbound.clear()
+            frames
+        }
+        if (held.isNotEmpty()) {
+            Log.i(TAG, "flushing ${held.size} held frame(s) for ${link.id}")
+            held.forEach { emitData(link.id, it) }
+        }
+    }
+
+    /**
+     * A central that keeps writing but never subscribes subscribed to a
+     * *previous* incarnation of this GATT server.
+     *
+     * The connection belongs to the remote central, not to our process, so it
+     * outlives a Chatter restart: the new server is told about it in
+     * `onConnectionStateChange(STATE_CONNECTED)` straight after `addService`, but
+     * the CCCD write that would announce it was made to the old process and is
+     * never repeated. bitchat-android treats its client connection as healthy
+     * and goes on writing its announces into it every few seconds — measured on
+     * the S9 after a restart: `write from p:58:87:06:F2:2C:BD held until the
+     * link is announced` every 30 s, indefinitely, with Rust never told the link
+     * existed and so nothing ever notified back. Waiting for a CCCD write here
+     * waits forever; with scanning unavailable it was the only link and the
+     * mesh stayed at zero peers.
+     *
+     * The remote's notification registration lives in its own GATT client and
+     * survived with the connection, so a notify reaches it. Its writes are the
+     * evidence the link is live, and the largest of them bounds the MTU from
+     * below (ours was negotiated, and reported, to the dead process).
+     */
+    private fun adoptStaleSubscription(link: PeripheralLink) {
+        link.adoptionScheduled.set(false)
+        if (link.announced || peripheralLinks[link.id] !== link) return
+        val pending = synchronized(link.pendingInbound) { link.pendingInbound.size }
+        if (pending == 0) return
+        val proven = link.largestInbound
+        if (proven > link.maxWrite) link.maxWrite = proven
+        Log.i(
+            TAG,
+            "peripheral link ${link.id} wrote for " +
+                "${SystemClock.elapsedRealtime() - link.connectedAt} ms without subscribing: " +
+                "adopting a subscription made before this process started",
+        )
+        announcePeripheral(link, "adopted")
     }
 
     // --- Sending -------------------------------------------------------------------
