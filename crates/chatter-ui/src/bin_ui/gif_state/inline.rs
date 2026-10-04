@@ -254,16 +254,17 @@ fn tick_inline_gifs(elapsed_ms: u64) {
         return;
     };
     let messages = w.get_messages();
-    let last = w.get_message_last_visible_row().saturating_add(1);
-    if last < 0 {
+    let Some(rows) = rows_to_animate(
+        w.get_message_first_visible_row(),
+        w.get_message_last_visible_row(),
+        messages.row_count(),
+    ) else {
         return;
-    }
-    let first = w.get_message_first_visible_row().saturating_sub(1).max(0) as usize;
-    let last = (last as usize).min(messages.row_count().saturating_sub(1));
+    };
 
     // Every visible occurrence of a registered GIF: (its attachments, index, row).
     let mut shown = Vec::new();
-    for msg_idx in first..=last {
+    for msg_idx in rows {
         let Some(msg) = messages.row_data(msg_idx) else { continue };
         for att_idx in 0..msg.attachments.row_count() {
             if let Some(att) = msg.attachments.row_data(att_idx) {
@@ -301,6 +302,19 @@ fn tick_inline_gifs(elapsed_ms: u64) {
         att.has_thumbnail = true;
         model.set_row_data(att_idx, att);
     }
+}
+
+/// The message rows whose GIFs advance: the list's visible range widened by
+/// one row either side, clamped to the model. `None` when the list reports no
+/// rows (`last == -1`: no list, or a conversation still loading) or the model
+/// is empty.
+fn rows_to_animate(first: i32, last: i32, row_count: usize) -> Option<std::ops::RangeInclusive<usize>> {
+    if last < 0 || row_count == 0 {
+        return None;
+    }
+    let first = first.saturating_sub(1).max(0) as usize;
+    let last = (last.saturating_add(1) as usize).min(row_count - 1);
+    (first <= last).then_some(first..=last)
 }
 
 /// Show `image` as the thumbnail of attachment `attachment_id`, wherever it
@@ -578,3 +592,35 @@ pub fn register_gif_attachment(
 // an `Arc<ChatterClient>` rather than `Arc<AttachmentService>`), so keeping
 // the dead block only kept a forbidden direct reference to the service.
 // End-to-end coverage lives in the integration suite.
+
+#[cfg(test)]
+mod tests {
+    use super::rows_to_animate;
+
+    #[test]
+    fn no_list_animates_nothing() {
+        // -1 is the "no list" sentinel (message_list.slint); it must not be
+        // read as row 0 once widened by a row.
+        assert_eq!(rows_to_animate(0, -1, 10), None);
+        assert_eq!(rows_to_animate(5, -1, 10), None);
+    }
+
+    #[test]
+    fn empty_model_animates_nothing() {
+        assert_eq!(rows_to_animate(0, 3, 0), None);
+    }
+
+    #[test]
+    fn visible_range_widens_by_one_and_clamps() {
+        assert_eq!(rows_to_animate(4, 7, 20), Some(3..=8));
+        assert_eq!(rows_to_animate(0, 2, 20), Some(0..=3));
+        assert_eq!(rows_to_animate(17, 19, 20), Some(16..=19));
+    }
+
+    #[test]
+    fn range_past_a_shrunken_model_is_empty() {
+        // The estimate is from the last layout pass; the model may have
+        // shrunk since.
+        assert_eq!(rows_to_animate(30, 35, 10), None);
+    }
+}

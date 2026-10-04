@@ -4647,7 +4647,10 @@ fn inline_gifs_animate_only_visible_rows() {
     let main = include_str!("../../../ui/main.slint");
     assert!(main.contains("message-last-visible-row <=> app.message-last-visible-row;"));
     let gifs = include_str!("../src/bin_ui/gif_state/inline.rs");
-    assert!(gifs.contains("for msg_idx in first..=last {"), "the tick must walk only the visible rows");
+    assert!(gifs.contains("for msg_idx in rows {"), "the tick must walk only the visible rows");
+    assert!(gifs.contains("fn rows_to_animate("), "the range (and its -1 sentinel) is unit-tested there");
+    // A conversation that starts loading has no rows on screen yet.
+    assert!(squash(list).contains("root.first-visible-row = 0; root.last-visible-row = -1;"));
     assert!(!gifs.contains("for msg_idx in 0..msg_count"), "a whole-model scan per tick is back");
 }
 
