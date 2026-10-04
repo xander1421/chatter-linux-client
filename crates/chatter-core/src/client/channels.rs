@@ -84,7 +84,7 @@ impl ChatterClient {
         initial_members: Vec<crate::domain::ids::UserId>,
     ) -> Result<Channel, crate::services::channel::ChannelError> {
         let (channel, _mailbox_setup) = self.channels()
-            .create_channel(name, channel_type, config, description, icon, password, initial_members, true)
+            .create_channel(name, channel_type, config, description, icon, password, initial_members)
             .await?;
         // The global message stream subscribes from the server's membership
         // list; nudge it so the channel we just created is picked up now
@@ -145,7 +145,7 @@ impl ChatterClient {
         password: Option<&str>,
     ) -> Result<Channel, crate::services::channel::ChannelError> {
         let (channel, _mailbox_setup) = self.channels()
-            .join_channel(channel_id, password, true)
+            .join_channel(channel_id, password)
             .await?;
         self.resubscribe_channel_messages();
 

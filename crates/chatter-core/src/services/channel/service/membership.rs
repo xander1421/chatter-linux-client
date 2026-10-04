@@ -83,15 +83,11 @@ enum JoinProof {
 impl ChannelService {
     /// Join a channel: accept a pending invite, self-join an open channel,
     /// or (with `password`) join through the password capability.
-    ///
-    /// `setup_mailbox` is retained for call-site compatibility only.
     pub async fn join_channel(
         &self,
         channel_id: &ChannelId,
         password: Option<&str>,
-        setup_mailbox: bool,
     ) -> Result<(crate::domain::channel::Channel, Option<GroupMailboxSetupResult>), ChannelError> {
-        let _ = setup_mailbox;
         let proof = match password.filter(|p| !p.is_empty()) {
             Some(p) => JoinProof::Key(password_invite_key(channel_id, p)?),
             None => JoinProof::None,

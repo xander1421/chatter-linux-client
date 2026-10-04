@@ -9,7 +9,6 @@
 //! - mailbox.rs: Group mailbox setup
 
 mod listing;
-mod mailbox;
 mod membership;
 mod moderation;
 
@@ -24,8 +23,6 @@ use crate::domain::ids::{ChannelId, UserId};
 use crate::mailbox::group::{GroupCoordinator, GroupMailboxSetupResult};
 use crate::network::grpc::channel_client::ChannelClient;
 use crate::network::grpc::client_pool::GrpcClientPool;
-use crate::network::grpc::mailbox_client::MailboxClient;
-use crate::network::grpc::AnonymousMailboxClient;
 use crate::proto::chat_v1::{self, self as pb, channel_event};
 use pb::channel_action::Action;
 use crate::services::current_user::CurrentUserProvider;
@@ -100,16 +97,6 @@ impl ChannelService {
         self.grpc_pool.channel_client()
     }
 
-    /// Create an authenticated mailbox client for token requests.
-    pub(crate) fn mailbox_client(&self) -> MailboxClient {
-        self.grpc_pool.mailbox_client()
-    }
-
-    /// Create an anonymous mailbox client for mailbox creation/polling.
-    pub(crate) fn anonymous_mailbox_client(&self) -> AnonymousMailboxClient {
-        self.grpc_pool.anonymous_mailbox_client()
-    }
-
     // ==================== Create Operations ====================
 
     /// Create a new channel.
@@ -124,15 +111,6 @@ impl ChannelService {
     /// * `password` - Optional channel password. Never sent: it seeds the
     ///   join capability in the genesis (`password_invite_key`)
     /// * `initial_members` - Initial member user IDs
-    /// * `setup_mailbox` - Whether to setup group mailbox for encrypted channels
-    ///
-    /// # Group Mailbox Setup
-    ///
-    /// If `setup_mailbox` is true and the channel requires encryption,
-    /// this method will automatically:
-    /// 1. Create an ephemeral group mailbox for receiving messages
-    /// 2. The caller should send the returned announcement via
-    ///    `MessageService::send_group_mailbox_announcement()`
     #[allow(clippy::too_many_arguments)]
     pub async fn create_channel(
         &self,
@@ -143,10 +121,8 @@ impl ChannelService {
         icon: Option<&[u8]>,
         password: Option<&str>,
         initial_members: Vec<UserId>,
-        setup_mailbox: bool,
     ) -> Result<(Channel, Option<GroupMailboxSetupResult>), ChannelError> {
         let _ = self.settings_repo.current_user_id()?;
-        let _ = setup_mailbox;
 
         let trimmed_name = name.trim();
         if trimmed_name.is_empty() {

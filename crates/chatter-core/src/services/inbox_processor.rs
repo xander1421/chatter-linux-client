@@ -194,14 +194,9 @@ impl InboxEventProcessor {
                 );
             }
 
-            InboxEvent::GroupMailboxAnnouncement {
-                channel_id,
-                member_id,
-                mailbox_pk,
-                timestamp: _,
-            } => {
-                self.handle_group_mailbox_announcement(channel_id, member_id, mailbox_pk);
-            }
+            // The group-mailbox transport is retired for server-managed
+            // channels; announcements from older peers are ignored.
+            InboxEvent::GroupMailboxAnnouncement { .. } => {}
 
             InboxEvent::CallKeyAnswerReceived {
                 peer_id,
@@ -1182,24 +1177,6 @@ impl InboxEventProcessor {
     fn lookup_message(&self, sender_id_str: &str, sent_timestamp: u64) -> Option<crate::domain::Message> {
         let sender_id: UserId = sender_id_str.parse().ok()?;
         self.message_service.get_by_sender_timestamp(&sender_id, sent_timestamp).ok().flatten()
-    }
-
-    fn handle_group_mailbox_announcement(
-        &self,
-        channel_id: &crate::domain::ChannelId,
-        member_id: &UserId,
-        mailbox_pk: &[u8],
-    ) {
-        // Group mailbox transport has been retired for server-managed channels
-        // — control content + SKDM fanout now ride the device inbox directly.
-        // A peer running older code may still broadcast announcements; ignore
-        // them silently.
-        tracing::debug!(
-            channel_id = %channel_id,
-            member_id = %member_id,
-            mailbox_pk_len = mailbox_pk.len(),
-            "Ignoring legacy group mailbox announcement (transport retired)"
-        );
     }
 
     fn handle_anon_group_invite(
