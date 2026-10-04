@@ -18,6 +18,11 @@ use crate::storage::repositories::{JarvisGraphRepository, JarvisMemoryRepository
 
 use super::error::JarvisError;
 
+/// Most recent stored turns the builder reads as chat history. Turns older
+/// than this window reach the model only through a summary
+/// (`MemoryManager::compress_if_needed`).
+pub(crate) const HISTORY_TURN_LIMIT: u32 = 60;
+
 /// Context builder for enriching Jarvis queries.
 pub struct ContextBuilder {
     memory_repo: Arc<JarvisMemoryRepository>,
@@ -165,7 +170,7 @@ impl ContextBuilder {
         //    turn count: fetch generously, then trim oldest-first to ~8K tokens
         //    (~4 chars/token) so long chats never blow the model context.
         const HISTORY_CHAR_BUDGET: usize = 32_000;
-        let mut history = self.memory_repo.get_recent_conversations(context, 60)?;
+        let mut history = self.memory_repo.get_recent_conversations(context, HISTORY_TURN_LIMIT)?;
         let mut total: usize = history.iter().map(|c| c.content.len()).sum();
         while total > HISTORY_CHAR_BUDGET && history.len() > 2 {
             total -= history.remove(0).content.len();

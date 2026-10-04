@@ -44,8 +44,113 @@ pub fn parse_jarvis_mention(text: &str) -> Option<&str> {
     None
 }
 
+/// A Jarvis message row as core shapes it: who, what, when. Jarvis turns
+/// are local-only, so these never come from the message store; the UI only
+/// formats the time and builds its view type.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct JarvisRow {
+    pub id: String,
+    /// The user's own turn (else Jarvis speaking).
+    pub is_own: bool,
+    pub sender_name: String,
+    pub content: String,
+    pub timestamp_ns: u64,
+    /// The "thinking" placeholder shown while a reply is generated.
+    pub thinking: bool,
+}
+
+const JARVIS_NAME: &str = "Jarvis";
+
+fn now_ns() -> u64 {
+    chrono::Utc::now().timestamp_nanos_opt().unwrap_or(0) as u64
+}
+
+impl JarvisRow {
+    fn jarvis(id: String, content: String, timestamp_ns: u64) -> Self {
+        Self { id, is_own: false, sender_name: JARVIS_NAME.into(), content, timestamp_ns, thinking: false }
+    }
+
+    /// Placeholder while Jarvis generates a reply; replaced by its id.
+    pub fn thinking() -> Self {
+        Self {
+            thinking: true,
+            ..Self::jarvis(format!("jarvis-thinking-{}", uuid::Uuid::new_v4()), "_Thinking..._".into(), now_ns())
+        }
+    }
+
+    /// A Jarvis answer shown inline in a normal conversation (mention or
+    /// slash command): the question is quoted above the answer.
+    pub fn inline_reply(query: &str, response: &str) -> Self {
+        Self::jarvis(
+            format!("jarvis-{}", uuid::Uuid::new_v4()),
+            format!("**Q:** {}\n\n{}", query, response),
+            now_ns(),
+        )
+    }
+
+    /// A Jarvis turn in the AI channel.
+    pub fn reply(response: &str) -> Self {
+        Self::jarvis(format!("jarvis-{}", uuid::Uuid::new_v4()), response.to_string(), now_ns())
+    }
+
+    /// The user's own turn in the AI channel.
+    pub fn own(own_name: &str, text: &str) -> Self {
+        Self {
+            id: format!("jarvis-user-{}", uuid::Uuid::new_v4()),
+            is_own: true,
+            sender_name: own_name.to_string(),
+            content: text.to_string(),
+            timestamp_ns: now_ns(),
+            thinking: false,
+        }
+    }
+
+    fn from_history(c: &crate::domain::jarvis::JarvisConversation, own_name: &str) -> Self {
+        let is_own = matches!(c.role, crate::domain::jarvis::Role::User);
+        Self {
+            id: c.id.to_string(),
+            is_own,
+            sender_name: if is_own { own_name } else { JARVIS_NAME }.to_string(),
+            content: c.content.clone(),
+            timestamp_ns: c.timestamp,
+            thinking: false,
+        }
+    }
+}
+
+/// What the AI channel shows for a finished turn: the reply, or the error
+/// with a pointer to where the provider is configured.
+pub fn jarvis_channel_reply_text(
+    result: &Result<String, crate::services::jarvis::JarvisError>,
+) -> String {
+    match result {
+        Ok(r) => r.clone(),
+        Err(e) => format!(
+            "Error: {}\n\nCheck Settings → AI Assistant: is a local provider (Ollama, LM Studio, …) running and a model selected?",
+            e
+        ),
+    }
+}
+
 impl ChatterClient {
     // ── Jarvis façade ────────────────────────────────────────────────────
+
+    /// The current user's name on their own AI-channel turns.
+    pub fn jarvis_own_name(&self) -> String {
+        self.auth_state().get().display_name.unwrap_or_else(|| "Me".to_string())
+    }
+
+    /// The AI channel's persisted history as rows (chronological).
+    pub fn jarvis_channel_rows(&self, limit: u32) -> Vec<JarvisRow> {
+        let own_name = self.jarvis_own_name();
+        match self.jarvis_channel_history(limit) {
+            Ok(history) => history.iter().map(|c| JarvisRow::from_history(c, &own_name)).collect(),
+            Err(e) => {
+                tracing::error!("failed to load AI channel history: {e}");
+                Vec::new()
+            }
+        }
+    }
 
     /// Whether the local AI channel should appear in the sidebar.
     ///
@@ -263,6 +368,30 @@ impl ChatterClient {
             .unwrap_or_default()
     }
 
+    /// Header line for the memory browser: the AI channel's stored turns and
+    /// summaries plus the real fact and entity totals.
+    pub fn jarvis_memory_stats_label(&self) -> String {
+        let facts = self.jarvis_memory_facts();
+        let current = facts.iter().filter(|f| f.valid_until.is_none()).count();
+        match self
+            .jarvis()
+            .get_memory_stats(&crate::domain::jarvis::JarvisContext::general())
+        {
+            Ok(stats) => memory_stats_label(&stats, facts.len(), current),
+            Err(e) => {
+                tracing::warn!("Jarvis memory stats unavailable: {e}");
+                String::new()
+            }
+        }
+    }
+
+    /// Delete the AI channel's conversation history and its summaries.
+    /// Facts and the knowledge graph stay. Returns the turns deleted.
+    pub fn jarvis_clear_history(&self) -> Result<u32, crate::services::jarvis::JarvisError> {
+        self.jarvis()
+            .clear_memory(&crate::domain::jarvis::JarvisContext::general())
+    }
+
     pub async fn jarvis_ask(
         &self,
         context: &crate::domain::jarvis::JarvisContext,
@@ -277,7 +406,20 @@ impl ChatterClient {
         {
             self.rebuild_cloud_engine();
         }
-        self.jarvis().ask_in(context, query, author_id, silo).await
+        let reply = self.jarvis().ask_in(context, query, author_id, silo).await?;
+        // The turn just grew this context's history; once it passes the
+        // builder's window, fold the oldest turns into a summary. Off the
+        // reply's path: it is one more LLM call.
+        let jarvis = self.jarvis().clone();
+        let ctx = context.clone();
+        self.runtime_handle().spawn(async move {
+            match jarvis.compress_memory(&ctx).await {
+                Ok(true) => tracing::info!(context_id = %ctx.context_id, "Jarvis history compressed"),
+                Ok(false) => {}
+                Err(e) => tracing::warn!(context_id = %ctx.context_id, "Jarvis history compression failed: {e}"),
+            }
+        });
+        Ok(reply)
     }
 
     /// Gate a Jarvis turn on the conversation's own AI switch.
@@ -390,6 +532,28 @@ impl ChatterClient {
 
 }
 
+/// "40 messages · 1 summary (40 folded) · 5 facts (3 current) · 12 entities".
+/// Facts are the current user's (history included, as the browser lists
+/// them); entities are the whole graph, not the browser's top-N.
+fn memory_stats_label(
+    stats: &crate::services::jarvis::MemoryStats,
+    facts: usize,
+    current_facts: usize,
+) -> String {
+    let plural = |n: u32, one: &str, many: &str| format!("{n} {}", if n == 1 { one } else { many });
+    let mut parts = vec![plural(stats.conversation_count, "message", "messages")];
+    if stats.summary_count > 0 {
+        parts.push(format!(
+            "{} ({} folded)",
+            plural(stats.summary_count, "summary", "summaries"),
+            stats.total_messages_summarized
+        ));
+    }
+    parts.push(format!("{facts} facts ({current_facts} current)"));
+    parts.push(plural(stats.entity_count, "entity", "entities"));
+    parts.join(" · ")
+}
+
 /// `(statement, leaves_device)` for the AI channel on `silo`.
 fn jarvis_privacy_for(silo: crate::ai_policy::policy::Silo, engine: &str) -> (String, bool) {
     use crate::ai_policy::policy::Silo;
@@ -401,7 +565,61 @@ fn jarvis_privacy_for(silo: crate::ai_policy::policy::Silo, engine: &str) -> (St
 
 #[cfg(test)]
 mod tests {
-    use super::{jarvis_privacy_for, parse_jarvis_mention};
+    use super::{jarvis_channel_reply_text, jarvis_privacy_for, memory_stats_label, parse_jarvis_mention, JarvisRow};
+    use crate::domain::jarvis::{JarvisContext, JarvisConversation};
+
+    #[test]
+    fn jarvis_rows_carry_sender_content_and_state() {
+        let t = JarvisRow::thinking();
+        assert!(t.thinking && !t.is_own && t.id.starts_with("jarvis-thinking-"));
+        assert_eq!(t.sender_name, "Jarvis");
+
+        let r = JarvisRow::inline_reply("why?", "because");
+        assert_eq!(r.content, "**Q:** why?\n\nbecause");
+        assert!(!r.thinking && !r.is_own);
+
+        let own = JarvisRow::own("Ana", "hi");
+        assert!(own.is_own && own.sender_name == "Ana" && own.content == "hi");
+
+        let ctx = JarvisContext::general();
+        let mut user = JarvisConversation::user_message(&ctx, "q".into());
+        user.timestamp = 7;
+        let row = JarvisRow::from_history(&user, "Ana");
+        assert!(row.is_own && row.sender_name == "Ana" && row.timestamp_ns == 7);
+        let bot = JarvisRow::from_history(&JarvisConversation::assistant_message(&ctx, "a".into()), "Ana");
+        assert!(!bot.is_own && bot.sender_name == "Jarvis");
+    }
+
+    #[test]
+    fn channel_reply_text_points_at_settings_on_error() {
+        assert_eq!(jarvis_channel_reply_text(&Ok("yo".into())), "yo");
+        let err = jarvis_channel_reply_text(&Err(crate::services::jarvis::JarvisError::NotEnabledHere));
+        assert!(err.starts_with("Error: ") && err.contains("Settings → AI Assistant"));
+    }
+    use crate::services::jarvis::MemoryStats;
+
+    #[test]
+    fn memory_stats_label_reports_real_totals() {
+        let stats = MemoryStats {
+            conversation_count: 20,
+            summary_count: 1,
+            total_messages_summarized: 40,
+            fact_count: 3,
+            entity_count: 37,
+        };
+        assert_eq!(
+            memory_stats_label(&stats, 5, 3),
+            "20 messages · 1 summary (40 folded) · 5 facts (3 current) · 37 entities"
+        );
+        let empty = MemoryStats {
+            conversation_count: 1,
+            summary_count: 0,
+            total_messages_summarized: 0,
+            fact_count: 0,
+            entity_count: 1,
+        };
+        assert_eq!(memory_stats_label(&empty, 0, 0), "1 message · 0 facts (0 current) · 1 entity");
+    }
     use crate::ai_policy::policy::Silo;
 
     /// Only a local engine may say the messages stay here; cloud says where

@@ -48,5 +48,5 @@ pub use engine::{JarvisEngine, SharedJarvisEngine};
 pub use entity_extractor::{EntityExtractor, ExtractedEntity};
 pub use fact_extractor::{ExtractedFact, FactExtractor};
 pub use error::JarvisError;
-pub use memory_manager::MemoryManager;
+pub use memory_manager::{CompressionConfig, MemoryManager, MemoryStats};
 pub use service::JarvisService;

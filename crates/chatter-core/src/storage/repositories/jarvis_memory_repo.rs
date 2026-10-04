@@ -80,26 +80,24 @@ impl JarvisMemoryRepository {
         Ok(conversations)
     }
 
-    /// Get conversation history before a timestamp.
-    pub fn get_conversations_before(
+    /// The oldest `limit` conversations in a context (chronological).
+    pub fn get_oldest_conversations(
         &self,
         context: &JarvisContext,
-        before_timestamp: u64,
         limit: u32,
     ) -> Result<Vec<JarvisConversation>, StorageError> {
         let conn = self.db.read_connection()?;
         let mut stmt = conn.prepare(
             "SELECT id, context_type, context_id, role, content, timestamp, metadata_json, created_at
              FROM jarvis_conversations
-             WHERE context_type = ?1 AND context_id = ?2 AND timestamp < ?3
-             ORDER BY timestamp DESC
-             LIMIT ?4",
+             WHERE context_type = ?1 AND context_id = ?2
+             ORDER BY timestamp ASC
+             LIMIT ?3",
         )?;
 
         let mut rows = stmt.query(params![
             context.context_type.to_i32(),
             context.context_id,
-            before_timestamp as i64,
             limit,
         ])?;
         let mut conversations = Vec::new();
@@ -108,7 +106,6 @@ impl JarvisMemoryRepository {
             conversations.push(row_to_conversation(row)?);
         }
 
-        conversations.reverse();
         Ok(conversations)
     }
 
@@ -123,7 +120,6 @@ impl JarvisMemoryRepository {
         Ok(count as u32)
     }
 
-    /// Delete old conversations (for compression).
     /// Delete all conversations for a specific context.
     pub fn delete_conversations_for_context(
         &self,
@@ -132,7 +128,7 @@ impl JarvisMemoryRepository {
         let conn = self.db.connection()?;
         let rows = conn.execute(
             "DELETE FROM jarvis_conversations WHERE context_type = ?1 AND context_id = ?2",
-            params![context.context_type.to_string(), context.context_id],
+            params![context.context_type.to_i32(), context.context_id],
         )?;
         Ok(rows as u32)
     }
@@ -450,23 +446,16 @@ impl JarvisMemoryRepository {
         Ok(summaries)
     }
 
-    /// Get latest summary end timestamp for a context.
-    pub fn get_latest_summary_end(
-        &self,
-        context: &JarvisContext,
-    ) -> Result<Option<u64>, StorageError> {
-        let conn = self.db.read_connection()?;
-        let result: Option<i64> = conn
-            .query_row(
-                "SELECT MAX(message_range_end) FROM jarvis_summaries WHERE context_type = ?1 AND context_id = ?2",
-                params![context.context_type.to_i32(), context.context_id],
-                |row| row.get(0),
-            )
-            .ok()
-            .flatten();
-
-        Ok(result.map(|v| v as u64))
+    /// Delete all summaries for a context.
+    pub fn delete_summaries_for_context(&self, context: &JarvisContext) -> Result<u32, StorageError> {
+        let conn = self.db.connection()?;
+        let rows = conn.execute(
+            "DELETE FROM jarvis_summaries WHERE context_type = ?1 AND context_id = ?2",
+            params![context.context_type.to_i32(), context.context_id],
+        )?;
+        Ok(rows as u32)
     }
+
 }
 
 // ============================================================================

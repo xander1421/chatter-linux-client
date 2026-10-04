@@ -23,7 +23,7 @@ pub mod events;
 #[cfg(feature = "jarvis")]
 mod jarvis;
 #[cfg(feature = "jarvis")]
-pub use jarvis::{is_jarvis_channel, jarvis_channel_id, JARVIS_CHANNEL_NAME};
+pub use jarvis::{is_jarvis_channel, jarvis_channel_id, jarvis_channel_reply_text, JarvisRow, JARVIS_CHANNEL_NAME};
 mod link_device;
 pub mod membership;
 mod messaging;

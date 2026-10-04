@@ -19,7 +19,7 @@ use super::engine::SharedJarvisEngine;
 use super::entity_extractor::{EntityExtractor, ExtractedEntity};
 use super::fact_extractor::FactExtractor;
 use super::error::JarvisError;
-use super::memory_manager::MemoryManager;
+use super::memory_manager::{CompressionConfig, MemoryManager, MemoryStats};
 
 /// Supplies live app state (channel names, friends) for the system prompt.
 /// A closure so Jarvis needs no dependency on channel/user services.
@@ -46,6 +46,8 @@ pub struct JarvisService {
     memory_manager: MemoryManager,
     /// App-context bridge (channels, friends) for grounded answers.
     app_context: Option<AppContextFn>,
+    /// One compression at a time; a turn that finds it held skips.
+    compress_lock: tokio::sync::Mutex<()>,
 }
 
 impl JarvisService {
@@ -59,7 +61,7 @@ impl JarvisService {
         let extractor = EntityExtractor::new(ai.clone());
         let fact_extractor = Arc::new(FactExtractor::new(ai.clone(), memory_repo.clone()));
         let context_builder = ContextBuilder::new(memory_repo.clone(), graph_repo.clone(), semantic);
-        let memory_manager = MemoryManager::new(memory_repo.clone());
+        let memory_manager = MemoryManager::new(memory_repo.clone(), graph_repo.clone(), ai.clone());
 
         Self {
             memory_repo,
@@ -70,6 +72,7 @@ impl JarvisService {
             context_builder,
             memory_manager,
             app_context: None,
+            compress_lock: tokio::sync::Mutex::new(()),
         }
     }
 
@@ -328,6 +331,32 @@ Summary:"#,
     // ========================================================================
     // Memory Management
     // ========================================================================
+
+    /// Compress old conversations into a summary once the context's stored
+    /// history passes the builder's window. Returns whether a summary was
+    /// written. A compression already running for any context makes this a
+    /// no-op rather than a second LLM call over the same rows.
+    pub async fn compress_memory(&self, context: &JarvisContext) -> Result<bool, JarvisError> {
+        let Ok(_guard) = self.compress_lock.try_lock() else {
+            return Ok(false);
+        };
+        let summary = self
+            .memory_manager
+            .compress_if_needed(context, &CompressionConfig::default())
+            .await?;
+        Ok(summary.is_some())
+    }
+
+    /// Get memory statistics for a context.
+    pub fn get_memory_stats(&self, context: &JarvisContext) -> Result<MemoryStats, JarvisError> {
+        self.memory_manager.get_stats(context)
+    }
+
+    /// Delete a context's conversation history and summaries. Returns the
+    /// number of turns deleted.
+    pub fn clear_memory(&self, context: &JarvisContext) -> Result<u32, JarvisError> {
+        self.memory_manager.clear_context(context)
+    }
 
     /// Apply decay to facts and prune low-confidence ones.
     pub fn apply_fact_decay(&self, threshold: f64) -> Result<u32, JarvisError> {
