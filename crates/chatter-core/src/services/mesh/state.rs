@@ -66,6 +66,8 @@ pub struct LinkStateInner {
     pub self_broadcasts: SelfBroadcastTracker,
     pub spool: DirectedRelaySpool,
     pub sessions: SessionManager,
+    /// Our one-time prekeys and peers' verified bundles.
+    pub prekeys: super::prekeys::PrekeyState,
     /// Negotiated write ceiling per link. Not derivable from the link store:
     /// it is negotiated per connection and arrives on the `Connected` event.
     pub max_write: BTreeMap<LinkId, usize>,
@@ -112,6 +114,7 @@ impl Default for LinkStateInner {
             self_broadcasts: SelfBroadcastTracker::new(),
             spool: DirectedRelaySpool::new(),
             sessions: SessionManager::new(),
+            prekeys: super::prekeys::PrekeyState::default(),
             max_write: BTreeMap::new(),
             address_of: BTreeMap::new(),
             connecting: BTreeSet::new(),

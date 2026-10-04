@@ -48,6 +48,12 @@ pub enum StorageKey {
     /// **Seal this one** too: public keys, but the list of them is everyone
     /// this device has been near.
     PeerPins,
+    /// Our one-time prekey secrets, their consumption times, and the stamp of
+    /// the bundle that published them.
+    ///
+    /// Must survive a restart, or mail already sealed to a published prekey can
+    /// never be opened. **Seal this one**: these are private keys.
+    LocalPrekeys,
 }
 
 impl StorageKey {
@@ -61,6 +67,7 @@ impl StorageKey {
         StorageKey::PublicArchive,
         StorageKey::BridgeDropDedup,
         StorageKey::PeerPins,
+        StorageKey::LocalPrekeys,
     ];
 
     /// Stable identifier for a file name or a database row.
@@ -71,6 +78,7 @@ impl StorageKey {
             StorageKey::PublicArchive => "public-archive",
             StorageKey::BridgeDropDedup => "bridge-drop-dedup",
             StorageKey::PeerPins => "peer-pins",
+            StorageKey::LocalPrekeys => "local-prekeys",
         }
     }
 }

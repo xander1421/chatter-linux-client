@@ -65,3 +65,5 @@ chatter-mesh-noise = { path = ".", features = ["vectors"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 hex = "0.4"
+# OsRng for the prekey generation test.
+rand_core = { version = "0.6", features = ["getrandom"] }

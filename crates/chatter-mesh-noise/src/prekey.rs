@@ -150,6 +150,21 @@ pub fn next_generated_at(previous_ms: u64, now_ms: u64) -> u64 {
     now_ms.max(previous_ms.wrapping_add(1))
 }
 
+/// A fresh one-time prekey: the half to publish and the secret to keep.
+///
+/// The secret is returned as raw bytes because its custody (sealed storage,
+/// consumption, expiry) belongs to the caller; this crate holds no store.
+pub fn generate_prekey(id: u32, rng: &mut impl rand_core::CryptoRngCore) -> (Prekey, [u8; KEY_LEN]) {
+    let secret = x25519_dalek::StaticSecret::random_from_rng(rng);
+    let public_key = x25519_dalek::PublicKey::from(&secret).to_bytes();
+    (Prekey { id, public_key }, secret.to_bytes())
+}
+
+/// The public half of a stored prekey secret.
+pub fn prekey_public(secret: &[u8; KEY_LEN]) -> [u8; KEY_LEN] {
+    x25519_dalek::PublicKey::from(&x25519_dalek::StaticSecret::from(*secret)).to_bytes()
+}
+
 // MARK: - Types
 
 /// One published one-time prekey.
@@ -446,6 +461,22 @@ mod tests {
 
     fn signed_bundle(count: u32) -> PrekeyBundle {
         PrekeyBundle::sign(OWNER_STATIC, prekeys(count), GENERATED_AT, &identity())
+    }
+
+    #[test]
+    fn a_generated_prekey_opens_what_is_sealed_to_its_public_half() {
+        use crate::seal::{open_prekey, seal_prekey};
+        let mut rng = rand_core::OsRng;
+        let (prekey, secret) = generate_prekey(9, &mut rng);
+        assert_eq!(prekey.id, 9);
+        assert_eq!(prekey_public(&secret), prekey.public_key);
+
+        let sender = MeshIdentity::generate(&mut rng);
+        let recipient = MeshIdentity::generate(&mut rng);
+        let sealed = seal_prekey(b"later", 9, &prekey.public_key, &sender).unwrap();
+        let (opened, from) = open_prekey(&sealed, 9, &secret, &recipient).unwrap();
+        assert_eq!(opened, b"later");
+        assert_eq!(from, sender.static_public());
     }
 
     // MARK: wire format

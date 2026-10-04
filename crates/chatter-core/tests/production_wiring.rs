@@ -338,6 +338,22 @@ const MESH_TABLE: &[Entry] = &[
               (services/mesh/ble.rs rekey_if_due). Without a caller the session \
               hard-fails at the limit and DMs to that peer stall.",
     },
+    Entry {
+        symbol: "seal_prekey",
+        defined_in: "chatter-mesh-noise/src/seal.rs",
+        expect: Expect::Wired,
+        why: "Forward-secret offline mail (services/mesh/prekeys.rs seal_offline, from \
+              the BLE courier and relay-drop sealers). Lose it and every courier \
+              envelope is sealed to the recipient's long-lived static key, readable \
+              by whoever later takes that key.",
+    },
+    Entry {
+        symbol: "open_prekey",
+        defined_in: "chatter-mesh-noise/src/seal.rs",
+        expect: Expect::Wired,
+        why: "Opens mail sealed to our one-time prekeys (services/mesh/prekeys.rs). \
+              Without it every peer that holds our bundle sends mail we cannot read.",
+    },
     // ---- Mesh: inbound memory -------------------------------------------
     Entry {
         symbol: "reap_stalled",

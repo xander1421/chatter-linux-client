@@ -35,7 +35,6 @@ use chatter_mesh::tlv::file::BitchatFilePacket;
 use chatter_mesh::tlv::file_stream::FileManifest;
 use chatter_mesh::tlv::private_message::PrivateMessagePacket;
 use chatter_mesh_noise::MeshIdentity;
-use chatter_mesh_noise::seal::seal_courier;
 use chatter_mesh_store::bridge_drop::DropOperationId;
 use chatter_mesh_store::courier::INITIAL_COPIES;
 use chatter_mesh_store::router::CourierDirectory;
@@ -231,8 +230,9 @@ impl BleTransport {
     /// Seal a message to `recipient_key` and wrap it as a courier envelope.
     ///
     /// The plaintext never leaves this function: what the envelope carries is a
-    /// Noise `X` seal to the recipient's static key, opaque to every courier
-    /// that relays it.
+    /// Noise `X` seal to one of the recipient's one-time prekeys when we hold
+    /// their fresh bundle, else to their static key — opaque to every courier
+    /// that relays it either way.
     fn seal_envelope(
         &self,
         content: &str,
@@ -244,7 +244,13 @@ impl BleTransport {
             .encode()
             .ok()?;
         let payload = encode_noise_payload(NoisePayloadType::PrivateMessage, &inner);
-        let ciphertext = seal_courier(&payload, recipient_key, &self.identity).ok()?;
+        let (ciphertext, prekey_id) = super::prekeys::seal_offline(
+            &self.state,
+            &payload,
+            recipient_key,
+            &self.identity,
+            now_unix_secs.saturating_mul(1_000),
+        )?;
         let expiry_ms = now_unix_secs
             .saturating_add(MESSAGE_TTL_SECS)
             .saturating_mul(1_000);
@@ -253,7 +259,7 @@ impl BleTransport {
             expiry_ms,
             ciphertext,
             INITIAL_COPIES,
-            None,
+            prekey_id,
         );
         // Refuse anything that cannot be put on the wire rather than handing a
         // courier an envelope it will fail to forward.

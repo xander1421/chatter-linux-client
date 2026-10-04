@@ -52,7 +52,7 @@ use chatter_mesh_link::scheduler::{
     QueueDecision,
 };
 use chatter_mesh_link::{LinkEvent, LinkId, LinkRole, MeshLink};
-use chatter_mesh_noise::seal::open_courier;
+use chatter_mesh_noise::prekey::PrekeyBundle;
 use chatter_mesh_noise::sign::{sign_packet, verify_packet};
 use chatter_mesh_noise::{MeshIdentity, NoiseError};
 use chatter_mesh_store::storage::{Storage, StorageKey};
@@ -225,6 +225,98 @@ impl BleRuntime {
         Ok(())
     }
 
+    fn restore_prekeys(&self) -> Result<super::prekeys::LocalPrekeys, String> {
+        let Some(sealed) = self.storage.load(StorageKey::LocalPrekeys).map_err(|e| e.to_string())?
+        else {
+            return Ok(super::prekeys::LocalPrekeys::default());
+        };
+        let bytes = zeroize::Zeroizing::new(self.sealer.open(&sealed).map_err(|e| e.to_string())?);
+        super::prekeys::LocalPrekeys::from_bytes(&bytes).ok_or_else(|| "malformed prekey store".to_string())
+    }
+
+    /// Keep our prekey batch topped up, and publish its bundle whenever it
+    /// changes: broadcast now, and into the gossip archive so sync carries it to
+    /// peers we meet later.
+    ///
+    /// Persist strictly before publishing. A published prekey whose secret was
+    /// never saved is mail that can never be opened.
+    async fn maintain_prekeys(&mut self, now_ms: u64, now_s: u64) {
+        let changed = self.state.with(|state| {
+            state
+                .prekeys
+                .local
+                .as_mut()
+                .is_some_and(|local| local.refresh(now_ms, &mut rand_core_06::OsRng))
+        });
+        if !changed {
+            return;
+        }
+        let Some(bytes) = self
+            .state
+            .with(|state| state.prekeys.local.as_ref().map(super::prekeys::LocalPrekeys::to_bytes))
+        else {
+            return;
+        };
+        let saved = self
+            .sealer
+            .seal(&bytes)
+            .map_err(|e| e.to_string())
+            .and_then(|sealed| {
+                self.storage
+                    .save(StorageKey::LocalPrekeys, &sealed)
+                    .map_err(|e| e.to_string())
+            });
+        if let Err(error) = saved {
+            // Not marked saved, so the next tick retries before anything is
+            // published.
+            self.degraded(format!("mesh prekeys could not be saved: {error}"));
+            return;
+        }
+        let identity = Arc::clone(&self.identity);
+        let bundle = self.state.with(|state| {
+            let local = state.prekeys.local.as_mut()?;
+            local.mark_saved();
+            local.bundle(&identity)
+        });
+        let Some(Ok(payload)) = bundle.map(|bundle| bundle.encode()) else {
+            return;
+        };
+        let packet = self.build_packet(
+            MessageType::PrekeyBundle,
+            None,
+            payload,
+            chatter_mesh::relay::MESSAGE_TTL_DEFAULT,
+        );
+        let packet = self.maybe_sign(packet, true);
+        self.gossip.on_public_packet_seen(&packet, now_s);
+        self.transmit(&packet, None, None).await;
+    }
+
+    /// A peer's prekey bundle. Cached and re-gossiped only if it verifies
+    /// against the signing key pinned from that owner's verified announce — the
+    /// bundle's own signature proves nothing about whose static key it names.
+    fn on_prekey_bundle(&mut self, packet: &BitchatPacket) -> bool {
+        let Ok(bundle) = PrekeyBundle::decode(&packet.payload) else {
+            return false;
+        };
+        if bundle.owner_static == self.identity.static_public() {
+            return false;
+        }
+        let owner = PeerId::from_noise_key(&bundle.owner_static);
+        let now_ms = now_millis();
+        self.state.with(|state| {
+            let verified = state.peers.pinned(&owner).is_some_and(|pin| {
+                pin.noise_public_key.as_slice() == bundle.owner_static.as_slice()
+                    && <[u8; 32]>::try_from(pin.signing_public_key.as_slice())
+                        .is_ok_and(|key| bundle.verify(&key))
+            });
+            if verified {
+                state.prekeys.peers.ingest(bundle, now_ms);
+            }
+            verified
+        })
+    }
+
     #[cfg(test)]
     fn save_pins(&self) -> Result<(), String> {
         let bytes = self.state.with(|state| state.peers.pins_to_bytes());
@@ -269,6 +361,14 @@ impl BleRuntime {
         if let Err(error) = self.couriers.restore(now_secs()) {
             self.degraded(format!("the courier pool could not be restored: {error}"));
         }
+        match self.restore_prekeys() {
+            Ok(local) => self.state.with(|state| state.prekeys.local = Some(local)),
+            // Left `None`: generating a fresh set over secrets we merely could
+            // not read would orphan every envelope already sealed to them. Mail
+            // to us falls back to the static seal until the next start.
+            Err(error) => self.degraded(format!("mesh prekeys could not be restored: {error}")),
+        }
+        self.maintain_prekeys(now_millis(), now_secs()).await;
 
         self.announce().await;
 
@@ -752,6 +852,7 @@ impl BleRuntime {
             Some(MessageType::FileManifest) => self.on_file_manifest(packet, claimed),
             Some(MessageType::FileChunk) => self.on_file_chunk(packet, claimed),
             Some(MessageType::FileChunkRequest) => self.on_file_chunk_request(packet, claimed),
+            Some(MessageType::PrekeyBundle) => return self.on_prekey_bundle(packet),
             // Boards, groups, voice and prekey bundles were deferred from P0.
             // Not handling them is right; not *relaying* them would partition
             // every peer that does implement them, so the relay decision in
@@ -1822,7 +1923,9 @@ impl BleRuntime {
 
         // Is it ours? Only the seal can answer that — the recipient tag rotates
         // and is a hint, not proof.
-        if let Ok((plaintext, sender_key)) = open_courier(&envelope.ciphertext, &self.identity) {
+        if let Some((plaintext, sender_key)) =
+            super::prekeys::open_envelope(&self.state, &envelope, &self.identity, now_millis())
+        {
             if let Some((NoisePayloadType::PrivateMessage, body)) = decode_noise_payload(&plaintext)
                 && let Ok(message) = PrivateMessagePacket::decode(body)
             {
@@ -2497,6 +2600,10 @@ impl BleRuntime {
         if self.config.bridge_geohash.is_some() {
             capabilities.insert(PeerCapabilities::BRIDGE);
         }
+        // We serve one-time prekeys only while our store is loaded.
+        if self.state.with(|state| state.prekeys.local.is_some()) {
+            capabilities.insert(PeerCapabilities::PREKEYS);
+        }
         let announcement = AnnouncementPacket::new(
             nickname.clone(),
             self.identity.static_public().to_vec(),
@@ -2896,6 +3003,8 @@ impl BleRuntime {
         // the receive side has no other way to notice that a transfer went quiet.
         self.pump_streamed_files(now_s).await;
         self.request_missing_chunks(now_s).await;
+
+        self.maintain_prekeys(now_ms, now_s).await;
 
         // Gossip sync, which nothing else can schedule.
         let connected: Vec<PeerId> = self
@@ -4690,6 +4799,173 @@ mod tests {
         runtime.drain_writes().await;
         assert_eq!(sent(&radio, MessageType::CourierEnvelope).len(), 1);
         assert!(!runtime.couriers.carries_for(&recipient, now_s));
+    }
+
+    #[tokio::test]
+    async fn our_prekey_bundle_is_saved_before_it_is_published() {
+        let (mut runtime, radio, state) = runtime();
+        let link = LinkId::new("/mock/prekeys");
+        state.with(|inner| {
+            inner.links.link_up(link.clone(), LinkRole::Central);
+            inner.links.set_writable(&link, true);
+            inner.max_write.insert(link.clone(), 512);
+        });
+
+        // Not restored: nothing is generated, nothing published.
+        runtime.maintain_prekeys(now_millis(), now_secs()).await;
+        assert!(runtime.storage.load(StorageKey::LocalPrekeys).unwrap().is_none());
+
+        state.with(|inner| inner.prekeys.local = Some(super::super::prekeys::LocalPrekeys::default()));
+        runtime.maintain_prekeys(now_millis(), now_secs()).await;
+        runtime.drain_writes().await;
+
+        let saved = runtime.storage.load(StorageKey::LocalPrekeys).unwrap().expect("saved");
+        assert!(super::super::prekeys::LocalPrekeys::from_bytes(&saved).is_some());
+        let published: Vec<BitchatPacket> = radio
+            .writes()
+            .iter()
+            .map(|(_, bytes)| codec::decode(bytes).expect("decodable"))
+            .filter(|packet| packet.message_type() == Some(MessageType::PrekeyBundle))
+            .collect();
+        assert_eq!(published.len(), 1);
+        let bundle = PrekeyBundle::decode(&published[0].payload).expect("bundle");
+        assert_eq!(bundle.owner_static, runtime.identity.static_public());
+        assert!(bundle.verify(&runtime.identity.signing_public()));
+        assert!(runtime.gossip.has_prekey_bundle(&runtime.identity.peer_id()));
+
+        // Unchanged on the next tick: no second publish.
+        runtime.maintain_prekeys(now_millis(), now_secs()).await;
+        runtime.drain_writes().await;
+        assert_eq!(radio.writes().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn a_peer_bundle_is_kept_only_when_its_pinned_key_signed_it() {
+        let (mut runtime, _radio, state) = runtime();
+        let owner = MeshIdentity::generate(&mut OsRng);
+        let announcement = AnnouncementPacket::new(
+            "owner".to_string(),
+            owner.static_public().to_vec(),
+            owner.signing_public().to_vec(),
+            None,
+            None,
+            None,
+        );
+        state.with(|inner| {
+            inner
+                .peers
+                .upsert_verified_announce(&owner.peer_id(), &announcement, true, now_millis());
+        });
+
+        let mut theirs = super::super::prekeys::LocalPrekeys::default();
+        theirs.refresh(now_millis(), &mut OsRng);
+        let genuine = theirs.bundle(&owner).expect("bundle");
+        let bundle_packet = |bundle: &PrekeyBundle| {
+            BitchatPacket::new(
+                MessageType::PrekeyBundle,
+                owner.peer_id().to_routing_bytes().expect("routing bytes"),
+                None,
+                now_millis(),
+                bundle.encode().expect("encodes"),
+                chatter_mesh::relay::MESSAGE_TTL_DEFAULT,
+            )
+        };
+
+        // Signed by someone else over the owner's static key: refused.
+        let forger = MeshIdentity::generate(&mut OsRng);
+        let forged = PrekeyBundle::sign(
+            owner.static_public(),
+            genuine.prekeys.clone(),
+            genuine.generated_at,
+            &forger,
+        );
+        assert!(!runtime.on_prekey_bundle(&bundle_packet(&forged)));
+        assert!(
+            state
+                .with(|inner| inner.prekeys.peers.take(&owner.static_public(), now_millis()))
+                .is_none()
+        );
+
+        // The genuine one is cached, so offline mail to the owner seals to it.
+        assert!(runtime.on_prekey_bundle(&bundle_packet(&genuine)));
+        let (_, prekey_id) = super::super::prekeys::seal_offline(
+            &state,
+            b"payload",
+            &owner.static_public(),
+            &runtime.identity,
+            now_millis(),
+        )
+        .expect("sealed");
+        assert!(prekey_id.is_some_and(|id| genuine.prekeys.iter().any(|p| p.id == id)));
+    }
+
+    #[tokio::test]
+    async fn a_courier_envelope_sealed_to_our_prekey_opens_and_consumes_it() {
+        let (mut runtime, _radio, state) = runtime();
+        let mut events = runtime.events.subscribe();
+        state.with(|inner| {
+            let mut local = super::super::prekeys::LocalPrekeys::default();
+            local.refresh(now_millis(), &mut OsRng);
+            inner.prekeys.local = Some(local);
+        });
+        let bundle = state
+            .with(|inner| inner.prekeys.local.as_ref().unwrap().bundle(&runtime.identity))
+            .expect("bundle");
+
+        let sender = MeshIdentity::generate(&mut OsRng);
+        let peer_state = MeshState::new(sender.peer_id());
+        peer_state.with(|inner| inner.prekeys.peers.ingest(bundle.clone(), now_millis()));
+        let inner = PrivateMessagePacket::new("PK-1".to_string(), "forward secret".to_string())
+            .encode()
+            .expect("encodes");
+        let payload = encode_noise_payload(NoisePayloadType::PrivateMessage, &inner);
+        let (ciphertext, prekey_id) = super::super::prekeys::seal_offline(
+            &peer_state,
+            &payload,
+            &runtime.identity.static_public(),
+            &sender,
+            now_millis(),
+        )
+        .expect("sealed");
+        assert!(prekey_id.is_some());
+        let now_s = now_secs();
+        let envelope = CourierEnvelope::new(
+            chatter_mesh::tlv::courier_envelope::recipient_tag(
+                &runtime.identity.static_public(),
+                chatter_mesh::tlv::courier_envelope::epoch_day(now_s),
+            ),
+            (now_s + 3600) * 1000,
+            ciphertext,
+            1,
+            prekey_id,
+        );
+        let packet = BitchatPacket::new(
+            MessageType::CourierEnvelope,
+            sender.peer_id().to_routing_bytes().expect("routing bytes"),
+            runtime.identity.peer_id().to_routing_bytes(),
+            now_millis(),
+            envelope.encode().expect("encodes"),
+            chatter_mesh::relay::MESSAGE_TTL_DEFAULT,
+        );
+        runtime.on_courier_envelope(&packet, &sender.peer_id());
+
+        match events.try_recv() {
+            Ok(MeshEvent::Message(message)) => {
+                assert_eq!(message.sender, sender.peer_id());
+                assert_eq!(mapping::text_of(&message.message), Some("forward secret"));
+            }
+            other => panic!("expected the DM, got {other:?}"),
+        }
+        // Consumed: the next refresh changes the set (so it is saved and
+        // republished under a newer stamp) and the bundle no longer offers it.
+        assert!(state.with(|inner| {
+            inner.prekeys.local.as_mut().unwrap().refresh(now_millis() + 1, &mut OsRng)
+        }));
+        let refreshed = state
+            .with(|inner| inner.prekeys.local.as_ref().unwrap().bundle(&runtime.identity))
+            .expect("bundle");
+        assert!(refreshed.prekeys.iter().all(|p| Some(p.id) != prekey_id));
+        assert!(refreshed.generated_at > bundle.generated_at);
     }
 
     #[tokio::test]

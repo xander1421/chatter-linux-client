@@ -26,7 +26,8 @@ use chatter_mesh::packet::{NoisePayloadType, decode_noise_payload, encode_noise_
 use chatter_mesh::tlv::courier_envelope::{CourierEnvelope, TAG_LEN, epoch_day, recipient_tag};
 use chatter_mesh::tlv::private_message::PrivateMessagePacket;
 use chatter_mesh_noise::MeshIdentity;
-use chatter_mesh_noise::seal::{open_courier, seal_courier};
+#[cfg(test)]
+use chatter_mesh_noise::seal::open_courier;
 use chatter_mesh_nostr::identity::NostrIdentity;
 use chatter_mesh_store::bridge_drop::{
     AbandonedDrop, BridgeCourier, BridgeView, DedupSnapshot, DepositOutcome, DepositRefusal,
@@ -240,7 +241,12 @@ struct MeshDropSink {
 impl MeshDropSink {
     /// Open a sealed envelope addressed to us and turn it into a timeline row.
     fn open(&self, envelope: &CourierEnvelope) -> Option<MeshMessage> {
-        let (plaintext, sender_key) = open_courier(&envelope.ciphertext, &self.identity).ok()?;
+        let (plaintext, sender_key) = super::prekeys::open_envelope(
+            &self.state,
+            envelope,
+            &self.identity,
+            now_secs().saturating_mul(1_000),
+        )?;
         let (payload_type, body) = decode_noise_payload(&plaintext)?;
         if payload_type != NoisePayloadType::PrivateMessage {
             return None;
@@ -407,7 +413,7 @@ impl Actor {
             },
             MeshDropSink {
                 identity: Arc::clone(&identity),
-                state,
+                state: Arc::clone(&state),
                 ble,
                 events: events.clone(),
             },
@@ -420,12 +426,13 @@ impl Actor {
         let abandoned: Rc<RefCell<Vec<AbandonedDrop>>> = Rc::new(RefCell::new(Vec::new()));
 
         let deposit_identity = Arc::clone(&identity);
+        let deposit_state = Arc::clone(&state);
         let deposit_bridge = Rc::clone(&bridge);
         let deposit_abandoned = Rc::clone(&abandoned);
         router.set_bridge_deposit(Box::new(move |content, message_id, recipient_key| {
             let now = now_secs();
             let Some(envelope) =
-                seal_for_drop(&deposit_identity, content, message_id, recipient_key, now)
+                seal_for_drop(&deposit_state, &deposit_identity, content, message_id, recipient_key, now)
             else {
                 return false;
             };
@@ -593,10 +600,12 @@ impl Actor {
                     self.events
                         .send(MeshEvent::Degraded(format!("outbox wipe failed: {error}")));
                 }
-                // Mail cleanup does not reset identity trust. Panic wipe
-                // destroys PeerPins explicitly in MeshService.
+                // Mail cleanup does not reset identity trust or identity-bound
+                // keys: wiping our prekey secrets would orphan mail already
+                // sealed to them. Panic wipe destroys both explicitly in
+                // MeshService.
                 for key in StorageKey::ALL {
-                    if *key == StorageKey::PeerPins { continue; }
+                    if matches!(key, StorageKey::PeerPins | StorageKey::LocalPrekeys) { continue; }
                     if let Err(error) = self.storage.wipe(*key) {
                         self.events.send(MeshEvent::Degraded(format!(
                             "mesh storage wipe failed: {error}"
@@ -686,6 +695,7 @@ impl Actor {
 /// One copy: a relay drop is not a spray-and-wait courier, and a copy budget
 /// above one would only invite the gateway layer to fan it out further.
 fn seal_for_drop(
+    state: &MeshState,
     identity: &MeshIdentity,
     content: &str,
     message_id: &str,
@@ -696,7 +706,13 @@ fn seal_for_drop(
         .encode()
         .ok()?;
     let payload = encode_noise_payload(NoisePayloadType::PrivateMessage, &inner);
-    let ciphertext = seal_courier(&payload, recipient_key, identity).ok()?;
+    let (ciphertext, prekey_id) = super::prekeys::seal_offline(
+        state,
+        &payload,
+        recipient_key,
+        identity,
+        now_unix_secs.saturating_mul(1_000),
+    )?;
     let expiry_ms = now_unix_secs
         .saturating_add(MESSAGE_TTL_SECS)
         .saturating_mul(1_000);
@@ -705,7 +721,7 @@ fn seal_for_drop(
         expiry_ms,
         ciphertext,
         1,
-        None,
+        prekey_id,
     );
     envelope.encode().ok()?;
     Some(envelope)
@@ -767,6 +783,7 @@ mod tests {
         let identity = MeshIdentity::generate(&mut OsRng);
         let recipient = MeshIdentity::generate(&mut OsRng);
         let envelope = seal_for_drop(
+            &MeshState::new(identity.peer_id()),
             &identity,
             "meet at the bridge",
             "m1",
@@ -798,6 +815,7 @@ mod tests {
         let recipient = MeshIdentity::generate(&mut OsRng);
         let stranger = MeshIdentity::generate(&mut OsRng);
         let envelope = seal_for_drop(
+            &MeshState::new(identity.peer_id()),
             &identity,
             "secret",
             "m1",

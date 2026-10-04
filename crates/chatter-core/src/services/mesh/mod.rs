@@ -41,6 +41,7 @@ pub mod mapping;
 #[cfg(test)]
 pub(crate) mod mock;
 pub mod nostr;
+pub mod prekeys;
 pub mod radio;
 pub mod router;
 pub mod session;
@@ -926,10 +927,10 @@ impl MeshService {
 
     /// Panic wipe: destroy everything this device holds about the mesh.
     ///
-    /// Clears, in order: live sessions, retained mail, carried courier
-    /// envelopes, gossip history, the bridge dedup sets, every mesh message,
-    /// the conversation directory, and finally the identity
-    /// keypair itself.
+    /// Clears, in order: live sessions, peer pins, our one-time prekeys,
+    /// retained mail, carried courier envelopes, gossip history, the bridge
+    /// dedup sets, every mesh message, the conversation directory, and finally
+    /// the identity keypair itself.
     ///
     /// # What this does not clear
     ///
@@ -962,9 +963,15 @@ impl MeshService {
             state.sessions.clear();
             state.peers.clear_pins();
             state.peers.remove_all();
+            state.prekeys = prekeys::PrekeyState::default();
         });
-        if let Err(error) = self.storage.wipe(chatter_mesh_store::storage::StorageKey::PeerPins) {
-            fail(error.into(), &mut first_error);
+        for key in [
+            chatter_mesh_store::storage::StorageKey::PeerPins,
+            chatter_mesh_store::storage::StorageKey::LocalPrekeys,
+        ] {
+            if let Err(error) = self.storage.wipe(key) {
+                fail(error.into(), &mut first_error);
+            }
         }
 
         if let Err(error) = self.router.send(RouterCommand::Wipe) {
