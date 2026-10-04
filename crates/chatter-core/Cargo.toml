@@ -420,3 +420,10 @@ path = "tests/validated.rs"
 name = "onion_signup_pow"
 path = "tests/onion_signup_pow.rs"
 required-features = ["onion"]
+
+# Shield chosen before sign-in: onboarding over real Tor never dials direct
+# (server OPEN-ITEMS §132).
+[[test]]
+name = "shield_onboarding"
+path = "tests/shield_onboarding.rs"
+required-features = ["onion"]

@@ -7,6 +7,8 @@ import { Typography } from "../theme/typography.slint";
 import { Button } from "../components/button.slint";
 import { Input } from "../components/input.slint";
 import { OfflineMeshNotice } from "../components/offline_mesh_notice.slint";
+import { ShieldOnboardingToggle } from "../anon_mode/shield_onboarding.slint";
+import { AnonMode } from "../anon_mode/anon_mode_global.slint";
 
 export component LoginPage inherits Rectangle {
     in-out property <string> username: "";
@@ -36,6 +38,8 @@ export component LoginPage inherits Rectangle {
     // unreachable server the real key is still out there, and chatter-core
     // refuses the reset rather than letting the UI decide.
     in property <bool> identity-reset-available: false;
+    // Touch density for the Shield header control.
+    in property <bool> touch: false;
 
     property <bool> submitted: false;
 
@@ -81,6 +85,11 @@ export component LoginPage inherits Rectangle {
                 VerticalLayout {
                     spacing: Spacing.md;
                     padding: Spacing.lg;
+
+                    ShieldOnboardingToggle {
+                        busy: root.loading;
+                        touch: root.touch;
+                    }
 
                     Text {
                         text: "Chatter";
@@ -215,6 +224,14 @@ export component LoginPage inherits Rectangle {
                                 clicked => { root.go-to-recovery(); }
                             }
                         }
+                    }
+
+                    if root.loading && AnonMode.onboarding-progress != "": Text {
+                        text: AnonMode.onboarding-progress;
+                        color: Colors.text-secondary;
+                        font-size: Typography.sm;
+                        wrap: word-wrap;
+                        horizontal-alignment: center;
                     }
 
                     // Login button

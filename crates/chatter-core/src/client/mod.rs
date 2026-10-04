@@ -2098,6 +2098,57 @@ impl ChatterClient {
         self.link_device().verify_pin(pin).unwrap_or(false)
     }
 
+    /// Whether Shield can hide this device's network location in this build:
+    /// the `onion` feature is compiled in and a server `.onion` is pinned
+    /// (`config::PINNED_ONION_ADDR`). The sign-in and create-account screens
+    /// offer Shield only when this holds.
+    pub fn shield_available(&self) -> bool {
+        self.services.grpc_pool.onion_available()
+    }
+
+    /// Choose Shield on the sign-in / create-account / recovery screens,
+    /// before any account is signed in, so the whole of onboarding —
+    /// registration challenge and proof of work, Register, OPAQUE login,
+    /// recovery, key upload, SVR backup, avatar upload — reaches the server
+    /// only over its onion service.
+    ///
+    /// Fails closed. Enabling returns an error and changes nothing when the
+    /// build cannot route over Tor, and never leaves the client on a direct
+    /// connection while claiming Shield. Once on, the pool has no direct path:
+    /// if Tor cannot bootstrap, every call fails rather than going direct.
+    ///
+    /// The session that signs in stays in Shield (`anon_mode_enabled()`), the
+    /// same state the chat-list toggle produces. Like that toggle it is
+    /// in-memory only: the next app start is direct again (owner decision).
+    ///
+    /// Refused once signed in: from there the chat-list toggle and its PIN
+    /// gate own the switch.
+    pub fn set_shield_before_login(self: &Arc<Self>, enabled: bool) -> Result<(), ClientError> {
+        if self.is_logged_in() {
+            return Err(ClientError::Validation(
+                "already signed in; use the Shield toggle on the chat list".into(),
+            ));
+        }
+        if enabled && !self.shield_available() {
+            return Err(ClientError::Validation(
+                "Shield can't hide your network location in this build (no Tor onion service configured)".into(),
+            ));
+        }
+        self.set_anon_mode_enabled(enabled);
+
+        use crate::network::grpc::client_pool::TransportMode;
+        if enabled && self.services.grpc_pool.transport_mode() != TransportMode::Onion {
+            // Availability was checked above, so this is an endpoint that would
+            // not build. Undo rather than sign in with Shield showing and the
+            // traffic going direct.
+            self.set_anon_mode_enabled(false);
+            return Err(ClientError::Validation(
+                "couldn't switch to the Tor onion service; Shield is off".into(),
+            ));
+        }
+        Ok(())
+    }
+
     pub fn offline_state(&self) -> &OfflineState { &self.services.offline_state }
     pub fn privacy_state(&self) -> &PrivacyState { &self.services.privacy_state }
     #[cfg(feature = "jarvis")]
@@ -3961,6 +4012,14 @@ impl ChatterClient {
         // and restore this exact config on exit.
         *self.push_url.lock() = Some(ntfy_url.to_string());
 
+        // ntfy is reached over plain HTTP, never Tor. In Shield — including a
+        // session that signed in with Shield on — only remember the URL;
+        // `rebuild_transport_loops` starts the listener when Shield goes off.
+        if self.anon_mode_enabled() {
+            tracing::info!("Push listener deferred: Shield is on (poll-only delivery)");
+            return Ok(());
+        }
+
         if self.services.auth_state.get().current_user_id.is_none() {
             return Err(ClientError::Validation(
                 "configure_push requires an authenticated user".into(),
@@ -4369,6 +4428,114 @@ mod transport_switch_tests {
         assert!(client.anon_mode_enabled());
         // Give the serialized rebuild tasks a chance to drain.
         tokio::task::yield_now().await;
+    }
+
+    /// Pre-login Shield fails closed when the build has nowhere to route over
+    /// Tor: an error, and nothing changed — no Shield flag, still direct.
+    #[tokio::test]
+    async fn shield_before_login_refuses_without_onion() {
+        use crate::network::grpc::client_pool::TransportMode;
+        let (client, _dir) = build_test_client();
+        client.services.grpc_pool.set_onion_address(None);
+
+        assert!(!client.shield_available());
+        assert!(client.set_shield_before_login(true).is_err());
+        assert!(!client.anon_mode_enabled());
+        assert_eq!(client.services.grpc_pool.transport_mode(), TransportMode::Direct);
+    }
+
+    /// The owner requirement: with Shield chosen before sign-in, onboarding
+    /// never dials the server directly. The "direct server" here is a local
+    /// listener counting TCP accepts; the pinned .onion is fake, so the onion
+    /// attempt can only fail or time out. Registration, sign-in and a direct
+    /// URL change must all produce zero direct connections and never succeed.
+    /// Turning Shield off afterwards does dial the listener — proof the
+    /// counter would have caught a leak.
+    #[cfg(feature = "onion")]
+    #[tokio::test]
+    async fn shield_before_login_never_dials_direct() {
+        use crate::network::grpc::client_pool::TransportMode;
+        use std::sync::atomic::AtomicUsize;
+        use std::time::Duration;
+
+        static MOCK_KEYRING: std::sync::Once = std::sync::Once::new();
+        MOCK_KEYRING.call_once(|| {
+            keyring::set_default_credential_builder(keyring::mock::default_credential_builder());
+        });
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let direct_url = format!("http://127.0.0.1:{}", listener.local_addr().unwrap().port());
+        let accepts = Arc::new(AtomicUsize::new(0));
+        let counter = accepts.clone();
+        tokio::spawn(async move {
+            let mut held = Vec::new();
+            while let Ok((sock, _)) = listener.accept().await {
+                counter.fetch_add(1, Ordering::SeqCst);
+                held.push(sock);
+            }
+        });
+
+        // Built on the placeholder URL every test uses: the builder publishes
+        // its URL in a process-wide env var (`app/context.rs`), so building on
+        // the listener's URL would point other tests' clients at it. The URL
+        // goes to this client's pool only.
+        let dir = tempfile::tempdir().unwrap();
+        let client = ChatterClient::builder()
+            .server_url("http://localhost:1")
+            .data_dir(dir.path().to_str().unwrap())
+            .build()
+            .expect("build client");
+        client.set_server_url(&direct_url).unwrap();
+        let fake_onion = format!("http://{}.onion:443", "a".repeat(56));
+        client.services.grpc_pool.set_onion_address(Some(fake_onion));
+
+        assert!(client.shield_available());
+        client.set_shield_before_login(true).expect("Shield before login");
+        assert!(client.anon_mode_enabled(), "the session must come up in Shield");
+        assert_eq!(client.services.grpc_pool.transport_mode(), TransportMode::Onion);
+
+        // The register form always re-applies its Server URL field.
+        client.set_server_url(&direct_url).unwrap();
+        assert!(client.endpoint().contains(".onion"), "a URL change must not leave onion");
+
+        let budget = Duration::from_secs(5);
+        let registered = tokio::time::timeout(
+            budget,
+            client.register("shieldtest", "pw-123456789012", "S", "dev", None, Some("correct-horse-9")),
+        )
+        .await;
+        assert!(!matches!(registered, Ok(Ok(_))), "fake .onion cannot register");
+        let logged_in = tokio::time::timeout(
+            budget,
+            client.login("shieldtest", "pw-123456789012", "dev", None),
+        )
+        .await;
+        assert!(!matches!(logged_in, Ok(Ok(_))), "fake .onion cannot sign in");
+        let connected = tokio::time::timeout(budget, client.connect()).await;
+        assert!(!matches!(connected, Ok(Ok(()))));
+        // Storage transfers (link-device archive) ride Tor too, never direct.
+        let uploaded = tokio::time::timeout(
+            budget,
+            client.message_backup().upload_link_archive(b"archive", &format!("{direct_url}/blob")),
+        )
+        .await;
+        assert!(!matches!(uploaded, Ok(Ok(()))));
+
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        assert_eq!(accepts.load(Ordering::SeqCst), 0, "Shield onboarding dialled the server directly");
+        assert!(client.anon_mode_enabled(), "a failed onion dial must not drop Shield");
+        assert_eq!(client.services.grpc_pool.transport_mode(), TransportMode::Onion);
+
+        // Sanity: the counter sees a direct dial once Shield is off.
+        client.set_shield_before_login(false).unwrap();
+        let _ = tokio::time::timeout(budget, client.connect()).await;
+        for _ in 0..20 {
+            if accepts.load(Ordering::SeqCst) > 0 {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+        assert!(accepts.load(Ordering::SeqCst) > 0, "listener should see the direct dial");
     }
 }
 

@@ -4793,3 +4793,57 @@ fn call_duration_uses_core_connection_time() {
     assert!(worker.contains("if encryption_root_key == &[0u8; 32] {\n        call.ring();"), "a DM room alone is not an answered call");
     assert!(worker.contains("derive_call_handle(state) == call && state.call.connected_at.is_none()"), "only the matching first answer starts the core clock");
 }
+
+/// Owner decision 2026-10-04: a Shield toggle on the sign-in and create-account
+/// screens, so an account can be made and used over the onion service without
+/// the server ever seeing the device's IP. It must be the chat list's Shield
+/// control (HeaderButton + shield glyph), disabled where the build cannot
+/// route over Tor, and must reach core's fail-closed `set_shield_before_login`.
+#[test]
+fn shield_toggle_on_sign_in_and_create_account() {
+    use slint::ComponentHandle;
+    use std::{cell::Cell, rc::Rc};
+
+    for (page, src) in [
+        ("login", include_str!("../../../ui/pages/login.slint")),
+        ("register", include_str!("../../../ui/pages/register.slint")),
+    ] {
+        assert!(src.contains("ShieldOnboardingToggle {"), "the {page} page lost its Shield toggle");
+    }
+    let toggle = include_str!("../../../ui/anon_mode/shield_onboarding.slint");
+    assert!(
+        toggle.contains("HeaderButton {") && toggle.contains("icon: Icons.shield;"),
+        "the sign-in Shield must reuse the chat-list Shield control"
+    );
+    let glue = include_str!("../src/bin_ui/features/auth/shield.rs");
+    assert!(glue.contains("set_shield_available(ui_ctx.shield_available())"));
+    assert!(glue.contains("ui_ctx.set_shield_before_login("));
+
+    require_element_queries();
+    let w = boot();
+    let hits = Rc::new(Cell::new(0));
+    let counter = hits.clone();
+    w.global::<AnonMode>().on_toggle_before_login(move || counter.set(counter.get() + 1));
+
+    for view in ["login", "register"] {
+        w.set_current_view(view.into());
+        // No onion service in the build: offered, but disabled.
+        w.global::<AnonMode>().set_shield_available(false);
+        let off = testing::ElementHandle::find_by_accessible_label(
+            &w,
+            "Shield unavailable: this build has no Tor onion service",
+        )
+        .next()
+        .unwrap_or_else(|| panic!("no Shield control on the {view} screen"));
+        let before = hits.get();
+        off.invoke_accessible_default_action();
+        assert_eq!(hits.get(), before, "a disabled Shield must not toggle ({view})");
+
+        w.global::<AnonMode>().set_shield_available(true);
+        testing::ElementHandle::find_by_accessible_label(&w, "Shield off - tap to connect over Tor")
+            .next()
+            .unwrap_or_else(|| panic!("Shield not offered on the {view} screen"))
+            .invoke_accessible_default_action();
+        assert_eq!(hits.get(), before + 1, "the {view} Shield did not reach the toggle callback");
+    }
+}

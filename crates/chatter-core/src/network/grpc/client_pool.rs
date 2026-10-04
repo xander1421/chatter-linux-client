@@ -97,6 +97,11 @@ pub struct GrpcClientPool {
     onion_addr: Arc<RwLock<Option<String>>>,
     /// Active transport (Direct by default; anon mode flips it to Onion).
     transport_mode: Arc<RwLock<TransportMode>>,
+    /// Bumped on every endpoint/transport swap. A `connect()` that started
+    /// before a swap must not install its channel after it — that is how a
+    /// direct dial still in flight when Shield was switched on would otherwise
+    /// become the cached channel every later RPC rides.
+    transport_gen: Arc<std::sync::atomic::AtomicU64>,
     /// Separate channel for the anonymous mailbox/message/auth clients, so their
     /// traffic rides its OWN connection — an isolated Tor circuit under onion — and
     /// the server can't correlate anon ops with authenticated RPCs by connection.
@@ -173,6 +178,7 @@ impl GrpcClientPool {
             direct_url: Arc::new(RwLock::new(server_url.to_string())),
             onion_addr: Arc::new(RwLock::new(None)),
             transport_mode: Arc::new(RwLock::new(TransportMode::Direct)),
+            transport_gen: Arc::new(std::sync::atomic::AtomicU64::new(0)),
             anon_channel: Arc::new(RwLock::new(None)),
             #[cfg(feature = "quic")]
             quic_probe: Arc::new(RwLock::new(QuicProbeState::Untried)),
@@ -257,12 +263,15 @@ impl GrpcClientPool {
         Self::validate_direct_url(server_url)?;
         let new_endpoint = Self::create_endpoint(server_url, self.timeout)?;
 
-        // Disconnect first
-        self.disconnect();
-
-        // Update endpoint
-        *self.endpoint.write() = new_endpoint;
         *self.direct_url.write() = server_url.to_string();
+        if self.transport_mode() == TransportMode::Onion {
+            // On onion the direct URL is only remembered for the switch back.
+            // Installing it as the endpoint would leave an onion-mode pool
+            // pointed at a clearnet host.
+            tracing::info!("gRPC pool direct URL updated to {server_url} (stays on onion)");
+            return Ok(());
+        }
+        self.swap_endpoint(new_endpoint, TransportMode::Direct);
         // quic_probe caches a verdict about the OLD server_url specifically
         // (reachable-over-QUIC or not) -- carrying it over to a genuinely
         // different destination is wrong in both directions: a stale
@@ -297,6 +306,50 @@ impl GrpcClientPool {
         self.onion_tor.clone()
     }
 
+    /// Whether this build can route over Tor at all: the `onion` feature is
+    /// compiled in AND a server `.onion` is pinned. Shield's network half is
+    /// only offered when this holds.
+    pub fn onion_available(&self) -> bool {
+        cfg!(feature = "onion") && self.onion_addr.read().is_some()
+    }
+
+    /// Install a new endpoint + transport and drop every cached channel, as
+    /// one step. Holding the channel write lock across the swap is what makes
+    /// it atomic for `channel()`, which builds its lazy channel under that same
+    /// lock: before this, `disconnect()` ran first, and a `channel()` landing
+    /// between it and the endpoint write cached a channel on the OLD transport
+    /// (direct) that then outlived the switch to onion.
+    fn swap_endpoint(&self, endpoint: Endpoint, mode: TransportMode) {
+        let mut channel = self.channel.write();
+        *self.endpoint.write() = endpoint;
+        *self.transport_mode.write() = mode;
+        self.transport_gen.fetch_add(1, std::sync::atomic::Ordering::AcqRel);
+        *channel = None;
+        *self.anon_channel.write() = None;
+    }
+
+    /// Endpoint, transport and generation read together (under the channel
+    /// lock `swap_endpoint` holds), so a dial never pairs a new endpoint with
+    /// the old transport's dialer.
+    fn snapshot(&self) -> (Endpoint, TransportMode, u64) {
+        let _guard = self.channel.read();
+        (
+            self.endpoint.read().clone(),
+            *self.transport_mode.read(),
+            self.transport_gen.load(std::sync::atomic::Ordering::Acquire),
+        )
+    }
+
+    /// Record the outcome of a real onion dial in the Tor indicator, so the
+    /// UI can say "connecting over Tor" / "connected" before any login-only
+    /// loop (the inbox poller) exists to do it.
+    fn note_onion_dial(mode: TransportMode, ok: bool) {
+        if mode == TransportMode::Onion {
+            use crate::network::connection::{set_tor_status, TorStatus};
+            set_tor_status(if ok { TorStatus::Connected } else { TorStatus::Error });
+        }
+    }
+
     /// Switch the network transport. `Direct` rebuilds a normal endpoint from the
     /// remembered server URL; `Onion` routes the whole pool over Tor to the pinned
     /// `.onion` (requires the `onion` feature). Rebuilding disconnects the current
@@ -309,9 +362,7 @@ impl GrpcClientPool {
             TransportMode::Direct => {
                 let url = self.direct_url.read().clone();
                 let ep = Self::create_endpoint(&url, self.timeout)?;
-                self.disconnect();
-                *self.endpoint.write() = ep;
-                *self.transport_mode.write() = TransportMode::Direct;
+                self.swap_endpoint(ep, TransportMode::Direct);
                 tracing::info!("transport: direct ({url})");
                 Ok(())
             }
@@ -327,9 +378,7 @@ impl GrpcClientPool {
                     // TODO(onion): isolate anon vs auth circuits — one shared circuit
                     // for the whole pool for now (hides client + server IP).
                     let ep = Self::create_endpoint(&_onion, self.timeout)?;
-                    self.disconnect();
-                    *self.endpoint.write() = ep;
-                    *self.transport_mode.write() = TransportMode::Onion;
+                    self.swap_endpoint(ep, TransportMode::Onion);
                     tracing::info!("transport: onion ({_onion})");
                     Ok(())
                 }
@@ -352,9 +401,10 @@ impl GrpcClientPool {
     ///
     /// Returns `NetworkError::ConnectionFailed` if the connection fails.
     pub async fn connect(&self) -> Result<(), NetworkError> {
-        let endpoint = self.endpoint.read().clone();
+        let (endpoint, mode, generation) = self.snapshot();
 
-        let connect_result = self.dial(&endpoint).await;
+        let connect_result = self.dial(&endpoint, mode).await;
+        Self::note_onion_dial(mode, connect_result.is_ok());
 
         let channel = connect_result.map_err(|e| {
             crate::network::connection::set_server_status(
@@ -363,10 +413,19 @@ impl GrpcClientPool {
             NetworkError::ConnectionFailed(format!("connection failed: {}", e))
         })?;
 
+        // The transport changed while we dialled: this channel belongs to the
+        // old one. Dropping it is the whole point — installing it would put
+        // every later RPC back on the transport the user just left.
+        let mut guard = self.channel.write();
+        if self.transport_gen.load(std::sync::atomic::Ordering::Acquire) != generation {
+            return Err(NetworkError::ConnectionFailed(
+                "transport changed while connecting; retry".into(),
+            ));
+        }
         crate::network::connection::set_server_status(
             crate::network::connection::ServerStatus::Reachable,
         );
-        *self.channel.write() = Some(channel);
+        *guard = Some(channel);
         Ok(())
     }
 
@@ -380,14 +439,18 @@ impl GrpcClientPool {
     /// UDP) falls back to the existing TCP/HTTP2 path for the rest of the
     /// pool's life, matching today's behavior exactly when QUIC is off or
     /// unreachable.
-    async fn dial(&self, endpoint: &Endpoint) -> Result<GrpcTransport, tonic::transport::Error> {
+    async fn dial(
+        &self,
+        endpoint: &Endpoint,
+        mode: TransportMode,
+    ) -> Result<GrpcTransport, tonic::transport::Error> {
         // QUIC target for this dial, when its probe is still in flight.
         #[cfg(feature = "quic")]
         let mut racing_quic: Option<http::Uri> = None;
 
         #[cfg(feature = "quic")]
         {
-            let direct = *self.transport_mode.read() == TransportMode::Direct;
+            let direct = mode == TransportMode::Direct;
             let probe_state = *self.quic_probe.read();
             let server_url = self.direct_url.read().clone();
             let uri = server_url
@@ -447,13 +510,16 @@ impl GrpcClientPool {
         // Onion transport tunnels the channel through Tor via the Arti connector;
         // Direct transport uses tonic's built-in TCP/TLS dialer.
         #[cfg(feature = "onion")]
-        let channel = if *self.transport_mode.read() == TransportMode::Onion {
+        let channel = if mode == TransportMode::Onion {
             endpoint.connect_with_connector(self.onion_connector()).await?
         } else {
             endpoint.connect().await?
         };
         #[cfg(not(feature = "onion"))]
-        let channel = endpoint.connect().await?;
+        let channel = {
+            let _ = mode;
+            endpoint.connect().await?
+        };
 
         // The probe won the race: prefer QUIC now rather than at the next dial.
         #[cfg(feature = "quic")]
@@ -490,8 +556,9 @@ impl GrpcClientPool {
     pub async fn probe(&self) -> Result<(), NetworkError> {
         use crate::network::connection::{set_server_status, ServerStatus};
 
-        let endpoint = self.endpoint.read().clone();
-        let result = self.dial(&endpoint).await;
+        let (endpoint, mode, _) = self.snapshot();
+        let result = self.dial(&endpoint, mode).await;
+        Self::note_onion_dial(mode, result.is_ok());
 
         match result {
             Ok(_channel) => {
@@ -978,6 +1045,44 @@ mod tests {
         }
     }
 
+    /// A direct-URL change while on onion (the sign-in form re-applies its
+    /// Server URL field) must not put a clearnet endpoint under the onion
+    /// dialer; it is remembered for the switch back.
+    #[cfg(feature = "onion")]
+    #[test]
+    fn set_url_on_onion_keeps_the_onion_endpoint() {
+        let pool = GrpcClientPool::new("http://localhost:50051").unwrap();
+        pool.set_onion_address(Some(format!("http://{}.onion:443", "a".repeat(56))));
+        assert!(pool.onion_available());
+        pool.set_transport_mode(TransportMode::Onion).unwrap();
+        let generation = pool.snapshot().2;
+
+        pool.set_url("http://127.0.0.1:50052").unwrap();
+        assert_eq!(pool.transport_mode(), TransportMode::Onion);
+        assert!(pool.endpoint().contains(".onion"), "endpoint: {}", pool.endpoint());
+        assert_eq!(pool.snapshot().2, generation, "no swap happened");
+
+        pool.set_transport_mode(TransportMode::Direct).unwrap();
+        assert!(pool.endpoint().contains("127.0.0.1:50052"), "endpoint: {}", pool.endpoint());
+    }
+
+    /// The onion dialer refuses anything that is not a hidden service, so an
+    /// endpoint/transport mismatch can never become a Tor-exit (or any other)
+    /// connection to a clearnet host.
+    #[cfg(feature = "onion")]
+    #[tokio::test]
+    async fn onion_connector_refuses_clearnet_host() {
+        use tower::Service;
+        let pool = GrpcClientPool::new("http://localhost:50051").unwrap();
+        let mut connector = pool.onion_connector();
+        let err = connector
+            .call("http://127.0.0.1:443".parse().unwrap())
+            .await
+            .err()
+            .expect("clearnet host must be refused");
+        assert!(err.to_string().contains("non-.onion"), "{err}");
+    }
+
     #[tokio::test]
     async fn test_transport_switch_drops_cached_channel() {
         // The anonymity guarantee of anon mode depends on a transport switch
@@ -1053,7 +1158,7 @@ mod tests {
 
         let endpoint = pool.endpoint.read().clone();
         let started = std::time::Instant::now();
-        let result = tokio::time::timeout(Duration::from_secs(10), pool.dial(&endpoint)).await;
+        let result = tokio::time::timeout(Duration::from_secs(10), pool.dial(&endpoint, TransportMode::Direct)).await;
 
         // dial() itself must never hang past its own QUIC_PROBE_TIMEOUT (3s)
         // plus a normal TCP connect attempt — the outer 10s is just a test
@@ -1087,7 +1192,7 @@ mod tests {
 
         let endpoint = pool.endpoint.read().clone();
         let started = std::time::Instant::now();
-        let result = tokio::time::timeout(Duration::from_secs(1), pool.dial(&endpoint)).await;
+        let result = tokio::time::timeout(Duration::from_secs(1), pool.dial(&endpoint, TransportMode::Direct)).await;
 
         let elapsed = started.elapsed();
         assert!(

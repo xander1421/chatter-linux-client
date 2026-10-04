@@ -1,0 +1,67 @@
+// Shield toggle for the sign-in and create-account screens.
+//
+// The same control as the chat list's header Shield (HeaderButton + shield
+// glyph, tinted when on, Tor dot), so Shield looks like one thing wherever it
+// appears. Here it decides how onboarding reaches the server: on, every call
+// goes to the server's onion service over Tor and the server never sees this
+// device's IP; the session that signs in stays in Shield. Disabled when the
+// build has no Tor onion service (AnonMode.shield-available).
+
+import { Colors } from "../theme/colors.slint";
+import { Spacing } from "../theme/spacing.slint";
+import { Typography } from "../theme/typography.slint";
+import { Icons } from "../theme/icons.slint";
+import { HeaderButton } from "../components/header_button.slint";
+import { AnonMode, TorStatus } from "anon_mode_global.slint";
+
+export component ShieldOnboardingToggle inherits VerticalLayout {
+    // A sign-in / registration is in flight: the transport can't change now.
+    in property <bool> busy: false;
+    in property <bool> touch: false;
+
+    spacing: Spacing.xxs;
+
+    HorizontalLayout {
+        alignment: end;
+        spacing: Spacing.sm;
+
+        Text {
+            text: !AnonMode.shield-available ? "Shield unavailable"
+                : AnonMode.enabled ? "Shield on" : "Shield off";
+            color: AnonMode.enabled ? Colors.primary : Colors.text-secondary;
+            font-size: Typography.sm;
+            vertical-alignment: center;
+        }
+
+        HeaderButton {
+            touch: root.touch;
+            icon: Icons.shield;
+            label: !AnonMode.shield-available
+                ? "Shield unavailable: this build has no Tor onion service"
+                : AnonMode.enabled ? "Shield on - tap to turn off" : "Shield off - tap to connect over Tor";
+            active: AnonMode.enabled;
+            enabled: AnonMode.shield-available && !root.busy;
+            clicked => { AnonMode.toggle-before-login(); }
+            // Tor status dot, as on the chat-list Shield: green connected,
+            // amber connecting, red error.
+            Rectangle {
+                visible: AnonMode.enabled;
+                width: 8px; height: 8px; border-radius: 4px;
+                x: (parent.width + (root.touch ? Spacing.header-glyph-touch : Spacing.header-glyph)) / 2 - self.width * 0.75;
+                y: (parent.height - (root.touch ? Spacing.header-glyph-touch : Spacing.header-glyph)) / 2 - self.height * 0.25;
+                border-width: 1px; border-color: Colors.surface;
+                background: TorStatus.state == 2 ? Colors.success
+                    : TorStatus.state >= 3 ? Colors.error
+                    : TorStatus.state == 1 ? Colors.warning
+                    : Colors.text-muted;
+            }
+        }
+    }
+
+    if AnonMode.enabled: Text {
+        text: "You'll connect over Tor to the server's onion service, so it never sees your IP address. The first connection can take up to a minute.";
+        color: Colors.text-muted;
+        font-size: Typography.xxs;
+        wrap: word-wrap;
+    }
+}

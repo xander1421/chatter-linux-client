@@ -22,6 +22,22 @@ export global AnonMode {
     // `if AnonMode.onion-built : ...` so a build that cannot honour the
     // promise does not make it.
     in-out property <bool> onion-built: false;
+
+    // Shield can hide the network location in this build: `onion` built AND a
+    // server .onion pinned. From chatter-core `ChatterClient::shield_available`
+    // at startup. The sign-in / create-account Shield toggle is disabled
+    // without it — there is nothing to connect over.
+    in-out property <bool> shield-available: false;
+
+    // Sign-in / create-account screens: "connecting over Tor…" etc. while a
+    // Shield onboarding call is in flight; empty otherwise. Set from Rust.
+    in-out property <string> onboarding-progress: "";
+
+    // The Shield toggle on the sign-in and create-account screens. Separate
+    // from the chat-list `toggle-anon-mode`: there is no account and no PIN
+    // yet, and turning it on must fail closed (chatter-core
+    // `set_shield_before_login`).
+    callback toggle-before-login();
 }
 
 // Tor onion transport status, pushed from Rust (see connection.rs `tor_status`).

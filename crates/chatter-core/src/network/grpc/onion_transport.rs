@@ -140,6 +140,15 @@ impl Service<Uri> for OnionConnector {
                 .host()
                 .ok_or_else(|| io_err("onion transport: endpoint URI has no host"))?
                 .to_string();
+            // This connector exists to reach the pinned hidden service and
+            // nothing else. A clearnet host here would mean the pool's endpoint
+            // and transport disagree; carrying it out through a Tor exit would
+            // quietly "work" while bypassing the onion service, so refuse.
+            if !host.to_ascii_lowercase().ends_with(".onion") {
+                return Err(io_err(format!(
+                    "onion transport: refusing non-.onion host {host}"
+                )));
+            }
             let port = uri.port_u16().unwrap_or(443);
 
             // Lazily bootstrap the Tor client on the first dial, then reuse it.

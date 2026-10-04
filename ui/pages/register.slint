@@ -9,6 +9,8 @@ import { Input } from "../components/input.slint";
 import { Avatar } from "../components/avatar.slint";
 import { OfflineMeshNotice } from "../components/offline_mesh_notice.slint";
 import { DismissButton } from "../components/dismiss_button.slint";
+import { ShieldOnboardingToggle } from "../anon_mode/shield_onboarding.slint";
+import { AnonMode } from "../anon_mode/anon_mode_global.slint";
 
 export component RegisterPage inherits Rectangle {
     in-out property <string> display-name: "";
@@ -24,6 +26,8 @@ export component RegisterPage inherits Rectangle {
     in property <image> avatar-source;
     in property <bool> has-avatar: false;
     in property <int> selected-default-idx: -1;
+    // Touch density for the Shield header control.
+    in property <bool> touch: false;
     
     // Task 1: Username availability
     
@@ -136,6 +140,13 @@ export component RegisterPage inherits Rectangle {
                     VerticalLayout {
                         spacing: Spacing.lg;
                         padding: Spacing.lg;
+
+                        // On every step, so Shield is chosen before anything
+                        // is sent — not discovered on the last page.
+                        ShieldOnboardingToggle {
+                            busy: root.loading;
+                            touch: root.touch;
+                        }
 
                         // Both of these used to live inside step 4, which meant a
                         // registration that failed while the user was on any other
@@ -432,6 +443,14 @@ export component RegisterPage inherits Rectangle {
                                     disabled: root.loading;
                                     clicked => { root.server-url = "https://api.chatter.example.com"; }
                                 }
+                            }
+
+                            if root.loading && AnonMode.onboarding-progress != "": Text {
+                                text: AnonMode.onboarding-progress;
+                                color: Colors.text-secondary;
+                                font-size: Typography.sm;
+                                wrap: word-wrap;
+                                horizontal-alignment: center;
                             }
 
                             Button {

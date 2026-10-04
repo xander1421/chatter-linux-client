@@ -1234,6 +1234,7 @@ export component App inherits Rectangle {
 
         // Login page
         if current-view == "login": LoginPage {
+            touch: root.is-mobile-platform;
             server-url <=> root.login-server-url;
             configured-server-url: root.configured-server-url;
             username <=> root.login-username;
@@ -1265,6 +1266,7 @@ export component App inherits Rectangle {
 
         // Register page
         if current-view == "register": RegisterPage {
+            touch: root.is-mobile-platform;
             display-name <=> root.register-display-name;
             username <=> root.register-username;
             password <=> root.register-password;

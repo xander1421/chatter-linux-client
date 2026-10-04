@@ -119,6 +119,7 @@ fn wire_password_login(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
         let server_url = server_url.to_string();
         let pin = pin.to_string();
 
+        let shield = ui_ctx.anon_mode_enabled();
         tokio::spawn(async move {
             // Set loading state
             let weak_for_loading = weak.clone();
@@ -126,6 +127,9 @@ fn wire_password_login(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                 if let Some(w) = weak_for_loading.upgrade() {
                     w.set_login_loading(true);
                     w.set_login_error("".into());
+                    w.global::<crate::AnonMode>().set_onboarding_progress(
+                        if shield { super::shield::CONNECTING_OVER_TOR } else { "" }.into(),
+                    );
                 }
             });
 
@@ -135,6 +139,7 @@ fn wire_password_login(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                     let error_msg = format!("Invalid Server URL: {}", e);
                     let _ = slint::invoke_from_event_loop(move || {
                         if let Some(w) = weak.upgrade() {
+                            w.global::<crate::AnonMode>().set_onboarding_progress("".into());
                             w.set_login_loading(false);
                             w.set_login_error(error_msg.into());
                         }
@@ -146,15 +151,26 @@ fn wire_password_login(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             // Ensure we are connected to the selected server
             if !ui_ctx.is_connected() {
                 if let Err(e) = ui_ctx.connect().await {
-                    let error_msg = format!("Failed to connect to server: {}", e);
+                    let error_msg = super::shield::connect_error(shield, &e);
                     let _ = slint::invoke_from_event_loop(move || {
                         if let Some(w) = weak.upgrade() {
+                            w.global::<crate::AnonMode>().set_onboarding_progress("".into());
                             w.set_login_loading(false);
                             w.set_login_error(error_msg.into());
                         }
                     });
                     return;
                 }
+            }
+
+            if shield {
+                let weak = weak.clone();
+                let _ = slint::invoke_from_event_loop(move || {
+                    if let Some(w) = weak.upgrade() {
+                        w.global::<crate::AnonMode>()
+                            .set_onboarding_progress("Connected over Tor. Signing in…".into());
+                    }
+                });
             }
 
             // Login via SDK (handles auth + state + inbox + presence)
@@ -193,6 +209,7 @@ fn wire_password_login(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                     let weak_for_view = weak.clone();
                     let _ = slint::invoke_from_event_loop(move || {
                         if let Some(w) = weak_for_view.upgrade() {
+                            w.global::<crate::AnonMode>().set_onboarding_progress("".into());
                             w.set_login_loading(false);
                             w.set_is_signed_in(true);
                             w.set_current_view("main".into());
@@ -221,6 +238,7 @@ fn wire_password_login(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                     let error_msg = e.user_message();
                     let _ = slint::invoke_from_event_loop(move || {
                         if let Some(w) = weak.upgrade() {
+                            w.global::<crate::AnonMode>().set_onboarding_progress("".into());
                             w.set_login_loading(false);
                             w.set_login_error(error_msg.into());
                             w.set_login_identity_reset_available(reset_available);

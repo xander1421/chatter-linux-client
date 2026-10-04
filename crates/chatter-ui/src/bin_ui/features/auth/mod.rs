@@ -10,6 +10,7 @@ mod logout;
 pub mod presence_integration;
 mod recovery;
 mod register;
+mod shield;
 
 pub use initial_data::load_initial_data;
 
@@ -26,4 +27,5 @@ pub fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     logout::wire_logout(window, ui_ctx);
     recovery::wire_recovery(window, ui_ctx);
     link_device::wire_link_device(window, ui_ctx);
+    shield::wire_shield_before_login(window, ui_ctx);
 }

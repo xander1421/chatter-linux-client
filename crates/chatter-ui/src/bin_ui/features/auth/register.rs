@@ -171,9 +171,14 @@ pub fn wire_register(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             let server_url = server_url.to_string();
 
             // Set loading state synchronously (we're on UI thread)
+            let shield = ui_ctx.anon_mode_enabled();
             if let Some(w) = weak.upgrade() {
                 w.set_register_loading(true);
                 w.set_register_error("".into());
+                if shield {
+                    w.global::<crate::AnonMode>()
+                        .set_onboarding_progress(super::shield::CONNECTING_OVER_TOR.into());
+                }
             }
 
             // Update server URL synchronously
@@ -182,6 +187,7 @@ pub fn wire_register(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                     if let Some(w) = weak.upgrade() {
                         w.set_register_loading(false);
                         w.set_register_error(format!("Invalid Server URL: {}", e).into());
+                        w.global::<crate::AnonMode>().set_onboarding_progress("".into());
                     }
                     return;
                 }
@@ -211,15 +217,26 @@ pub fn wire_register(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                 // Connect if needed
                 if !ui_ctx.is_connected() {
                     if let Err(e) = ui_ctx.connect().await {
-                        let error_msg = format!("Failed to connect: {}", e);
+                        let error_msg = super::shield::connect_error(shield, &e);
                         let _ = slint::invoke_from_event_loop(move || {
                             if let Some(w) = weak.upgrade() {
                                 w.set_register_loading(false);
                                 w.set_register_error(error_msg.into());
+                                w.global::<crate::AnonMode>().set_onboarding_progress("".into());
                             }
                         });
                         return;
                     }
+                }
+                if shield {
+                    let weak = weak.clone();
+                    let _ = slint::invoke_from_event_loop(move || {
+                        if let Some(w) = weak.upgrade() {
+                            w.global::<crate::AnonMode>().set_onboarding_progress(
+                                "Connected over Tor. Creating your account (includes a short anti-spam puzzle)…".into(),
+                            );
+                        }
+                    });
                 }
 
                 tracing::info!("Register: connected! Calling register()...");
@@ -268,6 +285,7 @@ pub fn wire_register(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                                     let model_rc = std::rc::Rc::new(slint::VecModel::from(model));
                                     w.set_recovery_codes(slint::ModelRc::from(model_rc));
                                     w.set_register_loading(false);
+                                    w.global::<crate::AnonMode>().set_onboarding_progress("".into());
                                     // Signed-in state is what app.slint gates the
                                     // shell on; the welcome page is a *view*, not a
                                     // signed-out state. Taking only the view (as
@@ -287,6 +305,7 @@ pub fn wire_register(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
 
                                 if let Some(w) = weak_for_ui.upgrade() {
                                     w.set_register_loading(false);
+                                    w.global::<crate::AnonMode>().set_onboarding_progress("".into());
                                     // Signed-in state is what app.slint gates the
                                     // shell on; the welcome page is a *view*, not a
                                     // signed-out state. Taking only the view (as
@@ -309,6 +328,7 @@ pub fn wire_register(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                             if let Some(w) = weak.upgrade() {
                                 w.set_register_loading(false);
                                 w.set_register_error(error_msg.into());
+                                w.global::<crate::AnonMode>().set_onboarding_progress("".into());
                             }
                         });
                     }

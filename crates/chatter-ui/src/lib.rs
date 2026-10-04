@@ -416,6 +416,34 @@ pub async fn app_init() -> AppState {
         window.global::<MeshGlobal>().set_mesh_on(client.mesh_enabled());
     }
 
+    // Tor status indicator: mirror the process-global Tor status into the
+    // Slint `TorStatus` global once a second, so every Shield control's dot
+    // reflects live onion connectivity (Connecting/Connected/Error). Cheap —
+    // reads an atomic, only touches the UI thread when the value changes.
+    // Runs for every session, signed in or not: the sign-in / create-account
+    // Shield toggle needs it, and a fresh sign-in never reached the
+    // restored-session branch that used to start it.
+    {
+        let weak_for_tor = window.as_weak();
+        tokio::spawn(async move {
+            let mut last = -1i32;
+            loop {
+                let s = chatter_core::network::connection::tor_status().as_i32();
+                if s != last {
+                    last = s;
+                    let weak = weak_for_tor.clone();
+                    let _ = slint::invoke_from_event_loop(move || {
+                        use slint::ComponentHandle;
+                        if let Some(w) = weak.upgrade() {
+                            w.global::<TorStatus>().set_state(s);
+                        }
+                    });
+                }
+                tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+            }
+        });
+    }
+
     window.set_is_signed_in(ui_ctx.is_logged_in());
 
     if ui_ctx.is_logged_in() {
@@ -438,31 +466,6 @@ pub async fn app_init() -> AppState {
         bin_ui::features::modals::spawn_anon_dm_request_handler(weak_window.clone(), &ui_ctx);
         bin_ui::features::modals::spawn_anon_group_invite_handler(weak_window.clone(), &ui_ctx);
         bin_ui::features::modals::load_channel_invites(weak_window.clone(), &ui_ctx);
-
-        // Tor status indicator: mirror the process-global Tor status into the
-        // Slint `TorStatus` global once a second, so the sidebar shield dot
-        // reflects live onion connectivity (Connecting/Connected/Error). Cheap —
-        // reads an atomic, only touches the UI thread when the value changes.
-        {
-            let weak_for_tor = weak_window.clone();
-            tokio::spawn(async move {
-                let mut last = -1i32;
-                loop {
-                    let s = chatter_core::network::connection::tor_status().as_i32();
-                    if s != last {
-                        last = s;
-                        let weak = weak_for_tor.clone();
-                        let _ = slint::invoke_from_event_loop(move || {
-                            use slint::ComponentHandle;
-                            if let Some(w) = weak.upgrade() {
-                                w.global::<TorStatus>().set_state(s);
-                            }
-                        });
-                    }
-                    tokio::time::sleep(std::time::Duration::from_secs(1)).await;
-                }
-            });
-        }
 
         {
             let mut domain_rx = ui_ctx.subscribe_events();

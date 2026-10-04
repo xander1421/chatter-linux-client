@@ -293,19 +293,8 @@ impl MessageBackupService {
             .set_message_backup(backup_id.to_vec(), container.len() as u64)
             .await?;
 
-        let response = storage_client().map_err(MessageBackupError::Generic)?
-            .put(&upload.upload_url)
-            .header("Content-Type", "application/octet-stream")
-            .body(container.clone())
-            .send()
-            .await
-            .map_err(|e| storage_transfer_error("blob upload failed", e))?;
-        if !response.status().is_success() {
-            return Err(MessageBackupError::Generic(format!(
-                "blob upload failed with status {}",
-                response.status()
-            )));
-        }
+        self.storage_put(&upload.upload_url, container.clone(), "blob upload failed")
+            .await?;
 
         tracing::info!(rows, bytes = container.len(), "message backup uploaded to server");
         Ok(BackupStats {
@@ -339,21 +328,7 @@ impl MessageBackupService {
             }
         };
 
-        let blob = async {
-            let response = storage_client().map_err(MessageBackupError::Generic)?
-                .get(&download.download_url)
-                .send()
-                .await
-                .map_err(|e| storage_transfer_error("blob download failed", e))?;
-            if !response.status().is_success() {
-                return Err(MessageBackupError::Generic(format!(
-                    "blob download failed with status {}",
-                    response.status()
-                )));
-            }
-            read_archive(response, "blob read failed").await
-        }
-        .await;
+        let blob = self.storage_get(&download.download_url, "blob download failed").await;
         let blob = match blob {
             Ok(b) => b,
             Err(e) => {
@@ -397,6 +372,73 @@ impl MessageBackupService {
     // caller because it is derived from envelope material the caller holds
     // (ephemeral key + ACI + primary registration id), not from local settings.
 
+    /// PUT an archive to a presigned storage URL: over Tor when the pool is on
+    /// the onion transport (Shield), direct otherwise. Never falls back to a
+    /// direct request in Shield — that would hand storage the real IP.
+    async fn storage_put(
+        &self,
+        url: &str,
+        body: Vec<u8>,
+        context: &str,
+    ) -> Result<(), MessageBackupError> {
+        #[cfg(feature = "onion")]
+        if self.grpc_pool.transport_mode() == crate::network::grpc::client_pool::TransportMode::Onion {
+            let tor = self.grpc_pool.onion_tor();
+            let resp = crate::network::anon_http::put(&tor, url, body, "application/octet-stream")
+                .await
+                .map_err(|e| MessageBackupError::Generic(format!("{context}: {e}")))?;
+            if !(200..300).contains(&resp.status) {
+                return Err(MessageBackupError::Generic(format!(
+                    "{context} with status {}",
+                    resp.status
+                )));
+            }
+            return Ok(());
+        }
+
+        let response = storage_client().map_err(MessageBackupError::Generic)?
+            .put(url)
+            .header("Content-Type", "application/octet-stream")
+            .body(body)
+            .send()
+            .await
+            .map_err(|e| storage_transfer_error(context, e))?;
+        if !response.status().is_success() {
+            return Err(MessageBackupError::Generic(format!(
+                "{context} with status {}",
+                response.status()
+            )));
+        }
+        Ok(())
+    }
+
+    /// GET an archive from a presigned storage URL, over Tor in Shield (see
+    /// [`Self::storage_put`]). The Tor path caps the body at the attachment
+    /// response limit, so an archive larger than that fails rather than
+    /// going direct.
+    async fn storage_get(&self, url: &str, context: &str) -> Result<Vec<u8>, MessageBackupError> {
+        #[cfg(feature = "onion")]
+        if self.grpc_pool.transport_mode() == crate::network::grpc::client_pool::TransportMode::Onion {
+            let tor = self.grpc_pool.onion_tor();
+            return crate::network::anon_http::get(&tor, url)
+                .await
+                .map_err(|e| MessageBackupError::Generic(format!("{context}: {e}")));
+        }
+
+        let response = storage_client().map_err(MessageBackupError::Generic)?
+            .get(url)
+            .send()
+            .await
+            .map_err(|e| storage_transfer_error(context, e))?;
+        if !response.status().is_success() {
+            return Err(MessageBackupError::Generic(format!(
+                "{context} with status {}",
+                response.status()
+            )));
+        }
+        read_archive(response, context).await
+    }
+
     /// Build the encrypted Link'n'Sync transfer archive from the local store.
     /// Returns the ciphertext and its stats; the caller declares `bytes` to
     /// `SetTransferArchive` and then uploads via `upload_link_archive`.
@@ -417,20 +459,8 @@ impl MessageBackupService {
         container: &[u8],
         upload_url: &str,
     ) -> Result<(), MessageBackupError> {
-        let response = storage_client().map_err(MessageBackupError::Generic)?
-            .put(upload_url)
-            .header("Content-Type", "application/octet-stream")
-            .body(container.to_vec())
-            .send()
+        self.storage_put(upload_url, container.to_vec(), "transfer archive upload failed")
             .await
-            .map_err(|e| storage_transfer_error("transfer archive upload failed", e))?;
-        if !response.status().is_success() {
-            return Err(MessageBackupError::Generic(format!(
-                "transfer archive upload failed with status {}",
-                response.status()
-            )));
-        }
-        Ok(())
     }
 
     /// Download the transfer archive from the primary-supplied presigned URL,
@@ -442,18 +472,9 @@ impl MessageBackupService {
         download_url: &str,
         kek: &[u8; 32],
     ) -> Result<ImportSummary, MessageBackupError> {
-        let response = storage_client().map_err(MessageBackupError::Generic)?
-            .get(download_url)
-            .send()
-            .await
-            .map_err(|e| storage_transfer_error("transfer archive download failed", e))?;
-        if !response.status().is_success() {
-            return Err(MessageBackupError::Generic(format!(
-                "transfer archive download failed with status {}",
-                response.status()
-            )));
-        }
-        let blob = read_archive(response, "transfer archive read failed").await?;
+        let blob = self
+            .storage_get(download_url, "transfer archive download failed")
+            .await?;
 
         let summary = self.decrypt_and_import(&blob, kek, KEY_MODE_LINK)?;
         tracing::info!(
