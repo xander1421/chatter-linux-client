@@ -2,9 +2,7 @@
 //!
 //! Provides platform-specific GPU video rendering:
 //! - Linux: EGL + GStreamer glsinkbin (zero-copy GL textures)
-//! - Android: EGL + GStreamer glsinkbin (via NDK)
 //! - Windows: D3D11 + GStreamer d3d11 (DXVA2/D3D11VA hardware decoding)
-//! - iOS: Metal + GStreamer applemedia (VideoToolbox hardware decoding)
 //!
 //! Falls back to software rendering if hardware acceleration unavailable.
 
@@ -18,14 +16,8 @@ mod gl_linux;
 #[cfg(target_os = "linux")]
 pub mod gl_call;
 
-#[cfg(all(target_os = "android", feature = "desktop-media"))]
-mod gl_android;
-
 #[cfg(target_os = "windows")]
 mod d3d11_windows;
-
-#[cfg(all(target_os = "ios", feature = "desktop-media"))]
-mod metal_ios;
 
 use crate::MainWindow;
 
@@ -37,22 +29,14 @@ pub fn init_hw_video(window: &MainWindow) -> bool {
         gl_linux::init_gl_video(window)
     }
 
-    #[cfg(all(target_os = "android", feature = "desktop-media"))]
-    {
-        gl_android::init_gl_video(window)
-    }
 
     #[cfg(target_os = "windows")]
     {
         d3d11_windows::init_d3d11_video(window)
     }
 
-    #[cfg(all(target_os = "ios", feature = "desktop-media"))]
-    {
-        metal_ios::init_metal_video(window)
-    }
 
-    #[cfg(not(any(target_os = "linux", all(target_os = "android", feature = "desktop-media"), target_os = "windows", all(target_os = "ios", feature = "desktop-media"))))]
+    #[cfg(not(any(target_os = "linux", target_os = "windows")))]
     {
         let _ = window;
         tracing::info!("Hardware video not supported on this platform");
@@ -67,22 +51,14 @@ pub fn is_hw_available() -> bool {
         gl_linux::is_gl_available()
     }
 
-    #[cfg(all(target_os = "android", feature = "desktop-media"))]
-    {
-        gl_android::is_gl_available()
-    }
 
     #[cfg(target_os = "windows")]
     {
         d3d11_windows::is_d3d11_available()
     }
 
-    #[cfg(all(target_os = "ios", feature = "desktop-media"))]
-    {
-        metal_ios::is_metal_available()
-    }
 
-    #[cfg(not(any(target_os = "linux", all(target_os = "android", feature = "desktop-media"), target_os = "windows", all(target_os = "ios", feature = "desktop-media"))))]
+    #[cfg(not(any(target_os = "linux", target_os = "windows")))]
     {
         false
     }
@@ -95,22 +71,14 @@ pub fn is_hw_connected() -> bool {
         gl_linux::is_gl_connected()
     }
 
-    #[cfg(all(target_os = "android", feature = "desktop-media"))]
-    {
-        gl_android::is_gl_connected()
-    }
 
     #[cfg(target_os = "windows")]
     {
         d3d11_windows::is_d3d11_connected()
     }
 
-    #[cfg(all(target_os = "ios", feature = "desktop-media"))]
-    {
-        metal_ios::is_metal_connected()
-    }
 
-    #[cfg(not(any(target_os = "linux", all(target_os = "android", feature = "desktop-media"), target_os = "windows", all(target_os = "ios", feature = "desktop-media"))))]
+    #[cfg(not(any(target_os = "linux", target_os = "windows")))]
     {
         false
     }
@@ -124,22 +92,14 @@ pub fn start_hw_video(data: Vec<u8>) -> Option<f64> {
         gl_linux::start_gl_video(data)
     }
 
-    #[cfg(all(target_os = "android", feature = "desktop-media"))]
-    {
-        gl_android::start_gl_video(data)
-    }
 
     #[cfg(target_os = "windows")]
     {
         d3d11_windows::start_d3d11_video(data)
     }
 
-    #[cfg(all(target_os = "ios", feature = "desktop-media"))]
-    {
-        metal_ios::start_metal_video(data)
-    }
 
-    #[cfg(not(any(target_os = "linux", all(target_os = "android", feature = "desktop-media"), target_os = "windows", all(target_os = "ios", feature = "desktop-media"))))]
+    #[cfg(not(any(target_os = "linux", target_os = "windows")))]
     {
         let _ = data;
         None
@@ -173,20 +133,12 @@ pub fn stop_hw_video() {
         gl_linux::stop_gl_video();
     }
 
-    #[cfg(all(target_os = "android", feature = "desktop-media"))]
-    {
-        gl_android::stop_gl_video();
-    }
 
     #[cfg(target_os = "windows")]
     {
         d3d11_windows::stop_d3d11_video();
     }
 
-    #[cfg(all(target_os = "ios", feature = "desktop-media"))]
-    {
-        metal_ios::stop_metal_video();
-    }
 }
 
 /// Set hardware video playing state.
@@ -196,28 +148,15 @@ pub fn set_hw_video_playing(playing: bool) {
         gl_linux::set_gl_video_playing(playing);
     }
 
-    #[cfg(all(target_os = "android", feature = "desktop-media"))]
-    {
-        gl_android::set_gl_video_playing(playing);
-    }
 
     #[cfg(target_os = "windows")]
     {
         d3d11_windows::set_d3d11_video_playing(playing);
     }
 
-    #[cfg(all(target_os = "ios", feature = "desktop-media"))]
-    {
-        metal_ios::set_metal_video_playing(playing);
-    }
 
     // No hw video path on this platform (e.g. macOS) — see init_hw_video above.
-    #[cfg(not(any(
-        target_os = "linux",
-        all(target_os = "android", feature = "desktop-media"),
-        target_os = "windows",
-        all(target_os = "ios", feature = "desktop-media")
-    )))]
+    #[cfg(not(any(target_os = "linux", target_os = "windows")))]
     let _ = playing;
 }
 
@@ -228,22 +167,14 @@ pub fn is_hw_video_active() -> bool {
         gl_linux::is_gl_video_active()
     }
 
-    #[cfg(all(target_os = "android", feature = "desktop-media"))]
-    {
-        gl_android::is_gl_video_active()
-    }
 
     #[cfg(target_os = "windows")]
     {
         d3d11_windows::is_d3d11_video_active()
     }
 
-    #[cfg(all(target_os = "ios", feature = "desktop-media"))]
-    {
-        metal_ios::is_metal_video_active()
-    }
 
-    #[cfg(not(any(target_os = "linux", all(target_os = "android", feature = "desktop-media"), target_os = "windows", all(target_os = "ios", feature = "desktop-media"))))]
+    #[cfg(not(any(target_os = "linux", target_os = "windows")))]
     {
         false
     }
@@ -256,22 +187,14 @@ pub fn get_hw_video_position() -> Option<f64> {
         gl_linux::get_gl_video_position()
     }
 
-    #[cfg(all(target_os = "android", feature = "desktop-media"))]
-    {
-        gl_android::get_gl_video_position()
-    }
 
     #[cfg(target_os = "windows")]
     {
         d3d11_windows::get_d3d11_video_position()
     }
 
-    #[cfg(all(target_os = "ios", feature = "desktop-media"))]
-    {
-        metal_ios::get_metal_video_position()
-    }
 
-    #[cfg(not(any(target_os = "linux", all(target_os = "android", feature = "desktop-media"), target_os = "windows", all(target_os = "ios", feature = "desktop-media"))))]
+    #[cfg(not(any(target_os = "linux", target_os = "windows")))]
     {
         None
     }
@@ -284,22 +207,14 @@ pub fn get_hw_video_duration() -> Option<f64> {
         gl_linux::get_gl_video_duration()
     }
 
-    #[cfg(all(target_os = "android", feature = "desktop-media"))]
-    {
-        gl_android::get_gl_video_duration()
-    }
 
     #[cfg(target_os = "windows")]
     {
         d3d11_windows::get_d3d11_video_duration()
     }
 
-    #[cfg(all(target_os = "ios", feature = "desktop-media"))]
-    {
-        metal_ios::get_metal_video_duration()
-    }
 
-    #[cfg(not(any(target_os = "linux", all(target_os = "android", feature = "desktop-media"), target_os = "windows", all(target_os = "ios", feature = "desktop-media"))))]
+    #[cfg(not(any(target_os = "linux", target_os = "windows")))]
     {
         None
     }
@@ -312,22 +227,14 @@ pub fn seek_hw_video(position: f64) {
         gl_linux::seek_gl_video(position);
     }
 
-    #[cfg(all(target_os = "android", feature = "desktop-media"))]
-    {
-        gl_android::seek_gl_video(position);
-    }
 
     #[cfg(target_os = "windows")]
     {
         d3d11_windows::seek_d3d11_video(position);
     }
 
-    #[cfg(all(target_os = "ios", feature = "desktop-media"))]
-    {
-        metal_ios::seek_metal_video(position);
-    }
 
-    #[cfg(not(any(target_os = "linux", all(target_os = "android", feature = "desktop-media"), target_os = "windows", all(target_os = "ios", feature = "desktop-media"))))]
+    #[cfg(not(any(target_os = "linux", target_os = "windows")))]
     {
         let _ = position;
     }
@@ -340,22 +247,14 @@ pub fn set_hw_video_volume(volume: f64) {
         gl_linux::set_gl_video_volume(volume);
     }
 
-    #[cfg(all(target_os = "android", feature = "desktop-media"))]
-    {
-        gl_android::set_gl_video_volume(volume);
-    }
 
     #[cfg(target_os = "windows")]
     {
         d3d11_windows::set_d3d11_video_volume(volume);
     }
 
-    #[cfg(all(target_os = "ios", feature = "desktop-media"))]
-    {
-        metal_ios::set_metal_video_volume(volume);
-    }
 
-    #[cfg(not(any(target_os = "linux", all(target_os = "android", feature = "desktop-media"), target_os = "windows", all(target_os = "ios", feature = "desktop-media"))))]
+    #[cfg(not(any(target_os = "linux", target_os = "windows")))]
     {
         let _ = volume;
     }
