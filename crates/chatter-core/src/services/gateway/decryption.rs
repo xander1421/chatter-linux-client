@@ -10,7 +10,7 @@ use zeroize::Zeroize;
 use crate::crypto::dm_crypto::decrypt_dm_bytes;
 use crate::domain::ids::UserId;
 use crate::error::{CryptoError, ServiceError};
-use crate::proto::content_v1::{Content, DataMessage, GroupEncrypted, content};
+use crate::proto::content_v1::{Content, GroupEncrypted, content};
 
 /// First byte of a serialized `PlaintextContent` (libsignal's
 /// `PLAINTEXT_CONTEXT_IDENTIFIER_BYTE`). A decrypted sealed-sender "message"
@@ -571,20 +571,11 @@ impl MessageGateway {
                 "GATEWAY: Non-data/non-keyexchange content - returning MessageStored"
             );
             return Ok(SealedSenderResult::MessageStored);
-        } else {
-            tracing::warn!(
-                sender_id = %sender_id,
-                plaintext_len = plaintext.len(),
-                "GATEWAY: Failed to parse as Content proto, trying DataMessage fallback"
-            );
         }
 
-        // Fallback: Parse as raw DataMessage proto
-        let data_message = DataMessage::decode(plaintext).map_err(|e| {
-            ServiceError::Validation(format!("Failed to parse DataMessage: {}", e))
-        })?;
-
-        self.store_data_message(data_message, Some(sender_id)).await
+        // Every sender wraps its plaintext in `Content`; anything else is
+        // refused rather than guessed at.
+        Err(not_content(plaintext.len()))
     }
 
     /// Persist a channel member's profile key carried on their SKDM. Returns
@@ -703,12 +694,7 @@ impl MessageGateway {
             return Ok(SealedSenderResult::MessageStored);
         }
 
-        // Fallback: Parse as raw DataMessage proto
-        let data_message = DataMessage::decode(plaintext).map_err(|e| {
-            ServiceError::Validation(format!("Failed to parse DataMessage: {}", e))
-        })?;
-
-        self.store_data_message(data_message, Some(*sender_id)).await
+        Err(not_content(plaintext.len()))
     }
 
     /// Process an incoming DM message with layered decryption.
@@ -791,62 +777,9 @@ impl MessageGateway {
             return Ok((sender_id, dm_content));
         }
 
-        // Fallback: try as DataMessage proto (backwards compat)
-        if let Ok(data_message) = DataMessage::decode(plaintext.as_slice()) {
-            let expire_timer = Some(crate::services::disappearing::message_ttl(&data_message));
-            let timer_version = data_message.expire_timer_version;
-            let timer_update = crate::services::disappearing::is_timer_update(&data_message);
-            let profile_key = data_message.profile_key.filter(|k| k.len() == 32);
-            tracing::debug!(
-                sender_id = %sender_id,
-                text_len = data_message.body.len(),
-                has_profile_key = profile_key.is_some(),
-                "Decrypted DM (DataMessage proto fallback)"
-            );
-            // Zeroize plaintext before returning
-            plaintext.zeroize();
-            let thread_id = (!data_message.thread_id.is_empty()).then_some(data_message.thread_id);
-            return Ok((sender_id, DmContent::Text {
-                body: data_message.body,
-                timestamp: data_message.timestamp,
-                attachments: data_message.attachments,
-                profile_key,
-                quote: data_message.quote,
-                thread_id,
-                expire_timer,
-                timer_version,
-                timer_update,
-            }));
-        }
-
-        // Last fallback: raw UTF-8 text
-        // Clone to String first, then zeroize the original bytes
-        let raw_text = match std::str::from_utf8(&plaintext) {
-            Ok(s) => s.to_string(),
-            Err(e) => {
-                plaintext.zeroize();
-                return Err(ServiceError::Validation(format!("DM content is not valid UTF-8: {}", e)));
-            }
-        };
-        // Zeroize plaintext after extracting the text
+        let len = plaintext.len();
         plaintext.zeroize();
-
-        tracing::debug!(
-            sender_id = %sender_id,
-            text_len = raw_text.len(),
-            "Decrypted DM (raw text fallback)"
-        );
-        Ok((sender_id, DmContent::Text {
-            body: raw_text,
-            timestamp: 0,
-            attachments: vec![],
-            profile_key: None,
-            quote: None,
-            thread_id: None,
-            expire_timer: None,
-            timer_version: 0,
-            timer_update: false,
-        }))
+        Err(not_content(len))
     }
 
     /// Parse Content proto into DmContent.
@@ -1339,6 +1272,7 @@ mod thread_id_tests {
     //! thread reply received over that transport was filed into the main
     //! conversation instead of the open thread panel.
     use super::*;
+    use crate::proto::content_v1::DataMessage;
 
     /// An edit keeps its own timestamp (`EditMessage.data_message.timestamp`):
     /// edits order and date by it.
@@ -1423,4 +1357,11 @@ mod null_message_tests {
         let parsed = MessageGateway::parse_content(content).expect("NullMessage must not be an error");
         assert!(matches!(parsed, DmContent::NullMessage), "got {parsed:?}");
     }
+}
+
+/// A decrypted plaintext that is not a `Content` proto. Every sender wraps
+/// its plaintext in `Content` (the bare-`DataMessage` and raw-UTF-8 fallbacks
+/// that used to accept anything here were removed), so this is refused.
+fn not_content(len: usize) -> ServiceError {
+    ServiceError::Validation(format!("decrypted plaintext ({len} bytes) is not a Content proto"))
 }
