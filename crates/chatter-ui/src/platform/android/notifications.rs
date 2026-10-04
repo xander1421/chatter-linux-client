@@ -599,7 +599,7 @@ fn build_activity_intent<'a>(
 }
 
 fn get_jni_env() -> Result<JNIEnv<'static>, SystemError> {
-    let ctx = unsafe { ndk_context::android_context() };
+    let ctx = ndk_context::android_context();
     // JavaVM lives for the process lifetime, so leaking is safe.
     let vm = unsafe { jni::JavaVM::from_raw(ctx.vm().cast()) }
         .map_err(|e| SystemError::NotificationInit(format!("JavaVM: {}", e)))?;
@@ -611,7 +611,7 @@ fn get_jni_env() -> Result<JNIEnv<'static>, SystemError> {
 }
 
 fn get_app_context<'a>(env: &mut JNIEnv<'a>) -> Result<JObject<'a>, SystemError> {
-    let ctx = unsafe { ndk_context::android_context() };
+    let ctx = ndk_context::android_context();
     let activity = unsafe { JObject::from_raw(ctx.context().cast()) };
 
     let context = env.call_method(

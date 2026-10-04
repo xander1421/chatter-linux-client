@@ -16,7 +16,7 @@ static ACTIVITY: OnceLock<GlobalRef> = OnceLock::new();
 /// Attach the current thread and get a `'static` JNIEnv. The JavaVM lives for
 /// the whole process, so leaking it is safe (mirrors notifications.rs).
 pub fn jni_env() -> Result<JNIEnv<'static>, String> {
-    let ctx = unsafe { ndk_context::android_context() };
+    let ctx = ndk_context::android_context();
     let vm = unsafe { JavaVM::from_raw(ctx.vm().cast()) }.map_err(|e| e.to_string())?;
     let vm = Box::leak(Box::new(vm));
     vm.get_env()

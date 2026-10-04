@@ -403,6 +403,7 @@ pub fn update_sidebar_typing(window: &MainWindow, id: &str, is_typing: bool) {
 }
 
 /// Show incoming call modal with caller information.
+#[cfg(feature = "call-ui")]
 pub fn show_incoming_call(
     window: &MainWindow,
     call_id: &str,
@@ -446,6 +447,7 @@ pub fn show_incoming_call(
 }
 
 /// Hide incoming call modal.
+#[cfg(feature = "call-ui")]
 pub fn hide_incoming_call(window: &MainWindow) {
     window.set_incoming_call_visible(false);
 }

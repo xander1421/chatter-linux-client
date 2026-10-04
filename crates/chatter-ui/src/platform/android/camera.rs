@@ -56,7 +56,7 @@ fn call_void(method: &str, sig: &str, args: &[JValue]) -> Result<(), String> {
 /// JNI callback from `MainActivity` — one CameraX frame as tightly-packed I420.
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_com_chatter_client_MainActivity_nativeOnCameraFrame(
-    mut env: JNIEnv,
+    env: JNIEnv,
     _this: JObject,
     data: JByteArray,
     width: jint,

@@ -788,6 +788,7 @@ pub fn wire_settings_callbacks(window: &MainWindow, ui_ctx: &Arc<ChatterClient>)
 
     // Local AI enabled toggle
     let ui_ctx_ai = ui_ctx.clone();
+    #[cfg(feature = "jarvis")]
     let weak_ai_toggle = window.as_weak();
     window.on_settings_local_ai_enabled_changed(move |enabled: bool| {
         if let Err(e) = ui_ctx_ai.set_local_ai_enabled(enabled) {

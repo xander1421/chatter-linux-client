@@ -9,7 +9,9 @@ use std::sync::Arc;
 
 #[cfg(not(target_os = "android"))]
 use cpal::traits::StreamTrait;
+#[cfg(not(target_os = "android"))]
 use cpal::traits::{DeviceTrait, HostTrait};
+#[cfg(not(target_os = "android"))]
 use cpal::Device;
 #[cfg(not(target_os = "android"))]
 use cpal::{SampleRate, StreamConfig};

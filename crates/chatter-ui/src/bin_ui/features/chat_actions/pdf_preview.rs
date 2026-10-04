@@ -8,6 +8,7 @@ use chatter_core::media::{FilePicker, FilePickerConfig};
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 use chatter_core::system::ExternalOpener;
 
+#[cfg(feature = "desktop")]
 use slint::ComponentHandle;
 
 use crate::bin_ui::preview_state;

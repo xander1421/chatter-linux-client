@@ -729,6 +729,7 @@ impl CallSignalingService {
     /// anonymous room create/join that spends it links the two in time
     /// (NDSS'21 §VI-F). An empty pool fails the call with `NoTokens`; the
     /// refill loop tops it up on its own schedule.
+    #[cfg(feature = "media")]
     fn acquire_call_room_token(
         &self,
     ) -> Result<crate::mailbox::CallRoomToken, CallSignalingError> {

@@ -27,6 +27,8 @@ pub fn wire_code_preview_callbacks(window: &MainWindow) {
         if let Some(w) = weak_window.upgrade() {
             let content = w.get_code_preview_plain_text().to_string();
             let line_count = w.get_code_preview_line_count();
+            #[cfg(any(target_os = "android", target_os = "ios"))]
+            let _ = (content, line_count);
             #[cfg(not(any(target_os = "android", target_os = "ios")))]
             std::thread::spawn(move || {
                 if let Ok(mut clipboard) = arboard::Clipboard::new() {

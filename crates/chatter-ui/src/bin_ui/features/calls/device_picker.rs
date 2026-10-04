@@ -85,7 +85,7 @@ pub fn wire_device_picker(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
         let ui_ctx = ui_ctx.clone();
         move || {
             #[cfg(target_os = "android")]
-            { tracing::warn!("Screen source picker not available on Android"); return; }
+            { let _ = (&weak, &ui_ctx); tracing::warn!("Screen source picker not available on Android"); return; }
             #[cfg(not(target_os = "android"))]
             {
                 let weak = weak.clone();
@@ -189,7 +189,7 @@ pub fn wire_device_picker(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
         let weak = weak.clone();
         move |source_id| {
             #[cfg(target_os = "android")]
-            { let _ = source_id; let _ = &ui_ctx; tracing::warn!("Screen source selection not available on Android"); return; }
+            { let _ = (source_id, &ui_ctx, &weak); tracing::warn!("Screen source selection not available on Android"); return; }
             #[cfg(not(target_os = "android"))]
             {
                 let source_id_str = source_id.to_string();

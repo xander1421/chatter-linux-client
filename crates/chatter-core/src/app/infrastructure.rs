@@ -354,6 +354,7 @@ impl InfrastructureContainer {
         // On Android, use file-based passphrase storage (app sandbox protects it)
         #[cfg(target_os = "android")]
         {
+            let _ = keyring;
             let passphrase_file = directories.data_dir().join(".db_key");
             if let Ok(existing) = std::fs::read_to_string(&passphrase_file) {
                 let trimmed = existing.trim().to_string();

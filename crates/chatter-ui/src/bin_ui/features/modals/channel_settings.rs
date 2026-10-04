@@ -416,7 +416,10 @@ fn wire_pick_icon(window: &MainWindow, _ui_ctx: &Arc<ChatterClient>) {
             });
         }
         #[cfg(target_os = "android")]
-        tracing::warn!("File picker not supported on Android");
+        {
+            let _ = &weak_window;
+            tracing::warn!("File picker not supported on Android");
+        }
     });
 }
 

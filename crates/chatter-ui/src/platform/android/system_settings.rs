@@ -15,7 +15,7 @@ pub fn font_scale() -> f32 {
         let mut env = jni_env()?;
         // The Application context: it carries the same configuration and,
         // unlike the Activity, exists before `onCreate` registers one.
-        let ctx = unsafe { ndk_context::android_context() };
+        let ctx = ndk_context::android_context();
         let context = unsafe { jni::objects::JObject::from_raw(ctx.context().cast()) };
         let res = (|| -> Result<f32, jni::errors::Error> {
             let resources = env
