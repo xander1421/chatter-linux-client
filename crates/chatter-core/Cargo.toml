@@ -103,7 +103,7 @@ qrcode = "0.14"
 # ============================================================================
 # Database (SQLite + SQLCipher)
 # ============================================================================
-rusqlite = { version = "0.36", features = ["bundled-sqlcipher", "unlock_notify", "blob"] }
+rusqlite = { version = "0.36", features = ["bundled-sqlcipher", "unlock_notify"] }
 memmap2 = "0.9"
 
 # ============================================================================
@@ -312,7 +312,7 @@ libsignal-protocol = { git = "https://github.com/signalapp/libsignal", rev = "8f
 # Needed by tests/validated.rs V50/V51 to open the SQLCipher stores directly
 # and compare backup-restored rows byte-for-byte. Same version as the normal
 # dep so Cargo unifies the build.
-rusqlite = { version = "0.36", features = ["bundled-sqlcipher", "unlock_notify", "blob"] }
+rusqlite = { version = "0.36", features = ["bundled-sqlcipher", "unlock_notify"] }
 
 [[bench]]
 name = "attachment_decrypt"

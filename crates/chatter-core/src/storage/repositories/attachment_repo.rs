@@ -5,7 +5,6 @@
 use crate::domain::attachment::{Attachment, AttachmentStatus, ContentLocation, FileMetadata, Thumbnail};
 use crate::domain::ids::AttachmentId;
 use crate::error::StorageError;
-use crate::storage::blob_stream::BlobInfo;
 use crate::storage::serialization::{db_deserialize, db_serialize};
 use crate::storage::Database;
 use chrono::{DateTime, Utc};
@@ -136,9 +135,6 @@ impl AttachmentRepository {
     ///
     /// Returns the encrypted ciphertext blob for decryption in memory.
     /// Returns None if content is not stored in database (needs CDN download).
-    ///
-    /// **Note**: For large attachments (>1MB), prefer `get_encrypted_content_blob_info`
-    /// with streaming access to avoid loading the entire blob into memory.
     pub fn get_encrypted_content(&self, id: &AttachmentId) -> Result<Option<Vec<u8>>, StorageError> {
         let conn = self.db.read_connection()?;
         let mut stmt = conn.prepare(
@@ -155,53 +151,6 @@ impl AttachmentRepository {
             Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
             Err(e) => Err(StorageError::Database(e)),
         }
-    }
-
-    /// Get blob info for streaming access to encrypted content.
-    ///
-    /// Returns the SQLite rowid and size needed to open a streaming blob reader.
-    /// Use this instead of `get_encrypted_content` for large attachments to avoid
-    /// loading the entire blob into memory.
-    ///
-    /// # Example
-    ///
-    /// ```ignore
-    /// let info = repo.get_encrypted_content_blob_info(&id)?;
-    /// let stream = BlobStream::open(&conn, "attachments", "encrypted_content", info.rowid)?;
-    /// // Read in chunks...
-    /// ```
-    pub fn get_encrypted_content_blob_info(
-        &self,
-        id: &AttachmentId,
-    ) -> Result<Option<BlobInfo>, StorageError> {
-        let conn = self.db.read_connection()?;
-        let mut stmt = conn.prepare(
-            "SELECT rowid, length(encrypted_content)
-             FROM attachments
-             WHERE id = ?1 AND content_location = 1 AND encrypted_content IS NOT NULL",
-        )?;
-
-        let result = stmt.query_row(params![id.to_string()], |row| {
-            let rowid: i64 = row.get(0)?;
-            let size: i64 = row.get(1)?;
-            Ok(BlobInfo {
-                rowid,
-                size: size as usize,
-            })
-        });
-
-        match result {
-            Ok(info) => Ok(Some(info)),
-            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
-            Err(e) => Err(StorageError::Database(e)),
-        }
-    }
-
-    /// Get a reference to the underlying database for blob streaming.
-    ///
-    /// Used to open blob streams with `BlobStream::open()`.
-    pub fn database(&self) -> &Arc<Database> {
-        &self.db
     }
 
     /// Store encrypted content for an existing attachment.
