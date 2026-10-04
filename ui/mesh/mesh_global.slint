@@ -82,6 +82,11 @@ export global MeshGlobal {
     // The BLE radio is started. False on platforms with no radio, where the
     // mesh still runs over Nostr relays.
     in-out property <bool> radio-running: false;
+    // Why the radio is down, from core (`MeshStatus::radio_down`): "" while it
+    // runs, "bluetooth-off" when the adapter is unpowered, "unavailable" for
+    // anything else — the reason itself arrives in `notice`. Only
+    // "bluetooth-off" may be worded as Bluetooth being off.
+    in-out property <string> radio-down: "";
     // Peers the mesh can see right now. THE connectivity signal for this
     // feature — there is no connection dot, because there is no connection.
     in-out property <int> peer-count: 0;

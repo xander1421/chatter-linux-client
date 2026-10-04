@@ -244,6 +244,17 @@ pub fn mark_read(
     ui_ctx.mesh_mark_conversation_read(conversation)
 }
 
+/// `MeshGlobal.radio-down`: which of core's radio-down causes applies, as the
+/// token the Slint captions switch on. Core decides; this only spells it.
+pub fn radio_down_label(status: &MeshStatus) -> &'static str {
+    use chatter_core::services::mesh::RadioDown;
+    match status.radio_down() {
+        None => "",
+        Some(RadioDown::BluetoothOff) => "bluetooth-off",
+        Some(RadioDown::Unavailable) => "unavailable",
+    }
+}
+
 /// How a mesh message's author should be named.
 ///
 /// The generic `message_sender_display_name` cannot answer this — a mesh peer

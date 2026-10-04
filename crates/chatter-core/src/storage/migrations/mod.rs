@@ -80,6 +80,7 @@ mod v079_message_deletion_token;
 mod v080_pending_reactions_and_pins;
 mod v081_dm_mailbox_encryption_key;
 mod v082_verified_channel_membership;
+mod v083_mesh_sender_names;
 
 use crate::error::StorageError;
 use chrono::Utc;
@@ -163,6 +164,7 @@ pub use v079_message_deletion_token::V079MessageDeletionToken;
 pub use v080_pending_reactions_and_pins::V080PendingReactionsAndPins;
 pub use v081_dm_mailbox_encryption_key::V081DmMailboxEncryptionKey;
 pub use v082_verified_channel_membership::V082VerifiedChannelMembership;
+pub use v083_mesh_sender_names::V083MeshSenderNames;
 
 /// Trait for database migrations.
 ///
@@ -371,4 +373,5 @@ pub fn default_migrations() -> MigrationRunner {
         .register(V080PendingReactionsAndPins)
         .register(V081DmMailboxEncryptionKey)
         .register(V082VerifiedChannelMembership)
+        .register(V083MeshSenderNames)
 }

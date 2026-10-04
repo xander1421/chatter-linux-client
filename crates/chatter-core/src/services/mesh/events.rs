@@ -130,6 +130,47 @@ pub struct MeshStatus {
     pub connected_relays: usize,
 }
 
+/// Why the radio is not running, as far as the mesh can tell.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RadioDown {
+    /// The adapter reported itself unpowered: the user can fix this.
+    BluetoothOff,
+    /// Bluetooth is not known to be off, yet the radio is down — it would not
+    /// start, or the mesh refused to start it (see the `Degraded` reason). Saying
+    /// "Bluetooth off" here sends the user to a switch that is already on.
+    Unavailable,
+}
+
+impl MeshStatus {
+    /// `None` while the radio runs.
+    #[must_use]
+    pub fn radio_down(&self) -> Option<RadioDown> {
+        if self.radio_running {
+            None
+        } else if !self.adapter_powered {
+            Some(RadioDown::BluetoothOff)
+        } else {
+            Some(RadioDown::Unavailable)
+        }
+    }
+}
+
+#[cfg(test)]
+mod radio_down_tests {
+    use super::*;
+
+    #[test]
+    fn only_an_unpowered_adapter_reads_as_bluetooth_off() {
+        let up = MeshStatus { radio_running: true, adapter_powered: true, ..Default::default() };
+        assert_eq!(up.radio_down(), None);
+        let off = MeshStatus { radio_running: false, adapter_powered: false, ..Default::default() };
+        assert_eq!(off.radio_down(), Some(RadioDown::BluetoothOff));
+        // The S9 case: Bluetooth on, radio refused to start over unreadable pins.
+        let refused = MeshStatus { radio_running: false, adapter_powered: true, ..Default::default() };
+        assert_eq!(refused.radio_down(), Some(RadioDown::Unavailable));
+    }
+}
+
 /// Everything the service surfaces.
 #[derive(Clone, Debug, PartialEq)]
 pub enum MeshEvent {

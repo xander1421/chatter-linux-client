@@ -127,7 +127,8 @@ export component ChatHeader inherits GlassSurface {
             : "No server, no internet";
     property <string> mesh-peers:
         !MeshGlobal.mesh-on ? "radio stopped"
-      : root.mesh-radio-down ? "Bluetooth off"
+      : root.mesh-radio-down
+            ? (MeshGlobal.radio-down == "bluetooth-off" ? "Bluetooth off" : "mesh unavailable")
       : MeshGlobal.peer-count == 0 ? "none nearby"
       : MeshGlobal.peer-count == 1 ? "1 nearby"
       : MeshGlobal.peer-count + " nearby";

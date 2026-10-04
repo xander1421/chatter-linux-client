@@ -255,7 +255,7 @@ pub fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                             let global = w.global::<MeshGlobal>();
                             global.set_mesh_on(!wanted);
                             global.set_notice(
-                                format!("Could not turn mesh {}. Check Bluetooth and permissions.",
+                                format!("Could not turn mesh {}: {error}",
                                     if wanted { "on" } else { "off" }).into(),
                             );
                         }
@@ -345,6 +345,7 @@ fn apply_status(
     // dying. See `MeshService::is_running`.
     global.set_running(core_api::service_running(ui_ctx));
     global.set_radio_running(status.radio_running);
+    global.set_radio_down(core_api::radio_down_label(&status).into());
     global.set_peer_count(i32::try_from(status.connected_peers).unwrap_or(i32::MAX));
     global.set_relay_count(i32::try_from(status.connected_relays).unwrap_or(i32::MAX));
 
@@ -434,7 +435,10 @@ fn handle_event(event: MeshEvent, weak: &slint::Weak<MainWindow>, ui_ctx: &Arc<C
             tracing::warn!(%reason, "Mesh transport unavailable");
             run_ui!(weak, |w| w
                 .global::<MeshGlobal>()
-                .set_notice("Mesh connection unavailable. Check Bluetooth and permissions.".into()));
+                // Core's own reason. A generic "check Bluetooth" sent the user to
+                // a switch that was already on while the mesh had refused to
+                // start over its own stored state.
+                .set_notice(format!("Mesh: {reason}").into()));
         }
     }
 }

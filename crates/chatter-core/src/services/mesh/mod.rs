@@ -84,7 +84,7 @@ use crate::storage::repositories::MessageRepository;
 
 pub use config::MeshConfig;
 pub use error::MeshError;
-pub use events::{MeshDelivery, MeshEvent, MeshMessage, MeshPeer, MeshStatus};
+pub use events::{MeshDelivery, MeshEvent, MeshMessage, MeshPeer, MeshStatus, RadioDown};
 pub use mapping::MeshConversation;
 pub use timeline::{MeshEvents, MeshTimeline};
 
@@ -442,10 +442,13 @@ impl MeshService {
     /// is O(peers) per lookup, over a set bounded by Bluetooth range and by the
     /// geohash cells joined — tens, not thousands.
     ///
-    /// `None` means exactly what it says: no peer we currently know hashes to
-    /// this id. A peer that has gone out of range and was never named is not
-    /// something this can invent a name for, and callers must render that case
-    /// rather than let a UUID through.
+    /// A peer that is no longer known falls back to the nickname it last used,
+    /// remembered when its message was stored. `None` means no peer we know
+    /// hashes to this id and none ever named itself to us; callers must render
+    /// that case rather than let a UUID through.
+    ///
+    /// Either way the name is self-declared — what the peer called itself, not
+    /// a verified identity.
     #[must_use]
     pub fn sender_display_name(&self, sender: &UserId) -> Option<String> {
         self.state
@@ -454,6 +457,7 @@ impl MeshService {
             .find(|p| mapping::peer_user_id(&p.peer) == *sender)
             .map(|p| p.nickname)
             .filter(|n| !n.is_empty())
+            .or_else(|| self.timeline.remembered_sender_name(sender))
     }
 
     /// Transport status across both halves.

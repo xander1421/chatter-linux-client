@@ -37,7 +37,7 @@ use crate::crypto::attachment_crypto::AttachmentCrypto;
 use crate::domain::attachment::{
     Attachment, AttachmentStatus, ContentLocation, FileMetadata,
 };
-use crate::domain::ids::{AttachmentId, ChannelId};
+use crate::domain::ids::{AttachmentId, ChannelId, UserId};
 use crate::domain::message::{ConversationType, Message};
 use crate::domain::UnifiedConversation;
 use crate::error::StorageError;
@@ -251,7 +251,29 @@ impl MeshTimeline {
         let nickname = (!event.is_local).then(|| event.nickname.as_str());
         self.register(&event.conversation, nickname);
 
+        // And names its sender for as long as the row exists, not just while
+        // the peer is in range — otherwise history reads "Unknown peer".
+        if !event.is_local
+            && let Some(sender) = event.message.sender_id.as_ref()
+            && let Err(error) = self.directory.remember_sender(
+                &sender.to_string(),
+                event.sender.as_str(),
+                &event.nickname,
+            )
+        {
+            tracing::warn!(%error, "mesh: could not remember a sender's nickname");
+        }
+
         Ok(stored)
+    }
+
+    /// The nickname a sender last used, as remembered by [`record`](Self::record).
+    pub fn remembered_sender_name(&self, sender: &UserId) -> Option<String> {
+        self.directory
+            .sender_name(&sender.to_string())
+            .inspect_err(|error| tracing::warn!(%error, "mesh: could not read a sender's nickname"))
+            .ok()
+            .flatten()
     }
 
     /// Whether a message with this wire ID is already on disk.
@@ -1032,6 +1054,32 @@ mod tests {
             2,
             "two wire IDs are two messages, however close together they were sent"
         );
+    }
+
+    #[test]
+    fn a_room_sender_is_still_named_after_a_restart() {
+        // The S9 report: bitchat's public message rendered as "Unknown peer"
+        // because only a peer still in range could be named, and the stored row
+        // keeps nothing but a hash of the peer ID.
+        use crate::storage::Database;
+
+        let dir = tempfile::tempdir().expect("temp dir");
+        let db = Arc::new(Database::open(&dir.path().join("names.db"), "testpass").expect("open"));
+        db.run_migrations().expect("migrations");
+        let messages = Arc::new(MessageRepository::new(db.clone()));
+        let directory = Arc::new(MeshConversationRepository::new(db.clone()));
+        let deliveries = Arc::new(MeshDeliveryRepository::new(db.clone()));
+        let attachments = Arc::new(AttachmentRepository::new(db.clone()));
+        let sender = peer("4f74eb3eb7441921");
+        let event = inbound("w1", MeshConversation::Room, &sender, "anon7431", "hi", 1_000);
+        let sender_id = event.message.sender_id.clone().expect("sender");
+
+        MeshTimeline::new(messages.clone(), directory.clone(), deliveries.clone(), attachments.clone())
+            .record(&event)
+            .expect("record");
+
+        let restarted = MeshTimeline::new(messages, directory, deliveries, attachments);
+        assert_eq!(restarted.remembered_sender_name(&sender_id).as_deref(), Some("anon7431"));
     }
 
     #[test]

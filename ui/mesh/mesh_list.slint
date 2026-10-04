@@ -138,7 +138,8 @@ export component MeshList inherits Rectangle {
                 property <bool> radio-down: MeshGlobal.mesh-on && !MeshGlobal.radio-running;
                 Text {
                     text: !MeshGlobal.mesh-on ? "mesh off"
-                        : caption.radio-down ? "Bluetooth off"
+                        : caption.radio-down
+                            ? (MeshGlobal.radio-down == "bluetooth-off" ? "Bluetooth off" : "mesh unavailable")
                         : MeshGlobal.peer-count == 0 ? "none nearby"
                         : MeshGlobal.peer-count == 1 ? "1 nearby"
                         : MeshGlobal.peer-count + " nearby";

@@ -100,6 +100,8 @@ export component ConnectionBanner inherits Rectangle {
     // case where the answer is "nothing" and saying anything else would be a
     // lie. Then Bluetooth off, which is actionable. Then the ordinary states,
     // where the peer count is the whole signal and zero is normal.
+    property <string> radio-down-clause:
+        MeshGlobal.radio-down == "bluetooth-off" ? "Bluetooth is off" : "the Bluetooth radio is unavailable";
     property <string> mesh-line:
         !MeshGlobal.running
             ? "The mesh is not running either, so there is nothing to fall back to."
@@ -108,10 +110,10 @@ export component ConnectionBanner inherits Rectangle {
             // a cell rides Nostr, which is servers over the internet, so this is
             // the one mesh path that is not actually infrastructure-free.
             ? (MeshGlobal.relay-count == 0
-                ? "Mesh is on, but Bluetooth is off and no relay is connected — nothing can carry a message right now."
+                ? "Mesh is on, but " + root.radio-down-clause + " and no relay is connected — nothing can carry a message right now."
               : MeshGlobal.relay-count == 1
-                ? "Mesh is on but Bluetooth is off. Only the 1 connected relay can carry, and relays need internet."
-                : "Mesh is on but Bluetooth is off. Only the " + MeshGlobal.relay-count + " connected relays can carry, and relays need internet.")
+                ? "Mesh is on but " + root.radio-down-clause + ". Only the 1 connected relay can carry, and relays need internet."
+                : "Mesh is on but " + root.radio-down-clause + ". Only the " + MeshGlobal.relay-count + " connected relays can carry, and relays need internet.")
       : MeshGlobal.peer-count == 0
             ? "Mesh is running over Bluetooth. Nobody is in range yet; what you send waits to be carried."
       : MeshGlobal.peer-count == 1
