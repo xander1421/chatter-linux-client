@@ -65,17 +65,34 @@ pub struct AppContext {
 }
 
 impl AppContext {
-    /// Create a new AppContext, initializing all subsystems.
+    /// Create a new AppContext, initializing all subsystems, against
+    /// `CHATTER_SERVER_URL` or the built-in default server.
     pub fn new(data_dir: Option<String>) -> Result<Self, ContextError> {
-        Self::new_with_sink(data_dir, None)
+        Self::with_config_and_sink(None, data_dir, None)
     }
 
-    /// Create a new AppContext with a caller-supplied notification sink.
-    pub fn new_with_sink(
+    /// Create a new AppContext with optional overrides.
+    ///
+    /// If `server_url` is `Some(url)`, that URL is used instead of the
+    /// `CHATTER_SERVER_URL` environment variable or the built-in default.
+    /// If `data_dir` is `Some(path)`, that path is used as the base directory
+    /// for config, data, and cache (required on Android).
+    pub fn with_config(server_url: Option<String>, data_dir: Option<String>) -> Result<Self, ContextError> {
+        Self::with_config_and_sink(server_url, data_dir, None)
+    }
+
+    /// Like `with_config` but allows injecting a platform notification sink.
+    ///
+    /// The URL is handed to the network pool explicitly: it used to travel
+    /// through a process-wide `set_var`, which raced between clients built
+    /// on different threads (parallel tests) and is unsound once threads run.
+    pub fn with_config_and_sink(
+        server_url: Option<String>,
         data_dir: Option<String>,
         notification_sink: Option<Arc<dyn NotificationSink>>,
     ) -> Result<Self, ContextError> {
-        let infrastructure = Arc::new(InfrastructureContainer::new(data_dir)?);
+        let server_url = super::infrastructure::resolve_server_url(server_url);
+        let infrastructure = Arc::new(InfrastructureContainer::new(data_dir, &server_url)?);
 
         // Create shared OnceLocks for post-boot services (shared with CoreServices)
         let device_inbox_provider = Arc::new(std::sync::OnceLock::new());
@@ -104,29 +121,6 @@ impl AppContext {
             #[cfg(feature = "media")]
             call_service,
         })
-    }
-
-    /// Create a new AppContext with optional overrides.
-    ///
-    /// If `server_url` is `Some(url)`, that URL is used instead of the
-    /// `CHATTER_SERVER_URL` environment variable or the built-in default.
-    /// If `data_dir` is `Some(path)`, that path is used as the base directory
-    /// for config, data, and cache (required on Android).
-    pub fn with_config(server_url: Option<String>, data_dir: Option<String>) -> Result<Self, ContextError> {
-        Self::with_config_and_sink(server_url, data_dir, None)
-    }
-
-    /// Like `with_config` but allows injecting a platform notification sink.
-    pub fn with_config_and_sink(
-        server_url: Option<String>,
-        data_dir: Option<String>,
-        notification_sink: Option<Arc<dyn NotificationSink>>,
-    ) -> Result<Self, ContextError> {
-        if let Some(url) = server_url {
-            // SAFETY: Called before any threads are spawned (single-threaded init).
-            unsafe { std::env::set_var(super::infrastructure::SERVER_URL_ENV, &url); }
-        }
-        Self::new_with_sink(data_dir, notification_sink)
     }
 
     /// Get the UI context - the primary API for UI code.
@@ -278,5 +272,28 @@ impl AppContext {
         self.services.channel_bootstrap_service.start(
             self.core_services.event_bus.subscribe_domain()
         )
+    }
+}
+
+#[cfg(test)]
+mod server_url_tests {
+    use super::*;
+
+    /// Building against an explicit URL leaves the process environment
+    /// alone: the URL reaches the pool as an argument (it used to be
+    /// `set_var`'d, so the next client built anywhere in the process
+    /// silently inherited it).
+    #[tokio::test]
+    async fn an_explicit_server_url_is_not_written_into_the_environment() {
+        static MOCK_KEYRING: std::sync::Once = std::sync::Once::new();
+        MOCK_KEYRING.call_once(|| {
+            keyring::set_default_credential_builder(keyring::mock::default_credential_builder());
+        });
+        let dir = tempfile::tempdir().unwrap();
+        let url = "https://explicit.invalid:1";
+        AppContext::with_config(Some(url.into()), Some(dir.path().to_str().unwrap().into()))
+            .expect("context");
+        assert_ne!(std::env::var("CHATTER_SERVER_URL").ok().as_deref(), Some(url));
+        assert_eq!(super::super::infrastructure::resolve_server_url(Some(url.into())), url);
     }
 }

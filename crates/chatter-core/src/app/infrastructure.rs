@@ -34,7 +34,16 @@ use super::ContextError;
 pub(crate) const DEFAULT_SERVER_URL: &str = "https://localhost:50051";
 
 /// Environment variable for server URL.
-pub(crate) const SERVER_URL_ENV: &str = "CHATTER_SERVER_URL";
+const SERVER_URL_ENV: &str = "CHATTER_SERVER_URL";
+
+/// The server URL to use: `explicit` if given, else `CHATTER_SERVER_URL`,
+/// else [`DEFAULT_SERVER_URL`]. Only reads the environment; the chosen URL is
+/// then passed down explicitly, never written back into it.
+pub(crate) fn resolve_server_url(explicit: Option<String>) -> String {
+    explicit
+        .or_else(|| env::var(SERVER_URL_ENV).ok())
+        .unwrap_or_else(|| DEFAULT_SERVER_URL.to_string())
+}
 
 
 /// Infrastructure container holding low-level dependencies.
@@ -138,7 +147,7 @@ impl InfrastructureContainer {
     /// # Errors
     ///
     /// Returns `ContextError` if any initialization step fails.
-    pub fn new(data_dir: Option<String>) -> Result<Self, ContextError> {
+    pub fn new(data_dir: Option<String>, server_url: &str) -> Result<Self, ContextError> {
         // 1. System initialization
         let directories = match data_dir {
             Some(dir) => Directories::with_base_dir(std::path::PathBuf::from(dir))?,
@@ -271,8 +280,7 @@ impl InfrastructureContainer {
         // A channel-wide 30s timeout cancels those streams with "Timeout
         // expired"; HTTP/2 keepalive (30s/10s, while-idle) covers dead-peer
         // detection. Add a per-call `Request::set_timeout` if a unary ever hangs.
-        let server_url = env::var(SERVER_URL_ENV).unwrap_or_else(|_| DEFAULT_SERVER_URL.to_string());
-        let grpc_pool = Arc::new(GrpcClientPool::new_for_streaming(&server_url)?);
+        let grpc_pool = Arc::new(GrpcClientPool::new_for_streaming(server_url)?);
         let auth_interceptor = grpc_pool.auth_clone();
 
         // The build's pinned .onion (config::PINNED_ONION_ADDR), so anon mode can
@@ -438,10 +446,5 @@ impl InfrastructureContainer {
 
             Ok(passphrase)
         }
-    }
-
-    /// Get the server URL being used.
-    pub fn server_url(&self) -> String {
-        env::var(SERVER_URL_ENV).unwrap_or_else(|_| DEFAULT_SERVER_URL.to_string())
     }
 }

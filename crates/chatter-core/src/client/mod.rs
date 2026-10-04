@@ -127,6 +127,7 @@ impl ClientBuilder {
     }
 
     /// Set the server URL. Falls back to `CHATTER_SERVER_URL` env var, then built-in default.
+    /// It is passed to the network pool explicitly, never via the environment.
     pub fn server_url(mut self, url: impl Into<String>) -> Self {
         self.server_url = Some(url.into());
         self

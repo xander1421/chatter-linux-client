@@ -231,7 +231,7 @@ fn test_08_infrastructure_container() {
     use chatter_core::app::InfrastructureContainer;
 
     let (result, duration) = with_timeout("InfrastructureContainer::new", || {
-        InfrastructureContainer::new(None)
+        InfrastructureContainer::new(None, "https://localhost:50051")
     }).expect("InfrastructureContainer::new should not hang");
 
     // Clean up
@@ -445,7 +445,7 @@ fn test_13_infrastructure_real_path() {
 
         println!("  [thread] Creating InfrastructureContainer...");
         let start = std::time::Instant::now();
-        let result = InfrastructureContainer::new(None);
+        let result = InfrastructureContainer::new(None, "https://localhost:50051");
         let elapsed = start.elapsed();
         println!("  [thread] Completed in {:?}", elapsed);
         let _ = tx.send((result.is_ok(), elapsed));
