@@ -520,7 +520,8 @@ pub fn screen_share_frame_id(participant_id: &str, is_screen_share: bool) -> Str
 /// Convert I420 (YUV 4:2:0) buffer to RGBA8 (memory byte order R, G, B, A).
 ///
 /// Uses libwebrtc's vendored libyuv (SIMD-accelerated on x86_64/ARMv8).
-/// Verified by `examples/yuv_check.rs`: libyuv names destinations by the
+/// Verified by a one-off example (`examples/yuv_check.rs`, since removed; see
+/// `git log -- crates/chatter-core/examples`): libyuv names destinations by the
 /// little-endian 32-bit word value, so the in-memory byte order is the
 /// reverse of the function name. `i420_to_abgr` writes bytes in
 /// R, G, B, A order — exactly what Slint's `Rgba8Pixel` consumes.
@@ -529,7 +530,8 @@ pub fn screen_share_frame_id(participant_id: &str, is_screen_share: bool) -> Str
 /// the per-chunk slice splitting + rayon dispatch overhead beat the gain,
 /// pushing 5120×1440 convert from 5ms to 17–53ms. Single-thread libyuv
 /// already lands ~0.8 ms in release / ~5 ms in debug at 5120×1440 — both
-/// under one 60-fps frame budget. See `examples/yuv_threaded_bench.rs`.
+/// under one 60-fps frame budget (measured by `examples/yuv_threaded_bench.rs`,
+/// since removed; see `git log -- crates/chatter-core/examples`).
 ///
 /// Writes into a caller-provided destination of exactly `width*height*4` bytes
 /// (so the receive loop can recycle a pooled buffer instead of allocating).

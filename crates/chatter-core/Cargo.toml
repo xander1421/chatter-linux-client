@@ -168,8 +168,7 @@ libc = "0.2"
 # screen picker never appears.
 livekit = { version = "0.7.52", default-features = false, features = ["tokio", "rustls-tls-webpki-roots", "glib-main-loop"], optional = true }
 # livekit-api dropped: the app never used it (server mints LiveKit tokens), and
-# its published version skews against livekit 0.7.52's livekit-protocol. The one
-# consumer (examples/screenshare_wire_bench) hand-mints its JWT via hmac+sha2.
+# its published version skews against livekit 0.7.52's livekit-protocol.
 # lazy_static removed — migrated to std::sync::LazyLock
 
 # ============================================================================

@@ -415,7 +415,8 @@ impl RoomManager {
 
         // Screen-share track tuned for high-res content (e.g. 5120×1440
         // ultrawides). Settings validated by a live end-to-end wire sweep
-        // (examples/screenshare_wire_bench.rs). The headline result at 5120×1440:
+        // (examples/screenshare_wire_bench.rs, since removed; see
+        // `git log -- crates/chatter-core/examples`). The headline result at 5120×1440:
         //   default (MaintainResolution)      →  30 fps, 149 ms latency
         //   THIS (Disabled + H265 + NVENC)    → 104 fps,  30-45 ms, PSNR ~44
         // i.e. 3.5× the framerate at FULL native resolution, visually lossless.
