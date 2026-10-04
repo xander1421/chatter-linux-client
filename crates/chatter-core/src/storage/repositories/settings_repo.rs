@@ -21,7 +21,6 @@ pub mod keys {
     /// Device-local chrome effects preference, enabled by default.
     pub const GLASS_EFFECTS: &str = "app.glass_effects";
     pub const NOTIFICATION_SOUND: &str = "app.notification_sound";
-    pub const NOTIFICATION_ENABLED: &str = "app.notification_enabled";
     /// Opaque ntfy push topic issued by the server in AuthResponse. The client
     /// subscribes to this instead of deriving `chatter_{user_id}` locally
     /// (which leaked the user_id and didn't match the server's publish topic).
@@ -33,9 +32,6 @@ pub mod keys {
     /// Manual presence override: "auto" | "online" | "away" | "dnd" | "invisible".
     /// "auto" (default) = start online, idle detector may set away.
     pub const PRESENCE_MODE: &str = "presence.mode";
-
-    // Sync settings
-    pub const LAST_SYNC_TIMESTAMP: &str = "sync.last_timestamp";
 
     // Auth settings
     pub const CURRENT_USER_ID: &str = "auth.current_user_id";
@@ -103,12 +99,7 @@ pub mod keys {
     pub const PIN_FINGERPRINT: &str = "crypto.pin_fingerprint";
 
     // UI settings
-    pub const WINDOW_WIDTH: &str = "ui.window_width";
-    pub const WINDOW_HEIGHT: &str = "ui.window_height";
-    pub const WINDOW_MAXIMIZED: &str = "ui.window_maximized";
-    pub const SIDEBAR_WIDTH: &str = "ui.sidebar_width";
     pub const SIDEBAR_COLLAPSED: &str = "ui.sidebar_collapsed";
-    pub const FONT_SIZE: &str = "ui.font_size";
     pub const SEARCH_SHORTCUT: &str = "ui.search_shortcut";
 
     /// Whether the user enabled the BLE mesh. Absent means off; radio use is opt-in.
