@@ -635,7 +635,7 @@ impl MessageService {
         let sealed_message = SealedSenderMessage {
             sealed_body,
             server_key_id: self.signal_service.get_server_key_id(),
-            timestamp: crate::util::time::TimestampNanos::now().as_u64(),
+            timestamp: crate::util::time::TimestampNanos::now_anonymized().as_u64(),
         };
 
         let peer_id_str = peer_id.to_string();
@@ -906,7 +906,7 @@ impl MessageService {
         uak: Option<&[u8; 16]>,
         device_set: Vec<DestinationDevice>,
     ) -> Result<DepositOutcome, crate::error::NetworkError> {
-        let timestamp = crate::util::time::TimestampNanos::now().as_u64();
+        let timestamp = crate::util::time::TimestampNanos::now_anonymized().as_u64();
         let server_key_id = self.signal_service.get_server_key_id();
         let mut anon_client = uak.map(|_| self.grpc_pool.anonymous_message_client());
 

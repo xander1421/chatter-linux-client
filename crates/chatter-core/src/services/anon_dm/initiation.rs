@@ -230,17 +230,11 @@ impl AnonDmService {
         // sealed sender here - we're using raw ECIES + anonymous credential
         let mut anon_client = self.grpc_pool.anonymous_message_client();
 
-        // Use a custom envelope type for ECIES messages
-        // Set timestamp to current time in nanoseconds for server validation
-        let timestamp_nanos = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .expect("Time should be after Unix epoch")
-            .as_nanos() as u64;
-
         // ECIES_INIT requires server_key_id == 0 (server rejects non-zero, see sealed_sender.go:66-68)
         let sealed_message = SealedSenderMessage {
             sealed_body,
-            timestamp: timestamp_nanos,
+            // Plaintext to the server: coarsened (see now_anonymized).
+            timestamp: crate::util::time::TimestampNanos::now_anonymized().as_u64(),
             server_key_id: 0,
         };
 

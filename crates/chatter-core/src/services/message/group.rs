@@ -1584,7 +1584,7 @@ impl MessageService {
         let sealed_message = crate::proto::chat_v1::SealedSenderMessage {
             sealed_body,
             server_key_id: self.signal_service.get_server_key_id(),
-            timestamp: TimestampNanos::now().as_u64(),
+            timestamp: TimestampNanos::now_anonymized().as_u64(),
         };
         let peer = peer_id.to_string();
         let uak = self.sealed_access_key(&peer, false);

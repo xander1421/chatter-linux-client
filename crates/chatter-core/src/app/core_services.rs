@@ -866,7 +866,7 @@ async fn announce_rotated_group_mailbox(
             let sealed = SealedSenderMessage {
                 sealed_body: ciphertext,
                 server_key_id: signal_service.get_server_key_id(),
-                timestamp: TimestampNanos::now().as_u64(),
+                timestamp: TimestampNanos::now_anonymized().as_u64(),
             };
             match anon_messages
                 .send_sealed_message_with_uak(

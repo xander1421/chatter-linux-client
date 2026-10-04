@@ -1201,7 +1201,7 @@ impl MessageService {
                                     chat_v1::SealedSenderMessage {
                                         sealed_body: ciphertext,
                                         server_key_id: self.signal_service.get_server_key_id(),
-                                        timestamp: crate::util::time::TimestampNanos::now().as_u64(),
+                                        timestamp: crate::util::time::TimestampNanos::now_anonymized().as_u64(),
                                     }
                                 )),
                             };

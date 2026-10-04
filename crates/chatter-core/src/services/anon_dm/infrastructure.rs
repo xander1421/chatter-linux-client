@@ -42,14 +42,10 @@ impl AnonDmService {
             .ok()
             .flatten()
             .unwrap_or(1);
-        let timestamp = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .expect("Time should be after Unix epoch")
-            .as_nanos() as u64;
         let sealed_message = SealedSenderMessage {
             sealed_body: ciphertext,
             server_key_id,
-            timestamp,
+            timestamp: crate::util::time::TimestampNanos::now_anonymized().as_u64(),
         };
 
         // Send to device inbox using ANONYMOUS client (no auth headers)

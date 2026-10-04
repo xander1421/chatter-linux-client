@@ -416,7 +416,7 @@ impl MessageService {
             let sealed_msg = SealedSenderMessage {
                 sealed_body: sealed_ciphertext,
                 server_key_id: self.signal_service.get_server_key_id(),
-                timestamp: TimestampNanos::now().as_u64(),
+                timestamp: TimestampNanos::now_anonymized().as_u64(),
             };
 
             match grpc_pool
