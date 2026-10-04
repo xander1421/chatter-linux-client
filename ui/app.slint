@@ -339,6 +339,9 @@ export component App inherits Rectangle {
     in-out property <length> message-scroll-position: 0px;  // Scroll position for message list
     in-out property <int> message-first-visible-row: 0;  // See MessageList.first-visible-row
     in-out property <int> message-last-visible-row: -1;
+    // ChatLayout.list-scrolling, mirrored here for the SelectionBar, which sits
+    // over the message list but is not inside ChatLayout.
+    property <bool> chat-list-scrolling: false;
     in-out property <bool> is-at-bottom: true;  // True when message list is scrolled to bottom
     // Unread boundary from core — see MessageList.
     in-out property <int> unread-index: -1;
@@ -1639,6 +1642,7 @@ export component App inherits Rectangle {
                         && !root.active-call-fullscreen
                         && !(root.is-small-screen && root.thread-panel-visible): SelectionBar {
                         show: true;
+                        backdrop-paused: root.chat-list-scrolling;
                         touch: root.is-mobile-platform;
                         count: root.selected-message-count;
                         cleared => {
@@ -1700,6 +1704,10 @@ export component App inherits Rectangle {
                     message-scroll-position <=> root.message-scroll-position;
                     message-first-visible-row <=> root.message-first-visible-row;
                     message-last-visible-row <=> root.message-last-visible-row;
+                    // A new layout's list starts at rest; `changed` does not
+                    // fire for that first value.
+                    init => { root.chat-list-scrolling = false; }
+                    changed list-scrolling => { root.chat-list-scrolling = self.list-scrolling; }
                     is-at-bottom <=> root.is-at-bottom;
                     unread-index <=> root.unread-index;
                     unread-count <=> root.unread-count;

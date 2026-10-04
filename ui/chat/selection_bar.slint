@@ -52,6 +52,7 @@ export component SelectionBar inherits GlassSurface {
 
         // Exit selection mode. Mirrors what Android Back does.
         HeaderButton {
+            backdrop-paused: root.backdrop-paused;
             touch: root.touch;
             icon: Icons.x;
             label: "Exit selection";
@@ -69,6 +70,7 @@ export component SelectionBar inherits GlassSurface {
         }
 
         HeaderButton {
+            backdrop-paused: root.backdrop-paused;
             touch: root.touch;
             icon: Icons.copy;
             label: "Copy selected";
@@ -77,6 +79,7 @@ export component SelectionBar inherits GlassSurface {
         }
 
         HeaderButton {
+            backdrop-paused: root.backdrop-paused;
             touch: root.touch;
             icon: Icons.send;
             label: "Forward selected";
@@ -85,6 +88,7 @@ export component SelectionBar inherits GlassSurface {
         }
 
         HeaderButton {
+            backdrop-paused: root.backdrop-paused;
             touch: root.touch;
             icon: Icons.trash;
             label: "Delete selected";

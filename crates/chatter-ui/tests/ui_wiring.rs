@@ -4681,6 +4681,23 @@ fn chrome_over_the_list_pauses_backdrop_while_scrolling() {
         header.matches("backdrop-paused: root.backdrop-paused;").count(),
         "every header button samples the header's backdrop too"
     );
+    // The selection bar replaces the header over the same list, from App.
+    assert!(layout.contains("out property <bool> list-scrolling: message-list.scrolling;"));
+    let app = include_str!("../../../ui/app.slint");
+    assert!(app.contains("changed list-scrolling => { root.chat-list-scrolling = self.list-scrolling; }"));
+    assert!(app.contains("backdrop-paused: root.chat-list-scrolling;"), "selection bar");
+    let bar = include_str!("../../../ui/chat/selection_bar.slint");
+    assert_eq!(
+        bar.matches("HeaderButton {").count(),
+        bar.matches("backdrop-paused: root.backdrop-paused;").count(),
+        "every selection-bar button pauses with the bar"
+    );
+    let composer = include_str!("../../../ui/chat/message_composer.slint");
+    assert_eq!(
+        composer.matches("HeaderButton {").count(),
+        composer.matches("backdrop-paused: root.backdrop-paused;").count(),
+        "the voice-record buttons pause with the composer"
+    );
 }
 
 #[test]
