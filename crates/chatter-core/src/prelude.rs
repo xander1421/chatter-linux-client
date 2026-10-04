@@ -6,7 +6,6 @@
 
 // Client
 pub use crate::client::{ChatterClient, ClientBuilder, ClientError, SendOptions, UploadedAttachments};
-pub use crate::client::channels::ChannelBuilder;
 pub use crate::services::auth_service::LoginResult;
 
 // Crypto-adjacent helpers commonly needed by callers (auth flows,
