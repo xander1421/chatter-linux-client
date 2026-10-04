@@ -85,6 +85,9 @@ pub fn clear_active(window: &MainWindow) {
     global.set_active_scope("".into());
     global.set_active_reachable(false);
     global.set_active_verified(false);
+    // The mesh set its own placeholder; leaving it would label a DM "everyone
+    // in radio range".
+    window.set_composer_placeholder("Type a message...".into());
     deselect_rows(window);
 }
 
