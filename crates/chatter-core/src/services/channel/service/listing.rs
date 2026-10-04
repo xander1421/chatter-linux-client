@@ -219,11 +219,21 @@ impl ChannelService {
 
     /// Get the peer's user ID from a DM channel (local query).
     ///
-    /// DM channels have exactly 2 members - returns the one that's not the current user.
+    /// `None` unless the channel is a `DirectMessage`: a public or private
+    /// channel is never a 1:1, however few members it has. Answering by
+    /// membership alone routed every channel call through the DM path, so it
+    /// rang one member and never posted the channel's call rows (O9).
     pub fn get_dm_peer_local(
         &self,
         channel_id: &ChannelId,
     ) -> Result<Option<crate::domain::ids::UserId>, ChannelError> {
+        let is_dm = self
+            .channel_repo
+            .get(channel_id)?
+            .is_some_and(|c| c.channel_type == ChannelType::DirectMessage);
+        if !is_dm {
+            return Ok(None);
+        }
         let current_user_id = self.settings_repo.current_user_id()?;
         let memberships = self.channel_repo.list_members(channel_id)?;
 
@@ -236,4 +246,58 @@ impl ChannelService {
         Ok(None)
     }
 
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::domain::channel::{Channel, ChannelType, MemberRole, Membership, NotificationPreference};
+    use crate::domain::ids::{ChannelId, UserId};
+    use crate::storage::repositories::settings_repo::keys;
+
+    /// A two-member channel of `channel_type` holding us and `peer`.
+    fn client_with(channel_type: ChannelType) -> (std::sync::Arc<crate::client::ChatterClient>, tempfile::TempDir, ChannelId, UserId) {
+        static MOCK_KEYRING: std::sync::Once = std::sync::Once::new();
+        MOCK_KEYRING.call_once(|| {
+            keyring::set_default_credential_builder(keyring::mock::default_credential_builder());
+        });
+        let dir = tempfile::tempdir().unwrap();
+        let client = crate::client::ChatterClient::builder()
+            .server_url("https://localhost:1")
+            .data_dir(dir.path().to_str().unwrap())
+            .build()
+            .expect("build client");
+        let (me, peer, channel) = (UserId::new(), UserId::new(), ChannelId::new());
+        let svc = client.channels();
+        svc.settings_repo.set(keys::CURRENT_USER_ID, &me.to_string()).unwrap();
+        svc.channel_repo.insert(&Channel::new(channel, "c".into(), channel_type, me)).unwrap();
+        for user_id in [me, peer] {
+            svc.channel_repo.insert_membership(&Membership {
+                channel_id: channel,
+                user_id,
+                role: MemberRole::Member,
+                joined_at: chrono::Utc::now(),
+                last_read_message_id: None,
+                is_muted: false,
+                muted_until: None,
+                notification_preference: NotificationPreference::default(),
+            }).unwrap();
+        }
+        (client, dir, channel, peer)
+    }
+
+    /// A two-member public or private channel is a channel, not a DM: its
+    /// call must take the group path (which posts the O9 call rows).
+    #[tokio::test]
+    async fn a_two_member_channel_has_no_dm_peer() {
+        for channel_type in [ChannelType::Public, ChannelType::Private] {
+            let (client, _dir, channel, _) = client_with(channel_type);
+            assert_eq!(client.channels().get_dm_peer_local(&channel).unwrap(), None, "{channel_type:?}");
+        }
+    }
+
+    #[tokio::test]
+    async fn a_dm_channel_names_the_other_member() {
+        let (client, _dir, channel, peer) = client_with(ChannelType::DirectMessage);
+        assert_eq!(client.channels().get_dm_peer_local(&channel).unwrap(), Some(peer));
+    }
 }
