@@ -32,6 +32,12 @@ export component DMListItem inherits Rectangle {
     callback context-menu-requested(/* x */ length, /* y */ length);
 
     // Typing animation (0.0 to 1.0 cycling)
+    // The dots fade through their background's alpha, not `opacity`: Slint
+    // wraps an element with `opacity` in an Opacity item that is rendered even
+    // when clipped away, which read this animated value, and so kept the
+    // animation (and a frame every vsync) running for a row scrolled out of
+    // the sidebar. A background is read only when the dot is drawn, so the
+    // animation ticks only while a dot is on screen.
     property <float> typing-animation-progress: 0.0;
 
     // Animation states
@@ -171,22 +177,19 @@ export component DMListItem inherits Rectangle {
                     width: 4px;
                     height: 4px;
                     border-radius: 2px;
-                    background: Colors.primary;
-                    opacity: root.dot-opacity(0);
+                    background: Colors.primary.with-alpha(root.dot-opacity(0));
                 }
                 Rectangle {
                     width: 4px;
                     height: 4px;
                     border-radius: 2px;
-                    background: Colors.primary;
-                    opacity: root.dot-opacity(1);
+                    background: Colors.primary.with-alpha(root.dot-opacity(1));
                 }
                 Rectangle {
                     width: 4px;
                     height: 4px;
                     border-radius: 2px;
-                    background: Colors.primary;
-                    opacity: root.dot-opacity(2);
+                    background: Colors.primary.with-alpha(root.dot-opacity(2));
                 }
 
                 Text {

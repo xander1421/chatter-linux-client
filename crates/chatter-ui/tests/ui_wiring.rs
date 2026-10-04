@@ -4700,6 +4700,22 @@ fn chrome_over_the_list_pauses_backdrop_while_scrolling() {
     );
 }
 
+/// The sidebar's typing dots fade through their background's alpha. An
+/// `opacity` binding becomes an Opacity item that Slint renders even when it
+/// is clipped away, so a row scrolled out of the sidebar kept the infinite
+/// animation, and a frame every vsync, running.
+#[test]
+fn typing_dots_animate_only_while_drawn() {
+    for (name, src) in [
+        ("channel", include_str!("../../../ui/sidebar/channel_list_item.slint")),
+        ("dm", include_str!("../../../ui/sidebar/dm_list_item.slint")),
+        ("private group", include_str!("../../../ui/sidebar/private_group_list_item.slint")),
+    ] {
+        assert!(!src.contains("opacity: root.dot-opacity("), "{name} row fades its dots with opacity again");
+        assert_eq!(src.matches(".with-alpha(root.dot-opacity(").count(), 3, "{name} row");
+    }
+}
+
 #[test]
 fn fine_glass_rim_preserves_shared_childless_material() {
     let materials = include_str!("../../../ui/theme/materials.slint");
