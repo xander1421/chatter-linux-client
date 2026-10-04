@@ -15,6 +15,7 @@ impl AnonGroupService {
     pub fn block_group(&self, group_id: &AnonGroupId) -> Result<(), AnonGroupError> {
         self.anon_group_repo
             .update_status(group_id, AnonGroupStatus::Blocked)?;
+        self.held_posts.forget(group_id);
         tracing::info!("Blocked group {}", group_id);
         Ok(())
     }

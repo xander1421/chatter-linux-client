@@ -127,6 +127,31 @@ impl AnonGroupService {
             return Ok(vec![]);
         }
 
+        // Roster gate, fail closed (a store error reads as "not a member").
+        // Structural messages authorize themselves (owner signature, sender
+        // == leaver). Call signalling from outside the roster is dropped: a
+        // ring replayed minutes later would be for a call long gone. Anything
+        // else waits in `held_posts` for a member list that adds the sender.
+        if !structural && !self.sender_in_roster(group_id, peer_id) {
+            let is_call = matches!(
+                inner_content.content,
+                Some(ContentType::AnonCallOffer(_))
+                    | Some(ContentType::AnonCallAnswer(_))
+                    | Some(ContentType::AnonCallHangup(_))
+            );
+            if !is_call {
+                let now = std::time::Instant::now();
+                self.held_posts.hold(
+                    *group_id,
+                    super::held::HeldPost { at: now, sender: *peer_id, content: inner_content.clone() },
+                    now,
+                );
+            }
+            tracing::debug!(group_id = %group_id, sender_id = %peer_id, held = !is_call,
+                "Content from a sender outside the roster not delivered");
+            return Ok(vec![]);
+        }
+
         // Common content types first.
         match dispatch_common_content(group_id, peer_id, inner_content, self.as_ref()) {
             CommonDispatchOutcome::Handled(events) => return Ok(events),
@@ -198,6 +223,8 @@ impl AnonGroupService {
                     group_id: *group_id,
                     members,
                 });
+                // Posts that raced this list in are delivered now.
+                events.extend(self.release_held_posts(group_id));
 
                 tracing::info!(group_id = %group_id, sender_id = %peer_id, "Processed group member list");
             }
@@ -242,11 +269,6 @@ impl AnonGroupService {
                 }
             }
             Some(ContentType::AnonGroupProfileShare(profile)) => {
-                if !self.is_member(group_id, peer_id).unwrap_or(false) {
-                    tracing::debug!(sender_id = %peer_id, "Dropped profile share from non-member");
-                    return Ok(events);
-                }
-
                 let profile_key = profile.profile_key.as_ref().and_then(|pk| {
                     if pk.len() == 32 { let mut k = [0u8; 32]; k.copy_from_slice(pk); Some(k) } else { None }
                 });
@@ -289,5 +311,33 @@ impl AnonGroupService {
         }
 
         Ok(events)
+    }
+}
+
+impl AnonGroupService {
+    /// Whether `peer` may post in `group`: us, or a member of its roster.
+    /// Fail closed: a store error is "no".
+    fn sender_in_roster(&self, group: &AnonGroupId, peer: &UserId) -> bool {
+        self.current_user_id().is_ok_and(|me| me == *peer)
+            || self.anon_group_repo.is_member(group, peer).unwrap_or(false)
+    }
+
+    /// Re-check every post held for `group` against its roster now: deliver
+    /// the ones whose sender is in it, keep the rest until they expire.
+    /// Returns the delivered posts' events.
+    pub fn release_held_posts(self: &std::sync::Arc<Self>, group: &AnonGroupId) -> Vec<DomainEvent> {
+        let now = std::time::Instant::now();
+        let mut events = Vec::new();
+        for post in self.held_posts.take(group, now) {
+            if self.sender_in_roster(group, &post.sender) {
+                match self.process_incoming_content(group, &post.sender, &post.content) {
+                    Ok(delivered) => events.extend(delivered),
+                    Err(e) => tracing::warn!(group_id = %group, error = %e, "Held post failed on release"),
+                }
+            } else {
+                self.held_posts.hold(*group, post, now);
+            }
+        }
+        events
     }
 }

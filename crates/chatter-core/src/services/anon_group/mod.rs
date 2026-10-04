@@ -18,6 +18,7 @@ mod control;
 mod ephemeral;
 mod error;
 mod handlers;
+mod held;
 mod lifecycle;
 mod membership;
 mod messaging;
@@ -63,6 +64,8 @@ pub struct AnonGroupService {
     pub(crate) mailbox_manager: Arc<MailboxManager>,
     pub(crate) grpc_pool: Arc<GrpcClientPool>,
     pub(crate) token_manager: Arc<TokenManager>,
+    /// Posts from senders outside the roster, awaiting a member list.
+    pub(crate) held_posts: held::HeldPosts,
 }
 
 impl AnonGroupService {
@@ -89,6 +92,7 @@ impl AnonGroupService {
             mailbox_manager,
             grpc_pool,
             token_manager,
+            held_posts: held::HeldPosts::default(),
         }
     }
 

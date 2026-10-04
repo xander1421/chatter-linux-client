@@ -1309,9 +1309,10 @@ impl InboxEventProcessor {
 
         let anon_service = self.anon_group_service.clone();
         let peer_id_clone = peer_id;
+        let event_bus = self.event_bus.clone();
 
         tokio::spawn(async move {
-            if let Err(e) = anon_service.handle_join_ack(
+            match anon_service.handle_join_ack(
                 anon_group_id,
                 peer_id_clone,
                 mailbox_pk,
@@ -1319,12 +1320,19 @@ impl InboxEventProcessor {
                 display_name,
                 avatar,
             ).await {
-                tracing::error!(
+                // The joiner is in our roster now: their posts that beat
+                // this ack in are delivered.
+                Ok(()) => {
+                    for event in anon_service.release_held_posts(&anon_group_id) {
+                        event_bus.emit_domain(event);
+                    }
+                }
+                Err(e) => tracing::error!(
                     group_id = ?anon_group_id,
                     peer_id = %peer_id_clone,
                     error = %e,
                     "Failed to handle join ack"
-                );
+                ),
             }
         });
     }

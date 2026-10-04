@@ -55,6 +55,7 @@ impl AnonGroupService {
 
         // Delete local group data
         self.anon_group_repo.delete_group(group_id)?;
+        self.held_posts.forget(group_id);
 
         tracing::info!("Left group {}", group_id);
         Ok(())
@@ -316,6 +317,67 @@ mod tests {
 
     fn is_member(f: &Fixture, user: &UserId) -> bool {
         f.client.anon_groups().anon_group_repo.is_member(&f.group_id, user).unwrap()
+    }
+
+    /// The owner's member list naming `members` (mailbox keys are dummies).
+    fn member_list(f: &Fixture, members: &[UserId]) -> Content {
+        use crate::proto::content_v1::{AnonGroupMemberInfo, AnonGroupMemberList};
+        Content {
+            content: Some(content_v1::content::Content::AnonGroupMemberList(AnonGroupMemberList {
+                group_id: f.group_id.to_vec(),
+                members: members
+                    .iter()
+                    .map(|u| AnonGroupMemberInfo {
+                        user_id: u.as_bytes().to_vec(),
+                        mailbox_pk: vec![4u8; 32],
+                        role: AnonGroupRole::Member.to_i32(),
+                        ..Default::default()
+                    })
+                    .collect(),
+                timestamp: 1,
+            })),
+            ..Default::default()
+        }
+    }
+
+    #[tokio::test]
+    async fn a_kicked_members_post_is_not_delivered() {
+        let f = fixture(AnonGroupRole::Member);
+        let svc = f.client.anon_groups();
+        svc.process_incoming_content(&f.group_id, &f.owner, &kick(&f, &f.owner_key)).unwrap();
+        assert!(!is_member(&f, &f.mallory));
+
+        // Mallory kept the mailbox keys and posts anyway.
+        assert!(svc.process_incoming_content(&f.group_id, &f.mallory, &post()).unwrap().is_empty());
+        assert_eq!(stored(&f), 0);
+        // A later roster that still leaves her out delivers nothing either.
+        let events = svc.process_incoming_content(&f.group_id, &f.owner, &member_list(&f, &[f.owner])).unwrap();
+        assert!(events.iter().all(|e| matches!(e, DomainEvent::AnonGroupMemberListReceived { .. })), "{events:?}");
+        assert_eq!(stored(&f), 0);
+    }
+
+    #[tokio::test]
+    async fn a_new_members_post_waits_for_the_roster_that_adds_them() {
+        let f = fixture(AnonGroupRole::Member);
+        let svc = f.client.anon_groups();
+        let newbie = UserId::new();
+
+        // Their first post beats the owner's member list here.
+        assert!(svc.process_incoming_content(&f.group_id, &newbie, &post()).unwrap().is_empty());
+        assert_eq!(stored(&f), 0);
+
+        // A forged list from a non-owner releases nothing.
+        svc.process_incoming_content(&f.group_id, &f.mallory, &member_list(&f, &[newbie])).unwrap();
+        assert_eq!(stored(&f), 0);
+
+        svc.process_incoming_content(&f.group_id, &f.owner, &member_list(&f, &[f.owner, f.mallory, newbie]))
+            .unwrap();
+        assert!(is_member(&f, &newbie));
+        assert_eq!(stored(&f), 1, "the held post is delivered once the roster lists its sender");
+        // Released once, not again on the next list.
+        svc.process_incoming_content(&f.group_id, &f.owner, &member_list(&f, &[f.owner, f.mallory, newbie]))
+            .unwrap();
+        assert_eq!(stored(&f), 1);
     }
 
     #[tokio::test]
