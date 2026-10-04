@@ -544,10 +544,6 @@ impl SignalService {
         ).map_err(|e| ServiceError::Validation(format!("Invalid bundle: {}", e)))
     }
 
-    pub fn set_trust_root(&mut self, key: PublicKey) {
-        self.trust_root = key;
-    }
-
     // =========================================================================
     // Multi-Device Operations
     // =========================================================================
