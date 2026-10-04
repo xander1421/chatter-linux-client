@@ -88,7 +88,7 @@ pub mod channel_bootstrap_service;
 pub use user::{FriendResponseResult, UserError, UserService};
 
 pub use signal_service::SignalService;
-pub use mailbox_manager::{MailboxManager, MailboxError, ActiveMailbox};
+pub use mailbox_manager::{MailboxManager, MailboxError};
 pub use inbox_processor::InboxEventProcessor;
 pub use gateway::{
     DmContent, MessageGateway, RouteResult,

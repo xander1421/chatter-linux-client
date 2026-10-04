@@ -127,10 +127,7 @@ impl ServiceContainer {
         ));
 
         // 2. Mailbox manager for DM privacy
-        let mailbox_manager = Arc::new(MailboxManager::new(
-            infra.grpc_pool.clone(),
-            infra.settings_repo.clone(),
-        ));
+        let mailbox_manager = Arc::new(MailboxManager::new(infra.grpc_pool.clone()));
 
         // 2b. Ephemeral (disappearing-message) local-expiry engine. Shared by
         // the send path (MessageService — arms the sender's copy), the receive
