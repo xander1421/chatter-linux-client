@@ -1,7 +1,5 @@
 //! Cryptographic operations for attachments.
 
-use std::path::Path;
-
 use memmap2::Mmap;
 
 use crate::crypto::attachment_crypto::KEY_SET_LENGTH;
@@ -123,71 +121,6 @@ impl AttachmentService {
         super::sanitize::validate_media(buffer.as_slice())?;
 
         Ok(buffer)
-    }
-
-    /// Export a decrypted attachment to a file.
-    ///
-    /// Decrypts the attachment content to memory and writes it to the
-    /// specified path. Used for "Save As" functionality.
-    ///
-    /// # Security Note
-    ///
-    /// This is the only method that writes decrypted content to disk.
-    /// It should only be called when the user explicitly requests to
-    /// export a file via "Save As".
-    pub fn export_to_file(
-        &self,
-        attachment_id: &AttachmentId,
-        destination: &Path,
-    ) -> Result<(), AttachmentError> {
-        // Decrypt to memory
-        let secure_buffer = self.decrypt_to_memory(attachment_id)?;
-
-        // Write to destination file
-        std::fs::write(destination, secure_buffer.as_slice())
-            .map_err(|e| AttachmentError::FileError(format!("Failed to write file: {}", e)))?;
-
-        tracing::info!(
-            attachment_id = %attachment_id,
-            destination = %destination.display(),
-            size = secure_buffer.len(),
-            "Exported attachment to file"
-        );
-
-        Ok(())
-        // secure_buffer dropped here -> memory zeroized
-    }
-
-    /// Export a decrypted attachment asynchronously.
-    ///
-    /// Same as export_to_file but runs the file write in a blocking task.
-    pub async fn export_to_file_async(
-        &self,
-        attachment_id: &AttachmentId,
-        destination: &Path,
-    ) -> Result<(), AttachmentError> {
-        // Decrypt to memory (sync operation on DB)
-        let secure_buffer = self.decrypt_to_memory(attachment_id)?;
-        let dest = destination.to_path_buf();
-        let att_id = *attachment_id;
-
-        // Write to file in blocking task
-        tokio::task::spawn_blocking(move || {
-            std::fs::write(&dest, secure_buffer.as_slice())
-                .map_err(|e| AttachmentError::FileError(format!("Failed to write file: {}", e)))?;
-
-            tracing::info!(
-                attachment_id = %att_id,
-                destination = %dest.display(),
-                "Exported attachment to file"
-            );
-
-            Ok::<(), AttachmentError>(())
-        })
-        .await
-        .map_err(|e| AttachmentError::FileError(format!("Export task failed: {}", e)))??;
-
-        Ok(())
     }
 
     /// Decrypt attachment using true streaming I/O.

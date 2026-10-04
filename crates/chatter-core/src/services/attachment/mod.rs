@@ -469,15 +469,6 @@ impl AttachmentService {
         ids
     }
 
-    /// Check if attachment content is available locally (in database or filesystem).
-    pub fn has_local_content(&self, attachment_id: &AttachmentId) -> bool {
-        self.attachment_repo
-            .get(attachment_id)
-            .ok()
-            .flatten()
-            .is_some_and(|a| a.content_location == ContentLocation::OnFilesystem)
-    }
-
     /// Get preview image data (decoded RGBA) from stored thumbnail.
     ///
     /// Returns (rgba_bytes, width, height) if thumbnail is available and decodable.
@@ -586,102 +577,6 @@ impl AttachmentService {
         }
         tracing::debug!(attachment_id = %attachment_id, bytes = plaintext.len(), "Fetched thumbnail sidecar");
         Some(plaintext)
-    }
-
-    /// Clean up orphaned attachment files (files with no DB record).
-    ///
-    /// Scans the attachments directory and removes any `.enc` files that
-    /// don't have a corresponding record in the database.
-    ///
-    /// Returns the number of files cleaned up.
-    pub fn cleanup_orphaned_files(&self) -> Result<usize, AttachmentError> {
-        let dir = attachments_dir();
-        if !dir.exists() {
-            return Ok(0);
-        }
-
-        let mut cleaned = 0;
-
-        let entries = std::fs::read_dir(&dir)
-            .map_err(|e| AttachmentError::FileError(format!("Failed to read attachments dir: {}", e)))?;
-
-        for entry in entries {
-            let entry = entry
-                .map_err(|e| AttachmentError::FileError(format!("Failed to read dir entry: {}", e)))?;
-            let path = entry.path();
-
-            // Only process .enc files
-            if path.extension().is_some_and(|ext| ext == "enc") {
-                if let Some(stem) = path.file_stem().and_then(|s| s.to_str()) {
-                    // Try to parse as AttachmentId
-                    if let Ok(id) = stem.parse::<AttachmentId>() {
-                        // Check if attachment exists in database
-                        match self.attachment_repo.get(&id) {
-                            Ok(None) => {
-                                // No DB record - orphaned file
-                                if let Err(e) = std::fs::remove_file(&path) {
-                                    tracing::warn!(
-                                        "Failed to remove orphaned attachment file {}: {}",
-                                        path.display(),
-                                        e
-                                    );
-                                } else {
-                                    tracing::debug!(
-                                        "Removed orphaned attachment file: {}",
-                                        path.display()
-                                    );
-                                    cleaned += 1;
-                                }
-                            }
-                            Ok(Some(_)) => {
-                                // Attachment exists - keep file
-                            }
-                            Err(e) => {
-                                tracing::warn!(
-                                    "Failed to check attachment {}: {}",
-                                    id,
-                                    e
-                                );
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        if cleaned > 0 {
-            tracing::info!("Cleaned up {} orphaned attachment files", cleaned);
-        }
-
-        Ok(cleaned)
-    }
-
-    /// Delete an attachment and its associated file (if filesystem-stored).
-    pub fn delete_attachment(&self, attachment_id: &AttachmentId) -> Result<(), AttachmentError> {
-        // Get attachment to check storage location
-        if let Ok(Some(attachment)) = self.attachment_repo.get(attachment_id) {
-            // If stored on filesystem, delete the file
-            if attachment.content_location == ContentLocation::OnFilesystem {
-                let file_path = attachment_file_path(attachment_id);
-                if file_path.exists() {
-                    std::fs::remove_file(&file_path).map_err(|e| {
-                        AttachmentError::FileError(format!(
-                            "Failed to delete attachment file: {}",
-                            e
-                        ))
-                    })?;
-                    tracing::debug!(
-                        "Deleted attachment file: {}",
-                        file_path.display()
-                    );
-                }
-            }
-        }
-
-        // Delete from database
-        self.attachment_repo
-            .delete(attachment_id)
-            .map_err(|e| AttachmentError::StorageError(e.to_string()))
     }
 
     /// Get attachment metadata without loading content.
