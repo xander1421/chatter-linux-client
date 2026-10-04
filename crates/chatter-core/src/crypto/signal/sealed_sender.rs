@@ -419,42 +419,6 @@ impl SealedSenderManager {
             .await
             .map_err(|e| CryptoError::EncryptionFailed(e.to_string()))
     }
-
-    /// Decrypt sealed sender message to USMC without inner decryption.
-    ///
-    /// This extracts the sender information and inner ciphertext without
-    /// decrypting the inner message. Useful for:
-    /// - Inspecting sender identity before full decryption
-    /// - Forwarding messages without decrypting content
-    /// - Validating certificates separately
-    ///
-    /// # Arguments
-    ///
-    /// * `ciphertext` - The sealed sender message bytes
-    /// * `identity_store` - Identity key storage
-    ///
-    /// # Returns
-    ///
-    /// The USMC containing sender certificate and encrypted inner message.
-    pub async fn decrypt_to_content<I>(
-        ciphertext: &[u8],
-        identity_store: &I,
-    ) -> Result<UnidentifiedSenderMessageContent, CryptoError>
-    where
-        I: IdentityKeyStore,
-    {
-        sealed_sender_decrypt_to_usmc(ciphertext, identity_store)
-            .await
-            .map_err(|e| {
-                tracing::warn!(
-                    target: "chatter::crypto::decrypt_failure",
-                    kind = "sealed_sender",
-                    error = %e,
-                    "decryption failure"
-                );
-                CryptoError::InvalidSealedSenderMessage(e.to_string())
-            })
-    }
 }
 
 impl Default for SealedSenderManager {

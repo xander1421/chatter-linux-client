@@ -50,10 +50,10 @@ impl MessageError {
 impl MessageService {
     /// Send a message to a channel.
     ///
-    /// Encrypts with sender keys if channel requires encryption. When
-    /// `group_fanout` is provided and channel is encrypted, the message
-    /// will be delivered to member mailboxes IN ADDITION to the channel-based
-    /// delivery. This provides traffic analysis resistance per NDSS '21 paper.
+    /// Encrypts with sender keys if channel requires encryption. Channel
+    /// sends go to the server channel only: `group_fanout` is accepted but
+    /// not used here (a second pairwise copy double-stored the message, see
+    /// below); pairwise group-mailbox fan-out is the anon-group path.
     #[allow(clippy::too_many_arguments)]
     pub async fn send_message(
         &self,
