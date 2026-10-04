@@ -1963,6 +1963,7 @@ impl BleRuntime {
                     chatter_mesh::relay::MESSAGE_TTL_DEFAULT,
                 );
                 self.transmit(&packet, Some(peer), None).await;
+                self.rekey_if_due(peer).await;
             }
             Err(_) => {
                 // No session yet. Hold the message and start a handshake: the
@@ -1981,6 +1982,20 @@ impl BleRuntime {
                 });
                 self.start_handshake(peer).await;
             }
+        }
+    }
+
+    /// Renegotiate a session that has spent 90% of its nonce budget, before
+    /// encryption hard-fails at the limit. The old session keeps carrying
+    /// traffic until the new handshake completes and replaces it; the peer
+    /// treats our opening message as a restart and does the same.
+    ///
+    /// Only the message-count half of bitchat's `needsRenegotiation()` is
+    /// checked; its 24-hour idle half is not implemented here.
+    async fn rekey_if_due(&mut self, peer: &PeerId) {
+        if self.state.with(|state| state.sessions.needs_rekey(peer)) {
+            tracing::info!(target: "mesh::ble", %peer, "session near its nonce budget; rekeying");
+            self.start_handshake(peer).await;
         }
     }
 
@@ -2031,6 +2046,7 @@ impl BleRuntime {
             chatter_mesh::relay::MESSAGE_TTL_DEFAULT,
         );
         self.transmit(&packet, Some(peer), None).await;
+        self.rekey_if_due(peer).await;
     }
 
     /// Broadcast a public message into the mesh room.
@@ -4475,6 +4491,77 @@ mod tests {
             !writes[0].1.windows(6).any(|w| w == b"secret"),
             "plaintext must never reach the wire"
         );
+    }
+
+    #[cfg(feature = "testing")]
+    #[tokio::test]
+    async fn a_send_past_the_rekey_threshold_opens_one_renegotiation() {
+        use chatter_mesh_noise::session::REKEY_MESSAGE_THRESHOLD;
+
+        let (mut runtime, radio, state) = runtime();
+        let local_peer = runtime.identity.peer_id();
+        let peer_identity = MeshIdentity::generate(&mut OsRng);
+        let peer = peer_identity.peer_id();
+        let link = LinkId::new("/mock/rekey");
+        state.with(|inner| {
+            inner.links.link_up(link.clone(), LinkRole::Central);
+            inner.links.bind_if_unbound(&link, &peer);
+            inner.links.set_writable(&link, true);
+            inner.max_write.insert(link.clone(), 512);
+        });
+
+        // Establish a session: the peer initiates, we answer.
+        let mut remote = super::super::session::SessionManager::new();
+        let m1 = remote.initiate(&local_peer, &peer_identity).expect("m1");
+        let identity = Arc::clone(&runtime.identity);
+        let m2 = state
+            .with(|inner| inner.sessions.on_handshake(&peer, &local_peer, &identity, &m1))
+            .expect("we read m1")
+            .reply
+            .expect("m2");
+        let m3 = remote
+            .on_handshake(&local_peer, &peer, &peer_identity, &m2)
+            .expect("peer reads m2")
+            .reply
+            .expect("m3");
+        state
+            .with(|inner| inner.sessions.on_handshake(&peer, &local_peer, &identity, &m3))
+            .expect("we complete");
+        assert!(state.has_session(&peer));
+
+        // Below the threshold a send is just a send.
+        runtime.send_private(&peer, "MSG-1", "hello").await;
+        runtime.drain_writes().await;
+        let types = |radio: &MockLink| -> Vec<Option<MessageType>> {
+            radio
+                .writes()
+                .iter()
+                .map(|(_, bytes)| codec::decode(bytes).expect("decodable").message_type())
+                .collect()
+        };
+        assert_eq!(types(&radio), [Some(MessageType::NoiseEncrypted)]);
+
+        // At the threshold the message still goes out on the old session, and
+        // one handshake follows it; a second send does not restart it.
+        state.with(|inner| {
+            inner
+                .sessions
+                .set_messages_sent_for_testing(&peer, REKEY_MESSAGE_THRESHOLD)
+        });
+        runtime.send_private(&peer, "MSG-2", "again").await;
+        runtime.send_private(&peer, "MSG-3", "and again").await;
+        runtime.drain_writes().await;
+        assert_eq!(
+            types(&radio),
+            [
+                Some(MessageType::NoiseEncrypted),
+                Some(MessageType::NoiseEncrypted),
+                Some(MessageType::NoiseHandshake),
+                Some(MessageType::NoiseEncrypted),
+            ]
+        );
+        assert!(state.has_session(&peer), "the old session stays until replaced");
+        assert!(state.with(|inner| inner.sessions.is_handshaking(&peer)));
     }
 
     #[tokio::test]

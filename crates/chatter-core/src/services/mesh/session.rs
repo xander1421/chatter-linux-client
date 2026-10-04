@@ -237,13 +237,30 @@ impl SessionManager {
             .decrypt(ciphertext)
     }
 
-    /// Whether the session with this peer is close enough to its message limit
-    /// that it should be renegotiated.
+    /// Whether to open a renegotiation with this peer now: its session has
+    /// spent 90% of its nonce budget (bitchat `needsRenegotiation()`) and no
+    /// handshake is already replacing it.
+    ///
+    /// The handshake check matters: [`initiate`](Self::initiate) restarts a
+    /// handshake in flight, so re-opening on every send past the threshold would
+    /// never let one complete. The old session keeps carrying traffic until the
+    /// new handshake completes and [`establish`](Self::establish) swaps it out.
     #[must_use]
     pub fn needs_rekey(&self, peer: &PeerId) -> bool {
-        self.sessions
-            .get(peer)
-            .is_some_and(NoiseSession::needs_rekey)
+        !self.is_handshaking(peer)
+            && self
+                .sessions
+                .get(peer)
+                .is_some_and(NoiseSession::needs_rekey)
+    }
+
+    /// Set a session's sent-message count, so tests can reach the rekey
+    /// threshold. Requires mesh-noise's `testing` hook.
+    #[cfg(all(test, feature = "testing"))]
+    pub(crate) fn set_messages_sent_for_testing(&mut self, peer: &PeerId, count: u64) {
+        if let Some(session) = self.sessions.get_mut(peer) {
+            session.set_messages_sent_for_testing(count);
+        }
     }
 
     /// Forget everything about one peer.
@@ -491,6 +508,45 @@ mod tests {
             !local.has_session(&victim_peer),
             "and no session may be keyed on the impersonated ID"
         );
+    }
+
+    #[cfg(feature = "testing")]
+    #[test]
+    fn a_rekey_is_due_at_the_threshold_until_a_handshake_replaces_the_session() {
+        use chatter_mesh_noise::session::REKEY_MESSAGE_THRESHOLD;
+
+        let (alice_id, bob_id) = (identity(), identity());
+        let (mut alice, mut bob) = (SessionManager::new(), SessionManager::new());
+        let (alice_peer, bob_peer) = complete(&mut alice, &alice_id, &mut bob, &bob_id);
+        assert!(!alice.needs_rekey(&bob_peer));
+
+        alice.set_messages_sent_for_testing(&bob_peer, REKEY_MESSAGE_THRESHOLD);
+        assert!(alice.needs_rekey(&bob_peer));
+
+        // Opening the renegotiation suppresses the signal, so the next send does
+        // not restart it, and the old session keeps working meanwhile.
+        let m1 = alice.initiate(&bob_peer, &alice_id).expect("m1");
+        assert!(!alice.needs_rekey(&bob_peer));
+        let sealed = alice.encrypt(&bob_peer, b"mid-rekey").expect("old session");
+        assert_eq!(bob.decrypt(&alice_peer, &sealed).expect("opens"), b"mid-rekey");
+
+        let m2 = bob
+            .on_handshake(&alice_peer, &bob_peer, &bob_id, &m1)
+            .expect("bob reads m1")
+            .reply
+            .expect("m2");
+        let m3 = alice
+            .on_handshake(&bob_peer, &alice_peer, &alice_id, &m2)
+            .expect("alice reads m2")
+            .reply
+            .expect("m3");
+        bob.on_handshake(&alice_peer, &bob_peer, &bob_id, &m3)
+            .expect("bob completes");
+
+        // A fresh session: the count is back to zero, and both sides agree.
+        assert!(!alice.needs_rekey(&bob_peer));
+        let sealed = alice.encrypt(&bob_peer, b"rekeyed").expect("new session");
+        assert_eq!(bob.decrypt(&alice_peer, &sealed).expect("opens"), b"rekeyed");
     }
 
     #[test]

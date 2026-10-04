@@ -373,8 +373,9 @@ mesh = [
 # release build silently pinned the dev sealed-sender root, the dev TLS CA, the
 # dev KT tree-head key and the dev VRF key — defeating the guarantee those
 # guards exist for. Accessor widening and anchor selection are now separate
-# features; this one has no security effect.
-testing = []
+# features; this one has no security effect (the mesh-noise `testing` hook it
+# forwards only sets a session's sent-message count).
+testing = ["chatter-mesh-noise?/testing"]
 # Falls the four pinned trust anchors back to their DEVELOPMENT values when
 # nothing is provisioned, so `cargo test` runs without `make provision-keys`.
 #

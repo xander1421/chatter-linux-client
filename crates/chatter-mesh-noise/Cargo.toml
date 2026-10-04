@@ -17,6 +17,9 @@ path = "src/lib.rs"
 # drive the canonical specification vectors. Never enable in a shipped build: a
 # predictable ephemeral is a handshake an observer can decrypt.
 vectors = []
+# Exposes `NoiseSession::set_messages_sent_for_testing`, so a caller's tests can
+# reach the rekey threshold without 900 million encryptions.
+testing = []
 
 [dependencies]
 chatter-mesh = { path = "../chatter-mesh" }
