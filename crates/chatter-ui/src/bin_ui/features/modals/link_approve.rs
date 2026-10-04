@@ -187,6 +187,7 @@ fn wire_submit(
             let secret = SecretString::new(password);
             let result = ui_ctx.approve_link(token, secret).await;
             let weak_for_ui = weak.clone();
+            let pending_for_ui = pending.clone();
             let _ = slint::invoke_from_event_loop(move || {
                 let Some(w) = weak_for_ui.upgrade() else { return };
                 w.set_link_approve_busy(false);
@@ -195,12 +196,16 @@ fn wire_submit(
                         let name = approved
                             .device_name
                             .unwrap_or_else(|| "the new device".to_string());
-                        w.set_link_approve_status(
-                            format!("Linked {name}.").into(),
-                        );
-                        w.set_link_approve_password("".into());
-                        // Leave modal open briefly so user sees confirmation;
-                        // they tap close to dismiss.
+                        // Close and confirm with a toast — the app's pattern
+                        // for a finished modal action (create-channel,
+                        // forward). Leaving it open on "Linked …" read as
+                        // stuck (§138). `close` is a no-op if the user
+                        // already left the dialog.
+                        reset(&w, &pending_for_ui);
+                        crate::bin_ui::features::back::close(&w, "link-device-approve");
+                        w.set_toast_message(format!("Linked {name}.").into());
+                        w.set_toast_variant("success".into());
+                        w.set_toast_visible(true);
                     }
                     Err(LinkDeviceError::ReauthFailed) => {
                         w.set_link_approve_status("".into());
