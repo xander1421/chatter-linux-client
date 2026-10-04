@@ -69,7 +69,6 @@ use super::file_stream::{
     CHUNK_REQUEST_QUIET_SECS, ChunkOutcome, FileStreamSpool, ManifestOutcome, OutboundTransfer,
     TRANSFER_ABANDON_SECS, TransferId,
 };
-use super::glue::SharedStorage;
 use super::mapping::{self, InboundMessage, MeshConversation, outbound_message};
 use super::router::{RouterCommand, RouterHandle};
 use super::state::{LinkStateInner, MeshState, NostrState, link_candidates_locked, now_millis, now_secs};
@@ -137,7 +136,7 @@ const MANIFEST_REPEAT_SECS: u64 = 60;
 
 /// The radio loop.
 pub struct BleRuntime {
-    storage: SharedStorage,
+    storage: Arc<dyn Storage>,
     sealer: Arc<dyn Sealer>,
     radio: Arc<dyn MeshLink>,
     state: Arc<MeshState>,
@@ -149,7 +148,7 @@ pub struct BleRuntime {
     events: MeshEvents,
     router: Arc<RouterHandle>,
     gossip: GossipSyncManager,
-    couriers: CourierStore<SharedStorage>,
+    couriers: CourierStore<Arc<dyn Storage>>,
     guard: IngressGuard,
     /// Chunked transfers being received. Owned by the loop rather than by
     /// [`MeshState`], because every method on it touches disk and `MeshState` is
@@ -181,7 +180,7 @@ impl BleRuntime {
         config: Arc<MeshConfig>,
         events: MeshEvents,
         router: Arc<RouterHandle>,
-        storage: SharedStorage,
+        storage: Arc<dyn Storage>,
         sealer: Arc<dyn Sealer>,
     ) -> Self {
         let now = now_secs();
@@ -3457,7 +3456,7 @@ mod tests {
         let nostr_state = Arc::new(NostrState::new());
         let timeline = crate::services::mesh::timeline::temp_timeline();
         let events = MeshEvents::new(64, Arc::clone(&timeline));
-        let storage = SharedStorage::new(Arc::new(MemoryStorage::new()) as Arc<dyn Storage>);
+        let storage = Arc::new(MemoryStorage::new()) as Arc<dyn Storage>;
         let router = Arc::new(RouterHandle::spawn(super::super::router::RouterDeps {
             state: Arc::clone(&state),
             nostr_state: Arc::clone(&nostr_state),

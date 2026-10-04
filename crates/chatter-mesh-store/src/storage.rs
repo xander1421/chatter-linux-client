@@ -29,8 +29,6 @@ pub enum StorageKey {
     CourierPool,
     /// Cached public broadcast traffic for gossip sync. Already public.
     PublicArchive,
-    /// Bare local counters. No identities, no message IDs, no timestamps.
-    Metrics,
     /// Which bridge drops we have already published or already seen.
     ///
     /// Must survive a restart. bitchat's own comment records a field-verified
@@ -39,8 +37,8 @@ pub enum StorageKey {
     /// gateway watching the tag does the same.
     ///
     /// **Seal this one.** It is a set of recipient tags and event IDs — metadata
-    /// about who this device is messaging and when — so unlike [`Self::Metrics`] it
-    /// is not safe to persist in the clear.
+    /// about who this device is messaging and when — so it is not safe to persist
+    /// in the clear.
     BridgeDropDedup,
     /// The keys each peer ID was first seen with.
     ///
@@ -61,7 +59,6 @@ impl StorageKey {
         StorageKey::Outbox,
         StorageKey::CourierPool,
         StorageKey::PublicArchive,
-        StorageKey::Metrics,
         StorageKey::BridgeDropDedup,
         StorageKey::PeerPins,
     ];
@@ -72,7 +69,6 @@ impl StorageKey {
             StorageKey::Outbox => "outbox",
             StorageKey::CourierPool => "courier-pool",
             StorageKey::PublicArchive => "public-archive",
-            StorageKey::Metrics => "sf-metrics",
             StorageKey::BridgeDropDedup => "bridge-drop-dedup",
             StorageKey::PeerPins => "peer-pins",
         }
@@ -127,6 +123,23 @@ pub trait Storage: Send + Sync {
     }
 }
 
+/// A shared handle is the store it points at. [`crate::courier::CourierStore`] is
+/// generic over an owned `S: Storage` while the outbox takes `Arc<dyn Storage>`,
+/// so one shared database can back both.
+impl<T: Storage + ?Sized> Storage for std::sync::Arc<T> {
+    fn load(&self, key: StorageKey) -> Result<Option<Vec<u8>>, StoreError> {
+        (**self).load(key)
+    }
+
+    fn save(&self, key: StorageKey, sealed: &[u8]) -> Result<(), StoreError> {
+        (**self).save(key, sealed)
+    }
+
+    fn wipe(&self, key: StorageKey) -> Result<(), StoreError> {
+        (**self).wipe(key)
+    }
+}
+
 /// In-memory storage for tests.
 #[derive(Debug, Default)]
 pub struct MemoryStorage {
@@ -170,6 +183,21 @@ impl Storage for MemoryStorage {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_shared_handle_reaches_the_same_blobs() {
+        let backing = std::sync::Arc::new(MemoryStorage::new());
+        let shared: std::sync::Arc<dyn Storage> = backing.clone();
+        let courier_side = crate::courier::CourierStore::new(std::sync::Arc::clone(&shared));
+
+        courier_side
+            .storage()
+            .save(StorageKey::CourierPool, b"sealed")
+            .expect("save");
+        assert_eq!(backing.len(), 1);
+        shared.wipe(StorageKey::CourierPool).expect("wipe");
+        assert!(backing.is_empty());
+    }
 
     #[test]
     fn round_trips_and_reports_absence_as_none() {

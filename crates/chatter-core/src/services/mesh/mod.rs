@@ -36,7 +36,6 @@ pub mod config;
 pub mod error;
 pub mod events;
 pub mod file_stream;
-pub mod glue;
 pub mod identity;
 pub mod mapping;
 #[cfg(test)]
@@ -89,7 +88,6 @@ pub use mapping::MeshConversation;
 pub use timeline::{MeshEvents, MeshTimeline};
 
 use ble::BleRuntime;
-use glue::SharedStorage;
 use identity::NostrIdentities;
 use nostr::NostrRuntime;
 use router::{RouterCommand, RouterDeps, RouterHandle};
@@ -198,7 +196,7 @@ pub struct MeshService {
     config: Arc<MeshConfig>,
     state: Arc<MeshState>,
     nostr_state: Arc<NostrState>,
-    storage: SharedStorage,
+    storage: Arc<dyn Storage>,
     sealer: Arc<dyn Sealer>,
     router: Arc<RouterHandle>,
     ble: Arc<CommandBus<BleCommand>>,
@@ -290,7 +288,7 @@ impl MeshService {
             state,
             nostr_state,
             identity_store,
-            storage: SharedStorage::new(deps.storage),
+            storage: deps.storage,
             sealer: deps.sealer,
             router,
             ble: Arc::clone(&ble_bus),
@@ -1106,7 +1104,7 @@ mod tests {
             config,
             state,
             nostr_state,
-            storage: SharedStorage::new(storage),
+            storage: storage,
             sealer,
             router,
             ble: ble_bus,

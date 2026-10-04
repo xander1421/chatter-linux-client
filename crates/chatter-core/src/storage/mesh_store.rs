@@ -781,14 +781,14 @@ mod tests {
     fn wipe_removes_only_that_key() {
         let storage = MeshStorage::new(test_db());
         storage.save(StorageKey::Outbox, b"mail").expect("save");
-        storage.save(StorageKey::Metrics, b"counters").expect("save");
+        storage.save(StorageKey::PublicArchive, b"history").expect("save");
 
         storage.wipe(StorageKey::Outbox).expect("wipe");
 
         assert_eq!(storage.load(StorageKey::Outbox).expect("load"), None);
         assert_eq!(
-            storage.load(StorageKey::Metrics).expect("load"),
-            Some(b"counters".to_vec())
+            storage.load(StorageKey::PublicArchive).expect("load"),
+            Some(b"history".to_vec())
         );
     }
 
