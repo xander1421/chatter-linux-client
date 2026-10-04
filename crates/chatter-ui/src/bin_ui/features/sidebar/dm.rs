@@ -33,17 +33,7 @@ pub fn wire_delete_conversation(window: &MainWindow, ui_ctx: &Arc<ChatterClient>
                 tracing::error!(error = %e, row_id = %row_id, "delete chat failed");
                 return;
             }
-            let ui_ctx_ui = ui_ctx.clone();
-            run_ui!(weak, |w| {
-                if ui_ctx_ui.active_conversation() == conv {
-                    ui_ctx_ui.chat_state().set_active_conversation(chatter_core::state::ActiveConversation::None);
-                    w.set_messages(ModelRc::new(VecModel::<crate::MessageItemData>::default()));
-                    // No name = nothing open: the pane shows "Select a conversation".
-                    w.set_channel_name("".into());
-                }
-            });
-            super::sections::refresh_sections_ui(&weak, &ui_ctx);
-            super::rebuild_chat_list(&weak, &ui_ctx);
+            super::conversation_removed(&weak, &ui_ctx, conv);
         });
     });
 }

@@ -101,7 +101,7 @@ export component Sidebar inherits Rectangle {
     callback remove-from-section(/* conversation-id */ string);
     callback set-conversation-pinned(/* conversation-id */ string, /* pinned */ bool);
     callback delete-conversation(/* conversation-id */ string, /* kind */ ConversationKind);
-    callback leave-channel(/* channel-id */ string);
+    callback leave-conversation(/* conversation-id */ string, /* kind */ ConversationKind);
     callback move-section(/* section-id */ string, /* delta */ int);
     callback set-section-sort-mode(/* section-id */ string, /* mode */ string);
 
@@ -169,7 +169,7 @@ export component Sidebar inherits Rectangle {
     property <ConversationKind> ctx-menu-conv-type;
     property <string> ctx-menu-current-section-id: "";
     property <bool> ctx-menu-is-pinned: false;
-    // Channel rows only, as core decided it for the row.
+    // Channel and group rows, as core decided it for the row.
     property <bool> ctx-menu-can-leave: false;
     property <bool> ctx-menu-can-delete-channel: false;
 
@@ -869,8 +869,8 @@ export component Sidebar inherits Rectangle {
         delete-chat(conv-id, conv-type) => {
             root.delete-conversation(conv-id, conv-type);
         }
-        leave-channel(conv-id) => {
-            root.leave-channel(conv-id);
+        leave-conversation(conv-id, kind) => {
+            root.leave-conversation(conv-id, kind);
         }
     }
 

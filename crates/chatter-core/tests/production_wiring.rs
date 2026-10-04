@@ -324,6 +324,30 @@ const TABLE: &[Entry] = &[
               2026-10-04; without this caller one byte per link pins memory until \
               disconnect.",
     },
+    // ---- Anonymous groups: removal -------------------------------------
+    Entry {
+        symbol: "verify_kick_signature",
+        defined_in: "chatter-core/src/services/anon_group/removal.rs",
+        expect: Expect::Wired,
+        why: "Receive-side kick authentication (services/anon_group/handlers.rs). Lose \
+              this caller and any member who knows a group id can remove anyone by \
+              sending an unsigned AnonGroupKick.",
+    },
+    Entry {
+        symbol: "kick_member",
+        defined_in: "chatter-core/src/services/anon_group/removal.rs",
+        expect: Expect::Wired,
+        why: "Send-side, signed private-group kick (services/conversation.rs \
+              `remove_member`, from Settings › Members › Remove). Dead until \
+              2026-10-04: the button sent the group id to the server's channel kick.",
+    },
+    Entry {
+        symbol: "leave_group",
+        defined_in: "chatter-core/src/services/anon_group/removal.rs",
+        expect: Expect::Wired,
+        why: "Private-group leave (services/conversation.rs `leave`, from Settings and \
+              the sidebar row menu). Dead until 2026-10-04: a group could not be left.",
+    },
 ];
 
 // ============================================================================

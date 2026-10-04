@@ -2761,6 +2761,24 @@ impl ChatterClient {
         self.conversation(conv).is_muted()
     }
 
+    /// Leave a channel or private group. See `ConversationHandle::leave`.
+    pub async fn leave_conversation(
+        self: &Arc<Self>,
+        conv: ActiveConversation,
+    ) -> Result<(), crate::services::conversation::ConversationError> {
+        self.conversation(conv).leave().await
+    }
+
+    /// Remove a member from a channel or private group. See
+    /// `ConversationHandle::remove_member`.
+    pub async fn remove_conversation_member(
+        self: &Arc<Self>,
+        conv: ActiveConversation,
+        user: &crate::domain::ids::UserId,
+    ) -> Result<(), crate::services::conversation::ConversationError> {
+        self.conversation(conv).remove_member(user).await
+    }
+
     /// Delete a conversation from local storage.
     pub fn delete_conversation(
         self: &Arc<Self>,

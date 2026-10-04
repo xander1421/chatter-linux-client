@@ -203,6 +203,16 @@ pub(super) fn handle_group_member_kicked(
     user_id: UserId,
     kicked_by: UserId,
 ) {
+    // We were the one removed: core has dropped the group (`handle_kick`).
+    if ui_ctx.get_anon_group(&group_id).is_none() {
+        let (weak, ui_ctx) = (window.clone(), ui_ctx.clone());
+        tokio::spawn(async move {
+            crate::bin_ui::features::sidebar::conversation_removed(
+                &weak, &ui_ctx, chatter_core::state::ActiveConversation::AnonGroup(group_id),
+            );
+        });
+        return;
+    }
     let message = ui_ctx.anon_group_system_message(
         group_id,
         kicked_by, // sender = admin who did it

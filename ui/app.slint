@@ -912,7 +912,7 @@ export component App inherits Rectangle {
     callback remove-from-section(/* conversation-id */ string);
     callback set-conversation-pinned(/* conversation-id */ string, /* pinned */ bool);
     callback delete-conversation(/* conversation-id */ string, /* kind */ ConversationKind);
-    callback leave-channel(/* channel-id */ string);
+    callback leave-conversation(/* conversation-id */ string, /* kind */ ConversationKind);
     callback move-section(/* section-id */ string, /* delta */ int);
     callback set-section-sort-mode(/* section-id */ string, /* mode */ string);
 
@@ -1537,8 +1537,8 @@ export component App inherits Rectangle {
                 delete-conversation(conv-id, kind) => {
                     root.delete-conversation(conv-id, kind);
                 }
-                leave-channel(channel-id) => {
-                    root.leave-channel(channel-id);
+                leave-conversation(conv-id, kind) => {
+                    root.leave-conversation(conv-id, kind);
                 }
                 move-section(section-id, delta) => {
                     root.move-section(section-id, delta);

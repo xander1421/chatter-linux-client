@@ -732,6 +732,8 @@ impl ChatterClient {
             unread_count: self.anon_group_unread_count(&group.id),
             member_count: self.get_anon_group_members(&group.id).len() as u32,
             is_pinned: self.is_conversation_pinned(&group.id.to_string()),
+            // Any member may leave a private group, the owner included.
+            can_leave: true,
             last_activity: Some(last_activity),
             ..ChatRowSendData::new(crate::domain::message::ConversationType::AnonGroup, group.id.to_string(), group.name.clone())
         }
@@ -748,8 +750,9 @@ impl ChatterClient {
     /// that model on purpose — they render inside the folder — so the lookup
     /// came back empty and a foldered DM opened into nothing: no active
     /// conversation, no messages, and every send silently dropped.
-    /// The conversation a sidebar row's "Delete chat" acts on: a channel row
-    /// is its channel, a DM row resolves as [`Self::resolve_dm_conversation`].
+    /// The conversation a sidebar row's "Delete chat" or "Leave" acts on: a
+    /// channel row is its channel, a group row its group, a DM row resolves
+    /// as [`Self::resolve_dm_conversation`].
     pub fn resolve_row_conversation(
         &self,
         row_id: &str,
@@ -758,6 +761,9 @@ impl ChatterClient {
         match kind {
             crate::domain::message::ConversationType::Channel => {
                 row_id.parse().ok().map(crate::state::ActiveConversation::Channel)
+            }
+            crate::domain::message::ConversationType::AnonGroup => {
+                row_id.parse().ok().map(crate::state::ActiveConversation::AnonGroup)
             }
             _ => self.resolve_dm_conversation(row_id),
         }

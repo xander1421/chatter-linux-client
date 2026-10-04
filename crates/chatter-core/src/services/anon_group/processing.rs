@@ -22,18 +22,9 @@ impl AnonInboxBackend for AnonGroupService {
     fn conversation_type(&self) -> ConversationType { ConversationType::AnonGroup }
     fn label(&self) -> &'static str { "anon group" }
 
-    fn is_sender_blocked(&self, _sender_id: &UserId) -> bool {
-        // Group-level blocking is per-conversation; checked in is_conversation_blocked
-        // by callers that have the group_id. No global user blocking for anon groups.
-        false
-    }
-
-    fn is_conversation_blocked(&self, _id: &Self::Id) -> bool {
-        // Group blocking is keyed by (group_id, user_id); checked at process_incoming_content
-        // entry against membership + per-group block list. Return false here so the common
-        // dispatcher doesn't short-circuit.
-        false
-    }
+    // Both block lists are keyed by group, so they are enforced at the top of
+    // `process_incoming_content`, which has the group id; these trait hooks
+    // (keyed by sender alone, or by id alone) stay at their defaults.
 
     fn create_attachment_records(&self, pointers: &[AttachmentPointer]) -> Vec<AttachmentId> {
         self.create_attachments_from_pointers(pointers)
@@ -105,6 +96,36 @@ impl AnonGroupService {
         inner_content: &Content,
     ) -> Result<Vec<DomainEvent>, AnonGroupError> {
         use crate::proto::content_v1::content::Content as ContentType;
+
+        // Block lists, fail closed: a store error counts as blocked.
+        // A blocked group is ignored entirely. A member blocked in this group
+        // is muted — posts, reactions, typing, calls, profile shares dropped —
+        // but the group's structure (leave, kick, member list, update) still
+        // applies, so the roster stays true and we never keep sending to
+        // someone who left.
+        let group_blocked = match self.anon_group_repo.get_group(group_id) {
+            Ok(group) => group.is_some_and(|g| g.is_blocked()),
+            Err(_) => true,
+        };
+        if group_blocked {
+            tracing::debug!(group_id = %group_id, "Dropped content for blocked group");
+            return Ok(vec![]);
+        }
+        let sender_blocked = self
+            .anon_group_repo
+            .is_user_blocked(group_id, peer_id)
+            .unwrap_or(true);
+        let structural = matches!(
+            inner_content.content,
+            Some(ContentType::AnonGroupLeave(_))
+                | Some(ContentType::AnonGroupKick(_))
+                | Some(ContentType::AnonGroupMemberList(_))
+                | Some(ContentType::AnonGroupUpdate(_))
+        );
+        if sender_blocked && !structural {
+            tracing::debug!(group_id = %group_id, "Dropped content from member blocked in group");
+            return Ok(vec![]);
+        }
 
         // Common content types first.
         match dispatch_common_content(group_id, peer_id, inner_content, self.as_ref()) {
@@ -181,14 +202,17 @@ impl AnonGroupService {
                 tracing::info!(group_id = %group_id, sender_id = %peer_id, "Processed group member list");
             }
             Some(ContentType::AnonGroupLeave(_)) => {
-                if let Err(e) = self.handle_leave(*group_id, *peer_id) {
-                    tracing::warn!(error = %e, "Failed to handle group leave");
+                match self.handle_leave(*group_id, *peer_id) {
+                    Ok(true) => {
+                        events.push(DomainEvent::AnonGroupMemberLeft {
+                            group_id: *group_id,
+                            user_id: *peer_id,
+                        });
+                        tracing::info!(group_id = %group_id, sender_id = %peer_id, "Member left group");
+                    }
+                    Ok(false) => {}
+                    Err(e) => tracing::warn!(error = %e, "Failed to handle group leave"),
                 }
-                events.push(DomainEvent::AnonGroupMemberLeft {
-                    group_id: *group_id,
-                    user_id: *peer_id,
-                });
-                tracing::info!(group_id = %group_id, sender_id = %peer_id, "Member left group");
             }
             Some(ContentType::AnonGroupKick(kick)) => {
                 let kicked_user_id = match UserId::try_from_slice(&kick.kicked_user_id) {
@@ -198,18 +222,24 @@ impl AnonGroupService {
                         return Ok(events);
                     }
                 };
-                if let Err(e) = self.handle_kick(
+                // Announced only once verified and applied: a refused kick
+                // (unsigned, forged, from a non-admin, at the owner) must
+                // not show up as "X removed by Y".
+                match self.handle_kick(
                     *group_id, kicked_user_id, *peer_id,
                     &kick.admin_signature, kick.timestamp,
                 ) {
-                    tracing::warn!(error = %e, "Failed to handle group kick");
+                    Ok(true) => {
+                        events.push(DomainEvent::AnonGroupMemberKicked {
+                            group_id: *group_id,
+                            user_id: kicked_user_id,
+                            kicked_by: *peer_id,
+                        });
+                        tracing::info!(group_id = %group_id, kicked = %kicked_user_id, by = %peer_id, "Member kicked");
+                    }
+                    Ok(false) => {}
+                    Err(e) => tracing::warn!(error = %e, "Failed to handle group kick"),
                 }
-                events.push(DomainEvent::AnonGroupMemberKicked {
-                    group_id: *group_id,
-                    user_id: kicked_user_id,
-                    kicked_by: *peer_id,
-                });
-                tracing::info!(group_id = %group_id, kicked = %kicked_user_id, by = %peer_id, "Member kicked");
             }
             Some(ContentType::AnonGroupProfileShare(profile)) => {
                 if !self.is_member(group_id, peer_id).unwrap_or(false) {

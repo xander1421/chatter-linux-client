@@ -253,6 +253,7 @@ export component SectionContextMenu inherits Rectangle {
     in property <string> current-section-id: "";   // non-empty => already in a section
     in property <bool> is-pinned: false;
     // Channel rows: core's `can_leave_channel` (a member, not the owner).
+    // Private-group rows: always (any member may leave).
     in property <bool> can-leave: false;
     // Channel rows: core's `is_former_channel` (we are no longer in it).
     in property <bool> can-delete-channel: false;
@@ -268,13 +269,14 @@ export component SectionContextMenu inherits Rectangle {
     // DM rows, and channels we are no longer in: deletes the chat on this
     // device (core `delete_conversation`).
     callback delete-chat(/* conv-id */ string, /* conv-type */ ConversationKind);
-    // Channel rows: same leave as Channel Settings' Danger Zone.
-    callback leave-channel(/* channel-id */ string);
+    // Channel and group rows: same leave as Settings' Danger Zone.
+    callback leave-conversation(/* conv-id */ string, /* conv-type */ ConversationKind);
     callback close();
 
     property <bool> can-delete: root.conversation-type == ConversationKind.server-dm
         || root.conversation-type == ConversationKind.anon-dm
         || root.can-delete-channel;
+    property <bool> is-group: root.conversation-type == ConversationKind.anon-group;
     // Delete asks once, inside the menu; reset whenever the menu closes.
     property <bool> confirm-delete: false;
     property <bool> confirm-leave: false;
@@ -437,7 +439,7 @@ export component SectionContextMenu inherits Rectangle {
 
             if root.can-leave && !root.confirm-leave: MenuItem {
                 icon: Icons.x;
-                label: "Leave channel";
+                label: root.is-group ? "Leave group" : "Leave channel";
                 destructive: true;
                 mobile-mode: root.mobile-mode;
                 clicked => { root.confirm-leave = true; }
@@ -448,7 +450,9 @@ export component SectionContextMenu inherits Rectangle {
                 padding-left: Spacing.md;
                 padding-right: Spacing.md;
                 Text {
-                    text: "Leave this channel? You won't get new messages.";
+                    text: root.is-group
+                        ? "Leave this group? It is removed from this device."
+                        : "Leave this channel? You won't get new messages.";
                     color: Colors.error;
                     font-size: Typography.xs;
                     wrap: word-wrap;
@@ -461,7 +465,7 @@ export component SectionContextMenu inherits Rectangle {
                 destructive: true;
                 mobile-mode: root.mobile-mode;
                 clicked => {
-                    root.leave-channel(root.conversation-id);
+                    root.leave-conversation(root.conversation-id, root.conversation-type);
                     root.close();
                 }
             }

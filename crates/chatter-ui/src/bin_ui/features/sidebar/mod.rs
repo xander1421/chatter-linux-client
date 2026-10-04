@@ -335,6 +335,27 @@ pub(crate) fn rebuild_chat_list(weak: &slint::Weak<MainWindow>, ui_ctx: &Arc<Cha
     });
 }
 
+/// `conv` no longer exists on this device (a deleted chat, a left or
+/// kicked-from group): empty the chat pane if it was open, then rebuild the
+/// folders and the chat list. Runtime thread, like [`rebuild_chat_list`].
+pub(crate) fn conversation_removed(
+    weak: &slint::Weak<MainWindow>,
+    ui_ctx: &Arc<ChatterClient>,
+    conv: chatter_core::state::ActiveConversation,
+) {
+    let ui_ctx_ui = ui_ctx.clone();
+    run_ui!(weak, |w| {
+        if ui_ctx_ui.active_conversation() == conv {
+            ui_ctx_ui.chat_state().set_active_conversation(chatter_core::state::ActiveConversation::None);
+            w.set_messages(slint::ModelRc::new(slint::VecModel::<crate::MessageItemData>::default()));
+            // No name = nothing open: the pane shows "Select a conversation".
+            w.set_channel_name("".into());
+        }
+    });
+    sections::refresh_sections_ui(weak, ui_ctx);
+    rebuild_chat_list(weak, ui_ctx);
+}
+
 /// [`rebuild_chat_list`] from the UI thread. Friends are synced from the
 /// server first — `list_friends_with_profiles` persists each accepted friend
 /// locally — so a friendship accepted on another device shows up too.

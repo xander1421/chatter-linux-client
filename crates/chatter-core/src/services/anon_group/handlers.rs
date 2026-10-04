@@ -7,12 +7,13 @@ use crate::proto::content_v1::{anon_group_update, AnonGroupUpdate};
 use super::{AnonGroupError, AnonGroupService};
 
 impl AnonGroupService {
-    /// Handle an incoming leave message.
+    /// Handle an incoming leave message. `Ok(true)` only when a member was
+    /// actually removed, so the caller announces nothing it did not apply.
     pub fn handle_leave(
         &self,
         group_id: AnonGroupId,
         sender_id: UserId,
-    ) -> Result<(), AnonGroupError> {
+    ) -> Result<bool, AnonGroupError> {
         // Verify group exists
         let _group = self
             .anon_group_repo
@@ -28,17 +29,19 @@ impl AnonGroupService {
         // Verify sender is a member
         if !self.anon_group_repo.is_member(&group_id, &sender_id)? {
             tracing::debug!("Leave from non-member {} in group {}", sender_id, group_id);
-            return Ok(());
+            return Ok(false);
         }
 
         // Remove member
         self.anon_group_repo.remove_member(&group_id, &sender_id)?;
 
         tracing::info!("Member {} left group {}", sender_id, group_id);
-        Ok(())
+        Ok(true)
     }
 
-    /// Handle an incoming kick message.
+    /// Handle an incoming kick message. `Ok(true)` only when the kick was
+    /// authorized, carried a valid signature, and was applied; every refusal
+    /// is `Ok(false)` (or an error), so the caller announces nothing.
     pub fn handle_kick(
         &self,
         group_id: AnonGroupId,
@@ -46,7 +49,7 @@ impl AnonGroupService {
         sender_id: UserId,
         admin_signature: &[u8],
         timestamp: u64,
-    ) -> Result<(), AnonGroupError> {
+    ) -> Result<bool, AnonGroupError> {
         let current_user = self.current_user_id()?;
 
         // Verify group exists
@@ -67,7 +70,7 @@ impl AnonGroupService {
                 sender_id,
                 group_id
             );
-            return Ok(());
+            return Ok(false);
         }
 
         // SECURITY: The owner can never be kicked.
@@ -77,7 +80,7 @@ impl AnonGroupService {
                 group_id = %group_id,
                 "Rejected attempt to kick the group owner"
             );
-            return Ok(());
+            return Ok(false);
         }
 
         // Verify the signature using sender's mailbox public key
@@ -98,7 +101,7 @@ impl AnonGroupService {
                     sender_id,
                     group_id
                 );
-                return Ok(());
+                return Ok(false);
             }
             Err(e) => {
                 tracing::error!("Failed to verify kick signature: {} - rejecting kick", e);
@@ -113,7 +116,7 @@ impl AnonGroupService {
         if kicked_user_id == current_user {
             self.anon_group_repo.delete_group(&group_id)?;
             tracing::info!("We were kicked from group {}", group_id);
-            return Ok(());
+            return Ok(true);
         }
 
         // Remove the kicked member from our local list
@@ -128,7 +131,7 @@ impl AnonGroupService {
             group_id,
             sender_id
         );
-        Ok(())
+        Ok(true)
     }
 
     /// Handle an incoming group update message (name change, role change).

@@ -33,6 +33,8 @@ pub enum ConversationError {
     AnonGroup(#[from] crate::services::AnonGroupError),
     #[error("Message error: {0}")]
     Message(#[from] crate::services::MessageError),
+    #[error("Channel error: {0}")]
+    Channel(#[from] crate::services::channel::ChannelError),
     #[error("{0}")]
     Other(String),
 }
@@ -849,6 +851,37 @@ impl ConversationHandle {
                     .unwrap_or(false))
             }
             ActiveConversation::None => Err(ConversationError::NoConversation),
+        }
+    }
+
+    /// Leave this conversation (Settings › Leave, the sidebar row menu).
+    ///
+    /// A channel is left on the server and stays listed, read-only. A private
+    /// group tells every other member over their anonymous mailboxes and is
+    /// then dropped from this device. DMs have nothing to leave.
+    pub async fn leave(&self) -> ConversationResult {
+        match &self.conversation {
+            ActiveConversation::Channel(id) => Ok(self.client.leave_channel(id).await?),
+            ActiveConversation::AnonGroup(id) => Ok(self.client.anon_groups().leave_group(id).await?),
+            _ => Err(ConversationError::Other("only channels and groups can be left".into())),
+        }
+    }
+
+    /// Remove `user` from this conversation (Settings › Members › Remove).
+    ///
+    /// A channel kick is authorized by the server. A private-group kick is
+    /// refused here unless we may kick (admin/owner) and the target is not the
+    /// owner; it is signed with our group mailbox key, and every member's
+    /// client verifies that signature before applying it (`handle_kick`).
+    pub async fn remove_member(&self, user: &UserId) -> ConversationResult {
+        match &self.conversation {
+            ActiveConversation::Channel(id) => {
+                Ok(self.client.kick_user(id, user, None).await?)
+            }
+            ActiveConversation::AnonGroup(id) => {
+                Ok(self.client.anon_groups().kick_member(id, user).await?)
+            }
+            _ => Err(ConversationError::Other("only channels and groups have members to remove".into())),
         }
     }
 

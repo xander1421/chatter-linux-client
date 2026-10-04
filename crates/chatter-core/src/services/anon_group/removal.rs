@@ -110,9 +110,11 @@ impl AnonGroupService {
             padding: Self::generate_padding(160),
         };
 
-        // Notify all members except the kicked user (via anonymous mailboxes)
+        // Notify every other member, the kicked one included: their client
+        // verifies the same signature and drops the group (`handle_kick`),
+        // instead of posting into a group that no longer lists them.
         for member in members {
-            if member.user_id == current_user || member.user_id == *target_user_id {
+            if member.user_id == current_user {
                 continue;
             }
 
@@ -214,5 +216,210 @@ impl AnonGroupService {
 
         // Verify
         Ok(verifying_key.verify(&message, &sig).is_ok())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use ed25519_dalek::{Signer, SigningKey};
+
+    use crate::client::ChatterClient;
+    use crate::domain::anon_group::{
+        AnonGroup, AnonGroupId, AnonGroupMember, AnonGroupRole, AnonGroupStatus,
+    };
+    use crate::domain::UserId;
+    use crate::inbox::handlers::DomainEvent;
+    use crate::proto::content_v1::{self, AnonGroupKick, AnonGroupLeave, Content};
+    use crate::services::anon_group::AnonGroupError;
+    use crate::services::conversation::ConversationError;
+    use crate::state::ActiveConversation;
+    use crate::storage::repositories::settings_repo::keys;
+
+    /// We are a member (role `my_role`) of a group owned by `owner`, whose
+    /// mailbox key is `owner_key`; `mallory` is a plain member.
+    struct Fixture {
+        client: Arc<ChatterClient>,
+        _dir: tempfile::TempDir,
+        group_id: AnonGroupId,
+        owner: UserId,
+        owner_key: SigningKey,
+        mallory: UserId,
+    }
+
+    fn fixture(my_role: AnonGroupRole) -> Fixture {
+        static MOCK_KEYRING: std::sync::Once = std::sync::Once::new();
+        MOCK_KEYRING.call_once(|| {
+            keyring::set_default_credential_builder(keyring::mock::default_credential_builder());
+        });
+        let dir = tempfile::tempdir().unwrap();
+        let client = ChatterClient::builder()
+            .server_url("https://localhost:1")
+            .data_dir(dir.path().to_str().unwrap())
+            .build()
+            .expect("build client");
+        let me = UserId::new();
+        let s = &client.messages().settings_repo;
+        s.set(keys::CURRENT_USER_ID, &me.to_string()).unwrap();
+        s.set(keys::CURRENT_DEVICE_ID, &1u32).unwrap();
+
+        let (owner, mallory) = (UserId::new(), UserId::new());
+        let owner_key = SigningKey::from_bytes(&[5u8; 32]);
+        let group_id = AnonGroupId::new();
+        let repo = &client.anon_groups().anon_group_repo;
+        let mut group = AnonGroup::from_invite(group_id, "g".into(), owner);
+        group.my_role = my_role;
+        repo.insert_group(&group).unwrap();
+        repo.add_member(&AnonGroupMember::with_mailbox(
+            group_id, owner, AnonGroupRole::Owner, owner_key.verifying_key().to_bytes(),
+        )).unwrap();
+        repo.add_member(&AnonGroupMember::with_mailbox(group_id, mallory, AnonGroupRole::Member, [2u8; 32])).unwrap();
+        repo.add_member(&AnonGroupMember::with_mailbox(group_id, me, my_role, [3u8; 32])).unwrap();
+        Fixture { client, _dir: dir, group_id, owner, owner_key, mallory }
+    }
+
+    fn kick(f: &Fixture, signer: &SigningKey) -> Content {
+        let timestamp = 42u64;
+        let mut msg = Vec::new();
+        msg.extend_from_slice(f.group_id.as_bytes());
+        msg.extend_from_slice(f.mallory.as_bytes());
+        msg.extend_from_slice(&timestamp.to_le_bytes());
+        Content {
+            content: Some(content_v1::content::Content::AnonGroupKick(AnonGroupKick {
+                group_id: f.group_id.to_vec(),
+                kicked_user_id: f.mallory.as_bytes().to_vec(),
+                timestamp,
+                admin_signature: signer.sign(&msg).to_bytes().to_vec(),
+            })),
+            ..Default::default()
+        }
+    }
+
+    fn leave(f: &Fixture) -> Content {
+        Content {
+            content: Some(content_v1::content::Content::AnonGroupLeave(AnonGroupLeave {
+                group_id: f.group_id.to_vec(),
+                timestamp: 1,
+            })),
+            ..Default::default()
+        }
+    }
+
+    fn post() -> Content {
+        crate::services::gateway::builders::build_text_content("hi", 7)
+    }
+
+    fn stored(f: &Fixture) -> usize {
+        f.client.anon_groups().get_messages_asc(&f.group_id, None, 50).unwrap().len()
+    }
+
+    fn is_member(f: &Fixture, user: &UserId) -> bool {
+        f.client.anon_groups().anon_group_repo.is_member(&f.group_id, user).unwrap()
+    }
+
+    #[tokio::test]
+    async fn forged_kick_is_neither_applied_nor_announced() {
+        let f = fixture(AnonGroupRole::Member);
+        let svc = f.client.anon_groups();
+        let forger = SigningKey::from_bytes(&[9u8; 32]);
+        let events = svc.process_incoming_content(&f.group_id, &f.owner, &kick(&f, &forger)).unwrap();
+        assert!(events.is_empty(), "a refused kick must not reach the UI: {events:?}");
+        assert!(is_member(&f, &f.mallory));
+
+        // Validly signed, but by a non-admin: refused the same way.
+        let events = svc.process_incoming_content(&f.group_id, &f.mallory, &kick(&f, &f.owner_key)).unwrap();
+        assert!(events.is_empty());
+        assert!(is_member(&f, &f.mallory));
+    }
+
+    #[tokio::test]
+    async fn signed_kick_from_owner_is_applied_and_announced() {
+        let f = fixture(AnonGroupRole::Member);
+        let events = f.client.anon_groups()
+            .process_incoming_content(&f.group_id, &f.owner, &kick(&f, &f.owner_key))
+            .unwrap();
+        assert!(matches!(
+            events.as_slice(),
+            [DomainEvent::AnonGroupMemberKicked { user_id, kicked_by, .. }]
+                if *user_id == f.mallory && *kicked_by == f.owner
+        ), "{events:?}");
+        assert!(!is_member(&f, &f.mallory));
+    }
+
+    #[tokio::test]
+    async fn blocked_group_drops_everything() {
+        let f = fixture(AnonGroupRole::Member);
+        let svc = f.client.anon_groups();
+        svc.block_group(&f.group_id).unwrap();
+        assert!(matches!(svc.check_group_not_blocked(&f.group_id), Err(AnonGroupError::GroupBlocked(_))));
+
+        assert!(svc.process_incoming_content(&f.group_id, &f.mallory, &post()).unwrap().is_empty());
+        assert!(svc.process_incoming_content(&f.group_id, &f.mallory, &leave(&f)).unwrap().is_empty());
+        assert_eq!(stored(&f), 0);
+        assert!(is_member(&f, &f.mallory));
+
+        svc.unblock_group(&f.group_id).unwrap();
+        assert_eq!(svc.get_group(&f.group_id).unwrap().unwrap().status, AnonGroupStatus::Active);
+        svc.process_incoming_content(&f.group_id, &f.mallory, &post()).unwrap();
+        assert_eq!(stored(&f), 1);
+    }
+
+    #[tokio::test]
+    async fn member_blocked_in_group_is_muted_but_their_leave_applies() {
+        let f = fixture(AnonGroupRole::Member);
+        let svc = f.client.anon_groups();
+        svc.block_user_in_group(&f.group_id, &f.mallory, None).unwrap();
+
+        assert!(svc.process_incoming_content(&f.group_id, &f.mallory, &post()).unwrap().is_empty());
+        assert_eq!(stored(&f), 0, "a blocked member's post must not be stored");
+        // Others are unaffected.
+        svc.process_incoming_content(&f.group_id, &f.owner, &post()).unwrap();
+        assert_eq!(stored(&f), 1);
+
+        let events = svc.process_incoming_content(&f.group_id, &f.mallory, &leave(&f)).unwrap();
+        assert!(matches!(events.as_slice(), [DomainEvent::AnonGroupMemberLeft { .. }]), "{events:?}");
+        assert!(!is_member(&f, &f.mallory));
+    }
+
+    #[tokio::test]
+    async fn leave_from_non_member_is_not_announced() {
+        let f = fixture(AnonGroupRole::Member);
+        let stranger = UserId::new();
+        let events = f.client.anon_groups()
+            .process_incoming_content(&f.group_id, &stranger, &leave(&f))
+            .unwrap();
+        assert!(events.is_empty());
+    }
+
+    #[tokio::test]
+    async fn plain_member_cannot_kick_and_nobody_kicks_the_owner() {
+        let f = fixture(AnonGroupRole::Member);
+        let conv = ActiveConversation::AnonGroup(f.group_id);
+        let res = f.client.remove_conversation_member(conv, &f.mallory).await;
+        assert!(matches!(res, Err(ConversationError::AnonGroup(AnonGroupError::InsufficientPermissions(_)))), "{res:?}");
+        assert!(is_member(&f, &f.mallory));
+
+        let f = fixture(AnonGroupRole::Admin);
+        let conv = ActiveConversation::AnonGroup(f.group_id);
+        let res = f.client.remove_conversation_member(conv, &f.owner).await;
+        assert!(matches!(res, Err(ConversationError::AnonGroup(AnonGroupError::CannotKickOwner))), "{res:?}");
+        assert!(is_member(&f, &f.owner));
+    }
+
+    #[tokio::test]
+    async fn leaving_drops_the_group_from_this_device() {
+        let f = fixture(AnonGroupRole::Member);
+        let row = f.client.sidebar_rows().into_iter().find(|r| r.id == f.group_id.to_string()).unwrap();
+        assert!(row.can_leave, "every member is offered Leave");
+
+        let conv = f.client
+            .resolve_row_conversation(&row.id, &crate::domain::message::ConversationType::AnonGroup)
+            .unwrap();
+        assert_eq!(conv, ActiveConversation::AnonGroup(f.group_id));
+        // The notices cannot be delivered here (no server); the leave still
+        // completes locally.
+        f.client.leave_conversation(conv).await.unwrap();
+        assert!(f.client.get_anon_group(&f.group_id).is_none());
     }
 }

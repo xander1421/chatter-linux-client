@@ -8,7 +8,9 @@ use slint::{ComponentHandle, Model, ModelRc, VecModel};
 use chatter_core::client::{ChatterClient, InviteCandidate};
 use chatter_core::domain::anon_group::AnonGroupId;
 use chatter_core::domain::ids::{ChannelId, UserId};
+use chatter_core::domain::message::ConversationType;
 use chatter_core::domain::ChannelType;
+use chatter_core::state::ActiveConversation;
 
 use crate::{BannedMemberData, ChannelMemberData, InviteUser, MainWindow, PrivateGroupFriend};
 
@@ -269,6 +271,14 @@ pub fn load_private_group_roster(ui_ctx: &ChatterClient, group_id: AnonGroupId) 
 /// UI thread only (decodes avatars into `slint::Image`s). Fills the members
 /// pane and the General pane's count; leaves the name field (a draft) alone.
 pub fn apply_private_group_roster(w: &MainWindow, roster: PrivateGroupRoster) {
+    // A group has no server-side edit/archive/delete; any member may leave
+    // (as core's group row says). Set every time: these properties are
+    // shared with channel settings and would otherwise keep a channel's
+    // values, offering server RPCs keyed by the group id.
+    w.set_channel_settings_can_edit(false);
+    w.set_channel_settings_can_archive(false);
+    w.set_channel_settings_can_delete(false);
+    w.set_channel_settings_can_leave(true);
     w.set_channel_settings_member_count(roster.members.len() as i32);
     w.set_channel_settings_is_owner(roster.is_owner);
     w.set_channel_settings_can_manage_members(roster.can_manage_members);
@@ -521,27 +531,42 @@ fn wire_member_management(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     window.on_channel_settings_remove_member(move |user_id| {
         let weak = weak_window.clone();
         let ui_ctx = ui_ctx.clone();
-        let user_id_str = user_id.to_string();
-
         // Read on the UI thread: a Slint Weak never upgrades inside tokio::spawn.
-        let channel_id = weak.upgrade().map(|w| w.get_channel_settings_id().to_string()).unwrap_or_default();
+        let Some(conv) = weak.upgrade().and_then(|w| settings_conversation(&w, &ui_ctx)) else { return };
+        let Ok(user) = user_id.as_str().parse::<UserId>() else { return };
         tokio::spawn(async move {
-            if channel_id.is_empty() { return; }
-            let channel_uuid = match channel_id.parse::<uuid::Uuid>() {
-                Ok(id) => ChannelId::from(id),
-                Err(_) => return,
-            };
-            let user_uuid = match user_id_str.parse::<uuid::Uuid>() {
-                Ok(id) => chatter_core::domain::ids::UserId::from(id),
-                Err(_) => return,
-            };
-
-            if let Err(e) = ui_ctx.kick_user(&channel_uuid, &user_uuid, None).await {
-                tracing::error!(error = %e, "Failed to kick user");
+            let result = ui_ctx.remove_conversation_member(conv, &user).await;
+            match result {
+                // A group kick emits no membership event here; re-read the roster.
+                Ok(()) => {
+                    if let Some(id) = conv.channel_id() {
+                        refresh_members_if_open(weak, ui_ctx, id);
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!(error = %e, "Failed to remove member");
+                    let _ = slint::invoke_from_event_loop(move || {
+                        if let Some(w) = weak.upgrade() {
+                            w.set_channel_settings_error(format!("Couldn't remove member: {e}").into());
+                        }
+                    });
+                }
             }
         });
     });
 }
+
+/// The conversation the settings modal is showing: a private group when it
+/// was opened for one (`type == "private-group"`), otherwise a channel.
+fn settings_conversation(w: &MainWindow, ui_ctx: &ChatterClient) -> Option<ActiveConversation> {
+    let kind = if w.get_channel_settings_type() == "private-group" {
+        ConversationType::AnonGroup
+    } else {
+        ConversationType::Channel
+    };
+    ui_ctx.resolve_row_conversation(w.get_channel_settings_id().as_str(), &kind)
+}
+
 
 /// A members-pane moderation action; core does the work and the server
 /// authorizes it (the buttons only appear where core's `MemberModeration`
@@ -683,15 +708,17 @@ fn wire_channel_actions(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     let ui_ctx_leave = ui_ctx.clone();
     window.on_channel_settings_leave(move || {
         // Read on the UI thread: a Slint Weak never upgrades inside tokio::spawn.
-        let channel_id = weak_window.upgrade().map(|w| w.get_channel_settings_id().to_string()).unwrap_or_default();
-        leave_channel(weak_window.clone(), ui_ctx_leave.clone(), channel_id);
+        let Some(conv) = weak_window.upgrade().and_then(|w| settings_conversation(&w, &ui_ctx_leave)) else { return };
+        leave_conversation(weak_window.clone(), ui_ctx_leave.clone(), conv);
     });
 
     // The sidebar row's long-press menu.
     let weak_window = window.as_weak();
     let ui_ctx_leave = ui_ctx.clone();
-    window.on_leave_channel(move |channel_id| {
-        leave_channel(weak_window.clone(), ui_ctx_leave.clone(), channel_id.to_string());
+    window.on_leave_conversation(move |row_id, kind| {
+        let kind = crate::bin_ui::converters::conversation_type(kind);
+        let Some(conv) = ui_ctx_leave.resolve_row_conversation(row_id.as_str(), &kind) else { return };
+        leave_conversation(weak_window.clone(), ui_ctx_leave.clone(), conv);
     });
 
     let weak_window = window.as_weak();
@@ -721,17 +748,21 @@ fn wire_channel_actions(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     });
 }
 
-/// Leave `channel_id` (Channel Settings and the sidebar row menu). Core files
-/// "You left the channel"; the row stays, read-only, like a removal.
-fn leave_channel(weak: slint::Weak<MainWindow>, ui_ctx: Arc<ChatterClient>, channel_id: String) {
-    let Ok(channel_uuid) = channel_id.parse::<uuid::Uuid>().map(ChannelId::from) else { return };
+/// Leave a channel or private group (Settings and the sidebar row menu).
+/// A channel's row stays, read-only, like a removal (core files "You left
+/// the channel"); a group is gone from this device, so its chat closes.
+fn leave_conversation(weak: slint::Weak<MainWindow>, ui_ctx: Arc<ChatterClient>, conv: ActiveConversation) {
+    let id = conv.channel_id().map(|c| c.to_string()).unwrap_or_default();
     tokio::spawn(async move {
-        let result = ui_ctx.leave_channel(&channel_uuid).await;
+        let result = ui_ctx.leave_conversation(conv).await;
+        if result.is_ok() && matches!(conv, ActiveConversation::AnonGroup(_)) {
+            crate::bin_ui::features::sidebar::conversation_removed(&weak, &ui_ctx, conv);
+        }
         let _ = slint::invoke_from_event_loop(move || {
             let Some(w) = weak.upgrade() else { return };
             match result {
                 Ok(()) => {
-                    if w.get_channel_settings_id() == channel_id.as_str() {
+                    if w.get_channel_settings_id() == id.as_str() {
                         crate::bin_ui::features::back::close(&w, "channel-settings");
                     }
                     // An open chat stays open, read-only: the leave's
@@ -739,9 +770,9 @@ fn leave_channel(weak: slint::Weak<MainWindow>, ui_ctx: Arc<ChatterClient>, chan
                     crate::bin_ui::features::sidebar::refresh_selection(&w, &ui_ctx);
                 }
                 Err(e) => {
-                    tracing::warn!(%channel_uuid, error = %e, "Leave channel failed");
+                    tracing::warn!(%id, error = %e, "Leave failed");
                     // A toast, not the modal's error line: the row menu has no modal.
-                    w.set_toast_message(format!("Couldn't leave the channel: {e}").into());
+                    w.set_toast_message(format!("Couldn't leave: {e}").into());
                     w.set_toast_variant("error".into());
                     w.set_toast_visible(true);
                 }
