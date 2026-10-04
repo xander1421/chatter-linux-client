@@ -35,8 +35,9 @@
 //!   cannot drift back out of step with the code. A green `DEAD` entry is not an
 //!   endorsement — it is an open bug with a test holding its place.
 //!
-//! Runs with no server, no `INTEGRATION_TESTS`, and no feature flags, unlike the
-//! V-series, which skips silently when the stack is absent.
+//! Runs with no server and no `INTEGRATION_TESTS`, unlike the V-series, which
+//! skips silently when the stack is absent. The mesh entries (`MESH_TABLE`) are
+//! checked only with `--features mesh`, the one build where their callers exist.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -188,31 +189,6 @@ const TABLE: &[Entry] = &[
               the next send never re-fetches the peer's bundle, and a peer's revoked \
               device keeps a live session.",
     },
-    // ---- Mesh: peer authentication --------------------------------------
-    Entry {
-        symbol: "evaluate_announce",
-        defined_in: "chatter-mesh-link/src/announce.rs",
-        expect: Expect::Wired,
-        why: "The whole inbound announce trust policy, including the load-bearing check \
-              that the sender ID equals SHA256(announced noise key)[..8]. This function \
-              HAD zero production callers — mesh peers were unauthenticated on the live \
-              path while announce.rs's unit tests passed. It is wired now \
-              (services/mesh/ble.rs); this entry stops it regressing.",
-    },
-    Entry {
-        symbol: "verify_packet",
-        defined_in: "chatter-mesh-noise/src/sign.rs",
-        expect: Expect::Wired,
-        why: "The Ed25519 check actually used on the live mesh path. Without it an \
-              announce is an unauthenticated stranger claiming a nickname and two keys.",
-    },
-    Entry {
-        symbol: "upsert_verified_announce",
-        defined_in: "chatter-mesh-link/src/registry.rs",
-        expect: Expect::Wired,
-        why: "Records a peer only AFTER verification. bitchat drops an unverified \
-              announce outright; recording one would be identity poisoning.",
-    },
     // ---- Blocking: enforced only on the receiving client ------------------
     Entry {
         symbol: "sender_is_blocked",
@@ -312,6 +288,39 @@ const TABLE: &[Entry] = &[
               guesses) cannot log in a new device, while clearnet sign-up \
               (difficulty 0) keeps passing every test.",
     },
+];
+
+/// Mesh entries. Their callers live in `services/mesh`, which only exists in a
+/// `mesh` build, so they are checked only there: `cargo test -p chatter-core
+/// --features mesh,testing --test it production_wiring`. Gated, not deleted — a mesh build
+/// that loses one of these callers still goes red.
+#[cfg(feature = "mesh")]
+const MESH_TABLE: &[Entry] = &[
+    // ---- Mesh: peer authentication --------------------------------------
+    Entry {
+        symbol: "evaluate_announce",
+        defined_in: "chatter-mesh-link/src/announce.rs",
+        expect: Expect::Wired,
+        why: "The whole inbound announce trust policy, including the load-bearing check \
+              that the sender ID equals SHA256(announced noise key)[..8]. This function \
+              HAD zero production callers — mesh peers were unauthenticated on the live \
+              path while announce.rs's unit tests passed. It is wired now \
+              (services/mesh/ble.rs); this entry stops it regressing.",
+    },
+    Entry {
+        symbol: "verify_packet",
+        defined_in: "chatter-mesh-noise/src/sign.rs",
+        expect: Expect::Wired,
+        why: "The Ed25519 check actually used on the live mesh path. Without it an \
+              announce is an unauthenticated stranger claiming a nickname and two keys.",
+    },
+    Entry {
+        symbol: "upsert_verified_announce",
+        defined_in: "chatter-mesh-link/src/registry.rs",
+        expect: Expect::Wired,
+        why: "Records a peer only AFTER verification. bitchat drops an unverified \
+              announce outright; recording one would be identity poisoning.",
+    },
     // ---- Mesh: inbound memory -------------------------------------------
     Entry {
         symbol: "reap_stalled",
@@ -324,31 +333,22 @@ const TABLE: &[Entry] = &[
               2026-10-04; without this caller one byte per link pins memory until \
               disconnect.",
     },
-    // ---- Anonymous groups: removal -------------------------------------
-    Entry {
-        symbol: "verify_kick_signature",
-        defined_in: "chatter-core/src/services/anon_group/removal.rs",
-        expect: Expect::Wired,
-        why: "Receive-side kick authentication (services/anon_group/handlers.rs). Lose \
-              this caller and any member who knows a group id can remove anyone by \
-              sending an unsigned AnonGroupKick.",
-    },
-    Entry {
-        symbol: "kick_member",
-        defined_in: "chatter-core/src/services/anon_group/removal.rs",
-        expect: Expect::Wired,
-        why: "Send-side, signed private-group kick (services/conversation.rs \
-              `remove_member`, from Settings › Members › Remove). Dead until \
-              2026-10-04: the button sent the group id to the server's channel kick.",
-    },
-    Entry {
-        symbol: "leave_group",
-        defined_in: "chatter-core/src/services/anon_group/removal.rs",
-        expect: Expect::Wired,
-        why: "Private-group leave (services/conversation.rs `leave`, from Settings and \
-              the sidebar row menu). Dead until 2026-10-04: a group could not be left.",
-    },
 ];
+
+/// Every entry this build can check.
+fn table() -> impl Iterator<Item = &'static Entry> {
+    let mesh: &[Entry] = {
+        #[cfg(feature = "mesh")]
+        {
+            MESH_TABLE
+        }
+        #[cfg(not(feature = "mesh"))]
+        {
+            &[]
+        }
+    };
+    TABLE.iter().chain(mesh.iter())
+}
 
 // ============================================================================
 // Source scanning
@@ -535,7 +535,7 @@ fn production_callers(symbol: &str, defined_in: &str) -> Vec<String> {
 fn security_controls_have_at_least_one_production_caller() {
     let mut unwired: Vec<String> = Vec::new();
 
-    for entry in TABLE.iter().filter(|e| e.expect == Expect::Wired) {
+    for entry in table().filter(|e| e.expect == Expect::Wired) {
         let callers = production_callers(entry.symbol, entry.defined_in);
         if callers.is_empty() {
             unwired.push(format!(
@@ -565,7 +565,7 @@ fn security_controls_have_at_least_one_production_caller() {
 fn recorded_dead_wires_have_not_silently_come_alive() {
     let mut revived: Vec<String> = Vec::new();
 
-    for entry in TABLE.iter().filter(|e| e.expect == Expect::Dead) {
+    for entry in table().filter(|e| e.expect == Expect::Dead) {
         let callers = production_callers(entry.symbol, entry.defined_in);
         if !callers.is_empty() {
             revived.push(format!(
@@ -700,12 +700,15 @@ fn every_sealed_sender_decrypt_consumer_refuses_unratcheted_plaintext() {
 /// invent one that is not.
 #[test]
 fn scanner_self_check() {
-    let real = production_callers("evaluate_announce", "chatter-mesh-link/src/announce.rs");
+    let real = production_callers(
+        "sender_is_blocked",
+        "chatter-core/src/services/gateway/block_filter.rs",
+    );
     assert!(
         !real.is_empty(),
-        "positive control failed: evaluate_announce IS called from services/mesh/ble.rs, \
-         so a scanner that reports zero here is broken, and every Dead verdict in this \
-         file is meaningless"
+        "positive control failed: sender_is_blocked IS called from \
+         services/gateway/decryption.rs, so a scanner that reports zero here is broken, \
+         and every Dead verdict in this file is meaningless"
     );
 
     let fictional = production_callers("no_such_function_exists_anywhere", "NONE");

@@ -129,8 +129,9 @@ default = ["desktop", "jarvis"]
 # Emit Slint element metadata for the headless UI query suites.
 ui-test-debug = ["chatter-ui-slint/ui-test-debug"]
 # The bitchat mesh. Off by default while the radio stack is unproven against a
-# second device. `mesh` alone gives BLE; add `onion` for geohash channels and
-# Nostr DMs, which are Tor-only on purpose.
+# second device: a default build links no chatter-mesh* crate at all. `mesh`
+# alone gives BLE; add `onion` for geohash channels and Nostr DMs, which are
+# Tor-only on purpose. android/build-android.sh turns it on (MESH=0 to omit).
 mesh = ["chatter-core/mesh"]
 desktop = [
     "dep:i-slint-backend-winit", "dep:winit", "dep:arboard", "slint/backend-winit",

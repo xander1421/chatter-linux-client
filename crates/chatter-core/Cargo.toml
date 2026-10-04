@@ -16,24 +16,25 @@ path = "src/lib.rs"
 
 [dependencies]
 # ============================================================================
-# bitchat mesh
+# bitchat mesh — every chatter-mesh* crate is optional, enabled only by the
+# `mesh` feature below. A default build links none of them.
 # ============================================================================
 # Noise sessions and the mesh identity type. The crate holds no key custody by
 # design — `storage/mesh_identity_store.rs` provides it, over SQLCipher.
 # Its `rand_core` is 0.6, which is why the mesh identity is generated with the
 # `rand_core_06` alias below rather than the crate's main `rand` 0.9.
-chatter-mesh-noise = { path = "../chatter-mesh-noise" }
+chatter-mesh-noise = { path = "../chatter-mesh-noise", optional = true }
 # Store-and-forward (P5). Leaves `Storage` and `Sealer` open on purpose so the
 # sealing key never enters that crate — `storage/mesh_store.rs` implements both.
-chatter-mesh-store = { path = "../chatter-mesh-store" }
+chatter-mesh-store = { path = "../chatter-mesh-store", optional = true }
 # Wire format: packet codec, TLV payloads, relay policy, gossip-sync filters.
-chatter-mesh = { path = "../chatter-mesh" }
+chatter-mesh = { path = "../chatter-mesh", optional = true }
 # Link policy plus the MeshLink radio trait. The trait lives here rather than in
 # a platform crate so the Android backend needs no BlueZ.
-chatter-mesh-link = { path = "../chatter-mesh-link" }
+chatter-mesh-link = { path = "../chatter-mesh-link", optional = true }
 # Nostr transport: geohash channels and gift-wrapped DMs. Its RelayConnector is
 # injected, so no second Tor stack — the existing arti client backs it.
-chatter-mesh-nostr = { path = "../chatter-mesh-nostr" }
+chatter-mesh-nostr = { path = "../chatter-mesh-nostr", optional = true }
 
 # ============================================================================
 # Async Runtime
@@ -241,7 +242,7 @@ open = "5.3.3"
 # ============================================================================
 [target.'cfg(target_os = "linux")'.dependencies]
 # BlueZ radio for the mesh (Linux only, by construction).
-chatter-mesh-ble = { path = "../chatter-mesh-ble" }
+chatter-mesh-ble = { path = "../chatter-mesh-ble", optional = true }
 ksni = "0.2"
 v4l = "0.14"
 
@@ -266,7 +267,7 @@ muda = "0.17"
 # Core is platform-neutral; UI crate injects platform impls via NotificationSink.
 [target.'cfg(target_os = "android")'.dependencies]
 # JNI radio for the mesh (Android only).
-chatter-mesh-android = { path = "../chatter-mesh-android" }
+chatter-mesh-android = { path = "../chatter-mesh-android", optional = true }
 # Call playback opens its stream through oboe directly (cpal already links the
 # same crate) so it can declare USAGE_VOICE_COMMUNICATION: only that usage
 # follows the call route (earpiece / speaker / headset) AudioManager selects.
@@ -352,7 +353,16 @@ jarvis = []
 # Mesh-over-clearnet is not offered on purpose: publishing to public relays
 # without Tor would hand every relay operator the user's IP alongside the cell
 # they are sitting in, which is the correlation the design exists to prevent.
-mesh = []
+#
+# This is a real gate: the chatter-mesh* crates are optional dependencies and
+# `services::mesh`, `storage::mesh_store` and `storage::mesh_identity_store` are
+# `#[cfg(feature = "mesh")]`. The BLE radio crate is per-target (BlueZ on Linux,
+# JNI on Android); naming it here enables whichever one the target has.
+mesh = [
+    "dep:chatter-mesh", "dep:chatter-mesh-noise", "dep:chatter-mesh-link",
+    "dep:chatter-mesh-store", "dep:chatter-mesh-nostr",
+    "dep:chatter-mesh-ble", "dep:chatter-mesh-android",
+]
 # Widens `ChatterClient` service accessors to `pub` so integration tests in
 # this crate's `tests/` directory (which are external consumers) can wire
 # real services against a live server. Do NOT enable for application builds —

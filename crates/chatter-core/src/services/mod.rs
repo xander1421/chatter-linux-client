@@ -49,6 +49,7 @@ pub mod dm_bootstrap_service;
 pub mod pairwise;
 pub mod anon_group;
 pub mod anon_dm;
+#[cfg(feature = "mesh")]
 pub mod mesh;
 pub(crate) mod anon_shared;
 pub mod message_backup_service;

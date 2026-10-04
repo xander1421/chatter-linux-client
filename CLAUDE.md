@@ -26,9 +26,15 @@ Eleven crates (`Cargo.toml` `[workspace]`):
 - `chatter-mesh-nostr` — Nostr relay transport
 - `chatter-mesh-store` — mesh outbox / courier / archive
 
-The mesh crates **are** wired into `chatter-core` (`services/mesh/`) with UI in
-`ui/mesh/`. Older docs saying "chatter-mesh is not wired into anything" are
-stale.
+The mesh crates are wired into `chatter-core` (`services/mesh/`) with UI in
+`ui/mesh/`, **behind the `mesh` cargo feature, which is off by default**. The
+chatter-mesh* crates are optional dependencies of `chatter-core`, and
+`services::mesh`, `storage::mesh_store` and `storage::mesh_identity_store` are
+`#[cfg(feature = "mesh")]`, so a default build links none of them
+(`cargo tree -p chatter-ui -e normal | grep chatter-mesh` is empty). Builds that
+need it opt in: `android/build-android.sh` (on unless `MESH=0`), `dev-run.sh`,
+`make test-rust`, `make check-features-mesh`. Mesh rows in
+`tests/production_wiring.rs` are checked only with `--features mesh`.
 
 ## Architecture Rules
 
