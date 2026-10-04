@@ -140,26 +140,22 @@ desktop = [
     "dep:objc2", "dep:objc2-app-kit", "dep:raw-window-handle"
 ]
 # windows-cross: No LiveKit (webrtc-sys requires MSVC, can't cross-compile with MinGW).
-# GStreamer still links (unconditional dep in chatter-ui). For full features, build
-# natively on Windows with the 'desktop' feature.
+# GStreamer decode (video, GIF, waveform, thumbnails) still works through
+# `desktop-gstreamer`. For calls, build natively on Windows with 'desktop'.
 windows-cross = [
     "dep:i-slint-backend-winit", "dep:winit", "dep:arboard", "slint/backend-winit",
-    "slint/renderer-software", "chatter-core/desktop-system", "chatter-core/desktop-gstreamer",
-    "desktop-media-no-livekit"
+    "slint/renderer-software", "chatter-core/desktop-system", "desktop-gstreamer",
 ]
-desktop-media = [
-    "dep:gstreamer", "dep:gstreamer-app", "dep:gstreamer-video", "dep:gstreamer-gl",
-    "dep:livekit", "dep:gstreamer-gl-egl", "dep:glutin_egl_sys",
-    "call-ui"
-]
+desktop-media = ["desktop-gstreamer", "dep:livekit", "call-ui"]
 # Call UI wiring (features/calls, call event routing, video-frame→image). Enabled
 # by both desktop (desktop-media) and mobile so the call screens are actually
 # driven on both. The Slint call screens themselves compile unconditionally; this
-# only gates the Rust glue. gstreamer-init stays desktop-media-only (lib.rs).
+# only gates the Rust glue.
 call-ui = []
-desktop-media-no-livekit = [
+# GStreamer (init, GIF viewer decode) here plus core's GStreamer decoders.
+desktop-gstreamer = [
     "dep:gstreamer", "dep:gstreamer-app", "dep:gstreamer-video", "dep:gstreamer-gl",
-    "dep:gstreamer-gl-egl", "dep:glutin_egl_sys"
+    "dep:gstreamer-gl-egl", "dep:glutin_egl_sys", "chatter-core/desktop-gstreamer",
 ]
 local-ai = ["chatter-core/local-ai"]
 jarvis = ["chatter-core/jarvis"]

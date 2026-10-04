@@ -127,7 +127,7 @@ impl AttachmentService {
         attachment_id: &AttachmentId,
     ) -> Result<ImageDecodeResult, AttachmentError> {
         let secure_buffer = self.decrypt_auto(attachment_id)?;
-        #[cfg(feature = "desktop-media")]
+        #[cfg(feature = "desktop-gstreamer")]
         {
             let (thumbnail, width, height, _duration_ms) =
                 crate::media::extract_video_thumbnail_from_memory(secure_buffer.as_slice())
@@ -151,9 +151,9 @@ impl AttachmentService {
                 height,
             })
         }
-        // GStreamer video processing is desktop-media only; mobile has no
+        // GStreamer video processing is desktop-gstreamer only; mobile has no
         // frame extractor, so the receiver simply renders without a thumbnail.
-        #[cfg(not(feature = "desktop-media"))]
+        #[cfg(not(feature = "desktop-gstreamer"))]
         {
             let _ = secure_buffer;
             Err(AttachmentError::DecryptionError(
@@ -173,7 +173,7 @@ impl AttachmentService {
     /// avoids the flaky GL pipeline that produced black frames. Falls back to
     /// the `image` crate if GStreamer is unavailable or fails.
     pub fn decode_gif_all_frames(gif_bytes: &[u8]) -> Result<GifFullDecodeResult, AttachmentError> {
-        #[cfg(feature = "desktop-media")]
+        #[cfg(feature = "desktop-gstreamer")]
         {
             match crate::media::gif::decode_all_frames_cpu(gif_bytes) {
                 Ok(frames) if frames.len() > 1 => return Ok(GifFullDecodeResult { frames }),

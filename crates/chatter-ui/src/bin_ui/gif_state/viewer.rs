@@ -172,7 +172,7 @@ fn decode_gif_with_best_backend(
 ) -> Result<usize, String> {
     // Fast, reliable CPU GStreamer decode (stride-honored, ~0.15s, no flaky GL).
     // Decodes all frames up front, then streams them to the animation channel.
-    #[cfg(feature = "desktop-media")]
+    #[cfg(feature = "desktop-gstreamer")]
     {
         match chatter_core::media::gif::decode_all_frames_cpu(data) {
             Ok(frames) if frames.len() > 1 => {

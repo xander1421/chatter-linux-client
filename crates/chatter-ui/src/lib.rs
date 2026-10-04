@@ -194,7 +194,7 @@ pub async fn app_init() -> AppState {
         tracing::warn!("Security: Continuing with debugger detected - sensitive data may be exposed");
     }
 
-    #[cfg(feature = "desktop-media")]
+    #[cfg(feature = "desktop-gstreamer")]
     if let Err(e) = gstreamer::init() {
         tracing::warn!("GStreamer initialization failed: {} (media features may not work)", e);
     } else {

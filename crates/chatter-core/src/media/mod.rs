@@ -14,7 +14,7 @@ pub mod file_picker;
 pub mod gif;
 pub mod image_processor;
 pub mod video_playback;
-#[cfg(feature = "desktop-media")]
+#[cfg(feature = "desktop-gstreamer")]
 pub mod video_processor;
 pub mod waveform;
 
@@ -27,7 +27,7 @@ pub use video_playback::{
     format_duration, PlayerState, SharedPlayerState,
     VideoPlayer as InAppVideoPlayer,
 };
-#[cfg(feature = "desktop-media")]
+#[cfg(feature = "desktop-gstreamer")]
 pub use video_processor::{
     extract_video_thumbnail, extract_video_thumbnail_from_memory,
     get_video_dimensions, get_video_dimensions_from_memory,

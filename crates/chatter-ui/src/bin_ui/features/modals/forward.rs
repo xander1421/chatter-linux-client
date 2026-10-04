@@ -79,7 +79,7 @@ pub fn wire_forward_message(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                         // stayed invisible until the next load (§112k).
                         // Reopen it through the sidebar path to reload.
                         if ui_ctx.chat_state().active_conversation() == target {
-                            crate::bin_ui::features::calls::history::select_conversation(
+                            crate::bin_ui::features::sidebar::select_conversation(
                                 &w, target,
                             );
                         }

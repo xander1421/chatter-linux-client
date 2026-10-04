@@ -14,7 +14,6 @@ use slint::{ComponentHandle, ModelRc, SharedString, VecModel};
 use chatter_core::client::calls::CallHistoryPage;
 use chatter_core::client::ChatterClient;
 use chatter_core::domain::call::CallHistoryFilter;
-use chatter_core::state::ActiveConversation;
 
 use crate::bin_ui::converters::avatar_bytes_to_image;
 use crate::run_ui;
@@ -129,7 +128,7 @@ fn open_conversation(
     // rejects it.
     let opened = ui_ctx
         .call_history_conversation(conversation_type, conversation_id)
-        .is_some_and(|conv| select_conversation(window, conv));
+        .is_some_and(|conv| crate::bin_ui::features::sidebar::select_conversation(window, conv));
     if !opened {
         tracing::warn!(
             conversation_type,
@@ -141,24 +140,6 @@ fn open_conversation(
         window.set_toast_visible(true);
     }
     opened
-}
-
-/// Fire the sidebar-open callback for `conv` — the same entry point a row tap
-/// uses, so the message list is (re)loaded from storage. False for the
-/// variant no open callback exists for (`None`).
-pub(crate) fn select_conversation(window: &MainWindow, conv: ActiveConversation) -> bool {
-    match conv {
-        ActiveConversation::Channel(id) => window.invoke_channel_selected(id.to_string().into()),
-        ActiveConversation::ServerDm { peer_id } => {
-            window.invoke_dm_selected(peer_id.to_string().into())
-        }
-        ActiveConversation::AnonDm(id) => window.invoke_dm_selected(id.to_string().into()),
-        ActiveConversation::AnonGroup(id) => {
-            window.invoke_private_group_selected(id.to_string().into())
-        }
-        ActiveConversation::None => return false,
-    }
-    true
 }
 
 /// Re-read the list from core and repaint it, badge included.

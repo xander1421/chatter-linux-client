@@ -6,13 +6,13 @@
 
 use std::path::Path;
 
-#[cfg(feature = "desktop-media")]
+#[cfg(feature = "desktop-gstreamer")]
 use gstreamer as gst;
-#[cfg(feature = "desktop-media")]
+#[cfg(feature = "desktop-gstreamer")]
 use gstreamer::prelude::*;
-#[cfg(feature = "desktop-media")]
+#[cfg(feature = "desktop-gstreamer")]
 use gstreamer_app as gst_app;
-#[cfg(feature = "desktop-media")]
+#[cfg(feature = "desktop-gstreamer")]
 use gstreamer_pbutils as gst_pbutils;
 
 use crate::error::MediaError;
@@ -52,13 +52,13 @@ pub fn extract_waveform_with_bars(path: &Path, num_bars: usize) -> Result<Vec<u8
         return Ok(Vec::new());
     }
 
-    #[cfg(feature = "desktop-media")]
+    #[cfg(feature = "desktop-gstreamer")]
     {
         gst::init().map_err(|e| MediaError::InvalidFormat(format!("GStreamer init failed: {}", e)))?;
         let uri = format!("file://{}", path.display());
         extract_waveform_from_uri(&uri, num_bars)
     }
-    #[cfg(not(feature = "desktop-media"))]
+    #[cfg(not(feature = "desktop-gstreamer"))]
     {
         let data = std::fs::read(path)
             .map_err(|e| MediaError::InvalidFormat(e.to_string()))?;
@@ -97,17 +97,17 @@ pub fn extract_waveform_from_memory_with_bars(data: &[u8], num_bars: usize) -> R
         }.map_err(|e| MediaError::InvalidFormat(e.to_string()))?;
         return process_samples_to_bars(samples, num_bars);
     }
-    #[cfg(feature = "desktop-media")]
+    #[cfg(feature = "desktop-gstreamer")]
     {
         gst::init().map_err(|e| MediaError::InvalidFormat(format!("GStreamer init failed: {}", e)))?;
         extract_waveform_from_data(data, num_bars)
     }
-    #[cfg(not(feature = "desktop-media"))]
+    #[cfg(not(feature = "desktop-gstreamer"))]
     Err(MediaError::InvalidFormat("Waveform extraction requires PCM WAV on this platform".into()))
 }
 
 /// Extract waveform from in-memory data using appsrc.
-#[cfg(feature = "desktop-media")]
+#[cfg(feature = "desktop-gstreamer")]
 fn extract_waveform_from_data(data: &[u8], num_bars: usize) -> Result<Vec<u8>, MediaError> {
     // Create pipeline: appsrc -> decodebin -> audioconvert -> audioresample -> appsink
     let pipeline = gst::Pipeline::new();
@@ -239,7 +239,7 @@ fn extract_waveform_from_data(data: &[u8], num_bars: usize) -> Result<Vec<u8>, M
 /// Instead of decoding the entire file (which takes minutes for large files),
 /// we seek to `num_bars` positions and sample a small chunk at each position.
 /// This reduces a 5-minute decode to ~1 second.
-#[cfg(feature = "desktop-media")]
+#[cfg(feature = "desktop-gstreamer")]
 fn extract_waveform_from_uri(uri: &str, num_bars: usize) -> Result<Vec<u8>, MediaError> {
     // First, query the duration using playbin
     let duration_ns = query_audio_duration(uri)?;
@@ -373,7 +373,7 @@ fn extract_waveform_from_uri(uri: &str, num_bars: usize) -> Result<Vec<u8>, Medi
 }
 
 /// Query audio duration without decoding.
-#[cfg(feature = "desktop-media")]
+#[cfg(feature = "desktop-gstreamer")]
 fn query_audio_duration(uri: &str) -> Result<u64, MediaError> {
     let discoverer = gst_pbutils::Discoverer::new(gst::ClockTime::from_seconds(10))
         .map_err(|e| MediaError::InvalidFormat(format!("Failed to create discoverer: {}", e)))?;

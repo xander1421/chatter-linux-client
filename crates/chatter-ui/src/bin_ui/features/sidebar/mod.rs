@@ -73,6 +73,28 @@ pub(crate) fn apply_unread_anchor(
     window.set_is_at_bottom(index.is_none());
 }
 
+/// Fire the sidebar-open callback for `conv` — the same entry point a row tap
+/// uses, so the message list is (re)loaded from storage. False for the
+/// variant no open callback exists for (`None`).
+pub(crate) fn select_conversation(
+    window: &MainWindow,
+    conv: chatter_core::state::ActiveConversation,
+) -> bool {
+    use chatter_core::state::ActiveConversation;
+    match conv {
+        ActiveConversation::Channel(id) => window.invoke_channel_selected(id.to_string().into()),
+        ActiveConversation::ServerDm { peer_id } => {
+            window.invoke_dm_selected(peer_id.to_string().into())
+        }
+        ActiveConversation::AnonDm(id) => window.invoke_dm_selected(id.to_string().into()),
+        ActiveConversation::AnonGroup(id) => {
+            window.invoke_private_group_selected(id.to_string().into())
+        }
+        ActiveConversation::None => return false,
+    }
+    true
+}
+
 /// Recompute `is_selected` on every sidebar model item from the typed
 /// `ActiveConversation` held by the client. Call after any selection change
 /// so highlighting stays in sync without stringly-typed window properties.
