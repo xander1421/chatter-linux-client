@@ -10,6 +10,7 @@ import { Spacing } from "../theme/spacing.slint";
 import { Typography } from "../theme/typography.slint";
 import { Button } from "../components/button.slint";
 import { DismissButton } from "../components/dismiss_button.slint";
+import { JarvisGlobal } from "../jarvis/jarvis_global.slint";
 
 // One fact row.
 export struct MemoryFactData {
@@ -84,6 +85,7 @@ export component JarvisMemoryModal inherits GlassSurface {
                 font-size: Typography.xs;
                 vertical-alignment: center;
             }
+            Button { text: "Clear history"; variant: "ghost"; clicked => { JarvisGlobal.clear-history(); } }
             Button { text: "Refresh"; variant: "ghost"; clicked => { root.refresh(); } }
             // Centered dialog → the shared X on the trailing edge. A "Close"
             // text button was a fourth spelling of the same action, and it sat

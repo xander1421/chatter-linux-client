@@ -11,7 +11,7 @@ use slint::{ComponentHandle, ModelRc, SharedString, VecModel};
 use chatter_core::client::ChatterClient;
 
 use crate::{
-    MainWindow, MemoryEntityData, MemoryFactData, MemoryGraphEdgeData, MemoryGraphNodeData,
+    JarvisGlobal, MainWindow, MemoryEntityData, MemoryFactData, MemoryGraphEdgeData, MemoryGraphNodeData,
 };
 
 const VW: f32 = 400.0;
@@ -45,6 +45,20 @@ pub fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             let ui_ctx = ui_ctx.clone();
             let weak = weak.clone();
             tokio::spawn(async move { refresh(ui_ctx, weak, Some(entity_id.to_string())).await });
+        });
+    }
+    {
+        let ui_ctx = ui_ctx.clone();
+        let weak = window.as_weak();
+        window.global::<JarvisGlobal>().on_clear_history(move || {
+            let ui_ctx = ui_ctx.clone();
+            let weak = weak.clone();
+            tokio::spawn(async move {
+                if let Err(e) = ui_ctx.jarvis_clear_history() {
+                    tracing::error!("failed to clear Jarvis history: {e}");
+                }
+                refresh(ui_ctx, weak, None).await
+            });
         });
     }
 }
@@ -122,13 +136,7 @@ async fn refresh(ui_ctx: Arc<ChatterClient>, weak: slint::Weak<MainWindow>, sele
         }
     }
 
-    let current_count = facts.iter().filter(|f| f.valid_until.is_none()).count();
-    let stats = format!(
-        "{} facts ({} current) · {} entities",
-        facts.len(),
-        current_count,
-        entities.len()
-    );
+    let stats = ui_ctx.jarvis_memory_stats_label();
 
     let _ = slint::invoke_from_event_loop(move || {
         if let Some(w) = weak.upgrade() {

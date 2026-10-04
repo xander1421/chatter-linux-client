@@ -7,4 +7,7 @@
 
 export global JarvisGlobal {
     in-out property <bool> enabled: false;
+    // Memory browser "Clear history": core deletes the AI channel's turns
+    // and summaries (`ChatterClient::jarvis_clear_history`).
+    callback clear-history();
 }
