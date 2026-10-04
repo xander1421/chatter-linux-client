@@ -34,69 +34,6 @@ impl Default for InboxConfig {
     }
 }
 
-impl InboxConfig {
-    /// Create a new configuration builder.
-    pub fn builder() -> InboxConfigBuilder {
-        InboxConfigBuilder::new()
-    }
-}
-
-/// Builder for `InboxConfig`.
-#[derive(Debug, Clone)]
-pub struct InboxConfigBuilder {
-    config: InboxConfig,
-}
-
-impl InboxConfigBuilder {
-    /// Create a new builder with default values.
-    pub fn new() -> Self {
-        Self {
-            config: InboxConfig::default(),
-        }
-    }
-
-    /// Set the base polling interval.
-    pub fn poll_interval(mut self, interval: Duration) -> Self {
-        self.config.poll_interval = interval;
-        self
-    }
-
-    /// Set the idle polling interval.
-    pub fn poll_interval_idle(mut self, interval: Duration) -> Self {
-        self.config.poll_interval_idle = interval;
-        self
-    }
-
-    /// Set the maximum batch size for polling.
-    pub fn max_batch_size(mut self, size: u32) -> Self {
-        self.config.max_batch_size = size;
-        self
-    }
-
-    /// Set the number of retry attempts.
-    pub fn retry_attempts(mut self, attempts: u32) -> Self {
-        self.config.retry_attempts = attempts;
-        self
-    }
-
-    /// Set the acknowledgment batch size.
-    pub fn ack_batch_size(mut self, size: u32) -> Self {
-        self.config.ack_batch_size = size;
-        self
-    }
-
-    /// Build the configuration.
-    pub fn build(self) -> InboxConfig {
-        self.config
-    }
-}
-
-impl Default for InboxConfigBuilder {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -109,22 +46,5 @@ mod tests {
         assert_eq!(config.max_batch_size, 100);
         assert_eq!(config.retry_attempts, 3);
         assert_eq!(config.ack_batch_size, 50);
-    }
-
-    #[test]
-    fn test_inbox_config_builder() {
-        let config = InboxConfig::builder()
-            .poll_interval(Duration::from_secs(10))
-            .poll_interval_idle(Duration::from_secs(60))
-            .max_batch_size(50)
-            .retry_attempts(5)
-            .ack_batch_size(25)
-            .build();
-
-        assert_eq!(config.poll_interval, Duration::from_secs(10));
-        assert_eq!(config.poll_interval_idle, Duration::from_secs(60));
-        assert_eq!(config.max_batch_size, 50);
-        assert_eq!(config.retry_attempts, 5);
-        assert_eq!(config.ack_batch_size, 25);
     }
 }

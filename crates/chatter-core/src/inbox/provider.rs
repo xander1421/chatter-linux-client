@@ -100,9 +100,10 @@ async fn perform_dummy_poll(
 /// # Example
 ///
 /// ```ignore
-/// let config = InboxConfig::builder()
-///     .poll_interval(Duration::from_secs(5))
-///     .build();
+/// let config = InboxConfig {
+///     poll_interval: Duration::from_secs(5),
+///     ..InboxConfig::default()
+/// };
 ///
 /// let provider = DeviceInboxProvider::new(
 ///     config,

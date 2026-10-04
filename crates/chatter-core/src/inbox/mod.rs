@@ -6,7 +6,6 @@
 //!
 //! - `DeviceInboxProvider` - Main coordinator for inbox operations
 //! - `InboxPoller` - Polling loop with challenge-response authentication
-//! - `LocalQueue` - Retry queue with exponential backoff
 //! - `InboxConfig` - Configuration for polling intervals and batch sizes
 //! - `InboxEvent` - Events for monitoring message flow
 //! - `DomainEvent` - High-level events emitted to UI/state stores
@@ -28,17 +27,15 @@ pub mod handlers;
 pub mod poller;
 pub mod polling;
 pub mod provider;
-pub mod queue;
 pub mod state;
 pub mod streaming;
 
 // Re-export main types for convenience
-pub use config::{InboxConfig, InboxConfigBuilder};
+pub use config::InboxConfig;
 pub use error::InboxError;
 pub use events::InboxEvent;
 pub use poller::InboxPoller;
 pub use provider::DeviceInboxProvider;
-pub use queue::{LocalQueue, QueuedInboxMessage};
 pub use state::{InboxState, InboxStats};
 
 // Re-export DomainEvent (emitted by all inbox dispatchers).
