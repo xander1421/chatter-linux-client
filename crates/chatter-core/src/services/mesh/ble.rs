@@ -2739,8 +2739,8 @@ impl BleRuntime {
     ///
     /// Our own announce is the one exception, a deliberate departure from
     /// bitchat: the store's stale-peer sweep purges every carried packet of a
-    /// peer whose announce has aged past a minute, and filing ours would aim
-    /// that sweep at our own messages between announces.
+    /// peer whose announce has aged past `STALE_PEER_TIMEOUT_SECS`, and filing
+    /// ours would aim that sweep at our own messages between announces.
     async fn originate_broadcast(&mut self, packet: &BitchatPacket) {
         if packet.message_type() != Some(MessageType::Announce) {
             self.gossip.on_public_packet_seen(packet, now_secs());

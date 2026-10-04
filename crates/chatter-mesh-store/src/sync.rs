@@ -101,6 +101,18 @@ pub const MAINTENANCE_INTERVAL_SECS: u64 = 30;
 /// time to finish, so the first request is not competing with them.
 pub const INITIAL_SYNC_DELAY_SECS: u64 = 5;
 
+/// How old a peer's latest announce may be before the peer counts as gone and
+/// the store purges the public traffic it authored.
+///
+/// bitchat-android's `STALE_PEER_TIMEOUT_MS` (`AppConstants.kt:15`), not Swift's
+/// 60 s (`TransportConfig.syncStalePeerTimeoutSeconds`). Swift announces every
+/// 4 s (`bleAnnounceIntervalSeconds`), so a minute is many announces there. Android
+/// announces every 30 s in the foreground and every 60, 120 or 300 s in the
+/// background or on low battery (`PowerManager.kt:338-345`). A 60 s timeout swept
+/// every 60 s therefore purged a present Android peer's messages between two of
+/// its announces, and the next sync round fetched them again.
+pub const STALE_PEER_TIMEOUT_SECS: u64 = 180;
+
 /// Tunables for one sync driver. Defaults are bitchat's shipping values.
 #[derive(Clone, Debug, PartialEq)]
 pub struct SyncConfig {
@@ -120,7 +132,8 @@ pub struct SyncConfig {
     pub prekey_bundle_max_age_secs: u64,
     /// How often stale-announce cleanup runs, in seconds.
     pub stale_peer_cleanup_interval_secs: u64,
-    /// An announce older than this makes its peer stale.
+    /// An announce older than this makes its peer stale. See
+    /// [`STALE_PEER_TIMEOUT_SECS`] for why the default is not Swift's.
     pub stale_peer_timeout_secs: u64,
     pub fragment_capacity: usize,
     pub file_transfer_capacity: usize,
@@ -149,7 +162,7 @@ impl Default for SyncConfig {
             public_message_max_age_secs: 6 * 60 * 60,
             prekey_bundle_max_age_secs: 24 * 60 * 60,
             stale_peer_cleanup_interval_secs: 60,
-            stale_peer_timeout_secs: 60,
+            stale_peer_timeout_secs: STALE_PEER_TIMEOUT_SECS,
             fragment_capacity: 600,
             file_transfer_capacity: 200,
             group_message_capacity: 200,
@@ -2224,6 +2237,37 @@ mod tests {
 
         manager.maintenance(&[], NOW + 60).expect("maintenance");
         assert!(!manager.has_announcement(&PeerId::from_bytes(&sender())));
+    }
+
+    #[test]
+    fn a_present_android_peer_keeps_its_messages_between_announces() {
+        // bitchat-android announces every 60 s in the background and every 120 s
+        // on low battery. With Swift's 60 s timeout the sweep purged such a peer's
+        // messages between two of its announces.
+        let mut manager = manager();
+        let peer = PeerId::from_bytes(&sender());
+        manager.on_public_packet_seen(&packet_of(MessageType::Announce, b"", NOW_MS), NOW);
+        manager.on_public_packet_seen(&message(b"theirs", NOW_MS), NOW);
+        manager.maintenance(&[], NOW).expect("maintenance");
+
+        // Next announce still in flight 120 s on: nothing is purged.
+        manager.maintenance(&[], NOW + 120).expect("maintenance");
+        assert!(manager.has_announcement(&peer));
+        assert_eq!(manager.message_count(), 1);
+
+        // A relayed announce 90 s old is presence, not departure.
+        manager.on_public_packet_seen(
+            &packet_of(MessageType::Announce, b"", NOW_MS - 90_000),
+            NOW,
+        );
+        assert_eq!(manager.message_count(), 1);
+
+        // Silent past bitchat-android's 180 s: gone, with its traffic.
+        manager
+            .maintenance(&[], NOW + STALE_PEER_TIMEOUT_SECS + 1)
+            .expect("maintenance");
+        assert!(!manager.has_announcement(&peer));
+        assert_eq!(manager.message_count(), 0);
     }
 
     #[test]
