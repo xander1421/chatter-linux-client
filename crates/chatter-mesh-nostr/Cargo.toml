@@ -13,8 +13,8 @@ name = "chatter_mesh_nostr"
 path = "src/lib.rs"
 
 [features]
-# The async relay client. Off-by-default so the event/crypto layer builds and
-# tests without dragging in tokio — the pure half is the half with vectors.
+# The async relay client. On by default. `--no-default-features` builds the
+# event/crypto layer without tokio — the pure half is the half with vectors.
 default = ["client"]
 client = ["dep:tokio"]
 
