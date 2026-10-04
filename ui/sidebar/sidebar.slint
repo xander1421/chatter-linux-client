@@ -201,10 +201,11 @@ export component Sidebar inherits Rectangle {
     // In Anon Mode, slightly shift the surface tint toward primary so the
     // user has a constant visual cue the mode is active.
     // Same reasoning as the lists inside it: a phone shows this panel full
-    // screen, so it is the page and takes the page colour. Desktop keeps the
-    // raised-panel tone that separates it from the chat column beside it.
+    // screen, so it is the page: transparent, so the window's ambient wash
+    // (Materials.ambient) shows through. Desktop keeps the raised-panel tone
+    // that separates it from the chat column beside it.
     background: AnonMode.enabled ? Colors.primary.with-alpha(0.08)
-              : root.mobile-mode ? Colors.background
+              : root.mobile-mode ? transparent
               : Colors.surface;
     // No `border-width` here: this is a right-EDGE highlight in intent and
     // Slint's border draws all four sides. On a phone that traced a hairline

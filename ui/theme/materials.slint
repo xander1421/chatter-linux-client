@@ -6,20 +6,20 @@ export global Materials {
     // iOS materials. Regular/thick bound backdrop luminance for readable labels.
     // Dark tints are one slate step above the page (#080d13) so chrome floats
     // instead of reading as a grey slab; muted text stays >= 5.3:1 over a
-    // white or black backdrop at regular/thick (contrast.py).
+    // white (>= 4.67:1) or black backdrop at regular/thick (contrast.py).
     out property <color> ultra-thin: Appearance.glass-effects
-        ? (Appearance.dark ? #16212d1c : #ffffff24)
+        ? (Appearance.dark ? #1a26351c : #ffffff24)
         : (Appearance.dark ? #18232f : #fbfdff);
     out property <color> thin: Appearance.glass-effects
-        ? (Appearance.dark ? #16212d70 : #ffffff6c)
+        ? (Appearance.dark ? #1a263570 : #ffffff6c)
         : (Appearance.dark ? #18232f : #fbfdff);
     out property <color> regular: Appearance.glass-effects
-        ? (Appearance.dark ? #121c27e6 : #ffffffe8)
+        ? (Appearance.dark ? #1a2635e6 : #ffffffe8)
         : (Appearance.dark ? #18232f : #fbfdff);
     // Sheets sample the dimmed backdrop; light mode needs a milkier tint
     // to stay distinct from the scrim while retaining the blurred content.
     out property <color> thick: Appearance.glass-effects
-        ? (Appearance.dark ? #141e29ee : #fffffff2)
+        ? (Appearance.dark ? #1c2837ee : #fffffff2)
         : (Appearance.dark ? #1a2532 : #fdfeff);
     out property <color> opaque: Appearance.dark ? #18232f : #fbfdff;
     // The single optical edge is local to GlassSurface, never a row/card stroke.
@@ -46,7 +46,7 @@ export global Materials {
     // The page behind every screen: a faint teal wash at the top fading into
     // the neutral page colour (Colors.background), cool violet at the foot.
     out property <brush> ambient: Appearance.dark
-        ? @linear-gradient(165deg, #0d1d22 0%, #091118 30%, #080d13 60%, #0a0d17 100%)
+        ? @linear-gradient(165deg, #10252b 0%, #0a151c 28%, #080d13 58%, #0b0e19 100%)
         : @linear-gradient(165deg, #e2f1f0 0%, #eaf0f4 32%, #edf1f5 62%, #efeff7 100%);
     out property <length> blur-regular: 18px;
     out property <length> blur-thick: 24px;
