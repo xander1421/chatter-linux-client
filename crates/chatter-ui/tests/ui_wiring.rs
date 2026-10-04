@@ -3564,15 +3564,12 @@ fn dismissable_screens() -> Vec<(String, String)> {
 
 #[test]
 fn no_screen_defines_its_own_dismissal_glyph() {
-    // `Icons.arrow-left` is an alias of `Icons.chevron-left` (icons.slint), so
-    // both spellings have to be listed or the rule is one rename from mute.
     // The `\u{...}` escapes are the Unicode close glyphs: they are BOTH an
     // inconsistency and an Android bug — the font has no glyph, so they render
     // as a tofu box.
-    const OWN_GLYPH: [&str; 5] = [
+    const OWN_GLYPH: [&str; 4] = [
         "Icons.x",
         "Icons.chevron-left",
-        "Icons.arrow-left",
         "\\u{00D7}",
         "\\u{2715}",
     ];
@@ -3641,7 +3638,7 @@ fn dismissal_glyph_and_edge_follow_the_screen_shape() {
         "Modal's dismissal edges are reversed: the chevron must precede the \
          title and the X must follow it"
     );
-    for glyph in ["Icons.x", "Icons.chevron-left", "Icons.arrow-left"] {
+    for glyph in ["Icons.x", "Icons.chevron-left"] {
         assert!(
             !modal.contains(glyph),
             "Modal must not name a dismissal glyph ({glyph}) — DismissButton owns that"
@@ -3730,9 +3727,8 @@ fn headers_use_the_shared_header_button() {
     // 2. A back / close / ⋮ / fullscreen glyph drawn next to its own TouchArea
     //    is a hand-rolled header button. The allowlist is the uses that are
     //    NOT in a title row, each with where it lives.
-    const HEADER_GLYPHS: [&str; 9] = [
+    const HEADER_GLYPHS: [&str; 8] = [
         "Icons.chevron-left",
-        "Icons.arrow-left",
         "Icons.x",
         "Icons.more-vertical",
         "Icons.maximize",
