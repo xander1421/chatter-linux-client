@@ -4,21 +4,12 @@
 
 pub mod anon_http;
 pub mod connection;
-pub mod connection_manager;
 pub mod grpc;
-pub mod offline_queue;
 pub mod reconnect_config;
-pub mod recovery;
 pub mod server_monitor;
 pub(crate) mod storage_http;
 pub mod streaming;
 pub mod validation;
 
-pub use connection::{
-    server_status, ConnectionEvent, ConnectionState, ConnectionStateMachine, FailReason,
-    ServerStatus,
-};
-pub use connection_manager::{ConnectionConfig, ConnectionManager, ReplayResult};
-pub use offline_queue::{OfflineQueue, OperationType, QueueError, QueueEvent, QueuedOperation, QueueStats};
+pub use connection::{server_status, ConnectionState, FailReason, ServerStatus};
 pub use reconnect_config::ReconnectConfig;
-pub use recovery::{ConnectionRecovery, FibonacciBackoff};

@@ -48,7 +48,6 @@ pub fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     window.set_connection_reconnect_attempt(
         ui_ctx.offline_state().reconnect_attempt().unwrap_or(0) as i32,
     );
-    window.set_connection_queue_count(ui_ctx.offline_state().queue_count() as i32);
 
     // Whether the sign-in screens have anywhere to offer as an alternative to
     // themselves. Core's call, not ours.
@@ -75,7 +74,6 @@ pub fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             // test here — see `ConnectionState::is_unreachable`.
             let unreachable = ui_ctx_for_task.server_unreachable();
             let attempt = snapshot.reconnect_attempt.unwrap_or(0) as i32;
-            let queue = snapshot.queue_count as i32;
             // Re-read rather than cache: the mesh can start, or fail, after this
             // task began, and an offer to use it has to be current at the moment
             // it is made.
@@ -88,7 +86,6 @@ pub fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                     w.set_connection_status(state_string.into());
                     w.set_server_unreachable(unreachable);
                     w.set_connection_reconnect_attempt(attempt);
-                    w.set_connection_queue_count(queue);
                     w.set_account_free_surfaces(account_free);
                     w.set_is_signed_in(signed_in);
                 }
