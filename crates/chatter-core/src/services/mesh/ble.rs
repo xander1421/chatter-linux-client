@@ -744,7 +744,7 @@ impl BleRuntime {
                 self.gossip.remove_announcement_for_peer(claimed);
                 self.emit_peers();
             }
-            Some(MessageType::NoiseHandshake) => self.on_handshake(packet, claimed).await,
+            Some(MessageType::NoiseHandshake) => self.on_handshake(link, packet, claimed).await,
             Some(MessageType::NoiseEncrypted) => self.on_encrypted(link, packet, claimed).await,
             Some(MessageType::CourierEnvelope) => self.on_courier_envelope(packet, claimed),
             Some(MessageType::RequestSync) => self.on_request_sync(packet, claimed).await,
@@ -929,10 +929,11 @@ impl BleRuntime {
                     .links
                     .rebind_after_verified_direct(link, direct, now_ms);
             }
-            let authenticated = state.sessions.has_session(claimed);
-            if authenticated {
-                state.links.mark_noise_authenticated(link, claimed);
-            }
+            // Per-link proof only: a Noise handshake completed, or traffic
+            // decrypted, on *this* link from this peer. A peer-level session is
+            // not enough — it outlives its link, and a replayed announce can
+            // rebind an attacker's link to the victim's ID.
+            let authenticated = state.links.is_noise_authenticated(link, claimed);
             (
                 update.is_new_peer || update.was_disconnected,
                 authenticated,
@@ -995,10 +996,19 @@ impl BleRuntime {
         // "we have a session with X" is not enough — a replayed announce could
         // otherwise rebind X's ID to the replayer's link and drain their mail.
         let ingress = AnnounceIngress::new(direct.is_some(), link_authenticated);
-        if ingress.releases_mail()
-            && let Ok(key) = <[u8; 32]>::try_from(announcement.noise_public_key.as_slice())
-        {
-            self.hand_over_courier_mail(claimed, &key, now_s, ingress).await;
+        if let Ok(key) = <[u8; 32]>::try_from(announcement.noise_public_key.as_slice()) {
+            if ingress.releases_mail() {
+                self.hand_over_courier_mail(claimed, &key, now_s, ingress).await;
+            } else if direct.is_some()
+                && self.couriers.carries_for(&key, now_s)
+                && !self.state.with(|state| state.sessions.is_handshaking(claimed))
+            {
+                // We carry mail for a peer that is here, direct, but has not
+                // proved its key on this link. A handshake is that proof; once
+                // it completes, the link is marked and its next announce
+                // releases the mail.
+                self.start_handshake(claimed).await;
+            }
         }
 
         if is_new {
@@ -1697,7 +1707,7 @@ impl BleRuntime {
         );
     }
 
-    async fn on_handshake(&mut self, packet: &BitchatPacket, claimed: &PeerId) {
+    async fn on_handshake(&mut self, link: &LinkId, packet: &BitchatPacket, claimed: &PeerId) {
         let local = self.identity.peer_id();
         let identity = Arc::clone(&self.identity);
         let step = self.state.with(|state| {
@@ -1728,6 +1738,11 @@ impl BleRuntime {
         }
 
         if step.established.is_some() {
+            // The handshake authenticated `claimed`'s static key (the session
+            // manager refuses one that does not derive the ID), and it finished
+            // on this link: that is the per-link proof courier handover needs.
+            self.state
+                .with(|state| state.links.mark_noise_authenticated(link, claimed));
             // A session is the only signal strong enough for the router to send
             // without retaining, so this is the moment retained mail can go.
             let _ = self.router.send(RouterCommand::PeerAvailable {
@@ -4562,6 +4577,119 @@ mod tests {
         );
         assert!(state.has_session(&peer), "the old session stays until replaced");
         assert!(state.with(|inner| inner.sessions.is_handshaking(&peer)));
+    }
+
+    /// Courier mail is released only on a link that proved the recipient's key
+    /// itself. A peer-level session used to suffice, which is exactly the state a
+    /// replayed announce rebinding an attacker's link produces.
+    #[tokio::test]
+    async fn courier_mail_waits_for_a_handshake_on_the_announcing_link() {
+        use chatter_mesh::tlv::courier_envelope::{epoch_day, recipient_tag};
+
+        let (mut runtime, radio, state) = runtime();
+        let local_peer = runtime.identity.peer_id();
+        let peer_identity = MeshIdentity::generate(&mut OsRng);
+        let peer = peer_identity.peer_id();
+        let link = LinkId::new("/mock/courier");
+        state.with(|inner| {
+            inner.links.link_up(link.clone(), LinkRole::Central);
+            inner.links.set_writable(&link, true);
+            inner.max_write.insert(link.clone(), 512);
+        });
+
+        // We carry one envelope for the peer.
+        let now_s = now_millis() / 1000;
+        let recipient = peer_identity.static_public();
+        let envelope = CourierEnvelope::new(
+            recipient_tag(&recipient, epoch_day(now_s)),
+            (now_s + 3600) * 1000,
+            vec![0x5A; 96],
+            1,
+            None,
+        );
+        runtime
+            .couriers
+            .deposit(&envelope, &[0xA1; 32], now_s)
+            .expect("deposit");
+
+        // A peer-level session exists, but it was not made on this link.
+        let mut remote = super::super::session::SessionManager::new();
+        let identity = Arc::clone(&runtime.identity);
+        let m1 = remote.initiate(&local_peer, &peer_identity).expect("m1");
+        let m2 = state
+            .with(|inner| inner.sessions.on_handshake(&peer, &local_peer, &identity, &m1))
+            .expect("m1 read")
+            .reply
+            .expect("m2");
+        let m3 = remote
+            .on_handshake(&local_peer, &peer, &peer_identity, &m2)
+            .expect("m2 read")
+            .reply
+            .expect("m3");
+        state
+            .with(|inner| inner.sessions.on_handshake(&peer, &local_peer, &identity, &m3))
+            .expect("established");
+
+        let announce = |timestamp: u64| {
+            let announcement = AnnouncementPacket::new(
+                "recipient".to_string(),
+                peer_identity.static_public().to_vec(),
+                peer_identity.signing_public().to_vec(),
+                None,
+                None,
+                None,
+            );
+            let mut packet = BitchatPacket::new(
+                MessageType::Announce,
+                peer.to_routing_bytes().expect("routing bytes"),
+                None,
+                timestamp,
+                announcement.encode().expect("encodes"),
+                chatter_mesh::relay::MESSAGE_TTL_DEFAULT,
+            );
+            packet.signature = Some(sign_packet(&peer_identity, &packet).expect("signs"));
+            packet
+        };
+        let sent = |radio: &MockLink, kind: MessageType| -> Vec<BitchatPacket> {
+            radio
+                .writes()
+                .iter()
+                .map(|(_, bytes)| codec::decode(bytes).expect("decodable"))
+                .filter(|packet| packet.message_type() == Some(kind))
+                .collect()
+        };
+
+        // A direct, verified announce: no mail yet, but a handshake to prove it.
+        assert!(runtime.on_announce(&link, &announce(now_millis()), &peer).await);
+        runtime.drain_writes().await;
+        assert!(sent(&radio, MessageType::CourierEnvelope).is_empty());
+        assert!(runtime.couriers.carries_for(&recipient, now_s));
+        let opening = sent(&radio, MessageType::NoiseHandshake);
+        assert_eq!(opening.len(), 1, "one handshake opened to prove the link");
+
+        // The peer answers on this link; completing the handshake marks it.
+        let mut remote = super::super::session::SessionManager::new();
+        let m2 = remote
+            .on_handshake(&local_peer, &peer, &peer_identity, &opening[0].payload)
+            .expect("peer reads m1")
+            .reply
+            .expect("m2");
+        let reply = BitchatPacket::new(
+            MessageType::NoiseHandshake,
+            peer.to_routing_bytes().expect("routing bytes"),
+            local_peer.to_routing_bytes(),
+            now_millis(),
+            m2,
+            chatter_mesh::relay::MESSAGE_TTL_DEFAULT,
+        );
+        runtime.on_handshake(&link, &reply, &peer).await;
+        assert!(state.with(|inner| inner.links.is_noise_authenticated(&link, &peer)));
+
+        // The next announce on the proved link releases the mail.
+        assert!(runtime.on_announce(&link, &announce(now_millis() + 1), &peer).await);
+        runtime.drain_writes().await;
+        assert_eq!(sent(&radio, MessageType::CourierEnvelope).len(), 1);
+        assert!(!runtime.couriers.carries_for(&recipient, now_s));
     }
 
     #[tokio::test]

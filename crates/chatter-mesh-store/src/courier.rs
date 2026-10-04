@@ -289,6 +289,18 @@ impl<S: Storage> CourierStore<S> {
         self.envelopes.len()
     }
 
+    /// Whether any carried envelope is addressed to this Noise static key. Read
+    /// only, so the caller can decide to prove the link before a handover.
+    pub fn carries_for(&self, recipient_noise_static_key: &[u8], now_unix_secs: u64) -> bool {
+        if self.envelopes.is_empty() {
+            return false;
+        }
+        let tags = candidate_tags(recipient_noise_static_key, now_unix_secs);
+        self.envelopes
+            .iter()
+            .any(|stored| tags.contains(&stored.recipient_tag))
+    }
+
     // MARK: - Depositing (courier side)
 
     /// Accept an envelope from a depositor.
@@ -722,6 +734,18 @@ mod tests {
                 .expect("take")
                 .is_empty()
         );
+    }
+
+    #[test]
+    fn carries_for_names_only_the_recipient_and_takes_nothing() {
+        let mut store = store();
+        assert!(!store.carries_for(&key(0xB0), NOW));
+        store
+            .deposit(&envelope(&key(0xB0), 1), &key(0xA1), NOW)
+            .expect("deposit");
+        assert!(store.carries_for(&key(0xB0), NOW));
+        assert!(!store.carries_for(&key(0xCC), NOW));
+        assert_eq!(store.carried_count(), 1);
     }
 
     #[test]

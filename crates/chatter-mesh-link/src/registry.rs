@@ -615,12 +615,6 @@ impl LinkStateStore {
         }
     }
 
-    pub fn noise_authenticated_owner(&self, link: &LinkId) -> Option<&PeerId> {
-        self.links
-            .get(link)
-            .and_then(|s| s.noise_authenticated_owner.as_ref())
-    }
-
     /// Whether this link both *belongs* to `peer` and carries `peer`'s Noise
     /// proof. Both halves are required: a rebind clears the proof, and an
     /// unbound-but-proved link is not somewhere to send directed traffic.
@@ -628,17 +622,6 @@ impl LinkStateStore {
         self.links.get(link).is_some_and(|s| {
             s.peer.as_ref() == Some(peer) && s.noise_authenticated_owner.as_ref() == Some(peer)
         })
-    }
-
-    /// Live links that are both bound to `peer` and Noise-authenticated by it.
-    pub fn noise_authenticated_links_to(&self, peer: &PeerId) -> BTreeSet<LinkId> {
-        self.links
-            .iter()
-            .filter(|(_, s)| {
-                s.peer.as_ref() == Some(peer) && s.noise_authenticated_owner.as_ref() == Some(peer)
-            })
-            .map(|(id, _)| id.clone())
-            .collect()
     }
 
     /// Drops every link, e.g. when the adapter powers off. Returns the identities
@@ -1684,19 +1667,19 @@ mod tests {
                 .rebound()
                 .is_some()
         );
-        assert_eq!(store.noise_authenticated_owner(&link("l1")), None);
+        assert!(!store.is_noise_authenticated(&link("l1"), &peer(0xAA)));
         assert!(!store.is_noise_authenticated(&link("l1"), &peer(0xBB)));
-        assert!(store.noise_authenticated_links_to(&peer(0xBB)).is_empty());
     }
 
     #[test]
     fn noise_proof_requires_the_binding_to_agree() {
         let mut store = store_with_bound_link("l1", LinkRole::Central, &peer(0xAA));
+        // A proof from a peer the link is not bound to (a relayed handshake)
+        // authenticates nothing on it.
+        store.mark_noise_authenticated(&link("l1"), &peer(0xBB));
+        assert!(!store.is_noise_authenticated(&link("l1"), &peer(0xBB)));
         store.mark_noise_authenticated(&link("l1"), &peer(0xAA));
-        assert_eq!(
-            store.noise_authenticated_links_to(&peer(0xAA)),
-            BTreeSet::from([link("l1")])
-        );
+        assert!(store.is_noise_authenticated(&link("l1"), &peer(0xAA)));
 
         let _ = store.link_down(&link("l1"));
         assert!(!store.is_noise_authenticated(&link("l1"), &peer(0xAA)));

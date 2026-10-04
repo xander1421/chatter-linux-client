@@ -321,6 +321,23 @@ const MESH_TABLE: &[Entry] = &[
         why: "Records a peer only AFTER verification. bitchat drops an unverified \
               announce outright; recording one would be identity poisoning.",
     },
+    Entry {
+        symbol: "is_noise_authenticated",
+        defined_in: "chatter-mesh-link/src/registry.rs",
+        expect: Expect::Wired,
+        why: "Gates destructive courier handover on a per-link Noise proof \
+              (services/mesh/ble.rs on_announce). It used to be a peer-level \
+              has_session check, which a replayed announce rebinding an attacker's \
+              link satisfies, handing the victim's carried mail to the attacker.",
+    },
+    Entry {
+        symbol: "needs_rekey",
+        defined_in: "chatter-core/src/services/mesh/session.rs",
+        expect: Expect::Wired,
+        why: "Renegotiates a Noise session at 90% of its nonce budget \
+              (services/mesh/ble.rs rekey_if_due). Without a caller the session \
+              hard-fails at the limit and DMs to that peer stall.",
+    },
     // ---- Mesh: inbound memory -------------------------------------------
     Entry {
         symbol: "reap_stalled",
