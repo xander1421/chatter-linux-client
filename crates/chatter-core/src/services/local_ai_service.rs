@@ -533,7 +533,7 @@ mod per_conversation_ai_tests {
             Database::open(&dir.path().join("local_ai_test.db"), "testpass").expect("open"),
         );
         db.run_migrations().expect("migrations");
-        Box::leak(Box::new(dir));
+        crate::test_tempdir::hold(dir);
 
         let settings_repo = Arc::new(SettingsRepository::new(db.clone()));
         let vector_repo = Arc::new(VectorRepository::new(db));
@@ -552,7 +552,7 @@ mod per_conversation_ai_tests {
                 let dir = tempfile::tempdir().unwrap();
                 let db = Arc::new(Database::open(&dir.path().join("index.db"), "testpass").unwrap());
                 db.run_migrations().unwrap();
-                Box::leak(Box::new(dir));
+                crate::test_tempdir::hold(dir);
                 Arc::new(VectorRepository::new(db))
             },
             Arc::new(EmbeddingGenerator::new(OllamaBackend::default_local(), &svc.settings)),

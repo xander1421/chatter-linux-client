@@ -39,8 +39,13 @@ fn setup_test_db() -> Arc<Database> {
             .expect("Failed to run migrations");
     }
 
-    // Leak the temp_dir so it doesn't get deleted
-    std::mem::forget(temp_dir);
+    // Keep the temp dir until this test's thread (libtest: one per test) exits,
+    // then delete it. `mem::forget` used to leave it behind on a tmpfs /tmp.
+    thread_local! {
+        static HELD: std::cell::RefCell<Vec<tempfile::TempDir>> =
+            const { std::cell::RefCell::new(Vec::new()) };
+    }
+    HELD.with(|h| h.borrow_mut().push(temp_dir));
 
     Arc::new(db)
 }

@@ -125,7 +125,7 @@ pub(crate) fn test_db() -> Arc<Database> {
     let dir = tempfile::tempdir().unwrap();
     let db = Arc::new(Database::open(&dir.path().join("membership_log_test.db"), "testpass").unwrap());
     db.run_migrations().unwrap();
-    Box::leak(Box::new(dir));
+    crate::test_tempdir::hold(dir);
     db
 }
 

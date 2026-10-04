@@ -27,6 +27,8 @@ macro_rules! service_accessor {
 
 // ── Public API ──────────────────────────────────────────────────────────────
 
+#[cfg(test)]
+pub(crate) mod test_tempdir;
 pub mod client;
 pub mod prelude;
 pub mod domain;

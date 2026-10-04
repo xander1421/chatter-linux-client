@@ -208,7 +208,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let db = Arc::new(Database::open(&dir.path().join("pv.db"), "testpass").unwrap());
         db.run_migrations().unwrap();
-        Box::leak(Box::new(dir));
+        crate::test_tempdir::hold(dir);
         let t = T { settings: SettingsRepository::new(db.clone()), users: UserRepository::new(db), me: UserId::new() };
         t.settings.set(keys::CURRENT_USER_ID, &t.me.to_string()).unwrap();
         t.settings.set_bytes(keys::PROFILE_KEY, &[7; 32]).unwrap();

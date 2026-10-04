@@ -1291,12 +1291,12 @@ mod tests {
         ));
     }
 
-    /// A file of `bytes` zero bytes, on a leaked temp path.
+    /// A file of `bytes` zero bytes, in a temp dir deleted when the test ends.
     fn temp_file(name: &str, bytes: usize) -> std::path::PathBuf {
         let dir = tempfile::tempdir().expect("temp dir");
         let path = dir.path().join(name);
         std::fs::write(&path, vec![0x5A; bytes]).expect("write");
-        Box::leak(Box::new(dir));
+        crate::test_tempdir::hold(dir);
         path
     }
 
@@ -1313,7 +1313,7 @@ mod tests {
             .expect("create")
             .set_len(bytes)
             .expect("set_len");
-        Box::leak(Box::new(dir));
+        crate::test_tempdir::hold(dir);
         path
     }
 

@@ -1054,7 +1054,7 @@ mod tests {
     fn spool() -> (FileStreamSpool, PathBuf) {
         let dir = tempfile::tempdir().expect("temp dir");
         let path = dir.path().to_path_buf();
-        Box::leak(Box::new(dir));
+        crate::test_tempdir::hold(dir);
         (FileStreamSpool::new(path.clone()), path)
     }
 

@@ -312,12 +312,12 @@ mod tests {
         // SQLCipher's :memory: handling requires a passphrase after attach,
         // and the existing `Database::open` assumes a real path — so a temp
         // file on disk is the closest we can get to in-memory without
-        // refactoring `Database`. Temp dir is leaked for test lifetime.
+        // refactoring `Database`. The temp dir lives until the test ends.
         let temp_dir = tempfile::tempdir().unwrap();
         let db_path = temp_dir.path().join("call_history_test.db");
         let db = Arc::new(Database::open(&db_path, "testpass").unwrap());
         db.run_migrations().unwrap();
-        Box::leak(Box::new(temp_dir));
+        crate::test_tempdir::hold(temp_dir);
         db
     }
 

@@ -325,7 +325,7 @@ mod tests {
         let db_path = temp_dir.path().join("shared_content_test.db");
         let db = Arc::new(Database::open(&db_path, "testpass").unwrap());
         db.run_migrations().unwrap();
-        Box::leak(Box::new(temp_dir));
+        crate::test_tempdir::hold(temp_dir);
         db
     }
 

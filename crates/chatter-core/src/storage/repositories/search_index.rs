@@ -173,9 +173,8 @@ mod tests {
         let db = Arc::new(Database::open(&db_path, "testpass").unwrap());
         db.run_migrations().unwrap();
         
-        // Keep temp_dir alive by leaking it for simplicity in this test helper
-        // (Not ideal but fine for unit tests)
-        Box::leak(Box::new(temp_dir));
+        // Keep temp_dir alive until the test ends.
+        crate::test_tempdir::hold(temp_dir);
         
         db
     }

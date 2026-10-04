@@ -860,7 +860,7 @@ pub(crate) fn temp_identity_store() -> Arc<crate::storage::mesh_identity_store::
         Database::open(&dir.path().join("mesh_identity.db"), "testpass").expect("open database"),
     );
     db.run_migrations().expect("migrations");
-    Box::leak(Box::new(dir));
+    crate::test_tempdir::hold(dir);
     Arc::new(crate::storage::mesh_identity_store::MeshIdentityStore::new(db))
 }
 
@@ -880,6 +880,8 @@ fn redirect_attachments_to_temp() {
     ONCE.call_once(|| {
         let dir = tempfile::tempdir().expect("temp dir");
         crate::services::attachment::set_attachments_base_dir(dir.path().to_path_buf());
+        // Process-wide on purpose (see above): one directory per test binary,
+        // shared by every test, so it cannot be tied to one test's lifetime.
         Box::leak(Box::new(dir));
     });
 }
@@ -894,7 +896,7 @@ pub(crate) fn temp_timeline() -> Arc<MeshTimeline> {
         Database::open(&dir.path().join("mesh_timeline.db"), "testpass").expect("open database"),
     );
     db.run_migrations().expect("migrations");
-    Box::leak(Box::new(dir));
+    crate::test_tempdir::hold(dir);
     Arc::new(MeshTimeline::new(
         Arc::new(MessageRepository::new(db.clone())),
         Arc::new(MeshConversationRepository::new(db.clone())),

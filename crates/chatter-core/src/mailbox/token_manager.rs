@@ -983,7 +983,7 @@ mod tests {
         let dir = tempfile::tempdir().expect("tempdir");
         let db = Arc::new(Database::open(&dir.path().join("tokens.db"), "testpass").expect("open"));
         db.run_migrations().expect("migrations");
-        Box::leak(Box::new(dir));
+        crate::test_tempdir::hold(dir);
         db
     }
 

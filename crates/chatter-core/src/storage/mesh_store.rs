@@ -590,8 +590,8 @@ mod tests {
             Database::open(&dir.path().join("mesh_store_test.db"), "testpass").expect("open"),
         );
         db.run_migrations().expect("migrations");
-        // Keep the directory alive for the whole test.
-        Box::leak(Box::new(dir));
+        // Keep the directory alive until the test ends.
+        crate::test_tempdir::hold(dir);
         db
     }
 

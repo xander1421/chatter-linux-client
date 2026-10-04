@@ -4723,7 +4723,7 @@ mod tests {
     fn isolate_spool(runtime: &mut BleRuntime) -> std::path::PathBuf {
         let dir = tempfile::tempdir().expect("temp dir");
         let path = dir.path().to_path_buf();
-        Box::leak(Box::new(dir));
+        crate::test_tempdir::hold(dir);
         runtime.files_in = FileStreamSpool::new(path.clone());
         path
     }

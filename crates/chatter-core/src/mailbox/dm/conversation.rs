@@ -1311,7 +1311,7 @@ mod tests {
         .unwrap();
         drop(conn);
 
-        Box::leak(Box::new(temp_dir));
+        crate::test_tempdir::hold(temp_dir);
         db
     }
 
