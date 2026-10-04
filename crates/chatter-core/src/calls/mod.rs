@@ -13,6 +13,7 @@ pub mod android_camera;
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 mod screen_capture;
 pub mod shared_frames;
+pub mod tiles;
 
 pub use room_manager::{RoomManager, RoomState, RoomEvent as LiveKitRoomEvent};
 pub use audio_capture::{AudioCapture, AudioDevice};

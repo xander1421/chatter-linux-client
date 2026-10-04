@@ -33,11 +33,10 @@ fn set_local_participant_screen_sharing(window: &MainWindow, local_user_id: &str
     // Always drop any existing local screen tile first (idempotent).
     participants.retain(|p| p.user_id.as_str() != screen_id);
     if sharing {
-        // Insert the screen tile just before the local "You" tile (pinned last).
-        let insert_at = participants.len().saturating_sub(1);
-        participants.insert(insert_at, CallParticipantData {
+        let slot = chatter_core::calls::tiles::local_screen_slot(participants.len());
+        participants.insert(slot, CallParticipantData {
             user_id: screen_id.into(),
-            display_name: "Your screen".into(),
+            display_name: chatter_core::calls::tiles::LOCAL_SCREEN_TILE_NAME.into(),
             initials: "".into(),
             avatar_source: slint::Image::default(),
             is_muted: false,

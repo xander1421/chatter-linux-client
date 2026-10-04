@@ -7,33 +7,18 @@ use std::sync::Arc;
 use slint::{ComponentHandle, Model, ModelRc, VecModel};
 
 use chatter_core::client::ChatterClient;
-use chatter_core::calls::LiveKitRoomEvent;
+use chatter_core::calls::{tiles, LiveKitRoomEvent};
 use chatter_core::ui::initials_from_name;
 use crate::{CallParticipantData, MainWindow};
 
-/// The local participant is pinned to the LAST tile (the layout treats the last
-/// row as "You" and feeds it `local-video-frame`). Split it off before touching
-/// the remote rows. Callers must re-attach it via [`order_participants`].
-fn split_local(mut participants: Vec<CallParticipantData>) -> (Vec<CallParticipantData>, Option<CallParticipantData>) {
-    let local = if participants.is_empty() { None } else { Some(participants.remove(participants.len() - 1)) };
-    (participants, local)
-}
-
-/// Rebuild the participant list: remotes ascending by user_id, local pinned last.
-/// The GL frame list is published in ascending participant-id order and matched
-/// to tiles positionally (see `gl_call.rs`), so the remote rows must be sorted
-/// the same way or a peer's frame lands on the wrong tile.
 /// The remote tile rendered before its peer joined (empty `user_id`), if any.
 fn unjoined_peer_tile(remotes: &mut [CallParticipantData]) -> Option<&mut CallParticipantData> {
     remotes.iter_mut().find(|p| p.user_id.is_empty())
 }
 
-fn order_participants(mut remotes: Vec<CallParticipantData>, local: Option<CallParticipantData>) -> Vec<CallParticipantData> {
-    remotes.sort_by(|a, b| a.user_id.as_str().cmp(b.user_id.as_str()));
-    if let Some(l) = local {
-        remotes.push(l);
-    }
-    remotes
+/// Core's tile order ([`chatter_core::calls::tiles::order_tiles`]).
+fn order_participants(remotes: Vec<CallParticipantData>, local: Option<CallParticipantData>) -> Vec<CallParticipantData> {
+    tiles::order_tiles(remotes, local, |p| p.user_id.as_str())
 }
 
 /// Wire room events to update UI (participant count, etc.).
@@ -102,7 +87,7 @@ pub fn wire_room_events(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                                 (0..data.participants.row_count())
                                     .map(|i| data.participants.row_data(i).unwrap_or_default())
                                     .collect();
-                            let (mut remotes, local) = split_local(all);
+                            let (mut remotes, local) = tiles::split_local(all);
 
                             // LiveKit identity == plain user UUID (server SetIdentity),
                             // so a pre-populated remote (peer_id) matches by user_id.
@@ -192,7 +177,7 @@ pub fn wire_room_events(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                         // Separate local BEFORE reordering remotes, else the sort
                         // would shuffle "You" in among the peers and misalign every
                         // frame slot.
-                        let (mut remotes, local) = split_local(all);
+                        let (mut remotes, local) = tiles::split_local(all);
 
                         if is_screen_share {
                             // Screen share is its OWN tile (camera + screen are
@@ -257,7 +242,7 @@ pub fn wire_room_events(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                             (0..data.participants.row_count())
                                 .map(|i| data.participants.row_data(i).unwrap_or_default())
                                 .collect();
-                        let (mut remotes, local) = split_local(all);
+                        let (mut remotes, local) = tiles::split_local(all);
 
                         if is_screen_share {
                             // Screen share stopped — drop its whole pseudo-tile.
