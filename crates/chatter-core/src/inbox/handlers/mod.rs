@@ -630,23 +630,6 @@ pub enum DomainEvent {
     },
 
     // ========================================================================
-    // Jarvis AI Events
-    // ========================================================================
-
-    JarvisResponse {
-        text: String,
-        context_id: String,
-    },
-
-    JarvisStats {
-        stats: String,
-    },
-
-    JarvisCleared {
-        context_id: String,
-    },
-
-    // ========================================================================
     // Sync Events
     // ========================================================================
 
@@ -761,9 +744,6 @@ impl DomainEvent {
             DomainEvent::UserPresenceChanged { .. } => None,
             DomainEvent::AnonDmProfileUpdated { .. } => None,
             DomainEvent::UserProfileUpdated { .. } => None,
-            DomainEvent::JarvisResponse { .. } => None,
-            DomainEvent::JarvisStats { .. } => None,
-            DomainEvent::JarvisCleared { .. } => None,
             DomainEvent::SyncComplete { .. } => None,
             DomainEvent::PushWakeup { .. } => None,
             DomainEvent::MissedCallsChanged => None,

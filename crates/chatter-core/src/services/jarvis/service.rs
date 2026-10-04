@@ -13,15 +13,13 @@ use crate::domain::UserId;
 use crate::services::ai::SampleParams;
 use crate::storage::repositories::{JarvisGraphRepository, JarvisMemoryRepository};
 
-use crate::events::EventBus;
-use crate::inbox::handlers::DomainEvent;
 
 use super::context_builder::ContextBuilder;
 use super::engine::SharedJarvisEngine;
 use super::entity_extractor::{EntityExtractor, ExtractedEntity};
 use super::fact_extractor::FactExtractor;
 use super::error::JarvisError;
-use super::memory_manager::{CompressionConfig, MemoryManager, MemoryStats};
+use super::memory_manager::MemoryManager;
 
 /// Supplies live app state (channel names, friends) for the system prompt.
 /// A closure so Jarvis needs no dependency on channel/user services.
@@ -38,8 +36,6 @@ pub struct JarvisService {
     graph_repo: Arc<JarvisGraphRepository>,
     /// Inference engine (active provider or in-process actor).
     ai: SharedJarvisEngine,
-    /// Event bus for emitting events.
-    event_bus: EventBus,
     /// Entity extractor.
     extractor: EntityExtractor,
     /// LLM fact extractor (background write path).
@@ -58,19 +54,17 @@ impl JarvisService {
         memory_repo: Arc<JarvisMemoryRepository>,
         graph_repo: Arc<JarvisGraphRepository>,
         ai: SharedJarvisEngine,
-        event_bus: EventBus,
         semantic: Option<Arc<crate::services::semantic_search::SemanticSearchService>>,
     ) -> Self {
         let extractor = EntityExtractor::new(ai.clone());
         let fact_extractor = Arc::new(FactExtractor::new(ai.clone(), memory_repo.clone()));
         let context_builder = ContextBuilder::new(memory_repo.clone(), graph_repo.clone(), semantic);
-        let memory_manager = MemoryManager::new(memory_repo.clone(), graph_repo.clone(), ai.clone());
+        let memory_manager = MemoryManager::new(memory_repo.clone());
 
         Self {
             memory_repo,
             graph_repo,
             ai,
-            event_bus,
             extractor,
             fact_extractor,
             context_builder,
@@ -88,97 +82,6 @@ impl JarvisService {
     // ========================================================================
     // Main API
     // ========================================================================
-
-    /// Process user input to detect and handle Jarvis commands.
-    ///
-    /// Returns true if the input was handled as a Jarvis command, false otherwise.
-    /// This allows the UI to simply check if Jarvis handled the input.
-    ///
-    /// Handles:
-    /// - `/ask <question>` - Direct Jarvis query
-    /// - `@Jarvis <message>` or `@jarvis <message>` - Mention-based query
-    /// - `/jarvis <command>` - Various Jarvis commands (stats, clear, etc.)
-    pub async fn process_input(
-        &self,
-        text: &str,
-        context: &JarvisContext,
-        author_id: Option<&UserId>,
-    ) -> Result<bool, JarvisError> {
-        // Check for /ask command
-        if let Some(query) = text.strip_prefix("/ask ") {
-            let response = self.ask(context, query, author_id).await?;
-            
-            // Emit event for UI to display response
-            self.event_bus.emit_domain(DomainEvent::JarvisResponse {
-                text: response,
-                context_id: context.context_id.clone(),
-            });
-            
-            tracing::info!("Jarvis handled /ask command");
-            return Ok(true);
-        }
-
-        // Check for @Jarvis or @jarvis mention
-        if text.starts_with("@Jarvis ") || text.starts_with("@jarvis ") {
-            let query = text.trim_start_matches("@Jarvis ")
-                .trim_start_matches("@jarvis ")
-                .trim();
-            if !query.is_empty() {
-                let response = self.ask(context, query, author_id).await?;
-                
-                // Emit event for UI to display response
-                self.event_bus.emit_domain(DomainEvent::JarvisResponse {
-                    text: response,
-                    context_id: context.context_id.clone(),
-                });
-                
-                tracing::info!("Jarvis handled @mention");
-                return Ok(true);
-            }
-        }
-
-        // Check for /jarvis commands
-        if text.starts_with("/jarvis") {
-            if let Some(cmd) = text.strip_prefix("/jarvis ") {
-                match cmd {
-                    "stats" => {
-                        let stats = self.memory_manager.get_stats(context)?;
-                        
-                        // Emit JarvisStats event
-                        self.event_bus.emit_domain(DomainEvent::JarvisStats {
-                            stats: format!(
-                                "Memory Stats:\n- Conversations: {}\n- Facts: {}\n- Entities: {}",
-                                stats.conversation_count,
-                                stats.fact_count,
-                                stats.entity_count
-                            ),
-                        });
-                        
-                        tracing::info!("Jarvis handled stats command");
-                        return Ok(true);
-                    }
-                    "clear" => {
-                        self.memory_manager.clear_context(context)?;
-                        
-                        // Emit JarvisCleared event
-                        self.event_bus.emit_domain(DomainEvent::JarvisCleared {
-                            context_id: context.context_id.clone(),
-                        });
-                        
-                        tracing::info!("Jarvis handled clear command");
-                        return Ok(true);
-                    }
-                    _ => {
-                        // Unknown jarvis command, let it through as regular message
-                        return Ok(false);
-                    }
-                }
-            }
-        }
-
-        // Not a Jarvis command
-        Ok(false)
-    }
 
     /// Ask Jarvis a question with full context.
     ///
@@ -426,36 +329,14 @@ Summary:"#,
     // Memory Management
     // ========================================================================
 
-    /// Compress old conversations into summaries if needed.
-    pub async fn compress_memory(
-        &self,
-        context: &JarvisContext,
-    ) -> Result<bool, JarvisError> {
-        let config = CompressionConfig::default();
-        let summary = self.memory_manager.compress_if_needed(context, &config).await?;
-        Ok(summary.is_some())
-    }
-
     /// Apply decay to facts and prune low-confidence ones.
     pub fn apply_fact_decay(&self, threshold: f64) -> Result<u32, JarvisError> {
         self.memory_manager.apply_decay(threshold)
     }
 
-    /// Get memory statistics for a context.
-    pub fn get_memory_stats(&self, context: &JarvisContext) -> Result<MemoryStats, JarvisError> {
-        self.memory_manager.get_stats(context)
-    }
-
     // ========================================================================
     // Knowledge Graph
     // ========================================================================
-
-    /// Search for entities by name.
-    pub fn search_entities(&self, query: &str, limit: u32) -> Result<Vec<JarvisEntity>, JarvisError> {
-        self.graph_repo
-            .search_entities(query, limit)
-            .map_err(JarvisError::from)
-    }
 
     /// Get the top mentioned entities.
     pub fn get_top_entities(&self, limit: u32) -> Result<Vec<JarvisEntity>, JarvisError> {

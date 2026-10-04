@@ -224,7 +224,7 @@ mod tests {
         let jarvis = Arc::new(JarvisService::new(
             Arc::new(JarvisMemoryRepository::new(db.clone())),
             Arc::new(JarvisGraphRepository::new(db)),
-            engine, EventBus::new(), None,
+            engine, None,
         ));
         let builder = JarvisBackgroundBuilder::new(jarvis);
         assert_eq!(builder.maintenance_interval, Duration::from_secs(24 * 60 * 60));

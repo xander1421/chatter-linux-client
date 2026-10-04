@@ -515,11 +515,6 @@ pub async fn handle_domain_event(
             messaging::handle_message_received(window, ui_ctx, message);
         }
 
-        // Jarvis AI events — UI can subscribe directly for display
-        DomainEvent::JarvisResponse { .. }
-        | DomainEvent::JarvisStats { .. }
-        | DomainEvent::JarvisCleared { .. } => {}
-
         // The catch-up sync stores channel messages without a MessageReceived
         // each (a backfill must not fire a toast per message), so a message
         // missed while the stream was down — app backgrounded — reached the

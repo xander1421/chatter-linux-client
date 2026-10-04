@@ -427,7 +427,6 @@ impl ServiceContainer {
                     infra.jarvis_memory_repo.clone(),
                     infra.jarvis_graph_repo.clone(),
                     jarvis_engine.clone(),
-                    infra.event_bus.clone(),
                     Some(semantic_search_service.clone()),
                 )
                 .with_app_context(app_context),

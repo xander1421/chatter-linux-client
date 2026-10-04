@@ -26,7 +26,6 @@ use tempfile::TempDir;
 use chatter_core::domain::jarvis::JarvisContext;
 use chatter_core::domain::jarvis::SubjectType;
 use chatter_core::domain::UserId;
-use chatter_core::events::EventBus;
 use chatter_core::local_ai::providers::{detect_providers, ProviderKind};
 use chatter_core::local_ai::settings::LocalAISettings;
 use chatter_core::services::ai::LocalAIActorHandle;
@@ -69,7 +68,7 @@ fn service() -> Harness {
     let (db, _temp) = test_db();
     let memory = Arc::new(JarvisMemoryRepository::new(db.clone()));
     let graph = Arc::new(JarvisGraphRepository::new(db));
-    let svc = JarvisService::new(memory.clone(), graph, engine(), EventBus::new(), None);
+    let svc = JarvisService::new(memory.clone(), graph, engine(), None);
     Harness { svc, memory, _temp }
 }
 
@@ -244,7 +243,7 @@ async fn v_ai_07_app_context_grounding() {
     let (db, _temp) = test_db();
     let memory = Arc::new(JarvisMemoryRepository::new(db.clone()));
     let graph = Arc::new(JarvisGraphRepository::new(db));
-    let svc = JarvisService::new(memory, graph, engine(), EventBus::new(), None)
+    let svc = JarvisService::new(memory, graph, engine(), None)
         .with_app_context(Arc::new(|| {
             "User's channels: general, dev-team.\nUser's friends: alex_dev, sam42.\n".to_string()
         }));
