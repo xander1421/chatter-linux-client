@@ -50,22 +50,6 @@ use crate::storage::settings_keys;
 use crate::system::Directories;
 use super::{ChatterClient, ClientError};
 
-/// Result of [`ChatterClient::accept_presented_incoming_call`]. Carries enough
-/// information for a UI layer to build its active-call view without poking
-/// Plain-data snapshot of a room participant. Used across the FFI
-/// boundary so bridge callers don't touch LiveKit types directly.
-#[cfg(feature = "media")]
-#[derive(Clone, Debug)]
-pub struct CallParticipantSnapshot {
-    pub identity: String,
-    pub display_name: String,
-    pub has_audio: bool,
-    pub has_video: bool,
-    pub is_speaking: bool,
-    pub is_muted: bool,
-    pub is_local: bool,
-}
-
 /// One load of the Calls screen: the rows to render plus the unseen
 /// missed-call count for the tab badge. Both come from the same blocking read so the
 /// list and the badge can never disagree.
@@ -784,15 +768,6 @@ impl ChatterClient {
             worker.leave_call(crate::services::call_worker::CallEndReason::LocalHangup).await?;
         }
         Ok(())
-    }
-
-    /// Snapshot of the active call's participant list — identity, display
-    /// name, audio/video flags, speaking + muted state, `is_local`.
-    /// Returned in a Send-safe shape so the bridge can hand it over uniffi.
-    #[cfg(feature = "media")]
-    pub async fn call_active_participants(&self) -> Vec<CallParticipantSnapshot> {
-        let Some(worker) = self.call_service().get().cloned() else { return vec![]; };
-        worker.participant_snapshot().await
     }
 
     /// Cloned handle to the currently-initialised call worker, or None

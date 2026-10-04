@@ -115,8 +115,6 @@ pub struct ClientBuilder {
     server_url: Option<String>,
     data_dir: Option<String>,
     notification_sink: Option<Arc<dyn crate::system::notification_sink::NotificationSink>>,
-    reconnect_config: Option<crate::network::ReconnectConfig>,
-    max_attachment_size: Option<u64>,
 }
 
 impl ClientBuilder {
@@ -125,8 +123,6 @@ impl ClientBuilder {
             server_url: None,
             data_dir: None,
             notification_sink: None,
-            reconnect_config: None,
-            max_attachment_size: None,
         }
     }
 
@@ -153,36 +149,13 @@ impl ClientBuilder {
         self
     }
 
-    /// Override the reconnect backoff / give-up tuning. Defaults reproduce
-    /// the historical behavior exactly — override this on mobile deployments
-    /// that want tighter give-up thresholds than desktop.
-    pub fn reconnect_config(mut self, cfg: crate::network::ReconnectConfig) -> Self {
-        self.reconnect_config = Some(cfg);
-        self
-    }
-
-    /// Override the maximum attachment size in bytes. If `None`, the built-in
-    /// default (1 GiB) is used. Applied at startup via
-    /// `crate::crypto::set_max_attachment_size` so all upload entrypoints in
-    /// `AttachmentService` enforce the cap.
-    pub fn max_attachment_size(mut self, bytes: u64) -> Self {
-        self.max_attachment_size = Some(bytes);
-        self
-    }
-
     /// Build the client. Initializes database, crypto, and network pool.
     ///
     /// Must be called within a tokio runtime (e.g. inside `#[tokio::main]`
     /// or after `Runtime::new()`).
     pub fn build(self) -> Result<Arc<ChatterClient>, ClientError> {
-        // Apply the attachment size cap before any service is constructed so
-        // every upload path sees the configured value.
-        if let Some(cap) = self.max_attachment_size {
-            crate::crypto::set_max_attachment_size(cap);
-        }
         let ctx = AppContext::with_config_and_sink(self.server_url, self.data_dir, self.notification_sink)?;
         let services = ctx.core_services();
-        let reconnect_config = self.reconnect_config.unwrap_or_default();
         let anon_mode = services.message_service.shield_mode.clone();
         Ok(Arc::new(ChatterClient {
             ctx,
@@ -190,7 +163,6 @@ impl ClientBuilder {
             tasks: Mutex::new(Vec::new()),
             started: AtomicBool::new(false),
             last_activity_ms: AtomicU64::new(0),
-            reconnect_config: Mutex::new(reconnect_config),
             push_shutdown: Mutex::new(None),
             call_signaling: std::sync::OnceLock::new(),
             svr_backup_service: std::sync::OnceLock::new(),
@@ -343,10 +315,6 @@ pub struct ChatterClient {
     started: AtomicBool,
     /// Epoch millis of last user activity (for idle detection).
     last_activity_ms: AtomicU64,
-    /// Reconnect backoff / give-up tuning. Mutable at runtime so the FFI
-    /// layer can adjust it without rebuilding the client (e.g. mobile apps
-    /// tighten this on battery-saver mode).
-    reconnect_config: Mutex<crate::network::ReconnectConfig>,
     /// Shutdown channel for the active ntfy push listener task, if any.
     /// Reset / replaced on every `configure_push` call so the caller can
     /// swap URLs (or disable push) idempotently.
@@ -1785,70 +1753,6 @@ impl ChatterClient {
 
     pub fn set_server_url(&self, url: &str) -> Result<(), crate::error::NetworkError> {
         self.auth().set_server_url(url)
-    }
-
-    // ── Reconnect tuning façade (FFI surface for apps) ──────────────────
-    //
-    // Mirrors the pattern of `set_server_url` / `set_local_ai_enabled`:
-    // a thin setter on the client that an FFI bridge can expose without
-    // having to model the whole config struct.
-
-    /// Get the currently-active reconnect tuning. Safe to call across threads.
-    pub fn reconnect_config(&self) -> crate::network::ReconnectConfig {
-        *self.reconnect_config.lock()
-    }
-
-    /// Replace the reconnect tuning. Takes effect on the next reconnect
-    /// loop iteration for any component that reads this at the start of a
-    /// cycle. Already-in-flight sleeps are not interrupted.
-    pub fn set_reconnect_config(&self, cfg: crate::network::ReconnectConfig) {
-        *self.reconnect_config.lock() = cfg;
-    }
-
-    /// Convenience wrapper for FFI bridges that can't easily pass the whole
-    /// struct. Field-by-field tuning; any `None` argument leaves that field
-    /// unchanged.
-    ///
-    /// # Arguments
-    /// - `initial_delay_ms`: initial retry delay in milliseconds
-    /// - `max_delay_ms`: upper cap on any retry delay
-    /// - `backoff_multiplier`: multiplier applied after each failure (>= 1.0)
-    /// - `jitter_ratio`: ±fraction added to each delay (0.0 = no jitter)
-    /// - `max_attempts`: give up after this many failed attempts (0 = infinite)
-    /// - `give_up_after_ms`: give up after this many ms of wall-clock (0 = infinite)
-    pub fn tune_reconnect(
-        &self,
-        initial_delay_ms: Option<u64>,
-        max_delay_ms: Option<u64>,
-        backoff_multiplier: Option<f32>,
-        jitter_ratio: Option<f32>,
-        max_attempts: Option<u32>,
-        give_up_after_ms: Option<u64>,
-    ) {
-        let mut guard = self.reconnect_config.lock();
-        if let Some(v) = initial_delay_ms {
-            guard.initial_delay = std::time::Duration::from_millis(v);
-        }
-        if let Some(v) = max_delay_ms {
-            guard.max_delay = std::time::Duration::from_millis(v);
-        }
-        if let Some(v) = backoff_multiplier {
-            guard.backoff_multiplier = v;
-        }
-        if let Some(v) = jitter_ratio {
-            guard.jitter_ratio = v;
-        }
-        if let Some(v) = max_attempts {
-            // 0 = sentinel for "infinite" — mirrors the Option<u32> internal rep.
-            guard.max_attempts = if v == 0 { None } else { Some(v) };
-        }
-        if let Some(v) = give_up_after_ms {
-            guard.give_up_after = if v == 0 {
-                None
-            } else {
-                Some(std::time::Duration::from_millis(v))
-            };
-        }
     }
 
     pub fn is_logged_in(&self) -> bool {

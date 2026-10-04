@@ -526,11 +526,6 @@ enum CallCommand {
         call: CallHandle,
         response: oneshot::Sender<Result<PendingIncoming, CallError>>,
     },
-    /// UI queries whether there is currently an active call, for callers
-    /// that need a synchronous-ish answer (e.g. UI routing).
-    OrchIsActive {
-        response: oneshot::Sender<bool>,
-    },
     /// Return the kind of the call we are in — connected, or dialed and
     /// still ringing — or `None` if no call.
     OrchActiveKind {
@@ -780,15 +775,6 @@ impl CallWorkerHandle {
             .map(PendingIncomingSnapshot::from)
     }
 
-    /// Query whether there is an orchestrator-tracked active call.
-    pub async fn orch_is_active(&self) -> bool {
-        let (tx, rx) = oneshot::channel();
-        if self.cmd_tx.try_send(CallCommand::OrchIsActive { response: tx }).is_err() {
-            return false;
-        }
-        rx.await.unwrap_or(false)
-    }
-
     /// Kind of the call we are in — connected, or our outgoing call still
     /// ringing — or `None`. What `end_active_call` dispatches on, so a caller
     /// who cancels while it rings still takes the hangup path.
@@ -930,34 +916,6 @@ impl CallWorkerHandle {
             .try_send(CallCommand::GetActiveCall { response: tx })
             .ok()?;
         rx.await.ok().flatten()
-    }
-
-    /// Get active call synchronously (best effort, may return stale data).
-    /// For UI that needs immediate response without blocking.
-    pub fn active_call_sync(&self) -> Option<Call> {
-        // Fire-and-forget query - UI should use events for real-time updates
-        None
-    }
-
-    /// Plain-data snapshot of participants for FFI consumers. Maps the
-    /// domain `Participant` list onto a `Send + Clone` shape and tags
-    /// which one is the local user.
-    pub async fn participant_snapshot(
-        &self,
-    ) -> Vec<crate::client::calls::CallParticipantSnapshot> {
-        let Some(call) = self.active_call().await else { return vec![]; };
-        let local_id = call.initiator_id.clone();
-        call.participants.iter().map(|p| {
-            crate::client::calls::CallParticipantSnapshot {
-                identity: p.user_id.to_string(),
-                display_name: p.user_id.to_string(),
-                has_audio: !p.is_muted,
-                has_video: p.is_video_enabled,
-                is_speaking: false,
-                is_muted: p.is_muted,
-                is_local: p.user_id == local_id,
-            }
-        }).collect()
     }
 
     /// Get the room name of the active call (for anonymous call management).
@@ -1850,10 +1808,6 @@ fn run_call_worker(
                         None => Err(CallError::NotInCall),
                     };
                     let _ = response.send(result);
-                }
-
-                CallCommand::OrchIsActive { response } => {
-                    let _ = response.send(orchestrator.active.is_some());
                 }
 
                 CallCommand::OrchActiveKind { response } => {
