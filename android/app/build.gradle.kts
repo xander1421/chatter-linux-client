@@ -103,7 +103,7 @@ dependencies {
     implementation(
         fileTree(
             mapOf(
-                "dir" to "$projectDir/../../target",
+                "dir" to (System.getenv("CARGO_TARGET_DIR") ?: "$projectDir/../../target"),
                 "include" to listOf("**/livekit_webrtc/**/android-arm64-release/libwebrtc.jar"),
             ),
         ),
