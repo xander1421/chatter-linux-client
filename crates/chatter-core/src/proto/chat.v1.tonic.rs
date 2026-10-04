@@ -2623,6 +2623,30 @@ pub mod gif_service_client {
                 .insert(GrpcMethod::new("chat.v1.GifService", "GetTrendingGifs"));
             self.inner.unary(req, path, codec).await
         }
+        pub async fn get_gif_media(
+            &mut self,
+            request: impl tonic::IntoRequest<super::GetGifMediaRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::GetGifMediaResponse>,
+            tonic::Status,
+        > {
+            self.inner
+                .ready()
+                .await
+                .map_err(|e| {
+                    tonic::Status::unknown(
+                        format!("Service was not ready: {}", e.into()),
+                    )
+                })?;
+            let codec = tonic_prost::ProstCodec::default();
+            let path = http::uri::PathAndQuery::from_static(
+                "/chat.v1.GifService/GetGifMedia",
+            );
+            let mut req = request.into_request();
+            req.extensions_mut()
+                .insert(GrpcMethod::new("chat.v1.GifService", "GetGifMedia"));
+            self.inner.unary(req, path, codec).await
+        }
     }
 }
 /// Generated client implementations.

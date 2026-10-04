@@ -802,11 +802,12 @@ impl ChatterClient {
         ))
     }
 
-    pub async fn download_url_bytes(
+    /// Fetch GIF picker media through the server's GIF media proxy.
+    pub async fn fetch_gif_media(
         &self,
         url: &str,
     ) -> Result<Vec<u8>, crate::services::attachment::AttachmentError> {
-        self.attachments().download_url_bytes(url).await
+        self.attachments().fetch_gif_media(url).await
     }
 
     pub async fn download_and_upload_gif(

@@ -669,32 +669,33 @@ impl AttachmentService {
         })
     }
 
-    /// Download a GIF from a URL and upload it to CDN (encrypted).
+    /// Fetch a GIF via the server's GIF media proxy and upload it to CDN (encrypted).
     ///
-    /// Combines HTTP download + CDN upload into a single operation so the
-    /// UI layer doesn't need raw HTTP clients.
+    /// Combines the fetch + CDN upload into a single operation so the UI layer
+    /// doesn't need raw HTTP clients.
     pub async fn download_and_upload_gif(
         &self,
         url: &str,
         gif_id: &str,
     ) -> Result<CdnUploadResult, AttachmentError> {
-        // Download the GIF bytes (over Tor in anon mode — the source URL is a
-        // third-party/CDN host whose operator must not see the real IP).
-        let bytes = self.cdn_http_get(url).await?;
+        let bytes = self.fetch_gif_media(url).await?;
 
         let filename = format!("{}.gif", gif_id.replace(['/', '\\', ':', '*', '?', '"', '<', '>', '|'], "_"));
 
         self.upload_bytes_to_cdn_encrypted(&bytes, &filename, "image/gif").await
     }
 
-    /// Download bytes from a URL (for media display, GIF animation, etc).
+    /// Fetch a GifResult media URL through the server's GIF media proxy.
     ///
-    /// Routes over Tor in anon mode so the source host never sees the real IP.
-    pub async fn download_url_bytes(
-        &self,
-        url: &str,
-    ) -> Result<Vec<u8>, AttachmentError> {
-        self.cdn_http_get(url).await
+    /// The provider CDN is a public-PKI host the pinned client cannot (and must
+    /// not) reach directly; the server fetches it so the provider never sees the
+    /// client's IP. In anon mode the RPC itself already rides the onion channel.
+    pub async fn fetch_gif_media(&self, url: &str) -> Result<Vec<u8>, AttachmentError> {
+        self.grpc_pool()?
+            .gif_client()
+            .media(url)
+            .await
+            .map_err(|e| AttachmentError::NetworkError(format!("GIF media fetch failed: {}", e)))
     }
 
     /// Extract media metadata from bytes (for in-memory content like downloaded GIFs).

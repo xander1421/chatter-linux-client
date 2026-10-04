@@ -149,10 +149,10 @@ struct RawGifFrames {
 }
 
 async fn fetch_full_gif_frames(id: String, url: &str, ui_ctx: &std::sync::Arc<ChatterClient>) -> Option<RawGifFrames> {
-    let bytes = match ui_ctx.download_url_bytes(url).await {
+    let bytes = match ui_ctx.fetch_gif_media(url).await {
         Ok(b) => b,
         Err(e) => {
-            tracing::debug!("Failed to download GIF frames: {}", e);
+            tracing::warn!(gif_id = %id, error = %e, "GIF preview fetch failed");
             return None;
         }
     };
@@ -164,7 +164,10 @@ async fn fetch_full_gif_frames(id: String, url: &str, ui_ctx: &std::sync::Arc<Ch
     let cursor = Cursor::new(&bytes);
     let decoder = match GifDecoder::new(cursor) {
         Ok(d) => d,
-        _ => return None,
+        Err(e) => {
+            tracing::warn!(gif_id = %id, error = %e, "GIF preview decode failed");
+            return None;
+        }
     };
 
     let frames_iter = decoder.into_frames();
