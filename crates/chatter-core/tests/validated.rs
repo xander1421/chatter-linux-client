@@ -117,20 +117,61 @@ async fn pg_dump_locked(_guard: &tokio::sync::MutexGuard<'_, ()>) -> String {
 /// Naive `LRANGE`/`ZRANGE` over a hash key returns WRONGTYPE and yields an
 /// empty haystack — which then "passes" any absence grep. This dispatches on
 /// the actual type so the haystack is real.
+///
+/// One SCAN page (1000 keys) per `EVAL`, dispatching on TYPE inside Redis. The
+/// previous shell loop forked two `redis-cli` per key; at ~36k keys on the
+/// shared dev stack that was ~130 s per dump and made the five dumping proofs
+/// the suite's critical path. Paging keeps each script short so the server's
+/// own Redis calls are not stalled behind one long one. A failed page (auth,
+/// script error) prints `REDIS DUMP FAILED` instead of an empty haystack,
+/// and V0 still requires a planted marker to be found.
 fn redis_dump_all() -> String {
-    sh(r##"docker compose exec -T -e REDISCLI_AUTH="$(grep -m1 '^REDIS_PASSWORD=' .env | cut -d= -f2-)" redis sh -c '
-        for k in $(redis-cli --scan --pattern "*"); do
-          t=$(redis-cli type "$k")
-          echo "--- KEY $k ($t)"
-          case "$t" in
-            string) redis-cli get "$k" ;;
-            hash)   redis-cli hgetall "$k" ;;
-            list)   redis-cli lrange "$k" 0 -1 ;;
-            set)    redis-cli smembers "$k" ;;
-            zset)   redis-cli zrange "$k" 0 -1 ;;
-            *)      echo "(unhandled type: $t)" ;;
-          esac
-        done' 2>/dev/null"##)
+    const DUMP_PAGE_LUA: &str = r#"
+local r = redis.call("SCAN", ARGV[1], "COUNT", 1000)
+local out = {r[1]}
+for _, k in ipairs(r[2]) do
+  local t = redis.call("TYPE", k)["ok"]
+  out[#out + 1] = "--- KEY " .. k .. " (" .. t .. ")"
+  local vals
+  if t == "string" then vals = {redis.call("GET", k)}
+  elseif t == "hash" then vals = redis.call("HGETALL", k)
+  elseif t == "list" then vals = redis.call("LRANGE", k, 0, -1)
+  elseif t == "set" then vals = redis.call("SMEMBERS", k)
+  elseif t == "zset" then vals = redis.call("ZRANGE", k, 0, -1)
+  else vals = {"(unhandled type: " .. t .. ")"} end
+  for _, v in ipairs(vals) do out[#out + 1] = v end
+end
+return out
+"#;
+    const PAGE_LOOP: &str = r#"f=/tmp/validated-dump.$$; c=0
+while :; do
+  redis-cli --raw EVAL "$DUMP_LUA" 0 "$c" > "$f" 2>&1
+  c=$(head -n1 "$f")
+  case "$c" in ""|*[!0-9]*) echo "REDIS DUMP FAILED: $(cat "$f")"; break;; esac
+  tail -n +2 "$f"
+  [ "$c" = 0 ] && break
+done
+rm -f "$f""#;
+    let out = std::process::Command::new("docker")
+        .args(["compose", "exec", "-T"])
+        .arg("-e")
+        .arg(format!("REDISCLI_AUTH={}", env_value("REDIS_PASSWORD")))
+        .arg("-e")
+        .arg(format!("DUMP_LUA={DUMP_PAGE_LUA}"))
+        .args(["redis", "sh", "-c", PAGE_LOOP])
+        .current_dir(repo_dir())
+        .output()
+        .expect("redis dump failed to spawn");
+    let dump = String::from_utf8_lossy(&out.stdout).into_owned();
+    // A page failing mid-scan leaves a partial haystack; never grep one.
+    assert!(
+        out.status.success() && !dump.contains("REDIS DUMP FAILED"),
+        "redis dump failed ({}): {}{}",
+        out.status,
+        dump.lines().find(|l| l.contains("REDIS DUMP FAILED")).unwrap_or(""),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    dump
 }
 
 fn psql(sql: &str) -> String {
@@ -848,6 +889,30 @@ fn row_ids(uid: &UserId) -> std::collections::HashSet<String> {
     .collect()
 }
 
+/// Field names of one Redis hash (a device queue's envelopes).
+fn redis_hkeys(k: &str) -> std::collections::HashSet<String> {
+    sh(&format!(
+        "docker compose exec -T -e REDISCLI_AUTH=\"$(grep -m1 '^REDIS_PASSWORD=' .env | cut -d= -f2-)\" redis redis-cli HKEYS '{k}' 2>/dev/null"
+    ))
+    .lines()
+    .map(|l| l.trim().to_string())
+    .filter(|l| !l.is_empty())
+    .collect()
+}
+
+/// Wait until hash `k` has a field not in `before` — the envelope a send
+/// queued — instead of sleeping a fixed 3 s and hoping it landed. Returns on
+/// timeout too; the caller's exact-count positive control then reports it.
+async fn wait_for_new_hash_field(k: &str, before: &std::collections::HashSet<String>) {
+    let deadline = Instant::now() + CONDITION_TIMEOUT;
+    while Instant::now() < deadline {
+        if redis_hkeys(k).difference(before).next().is_some() {
+            return;
+        }
+        tokio::time::sleep(POLL_INTERVAL).await;
+    }
+}
+
 // ============================================================================
 // V0: DETECTOR SELF-CHECK — prove the plaintext detector can find plaintext
 //
@@ -1113,15 +1178,7 @@ async fn v2_corrupted_ciphertext_never_decrypts() {
     //      GUID, so the client's ID never appears server-side at all.
     // Diffing the field set across the send depends on neither assumption.
     let key = format!("device_queue_envelopes:{uid_b}:1");
-    let hkeys = |k: &str| -> std::collections::HashSet<String> {
-        sh(&format!(
-            "docker compose exec -T -e REDISCLI_AUTH=\"$(grep -m1 '^REDIS_PASSWORD=' .env | cut -d= -f2-)\" redis redis-cli HKEYS '{k}' 2>/dev/null"
-        ))
-        .lines()
-        .map(|l| l.trim().to_string())
-        .filter(|l| !l.is_empty())
-        .collect()
-    };
+    let hkeys = redis_hkeys;
 
     let before = hkeys(&key);
 
@@ -1131,7 +1188,7 @@ async fn v2_corrupted_ciphertext_never_decrypts() {
         .send_text(ActiveConversation::ServerDm { peer_id: uid_b }, &marker)
         .await
         .expect("send_text failed");
-    tokio::time::sleep(Duration::from_secs(3)).await;
+    wait_for_new_hash_field(&key, &before).await;
 
     let after = hkeys(&key);
     let new_fields: Vec<String> = after.difference(&before).cloned().collect();
@@ -1882,15 +1939,7 @@ async fn v6_delivered_message_key_is_destroyed() {
     tokio::time::sleep(Duration::from_secs(2)).await;
 
     let key = format!("device_queue_envelopes:{uid_b}:1");
-    let hkeys = |k: &str| -> std::collections::HashSet<String> {
-        sh(&format!(
-            "docker compose exec -T -e REDISCLI_AUTH=\"$(grep -m1 '^REDIS_PASSWORD=' .env | cut -d= -f2-)\" redis redis-cli HKEYS '{k}' 2>/dev/null"
-        ))
-        .lines()
-        .map(|l| l.trim().to_string())
-        .filter(|l| !l.is_empty())
-        .collect()
-    };
+    let hkeys = redis_hkeys;
 
     // Identify each marker's envelope by DIFFING the field set across the send.
     // Same reasoning as V2: the queue holds unrelated traffic (session
@@ -1931,7 +1980,7 @@ async fn v6_delivered_message_key_is_destroyed() {
         .send_text(ActiveConversation::ServerDm { peer_id: uid_b }, &m_delivered)
         .await
         .expect("send of delivered marker failed");
-    tokio::time::sleep(Duration::from_secs(3)).await;
+    wait_for_new_hash_field(&key, &base).await;
     let (_field_d, b64_delivered) = send_and_capture(&m_delivered, base.clone()).await;
 
     // ---- message 2: will be WITHHELD ---------------------------------------
@@ -1942,7 +1991,7 @@ async fn v6_delivered_message_key_is_destroyed() {
         .send_text(ActiveConversation::ServerDm { peer_id: uid_b }, &m_undelivered)
         .await
         .expect("send of undelivered marker failed");
-    tokio::time::sleep(Duration::from_secs(3)).await;
+    wait_for_new_hash_field(&key, &before2).await;
     let (field_u, b64_undelivered) = send_and_capture(&m_undelivered, before2).await;
 
     assert_ne!(
@@ -2521,10 +2570,9 @@ async fn v9_linked_device_receives_and_decrypts_dm() {
     client_bp.shutdown().await;
     drop(client_bs);
     drop(client_bp);
-    tokio::time::sleep(Duration::from_secs(3)).await;
-
     // ---- snapshot BEFORE the send, scoped to THIS user ----------------------
-    let before = row_ids(&uid_b);
+    // Quiesced, not a fixed sleep: waits out in-flight fan-out from the shutdown.
+    let before = quiesced_row_ids(&uid_b).await;
     println!("  device_messages rows for B before the send: {}", before.len());
 
     let marker = unique_marker();
@@ -2868,10 +2916,9 @@ async fn v10_dm_fans_out_to_three_devices() {
     drop(client_b3);
     drop(client_b2);
     drop(client_bp);
-    tokio::time::sleep(Duration::from_secs(3)).await;
-
     // ---- snapshot BEFORE the send, scoped to THIS user ----------------------
-    let before = row_ids(&uid_b);
+    // Quiesced, not a fixed sleep: waits out in-flight fan-out from the shutdown.
+    let before = quiesced_row_ids(&uid_b).await;
     println!("  device_messages rows for B before the send: {}", before.len());
 
     let marker = unique_marker();
@@ -3271,10 +3318,9 @@ async fn v11_device_linked_mid_conversation_receives_next_message() {
     client_bp.shutdown().await;
     drop(client_bs);
     drop(client_bp);
-    tokio::time::sleep(Duration::from_secs(3)).await;
-
     // ---- snapshot BEFORE the second send, scoped to THIS user ---------------
-    let before = row_ids(&uid_b);
+    // Quiesced, not a fixed sleep: waits out in-flight fan-out from the shutdown.
+    let before = quiesced_row_ids(&uid_b).await;
     println!("  device_messages rows for B before the second send: {}", before.len());
 
     let marker_2 = unique_marker();
@@ -3876,8 +3922,6 @@ async fn v13_self_synced_dm_files_as_outgoing_in_the_recipient_conversation() {
     client_b.shutdown().await;
     drop(client_as);
     drop(client_b);
-    tokio::time::sleep(Duration::from_secs(3)).await;
-
     let before_a = quiesced_row_ids(&uid_a).await;
     let before_b = quiesced_row_ids(&uid_b).await;
 
@@ -4373,15 +4417,7 @@ async fn v15_post_compromise_security_heals_after_dh_ratchet() {
 
     // ---- Redis queue capture helpers (mirror V6) ---------------------------
     let queue_key = format!("device_queue_envelopes:{uid_b}:1");
-    let hkeys = |k: &str| -> std::collections::HashSet<String> {
-        sh(&format!(
-            "docker compose exec -T -e REDISCLI_AUTH=\"$(grep -m1 '^REDIS_PASSWORD=' .env | cut -d= -f2-)\" redis redis-cli HKEYS '{k}' 2>/dev/null"
-        ))
-        .lines()
-        .map(|l| l.trim().to_string())
-        .filter(|l| !l.is_empty())
-        .collect()
-    };
+    let hkeys = redis_hkeys;
     let capture_after = |marker: &str, before: std::collections::HashSet<String>| {
         let queue_key = queue_key.clone();
         let marker = marker.to_string();
@@ -4466,7 +4502,7 @@ async fn v15_post_compromise_security_heals_after_dh_ratchet() {
         .send_text(ActiveConversation::ServerDm { peer_id: uid_b }, &m_pre)
         .await
         .expect("send of pre-step marker failed");
-    tokio::time::sleep(Duration::from_secs(3)).await;
+    wait_for_new_hash_field(&queue_key, &base_q).await;
     let (_pre_field, b64_pre) = capture_after(&m_pre, base_q).await;
     let bytes_pre = b64_to_bytes(&b64_pre);
     println!("  captured PRE-step ciphertext ({} b64 chars)", b64_pre.len());
@@ -4528,7 +4564,7 @@ async fn v15_post_compromise_security_heals_after_dh_ratchet() {
         .send_text(ActiveConversation::ServerDm { peer_id: uid_b }, &m_post)
         .await
         .expect("send of post-step marker failed");
-    tokio::time::sleep(Duration::from_secs(3)).await;
+    wait_for_new_hash_field(&queue_key, &base_q2).await;
     let (post_field, b64_post) = capture_after(&m_post, base_q2).await;
     let bytes_post = b64_to_bytes(&b64_post);
     assert_ne!(b64_pre, b64_post, "captured the same envelope twice");
@@ -5119,8 +5155,6 @@ async fn v17_self_synced_reaction_attaches_to_the_right_message_as_ours() {
     // queue (inspect it) and B can't interfere.
     fx.client_as.shutdown().await;
     fx.client_b.shutdown().await;
-    tokio::time::sleep(Duration::from_secs(3)).await;
-
     let before_a = quiesced_row_ids(&uid_a).await;
 
     // THE ACTION UNDER TEST: A reacts from the PRIMARY to B's message.
@@ -5256,8 +5290,6 @@ async fn v18_self_synced_read_receipt_clears_unread_on_linked_device() {
     // receipt SITS in A's linked queue.
     fx.client_as.shutdown().await;
     fx.client_b.shutdown().await;
-    tokio::time::sleep(Duration::from_secs(3)).await;
-
     let before_a = quiesced_row_ids(&uid_a).await;
 
     // THE ACTION UNDER TEST: A reads B's message from the PRIMARY.
@@ -5342,8 +5374,6 @@ async fn v19_own_typing_is_not_self_synced() {
 
     // Keep B offline so its queue is a clean before/after ledger for THIS action.
     fx.client_b.shutdown().await;
-    tokio::time::sleep(Duration::from_secs(2)).await;
-
     let before_a = quiesced_row_ids(&uid_a).await;
     let before_b = quiesced_row_ids(&uid_b).await;
 
@@ -5365,6 +5395,8 @@ async fn v19_own_typing_is_not_self_synced() {
     // is slow — the wide version swept in a live peer's delivery receipt and
     // reported the self-sync suppression as broken.
     let new_b = wait_for_new_envelopes(&uid_b, &before_b, 1).await;
+    // Absence proof: A's own devices must get nothing within 3 s of B's copy
+    // landing. No event signals "nothing synced", so this stays a fixed wait.
     tokio::time::sleep(Duration::from_secs(3)).await;
     let new_a: Vec<Vec<String>> = envelope_rows(&uid_a)
         .into_iter()
@@ -6321,15 +6353,7 @@ async fn v23_message_ordering_reorder_and_gap() {
     tokio::time::sleep(Duration::from_secs(2)).await;
 
     let key = format!("device_queue_envelopes:{uid_b}:1");
-    let hkeys = |k: &str| -> std::collections::HashSet<String> {
-        sh(&format!(
-            "docker compose exec -T -e REDISCLI_AUTH=\"$(grep -m1 '^REDIS_PASSWORD=' .env | cut -d= -f2-)\" redis redis-cli HKEYS '{k}' 2>/dev/null"
-        ))
-        .lines()
-        .map(|l| l.trim().to_string())
-        .filter(|l| !l.is_empty())
-        .collect()
-    };
+    let hkeys = redis_hkeys;
 
     // Send one message, then return (field, envelope_b64) for the ONE new queue
     // entry it produced — identified by diffing HKEYS (V6's method).
@@ -6365,17 +6389,17 @@ async fn v23_message_ordering_reorder_and_gap() {
 
     let before1 = hkeys(&key);
     client_a.send_text(ActiveConversation::ServerDm { peer_id: uid_b }, &m1).await.expect("send msg1");
-    tokio::time::sleep(Duration::from_secs(3)).await;
+    wait_for_new_hash_field(&key, &before1).await;
     let (f1, b64_1) = send_and_capture(&m1, before1).await;
 
     let before2 = hkeys(&key);
     client_a.send_text(ActiveConversation::ServerDm { peer_id: uid_b }, &m2).await.expect("send msg2");
-    tokio::time::sleep(Duration::from_secs(3)).await;
+    wait_for_new_hash_field(&key, &before2).await;
     let (f2, b64_2) = send_and_capture(&m2, before2).await;
 
     let before3 = hkeys(&key);
     client_a.send_text(ActiveConversation::ServerDm { peer_id: uid_b }, &m3).await.expect("send msg3");
-    tokio::time::sleep(Duration::from_secs(3)).await;
+    wait_for_new_hash_field(&key, &before3).await;
     let (f3, b64_3) = send_and_capture(&m3, before3).await;
 
     assert!(b64_1 != b64_2 && b64_2 != b64_3 && b64_1 != b64_3,
@@ -11553,7 +11577,6 @@ async fn v57_group_resend_reaches_only_original_recipients_still_in_the_channel(
         c.shutdown().await;
     }
     drop((client_b, client_c, client_d));
-    tokio::time::sleep(Duration::from_secs(2)).await;
     let base_b = quiesced_row_ids(&uid_b).await;
     let base_c = quiesced_row_ids(&uid_c).await;
     let base_d = quiesced_row_ids(&uid_d).await;
@@ -12309,6 +12332,8 @@ async fn v60_signed_kick_rotates_the_sender_key() {
             Err(e) => println!("  C on m1 ({id}): {e}"),
         }
     }
+    // Absence proof: nothing may be queued for C within 3 s. No event signals
+    // "nothing was queued", so this one stays a fixed wait.
     tokio::time::sleep(Duration::from_secs(3)).await;
     let new_c: Vec<_> = envelope_rows(&uid_c).into_iter().filter(|f| !base_c.contains(&f[0])).collect();
     assert!(new_c.is_empty(), "A queued {} envelope(s) for the kicked C after the kick: {new_c:?}", new_c.len());
@@ -12551,6 +12576,8 @@ async fn v62_unverifiable_change_send_blocks_until_a_genuine_one() {
     assert_eq!(blocked.delivery_status, "failed", "B SENT while its membership failed verification");
     assert_eq!(blocked.failure_reason.as_deref(), Some("Membership not verified"),
         "B's send failed for another reason: {:?}", blocked.failure_reason);
+    // Absence proof: nothing may reach the server within 2 s. No event signals
+    // "nothing was sent", so this one stays a fixed wait.
     tokio::time::sleep(Duration::from_secs(2)).await;
     assert!(server_group_ciphertexts(&gid, &uid_b).is_empty(), "the server stored a message from send-blocked B");
     println!("  forged change relayed to B: VerificationFailed ({reason}); not applied; B's send stored as \
