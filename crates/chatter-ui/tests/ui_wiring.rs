@@ -1,6 +1,6 @@
 //! VALIDATED-UI headless harness — smoke test.
 //!
-//! Boots the real `MainWindow` (the generated Slint root from `ui/main.slint`)
+//! Boots the real `MainWindow` (the generated Slint root, `ui/app.slint`)
 //! under the headless testing backend and proves basic round-trips. This is the
 //! LAYER-1 (headless-dynamic) foundation for VALIDATED-UI.md.
 //!
@@ -63,9 +63,8 @@ fn require_element_queries() {
 #[test]
 fn smoke_boots_and_view_roundtrips() {
     let w = boot();
-    // current-view is an in-out property bridged App<=>MainWindow. Setting it and
-    // reading it back proves the two-way binding across the component boundary is
-    // live (not a dead alias).
+    // current-view is an in-out property on MainWindow. Setting it and reading it
+    // back proves the Rust-facing property is live.
     w.set_current_view("register".into());
     assert_eq!(w.get_current_view().as_str(), "register");
     w.set_current_view("login".into());
@@ -251,7 +250,7 @@ fn settings_read_receipts_toggle_reaches_core() {
 ///   1. the accessible-label we added resolves to exactly one `switch` element,
 ///   2. its accessible-checked tracks the bound property (display wire), and
 ///   3. a REAL pointer click traverses the whole chain
-///      (Toggle.toggled → SettingsScreen.read-receipts-changed → App →
+///      (Toggle.toggled → SettingsScreen.read-receipts-changed →
 ///       MainWindow → Rust on_settings_read_receipts_changed) into chatter-core.
 ///
 /// Routing wire, proven dynamically. Pushing "settings" on the modal stack
@@ -1378,8 +1377,8 @@ fn public_channels_do_not_claim_end_to_end_encryption() {
 //
 //  L1 (DYNAMIC, MainWindow boundary): the generate/reset/copy callbacks are
 //     declared, wired by the REAL `wire_profile_actions`, and safe to invoke;
-//     and the share-link display properties round-trip through the
-//     main.slint <=> app.slint aliases (a dead alias would read back empty).
+//     and the share-link display properties round-trip through the window
+//     (a property nothing binds would read back empty).
 //
 //  L2 (STATIC, reaches-core): the production handlers wire generate/reset to
 //     `create_username_link` (core) and the Slint modal fires the callbacks
@@ -1397,7 +1396,7 @@ fn profile_share_username_link_is_wired() {
     assert_eq!(
         w.get_profile_share_link().as_str(),
         "chatter://u/test-id#AAAA",
-        "profile-share-link alias is dead (main.slint <=> app.slint)"
+        "profile-share-link does not round-trip on the window"
     );
     w.set_profile_share_status("status-probe".into());
     assert_eq!(w.get_profile_share_status().as_str(), "status-probe");
@@ -1445,8 +1444,8 @@ fn profile_share_username_link_is_wired() {
 //
 //  L1 (DYNAMIC, MainWindow boundary): the four drawer callbacks are declared,
 //     wired by the REAL `wire_profile_actions`, and safe to invoke; and the
-//     tab/loading properties round-trip through the main.slint <=> app.slint
-//     aliases (a dead alias would read back empty).
+//     tab/loading properties round-trip through the window (a property
+//     nothing binds would read back empty).
 //
 //  L2 (STATIC, reaches-core): the handlers reach the core façade methods, and
 //     the Slint modal fires the callbacks from the tab strip and the grid.
@@ -1462,7 +1461,7 @@ fn profile_shared_content_drawer_is_wired() {
     assert_eq!(
         w.get_profile_shared_tab().as_str(),
         "media",
-        "profile-shared-tab alias is dead (main.slint <=> app.slint)"
+        "profile-shared-tab does not round-trip on the window"
     );
     w.set_profile_shared_loading(true);
     assert!(w.get_profile_shared_loading());
@@ -1528,8 +1527,8 @@ fn profile_shared_content_drawer_is_wired() {
 // validated.rs V50 (local file) / V51 (server, PIN). Offline this proves the
 // modal wiring at two layers, and NAMES which:
 //
-//  L1 (DYNAMIC, MainWindow boundary): the status property alias survives the
-//     main.slint <=> app.slint hop, and the two server-mode callbacks are
+//  L1 (DYNAMIC, MainWindow boundary): the status property round-trips on the
+//     window, and the two server-mode callbacks are
 //     declared, wired by the REAL wire_settings_callbacks, and safe to invoke
 //     (their async half errors offline into the status property). The two
 //     file-mode callbacks are NOT invoked here — their handlers open a native
@@ -1549,7 +1548,7 @@ fn settings_message_backup_wires_reach_core() {
     assert_eq!(
         w.get_settings_message_backup_status().as_str(),
         "status-probe",
-        "settings-message-backup-status alias is dead (main.slint <=> app.slint)"
+        "settings-message-backup-status does not round-trip on the window"
     );
 
     // L1: server-mode wires run their real handlers without panicking.
@@ -2219,15 +2218,24 @@ fn back_key_event_reaches_the_handler() {
 /// requiring the scope to hold focus itself.
 #[test]
 fn back_scope_does_not_steal_focus_from_text_input() {
-    let main = include_str!("../../../ui/main.slint");
+    let app = include_str!("../../../ui/app.slint");
+    let at = app
+        .find("back-scope := FocusScope")
+        .expect("the top-level back FocusScope is gone; Back cannot be observed");
     assert!(
-        main.contains("back-scope := FocusScope"),
-        "the top-level back FocusScope is gone; Back cannot be observed"
-    );
-    assert!(
-        main.contains("forward-focus: back-scope;"),
+        app.contains("forward-focus: back-scope;"),
         "without forward-focus nothing holds focus at startup and Back is dropped"
     );
+    // back-scope must be an ANCESTOR of every focusable item: nothing may sit
+    // beside it at the window's top level, or Back is lost while that thing's
+    // TextInput holds focus.
+    let after = &app[at..];
+    assert!(
+        after.lines().skip(1).filter(|l| l.starts_with("    ") && !l.starts_with("     "))
+            .all(|l| l == "    }"),
+        "an element was added beside back-scope instead of inside it"
+    );
+    let main = &after[..after.find("Global keyboard shortcuts").expect("shortcut scope moved")];
     assert!(
         main.contains("focus-on-click: false;"),
         "back-scope would steal focus from the composer on every stray tap"
@@ -3363,9 +3371,9 @@ fn the_identity_change_bar_is_wired_and_not_dismissable() {
         "the bar must render inside the conversation, gated on conversation-kind so a \
          prompt cannot survive a switch into a channel, group or mesh room"
     );
-    // The whole four-hop chain, because a break at any hop leaves a button that
+    // The whole chain, because a break at any hop leaves a button that
     // looks alive and reaches nothing:
-    // IdentityChangeBar -> ChatLayout -> App -> MainWindow -> Rust.
+    // IdentityChangeBar -> ChatLayout -> MainWindow (app.slint) -> Rust.
     assert!(
         layout.contains("root.identity-change-accept-clicked()"),
         "ChatLayout must forward the bar's accept-clicked onwards"
@@ -3373,13 +3381,12 @@ fn the_identity_change_bar_is_wired_and_not_dismissable() {
     let app = include_str!("../../../ui/app.slint");
     assert!(
         app.contains("identity-change-accept-clicked => { root.identity-change-accept-clicked(); }"),
-        "App must forward accept-clicked from ChatLayout"
+        "MainWindow must forward accept-clicked from ChatLayout"
     );
-    let main = include_str!("../../../ui/main.slint");
     assert!(
-        main.contains("callback identity-change-accept-clicked <=> app.identity-change-accept-clicked;"),
-        "MainWindow must alias the callback, or `on_identity_change_accept_clicked` \
-         is wired to something nothing can fire"
+        app.contains("callback identity-change-accept-clicked();"),
+        "the window must declare the callback, or there is no \
+         `on_identity_change_accept_clicked` for Rust to wire"
     );
 }
 
@@ -3497,17 +3504,12 @@ fn conversation_open_anchors_on_the_unread_boundary() {
     let app = include_str!("../../../ui/app.slint");
     assert!(
         app.contains("unread-index <=> root.unread-index"),
-        "App must forward the open position to ChatLayout"
+        "MainWindow must forward the open position to ChatLayout"
     );
     assert!(
         app.contains("is-at-bottom <=> root.is-at-bottom"),
-        "App must bind is-at-bottom to ChatLayout, or every set_is_at_bottom call \
+        "MainWindow must bind is-at-bottom to ChatLayout, or every set_is_at_bottom call \
          in Rust writes to a property nothing reads"
-    );
-    let main = include_str!("../../../ui/main.slint");
-    assert!(
-        main.contains("unread-index <=> app.unread-index"),
-        "MainWindow must alias unread-index, or set_unread_index is inert"
     );
 }
 
@@ -4644,8 +4646,6 @@ fn inline_gifs_animate_only_visible_rows() {
     assert!(layout.contains("last-visible-row <=> root.message-last-visible-row;"));
     let app = include_str!("../../../ui/app.slint");
     assert!(app.contains("message-last-visible-row <=> root.message-last-visible-row;"));
-    let main = include_str!("../../../ui/main.slint");
-    assert!(main.contains("message-last-visible-row <=> app.message-last-visible-row;"));
     let gifs = include_str!("../src/bin_ui/gif_state/inline.rs");
     assert!(gifs.contains("for msg_idx in rows {"), "the tick must walk only the visible rows");
     assert!(gifs.contains("fn rows_to_animate("), "the range (and its -1 sentinel) is unit-tested there");
@@ -4681,7 +4681,7 @@ fn chrome_over_the_list_pauses_backdrop_while_scrolling() {
         header.matches("backdrop-paused: root.backdrop-paused;").count(),
         "every header button samples the header's backdrop too"
     );
-    // The selection bar replaces the header over the same list, from App.
+    // The selection bar replaces the header over the same list, from the window root.
     assert!(layout.contains("out property <bool> list-scrolling: message-list.scrolling;"));
     let app = include_str!("../../../ui/app.slint");
     assert!(app.contains("changed list-scrolling => { root.chat-list-scrolling = self.list-scrolling; }"));

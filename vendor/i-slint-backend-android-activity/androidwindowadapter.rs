@@ -487,7 +487,7 @@ impl i_slint_core::window::WindowAdapterInternal for AndroidWindowAdapter {
     }
 
     /// Modals and the conversation pane re-take focus when they close
-    /// (`ui/main.slint`, the `changed active-modal` / `changed
+    /// (`ui/app.slint`, the `changed active-modal` / `changed
     /// mobile-show-chat` handlers), which is exactly the moment a focused
     /// field may have been destroyed without a FocusOut (§112m).
     fn handle_focus_change(

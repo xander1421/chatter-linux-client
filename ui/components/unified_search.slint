@@ -4,7 +4,7 @@ import { GlassSurface } from "glass_surface.slint";
 // Replaces QuickSwitcher (Ctrl+K) and SearchModal (Ctrl+F).
 //
 // Opened from the sidebar "Search" row (top, above Saved Messages) or the
-// Ctrl+K / Ctrl+F shortcut. `UnifiedSearch` is an App-root overlay driven by a
+// Ctrl+K / Ctrl+F shortcut. `UnifiedSearch` is a window-root overlay driven by a
 // boolean `if` — same pattern as every other modal here — which makes the
 // shortcut + click-outside + Escape reliable.
 
@@ -207,7 +207,7 @@ component PersonRow inherits Rectangle {
     }
 }
 
-// Full-window overlay palette (rendered at App root via `if open`).
+// Full-window overlay palette (rendered at the window root via `if open`).
 export component UnifiedSearch inherits Rectangle {
     in property <bool> show: false;
     in property <[QuickSwitcherItem]> conversations: [];

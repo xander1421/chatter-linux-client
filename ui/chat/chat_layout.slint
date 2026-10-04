@@ -67,7 +67,7 @@ export component ChatLayout inherits Rectangle {
     in-out property <int> message-first-visible-row: 0;  // See MessageList.first-visible-row
     in-out property <int> message-last-visible-row: -1;
     // The message list is moving (MessageList.scrolling), for glass outside
-    // this layout that sits over it: App's SelectionBar.
+    // this layout that sits over it: the window's SelectionBar.
     out property <bool> list-scrolling: message-list.scrolling;
     // Two-way: the open path resets it so a conversation left scrolled up
     // does not decide where the NEXT conversation opens.

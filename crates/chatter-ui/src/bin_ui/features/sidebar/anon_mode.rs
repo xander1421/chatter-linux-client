@@ -2,7 +2,7 @@
 //!
 //! The button lives in the sidebar's bottom utility bar (see
 //! `ui/sidebar/sidebar.slint`'s `anon-mode-clicked` callback) and routes
-//! through the App's `toggle-anon-mode` callback. Logic:
+//! through the window's `toggle-anon-mode` callback. Logic:
 //!
 //! - If anon mode is currently OFF: open the PIN modal. On submit, call
 //!   `ChatterClient::verify_pin_for_anon_mode(pin)`. On success: flip the

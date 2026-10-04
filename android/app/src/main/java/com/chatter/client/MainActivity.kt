@@ -294,7 +294,7 @@ class MainActivity : GameActivity() {
      * `onKeyPreIme` on the focused view runs before the IME stage (the
      * pattern SearchView and AutoCompleteTextView use for the same job), so
      * this no longer depends on the IME finishing its half. Both halves are
-     * consumed so Rust's `back-scope` (ui/main.slint) does not also pop a
+     * consumed so Rust's `back-scope` (ui/app.slint) does not also pop a
      * layer: the first Back hides the keyboard, the next one navigates — what
      * the S9 already did. With no keyboard up, Back is untouched.
      */

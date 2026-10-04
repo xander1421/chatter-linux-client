@@ -79,7 +79,7 @@ pub extern "system" fn Java_com_chatter_client_MainActivity_nativeInitWebrtc(
 
 /// Set or clear `FLAG_SECURE` on the Activity window (`MainActivity.setSecure`).
 ///
-/// Bound to the Slint `secure-screen` callback, which `main.slint` fires from
+/// Bound to the Slint `secure-screen` callback, which `app.slint` fires from
 /// its `changed active-modal` handler. Change handlers run before the next
 /// frame is rendered, so the flag is requested before the secret is drawn.
 pub fn set_secure(secure: bool) {

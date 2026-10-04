@@ -110,7 +110,7 @@ fn android_main(app: i_slint_backend_android_activity::AndroidApp) {
     let _guard = rt.enter();
     let _ = visibility_client.set(app_state.ui_ctx.clone());
 
-    // Safe-area insets (status bar, nav bar, IME) are now bound in `main.slint`
+    // Safe-area insets (status bar, nav bar, IME) are now bound in `app.slint`
     // directly off the Window's built-in `safe-area-insets` and
     // `virtual-keyboard-size` out properties — Slint's Android backend feeds
     // them via `WindowInsetsCompat`, so no manual JNI polling is needed.

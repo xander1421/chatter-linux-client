@@ -6,7 +6,7 @@ import { GlassSurface } from "../components/glass_surface.slint";
 // Android Back is the other way out and is handled in Rust, ahead of modal
 // dismissal.
 //
-// Lives INSIDE the chat column, not at App root. As a root-level overlay it
+// Lives INSIDE the chat column, not at the window root. As a root-level overlay it
 // spanned the whole window and sat on top of the sidebar and the chat header at
 // once — the count floated above nav it was not part of. Here it replaces
 // ChatHeader (`hide-header: root.selection-mode`), which is also why it does not

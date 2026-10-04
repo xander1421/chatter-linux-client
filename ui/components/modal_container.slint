@@ -6,7 +6,7 @@ import { GlassSurface } from "glass_surface.slint";
 import { Spacing } from "../theme/spacing.slint";
 
 // Height of the on-screen keyboard. Only the Window can read
-// `virtual-keyboard-size`, so `main.slint` mirrors it here.
+// `virtual-keyboard-size`, so `app.slint` mirrors it here.
 export global VirtualKeyboard {
     in-out property <length> height: 0px;
 }
@@ -38,7 +38,7 @@ export component ModalContainer inherits Rectangle {
 
     // Take focus off the card's text field (which hides the soft keyboard) and
     // park it on the modal's own scope. Not `clear-focus()`: that leaves
-    // nothing focused, and Back is then dropped (main.slint `back-scope`).
+    // nothing focused, and Back is then dropped (app.slint `back-scope`).
     public function release-focus() {
         modal-keys.focus();
     }

@@ -12,11 +12,10 @@ a mouse button the device does not have (E). Every one of those shipped here.
 
 
   A) DANGLING MainWindow callback surface.
-     Every `callback NAME` declared on the exported `MainWindow` (ui/main.slint)
+     Every `callback NAME` declared on the exported `MainWindow` (ui/app.slint)
      is the Rust-facing surface: Slint generates an `on_NAME` / `invoke_NAME`
-     for it. If NO `.on_NAME(` handler exists anywhere in the Rust and the
-     callback isn't a pure `<=> app.x` forward that another element handles,
-     the button/toggle fires into the void. We report every MainWindow callback
+     for it. If NO `.on_NAME(` handler exists anywhere in the Rust, the
+     button/toggle fires into the void. We report every MainWindow callback
      with no Rust `.on_` handler so the ledger can triage each as
      handled-in-Slint vs genuinely dead.
 
@@ -103,20 +102,15 @@ def all_rust_files():
 
 # ---- A) MainWindow callback surface -----------------------------------------
 
-CB_RE = re.compile(r"^\s*callback\s+([A-Za-z0-9_\-]+)\s*(<=>|\(|;)")
+# Top-level declarations only (4-space indent): MainWindow is the only
+# component in app.slint.
+CB_RE = re.compile(r"^    callback\s+([A-Za-z0-9_\-]+)\s*(\(|;)")
 
 
 def mainwindow_callbacks():
-    """Return list of (name, forwarded_bool) declared on MainWindow."""
-    text = read(os.path.join(UI_DIR, "main.slint"))
-    out = []
-    for line in text.splitlines():
-        m = CB_RE.match(line)
-        if m:
-            name = snake(m.group(1))
-            forwarded = "<=>" in line
-            out.append((name, forwarded))
-    return out
+    """Return the callback names declared on MainWindow."""
+    text = read(os.path.join(UI_DIR, "app.slint"))
+    return [snake(m.group(1)) for m in map(CB_RE.match, text.splitlines()) if m]
 
 
 # ---- B) Rust handler bodies --------------------------------------------------
@@ -489,9 +483,9 @@ def main():
     # A) MainWindow surface
     mw = mainwindow_callbacks()
     no_handler = []
-    for name, forwarded in mw:
+    for name in mw:
         if name not in handler_class:
-            no_handler.append((name, forwarded))
+            no_handler.append(name)
 
     all_stubs = sorted([n for n, c in handler_class.items() if c == "STUB"])
     stubs = [n for n in all_stubs if n not in KNOWN_INTENTIONAL_STUBS]
@@ -519,7 +513,7 @@ def main():
         print(json.dumps({
             "mainwindow_callbacks": len(mw),
             "rust_handlers": len(handler_class),
-            "mainwindow_no_rust_handler": [n for n, _ in no_handler],
+            "mainwindow_no_rust_handler": no_handler,
             "stub_handlers": stubs,
             "local_only_handlers": local_only,
             "fn_ref_handlers": fn_refs,
@@ -542,9 +536,8 @@ def main():
         print(f"[A] MainWindow callbacks with NO Rust .on_ handler: {len(no_handler)}")
         print("    (each is either handled purely in Slint, or a dead wire —")
         print("     triage in the ledger)")
-        for name, fwd in sorted(no_handler):
-            tag = "forward<=>" if fwd else "declared"
-            print(f"      - {name}  [{tag}]")
+        for name in sorted(no_handler):
+            print(f"      - {name}")
         print()
         print(f"[B] LOCAL-ONLY handlers (never touch core ctx — eyeball): {len(local_only)}")
         for n in local_only:

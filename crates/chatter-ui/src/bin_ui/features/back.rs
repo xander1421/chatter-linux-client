@@ -1,6 +1,6 @@
 //! Android Back key.
 //!
-//! `ui/main.slint`'s top-level `back-scope` FocusScope reports every Back press
+//! `ui/app.slint`'s top-level `back-scope` FocusScope reports every Back press
 //! through the `back-pressed` callback; the decision of what Back *means* is
 //! made here, in Rust, so it can be tested headlessly.
 //!
