@@ -68,15 +68,16 @@ impl UserClient {
     /// Update current user's profile (streaming response).
     ///
     /// Returns stream of UserEvent with update progress.
-    /// Uses FieldMask to specify which fields to update.
+    /// Only the fields in `update_mask` are written; there is deliberately no
+    /// maskless (whole-profile) form.
     pub async fn update_user_profile(
         &mut self,
         profile: UserProfile,
-        update_mask: Option<prost_types::FieldMask>,
+        update_mask: prost_types::FieldMask,
     ) -> Result<impl Stream<Item = Result<UserEvent, NetworkError>>, NetworkError> {
         let request = UpdateUserProfileRequest {
             profile: Some(profile),
-            update_mask,
+            update_mask: Some(update_mask),
             request_id: uuid::Uuid::new_v4().to_string(),
         };
 

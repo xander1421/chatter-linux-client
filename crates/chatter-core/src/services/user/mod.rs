@@ -621,11 +621,14 @@ impl UserService {
             paths.push("encrypted_avatar".to_string());
         }
 
-        let update_mask = if paths.is_empty() {
-            None
-        } else {
-            Some(prost_types::FieldMask { paths })
-        };
+        // Only masked fields go up. The server reads an absent or empty mask
+        // as "every field", which would upload the stored plaintext name and
+        // status (refused since server 8feb3585) and clear the avatar — so
+        // with nothing to change, nothing is sent.
+        if paths.is_empty() {
+            return Ok(existing);
+        }
+        let update_mask = prost_types::FieldMask { paths };
 
         let mut user_client = self.user_client();
         let mut stream = user_client

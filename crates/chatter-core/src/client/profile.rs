@@ -859,6 +859,21 @@ mod tests {
         assert_eq!(client.typing_indicator_text(channel), "");
     }
 
+    /// Nothing to change (no name, no status, no avatar) sends nothing: the
+    /// server reads a maskless update as "every field". The test server is
+    /// unreachable, so any RPC would fail this.
+    #[tokio::test]
+    async fn profile_update_with_nothing_to_change_sends_no_unmasked_update() {
+        use crate::storage::repositories::settings_repo::keys;
+        let (client, _dir) = test_client();
+        let me = UserId::new();
+        client.messages().settings_repo.set(keys::CURRENT_USER_ID, &me.to_string()).unwrap();
+        client.messages().user_repo.ensure_user_exists(&me).unwrap();
+        client.messages().user_repo.upsert_profile(&crate::domain::user::Profile::new(me, "me".into())).unwrap();
+        let profile = client.users().update_user_profile(None, None).await.expect("no RPC");
+        assert_eq!(profile.user_id, me);
+    }
+
     /// Friends › Blocked › Delete chat on an anon peer: the conversation and
     /// its history go, the block stays, and the peer's friend requests stay
     /// hidden. Unblock afterwards lifts the peer block (no chat to go through).
