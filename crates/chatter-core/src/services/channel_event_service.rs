@@ -1067,7 +1067,7 @@ mod tests {
         // Never reachable: the rollback fetch is expected to fail, which is
         // the "server no longer has this channel" path.
         let grpc_pool = Arc::new(
-            crate::network::grpc::client_pool::GrpcClientPool::new("http://127.0.0.1:1").unwrap(),
+            crate::network::grpc::client_pool::GrpcClientPool::new("https://127.0.0.1:1").unwrap(),
         );
         let (log, _, _) = crate::services::channel::membership_log::test_support::device_on(db.clone(), me, server, people);
 

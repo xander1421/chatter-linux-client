@@ -656,11 +656,11 @@ mod tests {
             .lines()
             .find(|l| l.trim_start().starts_with("testing ="))
             .expect("chatter-core must declare a `testing` feature");
-        assert_eq!(
-            line.trim(),
-            "testing = []",
-            "`testing` must stay a bare accessor-widening feature; it must not \
-             pull in `insecure-test-anchors`"
+        // It may forward `testing` to its own crates (mesh-noise's test
+        // hooks); it must never name the anchor fallback.
+        assert!(
+            !line.contains("insecure-test-anchors"),
+            "`testing` must stay an accessor-widening feature; it must not pull in `insecure-test-anchors`: {line}"
         );
         assert!(
             manifest.contains("insecure-test-anchors = []"),

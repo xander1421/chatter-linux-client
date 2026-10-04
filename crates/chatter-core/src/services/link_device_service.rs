@@ -1774,7 +1774,7 @@ mod tests {
         // Network/event/notification deps aren't exercised by verify_*; build
         // smallest possible instances.
         let grpc_pool = Arc::new(
-            GrpcClientPool::new("http://127.0.0.1:0").expect("grpc pool"),
+            GrpcClientPool::new("https://127.0.0.1:0").expect("grpc pool"),
         );
         let event_bus = EventBus::new();
         let notifications = Arc::new(NotificationService::noop());

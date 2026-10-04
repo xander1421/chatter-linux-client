@@ -1775,7 +1775,7 @@ mod local_friends_tests {
         });
         let dir = tempfile::tempdir().unwrap();
         ChatterClient::builder()
-            .server_url("http://127.0.0.1:1")
+            .server_url("https://127.0.0.1:1")
             .data_dir(dir.path().to_str().unwrap())
             .build()
             .expect("build client")
@@ -2043,7 +2043,15 @@ mod section_row_tests {
     #[tokio::test]
     async fn group_row_offers_leave_and_carries_badge_and_initials() {
         let (client, _dir) = client();
-        let row = client.section_row(&conv(uuid::Uuid::new_v4().to_string(), ConversationType::AnonGroup, "Book Club"));
+        // A group we belong to (not its owner): Leave is offered.
+        client.messages().settings_repo
+            .set(crate::storage::repositories::settings_repo::keys::CURRENT_USER_ID, &UserId::new().to_string())
+            .unwrap();
+        let id = crate::domain::anon_group::AnonGroupId::new();
+        client.anon_groups().anon_group_repo
+            .insert_group(&crate::domain::anon_group::AnonGroup::from_invite(id, "Book Club".into(), UserId::new()))
+            .unwrap();
+        let row = client.section_row(&conv(id.to_string(), ConversationType::AnonGroup, "Book Club"));
         assert_eq!(row.display_name, "Book Club");
         assert_eq!(row.initials, crate::ui::chat_data::initials_from_name("Book Club"));
         assert!(row.can_leave && !row.can_delete);

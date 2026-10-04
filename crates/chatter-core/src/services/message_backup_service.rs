@@ -505,7 +505,7 @@ mod tests {
         let db = Arc::new(Database::open(file.path(), "test_passphrase").unwrap());
         db.run_migrations().unwrap();
         let settings = Arc::new(SettingsRepository::new(db.clone()));
-        let grpc = Arc::new(GrpcClientPool::new("http://127.0.0.1:0").unwrap());
+        let grpc = Arc::new(GrpcClientPool::new("https://127.0.0.1:0").unwrap());
         (
             MessageBackupService::new(db.clone(), settings, grpc),
             db,

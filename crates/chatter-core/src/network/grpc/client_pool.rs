@@ -66,7 +66,7 @@ const UNARY_DEADLINE: Duration = Duration::from_secs(75);
 /// # Example
 ///
 /// ```ignore
-/// let pool = GrpcClientPool::new("http://localhost:50051")?;
+/// let pool = GrpcClientPool::new("https://localhost:50051")?;
 /// pool.connect().await?;
 ///
 /// // Set authentication
@@ -954,7 +954,7 @@ mod tests {
 
     #[test]
     fn test_new_valid_url() {
-        let pool = GrpcClientPool::new("http://localhost:50051");
+        let pool = GrpcClientPool::new("https://localhost:50051");
         assert!(pool.is_ok());
     }
 
@@ -1002,14 +1002,14 @@ mod tests {
 
     #[test]
     fn test_initial_state() {
-        let pool = GrpcClientPool::new("http://localhost:50051").unwrap();
+        let pool = GrpcClientPool::new("https://localhost:50051").unwrap();
         assert!(!pool.is_connected());
         assert!(pool.try_channel().is_none());
     }
 
     #[test]
     fn test_disconnect_when_not_connected() {
-        let pool = GrpcClientPool::new("http://localhost:50051").unwrap();
+        let pool = GrpcClientPool::new("https://localhost:50051").unwrap();
         // Should not panic
         pool.disconnect();
         assert!(!pool.is_connected());
@@ -1017,7 +1017,7 @@ mod tests {
 
     #[test]
     fn test_transport_mode_switching() {
-        let pool = GrpcClientPool::new("http://localhost:50051").unwrap();
+        let pool = GrpcClientPool::new("https://localhost:50051").unwrap();
         assert_eq!(pool.transport_mode(), TransportMode::Direct);
 
         // Direct rebuild always works (no connect, just an endpoint swap).
@@ -1051,13 +1051,13 @@ mod tests {
     #[cfg(feature = "onion")]
     #[test]
     fn set_url_on_onion_keeps_the_onion_endpoint() {
-        let pool = GrpcClientPool::new("http://localhost:50051").unwrap();
+        let pool = GrpcClientPool::new("https://localhost:50051").unwrap();
         pool.set_onion_address(Some(format!("http://{}.onion:443", "a".repeat(56))));
         assert!(pool.onion_available());
         pool.set_transport_mode(TransportMode::Onion).unwrap();
         let generation = pool.snapshot().2;
 
-        pool.set_url("http://127.0.0.1:50052").unwrap();
+        pool.set_url("https://127.0.0.1:50052").unwrap();
         assert_eq!(pool.transport_mode(), TransportMode::Onion);
         assert!(pool.endpoint().contains(".onion"), "endpoint: {}", pool.endpoint());
         assert_eq!(pool.snapshot().2, generation, "no swap happened");
@@ -1073,7 +1073,7 @@ mod tests {
     #[tokio::test]
     async fn onion_connector_refuses_clearnet_host() {
         use tower::Service;
-        let pool = GrpcClientPool::new("http://localhost:50051").unwrap();
+        let pool = GrpcClientPool::new("https://localhost:50051").unwrap();
         let mut connector = pool.onion_connector();
         let err = connector
             .call("http://127.0.0.1:443".parse().unwrap())
@@ -1090,7 +1090,7 @@ mod tests {
         // channel in place, live traffic would keep riding the previous
         // transport (e.g. direct IP) after the user believed they were on Tor.
         // set_transport_mode must disconnect so the next channel() rebuilds.
-        let pool = GrpcClientPool::new("http://localhost:50051").unwrap();
+        let pool = GrpcClientPool::new("https://localhost:50051").unwrap();
 
         // Materialise a (lazy) channel — pool now reports connected + caches it.
         let _ch = pool.channel();
@@ -1108,7 +1108,7 @@ mod tests {
 
     #[test]
     fn test_auth_interceptor_access() {
-        let pool = GrpcClientPool::new("http://localhost:50051").unwrap();
+        let pool = GrpcClientPool::new("https://localhost:50051").unwrap();
 
         pool.auth().set_bearer("test-token".to_string());
 
@@ -1122,7 +1122,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_channel_returns_lazy_when_not_connected() {
-        let pool = GrpcClientPool::new("http://localhost:50051").unwrap();
+        let pool = GrpcClientPool::new("https://localhost:50051").unwrap();
         // Should not panic — returns a lazy channel instead.
         let _ch = pool.channel();
         assert!(pool.is_connected(), "lazy channel should mark pool as connected");
@@ -1130,7 +1130,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_connect_to_nonexistent_server() {
-        let pool = GrpcClientPool::new("http://127.0.0.1:1").unwrap();
+        let pool = GrpcClientPool::new("https://127.0.0.1:1").unwrap();
         let result = pool.connect().await;
 
         assert!(result.is_err());
