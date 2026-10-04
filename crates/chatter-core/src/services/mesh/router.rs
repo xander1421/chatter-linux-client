@@ -48,7 +48,7 @@ use super::mapping::{InboundMessage, MeshConversation};
 use super::state::{MeshState, NostrState, now_secs};
 use super::timeline::MeshEvents;
 use super::transport::{
-    BleCommand, BleTransport, MeshDirectory, MeshFavorites, NostrCommand, NostrTransport,
+    BleCommand, BleTransport, MeshDirectory, NostrCommand, NostrTransport,
 };
 
 /// The bridge courier, shared between the actor and the router's deposit
@@ -64,7 +64,6 @@ pub struct RouterDeps {
     pub identity: Arc<MeshIdentity>,
     pub storage: Arc<dyn Storage>,
     pub sealer: Arc<dyn Sealer>,
-    pub favorites: Arc<MeshFavorites>,
     pub ble: Arc<super::CommandBus<BleCommand>>,
     pub nostr: Arc<super::CommandBus<NostrCommand>>,
     pub events: MeshEvents,
@@ -377,7 +376,6 @@ impl Actor {
             identity,
             storage,
             sealer,
-            favorites,
             ble,
             nostr,
             events,
@@ -385,7 +383,7 @@ impl Actor {
         } = deps;
 
         let outbox = OutboxStore::new(Arc::clone(&storage), Arc::clone(&sealer));
-        let directory = MeshDirectory::new(Arc::clone(&state), favorites);
+        let directory = MeshDirectory::new(Arc::clone(&state));
 
         // Order matters. The router takes the *first* transport reporting a link
         // binding, and only the radio ever has one; the reachable fallback is

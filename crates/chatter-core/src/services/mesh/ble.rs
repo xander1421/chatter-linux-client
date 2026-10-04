@@ -55,7 +55,6 @@ use chatter_mesh_link::{LinkEvent, LinkId, LinkRole, MeshLink};
 use chatter_mesh_noise::seal::open_courier;
 use chatter_mesh_noise::sign::{sign_packet, verify_packet};
 use chatter_mesh_noise::{MeshIdentity, NoiseError};
-use chatter_mesh_store::CourierTier;
 use chatter_mesh_store::storage::{Storage, StorageKey};
 use chatter_mesh_store::outbox::Sealer;
 use chatter_mesh_store::archive::GossipMessageArchive;
@@ -1819,8 +1818,7 @@ impl BleRuntime {
             return;
         }
 
-        // Not ours: carry it. Verified strangers and mutual favourites draw from
-        // separate quotas, which is what stops strangers crowding out favourites.
+        // Not ours: carry it, if the depositor is signature-verified.
         let snapshot = self.state.with(|state| {
             state
                 .peers
@@ -1846,7 +1844,6 @@ impl BleRuntime {
         if let Err(error) = self.couriers.deposit(
             &envelope,
             &depositor_key,
-            CourierTier::Verified,
             now_secs(),
         ) {
             // Warn: the depositor believes we are carrying this for them, and we
@@ -3467,7 +3464,6 @@ mod tests {
             identity: Arc::clone(&identity),
             storage: Arc::new(MemoryStorage::new()),
             sealer: Arc::new(NoopSealer),
-            favorites: Arc::new(super::super::transport::MeshFavorites::new()),
             ble: crate::services::mesh::CommandBus::new().0,
             nostr: crate::services::mesh::CommandBus::new().0,
             events: events.clone(),

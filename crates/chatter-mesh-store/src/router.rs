@@ -36,21 +36,17 @@ use crate::error::StoreError;
 use crate::outbox::{AckKind, AckOutcome, DroppedMessage, LinkState, OutboxStore, QueuedMessage};
 use crate::transport::{PeerSnapshot, RouterTransport};
 
-/// Trust and identity lookups the router needs to pick couriers.
+/// Identity lookups the router needs to address couriered mail.
 ///
-/// Injected rather than reached for: "is this peer a mutual favourite" lives in the
-/// app's favourites store, and this crate is sans-IO.
+/// Injected rather than reached for: peer keys live in the app's mesh state, and
+/// this crate is sans-IO. Whether a peer may carry mail is read off the transport
+/// snapshot (`is_verified`), not from here.
 pub trait CourierDirectory {
     /// The recipient's Noise static key, when we know one.
     ///
     /// A peer whose key we do not have cannot be addressed offline at all — nothing
     /// can be sealed to them — so `None` disables the whole courier path for them.
     fn noise_key(&self, peer: &PeerId) -> Option<[u8; 32]>;
-
-    /// Whether this static key belongs to a mutual favourite, the preferred courier
-    /// tier. Signature-verified strangers are the fallback tier, and that is read
-    /// off the transport snapshot rather than from here.
-    fn is_trusted_courier(&self, noise_key: &[u8; 32]) -> bool;
 }
 
 /// Parks a sealed copy on relays as a courier drop, so delivery stops requiring a
@@ -274,10 +270,9 @@ impl MessageRouter {
     /// Seal the message to the recipient's known static key and hand it to peers who
     /// may physically encounter them.
     ///
-    /// Mutual favourites are preferred; signature-verified strangers fill the
-    /// remaining slots so a crowd without favourites can still carry mail — the
-    /// envelopes are opaque either way. The retained copy stays retained, so a
-    /// direct delivery still wins if the peer reappears first.
+    /// Only signature-verified peers carry mail; the envelopes are opaque to them.
+    /// The retained copy stays retained, so a direct delivery still wins if the
+    /// peer reappears first.
     fn attempt_courier_deposit(&mut self, message_id: &str, peer: &PeerId) -> Vec<RouterEvent> {
         let Some(recipient_key) = self.directory.noise_key(peer) else {
             return Vec::new();
@@ -335,7 +330,7 @@ impl MessageRouter {
     /// A courier candidate just connected: hand it any queued mail it is not already
     /// carrying.
     ///
-    /// This is what turns couriering from "a favourite happened to be nearby at send
+    /// This is what turns couriering from "a courier happened to be nearby at send
     /// time" into eventual spread — deposits retry as eligible peers appear, until
     /// each message rides with its full complement of distinct couriers or expires.
     pub fn courier_became_available(
@@ -349,15 +344,15 @@ impl MessageRouter {
             if !self.transports[index].is_peer_connected(peer) {
                 continue;
             }
-            // Only a favourite or a signature-verified peer may carry mail, and only
-            // one whose static key we know — the envelope has to be addressed.
+            // Only a signature-verified peer may carry mail, and only one whose
+            // static key we know — the envelope has to be addressed.
             let Some(courier_key) = self.transports[index]
                 .peer_snapshots()
                 .into_iter()
                 .find(|s| &s.peer == peer && s.is_connected)
                 .and_then(|s| {
                     let key = s.noise_public_key?;
-                    (self.directory.is_trusted_courier(&key) || s.is_verified).then_some(key)
+                    s.is_verified.then_some(key)
                 })
             else {
                 continue;
@@ -418,7 +413,7 @@ impl MessageRouter {
         events
     }
 
-    /// Candidates on one transport, favourites first, capped at `limit`.
+    /// Verified candidates on one transport, in snapshot order, capped at `limit`.
     fn eligible_couriers(
         &self,
         transport_index: usize,
@@ -429,7 +424,7 @@ impl MessageRouter {
         if limit == 0 {
             return Vec::new();
         }
-        let mut candidates: Vec<(CourierCandidate, bool)> = self.transports[transport_index]
+        self.transports[transport_index]
             .peer_snapshots()
             .into_iter()
             .filter_map(|snapshot: PeerSnapshot| {
@@ -444,27 +439,16 @@ impl MessageRouter {
                 if &key == recipient_key || excluded.contains(&key) {
                     return None;
                 }
-                let is_favorite = self.directory.is_trusted_courier(&key);
                 // Unverified strangers may not carry mail at all.
-                if !is_favorite && !snapshot.is_verified {
+                if !snapshot.is_verified {
                     return None;
                 }
-                Some((
-                    CourierCandidate {
-                        peer: snapshot.peer,
-                        noise_key: key,
-                    },
-                    is_favorite,
-                ))
+                Some(CourierCandidate {
+                    peer: snapshot.peer,
+                    noise_key: key,
+                })
             })
-            .collect();
-
-        // Stable sort: favourites first, each tier keeping snapshot order.
-        candidates.sort_by_key(|(_, is_favorite)| !is_favorite);
-        candidates
-            .into_iter()
             .take(limit)
-            .map(|(candidate, _)| candidate)
             .collect()
     }
 
@@ -840,7 +824,6 @@ mod tests {
     #[derive(Default)]
     struct TestDirectory {
         keys: BTreeMap<PeerId, [u8; 32]>,
-        favorites: Vec<[u8; 32]>,
     }
 
     impl TestDirectory {
@@ -848,18 +831,11 @@ mod tests {
             self.keys.insert(p.clone(), k);
             self
         }
-        fn with_favorite(mut self, k: [u8; 32]) -> Self {
-            self.favorites.push(k);
-            self
-        }
     }
 
     impl CourierDirectory for TestDirectory {
         fn noise_key(&self, p: &PeerId) -> Option<[u8; 32]> {
             self.keys.get(p).copied()
-        }
-        fn is_trusted_courier(&self, k: &[u8; 32]) -> bool {
-            self.favorites.contains(k)
         }
     }
 
@@ -916,8 +892,7 @@ mod tests {
             .with_snapshots(vec![snapshot(&courier, Some(key(2)), true)])
             .accepting_couriers();
         let directory = TestDirectory::default()
-            .with_key(&recipient, key(1))
-            .with_favorite(key(2));
+            .with_key(&recipient, key(1));
         let mut router = router(vec![transport.boxed()], directory);
         let bridge_log = Rc::new(RefCell::new(Vec::new()));
         router.set_bridge_deposit(recording_bridge(bridge_log.clone(), true));
@@ -943,8 +918,7 @@ mod tests {
             .with_snapshots(vec![snapshot(&courier, Some(key(2)), true)])
             .accepting_couriers();
         let directory = TestDirectory::default()
-            .with_key(&recipient, key(1))
-            .with_favorite(key(2));
+            .with_key(&recipient, key(1));
         let mut router = router(vec![transport.boxed()], directory);
 
         let outcome = router.send_private("hi", &recipient, "bob", "m1", 1_000);
@@ -977,8 +951,7 @@ mod tests {
             .with_snapshots(vec![snapshot(&courier, Some(key(2)), true)])
             .accepting_couriers();
         let directory = TestDirectory::default()
-            .with_key(&recipient, key(1))
-            .with_favorite(key(2));
+            .with_key(&recipient, key(1));
         let mut router = router(vec![transport.boxed()], directory);
 
         let outcome = router.send_private("hi", &recipient, "bob", "m1", 1_000);
@@ -1000,8 +973,7 @@ mod tests {
             .with_snapshots(vec![snapshot(&courier, Some(key(2)), true)])
             .accepting_couriers();
         let directory = TestDirectory::default()
-            .with_key(&recipient, key(1))
-            .with_favorite(key(2));
+            .with_key(&recipient, key(1));
         let mut router = router(vec![transport.boxed()], directory);
 
         let outcome = router.send_private("hi", &recipient, "bob", "m1", 1_000);
@@ -1023,8 +995,7 @@ mod tests {
             .with_snapshots(vec![snapshot(&courier, Some(key(2)), true)])
             .accepting_couriers();
         let directory = TestDirectory::default()
-            .with_key(&recipient, key(1))
-            .with_favorite(key(2));
+            .with_key(&recipient, key(1));
         let mut router = router(vec![transport.boxed()], directory);
 
         let outcome = router.send_private("hi", &recipient, "bob", "m1", 1_000);
@@ -1046,7 +1017,7 @@ mod tests {
             .with_snapshots(vec![snapshot(&courier, Some(key(2)), true)])
             .accepting_couriers();
         // No key for the recipient: nothing can be sealed to them.
-        let directory = TestDirectory::default().with_favorite(key(2));
+        let directory = TestDirectory::default();
         let mut router = router(vec![transport.boxed()], directory);
         let log = Rc::new(RefCell::new(Vec::new()));
         router.set_bridge_deposit(recording_bridge(log.clone(), true));
@@ -1069,8 +1040,7 @@ mod tests {
         let transport =
             MockTransport::new().with_snapshots(vec![snapshot(&courier, Some(key(2)), true)]);
         let directory = TestDirectory::default()
-            .with_key(&recipient, key(1))
-            .with_favorite(key(2));
+            .with_key(&recipient, key(1));
         let mut router = router(vec![transport.boxed()], directory);
 
         let outcome = router.send_private("hi", &recipient, "bob", "m1", 1_000);
@@ -1087,30 +1057,28 @@ mod tests {
     // ------------------------------------------------------------ courier choice
 
     #[test]
-    fn courier_selection_prefers_favorites_then_fills_with_verified_strangers() {
+    fn courier_selection_takes_verified_peers_in_snapshot_order_capped() {
         let recipient = peer(1);
-        let (v1, v2, fav, v3) = (peer(10), peer(11), peer(12), peer(13));
+        let (v1, v2, unverified, v3, v4) = (peer(10), peer(11), peer(12), peer(13), peer(14));
         let transport = MockTransport::new()
             .with_snapshots(vec![
                 snapshot(&v1, Some(key(10)), true),
                 snapshot(&v2, Some(key(11)), true),
-                snapshot(&fav, Some(key(12)), false),
+                snapshot(&unverified, Some(key(12)), false),
                 snapshot(&v3, Some(key(13)), true),
+                snapshot(&v4, Some(key(14)), true),
             ])
             .accepting_couriers();
         let directory = TestDirectory::default()
-            .with_key(&recipient, key(1))
-            .with_favorite(key(12));
+            .with_key(&recipient, key(1));
         let mut router = router(vec![transport.boxed()], directory);
 
         router.send_private("hi", &recipient, "bob", "m1", 1_000);
 
         let sends = transport.courier_sends();
         assert_eq!(sends.len(), 1);
-        // Favourite first, then verified strangers in snapshot order, capped. Note
-        // the favourite is not itself signature-verified: being a mutual favourite
-        // is a stronger statement than a verified announce.
-        assert_eq!(sends[0].1, vec![fav, v1, v2]);
+        // Verified peers in snapshot order, the unverified one skipped, capped.
+        assert_eq!(sends[0].1, vec![v1, v2, v3]);
         assert_eq!(sends[0].1.len(), MAX_COURIERS_PER_MESSAGE);
     }
 
@@ -1119,28 +1087,27 @@ mod tests {
         let recipient = peer(1);
         let stranger = peer(10);
         let keyless = peer(12);
-        let fav = peer(11);
+        let verified = peer(11);
         let transport = MockTransport::new()
             .with_snapshots(vec![
                 // The recipient itself, matched by key: never hand someone their own
                 // mail back as an opaque envelope.
                 snapshot(&recipient, Some(key(1)), true),
-                // Neither verified nor a favourite: may not carry mail.
+                // Not verified: may not carry mail.
                 snapshot(&stranger, Some(key(10)), false),
                 // No static key at all: invisible to the courier path.
                 snapshot(&keyless, None, true),
-                snapshot(&fav, Some(key(11)), false),
+                snapshot(&verified, Some(key(11)), true),
             ])
             .accepting_couriers();
         let directory = TestDirectory::default()
-            .with_key(&recipient, key(1))
-            .with_favorite(key(11));
+            .with_key(&recipient, key(1));
         let mut router = router(vec![transport.boxed()], directory);
 
         router.send_private("hi", &recipient, "bob", "m1", 1_000);
 
         let sends = transport.courier_sends();
-        assert_eq!(sends[0].1, vec![fav]);
+        assert_eq!(sends[0].1, vec![verified]);
     }
 
     #[test]
@@ -1171,9 +1138,7 @@ mod tests {
             .with_snapshots(vec![snapshot(&first, Some(key(10)), true)])
             .accepting_couriers();
         let directory = TestDirectory::default()
-            .with_key(&recipient, key(1))
-            .with_favorite(key(10))
-            .with_favorite(key(11));
+            .with_key(&recipient, key(1));
         let mut router = router(vec![transport.boxed()], directory);
 
         router.send_private("hi", &recipient, "bob", "m1", 1_000);
@@ -1207,15 +1172,14 @@ mod tests {
         let transport = MockTransport::new().accepting_couriers();
         let directory = TestDirectory::default()
             .with_key(&recipient, key(1))
-            .with_key(&courier, key(2))
-            .with_favorite(key(2));
+            .with_key(&courier, key(2));
         let mut router = router(vec![transport.boxed()], directory);
 
         router.send_private("hi", &recipient, "bob", "m1", 1_000);
         assert!(transport.courier_sends().is_empty());
 
-        // Now the favourite walks in. This is what turns couriering from "a
-        // favourite happened to be nearby at send time" into eventual spread.
+        // Now a verified courier walks in. This is what turns couriering from "a
+        // courier happened to be nearby at send time" into eventual spread.
         transport.courier_arrives(&courier, key(2), true);
         let events = router.courier_became_available(&courier, 1_100);
 
@@ -1238,8 +1202,7 @@ mod tests {
         let courier = peer(2);
         let transport = MockTransport::new().accepting_couriers();
         let directory = TestDirectory::default()
-            .with_key(&courier, key(2))
-            .with_favorite(key(2));
+            .with_key(&courier, key(2));
         let mut router = router(vec![transport.boxed()], directory);
 
         // Mail *for* the courier. It flushes directly on connect instead.
@@ -1253,7 +1216,7 @@ mod tests {
     }
 
     #[test]
-    fn an_unverified_non_favorite_may_not_pick_up_mail() {
+    fn an_unverified_peer_may_not_pick_up_mail() {
         let recipient = peer(1);
         let stranger = peer(2);
         let transport = MockTransport::new().accepting_couriers();
@@ -1297,8 +1260,7 @@ mod tests {
         let transport = MockTransport::new().accepting_couriers();
         let directory = TestDirectory::default()
             .with_key(&recipient, key(1))
-            .with_key(&courier, key(2))
-            .with_favorite(key(2));
+            .with_key(&courier, key(2));
         let mut router = router(vec![transport.boxed()], directory);
 
         router.send_private("hi", &recipient, "bob", "m1", 1_000);
@@ -1680,8 +1642,7 @@ mod tests {
             .with_snapshots(vec![snapshot(&courier, Some(key(2)), true)])
             .accepting_couriers();
         let directory = TestDirectory::default()
-            .with_key(&recipient, key(1))
-            .with_favorite(key(2));
+            .with_key(&recipient, key(1));
         let mut router = router(vec![refuses.boxed(), accepts.boxed()], directory);
 
         let outcome = router.send_private("hi", &recipient, "bob", "m1", 1_000);

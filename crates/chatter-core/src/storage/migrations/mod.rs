@@ -57,7 +57,6 @@ pub mod v055_temporal_facts;
 pub mod v056_mesh_identity;
 pub mod v057_mesh_store;
 pub mod v058_mesh_conversations;
-pub mod v059_mesh_favorites;
 mod v060_mesh_delivery;
 mod v061_mesh_exempt_sender_sent_at;
 mod v062_section_sort_mode;
@@ -141,7 +140,6 @@ pub use v055_temporal_facts::V055TemporalFacts;
 pub use v056_mesh_identity::V056MeshIdentity;
 pub use v057_mesh_store::V057MeshStore;
 pub use v058_mesh_conversations::V058MeshConversations;
-pub use v059_mesh_favorites::V059MeshFavorites;
 pub use v060_mesh_delivery::V060MeshDelivery;
 pub use v061_mesh_exempt_sender_sent_at::V061MeshExemptSenderSentAt;
 pub use v062_section_sort_mode::V062SectionSortMode;
@@ -350,7 +348,6 @@ pub fn default_migrations() -> MigrationRunner {
         .register(V056MeshIdentity)
         .register(V057MeshStore)
         .register(V058MeshConversations)
-        .register(V059MeshFavorites)
         .register(V060MeshDelivery)
         .register(V061MeshExemptSenderSentAt)
         .register(V062SectionSortMode)

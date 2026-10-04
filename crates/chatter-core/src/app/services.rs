@@ -352,11 +352,6 @@ impl ServiceContainer {
                 // the messages are: a mesh file is not a second kind of
                 // attachment, it just never had a CDN behind it.
                 attachments: infra.attachment_repo.clone(),
-                favorites: Arc::new(
-                    crate::storage::repositories::MeshFavoritesRepository::new(
-                        infra.database.clone(),
-                    ),
-                ),
                 // Never fatal. `from_keyring` hands back a sealer that reports
                 // why it has no key rather than an error, and `MeshService::start`
                 // declines to start on that basis. A locked keyring used to abort

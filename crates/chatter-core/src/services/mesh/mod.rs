@@ -94,7 +94,7 @@ use identity::NostrIdentities;
 use nostr::NostrRuntime;
 use router::{RouterCommand, RouterDeps, RouterHandle};
 use state::{MeshState, NostrState, now_millis};
-use transport::{BleCommand, MeshFavorites, NostrCommand};
+use transport::{BleCommand, NostrCommand};
 
 /// How many events the broadcast channel buffers before a slow subscriber
 /// starts missing them.
@@ -125,9 +125,6 @@ pub struct MeshDeps {
     /// other conversation type's attachments live in — a mesh file is not a
     /// second kind of attachment, it simply never had a CDN behind it.
     pub attachments: Arc<crate::storage::repositories::AttachmentRepository>,
-    /// Durable favourites. These are the courier trust tier, so losing them on
-    /// restart silently demotes every favourite to the stranger deposit quota.
-    pub favorites: Arc<crate::storage::repositories::MeshFavoritesRepository>,
     /// Seals outbox blobs before they reach storage. The key never enters the
     /// store crates, which is what makes "nothing plaintext reaches disk"
     /// structural rather than a matter of remembering.
@@ -201,7 +198,6 @@ pub struct MeshService {
     config: Arc<MeshConfig>,
     state: Arc<MeshState>,
     nostr_state: Arc<NostrState>,
-    favorites: Arc<MeshFavorites>,
     storage: SharedStorage,
     sealer: Arc<dyn Sealer>,
     router: Arc<RouterHandle>,
@@ -243,7 +239,6 @@ impl MeshService {
         let config = Arc::new(config);
         let state = Arc::new(MeshState::new(identity.peer_id()));
         let nostr_state = Arc::new(NostrState::new());
-        let favorites = Arc::new(MeshFavorites::with_store(Arc::clone(&deps.favorites)));
         let timeline = Arc::new(MeshTimeline::new(
             deps.messages,
             deps.conversations,
@@ -264,7 +259,6 @@ impl MeshService {
             identity: Arc::clone(&identity),
             storage: Arc::clone(&deps.storage),
             sealer: Arc::clone(&deps.sealer),
-            favorites: Arc::clone(&favorites),
             ble: Arc::clone(&ble_bus),
             nostr: Arc::clone(&nostr_bus),
             events: events.clone(),
@@ -295,7 +289,6 @@ impl MeshService {
             config,
             state,
             nostr_state,
-            favorites,
             identity_store,
             storage: SharedStorage::new(deps.storage),
             sealer: deps.sealer,
@@ -913,20 +906,6 @@ impl MeshService {
             .map_err(|_| MeshError::WorkerGone)
     }
 
-    /// Mark a peer's static key as a mutual favourite.
-    ///
-    /// Favourites and signature-verified strangers draw from separate courier
-    /// quotas, so this is what stops a crowd of strangers crowding a favourite's
-    /// mail out of the pool.
-    pub fn add_favorite(&self, noise_key: [u8; 32]) {
-        self.favorites.add(noise_key);
-    }
-
-    /// Drop a favourite.
-    pub fn remove_favorite(&self, noise_key: &[u8; 32]) {
-        self.favorites.remove(noise_key);
-    }
-
     /// Tell the duty cycle whether the app is in the foreground.
     ///
     /// Scanning is the expensive half of BLE. In the foreground it runs
@@ -951,7 +930,7 @@ impl MeshService {
     ///
     /// Clears, in order: live sessions, retained mail, carried courier
     /// envelopes, gossip history, the bridge dedup sets, every mesh message,
-    /// the conversation directory, favourites, and finally the identity
+    /// the conversation directory, and finally the identity
     /// keypair itself.
     ///
     /// # What this does not clear
@@ -996,7 +975,6 @@ impl MeshService {
         if let Err(error) = self.timeline.wipe() {
             fail(error.into(), &mut first_error);
         }
-        self.favorites.clear();
         if let Err(error) = self.identity_store.wipe() {
             fail(error.into(), &mut first_error);
         }
@@ -1093,7 +1071,6 @@ mod tests {
         let config = Arc::new(MeshConfig::default());
         let state = Arc::new(MeshState::new(identity.peer_id()));
         let nostr_state = Arc::new(NostrState::new());
-        let favorites = Arc::new(MeshFavorites::new());
         let timeline = timeline::temp_timeline();
         let identity_store = timeline::temp_identity_store();
         let events = MeshEvents::new(EVENT_CAPACITY, Arc::clone(&timeline));
@@ -1114,7 +1091,6 @@ mod tests {
             identity: Arc::clone(&identity),
             storage: Arc::clone(&storage),
             sealer: Arc::clone(&sealer),
-            favorites: Arc::clone(&favorites),
             ble: Arc::clone(&ble_bus),
             nostr: Arc::clone(&nostr_bus),
             events: events.clone(),
@@ -1130,7 +1106,6 @@ mod tests {
             config,
             state,
             nostr_state,
-            favorites,
             storage: SharedStorage::new(storage),
             sealer,
             router,
@@ -1592,17 +1567,6 @@ mod tests {
             service.mark_read(&peer, "MSG-1"),
             Err(MeshError::Unroutable(_))
         ));
-    }
-
-    #[tokio::test]
-    async fn favourites_are_tracked_for_the_courier_tiers() {
-        let service = service(None, None);
-        let key = [4u8; 32];
-        assert!(service.favorites.is_empty());
-        service.add_favorite(key);
-        assert!(service.favorites.contains(&key));
-        service.remove_favorite(&key);
-        assert!(service.favorites.is_empty());
     }
 
     #[tokio::test]
