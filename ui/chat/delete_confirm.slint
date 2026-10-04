@@ -1,7 +1,9 @@
-// "Delete message?" — the confirm Signal shows before a delete-for-me, for
-// one message (context menu) or a multi-select. Delete for me cannot be
-// undone and syncs to the user's other devices (`delete_for_me`), so it never
-// runs on the first tap.
+// The confirm Signal shows before a delete. "Delete message?" for
+// delete-for-me, for one message (context menu) or a multi-select: it cannot
+// be undone and syncs to the user's other devices (`delete_for_me`).
+// "Delete for everyone?" for one message: it cannot be undone either and
+// removes the message from every member's device. Neither runs on the first
+// tap.
 
 import { Colors } from "../theme/colors.slint";
 import { Spacing } from "../theme/spacing.slint";
@@ -9,16 +11,19 @@ import { Typography } from "../theme/typography.slint";
 import { Modal } from "../components/modal.slint";
 import { Button } from "../components/button.slint";
 
-export component DeleteForMeConfirm inherits Rectangle {
+export component DeleteConfirm inherits Rectangle {
     // Messages the delete would remove; 0 hides the dialog.
     in property <int> count: 0;
+    // Delete for everyone (one message) rather than delete for me.
+    in property <bool> for-everyone: false;
 
     callback confirmed();
     callback cancelled();
 
     Modal {
         show: root.count > 0;
-        title: root.count > 1 ? "Delete " + root.count + " messages?" : "Delete message?";
+        title: root.for-everyone ? "Delete for everyone?"
+            : root.count > 1 ? "Delete " + root.count + " messages?" : "Delete message?";
         modal-width: 400px;
         show-close: false;
 
@@ -28,7 +33,9 @@ export component DeleteForMeConfirm inherits Rectangle {
             spacing: Spacing.md;
 
             Text {
-                text: root.count > 1
+                text: root.for-everyone
+                    ? "This message will be deleted for everyone in the chat."
+                    : root.count > 1
                     ? "These messages will be deleted from all your devices."
                     : "This message will be deleted from all your devices.";
                 color: Colors.text-secondary;
@@ -47,7 +54,7 @@ export component DeleteForMeConfirm inherits Rectangle {
                 }
 
                 Button {
-                    text: "Delete for me";
+                    text: root.for-everyone ? "Delete for everyone" : "Delete for me";
                     variant: "destructive";
                     clicked => { root.confirmed(); }
                 }
