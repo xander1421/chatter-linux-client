@@ -4615,9 +4615,9 @@ fn floating_chrome_keeps_content_insets_and_clear_materials() {
         assert!(src.contains("height: root.mobile-mode ? root.height : parent.height;"));
         assert!(src.contains("padding-bottom: root.mobile-mode ? root.bottom-inset + Spacing.md : Spacing.none;"));
     }
-    assert!(material.contains("#00000029 : #ffffff29"));
-    assert!(material.contains("blur-regular: 14px") && material.contains("blur-thick: 18px"));
-    assert!(material.contains("glass-edge-width: 0.75px") && material.contains("refraction: 0.15"));
+    assert!(material.contains("Appearance.glass-effects"));
+    assert!(material.contains("blur-regular:") && material.contains("blur-thick:"));
+    assert!(material.contains("<physical-length> glass-edge-width:"));
     assert!(nav.contains("background: root.active ? Colors.text-primary.with-alpha(0.12) : transparent;"));
 }
 
@@ -4641,10 +4641,10 @@ fn repeated_chat_rows_never_sample_glass() {
 fn fine_glass_rim_preserves_shared_childless_material() {
     let materials = include_str!("../../../ui/theme/materials.slint");
     let glass = include_str!("../../../ui/components/glass_surface.slint");
-    assert!(materials.contains("glass-edge-width: 0.75px;"));
-    for alpha in ["#ffffff2e", "#ffffff08", "#ffffff99", "#ffffff1a"] {
-        assert!(materials.contains(alpha), "missing theme-aware rim endpoint {alpha}");
-    }
+    assert!(materials.contains("<physical-length> glass-edge-width: 1phx;"), "rim must stay one physical pixel at every DPI");
+    let rim = materials.split("<brush> glass-edge:").nth(1).unwrap().split(';').next().unwrap();
+    assert!(rim.contains("Appearance.dark"), "rim must adapt to the theme");
+    assert!(rim.contains("#ffffff00"), "rim must fade away between its highlights");
     assert!(!materials.contains("inner-edge") && !glass.contains("inner-edge"));
     assert_eq!(glass.matches("border-width:").count(), 1, "a second stroke makes the rim look thick");
     let private = glass.split("export component GlassSurface").next().unwrap();

@@ -13,7 +13,7 @@ component GlassMaterial inherits Rectangle {
     in property <color> material-tint;
     in property <int> elevation;
 
-    if root.material-enabled && Appearance.glass-effects: Rectangle {
+    if root.material-enabled && Appearance.glass-effects && root.elevation >= 2: Rectangle {
         border-radius: root.border-radius;
         background: transparent;
         drop-shadow-blur: root.elevation == 3 ? 28px : root.elevation == 2 ? 18px : 0px;
@@ -21,7 +21,7 @@ component GlassMaterial inherits Rectangle {
         drop-shadow-color: root.elevation == 3 ? Materials.shadow-modal
             : root.elevation == 2 ? Materials.shadow-float : transparent;
     }
-    if root.material-enabled && Appearance.glass-effects: Rectangle {
+    if root.material-enabled && Appearance.glass-effects && root.elevation >= 2: Rectangle {
         border-radius: root.border-radius;
         background: transparent;
         drop-shadow-blur: root.elevation > 0 ? 6px : 0px;
@@ -47,6 +47,10 @@ component GlassMaterial inherits Rectangle {
             background: Materials.specular;
         }
         if Appearance.glass-effects: Rectangle {
+            border-radius: root.border-radius;
+            background: Materials.inner-shade;
+        }
+        if Appearance.glass-effects: Rectangle {
             x: Materials.glass-edge-width / 2;
             y: self.x;
             width: max(0px, root.width - Materials.glass-edge-width);
@@ -62,7 +66,7 @@ export component GlassSurface inherits Rectangle {
     in property <bool> material-enabled: true;
     // 0 ultra-thin / 1 thin: controlled ambient backgrounds only; 2 regular / 3 thick.
     in property <int> material-level: 2;
-    // 0 flat pill, 1 header contact, 2 floating chrome, 3 dialog.
+    // 0 flat pill, 1 attached chrome, 2 floating chrome, 3 dialog.
     in property <int> elevation: 1;
     in property <color> material-tint: material-level == 0 ? Materials.ultra-thin
         : material-level == 1 ? Materials.thin

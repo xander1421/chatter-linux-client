@@ -3,28 +3,35 @@ import { Appearance } from "appearance.slint";
 
 export global Materials {
     // With real backdrop blur (glass effects on) the tint is see-through like
-    // iOS materials; without blur the near-opaque values keep text readable.
+    // iOS materials. Regular/thick bound backdrop luminance for readable labels.
     out property <color> ultra-thin: Appearance.glass-effects
-        ? (Appearance.dark ? #0000000d : #ffffff0d)
-        : (Appearance.dark ? #17233199 : #f8fcff99);
+        ? (Appearance.dark ? #10182018 : #ffffff20)
+        : (Appearance.dark ? #172331 : #f8fcff);
     out property <color> thin: Appearance.glass-effects
-        ? (Appearance.dark ? #0000001a : #ffffff1a)
-        : (Appearance.dark ? #172331c7 : #f8fcffc7);
+        ? (Appearance.dark ? #10182066 : #ffffff66)
+        : (Appearance.dark ? #172331 : #f8fcff);
     out property <color> regular: Appearance.glass-effects
-        ? (Appearance.dark ? #00000029 : #ffffff29)
-        : (Appearance.dark ? #172331eb : #f8fcffeb);
+        ? (Appearance.dark ? #101820e0 : #ffffffec)
+        : (Appearance.dark ? #172331 : #f8fcff);
     // Sheets sample the dimmed backdrop; light mode needs a milkier tint
     // to stay distinct from the scrim while retaining the blurred content.
     out property <color> thick: Appearance.glass-effects
-        ? (Appearance.dark ? #00000033 : #ffffff99)
-        : (Appearance.dark ? #18222ff7 : #fcfdfff7);
+        ? (Appearance.dark ? #101820eb : #fffffff0)
+        : (Appearance.dark ? #18222f : #fcfdff);
     out property <color> opaque: Appearance.dark ? #172331 : #f8fcff;
     // The single optical edge is local to GlassSurface, never a row/card stroke.
     out property <brush> glass-edge: Appearance.dark
-        ? @linear-gradient(180deg, #ffffff2e 0%, #ffffff14 35%, #ffffff08 100%)
-        : @linear-gradient(180deg, #ffffff99 0%, #ffffff40 35%, #ffffff1a 100%);
-    out property <length> glass-edge-width: 0.75px;
-    out property <brush> specular: @linear-gradient(160deg, #ffffff14 0%, #ffffff00 40%, #ffffff06 100%);
+        ? @linear-gradient(135deg, #ffffff38 0%, #ffffff10 24%, #ffffff00 52%, #ffffff00 72%, #ffffff0c 100%)
+        : @linear-gradient(135deg, #ffffff80 0%, #ffffff24 24%, #ffffff00 52%, #ffffff00 72%, #ffffff18 100%);
+    out property <physical-length> glass-edge-width: 1phx;
+    // Physical pixels keep the rim one device pixel even at 2x/3x scale.
+    out property <brush> specular: Appearance.dark
+        ? @linear-gradient(135deg, #ffffff08 0%, #ffffff00 32%, #ffffff00 100%)
+        : @linear-gradient(135deg, #ffffff10 0%, #ffffff00 32%, #ffffff00 100%);
+    // A soft internal falloff, not another stroke around the silhouette.
+    out property <brush> inner-shade: Appearance.dark
+        ? @linear-gradient(180deg, #00000000 0%, #00000000 88%, #00000008 100%)
+        : @linear-gradient(180deg, #00000000 0%, #00000000 88%, #00000004 100%);
     out property <color> shadow-contact: Appearance.dark ? #00000038 : #11233914;
     out property <color> shadow-float: Appearance.dark ? #00000052 : #1123391c;
     out property <color> shadow-modal: Appearance.dark ? #00000066 : #11233926;
@@ -34,11 +41,11 @@ export global Materials {
     out property <brush> ambient: Appearance.dark
         ? @linear-gradient(135deg, #000000 0%, #000000 100%)
         : @linear-gradient(135deg, #eaf4f5 0%, #eff1f8 45%, #f3f5f8 100%);
-    out property <length> blur-regular: 14px;
-    out property <length> blur-thick: 18px;
-    out property <float> saturation: 1.8;
+    out property <length> blur-regular: 18px;
+    out property <length> blur-thick: 24px;
+    out property <float> saturation: 1.25;
     // Edge lensing strength for the Backdrop refraction shader (0..1).
-    out property <float> refraction: 0.15;
+    out property <float> refraction: 0.10;
     out property <duration> feedback-duration: Appearance.reduce-motion ? 0ms : 100ms;
     out property <duration> menu-duration: Appearance.reduce-motion ? 0ms : 180ms;
     out property <duration> sheet-duration: Appearance.reduce-motion ? 0ms : 240ms;

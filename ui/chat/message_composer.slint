@@ -780,8 +780,10 @@ export component MessageComposer inherits GlassSurface {
                 height: root.content-height;
                 background: Colors.neo-inset-bg;
                 border-radius: Spacing.radius-lg;
-                border-width: Spacing.stroke;
-                border-color: text-input.has-focus ? Colors.primary : Colors.border;
+                // The glass shell supplies the resting silhouette. Keep a
+                // physical-pixel focus cue without a second permanent rim.
+                border-width: text-input.has-focus ? 1phx : 0px;
+                border-color: Colors.primary;
                 opacity: root.disabled ? 0.5 : 1.0;
                 clip: true;
                 accessible-role: AccessibleRole.text-input;
