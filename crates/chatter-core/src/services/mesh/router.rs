@@ -30,7 +30,7 @@ use chatter_mesh_noise::MeshIdentity;
 use chatter_mesh_noise::seal::open_courier;
 use chatter_mesh_nostr::identity::NostrIdentity;
 use chatter_mesh_store::bridge_drop::{
-    AbandonedDrop, BridgeCourier, BridgeView, DedupSnapshot, DepositOutcome, DepositRefusal,
+    AbandonedDrop, BridgeCourier, DedupSnapshot, DepositOutcome, DepositRefusal,
     DropEvent, DropOperationId, DropRelay, DropSink, PublishRequest, PublisherKey,
 };
 use chatter_mesh_store::outbox::{AckKind, DropReason, LinkState, OutboxStore, Sealer};
@@ -234,7 +234,6 @@ impl DropRelay for NostrDropRelay {
 struct MeshDropSink {
     identity: Arc<MeshIdentity>,
     state: Arc<MeshState>,
-    ble: Arc<super::CommandBus<BleCommand>>,
     events: MeshEvents,
 }
 
@@ -294,18 +293,6 @@ impl DropSink for MeshDropSink {
             // cannot open would hide it from a later attempt that could.
             None => false,
         }
-    }
-
-    fn deliver_to_peer(&self, envelope: &CourierEnvelope, peer: &PeerId) -> bool {
-        if !self.state.can_write_to(peer) {
-            return false;
-        }
-        self.ble
-            .send(BleCommand::Courier {
-                peer: peer.clone(),
-                envelope: envelope.clone(),
-            })
-            .is_ok()
     }
 }
 
@@ -414,14 +401,10 @@ impl Actor {
             MeshDropSink {
                 identity: Arc::clone(&identity),
                 state: Arc::clone(&state),
-                ble,
                 events: events.clone(),
             },
         );
         courier.set_bridge_enabled(bridge_enabled);
-        // Not a gateway: this device publishes and collects its own mail and
-        // never republishes other people's.
-        courier.set_gateway_enabled(false);
         let bridge: SharedBridge = Rc::new(RefCell::new(courier));
         let abandoned: Rc<RefCell<Vec<AbandonedDrop>>> = Rc::new(RefCell::new(Vec::new()));
 
@@ -552,9 +535,7 @@ impl Actor {
                 self.abandoned.borrow_mut().extend(flushed);
                 if now >= bridge.next_refresh_due() {
                     let key = self.identity.static_public();
-                    // Sender-only: this device watches its own recipient tags
-                    // and never other people's, because it is not a gateway.
-                    let evicted = bridge.refresh(BridgeView::sender_only(Some(key)), now);
+                    let evicted = bridge.refresh(Some(key), now);
                     self.abandoned.borrow_mut().extend(evicted);
                 }
                 drop(bridge);
@@ -570,10 +551,9 @@ impl Actor {
                     .resolve_publish(operation, accepted, now);
                 if let Some(resolved) = resolved
                     && resolved.accepted
-                    && let Some(message_id) = resolved.message_id
                 {
                     self.events.send(MeshEvent::Delivery {
-                        message_id,
+                        message_id: resolved.message_id,
                         peer: None,
                         state: MeshDelivery::Carried,
                     });
@@ -621,13 +601,11 @@ impl Actor {
     fn drain_abandoned(&self) {
         let drops: Vec<AbandonedDrop> = self.abandoned.borrow_mut().drain(..).collect();
         for drop in drops {
-            if let Some(message_id) = drop.message_id {
-                self.events.send(MeshEvent::Delivery {
-                    message_id,
-                    peer: None,
-                    state: MeshDelivery::Unreachable,
-                });
-            }
+            self.events.send(MeshEvent::Delivery {
+                message_id: drop.message_id,
+                peer: None,
+                state: MeshDelivery::Unreachable,
+            });
         }
     }
 

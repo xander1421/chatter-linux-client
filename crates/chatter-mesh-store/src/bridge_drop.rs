@@ -7,7 +7,7 @@
 //! kind-1401 event, tagged with the recipient's rotating tag — so delivery stops
 //! requiring a physical encounter while nothing about the envelope changes.
 //!
-//! # Three duties, all gated on the bridge toggle
+//! # Two duties, both gated on the bridge toggle
 //!
 //! - **Sender.** When the router seals mail for an unreachable peer it deposits a copy
 //!   here; we publish it as a drop, or queue it (bounded, drop-oldest) until relays
@@ -16,9 +16,10 @@
 //!   and open matching drops. The adjacency is not decoration: the tag rotates at UTC
 //!   midnight, so a drop published a minute before rollover is only findable if the
 //!   recipient is still watching yesterday's tag.
-//! - **Gateway.** A device with the gateway toggle *as well* additionally watches the
-//!   tags of verified local mesh peers and hands matching drops to them as directed
-//!   courier packets, so recipients who never touch the internet are served too.
+//!
+//! bitchat also has a gateway role (watching verified local peers' tags and
+//! republishing carried mail). This device never runs as a gateway, so it is not
+//! ported.
 //!
 //! # The publisher key is fresh every single time
 //!
@@ -53,21 +54,12 @@
 use std::collections::VecDeque;
 use std::fmt;
 
-use chatter_mesh::ids::PeerId;
 use chatter_mesh::tlv::courier_envelope::{CourierEnvelope, TAG_LEN, candidate_tags};
-
-use crate::transport::PeerSnapshot;
 
 /// Drops waiting for relay connectivity. Bounded, drop-oldest.
 pub const MAX_PENDING_DROPS: usize = 20;
-/// A gateway-held envelope may be republished at most this often.
-pub const HELD_ENVELOPE_PUBLISH_COOLDOWN_SECS: u64 = 30 * 60;
-/// Local peers a gateway watches drops for, three candidate tags each.
-pub const MAX_WATCHED_PEERS: usize = 16;
 /// Tag-set refresh cadence. Also what covers the UTC day rollover.
 pub const REFRESH_INTERVAL_SECS: u64 = 30 * 60;
-/// Minimum spacing between announce-driven refreshes.
-pub const ANNOUNCE_REFRESH_DEBOUNCE_SECS: u64 = 60;
 /// Encoded-envelope cap for a drop: 16 KiB of ciphertext plus TLV slack.
 pub const MAX_DROP_ENVELOPE_BYTES: usize = 20 * 1024;
 /// Capacity of each of the dedup sets.
@@ -75,13 +67,10 @@ pub const MAX_TRACKED_IDS: usize = 512;
 /// How long a dedup entry lives — the courier envelope lifetime, which is also the
 /// NIP-40 window relays hold a drop for.
 pub const TRACKED_ID_LIFETIME_SECS: u64 = crate::MESSAGE_TTL_SECS;
-/// Held-envelope cooldown records kept at once. The courier pool is smaller than this,
-/// so the bound only matters if envelopes churn faster than the cooldown expires.
-const MAX_HELD_COOLDOWN_ENTRIES: usize = 64;
 
 /// Identifies one publish attempt chain.
 ///
-/// Minted per deposit (or per held-envelope publish) and carried through queueing and
+/// Minted per deposit and carried through queueing and
 /// retries, so a late relay callback for an operation that was evicted, cancelled or
 /// superseded can be recognised and ignored rather than completing a newer attempt for
 /// the same message.
@@ -179,7 +168,7 @@ pub trait DropRelay {
 
 /// Where an inbound drop goes once it is ours to act on.
 ///
-/// Synchronous, unlike publishing: both decisions are local. A `false` means the drop
+/// Synchronous, unlike publishing: the decision is local. A `false` means the drop
 /// was *not* consumed and the relay event stays eligible for another attempt.
 pub trait DropSink {
     /// Open a drop addressed to us.
@@ -188,49 +177,6 @@ pub trait DropSink {
     /// rejected after decryption — all terminal. `false` is a transient crypto or key
     /// failure and leaves the event retryable.
     fn open_for_self(&self, envelope: &CourierEnvelope) -> bool;
-
-    /// Hand a drop to a local mesh peer as a directed courier packet.
-    ///
-    /// `true` only when the transport accepted the packet onto a live physical link or
-    /// its link-specific backpressure queue. Stale reachability and process-local
-    /// spooling must return `false` so the drop stays retryable.
-    fn deliver_to_peer(&self, envelope: &CourierEnvelope, peer: &PeerId) -> bool;
-}
-
-/// What the world looks like at the moment of a refresh.
-///
-/// The Swift reads three closures here. Passing the values in keeps the direction of
-/// control one-way and means a test can describe a scenario as data.
-#[derive(Clone, Copy, Debug)]
-pub struct BridgeView<'a> {
-    /// Our own Noise static public key. `None` before an identity exists, in which
-    /// case we watch nothing for ourselves.
-    pub local_noise_key: Option<[u8; 32]>,
-    /// Everyone the mesh currently knows about. Filtered here — verified, connected,
-    /// and with a known static key — rather than by the caller.
-    pub peers: &'a [PeerSnapshot],
-    /// Envelopes we are carrying for other people, offered for (re)publication subject
-    /// to the cooldown.
-    pub held_envelopes: &'a [CourierEnvelope],
-}
-
-impl BridgeView<'_> {
-    /// A view with no peers and nothing held — the sender-only case.
-    pub const fn sender_only(local_noise_key: Option<[u8; 32]>) -> Self {
-        Self {
-            local_noise_key,
-            peers: &[],
-            held_envelopes: &[],
-        }
-    }
-}
-
-/// A local peer whose tags a gateway is watching.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct WatchedPeer {
-    pub peer: PeerId,
-    /// Their candidate tags for the adjacent UTC days.
-    pub tags: [[u8; TAG_LEN]; 3],
 }
 
 /// Why a deposit was refused. None of these are failures — they are the bounds doing
@@ -276,17 +222,15 @@ pub struct Deposited {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AbandonedDrop {
     pub operation: DropOperationId,
-    /// The sender-side message ID, or `None` for an envelope we were carrying for
-    /// someone else.
-    pub message_id: Option<String>,
+    /// The sender-side message ID.
+    pub message_id: String,
 }
 
 /// The result of a publish attempt, matched back to what it was publishing.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ResolvedDrop {
     pub operation: DropOperationId,
-    /// `None` for a held envelope, which has no sender-side message ID.
-    pub message_id: Option<String>,
+    pub message_id: String,
     pub accepted: bool,
 }
 
@@ -295,9 +239,6 @@ pub struct ResolvedDrop {
 pub enum DropDisposition {
     /// Handed to [`DropSink::open_for_self`], which took it.
     OpenedForSelf,
-    /// Handed to this local peer as a directed courier packet, which the transport
-    /// accepted.
-    DeliveredToPeer(PeerId),
     /// The sink refused transiently. The event ID is *not* consumed, so the same drop
     /// arriving again — from another relay, or after a resubscribe — is tried again.
     Retryable,
@@ -316,7 +257,7 @@ pub enum IgnoreReason {
     /// The envelope's own recipient tag disagrees with the event tag it was filed
     /// under. A mislabelled drop must not ride a subscription it does not belong to.
     Mislabelled,
-    /// Addressed to a tag we are not watching — a leftover from a previous watch set,
+    /// Addressed to a tag we are not watching — a leftover from a previous tag set,
     /// or someone else's mail entirely.
     NotWatched,
 }
@@ -340,8 +281,8 @@ pub struct DropEvent<'a> {
 ///
 /// Persisting matters. Relays hold drops for the full 24 h NIP-40 window and the
 /// outbox keeps re-depositing, so an in-memory-only record means every relaunch
-/// republishes the same message as a fresh drop and every gateway relaunch re-delivers
-/// the whole backlog. bitchat observed exactly that amplification storm in the field.
+/// republishes the same message as a fresh drop and reopens every drop already
+/// handled. bitchat observed exactly that amplification storm in the field.
 ///
 /// Entries are `(id, recorded_at_unix_secs)` and age out with the drop window.
 /// Deterministically undeliverable message IDs are intentionally absent: they are
@@ -351,51 +292,27 @@ pub struct DropEvent<'a> {
 pub struct DedupSnapshot {
     /// Message IDs a relay has confirmed a drop for.
     pub published_drop_keys: Vec<(String, u64)>,
-    /// Drop event IDs already opened or handed on.
+    /// Drop event IDs already opened.
     pub seen_drop_event_ids: Vec<(String, u64)>,
 }
 
 // --- The service -----------------------------------------------------------
 
-/// Bridge courier drops: publishing, watching, and gateway relay of kind-1401 drops.
+/// Bridge courier drops: publishing our own kind-1401 drops and opening ours.
 pub struct BridgeCourier<R, S> {
     relay: R,
     sink: S,
     bridge_enabled: bool,
-    gateway_enabled: bool,
     my_tags: Vec<[u8; TAG_LEN]>,
-    watched: Vec<WatchedPeer>,
     pending: VecDeque<PendingDrop>,
     in_flight: Vec<InFlightDrop>,
-    held_cooldowns: VecDeque<HeldCooldown>,
     published_drop_keys: ExpiringIdSet,
     seen_drop_event_ids: ExpiringIdSet,
     rejected_drop_keys: ExpiringIdSet,
     subscription_open: bool,
     last_subscribed: Vec<[u8; TAG_LEN]>,
     last_refresh: u64,
-    last_announce_refresh: u64,
-    announce_refresh_pending: bool,
     next_operation: u64,
-}
-
-/// What an in-flight or queued operation is publishing.
-#[derive(Clone, Debug, PartialEq, Eq)]
-enum DropKey {
-    /// Our own outbound mail, keyed by message ID.
-    Sender(String),
-    /// An envelope we carry for someone else, keyed by its ciphertext — the only
-    /// identity an opaque envelope has.
-    Held(Vec<u8>),
-}
-
-impl DropKey {
-    fn message_id(&self) -> Option<String> {
-        match self {
-            DropKey::Sender(id) => Some(id.clone()),
-            DropKey::Held(_) => None,
-        }
-    }
 }
 
 #[derive(Clone, Debug)]
@@ -408,13 +325,7 @@ struct PendingDrop {
 #[derive(Clone, Debug)]
 struct InFlightDrop {
     operation: DropOperationId,
-    key: DropKey,
-}
-
-#[derive(Clone, Debug)]
-struct HeldCooldown {
-    ciphertext: Vec<u8>,
-    published_at: u64,
+    message_id: String,
 }
 
 /// Where one publish attempt ended up.
@@ -436,20 +347,15 @@ impl<R: DropRelay, S: DropSink> BridgeCourier<R, S> {
             relay,
             sink,
             bridge_enabled: false,
-            gateway_enabled: false,
             my_tags: Vec::new(),
-            watched: Vec::new(),
             pending: VecDeque::new(),
             in_flight: Vec::new(),
-            held_cooldowns: VecDeque::new(),
             published_drop_keys: ExpiringIdSet::new(MAX_TRACKED_IDS, TRACKED_ID_LIFETIME_SECS),
             seen_drop_event_ids: ExpiringIdSet::new(MAX_TRACKED_IDS, TRACKED_ID_LIFETIME_SECS),
             rejected_drop_keys: ExpiringIdSet::new(MAX_TRACKED_IDS, TRACKED_ID_LIFETIME_SECS),
             subscription_open: false,
             last_subscribed: Vec::new(),
             last_refresh: 0,
-            last_announce_refresh: 0,
-            announce_refresh_pending: false,
             next_operation: 1,
         }
     }
@@ -472,24 +378,9 @@ impl<R: DropRelay, S: DropSink> BridgeCourier<R, S> {
         self.bridge_enabled
     }
 
-    /// The gateway toggle. With both toggles on, this device also watches drops
-    /// addressed to its verified local peers and hands them over the mesh.
-    pub fn set_gateway_enabled(&mut self, enabled: bool) {
-        self.gateway_enabled = enabled;
-    }
-
-    pub fn is_gateway_enabled(&self) -> bool {
-        self.gateway_enabled
-    }
-
     /// Our own watched tags: the adjacent-day candidates for our static key.
     pub fn my_tags(&self) -> &[[u8; TAG_LEN]] {
         &self.my_tags
-    }
-
-    /// Local peers whose tags we are watching on their behalf.
-    pub fn watched_peers(&self) -> &[WatchedPeer] {
-        &self.watched
     }
 
     /// Drops waiting for relay connectivity.
@@ -556,7 +447,7 @@ impl<R: DropRelay, S: DropSink> BridgeCourier<R, S> {
         let operation = self.mint_operation();
         let attempt = self.attempt_publish(
             operation,
-            DropKey::Sender(message_id.to_owned()),
+            message_id.to_owned(),
             envelope.clone(),
             now_unix_secs,
         );
@@ -574,7 +465,7 @@ impl<R: DropRelay, S: DropSink> BridgeCourier<R, S> {
     /// Report a relay's verdict on a publish attempt.
     ///
     /// `accepted` must mean a relay explicitly acknowledged the event (NIP-20 `OK`).
-    /// Only that commits the sender-side dedup key or a held envelope's cooldown.
+    /// Only that commits the sender-side dedup key.
     ///
     /// Returns `None` for an operation this instance is not waiting on: a duplicated
     /// callback, one invalidated by a wipe or a bridge disable, or one belonging to a
@@ -593,19 +484,13 @@ impl<R: DropRelay, S: DropSink> BridgeCourier<R, S> {
         let entry = self.in_flight.remove(index);
 
         if accepted {
-            match &entry.key {
-                DropKey::Sender(message_id) => {
-                    self.published_drop_keys.insert(message_id, now_unix_secs);
-                }
-                DropKey::Held(ciphertext) => {
-                    self.record_held_publish(ciphertext, now_unix_secs);
-                }
-            }
+            self.published_drop_keys
+                .insert(&entry.message_id, now_unix_secs);
         }
 
         Some(ResolvedDrop {
             operation,
-            message_id: entry.key.message_id(),
+            message_id: entry.message_id,
             accepted,
         })
     }
@@ -623,7 +508,7 @@ impl<R: DropRelay, S: DropSink> BridgeCourier<R, S> {
         for item in queued {
             let attempt = self.attempt_publish(
                 item.operation,
-                DropKey::Sender(item.message_id),
+                item.message_id,
                 item.envelope,
                 now_unix_secs,
             );
@@ -632,54 +517,22 @@ impl<R: DropRelay, S: DropSink> BridgeCourier<R, S> {
         abandoned
     }
 
-    /// Offer envelopes we are carrying for other people to the relays.
-    ///
-    /// A gateway that has internet can park someone else's mail where its recipient
-    /// can fetch it, without ever meeting them. The cooldown is what keeps that from
-    /// becoming a republish loop: each distinct envelope goes up at most once per
-    /// [`HELD_ENVELOPE_PUBLISH_COOLDOWN_SECS`], and the clock only starts when a relay
-    /// actually accepted it.
-    pub fn publish_held_envelopes(&mut self, held: &[CourierEnvelope], now_unix_secs: u64) {
-        if !self.bridge_enabled || !self.relay.is_connected() {
-            return;
-        }
-        self.prune_held_cooldowns(now_unix_secs);
-        for envelope in held {
-            if self.held_cooldown_active(&envelope.ciphertext, now_unix_secs)
-                || self.is_held_in_flight(&envelope.ciphertext)
-                || expires_at_secs(envelope, now_unix_secs).is_none()
-            {
-                continue;
-            }
-            let operation = self.mint_operation();
-            // Held mail lives in the courier pool and has no sender-side operation to
-            // recover, so a disconnected attempt is dropped rather than queued; the
-            // next connected refresh offers it again with its cooldown still unset.
-            let _ = self.attempt_publish(
-                operation,
-                DropKey::Held(envelope.ciphertext.clone()),
-                envelope.clone(),
-                now_unix_secs,
-            );
-        }
-    }
+    // --- Subscription ------------------------------------------------------
 
-    // --- Subscription: recipient and gateway watch -------------------------
-
-    /// Recompute the watched tag set and (re)open the subscription, then drain the
-    /// queued and held work.
+    /// Recompute our tag set and (re)open the subscription, then drain the queue.
     ///
     /// Call on toggle changes, on relay connectivity changes, and whenever
     /// [`next_refresh_due`](Self::next_refresh_due) comes around — the periodic call is
     /// what carries the tag set across UTC midnight. Idempotent.
-    pub fn refresh(&mut self, view: BridgeView<'_>, now_unix_secs: u64) -> Vec<AbandonedDrop> {
+    ///
+    /// `local_noise_key` is our own Noise static public key; `None` before an
+    /// identity exists, in which case there is nothing to watch.
+    pub fn refresh(
+        &mut self,
+        local_noise_key: Option<[u8; 32]>,
+        now_unix_secs: u64,
+    ) -> Vec<AbandonedDrop> {
         self.last_refresh = now_unix_secs;
-        if self.announce_refresh_pending {
-            // This refresh is standing in for the trailing edge of the announce
-            // debounce, so it restarts that window too.
-            self.announce_refresh_pending = false;
-            self.last_announce_refresh = now_unix_secs;
-        }
 
         if !self.bridge_enabled {
             let abandoned = self.cancel_active_publishes();
@@ -693,16 +546,12 @@ impl<R: DropRelay, S: DropSink> BridgeCourier<R, S> {
             return Vec::new();
         }
 
-        self.my_tags = match view.local_noise_key {
+        self.my_tags = match local_noise_key {
             Some(key) => candidate_tags(&key, now_unix_secs).to_vec(),
             None => Vec::new(),
         };
-        self.watched = self.watchable_peers(view.peers, now_unix_secs);
 
         let mut all_tags: Vec<[u8; TAG_LEN]> = self.my_tags.clone();
-        for peer in &self.watched {
-            all_tags.extend_from_slice(&peer.tags);
-        }
         all_tags.sort_unstable();
         all_tags.dedup();
 
@@ -712,60 +561,25 @@ impl<R: DropRelay, S: DropSink> BridgeCourier<R, S> {
             return Vec::new();
         }
 
-        // Resubscribe only when the set actually changed. Refresh fires on every
-        // verified announce, and bitchat's field logs showed the drop subscription
-        // being rebuilt every minute or so for an unchanged tag set.
+        // Resubscribe only when the set actually changed: bitchat's field logs
+        // showed the drop subscription being rebuilt every minute or so for an
+        // unchanged tag set.
         if !self.subscription_open || all_tags != self.last_subscribed {
             self.relay.open_subscription(&all_tags);
             self.subscription_open = true;
             self.last_subscribed = all_tags;
         }
 
-        let abandoned = self.flush_pending(now_unix_secs);
-        self.publish_held_envelopes(view.held_envelopes, now_unix_secs);
-        abandoned
-    }
-
-    /// Announce-driven refresh, debounced.
-    ///
-    /// A newly verified peer should be watched promptly, but announce storms must not
-    /// thrash the subscription. Inside the window the refresh is deferred rather than
-    /// dropped — [`next_refresh_due`](Self::next_refresh_due) moves up to the trailing
-    /// edge — so a peer learned just after the leading edge is not invisible until the
-    /// next periodic refresh half an hour later.
-    pub fn refresh_after_verified_announce(
-        &mut self,
-        view: BridgeView<'_>,
-        now_unix_secs: u64,
-    ) -> Vec<AbandonedDrop> {
-        if !self.bridge_enabled {
-            return Vec::new();
-        }
-        let elapsed = now_unix_secs.saturating_sub(self.last_announce_refresh);
-        if elapsed >= ANNOUNCE_REFRESH_DEBOUNCE_SECS {
-            self.last_announce_refresh = now_unix_secs;
-            return self.refresh(view, now_unix_secs);
-        }
-        self.announce_refresh_pending = true;
-        Vec::new()
+        self.flush_pending(now_unix_secs)
     }
 
     /// When [`refresh`](Self::refresh) should next be called, in unix seconds.
     ///
-    /// This is the sans-IO form of the Swift's two timers: the half-hourly tag refresh,
-    /// pulled forward to the trailing edge of the announce debounce when one is
-    /// pending. A caller that only ever refreshes on connectivity changes still works;
-    /// it just discovers the day rollover late.
+    /// The sans-IO form of the Swift's half-hourly tag-refresh timer. A caller that
+    /// only ever refreshes on connectivity changes still works; it just discovers the
+    /// day rollover late.
     pub fn next_refresh_due(&self) -> u64 {
-        let periodic = self.last_refresh.saturating_add(REFRESH_INTERVAL_SECS);
-        if self.announce_refresh_pending {
-            let trailing = self
-                .last_announce_refresh
-                .saturating_add(ANNOUNCE_REFRESH_DEBOUNCE_SECS);
-            periodic.min(trailing)
-        } else {
-            periodic
-        }
+        self.last_refresh.saturating_add(REFRESH_INTERVAL_SECS)
     }
 
     // --- Inbound drops -----------------------------------------------------
@@ -778,8 +592,8 @@ impl<R: DropRelay, S: DropSink> BridgeCourier<R, S> {
         if !self.bridge_enabled {
             return DropDisposition::Ignored(IgnoreReason::BridgeDisabled);
         }
-        // A resubscribe can still deliver an event from the old watch set, so the
-        // event ID is not consumed until the drop is actually opened or handed on.
+        // A resubscribe can still deliver an event from the old tag set, so the
+        // event ID is not consumed until the drop is actually opened.
         if self
             .seen_drop_event_ids
             .contains(event.event_id, now_unix_secs)
@@ -801,32 +615,15 @@ impl<R: DropRelay, S: DropSink> BridgeCourier<R, S> {
             return DropDisposition::Ignored(IgnoreReason::Mislabelled);
         }
 
-        if self.my_tags.contains(&event.tag) {
-            return if self.sink.open_for_self(&envelope) {
-                self.seen_drop_event_ids
-                    .insert(event.event_id, now_unix_secs);
-                DropDisposition::OpenedForSelf
-            } else {
-                DropDisposition::Retryable
-            };
+        if !self.my_tags.contains(&event.tag) {
+            return DropDisposition::Ignored(IgnoreReason::NotWatched);
         }
-
-        let watched = self
-            .watched
-            .iter()
-            .find(|peer| peer.tags.contains(&event.tag))
-            .map(|peer| peer.peer.clone());
-        match watched {
-            Some(peer) => {
-                if self.sink.deliver_to_peer(&envelope, &peer) {
-                    self.seen_drop_event_ids
-                        .insert(event.event_id, now_unix_secs);
-                    DropDisposition::DeliveredToPeer(peer)
-                } else {
-                    DropDisposition::Retryable
-                }
-            }
-            None => DropDisposition::Ignored(IgnoreReason::NotWatched),
+        if self.sink.open_for_self(&envelope) {
+            self.seen_drop_event_ids
+                .insert(event.event_id, now_unix_secs);
+            DropDisposition::OpenedForSelf
+        } else {
+            DropDisposition::Retryable
         }
     }
 
@@ -856,9 +653,7 @@ impl<R: DropRelay, S: DropSink> BridgeCourier<R, S> {
         self.published_drop_keys.clear();
         self.seen_drop_event_ids.clear();
         self.rejected_drop_keys.clear();
-        self.held_cooldowns.clear();
         self.my_tags.clear();
-        self.watched.clear();
         self.last_subscribed.clear();
         abandoned
     }
@@ -879,7 +674,7 @@ impl<R: DropRelay, S: DropSink> BridgeCourier<R, S> {
     fn attempt_publish(
         &mut self,
         operation: DropOperationId,
-        key: DropKey,
+        message_id: String,
         envelope: CourierEnvelope,
         now_unix_secs: u64,
     ) -> AttemptResult {
@@ -899,17 +694,16 @@ impl<R: DropRelay, S: DropSink> BridgeCourier<R, S> {
         };
 
         if !self.relay.is_connected() {
-            return match key {
-                DropKey::Sender(message_id) => AttemptResult {
-                    state: AttemptState::Queued,
-                    abandoned: self.enqueue(operation, message_id, envelope),
-                },
-                // Held mail stays in the courier pool; there is nothing to recover.
-                DropKey::Held(_) => dropped,
+            return AttemptResult {
+                state: AttemptState::Queued,
+                abandoned: self.enqueue(operation, message_id, envelope),
             };
         }
 
-        self.in_flight.push(InFlightDrop { operation, key });
+        self.in_flight.push(InFlightDrop {
+            operation,
+            message_id,
+        });
         self.relay.publish(PublishRequest {
             operation,
             recipient_tag: envelope.recipient_tag,
@@ -940,7 +734,7 @@ impl<R: DropRelay, S: DropSink> BridgeCourier<R, S> {
             if let Some(evicted) = self.pending.pop_front() {
                 abandoned.push(AbandonedDrop {
                     operation: evicted.operation,
-                    message_id: Some(evicted.message_id),
+                    message_id: evicted.message_id,
                 });
             }
         }
@@ -953,81 +747,11 @@ impl<R: DropRelay, S: DropSink> BridgeCourier<R, S> {
             .pending
             .iter()
             .any(|item| item.message_id == message_id);
-        let in_flight = self.in_flight.iter().any(|entry| match &entry.key {
-            DropKey::Sender(id) => id == message_id,
-            DropKey::Held(_) => false,
-        });
-        queued || in_flight
-    }
-
-    fn is_held_in_flight(&self, ciphertext: &[u8]) -> bool {
-        self.in_flight.iter().any(|entry| match &entry.key {
-            DropKey::Held(held) => held == ciphertext,
-            DropKey::Sender(_) => false,
-        })
-    }
-
-    fn held_cooldown_active(&self, ciphertext: &[u8], now_unix_secs: u64) -> bool {
-        self.held_cooldowns.iter().any(|entry| {
-            entry.ciphertext == ciphertext
-                && now_unix_secs.saturating_sub(entry.published_at)
-                    < HELD_ENVELOPE_PUBLISH_COOLDOWN_SECS
-        })
-    }
-
-    fn record_held_publish(&mut self, ciphertext: &[u8], now_unix_secs: u64) {
-        self.prune_held_cooldowns(now_unix_secs);
-        if let Some(entry) = self
-            .held_cooldowns
-            .iter_mut()
-            .find(|entry| entry.ciphertext == ciphertext)
-        {
-            entry.published_at = now_unix_secs;
-            return;
-        }
-        self.held_cooldowns.push_back(HeldCooldown {
-            ciphertext: ciphertext.to_vec(),
-            published_at: now_unix_secs,
-        });
-        while self.held_cooldowns.len() > MAX_HELD_COOLDOWN_ENTRIES {
-            self.held_cooldowns.pop_front();
-        }
-    }
-
-    /// An expired cooldown is just an envelope that may be published again, so
-    /// dropping the record loses nothing and keeps the ciphertext copies bounded.
-    fn prune_held_cooldowns(&mut self, now_unix_secs: u64) {
-        self.held_cooldowns.retain(|entry| {
-            now_unix_secs.saturating_sub(entry.published_at) < HELD_ENVELOPE_PUBLISH_COOLDOWN_SECS
-        });
-    }
-
-    /// Verified, connected local peers with a known static key, capped.
-    ///
-    /// Connected peers come first so the cap is not spent on peers that could not take
-    /// a directed courier packet right now. Unverified peers are excluded outright:
-    /// watching a tag on behalf of someone whose announce we could not verify would
-    /// let anyone point our gateway at any recipient.
-    fn watchable_peers(&self, peers: &[PeerSnapshot], now_unix_secs: u64) -> Vec<WatchedPeer> {
-        if !self.gateway_enabled {
-            return Vec::new();
-        }
-        let mut eligible: Vec<&PeerSnapshot> = peers
+        let in_flight = self
+            .in_flight
             .iter()
-            .filter(|peer| peer.is_verified && peer.noise_public_key.is_some())
-            .collect();
-        // Stable, so the caller's order is preserved within each group.
-        eligible.sort_by_key(|peer| !peer.is_connected);
-        eligible
-            .into_iter()
-            .take(MAX_WATCHED_PEERS)
-            .filter_map(|peer| {
-                peer.noise_public_key.map(|key| WatchedPeer {
-                    peer: peer.peer.clone(),
-                    tags: candidate_tags(&key, now_unix_secs),
-                })
-            })
-            .collect()
+            .any(|entry| entry.message_id == message_id);
+        queued || in_flight
     }
 
     fn close_subscription_if_open(&mut self) {
@@ -1045,12 +769,12 @@ impl<R: DropRelay, S: DropSink> BridgeCourier<R, S> {
             .drain(..)
             .map(|item| AbandonedDrop {
                 operation: item.operation,
-                message_id: Some(item.message_id),
+                message_id: item.message_id,
             })
             .collect();
         abandoned.extend(self.in_flight.drain(..).map(|entry| AbandonedDrop {
             operation: entry.operation,
-            message_id: entry.key.message_id(),
+            message_id: entry.message_id,
         }));
         abandoned
     }
@@ -1192,14 +916,6 @@ mod tests {
                 .map(|drop| drop.publisher_key)
                 .collect()
         }
-
-        fn last_subscription(&self) -> Vec<[u8; TAG_LEN]> {
-            self.subscriptions
-                .borrow()
-                .last()
-                .cloned()
-                .unwrap_or_default()
-        }
     }
 
     impl DropRelay for FakeRelay {
@@ -1239,16 +955,13 @@ mod tests {
     #[derive(Default)]
     struct FakeSink {
         opened: RefCell<Vec<CourierEnvelope>>,
-        delivered: RefCell<Vec<(CourierEnvelope, PeerId)>>,
         accept_open: RefCell<bool>,
-        accept_deliver: RefCell<bool>,
     }
 
     impl FakeSink {
         fn accepting() -> Self {
             let sink = Self::default();
             *sink.accept_open.borrow_mut() = true;
-            *sink.accept_deliver.borrow_mut() = true;
             sink
         }
     }
@@ -1257,13 +970,6 @@ mod tests {
         fn open_for_self(&self, envelope: &CourierEnvelope) -> bool {
             self.opened.borrow_mut().push(envelope.clone());
             *self.accept_open.borrow()
-        }
-
-        fn deliver_to_peer(&self, envelope: &CourierEnvelope, peer: &PeerId) -> bool {
-            self.delivered
-                .borrow_mut()
-                .push((envelope.clone(), peer.clone()));
-            *self.accept_deliver.borrow()
         }
     }
 
@@ -1288,27 +994,6 @@ mod tests {
             1,
             None,
         )
-    }
-
-    fn snapshot(peer: &str, key: [u8; 32], verified: bool, connected: bool) -> PeerSnapshot {
-        PeerSnapshot {
-            peer: PeerId::from_str(peer),
-            is_connected: connected,
-            noise_public_key: Some(key),
-            is_verified: verified,
-        }
-    }
-
-    fn view<'a>(
-        key: &'a Option<[u8; 32]>,
-        peers: &'a [PeerSnapshot],
-        held: &'a [CourierEnvelope],
-    ) -> BridgeView<'a> {
-        BridgeView {
-            local_noise_key: *key,
-            peers,
-            held_envelopes: held,
-        }
     }
 
     // --- The non-negotiable ------------------------------------------------
@@ -1386,7 +1071,7 @@ mod tests {
 
         let mut courier = new_courier(true);
         let key = Some([0x21u8; 32]);
-        courier.refresh(view(&key, &[], &[]), NOW);
+        courier.refresh(key, NOW);
 
         let day = epoch_day(NOW);
         let mine = courier.my_tags().to_vec();
@@ -1413,13 +1098,13 @@ mod tests {
         let mut courier = new_courier(true);
         let local = Some(key);
 
-        courier.refresh(view(&local, &[], &[]), before);
+        courier.refresh(local, before);
         assert!(courier.my_tags().contains(&sender_tag));
 
         // After the rollover the recipient keeps yesterday's tag in the watch set,
         // which is the only reason a drop sealed a second before midnight is ever
         // found.
-        courier.refresh(view(&local, &[], &[]), after);
+        courier.refresh(local, after);
         assert!(
             courier.my_tags().contains(&sender_tag),
             "yesterday's tag must survive the rollover"
@@ -1447,12 +1132,12 @@ mod tests {
     fn the_subscription_is_rebuilt_only_when_the_tag_set_changes() {
         let mut courier = new_courier(true);
         let key = Some([0x23u8; 32]);
-        courier.refresh(view(&key, &[], &[]), NOW);
-        courier.refresh(view(&key, &[], &[]), NOW + 60);
+        courier.refresh(key, NOW);
+        courier.refresh(key, NOW + 60);
         assert_eq!(courier.relay().subscriptions.borrow().len(), 1);
 
         // A day later the tags have rotated, so the subscription must be reopened.
-        courier.refresh(view(&key, &[], &[]), NOW + DAY);
+        courier.refresh(key, NOW + DAY);
         assert_eq!(courier.relay().subscriptions.borrow().len(), 2);
     }
 
@@ -1490,7 +1175,7 @@ mod tests {
             overflow.abandoned,
             vec![AbandonedDrop {
                 operation: first_operation.expect("first operation"),
-                message_id: Some("m0".to_string()),
+                message_id: "m0".to_string(),
             }]
         );
 
@@ -1627,7 +1312,7 @@ mod tests {
         };
 
         courier.set_bridge_enabled(false);
-        let abandoned = courier.refresh(view(&Some(key), &[], &[]), NOW);
+        let abandoned = courier.refresh(Some(key), NOW);
         let operations: Vec<DropOperationId> =
             abandoned.iter().map(|drop| drop.operation).collect();
         assert!(operations.contains(&in_flight));
@@ -1652,173 +1337,12 @@ mod tests {
         assert!(drop.expires_at > NOW, "NIP-40 must be in the future");
     }
 
-    // --- Held envelopes and the republish cooldown -------------------------
-
-    #[test]
-    fn a_held_envelope_respects_the_republish_cooldown() {
-        let mut courier = new_courier(true);
-        let held = vec![envelope_for(&[0x41u8; 32], NOW, 3)];
-
-        courier.publish_held_envelopes(&held, NOW);
-        assert_eq!(courier.relay().publish_count(), 1);
-        let operation = courier.relay().last_operation();
-
-        // Still awaiting the relay's verdict: no second event for the same envelope.
-        courier.publish_held_envelopes(&held, NOW + 1);
-        assert_eq!(courier.relay().publish_count(), 1);
-
-        courier
-            .resolve_publish(operation, true, NOW + 2)
-            .expect("resolves");
-
-        // Inside the cooldown, including the last second of it.
-        courier.publish_held_envelopes(&held, NOW + 2);
-        courier.publish_held_envelopes(&held, NOW + 1 + HELD_ENVELOPE_PUBLISH_COOLDOWN_SECS);
-        assert_eq!(courier.relay().publish_count(), 1);
-
-        // The cooldown runs from the acceptance, not from the attempt.
-        courier.publish_held_envelopes(&held, NOW + 2 + HELD_ENVELOPE_PUBLISH_COOLDOWN_SECS);
-        assert_eq!(courier.relay().publish_count(), 2);
-    }
-
-    #[test]
-    fn a_rejected_held_publish_starts_no_cooldown() {
-        let mut courier = new_courier(true);
-        let held = vec![envelope_for(&[0x42u8; 32], NOW, 4)];
-
-        courier.publish_held_envelopes(&held, NOW);
-        let operation = courier.relay().last_operation();
-        courier
-            .resolve_publish(operation, false, NOW + 1)
-            .expect("resolves");
-
-        courier.publish_held_envelopes(&held, NOW + 2);
-        assert_eq!(
-            courier.relay().publish_count(),
-            2,
-            "no relay took it, so retry"
-        );
-    }
-
-    #[test]
-    fn held_envelopes_are_not_queued_when_relays_are_down() {
-        let mut courier = new_courier(false);
-        let held = vec![envelope_for(&[0x43u8; 32], NOW, 5)];
-        courier.publish_held_envelopes(&held, NOW);
-        assert_eq!(
-            courier.pending_len(),
-            0,
-            "held mail stays in the courier pool"
-        );
-        assert_eq!(courier.relay().publish_count(), 0);
-    }
-
-    #[test]
-    fn refresh_offers_held_envelopes_once_connected() {
-        let mut courier = new_courier(true);
-        courier.set_gateway_enabled(true);
-        let key = Some([0x44u8; 32]);
-        let held = vec![envelope_for(&[0x45u8; 32], NOW, 6)];
-        courier.refresh(view(&key, &[], &held), NOW);
-        assert_eq!(courier.relay().publish_count(), 1);
-    }
-
-    // --- Gateway watch -----------------------------------------------------
-
-    #[test]
-    fn the_watched_peer_set_is_capped() {
-        let mut courier = new_courier(true);
-        courier.set_gateway_enabled(true);
-        let peers: Vec<PeerSnapshot> = (0..MAX_WATCHED_PEERS + 4)
-            .map(|index| {
-                let mut key = [0u8; 32];
-                key[0] = index as u8;
-                snapshot(&format!("aaaaaaaaaaaaaa{index:02}"), key, true, true)
-            })
-            .collect();
-
-        courier.refresh(view(&Some([0x51u8; 32]), &peers, &[]), NOW);
-        assert_eq!(courier.watched_peers().len(), MAX_WATCHED_PEERS);
-        // Three candidate tags each, plus our own three.
-        assert_eq!(
-            courier.relay().last_subscription().len(),
-            MAX_WATCHED_PEERS * 3 + 3
-        );
-    }
-
-    #[test]
-    fn only_verified_peers_with_a_known_key_are_watched_and_connected_ones_come_first() {
-        let mut courier = new_courier(true);
-        courier.set_gateway_enabled(true);
-        let peers = vec![
-            snapshot("1111111111111111", [1u8; 32], false, true),
-            PeerSnapshot {
-                peer: PeerId::from_str("2222222222222222"),
-                is_connected: true,
-                noise_public_key: None,
-                is_verified: true,
-            },
-            snapshot("3333333333333333", [3u8; 32], true, false),
-            snapshot("4444444444444444", [4u8; 32], true, true),
-        ];
-        courier.refresh(view(&None, &peers, &[]), NOW);
-
-        let watched: Vec<String> = courier
-            .watched_peers()
-            .iter()
-            .map(|peer| peer.peer.to_string())
-            .collect();
-        assert_eq!(
-            watched,
-            vec![
-                "4444444444444444".to_string(),
-                "3333333333333333".to_string()
-            ]
-        );
-    }
-
-    #[test]
-    fn without_the_gateway_toggle_no_peer_tags_are_watched() {
-        let mut courier = new_courier(true);
-        let peers = vec![snapshot("5555555555555555", [5u8; 32], true, true)];
-        courier.refresh(view(&Some([0x52u8; 32]), &peers, &[]), NOW);
-        assert!(courier.watched_peers().is_empty());
-        assert_eq!(courier.relay().last_subscription().len(), 3);
-    }
-
-    #[test]
-    fn a_gateway_hands_a_matching_drop_to_its_local_peer() {
-        let mut courier = new_courier(true);
-        courier.set_gateway_enabled(true);
-        let peer_key = [0x53u8; 32];
-        let peers = vec![snapshot("6666666666666666", peer_key, true, true)];
-        courier.refresh(view(&Some([0x54u8; 32]), &peers, &[]), NOW);
-
-        let envelope = envelope_for(&peer_key, NOW, 8);
-        let encoded = envelope.encode().expect("encodes");
-        let disposition = courier.handle_drop(
-            &DropEvent {
-                event_id: "e-peer",
-                tag: envelope.recipient_tag,
-                envelope_bytes: &encoded,
-            },
-            NOW,
-        );
-        assert_eq!(
-            disposition,
-            DropDisposition::DeliveredToPeer(PeerId::from_str("6666666666666666"))
-        );
-        assert_eq!(courier.sink().delivered.borrow().len(), 1);
-        assert!(courier.sink().opened.borrow().is_empty());
-    }
-
     // --- Inbound drops -----------------------------------------------------
 
     #[test]
     fn a_drop_for_an_unknown_tag_is_ignored_rather_than_opened() {
         let mut courier = new_courier(true);
-        courier.set_gateway_enabled(true);
-        courier.refresh(view(&Some([0x61u8; 32]), &[], &[]), NOW);
+        courier.refresh(Some([0x61u8; 32]), NOW);
 
         // Someone else's mail, addressed to a tag we do not watch.
         let envelope = envelope_for(&[0x62u8; 32], NOW, 9);
@@ -1839,7 +1363,6 @@ mod tests {
             courier.sink().opened.borrow().is_empty(),
             "an unwatched tag must not reach the seal at all"
         );
-        assert!(courier.sink().delivered.borrow().is_empty());
         assert!(courier.dedup_snapshot().seen_drop_event_ids.is_empty());
     }
 
@@ -1847,7 +1370,7 @@ mod tests {
     fn a_mislabelled_drop_cannot_ride_someone_elses_subscription() {
         let mut courier = new_courier(true);
         let key = [0x63u8; 32];
-        courier.refresh(view(&Some(key), &[], &[]), NOW);
+        courier.refresh(Some(key), NOW);
         let our_tag = courier.my_tags()[1];
 
         // The event claims our tag; the envelope inside is addressed elsewhere.
@@ -1872,7 +1395,7 @@ mod tests {
     fn the_same_drop_from_two_relays_is_opened_once() {
         let mut courier = new_courier(true);
         let key = [0x65u8; 32];
-        courier.refresh(view(&Some(key), &[], &[]), NOW);
+        courier.refresh(Some(key), NOW);
         let envelope = envelope_for(&key, NOW, 11);
         let encoded = envelope.encode().expect("encodes");
         let event = DropEvent {
@@ -1896,7 +1419,7 @@ mod tests {
     fn a_transient_sink_failure_leaves_the_drop_retryable() {
         let mut courier = new_courier(true);
         let key = [0x66u8; 32];
-        courier.refresh(view(&Some(key), &[], &[]), NOW);
+        courier.refresh(Some(key), NOW);
         *courier.sink().accept_open.borrow_mut() = false;
 
         let envelope = envelope_for(&key, NOW, 12);
@@ -1920,7 +1443,7 @@ mod tests {
     fn malformed_and_expired_drops_go_no_further() {
         let mut courier = new_courier(true);
         let key = [0x67u8; 32];
-        courier.refresh(view(&Some(key), &[], &[]), NOW);
+        courier.refresh(Some(key), NOW);
 
         assert_eq!(
             courier.handle_drop(
@@ -1967,7 +1490,7 @@ mod tests {
     fn drops_are_ignored_while_the_bridge_is_off() {
         let mut courier = new_courier(true);
         let key = [0x68u8; 32];
-        courier.refresh(view(&Some(key), &[], &[]), NOW);
+        courier.refresh(Some(key), NOW);
         courier.set_bridge_enabled(false);
 
         let envelope = envelope_for(&key, NOW, 13);
@@ -1990,64 +1513,28 @@ mod tests {
     #[test]
     fn the_refresh_falls_due_every_half_hour() {
         let mut courier = new_courier(true);
-        courier.refresh(view(&Some([0x71u8; 32]), &[], &[]), NOW);
+        courier.refresh(Some([0x71u8; 32]), NOW);
         assert_eq!(courier.next_refresh_due(), NOW + REFRESH_INTERVAL_SECS);
-    }
-
-    #[test]
-    fn an_announce_storm_debounces_into_one_trailing_refresh() {
-        let mut courier = new_courier(true);
-        let key = Some([0x72u8; 32]);
-        courier.set_gateway_enabled(true);
-        let peers = vec![snapshot("7777777777777777", [7u8; 32], true, true)];
-
-        // The leading edge refreshes immediately.
-        courier.refresh_after_verified_announce(view(&key, &peers, &[]), NOW);
-        assert_eq!(courier.relay().subscriptions.borrow().len(), 1);
-
-        // Everything inside the window defers rather than resubscribing.
-        let more = vec![
-            snapshot("7777777777777777", [7u8; 32], true, true),
-            snapshot("8888888888888888", [8u8; 32], true, true),
-        ];
-        courier.refresh_after_verified_announce(view(&key, &more, &[]), NOW + 1);
-        courier.refresh_after_verified_announce(view(&key, &more, &[]), NOW + 2);
-        assert_eq!(courier.relay().subscriptions.borrow().len(), 1);
-        assert_eq!(
-            courier.next_refresh_due(),
-            NOW + ANNOUNCE_REFRESH_DEBOUNCE_SECS,
-            "a deferred refresh pulls the wake-up forward"
-        );
-
-        // The trailing refresh picks up the peer learned during the window.
-        courier.refresh(view(&key, &more, &[]), NOW + ANNOUNCE_REFRESH_DEBOUNCE_SECS);
-        assert_eq!(courier.watched_peers().len(), 2);
-        assert_eq!(courier.relay().subscriptions.borrow().len(), 2);
-        assert_eq!(
-            courier.next_refresh_due(),
-            NOW + ANNOUNCE_REFRESH_DEBOUNCE_SECS + REFRESH_INTERVAL_SECS
-        );
     }
 
     #[test]
     fn a_disconnected_refresh_closes_the_subscription_and_publishes_nothing() {
         let mut courier = new_courier(true);
         let key = Some([0x73u8; 32]);
-        courier.refresh(view(&key, &[], &[]), NOW);
+        courier.refresh(key, NOW);
         assert!(courier.is_subscribed());
 
         courier.relay().set_connected(false);
-        courier.refresh(view(&key, &[], &[]), NOW + 1);
+        courier.refresh(key, NOW + 1);
         assert!(!courier.is_subscribed());
         assert_eq!(*courier.relay().closes.borrow(), 1);
         assert_eq!(courier.relay().publish_count(), 0);
     }
 
     #[test]
-    fn with_no_key_and_no_peers_there_is_nothing_to_subscribe_to() {
+    fn with_no_key_there_is_nothing_to_subscribe_to() {
         let mut courier = new_courier(true);
-        courier.set_gateway_enabled(true);
-        courier.refresh(view(&None, &[], &[]), NOW);
+        courier.refresh(None, NOW);
         assert!(!courier.is_subscribed());
         assert!(courier.relay().subscriptions.borrow().is_empty());
     }
