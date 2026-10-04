@@ -9,59 +9,12 @@ use slint::{ComponentHandle, ModelRc, SharedString, VecModel};
 
 use chatter_core::client::ChatterClient;
 use chatter_core::domain::ids::SectionId;
-use chatter_core::domain::message::ConversationType;
 use chatter_core::domain::section::SectionSortMode;
 
-use chatter_core::services::attachment::DecodedImagePixels;
+use chatter_core::ui::sidebar_data::ChatRowSendData;
 
-use chatter_core::ui::initials_from_name;
+use crate::bin_ui::converters::ChatRowExt;
 use crate::{ChatRowData, CustomSectionData, MainWindow, run_ui};
-
-/// Send-safe intermediate for a folder's `ChatRowData`.
-struct SectionConvSendData {
-    conversation_id: String,
-    conversation_type: ConversationType,
-    display_name: String,
-    avatar_decoded: Option<DecodedImagePixels>,
-    initials: String,
-    unread_count: i32,
-    is_pinned: bool,
-    can_leave: bool,
-    can_delete: bool,
-    extras: chatter_core::client::SectionRowExtras,
-}
-
-impl SectionConvSendData {
-    fn to_slint(self) -> ChatRowData {
-        let (avatar_source, has_avatar) = match self.avatar_decoded {
-            Some(pixels) => {
-                (crate::bin_ui::slint_conversions::rgba_to_slint_image(&pixels.rgba, pixels.width, pixels.height,), true)
-            }
-            None => (slint::Image::default(), false),
-        };
-
-        ChatRowData {
-            conversation_id: self.conversation_id.into(),
-            conversation_type: crate::bin_ui::converters::conversation_kind(&self.conversation_type),
-            user_id: SharedString::default(),
-            display_name: self.display_name.into(),
-            avatar_source,
-            has_avatar,
-            initials: self.initials.into(),
-            last_message: self.extras.last_message.into(),
-            timestamp: self.extras.timestamp.into(),
-            presence_status: self.extras.presence_status.into(),
-            private_channel: self.extras.private_channel,
-            member_count: 0,
-            unread_count: self.unread_count,
-            is_typing: false,
-            is_pinned: self.is_pinned,
-            can_leave: self.can_leave,
-            can_delete: self.can_delete,
-            is_selected: false,
-        }
-    }
-}
 
 /// Send-safe intermediate for one section and the rows it owns.
 struct SectionSendData {
@@ -71,13 +24,13 @@ struct SectionSendData {
     is_expanded: bool,
     unread_count: i32,
     sort_mode: String,
-    conversations: Vec<SectionConvSendData>,
+    conversations: Vec<ChatRowSendData>,
 }
 
 impl SectionSendData {
     fn to_slint(self) -> CustomSectionData {
         let rows: Vec<ChatRowData> =
-            self.conversations.into_iter().map(|c| c.to_slint()).collect();
+            self.conversations.into_iter().map(ChatRowExt::to_slint).collect();
         CustomSectionData {
             section_id: self.section_id.into(),
             name: self.name.into(),
@@ -417,14 +370,6 @@ fn build_section_data(
     sections: &[chatter_core::domain::section::CustomSection],
     ui_ctx: &Arc<ChatterClient>,
 ) -> Vec<SectionSendData> {
-    // Channel icons are raw bytes on the Channel record (BLOB since v54), not
-    // a CDN URL — fetch them once, keyed by id, for enrich to decode per row.
-    let channel_icons: std::collections::HashMap<String, Vec<u8>> = ui_ctx
-        .get_channels_mru()
-        .into_iter()
-        .filter_map(|c| c.icon.filter(|b| !b.is_empty()).map(|b| (c.id.to_string(), b)))
-        .collect();
-
     sections
         .iter()
         .map(|section| SectionSendData {
@@ -437,58 +382,14 @@ fn build_section_data(
             conversations: section
                 .conversations
                 .iter()
-                .map(|conv| enrich_conversation_send(conv, ui_ctx, &channel_icons))
+                .map(|conv| {
+                    // Core shapes the row; only the avatar decode happens here,
+                    // off the UI thread.
+                    let mut row = ui_ctx.section_row(conv);
+                    row.pre_decode_avatar();
+                    row
+                })
                 .collect(),
         })
         .collect()
-}
-
-fn enrich_conversation_send(
-    conv: &chatter_core::domain::section::SectionConversation,
-    ui_ctx: &Arc<ChatterClient>,
-    channel_icons: &std::collections::HashMap<String, Vec<u8>>,
-) -> SectionConvSendData {
-    // Name / unread / pin already came back with the section — core resolved
-    // them in one query. This used to be a `get_conversation_metadata` per row.
-    let mut display_name = conv.display_name.clone();
-    if display_name.is_empty() {
-        // A channel-free DM has no unified-conversation row until its first
-        // message lands; fall back to the peer profile so the row is not blank.
-        if let Ok(peer_id) = conv.conversation_id.parse() {
-            display_name = ui_ctx.display_name(&peer_id);
-        }
-    }
-
-    let mut data = SectionConvSendData {
-        conversation_id: conv.conversation_id.clone(),
-        conversation_type: conv.conversation_type.clone(),
-        initials: initials_from_name(&display_name),
-        display_name,
-        avatar_decoded: None,
-        unread_count: conv.unread_count as i32,
-        is_pinned: conv.is_pinned,
-        can_leave: matches!(conv.conversation_type, ConversationType::AnonGroup)
-            || (matches!(conv.conversation_type, ConversationType::Channel)
-                && conv.conversation_id.parse().is_ok_and(|id| ui_ctx.can_leave_channel(&id))),
-        can_delete: matches!(conv.conversation_type, ConversationType::Channel)
-            && conv.conversation_id.parse().is_ok_and(|id| ui_ctx.is_former_channel(&id)),
-        // Preview, time, avatar, presence: the loose row's, from core.
-        extras: ui_ctx.section_row_extras(conv),
-    };
-
-    // Channels carry their icon as raw bytes on the Channel record, not a URL;
-    // a friend DM's avatar comes with the row's extras.
-    let avatar_bytes = match conv.conversation_type {
-        ConversationType::Channel => channel_icons.get(&conv.conversation_id).map(Vec::as_slice),
-        _ => data.extras.avatar_bytes.as_deref(),
-    };
-    data.avatar_decoded = avatar_bytes
-        .and_then(|bytes| image::load_from_memory(bytes).ok())
-        .map(|img| {
-            let rgba = img.to_rgba8();
-            let (w, h) = rgba.dimensions();
-            DecodedImagePixels { width: w, height: h, rgba: rgba.into_raw() }
-        });
-
-    data
 }

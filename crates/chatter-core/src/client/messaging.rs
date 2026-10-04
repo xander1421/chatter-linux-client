@@ -409,44 +409,64 @@ impl ChatterClient {
         )
     }
 
-    /// What a folder row shows beyond its name and badge: the preview, time,
-    /// avatar and presence the loose row for the same conversation shows, so
-    /// a chat looks the same filed or not. Filled for the kinds a folder
-    /// renders with the main list's rows (friend DMs and channels); other
-    /// kinds get the default.
-    pub fn section_row_extras(
+    /// One folder row, shaped like the loose row for the same conversation so
+    /// a chat looks the same filed or not: the name (a channel-free DM with no
+    /// unified-conversation row yet falls back to the peer profile), initials,
+    /// badge, pin, Leave/Delete availability, and — for the kinds a folder
+    /// renders with the main list's rows (friend DMs and channels) — preview,
+    /// time, avatar, presence and the private-channel lock.
+    pub fn section_row(
         &self,
         conv: &crate::domain::section::SectionConversation,
-    ) -> SectionRowExtras {
+    ) -> crate::ui::sidebar_data::ChatRowSendData {
         use crate::domain::message::ConversationType as CT;
-        let Ok(id) = conv.conversation_id.parse::<crate::domain::ids::ChannelId>() else {
-            return SectionRowExtras::default();
-        };
-        let (last_message, timestamp) = match conv.conversation_type {
-            CT::ServerDm | CT::Channel => {
-                self.sidebar_activity(self.latest_message(&id, &conv.conversation_type).as_ref())
+        use crate::ui::sidebar_data::ChatRowSendData;
+
+        let mut display_name = conv.display_name.clone();
+        if display_name.is_empty() {
+            if let Ok(peer_id) = conv.conversation_id.parse() {
+                display_name = self.display_name(&peer_id);
             }
-            _ => return SectionRowExtras::default(),
+        }
+        let channel_id = conv.conversation_id.parse::<crate::domain::ids::ChannelId>().ok();
+        let is_channel = conv.conversation_type == CT::Channel;
+        let mut row = ChatRowSendData {
+            initials: crate::ui::chat_data::initials_from_name(&display_name),
+            unread_count: conv.unread_count,
+            is_pinned: conv.is_pinned,
+            can_leave: match conv.conversation_type {
+                // Any member may leave a private group (as `private_group_row`).
+                CT::AnonGroup => true,
+                CT::Channel => channel_id.is_some_and(|id| self.can_leave_channel(&id)),
+                _ => false,
+            },
+            can_delete: is_channel && channel_id.is_some_and(|id| self.is_former_channel(&id)),
+            ..ChatRowSendData::new(conv.conversation_type.clone(), conv.conversation_id.clone(), display_name)
         };
-        let mut extras = SectionRowExtras { last_message, timestamp, ..Default::default() };
+
+        let Some(id) = channel_id else { return row };
+        if !matches!(conv.conversation_type, CT::ServerDm | CT::Channel) {
+            return row;
+        }
+        (row.last_message, row.timestamp) =
+            self.sidebar_activity(self.latest_message(&id, &conv.conversation_type).as_ref());
         match conv.conversation_type {
             CT::ServerDm => {
                 let profile = self.get_profile_local(&crate::domain::ids::UserId::from_uuid(*id.as_uuid()));
-                extras.presence_status =
+                row.presence_status =
                     profile.as_ref().map_or("offline", |p| p.presence.as_str()).to_string();
-                extras.avatar_bytes = profile.and_then(|p| p.avatar_bytes);
+                row.avatar_bytes = profile.and_then(|p| p.avatar_bytes);
             }
             _ => {
-                extras.private_channel = self
-                    .channels()
-                    .channel_repo
-                    .get(&id)
-                    .ok()
-                    .flatten()
+                let channel = self.channels().channel_repo.get(&id).ok().flatten();
+                row.private_channel = channel
+                    .as_ref()
                     .is_some_and(|c| c.channel_type == crate::domain::channel::ChannelType::Private);
+                // A channel's icon is raw bytes on its record, not a URL.
+                row.avatar_bytes = channel.and_then(|c| c.icon).filter(|b| !b.is_empty());
             }
         }
-        extras
+        row
     }
 
     /// Build the complete DM sidebar list — regular server DMs plus anon DMs
@@ -1274,6 +1294,58 @@ impl ChatterClient {
         Ok(Some(channel))
     }
 
+    /// The invite picker's search: [`Self::list_channel_invite_candidates`]
+    /// narrowed to `query` ([`InviteCandidate::matches`]), plus — when the
+    /// query is a complete handle — the account that exact username resolves
+    /// to (Signal-style: display names are profile-key-encrypted on the
+    /// server, so only an exact username can reach a stranger).
+    ///
+    /// The lookup waits for typing to pause, so `alice.47` → `alice.471` →
+    /// `alice.4711` does not probe every discriminator on the way: after the
+    /// pause, `superseded()` is asked and a newer keystroke's search wins
+    /// (`None`).
+    pub async fn search_channel_invite_candidates(
+        &self,
+        channel_id: &crate::domain::ids::ChannelId,
+        query: &str,
+        superseded: impl Fn() -> bool,
+    ) -> Option<Vec<InviteCandidate>> {
+        let mut cands = self.list_channel_invite_candidates(channel_id).await.unwrap_or_default();
+        let trimmed = query.trim();
+        cands.retain(|c| c.matches(trimmed));
+        if !crate::services::user::is_lookup_handle(trimmed) {
+            return Some(cands);
+        }
+
+        tokio::time::sleep(Self::INVITE_LOOKUP_PAUSE).await;
+        if superseded() {
+            return None;
+        }
+        match self.lookup_by_username(trimmed).await {
+            Ok(Some(user_id)) if !cands.iter().any(|c| c.user_id == user_id) => {
+                match self.get_user_profile(&user_id).await {
+                    Ok(profile) => cands.push(InviteCandidate {
+                        user_id,
+                        display_name: profile.display_name,
+                        username: self.known_username(&user_id).unwrap_or_else(|| trimmed.to_string()),
+                        avatar_bytes: profile.avatar_bytes.unwrap_or_default(),
+                        // A non-contact found by exact username; if already a
+                        // member or banned, the invite RPC rejects it server-side.
+                        already_member: false,
+                        banned: false,
+                    }),
+                    Err(e) => tracing::warn!(error = %e, %user_id, "lookup hit but profile fetch failed"),
+                }
+            }
+            Ok(_) => {}
+            Err(e) => tracing::warn!(error = %e, query = %trimmed, "username lookup failed"),
+        }
+        Some(cands)
+    }
+
+    /// How long typing must pause on a complete handle before it is looked up.
+    const INVITE_LOOKUP_PAUSE: std::time::Duration = std::time::Duration::from_millis(500);
+
     /// Build the list of people the user can invite to `channel_id`: their DM
     /// contacts (regular server DMs + anon DMs — the same set shown in the
     /// sidebar), deduped, with `already_member` flagged for current members.
@@ -1458,19 +1530,6 @@ pub struct ReplyParentMedia {
     /// Audio waveform (32 values, 0-100) for the inline quote player; empty when
     /// the parent carries none.
     pub waveform: Vec<i32>,
-}
-
-/// A folder row's display extras — see [`ChatterClient::section_row_extras`].
-#[derive(Debug, Clone, Default)]
-pub struct SectionRowExtras {
-    pub last_message: String,
-    pub timestamp: String,
-    /// A friend DM's avatar (raw bytes; the UI decodes).
-    pub avatar_bytes: Option<Vec<u8>>,
-    /// A friend DM's presence word, as the DM row takes it.
-    pub presence_status: String,
-    /// An invite-only channel (sender-key encrypted; its glyph is the lock).
-    pub private_channel: bool,
 }
 
 /// One destination row in the forward picker, shaped by
@@ -1941,5 +2000,93 @@ mod older_messages_tests {
         client.messages().store_message_local(&elsewhere).expect("store");
         assert!(until(&elsewhere.id).is_empty(), "a target in another conversation");
         assert!(until(&MessageId::new()).is_empty(), "a target that is not stored");
+    }
+}
+
+#[cfg(test)]
+mod section_row_tests {
+    //! Folder rows are shaped by core (`section_row`), like loose rows.
+    use crate::client::ChatterClient;
+    use crate::domain::ids::{ChannelId, UserId};
+    use crate::domain::message::{ConversationType, Message};
+    use crate::domain::section::SectionConversation;
+
+    fn client() -> (std::sync::Arc<ChatterClient>, tempfile::TempDir) {
+        static MOCK_KEYRING: std::sync::Once = std::sync::Once::new();
+        MOCK_KEYRING.call_once(|| {
+            keyring::set_default_credential_builder(keyring::mock::default_credential_builder());
+        });
+        let dir = tempfile::tempdir().unwrap();
+        let client = ChatterClient::builder()
+            .server_url("https://localhost:1")
+            .data_dir(dir.path().to_str().unwrap())
+            .build()
+            .expect("build client");
+        (client, dir)
+    }
+
+    fn conv(id: String, kind: ConversationType, name: &str) -> SectionConversation {
+        SectionConversation {
+            conversation_id: id,
+            conversation_type: kind,
+            display_name: name.into(),
+            unread_count: 3,
+            last_message_at: None,
+            is_pinned: true,
+        }
+    }
+
+    #[tokio::test]
+    async fn group_row_offers_leave_and_carries_badge_and_initials() {
+        let (client, _dir) = client();
+        let row = client.section_row(&conv(uuid::Uuid::new_v4().to_string(), ConversationType::AnonGroup, "Book Club"));
+        assert_eq!(row.display_name, "Book Club");
+        assert_eq!(row.initials, crate::ui::chat_data::initials_from_name("Book Club"));
+        assert!(row.can_leave && !row.can_delete);
+        assert!(row.is_pinned);
+        assert_eq!(row.unread_count, 3);
+        // Groups take no preview in a folder (as before the move).
+        assert!(row.last_message.is_empty());
+    }
+
+    #[tokio::test]
+    async fn unknown_channel_offers_neither_leave_nor_delete() {
+        let (client, _dir) = client();
+        let row = client.section_row(&conv(ChannelId::new().to_string(), ConversationType::Channel, "general"));
+        assert!(!row.can_leave && !row.can_delete);
+        assert!(!row.private_channel);
+        assert!(row.avatar_bytes.is_none());
+    }
+
+    #[tokio::test]
+    async fn dm_row_falls_back_to_the_peer_name_and_shows_its_preview() {
+        let (client, _dir) = client();
+        let peer = UserId::new();
+        let id: ChannelId = peer.into();
+        let msg = Message::new_text(id, ConversationType::ServerDm, Some(peer), "hello there".into(), 5);
+        client.messages().store_message_local(&msg).unwrap();
+
+        let row = client.section_row(&conv(peer.to_string(), ConversationType::ServerDm, ""));
+        assert_eq!(row.display_name, client.display_name(&peer));
+        assert!(!row.display_name.is_empty());
+        assert!(row.last_message.contains("hello there"), "{}", row.last_message);
+        assert_eq!(row.presence_status, "offline");
+        assert!(!row.can_leave);
+    }
+
+    /// The invite search: a newer keystroke during the pre-lookup pause
+    /// retires a complete-handle search before it reaches the server; a
+    /// partial handle never pauses or looks up.
+    #[tokio::test]
+    async fn invite_search_is_superseded_before_any_lookup() {
+        let (client, _dir) = client();
+        let channel = ChannelId::new();
+        let started = std::time::Instant::now();
+        assert!(client.search_channel_invite_candidates(&channel, "alice.4711", || true).await.is_none());
+        assert!(started.elapsed() >= ChatterClient::INVITE_LOOKUP_PAUSE);
+
+        // Not a complete handle: no pause, so nothing to supersede.
+        let cands = client.search_channel_invite_candidates(&channel, "alice.", || true).await;
+        assert_eq!(cands.map(|c| c.len()), Some(0));
     }
 }

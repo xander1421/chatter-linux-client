@@ -1,6 +1,5 @@
 //! Channel settings modal callbacks.
 
-use std::collections::HashSet;
 use std::sync::Arc;
 
 use slint::{ComponentHandle, Model, ModelRc, VecModel};
@@ -1079,8 +1078,8 @@ fn wire_invite_member_search(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     let weak_window = window.as_weak();
     let ui_ctx_search = ui_ctx.clone();
 
-    // Keystroke sequence number: a lookup only fires once typing has paused
-    // on a complete handle, and a newer keystroke retires older searches.
+    // Keystroke sequence number: a newer keystroke retires older searches
+    // (core asks after its pre-lookup pause).
     static SEARCH_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
     window.on_invite_member_search_changed(move |query: slint::SharedString| {
@@ -1103,61 +1102,15 @@ fn wire_invite_member_search(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                 Err(_) => return,
             };
 
-            // Work on Send `InviteCandidate`s; convert to UI rows (non-Send
-            // images) inside the event loop below.
-            let mut cands: Vec<InviteCandidate> = ui_ctx
-                .list_channel_invite_candidates(&channel_id)
+            // Core filters and looks up; the rows (non-Send images) are
+            // built inside the event loop below.
+            let superseded = || SEARCH_SEQ.load(std::sync::atomic::Ordering::SeqCst) != seq;
+            let Some(cands) = ui_ctx
+                .search_channel_invite_candidates(&channel_id, &query, superseded)
                 .await
-                .unwrap_or_default();
-            let trimmed = query.trim();
-
-            if !trimmed.is_empty() {
-                cands.retain(|c| c.matches(trimmed));
-            }
-
-            let mut seen: HashSet<UserId> = cands.iter().map(|c| c.user_id).collect();
-
-            // Signal-style exact-username lookup: display names are
-            // profile-key-encrypted on the server, so only exact username
-            // matches can resolve to an account. Core refuses anything that is
-            // not a complete handle; the pause keeps `alice.47` → `alice.471`
-            // → `alice.4711` from probing every discriminator on the way.
-            if chatter_core::services::user::is_lookup_handle(trimmed) {
-                tokio::time::sleep(std::time::Duration::from_millis(500)).await;
-                if SEARCH_SEQ.load(std::sync::atomic::Ordering::SeqCst) != seq {
-                    return;
-                }
-                match ui_ctx.lookup_by_username(trimmed).await {
-                    Ok(Some(user_id)) => {
-                        if seen.insert(user_id) {
-                            match ui_ctx.get_user_profile(&user_id).await {
-                                Ok(profile) => {
-                                    let username = ui_ctx
-                                        .known_username(&user_id)
-                                        .unwrap_or_else(|| trimmed.to_string());
-                                    cands.push(InviteCandidate {
-                                        user_id,
-                                        display_name: profile.display_name,
-                                        username,
-                                        avatar_bytes: profile.avatar_bytes.unwrap_or_default(),
-                                        // non-contact found by exact username; if already a
-                                        // member or banned the invite RPC rejects it server-side.
-                                        already_member: false,
-                                        banned: false,
-                                    });
-                                }
-                                Err(e) => {
-                                    tracing::warn!(error = %e, %user_id, "lookup hit but profile fetch failed");
-                                }
-                            }
-                        }
-                    }
-                    Ok(None) => {}
-                    Err(e) => {
-                        tracing::warn!(error = %e, query = %trimmed, "username lookup failed");
-                    }
-                }
-            }
+            else {
+                return;
+            };
 
             let _ = slint::invoke_from_event_loop(move || {
                 if let Some(w) = weak.upgrade() {

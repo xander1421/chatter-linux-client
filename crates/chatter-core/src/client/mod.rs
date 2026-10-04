@@ -28,7 +28,7 @@ mod link_device;
 pub mod membership;
 mod messaging;
 mod receipts;
-pub use messaging::{InviteCandidate, ReplyParentMedia, SectionRowExtras};
+pub use messaging::{InviteCandidate, ReplyParentMedia};
 pub use anon_group::AnonGroupInviteCandidate;
 
 /// A user-search hit surfaced to the UI (friends modal search).
