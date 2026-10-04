@@ -16,18 +16,6 @@ import { ConversationKind } from "conversation_kind.slint";
 import { DisappearingGlobal } from "disappearing_global.slint";
 import { MembershipGlobal } from "membership_global.slint";
 
-// Data struct for chat header (mirrors Rust ChatHeaderData)
-export struct ChatHeaderData {
-    channel-id: string,
-    channel-name: string,
-    conversation-kind: ConversationKind,
-    private-channel: bool,
-    member-count: int,
-    topic: string,
-    typing-indicator: string,
-    presence-status: string,  // "online", "away", "dnd", "offline" — shown for DMs only
-}
-
 export component ChatHeader inherits GlassSurface {
     material-level: 2;
     elevation: 1;
