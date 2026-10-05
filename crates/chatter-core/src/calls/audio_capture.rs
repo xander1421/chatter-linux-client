@@ -193,6 +193,9 @@ impl AudioCapture {
         let (frame_tx, mut frame_rx) = mpsc::channel::<CapturedFrame>(64);
         let source_for_worker = audio_source.clone();
         tokio::spawn(async move {
+            let mut first_frame = true;
+            let mut first_non_silent = true;
+            let mut first_error = true;
             while let Some(captured) = frame_rx.recv().await {
                 let frame = AudioFrame {
                     data: Cow::Owned(captured.samples),
@@ -204,7 +207,24 @@ impl AudioCapture {
                     samples_per_channel: frame.data.len() as u32 / frame.num_channels,
                     ..frame
                 };
-                let _ = source_for_worker.capture_frame(&frame).await;
+                let non_silent = first_non_silent && frame.data.iter().any(|&s| s != 0);
+                match source_for_worker.capture_frame(&frame).await {
+                    Ok(()) => {
+                        if first_frame {
+                            tracing::info!("First microphone frame delivered to LiveKit");
+                            first_frame = false;
+                        }
+                        if non_silent {
+                            tracing::info!("First non-silent microphone frame delivered to LiveKit");
+                            first_non_silent = false;
+                        }
+                    }
+                    Err(error) if first_error => {
+                        tracing::warn!(%error, "Microphone frame delivery failed");
+                        first_error = false;
+                    }
+                    Err(_) => {}
+                }
             }
         });
 
