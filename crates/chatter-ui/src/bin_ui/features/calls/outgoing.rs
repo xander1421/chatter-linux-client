@@ -317,6 +317,16 @@ mod tests {
         let runtime = super::super::timers::tests::runtime();
         let _guard = runtime.enter();
         let dir = tempfile::tempdir().unwrap();
+        // Keep this fixture off the real keyring even when the launcher omits
+        // CHATTER_NO_KEYRING. The marker must exist before client construction.
+        let db_path = chatter_core::system::Directories::with_base_dir(dir.path().to_path_buf())
+            .unwrap()
+            .database_path();
+        std::fs::write(
+            db_path.parent().unwrap().join(chatter_core::system::keyring::NO_KEYRING_MARKER),
+            b"",
+        )
+        .unwrap();
         let client = ChatterClient::builder()
             .data_dir(dir.path().to_string_lossy().to_string())
             .build()
