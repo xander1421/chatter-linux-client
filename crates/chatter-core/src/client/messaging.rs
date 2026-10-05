@@ -491,9 +491,9 @@ impl ChatterClient {
             self.sidebar_activity(self.latest_message(&id, &conv.conversation_type).as_ref());
         match conv.conversation_type {
             CT::ServerDm => {
-                let profile = self.get_profile_local(&crate::domain::ids::UserId::from_uuid(*id.as_uuid()));
-                row.presence_status =
-                    profile.as_ref().map_or("offline", |p| p.presence.as_str()).to_string();
+                let peer = crate::domain::ids::UserId::from_uuid(*id.as_uuid());
+                let profile = self.get_profile_local(&peer);
+                row.presence_status = self.peer_presence(&peer).as_str().to_string();
                 row.avatar_bytes = profile.and_then(|p| p.avatar_bytes);
             }
             _ => {
@@ -538,15 +538,12 @@ impl ChatterClient {
             let conversation_id: crate::domain::ids::ChannelId = peer_id.into();
 
             let display_name = self.display_name(&peer_id);
-            // Presence rides on the same stored profile as the avatar — one
-            // read, both fields. It used to be hardcoded "offline", so every
-            // friend's dot in the sidebar was grey until a live presence event
-            // happened to arrive, and grey again after the next rebuild.
+            // Presence from the stored profile (hidden for a blocked peer).
+            // It used to be hardcoded "offline", so every friend's dot in the
+            // sidebar was grey until a live presence event happened to
+            // arrive, and grey again after the next rebuild.
             let profile = self.get_profile_local(&peer_id);
-            let presence_status = profile
-                .as_ref()
-                .map_or("offline", |p| p.presence.as_str())
-                .to_string();
+            let presence_status = self.peer_presence(&peer_id).as_str().to_string();
             let avatar_bytes = profile.and_then(|p| p.avatar_bytes);
 
             // Preview + timestamp from local DM history (empty if none). This

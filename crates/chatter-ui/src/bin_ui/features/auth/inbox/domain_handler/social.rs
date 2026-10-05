@@ -169,10 +169,12 @@ pub(super) fn handle_presence_changed(
 ) {
     let weak = window.clone();
     let user_id_str = user_id.to_string();
-    let presence_str = presence.as_str();
     // Our own presence arrives here too — `set_presence` emits it locally,
     // since the server fans presence out to friends and not back to us.
     let is_self = ui_ctx.session_current_user_id() == Some(user_id);
+    // A blocked peer's live presence is hidden like their stored one.
+    let presence = if is_self { presence } else { ui_ctx.peer_display_presence(&user_id, presence) };
+    let presence_str = presence.as_str();
 
     let presence_slint: slint::SharedString = presence_str.into();
 

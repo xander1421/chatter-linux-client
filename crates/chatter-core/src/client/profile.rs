@@ -613,6 +613,29 @@ impl ChatterClient {
         self.users().is_blocked_local(id)
     }
 
+    /// A peer's presence as this device shows it: the stored presence, or
+    /// [`Self::peer_display_presence`] of it. Every dot and "online" line for
+    /// another user reads this, never `Profile::presence` directly.
+    pub fn peer_presence(&self, id: &crate::domain::ids::UserId) -> crate::domain::user::PresenceStatus {
+        let stored = self.get_profile_local(id).map(|p| p.presence).unwrap_or_default();
+        self.peer_display_presence(id, stored)
+    }
+
+    /// `reported` (a stored or live presence) as it may be shown. A blocked
+    /// user's presence is hidden — always offline — as Signal shows none for
+    /// people you blocked; unblocking shows it again.
+    pub fn peer_display_presence(
+        &self,
+        id: &crate::domain::ids::UserId,
+        reported: crate::domain::user::PresenceStatus,
+    ) -> crate::domain::user::PresenceStatus {
+        if self.is_profile_user_blocked(id) {
+            crate::domain::user::PresenceStatus::Offline
+        } else {
+            reported
+        }
+    }
+
     pub async fn send_anon_dm_presence_update(
         &self,
         conversation_id: &crate::domain::anon_dm::AnonDmId,
@@ -873,6 +896,38 @@ mod tests {
         client.messages().user_repo.upsert_profile(&crate::domain::user::Profile::new(me, "me".into())).unwrap();
         let profile = client.users().update_user_profile(None, None).await.expect("no RPC");
         assert_eq!(profile.user_id, me);
+    }
+
+    /// A blocked contact's presence is hidden: their stored "online" shows as
+    /// offline (dot, profile line, live events), and returns on unblock.
+    #[tokio::test]
+    async fn blocked_peer_presence_is_hidden() {
+        use crate::domain::user::{Friendship, FriendshipStatus, PresenceStatus, Profile};
+        use crate::storage::repositories::settings_repo::keys;
+        let (client, _dir) = test_client();
+        let (me, peer, friend) = (UserId::new(), UserId::new(), UserId::new());
+        let repos = client.messages();
+        repos.settings_repo.set_string(keys::CURRENT_USER_ID, &me.to_string()).unwrap();
+        for u in [me, peer, friend] {
+            repos.user_repo.ensure_user_exists(&u).unwrap();
+            let mut p = Profile::new(u, "x".into());
+            p.presence = PresenceStatus::Online;
+            repos.user_repo.upsert_profile(&p).unwrap();
+        }
+        assert_eq!(client.peer_presence(&peer), PresenceStatus::Online);
+
+        repos.user_repo.insert_friendship(&Friendship {
+            requester_id: me, addressee_id: peer,
+            status: FriendshipStatus::Blocked, created_at: chrono::Utc::now(),
+        }).unwrap();
+        assert_eq!(client.peer_presence(&peer), PresenceStatus::Offline);
+        assert_eq!(client.peer_display_presence(&peer, PresenceStatus::Away), PresenceStatus::Offline);
+        assert!(!client.peer_last_seen_label(&peer).contains("online"));
+        assert_eq!(client.peer_presence(&friend), PresenceStatus::Online);
+        assert_eq!(client.peer_last_seen_label(&friend), "online");
+
+        repos.user_repo.delete_friendship(&me, &peer).unwrap();
+        assert_eq!(client.peer_presence(&peer), PresenceStatus::Online);
     }
 
     /// Friends › Blocked › Delete chat on an anon peer: the conversation and

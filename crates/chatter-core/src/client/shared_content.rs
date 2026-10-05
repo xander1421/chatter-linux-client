@@ -83,19 +83,21 @@ impl ChatterClient {
     /// "last seen yesterday 4:12 pm", or "last seen recently" when no presence
     /// timestamp has ever reached us for them.
     ///
-    /// Synchronous: two indexed point-lookups on an already-open connection,
-    /// cheap enough to run while building the modal.
+    /// Synchronous: indexed point-lookups on an already-open connection,
+    /// cheap enough to run while building the modal. Empty for a blocked
+    /// user (their presence is hidden, so is when it last changed); the
+    /// screen then shows the offline presence it is given.
     pub fn peer_last_seen_label(self: &Arc<Self>, user_id: &crate::domain::ids::UserId) -> String {
+        if self.is_profile_user_blocked(user_id) {
+            return String::new();
+        }
         let repo = crate::storage::repositories::UserRepository::new(
             self.services.database.clone(),
         );
-        let presence = repo
-            .get_profile(user_id)
-            .ok()
-            .flatten()
-            .map(|p| p.presence)
-            .unwrap_or_default();
-        crate::ui::chat_data::last_seen_label(presence, repo.last_seen_at(user_id).ok().flatten())
+        crate::ui::chat_data::last_seen_label(
+            self.peer_presence(user_id),
+            repo.last_seen_at(user_id).ok().flatten(),
+        )
     }
 }
 

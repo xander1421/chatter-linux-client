@@ -275,9 +275,7 @@ pub fn wire_dm_selected(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             let peer_profile = ui_ctx.get_profile_local(&peer_id);
             let title = ui_ctx.display_name(&peer_id);
 
-            let status_str = peer_profile.as_ref()
-                .map(|p| p.presence.as_str())
-                .unwrap_or("offline");
+            let status_str = ui_ctx.peer_presence(&peer_id).as_str();
 
             let display_messages = messages_to_display_batch(
                 &messages,

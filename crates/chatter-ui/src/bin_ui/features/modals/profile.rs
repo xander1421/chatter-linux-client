@@ -144,13 +144,9 @@ pub fn open_user_profile(
 
         let initials = initials_from_name(&display_name);
 
-        // Same source as core's `peer_last_seen_label` (the local user
-        // directory): `user_state` is not populated for peers, so the dot read
-        // grey next to the words "online".
-        let presence = ui_ctx
-            .and_then(|ctx| ctx.get_profile_local(user_id))
-            .map(|p| p.presence.as_str())
-            .unwrap_or("offline");
+        // Core's display presence (the local user directory, hidden for a
+        // blocked user) — the same source as `peer_last_seen_label`.
+        let presence = ui_ctx.map_or("offline", |ctx| ctx.peer_presence(user_id).as_str());
 
         // From core's local profile, like the avatar below: `user_state` is not
         // populated for peers, so the bio never showed.
