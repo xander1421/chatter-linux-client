@@ -15,7 +15,7 @@ pub mod membership;
 mod pin;
 mod reactions;
 mod selection;
-mod send_message;
+pub(crate) mod send_message;
 mod typing;
 
 use std::sync::Arc;

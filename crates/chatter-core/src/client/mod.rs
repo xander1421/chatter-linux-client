@@ -19,6 +19,8 @@ mod appearance;
 mod auth;
 pub mod calls;
 pub mod channels;
+mod composer;
+pub use composer::{ComposerReply, ComposerSend};
 pub mod events;
 #[cfg(feature = "jarvis")]
 mod jarvis;
@@ -178,6 +180,8 @@ impl ClientBuilder {
             server_monitor_started: AtomicBool::new(false),
             server_contact_deferred: AtomicBool::new(false),
             composer_drafts: Mutex::new(std::collections::HashMap::new()),
+            parked_sends: Mutex::new(Vec::new()),
+            composer_owner: Mutex::new(String::new()),
             expired_messages: tokio::sync::broadcast::channel(16).0,
         }))
     }
@@ -369,6 +373,13 @@ pub struct ChatterClient {
     /// conversation it was typed in. See `swap_composer_draft`.
     // in-memory, lost on restart.
     composer_drafts: Mutex<std::collections::HashMap<String, String>>,
+    /// Failed composed sends kept until their composer has room for them.
+    /// See `recover_composer_send`. In memory, like the drafts.
+    parked_sends: Mutex<Vec<ComposerSend>>,
+    /// The conversation whose draft the composer holds: the `entering` of the
+    /// last `swap_composer_draft`. Lags the active conversation until the
+    /// UI's draft watcher has run.
+    composer_owner: Mutex<String>,
     /// Messages the disappearing-messages reaper just deleted. See
     /// `subscribe_expired_messages`.
     expired_messages: tokio::sync::broadcast::Sender<Vec<crate::domain::message::Message>>,
@@ -2898,6 +2909,7 @@ impl ChatterClient {
                 drafts.insert(leaving.to_owned(), text);
             }
         }
+        *self.composer_owner.lock() = entering.to_owned();
         drafts.remove(entering).unwrap_or_default()
     }
 

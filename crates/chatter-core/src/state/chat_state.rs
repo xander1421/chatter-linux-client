@@ -541,6 +541,19 @@ impl ChatState {
         self.store.get().pending_attachments.clone()
     }
 
+    /// Take the staged attachments for a send to `conversation`, in one
+    /// update: `None`, with nothing taken, when another conversation has
+    /// become active, so a send never mixes two chats' files.
+    pub fn take_pending_attachments_for(&self, conversation: ActiveConversation) -> Option<Vec<PendingAttachment>> {
+        let mut taken = None;
+        self.store.update(|state| {
+            if state.active_conversation == conversation {
+                taken = Some(std::mem::take(&mut state.pending_attachments));
+            }
+        });
+        taken
+    }
+
     /// Clear all pending attachments (called after message is sent).
     pub fn clear_pending_attachments(&self) {
         self.store.update(|state| {

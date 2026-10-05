@@ -1,0 +1,263 @@
+//! A send frozen at the moment it was asked for.
+//!
+//! Send reads the composer once and clears it. A send that only completes
+//! later — a GIF, which is downloaded and uploaded first — must deliver what
+//! the composer held THEN, to the conversation it was asked for in, never
+//! whatever the composer and the active conversation hold when the upload
+//! finishes.
+
+use super::ChatterClient;
+use crate::state::{ActiveConversation, PendingAttachment};
+
+/// The message being replied to, as the composer's reply bar holds it.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ComposerReply {
+    pub sender_id: String,
+    pub timestamp: String,
+    pub sender_name: String,
+    pub preview: String,
+}
+
+/// Everything one send commits to: where it goes and what it carries.
+#[derive(Clone, Debug)]
+pub struct ComposerSend {
+    pub conversation: ActiveConversation,
+    pub text: String,
+    pub reply: Option<ComposerReply>,
+    pub attachments: Vec<PendingAttachment>,
+}
+
+impl ChatterClient {
+    /// Freeze the composer into a send to the active conversation, taking the
+    /// staged attachments with it. `Err` carries what to tell the user, and
+    /// consumes nothing: no conversation open (a mesh room is none), Jarvis's
+    /// local channel or a Jarvis request in the text (both answered locally,
+    /// never posted), or a channel we may not post in.
+    pub fn begin_composer_send(
+        &self,
+        text: String,
+        reply: Option<ComposerReply>,
+    ) -> Result<ComposerSend, String> {
+        let conversation = self.chat_state().active_conversation();
+        if let ActiveConversation::None = conversation {
+            return Err("This can't be sent here.".into());
+        }
+        if !self.composer_shows_active() {
+            return Err("The conversation is changing. Nothing was sent.".into());
+        }
+        if let ActiveConversation::Channel(id) = conversation {
+            #[cfg(feature = "jarvis")]
+            if super::jarvis::is_jarvis_channel(&id) {
+                return Err("This can't be sent here.".into());
+            }
+            let notice = self.channel_send_notice(&id);
+            if !notice.is_empty() {
+                return Err(notice);
+            }
+            if self.is_former_channel(&id) {
+                return Err("You can no longer post in this channel.".into());
+            }
+        }
+        #[cfg(feature = "jarvis")]
+        if crate::services::jarvis::parse_slash_command(&text).is_some()
+            || self.jarvis_mention(&conversation, &text).is_some()
+        {
+            return Err("Send the Jarvis request on its own first.".into());
+        }
+        let attachments = self
+            .chat_state()
+            .take_pending_attachments_for(conversation)
+            .ok_or_else(|| "The conversation changed. Nothing was sent.".to_string())?;
+        Ok(ComposerSend { conversation, text, reply, attachments })
+    }
+
+    /// Hand a failed send back. `Some`: restore it now — its conversation is
+    /// open and `composer_empty` (nothing typed, replied to, or edited since)
+    /// with nothing staged. Otherwise it is kept, never written over newer
+    /// input, until [`Self::take_parked_send`] finds room for it.
+    pub fn recover_composer_send(&self, send: ComposerSend, composer_empty: bool) -> Option<ComposerSend> {
+        if self.composer_has_room(send.conversation, composer_empty) {
+            return Some(send);
+        }
+        self.parked_sends.lock().push(send);
+        None
+    }
+
+    /// A kept failed send for the active conversation, if the composer has
+    /// room for it now. Checked on entering a conversation.
+    pub fn take_parked_send(&self, composer_empty: bool) -> Option<ComposerSend> {
+        let active = self.chat_state().active_conversation();
+        if !self.composer_has_room(active, composer_empty) {
+            return None;
+        }
+        let mut parked = self.parked_sends.lock();
+        let at = parked.iter().position(|s| s.conversation == active)?;
+        Some(parked.remove(at))
+    }
+
+    /// Mid-switch the active conversation is already the new one while the
+    /// composer still holds the old one's draft (the UI's watcher has not
+    /// swapped it yet): the composer belongs to neither.
+    fn composer_shows_active(&self) -> bool {
+        let shown = self.chat_state().get().active_channel_id.map(|id| id.to_string()).unwrap_or_default();
+        *self.composer_owner.lock() == shown
+    }
+
+    fn composer_has_room(&self, conversation: ActiveConversation, composer_empty: bool) -> bool {
+        composer_empty
+            && self.chat_state().active_conversation() == conversation
+            && self.composer_shows_active()
+            && self.chat_state().get_pending_attachments().is_empty()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use super::*;
+    use crate::domain::ids::{AttachmentId, ChannelId};
+
+    fn client() -> (Arc<ChatterClient>, tempfile::TempDir) {
+        static MOCK_KEYRING: std::sync::Once = std::sync::Once::new();
+        MOCK_KEYRING.call_once(|| {
+            keyring::set_default_credential_builder(keyring::mock::default_credential_builder());
+        });
+        let dir = tempfile::tempdir().unwrap();
+        // Persistent opt-out beside the database, before anything opens it.
+        let db = crate::system::Directories::with_base_dir(dir.path().to_path_buf())
+            .unwrap()
+            .database_path();
+        std::fs::write(db.parent().unwrap().join(crate::system::keyring::NO_KEYRING_MARKER), b"").unwrap();
+        let client = ChatterClient::builder()
+            .server_url("https://localhost:1")
+            .data_dir(dir.path().to_str().unwrap())
+            .build()
+            .expect("build client");
+        (client, dir)
+    }
+
+    fn staged(name: &str) -> PendingAttachment {
+        PendingAttachment::new(AttachmentId::new(), name.into(), Default::default(), 1, "image/png".into())
+    }
+
+    /// Navigate as the app does: core state, then the UI's draft swap.
+    fn open(client: &ChatterClient, id: ChannelId) {
+        client.chat_state().set_active_conversation(ActiveConversation::Channel(id));
+        client.swap_composer_draft("", String::new(), &id.to_string());
+    }
+
+    #[tokio::test]
+    async fn begin_freezes_the_composer_and_takes_what_is_staged() {
+        let (client, _dir) = client();
+        let a = ChannelId::new();
+        open(&client, a);
+        client.chat_state().add_pending_attachment(staged("cat.png"));
+        let send = client.begin_composer_send("caption".into(), None).unwrap();
+        assert_eq!(send.conversation, ActiveConversation::Channel(a));
+        assert_eq!(send.text, "caption");
+        assert_eq!(send.attachments.len(), 1);
+        assert!(client.chat_state().get_pending_attachments().is_empty(), "the staged file went to two sends");
+
+        // Later navigation and staging do not reach into the frozen send.
+        open(&client, ChannelId::new());
+        client.chat_state().add_pending_attachment(staged("later.png"));
+        assert_eq!(send.conversation, ActiveConversation::Channel(a));
+        assert_eq!(send.attachments[0].filename, "cat.png");
+    }
+
+    #[tokio::test]
+    async fn begin_with_no_conversation_consumes_nothing() {
+        let (client, _dir) = client();
+        client.chat_state().add_pending_attachment(staged("cat.png"));
+        assert!(client.begin_composer_send("x".into(), None).is_err());
+        assert_eq!(client.chat_state().get_pending_attachments().len(), 1);
+    }
+
+    #[cfg(feature = "jarvis")]
+    #[tokio::test]
+    async fn begin_refuses_a_jarvis_request_before_consuming() {
+        let (client, _dir) = client();
+        open(&client, ChannelId::new());
+        client.chat_state().add_pending_attachment(staged("cat.png"));
+        assert!(client.begin_composer_send("/ask why".into(), None).is_err());
+        assert_eq!(client.chat_state().get_pending_attachments().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn a_failure_is_restored_only_into_its_own_empty_composer() {
+        let (client, _dir) = client();
+        let (a, b) = (ChannelId::new(), ChannelId::new());
+        open(&client, a);
+        let send = client.begin_composer_send("caption".into(), None).unwrap();
+
+        // Same chat, newer draft typed: kept, not written over it.
+        assert!(client.recover_composer_send(send.clone(), false).is_none());
+        assert!(client.take_parked_send(false).is_none(), "newer draft still there");
+
+        // Navigated to B: B's empty composer is no home for A's send.
+        open(&client, b);
+        assert!(client.take_parked_send(true).is_none(), "A's send restored into B");
+
+        // Back in A, composer empty but a file staged since: still kept.
+        open(&client, a);
+        client.chat_state().add_pending_attachment(staged("new.png"));
+        assert!(client.take_parked_send(true).is_none());
+        client.chat_state().clear_pending_attachments();
+
+        let back = client.take_parked_send(true).expect("A's composer has room now");
+        assert_eq!(back.text, "caption");
+        assert!(client.take_parked_send(true).is_none(), "restored twice");
+
+        // Failing while its own composer is empty restores at once.
+        assert!(client.recover_composer_send(back, true).is_some());
+    }
+
+    #[tokio::test]
+    async fn a_failure_while_elsewhere_waits_for_its_conversation() {
+        let (client, _dir) = client();
+        let (a, b) = (ChannelId::new(), ChannelId::new());
+        open(&client, a);
+        let send = client.begin_composer_send("for A".into(), None).unwrap();
+        open(&client, b);
+        assert!(client.recover_composer_send(send, true).is_none(), "restored into B");
+        open(&client, a);
+        assert_eq!(client.take_parked_send(true).unwrap().text, "for A");
+    }
+
+    #[tokio::test]
+    async fn staged_files_are_taken_only_for_the_conversation_still_open() {
+        let (client, _dir) = client();
+        let (a, b) = (ChannelId::new(), ChannelId::new());
+        open(&client, b);
+        client.chat_state().add_pending_attachment(staged("b.png"));
+        assert!(client.chat_state().take_pending_attachments_for(ActiveConversation::Channel(a)).is_none());
+        assert_eq!(client.chat_state().get_pending_attachments().len(), 1, "B's file was taken for A");
+    }
+
+    #[tokio::test]
+    async fn begin_mid_switch_refuses_before_consuming() {
+        let (client, _dir) = client();
+        let (a, b) = (ChannelId::new(), ChannelId::new());
+        open(&client, a);
+        // Core has moved to B; the composer still holds A's draft.
+        client.chat_state().set_active_conversation(ActiveConversation::Channel(b));
+        client.chat_state().add_pending_attachment(staged("a.png"));
+        assert!(client.begin_composer_send("for A".into(), None).is_err());
+        assert_eq!(client.chat_state().get_pending_attachments().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn a_failure_mid_switch_is_kept_not_restored_into_the_old_composer() {
+        let (client, _dir) = client();
+        let (a, b) = (ChannelId::new(), ChannelId::new());
+        open(&client, a);
+        let send = client.begin_composer_send("for A".into(), None).unwrap();
+        open(&client, b);
+        // Back to A in core; the composer still shows B's (empty) draft.
+        client.chat_state().set_active_conversation(ActiveConversation::Channel(a));
+        assert!(client.recover_composer_send(send, true).is_none(), "A's send restored into B's composer");
+        client.swap_composer_draft(&b.to_string(), String::new(), &a.to_string());
+        assert_eq!(client.take_parked_send(true).unwrap().text, "for A");
+    }
+}

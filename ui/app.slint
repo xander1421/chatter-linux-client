@@ -1242,6 +1242,30 @@ export component MainWindow inherits Window {
         back-scope.focus();
     }
 
+    // The composer's in-flight IME composition, mirrored from the live
+    // ChatLayout. `TextInput.text` excludes it, so without this a conversation
+    // switch parked the draft without the composing word, and the input method
+    // later committed that word into the NEXT conversation's text. Destroying
+    // the composer (leaving the chat) drops it too: Slint sends no FocusOut to
+    // a TextInput that dies with its component.
+    property <bool> composer-composing: false;
+    property <string> composer-composed-text;
+    // Fold the composition into `composer-text` and end it. The text is
+    // computed BEFORE focus moves and assigned after, as the composer's
+    // suspend-input does: a FocusOut that commits the preedit itself (core's
+    // Android path) yields the same string, one that drops it (desktop) is
+    // restored, and nothing is inserted twice. Called by Rust before it parks
+    // the draft on a conversation switch, and by a remounted ChatLayout for a
+    // composition its predecessor died with.
+    public function settle-composer() {
+        if !root.composer-composing { return; }
+        root.composer-composing = false;
+        root.composer-settled-text = root.composer-composed-text;
+        back-scope.focus();
+        root.composer-text = root.composer-settled-text;
+    }
+    private property <string> composer-settled-text;
+
     // Same hole for the composer's pickers. On a phone the composer drops its
     // focus when one opens so the panel replaces the keyboard
     // (message_composer.slint, emoji-touch) — which left NOTHING focused, so
@@ -1873,7 +1897,9 @@ export component MainWindow inherits Window {
                         message-last-visible-row <=> root.message-last-visible-row;
                         // A new layout's list starts at rest; `changed` does not
                         // fire for that first value.
-                        init => { root.chat-list-scrolling = false; }
+                        init => { root.chat-list-scrolling = false; root.settle-composer(); }
+                        changed composer-composing => { root.composer-composing = self.composer-composing; }
+                        changed composer-composed-text => { root.composer-composed-text = self.composer-composed-text; }
                         changed list-scrolling => { root.chat-list-scrolling = self.list-scrolling; }
                         is-at-bottom <=> root.is-at-bottom;
                         unread-index <=> root.unread-index;

@@ -113,6 +113,8 @@ export component ChatLayout inherits Rectangle {
 
     // Composer properties
     in-out property <string> composer-text: "";
+    out property <bool> composer-composing: composer.composing;
+    out property <string> composer-composed-text: composer.composed-text;
     in property <string> composer-placeholder: "Type a message...";
     // Non-empty when the viewer may not post here (muted, removed): the
     // composer is replaced by this text, worded by chatter-core.

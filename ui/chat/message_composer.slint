@@ -152,14 +152,18 @@ export component MessageComposer inherits GlassSurface {
     // the input method is still composing -- so sending `text` silently drops
     // whatever the keyboard had in flight and leaves it behind in the box.
     // Measured on a Galaxy S9: typing "hello-ui-test" and pressing send
-    // delivered "hello-ui-" and left "test" in the composer.
-    //
-    // The preedit sits at the cursor, and Slint exposes no way to splice at a
-    // byte offset from .slint, so this appends. That is exact for composing at
-    // the end of the line, which is what typing a message is; composing in the
-    // middle of an already-typed line would place those characters at the end
-    // instead. Strictly better than the alternative, which is losing them.
-    property <string> outgoing-text: root.text + text-input.preedit-text;
+    // delivered "hello-ui-" and left "test" in the composer. The preedit is
+    // spliced in at the caret (`composed-text`), not appended.
+    property <string> outgoing-text: root.composed-text;
+
+    // `text` with the input method's in-flight composition spliced in at the
+    // caret (the byte offset the preedit is drawn at). The host mirrors these
+    // so it can settle a composition this element may no longer be alive to
+    // settle itself: a conversation switch retargets `text`, and leaving the
+    // chat destroys this TextInput without a FocusOut.
+    out property <bool> composing: text-input.preedit-text != "";
+    out property <string> composed-text: TextFormat.replace(root.text, text-input.preedit-text,
+        text-input.cursor-position-byte-offset, text-input.cursor-position-byte-offset);
 
     // Clearing `text` alone does NOT clear the preedit: the composition belongs
     // to the input method, and Slint keeps rendering it. After a send that means

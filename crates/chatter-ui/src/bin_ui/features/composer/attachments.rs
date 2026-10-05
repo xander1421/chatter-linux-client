@@ -67,26 +67,31 @@ pub(crate) fn update_attachments_ui(chat_state: &ChatState, weak: &Weak<MainWind
 
     let _ = slint::invoke_from_event_loop(move || {
         if let Some(w) = weak_update.upgrade() {
-            let slint_attachments: Vec<PendingAttachmentData> = attachments
-                .iter()
-                .map(pending_attachment_to_slint)
-                .collect();
-
-            let model = ModelRc::new(VecModel::from(slint_attachments));
-            w.set_pending_attachments(model);
-
-            // Update placeholder text
-            let pending_count = attachments.len();
-            let placeholder = if pending_count == 0 {
-                "Type a message...".to_string()
-            } else if pending_count == 1 {
-                "1 file attached - type a message...".to_string()
-            } else {
-                format!("{} files attached - type a message...", pending_count)
-            };
-            w.set_composer_placeholder(placeholder.into());
+            render_attachments(&w, &attachments);
         }
     });
+}
+
+/// Show `attachments` in the composer's tray.
+pub(crate) fn render_attachments(w: &MainWindow, attachments: &[chatter_core::state::PendingAttachment]) {
+    let slint_attachments: Vec<PendingAttachmentData> = attachments
+        .iter()
+        .map(pending_attachment_to_slint)
+        .collect();
+
+    let model = ModelRc::new(VecModel::from(slint_attachments));
+    w.set_pending_attachments(model);
+
+    // Update placeholder text
+    let pending_count = attachments.len();
+    let placeholder = if pending_count == 0 {
+        "Type a message...".to_string()
+    } else if pending_count == 1 {
+        "1 file attached - type a message...".to_string()
+    } else {
+        format!("{} files attached - type a message...", pending_count)
+    };
+    w.set_composer_placeholder(placeholder.into());
 }
 
 pub(crate) fn wire_attachment_clicked(

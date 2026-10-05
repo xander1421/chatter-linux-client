@@ -3,11 +3,12 @@
 //! Handles message composer actions (attach, emoji, gif, mentions, drag/drop).
 
 mod attachments;
+pub(crate) use attachments::render_attachments;
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 mod drag_drop;
 mod emoji;
 mod format_text;
-mod gif;
+pub mod gif;
 mod mentions;
 mod voice;
 
@@ -55,6 +56,11 @@ fn wire_per_conversation_drafts(window: &MainWindow, ui_ctx: &Arc<ChatterClient>
         d.active_channel_id.map(|id| id.to_string()).unwrap_or_default()
     };
     let mut current = key(&ui_ctx.chat_state().get());
+    // The composer starts out holding `current`'s draft.
+    let draft = ui_ctx.swap_composer_draft("", String::new(), &current);
+    if !draft.is_empty() {
+        window.set_composer_text(draft.into());
+    }
     let mut rx = ui_ctx.chat_state().subscribe();
     let weak = slint::ComponentHandle::as_weak(window);
     let ctx = ui_ctx.clone();
@@ -74,15 +80,34 @@ fn wire_per_conversation_drafts(window: &MainWindow, ui_ctx: &Arc<ChatterClient>
             let weak = weak.clone();
             let _ = slint::invoke_from_event_loop(move || {
                 if let Some(w) = weak.upgrade() {
-                    w.set_composer_emoji_picker_visible(false);
-                    w.set_composer_gif_picker_visible(false);
-                    // Left mid-edit: the edit is cancelled and the draft it
-                    // held aside is what gets parked, not the edit text.
-                    crate::bin_ui::features::chat::edit::end_edit(&w);
-                    let text = w.get_composer_text().to_string();
-                    w.set_composer_text(ctx.swap_composer_draft(&leaving, text, &entering).into());
+                    switch_composer_draft(&w, &ctx, &leaving, &entering);
                 }
             });
         }
     });
+}
+
+/// Park the composer under `leaving` and load `entering`'s draft.
+pub fn switch_composer_draft(w: &MainWindow, ctx: &ChatterClient, leaving: &str, entering: &str) {
+    w.set_composer_emoji_picker_visible(false);
+    w.set_composer_gif_picker_visible(false);
+    // The send status line belongs to the conversation being left.
+    w.set_composer_send_status("".into());
+    // A word the input method is still composing belongs to the conversation
+    // being left; fold it in and end the composition before the text moves.
+    // The settle reads a mirror kept by `changed` handlers. Slint runs those
+    // at the end of every key/IME event it processes; run any still pending
+    // in case the mirrored state changed some other way since.
+    i_slint_core::properties::ChangeTracker::run_change_handlers();
+    w.invoke_settle_composer();
+    // Left mid-edit: the edit is cancelled and the draft it
+    // held aside is what gets parked, not the edit text.
+    crate::bin_ui::features::chat::edit::end_edit(w);
+    let text = w.get_composer_text().to_string();
+    w.set_composer_text(ctx.swap_composer_draft(leaving, text, entering).into());
+    // A GIF send that failed while this conversation was not open.
+    let empty = crate::bin_ui::features::chat::send_message::composer_is_empty(w);
+    if let Some(send) = ctx.take_parked_send(empty) {
+        crate::bin_ui::features::chat::send_message::restore_composer(w, ctx, send);
+    }
 }

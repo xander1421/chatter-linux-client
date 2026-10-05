@@ -5101,3 +5101,495 @@ fn call_banners_use_connection_state_instead_of_roster_or_duration() {
             "connected zero-second call must show its clock (fullscreen={fullscreen})");
     }
 }
+
+// ── Composer IME composition across conversation switches ─────────────────
+
+/// The persistent no-keyring marker beside the database a client in `dir`
+/// will open, written before it is built: the opt-out holds even without the
+/// environment overrides.
+fn headless_dir(dir: &std::path::Path) {
+    let db = chatter_core::system::Directories::with_base_dir(dir.to_path_buf())
+        .expect("test directories")
+        .database_path();
+    std::fs::write(db.parent().unwrap().join(chatter_core::system::keyring::NO_KEYRING_MARKER), b"")
+        .expect("write no-keyring marker");
+}
+
+/// A real chat window with a client for the draft store, the composer focused
+/// by a click and holding `typed` with the caret `left` characters from the end.
+fn composer_with_caret(typed: &str, left: usize) -> (
+    tempfile::TempDir,
+    std::sync::Arc<chatter_core::client::ChatterClient>,
+    MainWindow,
+) {
+    use slint::ComponentHandle;
+    no_keyring();
+    let _guard = test_rt().enter();
+    let tmp = tempfile::tempdir().unwrap();
+    headless_dir(tmp.path());
+    let w = boot();
+    let client = chatter_core::client::ChatterClient::builder()
+        .data_dir(tmp.path().to_string_lossy().to_string())
+        .build()
+        .expect("offline ChatterClient::build");
+    chatter_ui::bin_ui::features::composer::wire_text_format(&w);
+    w.set_current_view("main".into());
+    w.set_channel_name("A".into());
+    w.window().set_size(slint::LogicalSize::new(1000.0, 800.0));
+    let input = testing::ElementHandle::find_by_accessible_label(&w, "Message input")
+        .next()
+        .expect("the composer's text input is not in the tree");
+    let at = input.absolute_position();
+    let size = input.size();
+    let position = slint::LogicalPosition::new(at.x + size.width / 2.0, at.y + size.height / 2.0);
+    let button = slint::platform::PointerEventButton::Left;
+    w.window().dispatch_event(slint::platform::WindowEvent::PointerPressed { position, button });
+    w.window().dispatch_event(slint::platform::WindowEvent::PointerReleased { position, button });
+    for ch in typed.chars() {
+        w.window().dispatch_event(slint::platform::WindowEvent::KeyPressed { text: ch.to_string().into() });
+    }
+    for _ in 0..left {
+        w.window().dispatch_event(slint::platform::WindowEvent::KeyPressed {
+            text: slint::platform::Key::LeftArrow.into(),
+        });
+    }
+    assert_eq!(w.get_composer_text().as_str(), typed, "precondition: the composer took the keys");
+    (tmp, client, w)
+}
+
+/// What an input method sends: a composition (`commit: false`) or its commit.
+fn ime(w: &MainWindow, text: &str, commit: bool) {
+    ime_unpumped(w, text, commit);
+    // Between two input events the loop runs change handlers; the mirror the
+    // settle reads is one of them.
+    slint::platform::update_timers_and_animations();
+}
+
+/// The event alone, with no loop iteration after it.
+fn ime_unpumped(w: &MainWindow, text: &str, commit: bool) {
+    use i_slint_core::input::{InternalKeyEvent, KeyEventType};
+    use slint::ComponentHandle;
+    let mut event = InternalKeyEvent::default();
+    if commit {
+        event.event_type = KeyEventType::CommitComposition;
+        event.key_event.text = text.into();
+    } else {
+        event.event_type = KeyEventType::UpdateComposition;
+        event.preedit_text = text.into();
+    }
+    i_slint_core::window::WindowInner::from_pub(w.window()).process_key_input(event);
+}
+
+/// Switching conversation mid-composition parked the draft WITHOUT the word
+/// being composed (`TextInput.text` excludes it), and the input method later
+/// committed that word into the conversation switched TO. The word is spliced
+/// in at the caret's byte offset — multi-byte text before it — and the draft
+/// parked under the conversation it was typed in.
+#[test]
+fn switching_conversation_mid_composition_keeps_the_word_in_its_own_draft() {
+    let (_tmp, client, w) = composer_with_caret("hélo", 1);
+    ime(&w, "ö", false);
+    assert_eq!(w.get_composer_text().as_str(), "hélo", "precondition: the preedit is not text yet");
+
+    chatter_ui::bin_ui::features::composer::switch_composer_draft(&w, &client, "A", "B");
+    assert_eq!(w.get_composer_text().as_str(), "", "B starts empty");
+
+    // The input method finishes the word it was composing. The composition
+    // was ended with the switch, so this must land nowhere — above all not
+    // in B's draft.
+    ime(&w, "ö", true);
+    assert_eq!(w.get_composer_text().as_str(), "", "the old composition was committed into B");
+
+    chatter_ui::bin_ui::features::composer::switch_composer_draft(&w, &client, "B", "A");
+    assert_eq!(
+        w.get_composer_text().as_str(),
+        "hélöo",
+        "A's draft must hold the composed word at the caret, exactly once"
+    );
+}
+
+/// No composition: a switch takes no focus and parks the text as typed.
+#[test]
+fn switching_conversation_without_a_composition_leaves_focus_alone() {
+    let (_tmp, client, w) = composer_with_caret("hi", 0);
+    chatter_ui::bin_ui::features::composer::switch_composer_draft(&w, &client, "A", "B");
+    {
+        use slint::ComponentHandle;
+        w.window().dispatch_event(slint::platform::WindowEvent::KeyPressed { text: "x".into() });
+    }
+    assert_eq!(w.get_composer_text().as_str(), "x", "the composer lost focus on a plain switch");
+    chatter_ui::bin_ui::features::composer::switch_composer_draft(&w, &client, "B", "A");
+    assert_eq!(w.get_composer_text().as_str(), "hi");
+}
+
+/// The chat pane is an `if`: leaving it (a fullscreen call, a phone's Back)
+/// destroys the focused TextInput, and Slint sends a dying item no FocusOut,
+/// so its preedit vanished. The remounted layout settles what its
+/// predecessor was composing into the same conversation's text.
+#[test]
+fn a_composition_survives_the_chat_pane_being_destroyed() {
+    let (_tmp, _client, w) = composer_with_caret("ab", 1);
+    ime(&w, "X", false);
+    w.set_active_call_fullscreen(true);
+    assert!(
+        testing::ElementHandle::find_by_accessible_label(&w, "Message input").next().is_none(),
+        "precondition: a fullscreen call unmounts the chat pane"
+    );
+    w.set_active_call_fullscreen(false);
+    assert!(testing::ElementHandle::find_by_accessible_label(&w, "Message input").next().is_some());
+    assert_eq!(w.get_composer_text().as_str(), "aXb", "the composition died with the pane");
+    // Settled once: another remount must not insert it again.
+    w.set_active_call_fullscreen(true);
+    testing::ElementHandle::find_by_accessible_label(&w, "Message input").next();
+    w.set_active_call_fullscreen(false);
+    testing::ElementHandle::find_by_accessible_label(&w, "Message input").next();
+    assert_eq!(w.get_composer_text().as_str(), "aXb");
+}
+
+// ── GIF send bound to the conversation and composer it was picked in ──────
+
+struct GifHarness {
+    _tmp: tempfile::TempDir,
+    client: std::sync::Arc<chatter_core::client::ChatterClient>,
+    w: MainWindow,
+    a: chatter_core::domain::ids::ChannelId,
+    b: chatter_core::domain::ids::ChannelId,
+}
+
+impl GifHarness {
+    fn new() -> Self {
+        no_keyring();
+        let _guard = test_rt().enter();
+        let tmp = tempfile::tempdir().unwrap();
+        headless_dir(tmp.path());
+        let w = boot();
+        let client = chatter_core::client::ChatterClient::builder()
+            .data_dir(tmp.path().to_string_lossy().to_string())
+            .build()
+            .expect("offline ChatterClient::build");
+        chatter_ui::bin_ui::features::composer::wire_text_format(&w);
+        let h = Self {
+            _tmp: tmp,
+            client,
+            w,
+            a: chatter_core::domain::ids::ChannelId::new(),
+            b: chatter_core::domain::ids::ChannelId::new(),
+        };
+        h.client.chat_state().set_active_conversation(chatter_core::state::ActiveConversation::Channel(h.a));
+        chatter_ui::bin_ui::features::composer::switch_composer_draft(&h.w, &h.client, "", &h.a.to_string());
+        h
+    }
+
+    /// Navigate the way the app does: core state first, then the draft swap.
+    fn open(&self, to: chatter_core::domain::ids::ChannelId) {
+        let from = match self.client.chat_state().active_conversation() {
+            chatter_core::state::ActiveConversation::Channel(id) => id,
+            _ => unreachable!(),
+        };
+        self.client.chat_state().set_active_conversation(chatter_core::state::ActiveConversation::Channel(to));
+        chatter_ui::bin_ui::features::composer::switch_composer_draft(
+            &self.w,
+            &self.client,
+            &from.to_string(),
+            &to.to_string(),
+        );
+    }
+
+    fn stage(&self, name: &str) {
+        self.client.chat_state().add_pending_attachment(chatter_core::state::PendingAttachment::new(
+            chatter_core::domain::ids::AttachmentId::new(),
+            name.into(),
+            Default::default(),
+            1,
+            "image/png".into(),
+        ));
+    }
+
+    fn staged(&self) -> Vec<String> {
+        self.client.chat_state().get_pending_attachments().into_iter().map(|a| a.filename).collect()
+    }
+
+    /// Pick a GIF now; its upload resolves when the returned sender fires.
+    fn pick(
+        &self,
+    ) -> (
+        tokio::sync::oneshot::Sender<Result<chatter_core::state::PendingAttachment, String>>,
+        tokio::task::JoinHandle<Option<chatter_core::client::ComposerSend>>,
+    ) {
+        use slint::ComponentHandle;
+        let send = chatter_ui::bin_ui::features::composer::gif::begin_gif_send(&self.w, &self.client)
+            .expect("a GIF can be sent to channel A");
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        let upload = async move { rx.await.unwrap() };
+        let task = test_rt().spawn(chatter_ui::bin_ui::features::composer::gif::finish_gif_send(
+            self.w.as_weak(),
+            self.client.clone(),
+            send,
+            upload,
+        ));
+        (tx, task)
+    }
+
+    /// The upload resolves; the completion lands on the UI thread.
+    fn complete(
+        &self,
+        tx: tokio::sync::oneshot::Sender<Result<chatter_core::state::PendingAttachment, String>>,
+        task: tokio::task::JoinHandle<Option<chatter_core::client::ComposerSend>>,
+        upload: Result<chatter_core::state::PendingAttachment, String>,
+    ) {
+        tx.send(upload).unwrap();
+        // Offline and signed out, core cannot send: every completion here is
+        // the failure path, which is the one that must not touch live state.
+        let failed = test_rt().block_on(task).unwrap().expect("an offline send cannot succeed");
+        chatter_ui::bin_ui::features::composer::gif::recover_gif_send(&self.w, &self.client, failed);
+    }
+}
+
+fn gif_attachment() -> chatter_core::state::PendingAttachment {
+    chatter_core::state::PendingAttachment::new(
+        chatter_core::domain::ids::AttachmentId::new(),
+        "picked.gif".into(),
+        Default::default(),
+        1,
+        "image/gif".into(),
+    )
+}
+
+/// The GIF send took the caption, the reply and the staged file at the pick
+/// and cleared them, as Send does.
+#[test]
+fn picking_a_gif_freezes_the_composer_into_its_send() {
+    let h = GifHarness::new();
+    h.w.set_composer_text("caption".into());
+    h.w.set_composer_is_replying(true);
+    h.w.set_composer_reply_to_sender(uuid::Uuid::new_v4().to_string().into());
+    h.w.set_composer_reply_to_timestamp("1700000000000".into());
+    h.stage("cat.png");
+
+    let send = chatter_ui::bin_ui::features::composer::gif::begin_gif_send(&h.w, &h.client).unwrap();
+    assert_eq!(send.conversation, chatter_core::state::ActiveConversation::Channel(h.a));
+    assert_eq!(send.text, "caption");
+    assert!(send.reply.is_some());
+    assert_eq!(send.attachments.len(), 1);
+    assert_eq!(h.w.get_composer_text().as_str(), "");
+    assert!(!h.w.get_composer_is_replying());
+    assert!(h.staged().is_empty());
+}
+
+/// The download finishes after the user moved to B and started a message
+/// there: B's draft and B's staged file are not consumed, nothing is written
+/// into B, and A gets its caption back when it is opened again.
+#[test]
+fn a_gif_completing_after_navigation_never_touches_the_other_chat() {
+    let h = GifHarness::new();
+    h.w.set_composer_text("for A".into());
+    h.stage("a.png");
+    let (tx, task) = h.pick();
+
+    h.w.set_composer_send_status("Sending 2 attachments…".into());
+    h.open(h.b);
+    assert_eq!(h.w.get_composer_send_status().as_str(), "", "A's send status followed the user into B");
+    h.w.set_composer_text("for B".into());
+    h.stage("b.png");
+
+    h.complete(tx, task, Ok(gif_attachment()));
+    assert_eq!(h.w.get_composer_text().as_str(), "for B", "B's draft was consumed or overwritten");
+    assert_eq!(h.staged(), ["b.png"], "B's staged file was consumed, or A's landed in B");
+
+    h.w.set_composer_text("".into());
+    h.client.chat_state().clear_pending_attachments();
+    h.open(h.a);
+    assert_eq!(h.w.get_composer_text().as_str(), "for A");
+    assert_eq!(h.staged(), ["a.png", "picked.gif"], "A's send came back without its files");
+}
+
+/// A newer draft in the same chat is not written over: the failed send is
+/// kept, and comes back only once that composer is empty again.
+#[test]
+fn a_failed_gif_never_overwrites_a_newer_draft_in_its_chat() {
+    let h = GifHarness::new();
+    h.w.set_composer_text("caption".into());
+    let (tx, task) = h.pick();
+    h.w.set_composer_text("newer".into());
+
+    h.complete(tx, task, Err("download failed".into()));
+    assert_eq!(h.w.get_composer_text().as_str(), "newer");
+    assert!(h.staged().is_empty(), "a failed download staged nothing");
+
+    // Composer emptied, chat left and re-entered: now there is room.
+    h.w.set_composer_text("".into());
+    h.open(h.b);
+    h.open(h.a);
+    assert_eq!(h.w.get_composer_text().as_str(), "caption");
+}
+
+/// Failing while its own composer is still empty puts it straight back.
+#[test]
+fn a_failed_gif_in_an_untouched_composer_is_restored_at_once() {
+    let h = GifHarness::new();
+    h.w.set_composer_text("caption".into());
+    let (tx, task) = h.pick();
+    h.complete(tx, task, Err("download failed".into()));
+    assert_eq!(h.w.get_composer_text().as_str(), "caption");
+}
+
+/// Where a GIF cannot go, picking one consumes nothing.
+#[test]
+fn a_gif_with_nowhere_to_go_consumes_nothing() {
+    let h = GifHarness::new();
+    h.client.chat_state().set_active_conversation(chatter_core::state::ActiveConversation::None);
+    h.w.set_composer_text("keep".into());
+    h.stage("keep.png");
+    assert!(chatter_ui::bin_ui::features::composer::gif::begin_gif_send(&h.w, &h.client).is_none());
+    assert_eq!(h.w.get_composer_text().as_str(), "keep");
+    assert_eq!(h.staged(), ["keep.png"]);
+}
+
+/// B open with an EMPTY composer when A's GIF fails: still not B's to have.
+#[test]
+fn a_gif_failing_while_another_empty_chat_is_open_waits_for_its_own() {
+    let h = GifHarness::new();
+    h.w.set_composer_text("for A".into());
+    let (tx, task) = h.pick();
+    h.open(h.b);
+    h.complete(tx, task, Err("download failed".into()));
+    assert_eq!(h.w.get_composer_text().as_str(), "", "A's caption was restored into B");
+    assert!(h.staged().is_empty());
+    h.open(h.a);
+    assert_eq!(h.w.get_composer_text().as_str(), "for A");
+}
+
+/// A recording started after the pick (the composer looked empty) would send
+/// whatever is staged with the voice note: a failed GIF is kept, not restored
+/// behind the recording panel.
+#[test]
+fn a_failed_gif_is_not_restored_under_a_voice_recording() {
+    use slint::ComponentHandle;
+    let h = GifHarness::new();
+    h.w.set_composer_text("caption".into());
+    h.stage("a.png");
+    let (tx, task) = h.pick();
+    h.w.global::<chatter_ui::VoiceRecording>().set_active(true);
+    h.complete(tx, task, Err("download failed".into()));
+    assert_eq!(h.w.get_composer_text().as_str(), "");
+    assert!(h.staged().is_empty(), "A's file was staged under the recording");
+    h.w.global::<chatter_ui::VoiceRecording>().set_active(false);
+    h.open(h.b);
+    h.open(h.a);
+    assert_eq!(h.w.get_composer_text().as_str(), "caption");
+    assert_eq!(h.staged(), ["a.png"]);
+}
+
+/// The IME update and the switch in ONE loop iteration: no change-handler
+/// pass between them to refresh the mirror the settle reads.
+#[test]
+fn a_composition_updated_in_the_same_iteration_as_the_switch_is_kept() {
+    let (_tmp, client, w) = composer_with_caret("ab", 1);
+    ime(&w, "x", false);
+    ime_unpumped(&w, "xy", false);
+    chatter_ui::bin_ui::features::composer::switch_composer_draft(&w, &client, "A", "B");
+    ime(&w, "xy", true);
+    assert_eq!(w.get_composer_text().as_str(), "", "the composition leaked into B");
+    chatter_ui::bin_ui::features::composer::switch_composer_draft(&w, &client, "B", "A");
+    assert_eq!(w.get_composer_text().as_str(), "axyb", "a stale mirror parked the old composition");
+}
+
+/// An input method replacing existing text with a composition (recomposing a
+/// word, or composing over a selection) sends a replacement range relative to
+/// the caret, which deletes those bytes; the word then sits where they were.
+#[test]
+fn a_composition_replacing_text_lands_at_the_right_bytes() {
+    use i_slint_core::input::{InternalKeyEvent, KeyEventType};
+    use slint::ComponentHandle;
+    // Caret after "hé" (byte 3, "é" is two bytes); the range covers "ll".
+    let (_tmp, client, w) = composer_with_caret("héllo", 3);
+    let mut event = InternalKeyEvent::default();
+    event.event_type = KeyEventType::UpdateComposition;
+    event.preedit_text = "ß".into();
+    event.replacement_range = Some(0..2);
+    i_slint_core::window::WindowInner::from_pub(w.window()).process_key_input(event);
+    assert_eq!(w.get_composer_text().as_str(), "héo", "precondition: the range deleted the replaced bytes");
+    chatter_ui::bin_ui::features::composer::switch_composer_draft(&w, &client, "A", "B");
+    chatter_ui::bin_ui::features::composer::switch_composer_draft(&w, &client, "B", "A");
+    assert_eq!(w.get_composer_text().as_str(), "héßo");
+}
+
+/// The very first composition, switched away from before any loop
+/// iteration: the mirror has never been set at all.
+#[test]
+fn a_first_composition_switched_away_unpumped_is_kept() {
+    let (_tmp, client, w) = composer_with_caret("ab", 1);
+    ime_unpumped(&w, "x", false);
+    chatter_ui::bin_ui::features::composer::switch_composer_draft(&w, &client, "A", "B");
+    ime(&w, "x", true);
+    assert_eq!(w.get_composer_text().as_str(), "", "the composition leaked into B");
+    chatter_ui::bin_ui::features::composer::switch_composer_draft(&w, &client, "B", "A");
+    assert_eq!(w.get_composer_text().as_str(), "axb");
+}
+
+/// The pane dies mid-composition and, before it is rebuilt, the user opens B,
+/// which has a draft of its own: the word goes to A, B's draft is untouched,
+/// and the rebuilt pane adds nothing.
+#[test]
+fn a_composition_lost_with_the_pane_goes_to_its_own_chat_not_the_next() {
+    let (_tmp, client, w) = composer_with_caret("ab", 1);
+    chatter_ui::bin_ui::features::composer::switch_composer_draft(&w, &client, "A", "B");
+    w.set_composer_text("b draft".into());
+    chatter_ui::bin_ui::features::composer::switch_composer_draft(&w, &client, "B", "A");
+    assert_eq!(w.get_composer_text().as_str(), "ab");
+    ime(&w, "X", false);
+    w.set_active_call_fullscreen(true);
+    assert!(testing::ElementHandle::find_by_accessible_label(&w, "Message input").next().is_none());
+    chatter_ui::bin_ui::features::composer::switch_composer_draft(&w, &client, "A", "B");
+    assert_eq!(w.get_composer_text().as_str(), "b draft");
+    w.set_active_call_fullscreen(false);
+    assert!(testing::ElementHandle::find_by_accessible_label(&w, "Message input").next().is_some());
+    assert_eq!(w.get_composer_text().as_str(), "b draft", "the dead pane's word landed in B");
+    chatter_ui::bin_ui::features::composer::switch_composer_draft(&w, &client, "B", "A");
+    assert_eq!(w.get_composer_text().as_str(), "aXb");
+}
+
+/// Core has moved to B but the draft watcher has not swapped the composer
+/// yet: a GIF picked now would carry A's caption to B. Refused, nothing taken.
+#[test]
+fn a_gif_picked_mid_switch_is_refused() {
+    let h = GifHarness::new();
+    h.w.set_composer_text("for A".into());
+    h.stage("a.png");
+    h.client.chat_state().set_active_conversation(chatter_core::state::ActiveConversation::Channel(h.b));
+    assert!(chatter_ui::bin_ui::features::composer::gif::begin_gif_send(&h.w, &h.client).is_none());
+    assert_eq!(h.w.get_composer_text().as_str(), "for A");
+    assert_eq!(h.staged(), ["a.png"]);
+}
+
+/// The GIF fails just after core moved back to A but before the watcher
+/// swapped the composer, which still shows B: not restored into B (where the
+/// swap would then park it under B), but kept for A.
+#[test]
+fn a_gif_failing_mid_switch_is_not_restored_into_the_old_composer() {
+    let h = GifHarness::new();
+    h.w.set_composer_text("for A".into());
+    let (tx, task) = h.pick();
+    h.open(h.b);
+    h.client.chat_state().set_active_conversation(chatter_core::state::ActiveConversation::Channel(h.a));
+    h.complete(tx, task, Err("download failed".into()));
+    assert_eq!(h.w.get_composer_text().as_str(), "", "A's caption landed in B's composer");
+    chatter_ui::bin_ui::features::composer::switch_composer_draft(&h.w, &h.client, &h.b.to_string(), &h.a.to_string());
+    assert_eq!(h.w.get_composer_text().as_str(), "for A");
+    chatter_ui::bin_ui::features::composer::switch_composer_draft(&h.w, &h.client, &h.a.to_string(), &h.b.to_string());
+    assert_eq!(h.w.get_composer_text().as_str(), "", "A's caption was parked under B");
+}
+
+/// Send while a word is composed mid-line: it goes out where it is drawn,
+/// at the caret, not appended to the end.
+#[test]
+fn sending_mid_composition_sends_the_word_at_the_caret() {
+    use slint::ComponentHandle;
+    let (_tmp, _client, w) = composer_with_caret("ac", 1);
+    let sent = std::rc::Rc::new(std::cell::RefCell::new(None));
+    let sink = sent.clone();
+    w.on_send(move |text| *sink.borrow_mut() = Some(text.to_string()));
+    ime(&w, "b", false);
+    w.window().dispatch_event(slint::platform::WindowEvent::KeyPressed { text: slint::platform::Key::Return.into() });
+    assert_eq!(sent.borrow().as_deref(), Some("abc"));
+}
