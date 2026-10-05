@@ -338,6 +338,9 @@ impl AudioPlayback {
                             continue;
                         }
 
+                        // Concealment can yield silent frames before an E2EE key
+                        // arrives. Time actual audio, rather than that silence.
+                        let audible = first_frame && frame.data.iter().any(|&s| s != 0);
                         // Convert audio frame to f32 samples
                         let samples: Vec<f32> = frame
                             .data
@@ -348,8 +351,8 @@ impl AudioPlayback {
                         // Add to buffer
                         let mut buffer = sample_buffer.write();
                         buffer.extend(samples);
-                        if first_frame {
-                            tracing::info!(participant = %participant_id_clone, "First decoded remote audio queued for playback");
+                        if audible {
+                            tracing::info!(participant = %participant_id_clone, "First non-silent remote audio queued for playback");
                             first_frame = false;
                         }
 
