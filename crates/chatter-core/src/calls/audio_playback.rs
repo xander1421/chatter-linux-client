@@ -326,6 +326,7 @@ impl AudioPlayback {
         let participant_id_clone = participant_id.clone();
         tokio::spawn(async move {
             tracing::debug!("Audio stream receiver started for {}", participant_id_clone);
+            let mut first_frame = true;
 
             while !stop_signal_clone.load(Ordering::Relaxed) {
                 match audio_stream.next().await {
@@ -347,6 +348,10 @@ impl AudioPlayback {
                         // Add to buffer
                         let mut buffer = sample_buffer.write();
                         buffer.extend(samples);
+                        if first_frame {
+                            tracing::info!(participant = %participant_id_clone, "First decoded remote audio queued for playback");
+                            first_frame = false;
+                        }
 
                         // Prevent buffer from growing too large (keep ~500ms of audio)
                         let max_samples = (target_sample_rate as usize) * target_channels / 2;
