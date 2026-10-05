@@ -5017,7 +5017,7 @@ fn video_call_lives_in_the_header_more_menu() {
     // Phone DM, then two-pane channel, private group and anon DM: every header
     // variant keeps Voice call in the row and Video call only behind ⋯.
     for (phone, kind, name, settings_row) in [
-        (true, ConversationKind::ServerDm, "Bob", false),
+        (true, ConversationKind::ServerDm, "Bob", true),
         (false, ConversationKind::Channel, "general", true),
         (false, ConversationKind::AnonGroup, "Group", true),
         (true, ConversationKind::AnonDm, "Anon", false),
