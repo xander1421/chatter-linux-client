@@ -378,7 +378,7 @@ async fn test_login_nonexistent_user_is_indistinguishable() {
 
     let start = chatter_core::crypto::opaque::login_start("any password").unwrap();
     let identifier = chatter_core::crypto::auth_crypto::login_identifier(&unique_username());
-    let started = assert_ok(auth_client.login_start(&identifier, &start.ke1, None, &[]).await);
+    let started = assert_ok(auth_client.login_start(&identifier, &start.ke1, None, &[], &[]).await);
     assert_eq!(started.ke2.len(), 320, "fake KE2 has the real KE2's size");
     assert!(matches!(
         chatter_core::crypto::opaque::login_finish_async(start, "any password", started.ke2).await,
@@ -418,7 +418,7 @@ async fn test_login_priced_by_proof_of_work_not_locked() {
     let mut challenge = None;
     for _ in 0..10 {
         let ke1 = opaque::login_start("wrong guess").unwrap().ke1;
-        let r = assert_ok(auth_client.login_start(&identifier, &ke1, None, &[]).await);
+        let r = assert_ok(auth_client.login_start(&identifier, &ke1, None, &[], &[]).await);
         if let Some(c) = r.pow_challenge {
             assert!(r.ke2.is_empty() && r.login_id.is_empty(), "a challenge carries no KE2");
             challenge = Some(c);
@@ -427,7 +427,7 @@ async fn test_login_priced_by_proof_of_work_not_locked() {
         assert_eq!(r.ke2.len(), 320);
     }
     let challenge = challenge.expect("repeated failures must price the login");
-    assert!(challenge.difficulty >= 16 && challenge.difficulty <= 26, "{}", challenge.difficulty);
+    assert!(challenge.difficulty >= 6 && challenge.difficulty <= 9, "{}", challenge.difficulty);
 
     // A solution for the sign-up puzzle over the same token is not a login
     // solution (unless by chance it is both; skip those).
@@ -439,7 +439,7 @@ async fn test_login_priced_by_proof_of_work_not_locked() {
         })
         .unwrap();
     let ke1 = opaque::login_start("wrong guess").unwrap().ke1;
-    let refused = auth_client.login_start(&identifier, &ke1, Some((&challenge.token, reg)), &[]).await;
+    let refused = auth_client.login_start(&identifier, &ke1, Some((&challenge.token, reg)), &[], &[]).await;
     assert!(
         matches!(&refused, Err(NetworkError::PermissionDenied)),
         "sign-up-domain solution must be refused: {refused:?}"
@@ -448,7 +448,7 @@ async fn test_login_priced_by_proof_of_work_not_locked() {
     // The owner: solved transparently, then a normal login.
     let paid = AtomicU32::new(0);
     let start = opaque::login_start(&user.password).unwrap();
-    let started = login_start_paying_pow(&mut auth_client, &identifier, &start.ke1, None, &|| {
+    let started = login_start_paying_pow(&mut auth_client, &identifier, &start.ke1, None, &mut None, &|| {
         paid.fetch_add(1, Ordering::Relaxed);
     })
     .await
@@ -465,7 +465,7 @@ async fn test_login_priced_by_proof_of_work_not_locked() {
 
     // A verified login wipes the count: the next attempt is free again.
     let ke1 = opaque::login_start(&user.password).unwrap().ke1;
-    let r = assert_ok(auth_client.login_start(&identifier, &ke1, None, &[]).await);
+    let r = assert_ok(auth_client.login_start(&identifier, &ke1, None, &[], &[]).await);
     assert!(r.pow_challenge.is_none());
 }
 
@@ -509,7 +509,7 @@ async fn test_login_guess_ceiling_and_its_bypasses() {
         async move {
             for _ in 0..30 {
                 let ke1 = opaque::login_start("wrong guess").unwrap().ke1;
-                match login_start_paying_pow(&mut stranger, &identifier, &ke1, None, &|| {}).await {
+                match login_start_paying_pow(&mut stranger, &identifier, &ke1, None, &mut None, &|| {}).await {
                     Ok(_) => continue,
                     Err(e) => return e,
                 }
@@ -524,7 +524,7 @@ async fn test_login_guess_ceiling_and_its_bypasses() {
 
     // The owner's password, too, gets no KE2 now...
     let ke1 = opaque::login_start(&user.password).unwrap().ke1;
-    let refused = login_start_paying_pow(&mut stranger, &identifier, &ke1, None, &|| {}).await;
+    let refused = login_start_paying_pow(&mut stranger, &identifier, &ke1, None, &mut None, &|| {}).await;
     assert!(matches!(refused, Err(AuthError::LoginGuessLimit)), "{refused:?}");
     // ...but the signed-in device still proves it (per-device budget).
     assert_ok(device.verify_password(assert_ok(prove(user.password.clone()).await)).await);
@@ -546,7 +546,7 @@ async fn test_login_guess_ceiling_and_its_bypasses() {
     // Burnt again straight after; the grant still gets the owner in.
     assert!(matches!(burn().await, AuthError::LoginGuessLimit));
     let start = opaque::login_start(new_pw).unwrap();
-    let started = login_start_paying_pow(&mut stranger, &identifier, &start.ke1, Some(&finished.login_grant), &|| {})
+    let started = login_start_paying_pow(&mut stranger, &identifier, &start.ke1, Some(&finished.login_grant), &mut None, &|| {})
         .await
         .expect("the recovery grant skips the ceiling");
     let done = opaque::login_finish_async(start, new_pw, started.ke2).await.expect("new password opens KE2");
@@ -555,6 +555,71 @@ async fn test_login_guess_ceiling_and_its_bypasses() {
             .login_finish(&started.login_id, &done.ke3, "d1", &random_svr_public_key(), &random_device_auth_token(), None)
             .await,
     );
+}
+
+/// Trusted-device tokens (server OPEN-ITEMS §134): a device that logged in
+/// before keeps getting in while a stranger holds the account's shared guess
+/// ceiling full; a token the server no longer honours is dropped and the
+/// login goes on without it. Needs a dev server running this change.
+#[tokio::test]
+async fn test_trusted_device_token_outlasts_burnt_ceiling() {
+    use chatter_core::crypto::opaque;
+    use chatter_core::services::auth_service::{login_start_paying_pow, AuthError};
+    skip_if_no_server!();
+
+    let pool = assert_ok(create_test_pool().await);
+    let user = assert_ok(register_test_user(&pool).await);
+    let mut device = AuthClient::new(pool.channel(), pool.auth_clone());
+    let identifier = chatter_core::crypto::auth_crypto::login_identifier(&user.username);
+
+    // A first password login on "this device" hands out a token.
+    let login = |token: Option<Vec<u8>>| {
+        let identifier = identifier.clone();
+        let pw = user.password.clone();
+        let mut device = AuthClient::new(pool.channel(), pool.auth_clone());
+        async move {
+            let mut token = token;
+            let start = opaque::login_start(&pw).unwrap();
+            let started = login_start_paying_pow(&mut device, &identifier, &start.ke1, None, &mut token, &|| {}).await?;
+            let done = opaque::login_finish_async(start, &pw, started.ke2).await.unwrap();
+            let resp = device
+                .login_finish(&started.login_id, &done.ke3, "d1", &random_svr_public_key(), &random_device_auth_token(), None)
+                .await
+                .map_err(AuthError::Network)?;
+            Ok::<_, AuthError>((token, resp.trusted_device_token))
+        }
+    };
+    let (_, token) = login(None).await.expect("first login");
+    assert_eq!(token.len(), 57, "LoginFinish issues a trusted-device token");
+
+    // A stranger fills the shared ceiling, paying for each guess.
+    let mut stranger = AuthClient::new(pool.channel(), pool.auth_clone());
+    let mut burnt = false;
+    for _ in 0..30 {
+        let ke1 = opaque::login_start("wrong guess").unwrap().ke1;
+        if let Err(e) = login_start_paying_pow(&mut stranger, &identifier, &ke1, None, &mut None, &|| {}).await {
+            assert!(matches!(e, AuthError::LoginGuessLimit), "{e:?}");
+            burnt = true;
+            break;
+        }
+    }
+    assert!(burnt, "30 paid guesses and no ceiling");
+    assert!(matches!(login(None).await, Err(AuthError::LoginGuessLimit)), "no token: locked out");
+
+    // With the token the device still gets in, and receives a fresh one.
+    let (kept, fresh) = login(Some(token.clone())).await.expect("token bypasses the shared ceiling");
+    assert_eq!(kept.as_deref(), Some(token.as_slice()), "a valid token is kept");
+    assert_eq!(fresh.len(), 57);
+
+    // A token the server did not issue is dropped (and, the ceiling being
+    // full, the login then fails like any token-less one).
+    let mut forged = fresh.clone();
+    forged[56] ^= 1;
+    let mut dropped = Some(forged);
+    let ke1 = opaque::login_start(&user.password).unwrap().ke1;
+    let r = login_start_paying_pow(&mut device, &identifier, &ke1, None, &mut dropped, &|| {}).await;
+    assert!(dropped.is_none(), "an invalid token is dropped");
+    assert!(matches!(r, Err(AuthError::LoginGuessLimit)), "{r:?}");
 }
 
 /// A LoginFinish is single-use: replaying the same login_id + KE3 fails.
@@ -568,7 +633,7 @@ async fn test_login_finish_replay_rejected() {
 
     let start = chatter_core::crypto::opaque::login_start(&user.password).unwrap();
     let identifier = chatter_core::crypto::auth_crypto::login_identifier(&user.username);
-    let started = assert_ok(auth_client.login_start(&identifier, &start.ke1, None, &[]).await);
+    let started = assert_ok(auth_client.login_start(&identifier, &start.ke1, None, &[], &[]).await);
     let done = chatter_core::crypto::opaque::login_finish_async(start, &user.password, started.ke2)
         .await
         .expect("right password opens KE2");

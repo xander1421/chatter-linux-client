@@ -96,6 +96,7 @@ pub async fn opaque_login(
         &identifier,
         &start.ke1,
         None,
+        &mut None,
         &|| {},
     )
     .await

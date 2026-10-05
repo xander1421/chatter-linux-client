@@ -81,6 +81,17 @@ pub enum AuthError {
 /// (auth.proto `LoginStartResponse`), carried in a FAILED_PRECONDITION.
 const LOGIN_GUESS_LIMIT_TOKEN: &str = "login_guess_limit:";
 
+/// The server's stable token for a trusted-device token it no longer honours
+/// (password changed, recovered, expired), carried in a FAILED_PRECONDITION.
+const DEVICE_TOKEN_INVALID_TOKEN: &str = "device_token_invalid:";
+
+/// How often a solved login challenge is resent when the server says its
+/// verification budget is momentarily spent (RESOURCE_EXHAUSTED "pow_busy:"),
+/// and how long to wait between. The challenge is not consumed by that
+/// refusal, so resending the same solution is all it takes.
+const POW_BUSY_RETRIES: usize = 3;
+const POW_BUSY_BACKOFF: std::time::Duration = std::time::Duration::from_millis(1500);
+
 fn login_start_error(e: NetworkError) -> AuthError {
     match &e {
         NetworkError::InvalidRequest(m) if m.contains(LOGIN_GUESS_LIMIT_TOKEN) => AuthError::LoginGuessLimit,
@@ -114,9 +125,9 @@ pub(crate) async fn prove_password(
 }
 
 /// How long a login proof of work may run. The server keeps the challenge
-/// 3 minutes; the cap difficulty (26 bits) measured mean 1.27 s, p90 2.85 s
-/// on a Galaxy S9 with the ARMv8 SHA2 instructions (server `login_pow.go`
-/// `LoginPoWCapBits`).
+/// 3 minutes; the cap difficulty (9 bits = 512 expected Argon2id
+/// evaluations) is ESTIMATED at mean ~5 s, p90 ~12 s on a Galaxy S9 (server
+/// `login_pow.go` `LoginPoWCapBits`; not measured on the device).
 const LOGIN_POW_DEADLINE: std::time::Duration = std::time::Duration::from_secs(150);
 
 /// Most proofs of work one login pays. The server can ask twice: under onion
@@ -128,10 +139,10 @@ const LOGIN_POW_ROUNDS: usize = 3;
 
 /// OPAQUE LoginStart, paying the server's price when it names one (server
 /// OPEN-ITEMS §133, §134). A `pow_challenge` instead of a KE2 is solved off
-/// the async runtime (every core, [`pow::solve_async`]) and the call repeated
-/// with the token and solution, up to [`LOGIN_POW_ROUNDS`] times.
-/// `on_verifying` fires before the first solve so the caller can show that
-/// the login is working, not stuck.
+/// the async runtime ([`pow::solve_async`]) and the call repeated with the
+/// token and solution, up to [`LOGIN_POW_ROUNDS`] times. `on_verifying` fires
+/// before the first solve so the caller can show that the login is working,
+/// not stuck.
 ///
 /// [`pow::solve_async`]: crate::crypto::pow::solve_async
 ///
@@ -139,16 +150,25 @@ const LOGIN_POW_ROUNDS: usize = 3;
 /// price and the account's guess ceiling. A refused grant (expired, already
 /// used) falls back to an ordinary attempt. The ceiling itself surfaces as
 /// [`AuthError::LoginGuessLimit`].
+///
+/// `device_token` is this device's trusted-device token for `identifier`
+/// (from its last login or registration): with it the server meters this
+/// device on its own budget instead of the account's shared price and
+/// ceiling, so a stranger burning the ceiling cannot keep it out. A token the
+/// server no longer honours (password changed or recovered, expired) is set
+/// to `None` here — the caller deletes its stored copy — and the login goes
+/// on without it.
 pub async fn login_start_paying_pow(
     auth_client: &mut AuthClient,
     identifier: &str,
     ke1: &[u8],
     login_grant: Option<&[u8]>,
+    device_token: &mut Option<Vec<u8>>,
     on_verifying: &(dyn Fn() + Send + Sync),
 ) -> Result<crate::proto::chat_v1::LoginStartResponse, AuthError> {
     use crate::crypto::pow;
     if let Some(grant) = login_grant {
-        match auth_client.login_start(identifier, ke1, None, grant).await {
+        match auth_client.login_start(identifier, ke1, None, grant, &[]).await {
             Ok(r) => return Ok(r),
             Err(NetworkError::PermissionDenied) => {
                 tracing::warn!("recovery login grant refused; logging in without it");
@@ -156,7 +176,7 @@ pub async fn login_start_paying_pow(
             Err(e) => return Err(login_start_error(e)),
         }
     }
-    let mut response = auth_client.login_start(identifier, ke1, None, &[]).await.map_err(login_start_error)?;
+    let mut response = login_start_once(auth_client, identifier, ke1, None, device_token).await?;
     let started = std::time::Instant::now();
     for round in 0..LOGIN_POW_ROUNDS {
         let Some(challenge) = response.pow_challenge.take() else {
@@ -178,10 +198,17 @@ pub async fn login_start_paying_pow(
             solve_ms = solve_started.elapsed().as_millis() as u64,
             "login proof of work solved"
         );
-        response = auth_client
-            .login_start(identifier, ke1, Some((&challenge.token, solution)), &[])
-            .await
-            .map_err(login_start_error)?;
+        let mut busy = 0;
+        response = loop {
+            match login_start_once(auth_client, identifier, ke1, Some((&challenge.token, solution)), device_token).await {
+                Err(AuthError::Network(NetworkError::RateLimited)) if busy < POW_BUSY_RETRIES => {
+                    busy += 1;
+                    tracing::info!(attempt = busy, "server busy verifying proof of work; resending");
+                    tokio::time::sleep(POW_BUSY_BACKOFF).await;
+                }
+                other => break other?,
+            }
+        };
     }
     if response.pow_challenge.is_some() {
         return Err(AuthError::LoginFailed(
@@ -189,6 +216,28 @@ pub async fn login_start_paying_pow(
         ));
     }
     Ok(response)
+}
+
+/// One LoginStart presenting `device_token` if there is one. A token the
+/// server refuses as `device_token_invalid:` is dropped (set to `None`) and
+/// the same request sent again without it.
+async fn login_start_once(
+    auth_client: &mut AuthClient,
+    identifier: &str,
+    ke1: &[u8],
+    pow: Option<(&[u8], u64)>,
+    device_token: &mut Option<Vec<u8>>,
+) -> Result<crate::proto::chat_v1::LoginStartResponse, AuthError> {
+    if let Some(tok) = device_token.as_deref() {
+        match auth_client.login_start(identifier, ke1, pow, &[], tok).await {
+            Err(NetworkError::InvalidRequest(m)) if m.contains(DEVICE_TOKEN_INVALID_TOKEN) => {
+                tracing::warn!("trusted device token no longer valid; logging in without it");
+                *device_token = None;
+            }
+            other => return other.map_err(login_start_error),
+        }
+    }
+    auth_client.login_start(identifier, ke1, pow, &[], &[]).await.map_err(login_start_error)
 }
 
 impl AuthError {
@@ -582,14 +631,27 @@ impl AuthService {
                 }
             }
         };
+        // This device's trusted-device token for the account, if it has
+        // logged in (or registered) here before. Unreadable = none: the login
+        // then goes through the shared ceiling, which is what it would do
+        // without a token anyway.
+        let token_key = keys::trusted_device_token_key(&identifier);
+        let stored_token = self.settings_repo.get_bytes(&token_key).ok().flatten();
+        let mut device_token = stored_token.clone();
         let started = login_start_paying_pow(
             auth_client,
             &identifier,
             &opaque_start.ke1,
             grant.as_deref(),
+            &mut device_token,
             on_verifying,
         )
-        .await?;
+        .await;
+        if stored_token.is_some() && device_token.is_none() {
+            // Revoked by the server (password changed, recovered, expired).
+            let _ = self.settings_repo.delete(&token_key);
+        }
+        let started = started?;
         let opaque_done = opaque::login_finish_async(opaque_start, password, started.ke2).await?;
         let response = auth_client
             .login_finish(
@@ -607,6 +669,12 @@ impl AuthService {
             })?;
 
         let identity_public_key = identity_key_pair.as_ref().map(|kp| kp.identity_key().serialize());
+
+        // The fresh trusted-device token for this device's next login. In
+        // the encrypted settings database, like the device auth token.
+        if !response.trusted_device_token.is_empty() {
+            self.settings_repo.set_bytes(&token_key, &response.trusted_device_token)?;
+        }
 
         // Extract session and user profile
         let session = response.session.ok_or_else(|| {
@@ -973,7 +1041,7 @@ impl AuthService {
 
         // Proof of work the server set for this transport (required over the
         // onion service and rising with its load, 0 on clearnet), over the
-        // challenge token. Solved on the blocking pool on every core. Given
+        // challenge token. Solved on the blocking pool. Given
         // up after 4 min: the challenge lives 5 min on the server, and
         // measuring from our own clock (not `expires_at`) keeps a skewed
         // phone clock out of it.
@@ -1135,6 +1203,12 @@ impl AuthService {
         
         // SECURITY: Store auth token in encrypted settings
         self.settings_repo.set_bytes(keys::DEVICE_AUTH_TOKEN, credentials.auth_token().as_bytes())?;
+        // This device created the password: it is trusted for its next login
+        // (server OPEN-ITEMS §134). Encrypted settings, like the auth token.
+        if !result.trusted_device_token.is_empty() {
+            self.settings_repo
+                .set_bytes(&keys::trusted_device_token_key(&username_hash), &result.trusted_device_token)?;
+        }
 
         // Store identity public key for NDSS'21 private friend codes
         // This allows generating friend codes without accessing the SignalStore

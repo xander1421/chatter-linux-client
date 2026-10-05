@@ -299,6 +299,18 @@ const TABLE: &[Entry] = &[
               guesses) cannot log in a new device, while clearnet sign-up \
               (difficulty 0) keeps passing every test.",
     },
+    Entry {
+        symbol: "trusted_device_token_key",
+        defined_in: "chatter-core/src/storage/repositories/settings_repo.rs",
+        expect: Expect::Wired,
+        why: "The trusted-device token's storage key (server OPEN-ITEMS §134), used by \
+              AuthService::login to load the token it presents to LoginStart and to \
+              store the fresh one LoginFinish returns, and by AuthService::register. \
+              Lose the callers and no device ever presents a token: anyone who pays \
+              ~20 puzzles a day keeps the owner out of password login on every \
+              device, which is exactly the lockout lever tokens exist to remove, and \
+              every unit test still passes.",
+    },
     // ---- Anonymous groups: removal -------------------------------------
     Entry {
         symbol: "verify_kick_signature",

@@ -50,7 +50,7 @@ use crate::proto::chat_v1::{
 /// pool.connect().await?;
 ///
 /// let mut auth = AuthClient::new(pool.channel(), pool.auth_clone());
-/// let started = auth.login_start(&identifier, &ke1, None, &[]).await?;
+/// let started = auth.login_start(&identifier, &ke1, None, &[], &[]).await?;
 /// ```
 pub struct AuthClient {
     inner: AuthServiceClient<InterceptedService<GrpcTransport, AuthInterceptor>>,
@@ -118,13 +118,16 @@ impl AuthClient {
     /// OPAQUE login, first round trip: KE1 for the login identifier. The
     /// answer is a KE2, or a `pow_challenge` to repeat the call with: `pow`
     /// is `(challenge token, solution)` for that repeat, `None` first.
-    /// `login_grant` is a recovery's grant (empty for none).
+    /// `login_grant` is a recovery's grant (empty for none);
+    /// `trusted_device_token` is this device's token from its last
+    /// LoginFinish / Register for this identifier (empty for none).
     pub async fn login_start(
         &mut self,
         identifier: &str,
         ke1: &[u8],
         pow: Option<(&[u8], u64)>,
         login_grant: &[u8],
+        trusted_device_token: &[u8],
     ) -> Result<LoginStartResponse, NetworkError> {
         let (pow_token, pow_solution) = pow.map_or((Vec::new(), 0), |(t, s)| (t.to_vec(), s));
         let request = LoginStartRequest {
@@ -133,6 +136,7 @@ impl AuthClient {
             pow_token,
             pow_solution,
             login_grant: login_grant.to_vec(),
+            trusted_device_token: trusted_device_token.to_vec(),
         };
         self.inner
             .login_start(request)

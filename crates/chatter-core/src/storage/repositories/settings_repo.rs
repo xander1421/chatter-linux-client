@@ -38,6 +38,18 @@ pub mod keys {
     pub const CURRENT_DEVICE_ID: &str = "auth.current_device_id";
     /// Device authentication token (32 bytes, base64 encoded)
     pub const DEVICE_AUTH_TOKEN: &str = "auth.device_token";
+    /// Prefix of the per-account trusted-device token (server OPEN-ITEMS
+    /// §134, OWASP "device cookie"): `auth.trusted_device_token.{login
+    /// identifier}`. Kept across logout on purpose — it is what lets this
+    /// device sign back in while strangers burn the account's shared login
+    /// ceiling. In this (SQLCipher) database like every other credential.
+    pub const TRUSTED_DEVICE_TOKEN_PREFIX: &str = "auth.trusted_device_token.";
+
+    /// Settings key of this device's trusted-device token for the login
+    /// identifier `identifier`.
+    pub fn trusted_device_token_key(identifier: &str) -> String {
+        format!("{TRUSTED_DEVICE_TOKEN_PREFIX}{identifier}")
+    }
     /// Current user's plaintext display name
     pub const DISPLAY_NAME: &str = "auth.display_name";
     /// Full Signal-style `nickname.discriminator` chosen at registration.
