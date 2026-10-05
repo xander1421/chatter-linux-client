@@ -2394,7 +2394,7 @@ export component SettingsScreen inherits Rectangle {
                                             if entry.downloading: Rectangle {
                                                 height: 4px;
                                                 border-radius: 2px;
-                                                background: Colors.background;
+                                                background: Colors.surface-hover;
                                                 Rectangle {
                                                     x: 0;
                                                     width: parent.width * entry.progress;
@@ -2893,7 +2893,9 @@ export component SettingsScreen inherits Rectangle {
                         ]: Button {
                             text: item.label;
                             height: Spacing.touch-target-min;
-                            variant: root.active-section == item.id ? "primary" : "ghost";
+                            // Selected tab = the neutral raised pill every other tab bar uses
+                            // (bottom nav, Calls, Contacts); teal fill is for actions.
+                            variant: root.active-section == item.id ? "secondary" : "ghost";
                             clicked => { root.active-section = item.id; }
                         }
                     }
