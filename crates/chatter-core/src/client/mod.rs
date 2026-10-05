@@ -2358,7 +2358,7 @@ impl ChatterClient {
                             let Ok(slot) = Arc::clone(&key_slots).try_acquire_owned() else {
                                 // Dropped, so resync: whatever it was, a
                                 // fresh rotation covers it.
-                                tracing::warn!(%sender_id, ?signal, "Group call signal dropped: handling saturated; resyncing the key");
+                                tracing::warn!(%sender_id, "Group call signal dropped: handling saturated; resyncing the key");
                                 client.resync_group_call_key();
                                 continue;
                             };

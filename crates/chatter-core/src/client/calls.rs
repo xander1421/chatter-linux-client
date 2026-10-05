@@ -914,7 +914,7 @@ impl ChatterClient {
         match membership {
             Ok(true) => {}
             Ok(false) => {
-                tracing::warn!(%sender_id, %channel_id, ?signal, "Group call signal from a non-member; ignored");
+                tracing::warn!(%sender_id, %channel_id, "Group call signal from a non-member; ignored");
                 return false;
             }
             Err(e) => {
