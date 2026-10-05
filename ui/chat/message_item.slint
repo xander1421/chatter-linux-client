@@ -274,19 +274,30 @@ export component MessageItem inherits Rectangle {
                 // call-content carries its own padding; adding more here left
                 // slack that the fixed-size icon did not share.
                 width: call-content.preferred-width;
-                height: call-content.preferred-height;
-                background: root.is-own ? Colors.bubble-own : Colors.bubble-other;
+                height: call-content.preferred-height + Elevation.contact-offset;
+                // Contact-shadow plate; the fill below is contact-offset shorter, so a
+                // crescent of it shows along the bottom edge (same as text bubbles).
+                background: Elevation.contact-shadow;
                 border-top-left-radius: root.is-own ? root.r-round : root.r-outer-top;
                 border-top-right-radius: root.is-own ? root.r-outer-top : root.r-round;
                 border-bottom-left-radius: root.is-own ? root.r-round : root.r-outer-bottom;
                 border-bottom-right-radius: root.is-own ? root.r-outer-bottom : root.r-round;
-                border-width: Elevation.rim-width;
-                border-color: Elevation.raised-rim;
-                drop-shadow-blur: Elevation.raised-blur;
-                drop-shadow-offset-y: Elevation.raised-offset;
-                drop-shadow-color: Elevation.raised-shadow;
+
+                Rectangle {
+                    y: 0;
+                    height: call-content.preferred-height;
+                    background: root.is-own ? Colors.bubble-own : Colors.bubble-other;
+                    border-top-left-radius: parent.border-top-left-radius;
+                    border-top-right-radius: parent.border-top-right-radius;
+                    border-bottom-left-radius: parent.border-bottom-left-radius;
+                    border-bottom-right-radius: parent.border-bottom-right-radius;
+                    border-width: Elevation.rim-width;
+                    border-color: Elevation.raised-rim;
+                }
 
                 call-content := HorizontalLayout {
+                    y: 0;
+                    height: self.preferred-height;
                     padding: Spacing.md;
                     spacing: Spacing.md;
                     alignment: center;
@@ -403,22 +414,33 @@ export component MessageItem inherits Rectangle {
                     // Elevation level 2: the matched own/peer pair, a lit top
                     // rim and a tight contact shadow lift it off the list. AI
                     // replies are peer bubbles marked by the accent bar.
-                    background: bubble-hovered
-                        ? (root.is-own ? Colors.bubble-own-hover : Colors.bubble-other-hover)
-                        : (root.is-own ? Colors.bubble-own : Colors.bubble-other);
+                    // The bubble itself is the contact-shadow plate; its first child is
+                    // the fill, contact-offset shorter, so a crescent of shadow shows
+                    // along the bottom edge. A blurred shadow on a recycled row would be
+                    // re-rendered on every reuse (PERF1); this is one more rounded rect.
+                    background: Elevation.contact-shadow;
                     border-top-left-radius: root.is-own ? root.r-round : root.r-outer-top;
                     border-top-right-radius: root.is-own ? root.r-outer-top : root.r-round;
                     border-bottom-left-radius: root.is-own ? root.r-round : root.r-outer-bottom;
                     border-bottom-right-radius: root.is-own ? root.r-outer-bottom : root.r-round;
-                    border-width: Elevation.rim-width;
-                    border-color: Elevation.raised-rim;
-                    drop-shadow-blur: Elevation.raised-blur;
-                    drop-shadow-offset-y: Elevation.raised-offset;
-                    drop-shadow-color: Elevation.raised-shadow;
 
                     // Calculate height based on content
-                    height: bubble-content.preferred-height;
+                    height: bubble-content.preferred-height + Elevation.contact-offset;
                     width: bubble-content.preferred-width + (root.is-ai ? 4px : 0);
+
+                    Rectangle {
+                        y: 0;
+                        height: bubble-content.preferred-height;
+                        background: bubble-hovered
+                            ? (root.is-own ? Colors.bubble-own-hover : Colors.bubble-other-hover)
+                            : (root.is-own ? Colors.bubble-own : Colors.bubble-other);
+                        border-top-left-radius: parent.border-top-left-radius;
+                        border-top-right-radius: parent.border-top-right-radius;
+                        border-bottom-left-radius: parent.border-bottom-left-radius;
+                        border-bottom-right-radius: parent.border-bottom-right-radius;
+                        border-width: Elevation.rim-width;
+                        border-color: Elevation.raised-rim;
+                    }
 
                     // AI message left accent bar
                     if root.is-ai: Rectangle {
@@ -495,6 +517,8 @@ export component MessageItem inherits Rectangle {
                     }
 
                     bubble-content := VerticalLayout {
+                        y: 0;
+                        height: self.preferred-height;
                         padding: Spacing.sm + Spacing.xxs;
                         padding-left: root.is-ai ? Spacing.sm + Spacing.sm : Spacing.sm + Spacing.xxs;
                         spacing: Spacing.xs;
@@ -1278,9 +1302,6 @@ export component MessageItem inherits Rectangle {
                     border-radius: self.height / 2;
                     border-width: Elevation.rim-width;
                     border-color: Elevation.raised-rim;
-                    drop-shadow-blur: Elevation.raised-blur;
-                    drop-shadow-offset-y: Elevation.raised-offset;
-                    drop-shadow-color: Elevation.raised-shadow;
 
                     x: root.is-own ? -self.width + 8px : bubble.width - 8px;
                     y: bubble.height - 4px;
@@ -1345,9 +1366,6 @@ export component MessageItem inherits Rectangle {
                         border-radius: Spacing.radius-md;
                         border-width: Elevation.rim-width;
                         border-color: Elevation.raised-rim;
-                        drop-shadow-blur: Elevation.raised-blur;
-                        drop-shadow-offset-y: Elevation.raised-offset;
-                        drop-shadow-color: Elevation.raised-shadow;
 
                         HorizontalLayout {
                             padding: Spacing.xxs;

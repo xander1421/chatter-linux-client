@@ -4,8 +4,8 @@
 //   1 card       Colors.surface — settings cards, list cards, call rows' host.
 //                Weak lit rim + a 1px contact shadow.
 //   2 raised     Message bubbles, reaction chips, hover toolbars
-//                (Colors.bubble-*, Colors.surface-raised). Lit rim + a tight
-//                contact shadow, so a bubble reads as a lifted card on the list.
+//                (Colors.bubble-*, Colors.surface-raised). Lit rim + a solid
+//                contact crescent, so a bubble reads as a lifted card.
 //   3 chrome     Floating chrome that content scrolls UNDER: chat header,
 //                composer, tab bar, FAB, selection/pinned bars (GlassSurface
 //                elevation 3). Glass + an ambient shadow + a contact shadow.
@@ -18,8 +18,8 @@
 // further away than the one below it, which is what makes the stacking
 // legible. Shadows exist only with Appearance.glass-effects on: with it off
 // the blur collapses to 0 (nothing is rendered) and the levels are told apart
-// by tint steps and rims alone. Shadow images are cached per item by the
-// renderer, so a static bubble's shadow costs a blit while scrolling.
+// by tint steps and rims alone. Blurred shadows are only for elements that
+// are not recycled by a scrolling list (cards, chrome, popovers, modals).
 import { Appearance } from "appearance.slint";
 
 export global Elevation {
@@ -33,10 +33,12 @@ export global Elevation {
         ? @linear-gradient(180deg, #ffffff12 0%, #ffffff00 35%)
         : @linear-gradient(180deg, #ffffff00 0%, #ffffff00 70%, #1a2c3e0d 100%);
 
-    // Level 2 — bubbles and raised chips.
-    out property <length> raised-blur: shadows ? 4px : 0px;
-    out property <length> raised-offset: shadows ? 1.5px : 0px;
-    out property <color> raised-shadow: Appearance.dark ? #000000a6 : #1a2c3e2e;
+    // Level 2 — bubbles and raised chips. Message rows are recycled while
+    // scrolling, so they never blur (a blurred shadow re-renders on every
+    // reuse): a bubble sits on a solid contact plate that shows as a
+    // crescent `contact-offset` deep along its bottom edge.
+    out property <length> contact-offset: shadows ? 1.5px : 0px;
+    out property <color> contact-shadow: shadows ? (Appearance.dark ? #000000b3 : #1a2c3e33) : transparent;
     out property <brush> raised-rim: Appearance.dark
         ? @linear-gradient(180deg, #ffffff1f 0%, #ffffff08 30%, #ffffff00 60%)
         : @linear-gradient(180deg, #ffffffd9 0%, #ffffff00 35%, #1a2c3e00 65%, #1a2c3e14 100%);

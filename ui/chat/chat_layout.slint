@@ -269,10 +269,10 @@ export component ChatLayout inherits Rectangle {
         // Level-3 chrome floats: on a phone it is inset from the screen edges
         // so its shadow and rim show on all sides and messages visibly pass
         // underneath it (theme/elevation.slint).
-        padding-left: root.mobile ? Spacing.sm : 0px;
+        padding-left: root.mobile ? Spacing.sm : Spacing.none;
         padding-right: self.padding-left;
-        padding-top: root.mobile ? Spacing.xs : 0px;
-        spacing: root.mobile ? Spacing.xs : 0px;
+        padding-top: root.mobile ? Spacing.xs : Spacing.none;
+        spacing: root.mobile ? Spacing.xs : Spacing.none;
         // Header at top (fixed 56px). Hidden during active calls — the call
         // dock already shows channel name/encryption/timer.
         if !root.hide-header: ChatHeader {
@@ -384,7 +384,7 @@ export component ChatLayout inherits Rectangle {
         width: root.width;
         height: self.preferred-height;
         y: root.height - self.height;
-        padding-left: root.mobile ? Spacing.sm : 0px;
+        padding-left: root.mobile ? Spacing.sm : Spacing.none;
         padding-right: self.padding-left;
         // Floating composer — placed directly in VerticalLayout so its
         // explicit height drives the layout slot. A wrapping plain Rectangle

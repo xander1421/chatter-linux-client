@@ -183,7 +183,7 @@ export component IncomingCallModal inherits Rectangle {
                     border-radius: 32px;
                     background: decline-hover.has-hover ? Colors.error-hover : Colors.error;
                     drop-shadow-blur: decline-hover.has-hover ? Elevation.halo-blur-strong : Elevation.halo-blur;
-                    drop-shadow-offset-y: Elevation.raised-offset;
+                    drop-shadow-offset-y: Elevation.popover-contact-offset;
                     drop-shadow-color: Colors.error.with-alpha(0.4);
 
                     decline-hover := TouchArea {
@@ -212,7 +212,7 @@ export component IncomingCallModal inherits Rectangle {
                     border-radius: 32px;
                     background: accept-hover.has-hover ? Colors.success-fill-hover : Colors.success-fill;
                     drop-shadow-blur: accept-hover.has-hover ? Elevation.halo-blur-strong : Elevation.halo-blur;
-                    drop-shadow-offset-y: Elevation.raised-offset;
+                    drop-shadow-offset-y: Elevation.popover-contact-offset;
                     drop-shadow-color: Colors.success-fill.with-alpha(0.4);
 
                     accept-hover := TouchArea {

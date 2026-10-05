@@ -69,21 +69,16 @@ component GlassMaterial inherits Rectangle {
             border-radius: root.border-radius;
             background: Materials.inner-shade;
         }
-        if Appearance.glass-effects: Rectangle {
+        // The one optical edge. Glass effects off: no blur and no shadow, so
+        // a floating level keeps a flat lit/ink hairline instead.
+        if Appearance.glass-effects || root.elevation >= 3: Rectangle {
             x: Materials.glass-edge-width / 2;
             y: self.x;
             width: max(0px, root.width - Materials.glass-edge-width);
             height: max(0px, root.height - Materials.glass-edge-width);
             border-radius: max(0px, root.border-radius - Materials.glass-edge-width / 2);
             border-width: Materials.glass-edge-width;
-            border-color: Materials.glass-edge;
-        }
-        // Glass effects off: no blur, no shadow — the level still reads by its
-        // flat tint step and this one hairline.
-        if !Appearance.glass-effects && root.elevation >= 3: Rectangle {
-            border-radius: root.border-radius;
-            border-width: Elevation.rim-width;
-            border-color: Elevation.flat-rim;
+            border-color: Appearance.glass-effects ? Materials.glass-edge : Elevation.flat-rim;
         }
     }
 }

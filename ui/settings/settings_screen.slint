@@ -971,9 +971,8 @@ export component SettingsScreen inherits Rectangle {
                             Rectangle {
                                 background: Colors.error.with-alpha(0.05);
                                 border-radius: Spacing.radius-lg;
-                                drop-shadow-blur: Elevation.halo-blur;
-                                drop-shadow-offset-y: Elevation.raised-offset;
-                                drop-shadow-color: Colors.error.with-alpha(0.1);
+                                border-width: Elevation.rim-width;
+                                border-color: Elevation.card-rim;
 
                                 VerticalLayout {
                                     padding: Spacing.md;
