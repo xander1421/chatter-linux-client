@@ -14,12 +14,14 @@ use crate::MessageItemData;
 /// label and the avatar initial.
 pub fn row_to_item(row: JarvisRow) -> MessageItemData {
     let ts = chrono::DateTime::from_timestamp_nanos(row.timestamp_ns as i64);
+    let (content, rich_content) = crate::bin_ui::converters::body_fields(&row.content);
     MessageItemData {
         message_id: row.id.into(),
         sender_id: if row.is_own { "me" } else { "jarvis" }.into(),
         sender_initials: row.sender_name.chars().next().unwrap_or('J').to_string().into(),
         sender_name: row.sender_name.into(),
-        content: row.content.into(),
+        content,
+        rich_content,
         timestamp: ts.with_timezone(&chrono::Local).format("%H:%M").to_string().into(),
         timestamp_ns: row.timestamp_ns.to_string().into(),
         is_own: row.is_own,

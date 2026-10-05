@@ -55,13 +55,15 @@ pub fn build_own_message_item(
 ) -> crate::MessageItemData {
     use slint::{ModelRc, VecModel};
 
+    let (content, rich_content) = crate::bin_ui::converters::body_fields(text);
     crate::MessageItemData {
         // See converters::message — selection marking is applied afterwards.
         message_id: message_id.into(),
         sender_id: sender_id.into(),
         sender_name: sender_name.into(),
         sender_initials: chatter_core::ui::initials_from_name(sender_name).into(),
-        content: text.into(),
+        content,
+        rich_content,
         timestamp: timestamp.into(),
         timestamp_ns: timestamp_ns.to_string().into(),
         is_own: true,
@@ -192,4 +194,25 @@ pub(crate) fn remove_messages_where(
             }
         }
     });
+}
+
+#[cfg(test)]
+mod own_echo_tests {
+    use slint::Model;
+
+    /// The sender's own bubble is this echo until the conversation is
+    /// reopened; it set `content` to the raw text and no blocks, so the
+    /// bubble showed `**bold** *italic*` with the markers (S9, 2026-10-05).
+    #[test]
+    fn own_echo_renders_markdown_like_every_other_row() {
+        let row = super::build_own_message_item(
+            "m1", "me", "Me", "**bold** *italic* ~~strike~~ and normal text",
+            "12:00", 1, Vec::new(), false, "", "",
+            slint::Image::default(), false, 0, 0,
+            &chatter_core::client::ReplyParentMedia::default(), "sent",
+        );
+        assert_eq!(row.content, "bold italic strike and normal text");
+        assert_eq!(row.rich_content.row_count(), 1, "one inline run, drawn as one StyledText");
+        assert_eq!(row.rich_content.row_data(0).unwrap().plain, "bold italic strike and normal text");
+    }
 }

@@ -16,7 +16,12 @@ use super::utils::{format_count, reaction_counts_to_entries};
 /// their own), `content` the stripped text used for empty checks, copy and
 /// the plain path. A body with no markdown at all gets no blocks: the bubble
 /// draws `content` in a plain `Text`.
-fn body_fields(raw: &str) -> (slint::SharedString, ModelRc<RichTextBlock>) {
+///
+/// Every path that builds or rewrites a row's body goes through here: history
+/// and live rows (`to_slint_with_user`), edits (`apply_edit`), the sender's
+/// own echo (`features/chat/helpers.rs` `build_own_message_item`) and local
+/// Jarvis rows. A path that set `content` itself drew the raw markers.
+pub fn body_fields(raw: &str) -> (slint::SharedString, ModelRc<RichTextBlock>) {
     let trimmed = raw.trim();
     let blocks = parse_blocks(trimmed);
     let plain = match blocks.as_slice() {
