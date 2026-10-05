@@ -54,9 +54,7 @@ pub fn wire_start_call(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
 /// indistinguishable from a button that does not work, which is what people
 /// reasonably concluded before tapping it again.
 ///
-/// The view already knows how to draw this moment — `is-connecting` in
-/// `active_call_view.slint` keys off "one participant, no elapsed time", which is
-/// exactly the state seeded here, so it says "Calling…" with no new property.
+/// The explicit connection flag keeps this placeholder in "Calling…".
 /// `render_calling_placeholder` overwrites all of it a moment later with the real
 /// call.
 fn show_dialling(weak: &slint::Weak<MainWindow>, call_type: CallType, ui_ctx: &Arc<ChatterClient>) {
@@ -93,6 +91,7 @@ fn show_dialling(weak: &slint::Weak<MainWindow>, call_type: CallType, ui_ctx: &A
         identity_warning: "".into(),
         participant_count: 1,
         duration_seconds: 0,
+        is_connected: false,
         participants: ModelRc::new(VecModel::from(vec![local_participant])),
         verification_emoji_1: "".into(),
         verification_emoji_2: "".into(),
@@ -286,6 +285,7 @@ fn render_calling_placeholder(
         // callee tile does not count, which keeps the view in its ringing state.
         participant_count: 1,
         duration_seconds: 0,
+        is_connected: false,
         participants: ModelRc::new(VecModel::from(participants)),
         verification_emoji_1: e1.into(),
         verification_emoji_2: e2.into(),
@@ -298,14 +298,54 @@ fn render_calling_placeholder(
     w.set_call_is_screen_sharing(false);
     w.set_active_call_visible(true);
 
-    // Channel group calls connect synchronously inside `start_group_call`, so
-    // start the timers now. DM + anon calls are still "pending" at this point
-    // — their timers are started by the `AnonCallConnected` / DM key-exchange
-    // paths when the peer answers.
-    if setup.verification_emojis.is_some() {
-        start_call_timer(&w, ui_ctx.clone());
-        if let Some(frames) = ui_ctx.call_video_frames() {
-            start_video_frame_timer(&w, frames);
-        }
+    // SAS emojis are absent for channel group calls too. Start presentation
+    // polling for every call; fresh core snapshots decide when it is connected.
+    // Pending DM/anon calls stay at zero until their answer is processed.
+    start_call_timer(&w, ui_ctx.clone());
+    if let Some(frames) = ui_ctx.call_video_frames() {
+        start_video_frame_timer(&w, frames);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn call_group_mount_starts_timer_without_verification_emojis() {
+        i_slint_backend_testing::init_no_event_loop();
+        let runtime = super::super::timers::tests::runtime();
+        let _guard = runtime.enter();
+        let dir = tempfile::tempdir().unwrap();
+        let client = ChatterClient::builder()
+            .data_dir(dir.path().to_string_lossy().to_string())
+            .build()
+            .unwrap();
+        let window = MainWindow::new().unwrap();
+        super::super::timers::stop_call_timer();
+        assert!(!super::super::timers::tests::timer_started());
+        let start = OutgoingCallStart {
+            call_id: uuid::Uuid::new_v4().to_string(),
+            channel_id: uuid::Uuid::new_v4().to_string(),
+            is_video: false,
+            is_anonymous: false,
+            verification_emojis: None,
+            title: String::new(),
+            peer: None,
+        };
+        render_calling_placeholder(
+            &window.as_weak(),
+            &client,
+            start,
+            chatter_core::domain::ids::UserId::new(),
+            "Me".into(),
+            "Group".into(),
+        );
+        assert!(window.get_active_call_visible());
+        assert!(
+            super::super::timers::tests::timer_started(),
+            "group calls have no SAS emojis but must still start their timer"
+        );
+        super::super::timers::stop_call_timer();
     }
 }

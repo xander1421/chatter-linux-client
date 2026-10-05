@@ -190,11 +190,9 @@ export component ActiveCallView inherits Rectangle {
     // A new/changed screen share re-arms auto-focus even if the user had dropped
     // back to the grid, so the share always surfaces.
     changed screen-share-index => { user-focus = -2; }
-    // True while dialling a DM/anon peer: the pending path leaves the duration
-    // timer stopped and only the local participant present (group calls start
-    // their timer immediately, so this flips off within the first tick).
-    property <bool> is-connecting: call-data.participant-count <= 1
-        && call-data.duration-seconds == 0;
+    // Connection is explicit: roster size and a zero-second duration also
+    // occur in connected calls.
+    property <bool> is-connecting: !call-data.is-connected;
     // Any live video (camera or screen) in the call? Voice-only calls collapse
     // to a compact dock instead of a tall grid of empty avatar tiles.
     // bounded 6-tile scan, same cap as screen-share-index above.

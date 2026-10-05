@@ -8,7 +8,7 @@ use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use slint::{ComponentHandle, Timer, TimerMode};
+use slint::{ComponentHandle, Timer};
 #[cfg(not(target_os = "linux"))]
 use slint::{Model, ModelRc, VecModel};
 
@@ -17,8 +17,6 @@ use chatter_core::client::ChatterClient;
 use crate::MainWindow;
 
 thread_local! {
-    /// Call duration timer (must be on UI thread).
-    static CALL_TIMER: RefCell<Option<Timer>> = const { RefCell::new(None) };
     /// Cancels an in-flight core snapshot when this call ends or is replaced.
     static CALL_TIMER_STOP: RefCell<Option<Arc<AtomicBool>>> = const { RefCell::new(None) };
     /// Video frame keepalive timer (low-rate poll alongside the push subscriber).
@@ -48,31 +46,71 @@ thread_local! {
 /// Must run on the UI thread. Signaling timestamps are key-exchange metadata,
 /// not the duration baseline, and delayed UI mounting must not restart the clock.
 pub fn start_call_timer(window: &MainWindow, ui_ctx: Arc<ChatterClient>) {
+    start_call_timer_with(window, move || {
+        let ui_ctx = ui_ctx.clone();
+        async move { ui_ctx.call_active_call().await }
+    });
+}
+
+// Poll even when the first read has no active call or is still ringing: room
+// connection and UI mounting arrive through independent event streams.
+fn start_call_timer_with<F, Fut>(window: &MainWindow, snapshot: F)
+where
+    F: Fn() -> Fut + Send + Sync + 'static,
+    Fut: std::future::Future<Output = Option<chatter_core::domain::call::Call>> + Send,
+{
     stop_call_timer();
     let weak = window.as_weak();
+    let presentation = window.get_active_call_data();
+    let expected_call_id = presentation.call_id;
+    let expected_channel_id = presentation.channel_id;
+    let anonymous = presentation.is_anonymous_call;
     let stop = Arc::new(AtomicBool::new(false));
     CALL_TIMER_STOP.with(|cell| *cell.borrow_mut() = Some(stop.clone()));
     crate::rt_handle().spawn(async move {
-        let Some(call) = ui_ctx.call_active_call().await else { return };
-        let _ = slint::invoke_from_event_loop(move || {
+        let mut ticks = tokio::time::interval(std::time::Duration::from_secs(1));
+        let mut snapshot_call_id = None;
+        ticks.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        loop {
+            ticks.tick().await;
             if stop.load(Ordering::Relaxed) {
-                return;
+                break;
             }
-            let Some(w) = weak.upgrade() else { return };
-            let mut data = w.get_active_call_data();
-            data.duration_seconds = call.duration_seconds().min(i32::MAX as i64) as i32;
-            w.set_active_call_data(data);
-
-            let timer = Timer::default();
-            timer.start(TimerMode::Repeated, std::time::Duration::from_secs(1), move || {
-                if let Some(w) = weak.upgrade() {
-                    let mut data = w.get_active_call_data();
-                    data.duration_seconds = call.duration_seconds().min(i32::MAX as i64) as i32;
-                    w.set_active_call_data(data);
+            let call = snapshot().await;
+            if stop.load(Ordering::Relaxed) {
+                break;
+            }
+            let Some(call) = call else { continue };
+            // Standard presentation IDs are domain call IDs. Anonymous IDs
+            // are room names; their setup supplies the synthetic channel ID.
+            if (!anonymous && call.id.to_string() != expected_call_id.as_str())
+                || (anonymous && call.channel_id.to_string() != expected_channel_id.as_str())
+                || snapshot_call_id.is_some_and(|id| id != call.id)
+            {
+                continue;
+            }
+            snapshot_call_id = Some(call.id);
+            let weak = weak.clone();
+            let stop = stop.clone();
+            let expected_call_id = expected_call_id.clone();
+            if slint::invoke_from_event_loop(move || {
+                if stop.load(Ordering::Relaxed) {
+                    return;
                 }
-            });
-            CALL_TIMER.with(|cell| *cell.borrow_mut() = Some(timer));
-        });
+                let Some(w) = weak.upgrade() else { return };
+                let mut data = w.get_active_call_data();
+                if data.call_id != expected_call_id {
+                    return;
+                }
+                data.is_connected = call.connected_at.is_some();
+                data.duration_seconds = call.duration_seconds().min(i32::MAX as i64) as i32;
+                w.set_active_call_data(data);
+            })
+            .is_err()
+            {
+                break;
+            }
+        }
     });
 }
 
@@ -81,11 +119,6 @@ pub fn stop_call_timer() {
     CALL_TIMER_STOP.with(|cell| {
         if let Some(stop) = cell.borrow_mut().take() {
             stop.store(true, Ordering::Relaxed);
-        }
-    });
-    CALL_TIMER.with(|cell| {
-        if let Some(timer) = cell.borrow_mut().take() {
-            timer.stop();
         }
     });
 }
@@ -124,6 +157,7 @@ pub fn stop_call_timer() {
 const VIDEO_PUSH_MIN_INTERVAL: std::time::Duration = std::time::Duration::from_millis(4);
 
 pub fn start_video_frame_timer(window: &MainWindow, shared_frames: SharedVideoFrames) {
+    stop_video_frame_timer();
     let weak = window.as_weak();
     let first_frame_logged = Arc::new(AtomicBool::new(false));
     let first_for_cb = first_frame_logged.clone();
@@ -336,4 +370,124 @@ pub fn stop_video_frame_timer() {
     crate::bin_ui::video::gl_call::clear_inbox();
 
     tracing::debug!("Video frame subscriber stopped");
+}
+
+#[cfg(test)]
+pub(super) mod tests {
+    use super::*;
+    use chatter_core::domain::call::{Call, CallType};
+    use chatter_core::domain::ids::{ChannelId, UserId};
+    use std::sync::Mutex;
+    use std::time::Duration;
+
+    pub(crate) fn runtime() -> &'static tokio::runtime::Runtime {
+        static RUNTIME: std::sync::LazyLock<tokio::runtime::Runtime> =
+            std::sync::LazyLock::new(|| tokio::runtime::Runtime::new().unwrap());
+        crate::init_rt_handle(RUNTIME.handle().clone());
+        &RUNTIME
+    }
+
+    pub(crate) fn timer_started() -> bool {
+        CALL_TIMER_STOP.with(|cell| cell.borrow().is_some())
+    }
+
+    fn pump(window: &MainWindow, millis: u64) {
+        Timer::single_shot(Duration::from_millis(millis), || {
+            slint::quit_event_loop().unwrap();
+        });
+        window.show().unwrap();
+        slint::run_event_loop().unwrap();
+    }
+
+    #[test]
+    fn call_timer_refreshes_after_missing_and_ringing_snapshots_and_cancels_late_reads() {
+        i_slint_backend_testing::init_integration_test_with_system_time();
+        let _runtime = runtime();
+        let window = MainWindow::new().unwrap();
+        let mut call = Call::new(ChannelId::new(), UserId::new(), CallType::Group);
+        call.ring();
+        let mut data = window.get_active_call_data();
+        data.call_id = call.id.to_string().into();
+        window.set_active_call_data(data);
+        let snapshot = Arc::new(Mutex::new(None::<Call>));
+        let source = snapshot.clone();
+        start_call_timer_with(&window, move || {
+            let call = source.lock().unwrap().clone();
+            async move { call }
+        });
+        pump(&window, 100);
+        assert!(!window.get_active_call_data().is_connected);
+        *snapshot.lock().unwrap() = Some(call.clone());
+        pump(&window, 1100);
+        assert_eq!(window.get_active_call_data().duration_seconds, 0);
+        assert!(!window.get_active_call_data().is_connected);
+        call.start();
+        call.connected_at = Some(chrono::Utc::now() - chrono::Duration::seconds(40));
+        *snapshot.lock().unwrap() = Some(call.clone());
+        pump(&window, 1100);
+        let data = window.get_active_call_data();
+        assert!(data.is_connected);
+        assert!(
+            data.duration_seconds >= 40,
+            "late connection must replace the ringing snapshot"
+        );
+        let before = data.duration_seconds;
+        pump(&window, 1100);
+        assert!(window.get_active_call_data().duration_seconds > before);
+
+        // Core may replace its call before the corresponding UI mount.
+        let mut other = Call::new(ChannelId::new(), UserId::new(), CallType::Group);
+        other.start();
+        other.connected_at = Some(chrono::Utc::now() - chrono::Duration::seconds(500));
+        *snapshot.lock().unwrap() = Some(other);
+        let before = window.get_active_call_data().duration_seconds;
+        pump(&window, 1100);
+        assert_eq!(window.get_active_call_data().duration_seconds, before);
+        *snapshot.lock().unwrap() = Some(call.clone());
+
+        // A queued result for this call cannot paint a replacement UI.
+        let mut replacement = window.get_active_call_data();
+        replacement.call_id = "replacement".into();
+        replacement.duration_seconds = 0;
+        replacement.is_connected = false;
+        window.set_active_call_data(replacement);
+        pump(&window, 1100);
+        assert_eq!(window.get_active_call_data().duration_seconds, 0);
+        assert!(!window.get_active_call_data().is_connected);
+        stop_call_timer();
+
+        // Anonymous UI IDs are room names, not the core's random domain IDs.
+        let mut anonymous = window.get_active_call_data();
+        anonymous.call_id = "anon-room".into();
+        anonymous.channel_id = call.channel_id.to_string().into();
+        anonymous.is_anonymous_call = true;
+        window.set_active_call_data(anonymous);
+        let source = snapshot.clone();
+        start_call_timer_with(&window, move || {
+            let call = source.lock().unwrap().clone();
+            async move { call }
+        });
+        pump(&window, 100);
+        assert!(window.get_active_call_data().is_connected);
+        assert!(window.get_active_call_data().duration_seconds >= 40);
+        stop_call_timer();
+        let mut data = window.get_active_call_data();
+        data.duration_seconds = 0;
+        data.is_connected = false;
+        window.set_active_call_data(data);
+
+        // Cancel while the core read is in flight, then let that read finish.
+        let (send, receive) = tokio::sync::oneshot::channel();
+        let receive = Arc::new(Mutex::new(Some(receive)));
+        start_call_timer_with(&window, move || {
+            let receive = receive.lock().unwrap().take().unwrap();
+            async move { receive.await.unwrap() }
+        });
+        pump(&window, 100);
+        stop_call_timer();
+        send.send(Some(call)).unwrap();
+        pump(&window, 100);
+        assert_eq!(window.get_active_call_data().duration_seconds, 0);
+        assert!(!window.get_active_call_data().is_connected);
+    }
 }

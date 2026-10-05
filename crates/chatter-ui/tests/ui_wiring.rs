@@ -5061,3 +5061,41 @@ fn video_call_lives_in_the_header_more_menu() {
         assert_eq!(w.get_active_modal().as_str(), "none");
     }
 }
+
+/// The call view and compact return banner agree on actual connection state,
+/// including an answered call at 0:00 and a pre-populated ringing roster.
+#[test]
+fn call_banners_use_connection_state_instead_of_roster_or_duration() {
+    use slint::ComponentHandle;
+    require_element_queries();
+    let w = boot();
+    w.set_current_view("main".into());
+    w.set_channel_name("Call test".into());
+    w.set_active_call_visible(true);
+    w.window().set_size(slint::LogicalSize::new(1000.0, 800.0));
+    let mut data = w.get_active_call_data();
+    data.call_id = "test-call".into();
+    data.title = "Call test".into();
+    data.participant_count = 3;
+    data.is_connected = false;
+    w.set_active_call_data(data.clone());
+    for fullscreen in [true, false] {
+        w.set_active_tab(if fullscreen { "chats" } else { "calls" }.into());
+        w.set_active_call_fullscreen(fullscreen);
+        slint::platform::update_timers_and_animations();
+        assert!(testing::ElementHandle::find_by_accessible_label(&w, "Calling…").next().is_some(),
+            "ringing roster must not imply an answered call (fullscreen={fullscreen})");
+    }
+    data.participant_count = 1;
+    data.is_connected = true;
+    data.duration_seconds = 0;
+    w.set_active_call_data(data);
+    for fullscreen in [true, false] {
+        w.set_active_tab(if fullscreen { "chats" } else { "calls" }.into());
+        w.set_active_call_fullscreen(fullscreen);
+        slint::platform::update_timers_and_animations();
+        assert!(testing::ElementHandle::find_by_accessible_label(&w, "Calling…").next().is_none());
+        assert!(testing::ElementHandle::find_by_accessible_label(&w, "0:00").next().is_some(),
+            "connected zero-second call must show its clock (fullscreen={fullscreen})");
+    }
+}

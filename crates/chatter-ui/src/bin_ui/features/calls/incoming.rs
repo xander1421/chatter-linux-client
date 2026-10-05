@@ -208,6 +208,7 @@ fn render_accepted_call(
                     identity_warning: "".into(),
                     participant_count: 2,
                     duration_seconds: 0,
+                    is_connected: true,
                     participants: ModelRc::new(VecModel::from(vec![
                         remote_participant,
                         local_participant,
@@ -266,6 +267,7 @@ fn render_accepted_call(
                     identity_warning: "".into(),
                     participant_count: participants.len() as i32,
                     duration_seconds: 0,
+                    is_connected: true,
                     participants: ModelRc::new(VecModel::from(participants)),
                     verification_emoji_1: setup.verification_emojis[0].clone().into(),
                     verification_emoji_2: setup.verification_emojis[1].clone().into(),
@@ -357,6 +359,7 @@ fn show_answering(w: &MainWindow) {
         identity_warning: "".into(),
         participant_count: 2,
         duration_seconds: 0,
+        is_connected: false,
         participants: ModelRc::new(VecModel::from(vec![remote, local])),
         // No key agreed yet: show nothing (the plain lock) until the SAS
         // emoji arrive, as the dialling view does.
@@ -480,6 +483,7 @@ fn render_active_anon_call(
             identity_warning: "".into(),
             participant_count: 2,
             duration_seconds: 0,
+            is_connected: true,
             participants: ModelRc::new(VecModel::from(vec![
                 remote_participant,
                 local_participant,
@@ -651,10 +655,24 @@ fn handle_orchestrator_event(
         }
 
         CallOrchestratorEvent::OutgoingStarted { call, .. }
-        | CallOrchestratorEvent::ActiveConnected { call, .. }
         // Too late to ring; core already filed it as a missed call.
         | CallOrchestratorEvent::IncomingMissed { call, .. } => {
             tracing::debug!(call = %call.as_str(), "Orchestrator state transition");
+        }
+
+        CallOrchestratorEvent::ActiveConnected { call, .. } => {
+            let weak = weak.clone();
+            let ui_ctx = ui_ctx.clone();
+            let _ = slint::invoke_from_event_loop(move || {
+                let Some(w) = weak.upgrade() else { return };
+                let mut data = w.get_active_call_data();
+                if data.call_id.as_str() != call.as_str() {
+                    return;
+                }
+                data.is_connected = true;
+                w.set_active_call_data(data);
+                start_call_timer(&w, ui_ctx);
+            });
         }
 
         CallOrchestratorEvent::AnonCallConnected { call, info, .. } => {
