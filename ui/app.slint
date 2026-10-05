@@ -1247,18 +1247,21 @@ export component MainWindow inherits Window {
     // (message_composer.slint, emoji-touch) — which left NOTHING focused, so
     // the Back meant to close the picker was dropped on the floor. Hand focus
     // to back-scope instead: the keyboard still goes away, and Back arrives.
-    // Phone only: on desktop the composer keeps the caret while picking.
+    // The drawer suspends text input on every platform. Give Back/Escape a
+    // focus owner until search or the keyboard toggle takes focus.
     changed composer-emoji-picker-visible => {
-        if root.composer-emoji-picker-visible && root.is-mobile-platform {
+        if root.composer-emoji-picker-visible {
             back-scope.focus();
         }
     }
     callback composer-gif-closed();
     in-out property <int> composer-gif-generation;
     changed composer-gif-picker-visible => {
-        root.composer-gif-generation += 1;
-        if !root.composer-gif-picker-visible { root.composer-gif-closed(); }
-        if root.composer-gif-picker-visible && root.is-mobile-platform {
+        if !root.composer-gif-picker-visible {
+            root.composer-gif-generation += 1;
+            root.composer-gif-closed();
+        }
+        if root.composer-gif-picker-visible {
             back-scope.focus();
         }
     }
@@ -1299,7 +1302,9 @@ export component MainWindow inherits Window {
         focus-on-tab-navigation: false;
 
         key-pressed(event) => {
-            if (event.text == Key.Back) {
+            if (event.text == Key.Back || (event.text == Key.Escape
+                && root.active-modal == "none"
+                && (root.composer-emoji-picker-visible || root.composer-gif-picker-visible))) {
                 root.back-pressed();
                 // Always consume. The android backend turns EventAccepted into
                 // InputStatus::Handled, which is what stops the framework's
@@ -1314,7 +1319,9 @@ export component MainWindow inherits Window {
         // would leave the release for the framework to act on — one physical
         // press then both pops a layer here and runs the default handler.
         key-released(event) => {
-            return event.text == Key.Back ? accept : reject;
+            return event.text == Key.Back || (event.text == Key.Escape
+                && root.active-modal == "none"
+                && (root.composer-emoji-picker-visible || root.composer-gif-picker-visible)) ? accept : reject;
         }
 
         // ========== Global keyboard shortcuts ==========

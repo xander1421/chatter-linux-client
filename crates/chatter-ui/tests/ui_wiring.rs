@@ -2269,10 +2269,12 @@ fn back_scope_does_not_steal_focus_from_text_input() {
         main.contains("focus-on-tab-navigation: false;"),
         "back-scope would swallow a Tab stop over the whole window"
     );
-    // Only Back is consumed; every other key is rejected so it keeps bubbling.
+    // Back and drawer Escape are consumed; ordinary typing keeps bubbling.
     assert!(
-        main.contains("if (event.text == Key.Back) {") && main.contains("return reject;"),
-        "back-scope must consume ONLY Key.Back and reject everything else, or it \
+        main.contains("if (event.text == Key.Back || (event.text == Key.Escape")
+            && main.contains("root.composer-emoji-picker-visible || root.composer-gif-picker-visible")
+            && main.contains("return reject;"),
+        "back-scope must reject ordinary keys and limit Escape to the drawer, or it \
          would eat text input"
     );
     // The key-UP must be swallowed too. Android's default Back fires off
@@ -2280,7 +2282,7 @@ fn back_scope_does_not_steal_focus_from_text_input() {
     // close a modal AND finish the Activity.
     assert!(
         main.contains("key-released(event) => {")
-            && main.contains("event.text == Key.Back ? accept : reject"),
+            && main.contains("return event.text == Key.Back || (event.text == Key.Escape"),
         "back-scope does not consume the Back key-up; Android's default Back \
          handler can still fire behind us"
     );

@@ -22,6 +22,9 @@ pub(crate) fn wire_gif_clicked(window: &MainWindow, ui_ctx: &Arc<ChatterClient>)
         let _ = slint::invoke_from_event_loop(move || {
             if let Some(w) = weak.upgrade() {
                 if w.get_composer_gif_picker_visible() {
+                    // Allocate here, before launching the request, rather than
+                    // relying on a deferred Slint visibility change handler.
+                    w.set_composer_gif_generation(w.get_composer_gif_generation() + 1);
                     w.set_composer_gif_picker_search("".into());
                     let generation = w.get_composer_gif_generation();
                     w.set_composer_gif_picker_loading(true);

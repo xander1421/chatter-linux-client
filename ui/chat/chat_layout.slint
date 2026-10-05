@@ -89,6 +89,11 @@ export component ChatLayout inherits Rectangle {
     in-out property <int> emoji-skin-tone;
     in-out property <string> emoji-search;
     in-out property <string> gif-search;
+    private property <string> drawer-search-text;
+    changed emoji-search => { if root.emoji-picker-visible { root.drawer-search-text = root.emoji-search; } }
+    changed gif-search => { if root.gif-picker-visible { root.drawer-search-text = root.gif-search; } }
+    changed emoji-picker-visible => { if root.emoji-picker-visible { root.drawer-search-text = root.emoji-search; } }
+    changed gif-picker-visible => { if root.gif-picker-visible { root.drawer-search-text = root.gif-search; } }
     in property <[GifData]> gif-results;
     in property <bool> gif-loading;
     in property <bool> gif-failed;
@@ -526,7 +531,7 @@ export component ChatLayout inherits Rectangle {
                             }
                             drawer-search := TextInput {
                                 width: 100%; height: 100%;
-                                text: root.gif-picker-visible ? root.gif-search : root.emoji-search;
+                                text <=> root.drawer-search-text;
                                 color: Colors.text-primary;
                                 single-line: true;
                                 accessible-label: "Search emoji and GIFs";

@@ -1018,8 +1018,8 @@ export component MessageComposer inherits GlassSurface {
                     enabled: !root.disabled;
                     pointer-event(event) => {
                         if event.kind == PointerEventKind.down && event.button == PointerEventButton.left {
-                            root.voice-press-x = self.mouse-x;
-                            root.voice-press-y = self.mouse-y;
+                            root.voice-press-x = self.mouse-x + self.absolute-position.x;
+                            root.voice-press-y = self.mouse-y + self.absolute-position.y;
                             root.voice-held = false;
                             voice-hold.running = true;
                             root.start-recording();
@@ -1038,8 +1038,8 @@ export component MessageComposer inherits GlassSurface {
                     }
                     moved => {
                         if self.pressed && VoiceRecording.active && !VoiceRecording.locked {
-                            if self.mouse-x - root.voice-press-x < -70px { VoiceRecording.cancel(); }
-                            else if self.mouse-y - root.voice-press-y < -60px { VoiceRecording.locked = true; }
+                            if self.mouse-x + self.absolute-position.x - root.voice-press-x < -70px { VoiceRecording.cancel(); }
+                            else if self.mouse-y + self.absolute-position.y - root.voice-press-y < -60px { VoiceRecording.locked = true; }
                         }
                     }
                 }

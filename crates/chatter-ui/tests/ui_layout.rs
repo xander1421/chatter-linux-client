@@ -184,6 +184,35 @@ fn composer_drawer_and_recording_have_usable_geometry() {
         assert!(ep.x >= cp.x && ep.x + emoji.size().width <= cp.x + chat.size().width + 1.0);
         assert!(ep.y >= composer.absolute_position().y + composer.size().height - 1.0);
         assert!(ep.y + emoji.size().height <= cp.y + chat.size().height + 1.0);
+        // A user edit must not detach the search field from later tab/reset
+        // updates. Inspect the visible input, not just the backing query.
+        click(&w, "Search emoji and GIFs");
+        for text in ["c", "a", "t"] {
+            w.window().dispatch_event(slint::platform::WindowEvent::KeyPressed { text: text.into() });
+        }
+        pump_at(&w, width, height);
+        assert_eq!(w.get_composer_emoji_search().as_str(), "cat");
+        let search_value = || testing::ElementHandle::find_by_accessible_label(&w, "Search emoji and GIFs")
+            .next().unwrap().accessible_value().unwrap().to_string();
+        assert_eq!(search_value(), "cat");
+        click(&w, "GIFs");
+        pump_at(&w, width, height);
+        assert_eq!(search_value(), w.get_composer_gif_picker_search().as_str());
+        w.set_composer_gif_picker_search("dogs".into());
+        pump_at(&w, width, height);
+        assert_eq!(search_value(), "dogs");
+        click(&w, "Emoji");
+        pump_at(&w, width, height);
+        assert_eq!(search_value(), "cat");
+        w.set_composer_emoji_search("".into());
+        pump_at(&w, width, height);
+        assert_eq!(search_value(), "");
+        // Opening a drawer leaves Back/Escape focused on desktop too.
+        let backs = std::rc::Rc::new(std::cell::Cell::new(0));
+        let capture = backs.clone();
+        w.on_back_pressed(move || capture.set(capture.get() + 1));
+        w.window().dispatch_event(slint::platform::WindowEvent::KeyPressed { text: slint::platform::Key::Escape.into() });
+        assert_eq!(backs.get(), 1, "drawer must retain a Back/Escape focus owner");
         w.set_composer_emoji_picker_visible(false);
         w.set_composer_gif_picker_visible(true);
         pump_at(&w, width, height);
@@ -258,6 +287,33 @@ fn composer_drawer_and_recording_have_usable_geometry() {
         assert_eq!(finishes.get(), 1);
         assert_eq!(w.get_composer_text().as_str(), "Draft stays here");
         w.global::<VoiceRecording>().set_active(false);
+        w.set_composer_text("".into());
+        pump_at(&w, width, height);
+        // Measure a slide in window coordinates: expanding the recording row
+        // moves the microphone, but must not increase the lock threshold.
+        let weak = w.as_weak();
+        w.global::<VoiceRecording>().on_start(move || {
+            let w = weak.upgrade().unwrap();
+            w.global::<VoiceRecording>().set_active(true);
+            w.global::<VoiceRecording>().set_locked(false);
+        });
+        let mic = testing::ElementHandle::find_by_accessible_label(&w, "Record voice message").next().unwrap();
+        let p = mic.absolute_position();
+        let size = mic.size();
+        let position = slint::LogicalPosition::new(p.x + size.width / 2.0, p.y + size.height / 2.0);
+        w.window().dispatch_event(slint::platform::WindowEvent::PointerPressed {
+            position, button: slint::platform::PointerEventButton::Left,
+        });
+        pump_at(&w, width, height);
+        let slid = slint::LogicalPosition::new(position.x, position.y - 65.0);
+        w.window().dispatch_event(slint::platform::WindowEvent::PointerMoved { position: slid });
+        assert!(w.global::<VoiceRecording>().get_locked(), "recording expansion changed slide-to-lock distance");
+        w.window().dispatch_event(slint::platform::WindowEvent::PointerReleased {
+            position: slid, button: slint::platform::PointerEventButton::Left,
+        });
+        assert_eq!(finishes.get(), 1, "releasing a locked recording must not send");
+        w.global::<VoiceRecording>().set_active(false);
+        w.set_composer_text("Draft stays here".into());
         pump_at(&w, width, height);
         click(&w, "Message input");
         w.set_selection_mode(true);
