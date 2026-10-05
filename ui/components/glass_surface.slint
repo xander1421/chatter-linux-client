@@ -23,9 +23,9 @@ component GlassMaterial inherits Rectangle {
         easing: ease-out;
     }
 
-    // Elevation shadows (theme/elevation.slint): a wide ambient shadow and a
-    // tight contact shadow, both falling downwards. Levels 0-2 cast none here
-    // (flat in-content glass); 3 chrome, 4 popover, 5 modal. Elevation's blur
+    // Elevation shadows (theme/elevation.slint), falling downwards. Levels
+    // 0-2 cast none here (flat in-content glass); 3 chrome casts one, 4
+    // popover and 5 modal cast an ambient and a contact layer. Elevation's blur
     // tokens are 0 with glass effects off, and these layers are then skipped.
     if root.material-enabled && root.elevation >= 3 && Elevation.chrome-blur > 0: Rectangle {
         border-radius: root.border-radius;
@@ -37,15 +37,18 @@ component GlassMaterial inherits Rectangle {
         drop-shadow-color: root.elevation >= 5 ? Elevation.modal-shadow
             : root.elevation == 4 ? Elevation.popover-shadow : Elevation.chrome-shadow;
     }
-    if root.material-enabled && root.elevation >= 3 && Elevation.chrome-blur > 0: Rectangle {
+    // Contact layer only for popovers and modals: level-3 chrome is on screen
+    // while the list scrolls, and each shadow layer is a full-size blit per
+    // frame, so chrome keeps one layer (S9 scroll pacing, see commit log).
+    if root.material-enabled && root.elevation >= 4 && Elevation.chrome-blur > 0: Rectangle {
         border-radius: root.border-radius;
         background: transparent;
         drop-shadow-blur: root.elevation >= 5 ? Elevation.modal-contact-blur
-            : root.elevation == 4 ? Elevation.popover-contact-blur : Elevation.chrome-contact-blur;
+            : Elevation.popover-contact-blur;
         drop-shadow-offset-y: root.elevation >= 5 ? Elevation.modal-contact-offset
-            : root.elevation == 4 ? Elevation.popover-contact-offset : Elevation.chrome-contact-offset;
+            : Elevation.popover-contact-offset;
         drop-shadow-color: root.elevation >= 5 ? Elevation.modal-contact
-            : root.elevation == 4 ? Elevation.popover-contact : Elevation.chrome-contact;
+            : Elevation.popover-contact;
     }
     // SLINT1 builtin integration is intentionally confined to this one element.
     if root.material-enabled: Backdrop {

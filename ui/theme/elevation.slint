@@ -8,7 +8,7 @@
 //                contact crescent, so a bubble reads as a lifted card.
 //   3 chrome     Floating chrome that content scrolls UNDER: chat header,
 //                composer, tab bar, FAB, selection/pinned bars (GlassSurface
-//                elevation 3). Glass + an ambient shadow + a contact shadow.
+//                elevation 3). Glass + lit rim + one soft shadow.
 //   4 popover    Menus, pickers, toasts, tooltips (GlassSurface elevation 4).
 //   5 modal      Dialogs, sheets, incoming call (GlassSurface elevation 5),
 //                over Materials.scrim.
@@ -44,13 +44,11 @@ export global Elevation {
         : @linear-gradient(180deg, #ffffffd9 0%, #ffffff00 35%, #1a2c3e00 65%, #1a2c3e14 100%);
     out property <length> rim-width: 1px;
 
-    // Level 3 — floating chrome: ambient + contact pair.
-    out property <length> chrome-blur: shadows ? 22px : 0px;
-    out property <length> chrome-offset: shadows ? 8px : 0px;
-    out property <color> chrome-shadow: Appearance.dark ? #000000b3 : #1a2c3e33;
-    out property <length> chrome-contact-blur: shadows ? 4px : 0px;
-    out property <length> chrome-contact-offset: shadows ? 1px : 0px;
-    out property <color> chrome-contact: Appearance.dark ? #00000099 : #1a2c3e24;
+    // Level 3 — floating chrome: ONE shadow (it is drawn every frame while
+    // the list scrolls under it); the lit rim stands in for a contact layer.
+    out property <length> chrome-blur: shadows ? 14px : 0px;
+    out property <length> chrome-offset: shadows ? 5px : 0px;
+    out property <color> chrome-shadow: Appearance.dark ? #000000c7 : #1a2c3e3d;
 
     // Level 4 — popovers and menus.
     out property <length> popover-blur: shadows ? 30px : 0px;
