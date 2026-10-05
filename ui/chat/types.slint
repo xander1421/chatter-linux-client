@@ -41,15 +41,14 @@ export struct MessageAttachmentData {
     progress: float,        // Transfer progress 0.0 to 1.0
 }
 
-// Styled text span for markdown-parsed message rendering.
-// Each span has at most one style flag set (bold, italic, etc.).
-export struct RichTextSpan {
-    text: string,
-    bold: bool,
-    italic: bool,
-    strikethrough: bool,
-    code: bool,         // inline code (monospace)
-    code-block: bool,   // fenced code block (monospace + background)
+// One block of a markdown message body (converters/markdown.rs parse_blocks).
+// Inline runs are ONE styled text each, so bold/italic/strike/code flow and
+// wrap together in a single paragraph; a fenced code block is its own box.
+export struct RichTextBlock {
+    text: styled-text,    // inline run (unset for a code block)
+    plain: string,        // the block's text without styles: code block content, or
+                          // the inline run's accessible label (StyledText has none)
+    is-code-block: bool,
 }
 
 // Data struct for message items (mirrors Rust MessageItemData)
@@ -61,7 +60,7 @@ export struct MessageItemData {
     sender-avatar-source: image,
     has-avatar: bool,
     content: string,
-    rich-content: [RichTextSpan],  // Parsed markdown spans for styled rendering
+    rich-content: [RichTextBlock],  // Markdown blocks; empty for a body with no markdown
     timestamp: string,
     timestamp-ns: string,  // Nanosecond timestamp as string for event matching (reactions, edits, pins)
     is-own: bool,

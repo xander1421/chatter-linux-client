@@ -12,7 +12,7 @@ import { Elevation } from "../theme/elevation.slint";
 import { Typography } from "../theme/typography.slint";
 import { Avatar } from "../components/avatar.slint";
 import { Haptics } from "../components/haptics.slint";
-import { MessageAttachmentData, ReactionEntry, RichTextSpan } from "types.slint";
+import { MessageAttachmentData, ReactionEntry, RichTextBlock } from "types.slint";
 import { Icons } from "../theme/icons.slint";
 import { AudioPlayer } from "audio_player.slint";
 import { HoldArea } from "../components/hold_area.slint";
@@ -31,14 +31,11 @@ export component MessageItem inherits Rectangle {
 
     // Content
     in property <string> content: "";
-    in property <[RichTextSpan]> rich-content: [];
+    in property <[RichTextBlock]> rich-content: [];
     in property <string> timestamp: "";
 
     // Ordinary messages have one span, even when they contain no markdown.
     // Keep that common case out of the nested rich-text layout/repeater.
-    property <bool> single-text-span: root.rich-content.length == 1
-        && !root.rich-content[0].code && !root.rich-content[0].code-block
-        && !root.rich-content[0].strikethrough;
     property <length> text-max-width: root.width * 0.7 - Spacing.sm * 2;
 
     // Flags
@@ -732,15 +729,19 @@ export component MessageItem inherits Rectangle {
                             }
                         }
 
-                        // Message content — rich text rendering
-                        // Uses parsed markdown spans when available, falls back to plain text
-                        if root.content != "" && root.rich-content.length > 0 && !root.single-text-span: VerticalLayout {
+                        // Message content. A body with markdown arrives as
+                        // blocks: each inline run is ONE StyledText, so mixed
+                        // bold/italic/strike/code flow and word-wrap in one
+                        // paragraph; fenced code blocks are boxes of their own.
+                        // StyledText passes presses through to bubble-touch
+                        // (vendor/i-slint-core/items/text.rs patch), so hold,
+                        // right-click and tap work on it as on a plain Text.
+                        if root.content != "" && root.rich-content.length > 0: VerticalLayout {
                             spacing: Spacing.xs;
                             max-width: root.text-max-width;
 
-                            for span in root.rich-content: VerticalLayout {
-                                // Code block: monospace + dark background
-                                if span.code-block: Rectangle {
+                            for block in root.rich-content: VerticalLayout {
+                                if block.is-code-block: Rectangle {
                                     background: Colors.bubble-inset;
                                     border-radius: 4px;
 
@@ -748,8 +749,8 @@ export component MessageItem inherits Rectangle {
                                         padding: Spacing.sm;
 
                                         Text {
-                                            text: span.text;
-                                            color: span.code-block && !root.is-own ? Colors.code-text : Colors.text-primary;
+                                            text: block.plain;
+                                            color: !root.is-own ? Colors.code-text : Colors.text-primary;
                                             font-family: Typography.font-family-mono;
                                             font-size: Typography.xs;
                                             wrap: word-wrap;
@@ -758,66 +759,21 @@ export component MessageItem inherits Rectangle {
                                     }
                                 }
 
-                                // Inline code: monospace + subtle background
-                                if span.code && !span.code-block: HorizontalLayout {
-                                    alignment: start;
-
-                                    Rectangle {
-                                        background: Colors.bubble-inset;
-                                        border-radius: 3px;
-                                        width: code-text.preferred-width + 8px;
-                                        height: code-text.preferred-height + 4px;
-
-                                        code-text := Text {
-                                            x: 4px;
-                                            y: 2px;
-                                            text: span.text;
-                                            color: Colors.text-primary;
-                                            font-family: Typography.font-family-mono;
-                                            font-size: Typography.xs;
-                                        }
-                                    }
-                                }
-
-                                // Strikethrough: text with line-through overlay
-                                if span.strikethrough && !span.code && !span.code-block: Rectangle {
-                                    height: strike-text.preferred-height;
-                                    width: strike-text.preferred-width;
-
-                                    strike-text := Text {
-                                        text: span.text;
-                                        color: Colors.text-secondary;
-                                        font-size: Typography.sm;
-                                        wrap: word-wrap;
-                                        max-width: root.text-max-width;
-                                    }
-
-                                    Rectangle {
-                                        y: parent.height / 2;
-                                        height: 1px;
-                                        width: strike-text.preferred-width;
-                                        background: Colors.text-secondary;
-                                    }
-                                }
-
-                                // Normal / bold / italic text
-                                if !span.code && !span.code-block && !span.strikethrough: Text {
-                                    text: span.text;
-                                    color: Colors.text-primary;
-                                    font-size: Typography.sm;
-                                    font-weight: span.bold ? 700 : 400;
-                                    font-italic: span.italic;
-                                    wrap: word-wrap;
+                                if !block.is-code-block: StyledText {
+                                    text: block.text;
+                                    // Text gets these implicitly; StyledText does not.
+                                    accessible-role: text;
+                                    accessible-label: block.plain;
+                                    default-color: Colors.text-primary;
+                                    default-font-size: Typography.sm;
                                     max-width: root.text-max-width;
                                 }
                             }
                         }
 
-                        // Plain text and a single normal/bold/italic span share one Text.
-                        if root.content != "" && (root.rich-content.length == 0 || root.single-text-span): Text {
-                            text: root.single-text-span ? root.rich-content[0].text : root.content;
-                            font-weight: root.single-text-span && root.rich-content[0].bold ? 700 : 400;
-                            font-italic: root.single-text-span && root.rich-content[0].italic;
+                        // A body with no markdown: one plain Text.
+                        if root.content != "" && root.rich-content.length == 0: Text {
+                            text: root.content;
                             color: Colors.text-primary;
                             font-size: Typography.sm;
                             wrap: word-wrap;

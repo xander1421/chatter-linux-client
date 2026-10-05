@@ -3,64 +3,89 @@
 //! Handles the subset of markdown produced by the composer formatting toolbar:
 //! `**bold**`, `*italic*`, `~~strikethrough~~`, `` `code` ``, and fenced code blocks.
 //!
-//! Produces a flat list of styled spans suitable for Slint's block-level rendering.
-//! Since Slint doesn't support inline rich text (mixed styles in a single wrapped
-//! text flow), each span is rendered as a separate element.
+//! [`parse_blocks`] turns a body into what the bubble lays out: the inline
+//! spans between fenced code blocks become one Slint `StyledText` each, so
+//! mixed styles flow and wrap together in one paragraph, and each fenced code
+//! block stays its own monospace box. The `StyledText` is built straight from
+//! these spans (`StyledText::from_paragraphs`, a patch in vendor/i-slint-core),
+//! never through Slint's own markdown parser, which rejects headings, quotes,
+//! fenced code and HTML that users type.
 
-/// A parsed rich text span for Slint rendering.
+use i_slint_core::styled_text::{FormattedSpan, Style, StyledTextParagraph};
+
+/// A parsed inline span.
 ///
-/// Each span maps to one Slint `RichTextSpan` struct element.
 /// Flags are mutually exclusive in practice (a span won't be both bold and code).
 #[derive(Clone, Debug, Default)]
-pub(crate) struct MarkdownSpan {
-    pub text: String,
-    pub bold: bool,
-    pub italic: bool,
-    pub strikethrough: bool,
-    pub code: bool,
-    pub code_block: bool,
+struct MarkdownSpan {
+    text: String,
+    bold: bool,
+    italic: bool,
+    strikethrough: bool,
+    code: bool,
 }
 
-/// Parse markdown text into styled spans.
-///
-/// Code block content preserves original whitespace.
-pub(crate) fn parse_markdown(input: &str) -> Vec<MarkdownSpan> {
-    let trimmed = input.trim();
-    if trimmed.is_empty() {
-        return vec![MarkdownSpan {
-            text: String::new(),
-            ..Default::default()
-        }];
-    }
+/// One block of a message body as the bubble lays it out.
+#[derive(Debug, PartialEq)]
+pub(crate) enum MarkdownBlock {
+    /// Inline text, one paragraph per line, its styles as byte ranges.
+    Inline(Vec<StyledTextParagraph>),
+    /// A fenced code block's content, whitespace preserved.
+    Code(String),
+}
 
-    let mut result = Vec::new();
+/// Parse a message body into the blocks the bubble draws: inline runs (split
+/// into lines) and fenced code blocks. Newlines that only separate a code
+/// block from its neighbours are dropped, so a code block does not gain a
+/// blank line above and below it.
+pub(crate) fn parse_blocks(input: &str) -> Vec<MarkdownBlock> {
+    split_code_blocks(input.trim())
+        .into_iter()
+        .filter_map(|block| {
+            if block.is_code_block {
+                return Some(MarkdownBlock::Code(block.text));
+            }
+            let text = block.text.trim_matches(|c| c == '\n' || c == '\r');
+            (!text.is_empty()).then(|| MarkdownBlock::Inline(paragraphs(&parse_inline(text))))
+        })
+        .collect()
+}
 
-    // Split on fenced code block boundaries first
-    let blocks = split_code_blocks(trimmed);
-
-    for block in blocks {
-        if block.is_code_block {
-            // Code blocks: preserve whitespace
-            result.push(MarkdownSpan {
-                text: block.text,
-                code_block: true,
-                ..Default::default()
-            });
-        } else if !block.text.is_empty() {
-            // Parse inline formatting within text blocks
-            let spans = parse_inline(&block.text);
-            result.extend(spans);
+/// Lay inline spans out as paragraphs, one per line. A span that crosses a
+/// line break is split into one formatting range per line.
+fn paragraphs(spans: &[MarkdownSpan]) -> Vec<StyledTextParagraph> {
+    let mut out = Vec::new();
+    let mut para = StyledTextParagraph { text: String::new(), formatting: Vec::new(), links: Vec::new() };
+    for span in spans {
+        let style = if span.bold {
+            Some(Style::Strong)
+        } else if span.italic {
+            Some(Style::Emphasis)
+        } else if span.strikethrough {
+            Some(Style::Strikethrough)
+        } else if span.code {
+            Some(Style::Code)
+        } else {
+            None
+        };
+        for (i, line) in span.text.split('\n').enumerate() {
+            if i > 0 {
+                out.push(std::mem::replace(
+                    &mut para,
+                    StyledTextParagraph { text: String::new(), formatting: Vec::new(), links: Vec::new() },
+                ));
+            }
+            // Parley treats a lone CR as a line break of its own.
+            let line = line.strip_suffix('\r').unwrap_or(line);
+            let start = para.text.len();
+            para.text.push_str(line);
+            if let (Some(style), false) = (&style, line.is_empty()) {
+                para.formatting.push(FormattedSpan { range: start..para.text.len(), style: style.clone() });
+            }
         }
     }
-
-    if result.is_empty() {
-        result.push(MarkdownSpan {
-            text: trimmed.to_string(),
-            ..Default::default()
-        });
-    }
-
-    result
+    out.push(para);
+    out
 }
 
 /// Strip all markdown markers from text, returning clean plaintext.
@@ -280,69 +305,78 @@ fn find_closing_single(chars: &[char], from: usize, c: char) -> Option<usize> {
 mod tests {
     use super::*;
 
-    #[test]
-    fn plain_text() {
-        let spans = parse_markdown("hello world");
-        assert_eq!(spans.len(), 1);
-        assert_eq!(spans[0].text, "hello world");
-        assert!(!spans[0].bold);
-        assert!(!spans[0].italic);
+    /// The single inline paragraph of `input`, as (text, [(styled text, style)]).
+    fn one_paragraph(input: &str) -> (String, Vec<(String, Style)>) {
+        let blocks = parse_blocks(input);
+        let [MarkdownBlock::Inline(paras)] = blocks.as_slice() else {
+            panic!("{input:?}: expected one inline block, got {blocks:?}");
+        };
+        let [p] = paras.as_slice() else { panic!("{input:?}: expected one line, got {paras:?}") };
+        let styled = p.formatting.iter().map(|f| (p.text[f.range.clone()].to_string(), f.style.clone())).collect();
+        (p.text.clone(), styled)
     }
 
     #[test]
-    fn bold_whole_message() {
-        let spans = parse_markdown("**hello world**");
-        assert_eq!(spans.len(), 1);
-        assert_eq!(spans[0].text, "hello world");
-        assert!(spans[0].bold);
+    fn plain_text_has_no_formatting() {
+        assert_eq!(one_paragraph("hello world"), ("hello world".into(), vec![]));
     }
 
     #[test]
-    fn italic_whole_message() {
-        let spans = parse_markdown("*hello world*");
-        assert_eq!(spans.len(), 1);
-        assert_eq!(spans[0].text, "hello world");
-        assert!(spans[0].italic);
+    fn each_marker_maps_to_its_style() {
+        for (input, style) in [
+            ("**hello world**", Style::Strong),
+            ("*hello world*", Style::Emphasis),
+            ("~~hello world~~", Style::Strikethrough),
+            ("`hello world`", Style::Code),
+        ] {
+            assert_eq!(one_paragraph(input), ("hello world".into(), vec![("hello world".into(), style)]), "{input}");
+        }
+    }
+
+    /// The bug this layout fixes: mixed styles were one block each, so each
+    /// sat on its own line. Now they are ranges in ONE paragraph.
+    #[test]
+    fn mixed_styles_share_one_paragraph() {
+        assert_eq!(
+            one_paragraph("**bold** *italic* ~~strike~~ `code` end"),
+            (
+                "bold italic strike code end".into(),
+                vec![
+                    ("bold".into(), Style::Strong),
+                    ("italic".into(), Style::Emphasis),
+                    ("strike".into(), Style::Strikethrough),
+                    ("code".into(), Style::Code),
+                ]
+            )
+        );
     }
 
     #[test]
-    fn strikethrough_whole_message() {
-        let spans = parse_markdown("~~hello world~~");
-        assert_eq!(spans.len(), 1);
-        assert_eq!(spans[0].text, "hello world");
-        assert!(spans[0].strikethrough);
+    fn ranges_are_bytes_not_chars() {
+        assert_eq!(one_paragraph("héllo **wörld** 🙂"), ("héllo wörld 🙂".into(), vec![("wörld".into(), Style::Strong)]));
     }
 
     #[test]
-    fn inline_code() {
-        let spans = parse_markdown("`hello world`");
-        assert_eq!(spans.len(), 1);
-        assert_eq!(spans[0].text, "hello world");
-        assert!(spans[0].code);
+    fn lines_become_paragraphs_and_a_style_crossing_one_is_split() {
+        let blocks = parse_blocks("a **b\r\nc** d");
+        let [MarkdownBlock::Inline(paras)] = blocks.as_slice() else { panic!("{blocks:?}") };
+        let lines: Vec<_> = paras.iter().map(|p| p.text.as_str()).collect();
+        assert_eq!(lines, ["a b", "c d"]);
+        assert_eq!(paras[0].formatting, [FormattedSpan { range: 2..3, style: Style::Strong }]);
+        assert_eq!(paras[1].formatting, [FormattedSpan { range: 0..1, style: Style::Strong }]);
     }
 
     #[test]
-    fn mixed_inline() {
-        let spans = parse_markdown("hello **world** how are you");
-        assert_eq!(spans.len(), 3);
-        assert_eq!(spans[0].text, "hello ");
-        assert!(!spans[0].bold);
-        assert_eq!(spans[1].text, "world");
-        assert!(spans[1].bold);
-        assert_eq!(spans[2].text, " how are you");
-        assert!(!spans[2].bold);
-    }
-
-    #[test]
-    fn code_block() {
-        let spans = parse_markdown("before\n```\nlet x = 1;\n```\nafter");
-        assert_eq!(spans.len(), 3);
-        assert_eq!(spans[0].text, "before\n");
-        assert!(!spans[0].code_block);
-        assert_eq!(spans[1].text, "let x = 1;");
-        assert!(spans[1].code_block);
-        assert_eq!(spans[2].text, "\nafter");
-        assert!(!spans[2].code_block);
+    fn code_blocks_stand_alone_without_padding_lines() {
+        let blocks = parse_blocks("before\n```rust\nlet x = 1;\n```\nafter");
+        let texts: Vec<_> = blocks
+            .iter()
+            .map(|b| match b {
+                MarkdownBlock::Inline(p) => format!("inline:{}", p.iter().map(|p| p.text.as_str()).collect::<Vec<_>>().join("|")),
+                MarkdownBlock::Code(c) => format!("code:{c}"),
+            })
+            .collect();
+        assert_eq!(texts, ["inline:before", "code:let x = 1;", "inline:after"]);
     }
 
     #[test]
@@ -356,9 +390,6 @@ mod tests {
 
     #[test]
     fn unmatched_markers_pass_through() {
-        let spans = parse_markdown("hello * world");
-        assert_eq!(spans.len(), 1);
-        assert_eq!(spans[0].text, "hello * world");
-        assert!(!spans[0].italic);
+        assert_eq!(one_paragraph("hello * world"), ("hello * world".into(), vec![]));
     }
 }

@@ -5,32 +5,45 @@ use slint::{ModelRc, VecModel};
 use chatter_core::domain::attachment::Attachment;
 use chatter_core::domain::message::{Message, MessageContent};
 
-use crate::{MessageItemData, RichTextSpan};
+use crate::{MessageItemData, RichTextBlock};
 
 use super::attachment::{attachment_to_display_data, AttachmentDisplayData};
-use super::markdown::{parse_markdown, strip_markdown};
+use super::markdown::{parse_blocks, strip_markdown, MarkdownBlock};
 use super::utils::{format_count, reaction_counts_to_entries};
 
-/// A message body as a row renders it: `rich_content` is the markdown spans
-/// the bubble draws, `content` the stripped text used for empty checks and the
-/// plain fallback.
-fn body_fields(raw: &str) -> (slint::SharedString, ModelRc<RichTextSpan>) {
+/// A message body as a row renders it: `rich_content` is the blocks the
+/// bubble draws (inline runs as one `StyledText` each, fenced code blocks on
+/// their own), `content` the stripped text used for empty checks, copy and
+/// the plain path. A body with no markdown at all gets no blocks: the bubble
+/// draws `content` in a plain `Text`.
+fn body_fields(raw: &str) -> (slint::SharedString, ModelRc<RichTextBlock>) {
     let trimmed = raw.trim();
-    let spans: Vec<RichTextSpan> = parse_markdown(trimmed)
-        .iter()
-        .map(|s| RichTextSpan {
-            text: s.text.clone().into(),
-            bold: s.bold,
-            italic: s.italic,
-            strikethrough: s.strikethrough,
-            code: s.code,
-            code_block: s.code_block,
-        })
-        .collect();
-    (
-        strip_markdown(trimmed).into(),
-        ModelRc::new(VecModel::from(spans)),
-    )
+    let blocks = parse_blocks(trimmed);
+    let plain = match blocks.as_slice() {
+        [] => true,
+        [MarkdownBlock::Inline(paras)] => paras.iter().all(|p| p.formatting.is_empty()),
+        _ => false,
+    };
+    let rows: Vec<RichTextBlock> = if plain {
+        Vec::new()
+    } else {
+        blocks
+            .into_iter()
+            .map(|b| match b {
+                MarkdownBlock::Inline(paras) => RichTextBlock {
+                    plain: paras.iter().map(|p| p.text.as_str()).collect::<Vec<_>>().join("\n").into(),
+                    text: slint::StyledText::from_paragraphs(paras),
+                    ..Default::default()
+                },
+                MarkdownBlock::Code(code) => RichTextBlock {
+                    plain: code.into(),
+                    is_code_block: true,
+                    ..Default::default()
+                },
+            })
+            .collect()
+    };
+    (strip_markdown(trimmed).into(), ModelRc::new(VecModel::from(rows)))
 }
 
 /// Replace a displayed row's body with an edit. The bubble draws
@@ -522,15 +535,29 @@ mod tests {
     use super::*;
 
     #[test]
-    fn apply_edit_replaces_the_spans_the_bubble_draws() {
+    fn apply_edit_replaces_the_blocks_the_bubble_draws() {
         let mut row = MessageItemData::default();
         (row.content, row.rich_content) = body_fields("hi again");
+        assert_eq!(row.rich_content.row_count(), 0, "plain text draws through the plain Text");
 
         apply_edit(&mut row, "hi **againX**");
 
-        let drawn: String = row.rich_content.iter().map(|s| s.text.to_string()).collect();
-        assert_eq!(drawn, "hi againX");
+        let blocks: Vec<_> = row.rich_content.iter().collect();
+        assert_eq!(blocks.len(), 1, "one inline run, one StyledText");
+        assert!(!blocks[0].is_code_block);
+        assert_ne!(blocks[0].text, slint::StyledText::default());
+        assert_eq!(blocks[0].plain, "hi againX", "the run's accessible label");
         assert_eq!(row.content, "hi againX");
         assert!(row.is_edited);
+    }
+
+    #[test]
+    fn code_blocks_are_their_own_rows() {
+        let (_, blocks) = body_fields("look\n```\nlet x = 1;\n```");
+        let blocks: Vec<_> = blocks.iter().collect();
+        assert_eq!(blocks.len(), 2);
+        assert!(!blocks[0].is_code_block);
+        assert!(blocks[1].is_code_block);
+        assert_eq!(blocks[1].plain, "let x = 1;");
     }
 }

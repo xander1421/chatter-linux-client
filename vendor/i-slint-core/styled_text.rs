@@ -1,6 +1,9 @@
 // Copyright © SixtyFPS GmbH <info@slint.dev>
 // SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-2.0 OR LicenseRef-Slint-Software-3.0
 
+// Chatter patch: the paragraph types, so `StyledText::from_paragraphs` callers can name them.
+pub use i_slint_common::styled_text::{FormattedSpan, Style, StyledTextParagraph};
+
 /// Styled text that has been parsed and separated into paragraphs
 #[repr(transparent)]
 #[derive(Debug, PartialEq, Clone, Default)]
@@ -47,6 +50,14 @@ impl StyledText {
             paragraphs: [i_slint_common::styled_text::paragraph_from_plain_text(text.into())]
                 .into(),
         }
+    }
+
+    /// Chatter patch: builds styled text from paragraphs an application has
+    /// already parsed, without a markdown round-trip. `from_markdown` rejects
+    /// headings, quotes, fenced code and HTML, so it cannot take arbitrary
+    /// user text; this takes the spans of the caller's own parser.
+    pub fn from_paragraphs(paragraphs: impl IntoIterator<Item = StyledTextParagraph>) -> Self {
+        Self { paragraphs: paragraphs.into_iter().collect() }
     }
 
     /// Parses markdown into styled text.

@@ -302,6 +302,14 @@ impl Item for StyledTextItem {
                 None,
             )
         };
+        // Chatter patch: only a press on a link belongs to the text. Upstream
+        // accepted every press, move and release, so a TouchArea around the
+        // text (long-press, right-click, tap, hover) never saw one. Text
+        // without links is now as transparent to input as a plain `Text`.
+        #[cfg(feature = "shared-parley")]
+        if self.text().paragraphs.iter().all(|p| p.links.is_empty()) {
+            return InputEventResult::EventIgnored;
+        }
         match event {
             #[cfg(feature = "shared-parley")]
             MouseEvent::Released {
@@ -310,19 +318,21 @@ impl Item for StyledTextItem {
                 click_count: _,
                 touch_finger_id: _,
             } => {
-                if let Some(link) = find_link(position) {
-                    *cursor = super::MouseCursor::Pointer;
-                    Self::FIELD_OFFSETS.link_clicked().apply_pin(self).call(&(link.into(),));
-                }
+                let Some(link) = find_link(position) else {
+                    return InputEventResult::EventIgnored;
+                };
+                *cursor = super::MouseCursor::Pointer;
+                Self::FIELD_OFFSETS.link_clicked().apply_pin(self).call(&(link.into(),));
                 InputEventResult::EventAccepted
             }
             #[cfg(feature = "shared-parley")]
             MouseEvent::Moved { position, .. }
             | MouseEvent::Pressed { position, .. }
             | MouseEvent::Released { position, .. } => {
-                if find_link(position).is_some() {
-                    *cursor = super::MouseCursor::Pointer;
+                if find_link(position).is_none() {
+                    return InputEventResult::EventIgnored;
                 }
+                *cursor = super::MouseCursor::Pointer;
                 InputEventResult::EventAccepted
             }
             _ => InputEventResult::EventIgnored,
