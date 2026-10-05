@@ -722,6 +722,26 @@ impl ConversationHandle {
     /// open the conversation where the user left off. Read-receipt failures do
     /// not swallow it — the anchor is the caller's only chance at the boundary.
     pub async fn mark_as_read(&self) -> Result<UnreadAnchor, ConversationError> {
+        let anchor = self.mark_read_local()?;
+        if let Some((conversation_id, conversation_type)) = self.receipt_target() {
+            if let Ok(page) = self.client.messages().get_messages_local(
+                &conversation_id,
+                &conversation_type,
+                None,
+                crate::config::MESSAGE_PAGE_SIZE as u32,
+            ) {
+                self.send_read_receipts_for_page(&page);
+            }
+        }
+        Ok(anchor)
+    }
+
+    /// The local half of [`Self::mark_as_read`]: clears `is_read` and returns
+    /// the anchor, sending nothing. A conversation open calls this, loads its
+    /// newest page, and hands that page to
+    /// [`Self::send_read_receipts_for_page`] — the same rows `mark_as_read`
+    /// would have queried a second time.
+    pub fn mark_read_local(&self) -> Result<UnreadAnchor, ConversationError> {
         // Off screen, nothing has been read. `ChatterClient::set_app_visible`
         // re-runs this for the open conversation when the app comes back.
         if !self.client.chat_state().is_app_visible() {
@@ -733,42 +753,48 @@ impl ConversationHandle {
         ) else {
             return Err(ConversationError::NoConversation);
         };
-
-        let anchor = self
+        Ok(self
             .client
             .messages()
-            .mark_conversation_read(&conversation_id, &conversation_type)?;
+            .mark_conversation_read(&conversation_id, &conversation_type)?)
+    }
 
-        if matches!(self.conversation, ActiveConversation::AnonGroup(_)) {
-            return Ok(anchor);
+    /// Where a read receipt for this conversation goes, if one goes at all:
+    /// nothing while off screen, and anon groups have no receipt (per-user read
+    /// state would defeat the sender anonymity the group is for).
+    fn receipt_target(&self) -> Option<(crate::domain::ids::ChannelId, crate::domain::message::ConversationType)> {
+        if !self.client.chat_state().is_app_visible()
+            || matches!(self.conversation, ActiveConversation::AnonGroup(_))
+        {
+            return None;
         }
+        Some((
+            self.conversation.channel_id()?,
+            self.client.conversation_type_of(&self.conversation)?,
+        ))
+    }
 
-        // Receipt the peer's messages only — receipting our own back to
-        // ourselves is noise. `send_read_receipt` holds the privacy gate and
-        // picks the transport.
+    /// Receipt the peer's messages in `page` — the conversation's newest page,
+    /// as the open just loaded it. Receipting our own back to ourselves is
+    /// noise. `send_read_receipt` holds the privacy gate and picks the
+    /// transport.
+    pub fn send_read_receipts_for_page(&self, page: &[crate::domain::message::Message]) {
+        if self.receipt_target().is_none() {
+            return;
+        }
         let my_user_id = self.client.auth_state().get().current_user_id;
-        let Ok(messages) = self.client.messages().get_messages_local(
-            &conversation_id,
-            &conversation_type,
-            None,
-            50,
-        ) else {
-            return Ok(anchor);
-        };
-        let timestamps: Vec<u64> = messages
+        let timestamps: Vec<u64> = page
             .iter()
             .filter(|m| m.sender_id != my_user_id)
             .map(|m| m.sent_at)
             .collect();
-        // Off the caller's path: opening a conversation awaits this call for
-        // its anchor, and a receipt is a network send (session, sealed
-        // sender, or the Shield mailbox). Awaited here, a slow peer held the
+        // Off the caller's path: a receipt is a network send (session, sealed
+        // sender, or the Shield mailbox). Awaited, a slow peer held the
         // previous conversation on screen until it finished.
         let handle = self.clone();
         tokio::spawn(async move {
             let _ = handle.send_read_receipt(&timestamps).await;
         });
-        Ok(anchor)
     }
 
     // ========================================================================

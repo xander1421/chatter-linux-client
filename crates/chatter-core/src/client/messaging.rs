@@ -135,17 +135,59 @@ impl ChatterClient {
     /// the per-channel name instead of the global profile. `None` sender →
     /// "Anonymous".
     pub fn message_sender_display_name(&self, msg: &crate::domain::message::Message) -> String {
-        // System lines about us read "You left the channel", as Signal's do.
-        if matches!(msg.content, crate::domain::message::MessageContent::System(_))
-            && msg.sender_id.is_some()
-            && msg.sender_id == self.session_current_user_id()
-        {
-            return "You".to_string();
-        }
-        match msg.sender_id {
-            Some(ref id) => self.display_name_in(&msg.conversation_type, &msg.conversation_id, id),
-            None => "Anonymous".to_string(),
-        }
+        self.message_sender_display_names(std::slice::from_ref(msg))
+            .pop()
+            .unwrap_or_default()
+    }
+
+    /// [`Self::message_sender_display_name`] for a whole page, in order. Each
+    /// distinct sender is resolved once, and every sender's directory name in
+    /// a single query (`UserService::get_display_names`) — opening a
+    /// conversation used to run that lookup per row.
+    pub fn message_sender_display_names(
+        &self,
+        messages: &[crate::domain::message::Message],
+    ) -> Vec<String> {
+        use crate::domain::message::ConversationType;
+        let me = self.session_current_user_id();
+        let mut seen = std::collections::HashSet::new();
+        let senders: Vec<crate::domain::ids::UserId> = messages
+            .iter()
+            .filter_map(|m| m.sender_id)
+            .filter(|id| seen.insert(*id))
+            .collect();
+        let names = self.users().get_display_names(&senders);
+        // Anon-group names are per group, so they key on the conversation too.
+        let mut group_names = std::collections::HashMap::new();
+        messages
+            .iter()
+            .map(|msg| {
+                // System lines about us read "You left the channel", as Signal's do.
+                if matches!(msg.content, crate::domain::message::MessageContent::System(_))
+                    && msg.sender_id.is_some()
+                    && msg.sender_id == me
+                {
+                    return "You".to_string();
+                }
+                let Some(id) = msg.sender_id else { return "Anonymous".to_string() };
+                if msg.conversation_type == ConversationType::AnonGroup {
+                    let group_name = group_names
+                        .entry((msg.conversation_id, id))
+                        .or_insert_with(|| {
+                            let group_id = crate::domain::anon_group::AnonGroupId::from_uuid(
+                                *msg.conversation_id.as_uuid(),
+                            );
+                            self.get_anon_group_member_display_name(&group_id, &id)
+                                .filter(|n| !n.is_empty())
+                        })
+                        .clone();
+                    if let Some(name) = group_name {
+                        return name;
+                    }
+                }
+                names.get(&id).cloned().unwrap_or_else(|| self.display_name(&id))
+            })
+            .collect()
     }
 
     /// Reply-quote author display name, scoped like the sender. Empty when the
@@ -251,25 +293,19 @@ impl ChatterClient {
         }
     }
 
-    /// Sender avatar bytes for a message, resolved per conversation type
-    /// (anon-DM own-vs-peer, anon-group member; everything else our own
-    /// avatar or the sender's stored profile — the source member rows and DM
-    /// rows use). `None` = initials.
+    /// Sender avatar bytes for a message row, resolved per conversation type
+    /// (anon-group member; channels our own avatar or the sender's stored
+    /// profile). `None` = initials.
+    ///
+    /// DMs (server and anon) get `None`: a DM row draws no sender avatar —
+    /// there are two people and the header already shows the other one
+    /// (`message_item.slint`, `!root.is-dm`). Resolving and decoding one per
+    /// row anyway was 85% of the time it took to open a DM (400 ms of an
+    /// 870 ms open on a Galaxy S9, `conversation_open_bench`).
     pub fn message_sender_avatar(&self, msg: &crate::domain::message::Message) -> Option<Vec<u8>> {
         use crate::domain::message::ConversationType;
         match msg.conversation_type {
-            ConversationType::AnonDm => {
-                let dm_id = crate::domain::AnonDmId::from_uuid(*msg.conversation_id.as_uuid());
-                let is_own = self
-                    .session_current_user_id()
-                    .map(|uid| msg.sender_id == Some(uid))
-                    .unwrap_or(false);
-                if is_own {
-                    self.my_avatar()
-                } else {
-                    self.get_anon_dm_conversation(&dm_id).and_then(|d| d.peer_avatar)
-                }
-            }
+            ConversationType::ServerDm | ConversationType::AnonDm => None,
             ConversationType::AnonGroup => {
                 let group_id =
                     crate::domain::anon_group::AnonGroupId::from_uuid(*msg.conversation_id.as_uuid());

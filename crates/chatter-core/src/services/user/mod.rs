@@ -1292,20 +1292,47 @@ impl UserService {
     /// 4. Anon group member (stored on the group's member row in any group)
     /// 5. The `User <id8>` placeholder every other screen shows
     pub fn get_display_name(&self, user_id: &UserId) -> String {
+        self.get_display_names(std::slice::from_ref(user_id))
+            .remove(user_id)
+            .unwrap_or_else(|| friend_display_name_placeholder(user_id))
+    }
+
+    /// [`Self::get_display_name`] for many users at once: the profile name and
+    /// the username of every id come from one reader query
+    /// (`UserRepository::display_name_sources`); only an id that neither
+    /// resolves walks the per-id anon fallbacks. Opening a conversation names
+    /// all its senders through this.
+    pub fn get_display_names(&self, user_ids: &[UserId]) -> std::collections::HashMap<UserId, String> {
+        let sources = self.user_repo.display_name_sources(user_ids).unwrap_or_default();
+        user_ids
+            .iter()
+            .map(|user_id| {
+                let (profile_name, username) = sources.get(user_id).cloned().unwrap_or_default();
+                (*user_id, self.resolve_display_name(user_id, profile_name, username))
+            })
+            .collect()
+    }
+
+    fn resolve_display_name(
+        &self,
+        user_id: &UserId,
+        profile_name: Option<String>,
+        username: Option<String>,
+    ) -> String {
         // A profile row written while we had no profile key holds the
         // placeholder itself; that is not a name, so keep resolving (a known
         // username beats `User 1c242673` in Contacts).
         let placeholder = friend_display_name_placeholder(user_id);
-        if let Ok(Some(profile)) = self.user_repo.get_profile(user_id) {
-            if !profile.display_name.is_empty() && profile.display_name != placeholder {
-                return profile.display_name;
+        if let Some(name) = profile_name {
+            if !name.is_empty() && name != placeholder {
+                return name;
             }
         }
-        if let Ok(Some(user)) = self.user_repo.get(user_id) {
+        if let Some(username) = username {
             // `ensure_user_exists` stores the id itself as a placeholder
             // username; that is not a name, so keep resolving.
-            if !user.username.is_empty() && user.username != user_id.to_string() {
-                return user.username;
+            if !username.is_empty() && username != user_id.to_string() {
+                return username;
             }
         }
         if let Ok(Some(anon_dm)) = self.anon_dm_repo.get_conversation_by_peer(user_id) {

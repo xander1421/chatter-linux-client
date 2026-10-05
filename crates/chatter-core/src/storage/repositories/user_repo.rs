@@ -95,6 +95,45 @@ impl UserRepository {
         }
     }
 
+    /// The two name columns `UserService::get_display_names` reads first —
+    /// profile `display_name` and `users.username` — for every id, in one
+    /// query on a reader. A conversation page resolves all its senders here
+    /// instead of two writer-mutex queries per row (`get_profile` also pulled
+    /// each sender's avatar blob just to read the name). Ids with neither row
+    /// map to `(None, None)`.
+    pub fn display_name_sources(
+        &self,
+        ids: &[UserId],
+    ) -> Result<std::collections::HashMap<UserId, (Option<String>, Option<String>)>, StorageError> {
+        let mut out = std::collections::HashMap::with_capacity(ids.len());
+        let conn = self.db.read_connection()?;
+        // Far below SQLITE_MAX_VARIABLE_NUMBER; a page has a handful of senders.
+        for chunk in ids.chunks(500) {
+            let values = vec!["(?)"; chunk.len()].join(",");
+            let mut stmt = conn.prepare(&format!(
+                "WITH ids(id) AS (VALUES {values}) \
+                 SELECT ids.id, p.display_name, u.username FROM ids \
+                 LEFT JOIN profiles p ON p.user_id = ids.id \
+                 LEFT JOIN users u ON u.id = ids.id"
+            ))?;
+            let keys: Vec<String> = chunk.iter().map(|id| id.to_string()).collect();
+            let rows = stmt.query_map(rusqlite::params_from_iter(keys.iter()), |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, Option<String>>(1)?,
+                    row.get::<_, Option<String>>(2)?,
+                ))
+            })?;
+            for row in rows {
+                let (id, display_name, username) = row?;
+                if let Ok(id) = id.parse::<UserId>() {
+                    out.insert(id, (display_name, username));
+                }
+            }
+        }
+        Ok(out)
+    }
+
     /// Count total number of users in the database.
     pub fn count(&self) -> Result<u64, StorageError> {
         let conn = self.db.connection()?;
