@@ -565,10 +565,11 @@ export component Sidebar inherits Rectangle {
             material-level: 2;
             elevation: 3;
 
-            // Pinned to the top: without x/y a sized element is centred.
-            x: 0;
+            // Pinned to the top: without x/y a sized element is centred. On a
+            // phone it floats inset from the edges like the chat header.
+            x: root.mobile-mode ? Spacing.sm : Spacing.none;
             y: 0;
-            width: root.width;
+            width: root.width - 2 * self.x;
             height: root.top-row-height;
             accessible-role: button;
             accessible-label: "Search";
