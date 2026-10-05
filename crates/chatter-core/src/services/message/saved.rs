@@ -41,7 +41,13 @@ impl MessageService {
         // Create and store the message locally
         let channel_id = ChannelId::from(sender_id); // SavedMessages channel_id = user_id
         let sent_at = TimestampNanos::now().as_u64();
-        let mut message = Message::new_text(channel_id, ConversationType::SavedMessages, Some(sender_id), trimmed_text.to_string(), sent_at);
+        let mut message = Message::new_text(
+            channel_id,
+            ConversationType::SavedMessages,
+            Some(sender_id),
+            trimmed_text.to_string(),
+            sent_at,
+        );
         message.attachments = attachment_ids.clone();
         self.message_repo.insert_outgoing(&message)?;
 
@@ -72,7 +78,9 @@ impl MessageService {
             sent_at,
             attachment_ids.iter().map(|id| id.to_string()).collect(),
         );
-        let synced = self.sync_to_own_devices(&mut self.auth_client(), content).await;
+        let synced = self
+            .sync_to_own_devices(&mut self.auth_client(), content)
+            .await;
         tracing::debug!(message_id = %message_id, synced, "SavedMessages: own-device sync done");
         synced
     }
@@ -90,20 +98,31 @@ impl MessageService {
         let sender_id = self.settings_repo.current_user_id()?;
         let channel_id = ChannelId::from(sender_id);
 
-        let parsed_id: MessageId = message_id.parse()
-            .map_err(|_| MessageError::InvalidContent(format!("invalid message ID: {}", message_id)))?;
+        let parsed_id: MessageId = message_id.parse().map_err(|_| {
+            MessageError::InvalidContent(format!("invalid message ID: {}", message_id))
+        })?;
 
         // Check for duplicate (idempotent)
         if self.message_repo.get(&parsed_id)?.is_some() {
-            tracing::debug!(message_id, "SavedMessages sync: message already exists, skipping");
+            tracing::debug!(
+                message_id,
+                "SavedMessages sync: message already exists, skipping"
+            );
             return Ok(self.message_repo.get(&parsed_id)?.unwrap());
         }
 
-        let att_ids: Vec<AttachmentId> = attachment_ids.iter()
+        let att_ids: Vec<AttachmentId> = attachment_ids
+            .iter()
             .map(|s| AttachmentId::from_cdn_key(s))
             .collect();
 
-        let mut message = Message::new_text(channel_id, ConversationType::SavedMessages, Some(sender_id), text.to_string(), sent_at);
+        let mut message = Message::new_text(
+            channel_id,
+            ConversationType::SavedMessages,
+            Some(sender_id),
+            text.to_string(),
+            sent_at,
+        );
         message.id = parsed_id;
         message.attachments = att_ids;
 

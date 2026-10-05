@@ -123,9 +123,8 @@ mod tests {
 
     #[test]
     fn low_bits_pack_into_a_single_little_endian_byte() {
-        let caps = PeerCapabilities::from_bits(
-            PeerCapabilities::PREKEYS | PeerCapabilities::BRIDGE,
-        );
+        let caps =
+            PeerCapabilities::from_bits(PeerCapabilities::PREKEYS | PeerCapabilities::BRIDGE);
         assert_eq!(caps.encode().unwrap(), vec![0x81]);
     }
 

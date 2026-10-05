@@ -69,7 +69,11 @@ pub enum LinkEvent {
     /// therefore the only way to recognise an address as a peer already held
     /// *before* spending a connection to find out. `None` from a peer whose scan
     /// response was not received — treat that as unknown, never as unfamiliar.
-    Discovered { address: String, rssi: i16, peer: Option<[u8; 8]> },
+    Discovered {
+        address: String,
+        rssi: i16,
+        peer: Option<[u8; 8]>,
+    },
 
     /// A link is up **and writable right now**.
     ///

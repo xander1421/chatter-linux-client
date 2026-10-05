@@ -26,12 +26,12 @@ use crate::network::grpc::transport::GrpcTransport;
 
 use crate::error::NetworkError;
 use crate::proto::mailbox_v1::{
-    ephemeral_mailbox_service_client::EphemeralMailboxServiceClient,
     AcknowledgeMessagesRequest, AcknowledgeMessagesResponse, CreateEphemeralMailboxRequest,
     CreateEphemeralMailboxResponse, GetBlindSignaturePublicKeyRequest,
     GetBlindSignaturePublicKeyResponse, GetMailboxChallengeRequest, GetMailboxChallengeResponse,
     JoinAnonCallRoomRequest, JoinAnonCallRoomResponse, PollEphemeralMailboxRequest,
     PollEphemeralMailboxResponse, SendToEphemeralMailboxRequest, SendToEphemeralMailboxResponse,
+    ephemeral_mailbox_service_client::EphemeralMailboxServiceClient,
 };
 
 /// Anonymous mailbox client - NO auth interceptor.

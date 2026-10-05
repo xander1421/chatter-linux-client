@@ -16,7 +16,6 @@ use chatter_mesh::BitchatPacket;
 use crate::error::NoiseError;
 use crate::identity::MeshIdentity;
 
-
 /// Signs a packet over [`BitchatPacket::signing_preimage`].
 ///
 /// That preimage is the **padded** re-encoding with `ttl = 0`, no signature, and
@@ -76,7 +75,6 @@ pub fn verify_bytes(signature: &[u8; 64], data: &[u8], public_key: &[u8; 32]) ->
         .is_ok()
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -91,15 +89,22 @@ mod tests {
         MeshIdentity::from_keys(STATIC_SECRET, SIGNING_SECRET)
     }
 
-
     // MARK: raw bytes
 
     #[test]
     fn raw_signature_round_trips_and_rejects_tampering() {
         let id = identity();
         let signature = sign_bytes(&id, b"attack at dawn");
-        assert!(verify_bytes(&signature, b"attack at dawn", &id.signing_public()));
-        assert!(!verify_bytes(&signature, b"attack at dusk", &id.signing_public()));
+        assert!(verify_bytes(
+            &signature,
+            b"attack at dawn",
+            &id.signing_public()
+        ));
+        assert!(!verify_bytes(
+            &signature,
+            b"attack at dusk",
+            &id.signing_public()
+        ));
     }
 
     #[test]

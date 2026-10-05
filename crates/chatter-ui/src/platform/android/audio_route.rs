@@ -13,9 +13,9 @@
 use std::sync::{Mutex, OnceLock};
 
 use chatter_core::calls::audio_route::{AudioOutputs, AudioRoute, CallAudioRouting};
+use jni::JNIEnv;
 use jni::objects::{JObject, JValue};
 use jni::sys::jboolean;
-use jni::JNIEnv;
 use slint::ComponentHandle;
 
 use super::activity::{activity, clear_exception, jni_env};
@@ -70,7 +70,9 @@ fn apply(route: AudioRoute) {
 /// Mirror the route into the UI. Callers may be on the JNI (Android main)
 /// thread, so the Weak is upgraded on the Slint event loop.
 fn publish(speaker_on: bool) {
-    let Some(weak) = WINDOW.get().cloned() else { return };
+    let Some(weak) = WINDOW.get().cloned() else {
+        return;
+    };
     let _ = slint::invoke_from_event_loop(move || {
         if let Some(w) = weak.upgrade() {
             w.set_call_speaker_on(speaker_on);

@@ -5,11 +5,11 @@
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
-use crate::framework::mocks::{
-    InMemoryStorage, InMemorySignalStores, MockGrpcServer, NetworkSimulator,
-};
-use crate::framework::fixtures::TestUser;
 use crate::framework::builders::UserBuilder;
+use crate::framework::fixtures::TestUser;
+use crate::framework::mocks::{
+    InMemorySignalStores, InMemoryStorage, MockGrpcServer, NetworkSimulator,
+};
 
 // ============================================================================
 // Configuration Types
@@ -168,7 +168,6 @@ pub struct TestHarnessBuilder {
 }
 
 impl TestHarnessBuilder {
-
     /// Use mock in-process server.
     pub fn with_mock_network(mut self) -> Self {
         self.config.network_mode = NetworkMode::Mock;
@@ -219,9 +218,7 @@ impl TestHarnessBuilder {
 
         // Create signal stores
         let signal_stores = match &self.config.crypto_mode {
-            CryptoMode::Deterministic(seed) => {
-                Arc::new(InMemorySignalStores::deterministic(*seed))
-            }
+            CryptoMode::Deterministic(seed) => Arc::new(InMemorySignalStores::deterministic(*seed)),
             _ => Arc::new(InMemorySignalStores::new()),
         };
 
@@ -238,9 +235,9 @@ impl TestHarnessBuilder {
 
         // Create mock server if needed
         let mock_server = match &self.config.network_mode {
-            NetworkMode::Mock | NetworkMode::Flaky(_) => {
-                Some(Arc::new(MockGrpcServer::new().with_network(network.clone())))
-            }
+            NetworkMode::Mock | NetworkMode::Flaky(_) => Some(Arc::new(
+                MockGrpcServer::new().with_network(network.clone()),
+            )),
             _ => None,
         };
 

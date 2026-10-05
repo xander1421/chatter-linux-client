@@ -7,8 +7,8 @@
 //! Each `#[test]` runs on its own cargo test thread; `init_no_event_loop()`
 //! installs a per-thread testing platform, so tests do not collide.
 
-use i_slint_backend_testing as testing;
 use chatter_ui::MainWindow;
+use i_slint_backend_testing as testing;
 // DROPPED-P1s: feature-mirror globals asserted by the anon-mode / AI-template tests.
 use chatter_ui::{AiIntegrationGlobal, AnonMode};
 
@@ -106,7 +106,10 @@ fn smoke_can_query_elements() {
     // element with a type name. If this returns empty, the whole query layer is
     // dead and every other dynamic assertion is vacuous.
     let any = testing::ElementHandle::find_by_element_type_name(&w, "Rectangle").count();
-    assert!(any > 0, "expected at least one Rectangle in the element tree");
+    assert!(
+        any > 0,
+        "expected at least one Rectangle in the element tree"
+    );
 }
 
 // ============================================================================
@@ -168,10 +171,17 @@ fn wired_offline() -> (
 fn settings_notification_detail_level_persists_across_restart() {
     use chatter_core::services::notification_service::NotificationDetailLevel;
     let (rt, tmp, client, w) = wired_offline();
-    assert_eq!(client.notification_detail_level(), NotificationDetailLevel::None, "precondition");
+    assert_eq!(
+        client.notification_detail_level(),
+        NotificationDetailLevel::None,
+        "precondition"
+    );
 
     w.invoke_settings_notification_detail_changed("name_only".into());
-    assert_eq!(client.notification_detail_level(), NotificationDetailLevel::NameOnly);
+    assert_eq!(
+        client.notification_detail_level(),
+        NotificationDetailLevel::NameOnly
+    );
     assert_eq!(w.get_settings_notification_detail().as_str(), "name_only");
 
     drop(w);
@@ -201,7 +211,10 @@ fn settings_theme_pick_persists_and_flips_palette() {
 
     appearance.invoke_theme_changed("light".into());
     assert_eq!(client.theme_mode(), ThemeMode::Light);
-    assert!(!appearance.get_dark(), "light pick left the dark palette in force");
+    assert!(
+        !appearance.get_dark(),
+        "light pick left the dark palette in force"
+    );
     appearance.invoke_theme_changed("dark".into());
     assert!(appearance.get_dark());
 
@@ -212,7 +225,11 @@ fn settings_theme_pick_persists_and_flips_palette() {
         .data_dir(tmp.path().to_string_lossy().to_string())
         .build()
         .expect("offline ChatterClient::build (restart)");
-    assert_eq!(client.theme_mode(), ThemeMode::Dark, "theme did not survive a restart");
+    assert_eq!(
+        client.theme_mode(),
+        ThemeMode::Dark,
+        "theme did not survive a restart"
+    );
 }
 
 #[test]
@@ -237,7 +254,10 @@ fn settings_glass_effects_persists_and_restores_before_first_frame() {
     let w = MainWindow::new().expect("restarted window");
     chatter_ui::bin_ui::features::modals::settings::wire_settings_callbacks(&w, &client);
     let appearance = w.global::<chatter_ui::Appearance>();
-    assert!(!appearance.get_glass_effects(), "saved preference must apply before showing the window");
+    assert!(
+        !appearance.get_glass_effects(),
+        "saved preference must apply before showing the window"
+    );
     appearance.invoke_glass_effects_changed(true);
     assert!(client.glass_effects_enabled());
     assert!(appearance.get_glass_effects());
@@ -248,7 +268,11 @@ fn settings_read_receipts_toggle_reaches_core() {
     require_element_queries();
     let (_rt, _tmp, client, w) = wired_offline();
     // Default is true (get_bool_setting.unwrap_or(true)).
-    assert_eq!(client.read_receipts_enabled().unwrap(), true, "precondition");
+    assert_eq!(
+        client.read_receipts_enabled().unwrap(),
+        true,
+        "precondition"
+    );
     // Fire the exact callback the read-receipts Toggle invokes.
     w.invoke_settings_read_receipts_changed(false);
     assert_eq!(
@@ -257,7 +281,11 @@ fn settings_read_receipts_toggle_reaches_core() {
         "read-receipts toggle did NOT reach core (dead/stub wire)"
     );
     w.invoke_settings_read_receipts_changed(true);
-    assert_eq!(client.read_receipts_enabled().unwrap(), true, "toggle did not flip back on");
+    assert_eq!(
+        client.read_receipts_enabled().unwrap(),
+        true,
+        "toggle did not flip back on"
+    );
 }
 
 // ============================================================================
@@ -308,9 +336,12 @@ fn settings_modal_routing_wire_instantiates_conditional() {
     // Force a layout pass (a headless `if` needs one to (de)materialise).
     let pump = |w: &MainWindow| {
         let scale = w.window().scale_factor();
-        w.window().dispatch_event(slint::platform::WindowEvent::Resized {
-            size: slint::LogicalSize::new(1000.0, 800.0).to_physical(scale).to_logical(scale),
-        });
+        w.window()
+            .dispatch_event(slint::platform::WindowEvent::Resized {
+                size: slint::LogicalSize::new(1000.0, 800.0)
+                    .to_physical(scale)
+                    .to_logical(scale),
+            });
         slint::Timer::single_shot(std::time::Duration::from_millis(80), || {
             slint::quit_event_loop().unwrap();
         });
@@ -319,7 +350,11 @@ fn settings_modal_routing_wire_instantiates_conditional() {
 
     // Negative control: modal not open → SettingsScreen absent.
     pump(&w);
-    assert_eq!(count_settings(), 0, "SettingsScreen present before the modal was opened");
+    assert_eq!(
+        count_settings(),
+        0,
+        "SettingsScreen present before the modal was opened"
+    );
 
     // Push Settings → conditional must appear.
     chatter_ui::bin_ui::features::back::push(&w, "settings");
@@ -334,12 +369,20 @@ fn settings_modal_routing_wire_instantiates_conditional() {
     // Something Settings opens keeps it mounted underneath.
     chatter_ui::bin_ui::features::back::push(&w, "sessions");
     pump(&w);
-    assert_eq!(count_settings(), 1, "Sessions over Settings unmounted Settings");
+    assert_eq!(
+        count_settings(),
+        1,
+        "Sessions over Settings unmounted Settings"
+    );
 
     // Close it → conditional must tear down (with what it opened).
     chatter_ui::bin_ui::features::back::close(&w, "settings");
     pump(&w);
-    assert_eq!(count_settings(), 0, "closing Settings did NOT remove SettingsScreen");
+    assert_eq!(
+        count_settings(),
+        0,
+        "closing Settings did NOT remove SettingsScreen"
+    );
 }
 
 // ============================================================================
@@ -375,7 +418,10 @@ fn avatar_bytes_decode_and_bind_to_display_property() {
 
     // Real decrypted-shaped bytes → a real Image.
     let img = avatar_bytes_to_image(TINY_PNG).expect("valid PNG must decode to an Image");
-    assert!(img.size().width > 0 && img.size().height > 0, "decoded avatar has zero size");
+    assert!(
+        img.size().width > 0 && img.size().height > 0,
+        "decoded avatar has zero size"
+    );
 
     // Bind it to the display property the Avatar element reads.
     w.set_user_avatar_source(img);
@@ -389,7 +435,11 @@ fn avatar_bytes_decode_and_bind_to_display_property() {
 #[test]
 fn settings_typing_indicators_toggle_reaches_core() {
     let (_rt, _tmp, client, w) = wired_offline();
-    assert_eq!(client.typing_indicators_enabled().unwrap(), true, "precondition");
+    assert_eq!(
+        client.typing_indicators_enabled().unwrap(),
+        true,
+        "precondition"
+    );
     w.invoke_settings_typing_indicators_changed(false);
     assert_eq!(
         client.typing_indicators_enabled().unwrap(),
@@ -397,7 +447,11 @@ fn settings_typing_indicators_toggle_reaches_core() {
         "typing-indicators toggle did NOT reach core (dead/stub wire)"
     );
     w.invoke_settings_typing_indicators_changed(true);
-    assert_eq!(client.typing_indicators_enabled().unwrap(), true, "toggle did not flip back on");
+    assert_eq!(
+        client.typing_indicators_enabled().unwrap(),
+        true,
+        "toggle did not flip back on"
+    );
 }
 
 // ============================================================================
@@ -493,7 +547,9 @@ fn channel_settings_mute_toggle_reaches_core() {
 
     // ---- L2 static: handler reaches the mute_conversation core method --------
     let src = include_str!("../src/bin_ui/features/modals/channel_settings.rs");
-    let idx = src.find("on_channel_settings_toggle_mute").expect("mute handler present");
+    let idx = src
+        .find("on_channel_settings_toggle_mute")
+        .expect("mute handler present");
     let after = &src[idx..];
     assert!(
         after.contains(".mute_conversation("),
@@ -517,7 +573,9 @@ fn channel_settings_mute_toggle_reaches_core() {
 fn edit_profile_avatar_change_persists_picked_bytes_on_save() {
     let src = include_str!("../src/bin_ui/features/modals/profile.rs");
 
-    let pick = src.find("on_edit_profile_change_avatar").expect("avatar handler present");
+    let pick = src
+        .find("on_edit_profile_change_avatar")
+        .expect("avatar handler present");
     let pick_body = &src[pick..src[pick..].find("on_profile_view_safety_number").unwrap() + pick];
     assert!(
         pick_body.contains("PENDING_AVATAR_BYTES"),
@@ -528,7 +586,9 @@ fn edit_profile_avatar_change_persists_picked_bytes_on_save() {
         "the picker must NOT persist the avatar — Cancel would keep it"
     );
 
-    let save = src.find("on_edit_profile_save").expect("save handler present");
+    let save = src
+        .find("on_edit_profile_save")
+        .expect("save handler present");
     let save_end = src[save..]
         .find("on_edit_profile_change_avatar")
         .map(|i| i + save)
@@ -574,8 +634,14 @@ fn channel_settings_save_reaches_core_and_drafts_are_wired() {
     // Draft properties exist and round-trip (Inputs write here; Save reads).
     w.set_channel_settings_name_draft("Renamed Channel".into());
     w.set_channel_settings_description_draft("New description".into());
-    assert_eq!(w.get_channel_settings_name_draft().as_str(), "Renamed Channel");
-    assert_eq!(w.get_channel_settings_description_draft().as_str(), "New description");
+    assert_eq!(
+        w.get_channel_settings_name_draft().as_str(),
+        "Renamed Channel"
+    );
+    assert_eq!(
+        w.get_channel_settings_description_draft().as_str(),
+        "New description"
+    );
 
     // L1 dynamic: the save callback runs the real handler without panicking.
     w.invoke_channel_settings_save(
@@ -585,7 +651,9 @@ fn channel_settings_save_reaches_core_and_drafts_are_wired() {
 
     // L2 static (Rust): the handler reaches ChatterClient::update_channel.
     let src = include_str!("../src/bin_ui/features/modals/channel_settings.rs");
-    let idx = src.find("on_channel_settings_save").expect("save handler present");
+    let idx = src
+        .find("on_channel_settings_save")
+        .expect("save handler present");
     assert!(
         src[idx..].contains(".update_channel("),
         "the save handler must call ChatterClient::update_channel (was Slint-only / dead)"
@@ -641,7 +709,10 @@ fn channel_settings_icon_picker_is_wired() {
 
     // The icon-path property exists and round-trips (Save reads it).
     w.set_channel_settings_icon_path("/tmp/some-icon.png".into());
-    assert_eq!(w.get_channel_settings_icon_path().as_str(), "/tmp/some-icon.png");
+    assert_eq!(
+        w.get_channel_settings_icon_path().as_str(),
+        "/tmp/some-icon.png"
+    );
 
     // L1 dynamic: the pick callback runs without panicking. Under
     // CHATTER_HEADLESS (set by the harness) FilePicker resolves to "cancelled"
@@ -663,12 +734,16 @@ fn channel_settings_icon_picker_is_wired() {
 
     // L2 static (Rust): pick handler stashes the path; Save reads it + uploads.
     let src = include_str!("../src/bin_ui/features/modals/channel_settings.rs");
-    let pick_idx = src.find("on_channel_settings_pick_icon").expect("pick-icon handler present");
+    let pick_idx = src
+        .find("on_channel_settings_pick_icon")
+        .expect("pick-icon handler present");
     assert!(
         src[pick_idx..].contains(".set_channel_settings_icon_path("),
         "the pick handler must stash the chosen path on channel-settings-icon-path"
     );
-    let save_idx = src.find("on_channel_settings_save").expect("save handler present");
+    let save_idx = src
+        .find("on_channel_settings_save")
+        .expect("save handler present");
     let save_body = &src[save_idx..];
     assert!(
         save_body.contains(".get_channel_settings_icon_path(")
@@ -730,7 +805,9 @@ fn message_reply_in_thread_button_is_wired() {
 
     // L2 static (Rust): the handler opens a thread (state + panel load).
     let src = include_str!("../src/bin_ui/features/chat_actions/message_actions.rs");
-    let idx = src.find("on_thread_clicked").expect("thread handler present");
+    let idx = src
+        .find("on_thread_clicked")
+        .expect("thread handler present");
     assert!(
         src[idx..].contains(".open_thread(") && src[idx..].contains("load_thread_data"),
         "the thread handler must open the thread state + load the thread panel"
@@ -747,7 +824,10 @@ fn message_reply_in_thread_button_is_wired() {
     );
     let icon_action = include_str!("../../../ui/components/icon_action.slint");
     assert!(icon_action.contains("accessible-label: root.label;"));
-    assert!(icon_action.contains("accessible-action-default => { if root.enabled { root.clicked(); } }"));
+    assert!(
+        icon_action
+            .contains("accessible-action-default => { if root.enabled { root.clicked(); } }")
+    );
     assert!(
         slint_src.contains("root.thread-clicked(root.message-id)"),
         "the Reply-in-thread button must fire thread-clicked with the message id"
@@ -790,30 +870,46 @@ fn message_react_edit_pin_actions_are_wired() {
 
     // L2 static (Rust): each handler reaches the ConversationHandle core method.
     let react_src = include_str!("../src/bin_ui/features/chat/reactions.rs");
-    let ri = react_src.find("on_reaction_selected").expect("reaction handler present");
-    assert!(react_src[ri..].contains(".toggle_reaction("),
-        "the reaction picker must call ConversationHandle::toggle_reaction");
+    let ri = react_src
+        .find("on_reaction_selected")
+        .expect("reaction handler present");
+    assert!(
+        react_src[ri..].contains(".toggle_reaction("),
+        "the reaction picker must call ConversationHandle::toggle_reaction"
+    );
 
     let edit_src = include_str!("../src/bin_ui/features/chat/edit.rs");
-    let ei = edit_src.find("on_send_edit").expect("send-edit handler present");
-    assert!(edit_src[ei..].contains(".send_edit("),
-        "the composer edit must call ConversationHandle::send_edit");
+    let ei = edit_src
+        .find("on_send_edit")
+        .expect("send-edit handler present");
+    assert!(
+        edit_src[ei..].contains(".send_edit("),
+        "the composer edit must call ConversationHandle::send_edit"
+    );
 
     let pin_src = include_str!("../src/bin_ui/features/chat/pin.rs");
     let pi = pin_src.find("on_pin_message").expect("pin handler present");
-    assert!(pin_src[pi..].contains(".send_pin("),
-        "the pin action must call ConversationHandle::send_pin");
+    assert!(
+        pin_src[pi..].contains(".send_pin("),
+        "the pin action must call ConversationHandle::send_pin"
+    );
 
     // L2 static (Slint): the affordances actually invoke the callbacks.
     let picker = include_str!("../../../ui/chat/reaction_picker.slint");
-    assert!(picker.contains("root.reaction-selected("),
-        "the reaction picker must invoke reaction-selected");
+    assert!(
+        picker.contains("root.reaction-selected("),
+        "the reaction picker must invoke reaction-selected"
+    );
     let composer = include_str!("../../../ui/chat/message_composer.slint");
-    assert!(composer.contains("root.send-edit("),
-        "the composer must invoke send-edit when editing");
+    assert!(
+        composer.contains("root.send-edit("),
+        "the composer must invoke send-edit when editing"
+    );
     let app = include_str!("../../../ui/app.slint");
-    assert!(app.contains("root.edit-message(") && app.contains("root.pin-message("),
-        "the message actions must invoke edit-message and pin-message");
+    assert!(
+        app.contains("root.edit-message(") && app.contains("root.pin-message("),
+        "the message actions must invoke edit-message and pin-message"
+    );
 }
 
 // ============================================================================
@@ -832,19 +928,29 @@ fn link_device_page_start_and_cancel_are_wired() {
     chatter_ui::bin_ui::features::auth::link_device::wire_link_device(&w, &client);
 
     // Negative control: nothing active before the callback fires.
-    assert!(!w.get_link_device_active(), "precondition: link flow inactive");
+    assert!(
+        !w.get_link_device_active(),
+        "precondition: link flow inactive"
+    );
 
     // The "Generate QR" button fires start → the handler must flip the bound
     // state synchronously (QR generation itself continues async and offline
     // will error later — the wire is what's under test here).
     w.invoke_link_device_start();
-    assert!(w.get_link_device_active(), "start did NOT reach the handler (dead wire)");
+    assert!(
+        w.get_link_device_active(),
+        "start did NOT reach the handler (dead wire)"
+    );
     assert_eq!(w.get_link_device_status().as_str(), "Generating QR code…");
 
     // Cancel routes back to login.
     w.set_current_view("link-device".into());
     w.invoke_link_device_cancel();
-    assert_eq!(w.get_current_view().as_str(), "login", "cancel did not route back to login");
+    assert_eq!(
+        w.get_current_view().as_str(),
+        "login",
+        "cancel did not route back to login"
+    );
 }
 
 // ============================================================================
@@ -903,7 +1009,10 @@ fn sidebar_injects_ai_channel_and_never_autoselects_it() {
         .expect("offline ChatterClient::build (restart)");
 
     let channels = client.sidebar_channels();
-    assert!(!channels.is_empty(), "AI channel missing from sidebar with local AI ON");
+    assert!(
+        !channels.is_empty(),
+        "AI channel missing from sidebar with local AI ON"
+    );
     let first = &channels[0];
     assert!(
         chatter_core::client::is_jarvis_channel(&first.id),
@@ -948,7 +1057,9 @@ fn ai_channel_select_and_send_are_wired_to_jarvis() {
     // L2 static (Rust): the send handler branches on the AI channel BEFORE the
     // network pipeline and routes to the Jarvis channel handler.
     let send_src = include_str!("../src/bin_ui/features/chat/send_message.rs");
-    let idx = send_src.find("is_jarvis_channel").expect("send must branch on the AI channel");
+    let idx = send_src
+        .find("is_jarvis_channel")
+        .expect("send must branch on the AI channel");
     assert!(
         send_src[idx..].contains("handle_jarvis_channel_send"),
         "AI-channel sends must route to handle_jarvis_channel_send, not send_message_ui"
@@ -960,7 +1071,9 @@ fn ai_channel_select_and_send_are_wired_to_jarvis() {
 
     // L2 static (Rust): channel selection branches to the Jarvis history loader.
     let sel_src = include_str!("../src/bin_ui/features/sidebar/channel.rs");
-    let sidx = sel_src.find("is_jarvis_channel_str").expect("selection must branch on the AI channel");
+    let sidx = sel_src
+        .find("is_jarvis_channel_str")
+        .expect("selection must branch on the AI channel");
     assert!(
         sel_src[sidx..].contains("load_jarvis_channel_into_ui"),
         "selecting the AI channel must load Jarvis history, not the network channel loader"
@@ -974,7 +1087,10 @@ fn ai_channel_select_and_send_are_wired_to_jarvis() {
         "Ctrl+J must open the AI channel"
     );
     // The floating panel is gone.
-    assert!(!app_src.contains("JarvisPanel"), "the Jarvis floating panel must stay deleted");
+    assert!(
+        !app_src.contains("JarvisPanel"),
+        "the Jarvis floating panel must stay deleted"
+    );
 
     // The spawned Jarvis task parks on invoke_from_event_loop (this harness
     // never pumps the loop), so a plain Runtime::drop would hang waiting for
@@ -1025,7 +1141,10 @@ fn settings_local_ai_section_is_wired_to_core() {
         "local_ai_pull_model",
         "local_ai_hardware_profile",
     ] {
-        assert!(src.contains(needle), "local_ai.rs must call ChatterClient::{needle}");
+        assert!(
+            src.contains(needle),
+            "local_ai.rs must call ChatterClient::{needle}"
+        );
     }
 
     // L2 static (Slint): the section fires the callbacks.
@@ -1036,7 +1155,10 @@ fn settings_local_ai_section_is_wired_to_core() {
         "root.local-ai-select-model(",
         "root.local-ai-download(",
     ] {
-        assert!(slint_src.contains(needle), "settings screen must invoke {needle}");
+        assert!(
+            slint_src.contains(needle),
+            "settings screen must invoke {needle}"
+        );
     }
 }
 
@@ -1064,8 +1186,15 @@ fn jarvis_memory_browser_is_wired() {
 
     // L2 static (Rust): handlers reach the memory façade.
     let src = include_str!("../src/bin_ui/features/jarvis/memory_view.rs");
-    for needle in ["jarvis_memory_facts", "jarvis_top_entities", "jarvis_entity_connections"] {
-        assert!(src.contains(needle), "memory_view.rs must call ChatterClient::{needle}");
+    for needle in [
+        "jarvis_memory_facts",
+        "jarvis_top_entities",
+        "jarvis_entity_connections",
+    ] {
+        assert!(
+            src.contains(needle),
+            "memory_view.rs must call ChatterClient::{needle}"
+        );
     }
 
     // L2 static (Slint): settings entry opens the modal; modal is routed.
@@ -1104,11 +1233,17 @@ fn link_approve_paste_reaches_core_parser() {
         !w.get_link_approve_preview_ready(),
         "paste did NOT reach the core parser (dead wire)"
     );
-    assert!(!w.get_link_approve_error().is_empty(), "parse error was not surfaced");
+    assert!(
+        !w.get_link_approve_error().is_empty(),
+        "parse error was not surfaced"
+    );
 
     // Clearing the box resets the error — the documented empty-string branch.
     w.invoke_link_approve_paste_changed("".into());
-    assert!(w.get_link_approve_error().is_empty(), "clearing input did not clear error");
+    assert!(
+        w.get_link_approve_error().is_empty(),
+        "clearing input did not clear error"
+    );
 }
 
 // ============================================================================
@@ -1376,7 +1511,9 @@ fn public_channels_do_not_claim_end_to_end_encryption() {
     let binding = &binding[..binding.find(';').expect("privacy-line binding terminated")];
 
     assert!(
-        binding.contains("root.conversation-kind == ConversationKind.channel && !root.private-channel"),
+        binding.contains(
+            "root.conversation-kind == ConversationKind.channel && !root.private-channel"
+        ),
         "the privacy line does not branch on a public channel, so a plaintext \
          public channel is labelled end-to-end encrypted: {binding}"
     );
@@ -1389,7 +1526,9 @@ fn public_channels_do_not_claim_end_to_end_encryption() {
         .expect("public-broadcast binding present");
     let broadcast = &broadcast[..broadcast.find(';').expect("public-broadcast terminated")];
     assert!(
-        broadcast.contains("root.conversation-kind == ConversationKind.channel && !root.private-channel"),
+        broadcast.contains(
+            "root.conversation-kind == ConversationKind.channel && !root.private-channel"
+        ),
         "public-broadcast does not include public channels, so the lock icon \
          contradicts the privacy text: {broadcast}"
     );
@@ -1540,7 +1679,9 @@ fn profile_shared_content_drawer_is_wired() {
         modal_src.contains("ModalContainer {")
             && modal_src.contains("full-screen: root.mobile-mode")
             && modal_src.contains("bottom-inset: root.mobile-mode ? 0px : root.bottom-inset;")
-            && modal_src.contains("padding-bottom: root.mobile-mode ? root.bottom-inset + Spacing.md : Spacing.none;"),
+            && modal_src.contains(
+                "padding-bottom: root.mobile-mode ? root.bottom-inset + Spacing.md : Spacing.none;"
+            ),
         "user_profile.slint must go full-screen through ModalContainer"
     );
 }
@@ -1583,10 +1724,22 @@ fn settings_message_backup_wires_reach_core() {
     // L2 static (Rust): every handler reaches the core façade.
     let src = include_str!("../src/bin_ui/features/modals/settings.rs");
     for (handler, core_call) in [
-        ("on_settings_export_message_backup", ".export_message_backup("),
-        ("on_settings_import_message_backup", ".import_message_backup("),
-        ("on_settings_server_message_backup", ".enable_server_message_backup("),
-        ("on_settings_restore_message_backup", ".restore_server_message_backup("),
+        (
+            "on_settings_export_message_backup",
+            ".export_message_backup(",
+        ),
+        (
+            "on_settings_import_message_backup",
+            ".import_message_backup(",
+        ),
+        (
+            "on_settings_server_message_backup",
+            ".enable_server_message_backup(",
+        ),
+        (
+            "on_settings_restore_message_backup",
+            ".restore_server_message_backup(",
+        ),
     ] {
         let i = src
             .find(handler)
@@ -1621,19 +1774,43 @@ fn welcome_page_buttons_are_wired() {
     // Registration parks the user on the welcome view; every button must exit it.
     w.set_current_view("welcome".into());
     w.invoke_welcome_get_started();
-    assert_eq!(w.get_current_view().as_str(), "main", "get-started did not reach main view");
+    assert_eq!(
+        w.get_current_view().as_str(),
+        "main",
+        "get-started did not reach main view"
+    );
 
     w.set_current_view("welcome".into());
     w.invoke_welcome_add_friends();
-    assert_eq!(w.get_current_view().as_str(), "main", "add-friends did not reach main view");
-    assert_eq!(w.get_active_tab().as_str(), "contacts", "add-friends did not open the Contacts tab");
-    assert_eq!(w.get_friends_modal_tab().as_str(), "find", "add-friends did not land on find tab");
+    assert_eq!(
+        w.get_current_view().as_str(),
+        "main",
+        "add-friends did not reach main view"
+    );
+    assert_eq!(
+        w.get_active_tab().as_str(),
+        "contacts",
+        "add-friends did not open the Contacts tab"
+    );
+    assert_eq!(
+        w.get_friends_modal_tab().as_str(),
+        "find",
+        "add-friends did not land on find tab"
+    );
 
     w.set_active_tab("chats".into());
     w.set_current_view("welcome".into());
     w.invoke_welcome_browse_channels();
-    assert_eq!(w.get_current_view().as_str(), "main", "browse-channels did not reach main view");
-    assert_eq!(w.get_active_modal().as_str(), "create-channel", "browse-channels did not open create-channel modal");
+    assert_eq!(
+        w.get_current_view().as_str(),
+        "main",
+        "browse-channels did not reach main view"
+    );
+    assert_eq!(
+        w.get_active_modal().as_str(),
+        "create-channel",
+        "browse-channels did not open create-channel modal"
+    );
 
     // Registration must route THROUGH welcome, not skip it (static wire proof —
     // the async register flow needs a live server, so assert on source).
@@ -1712,12 +1889,13 @@ fn presence_status_picker_reaches_core() {
     w.invoke_change_user_status("auto".into());
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
     loop {
-        if client.presence_mode().unwrap().as_deref()
-            == Some("auto")
-        {
+        if client.presence_mode().unwrap().as_deref() == Some("auto") {
             break;
         }
-        assert!(std::time::Instant::now() < deadline, "auto mode did not persist");
+        assert!(
+            std::time::Instant::now() < deadline,
+            "auto mode did not persist"
+        );
         std::thread::sleep(std::time::Duration::from_millis(50));
     }
 
@@ -1766,9 +1944,9 @@ fn forward_message_confirm_is_wired_to_core() {
         target_type: "dm".into(),
     }];
     w.set_forward_targets(ModelRc::new(VecModel::from(targets)));
-    w.set_forward_sources(ModelRc::new(VecModel::from(vec![slint::SharedString::from(
-        format!("{peer}:123456789"),
-    )])));
+    w.set_forward_sources(ModelRc::new(VecModel::from(vec![
+        slint::SharedString::from(format!("{peer}:123456789")),
+    ])));
     chatter_ui::bin_ui::features::back::push(&w, "forward-message");
     w.invoke_forward_message(peer.into());
     assert_eq!(
@@ -1840,7 +2018,9 @@ fn connection_banner_is_dismissible_without_hiding_the_outage() {
         "sidebar has no server-unreachable indicator, so a dismissed banner hides the outage"
     );
     assert_eq!(
-        sidebar.matches("accessible-label: \"Server unreachable\"").count(),
+        sidebar
+            .matches("accessible-label: \"Server unreachable\"")
+            .count(),
         2,
         "both the expanded and collapsed sidebar footers must carry the dot"
     );
@@ -1901,8 +2081,14 @@ fn back_press_closes_the_message_context_menu_first() {
     w.set_mobile_show_chat(true);
     w.set_context_menu_visible(true);
     assert!(chatter_ui::bin_ui::features::back::handle_back(&w));
-    assert!(!w.get_context_menu_visible(), "back did not close the context menu");
-    assert!(w.get_mobile_show_chat(), "back left the conversation instead of closing the menu");
+    assert!(
+        !w.get_context_menu_visible(),
+        "back did not close the context menu"
+    );
+    assert!(
+        w.get_mobile_show_chat(),
+        "back left the conversation instead of closing the menu"
+    );
 }
 
 /// Back inside a mobile conversation returns to the conversation list rather
@@ -1959,11 +2145,17 @@ fn back_press_closes_the_composer_emoji_picker() {
         chatter_ui::bin_ui::features::back::handle_back(&w),
         "back with the emoji picker open must be consumed in-app"
     );
-    assert!(!w.get_composer_emoji_picker_visible(), "back did NOT close the emoji picker");
+    assert!(
+        !w.get_composer_emoji_picker_visible(),
+        "back did NOT close the emoji picker"
+    );
 
     w.set_composer_gif_picker_visible(true);
     assert!(chatter_ui::bin_ui::features::back::handle_back(&w));
-    assert!(!w.get_composer_gif_picker_visible(), "back did NOT close the GIF picker");
+    assert!(
+        !w.get_composer_gif_picker_visible(),
+        "back did NOT close the GIF picker"
+    );
 }
 
 /// The unified search palette is an overlay, not a stacked screen, so
@@ -1979,7 +2171,10 @@ fn back_press_closes_the_unified_search_palette() {
         chatter_ui::bin_ui::features::back::handle_back(&w),
         "back with the search palette open must be consumed in-app"
     );
-    assert!(!w.get_unified_search_open(), "back did NOT close the palette");
+    assert!(
+        !w.get_unified_search_open(),
+        "back did NOT close the palette"
+    );
 }
 
 /// Back while a call rang popped the chat UNDER the full-screen ring (FX3).
@@ -1997,10 +2192,16 @@ fn back_while_ringing_hides_the_ring_and_pops_nothing_under_it() {
     w.set_mobile_show_chat(true);
     w.set_incoming_call_visible(true);
 
-    assert!(chatter_ui::bin_ui::features::back::handle_back(&w), "Back while ringing must be consumed");
+    assert!(
+        chatter_ui::bin_ui::features::back::handle_back(&w),
+        "Back while ringing must be consumed"
+    );
     assert!(w.get_incoming_call_minimized(), "Back must hide the ring");
     assert!(w.get_incoming_call_visible(), "the call must keep ringing");
-    assert!(w.get_mobile_show_chat(), "Back while ringing popped the chat underneath");
+    assert!(
+        w.get_mobile_show_chat(),
+        "Back while ringing popped the chat underneath"
+    );
 
     // With the ring hidden, the next Back is the chat's again.
     assert!(chatter_ui::bin_ui::features::back::handle_back(&w));
@@ -2017,18 +2218,25 @@ fn back_key_still_arrives_after_the_search_palette_closes() {
     let w = boot();
     chatter_ui::bin_ui::features::back::wire(&w);
     let scale = w.window().scale_factor();
-    w.window().dispatch_event(slint::platform::WindowEvent::Resized {
-        size: slint::LogicalSize::new(1000.0, 800.0).to_physical(scale).to_logical(scale),
-    });
+    w.window()
+        .dispatch_event(slint::platform::WindowEvent::Resized {
+            size: slint::LogicalSize::new(1000.0, 800.0)
+                .to_physical(scale)
+                .to_logical(scale),
+        });
 
     w.set_unified_search_open(true);
     // A redraw instantiates the palette, whose field focuses itself on init.
     w.window().request_redraw();
-    w.window().dispatch_event(slint::platform::WindowEvent::Resized {
-        size: slint::LogicalSize::new(1000.0, 801.0).to_physical(scale).to_logical(scale),
-    });
+    w.window()
+        .dispatch_event(slint::platform::WindowEvent::Resized {
+            size: slint::LogicalSize::new(1000.0, 801.0)
+                .to_physical(scale)
+                .to_logical(scale),
+        });
     slint::platform::update_timers_and_animations();
-    w.window().dispatch_event(slint::platform::WindowEvent::KeyPressed { text: "r".into() });
+    w.window()
+        .dispatch_event(slint::platform::WindowEvent::KeyPressed { text: "r".into() });
     assert_eq!(
         w.get_unified_search_query().as_str(),
         "r",
@@ -2042,9 +2250,10 @@ fn back_key_still_arrives_after_the_search_palette_closes() {
     // Any Back-consuming layer will do as the witness; selection mode needs
     // no core.
     w.set_selection_mode(true);
-    w.window().dispatch_event(slint::platform::WindowEvent::KeyPressed {
-        text: slint::platform::Key::Back.into(),
-    });
+    w.window()
+        .dispatch_event(slint::platform::WindowEvent::KeyPressed {
+            text: slint::platform::Key::Back.into(),
+        });
     assert!(
         !w.get_selection_mode(),
         "Back after closing the search palette never reached back-pressed — the \
@@ -2065,9 +2274,12 @@ fn opening_a_composer_picker_on_a_phone_keeps_back_alive() {
     w.set_is_mobile_platform(true);
     let scale = w.window().scale_factor();
     let resize = |h: f32| {
-        w.window().dispatch_event(slint::platform::WindowEvent::Resized {
-            size: slint::LogicalSize::new(1000.0, h).to_physical(scale).to_logical(scale),
-        });
+        w.window()
+            .dispatch_event(slint::platform::WindowEvent::Resized {
+                size: slint::LogicalSize::new(1000.0, h)
+                    .to_physical(scale)
+                    .to_logical(scale),
+            });
     };
     resize(800.0);
 
@@ -2075,7 +2287,8 @@ fn opening_a_composer_picker_on_a_phone_keeps_back_alive() {
     w.window().request_redraw();
     resize(801.0);
     slint::platform::update_timers_and_animations();
-    w.window().dispatch_event(slint::platform::WindowEvent::KeyPressed { text: "r".into() });
+    w.window()
+        .dispatch_event(slint::platform::WindowEvent::KeyPressed { text: "r".into() });
     assert_eq!(
         w.get_unified_search_query().as_str(),
         "r",
@@ -2089,15 +2302,17 @@ fn opening_a_composer_picker_on_a_phone_keeps_back_alive() {
             w.set_composer_emoji_picker_visible(true);
         }
         slint::platform::update_timers_and_animations();
-        w.window().dispatch_event(slint::platform::WindowEvent::KeyPressed { text: "x".into() });
+        w.window()
+            .dispatch_event(slint::platform::WindowEvent::KeyPressed { text: "x".into() });
         assert_eq!(
             w.get_unified_search_query().as_str(),
             "r",
             "the text field kept focus while a picker opened on a phone (gif={gif})"
         );
-        w.window().dispatch_event(slint::platform::WindowEvent::KeyPressed {
-            text: slint::platform::Key::Back.into(),
-        });
+        w.window()
+            .dispatch_event(slint::platform::WindowEvent::KeyPressed {
+                text: slint::platform::Key::Back.into(),
+            });
         assert!(
             !w.get_composer_emoji_picker_visible() && !w.get_composer_gif_picker_visible(),
             "a real Back did not close the picker (gif={gif})"
@@ -2118,17 +2333,22 @@ fn new_channel_done_and_back_put_the_keyboard_away() {
     chatter_ui::bin_ui::features::back::wire(&w);
     w.set_is_mobile_platform(true);
     let scale = w.window().scale_factor();
-    w.window().dispatch_event(slint::platform::WindowEvent::Resized {
-        size: slint::LogicalSize::new(400.0, 800.0).to_physical(scale).to_logical(scale),
-    });
+    w.window()
+        .dispatch_event(slint::platform::WindowEvent::Resized {
+            size: slint::LogicalSize::new(400.0, 800.0)
+                .to_physical(scale)
+                .to_logical(scale),
+        });
     chatter_ui::bin_ui::features::back::push(&w, "create-channel");
     w.window().request_redraw();
     // Let the card's entrance animation settle so clicks land on the fields.
     testing::mock_elapsed_time(std::time::Duration::from_millis(1000));
 
     let key = |t: slint::SharedString| {
-        w.window().dispatch_event(slint::platform::WindowEvent::KeyPressed { text: t.clone() });
-        w.window().dispatch_event(slint::platform::WindowEvent::KeyReleased { text: t });
+        w.window()
+            .dispatch_event(slint::platform::WindowEvent::KeyPressed { text: t.clone() });
+        w.window()
+            .dispatch_event(slint::platform::WindowEvent::KeyReleased { text: t });
     };
     let ret: slint::SharedString = slint::platform::Key::Return.into();
 
@@ -2137,11 +2357,19 @@ fn new_channel_done_and_back_put_the_keyboard_away() {
         .expect("the New Channel name field is not on screen");
     name.mock_single_click(slint::platform::PointerEventButton::Left);
     key("a".into());
-    assert_eq!(w.get_create_channel_name().as_str(), "a", "precondition: the name field must take typing");
+    assert_eq!(
+        w.get_create_channel_name().as_str(),
+        "a",
+        "precondition: the name field must take typing"
+    );
 
     key(ret.clone());
     key("d".into());
-    assert_eq!(w.get_create_channel_name().as_str(), "a", "Done on the name did not leave the name field");
+    assert_eq!(
+        w.get_create_channel_name().as_str(),
+        "a",
+        "Done on the name did not leave the name field"
+    );
     assert_eq!(
         w.get_create_channel_description().as_str(),
         "d",
@@ -2167,10 +2395,15 @@ fn new_channel_done_and_back_put_the_keyboard_away() {
         "release-text-focus left the name field focused (Back hid the keyboard only on screen)"
     );
 
-    w.window().dispatch_event(slint::platform::WindowEvent::KeyPressed {
-        text: slint::platform::Key::Back.into(),
-    });
-    assert_eq!(w.get_active_modal().as_str(), "none", "Back stopped arriving after focus was released");
+    w.window()
+        .dispatch_event(slint::platform::WindowEvent::KeyPressed {
+            text: slint::platform::Key::Back.into(),
+        });
+    assert_eq!(
+        w.get_active_modal().as_str(),
+        "none",
+        "Back stopped arriving after focus was released"
+    );
 }
 
 /// Back inside a thread returns to the conversation, not to the chat list.
@@ -2199,7 +2432,6 @@ fn back_press_pops_the_thread_panel_before_the_conversation() {
     );
 }
 
-
 /// LAYER 2: the KEY EVENT actually reaches that decision.
 ///
 /// This is the half the bug report was about — the backend already maps
@@ -2220,13 +2452,17 @@ fn back_key_event_reaches_the_handler() {
     // window has a zero-size root — the key would be discarded before it ever
     // reached back-scope, for a reason that has nothing to do with the wire.
     let scale = w.window().scale_factor();
-    w.window().dispatch_event(slint::platform::WindowEvent::Resized {
-        size: slint::LogicalSize::new(1000.0, 800.0).to_physical(scale).to_logical(scale),
-    });
+    w.window()
+        .dispatch_event(slint::platform::WindowEvent::Resized {
+            size: slint::LogicalSize::new(1000.0, 800.0)
+                .to_physical(scale)
+                .to_logical(scale),
+        });
 
-    w.window().dispatch_event(slint::platform::WindowEvent::KeyPressed {
-        text: slint::platform::Key::Back.into(),
-    });
+    w.window()
+        .dispatch_event(slint::platform::WindowEvent::KeyPressed {
+            text: slint::platform::Key::Back.into(),
+        });
 
     assert_eq!(
         w.get_active_modal().as_str(),
@@ -2256,11 +2492,16 @@ fn back_scope_does_not_steal_focus_from_text_input() {
     // TextInput holds focus.
     let after = &app[at..];
     assert!(
-        after.lines().skip(1).filter(|l| l.starts_with("    ") && !l.starts_with("     "))
+        after
+            .lines()
+            .skip(1)
+            .filter(|l| l.starts_with("    ") && !l.starts_with("     "))
             .all(|l| l == "    }"),
         "an element was added beside back-scope instead of inside it"
     );
-    let main = &after[..after.find("Global keyboard shortcuts").expect("shortcut scope moved")];
+    let main = &after[..after
+        .find("Global keyboard shortcuts")
+        .expect("shortcut scope moved")];
     assert!(
         main.contains("focus-on-click: false;"),
         "back-scope would steal focus from the composer on every stray tap"
@@ -2272,7 +2513,8 @@ fn back_scope_does_not_steal_focus_from_text_input() {
     // Back and drawer Escape are consumed; ordinary typing keeps bubbling.
     assert!(
         main.contains("if (event.text == Key.Back || (event.text == Key.Escape")
-            && main.contains("root.composer-emoji-picker-visible || root.composer-gif-picker-visible")
+            && main
+                .contains("root.composer-emoji-picker-visible || root.composer-gif-picker-visible")
             && main.contains("return reject;"),
         "back-scope must reject ordinary keys and limit Escape to the drawer, or it \
          would eat text input"
@@ -2298,14 +2540,16 @@ fn back_scope_ignores_ordinary_typing() {
     chatter_ui::bin_ui::features::back::push(&w, "sessions");
 
     let scale = w.window().scale_factor();
-    w.window().dispatch_event(slint::platform::WindowEvent::Resized {
-        size: slint::LogicalSize::new(1000.0, 800.0).to_physical(scale).to_logical(scale),
-    });
+    w.window()
+        .dispatch_event(slint::platform::WindowEvent::Resized {
+            size: slint::LogicalSize::new(1000.0, 800.0)
+                .to_physical(scale)
+                .to_logical(scale),
+        });
 
     for text in ["a", "Z", " "] {
-        w.window().dispatch_event(slint::platform::WindowEvent::KeyPressed {
-            text: text.into(),
-        });
+        w.window()
+            .dispatch_event(slint::platform::WindowEvent::KeyPressed { text: text.into() });
     }
 
     assert_eq!(
@@ -2344,7 +2588,11 @@ fn back_pops_selection_mode_before_the_modal() {
 
     // Second press now takes the modal.
     w.invoke_back_pressed();
-    assert_eq!(w.get_active_modal().as_str(), "none", "the second back press did not close the modal");
+    assert_eq!(
+        w.get_active_modal().as_str(),
+        "none",
+        "the second back press did not close the modal"
+    );
 }
 
 /// UX1 (R4 P0-1): the current tab and the screens pushed over it are separate
@@ -2363,28 +2611,59 @@ fn back_pops_the_modal_stack_before_leaving_the_tab() {
     // Slint callback. Settings is pushed, not a tab (UX3).
     w.set_active_tab("profile".into());
     w.invoke_nav_push("settings".into());
-    assert!(w.get_settings_open(), "pushing Settings did not raise settings-open");
+    assert!(
+        w.get_settings_open(),
+        "pushing Settings did not raise settings-open"
+    );
     w.invoke_nav_push("sessions".into());
     w.invoke_nav_push("link-device-approve".into());
     assert_eq!(top(&w), "link-device-approve");
     assert!(back::handle_back(&w));
-    assert_eq!(top(&w), "sessions", "Back from Link device must return to Sessions");
-    assert!(w.get_settings_open(), "Settings must stay mounted under Sessions");
+    assert_eq!(
+        top(&w),
+        "sessions",
+        "Back from Link device must return to Sessions"
+    );
+    assert!(
+        w.get_settings_open(),
+        "Settings must stay mounted under Sessions"
+    );
     assert!(back::handle_back(&w));
-    assert_eq!(top(&w), "settings", "Back from Sessions must return to Settings, not Chats");
+    assert_eq!(
+        top(&w),
+        "settings",
+        "Back from Sessions must return to Settings, not Chats"
+    );
     assert!(back::handle_back(&w));
-    assert_eq!((tab(&w), top(&w)), ("profile".into(), "none".into()), "Back from Settings must return to the account menu");
-    assert!(!w.get_settings_open(), "popping Settings left settings-open set");
-    assert!(back::handle_back(&w), "Back on a non-Chats tab must be consumed");
+    assert_eq!(
+        (tab(&w), top(&w)),
+        ("profile".into(), "none".into()),
+        "Back from Settings must return to the account menu"
+    );
+    assert!(
+        !w.get_settings_open(),
+        "popping Settings left settings-open set"
+    );
+    assert!(
+        back::handle_back(&w),
+        "Back on a non-Chats tab must be consumed"
+    );
     assert_eq!(tab(&w), "chats", "Back from a root tab must go to Chats");
-    assert!(!back::handle_back(&w), "Back on Chats with nothing open backgrounds the app");
+    assert!(
+        !back::handle_back(&w),
+        "Back on Chats with nothing open backgrounds the app"
+    );
 
     // A profile opened from Contacts is pushed over Contacts, never the Profile tab.
     w.set_active_tab("contacts".into());
     back::push(&w, "user-profile");
     assert_eq!(tab(&w), "contacts", "opening a profile changed the tab");
     assert!(back::handle_back(&w));
-    assert_eq!((tab(&w), top(&w)), ("contacts".into(), "none".into()), "Back from a profile must land on Contacts");
+    assert_eq!(
+        (tab(&w), top(&w)),
+        ("contacts".into(), "none".into()),
+        "Back from a profile must land on Contacts"
+    );
 
     // close() takes what the closed screen opened with it; closing a screen
     // that is not open (a late async completion) changes nothing.
@@ -2427,14 +2706,18 @@ fn tab_bar_and_call_bar_sit_under_pushed_modals() {
         "if root.fab-visible: GlassSurface {",
         r#"if current-view == "main": VerticalLayout {"#,
     ] {
-        let at = app.find(header).unwrap_or_else(|| panic!("app.slint lost `{header}`"));
+        let at = app
+            .find(header)
+            .unwrap_or_else(|| panic!("app.slint lost `{header}`"));
         let body = &app[at..at + 400];
         assert!(
             body.contains("z: -1;") || body.contains("z: -2;") || body.contains("z: -0.5;"),
             "`{header}` is no longer layered under the modals"
         );
     }
-    let bar = app.find("if root.bottom-nav-visible: MobileBottomNav {").unwrap();
+    let bar = app
+        .find("if root.bottom-nav-visible: MobileBottomNav {")
+        .unwrap();
     assert!(app[bar..bar + 300].contains("active-tab: root.active-tab;"));
     for screen in [
         r#"if root.active-tab == "calls": CallHistoryScreen {"#,
@@ -2486,18 +2769,37 @@ fn message_selection_toggle_reaches_the_selection_store() {
 
     // L1 dynamic: selecting one message turns the mode on and marks that row.
     w.invoke_message_selection_toggled("msg-a".into());
-    assert!(w.get_selection_mode(), "toggling a message must enter selection mode");
-    assert_eq!(w.get_selected_message_count(), 1, "the count must reach the selection bar");
+    assert!(
+        w.get_selection_mode(),
+        "toggling a message must enter selection mode"
+    );
+    assert_eq!(
+        w.get_selected_message_count(),
+        1,
+        "the count must reach the selection bar"
+    );
     let rows = w.get_messages();
-    assert!(rows.row_data(0).unwrap().selected, "the selected row must be marked");
-    assert!(!rows.row_data(1).unwrap().selected, "an unselected row must NOT be marked");
+    assert!(
+        rows.row_data(0).unwrap().selected,
+        "the selected row must be marked"
+    );
+    assert!(
+        !rows.row_data(1).unwrap().selected,
+        "an unselected row must NOT be marked"
+    );
 
     // Deselecting the last one leaves the mode entirely — a selection bar
     // reading "0 selected" with a dead delete button is a dead end.
     w.invoke_message_selection_toggled("msg-a".into());
-    assert!(!w.get_selection_mode(), "deselecting the last message must exit selection mode");
+    assert!(
+        !w.get_selection_mode(),
+        "deselecting the last message must exit selection mode"
+    );
     assert_eq!(w.get_selected_message_count(), 0);
-    assert!(!w.get_messages().row_data(0).unwrap().selected, "the mark must be cleared");
+    assert!(
+        !w.get_messages().row_data(0).unwrap().selected,
+        "the mark must be cleared"
+    );
 
     // L2 static (Slint): the hold gesture is what fires this on a touch screen.
     let item_src = include_str!("../../../ui/chat/message_item.slint");
@@ -2517,7 +2819,8 @@ fn message_selection_toggle_reaches_the_selection_store() {
     // longer hold.
     let menu_src = include_str!("../../../ui/chat/message_context_menu.slint");
     assert!(
-        menu_src.contains(r#"label: "Select""#) && menu_src.contains("root.select-clicked(root.message-id)"),
+        menu_src.contains(r#"label: "Select""#)
+            && menu_src.contains("root.select-clicked(root.message-id)"),
         "the message menu must carry a Select item wired to select-clicked"
     );
 }
@@ -2591,7 +2894,9 @@ fn pin_conversation_reaches_core_from_the_sidebar_menu() {
 
     // L2 static (Rust): the handler is not a Slint-only bool.
     let src = include_str!("../src/bin_ui/features/sidebar/sections.rs");
-    let idx = src.find("on_set_conversation_pinned").expect("pin handler present");
+    let idx = src
+        .find("on_set_conversation_pinned")
+        .expect("pin handler present");
     assert!(
         src[idx..].contains(".set_conversation_pinned("),
         "the pin entry must call ChatterClient::set_conversation_pinned"
@@ -2636,10 +2941,16 @@ fn pinning_round_trips_through_core_and_is_local_only() {
         .expect("offline ChatterClient::build");
 
     let id = "11111111-1111-1111-1111-111111111111";
-    assert!(!client.is_conversation_pinned(id), "nothing is pinned by default");
+    assert!(
+        !client.is_conversation_pinned(id),
+        "nothing is pinned by default"
+    );
 
     assert!(client.set_conversation_pinned(id, true));
-    assert!(client.is_conversation_pinned(id), "the pin must survive the write");
+    assert!(
+        client.is_conversation_pinned(id),
+        "the pin must survive the write"
+    );
     assert!(
         client.pinned_conversation_ids().contains(id),
         "the bulk query the lists use must see the same pin as the single lookup"
@@ -2676,7 +2987,9 @@ fn folder_reorder_is_wired_and_reaches_reorder_sections() {
     w.invoke_move_section("00000000-0000-0000-0000-000000000001".into(), -1);
 
     let src = include_str!("../src/bin_ui/features/sidebar/sections.rs");
-    let idx = src.find("on_move_section").expect("move-section handler present");
+    let idx = src
+        .find("on_move_section")
+        .expect("move-section handler present");
     assert!(
         src[idx..].contains(".move_section("),
         "the folder menu's Move up/down must reach ChatterClient::move_section"
@@ -2684,7 +2997,9 @@ fn folder_reorder_is_wired_and_reaches_reorder_sections() {
 
     // The core method is what finally calls the orphaned reorder.
     let core = include_str!("../../chatter-core/src/services/section_service.rs");
-    let core_idx = core.find("pub fn move_section").expect("move_section in core");
+    let core_idx = core
+        .find("pub fn move_section")
+        .expect("move_section in core");
     assert!(
         core[core_idx..].contains("self.reorder_sections(&ids)"),
         "move_section must be the caller reorder_sections never had"
@@ -2716,7 +3031,9 @@ fn folder_sort_mode_reaches_core_and_defaults_to_recent() {
     chatter_ui::bin_ui::features::sidebar::wire(&w, &client);
 
     // L1 dynamic through core: a new folder is Recent, and the mode persists.
-    let section = client.create_section("Work", "\u{1F4C1}").expect("create_section");
+    let section = client
+        .create_section("Work", "\u{1F4C1}")
+        .expect("create_section");
     assert_eq!(
         section.sort_mode,
         chatter_core::domain::section::SectionSortMode::Recent,
@@ -2724,9 +3041,14 @@ fn folder_sort_mode_reaches_core_and_defaults_to_recent() {
     );
 
     client
-        .set_section_sort_mode(&section.id, chatter_core::domain::section::SectionSortMode::Alphabetical)
+        .set_section_sort_mode(
+            &section.id,
+            chatter_core::domain::section::SectionSortMode::Alphabetical,
+        )
         .expect("set_section_sort_mode");
-    let reloaded = client.list_sections_with_conversations().expect("list sections");
+    let reloaded = client
+        .list_sections_with_conversations()
+        .expect("list sections");
     assert_eq!(
         reloaded[0].sort_mode,
         chatter_core::domain::section::SectionSortMode::Alphabetical,
@@ -2737,7 +3059,9 @@ fn folder_sort_mode_reaches_core_and_defaults_to_recent() {
     w.invoke_set_section_sort_mode(section.id.to_string().into(), "unread".into());
 
     let src = include_str!("../src/bin_ui/features/sidebar/sections.rs");
-    let idx = src.find("on_set_section_sort_mode").expect("sort-mode handler present");
+    let idx = src
+        .find("on_set_section_sort_mode")
+        .expect("sort-mode handler present");
     assert!(
         src[idx..].contains(".set_section_sort_mode("),
         "the sort picker must reach ChatterClient::set_section_sort_mode"
@@ -2759,7 +3083,9 @@ fn folder_sort_mode_reaches_core_and_defaults_to_recent() {
 #[test]
 fn foldered_conversations_are_excluded_from_the_loose_lists() {
     let core = include_str!("../../chatter-core/src/client/mod.rs");
-    let idx = core.find("pub fn sidebar_channels").expect("sidebar_channels present");
+    let idx = core
+        .find("pub fn sidebar_channels")
+        .expect("sidebar_channels present");
     let body = &core[idx..idx + 2000];
     assert!(
         body.contains("all_sectioned_conversation_ids"),
@@ -2771,7 +3097,9 @@ fn foldered_conversations_are_excluded_from_the_loose_lists() {
     );
 
     let messaging = include_str!("../../chatter-core/src/client/messaging.rs");
-    let dm_idx = messaging.find("fn finish_dm_sidebar").expect("finish_dm_sidebar present");
+    let dm_idx = messaging
+        .find("fn finish_dm_sidebar")
+        .expect("finish_dm_sidebar present");
     let dm_body = &messaging[dm_idx..dm_idx + 1200];
     assert!(
         dm_body.contains("all_sectioned_conversation_ids") && dm_body.contains("is_pinned"),
@@ -2797,7 +3125,9 @@ fn folder_badges_refresh_on_message_arrival_and_on_read() {
     );
 
     let channel = include_str!("../src/bin_ui/features/sidebar/channel.rs");
-    let read_idx = channel.find("mark_read_local()").expect("mark_read_local present");
+    let read_idx = channel
+        .find("mark_read_local()")
+        .expect("mark_read_local present");
     assert!(
         channel[read_idx..].contains("refresh_section_badges"),
         "reading a foldered channel must clear its folder badge too"
@@ -2808,9 +3138,9 @@ fn folder_badges_refresh_on_message_arrival_and_on_read() {
     // else — the count came straight back on the next refresh and after every
     // restart.
     let dm = include_str!("../src/bin_ui/features/sidebar/dm.rs");
-    let dm_read_idx = dm.find("mark_read_local()").expect(
-        "selecting a DM must mark it read in core, not just zero the sidebar model",
-    );
+    let dm_read_idx = dm
+        .find("mark_read_local()")
+        .expect("selecting a DM must mark it read in core, not just zero the sidebar model");
     assert!(
         dm[dm_read_idx..].contains("refresh_section_badges"),
         "reading a foldered DM must clear its folder badge too"
@@ -2867,7 +3197,9 @@ fn folder_rows_are_pre_grouped_per_section() {
 #[test]
 fn folder_ui_sizes_up_for_touch() {
     let sidebar = include_str!("../../../ui/sidebar/sidebar.slint");
-    let idx = sidebar.find("CustomSectionList {").expect("CustomSectionList instantiated");
+    let idx = sidebar
+        .find("CustomSectionList {")
+        .expect("CustomSectionList instantiated");
     assert!(
         // `touch`, not `mobile-mode`: a two-pane tablet is not in mobile
         // layout but is still driven by a finger (595b5031).
@@ -2877,13 +3209,17 @@ fn folder_ui_sizes_up_for_touch() {
 
     let list = include_str!("../../../ui/sidebar/custom_section_list.slint");
     // Folder rows are the chat list's own rows, sized by the same flag.
-    let rows = &list[list.find("for conv in section.conversations: ChatRow {").expect("folder rows are ChatRows")..];
+    let rows = &list[list
+        .find("for conv in section.conversations: ChatRow {")
+        .expect("folder rows are ChatRows")..];
     assert!(
         rows[..200].contains("mobile-mode: root.mobile-mode;"),
         "folder conversation rows must meet the touch minimum"
     );
     assert!(
-        list.contains("height: root.mobile-mode ? Spacing.touch-target-min : Spacing.button-height"),
+        list.contains(
+            "height: root.mobile-mode ? Spacing.touch-target-min : Spacing.button-height"
+        ),
         "folder headers must meet the touch minimum"
     );
     assert!(
@@ -2954,7 +3290,9 @@ fn a_foldered_dm_still_resolves_to_its_conversation() {
         .expect("offline ChatterClient::build");
 
     let peer = "22222222-2222-2222-2222-222222222222";
-    let section = client.create_section("Work", "\u{1F4C1}").expect("create_section");
+    let section = client
+        .create_section("Work", "\u{1F4C1}")
+        .expect("create_section");
     client
         .move_conversation_to_section(
             peer,
@@ -3006,7 +3344,9 @@ fn folders_hide_identified_conversations_while_anon_mode_is_on() {
         .expect("offline ChatterClient::build");
 
     let channel = "33333333-3333-3333-3333-333333333333";
-    let section = client.create_section("Work", "\u{1F4C1}").expect("create_section");
+    let section = client
+        .create_section("Work", "\u{1F4C1}")
+        .expect("create_section");
     client
         .move_conversation_to_section(
             channel,
@@ -3015,11 +3355,19 @@ fn folders_hide_identified_conversations_while_anon_mode_is_on() {
         )
         .expect("move_conversation_to_section");
 
-    let listed = client.list_sections_with_conversations().expect("list sections");
-    assert_eq!(listed[0].conversations.len(), 1, "the folder holds the channel");
+    let listed = client
+        .list_sections_with_conversations()
+        .expect("list sections");
+    assert_eq!(
+        listed[0].conversations.len(),
+        1,
+        "the folder holds the channel"
+    );
 
     client.set_anon_mode_enabled(true);
-    let hidden = client.list_sections_with_conversations().expect("list sections");
+    let hidden = client
+        .list_sections_with_conversations()
+        .expect("list sections");
     assert!(
         hidden[0].conversations.is_empty(),
         "an identified channel must not surface through a folder in anon mode"
@@ -3046,7 +3394,9 @@ fn foldered_private_groups_leave_the_loose_list() {
     );
 
     let rows = include_str!("../../chatter-core/src/client/messaging.rs");
-    let idx = rows.find("pub fn sidebar_rows").expect("sidebar_rows present");
+    let idx = rows
+        .find("pub fn sidebar_rows")
+        .expect("sidebar_rows present");
     assert!(
         rows[idx..idx + 1500].contains("sidebar_private_groups()"),
         "the chat list's group rows must come from the folder-aware core list"
@@ -3069,7 +3419,7 @@ fn foldered_private_groups_leave_the_loose_list() {
 #[test]
 fn chat_list_is_one_list_by_activity_with_pins_first() {
     use chatter_core::domain::message::ConversationType as CT;
-    use chatter_core::ui::sidebar_data::{order_chat_rows, ChatRowSendData};
+    use chatter_core::ui::sidebar_data::{ChatRowSendData, order_chat_rows};
     use chatter_ui::bin_ui::converters::ChatRowExt;
     use slint::Model;
 
@@ -3092,7 +3442,11 @@ fn chat_list_is_one_list_by_activity_with_pins_first() {
     ];
     order_chat_rows(&mut rows);
     let ids: Vec<_> = rows.iter().map(|r| r.id.clone()).collect();
-    assert_eq!(ids, [PINNED, CHANNEL, DM, OLD], "pinned first, then a newer channel above an older DM");
+    assert_eq!(
+        ids,
+        [PINNED, CHANNEL, DM, OLD],
+        "pinned first, then a newer channel above an older DM"
+    );
 
     no_keyring();
     let rt = tokio::runtime::Runtime::new().unwrap();
@@ -3118,11 +3472,25 @@ fn chat_list_is_one_list_by_activity_with_pins_first() {
         chatter_core::client::UnreadBadges { row: 1, total: 2 },
     );
     let model = w.get_chat_rows();
-    let ids: Vec<String> = model.iter().map(|r| r.conversation_id.to_string()).collect();
-    assert_eq!(ids, [PINNED, OLD, CHANNEL, DM], "the row moves to the top of the unpinned rows, not above the pin");
+    let ids: Vec<String> = model
+        .iter()
+        .map(|r| r.conversation_id.to_string())
+        .collect();
+    assert_eq!(
+        ids,
+        [PINNED, OLD, CHANNEL, DM],
+        "the row moves to the top of the unpinned rows, not above the pin"
+    );
     let moved = model.row_data(1).unwrap();
-    assert_eq!((moved.last_message.as_str(), moved.unread_count), ("hello", 1));
-    assert_eq!(model.row_data(3).unwrap().unread_count, 2, "other rows keep their unread counts");
+    assert_eq!(
+        (moved.last_message.as_str(), moved.unread_count),
+        ("hello", 1)
+    );
+    assert_eq!(
+        model.row_data(3).unwrap().unread_count,
+        2,
+        "other rows keep their unread counts"
+    );
 }
 
 /// A channel row in the sidebar showed the channel name and nothing else, while
@@ -3145,7 +3513,9 @@ fn channel_and_group_rows_show_their_latest_activity() {
         core[idx..idx + 900].contains("&channel.conversation_type()"),
         "a channel row's preview must come from the channel's own bucket"
     );
-    let idx = core.find("fn private_group_row(").expect("private_group_row present");
+    let idx = core
+        .find("fn private_group_row(")
+        .expect("private_group_row present");
     assert!(
         core[idx..idx + 700].contains("sidebar_activity("),
         "private-group rows must take core's preview wording"
@@ -3153,14 +3523,23 @@ fn channel_and_group_rows_show_their_latest_activity() {
 
     // 2. Forwarding — the row must hand each visual what it was given.
     let list = include_str!("../../../ui/sidebar/chat_list.slint");
-    for prop in ["last-message: root.data.last-message", "timestamp: root.data.timestamp", "is-typing: root.data.is-typing"] {
-        assert_eq!(list.matches(prop).count(), 3, "ChatRow must forward `{prop}` to all three row visuals");
+    for prop in [
+        "last-message: root.data.last-message",
+        "timestamp: root.data.timestamp",
+        "is-typing: root.data.is-typing",
+    ] {
+        assert_eq!(
+            list.matches(prop).count(),
+            3,
+            "ChatRow must forward `{prop}` to all three row visuals"
+        );
     }
 
     // 3. Markup — the second line and the right-hand column exist on both rows.
     let channel_row = include_str!("../../../ui/sidebar/channel_list_item.slint");
     assert!(
-        channel_row.contains("text: root.last-message;") && channel_row.contains("text: root.timestamp;"),
+        channel_row.contains("text: root.last-message;")
+            && channel_row.contains("text: root.timestamp;"),
         "the channel row must render the preview and the timestamp"
     );
     assert!(
@@ -3176,7 +3555,9 @@ fn channel_and_group_rows_show_their_latest_activity() {
     // 4. Typing reaches every row kind, not just DMs: one model, matched on
     // the conversation id or (DMs) the peer.
     let typing = include_str!("../src/bin_ui/features/auth/initial_data.rs");
-    let t_idx = typing.find("pub fn update_sidebar_typing").expect("update_sidebar_typing present");
+    let t_idx = typing
+        .find("pub fn update_sidebar_typing")
+        .expect("update_sidebar_typing present");
     let t_body = &typing[t_idx..t_idx + 700];
     assert!(
         t_body.contains("row.conversation_id.as_str() == id"),
@@ -3249,11 +3630,9 @@ fn wired_dm_open(
     // The accept handler reads the peer from the ACTIVE conversation, never
     // from the callback, so the key it pins always belongs to the conversation
     // the prompt was drawn in.
-    client
-        .chat_state()
-        .set_active_conversation(chatter_core::state::ActiveConversation::ServerDm {
-            peer_id: peer,
-        });
+    client.chat_state().set_active_conversation(
+        chatter_core::state::ActiveConversation::ServerDm { peer_id: peer },
+    );
     (tmp, client, w)
 }
 
@@ -3298,8 +3677,7 @@ fn identity_change_accept_reaches_core_and_clears_the_pending_change() {
         "a sealed-sender change is cryptographically attributed"
     );
     assert!(
-        !w.get_identity_change_title().is_empty()
-            && !w.get_identity_change_detail().is_empty(),
+        !w.get_identity_change_title().is_empty() && !w.get_identity_change_detail().is_empty(),
         "the prompt must carry core's wording, not an empty bar"
     );
 
@@ -3318,8 +3696,11 @@ fn identity_change_accept_reaches_core_and_clears_the_pending_change() {
         !w.get_identity_change_visible(),
         "the prompt must come down once the change has been accepted"
     );
-    assert!(w.get_toast_visible(), "accepting must confirm itself — a bar that \
-        merely disappears does not distinguish 'accepted' from 'did nothing'");
+    assert!(
+        w.get_toast_visible(),
+        "accepting must confirm itself — a bar that \
+        merely disappears does not distinguish 'accepted' from 'did nothing'"
+    );
 }
 
 /// A server-claimed change must NOT be presented as though the peer had been
@@ -3394,7 +3775,9 @@ fn the_identity_change_bar_is_wired_and_not_dismissable() {
 
     let layout = include_str!("../../../ui/chat/chat_layout.slint");
     assert!(
-        layout.contains(r#"&& root.conversation-kind == ConversationKind.server-dm: IdentityChangeBar"#),
+        layout.contains(
+            r#"&& root.conversation-kind == ConversationKind.server-dm: IdentityChangeBar"#
+        ),
         "the bar must render inside the conversation, gated on conversation-kind so a \
          prompt cannot survive a switch into a channel, group or mesh room"
     );
@@ -3407,7 +3790,9 @@ fn the_identity_change_bar_is_wired_and_not_dismissable() {
     );
     let app = include_str!("../../../ui/app.slint");
     assert!(
-        app.contains("identity-change-accept-clicked => { root.identity-change-accept-clicked(); }"),
+        app.contains(
+            "identity-change-accept-clicked => { root.identity-change-accept-clicked(); }"
+        ),
         "MainWindow must forward accept-clicked from ChatLayout"
     );
     assert!(
@@ -3428,7 +3813,9 @@ fn the_send_toast_points_at_the_identity_change_instead_of_saying_retry() {
     let (_tmp, client, _w) = wired_dm_open(peer);
 
     let err = chatter_core::services::gateway::SendError::Message(
-        MessageError::RecipientIdentityChanged { peer_id: peer.to_string() },
+        MessageError::RecipientIdentityChanged {
+            peer_id: peer.to_string(),
+        },
     );
     let msg = client.format_send_error(&err, "send");
 
@@ -3452,7 +3839,10 @@ fn the_send_toast_points_at_the_identity_change_instead_of_saying_retry() {
 #[test]
 fn conversation_open_anchors_on_the_unread_boundary() {
     for (name, src) in [
-        ("channel", include_str!("../src/bin_ui/features/sidebar/channel.rs")),
+        (
+            "channel",
+            include_str!("../src/bin_ui/features/sidebar/channel.rs"),
+        ),
         ("dm", include_str!("../src/bin_ui/features/sidebar/dm.rs")),
         (
             "private_group",
@@ -3586,7 +3976,11 @@ fn dismissable_screens() -> Vec<(String, String)> {
             .collect();
         entries.sort();
         for path in entries {
-            let name = path.file_name().expect("file name").to_string_lossy().into_owned();
+            let name = path
+                .file_name()
+                .expect("file name")
+                .to_string_lossy()
+                .into_owned();
             let src = std::fs::read_to_string(&path).expect("read slint source");
             out.push((format!("ui/{dir}/{name}"), src));
         }
@@ -3606,15 +4000,14 @@ fn no_screen_defines_its_own_dismissal_glyph() {
     // The `\u{...}` escapes are the Unicode close glyphs: they are BOTH an
     // inconsistency and an Android bug — the font has no glyph, so they render
     // as a tofu box.
-    const OWN_GLYPH: [&str; 4] = [
-        "Icons.x",
-        "Icons.chevron-left",
-        "\\u{00D7}",
-        "\\u{2715}",
-    ];
+    const OWN_GLYPH: [&str; 4] = ["Icons.x", "Icons.chevron-left", "\\u{00D7}", "\\u{2715}"];
     // A screen is "dismissable" if it exposes any of these outward.
-    const DISMISS_CALLBACK: [&str; 4] =
-        ["callback close(", "callback closed(", "close-clicked", "close-settings"];
+    const DISMISS_CALLBACK: [&str; 4] = [
+        "callback close(",
+        "callback closed(",
+        "close-clicked",
+        "close-settings",
+    ];
 
     let mut findings = Vec::new();
     for (name, src) in dismissable_screens() {
@@ -3636,7 +4029,11 @@ fn no_screen_defines_its_own_dismissal_glyph() {
             ));
         }
     }
-    assert!(findings.is_empty(), "dismissal drifted:\n  {}", findings.join("\n  "));
+    assert!(
+        findings.is_empty(),
+        "dismissal drifted:\n  {}",
+        findings.join("\n  ")
+    );
 }
 
 #[test]
@@ -3668,7 +4065,9 @@ fn dismissal_glyph_and_edge_follow_the_screen_shape() {
             "Modal must place a back chevron on the LEADING edge when full-screen, \
              except on a tab's root screen",
         );
-    let title = modal.find("text: root.title;").expect("Modal must render a title");
+    let title = modal
+        .find("text: root.title;")
+        .expect("Modal must render a title");
     let trailing = modal
         .find("if !root.full-screen && root.show-close: DismissButton")
         .expect("Modal must place an X on the TRAILING edge when not full-screen");
@@ -3702,8 +4101,15 @@ fn all_slint_sources() -> Vec<(String, String)> {
             if path.is_dir() {
                 walk(&path, base, out);
             } else if path.extension().is_some_and(|x| x == "slint") {
-                let rel = path.strip_prefix(base).expect("under ui/").to_string_lossy().into_owned();
-                out.push((rel, std::fs::read_to_string(&path).expect("read slint source")));
+                let rel = path
+                    .strip_prefix(base)
+                    .expect("under ui/")
+                    .to_string_lossy()
+                    .into_owned();
+                out.push((
+                    rel,
+                    std::fs::read_to_string(&path).expect("read slint source"),
+                ));
             }
         }
     }
@@ -3777,27 +4183,35 @@ fn headers_use_the_shared_header_button() {
         "\\u{22EE}",
     ];
     const NOT_A_HEADER: [(&str, &str); 10] = [
-        ("chat/message_composer.slint", "Icons.x"),       // cancel reply / edit strip
-        ("chat/message_composer.slint", "\\u{00D7}"),     // remove a pending attachment
-        ("chat/pinned_bar.slint", "Icons.x"),             // dismiss the pinned banner
+        ("chat/message_composer.slint", "Icons.x"), // cancel reply / edit strip
+        ("chat/message_composer.slint", "\\u{00D7}"), // remove a pending attachment
+        ("chat/pinned_bar.slint", "Icons.x"),       // dismiss the pinned banner
         ("components/connection_banner.slint", "Icons.x"), // dismiss the banner
-        ("components/toast.slint", "Icons.x"),            // dismiss a toast
-        ("components/emoji_picker.slint", "Icons.x"),     // clear the search field
-        ("components/gif_picker.slint", "Icons.x"),       // clear the search field
+        ("components/toast.slint", "Icons.x"),      // dismiss a toast
+        ("components/emoji_picker.slint", "Icons.x"), // clear the search field
+        ("components/gif_picker.slint", "Icons.x"), // clear the search field
         ("modals/channel_settings.slint", "Icons.more-vertical"), // a member row's menu
-        ("modals/friends.slint", "Icons.more-vertical"),  // a friend row's menu
-        ("sidebar/sidebar.slint", "Icons.chevron-left"),  // the rail's collapse control
+        ("modals/friends.slint", "Icons.more-vertical"), // a friend row's menu
+        ("sidebar/sidebar.slint", "Icons.chevron-left"), // the rail's collapse control
     ];
     for (name, src) in &sources {
         if name.ends_with("header_button.slint") || name.ends_with("dismiss_button.slint") {
             continue;
         }
-        for line_start in src.match_indices("source:").chain(src.match_indices("text:")).map(|(at, _)| at) {
-            let line = &src[line_start..src[line_start..].find(['\n', ';']).map_or(src.len(), |n| line_start + n)];
+        for line_start in src
+            .match_indices("source:")
+            .chain(src.match_indices("text:"))
+            .map(|(at, _)| at)
+        {
+            let line = &src[line_start
+                ..src[line_start..]
+                    .find(['\n', ';'])
+                    .map_or(src.len(), |n| line_start + n)];
             for glyph in HEADER_GLYPHS {
                 // `Icons.x` must not match a longer icon name.
                 let hit = line.match_indices(glyph).any(|(at, _)| {
-                    !line[at + glyph.len()..].starts_with(|c: char| c.is_ascii_alphanumeric() || c == '-')
+                    !line[at + glyph.len()..]
+                        .starts_with(|c: char| c.is_ascii_alphanumeric() || c == '-')
                 });
                 if !hit || NOT_A_HEADER.contains(&(name.as_str(), glyph)) {
                     continue;
@@ -3839,7 +4253,9 @@ fn headers_use_the_shared_header_button() {
             .unwrap_or_else(|| panic!("ui/{header} is gone — update this list"))
             .1;
         if !src.contains("HeaderButton {") && !src.contains("DismissButton {") {
-            findings.push(format!("ui/{header} has a header with no HeaderButton in it"));
+            findings.push(format!(
+                "ui/{header} has a header with no HeaderButton in it"
+            ));
         }
     }
 
@@ -3857,15 +4273,20 @@ fn headers_use_the_shared_header_button() {
         }
     }
     if button.contains("border-width") {
-        findings.push("HeaderButton draws its own stroke instead of using the shared material".into());
+        findings
+            .push("HeaderButton draws its own stroke instead of using the shared material".into());
     }
     // 5. It centres itself on the row's axis (RC24 D1). A fixed root height
     // leaves the button at the TOP of any taller HorizontalLayout; the root
     // must stretch to the row (floor: the box) and centre the box inside.
     let root_body = &button[button.find("export component HeaderButton").unwrap()..];
-    let root_body = &root_body[..root_body.find("box := GlassSurface").expect("HeaderButton lost its inner box")];
+    let root_body = &root_body[..root_body
+        .find("box := GlassSurface")
+        .expect("HeaderButton lost its inner box")];
     if root_body.lines().any(|l| l.starts_with("    height:")) {
-        findings.push("HeaderButton's root fixes its height — it will ride the top of a taller row".into());
+        findings.push(
+            "HeaderButton's root fixes its height — it will ride the top of a taller row".into(),
+        );
     }
     if !root_body.contains("min-height: self.width;") {
         findings.push("HeaderButton's root lost `min-height: self.width;`".into());
@@ -3874,7 +4295,11 @@ fn headers_use_the_shared_header_button() {
         findings.push("HeaderButton no longer centres its box vertically".into());
     }
 
-    assert!(findings.is_empty(), "header buttons drifted:\n  {}", findings.join("\n  "));
+    assert!(
+        findings.is_empty(),
+        "header buttons drifted:\n  {}",
+        findings.join("\n  ")
+    );
 }
 
 /// H3 (User Control and Freedom): every irreversible action in the app sat one
@@ -3930,7 +4355,10 @@ fn destructive_actions_need_a_second_click() {
             "{name}: the reveal is itself behind the confirm — nothing can open it"
         );
         let fires: Vec<usize> = src.match_indices(callback).map(|(at, _)| at).collect();
-        assert!(!fires.is_empty(), "{name}: the confirm step must still be able to act");
+        assert!(
+            !fires.is_empty(),
+            "{name}: the confirm step must still be able to act"
+        );
         for fire in fires {
             assert!(
                 gated_on(&enclosing_if(src, fire), flag),
@@ -4000,7 +4428,8 @@ fn shared_content_pill_tabs_clear_the_touch_floor() {
         .expect("the grid follows the tab strip");
     let block = &src[strip..strip + end];
     assert!(
-        block.contains("height: Spacing.touch-target-min;") && block.contains("padding: Spacing.xxs;"),
+        block.contains("height: Spacing.touch-target-min;")
+            && block.contains("padding: Spacing.xxs;"),
         "the pill shell must be Spacing.touch-target-min with a 2px inset, so each \
          chip lands on the 44px touch floor — a literal here is how 34px happened"
     );
@@ -4086,7 +4515,9 @@ fn tor_status_dot_does_not_report_off_as_connecting() {
     let src = include_str!("../../../ui/sidebar/sidebar.slint");
 
     // Both shield entry points (expanded footer + collapsed rail) carry a dot.
-    let dots: Vec<_> = src.match_indices("TorStatus.state == 2 ? Colors.success").collect();
+    let dots: Vec<_> = src
+        .match_indices("TorStatus.state == 2 ? Colors.success")
+        .collect();
     assert_eq!(
         dots.len(),
         2,
@@ -4104,10 +4535,7 @@ fn tor_status_dot_does_not_report_off_as_connecting() {
              going direct) as 'connecting' (STUB-1)"
         );
         // The fallback arm must not be warning.
-        let fallback = ternary
-            .split(": ")
-            .last()
-            .unwrap_or("");
+        let fallback = ternary.split(": ").last().unwrap_or("");
         assert!(
             !fallback.starts_with("Colors.warning"),
             "the fallback arm of the Tor dot must not be amber"
@@ -4140,8 +4568,13 @@ fn shield_toggle_is_offered_without_tor_but_the_tor_dot_is_not() {
          Android build has no onion, so it would have no Shield toggle"
     );
     let shields = sidebar_src.matches("root.anon-mode-clicked()").count();
-    let dots = sidebar_src.matches("visible: AnonMode.enabled && AnonMode.onion-built;").count();
-    assert_eq!(dots, shields, "every shield's Tor dot must be gated on onion-built");
+    let dots = sidebar_src
+        .matches("visible: AnonMode.enabled && AnonMode.onion-built;")
+        .count();
+    assert_eq!(
+        dots, shields,
+        "every shield's Tor dot must be gated on onion-built"
+    );
 
     // Rust mirrors the Cargo feature, exactly as it does for jarvis, and the
     // real startup path runs that mirror.
@@ -4162,7 +4595,10 @@ fn shield_toggle_is_offered_without_tor_but_the_tor_dot_is_not() {
     use slint::ComponentHandle;
     let w = boot();
     chatter_ui::mirror_anon_mode_build(&w);
-    assert!(!w.global::<AnonMode>().get_enabled(), "Shield must start off");
+    assert!(
+        !w.global::<AnonMode>().get_enabled(),
+        "Shield must start off"
+    );
     assert_eq!(
         w.global::<AnonMode>().get_onion_built(),
         cfg!(feature = "onion"),
@@ -4196,8 +4632,7 @@ fn ai_assistant_channel_template_is_off_and_its_failure_is_surfaced() {
     // The whole template block is behind the gate.
     let modal_src = include_str!("../../../ui/modals/create_channel.slint");
     assert!(
-        modal_src
-            .contains("if AiIntegrationGlobal.channel-template-enabled: VerticalLayout {"),
+        modal_src.contains("if AiIntegrationGlobal.channel-template-enabled: VerticalLayout {"),
         "the AI-assistant block in create_channel.slint must be gated on \
          AiIntegrationGlobal.channel-template-enabled (FEAT-5)"
     );
@@ -4205,8 +4640,7 @@ fn ai_assistant_channel_template_is_off_and_its_failure_is_surfaced() {
     // Rust mirrors the Cargo feature.
     let lib_src = include_str!("../src/lib.rs");
     assert!(
-        lib_src
-            .contains(r#"set_channel_template_enabled(cfg!(feature = "ai-channel-template"))"#),
+        lib_src.contains(r#"set_channel_template_enabled(cfg!(feature = "ai-channel-template"))"#),
         "lib.rs must mirror the `ai-channel-template` Cargo feature"
     );
 
@@ -4231,7 +4665,8 @@ fn ai_assistant_channel_template_is_off_and_its_failure_is_surfaced() {
     use slint::ComponentHandle;
     let w = boot();
     assert_eq!(
-        w.global::<AiIntegrationGlobal>().get_channel_template_enabled(),
+        w.global::<AiIntegrationGlobal>()
+            .get_channel_template_enabled(),
         cfg!(feature = "ai-channel-template"),
         "AiIntegrationGlobal.channel-template-enabled must equal the compiled-in feature"
     );
@@ -4256,7 +4691,10 @@ fn tablet_sidebar_opens_the_calls_screen() {
 
     // Two-pane tablet.
     w.window().set_size(slint::LogicalSize::new(1000.0, 800.0));
-    assert!(!w.get_compact_layout(), "1000 dp must be the two-pane layout");
+    assert!(
+        !w.get_compact_layout(),
+        "1000 dp must be the two-pane layout"
+    );
     let row = testing::ElementHandle::find_by_accessible_label(&w, "Calls")
         .next()
         .expect("no Calls entry in the tablet sidebar");
@@ -4271,7 +4709,9 @@ fn tablet_sidebar_opens_the_calls_screen() {
     w.set_active_tab("chats".into());
     w.set_missed_call_count(3);
     assert!(
-        testing::ElementHandle::find_by_accessible_label(&w, "Calls, 3 missed").next().is_some(),
+        testing::ElementHandle::find_by_accessible_label(&w, "Calls, 3 missed")
+            .next()
+            .is_some(),
         "missed-call count is not on the sidebar Calls row"
     );
 
@@ -4318,7 +4758,11 @@ fn channel_member_row_carries_avatar() {
 
     let with = member_to_slint(&member(Some(TINY_PNG.to_vec())));
     let without = member_to_slint(&member(None));
-    assert_eq!(without.avatar_source.size().width, 0, "no avatar must fall back to initials");
+    assert_eq!(
+        without.avatar_source.size().width,
+        0,
+        "no avatar must fall back to initials"
+    );
 
     w.set_channel_settings_members(ModelRc::new(VecModel::from(vec![with, without])));
     let rows = w.get_channel_settings_members();
@@ -4371,11 +4815,21 @@ fn toggle_rows_flip_from_anywhere_on_the_row() {
     tap_text(&w, "Notifications");
 
     tap_text(&w, "Mute Channel");
-    assert!(w.get_channel_settings_muted(), "tapping the Mute label did not mute");
-    assert_eq!(*muted.borrow(), vec![true], "the Mute row tap did not reach the handler once");
+    assert!(
+        w.get_channel_settings_muted(),
+        "tapping the Mute label did not mute"
+    );
+    assert_eq!(
+        *muted.borrow(),
+        vec![true],
+        "the Mute row tap did not reach the handler once"
+    );
 
     tap_switch(&w, "Mute Channel");
-    assert!(!w.get_channel_settings_muted(), "tapping the Mute switch did not unmute");
+    assert!(
+        !w.get_channel_settings_muted(),
+        "tapping the Mute switch did not unmute"
+    );
     assert_eq!(
         *muted.borrow(),
         vec![true, false],
@@ -4385,7 +4839,10 @@ fn toggle_rows_flip_from_anywhere_on_the_row() {
     // Core snapping the value back (as the AI handler does on a failed save)
     // must still reach the switch after the user has tapped it.
     tap_text(&w, "AI assistant");
-    assert!(w.get_channel_settings_ai_enabled(), "tapping the AI label did not enable it");
+    assert!(
+        w.get_channel_settings_ai_enabled(),
+        "tapping the AI label did not enable it"
+    );
     assert_eq!(*ai.borrow(), vec![true]);
     w.set_channel_settings_ai_enabled(false);
     let ai_switch = testing::ElementHandle::find_by_accessible_label(&w, "AI assistant")
@@ -4422,23 +4879,45 @@ fn disappearing_picker_offers_presets_to_friends_only() {
     chatter_ui::bin_ui::features::chat::disappearing::wire(&w, &client);
 
     let g = w.global::<DisappearingGlobal>();
-    let labels: Vec<String> = g.get_options().iter().map(|o| o.label.to_string()).collect();
+    let labels: Vec<String> = g
+        .get_options()
+        .iter()
+        .map(|o| o.label.to_string())
+        .collect();
     assert_eq!(
         labels,
-        ["Off", "30 seconds", "5 minutes", "1 hour", "8 hours", "1 day", "1 week", "4 weeks"]
+        [
+            "Off",
+            "30 seconds",
+            "5 minutes",
+            "1 hour",
+            "8 hours",
+            "1 day",
+            "1 week",
+            "4 weeks"
+        ]
     );
     let seconds: Vec<i32> = g.get_options().iter().map(|o| o.seconds).collect();
-    assert_eq!(seconds, [0, 30, 300, 3_600, 28_800, 86_400, 604_800, 2_419_200]);
+    assert_eq!(
+        seconds,
+        [0, 30, 300, 3_600, 28_800, 86_400, 604_800, 2_419_200]
+    );
 
     // No conversation open: no timer beside the header's name.
     assert_eq!(g.get_header_label().as_str(), "");
 
     let peer = chatter_core::domain::ids::UserId::new();
     chatter_ui::bin_ui::features::chat::disappearing::show_for_profile(&w, &client, &peer, false);
-    assert!(!g.get_dm_can_set(), "a non-friend has no DM to carry a timer");
+    assert!(
+        !g.get_dm_can_set(),
+        "a non-friend has no DM to carry a timer"
+    );
 
     chatter_ui::bin_ui::features::chat::disappearing::show_for_profile(&w, &client, &peer, true);
-    assert!(g.get_dm_can_set(), "a friend's DM settings offer the picker");
+    assert!(
+        g.get_dm_can_set(),
+        "a friend's DM settings offer the picker"
+    );
     assert_eq!(g.get_dm_seconds(), 0);
     assert_eq!(g.get_dm_label().as_str(), "Off");
 }
@@ -4472,16 +4951,29 @@ fn channel_settings_moderation_reaches_core() {
     w.invoke_channel_settings_set_member_muted(target, false, 0);
 
     let src = include_str!("../src/bin_ui/features/modals/channel_settings.rs");
-    for call in [".ban_user(", ".unban_user(", ".mute_user(", ".unmute_user(", ".list_banned_members("] {
-        assert!(src.contains(call), "channel settings must call ChatterClient{call}");
+    for call in [
+        ".ban_user(",
+        ".unban_user(",
+        ".mute_user(",
+        ".unmute_user(",
+        ".list_banned_members(",
+    ] {
+        assert!(
+            src.contains(call),
+            "channel settings must call ChatterClient{call}"
+        );
     }
     let conv = include_str!("../src/bin_ui/converters/channel.rs");
     assert!(
-        conv.contains("can_ban: m.moderation.can_ban") && conv.contains("can_mute: m.moderation.can_mute"),
+        conv.contains("can_ban: m.moderation.can_ban")
+            && conv.contains("can_mute: m.moderation.can_mute"),
         "Ban/Mute visibility must come from core's MemberModeration"
     );
     let slint = include_str!("../../../ui/modals/channel_settings.slint");
-    assert!(slint.contains("if member.can-ban: Button") && slint.contains("if member.can-mute && member.muted: Button"));
+    assert!(
+        slint.contains("if member.can-ban: Button")
+            && slint.contains("if member.can-mute && member.muted: Button")
+    );
     assert!(slint.contains("root.unban-member(banned.user-id)"));
 }
 
@@ -4490,8 +4982,8 @@ fn channel_settings_moderation_reaches_core() {
 /// in-list rows to a '+' (a FAB on a phone).
 #[test]
 fn ux3_account_menu_pushes_settings_and_fab_opens_create_menu() {
-    use chatter_ui::bin_ui::features::back;
     use chatter_ui::Appearance;
+    use chatter_ui::bin_ui::features::back;
     use slint::ComponentHandle;
     require_element_queries();
     let w = boot();
@@ -4501,10 +4993,20 @@ fn ux3_account_menu_pushes_settings_and_fab_opens_create_menu() {
     // The bar is Chats, Calls, Contacts, Profile; nothing routes to a
     // Settings tab any more.
     let nav = include_str!("../../../ui/components/mobile_bottom_nav.slint");
-    assert!(!nav.contains(r#"tab-selected("settings")"#), "Settings is back in the tab bar");
-    assert_eq!(nav.matches("\n    NavTab {").count(), 4, "the tab bar is not four tabs");
+    assert!(
+        !nav.contains(r#"tab-selected("settings")"#),
+        "Settings is back in the tab bar"
+    );
+    assert_eq!(
+        nav.matches("\n    NavTab {").count(),
+        4,
+        "the tab bar is not four tabs"
+    );
     let app = include_str!("../../../ui/app.slint");
-    assert!(!app.contains(r#"active-tab = "settings""#), "something still opens Settings as a tab");
+    assert!(
+        !app.contains(r#"active-tab = "settings""#),
+        "something still opens Settings as a tab"
+    );
 
     // Account menu › Settings pushes Settings over the Profile tab.
     let opened = std::rc::Rc::new(std::cell::Cell::new(0));
@@ -4516,19 +5018,38 @@ fn ux3_account_menu_pushes_settings_and_fab_opens_create_menu() {
         .find(|e| e.accessible_role() == Some(testing::AccessibleRole::Button))
         .expect("the account menu has no Settings row");
     settings_row.mock_single_click(slint::platform::PointerEventButton::Left);
-    assert_eq!(w.get_active_modal().as_str(), "settings", "the Settings row did not push Settings");
+    assert_eq!(
+        w.get_active_modal().as_str(),
+        "settings",
+        "the Settings row did not push Settings"
+    );
     assert!(w.get_settings_open());
-    assert_eq!(opened.get(), 1, "Settings opened without hydrating (settings-clicked)");
+    assert_eq!(
+        opened.get(),
+        1,
+        "Settings opened without hydrating (settings-clicked)"
+    );
     assert!(back::handle_back(&w));
-    assert_eq!((w.get_active_tab().as_str(), w.get_active_modal().as_str()), ("profile", "none"));
+    assert_eq!(
+        (w.get_active_tab().as_str(), w.get_active_modal().as_str()),
+        ("profile", "none")
+    );
 
     // Night Mode shows the palette in force and pins the opposite one.
     let appearance = w.global::<Appearance>();
     appearance.set_theme("dark".into());
     tap_switch(&w, "Night Mode");
-    assert_eq!(appearance.get_theme().as_str(), "light", "Night Mode off did not pick Light");
+    assert_eq!(
+        appearance.get_theme().as_str(),
+        "light",
+        "Night Mode off did not pick Light"
+    );
     tap_switch(&w, "Night Mode");
-    assert_eq!(appearance.get_theme().as_str(), "dark", "Night Mode on did not pick Dark");
+    assert_eq!(
+        appearance.get_theme().as_str(),
+        "dark",
+        "Night Mode on did not pick Dark"
+    );
 
     // Phone: the FAB is on the Chats list and opens the create menu, and is
     // gone while anything is pushed over the list.
@@ -4539,12 +5060,15 @@ fn ux3_account_menu_pushes_settings_and_fab_opens_create_menu() {
         testing::ElementHandle::find_by_accessible_label(&w, "Create")
             .find(|e| e.accessible_role() == Some(testing::AccessibleRole::Button))
     };
-    fab().expect("no create FAB on the phone Chats list")
+    fab()
+        .expect("no create FAB on the phone Chats list")
         .mock_single_click(slint::platform::PointerEventButton::Left);
     assert_eq!(w.get_active_modal().as_str(), "create-menu");
     assert!(fab().is_none(), "the FAB stayed up over its own menu");
     assert!(
-        testing::ElementHandle::find_by_accessible_label(&w, "New Section").next().is_some(),
+        testing::ElementHandle::find_by_accessible_label(&w, "New Section")
+            .next()
+            .is_some(),
         "the create menu has no New Section"
     );
     assert!(back::handle_back(&w));
@@ -4583,7 +5107,10 @@ fn phone_call_end_without_chat_returns_to_list() {
     answer(&w);
     w.set_active_call_visible(false);
     tick();
-    assert!(!w.get_mobile_show_chat(), "call end left the phone on the empty pane");
+    assert!(
+        !w.get_mobile_show_chat(),
+        "call end left the phone on the empty pane"
+    );
 
     // Opened a DM, went Back, then answered from the list.
     w.set_channel_name("Bob".into());
@@ -4595,7 +5122,10 @@ fn phone_call_end_without_chat_returns_to_list() {
     answer(&w);
     w.set_active_call_visible(false);
     tick();
-    assert!(!w.get_mobile_show_chat(), "call end opened the last DM instead of the list");
+    assert!(
+        !w.get_mobile_show_chat(),
+        "call end opened the last DM instead of the list"
+    );
 
     // Answered over an open chat: stays in it.
     w.set_mobile_show_chat(true);
@@ -4603,7 +5133,10 @@ fn phone_call_end_without_chat_returns_to_list() {
     answer(&w);
     w.set_active_call_visible(false);
     tick();
-    assert!(w.get_mobile_show_chat(), "call end closed the chat it was placed from");
+    assert!(
+        w.get_mobile_show_chat(),
+        "call end closed the chat it was placed from"
+    );
 }
 
 /// Glass optics stay centralized and outside the scroll delegates fixed by PERF1/PERF2.
@@ -4612,28 +5145,59 @@ fn glass_material_is_chrome_only_with_one_optical_edge() {
     let sources = all_slint_sources();
     let mut backdrops = Vec::new();
     for (name, src) in &sources {
-        let code = src.lines().map(|line| line.split("//").next().unwrap_or("")).collect::<Vec<_>>().join("\n");
+        let code = src
+            .lines()
+            .map(|line| line.split("//").next().unwrap_or(""))
+            .collect::<Vec<_>>()
+            .join("\n");
         if code.contains("Backdrop {") {
             backdrops.push(name.as_str());
         }
         if code.contains("Materials.glass-edge") {
-            assert_eq!(name, "components/glass_surface.slint", "optical edges belong only to GlassSurface");
+            assert_eq!(
+                name, "components/glass_surface.slint",
+                "optical edges belong only to GlassSurface"
+            );
         }
         if name.ends_with("_list_item.slint") || name == "chat/message_item.slint" {
-            assert!(!code.contains("GlassSurface"), "{name} puts glass in a scroll delegate");
-            assert!(!code.contains("Backdrop"), "{name} samples the backdrop while scrolling");
-            assert!(!code.contains("drop-shadow-"), "{name} restores a per-row shadow");
+            assert!(
+                !code.contains("GlassSurface"),
+                "{name} puts glass in a scroll delegate"
+            );
+            assert!(
+                !code.contains("Backdrop"),
+                "{name} samples the backdrop while scrolling"
+            );
+            assert!(
+                !code.contains("drop-shadow-"),
+                "{name} restores a per-row shadow"
+            );
         }
     }
     assert_eq!(backdrops, ["components/glass_surface.slint"]);
-    let glass = sources.iter().find(|(name, _)| name == "components/glass_surface.slint").unwrap().1.as_str();
+    let glass = sources
+        .iter()
+        .find(|(name, _)| name == "components/glass_surface.slint")
+        .unwrap()
+        .1
+        .as_str();
     assert!(glass.contains("Appearance.glass-effects"));
     assert!(glass.contains("Appearance.reduce-motion"));
-    assert!(!glass.contains("iteration-count"), "glass must settle without an idle animation loop");
-    let modal = sources.iter().find(|(name, _)| name == "components/modal_container.slint").unwrap().1.as_str();
-    assert!(modal.contains("material-enabled: !root.full-screen;"), "full-screen content is not a glass sheet");
+    assert!(
+        !glass.contains("iteration-count"),
+        "glass must settle without an idle animation loop"
+    );
+    let modal = sources
+        .iter()
+        .find(|(name, _)| name == "components/modal_container.slint")
+        .unwrap()
+        .1
+        .as_str();
+    assert!(
+        modal.contains("material-enabled: !root.full-screen;"),
+        "full-screen content is not a glass sheet"
+    );
 }
-
 
 /// Chrome must sample scrolling content, with clearance inside the scroll range.
 #[test]
@@ -4644,39 +5208,71 @@ fn floating_chrome_keeps_content_insets_and_clear_materials() {
     let app = include_str!("../../../ui/app.slint");
     let material = include_str!("../../../ui/theme/materials.slint");
     let nav = include_str!("../../../ui/components/mobile_bottom_nav.slint");
-    assert!(chat.find("message-list := MessageList").unwrap() < chat.find("top-chrome := VerticalLayout").unwrap());
-    assert!(chat.contains("top-inset: top-chrome.height;") && chat.contains("bottom-inset: bottom-chrome.height;"));
+    assert!(
+        chat.find("message-list := MessageList").unwrap()
+            < chat.find("top-chrome := VerticalLayout").unwrap()
+    );
+    assert!(
+        chat.contains("top-inset: top-chrome.height;")
+            && chat.contains("bottom-inset: bottom-chrome.height;")
+    );
     assert!(chat.contains("y: root.height - self.height;"));
     assert!(list.contains("padding-top: idx == 0 ? root.top-inset + Spacing.md : Spacing.none;"));
     assert!(list.contains("? root.bottom-inset + Spacing.md + Spacing.touch-target-min"));
     assert!(list.contains("(self.viewport-height - root.bottom-inset) + self.viewport-y"));
-    assert!(list.contains("changed bottom-inset =>") && list.contains("root.is-at-bottom && !root.scrolling && root.jump-row < 0"));
+    assert!(
+        list.contains("changed bottom-inset =>")
+            && list.contains("root.is-at-bottom && !root.scrolling && root.jump-row < 0")
+    );
     assert!(list.contains("y: root.height - root.bottom-inset - 60px;"));
-    assert!(sidebar.find("Flickable {").unwrap() < sidebar.find("if !root.collapsed: GlassSurface {").unwrap());
+    assert!(
+        sidebar.find("Flickable {").unwrap()
+            < sidebar.find("if !root.collapsed: GlassSurface {").unwrap()
+    );
     assert!(sidebar.contains("root.bottom-inset + Spacing.fab-size"));
     assert!(!app.contains("// Space held for the bottom tab bar."));
-    for src in [include_str!("../../../ui/modals/friends.slint"), include_str!("../../../ui/calls/call_history_screen.slint")] {
+    for src in [
+        include_str!("../../../ui/modals/friends.slint"),
+        include_str!("../../../ui/calls/call_history_screen.slint"),
+    ] {
         assert!(src.contains("floating-content: root.mobile-mode;"));
         assert!(src.contains("height: root.mobile-mode ? root.height : parent.height;"));
-        assert!(src.contains("padding-bottom: root.mobile-mode ? root.bottom-inset + Spacing.md : Spacing.none;"));
+        assert!(src.contains(
+            "padding-bottom: root.mobile-mode ? root.bottom-inset + Spacing.md : Spacing.none;"
+        ));
     }
     assert!(material.contains("Appearance.glass-effects"));
     assert!(material.contains("blur-regular:") && material.contains("blur-thick:"));
     assert!(material.contains("<physical-length> glass-edge-width:"));
-    assert!(nav.contains("background: root.active ? Colors.text-primary.with-alpha(0.12) : transparent;"));
+    assert!(
+        nav.contains(
+            "background: root.active ? Colors.text-primary.with-alpha(0.12) : transparent;"
+        )
+    );
 }
-
 
 /// DESIGN3: the row wrappers are just as important as the leaf delegates.
 #[test]
 fn repeated_chat_rows_never_sample_glass() {
     for (name, src) in all_slint_sources() {
         if name.ends_with("_list_item.slint")
-            || matches!(name.as_str(), "chat/message_item.slint" | "sidebar/chat_list.slint" | "sidebar/custom_section_list.slint")
+            || matches!(
+                name.as_str(),
+                "chat/message_item.slint"
+                    | "sidebar/chat_list.slint"
+                    | "sidebar/custom_section_list.slint"
+            )
         {
-            let code = src.lines().map(|line| line.split("//").next().unwrap_or("")).collect::<Vec<_>>().join("\n");
+            let code = src
+                .lines()
+                .map(|line| line.split("//").next().unwrap_or(""))
+                .collect::<Vec<_>>()
+                .join("\n");
             for forbidden in ["GlassSurface", "Backdrop", "drop-shadow-"] {
-                assert!(!code.contains(forbidden), "{name} adds {forbidden} to a repeated row");
+                assert!(
+                    !code.contains(forbidden),
+                    "{name} adds {forbidden} to a repeated row"
+                );
             }
         }
     }
@@ -4688,17 +5284,28 @@ fn repeated_chat_rows_never_sample_glass() {
 fn inline_gifs_animate_only_visible_rows() {
     let list = include_str!("../../../ui/chat/message_list.slint");
     assert!(list.contains("root.first-visible-row = root.seen-top;"));
-    assert!(list.contains("root.last-visible-row = Math.min(self.bottom-row(), root.messages.length - 1);"));
+    assert!(list.contains(
+        "root.last-visible-row = Math.min(self.bottom-row(), root.messages.length - 1);"
+    ));
     let layout = include_str!("../../../ui/chat/chat_layout.slint");
     assert!(layout.contains("last-visible-row <=> root.message-last-visible-row;"));
     let app = include_str!("../../../ui/app.slint");
     assert!(app.contains("message-last-visible-row <=> root.message-last-visible-row;"));
     let gifs = include_str!("../src/bin_ui/gif_state/inline.rs");
-    assert!(gifs.contains("for msg_idx in rows {"), "the tick must walk only the visible rows");
-    assert!(gifs.contains("fn rows_to_animate("), "the range (and its -1 sentinel) is unit-tested there");
+    assert!(
+        gifs.contains("for msg_idx in rows {"),
+        "the tick must walk only the visible rows"
+    );
+    assert!(
+        gifs.contains("fn rows_to_animate("),
+        "the range (and its -1 sentinel) is unit-tested there"
+    );
     // A conversation that starts loading has no rows on screen yet.
     assert!(squash(list).contains("root.first-visible-row = 0; root.last-visible-row = -1;"));
-    assert!(!gifs.contains("for msg_idx in 0..msg_count"), "a whole-model scan per tick is back");
+    assert!(
+        !gifs.contains("for msg_idx in 0..msg_count"),
+        "a whole-model scan per tick is back"
+    );
 }
 
 /// Chrome over the message list stops re-blurring the moving rows every frame
@@ -4710,39 +5317,60 @@ fn chrome_over_the_list_pauses_backdrop_while_scrolling() {
     assert!(glass.contains("property <float> sampling: root.backdrop-paused ? 0 : 1;"));
     assert!(glass.contains(": Materials.blur-regular) : 0px) * root.sampling;"));
     assert!(glass.contains("saturation: 1.0 + ((Appearance.glass-effects ? Materials.saturation : 1.0) - 1.0) * root.sampling;"));
-    assert!(glass.contains("refraction: (Appearance.glass-effects ? Materials.refraction : 0.0) * root.sampling;"));
+    assert!(glass.contains(
+        "refraction: (Appearance.glass-effects ? Materials.refraction : 0.0) * root.sampling;"
+    ));
     // Stops at once, fades back in at rest (no pop), honours reduce-motion.
-    assert!(glass.contains("duration: root.backdrop-paused || Appearance.reduce-motion ? 0ms : 160ms;"));
+    assert!(
+        glass.contains("duration: root.backdrop-paused || Appearance.reduce-motion ? 0ms : 160ms;")
+    );
     let list = include_str!("../../../ui/chat/message_list.slint");
     assert!(list.contains("out property <bool> scrolling: false;"));
-    assert!(list.contains("backdrop-paused: root.scrolling;"), "jump pill");
+    assert!(
+        list.contains("backdrop-paused: root.scrolling;"),
+        "jump pill"
+    );
     let layout = include_str!("../../../ui/chat/chat_layout.slint");
     assert_eq!(
-        layout.matches("backdrop-paused: message-list.scrolling;").count(),
+        layout
+            .matches("backdrop-paused: message-list.scrolling;")
+            .count(),
         4,
         "header, pinned bar, composer notice and composer"
     );
     let header = include_str!("../../../ui/chat/chat_header.slint");
     assert_eq!(
         header.matches("HeaderButton {").count(),
-        header.matches("backdrop-paused: root.backdrop-paused;").count(),
+        header
+            .matches("backdrop-paused: root.backdrop-paused;")
+            .count(),
         "every header button samples the header's backdrop too"
     );
     // The selection bar replaces the header over the same list, from the window root.
     assert!(layout.contains("out property <bool> list-scrolling: message-list.scrolling;"));
     let app = include_str!("../../../ui/app.slint");
-    assert!(app.contains("changed list-scrolling => { root.chat-list-scrolling = self.list-scrolling; }"));
-    assert!(app.contains("backdrop-paused: root.chat-list-scrolling;"), "selection bar");
+    assert!(
+        app.contains(
+            "changed list-scrolling => { root.chat-list-scrolling = self.list-scrolling; }"
+        )
+    );
+    assert!(
+        app.contains("backdrop-paused: root.chat-list-scrolling;"),
+        "selection bar"
+    );
     let bar = include_str!("../../../ui/chat/selection_bar.slint");
     assert_eq!(
         bar.matches("HeaderButton {").count(),
-        bar.matches("backdrop-paused: root.backdrop-paused;").count(),
+        bar.matches("backdrop-paused: root.backdrop-paused;")
+            .count(),
         "every selection-bar button pauses with the bar"
     );
     let composer = include_str!("../../../ui/chat/message_composer.slint");
     assert_eq!(
         composer.matches("HeaderButton {").count(),
-        composer.matches("backdrop-paused: root.backdrop-paused;").count(),
+        composer
+            .matches("backdrop-paused: root.backdrop-paused;")
+            .count(),
         "the voice-record buttons pause with the composer"
     );
 }
@@ -4754,12 +5382,25 @@ fn chrome_over_the_list_pauses_backdrop_while_scrolling() {
 #[test]
 fn typing_dots_animate_only_while_drawn() {
     for (name, src) in [
-        ("channel", include_str!("../../../ui/sidebar/channel_list_item.slint")),
+        (
+            "channel",
+            include_str!("../../../ui/sidebar/channel_list_item.slint"),
+        ),
         ("dm", include_str!("../../../ui/sidebar/dm_list_item.slint")),
-        ("private group", include_str!("../../../ui/sidebar/private_group_list_item.slint")),
+        (
+            "private group",
+            include_str!("../../../ui/sidebar/private_group_list_item.slint"),
+        ),
     ] {
-        assert!(!src.contains("opacity: root.dot-opacity("), "{name} row fades its dots with opacity again");
-        assert_eq!(src.matches(".with-alpha(root.dot-opacity(").count(), 3, "{name} row");
+        assert!(
+            !src.contains("opacity: root.dot-opacity("),
+            "{name} row fades its dots with opacity again"
+        );
+        assert_eq!(
+            src.matches(".with-alpha(root.dot-opacity(").count(),
+            3,
+            "{name} row"
+        );
     }
 }
 
@@ -4767,15 +5408,37 @@ fn typing_dots_animate_only_while_drawn() {
 fn fine_glass_rim_preserves_shared_childless_material() {
     let materials = include_str!("../../../ui/theme/materials.slint");
     let glass = include_str!("../../../ui/components/glass_surface.slint");
-    assert!(materials.contains("<physical-length> glass-edge-width: 1phx;"), "rim must stay one physical pixel at every DPI");
-    let rim = materials.split("<brush> glass-edge:").nth(1).unwrap().split(';').next().unwrap();
-    assert!(rim.contains("Appearance.dark"), "rim must adapt to the theme");
-    assert!(rim.contains("#ffffff00"), "rim must fade away between its highlights");
+    assert!(
+        materials.contains("<physical-length> glass-edge-width: 1phx;"),
+        "rim must stay one physical pixel at every DPI"
+    );
+    let rim = materials
+        .split("<brush> glass-edge:")
+        .nth(1)
+        .unwrap()
+        .split(';')
+        .next()
+        .unwrap();
+    assert!(
+        rim.contains("Appearance.dark"),
+        "rim must adapt to the theme"
+    );
+    assert!(
+        rim.contains("#ffffff00"),
+        "rim must fade away between its highlights"
+    );
     assert!(!materials.contains("inner-edge") && !glass.contains("inner-edge"));
-    assert_eq!(glass.matches("border-width:").count(), 1, "a second stroke makes the rim look thick");
+    assert_eq!(
+        glass.matches("border-width:").count(),
+        1,
+        "a second stroke makes the rim look thick"
+    );
     let private = glass.split("export component GlassSurface").next().unwrap();
     assert!(private.contains("component GlassMaterial inherits Rectangle"));
-    assert!(!private.lines().any(|line| line.trim() == "@children"), "MEM1: material must remain childless");
+    assert!(
+        !private.lines().any(|line| line.trim() == "@children"),
+        "MEM1: material must remain childless"
+    );
     assert!(squash(glass).contains("GlassMaterial { x: 0; y: 0;"));
 }
 
@@ -4789,23 +5452,42 @@ fn secondary_chrome_exposes_its_shared_material() {
         include_str!("../../../ui/components/gif_picker.slint"),
         include_str!("../../../ui/chat/message_composer.slint"),
     ] {
-        assert!(!src.contains("background: Colors.background;"), "opaque chrome masks its glass shell");
+        assert!(
+            !src.contains("background: Colors.background;"),
+            "opaque chrome masks its glass shell"
+        );
     }
     let reaction = include_str!("../../../ui/chat/reaction_picker.slint");
-    assert!(reaction.contains("material-enabled: false;"), "embedded emoji picker must not stack glass");
+    assert!(
+        reaction.contains("material-enabled: false;"),
+        "embedded emoji picker must not stack glass"
+    );
     let list = include_str!("../../../ui/chat/message_list.slint");
-    assert_eq!(list.matches("GlassSurface {").count(), 1, "only the jump capsule floats over the list");
+    assert_eq!(
+        list.matches("GlassSurface {").count(),
+        1,
+        "only the jump capsule floats over the list"
+    );
     // The date and unread chips are row content: a plain tinted fill, never a
     // backdrop sample per row (glass_surface.slint:1).
-    assert_eq!(list.matches("background: Materials.regular;").count(), 2, "date and unread chips");
+    assert_eq!(
+        list.matches("background: Materials.regular;").count(),
+        2,
+        "date and unread chips"
+    );
     assert!(!list.contains("Colors.action-fill.with-alpha(0.97)"));
     let profile = include_str!("../../../ui/modals/user_profile.slint");
     assert!(profile.contains("height: parent.height - self.y;"));
-    assert!(profile.contains("padding-top: root.mobile-mode ? profile-header.height + Spacing.sm * 2 : Spacing.none;"));
+    assert!(profile.contains(
+        "padding-top: root.mobile-mode ? profile-header.height + Spacing.sm * 2 : Spacing.none;"
+    ));
     let account = include_str!("../../../ui/settings/account_menu.slint");
     assert!(account.contains("floating-content: root.mobile-mode;"));
     assert!(account.contains("y: root.mobile-mode ? -menu-body.chrome-inset : 0px;"));
-    assert!(!account.contains("absolute-position"), "content-sized menus must not derive their padding from their own layout position");
+    assert!(
+        !account.contains("absolute-position"),
+        "content-sized menus must not derive their padding from their own layout position"
+    );
 }
 
 /// `src` with every whitespace run collapsed to one space, so a source pin
@@ -4818,15 +5500,34 @@ fn squash(src: &str) -> String {
 // These are source checks so they also cover screens absent from the headless
 // fixture, without needing every account/channel/call state to be constructed.
 fn raw_layout_spacing(src: &str) -> Vec<String> {
-    let code = src.lines().map(|line| line.split("//").next().unwrap_or("")).collect::<Vec<_>>().join("\n");
+    let code = src
+        .lines()
+        .map(|line| line.split("//").next().unwrap_or(""))
+        .collect::<Vec<_>>()
+        .join("\n");
     let mut findings = Vec::new();
     for (at, _) in code.match_indices(':') {
-        let property = code[..at].trim_end().rsplit(|c: char| !(c.is_ascii_alphanumeric() || c == '-')).next().unwrap_or("");
-        if !matches!(property, "spacing" | "padding" | "padding-left" | "padding-right" | "padding-top" | "padding-bottom") {
+        let property = code[..at]
+            .trim_end()
+            .rsplit(|c: char| !(c.is_ascii_alphanumeric() || c == '-'))
+            .next()
+            .unwrap_or("");
+        if !matches!(
+            property,
+            "spacing"
+                | "padding"
+                | "padding-left"
+                | "padding-right"
+                | "padding-top"
+                | "padding-bottom"
+        ) {
             continue;
         }
         let value = code[at + 1..].split(';').next().unwrap_or("");
-        if value.match_indices("px").any(|(i, _)| i > 0 && value.as_bytes()[i - 1].is_ascii_digit()) {
+        if value
+            .match_indices("px")
+            .any(|(i, _)| i > 0 && value.as_bytes()[i - 1].is_ascii_digit())
+        {
             findings.push(format!("{property}: {}", value.trim()));
         }
     }
@@ -4835,33 +5536,62 @@ fn raw_layout_spacing(src: &str) -> Vec<String> {
 
 #[test]
 fn screen_layout_spacing_uses_tokens() {
-    assert!(!raw_layout_spacing("HorizontalLayout { spacing: 6px; padding-left: wide ? 8px : 0px; }").is_empty());
-    assert!(raw_layout_spacing("// spacing: 8px;\nspacing: Spacing.sm; letter-spacing: 1px;").is_empty());
+    assert!(
+        !raw_layout_spacing("HorizontalLayout { spacing: 6px; padding-left: wide ? 8px : 0px; }")
+            .is_empty()
+    );
+    assert!(
+        raw_layout_spacing("// spacing: 8px;\nspacing: Spacing.sm; letter-spacing: 1px;")
+            .is_empty()
+    );
     let mut findings = Vec::new();
     for (name, src) in all_slint_sources() {
-        if name.starts_with("theme/") { continue; }
+        if name.starts_with("theme/") {
+            continue;
+        }
         for property in raw_layout_spacing(&src) {
             findings.push(format!("ui/{name}: {property}"));
         }
     }
-    assert!(findings.is_empty(), "Layout spacing must use Spacing tokens:\n{}", findings.join("\n"));
+    assert!(
+        findings.is_empty(),
+        "Layout spacing must use Spacing tokens:\n{}",
+        findings.join("\n")
+    );
 }
 
 #[test]
 fn screens_do_not_define_private_button_families() {
     let mut findings = Vec::new();
     for (name, src) in all_slint_sources() {
-        if name.starts_with("components/") || name.starts_with("theme/") { continue; }
-        let code = src.lines().map(|line| line.split("//").next().unwrap_or("")).collect::<Vec<_>>().join("\n");
+        if name.starts_with("components/") || name.starts_with("theme/") {
+            continue;
+        }
+        let code = src
+            .lines()
+            .map(|line| line.split("//").next().unwrap_or(""))
+            .collect::<Vec<_>>()
+            .join("\n");
         let words: Vec<_> = code.split_whitespace().collect();
         for pair in words.windows(2) {
             if pair[0] == "component" && pair[1].ends_with("Button") {
-                findings.push(format!("ui/{name}: private {} — use Button, HeaderButton or IconAction", pair[1]));
+                findings.push(format!(
+                    "ui/{name}: private {} — use Button, HeaderButton or IconAction",
+                    pair[1]
+                ));
             }
         }
-        for import in code.split(';').filter(|part| part.contains("std-widgets.slint")) {
-            if import.split(|c: char| !c.is_ascii_alphanumeric()).any(|word| word == "Button") {
-                findings.push(format!("ui/{name}: platform Button bypasses the shared family"));
+        for import in code
+            .split(';')
+            .filter(|part| part.contains("std-widgets.slint"))
+        {
+            if import
+                .split(|c: char| !c.is_ascii_alphanumeric())
+                .any(|word| word == "Button")
+            {
+                findings.push(format!(
+                    "ui/{name}: platform Button bypasses the shared family"
+                ));
             }
         }
     }
@@ -4871,18 +5601,40 @@ fn screens_do_not_define_private_button_families() {
 #[test]
 fn polish_shared_controls_and_rc28_regressions() {
     let sources = all_slint_sources();
-    let source = |name: &str| sources.iter().find(|(path, _)| path == name).unwrap().1.as_str();
+    let source = |name: &str| {
+        sources
+            .iter()
+            .find(|(path, _)| path == name)
+            .unwrap()
+            .1
+            .as_str()
+    };
     let button = source("components/button.slint");
     assert!(button.contains("pressed: touch.pressed && !root.disabled && !root.loading"));
-    assert!(button.contains("height: Spacing.button-height;") && button.contains("border-radius: self.height / 2;"));
+    assert!(
+        button.contains("height: Spacing.button-height;")
+            && button.contains("border-radius: self.height / 2;")
+    );
     assert!(button.contains("overflow: elide;") && button.contains("accessible-action-default"));
     let toggle = source("components/toggle.slint");
-    assert!(toggle.contains("height: Spacing.button-height;") && toggle.contains("background: Colors.on-action;"));
+    assert!(
+        toggle.contains("height: Spacing.button-height;")
+            && toggle.contains("background: Colors.on-action;")
+    );
     let icons = source("components/icon_action.slint");
-    assert!(icons.contains("max(Spacing.button-height, root.size)") && icons.contains("enabled: root.enabled;"));
+    assert!(
+        icons.contains("max(Spacing.button-height, root.size)")
+            && icons.contains("enabled: root.enabled;")
+    );
     let checkbox = source("components/checkbox.slint");
-    assert!(checkbox.contains("width: Spacing.button-height;") && checkbox.contains("height: Spacing.button-height;"));
-    assert!(source("components/emoji_picker.slint").contains("viewport-width: categories.preferred-width;"));
+    assert!(
+        checkbox.contains("width: Spacing.button-height;")
+            && checkbox.contains("height: Spacing.button-height;")
+    );
+    assert!(
+        source("components/emoji_picker.slint")
+            .contains("viewport-width: categories.preferred-width;")
+    );
     let picker = source("chat/reaction_picker.slint");
     assert!(picker.contains("max-picker-width: picker-shell.width;"));
     assert!(picker.contains("max-picker-height: max(0px, picker-shell.height - Spacing.touch-target-min - Spacing.stroke);"));
@@ -4894,13 +5646,18 @@ fn polish_shared_controls_and_rc28_regressions() {
     // D4: a modal scrim must sort above the conversation's floating controls.
     assert!(source("chat/message_context_menu.slint").contains("z: 10;"));
     // D6: the narrow DM column must retain the word that conveys the status.
-    assert!(source("chat/chat_header.slint").contains("root.mobile && root.is-dm ? \"Typing…\" : root.typing-indicator"));
+    assert!(
+        source("chat/chat_header.slint")
+            .contains("root.mobile && root.is-dm ? \"Typing…\" : root.typing-indicator")
+    );
     // D7: both cut edges are faded, and tabs share the ordinary Button family.
     let settings = source("settings/settings_screen.slint");
     assert!(settings.contains("if tabs.viewport-x < 0px: Rectangle"));
     assert!(settings.contains("if tabs.viewport-width + tabs.viewport-x > tabs.width: Rectangle"));
     // The open tab is the neutral pill every tab bar uses, not the action fill.
-    assert!(settings.contains("variant: root.active-section == item.id ? \"secondary\" : \"ghost\";"));
+    assert!(
+        settings.contains("variant: root.active-section == item.id ? \"secondary\" : \"ghost\";")
+    );
 }
 
 /// D10: every call entry point delegates duration to the core connected clock.
@@ -4910,20 +5667,35 @@ fn call_duration_uses_core_connection_time() {
     assert!(timers.contains("ui_ctx.call_room_snapshot().await"));
     assert!(timers.contains("call.duration_seconds()"));
     assert!(!timers.contains("SystemTime") && !timers.contains("started_at_ns"));
-    assert!(timers.contains("stop.load(Ordering::Relaxed)"), "a late snapshot must not restart a stopped timer");
+    assert!(
+        timers.contains("stop.load(Ordering::Relaxed)"),
+        "a late snapshot must not restart a stopped timer"
+    );
     for source in [
         include_str!("../src/bin_ui/features/calls/outgoing.rs"),
         include_str!("../src/bin_ui/features/calls/incoming.rs"),
         include_str!("../src/bin_ui/features/calls/key_exchange.rs"),
     ] {
         assert!(source.contains("start_call_timer(&w, ui_ctx.clone())"));
-        assert!(!source.contains("start_call_timer(&w, Some(") && !source.contains("start_call_timer(&w, None)"));
+        assert!(
+            !source.contains("start_call_timer(&w, Some(")
+                && !source.contains("start_call_timer(&w, None)")
+        );
     }
     let active = include_str!("../src/bin_ui/features/calls/active.rs");
-    assert!(active.contains("ctx.end_active_call().await"), "hangup duration must also come from core");
+    assert!(
+        active.contains("ctx.end_active_call().await"),
+        "hangup duration must also come from core"
+    );
     let worker = include_str!("../../chatter-core/src/services/call_worker.rs");
-    assert!(squash(worker).contains("if encryption_root_key == &[0u8; 32] { call.ring();"), "a DM room alone is not an answered call");
-    assert!(worker.contains("derive_call_handle(state) == call && state.call.connected_at.is_none()"), "only the matching first answer starts the core clock");
+    assert!(
+        squash(worker).contains("if encryption_root_key == &[0u8; 32] { call.ring();"),
+        "a DM room alone is not an answered call"
+    );
+    assert!(
+        worker.contains("derive_call_handle(state) == call && state.call.connected_at.is_none()"),
+        "only the matching first answer starts the core clock"
+    );
 }
 
 /// Owner decision 2026-10-04: a Shield toggle on the sign-in and create-account
@@ -4939,9 +5711,15 @@ fn shield_toggle_on_sign_in_and_create_account() {
     for (page, src) in [
         ("login", include_str!("../../../ui/pages/login.slint")),
         ("register", include_str!("../../../ui/pages/register.slint")),
-        ("link-device", include_str!("../../../ui/pages/link_device.slint")),
+        (
+            "link-device",
+            include_str!("../../../ui/pages/link_device.slint"),
+        ),
     ] {
-        assert!(src.contains("ShieldOnboardingToggle {"), "the {page} page lost its Shield toggle");
+        assert!(
+            src.contains("ShieldOnboardingToggle {"),
+            "the {page} page lost its Shield toggle"
+        );
     }
     let toggle = include_str!("../../../ui/anon_mode/shield_onboarding.slint");
     assert!(
@@ -4956,7 +5734,8 @@ fn shield_toggle_on_sign_in_and_create_account() {
     let w = boot();
     let hits = Rc::new(Cell::new(0));
     let counter = hits.clone();
-    w.global::<AnonMode>().on_toggle_before_login(move || counter.set(counter.get() + 1));
+    w.global::<AnonMode>()
+        .on_toggle_before_login(move || counter.set(counter.get() + 1));
 
     for view in ["login", "register", "link-device"] {
         w.set_current_view(view.into());
@@ -4970,14 +5749,25 @@ fn shield_toggle_on_sign_in_and_create_account() {
         .unwrap_or_else(|| panic!("no Shield control on the {view} screen"));
         let before = hits.get();
         off.invoke_accessible_default_action();
-        assert_eq!(hits.get(), before, "a disabled Shield must not toggle ({view})");
+        assert_eq!(
+            hits.get(),
+            before,
+            "a disabled Shield must not toggle ({view})"
+        );
 
         w.global::<AnonMode>().set_shield_available(true);
-        testing::ElementHandle::find_by_accessible_label(&w, "Shield off - tap to connect over Tor")
-            .next()
-            .unwrap_or_else(|| panic!("Shield not offered on the {view} screen"))
-            .invoke_accessible_default_action();
-        assert_eq!(hits.get(), before + 1, "the {view} Shield did not reach the toggle callback");
+        testing::ElementHandle::find_by_accessible_label(
+            &w,
+            "Shield off - tap to connect over Tor",
+        )
+        .next()
+        .unwrap_or_else(|| panic!("Shield not offered on the {view} screen"))
+        .invoke_accessible_default_action();
+        assert_eq!(
+            hits.get(),
+            before + 1,
+            "the {view} Shield did not reach the toggle callback"
+        );
     }
 }
 
@@ -4987,14 +5777,20 @@ fn shield_toggle_on_sign_in_and_create_account() {
 /// Video call row starts the same call the header button used to.
 #[test]
 fn video_call_lives_in_the_header_more_menu() {
-    use chatter_ui::bin_ui::features::back;
     use chatter_ui::ConversationKind;
+    use chatter_ui::bin_ui::features::back;
     use slint::ComponentHandle;
     require_element_queries();
 
     let header = include_str!("../../../ui/chat/chat_header.slint");
-    assert!(!header.contains("Icons.video"), "the header row draws a video-call button again");
-    assert!(!header.contains("video-call-clicked"), "the header still emits video-call-clicked");
+    assert!(
+        !header.contains("Icons.video"),
+        "the header row draws a video-call button again"
+    );
+    assert!(
+        !header.contains("video-call-clicked"),
+        "the header still emits video-call-clicked"
+    );
 
     let w = boot();
     back::wire(&w);
@@ -5035,10 +5831,20 @@ fn video_call_lives_in_the_header_more_menu() {
         w.set_mobile_show_chat(true);
         slint::platform::update_timers_and_animations();
 
-        assert!(button(&w, "Voice call").is_some(), "{kind:?}: voice call left the header");
-        assert!(button(&w, "Video call").is_none(), "{kind:?}: video call is still in the header row");
+        assert!(
+            button(&w, "Voice call").is_some(),
+            "{kind:?}: voice call left the header"
+        );
+        assert!(
+            button(&w, "Video call").is_none(),
+            "{kind:?}: video call is still in the header row"
+        );
         click(&w, "More options");
-        assert_eq!(w.get_active_modal().as_str(), "chat-menu", "{kind:?}: ⋯ did not open the menu");
+        assert_eq!(
+            w.get_active_modal().as_str(),
+            "chat-menu",
+            "{kind:?}: ⋯ did not open the menu"
+        );
         assert_eq!(
             button(&w, "Conversation settings").is_some(),
             settings_row,
@@ -5046,15 +5852,30 @@ fn video_call_lives_in_the_header_more_menu() {
         );
         let before = started.get();
         click(&w, "Video call");
-        assert_eq!(started.get(), before + 1, "{kind:?}: the menu's Video call did not start a video call");
-        assert_eq!(w.get_active_modal().as_str(), "none", "{kind:?}: the menu stayed open over the call");
+        assert_eq!(
+            started.get(),
+            before + 1,
+            "{kind:?}: the menu's Video call did not start a video call"
+        );
+        assert_eq!(
+            w.get_active_modal().as_str(),
+            "none",
+            "{kind:?}: the menu stayed open over the call"
+        );
 
         if settings_row {
             click(&w, "More options");
             let before = opened_settings.get();
             click(&w, "Conversation settings");
-            assert_eq!(opened_settings.get(), before + 1, "{kind:?}: settings row did nothing");
-            w.set_modal_stack(slint::ModelRc::new(slint::VecModel::from(Vec::<slint::SharedString>::new())));
+            assert_eq!(
+                opened_settings.get(),
+                before + 1,
+                "{kind:?}: settings row did nothing"
+            );
+            w.set_modal_stack(slint::ModelRc::new(slint::VecModel::from(Vec::<
+                slint::SharedString,
+            >::new(
+            ))));
         }
 
         // Back closes the menu like any other layer.
@@ -5085,8 +5906,12 @@ fn call_banners_use_connection_state_instead_of_roster_or_duration() {
         w.set_active_tab(if fullscreen { "chats" } else { "calls" }.into());
         w.set_active_call_fullscreen(fullscreen);
         slint::platform::update_timers_and_animations();
-        assert!(testing::ElementHandle::find_by_accessible_label(&w, "Calling…").next().is_some(),
-            "ringing roster must not imply an answered call (fullscreen={fullscreen})");
+        assert!(
+            testing::ElementHandle::find_by_accessible_label(&w, "Calling…")
+                .next()
+                .is_some(),
+            "ringing roster must not imply an answered call (fullscreen={fullscreen})"
+        );
     }
     data.participant_count = 1;
     data.is_connected = true;
@@ -5096,9 +5921,17 @@ fn call_banners_use_connection_state_instead_of_roster_or_duration() {
         w.set_active_tab(if fullscreen { "chats" } else { "calls" }.into());
         w.set_active_call_fullscreen(fullscreen);
         slint::platform::update_timers_and_animations();
-        assert!(testing::ElementHandle::find_by_accessible_label(&w, "Calling…").next().is_none());
-        assert!(testing::ElementHandle::find_by_accessible_label(&w, "0:00").next().is_some(),
-            "connected zero-second call must show its clock (fullscreen={fullscreen})");
+        assert!(
+            testing::ElementHandle::find_by_accessible_label(&w, "Calling…")
+                .next()
+                .is_none()
+        );
+        assert!(
+            testing::ElementHandle::find_by_accessible_label(&w, "0:00")
+                .next()
+                .is_some(),
+            "connected zero-second call must show its clock (fullscreen={fullscreen})"
+        );
     }
 }
 
@@ -5111,13 +5944,21 @@ fn headless_dir(dir: &std::path::Path) {
     let db = chatter_core::system::Directories::with_base_dir(dir.to_path_buf())
         .expect("test directories")
         .database_path();
-    std::fs::write(db.parent().unwrap().join(chatter_core::system::keyring::NO_KEYRING_MARKER), b"")
-        .expect("write no-keyring marker");
+    std::fs::write(
+        db.parent()
+            .unwrap()
+            .join(chatter_core::system::keyring::NO_KEYRING_MARKER),
+        b"",
+    )
+    .expect("write no-keyring marker");
 }
 
 /// A real chat window with a client for the draft store, the composer focused
 /// by a click and holding `typed` with the caret `left` characters from the end.
-fn composer_with_caret(typed: &str, left: usize) -> (
+fn composer_with_caret(
+    typed: &str,
+    left: usize,
+) -> (
     tempfile::TempDir,
     std::sync::Arc<chatter_core::client::ChatterClient>,
     MainWindow,
@@ -5143,17 +5984,27 @@ fn composer_with_caret(typed: &str, left: usize) -> (
     let size = input.size();
     let position = slint::LogicalPosition::new(at.x + size.width / 2.0, at.y + size.height / 2.0);
     let button = slint::platform::PointerEventButton::Left;
-    w.window().dispatch_event(slint::platform::WindowEvent::PointerPressed { position, button });
-    w.window().dispatch_event(slint::platform::WindowEvent::PointerReleased { position, button });
+    w.window()
+        .dispatch_event(slint::platform::WindowEvent::PointerPressed { position, button });
+    w.window()
+        .dispatch_event(slint::platform::WindowEvent::PointerReleased { position, button });
     for ch in typed.chars() {
-        w.window().dispatch_event(slint::platform::WindowEvent::KeyPressed { text: ch.to_string().into() });
+        w.window()
+            .dispatch_event(slint::platform::WindowEvent::KeyPressed {
+                text: ch.to_string().into(),
+            });
     }
     for _ in 0..left {
-        w.window().dispatch_event(slint::platform::WindowEvent::KeyPressed {
-            text: slint::platform::Key::LeftArrow.into(),
-        });
+        w.window()
+            .dispatch_event(slint::platform::WindowEvent::KeyPressed {
+                text: slint::platform::Key::LeftArrow.into(),
+            });
     }
-    assert_eq!(w.get_composer_text().as_str(), typed, "precondition: the composer took the keys");
+    assert_eq!(
+        w.get_composer_text().as_str(),
+        typed,
+        "precondition: the composer took the keys"
+    );
     (tmp, client, w)
 }
 
@@ -5189,7 +6040,11 @@ fn ime_unpumped(w: &MainWindow, text: &str, commit: bool) {
 fn switching_conversation_mid_composition_keeps_the_word_in_its_own_draft() {
     let (_tmp, client, w) = composer_with_caret("hélo", 1);
     ime(&w, "ö", false);
-    assert_eq!(w.get_composer_text().as_str(), "hélo", "precondition: the preedit is not text yet");
+    assert_eq!(
+        w.get_composer_text().as_str(),
+        "hélo",
+        "precondition: the preedit is not text yet"
+    );
 
     chatter_ui::bin_ui::features::composer::switch_composer_draft(&w, &client, "A", "B");
     assert_eq!(w.get_composer_text().as_str(), "", "B starts empty");
@@ -5198,7 +6053,11 @@ fn switching_conversation_mid_composition_keeps_the_word_in_its_own_draft() {
     // was ended with the switch, so this must land nowhere — above all not
     // in B's draft.
     ime(&w, "ö", true);
-    assert_eq!(w.get_composer_text().as_str(), "", "the old composition was committed into B");
+    assert_eq!(
+        w.get_composer_text().as_str(),
+        "",
+        "the old composition was committed into B"
+    );
 
     chatter_ui::bin_ui::features::composer::switch_composer_draft(&w, &client, "B", "A");
     assert_eq!(
@@ -5215,9 +6074,14 @@ fn switching_conversation_without_a_composition_leaves_focus_alone() {
     chatter_ui::bin_ui::features::composer::switch_composer_draft(&w, &client, "A", "B");
     {
         use slint::ComponentHandle;
-        w.window().dispatch_event(slint::platform::WindowEvent::KeyPressed { text: "x".into() });
+        w.window()
+            .dispatch_event(slint::platform::WindowEvent::KeyPressed { text: "x".into() });
     }
-    assert_eq!(w.get_composer_text().as_str(), "x", "the composer lost focus on a plain switch");
+    assert_eq!(
+        w.get_composer_text().as_str(),
+        "x",
+        "the composer lost focus on a plain switch"
+    );
     chatter_ui::bin_ui::features::composer::switch_composer_draft(&w, &client, "B", "A");
     assert_eq!(w.get_composer_text().as_str(), "hi");
 }
@@ -5232,12 +6096,22 @@ fn a_composition_survives_the_chat_pane_being_destroyed() {
     ime(&w, "X", false);
     w.set_active_call_fullscreen(true);
     assert!(
-        testing::ElementHandle::find_by_accessible_label(&w, "Message input").next().is_none(),
+        testing::ElementHandle::find_by_accessible_label(&w, "Message input")
+            .next()
+            .is_none(),
         "precondition: a fullscreen call unmounts the chat pane"
     );
     w.set_active_call_fullscreen(false);
-    assert!(testing::ElementHandle::find_by_accessible_label(&w, "Message input").next().is_some());
-    assert_eq!(w.get_composer_text().as_str(), "aXb", "the composition died with the pane");
+    assert!(
+        testing::ElementHandle::find_by_accessible_label(&w, "Message input")
+            .next()
+            .is_some()
+    );
+    assert_eq!(
+        w.get_composer_text().as_str(),
+        "aXb",
+        "the composition died with the pane"
+    );
     // Settled once: another remount must not insert it again.
     w.set_active_call_fullscreen(true);
     testing::ElementHandle::find_by_accessible_label(&w, "Message input").next();
@@ -5275,8 +6149,15 @@ impl GifHarness {
             a: chatter_core::domain::ids::ChannelId::new(),
             b: chatter_core::domain::ids::ChannelId::new(),
         };
-        h.client.chat_state().set_active_conversation(chatter_core::state::ActiveConversation::Channel(h.a));
-        chatter_ui::bin_ui::features::composer::switch_composer_draft(&h.w, &h.client, "", &h.a.to_string());
+        h.client
+            .chat_state()
+            .set_active_conversation(chatter_core::state::ActiveConversation::Channel(h.a));
+        chatter_ui::bin_ui::features::composer::switch_composer_draft(
+            &h.w,
+            &h.client,
+            "",
+            &h.a.to_string(),
+        );
         h
     }
 
@@ -5286,7 +6167,9 @@ impl GifHarness {
             chatter_core::state::ActiveConversation::Channel(id) => id,
             _ => unreachable!(),
         };
-        self.client.chat_state().set_active_conversation(chatter_core::state::ActiveConversation::Channel(to));
+        self.client
+            .chat_state()
+            .set_active_conversation(chatter_core::state::ActiveConversation::Channel(to));
         chatter_ui::bin_ui::features::composer::switch_composer_draft(
             &self.w,
             &self.client,
@@ -5296,17 +6179,24 @@ impl GifHarness {
     }
 
     fn stage(&self, name: &str) {
-        self.client.chat_state().add_pending_attachment(chatter_core::state::PendingAttachment::new(
-            chatter_core::domain::ids::AttachmentId::new(),
-            name.into(),
-            Default::default(),
-            1,
-            "image/png".into(),
-        ));
+        self.client.chat_state().add_pending_attachment(
+            chatter_core::state::PendingAttachment::new(
+                chatter_core::domain::ids::AttachmentId::new(),
+                name.into(),
+                Default::default(),
+                1,
+                "image/png".into(),
+            ),
+        );
     }
 
     fn staged(&self) -> Vec<String> {
-        self.client.chat_state().get_pending_attachments().into_iter().map(|a| a.filename).collect()
+        self.client
+            .chat_state()
+            .get_pending_attachments()
+            .into_iter()
+            .map(|a| a.filename)
+            .collect()
     }
 
     /// Pick a GIF now; its upload resolves when the returned sender fires.
@@ -5317,16 +6207,19 @@ impl GifHarness {
         tokio::task::JoinHandle<Option<chatter_core::client::ComposerSend>>,
     ) {
         use slint::ComponentHandle;
-        let send = chatter_ui::bin_ui::features::composer::gif::begin_gif_send(&self.w, &self.client)
-            .expect("a GIF can be sent to channel A");
+        let send =
+            chatter_ui::bin_ui::features::composer::gif::begin_gif_send(&self.w, &self.client)
+                .expect("a GIF can be sent to channel A");
         let (tx, rx) = tokio::sync::oneshot::channel();
         let upload = async move { rx.await.unwrap() };
-        let task = test_rt().spawn(chatter_ui::bin_ui::features::composer::gif::finish_gif_send(
-            self.w.as_weak(),
-            self.client.clone(),
-            send,
-            upload,
-        ));
+        let task = test_rt().spawn(
+            chatter_ui::bin_ui::features::composer::gif::finish_gif_send(
+                self.w.as_weak(),
+                self.client.clone(),
+                send,
+                upload,
+            ),
+        );
         (tx, task)
     }
 
@@ -5340,8 +6233,15 @@ impl GifHarness {
         tx.send(upload).unwrap();
         // Offline and signed out, core cannot send: every completion here is
         // the failure path, which is the one that must not touch live state.
-        let failed = test_rt().block_on(task).unwrap().expect("an offline send cannot succeed");
-        chatter_ui::bin_ui::features::composer::gif::recover_gif_send(&self.w, &self.client, failed);
+        let failed = test_rt()
+            .block_on(task)
+            .unwrap()
+            .expect("an offline send cannot succeed");
+        chatter_ui::bin_ui::features::composer::gif::recover_gif_send(
+            &self.w,
+            &self.client,
+            failed,
+        );
     }
 }
 
@@ -5366,8 +6266,12 @@ fn picking_a_gif_freezes_the_composer_into_its_send() {
     h.w.set_composer_reply_to_timestamp("1700000000000".into());
     h.stage("cat.png");
 
-    let send = chatter_ui::bin_ui::features::composer::gif::begin_gif_send(&h.w, &h.client).unwrap();
-    assert_eq!(send.conversation, chatter_core::state::ActiveConversation::Channel(h.a));
+    let send =
+        chatter_ui::bin_ui::features::composer::gif::begin_gif_send(&h.w, &h.client).unwrap();
+    assert_eq!(
+        send.conversation,
+        chatter_core::state::ActiveConversation::Channel(h.a)
+    );
     assert_eq!(send.text, "caption");
     assert!(send.reply.is_some());
     assert_eq!(send.attachments.len(), 1);
@@ -5388,19 +6292,35 @@ fn a_gif_completing_after_navigation_never_touches_the_other_chat() {
 
     h.w.set_composer_send_status("Sending 2 attachments…".into());
     h.open(h.b);
-    assert_eq!(h.w.get_composer_send_status().as_str(), "", "A's send status followed the user into B");
+    assert_eq!(
+        h.w.get_composer_send_status().as_str(),
+        "",
+        "A's send status followed the user into B"
+    );
     h.w.set_composer_text("for B".into());
     h.stage("b.png");
 
     h.complete(tx, task, Ok(gif_attachment()));
-    assert_eq!(h.w.get_composer_text().as_str(), "for B", "B's draft was consumed or overwritten");
-    assert_eq!(h.staged(), ["b.png"], "B's staged file was consumed, or A's landed in B");
+    assert_eq!(
+        h.w.get_composer_text().as_str(),
+        "for B",
+        "B's draft was consumed or overwritten"
+    );
+    assert_eq!(
+        h.staged(),
+        ["b.png"],
+        "B's staged file was consumed, or A's landed in B"
+    );
 
     h.w.set_composer_text("".into());
     h.client.chat_state().clear_pending_attachments();
     h.open(h.a);
     assert_eq!(h.w.get_composer_text().as_str(), "for A");
-    assert_eq!(h.staged(), ["a.png", "picked.gif"], "A's send came back without its files");
+    assert_eq!(
+        h.staged(),
+        ["a.png", "picked.gif"],
+        "A's send came back without its files"
+    );
 }
 
 /// A newer draft in the same chat is not written over: the failed send is
@@ -5437,7 +6357,9 @@ fn a_failed_gif_in_an_untouched_composer_is_restored_at_once() {
 #[test]
 fn a_gif_with_nowhere_to_go_consumes_nothing() {
     let h = GifHarness::new();
-    h.client.chat_state().set_active_conversation(chatter_core::state::ActiveConversation::None);
+    h.client
+        .chat_state()
+        .set_active_conversation(chatter_core::state::ActiveConversation::None);
     h.w.set_composer_text("keep".into());
     h.stage("keep.png");
     assert!(chatter_ui::bin_ui::features::composer::gif::begin_gif_send(&h.w, &h.client).is_none());
@@ -5453,7 +6375,11 @@ fn a_gif_failing_while_another_empty_chat_is_open_waits_for_its_own() {
     let (tx, task) = h.pick();
     h.open(h.b);
     h.complete(tx, task, Err("download failed".into()));
-    assert_eq!(h.w.get_composer_text().as_str(), "", "A's caption was restored into B");
+    assert_eq!(
+        h.w.get_composer_text().as_str(),
+        "",
+        "A's caption was restored into B"
+    );
     assert!(h.staged().is_empty());
     h.open(h.a);
     assert_eq!(h.w.get_composer_text().as_str(), "for A");
@@ -5472,7 +6398,10 @@ fn a_failed_gif_is_not_restored_under_a_voice_recording() {
     h.w.global::<chatter_ui::VoiceRecording>().set_active(true);
     h.complete(tx, task, Err("download failed".into()));
     assert_eq!(h.w.get_composer_text().as_str(), "");
-    assert!(h.staged().is_empty(), "A's file was staged under the recording");
+    assert!(
+        h.staged().is_empty(),
+        "A's file was staged under the recording"
+    );
     h.w.global::<chatter_ui::VoiceRecording>().set_active(false);
     h.open(h.b);
     h.open(h.a);
@@ -5489,9 +6418,17 @@ fn a_composition_updated_in_the_same_iteration_as_the_switch_is_kept() {
     ime_unpumped(&w, "xy", false);
     chatter_ui::bin_ui::features::composer::switch_composer_draft(&w, &client, "A", "B");
     ime(&w, "xy", true);
-    assert_eq!(w.get_composer_text().as_str(), "", "the composition leaked into B");
+    assert_eq!(
+        w.get_composer_text().as_str(),
+        "",
+        "the composition leaked into B"
+    );
     chatter_ui::bin_ui::features::composer::switch_composer_draft(&w, &client, "B", "A");
-    assert_eq!(w.get_composer_text().as_str(), "axyb", "a stale mirror parked the old composition");
+    assert_eq!(
+        w.get_composer_text().as_str(),
+        "axyb",
+        "a stale mirror parked the old composition"
+    );
 }
 
 /// An input method replacing existing text with a composition (recomposing a
@@ -5508,7 +6445,11 @@ fn a_composition_replacing_text_lands_at_the_right_bytes() {
     event.preedit_text = "ß".into();
     event.replacement_range = Some(0..2);
     i_slint_core::window::WindowInner::from_pub(w.window()).process_key_input(event);
-    assert_eq!(w.get_composer_text().as_str(), "héo", "precondition: the range deleted the replaced bytes");
+    assert_eq!(
+        w.get_composer_text().as_str(),
+        "héo",
+        "precondition: the range deleted the replaced bytes"
+    );
     chatter_ui::bin_ui::features::composer::switch_composer_draft(&w, &client, "A", "B");
     chatter_ui::bin_ui::features::composer::switch_composer_draft(&w, &client, "B", "A");
     assert_eq!(w.get_composer_text().as_str(), "héßo");
@@ -5522,7 +6463,11 @@ fn a_first_composition_switched_away_unpumped_is_kept() {
     ime_unpumped(&w, "x", false);
     chatter_ui::bin_ui::features::composer::switch_composer_draft(&w, &client, "A", "B");
     ime(&w, "x", true);
-    assert_eq!(w.get_composer_text().as_str(), "", "the composition leaked into B");
+    assert_eq!(
+        w.get_composer_text().as_str(),
+        "",
+        "the composition leaked into B"
+    );
     chatter_ui::bin_ui::features::composer::switch_composer_draft(&w, &client, "B", "A");
     assert_eq!(w.get_composer_text().as_str(), "axb");
 }
@@ -5539,12 +6484,24 @@ fn a_composition_lost_with_the_pane_goes_to_its_own_chat_not_the_next() {
     assert_eq!(w.get_composer_text().as_str(), "ab");
     ime(&w, "X", false);
     w.set_active_call_fullscreen(true);
-    assert!(testing::ElementHandle::find_by_accessible_label(&w, "Message input").next().is_none());
+    assert!(
+        testing::ElementHandle::find_by_accessible_label(&w, "Message input")
+            .next()
+            .is_none()
+    );
     chatter_ui::bin_ui::features::composer::switch_composer_draft(&w, &client, "A", "B");
     assert_eq!(w.get_composer_text().as_str(), "b draft");
     w.set_active_call_fullscreen(false);
-    assert!(testing::ElementHandle::find_by_accessible_label(&w, "Message input").next().is_some());
-    assert_eq!(w.get_composer_text().as_str(), "b draft", "the dead pane's word landed in B");
+    assert!(
+        testing::ElementHandle::find_by_accessible_label(&w, "Message input")
+            .next()
+            .is_some()
+    );
+    assert_eq!(
+        w.get_composer_text().as_str(),
+        "b draft",
+        "the dead pane's word landed in B"
+    );
     chatter_ui::bin_ui::features::composer::switch_composer_draft(&w, &client, "B", "A");
     assert_eq!(w.get_composer_text().as_str(), "aXb");
 }
@@ -5556,7 +6513,9 @@ fn a_gif_picked_mid_switch_is_refused() {
     let h = GifHarness::new();
     h.w.set_composer_text("for A".into());
     h.stage("a.png");
-    h.client.chat_state().set_active_conversation(chatter_core::state::ActiveConversation::Channel(h.b));
+    h.client
+        .chat_state()
+        .set_active_conversation(chatter_core::state::ActiveConversation::Channel(h.b));
     assert!(chatter_ui::bin_ui::features::composer::gif::begin_gif_send(&h.w, &h.client).is_none());
     assert_eq!(h.w.get_composer_text().as_str(), "for A");
     assert_eq!(h.staged(), ["a.png"]);
@@ -5571,13 +6530,33 @@ fn a_gif_failing_mid_switch_is_not_restored_into_the_old_composer() {
     h.w.set_composer_text("for A".into());
     let (tx, task) = h.pick();
     h.open(h.b);
-    h.client.chat_state().set_active_conversation(chatter_core::state::ActiveConversation::Channel(h.a));
+    h.client
+        .chat_state()
+        .set_active_conversation(chatter_core::state::ActiveConversation::Channel(h.a));
     h.complete(tx, task, Err("download failed".into()));
-    assert_eq!(h.w.get_composer_text().as_str(), "", "A's caption landed in B's composer");
-    chatter_ui::bin_ui::features::composer::switch_composer_draft(&h.w, &h.client, &h.b.to_string(), &h.a.to_string());
+    assert_eq!(
+        h.w.get_composer_text().as_str(),
+        "",
+        "A's caption landed in B's composer"
+    );
+    chatter_ui::bin_ui::features::composer::switch_composer_draft(
+        &h.w,
+        &h.client,
+        &h.b.to_string(),
+        &h.a.to_string(),
+    );
     assert_eq!(h.w.get_composer_text().as_str(), "for A");
-    chatter_ui::bin_ui::features::composer::switch_composer_draft(&h.w, &h.client, &h.a.to_string(), &h.b.to_string());
-    assert_eq!(h.w.get_composer_text().as_str(), "", "A's caption was parked under B");
+    chatter_ui::bin_ui::features::composer::switch_composer_draft(
+        &h.w,
+        &h.client,
+        &h.a.to_string(),
+        &h.b.to_string(),
+    );
+    assert_eq!(
+        h.w.get_composer_text().as_str(),
+        "",
+        "A's caption was parked under B"
+    );
 }
 
 /// Send while a word is composed mid-line: it goes out where it is drawn,
@@ -5590,7 +6569,10 @@ fn sending_mid_composition_sends_the_word_at_the_caret() {
     let sink = sent.clone();
     w.on_send(move |text| *sink.borrow_mut() = Some(text.to_string()));
     ime(&w, "b", false);
-    w.window().dispatch_event(slint::platform::WindowEvent::KeyPressed { text: slint::platform::Key::Return.into() });
+    w.window()
+        .dispatch_event(slint::platform::WindowEvent::KeyPressed {
+            text: slint::platform::Key::Return.into(),
+        });
     assert_eq!(sent.borrow().as_deref(), Some("abc"));
 }
 
@@ -5598,15 +6580,28 @@ fn sending_mid_composition_sends_the_word_at_the_caret() {
 fn a_failed_gif_does_not_overwrite_a_new_uncommitted_word() {
     let (_tmp, client, w) = composer_with_caret("", 0);
     let channel = chatter_core::domain::ids::ChannelId::new();
-    client.chat_state().set_active_conversation(chatter_core::state::ActiveConversation::Channel(channel));
-    chatter_ui::bin_ui::features::composer::switch_composer_draft(&w, &client, "", &channel.to_string());
+    client
+        .chat_state()
+        .set_active_conversation(chatter_core::state::ActiveConversation::Channel(channel));
+    chatter_ui::bin_ui::features::composer::switch_composer_draft(
+        &w,
+        &client,
+        "",
+        &channel.to_string(),
+    );
     w.set_composer_text("old caption".into());
     let send = chatter_ui::bin_ui::features::composer::gif::begin_gif_send(&w, &client).unwrap();
     ime(&w, "new", false);
-    assert!(w.invoke_composer_has_preedit(), "precondition: the new word is still composing");
+    assert!(
+        w.invoke_composer_has_preedit(),
+        "precondition: the new word is still composing"
+    );
     assert!(w.get_composer_text().is_empty());
     chatter_ui::bin_ui::features::composer::gif::recover_gif_send(&w, &client, send);
-    assert!(w.get_composer_text().is_empty(), "the old caption overwrote a composing word");
+    assert!(
+        w.get_composer_text().is_empty(),
+        "the old caption overwrote a composing word"
+    );
     ime(&w, "new", true);
     assert_eq!(w.get_composer_text().as_str(), "new");
     assert!(client.take_parked_send(false).is_none());
@@ -5616,15 +6611,22 @@ fn a_failed_gif_does_not_overwrite_a_new_uncommitted_word() {
 #[test]
 fn a_gif_finishing_after_an_account_change_is_discarded() {
     let h = GifHarness::new();
-    h.client.auth_state().set_logged_in(chatter_core::domain::ids::UserId::new(), 1, "A".into());
+    h.client
+        .auth_state()
+        .set_logged_in(chatter_core::domain::ids::UserId::new(), 1, "A".into());
     h.w.set_composer_text("A's caption".into());
     let (tx, task) = h.pick();
     h.client.auth_state().set_logged_out();
-    h.client.auth_state().set_logged_in(chatter_core::domain::ids::UserId::new(), 1, "B".into());
+    h.client
+        .auth_state()
+        .set_logged_in(chatter_core::domain::ids::UserId::new(), 1, "B".into());
     h.w.set_composer_text("B's draft".into());
     h.stage("b.png");
     tx.send(Ok(gif_attachment())).unwrap();
-    assert!(test_rt().block_on(task).unwrap().is_none(), "A's send survived into B's session");
+    assert!(
+        test_rt().block_on(task).unwrap().is_none(),
+        "A's send survived into B's session"
+    );
     assert_eq!(h.w.get_composer_text().as_str(), "B's draft");
     assert_eq!(h.staged(), ["b.png"]);
     h.client.chat_state().clear_pending_attachments();
@@ -5634,7 +6636,9 @@ fn a_gif_finishing_after_an_account_change_is_discarded() {
 #[test]
 fn sign_out_invalidates_recovery_before_resetting_the_visible_composer() {
     let h = GifHarness::new();
-    h.client.auth_state().set_logged_in(chatter_core::domain::ids::UserId::new(), 1, "A".into());
+    h.client
+        .auth_state()
+        .set_logged_in(chatter_core::domain::ids::UserId::new(), 1, "A".into());
     h.w.set_composer_text("A's caption".into());
     let old = chatter_ui::bin_ui::features::composer::gif::begin_gif_send(&h.w, &h.client).unwrap();
     h.w.set_composer_text("A's later draft".into());
@@ -5647,26 +6651,99 @@ fn sign_out_invalidates_recovery_before_resetting_the_visible_composer() {
     chatter_ui::bin_ui::features::composer::gif::recover_gif_send(&h.w, &h.client, old);
     assert!(h.w.get_composer_text().is_empty());
     h.client.auth_state().set_logged_out();
-    h.client.auth_state().set_logged_in(chatter_core::domain::ids::UserId::new(), 1, "B".into());
-    h.client.chat_state().set_active_conversation(chatter_core::state::ActiveConversation::Channel(h.a));
-    chatter_ui::bin_ui::features::composer::switch_composer_draft(&h.w, &h.client, "", &h.a.to_string());
-    assert!(h.w.get_composer_text().is_empty(), "A's draft restored under B");
+    h.client
+        .auth_state()
+        .set_logged_in(chatter_core::domain::ids::UserId::new(), 1, "B".into());
+    h.client
+        .chat_state()
+        .set_active_conversation(chatter_core::state::ActiveConversation::Channel(h.a));
+    chatter_ui::bin_ui::features::composer::switch_composer_draft(
+        &h.w,
+        &h.client,
+        "",
+        &h.a.to_string(),
+    );
+    assert!(
+        h.w.get_composer_text().is_empty(),
+        "A's draft restored under B"
+    );
     assert!(h.client.take_parked_send(true).is_none());
 }
 
 #[test]
 fn a_gif_upload_error_after_account_change_cannot_restore_or_show_a_toast() {
     let h = GifHarness::new();
-    h.client.auth_state().set_logged_in(chatter_core::domain::ids::UserId::new(), 1, "A".into());
+    h.client
+        .auth_state()
+        .set_logged_in(chatter_core::domain::ids::UserId::new(), 1, "A".into());
     h.w.set_composer_text("A's caption".into());
     let (tx, task) = h.pick();
     h.client.auth_state().set_logged_out();
-    h.client.auth_state().set_logged_in(chatter_core::domain::ids::UserId::new(), 1, "B".into());
+    h.client
+        .auth_state()
+        .set_logged_in(chatter_core::domain::ids::UserId::new(), 1, "B".into());
     h.w.set_composer_text("B's draft".into());
     tx.send(Err("download failed".into())).unwrap();
     let expired = test_rt().block_on(task).unwrap().unwrap();
     chatter_ui::bin_ui::features::composer::gif::recover_gif_send(&h.w, &h.client, expired);
     assert_eq!(h.w.get_composer_text().as_str(), "B's draft");
-    assert!(!h.w.get_toast_visible(), "old-session failure appeared in B's UI");
+    assert!(
+        !h.w.get_toast_visible(),
+        "old-session failure appeared in B's UI"
+    );
     assert!(h.client.take_parked_send(true).is_none());
+}
+
+#[test]
+fn attachment_trays_follow_their_conversations_and_keep_captions() {
+    use slint::Model;
+    let h = GifHarness::new();
+    h.w.set_composer_text("A caption".into());
+    h.stage("a.png");
+    h.open(h.b);
+    assert!(h.staged().is_empty());
+    assert_eq!(h.w.get_pending_attachments().row_count(), 0);
+    h.w.set_composer_text("B caption".into());
+    h.stage("b.png");
+    h.open(h.a);
+    assert_eq!(h.staged(), ["a.png"]);
+    assert_eq!(h.w.get_pending_attachments().row_count(), 1);
+    assert_eq!(h.w.get_composer_text().as_str(), "A caption");
+    let send =
+        chatter_ui::bin_ui::features::composer::gif::begin_gif_send(&h.w, &h.client).unwrap();
+    assert_eq!(send.attachments[0].filename, "a.png");
+    h.open(h.b);
+    assert_eq!(h.staged(), ["b.png"]);
+    assert_eq!(h.w.get_composer_text().as_str(), "B caption");
+}
+
+#[test]
+fn failed_reply_restores_its_thumbnail_after_navigation() {
+    let h = GifHarness::new();
+    let bytes = vec![25u8, 50, 75, 255, 100, 125, 150, 255];
+    let image = slint::Image::from_rgba8(
+        slint::SharedPixelBuffer::<slint::Rgba8Pixel>::clone_from_slice(&bytes, 2, 1),
+    );
+    h.w.set_composer_text("reply caption".into());
+    h.w.set_composer_is_replying(true);
+    h.w.set_composer_reply_to_sender(uuid::Uuid::new_v4().to_string().into());
+    h.w.set_composer_reply_to_timestamp("1700000000000".into());
+    h.w.set_composer_reply_to_sender_name("Author".into());
+    h.w.set_composer_reply_preview("Photo".into());
+    h.w.set_composer_reply_thumbnail(image);
+    h.w.set_composer_reply_has_thumbnail(true);
+    let send =
+        chatter_ui::bin_ui::features::composer::gif::begin_gif_send(&h.w, &h.client).unwrap();
+    assert!(!h.w.get_composer_reply_has_thumbnail());
+    h.open(h.b);
+    chatter_ui::bin_ui::features::composer::gif::recover_gif_send(&h.w, &h.client, send);
+    assert!(!h.w.get_composer_is_replying());
+    h.open(h.a);
+    assert!(h.w.get_composer_is_replying());
+    assert!(h.w.get_composer_reply_has_thumbnail());
+    let restored = h.w.get_composer_reply_thumbnail().to_rgba8().unwrap();
+    assert_eq!((restored.width(), restored.height()), (2, 1));
+    assert_eq!(restored.as_bytes(), bytes.as_slice());
+    assert_eq!(h.w.get_composer_reply_to_sender_name().as_str(), "Author");
+    assert_eq!(h.w.get_composer_reply_preview().as_str(), "Photo");
 }

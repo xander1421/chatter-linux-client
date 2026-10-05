@@ -7,10 +7,10 @@
 
 use crate::{common, skip_if_no_server};
 
-use chatter_core::proto::chat_v1::{
-    get_pre_key_bundle_response, ChannelType, MessageSortDirection,
-};
 use chatter_core::network::grpc::{AuthClient, ChannelClient, MessageClient};
+use chatter_core::proto::chat_v1::{
+    ChannelType, MessageSortDirection, get_pre_key_bundle_response,
+};
 use common::*;
 use tokio_stream::StreamExt;
 
@@ -32,7 +32,9 @@ async fn test_e2e_multi_device_prekey_fetch() {
 
     // Alice fetches Bob's prekeys for all devices
     let mut alice_auth = AuthClient::new(alice_pool.channel(), alice_pool.auth_clone());
-    let response = alice_auth.get_pre_key_bundles_all_devices(&bob.user_id).await;
+    let response = alice_auth
+        .get_pre_key_bundles_all_devices(&bob.user_id)
+        .await;
 
     match response {
         Ok(resp) => {
@@ -47,15 +49,9 @@ async fn test_e2e_multi_device_prekey_fetch() {
                 }
                 get_pre_key_bundle_response::Result::Devices(list) => {
                     // Multiple devices
-                    assert!(
-                        !list.bundles.is_empty(),
-                        "Should have at least one device"
-                    );
+                    assert!(!list.bundles.is_empty(), "Should have at least one device");
                     // One of the bundles should be for Bob's known device
-                    let has_bobs_device = list
-                        .bundles
-                        .iter()
-                        .any(|b| b.device_id == bob.device_id);
+                    let has_bobs_device = list.bundles.iter().any(|b| b.device_id == bob.device_id);
                     assert!(has_bobs_device, "Should include Bob's current device");
                 }
             }
@@ -142,7 +138,17 @@ async fn test_e2e_channel_message_reaches_device() {
 
     let message = assert_ok(
         msg_client
-            .send_message(&channel_id, content, None, false, None, vec![], false, vec![], Vec::new())
+            .send_message(
+                &channel_id,
+                content,
+                None,
+                false,
+                None,
+                vec![],
+                false,
+                vec![],
+                Vec::new(),
+            )
             .await,
     );
 

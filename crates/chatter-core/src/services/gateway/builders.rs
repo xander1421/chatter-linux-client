@@ -9,9 +9,9 @@
 use rand::RngCore;
 
 use crate::proto::content_v1::{
-    AttachmentPointer, Content, DataMessage, Delete, DeleteForMeSync, EditMessage,
-    PinMessage, Quote, QuotedAttachment, Reaction, ReceiptMessage, SavedMessageSync, TypingMessage,
-    content, quote, receipt_message, typing_message,
+    AttachmentPointer, Content, DataMessage, Delete, DeleteForMeSync, EditMessage, PinMessage,
+    Quote, QuotedAttachment, Reaction, ReceiptMessage, SavedMessageSync, TypingMessage, content,
+    quote, receipt_message, typing_message,
 };
 use crate::util::time::TimestampNanos;
 
@@ -60,7 +60,11 @@ pub fn build_text_content(body: &str, sent_at: u64) -> Content {
 
 /// Create a Content proto for a message with text and/or attachments.
 /// `sent_at` should be the SAME timestamp used for Message.sent_at (nanoseconds).
-pub fn build_data_message_content(body: &str, attachments: Vec<AttachmentPointer>, sent_at: u64) -> Content {
+pub fn build_data_message_content(
+    body: &str,
+    attachments: Vec<AttachmentPointer>,
+    sent_at: u64,
+) -> Content {
     tracing::debug!(
         sent_at = sent_at,
         body_len = body.len(),
@@ -107,12 +111,12 @@ pub fn build_reply_content(
             timestamp: sent_at,
             attachments,
             quote: Some(Quote {
-                id: quote_timestamp,  // Signal uses timestamp as ID
+                id: quote_timestamp, // Signal uses timestamp as ID
                 text: quote_text.to_string(),
                 attachments: quote_attachments,
                 author_aci: quote_author_id.to_string(),
                 r#type: quote::Type::Normal as i32,
-                author_aci_binary: vec![],  // We use string format
+                author_aci_binary: vec![], // We use string format
             }),
             ..Default::default()
         })),
@@ -155,7 +159,11 @@ pub fn build_typing_content_with_channel(started: bool, channel_id: Option<&str>
     Content {
         timestamp: now,
         content: Some(content::Content::Typing(TypingMessage {
-            action: if started { typing_message::Action::Started as i32 } else { typing_message::Action::Stopped as i32 },
+            action: if started {
+                typing_message::Action::Started as i32
+            } else {
+                typing_message::Action::Stopped as i32
+            },
             timestamp: now,
             channel_id: channel_id.unwrap_or_default().to_string(),
         })),
@@ -169,7 +177,10 @@ pub fn build_read_receipt_content(message_timestamps: Vec<u64>) -> Content {
 }
 
 /// Create a Content proto for read receipt with optional channel context.
-pub fn build_read_receipt_content_with_channel(message_timestamps: Vec<u64>, channel_id: Option<&str>) -> Content {
+pub fn build_read_receipt_content_with_channel(
+    message_timestamps: Vec<u64>,
+    channel_id: Option<&str>,
+) -> Content {
     let now = TimestampNanos::now().as_u64();
     Content {
         timestamp: now,
@@ -189,7 +200,10 @@ pub fn build_delivery_receipt_content(message_timestamps: Vec<u64>) -> Content {
 }
 
 /// Create a Content proto for delivery receipt with optional channel context.
-pub fn build_delivery_receipt_content_with_channel(message_timestamps: Vec<u64>, channel_id: Option<&str>) -> Content {
+pub fn build_delivery_receipt_content_with_channel(
+    message_timestamps: Vec<u64>,
+    channel_id: Option<&str>,
+) -> Content {
     let now = TimestampNanos::now().as_u64();
     Content {
         timestamp: now,
@@ -210,7 +224,13 @@ pub fn build_reaction_content(
     target_author_aci: &str,
     target_sent_timestamp: u64,
 ) -> Content {
-    build_reaction_content_with_channel(emoji, remove, target_author_aci, target_sent_timestamp, None)
+    build_reaction_content_with_channel(
+        emoji,
+        remove,
+        target_author_aci,
+        target_sent_timestamp,
+        None,
+    )
 }
 
 /// Create a Content proto for reaction with optional channel context.
@@ -411,10 +431,7 @@ pub fn build_call_key_offer(
 /// # Arguments
 /// * `call_id` - Call ID from the offer
 /// * `ephemeral_public_key` - Callee's ephemeral X25519 public key (32 bytes)
-pub fn build_call_key_answer(
-    call_id: &str,
-    ephemeral_public_key: [u8; 32],
-) -> Content {
+pub fn build_call_key_answer(call_id: &str, ephemeral_public_key: [u8; 32]) -> Content {
     use crate::proto::content_v1::CallKeyExchange;
     let now = TimestampNanos::now().as_u64();
     Content {
@@ -444,7 +461,9 @@ pub fn build_group_call_signal_content(
     signal: crate::domain::call::GroupCallSignal,
 ) -> Content {
     use crate::domain::call::GroupCallSignal;
-    use crate::proto::content_v1::{group_call_signal, GroupCallKeyRequest, GroupCallKeyUpdate, GroupCallRing};
+    use crate::proto::content_v1::{
+        GroupCallKeyRequest, GroupCallKeyUpdate, GroupCallRing, group_call_signal,
+    };
     let now = TimestampNanos::now().as_u64();
     let signal = match signal {
         GroupCallSignal::Ring => group_call_signal::Signal::Ring(GroupCallRing {}),
@@ -452,16 +471,20 @@ pub fn build_group_call_signal_content(
             key_material: key.to_vec(),
             key_epoch: epoch,
         }),
-        GroupCallSignal::KeyRequest => group_call_signal::Signal::KeyRequest(GroupCallKeyRequest {}),
+        GroupCallSignal::KeyRequest => {
+            group_call_signal::Signal::KeyRequest(GroupCallKeyRequest {})
+        }
     };
     Content {
         timestamp: now,
-        content: Some(content::Content::GroupCallSignal(crate::proto::content_v1::GroupCallSignal {
-            call_id: call_id.to_string(),
-            channel_id: channel_id.to_string(),
-            timestamp: now,
-            signal: Some(signal),
-        })),
+        content: Some(content::Content::GroupCallSignal(
+            crate::proto::content_v1::GroupCallSignal {
+                call_id: call_id.to_string(),
+                channel_id: channel_id.to_string(),
+                timestamp: now,
+                signal: Some(signal),
+            },
+        )),
         ..Default::default()
     }
 }
@@ -482,8 +505,12 @@ pub fn build_call_hangup_content(call_id: &str, reason: CallHangupReason) -> Con
                 CallHangupReason::Busy => call_hangup::Reason::Busy as i32,
                 CallHangupReason::Timeout => call_hangup::Reason::Timeout as i32,
                 CallHangupReason::NetworkError => call_hangup::Reason::NetworkError as i32,
-                CallHangupReason::AcceptedElsewhere => call_hangup::Reason::AcceptedElsewhere as i32,
-                CallHangupReason::DeclinedElsewhere => call_hangup::Reason::DeclinedElsewhere as i32,
+                CallHangupReason::AcceptedElsewhere => {
+                    call_hangup::Reason::AcceptedElsewhere as i32
+                }
+                CallHangupReason::DeclinedElsewhere => {
+                    call_hangup::Reason::DeclinedElsewhere as i32
+                }
             },
             timestamp: now,
             device_id: 0,
@@ -505,7 +532,9 @@ pub fn build_call_self_sync(content: &Content, our_device_id: u32) -> Option<Con
         Some(content::Content::CallKey(key)) if !key.is_offer => {
             (&key.call_id, call_hangup::Reason::AcceptedElsewhere)
         }
-        Some(content::Content::CallHangup(h)) if h.reason == call_hangup::Reason::Declined as i32 => {
+        Some(content::Content::CallHangup(h))
+            if h.reason == call_hangup::Reason::Declined as i32 =>
+        {
             (&h.call_id, call_hangup::Reason::DeclinedElsewhere)
         }
         _ => return None,
@@ -548,7 +577,9 @@ pub fn generate_anon_call_room() -> ([u8; 16], String, Vec<u8>) {
 }
 
 /// Build an `AnonCallToken` proto from a `CallRoomToken`.
-pub fn build_anon_call_token(token: &crate::mailbox::CallRoomToken) -> crate::proto::content_v1::AnonCallToken {
+pub fn build_anon_call_token(
+    token: &crate::mailbox::CallRoomToken,
+) -> crate::proto::content_v1::AnonCallToken {
     crate::proto::content_v1::AnonCallToken {
         public_key: token.public_key.clone(),
         signature: token.signature.clone(),
@@ -577,7 +608,11 @@ pub fn build_anon_call_offer_content(
             call_room_id: call_room_id.to_vec(),
             room_name: room_name.to_string(),
             caller_token: Some(build_anon_call_token(token)),
-            call_type: if video { CallType::Video.into() } else { CallType::Voice.into() },
+            call_type: if video {
+                CallType::Video.into()
+            } else {
+                CallType::Voice.into()
+            },
             timestamp: now,
             caller_display_name: display_name.to_string(),
             call_encryption_key: encryption_key.to_vec(),
@@ -605,7 +640,11 @@ pub fn build_anon_call_answer_content(
         content: Some(content::Content::AnonCallAnswer(AnonCallAnswer {
             call_room_id: call_room_id.to_vec(),
             accepted: accept,
-            callee_token: if accept { token.map(build_anon_call_token) } else { None },
+            callee_token: if accept {
+                token.map(build_anon_call_token)
+            } else {
+                None
+            },
             timestamp: now,
             callee_display_name: display_name.to_string(),
             decline_reason,
@@ -617,10 +656,7 @@ pub fn build_anon_call_answer_content(
 /// Create a Content proto for an anonymous call hangup.
 ///
 /// Used by both anon DM and anon group call termination.
-pub fn build_anon_call_hangup_content(
-    call_room_id: &[u8; 16],
-    reason: i32,
-) -> Content {
+pub fn build_anon_call_hangup_content(call_room_id: &[u8; 16], reason: i32) -> Content {
     use crate::proto::content_v1::AnonCallHangup;
 
     let now = TimestampNanos::now().as_u64();
@@ -652,12 +688,24 @@ mod call_self_sync_tests {
     #[test]
     fn only_answer_and_decline_reach_our_other_devices() {
         let answer = build_call_key_answer("c1", [1u8; 32]);
-        assert_eq!(synced(&answer), Some(("c1".into(), Reason::AcceptedElsewhere as i32, 6)));
+        assert_eq!(
+            synced(&answer),
+            Some(("c1".into(), Reason::AcceptedElsewhere as i32, 6))
+        );
         let decline = build_call_hangup_content("c2", CallHangupReason::Declined);
-        assert_eq!(synced(&decline), Some(("c2".into(), Reason::DeclinedElsewhere as i32, 6)));
+        assert_eq!(
+            synced(&decline),
+            Some(("c2".into(), Reason::DeclinedElsewhere as i32, 6))
+        );
 
         assert_eq!(synced(&build_call_key_offer("c3", [1u8; 32], "", "")), None);
-        assert_eq!(synced(&build_call_hangup_content("c4", CallHangupReason::Normal)), None);
-        assert_eq!(synced(&build_call_hangup_content("c5", CallHangupReason::Busy)), None);
+        assert_eq!(
+            synced(&build_call_hangup_content("c4", CallHangupReason::Normal)),
+            None
+        );
+        assert_eq!(
+            synced(&build_call_hangup_content("c5", CallHangupReason::Busy)),
+            None
+        );
     }
 }

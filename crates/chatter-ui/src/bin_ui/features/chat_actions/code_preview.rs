@@ -10,8 +10,8 @@ use chatter_core::media::{FilePicker, FilePickerConfig};
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 use chatter_core::system::ExternalOpener;
 
-use crate::bin_ui::preview_state;
 use crate::MainWindow;
+use crate::bin_ui::preview_state;
 
 /// Wire code preview callbacks.
 pub fn wire_code_preview_callbacks(window: &MainWindow) {

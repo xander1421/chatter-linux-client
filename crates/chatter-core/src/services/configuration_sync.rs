@@ -11,9 +11,9 @@
 
 use crate::domain::ids::UserId;
 use crate::error::StorageError;
-use crate::proto::content_v1::{content, Content, ConfigurationSync};
+use crate::proto::content_v1::{ConfigurationSync, Content, content};
 use crate::services::current_user::CurrentUserProvider;
-use crate::storage::repositories::settings_repo::{keys, SettingsRepository};
+use crate::storage::repositories::settings_repo::{SettingsRepository, keys};
 
 /// The settings as they stand on this device (each defaults to on, as the
 /// settings screen and the receipt path read them).
@@ -63,7 +63,9 @@ mod tests {
         let db = Arc::new(Database::open(&dir.path().join("c.db"), "testpass").expect("db"));
         db.run_migrations().expect("migrations");
         let settings = SettingsRepository::new(db);
-        settings.set_string(keys::CURRENT_USER_ID, &me.to_string()).expect("me");
+        settings
+            .set_string(keys::CURRENT_USER_ID, &me.to_string())
+            .expect("me");
         (dir, settings)
     }
 
@@ -74,9 +76,17 @@ mod tests {
         let me = UserId::new();
         let (_a, sender) = settings_for(&me);
         let (_b, receiver) = settings_for(&me);
-        assert_eq!(current(&receiver), ConfigurationSync { read_receipts: true, typing_indicators: true });
+        assert_eq!(
+            current(&receiver),
+            ConfigurationSync {
+                read_receipts: true,
+                typing_indicators: true
+            }
+        );
 
-        sender.set_bool(keys::SEND_READ_RECEIPTS, false).expect("set");
+        sender
+            .set_bool(keys::SEND_READ_RECEIPTS, false)
+            .expect("set");
         let wire = content(&sender, 7).encode_to_vec();
         let Some(content::Content::ConfigurationSync(sync)) =
             Content::decode(wire.as_slice()).expect("decode").content
@@ -85,16 +95,32 @@ mod tests {
         };
 
         assert!(apply(&receiver, &me, &sync).expect("apply"));
-        assert_eq!(current(&receiver), ConfigurationSync { read_receipts: false, typing_indicators: true });
+        assert_eq!(
+            current(&receiver),
+            ConfigurationSync {
+                read_receipts: false,
+                typing_indicators: true
+            }
+        );
     }
 
     #[test]
     fn a_sync_from_another_user_is_rejected() {
         let me = UserId::new();
         let (_dir, settings) = settings_for(&me);
-        let forged = ConfigurationSync { read_receipts: false, typing_indicators: false };
+        let forged = ConfigurationSync {
+            read_receipts: false,
+            typing_indicators: false,
+        };
 
         assert!(!apply(&settings, &UserId::new(), &forged).expect("apply"));
-        assert_eq!(current(&settings), ConfigurationSync { read_receipts: true, typing_indicators: true }, "nothing written");
+        assert_eq!(
+            current(&settings),
+            ConfigurationSync {
+                read_receipts: true,
+                typing_indicators: true
+            },
+            "nothing written"
+        );
     }
 }

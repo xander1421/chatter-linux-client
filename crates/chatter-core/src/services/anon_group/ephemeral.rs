@@ -28,7 +28,8 @@ impl AnonGroupService {
             return Ok(());
         }
 
-        let content = build_reaction_content(emoji, remove, target_author_aci, target_sent_timestamp);
+        let content =
+            build_reaction_content(emoji, remove, target_author_aci, target_sent_timestamp);
         self.send_ephemeral_message(group_id, content).await
     }
 
@@ -93,9 +94,12 @@ impl AnonGroupService {
 
         // Update message locally
         let channel_id: ChannelId = (*group_id).into();
-        self.message_service
-            .message_repo
-            .update_text_by_timestamp(&channel_id, &ConversationType::AnonGroup, target_sent_timestamp, new_text)?;
+        self.message_service.message_repo.update_text_by_timestamp(
+            &channel_id,
+            &ConversationType::AnonGroup,
+            target_sent_timestamp,
+            new_text,
+        )?;
 
         Ok(())
     }

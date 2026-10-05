@@ -79,12 +79,11 @@ impl MessageIndexer {
                         // Extract indexable text (plain, mixed-text, or AI-generated)
                         if let Some(text) = message.as_text() {
                             if text.trim().len() >= 5 {
-                                let _ = tx
-                                    .try_send(IndexableMessage {
-                                        message_id: message.id.0.to_string(),
-                                        channel_id: message.conversation_id.0.to_string(),
-                                        content: text.to_string(),
-                                    });
+                                let _ = tx.try_send(IndexableMessage {
+                                    message_id: message.id.0.to_string(),
+                                    channel_id: message.conversation_id.0.to_string(),
+                                    content: text.to_string(),
+                                });
                             }
                         }
                     }

@@ -1,10 +1,10 @@
 //! Thin presentation glue for core-owned server record pages.
-use crate::{run_ui, MainWindow, ServerRecordRow, ServerRecordsGlobal};
+use crate::{MainWindow, ServerRecordRow, ServerRecordsGlobal, run_ui};
 use chatter_core::client::ChatterClient;
 use slint::{ComponentHandle, Model, ModelRc, VecModel};
 use std::sync::{
-    atomic::{AtomicU64, Ordering},
     Arc,
+    atomic::{AtomicU64, Ordering},
 };
 
 pub fn wire(window: &MainWindow, client: &Arc<ChatterClient>) {

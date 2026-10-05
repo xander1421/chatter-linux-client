@@ -66,9 +66,7 @@ pub enum CallState {
     },
 }
 
-impl CallState {
-
-}
+impl CallState {}
 
 // ============================================================================
 // Participant
@@ -103,7 +101,6 @@ impl Participant {
             is_screen_sharing: false,
         }
     }
-
 }
 
 // ============================================================================
@@ -181,17 +178,22 @@ impl Call {
     /// the displayed duration negative.
     #[must_use]
     pub fn duration_seconds(&self) -> i64 {
-        self.duration().map(|duration| duration.num_seconds().max(0)).unwrap_or(0)
+        self.duration()
+            .map(|duration| duration.num_seconds().max(0))
+            .unwrap_or(0)
     }
 
     /// Add a participant to the call.
     pub fn add_participant(&mut self, participant: Participant) {
         // Don't add duplicates
-        if !self.participants.iter().any(|p| p.user_id == participant.user_id) {
+        if !self
+            .participants
+            .iter()
+            .any(|p| p.user_id == participant.user_id)
+        {
             self.participants.push(participant);
         }
     }
-
 }
 
 // ============================================================================
@@ -211,10 +213,7 @@ pub struct VerificationBadge {
     pub last_verified_at: Option<DateTime<Utc>>,
 }
 
-impl VerificationBadge {
-
-}
-
+impl VerificationBadge {}
 
 // ============================================================================
 // DM Call Orchestration Types

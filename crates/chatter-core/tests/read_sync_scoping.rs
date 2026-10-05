@@ -53,8 +53,14 @@ fn a_read_sync_marks_the_peers_dm_read() {
     let conv = ChannelId::from(peer);
     let msg = unread_from(&repo, conv, ConversationType::ServerDm, peer, ts);
 
-    assert_eq!(repo.mark_read_synced(&[(conv, peer, ts)], &me).unwrap(), vec![conv]);
-    assert!(is_read(&repo, &msg), "the sync's own subject must be marked read");
+    assert_eq!(
+        repo.mark_read_synced(&[(conv, peer, ts)], &me).unwrap(),
+        vec![conv]
+    );
+    assert!(
+        is_read(&repo, &msg),
+        "the sync's own subject must be marked read"
+    );
 }
 
 #[test]
@@ -70,8 +76,15 @@ fn a_read_sync_never_marks_our_own_message_read() {
     // sender; "unread" is not a state it can be in for us.
     let mine = unread_from(&repo, conv, ConversationType::ServerDm, me, ts);
 
-    assert!(repo.mark_read_synced(&[(conv, me, ts)], &me).unwrap().is_empty());
-    assert!(!is_read(&repo, &mine), "our own message was flipped by a read sync");
+    assert!(
+        repo.mark_read_synced(&[(conv, me, ts)], &me)
+            .unwrap()
+            .is_empty()
+    );
+    assert!(
+        !is_read(&repo, &mine),
+        "our own message was flipped by a read sync"
+    );
 }
 
 #[test]
@@ -87,7 +100,10 @@ fn a_read_sync_never_touches_another_conversation() {
     let conv = ChannelId::from(peer);
     let dm_msg = unread_from(&repo, conv, ConversationType::ServerDm, peer, ts);
 
-    assert_eq!(repo.mark_read_synced(&[(conv, peer, ts)], &me).unwrap(), vec![conv]);
+    assert_eq!(
+        repo.mark_read_synced(&[(conv, peer, ts)], &me).unwrap(),
+        vec![conv]
+    );
     assert!(is_read(&repo, &dm_msg));
     assert!(
         !is_read(&repo, &channel_msg),
@@ -112,10 +128,19 @@ fn a_read_sync_never_touches_a_mesh_message() {
     let mesh_dm = unread_from(&repo, conv, ConversationType::MeshDm, peer, ts);
     let dm_msg = unread_from(&repo, conv, ConversationType::ServerDm, peer, ts);
 
-    assert_eq!(repo.mark_read_synced(&[(conv, peer, ts)], &me).unwrap(), vec![conv]);
+    assert_eq!(
+        repo.mark_read_synced(&[(conv, peer, ts)], &me).unwrap(),
+        vec![conv]
+    );
     assert!(is_read(&repo, &dm_msg));
-    assert!(!is_read(&repo, &mesh_msg), "mesh row flipped by a read sync");
-    assert!(!is_read(&repo, &mesh_dm), "mesh DM row flipped by a read sync");
+    assert!(
+        !is_read(&repo, &mesh_msg),
+        "mesh row flipped by a read sync"
+    );
+    assert!(
+        !is_read(&repo, &mesh_dm),
+        "mesh DM row flipped by a read sync"
+    );
 }
 
 #[test]
@@ -129,9 +154,14 @@ fn an_already_read_message_is_not_reported_as_newly_read() {
     let conv = ChannelId::from(peer);
     let msg = unread_from(&repo, conv, ConversationType::ServerDm, peer, ts);
 
-    assert_eq!(repo.mark_read_synced(&[(conv, peer, ts)], &me).unwrap(), vec![conv]);
+    assert_eq!(
+        repo.mark_read_synced(&[(conv, peer, ts)], &me).unwrap(),
+        vec![conv]
+    );
     assert!(
-        repo.mark_read_synced(&[(conv, peer, ts)], &me).unwrap().is_empty(),
+        repo.mark_read_synced(&[(conv, peer, ts)], &me)
+            .unwrap()
+            .is_empty(),
         "a duplicate sync must not report a second state change"
     );
     assert!(is_read(&repo, &msg));
@@ -149,19 +179,28 @@ fn a_local_read_returns_what_it_flipped() {
     let conv = ChannelId::from(peer);
     let first = unread_from(&repo, conv, ConversationType::ServerDm, peer, 10);
     unread_from(&repo, conv, ConversationType::ServerDm, peer, 11);
-    let mut mine = Message::new_text(conv, ConversationType::ServerDm, Some(me), "mine".to_string(), 12);
+    let mut mine = Message::new_text(
+        conv,
+        ConversationType::ServerDm,
+        Some(me),
+        "mine".to_string(),
+        12,
+    );
     mine.is_read = true;
     repo.insert(&mine).unwrap();
     repo.mark_read(&first.id).unwrap();
 
-    let (anchor, read) = repo.mark_conversation_read_returning(&conv, &ConversationType::ServerDm).unwrap();
+    let (anchor, read) = repo
+        .mark_conversation_read_returning(&conv, &ConversationType::ServerDm)
+        .unwrap();
     assert_eq!(anchor.unread_count, 1);
     assert_eq!(read, vec![(peer, 11)]);
-    assert!(repo
-        .mark_conversation_read_returning(&conv, &ConversationType::ServerDm)
-        .unwrap()
-        .1
-        .is_empty());
+    assert!(
+        repo.mark_conversation_read_returning(&conv, &ConversationType::ServerDm)
+            .unwrap()
+            .1
+            .is_empty()
+    );
 }
 
 #[test]
@@ -174,8 +213,17 @@ fn a_read_sync_never_marks_another_peers_dm_at_the_same_time() {
     let ts = 1_700_000_000_000_000_000;
     let conv = ChannelId::from(peer);
     let intended = unread_from(&repo, conv, ConversationType::ServerDm, peer, ts);
-    let unrelated = unread_from(&repo, ChannelId::from(other), ConversationType::ServerDm, other, ts);
-    assert_eq!(repo.mark_read_synced(&[(conv, peer, ts)], &me).unwrap(), vec![conv]);
+    let unrelated = unread_from(
+        &repo,
+        ChannelId::from(other),
+        ConversationType::ServerDm,
+        other,
+        ts,
+    );
+    assert_eq!(
+        repo.mark_read_synced(&[(conv, peer, ts)], &me).unwrap(),
+        vec![conv]
+    );
     assert!(is_read(&repo, &intended));
     assert!(!is_read(&repo, &unrelated));
 }

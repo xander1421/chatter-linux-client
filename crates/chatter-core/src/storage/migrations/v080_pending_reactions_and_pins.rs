@@ -8,8 +8,12 @@
 use super::Migration;
 pub struct V080PendingReactionsAndPins;
 impl Migration for V080PendingReactionsAndPins {
-    fn version(&self) -> u32 { 80 }
-    fn description(&self) -> &'static str { "Hold early reactions and pins with pending modifiers" }
+    fn version(&self) -> u32 {
+        80
+    }
+    fn description(&self) -> &'static str {
+        "Hold early reactions and pins with pending modifiers"
+    }
     fn up(&self) -> &'static str {
         r#"
         DROP TABLE pending_message_modifiers;
@@ -29,5 +33,7 @@ impl Migration for V080PendingReactionsAndPins {
         CREATE INDEX pending_message_modifiers_received ON pending_message_modifiers(received_at);
         "#
     }
-    fn down(&self) -> Option<&'static str> { None }
+    fn down(&self) -> Option<&'static str> {
+        None
+    }
 }

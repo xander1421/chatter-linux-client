@@ -962,6 +962,7 @@ export component MainWindow inherits Window {
     // ========== Chat callbacks ==========
     callback chat-settings-clicked();
     callback invite-member();
+    callback open-message-link(string);
     callback message-clicked(string);
     callback reply-clicked(string, string);  // (sender_id, timestamp_ns)
     callback react-clicked(string, string, length, length);  // (sender_id, timestamp_ns, x, y)
@@ -1971,6 +1972,7 @@ export component MainWindow inherits Window {
                         pinned-go-to-message => { root.pinned-go-to-message(); }
                         pinned-dismiss-clicked => { root.pinned-dismiss-clicked(); }
                         pinned-show-clicked => { root.pinned-show-clicked(); }
+                        open-message-link(url) => { root.open-message-link(url); }
                         message-clicked(id) => { root.message-clicked(id); }
                         reply-clicked(sender-id, timestamp-ns) => { root.reply-clicked(sender-id, timestamp-ns); }
                         react-clicked(sender-id, timestamp-ns, x, y) => {
@@ -2058,6 +2060,7 @@ export component MainWindow inherits Window {
                         close-clicked => { root.close-thread-clicked(); }
                         send-reply(text) => { root.send-thread-reply(text); }
                         load-more-replies => { root.load-more-thread-replies(); }
+                        open-message-link(url) => { root.open-message-link(url); }
                         message-clicked(id) => { root.message-clicked(id); }
                         react-clicked(sender-id, timestamp-ns, x, y) => {
                             root.reaction-picker-sender-id = sender-id;

@@ -17,6 +17,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use chatter_mesh::dedup::MessageDeduplicator;
 use chatter_mesh::fragment::FragmentAssembler;
 use chatter_mesh::ids::PeerId;
+use chatter_mesh_link::LinkId;
 use chatter_mesh_link::backpressure::{InboundAssembler, OutboundWriteBuffer};
 use chatter_mesh_link::duty::ScanDutyCycle;
 use chatter_mesh_link::fanout::LinkCandidate;
@@ -24,7 +25,6 @@ use chatter_mesh_link::guard::SelfBroadcastTracker;
 use chatter_mesh_link::planner::DirectedRelaySpool;
 use chatter_mesh_link::registry::{IngressRegistry, LinkStateStore, PeerRecord, PeerRegistry};
 use chatter_mesh_link::scheduler::ConnectionScheduler;
-use chatter_mesh_link::LinkId;
 use chatter_mesh_store::PeerSnapshot;
 use parking_lot::Mutex;
 
@@ -434,15 +434,35 @@ mod tests {
         state.with(|s| {
             for (id, key) in [(&first, [1u8; 32]), (&second, [2u8; 32])] {
                 let announce = chatter_mesh::tlv::announce::AnnouncementPacket::new(
-                    "Alice".into(), key.to_vec(), vec![3; 32], None, None, None,
+                    "Alice".into(),
+                    key.to_vec(),
+                    vec![3; 32],
+                    None,
+                    None,
+                    None,
                 );
-                s.peers.upsert_verified_announce(id, &announce, true, now_millis());
+                s.peers
+                    .upsert_verified_announce(id, &announce, true, now_millis());
             }
         });
         let peers = state.peers();
-        assert_eq!(peers[0].nickname, format!("Alice#{}", &chatter_mesh_noise::fingerprint_of(&[1; 32])[..4]));
-        assert_eq!(peers[1].nickname, format!("Alice#{}", &chatter_mesh_noise::fingerprint_of(&[2; 32])[..4]));
-        state.with(|s| { s.peers.remove(&second); });
+        assert_eq!(
+            peers[0].nickname,
+            format!(
+                "Alice#{}",
+                &chatter_mesh_noise::fingerprint_of(&[1; 32])[..4]
+            )
+        );
+        assert_eq!(
+            peers[1].nickname,
+            format!(
+                "Alice#{}",
+                &chatter_mesh_noise::fingerprint_of(&[2; 32])[..4]
+            )
+        );
+        state.with(|s| {
+            s.peers.remove(&second);
+        });
         assert_eq!(state.peers()[0].nickname, "Alice");
     }
 
@@ -470,7 +490,10 @@ mod tests {
             inner.links.bind_if_unbound(&link, &other);
         });
         assert!(state.is_connected(&other));
-        assert!(!state.can_write_to(&other), "binding alone is not writability");
+        assert!(
+            !state.can_write_to(&other),
+            "binding alone is not writability"
+        );
 
         state.with(|inner| {
             inner.links.set_writable(&link, true);
@@ -548,7 +571,6 @@ mod tests {
     }
 }
 
-
 // A fingerprint belongs to the identity, so a collision suffix stays stable
 // when peer-list ordering changes.
 fn disambiguate_nicknames(peers: &mut [MeshPeer]) {
@@ -559,7 +581,11 @@ fn disambiguate_nicknames(peers: &mut [MeshPeer]) {
     for peer in peers {
         if counts.get(&peer.nickname).copied().unwrap_or(0) > 1 {
             let fingerprint = peer.fingerprint.as_deref().unwrap_or(peer.peer.as_str());
-            let suffix: String = fingerprint.chars().filter(|c| c.is_ascii_hexdigit()).take(4).collect();
+            let suffix: String = fingerprint
+                .chars()
+                .filter(|c| c.is_ascii_hexdigit())
+                .take(4)
+                .collect();
             peer.nickname = format!("{}#{}", peer.nickname, suffix.to_lowercase());
         }
     }

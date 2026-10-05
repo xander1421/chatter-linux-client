@@ -48,11 +48,20 @@ async fn test_e2e_session_establishment_flow() {
     let bob = harness.register_user("Bob").await;
 
     // Create sessions for both
-    let alice_token = harness.mock_server().create_session(&alice.user_id, alice.device_id);
-    let bob_token = harness.mock_server().create_session(&bob.user_id, bob.device_id);
+    let alice_token = harness
+        .mock_server()
+        .create_session(&alice.user_id, alice.device_id);
+    let bob_token = harness
+        .mock_server()
+        .create_session(&bob.user_id, bob.device_id);
 
     // Verify sessions are valid
-    assert!(harness.mock_server().validate_session(&alice_token).is_some());
+    assert!(
+        harness
+            .mock_server()
+            .validate_session(&alice_token)
+            .is_some()
+    );
     assert!(harness.mock_server().validate_session(&bob_token).is_some());
 }
 
@@ -71,7 +80,9 @@ async fn test_e2e_dm_conversation_flow() {
 
     // Step 2: Establish Signal session (simulated)
     let alice_bob_addr = format!("{}.{}", bob.user_id(), bob.device_id());
-    harness.signal_stores.store_session(&alice_bob_addr, random_bytes(256));
+    harness
+        .signal_stores
+        .store_session(&alice_bob_addr, random_bytes(256));
 
     // Step 3: Alice sends first message
     let msg1 = MessageBuilder::text("Hey Bob, how's it going?")
@@ -152,7 +163,10 @@ async fn test_e2e_group_channel_flow() {
     let conversation = vec![
         (alice.user_id(), "Hey team, let's discuss the roadmap"),
         (bob.user_id(), "Sounds good! What's the priority?"),
-        (charlie.user_id(), "I think we should focus on the MVP first"),
+        (
+            charlie.user_id(),
+            "I think we should focus on the MVP first",
+        ),
         (alice.user_id(), "Agreed. Let's break down the tasks"),
     ];
 
@@ -258,21 +272,21 @@ async fn test_e2e_multi_channel_workflow() {
         MessageBuilder::text("Welcome everyone!")
             .in_channel(&general_id)
             .from(alice.user_id())
-            .build()
+            .build(),
     );
 
     harness.mock_server().store_message(
         MessageBuilder::text("Check out this meme")
             .in_channel(&random_id)
             .from(bob.user_id())
-            .build()
+            .build(),
     );
 
     harness.mock_server().store_message(
         MessageBuilder::text("Private message")
             .in_channel(&dm_id)
             .from(alice.user_id())
-            .build()
+            .build(),
     );
 
     // Verify isolation
@@ -297,15 +311,32 @@ async fn test_e2e_multi_device_flow() {
     let device3_token = harness.mock_server().create_session(&alice.user_id, 3);
 
     // All sessions should be valid
-    assert!(harness.mock_server().validate_session(&device1_token).is_some());
-    assert!(harness.mock_server().validate_session(&device2_token).is_some());
-    assert!(harness.mock_server().validate_session(&device3_token).is_some());
+    assert!(
+        harness
+            .mock_server()
+            .validate_session(&device1_token)
+            .is_some()
+    );
+    assert!(
+        harness
+            .mock_server()
+            .validate_session(&device2_token)
+            .is_some()
+    );
+    assert!(
+        harness
+            .mock_server()
+            .validate_session(&device3_token)
+            .is_some()
+    );
 
     // Create Signal sessions for each device
     let bob = harness.register_user("Bob").await;
     for device_id in 1..=3 {
         let addr = format!("{}.{}", bob.user_id, device_id);
-        harness.signal_stores.store_session(&addr, random_bytes(256));
+        harness
+            .signal_stores
+            .store_session(&addr, random_bytes(256));
         assert!(harness.signal_stores.has_session(&addr));
     }
 }
@@ -334,7 +365,7 @@ async fn test_e2e_media_sharing_flow() {
             .in_channel(&channel_id)
             .from(alice.user_id())
             .with_attachment(image)
-            .build()
+            .build(),
     );
 
     // Bob shares a video
@@ -346,7 +377,7 @@ async fn test_e2e_media_sharing_flow() {
             .in_channel(&channel_id)
             .from(bob.user_id())
             .with_attachment(video)
-            .build()
+            .build(),
     );
 
     // Alice shares a document
@@ -358,7 +389,7 @@ async fn test_e2e_media_sharing_flow() {
             .in_channel(&channel_id)
             .from(alice.user_id())
             .with_attachment(doc)
-            .build()
+            .build(),
     );
 
     // Verify all media
@@ -419,7 +450,9 @@ async fn test_e2e_harness_reset_flow() {
     let channel_id = harness.mock_server().create_channel(channel);
 
     harness.mock_server().store_message(
-        MessageBuilder::text("Hello").in_channel(&channel_id).build()
+        MessageBuilder::text("Hello")
+            .in_channel(&channel_id)
+            .build(),
     );
 
     // Verify state exists
@@ -458,7 +491,11 @@ async fn test_e2e_with_network_latency() {
     for i in 0..3 {
         let msg = MessageBuilder::text(&format!("Message {}", i))
             .in_channel(&channel_id)
-            .from(if i % 2 == 0 { alice.user_id() } else { bob.user_id() })
+            .from(if i % 2 == 0 {
+                alice.user_id()
+            } else {
+                bob.user_id()
+            })
             .build();
         harness.mock_server().store_message(msg);
     }
@@ -473,10 +510,7 @@ async fn test_e2e_with_network_latency() {
 
 #[tokio::test]
 async fn test_e2e_offline_network_detection() {
-    let harness = TestHarness::builder()
-        .offline()
-        .build()
-        .await;
+    let harness = TestHarness::builder().offline().build().await;
 
     // Network should indicate offline
     assert!(harness.network.should_fail(), "Offline network should fail");

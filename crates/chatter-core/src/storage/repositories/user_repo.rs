@@ -3,12 +3,14 @@
 //! Data access for user, profile, device, and friendship entities.
 
 use crate::domain::ids::{DeviceId, UserId};
-use crate::domain::user::{Device, Friendship, FriendshipStatus, PresenceStatus, Profile, StatusMessage, User};
+use crate::domain::user::{
+    Device, Friendship, FriendshipStatus, PresenceStatus, Profile, StatusMessage, User,
+};
 use crate::error::StorageError;
 use crate::storage::Database;
 use chrono::{DateTime, Utc};
-use rusqlite::params;
 use rusqlite::OptionalExtension;
+use rusqlite::params;
 use std::sync::Arc;
 
 /// User data repository.
@@ -78,9 +80,10 @@ impl UserRepository {
 
         let result = stmt.query_row(params![id.to_string()], |row| {
             Ok(User {
-                id: row.get::<_, String>(0)?.parse().map_err(|_| {
-                    rusqlite::Error::InvalidParameterName("Invalid UUID".into())
-                })?,
+                id: row
+                    .get::<_, String>(0)?
+                    .parse()
+                    .map_err(|_| rusqlite::Error::InvalidParameterName("Invalid UUID".into()))?,
                 username: row.get(1)?,
                 svr_public_key: row.get(2)?,
                 last_active: parse_datetime(&row.get::<_, String>(3)?),
@@ -104,7 +107,8 @@ impl UserRepository {
     pub fn display_name_sources(
         &self,
         ids: &[UserId],
-    ) -> Result<std::collections::HashMap<UserId, (Option<String>, Option<String>)>, StorageError> {
+    ) -> Result<std::collections::HashMap<UserId, (Option<String>, Option<String>)>, StorageError>
+    {
         let mut out = std::collections::HashMap::with_capacity(ids.len());
         let conn = self.db.read_connection()?;
         // Far below SQLITE_MAX_VARIABLE_NUMBER; a page has a handful of senders.
@@ -194,9 +198,10 @@ impl UserRepository {
             });
 
             Ok(Profile {
-                user_id: row.get::<_, String>(0)?.parse().map_err(|_| {
-                    rusqlite::Error::InvalidParameterName("Invalid UUID".into())
-                })?,
+                user_id: row
+                    .get::<_, String>(0)?
+                    .parse()
+                    .map_err(|_| rusqlite::Error::InvalidParameterName("Invalid UUID".into()))?,
                 display_name: row.get(1)?,
                 avatar_bytes: row.get(2)?,
                 status_message,
@@ -306,9 +311,10 @@ impl UserRepository {
         while let Some(row) = rows.next()? {
             devices.push(Device {
                 id: DeviceId::new(row.get(0)?),
-                user_id: row.get::<_, String>(1)?.parse().map_err(|_| {
-                    rusqlite::Error::InvalidParameterName("Invalid UUID".into())
-                })?,
+                user_id: row
+                    .get::<_, String>(1)?
+                    .parse()
+                    .map_err(|_| rusqlite::Error::InvalidParameterName("Invalid UUID".into()))?,
                 name: row.get(2)?,
                 registration_id: row.get(3)?,
                 created_at: parse_datetime(&row.get::<_, String>(4)?),
@@ -351,9 +357,8 @@ impl UserRepository {
              FROM friendships WHERE user_id = ?1 AND friend_id = ?2",
         )?;
 
-        let result = stmt.query_row(
-            params![user_id.to_string(), friend_id.to_string()],
-            |row| {
+        let result =
+            stmt.query_row(params![user_id.to_string(), friend_id.to_string()], |row| {
                 Ok(Friendship {
                     requester_id: row.get::<_, String>(0)?.parse().map_err(|_| {
                         rusqlite::Error::InvalidParameterName("Invalid UUID".into())
@@ -364,8 +369,7 @@ impl UserRepository {
                     status: friendship_status_from_i32(row.get(2)?),
                     created_at: parse_datetime(&row.get::<_, String>(3)?),
                 })
-            },
-        );
+            });
 
         match result {
             Ok(friendship) => Ok(Some(friendship)),
@@ -409,7 +413,10 @@ impl UserRepository {
         )?;
         let ids = stmt
             .query_map(
-                params![user_id.to_string(), friendship_status_to_i32(FriendshipStatus::Blocked)],
+                params![
+                    user_id.to_string(),
+                    friendship_status_to_i32(FriendshipStatus::Blocked)
+                ],
                 |row| row.get::<_, String>(0),
             )?
             .filter_map(|r| r.ok()?.parse().ok())
@@ -481,12 +488,14 @@ impl UserRepository {
 
         while let Some(row) = rows.next()? {
             friendships.push(Friendship {
-                requester_id: row.get::<_, String>(0)?.parse().map_err(|_| {
-                    rusqlite::Error::InvalidParameterName("Invalid UUID".into())
-                })?,
-                addressee_id: row.get::<_, String>(1)?.parse().map_err(|_| {
-                    rusqlite::Error::InvalidParameterName("Invalid UUID".into())
-                })?,
+                requester_id: row
+                    .get::<_, String>(0)?
+                    .parse()
+                    .map_err(|_| rusqlite::Error::InvalidParameterName("Invalid UUID".into()))?,
+                addressee_id: row
+                    .get::<_, String>(1)?
+                    .parse()
+                    .map_err(|_| rusqlite::Error::InvalidParameterName("Invalid UUID".into()))?,
                 status: friendship_status_from_i32(row.get(2)?),
                 created_at: parse_datetime(&row.get::<_, String>(3)?),
             });
@@ -583,10 +592,10 @@ impl UserRepository {
             "SELECT profile_sharing FROM friendships WHERE user_id = ?1 AND friend_id = ?2",
         )?;
 
-        let result: Result<i32, _> = stmt.query_row(
-            params![user_id.to_string(), friend_id.to_string()],
-            |row| row.get(0),
-        );
+        let result: Result<i32, _> = stmt
+            .query_row(params![user_id.to_string(), friend_id.to_string()], |row| {
+                row.get(0)
+            });
 
         match result {
             Ok(value) => Ok(value != 0),
@@ -702,14 +711,22 @@ mod tests {
         repo.accept_friendship_unless_blocked(&me, &them).unwrap();
         assert!(repo.set_friend_profile_key(&me, &them, &[7; 32]).unwrap());
 
-        repo.update_friendship(&friendship(me, them, FriendshipStatus::Blocked)).unwrap();
+        repo.update_friendship(&friendship(me, them, FriendshipStatus::Blocked))
+            .unwrap();
         repo.accept_friendship_unless_blocked(&me, &them).unwrap();
-        assert!(repo.is_blocked(&me, &them).unwrap(), "refresh lifted the block");
+        assert!(
+            repo.is_blocked(&me, &them).unwrap(),
+            "refresh lifted the block"
+        );
 
         // Unblock flips the status back; the key is still there.
-        repo.update_friendship(&friendship(me, them, FriendshipStatus::Accepted)).unwrap();
+        repo.update_friendship(&friendship(me, them, FriendshipStatus::Accepted))
+            .unwrap();
         assert!(!repo.is_blocked(&me, &them).unwrap());
-        assert_eq!(repo.get_friend_profile_key(&me, &them).unwrap(), Some([7; 32]));
+        assert_eq!(
+            repo.get_friend_profile_key(&me, &them).unwrap(),
+            Some([7; 32])
+        );
     }
 
     /// `set_friend_profile_key` reports a change only when the stored key
@@ -724,14 +741,29 @@ mod tests {
         repo.insert_friendship(&friendship(me, them, FriendshipStatus::Accepted))
             .unwrap();
 
-        assert!(repo.set_friend_profile_key(&me, &them, &[1; 32]).unwrap(), "first key");
-        assert!(!repo.set_friend_profile_key(&me, &them, &[1; 32]).unwrap(), "same key");
-        assert!(repo.set_friend_profile_key(&me, &them, &[2; 32]).unwrap(), "rotated key");
-        assert_eq!(repo.get_friend_profile_key(&me, &them).unwrap(), Some([2; 32]));
+        assert!(
+            repo.set_friend_profile_key(&me, &them, &[1; 32]).unwrap(),
+            "first key"
+        );
+        assert!(
+            !repo.set_friend_profile_key(&me, &them, &[1; 32]).unwrap(),
+            "same key"
+        );
+        assert!(
+            repo.set_friend_profile_key(&me, &them, &[2; 32]).unwrap(),
+            "rotated key"
+        );
+        assert_eq!(
+            repo.get_friend_profile_key(&me, &them).unwrap(),
+            Some([2; 32])
+        );
         // A channel co-member with no friendship row still gets theirs kept.
         let member = UserId::new();
         assert!(repo.set_friend_profile_key(&me, &member, &[3; 32]).unwrap());
-        assert_eq!(repo.get_friend_profile_key(&me, &member).unwrap(), Some([3; 32]));
+        assert_eq!(
+            repo.get_friend_profile_key(&me, &member).unwrap(),
+            Some([3; 32])
+        );
     }
 
     /// The durable read that client-side block enforcement stands on.
@@ -745,13 +777,17 @@ mod tests {
     #[test]
     fn list_blocked_by_returns_only_our_blocks() {
         let (_d, repo) = setup();
-        let (me, blocked, friend, blocker) = (UserId::new(), UserId::new(), UserId::new(), UserId::new());
+        let (me, blocked, friend, blocker) =
+            (UserId::new(), UserId::new(), UserId::new(), UserId::new());
         for u in [me, blocked, friend, blocker] {
             repo.ensure_user_exists(&u).unwrap();
         }
-        repo.insert_friendship(&friendship(me, blocked, FriendshipStatus::Blocked)).unwrap();
-        repo.insert_friendship(&friendship(me, friend, FriendshipStatus::Accepted)).unwrap();
-        repo.insert_friendship(&friendship(blocker, me, FriendshipStatus::Blocked)).unwrap();
+        repo.insert_friendship(&friendship(me, blocked, FriendshipStatus::Blocked))
+            .unwrap();
+        repo.insert_friendship(&friendship(me, friend, FriendshipStatus::Accepted))
+            .unwrap();
+        repo.insert_friendship(&friendship(blocker, me, FriendshipStatus::Blocked))
+            .unwrap();
 
         assert_eq!(repo.list_blocked_by(&me).unwrap(), vec![blocked]);
     }
@@ -792,9 +828,18 @@ mod tests {
         repo.insert_friendship(&friendship(me, pending, FriendshipStatus::Pending))
             .unwrap();
 
-        assert!(!repo.is_blocked(&me, &stranger).unwrap(), "no row is not a block");
-        assert!(!repo.is_blocked(&me, &friend).unwrap(), "Accepted is not Blocked");
-        assert!(!repo.is_blocked(&me, &pending).unwrap(), "Pending is not Blocked");
+        assert!(
+            !repo.is_blocked(&me, &stranger).unwrap(),
+            "no row is not a block"
+        );
+        assert!(
+            !repo.is_blocked(&me, &friend).unwrap(),
+            "Accepted is not Blocked"
+        );
+        assert!(
+            !repo.is_blocked(&me, &pending).unwrap(),
+            "Pending is not Blocked"
+        );
     }
 
     /// A block is one-directional. `list_friends` matches either column
@@ -863,7 +908,8 @@ mod tests {
         })
         .unwrap();
 
-        repo.set_presence(&them, PresenceStatus::Online, None).unwrap();
+        repo.set_presence(&them, PresenceStatus::Online, None)
+            .unwrap();
 
         let stored = repo.get_profile(&them).unwrap().expect("profile row");
         assert_eq!(
@@ -891,7 +937,8 @@ mod tests {
         let (_d, repo) = setup();
         let stranger = UserId::new();
 
-        repo.set_presence(&stranger, PresenceStatus::Online, None).unwrap();
+        repo.set_presence(&stranger, PresenceStatus::Online, None)
+            .unwrap();
 
         assert!(
             repo.get_profile(&stranger).unwrap().is_none(),

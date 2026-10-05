@@ -53,9 +53,15 @@ const ONION_TIMEOUT: Duration = Duration::from_secs(180);
 /// An onion challenge must ask for work; if the run names the exact
 /// difficulty, it must be that.
 fn check_difficulty(bits: u32) {
-    assert!(bits > 0, "a challenge over onion asked for no proof of work");
+    assert!(
+        bits > 0,
+        "a challenge over onion asked for no proof of work"
+    );
     if let Ok(v) = std::env::var("CHATTER_EXPECT_ONION_POW_BITS") {
-        assert_eq!(bits, v.parse::<u32>().expect("CHATTER_EXPECT_ONION_POW_BITS"));
+        assert_eq!(
+            bits,
+            v.parse::<u32>().expect("CHATTER_EXPECT_ONION_POW_BITS")
+        );
     }
 }
 
@@ -64,7 +70,11 @@ fn onion_url() -> String {
     let onion = chatter_core::config::PINNED_ONION_ADDR
         .expect("build with CHATTER_ONION_ADDR=<dev server .onion>")
         .trim();
-    if onion.contains("://") { onion.to_string() } else { format!("http://{onion}:443") }
+    if onion.contains("://") {
+        onion.to_string()
+    } else {
+        format!("http://{onion}:443")
+    }
 }
 
 /// Arti state/cache in one persistent place, so reruns skip the full
@@ -94,7 +104,9 @@ impl std::io::Write for Tee {
 
 fn init_logs() {
     let _ = tracing_subscriber::fmt()
-        .with_env_filter("chatter_core::services::auth_service=info,chatter_core::network::grpc=info")
+        .with_env_filter(
+            "chatter_core::services::auth_service=info,chatter_core::network::grpc=info",
+        )
         .with_ansi(false)
         .with_writer(|| Tee)
         .try_init();
@@ -115,7 +127,8 @@ fn random32() -> [u8; 32] {
 async fn onion_pool() -> GrpcClientPool {
     let pool = GrpcClientPool::new(SERVER_URL).expect("pool");
     pool.set_onion_address(Some(onion_url()));
-    pool.set_transport_mode(TransportMode::Onion).expect("switch pool to onion");
+    pool.set_transport_mode(TransportMode::Onion)
+        .expect("switch pool to onion");
     // A rendezvous to a hidden service fails now and then over real Tor;
     // that is the network, not the code under test, so try a few circuits.
     let t = Instant::now();
@@ -137,17 +150,33 @@ async fn onion_pool() -> GrpcClientPool {
 async fn onion_challenge(
     pool: &GrpcClientPool,
     identity_key: &[u8],
-) -> (AuthClient, String, Vec<u8>, chatter_core::proto::chat_v1::RequestRegistrationChallengeResponse) {
+) -> (
+    AuthClient,
+    String,
+    Vec<u8>,
+    chatter_core::proto::chat_v1::RequestRegistrationChallengeResponse,
+) {
     let mut auth = AuthClient::new(pool.channel(), pool.auth_clone());
     let nick = unique_nickname();
     let reg = opaque::registration_start(PASSWORD).unwrap();
     let challenge = auth
-        .request_registration_challenge(&auth_crypto::login_identifier(&nick), identity_key, &reg.request)
+        .request_registration_challenge(
+            &auth_crypto::login_identifier(&nick),
+            identity_key,
+            &reg.request,
+        )
         .await
         .expect("challenge over onion");
-    check_difficulty(challenge.challenge.as_ref().expect("challenge token").difficulty);
-    let record = opaque::registration_finish(reg, PASSWORD, &challenge.opaque_registration_response)
-        .expect("OPAQUE registration record");
+    check_difficulty(
+        challenge
+            .challenge
+            .as_ref()
+            .expect("challenge token")
+            .difficulty,
+    );
+    let record =
+        opaque::registration_finish(reg, PASSWORD, &challenge.opaque_registration_response)
+            .expect("OPAQUE registration record");
     (auth, nick, record, challenge)
 }
 
@@ -161,7 +190,11 @@ async fn onion_register_solves_the_onion_pow() {
     // transport the client below registers over.
     let pool = onion_pool().await;
     let (_, _, _, challenge) = onion_challenge(&pool, &random32()).await;
-    let bits = challenge.challenge.as_ref().expect("challenge token").difficulty;
+    let bits = challenge
+        .challenge
+        .as_ref()
+        .expect("challenge token")
+        .difficulty;
     pool.disconnect();
 
     // A real client, on onion before it has said a word to the server.
@@ -175,7 +208,8 @@ async fn onion_register_solves_the_onion_pow() {
     client.set_anon_mode_enabled(true);
     // Set from the pool's actual transport after the switch (client/mod.rs).
     assert!(
-        chatter_core::network::anon_http::ANON_HTTP_ACTIVE.load(std::sync::atomic::Ordering::Acquire),
+        chatter_core::network::anon_http::ANON_HTTP_ACTIVE
+            .load(std::sync::atomic::Ordering::Acquire),
         "client pool did not switch to onion"
     );
 
@@ -189,7 +223,14 @@ async fn onion_register_solves_the_onion_pow() {
     // test below), so success here means the client solved it.
     let result = tokio::time::timeout(
         ONION_TIMEOUT,
-        client.register(&nick, PASSWORD, "Onion PoW", "onion-pow-test", None, Some("Kf8mq2xpZ")),
+        client.register(
+            &nick,
+            PASSWORD,
+            "Onion PoW",
+            "onion-pow-test",
+            None,
+            Some("Kf8mq2xpZ"),
+        ),
     )
     .await
     .expect("register over onion timed out")
@@ -201,7 +242,10 @@ async fn onion_register_solves_the_onion_pow() {
         .lines()
         .rfind(|l| l.contains("registration proof of work solved"))
         .expect("client did not log its proof-of-work solve");
-    assert!(line.contains(&format!("pow_bits={bits}")), "client solved the wrong difficulty: {line}");
+    assert!(
+        line.contains(&format!("pow_bits={bits}")),
+        "client solved the wrong difficulty: {line}"
+    );
     assert!(line.contains("solve_ms="), "solve time not logged: {line}");
     eprintln!(
         "registered {nick} over onion as {:?} in {:?} (incl. OPAQUE, prekeys, PoW at {bits})",
@@ -235,7 +279,9 @@ async fn onion_register_without_pow_is_refused() {
         // display-name padding buckets before the challenge is looked at.
         display_name: {
             use base64::Engine as _;
-            let ct = chatter_core::crypto::profile_crypto::encrypt_display_name(&random32(), "junk").unwrap();
+            let ct =
+                chatter_core::crypto::profile_crypto::encrypt_display_name(&random32(), "junk")
+                    .unwrap();
             base64::engine::general_purpose::STANDARD.encode(ct)
         },
         device_info: "onion-pow-negative".into(),
@@ -243,7 +289,12 @@ async fn onion_register_without_pow_is_refused() {
         device_auth_token: random32().to_vec(),
         registration_lock: vec![0u8; 32],
         prekey_bundle: Some(bundle),
-        challenge_token: challenge.challenge.as_ref().expect("challenge token").token.clone(),
+        challenge_token: challenge
+            .challenge
+            .as_ref()
+            .expect("challenge token")
+            .token
+            .clone(),
         challenge_response: vec![0u8; 64],
         username_lookup_hash: lookup.to_vec(),
         username_proof: proof,
@@ -264,7 +315,14 @@ async fn onion_register_without_pow_is_refused() {
             }
         }
     };
-    eprintln!("absent solution over onion: {:?}: {}", refused.code(), refused.message());
+    eprintln!(
+        "absent solution over onion: {:?}: {}",
+        refused.code(),
+        refused.message()
+    );
     assert_eq!(refused.code(), tonic::Code::PermissionDenied, "{refused:?}");
-    assert!(refused.message().contains("proof of work"), "refused, but not for the work: {refused:?}");
+    assert!(
+        refused.message().contains("proof of work"),
+        "refused, but not for the work: {refused:?}"
+    );
 }

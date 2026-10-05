@@ -8,8 +8,8 @@ use std::sync::Arc;
 
 use slint::Weak;
 
-use chatter_core::client::ChatterClient;
 use crate::MainWindow;
+use chatter_core::client::ChatterClient;
 
 pub(super) fn handle_device_linked(
     window: &Weak<MainWindow>,
@@ -39,9 +39,7 @@ pub(super) fn handle_device_linked(
                 let count = slint_sessions.len() as i32;
                 let _ = slint::invoke_from_event_loop(move || {
                     if let Some(w) = weak.upgrade() {
-                        w.set_sessions(slint::ModelRc::new(
-                            slint::VecModel::from(slint_sessions),
-                        ));
+                        w.set_sessions(slint::ModelRc::new(slint::VecModel::from(slint_sessions)));
                         w.set_settings_session_count(count);
                     }
                 });

@@ -12,7 +12,7 @@ use tonic::transport::Endpoint;
 use crate::error::NetworkError;
 
 use super::interceptors::AuthInterceptor;
-use super::retry::{retry_unary, RetryConfig};
+use super::retry::{RetryConfig, retry_unary};
 use super::transport::GrpcTransport;
 
 /// Ceiling on the QUIC reachability probe in [`GrpcClientPool::dial`]. QUIC/UDP
@@ -194,21 +194,29 @@ impl GrpcClientPool {
     fn validate_direct_url(server_url: &str) -> Result<(), NetworkError> {
         let url = url::Url::parse(server_url)
             .map_err(|_| NetworkError::ConnectionFailed("invalid URL".into()))?;
-        let dev_loopback = cfg!(feature = "dev-trust-root") && match url.host() {
-            Some(url::Host::Domain("localhost")) => true,
-            Some(url::Host::Ipv4(ip)) => ip.is_loopback(),
-            Some(url::Host::Ipv6(ip)) => ip.is_loopback(),
-            _ => false,
-        };
+        let dev_loopback = cfg!(feature = "dev-trust-root")
+            && match url.host() {
+                Some(url::Host::Domain("localhost")) => true,
+                Some(url::Host::Ipv4(ip)) => ip.is_loopback(),
+                Some(url::Host::Ipv6(ip)) => ip.is_loopback(),
+                _ => false,
+            };
         if (url.scheme() != "https" && !(url.scheme() == "http" && dev_loopback))
-            || !url.username().is_empty() || url.password().is_some() {
-            return Err(NetworkError::ConnectionFailed("direct server connection requires HTTPS".into()));
+            || !url.username().is_empty()
+            || url.password().is_some()
+        {
+            return Err(NetworkError::ConnectionFailed(
+                "direct server connection requires HTTPS".into(),
+            ));
         }
         Ok(())
     }
 
     /// Helper to create an endpoint with standard settings.
-    fn create_endpoint(server_url: &str, timeout: Option<Duration>) -> Result<Endpoint, NetworkError> {
+    fn create_endpoint(
+        server_url: &str,
+        timeout: Option<Duration>,
+    ) -> Result<Endpoint, NetworkError> {
         let mut endpoint = Endpoint::from_shared(server_url.to_string())
             .map_err(|e| NetworkError::ConnectionFailed(format!("invalid URL: {}", e)))?
             .connect_timeout(connect_timeout_for(server_url))
@@ -236,7 +244,8 @@ impl GrpcClientPool {
             })?;
             let tls_config = tonic::transport::ClientTlsConfig::new()
                 .ca_certificate(tonic::transport::Certificate::from_pem(ca_pem));
-            endpoint = endpoint.tls_config(tls_config)
+            endpoint = endpoint
+                .tls_config(tls_config)
                 .map_err(|e| NetworkError::ConnectionFailed(format!("TLS config error: {}", e)))?;
         }
 
@@ -323,7 +332,8 @@ impl GrpcClientPool {
         let mut channel = self.channel.write();
         *self.endpoint.write() = endpoint;
         *self.transport_mode.write() = mode;
-        self.transport_gen.fetch_add(1, std::sync::atomic::Ordering::AcqRel);
+        self.transport_gen
+            .fetch_add(1, std::sync::atomic::Ordering::AcqRel);
         *channel = None;
         *self.anon_channel.write() = None;
     }
@@ -336,7 +346,8 @@ impl GrpcClientPool {
         (
             self.endpoint.read().clone(),
             *self.transport_mode.read(),
-            self.transport_gen.load(std::sync::atomic::Ordering::Acquire),
+            self.transport_gen
+                .load(std::sync::atomic::Ordering::Acquire),
         )
     }
 
@@ -345,8 +356,12 @@ impl GrpcClientPool {
     /// loop (the inbox poller) exists to do it.
     fn note_onion_dial(mode: TransportMode, ok: bool) {
         if mode == TransportMode::Onion {
-            use crate::network::connection::{set_tor_status, TorStatus};
-            set_tor_status(if ok { TorStatus::Connected } else { TorStatus::Error });
+            use crate::network::connection::{TorStatus, set_tor_status};
+            set_tor_status(if ok {
+                TorStatus::Connected
+            } else {
+                TorStatus::Error
+            });
         }
     }
 
@@ -417,7 +432,11 @@ impl GrpcClientPool {
         // old one. Dropping it is the whole point — installing it would put
         // every later RPC back on the transport the user just left.
         let mut guard = self.channel.write();
-        if self.transport_gen.load(std::sync::atomic::Ordering::Acquire) != generation {
+        if self
+            .transport_gen
+            .load(std::sync::atomic::Ordering::Acquire)
+            != generation
+        {
             return Err(NetworkError::ConnectionFailed(
                 "transport changed while connecting; retry".into(),
             ));
@@ -511,7 +530,9 @@ impl GrpcClientPool {
         // Direct transport uses tonic's built-in TCP/TLS dialer.
         #[cfg(feature = "onion")]
         let channel = if mode == TransportMode::Onion {
-            endpoint.connect_with_connector(self.onion_connector()).await?
+            endpoint
+                .connect_with_connector(self.onion_connector())
+                .await?
         } else {
             endpoint.connect().await?
         };
@@ -554,7 +575,7 @@ impl GrpcClientPool {
     /// [`channel`]: Self::channel
     /// [`call_with_retry`]: Self::call_with_retry
     pub async fn probe(&self) -> Result<(), NetworkError> {
-        use crate::network::connection::{set_server_status, ServerStatus};
+        use crate::network::connection::{ServerStatus, set_server_status};
 
         let (endpoint, mode, _) = self.snapshot();
         let result = self.dial(&endpoint, mode).await;
@@ -646,7 +667,9 @@ impl GrpcClientPool {
     fn note_transport_error(&self) {
         let mut probe = self.quic_probe.write();
         if *probe == QuicProbeState::Working {
-            tracing::info!("QUIC channel failed in use — falling back to TCP for the rest of this session");
+            tracing::info!(
+                "QUIC channel failed in use — falling back to TCP for the rest of this session"
+            );
             *probe = QuicProbeState::Failed;
         }
     }
@@ -691,7 +714,9 @@ impl GrpcClientPool {
                 if let Ok(uri) = server_url.parse::<http::Uri>() {
                     match super::transport::build_quic(uri) {
                         Ok(channel) => {
-                            tracing::warn!("GrpcClientPool: no active connection — created lazy QUIC channel (RPCs will attempt on-demand connect)");
+                            tracing::warn!(
+                                "GrpcClientPool: no active connection — created lazy QUIC channel (RPCs will attempt on-demand connect)"
+                            );
                             *guard = Some(channel.clone());
                             return channel;
                         }
@@ -705,13 +730,17 @@ impl GrpcClientPool {
 
         #[cfg(feature = "onion")]
         let channel: GrpcTransport = if *self.transport_mode.read() == TransportMode::Onion {
-            endpoint.connect_with_connector_lazy(self.onion_connector()).into()
+            endpoint
+                .connect_with_connector_lazy(self.onion_connector())
+                .into()
         } else {
             endpoint.connect_lazy().into()
         };
         #[cfg(not(feature = "onion"))]
         let channel: GrpcTransport = endpoint.connect_lazy().into();
-        tracing::warn!("GrpcClientPool: no active connection — created lazy channel (RPCs will attempt on-demand connect)");
+        tracing::warn!(
+            "GrpcClientPool: no active connection — created lazy channel (RPCs will attempt on-demand connect)"
+        );
         *guard = Some(channel.clone());
         channel
     }
@@ -743,7 +772,12 @@ impl GrpcClientPool {
 
     /// Get the configured server URL.
     pub fn server_url(&self) -> String {
-        self.endpoint.read().uri().host().unwrap_or("unknown").to_string()
+        self.endpoint
+            .read()
+            .uri()
+            .host()
+            .unwrap_or("unknown")
+            .to_string()
     }
 
     /// Get the full endpoint URL string.
@@ -786,7 +820,7 @@ impl GrpcClientPool {
         F: FnMut(&Self) -> Fut,
         Fut: Future<Output = Result<T, NetworkError>>,
     {
-        use crate::network::connection::{set_server_status, ServerStatus};
+        use crate::network::connection::{ServerStatus, set_server_status};
 
         let pool = self;
         let retry_config = RetryConfig::default();
@@ -943,7 +977,8 @@ impl GrpcClientPool {
     ///
     /// Panics if not in Basic auth mode or credentials are malformed.
     pub fn auth_info(&self) -> super::interceptors::AuthInfo {
-        self.auth.get_auth_info()
+        self.auth
+            .get_auth_info()
             .expect("GrpcClientPool: auth_info requires Basic auth mode")
     }
 }
@@ -1059,11 +1094,19 @@ mod tests {
 
         pool.set_url("https://127.0.0.1:50052").unwrap();
         assert_eq!(pool.transport_mode(), TransportMode::Onion);
-        assert!(pool.endpoint().contains(".onion"), "endpoint: {}", pool.endpoint());
+        assert!(
+            pool.endpoint().contains(".onion"),
+            "endpoint: {}",
+            pool.endpoint()
+        );
         assert_eq!(pool.snapshot().2, generation, "no swap happened");
 
         pool.set_transport_mode(TransportMode::Direct).unwrap();
-        assert!(pool.endpoint().contains("127.0.0.1:50052"), "endpoint: {}", pool.endpoint());
+        assert!(
+            pool.endpoint().contains("127.0.0.1:50052"),
+            "endpoint: {}",
+            pool.endpoint()
+        );
     }
 
     /// The onion dialer refuses anything that is not a hidden service, so an
@@ -1125,7 +1168,10 @@ mod tests {
         let pool = GrpcClientPool::new("https://localhost:50051").unwrap();
         // Should not panic — returns a lazy channel instead.
         let _ch = pool.channel();
-        assert!(pool.is_connected(), "lazy channel should mark pool as connected");
+        assert!(
+            pool.is_connected(),
+            "lazy channel should mark pool as connected"
+        );
     }
 
     #[tokio::test]
@@ -1158,12 +1204,19 @@ mod tests {
 
         let endpoint = pool.endpoint.read().clone();
         let started = std::time::Instant::now();
-        let result = tokio::time::timeout(Duration::from_secs(10), pool.dial(&endpoint, TransportMode::Direct)).await;
+        let result = tokio::time::timeout(
+            Duration::from_secs(10),
+            pool.dial(&endpoint, TransportMode::Direct),
+        )
+        .await;
 
         // dial() itself must never hang past its own QUIC_PROBE_TIMEOUT (3s)
         // plus a normal TCP connect attempt — the outer 10s is just a test
         // deadline, not the thing under test.
-        assert!(started.elapsed() < Duration::from_secs(10), "dial() did not return promptly");
+        assert!(
+            started.elapsed() < Duration::from_secs(10),
+            "dial() did not return promptly"
+        );
         let result = result.expect("dial() must not hang");
 
         // TCP fallback also fails here (nothing listens on that port for TCP
@@ -1192,7 +1245,11 @@ mod tests {
 
         let endpoint = pool.endpoint.read().clone();
         let started = std::time::Instant::now();
-        let result = tokio::time::timeout(Duration::from_secs(1), pool.dial(&endpoint, TransportMode::Direct)).await;
+        let result = tokio::time::timeout(
+            Duration::from_secs(1),
+            pool.dial(&endpoint, TransportMode::Direct),
+        )
+        .await;
 
         let elapsed = started.elapsed();
         assert!(
@@ -1272,7 +1329,13 @@ mod transport_security_tests {
 
     #[test]
     fn direct_remote_endpoints_require_tls() {
-        for url in ["http://example.com", "http://192.0.2.1:50051", "http://example.onion", "https://user:secret@example.com", "ftp://example.com"] {
+        for url in [
+            "http://example.com",
+            "http://192.0.2.1:50051",
+            "http://example.onion",
+            "https://user:secret@example.com",
+            "ftp://example.com",
+        ] {
             assert!(GrpcClientPool::validate_direct_url(url).is_err(), "{url}");
         }
         assert!(GrpcClientPool::validate_direct_url("https://example.com").is_ok());

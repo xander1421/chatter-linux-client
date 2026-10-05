@@ -135,7 +135,11 @@ fn wire_resolve(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                         .await
                         .map(|p| p.display_name)
                         .unwrap_or_default();
-                    let name = if display.is_empty() { shown_handle.clone() } else { display };
+                    let name = if display.is_empty() {
+                        shown_handle.clone()
+                    } else {
+                        display
+                    };
                     ("found".to_string(), uid.to_string(), name)
                 }
                 Ok(None) => ("notfound".to_string(), String::new(), String::new()),
@@ -184,11 +188,13 @@ fn wire_person_selected(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
 /// On conversation pick: navigate (channel/dm/private group).
 fn wire_conversation_selected(window: &MainWindow) {
     let weak = window.as_weak();
-    window.on_unified_search_conversation_selected(move |id: SharedString, conv_type: SharedString| {
-        if let Some(w) = weak.upgrade() {
-            open_conversation(&w, id, conv_type.as_str());
-        }
-    });
+    window.on_unified_search_conversation_selected(
+        move |id: SharedString, conv_type: SharedString| {
+            if let Some(w) = weak.upgrade() {
+                open_conversation(&w, id, conv_type.as_str());
+            }
+        },
+    );
 }
 
 /// Open a conversation by its palette `(id, conv_type)` — the one way a
@@ -202,7 +208,9 @@ fn open_conversation(w: &MainWindow, id: SharedString, conv_type: &str) {
         // Mesh rows open through the same global callback the sidebar
         // uses, so there is one way into a mesh conversation.
         #[cfg(feature = "mesh")]
-        "mesh" => w.global::<crate::MeshGlobal>().invoke_conversation_selected(id),
+        "mesh" => w
+            .global::<crate::MeshGlobal>()
+            .invoke_conversation_selected(id),
         // No mesh in this build: the row cannot exist, but a stored message
         // from a mesh-enabled run can. Clearing the spinner is the honest
         // outcome — any view left open would be the wrong conversation.

@@ -4,7 +4,6 @@
 
 use std::collections::{HashMap, HashSet};
 
-
 use crate::domain::ids::UserId;
 use crate::domain::user::{Profile, User};
 use crate::state::store::Store;
@@ -87,7 +86,6 @@ impl UserState {
     pub fn get_profile(&self, user_id: &UserId) -> Option<Profile> {
         self.store.get().profiles.get(user_id).cloned()
     }
-
 }
 
 impl Default for UserState {
@@ -111,5 +109,4 @@ mod tests {
         assert!(data.blocked_users.is_empty());
         assert!(data.current_user_profile.is_none());
     }
-
 }

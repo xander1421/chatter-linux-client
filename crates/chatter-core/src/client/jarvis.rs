@@ -1,7 +1,7 @@
 //! jarvis façade — thin delegates to services.
 
-use crate::domain::channel::{Channel, ChannelType};
 use super::ChatterClient;
+use crate::domain::channel::{Channel, ChannelType};
 
 /// Display name of the local AI channel.
 pub const JARVIS_CHANNEL_NAME: &str = "Jarvis (AI)";
@@ -25,9 +25,16 @@ pub fn is_jarvis_channel(id: &crate::domain::ids::ChannelId) -> bool {
 pub fn parse_jarvis_mention(text: &str) -> Option<&str> {
     const TAG: &str = "@jarvis";
     for (at, _) in text.match_indices('@') {
-        let starts_word = text[..at].chars().next_back().map_or(true, char::is_whitespace);
+        let starts_word = text[..at]
+            .chars()
+            .next_back()
+            .map_or(true, char::is_whitespace);
         let rest = &text[at..];
-        if !starts_word || !rest.get(..TAG.len()).is_some_and(|t| t.eq_ignore_ascii_case(TAG)) {
+        if !starts_word
+            || !rest
+                .get(..TAG.len())
+                .is_some_and(|t| t.eq_ignore_ascii_case(TAG))
+        {
             continue;
         }
         let after = &rest[TAG.len()..];
@@ -38,7 +45,9 @@ pub fn parse_jarvis_mention(text: &str) -> Option<&str> {
         if !ends_word {
             continue;
         }
-        let query = after.trim_start_matches(|c: char| c.is_whitespace() || ",:;!?".contains(c)).trim_end();
+        let query = after
+            .trim_start_matches(|c: char| c.is_whitespace() || ",:;!?".contains(c))
+            .trim_end();
         return (!query.is_empty()).then_some(query);
     }
     None
@@ -67,14 +76,25 @@ fn now_ns() -> u64 {
 
 impl JarvisRow {
     fn jarvis(id: String, content: String, timestamp_ns: u64) -> Self {
-        Self { id, is_own: false, sender_name: JARVIS_NAME.into(), content, timestamp_ns, thinking: false }
+        Self {
+            id,
+            is_own: false,
+            sender_name: JARVIS_NAME.into(),
+            content,
+            timestamp_ns,
+            thinking: false,
+        }
     }
 
     /// Placeholder while Jarvis generates a reply; replaced by its id.
     pub fn thinking() -> Self {
         Self {
             thinking: true,
-            ..Self::jarvis(format!("jarvis-thinking-{}", uuid::Uuid::new_v4()), "_Thinking..._".into(), now_ns())
+            ..Self::jarvis(
+                format!("jarvis-thinking-{}", uuid::Uuid::new_v4()),
+                "_Thinking..._".into(),
+                now_ns(),
+            )
         }
     }
 
@@ -90,7 +110,11 @@ impl JarvisRow {
 
     /// A Jarvis turn in the AI channel.
     pub fn reply(response: &str) -> Self {
-        Self::jarvis(format!("jarvis-{}", uuid::Uuid::new_v4()), response.to_string(), now_ns())
+        Self::jarvis(
+            format!("jarvis-{}", uuid::Uuid::new_v4()),
+            response.to_string(),
+            now_ns(),
+        )
     }
 
     /// The user's own turn in the AI channel.
@@ -137,14 +161,20 @@ impl ChatterClient {
 
     /// The current user's name on their own AI-channel turns.
     pub fn jarvis_own_name(&self) -> String {
-        self.auth_state().get().display_name.unwrap_or_else(|| "Me".to_string())
+        self.auth_state()
+            .get()
+            .display_name
+            .unwrap_or_else(|| "Me".to_string())
     }
 
     /// The AI channel's persisted history as rows (chronological).
     pub fn jarvis_channel_rows(&self, limit: u32) -> Vec<JarvisRow> {
         let own_name = self.jarvis_own_name();
         match self.jarvis_channel_history(limit) {
-            Ok(history) => history.iter().map(|c| JarvisRow::from_history(c, &own_name)).collect(),
+            Ok(history) => history
+                .iter()
+                .map(|c| JarvisRow::from_history(c, &own_name))
+                .collect(),
             Err(e) => {
                 tracing::error!("failed to load AI channel history: {e}");
                 Vec::new()
@@ -185,7 +215,10 @@ impl ChatterClient {
     /// to-end encrypted). Its kind — a private channel — would otherwise
     /// claim "Messages are end-to-end encrypted", which is false either way.
     pub fn jarvis_privacy_line(&self) -> (String, bool) {
-        jarvis_privacy_for(self.jarvis_channel_silo(), &self.jarvis_engine_description())
+        jarvis_privacy_for(
+            self.jarvis_channel_silo(),
+            &self.jarvis_engine_description(),
+        )
     }
 
     /// Silo for the AI channel and the context-free global prompt: the
@@ -195,7 +228,11 @@ impl ChatterClient {
         use crate::ai_policy::policy::Silo;
         let prefers_cloud = self.ai_silo_preference() == SiloPreference::PreferCloud;
         let available = self.http_local_ai().cloud_settings().is_available();
-        if prefers_cloud && available { Silo::Cloud } else { Silo::Local }
+        if prefers_cloud && available {
+            Silo::Cloud
+        } else {
+            Silo::Local
+        }
     }
 
     /// If `text` sent in `active` is an `@jarvis` request that Jarvis may
@@ -290,12 +327,12 @@ impl ChatterClient {
 
     fn rebuild_jarvis_engine(&self) {
         let settings = self.http_local_ai().fresh_settings();
-        self.services.jarvis_engine.set(
-            crate::services::jarvis::JarvisEngine::from_settings(
+        self.services
+            .jarvis_engine
+            .set(crate::services::jarvis::JarvisEngine::from_settings(
                 &settings,
                 self.local_ai().actor(),
-            ),
-        );
+            ));
         self.rebuild_cloud_engine();
         tracing::info!(engine = %self.services.jarvis_engine.describe(), "jarvis engine rebuilt");
     }
@@ -318,9 +355,7 @@ impl ChatterClient {
                 cloud.model.clone(),
             )),
             // Bring-your-own-key: absent or blank key means no cloud engine.
-            CloudMode::DirectAnthropic => {
-                JarvisEngine::from_cloud_settings(&cloud)
-            }
+            CloudMode::DirectAnthropic => JarvisEngine::from_cloud_settings(&cloud),
         };
 
         let configured = engine.is_some();
@@ -337,7 +372,9 @@ impl ChatterClient {
         let settings = self.http_local_ai().fresh_settings();
         let backend = crate::local_ai::ollama::OllamaBackend::new(
             &settings.ollama_url,
-            settings.request_timeout.max(std::time::Duration::from_secs(3600)),
+            settings
+                .request_timeout
+                .max(std::time::Duration::from_secs(3600)),
         );
         backend.pull_model_with_progress(tag, on_progress).await
     }
@@ -401,12 +438,14 @@ impl ChatterClient {
         let silo = self.check_ai_allowed_in(context)?;
         // Make sure the silo this conversation resolved to is the one actually
         // installed before the turn runs.
-        if silo == crate::ai_policy::policy::Silo::Cloud
-            && !self.services.jarvis_engine.has_cloud()
+        if silo == crate::ai_policy::policy::Silo::Cloud && !self.services.jarvis_engine.has_cloud()
         {
             self.rebuild_cloud_engine();
         }
-        let reply = self.jarvis().ask_in(context, query, author_id, silo).await?;
+        let reply = self
+            .jarvis()
+            .ask_in(context, query, author_id, silo)
+            .await?;
         // The turn just grew this context's history; once it passes the
         // builder's window, fold the oldest turns into a summary. Off the
         // reply's path: it is one more LLM call.
@@ -442,9 +481,7 @@ impl ChatterClient {
         // The dedicated AI channel, and the context-free global prompt, always
         // work. They follow the user's silo preference, still clamped by
         // policy inside the engine.
-        if context.context_id.is_empty()
-            || context.context_id == jarvis_channel_id().to_string()
-        {
+        if context.context_id.is_empty() || context.context_id == jarvis_channel_id().to_string() {
             return Ok(self.jarvis_channel_silo());
         }
 
@@ -486,25 +523,29 @@ impl ChatterClient {
 
         let (query_display, result) = match cmd {
             JC::Ask(query) => {
-                self.jarvis_state().add_user_message(&query, channel_label.as_deref());
+                self.jarvis_state()
+                    .add_user_message(&query, channel_label.as_deref());
                 let r = self.jarvis_ask(context, &query, author_id).await;
                 (format!("/ask {}", query), r)
             }
             JC::Summarize => {
-                self.jarvis_state().add_user_message("/summarize", channel_label.as_deref());
+                self.jarvis_state()
+                    .add_user_message("/summarize", channel_label.as_deref());
                 let r = self.jarvis_summarize_conversation(context).await;
                 ("/summarize".to_string(), r)
             }
             JC::Knowledge(entity) => {
                 let label = format!("/knowledge {}", entity);
-                self.jarvis_state().add_user_message(&label, channel_label.as_deref());
+                self.jarvis_state()
+                    .add_user_message(&label, channel_label.as_deref());
                 let query = format!("What do you know about {}?", entity);
                 let r = self.jarvis_ask(context, &query, author_id).await;
                 (label, r)
             }
             JC::Remember(fact) => {
                 let label = format!("/remember {}", fact);
-                self.jarvis_state().add_user_message(&label, channel_label.as_deref());
+                self.jarvis_state()
+                    .add_user_message(&label, channel_label.as_deref());
                 let query = format!("Please remember this fact: {}", fact);
                 let r = self.jarvis_ask(context, &query, author_id).await;
                 (label, r)
@@ -516,7 +557,8 @@ impl ChatterClient {
                 self.jarvis_state().add_assistant_message(response);
             }
             Err(e) => {
-                self.jarvis_state().add_assistant_message(&format!("Error: {}", e));
+                self.jarvis_state()
+                    .add_assistant_message(&format!("Error: {}", e));
             }
         }
 
@@ -529,7 +571,6 @@ impl ChatterClient {
     ) -> Result<String, crate::services::jarvis::JarvisError> {
         self.jarvis().summarize_conversation(context).await
     }
-
 }
 
 /// "40 messages · 1 summary (40 folded) · 5 facts (3 current) · 12 entities".
@@ -558,14 +599,23 @@ fn memory_stats_label(
 fn jarvis_privacy_for(silo: crate::ai_policy::policy::Silo, engine: &str) -> (String, bool) {
     use crate::ai_policy::policy::Silo;
     match silo {
-        Silo::Local => (format!("Local AI · {engine} · never leaves this device"), false),
-        Silo::Cloud => ("Cloud AI · messages are sent to your cloud AI provider".to_string(), true),
+        Silo::Local => (
+            format!("Local AI · {engine} · never leaves this device"),
+            false,
+        ),
+        Silo::Cloud => (
+            "Cloud AI · messages are sent to your cloud AI provider".to_string(),
+            true,
+        ),
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{jarvis_channel_reply_text, jarvis_privacy_for, memory_stats_label, parse_jarvis_mention, JarvisRow};
+    use super::{
+        JarvisRow, jarvis_channel_reply_text, jarvis_privacy_for, memory_stats_label,
+        parse_jarvis_mention,
+    };
     use crate::domain::jarvis::{JarvisContext, JarvisConversation};
 
     #[test]
@@ -586,14 +636,18 @@ mod tests {
         user.timestamp = 7;
         let row = JarvisRow::from_history(&user, "Ana");
         assert!(row.is_own && row.sender_name == "Ana" && row.timestamp_ns == 7);
-        let bot = JarvisRow::from_history(&JarvisConversation::assistant_message(&ctx, "a".into()), "Ana");
+        let bot = JarvisRow::from_history(
+            &JarvisConversation::assistant_message(&ctx, "a".into()),
+            "Ana",
+        );
         assert!(!bot.is_own && bot.sender_name == "Jarvis");
     }
 
     #[test]
     fn channel_reply_text_points_at_settings_on_error() {
         assert_eq!(jarvis_channel_reply_text(&Ok("yo".into())), "yo");
-        let err = jarvis_channel_reply_text(&Err(crate::services::jarvis::JarvisError::NotEnabledHere));
+        let err =
+            jarvis_channel_reply_text(&Err(crate::services::jarvis::JarvisError::NotEnabledHere));
         assert!(err.starts_with("Error: ") && err.contains("Settings → AI Assistant"));
     }
     use crate::services::jarvis::MemoryStats;
@@ -618,7 +672,10 @@ mod tests {
             fact_count: 0,
             entity_count: 1,
         };
-        assert_eq!(memory_stats_label(&empty, 0, 0), "1 message · 0 facts (0 current) · 1 entity");
+        assert_eq!(
+            memory_stats_label(&empty, 0, 0),
+            "1 message · 0 facts (0 current) · 1 entity"
+        );
     }
     use crate::ai_policy::policy::Silo;
 
@@ -636,9 +693,18 @@ mod tests {
 
     #[test]
     fn jarvis_mention_is_a_whole_word() {
-        assert_eq!(parse_jarvis_mention("@Jarvis what time is it?"), Some("what time is it?"));
-        assert_eq!(parse_jarvis_mention("Hey @jarvis, help me"), Some("help me"));
-        assert_eq!(parse_jarvis_mention("  @JARVIS:  summarize this  "), Some("summarize this"));
+        assert_eq!(
+            parse_jarvis_mention("@Jarvis what time is it?"),
+            Some("what time is it?")
+        );
+        assert_eq!(
+            parse_jarvis_mention("Hey @jarvis, help me"),
+            Some("help me")
+        );
+        assert_eq!(
+            parse_jarvis_mention("  @JARVIS:  summarize this  "),
+            Some("summarize this")
+        );
         // An address or a longer word is not a mention.
         assert_eq!(parse_jarvis_mention("mail me@jarvis.io please"), None);
         assert_eq!(parse_jarvis_mention("@jarvis.io is down"), None);

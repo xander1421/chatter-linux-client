@@ -52,7 +52,12 @@ pub struct ByteLru<K, V> {
 
 impl<K: Eq + Hash + Clone, V: Clone> ByteLru<K, V> {
     pub fn new(budget: usize) -> Self {
-        Self { entries: HashMap::new(), budget, used: 0, tick: 0 }
+        Self {
+            entries: HashMap::new(),
+            budget,
+            used: 0,
+            tick: 0,
+        }
     }
 
     pub fn get(&mut self, key: &K) -> Option<V> {
@@ -139,7 +144,9 @@ impl Caches {
 static CACHES: LazyLock<Mutex<Caches>> = LazyLock::new(|| Mutex::new(Caches::new()));
 
 fn caches() -> std::sync::MutexGuard<'static, Caches> {
-    CACHES.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+    CACHES
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
 fn pixel_bytes(p: &Pixels) -> usize {
@@ -169,7 +176,9 @@ pub fn avatar(bytes: &[u8]) -> Option<Pixels> {
     let pixels = image::load_from_memory(bytes)
         .ok()
         .map(|img| to_pixels(img.thumbnail(AVATAR_PX, AVATAR_PX)))?;
-    caches().avatars.insert(key, pixels.clone(), pixel_bytes(&pixels));
+    caches()
+        .avatars
+        .insert(key, pixels.clone(), pixel_bytes(&pixels));
     Some(pixels)
 }
 
@@ -186,7 +195,9 @@ pub fn thumbnail(
         return Some(hit);
     }
     let pixels = decode().map(to_pixels)?;
-    caches().thumbnails.insert(key, pixels.clone(), pixel_bytes(&pixels));
+    caches()
+        .thumbnails
+        .insert(key, pixels.clone(), pixel_bytes(&pixels));
     Some(pixels)
 }
 
@@ -198,7 +209,10 @@ pub fn put_gif(id: &str, frames: Vec<Pixels>, delays: Vec<u64>) {
     let bytes = frames.iter().map(pixel_bytes).sum();
     caches().gifs.insert(
         id.to_string(),
-        GifFrames { frames: Arc::new(frames), delays: Arc::new(delays) },
+        GifFrames {
+            frames: Arc::new(frames),
+            delays: Arc::new(delays),
+        },
         bytes,
     );
 }
@@ -243,7 +257,11 @@ mod tests {
     fn fill() {
         assert!(avatar(&webp(512, 512)).is_some());
         assert!(thumbnail("att-1", 10, || Some(image::DynamicImage::new_rgba8(8, 8))).is_some());
-        put_gif("gif-1", vec![Pixels::new(4, 4), Pixels::new(4, 4)], vec![100, 100]);
+        put_gif(
+            "gif-1",
+            vec![Pixels::new(4, 4), Pixels::new(4, 4)],
+            vec![100, 100],
+        );
         assert!(!is_empty());
     }
 

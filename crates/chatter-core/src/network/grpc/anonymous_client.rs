@@ -12,12 +12,12 @@ use crate::network::grpc::transport::GrpcTransport;
 
 use crate::error::NetworkError;
 use crate::proto::chat_v1::{
+    GetConsistencyProofRequest, GetConsistencyProofResponse, GetPreKeyBundleRequest,
+    GetPreKeyBundleResponse, GetProofRequest, GetProofResponse, SealedDelivery,
+    SealedDeviceMessage, SendSealedMessageRequest, SendSealedMessageResponse,
     auth_service_client::AuthServiceClient,
     key_transparency_service_client::KeyTransparencyServiceClient,
-    message_service_client::MessageServiceClient, GetConsistencyProofRequest,
-    GetConsistencyProofResponse, GetPreKeyBundleRequest, GetPreKeyBundleResponse, GetProofRequest,
-    GetProofResponse, SealedDelivery, SealedDeviceMessage, SendSealedMessageRequest,
-    SendSealedMessageResponse,
+    message_service_client::MessageServiceClient,
 };
 
 /// Anonymous message client - NO auth interceptor.

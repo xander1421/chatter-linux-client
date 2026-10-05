@@ -2,12 +2,12 @@
 //!
 //! System tray integration using ksni (StatusNotifierItem protocol).
 
+use super::platform::{APP_DISPLAY_NAME, APP_ID};
 use crate::error::SystemError;
-use super::platform::{APP_ID, APP_DISPLAY_NAME};
-use ksni::{self, menu::StandardItem, Handle, Icon, MenuItem, Tray, TrayService};
+use ksni::{self, Handle, Icon, MenuItem, Tray, TrayService, menu::StandardItem};
 use std::sync::{
-    atomic::{AtomicU32, AtomicU8, Ordering},
     Arc,
+    atomic::{AtomicU8, AtomicU32, Ordering},
 };
 use tokio::sync::mpsc;
 
@@ -163,7 +163,10 @@ struct TrayServiceImpl {
 
 impl TrayServiceImpl {
     fn new(event_sender: mpsc::Sender<TrayMessage>, state: Arc<TrayState>) -> Self {
-        Self { state, event_sender }
+        Self {
+            state,
+            event_sender,
+        }
     }
 
     fn compute_icon_name(&self) -> String {
@@ -277,7 +280,9 @@ mod tests {
         assert_eq!(service.compute_icon_name(), "mail-unread");
 
         state.unread_count.store(0, Ordering::Relaxed);
-        state.status.store(TrayStatus::DoNotDisturb.as_u8(), Ordering::Relaxed);
+        state
+            .status
+            .store(TrayStatus::DoNotDisturb.as_u8(), Ordering::Relaxed);
         assert_eq!(service.compute_icon_name(), "user-busy");
     }
 }

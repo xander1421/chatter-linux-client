@@ -8,12 +8,12 @@
 
 use crate::{common, skip_if_no_server};
 
-use chatter_core::mailbox::blind_signature::{blind_key, unblind, ServerPublicKey};
+use chatter_core::mailbox::blind_signature::{ServerPublicKey, blind_key, unblind};
 use chatter_core::network::grpc::{AuthClient, MailboxClient, MessageClient};
 use chatter_core::proto::mailbox_v1::EnvelopeType;
 use chatter_core::proto::{
-    signal_pre_key_bundle::PreKeyRecord, GetPreKeyBundleResponse, SealedDelivery, SealedDeviceMessage,
-    SealedSenderMessage,
+    GetPreKeyBundleResponse, SealedDelivery, SealedDeviceMessage, SealedSenderMessage,
+    signal_pre_key_bundle::PreKeyRecord,
 };
 use common::*;
 use ed25519_dalek::{Signer, SigningKey};
@@ -66,7 +66,11 @@ async fn test_send_sealed_message_to_user() {
     let result = msg_client
         .send_sealed_messages_with_uak(
             &recipient.user_id,
-            vec![SealedDeviceMessage { device_id: 1, registration_id: 0, sealed_message: Some(sealed_message.clone()) }],
+            vec![SealedDeviceMessage {
+                device_id: 1,
+                registration_id: 0,
+                sealed_message: Some(sealed_message.clone()),
+            }],
             SealedDelivery::NamedDevices,
             &uuid::Uuid::new_v4().to_string(),
             &uak,
@@ -95,7 +99,11 @@ async fn test_send_sealed_message_to_user() {
         )
         .await;
     match result {
-        Err(chatter_core::error::NetworkError::MismatchedDevices { missing, extra, stale }) => {
+        Err(chatter_core::error::NetworkError::MismatchedDevices {
+            missing,
+            extra,
+            stale,
+        }) => {
             assert_eq!(missing, vec![1]);
             assert!(extra.is_empty() && stale.is_empty());
         }
@@ -106,7 +114,11 @@ async fn test_send_sealed_message_to_user() {
     let result = msg_client
         .send_sealed_messages_with_uak(
             &recipient.user_id,
-            vec![SealedDeviceMessage { device_id: 1, registration_id: 1, sealed_message: Some(sealed_message) }],
+            vec![SealedDeviceMessage {
+                device_id: 1,
+                registration_id: 1,
+                sealed_message: Some(sealed_message),
+            }],
             SealedDelivery::AllDevices,
             &uuid::Uuid::new_v4().to_string(),
             &uak,
@@ -143,7 +155,11 @@ async fn test_send_sealed_message_without_uak_rejected() {
     let result = msg_client
         .send_sealed_messages(
             &recipient.user_id,
-            vec![SealedDeviceMessage { device_id: 1, registration_id: 0, sealed_message: Some(sealed_message) }],
+            vec![SealedDeviceMessage {
+                device_id: 1,
+                registration_id: 0,
+                sealed_message: Some(sealed_message),
+            }],
             SealedDelivery::NamedDevices,
             &uuid::Uuid::new_v4().to_string(),
         )
@@ -171,7 +187,11 @@ async fn test_send_sealed_message_to_nonexistent_user() {
     let result = msg_client
         .send_sealed_messages(
             "00000000-0000-0000-0000-000000000000",
-            vec![SealedDeviceMessage { device_id: 1, registration_id: 0, sealed_message: Some(sealed_message) }],
+            vec![SealedDeviceMessage {
+                device_id: 1,
+                registration_id: 0,
+                sealed_message: Some(sealed_message),
+            }],
             SealedDelivery::NamedDevices,
             &uuid::Uuid::new_v4().to_string(),
         )
@@ -701,9 +721,7 @@ async fn test_request_sender_certificate() {
 
     // Request a new sender certificate (the server sets its lifetime). Server reads
     // the requesting device_id from the authenticated session.
-    let result = auth_client
-        .request_sender_certificate()
-        .await;
+    let result = auth_client.request_sender_certificate().await;
 
     assert!(
         result.is_ok(),

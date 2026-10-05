@@ -6,26 +6,28 @@ mod tests {
 
     use crate::domain::ids::UserId;
     use crate::domain::user::{FriendshipStatus, PresenceStatus};
-    use crate::proto::chat_v1::{friend_requests_filter, UserProfile};
+    use crate::proto::chat_v1::{UserProfile, friend_requests_filter};
     use crate::storage::repositories::settings_repo::SettingsRepository;
     use crate::storage::repositories::user_repo::UserRepository;
 
     use super::super::conversions::{
-        domain_presence_to_proto, presence_from_proto,
-        proto_friend_status_to_domain, proto_to_domain_profile,
+        domain_presence_to_proto, presence_from_proto, proto_friend_status_to_domain,
+        proto_to_domain_profile,
     };
-    use super::super::{friend_display_name_placeholder, FriendRequestFilter, UserError, UserService};
+    use super::super::{
+        FriendRequestFilter, UserError, UserService, friend_display_name_placeholder,
+    };
 
     /// F30: a peer whose only live device is 6 (device 1 retired) must still
     /// yield the account identity key — the friend request asks for all
     /// devices and never names one.
     #[test]
     fn friend_request_identity_key_from_any_device() {
-        use crate::proto::chat_v1::{
-            get_pre_key_bundle_response::Result as BundleResult, GetPreKeyBundleResponse,
-            PreKeyBundleDeviceList, SignalPreKeyBundle,
-        };
         use super::super::friend_request_identity_key;
+        use crate::proto::chat_v1::{
+            GetPreKeyBundleResponse, PreKeyBundleDeviceList, SignalPreKeyBundle,
+            get_pre_key_bundle_response::Result as BundleResult,
+        };
 
         let ik = vec![5u8; 33];
         let only_device_6 = GetPreKeyBundleResponse {
@@ -48,9 +50,15 @@ mod tests {
     #[test]
     fn user_message_hides_the_error_chain() {
         use crate::error::NetworkError;
-        let e = UserError::Network(NetworkError::ServerError("failed to get prekey bundle".into()));
+        let e = UserError::Network(NetworkError::ServerError(
+            "failed to get prekey bundle".into(),
+        ));
         assert_eq!(e.user_message(), "Couldn't reach the server. Try again.");
-        assert!(!UserError::Network(NetworkError::PermissionDenied).user_message().contains("error"));
+        assert!(
+            !UserError::Network(NetworkError::PermissionDenied)
+                .user_message()
+                .contains("error")
+        );
     }
 
     #[test]
@@ -69,13 +77,16 @@ mod tests {
     /// or fetched a full interval ago → refetch; anything newer → skip.
     #[test]
     fn profile_fetch_due_after_interval_only() {
-        use super::super::{profile_fetch_due, PROFILE_REFRESH_INTERVAL};
+        use super::super::{PROFILE_REFRESH_INTERVAL, profile_fetch_due};
         use std::time::{Duration, Instant};
 
         let now = Instant::now() + PROFILE_REFRESH_INTERVAL * 2;
         assert!(profile_fetch_due(None, now));
         assert!(!profile_fetch_due(Some(now), now));
-        assert!(!profile_fetch_due(Some(now - PROFILE_REFRESH_INTERVAL + Duration::from_secs(1)), now));
+        assert!(!profile_fetch_due(
+            Some(now - PROFILE_REFRESH_INTERVAL + Duration::from_secs(1)),
+            now
+        ));
         assert!(profile_fetch_due(Some(now - PROFILE_REFRESH_INTERVAL), now));
         // A clock that reads earlier than the stamp is not "stale".
         assert!(!profile_fetch_due(Some(now + Duration::from_secs(1)), now));
@@ -193,34 +204,13 @@ mod tests {
 
     #[test]
     fn test_proto_friend_status_conversion() {
-        assert_eq!(
-            proto_friend_status_to_domain(3),
-            FriendshipStatus::Accepted
-        );
-        assert_eq!(
-            proto_friend_status_to_domain(5),
-            FriendshipStatus::Blocked
-        );
-        assert_eq!(
-            proto_friend_status_to_domain(2),
-            FriendshipStatus::Pending
-        );
-        assert_eq!(
-            proto_friend_status_to_domain(0),
-            FriendshipStatus::Pending
-        );
-        assert_eq!(
-            proto_friend_status_to_domain(1),
-            FriendshipStatus::Pending
-        );
-        assert_eq!(
-            proto_friend_status_to_domain(4),
-            FriendshipStatus::Pending
-        );
-        assert_eq!(
-            proto_friend_status_to_domain(99),
-            FriendshipStatus::Pending
-        );
+        assert_eq!(proto_friend_status_to_domain(3), FriendshipStatus::Accepted);
+        assert_eq!(proto_friend_status_to_domain(5), FriendshipStatus::Blocked);
+        assert_eq!(proto_friend_status_to_domain(2), FriendshipStatus::Pending);
+        assert_eq!(proto_friend_status_to_domain(0), FriendshipStatus::Pending);
+        assert_eq!(proto_friend_status_to_domain(1), FriendshipStatus::Pending);
+        assert_eq!(proto_friend_status_to_domain(4), FriendshipStatus::Pending);
+        assert_eq!(proto_friend_status_to_domain(99), FriendshipStatus::Pending);
     }
 
     /// F40: a block keeps the friendship but hides the contact everywhere a
@@ -245,20 +235,41 @@ mod tests {
             .build()
             .expect("build client");
 
-        let (me, kept, blocked, anon_blocked) = (UserId::new(), UserId::new(), UserId::new(), UserId::new());
+        let (me, kept, blocked, anon_blocked) =
+            (UserId::new(), UserId::new(), UserId::new(), UserId::new());
         let users = client.users();
-        users.settings_repo.set_string(keys::CURRENT_USER_ID, &me.to_string()).unwrap();
+        users
+            .settings_repo
+            .set_string(keys::CURRENT_USER_ID, &me.to_string())
+            .unwrap();
         client.auth_state().set_logged_in(me, 1, "me".into());
-        let row = |from, to, status| Friendship { requester_id: from, addressee_id: to, status, created_at: chrono::Utc::now() };
+        let row = |from, to, status| Friendship {
+            requester_id: from,
+            addressee_id: to,
+            status,
+            created_at: chrono::Utc::now(),
+        };
         for u in [me, kept, blocked, anon_blocked] {
             users.user_repo.ensure_user_exists(&u).unwrap();
         }
-        users.user_repo.insert_friendship(&row(me, kept, FriendshipStatus::Accepted)).unwrap();
+        users
+            .user_repo
+            .insert_friendship(&row(me, kept, FriendshipStatus::Accepted))
+            .unwrap();
         // Friend who sent the request, then was blocked by us: the Accepted row
         // is theirs, the Blocked row ours.
-        users.user_repo.insert_friendship(&row(blocked, me, FriendshipStatus::Accepted)).unwrap();
-        users.user_repo.insert_friendship(&row(me, blocked, FriendshipStatus::Blocked)).unwrap();
-        users.user_repo.insert_friendship(&row(anon_blocked, me, FriendshipStatus::Accepted)).unwrap();
+        users
+            .user_repo
+            .insert_friendship(&row(blocked, me, FriendshipStatus::Accepted))
+            .unwrap();
+        users
+            .user_repo
+            .insert_friendship(&row(me, blocked, FriendshipStatus::Blocked))
+            .unwrap();
+        users
+            .user_repo
+            .insert_friendship(&row(anon_blocked, me, FriendshipStatus::Accepted))
+            .unwrap();
         users.anon_dm_repo.block_user(&anon_blocked, None).unwrap();
 
         assert_eq!(client.listed_friends(), vec![kept]);
@@ -289,24 +300,48 @@ mod tests {
             .build()
             .expect("build client");
 
-        let (me, friend, former, blocked, stranger) =
-            (UserId::new(), UserId::new(), UserId::new(), UserId::new(), UserId::new());
+        let (me, friend, former, blocked, stranger) = (
+            UserId::new(),
+            UserId::new(),
+            UserId::new(),
+            UserId::new(),
+            UserId::new(),
+        );
         let users = client.users();
-        users.settings_repo.set_string(keys::CURRENT_USER_ID, &me.to_string()).unwrap();
+        users
+            .settings_repo
+            .set_string(keys::CURRENT_USER_ID, &me.to_string())
+            .unwrap();
         client.auth_state().set_logged_in(me, 1, "me".into());
         for u in [me, friend, former, blocked, stranger] {
             users.user_repo.ensure_user_exists(&u).unwrap();
         }
-        users.user_repo.insert_friendship(&Friendship {
-            requester_id: me, addressee_id: friend,
-            status: FriendshipStatus::Accepted, created_at: chrono::Utc::now(),
-        }).unwrap();
-        users.user_repo.insert_friendship(&Friendship {
-            requester_id: me, addressee_id: blocked,
-            status: FriendshipStatus::Blocked, created_at: chrono::Utc::now(),
-        }).unwrap();
+        users
+            .user_repo
+            .insert_friendship(&Friendship {
+                requester_id: me,
+                addressee_id: friend,
+                status: FriendshipStatus::Accepted,
+                created_at: chrono::Utc::now(),
+            })
+            .unwrap();
+        users
+            .user_repo
+            .insert_friendship(&Friendship {
+                requester_id: me,
+                addressee_id: blocked,
+                status: FriendshipStatus::Blocked,
+                created_at: chrono::Utc::now(),
+            })
+            .unwrap();
         for (peer, sender) in [(former, me), (blocked, me), (stranger, stranger)] {
-            let m = Message::new_text(ChannelId::from(peer), ConversationType::ServerDm, Some(sender), "hi".into(), 1);
+            let m = Message::new_text(
+                ChannelId::from(peer),
+                ConversationType::ServerDm,
+                Some(sender),
+                "hi".into(),
+                1,
+            );
             client.messages().message_repo.insert(&m).unwrap();
         }
 
@@ -334,12 +369,21 @@ mod tests {
 
         let (bob, stranger) = (UserId::new(), UserId::new());
         let users = client.users();
-        users.user_repo.insert(&User::new(bob, "bob".into(), Vec::new())).unwrap();
-        users.user_repo.upsert_profile(&Profile::new(bob, friend_display_name_placeholder(&bob))).unwrap();
+        users
+            .user_repo
+            .insert(&User::new(bob, "bob".into(), Vec::new()))
+            .unwrap();
+        users
+            .user_repo
+            .upsert_profile(&Profile::new(bob, friend_display_name_placeholder(&bob)))
+            .unwrap();
 
         assert_eq!(client.display_name(&bob), "bob");
         assert_eq!(client.friend_request_peer_name(&stranger, "carol"), "carol");
-        assert_eq!(client.friend_request_peer_name(&stranger, ""), friend_display_name_placeholder(&stranger));
+        assert_eq!(
+            client.friend_request_peer_name(&stranger, ""),
+            friend_display_name_placeholder(&stranger)
+        );
     }
 
     #[test]
@@ -349,26 +393,25 @@ mod tests {
             settings_repo: Arc<SettingsRepository>,
             user_repo: Arc<UserRepository>,
             anon_dm_repo: Arc<crate::storage::repositories::anon_dm_repo::AnonDmRepository>,
-            anon_group_repo: Arc<crate::storage::repositories::anon_group_repo::AnonGroupRepository>,
+            anon_group_repo: Arc<
+                crate::storage::repositories::anon_group_repo::AnonGroupRepository,
+            >,
         ) {
-            let _service = UserService::new(grpc_pool, settings_repo, user_repo, anon_dm_repo, anon_group_repo);
+            let _service = UserService::new(
+                grpc_pool,
+                settings_repo,
+                user_repo,
+                anon_dm_repo,
+                anon_group_repo,
+            );
         }
     }
 
     #[test]
     fn test_blocked_status_mapping() {
-        assert_eq!(
-            proto_friend_status_to_domain(5),
-            FriendshipStatus::Blocked
-        );
-        assert_ne!(
-            proto_friend_status_to_domain(5),
-            FriendshipStatus::Pending
-        );
-        assert_ne!(
-            proto_friend_status_to_domain(5),
-            FriendshipStatus::Accepted
-        );
+        assert_eq!(proto_friend_status_to_domain(5), FriendshipStatus::Blocked);
+        assert_ne!(proto_friend_status_to_domain(5), FriendshipStatus::Pending);
+        assert_ne!(proto_friend_status_to_domain(5), FriendshipStatus::Accepted);
     }
 
     #[test]

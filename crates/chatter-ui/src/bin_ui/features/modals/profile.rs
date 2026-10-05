@@ -11,8 +11,8 @@ use slint::{ComponentHandle, Model, ModelRc, VecModel};
 use chatter_core::client::ChatterClient;
 use chatter_core::domain::ids::UserId;
 
-use chatter_core::ui::initials_from_name;
 use crate::{MainWindow, SharedContentItem, SharedTab};
+use chatter_core::ui::initials_from_name;
 
 /// Bytes of an avatar picked in the Edit Profile modal, held until Save.
 ///
@@ -140,7 +140,9 @@ pub fn open_user_profile(
 
         // A peer's handle is not known locally (the server stores only its
         // lookup hash); show none rather than the user id dressed up as one.
-        let username = ui_ctx.and_then(|ctx| ctx.known_username(user_id)).unwrap_or_default();
+        let username = ui_ctx
+            .and_then(|ctx| ctx.known_username(user_id))
+            .unwrap_or_default();
 
         let initials = initials_from_name(&display_name);
 
@@ -159,7 +161,9 @@ pub fn open_user_profile(
         let user_data = user_state.get();
         let is_friend = user_data.friends.contains(user_id)
             || ui_ctx.map(|ctx| ctx.is_friend(user_id)).unwrap_or(false);
-        let is_blocked = ui_ctx.map(|ctx| ctx.is_profile_user_blocked(user_id)).unwrap_or(false);
+        let is_blocked = ui_ctx
+            .map(|ctx| ctx.is_profile_user_blocked(user_id))
+            .unwrap_or(false);
 
         w.set_profile_display_name(display_name.into());
         w.set_profile_username(username.into());
@@ -201,7 +205,12 @@ pub fn open_user_profile(
     w.set_profile_shared_tab("".into());
     w.set_profile_last_seen("".into());
     w.set_profile_is_muted(false);
-    SHARED_PAGE.with(|p| *p.borrow_mut() = SharedPage { peer: Some(*user_id), ..Default::default() });
+    SHARED_PAGE.with(|p| {
+        *p.borrow_mut() = SharedPage {
+            peer: Some(*user_id),
+            ..Default::default()
+        }
+    });
 
     if !is_self {
         if let Some(ctx) = ui_ctx {
@@ -216,7 +225,8 @@ pub fn open_user_profile(
             w.set_profile_shared_loading(true);
             w.set_profile_last_seen(ctx.peer_last_seen_label(user_id).into());
             w.set_profile_is_muted(
-                ctx.is_conversation_muted(dm_conversation(user_id)).unwrap_or(false),
+                ctx.is_conversation_muted(dm_conversation(user_id))
+                    .unwrap_or(false),
             );
             load_shared_tabs(w.as_weak(), ctx.clone(), *user_id);
         }
@@ -328,16 +338,18 @@ fn request_shared_page(
             } else {
                 Vec::new()
             };
-            rows.extend(page.iter().map(|item| SharedContentItem {
-                message_id: item.message_id.clone().into(),
-                attachment_id: item.attachment_id.clone().into(),
-                category: item.category.clone().into(),
-                title: item.title.clone().into(),
-                subtitle: item.subtitle.clone().into(),
-                thumbnail: crate::bin_ui::converters::avatar_bytes_to_image(&item.thumbnail)
-                    .unwrap_or_default(),
-                has_thumbnail: item.has_thumbnail,
-                is_video: item.is_video,
+            rows.extend(page.iter().map(|item| {
+                SharedContentItem {
+                    message_id: item.message_id.clone().into(),
+                    attachment_id: item.attachment_id.clone().into(),
+                    category: item.category.clone().into(),
+                    title: item.title.clone().into(),
+                    subtitle: item.subtitle.clone().into(),
+                    thumbnail: crate::bin_ui::converters::avatar_bytes_to_image(&item.thumbnail)
+                        .unwrap_or_default(),
+                    has_thumbnail: item.has_thumbnail,
+                    is_video: item.is_video,
+                }
             }));
             w.set_profile_shared_items(ModelRc::new(VecModel::from(rows)));
         });
@@ -349,8 +361,12 @@ fn wire_shared_content(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     let weak_window = window.as_weak();
     let ui_ctx_tab = ui_ctx.clone();
     window.on_profile_shared_tab_selected(move |tab| {
-        let Some(w) = weak_window.upgrade() else { return };
-        let Some(peer) = SHARED_PAGE.with(|p| p.borrow().peer) else { return };
+        let Some(w) = weak_window.upgrade() else {
+            return;
+        };
+        let Some(peer) = SHARED_PAGE.with(|p| p.borrow().peer) else {
+            return;
+        };
         w.set_profile_shared_items(ModelRc::new(VecModel::<SharedContentItem>::from(vec![])));
         request_shared_page(&w, &ui_ctx_tab, peer, tab.to_string(), false);
     });
@@ -358,8 +374,12 @@ fn wire_shared_content(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     let weak_window = window.as_weak();
     let ui_ctx_more = ui_ctx.clone();
     window.on_profile_shared_load_more(move || {
-        let Some(w) = weak_window.upgrade() else { return };
-        let Some(peer) = SHARED_PAGE.with(|p| p.borrow().peer) else { return };
+        let Some(w) = weak_window.upgrade() else {
+            return;
+        };
+        let Some(peer) = SHARED_PAGE.with(|p| p.borrow().peer) else {
+            return;
+        };
         let tab = w.get_profile_shared_tab().to_string();
         if tab.is_empty() {
             return;
@@ -373,12 +393,15 @@ fn wire_shared_content(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     // retry.
     let weak_window = window.as_weak();
     window.on_profile_open_shared_item(move |message_id, _attachment_id, category| {
-        let Some(w) = weak_window.upgrade() else { return };
+        let Some(w) = weak_window.upgrade() else {
+            return;
+        };
         if category.as_str() == "link" {
             // For a link the title IS the URL; find it in the painted model
             // rather than re-querying.
             let items = w.get_profile_shared_items();
-            let url = items.iter()
+            let url = items
+                .iter()
                 .find(|i| i.message_id == message_id)
                 .map(|i| i.subtitle.to_string());
             if let Some(url) = url {
@@ -400,7 +423,9 @@ fn wire_shared_content(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             }
             return;
         }
-        let Some(peer) = SHARED_PAGE.with(|p| p.borrow().peer) else { return };
+        let Some(peer) = SHARED_PAGE.with(|p| p.borrow().peer) else {
+            return;
+        };
         crate::bin_ui::features::back::reset_to_chats(&w);
         w.invoke_dm_selected(peer.to_string().into());
         w.invoke_quote_clicked(message_id);
@@ -415,8 +440,7 @@ fn set_share_link_props(w: &MainWindow, ui_ctx: &Arc<ChatterClient>, url: &str) 
         .username_link_qr(url, 150)
         .map_err(|e| e.to_string())
         .and_then(|png| {
-            crate::bin_ui::slint_conversions::memory_to_slint_image(&png)
-                .map_err(|e| e.to_string())
+            crate::bin_ui::slint_conversions::memory_to_slint_image(&png).map_err(|e| e.to_string())
         }) {
         Ok(img) => w.set_profile_share_qr(img),
         Err(e) => tracing::error!("Failed to render username-link QR: {}", e),
@@ -487,11 +511,7 @@ fn show_toast(w: &MainWindow, (message, variant): (&str, &str)) {
     w.set_toast_visible(true);
 }
 
-fn spawn_create_link(
-    weak: slint::Weak<MainWindow>,
-    ui_ctx: Arc<ChatterClient>,
-    rotate: bool,
-) {
+fn spawn_create_link(weak: slint::Weak<MainWindow>, ui_ctx: Arc<ChatterClient>, rotate: bool) {
     tokio::spawn(async move {
         // First press with an existing link: just re-show it.
         if !rotate {
@@ -537,7 +557,6 @@ fn spawn_create_link(
 }
 
 pub fn wire_profile_actions(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
-
     // Username-link share (self profile view)
     wire_share_link(window, ui_ctx);
 
@@ -549,8 +568,12 @@ pub fn wire_profile_actions(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     let weak_window = window.as_weak();
     let ui_ctx_mute = ui_ctx.clone();
     window.on_profile_toggle_mute(move || {
-        let Some(w) = weak_window.upgrade() else { return };
-        let Ok(peer_id) = w.get_profile_user_id().parse::<UserId>() else { return };
+        let Some(w) = weak_window.upgrade() else {
+            return;
+        };
+        let Ok(peer_id) = w.get_profile_user_id().parse::<UserId>() else {
+            return;
+        };
         let muted = !w.get_profile_is_muted();
         // Reflect immediately, then persist — snapping back on failure.
         w.set_profile_is_muted(muted);
@@ -566,7 +589,9 @@ pub fn wire_profile_actions(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     // call.
     let weak_window = window.as_weak();
     window.on_profile_start_call(move |is_video| {
-        let Some(w) = weak_window.upgrade() else { return };
+        let Some(w) = weak_window.upgrade() else {
+            return;
+        };
         let peer_id = w.get_profile_user_id().to_string();
         if peer_id.is_empty() {
             return;
@@ -624,7 +649,9 @@ pub fn wire_profile_actions(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             let notice = match tokio::time::timeout(
                 crate::bin_ui::ui_helpers::UI_SERVICE_TIMEOUT,
                 ui_ctx.send_friend_request(&friend_id, None),
-            ).await {
+            )
+            .await
+            {
                 Ok(Ok(_)) => {
                     tracing::info!("Friend request sent to {}", friend_id);
                     // Core emits `FriendRequestsUpdated` after send — the
@@ -691,7 +718,9 @@ pub fn wire_profile_actions(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             match tokio::time::timeout(
                 crate::bin_ui::ui_helpers::UI_SERVICE_TIMEOUT,
                 ui_ctx.remove_friend(&friend_id),
-            ).await {
+            )
+            .await
+            {
                 Ok(Ok(())) => {
                     let _ = slint::invoke_from_event_loop(move || {
                         if let Some(w) = weak.upgrade() {
@@ -765,10 +794,12 @@ pub fn wire_profile_actions(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             match ui_ctx.block_profile_user(&user_id).await {
                 Ok(()) => {
                     crate::bin_ui::features::auth::initial_data::refresh_friends_list(
-                        weak.clone(), ui_ctx.clone(),
+                        weak.clone(),
+                        ui_ctx.clone(),
                     );
                     crate::bin_ui::features::modals::friends::refresh_blocked_users(
-                        weak.clone(), &ui_ctx,
+                        weak.clone(),
+                        &ui_ctx,
                     );
                     let _ = slint::invoke_from_event_loop(move || {
                         if let Some(w) = weak.upgrade() {
@@ -801,13 +832,17 @@ pub fn wire_profile_actions(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     let weak_window = window.as_weak();
     let ui_ctx_dm = ui_ctx.clone();
     window.on_profile_send_message(move || {
-        let Some(w) = weak_window.upgrade() else { return };
+        let Some(w) = weak_window.upgrade() else {
+            return;
+        };
         let peer = w.get_profile_user_id().to_string();
         let Some(dm_id) = ui_ctx_dm
             .resolve_dm_conversation(&peer)
             .and_then(|conversation| conversation.sidebar_key())
         else {
-            tracing::warn!("profile: no conversation with this peer is available in the current mode");
+            tracing::warn!(
+                "profile: no conversation with this peer is available in the current mode"
+            );
             return;
         };
         crate::bin_ui::features::back::reset_to_chats(&w);
@@ -823,11 +858,11 @@ pub fn wire_profile_actions(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                 w.set_edit_profile_display_name(w.get_profile_display_name());
                 w.set_edit_profile_bio(w.get_profile_bio());
                 w.set_edit_profile_avatar(w.get_user_avatar_source());
-                
+
                 // Clear any pending avatar
                 PENDING_AVATAR_PATH.with(|p| *p.borrow_mut() = None);
                 *PENDING_AVATAR_BYTES.lock().unwrap() = None;
-                
+
                 crate::bin_ui::features::back::push(&w, "edit-profile");
             }
         });
@@ -835,88 +870,92 @@ pub fn wire_profile_actions(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
 
     let weak_window = window.as_weak();
     let ui_ctx_save = ui_ctx.clone();
-    window.on_edit_profile_save(move |display_name: slint::SharedString, bio: slint::SharedString| {
-        let weak = weak_window.clone();
-        let ui_ctx = ui_ctx_save.clone();
-        let display_name = display_name.to_string();
-        let bio = bio.to_string();
+    window.on_edit_profile_save(
+        move |display_name: slint::SharedString, bio: slint::SharedString| {
+            let weak = weak_window.clone();
+            let ui_ctx = ui_ctx_save.clone();
+            let display_name = display_name.to_string();
+            let bio = bio.to_string();
 
-        tokio::spawn(async move {
-            // Set loading state
-            let weak_loading = weak.clone();
-            let _ = slint::invoke_from_event_loop(move || {
-                if let Some(w) = weak_loading.upgrade() {
-                    w.set_edit_profile_loading(true);
-                    w.set_edit_profile_error("".into());
+            tokio::spawn(async move {
+                // Set loading state
+                let weak_loading = weak.clone();
+                let _ = slint::invoke_from_event_loop(move || {
+                    if let Some(w) = weak_loading.upgrade() {
+                        w.set_edit_profile_loading(true);
+                        w.set_edit_profile_error("".into());
+                    }
+                });
+
+                // Map bio to status message
+                let status_msg = if !bio.is_empty() {
+                    Some(chatter_core::domain::user::StatusMessage::new(bio))
+                } else {
+                    None
+                };
+
+                // Update profile
+                tracing::info!(
+                    "Updating user profile - display_name: {}, bio: {:?}",
+                    display_name,
+                    status_msg.as_ref().map(|m| &m.text)
+                );
+
+                // Persist the picked avatar HERE, not at pick time: Save is what
+                // commits the edit, and `update_user_profile` re-reads
+                // `keys::AVATAR` to build the upload (§112v).
+                if let Some(bytes) = PENDING_AVATAR_BYTES.lock().unwrap().take() {
+                    if let Err(e) = ui_ctx.set_avatar_bytes(&bytes) {
+                        tracing::error!(error = %e, "Failed to persist picked avatar bytes");
+                    }
+                }
+
+                match ui_ctx
+                    .update_user_profile(Some(display_name.clone()), status_msg.clone())
+                    .await
+                {
+                    Ok(profile) => {
+                        tracing::info!(
+                            "Profile updated - display_name: {}, bio: {:?}",
+                            profile.display_name,
+                            profile.status_message.as_ref().map(|m| &m.text)
+                        );
+                        let _ = slint::invoke_from_event_loop(move || {
+                            if let Some(w) = weak.upgrade() {
+                                w.set_edit_profile_loading(false);
+                                // Back to the profile page it was opened from (its
+                                // only entry point), like Cancel — not the chat list.
+                                crate::bin_ui::features::back::close(&w, "edit-profile");
+
+                                // Update UI with new profile info
+                                w.set_profile_display_name(profile.display_name.clone().into());
+                                if let Some(msg) = &profile.status_message {
+                                    w.set_profile_bio(msg.text.clone().into());
+                                } else {
+                                    w.set_profile_bio("".into());
+                                }
+
+                                // Update sidebar name too
+                                w.set_user_display_name(profile.display_name.into());
+
+                                // Clear pending avatar
+                                PENDING_AVATAR_PATH.with(|p| *p.borrow_mut() = None);
+                            }
+                        });
+                    }
+                    Err(e) => {
+                        let error_msg = e.to_string();
+                        let _ = slint::invoke_from_event_loop(move || {
+                            if let Some(w) = weak.upgrade() {
+                                w.set_edit_profile_loading(false);
+                                w.set_edit_profile_error(error_msg.into());
+                            }
+                        });
+                    }
                 }
             });
-
-            // Map bio to status message
-            let status_msg = if !bio.is_empty() {
-                Some(chatter_core::domain::user::StatusMessage::new(bio))
-            } else {
-                None
-            };
-
-            // Update profile
-            tracing::info!(
-                "Updating user profile - display_name: {}, bio: {:?}",
-                display_name, status_msg.as_ref().map(|m| &m.text)
-            );
-
-            // Persist the picked avatar HERE, not at pick time: Save is what
-            // commits the edit, and `update_user_profile` re-reads
-            // `keys::AVATAR` to build the upload (§112v).
-            if let Some(bytes) = PENDING_AVATAR_BYTES.lock().unwrap().take() {
-                if let Err(e) = ui_ctx.set_avatar_bytes(&bytes) {
-                    tracing::error!(error = %e, "Failed to persist picked avatar bytes");
-                }
-            }
-
-            match ui_ctx
-                .update_user_profile(Some(display_name.clone()), status_msg.clone())
-                .await
-            {
-                Ok(profile) => {
-                    tracing::info!(
-                        "Profile updated - display_name: {}, bio: {:?}",
-                        profile.display_name, profile.status_message.as_ref().map(|m| &m.text)
-                    );
-                    let _ = slint::invoke_from_event_loop(move || {
-                        if let Some(w) = weak.upgrade() {
-                            w.set_edit_profile_loading(false);
-                            // Back to the profile page it was opened from (its
-                            // only entry point), like Cancel — not the chat list.
-                            crate::bin_ui::features::back::close(&w, "edit-profile");
-
-                            // Update UI with new profile info
-                            w.set_profile_display_name(profile.display_name.clone().into());
-                            if let Some(msg) = &profile.status_message {
-                                w.set_profile_bio(msg.text.clone().into());
-                            } else {
-                                w.set_profile_bio("".into());
-                            }
-
-                            // Update sidebar name too
-                            w.set_user_display_name(profile.display_name.into());
-                            
-                            // Clear pending avatar
-                            PENDING_AVATAR_PATH.with(|p| *p.borrow_mut() = None);
-                        }
-                    });
-                }
-                Err(e) => {
-                    let error_msg = e.to_string();
-                    let _ = slint::invoke_from_event_loop(move || {
-                        if let Some(w) = weak.upgrade() {
-                            w.set_edit_profile_loading(false);
-                            w.set_edit_profile_error(error_msg.into());
-                        }
-                    });
-                }
-            }
-        });
-    });
+        },
+    );
 
     // Change avatar with file picker
     let weak_window = window.as_weak();
@@ -1041,7 +1080,10 @@ pub fn wire_profile_actions(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
         let ui_ctx = ui_ctx_verify.clone();
 
         let (profile_user_id, currently_verified) = match weak.upgrade() {
-            Some(w) => (w.get_profile_user_id().to_string(), w.get_profile_is_verified()),
+            Some(w) => (
+                w.get_profile_user_id().to_string(),
+                w.get_profile_is_verified(),
+            ),
             None => return,
         };
 
@@ -1086,4 +1128,3 @@ pub fn wire_profile_actions(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
         }
     });
 }
-

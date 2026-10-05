@@ -46,6 +46,37 @@ import java.util.concurrent.Executors
  */
 class MainActivity : GameActivity() {
 
+    // Called only after an explicit tap; duplicate validation at the native edge.
+    fun openWebLink(value: String) {
+        runOnUiThread {
+            try {
+                val uri = Uri.parse(value)
+                if ((uri.scheme != "https" && uri.scheme != "http") || uri.host.isNullOrEmpty()
+                    || uri.userInfo != null || value.any { it.isWhitespace() || it.isISOControl() || it == '\\' }) return@runOnUiThread
+                startActivity(Intent(Intent.ACTION_VIEW, uri).addCategory(Intent.CATEGORY_BROWSABLE))
+            } catch (_: Exception) {
+                android.widget.Toast.makeText(this, "Unable to open browser", android.widget.Toast.LENGTH_SHORT).show()
+            }
+        }
+    }
+
+    fun showVideoError() {
+        runOnUiThread { android.widget.Toast.makeText(this, "Unable to play this video", android.widget.Toast.LENGTH_LONG).show() }
+    }
+
+    fun playVideo(token: Long, label: String) {
+        runOnUiThread {
+            try {
+                startActivity(Intent(this, VideoPlaybackActivity::class.java)
+                    .putExtra("video-token", token).putExtra("video-title", label))
+            } catch (_: Exception) {
+                nativeReleasePendingVideo(token)
+                android.widget.Toast.makeText(this, "Unable to open video player", android.widget.Toast.LENGTH_SHORT).show()
+            }
+        }
+    }
+    private external fun nativeReleasePendingVideo(token: Long)
+
     override fun onCreate(savedInstanceState: Bundle?) {
         // Until Slint's first frame the window background is all there is.
         // themes.xml resolves it from the SYSTEM night mode, so a Light app on

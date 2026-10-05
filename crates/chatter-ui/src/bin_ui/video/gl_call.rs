@@ -34,7 +34,7 @@
 
 use std::cell::RefCell;
 use std::collections::HashMap;
-use std::ffi::{c_void, CStr, CString};
+use std::ffi::{CStr, CString, c_void};
 use std::num::NonZeroU32;
 use std::rc::Rc;
 use std::sync::{Arc, LazyLock, Mutex};
@@ -296,7 +296,12 @@ pub fn on_before_rendering(window: &crate::MainWindow) {
         // Destructure into disjoint field borrows so we can call GL functions
         // (`&gl`) while mutating the texture map (`&mut textures`) in the same
         // scope — a single `&state` borrow would forbid that.
-        let CallGlState { gl, textures, model, .. } = state;
+        let CallGlState {
+            gl,
+            textures,
+            model,
+            ..
+        } = state;
 
         // Save GL state we are about to clobber.
         let mut prev_tex_binding: i32 = 0;
@@ -524,17 +529,22 @@ pub fn on_before_rendering(window: &crate::MainWindow) {
         let local_img = participants
             .row_data(participants.row_count().saturating_sub(1))
             .map(|p| p.user_id.to_string())
-            .and_then(|pid| textures.get(&pid).filter(|t| t.width != 0 && t.height != 0).map(|tex| {
-                // SAFETY: same invariants as the remote textures above — live,
-                // non-zero RGBA 2D texture kept in `state.textures` across the draw.
-                unsafe {
-                    slint::BorrowedOpenGLTextureBuilder::new_gl_2d_rgba_texture(
-                        tex.id,
-                        [tex.width, tex.height].into(),
-                    )
-                    .build()
-                }
-            }))
+            .and_then(|pid| {
+                textures
+                    .get(&pid)
+                    .filter(|t| t.width != 0 && t.height != 0)
+                    .map(|tex| {
+                        // SAFETY: same invariants as the remote textures above — live,
+                        // non-zero RGBA 2D texture kept in `state.textures` across the draw.
+                        unsafe {
+                            slint::BorrowedOpenGLTextureBuilder::new_gl_2d_rgba_texture(
+                                tex.id,
+                                [tex.width, tex.height].into(),
+                            )
+                            .build()
+                        }
+                    })
+            })
             .unwrap_or_default();
         window.set_call_local_video_frame(local_img);
     });
@@ -615,17 +625,29 @@ pub fn upload_media_player_frame(rgba: &[u8], width: u32, height: u32) -> Option
             let pixels = rgba.as_ptr() as *const c_void;
             if tex.width != width || tex.height != height {
                 (gl.TexImage2D)(
-                    GL_TEXTURE_2D, 0, GL_RGBA as i32,
-                    width as i32, height as i32, 0,
-                    GL_RGBA, GL_UNSIGNED_BYTE, pixels,
+                    GL_TEXTURE_2D,
+                    0,
+                    GL_RGBA as i32,
+                    width as i32,
+                    height as i32,
+                    0,
+                    GL_RGBA,
+                    GL_UNSIGNED_BYTE,
+                    pixels,
                 );
                 tex.width = width;
                 tex.height = height;
             } else {
                 (gl.TexSubImage2D)(
-                    GL_TEXTURE_2D, 0, 0, 0,
-                    width as i32, height as i32,
-                    GL_RGBA, GL_UNSIGNED_BYTE, pixels,
+                    GL_TEXTURE_2D,
+                    0,
+                    0,
+                    0,
+                    width as i32,
+                    height as i32,
+                    GL_RGBA,
+                    GL_UNSIGNED_BYTE,
+                    pixels,
                 );
             }
             let tex_id = tex.id;

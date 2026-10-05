@@ -335,7 +335,10 @@ async fn test_unique_channel_name_generator() {
 async fn test_channel_timestamp() {
     let channel = ChannelBuilder::public("timestamped").build();
 
-    assert!(channel.created_at > 0, "Channel should have creation timestamp");
+    assert!(
+        channel.created_at > 0,
+        "Channel should have creation timestamp"
+    );
 }
 
 // ============================================================================

@@ -5,8 +5,8 @@
 
 use std::fmt;
 
-use aes_gcm::{aead::Aead, Aes256Gcm, KeyInit, Nonce};
-use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
+use aes_gcm::{Aes256Gcm, KeyInit, Nonce, aead::Aead};
+use base64::{Engine, engine::general_purpose::STANDARD as BASE64};
 use subtle::ConstantTimeEq;
 use zeroize::Zeroize;
 
@@ -44,7 +44,12 @@ impl DeviceToken {
     /// Generate a new random device token.
     pub fn generate() -> Self {
         let mut token = [0u8; 32];
-        {use rand::TryRngCore; rand::rngs::OsRng.try_fill_bytes(&mut token).expect("OS CSPRNG must not fail");}
+        {
+            use rand::TryRngCore;
+            rand::rngs::OsRng
+                .try_fill_bytes(&mut token)
+                .expect("OS CSPRNG must not fail");
+        }
         Self { token }
     }
 
@@ -217,8 +222,7 @@ impl DeviceCredentials {
 /// 16-byte UAK (first 16 bytes of AES-GCM ciphertext)
 pub fn derive_uak(profile_key: &[u8; 32]) -> [u8; 16] {
     // Create AES-256-GCM cipher with profile key
-    let cipher = Aes256Gcm::new_from_slice(profile_key)
-        .expect("Profile key is always 32 bytes");
+    let cipher = Aes256Gcm::new_from_slice(profile_key).expect("Profile key is always 32 bytes");
 
     // Use 12-byte zero nonce (Signal's standard for UAK derivation)
     let nonce = Nonce::from_slice(&[0u8; 12]);
@@ -425,7 +429,10 @@ mod tests {
         let creds = DeviceCredentials::from_stored(7, [0xABu8; 32], [0xCDu8; 16]);
         let dbg = format!("{:?}", creds);
         assert!(dbg.contains("REDACTED"), "debug output: {dbg}");
-        assert!(dbg.contains("device_id"), "device_id should still be visible: {dbg}");
+        assert!(
+            dbg.contains("device_id"),
+            "device_id should still be visible: {dbg}"
+        );
         assert!(!dbg.contains("ab"), "auth_token bytes leaked: {dbg}");
         assert!(!dbg.contains("cd"), "uak bytes leaked: {dbg}");
     }

@@ -13,8 +13,8 @@ use gstreamer::prelude::*;
 use gstreamer_app as gst_app;
 use gstreamer_video as gst_video;
 
-use crate::error::MediaError;
 use super::GifFrame;
+use crate::error::MediaError;
 
 /// Lazy GStreamer initialization.
 static GST_INIT: Once = Once::new();
@@ -66,11 +66,18 @@ pub fn decode_all_frames_cpu(gif_bytes: &[u8]) -> Result<Vec<GifFrame>, MediaErr
     let convert = gst::ElementFactory::make("videoconvert")
         .build()
         .map_err(|e| MediaError::PlaybackError(format!("videoconvert: {e}")))?;
-    let caps = gst::Caps::builder("video/x-raw").field("format", "RGBA").build();
+    let caps = gst::Caps::builder("video/x-raw")
+        .field("format", "RGBA")
+        .build();
     let appsink = gst_app::AppSink::builder().caps(&caps).sync(false).build();
 
     pipeline
-        .add_many([appsrc.upcast_ref(), &decodebin, &convert, appsink.upcast_ref()])
+        .add_many([
+            appsrc.upcast_ref(),
+            &decodebin,
+            &convert,
+            appsink.upcast_ref(),
+        ])
         .map_err(|e| MediaError::PlaybackError(format!("add: {e}")))?;
     appsrc
         .link(&decodebin)
@@ -105,7 +112,9 @@ pub fn decode_all_frames_cpu(gif_bytes: &[u8]) -> Result<Vec<GifFrame>, MediaErr
     loop {
         match appsink.try_pull_sample(gst::ClockTime::from_seconds(5)) {
             Some(sample) => {
-                let Some(buffer) = sample.buffer() else { continue };
+                let Some(buffer) = sample.buffer() else {
+                    continue;
+                };
                 let Some(caps) = sample.caps() else { continue };
                 let info = gst_video::VideoInfo::from_caps(caps)
                     .map_err(|e| MediaError::PlaybackError(format!("caps: {e}")))?;
@@ -147,7 +156,9 @@ pub fn decode_all_frames_cpu(gif_bytes: &[u8]) -> Result<Vec<GifFrame>, MediaErr
                     break;
                 }
                 pipeline.set_state(gst::State::Null).ok();
-                return Err(MediaError::PlaybackError("timed out pulling frames".to_string()));
+                return Err(MediaError::PlaybackError(
+                    "timed out pulling frames".to_string(),
+                ));
             }
         }
     }

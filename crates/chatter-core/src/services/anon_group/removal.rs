@@ -1,9 +1,10 @@
 //! Leave, kick and ownership hand-off for anonymous groups.
 
-use crate::domain::anon_group::{AnonGroupId, AnonGroupRole};
 use crate::domain::UserId;
+use crate::domain::anon_group::{AnonGroupId, AnonGroupRole};
 use crate::proto::content_v1::{
-    self, anon_group_update, AnonGroupKick, AnonGroupLeave, AnonGroupRoleChange, AnonGroupUpdate, Content,
+    self, AnonGroupKick, AnonGroupLeave, AnonGroupRoleChange, AnonGroupUpdate, Content,
+    anon_group_update,
 };
 use crate::util::time::TimestampNanos;
 
@@ -77,13 +78,20 @@ impl AnonGroupService {
         me: &UserId,
     ) -> Result<bool, AnonGroupError> {
         Ok(group.owner_id != *me
-            || !self.anon_group_repo.get_members(&group.id)?.iter().any(|m| m.user_id != *me))
+            || !self
+                .anon_group_repo
+                .get_members(&group.id)?
+                .iter()
+                .any(|m| m.user_id != *me))
     }
 
     /// [`may_leave`](Self::may_leave) for the signed-in user; false when the
     /// group or the session cannot be read (the leave itself would fail).
     pub fn can_leave(&self, group_id: &AnonGroupId) -> bool {
-        let (Ok(me), Ok(Some(group))) = (self.current_user_id(), self.anon_group_repo.get_group(group_id)) else {
+        let (Ok(me), Ok(Some(group))) = (
+            self.current_user_id(),
+            self.anon_group_repo.get_group(group_id),
+        ) else {
             return false;
         };
         self.may_leave(&group, &me).unwrap_or(false)
@@ -113,15 +121,17 @@ impl AnonGroupService {
 
         let timestamp = TimestampNanos::now().as_u64();
         let content = Content {
-            content: Some(content_v1::content::Content::AnonGroupUpdate(AnonGroupUpdate {
-                group_id: group_id.to_vec(),
-                timestamp,
-                update: Some(anon_group_update::Update::RoleChange(AnonGroupRoleChange {
-                    user_id: new_owner.as_bytes().to_vec(),
-                    new_role: AnonGroupRole::Owner.to_i32(),
+            content: Some(content_v1::content::Content::AnonGroupUpdate(
+                AnonGroupUpdate {
+                    group_id: group_id.to_vec(),
                     timestamp,
-                })),
-            })),
+                    update: Some(anon_group_update::Update::RoleChange(AnonGroupRoleChange {
+                        user_id: new_owner.as_bytes().to_vec(),
+                        new_role: AnonGroupRole::Owner.to_i32(),
+                        timestamp,
+                    })),
+                },
+            )),
             ephemeral_reply_to: None,
             timestamp,
             padding: Self::generate_padding(160),
@@ -137,7 +147,11 @@ impl AnonGroupService {
                 .send_to_anon_mailbox(&member.user_id, &mailbox_pk, content.clone())
                 .await
             {
-                tracing::warn!("Failed to notify {} of ownership transfer: {}", member.user_id, e);
+                tracing::warn!(
+                    "Failed to notify {} of ownership transfer: {}",
+                    member.user_id,
+                    e
+                );
             }
         }
 
@@ -166,9 +180,11 @@ impl AnonGroupService {
             group.my_role
         };
         self.anon_group_repo.set_owner(group_id, to, my_role)?;
-        self.anon_group_repo.update_member_role(group_id, to, AnonGroupRole::Owner)?;
+        self.anon_group_repo
+            .update_member_role(group_id, to, AnonGroupRole::Owner)?;
         if self.anon_group_repo.is_member(group_id, from)? {
-            self.anon_group_repo.update_member_role(group_id, from, AnonGroupRole::Admin)?;
+            self.anon_group_repo
+                .update_member_role(group_id, from, AnonGroupRole::Admin)?;
         }
         Ok(())
     }
@@ -339,10 +355,10 @@ mod tests {
     use ed25519_dalek::{Signer, SigningKey};
 
     use crate::client::ChatterClient;
+    use crate::domain::UserId;
     use crate::domain::anon_group::{
         AnonGroup, AnonGroupId, AnonGroupMember, AnonGroupRole, AnonGroupStatus,
     };
-    use crate::domain::UserId;
     use crate::inbox::handlers::DomainEvent;
     use crate::proto::content_v1::{self, AnonGroupKick, AnonGroupLeave, Content};
     use crate::services::anon_group::AnonGroupError;
@@ -385,11 +401,31 @@ mod tests {
         group.my_role = my_role;
         repo.insert_group(&group).unwrap();
         repo.add_member(&AnonGroupMember::with_mailbox(
-            group_id, owner, AnonGroupRole::Owner, owner_key.verifying_key().to_bytes(),
-        )).unwrap();
-        repo.add_member(&AnonGroupMember::with_mailbox(group_id, mallory, AnonGroupRole::Member, [2u8; 32])).unwrap();
-        repo.add_member(&AnonGroupMember::with_mailbox(group_id, me, my_role, [3u8; 32])).unwrap();
-        Fixture { client, _dir: dir, group_id, owner, owner_key, mallory }
+            group_id,
+            owner,
+            AnonGroupRole::Owner,
+            owner_key.verifying_key().to_bytes(),
+        ))
+        .unwrap();
+        repo.add_member(&AnonGroupMember::with_mailbox(
+            group_id,
+            mallory,
+            AnonGroupRole::Member,
+            [2u8; 32],
+        ))
+        .unwrap();
+        repo.add_member(&AnonGroupMember::with_mailbox(
+            group_id, me, my_role, [3u8; 32],
+        ))
+        .unwrap();
+        Fixture {
+            client,
+            _dir: dir,
+            group_id,
+            owner,
+            owner_key,
+            mallory,
+        }
     }
 
     fn kick(f: &Fixture, signer: &SigningKey) -> Content {
@@ -411,10 +447,12 @@ mod tests {
 
     fn leave(f: &Fixture) -> Content {
         Content {
-            content: Some(content_v1::content::Content::AnonGroupLeave(AnonGroupLeave {
-                group_id: f.group_id.to_vec(),
-                timestamp: 1,
-            })),
+            content: Some(content_v1::content::Content::AnonGroupLeave(
+                AnonGroupLeave {
+                    group_id: f.group_id.to_vec(),
+                    timestamp: 1,
+                },
+            )),
             ..Default::default()
         }
     }
@@ -424,30 +462,40 @@ mod tests {
     }
 
     fn stored(f: &Fixture) -> usize {
-        f.client.anon_groups().get_messages_asc(&f.group_id, None, 50).unwrap().len()
+        f.client
+            .anon_groups()
+            .get_messages_asc(&f.group_id, None, 50)
+            .unwrap()
+            .len()
     }
 
     fn is_member(f: &Fixture, user: &UserId) -> bool {
-        f.client.anon_groups().anon_group_repo.is_member(&f.group_id, user).unwrap()
+        f.client
+            .anon_groups()
+            .anon_group_repo
+            .is_member(&f.group_id, user)
+            .unwrap()
     }
 
     /// The owner's member list naming `members` (mailbox keys are dummies).
     fn member_list(f: &Fixture, members: &[UserId]) -> Content {
         use crate::proto::content_v1::{AnonGroupMemberInfo, AnonGroupMemberList};
         Content {
-            content: Some(content_v1::content::Content::AnonGroupMemberList(AnonGroupMemberList {
-                group_id: f.group_id.to_vec(),
-                members: members
-                    .iter()
-                    .map(|u| AnonGroupMemberInfo {
-                        user_id: u.as_bytes().to_vec(),
-                        mailbox_pk: vec![4u8; 32],
-                        role: AnonGroupRole::Member.to_i32(),
-                        ..Default::default()
-                    })
-                    .collect(),
-                timestamp: 1,
-            })),
+            content: Some(content_v1::content::Content::AnonGroupMemberList(
+                AnonGroupMemberList {
+                    group_id: f.group_id.to_vec(),
+                    members: members
+                        .iter()
+                        .map(|u| AnonGroupMemberInfo {
+                            user_id: u.as_bytes().to_vec(),
+                            mailbox_pk: vec![4u8; 32],
+                            role: AnonGroupRole::Member.to_i32(),
+                            ..Default::default()
+                        })
+                        .collect(),
+                    timestamp: 1,
+                },
+            )),
             ..Default::default()
         }
     }
@@ -456,15 +504,27 @@ mod tests {
     async fn a_kicked_members_post_is_not_delivered() {
         let f = fixture(AnonGroupRole::Member);
         let svc = f.client.anon_groups();
-        svc.process_incoming_content(&f.group_id, &f.owner, &kick(&f, &f.owner_key)).unwrap();
+        svc.process_incoming_content(&f.group_id, &f.owner, &kick(&f, &f.owner_key))
+            .unwrap();
         assert!(!is_member(&f, &f.mallory));
 
         // Mallory kept the mailbox keys and posts anyway.
-        assert!(svc.process_incoming_content(&f.group_id, &f.mallory, &post()).unwrap().is_empty());
+        assert!(
+            svc.process_incoming_content(&f.group_id, &f.mallory, &post())
+                .unwrap()
+                .is_empty()
+        );
         assert_eq!(stored(&f), 0);
         // A later roster that still leaves her out delivers nothing either.
-        let events = svc.process_incoming_content(&f.group_id, &f.owner, &member_list(&f, &[f.owner])).unwrap();
-        assert!(events.iter().all(|e| matches!(e, DomainEvent::AnonGroupMemberListReceived { .. })), "{events:?}");
+        let events = svc
+            .process_incoming_content(&f.group_id, &f.owner, &member_list(&f, &[f.owner]))
+            .unwrap();
+        assert!(
+            events
+                .iter()
+                .all(|e| matches!(e, DomainEvent::AnonGroupMemberListReceived { .. })),
+            "{events:?}"
+        );
         assert_eq!(stored(&f), 0);
     }
 
@@ -475,35 +535,54 @@ mod tests {
         let newbie = UserId::new();
 
         // Their first post beats the owner's member list here.
-        assert!(svc.process_incoming_content(&f.group_id, &newbie, &post()).unwrap().is_empty());
+        assert!(
+            svc.process_incoming_content(&f.group_id, &newbie, &post())
+                .unwrap()
+                .is_empty()
+        );
         assert_eq!(stored(&f), 0);
 
         // A forged list from a non-owner releases nothing.
-        svc.process_incoming_content(&f.group_id, &f.mallory, &member_list(&f, &[newbie])).unwrap();
+        svc.process_incoming_content(&f.group_id, &f.mallory, &member_list(&f, &[newbie]))
+            .unwrap();
         assert_eq!(stored(&f), 0);
 
-        svc.process_incoming_content(&f.group_id, &f.owner, &member_list(&f, &[f.owner, f.mallory, newbie]))
-            .unwrap();
+        svc.process_incoming_content(
+            &f.group_id,
+            &f.owner,
+            &member_list(&f, &[f.owner, f.mallory, newbie]),
+        )
+        .unwrap();
         assert!(is_member(&f, &newbie));
-        assert_eq!(stored(&f), 1, "the held post is delivered once the roster lists its sender");
+        assert_eq!(
+            stored(&f),
+            1,
+            "the held post is delivered once the roster lists its sender"
+        );
         // Released once, not again on the next list.
-        svc.process_incoming_content(&f.group_id, &f.owner, &member_list(&f, &[f.owner, f.mallory, newbie]))
-            .unwrap();
+        svc.process_incoming_content(
+            &f.group_id,
+            &f.owner,
+            &member_list(&f, &[f.owner, f.mallory, newbie]),
+        )
+        .unwrap();
         assert_eq!(stored(&f), 1);
     }
 
     fn transfer_to(f: &Fixture, to: UserId) -> Content {
-        use crate::proto::content_v1::{anon_group_update, AnonGroupRoleChange, AnonGroupUpdate};
+        use crate::proto::content_v1::{AnonGroupRoleChange, AnonGroupUpdate, anon_group_update};
         Content {
-            content: Some(content_v1::content::Content::AnonGroupUpdate(AnonGroupUpdate {
-                group_id: f.group_id.to_vec(),
-                timestamp: 1,
-                update: Some(anon_group_update::Update::RoleChange(AnonGroupRoleChange {
-                    user_id: to.as_bytes().to_vec(),
-                    new_role: AnonGroupRole::Owner.to_i32(),
+            content: Some(content_v1::content::Content::AnonGroupUpdate(
+                AnonGroupUpdate {
+                    group_id: f.group_id.to_vec(),
                     timestamp: 1,
-                })),
-            })),
+                    update: Some(anon_group_update::Update::RoleChange(AnonGroupRoleChange {
+                        user_id: to.as_bytes().to_vec(),
+                        new_role: AnonGroupRole::Owner.to_i32(),
+                        timestamp: 1,
+                    })),
+                },
+            )),
             ..Default::default()
         }
     }
@@ -517,17 +596,42 @@ mod tests {
         let svc = f.client.anon_groups();
         let me = svc.current_user_id().unwrap();
         // Make us the owner of the fixture's group.
-        svc.apply_ownership_transfer(&f.group_id, &f.owner, &me, &me).unwrap();
+        svc.apply_ownership_transfer(&f.group_id, &f.owner, &me, &me)
+            .unwrap();
         let conv = ActiveConversation::AnonGroup(f.group_id);
         assert!(!svc.can_leave(&f.group_id));
-        let row = f.client.sidebar_rows().into_iter().find(|r| r.id == f.group_id.to_string()).unwrap();
-        assert!(!row.can_leave, "the owner is not offered Leave while others remain");
+        let row = f
+            .client
+            .sidebar_rows()
+            .into_iter()
+            .find(|r| r.id == f.group_id.to_string())
+            .unwrap();
+        assert!(
+            !row.can_leave,
+            "the owner is not offered Leave while others remain"
+        );
         let res = f.client.leave_conversation(conv).await;
-        assert!(matches!(res, Err(ConversationError::AnonGroup(AnonGroupError::OwnerMustTransfer))), "{res:?}");
+        assert!(
+            matches!(
+                res,
+                Err(ConversationError::AnonGroup(
+                    AnonGroupError::OwnerMustTransfer
+                ))
+            ),
+            "{res:?}"
+        );
 
         // Only a member can receive it.
-        assert!(f.client.transfer_conversation_ownership(conv, &UserId::new()).await.is_err());
-        f.client.transfer_conversation_ownership(conv, &f.mallory).await.unwrap();
+        assert!(
+            f.client
+                .transfer_conversation_ownership(conv, &UserId::new())
+                .await
+                .is_err()
+        );
+        f.client
+            .transfer_conversation_ownership(conv, &f.mallory)
+            .await
+            .unwrap();
         let group = svc.get_group(&f.group_id).unwrap().unwrap();
         assert_eq!(group.owner_id, f.mallory);
         assert_eq!(group.my_role, AnonGroupRole::Admin);
@@ -542,19 +646,43 @@ mod tests {
         let svc = f.client.anon_groups();
         let repo = &svc.anon_group_repo;
 
-        let events = svc.process_incoming_content(&f.group_id, &f.mallory, &transfer_to(&f, f.mallory)).unwrap();
+        let events = svc
+            .process_incoming_content(&f.group_id, &f.mallory, &transfer_to(&f, f.mallory))
+            .unwrap();
         assert!(events.is_empty(), "{events:?}");
-        assert_eq!(svc.get_group(&f.group_id).unwrap().unwrap().owner_id, f.owner);
+        assert_eq!(
+            svc.get_group(&f.group_id).unwrap().unwrap().owner_id,
+            f.owner
+        );
 
-        let events = svc.process_incoming_content(&f.group_id, &f.owner, &transfer_to(&f, f.mallory)).unwrap();
-        assert!(matches!(events.as_slice(), [DomainEvent::AnonGroupUpdated { .. }]), "{events:?}");
-        assert_eq!(svc.get_group(&f.group_id).unwrap().unwrap().owner_id, f.mallory);
-        assert_eq!(repo.get_member_role(&f.group_id, &f.mallory).unwrap(), Some(AnonGroupRole::Owner));
-        assert_eq!(repo.get_member_role(&f.group_id, &f.owner).unwrap(), Some(AnonGroupRole::Admin));
+        let events = svc
+            .process_incoming_content(&f.group_id, &f.owner, &transfer_to(&f, f.mallory))
+            .unwrap();
+        assert!(
+            matches!(events.as_slice(), [DomainEvent::AnonGroupUpdated { .. }]),
+            "{events:?}"
+        );
+        assert_eq!(
+            svc.get_group(&f.group_id).unwrap().unwrap().owner_id,
+            f.mallory
+        );
+        assert_eq!(
+            repo.get_member_role(&f.group_id, &f.mallory).unwrap(),
+            Some(AnonGroupRole::Owner)
+        );
+        assert_eq!(
+            repo.get_member_role(&f.group_id, &f.owner).unwrap(),
+            Some(AnonGroupRole::Admin)
+        );
 
         // The new owner's member list is now the authoritative one.
         let newbie = UserId::new();
-        svc.process_incoming_content(&f.group_id, &f.mallory, &member_list(&f, &[f.mallory, newbie])).unwrap();
+        svc.process_incoming_content(
+            &f.group_id,
+            &f.mallory,
+            &member_list(&f, &[f.mallory, newbie]),
+        )
+        .unwrap();
         assert!(is_member(&f, &newbie));
     }
 
@@ -563,12 +691,19 @@ mod tests {
         let f = fixture(AnonGroupRole::Member);
         let svc = f.client.anon_groups();
         let forger = SigningKey::from_bytes(&[9u8; 32]);
-        let events = svc.process_incoming_content(&f.group_id, &f.owner, &kick(&f, &forger)).unwrap();
-        assert!(events.is_empty(), "a refused kick must not reach the UI: {events:?}");
+        let events = svc
+            .process_incoming_content(&f.group_id, &f.owner, &kick(&f, &forger))
+            .unwrap();
+        assert!(
+            events.is_empty(),
+            "a refused kick must not reach the UI: {events:?}"
+        );
         assert!(is_member(&f, &f.mallory));
 
         // Validly signed, but by a non-admin: refused the same way.
-        let events = svc.process_incoming_content(&f.group_id, &f.mallory, &kick(&f, &f.owner_key)).unwrap();
+        let events = svc
+            .process_incoming_content(&f.group_id, &f.mallory, &kick(&f, &f.owner_key))
+            .unwrap();
         assert!(events.is_empty());
         assert!(is_member(&f, &f.mallory));
     }
@@ -576,14 +711,19 @@ mod tests {
     #[tokio::test]
     async fn signed_kick_from_owner_is_applied_and_announced() {
         let f = fixture(AnonGroupRole::Member);
-        let events = f.client.anon_groups()
+        let events = f
+            .client
+            .anon_groups()
             .process_incoming_content(&f.group_id, &f.owner, &kick(&f, &f.owner_key))
             .unwrap();
-        assert!(matches!(
-            events.as_slice(),
-            [DomainEvent::AnonGroupMemberKicked { user_id, kicked_by, .. }]
-                if *user_id == f.mallory && *kicked_by == f.owner
-        ), "{events:?}");
+        assert!(
+            matches!(
+                events.as_slice(),
+                [DomainEvent::AnonGroupMemberKicked { user_id, kicked_by, .. }]
+                    if *user_id == f.mallory && *kicked_by == f.owner
+            ),
+            "{events:?}"
+        );
         assert!(!is_member(&f, &f.mallory));
     }
 
@@ -592,16 +732,31 @@ mod tests {
         let f = fixture(AnonGroupRole::Member);
         let svc = f.client.anon_groups();
         svc.block_group(&f.group_id).unwrap();
-        assert!(matches!(svc.check_group_not_blocked(&f.group_id), Err(AnonGroupError::GroupBlocked(_))));
+        assert!(matches!(
+            svc.check_group_not_blocked(&f.group_id),
+            Err(AnonGroupError::GroupBlocked(_))
+        ));
 
-        assert!(svc.process_incoming_content(&f.group_id, &f.mallory, &post()).unwrap().is_empty());
-        assert!(svc.process_incoming_content(&f.group_id, &f.mallory, &leave(&f)).unwrap().is_empty());
+        assert!(
+            svc.process_incoming_content(&f.group_id, &f.mallory, &post())
+                .unwrap()
+                .is_empty()
+        );
+        assert!(
+            svc.process_incoming_content(&f.group_id, &f.mallory, &leave(&f))
+                .unwrap()
+                .is_empty()
+        );
         assert_eq!(stored(&f), 0);
         assert!(is_member(&f, &f.mallory));
 
         svc.unblock_group(&f.group_id).unwrap();
-        assert_eq!(svc.get_group(&f.group_id).unwrap().unwrap().status, AnonGroupStatus::Active);
-        svc.process_incoming_content(&f.group_id, &f.mallory, &post()).unwrap();
+        assert_eq!(
+            svc.get_group(&f.group_id).unwrap().unwrap().status,
+            AnonGroupStatus::Active
+        );
+        svc.process_incoming_content(&f.group_id, &f.mallory, &post())
+            .unwrap();
         assert_eq!(stored(&f), 1);
     }
 
@@ -609,16 +764,27 @@ mod tests {
     async fn member_blocked_in_group_is_muted_but_their_leave_applies() {
         let f = fixture(AnonGroupRole::Member);
         let svc = f.client.anon_groups();
-        svc.block_user_in_group(&f.group_id, &f.mallory, None).unwrap();
+        svc.block_user_in_group(&f.group_id, &f.mallory, None)
+            .unwrap();
 
-        assert!(svc.process_incoming_content(&f.group_id, &f.mallory, &post()).unwrap().is_empty());
+        assert!(
+            svc.process_incoming_content(&f.group_id, &f.mallory, &post())
+                .unwrap()
+                .is_empty()
+        );
         assert_eq!(stored(&f), 0, "a blocked member's post must not be stored");
         // Others are unaffected.
-        svc.process_incoming_content(&f.group_id, &f.owner, &post()).unwrap();
+        svc.process_incoming_content(&f.group_id, &f.owner, &post())
+            .unwrap();
         assert_eq!(stored(&f), 1);
 
-        let events = svc.process_incoming_content(&f.group_id, &f.mallory, &leave(&f)).unwrap();
-        assert!(matches!(events.as_slice(), [DomainEvent::AnonGroupMemberLeft { .. }]), "{events:?}");
+        let events = svc
+            .process_incoming_content(&f.group_id, &f.mallory, &leave(&f))
+            .unwrap();
+        assert!(
+            matches!(events.as_slice(), [DomainEvent::AnonGroupMemberLeft { .. }]),
+            "{events:?}"
+        );
         assert!(!is_member(&f, &f.mallory));
     }
 
@@ -626,7 +792,9 @@ mod tests {
     async fn leave_from_non_member_is_not_announced() {
         let f = fixture(AnonGroupRole::Member);
         let stranger = UserId::new();
-        let events = f.client.anon_groups()
+        let events = f
+            .client
+            .anon_groups()
             .process_incoming_content(&f.group_id, &stranger, &leave(&f))
             .unwrap();
         assert!(events.is_empty());
@@ -637,24 +805,49 @@ mod tests {
         let f = fixture(AnonGroupRole::Member);
         let conv = ActiveConversation::AnonGroup(f.group_id);
         let res = f.client.remove_conversation_member(conv, &f.mallory).await;
-        assert!(matches!(res, Err(ConversationError::AnonGroup(AnonGroupError::InsufficientPermissions(_)))), "{res:?}");
+        assert!(
+            matches!(
+                res,
+                Err(ConversationError::AnonGroup(
+                    AnonGroupError::InsufficientPermissions(_)
+                ))
+            ),
+            "{res:?}"
+        );
         assert!(is_member(&f, &f.mallory));
 
         let f = fixture(AnonGroupRole::Admin);
         let conv = ActiveConversation::AnonGroup(f.group_id);
         let res = f.client.remove_conversation_member(conv, &f.owner).await;
-        assert!(matches!(res, Err(ConversationError::AnonGroup(AnonGroupError::CannotKickOwner))), "{res:?}");
+        assert!(
+            matches!(
+                res,
+                Err(ConversationError::AnonGroup(
+                    AnonGroupError::CannotKickOwner
+                ))
+            ),
+            "{res:?}"
+        );
         assert!(is_member(&f, &f.owner));
     }
 
     #[tokio::test]
     async fn leaving_drops_the_group_from_this_device() {
         let f = fixture(AnonGroupRole::Member);
-        let row = f.client.sidebar_rows().into_iter().find(|r| r.id == f.group_id.to_string()).unwrap();
+        let row = f
+            .client
+            .sidebar_rows()
+            .into_iter()
+            .find(|r| r.id == f.group_id.to_string())
+            .unwrap();
         assert!(row.can_leave, "a non-owner member is offered Leave");
 
-        let conv = f.client
-            .resolve_row_conversation(&row.id, &crate::domain::message::ConversationType::AnonGroup)
+        let conv = f
+            .client
+            .resolve_row_conversation(
+                &row.id,
+                &crate::domain::message::ConversationType::AnonGroup,
+            )
             .unwrap();
         assert_eq!(conv, ActiveConversation::AnonGroup(f.group_id));
         // The notices cannot be delivered here (no server); the leave still

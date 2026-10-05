@@ -150,9 +150,7 @@ impl GroupMailboxState {
 
     /// Check if we can receive messages (have non-expired mailbox).
     pub fn is_ready_to_receive(&self) -> bool {
-        self.our_mailbox
-            .as_ref()
-            .is_some_and(|m| !m.is_expired())
+        self.our_mailbox.as_ref().is_some_and(|m| !m.is_expired())
     }
 
     /// Get a specific member's mailbox.
@@ -295,12 +293,11 @@ impl GroupMailboxManager {
                 let expires_at = DateTime::parse_from_rfc3339(&expires_at)
                     .map_err(|e| MailboxError::Storage(format!("Invalid expires_at: {}", e)))?
                     .with_timezone(&Utc);
-                let last_polled_at = last_polled_at
-                    .and_then(|s| {
-                        DateTime::parse_from_rfc3339(&s)
-                            .map(|dt| dt.with_timezone(&Utc))
-                            .ok()
-                    });
+                let last_polled_at = last_polled_at.and_then(|s| {
+                    DateTime::parse_from_rfc3339(&s)
+                        .map(|dt| dt.with_timezone(&Utc))
+                        .ok()
+                });
 
                 Ok(Some(GroupMailbox {
                     id,
@@ -356,9 +353,9 @@ impl GroupMailboxManager {
                 .get(3)
                 .map_err(|e| MailboxError::Storage(e.to_string()))?;
 
-            let user_id: UserId = user_id_str
-                .parse()
-                .map_err(|e: uuid::Error| MailboxError::Storage(format!("Invalid user_id: {}", e)))?;
+            let user_id: UserId = user_id_str.parse().map_err(|e: uuid::Error| {
+                MailboxError::Storage(format!("Invalid user_id: {}", e))
+            })?;
 
             let public_key_arr: [u8; 32] = public_key
                 .try_into()
@@ -368,12 +365,11 @@ impl GroupMailboxManager {
                 .map_err(|e| MailboxError::Storage(format!("Invalid received_at: {}", e)))?
                 .with_timezone(&Utc);
 
-            let expires_at = expires_at_str
-                .and_then(|s| {
-                    DateTime::parse_from_rfc3339(&s)
-                        .map(|dt| dt.with_timezone(&Utc))
-                        .ok()
-                });
+            let expires_at = expires_at_str.and_then(|s| {
+                DateTime::parse_from_rfc3339(&s)
+                    .map(|dt| dt.with_timezone(&Utc))
+                    .ok()
+            });
 
             members.insert(
                 user_id,
@@ -406,25 +402,26 @@ impl GroupMailboxManager {
 
         let group_id_str = mailbox.group_id.to_string();
 
-        let rows_affected = conn.execute(
-            "INSERT OR REPLACE INTO group_mailboxes
+        let rows_affected = conn
+            .execute(
+                "INSERT OR REPLACE INTO group_mailboxes
              (id, group_id, mailbox_public_key, mailbox_private_key, signature,
               randomizer, token_id, created_at, expires_at, last_polled_at)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
-            rusqlite::params![
-                mailbox.id,
-                group_id_str,
-                mailbox.public_key.as_slice(),
-                mailbox.private_key.as_slice(),
-                mailbox.signature,
-                mailbox.randomizer,
-                mailbox.token_id,
-                mailbox.created_at.to_rfc3339(),
-                mailbox.expires_at.to_rfc3339(),
-                mailbox.last_polled_at.map(|dt| dt.to_rfc3339())
-            ],
-        )
-        .map_err(|e| MailboxError::Storage(e.to_string()))?;
+                rusqlite::params![
+                    mailbox.id,
+                    group_id_str,
+                    mailbox.public_key.as_slice(),
+                    mailbox.private_key.as_slice(),
+                    mailbox.signature,
+                    mailbox.randomizer,
+                    mailbox.token_id,
+                    mailbox.created_at.to_rfc3339(),
+                    mailbox.expires_at.to_rfc3339(),
+                    mailbox.last_polled_at.map(|dt| dt.to_rfc3339())
+                ],
+            )
+            .map_err(|e| MailboxError::Storage(e.to_string()))?;
 
         tracing::info!(
             group_id = %mailbox.group_id,
@@ -638,18 +635,12 @@ impl GroupMailboxManager {
 
         // Count total rows from both tables (for debugging)
         let server_count: i64 = conn
-            .query_row(
-                "SELECT COUNT(*) FROM group_mailboxes",
-                [],
-                |row| row.get(0),
-            )
+            .query_row("SELECT COUNT(*) FROM group_mailboxes", [], |row| row.get(0))
             .unwrap_or(0);
         let anon_count: i64 = conn
-            .query_row(
-                "SELECT COUNT(*) FROM anon_group_mailboxes",
-                [],
-                |row| row.get(0),
-            )
+            .query_row("SELECT COUNT(*) FROM anon_group_mailboxes", [], |row| {
+                row.get(0)
+            })
             .unwrap_or(0);
 
         tracing::debug!(
@@ -713,9 +704,9 @@ impl GroupMailboxManager {
             // Parse group_id - server groups are UUID strings, anon groups are hex-encoded bytes
             let group_id: ChannelId = if group_id_str.contains('-') {
                 // Standard UUID format: "8c3cbbe0-3342-4bd8-bbd5-ce669d986cbe"
-                group_id_str
-                    .parse()
-                    .map_err(|e: uuid::Error| MailboxError::Storage(format!("Invalid group_id: {}", e)))?
+                group_id_str.parse().map_err(|e: uuid::Error| {
+                    MailboxError::Storage(format!("Invalid group_id: {}", e))
+                })?
             } else {
                 // Hex-encoded 16-byte UUID from anon_group_mailboxes: "8C3CBBE033424BD8BBD5CE669D986CBE"
                 let bytes = hex::decode(&group_id_str)
@@ -737,9 +728,7 @@ impl GroupMailboxManager {
         }
 
         if results.is_empty() {
-            tracing::trace!(
-                "[GROUP_MAILBOX] No active group mailboxes for polling"
-            );
+            tracing::trace!("[GROUP_MAILBOX] No active group mailboxes for polling");
         } else {
             tracing::info!(
                 count = results.len(),
@@ -795,9 +784,9 @@ impl GroupMailboxManager {
                 .get(0)
                 .map_err(|e| MailboxError::Storage(e.to_string()))?;
 
-            let group_id: ChannelId = group_id_str
-                .parse()
-                .map_err(|e: uuid::Error| MailboxError::Storage(format!("Invalid group_id: {}", e)))?;
+            let group_id: ChannelId = group_id_str.parse().map_err(|e: uuid::Error| {
+                MailboxError::Storage(format!("Invalid group_id: {}", e))
+            })?;
 
             results.push(group_id);
         }
@@ -855,9 +844,9 @@ impl GroupMailboxManager {
                 .get(0)
                 .map_err(|e| MailboxError::Storage(e.to_string()))?;
 
-            let group_id: ChannelId = group_id_str
-                .parse()
-                .map_err(|e: uuid::Error| MailboxError::Storage(format!("Invalid group_id: {}", e)))?;
+            let group_id: ChannelId = group_id_str.parse().map_err(|e: uuid::Error| {
+                MailboxError::Storage(format!("Invalid group_id: {}", e))
+            })?;
 
             results.push(group_id);
         }
@@ -1198,10 +1187,9 @@ mod tests {
 
         // Add a member mailbox
         let member_id = UserId::new();
-        state.member_mailboxes.insert(
-            member_id,
-            MemberMailbox::new(member_id, [0u8; 32], None),
-        );
+        state
+            .member_mailboxes
+            .insert(member_id, MemberMailbox::new(member_id, [0u8; 32], None));
 
         assert!(state.is_ready_to_send());
         assert_eq!(state.member_count(), 1);
@@ -1315,7 +1303,12 @@ mod tests {
         let group = ChannelId::new();
 
         let now = Utc::now();
-        let old = make_group_mailbox("a", group, now - Duration::hours(2), now + Duration::hours(22));
+        let old = make_group_mailbox(
+            "a",
+            group,
+            now - Duration::hours(2),
+            now + Duration::hours(22),
+        );
         let new = make_group_mailbox("b", group, now, now + Duration::hours(24));
         mgr.save_our_mailbox(&old).unwrap();
         mgr.save_our_mailbox(&new).unwrap();
@@ -1336,7 +1329,12 @@ mod tests {
         let group = ChannelId::new();
 
         let now = Utc::now();
-        let old = make_group_mailbox("a", group, now - Duration::hours(2), now + Duration::hours(22));
+        let old = make_group_mailbox(
+            "a",
+            group,
+            now - Duration::hours(2),
+            now + Duration::hours(22),
+        );
         let new = make_group_mailbox("b", group, now, now + Duration::hours(24));
         // Insert old last to prove ordering is by created_at, not insertion order.
         mgr.save_our_mailbox(&new).unwrap();
@@ -1356,7 +1354,12 @@ mod tests {
         let group = ChannelId::new();
 
         let now = Utc::now();
-        let expired = make_group_mailbox("a", group, now - Duration::hours(48), now - Duration::hours(1));
+        let expired = make_group_mailbox(
+            "a",
+            group,
+            now - Duration::hours(48),
+            now - Duration::hours(1),
+        );
         let live = make_group_mailbox("b", group, now, now + Duration::hours(24));
         mgr.save_our_mailbox(&expired).unwrap();
         mgr.save_our_mailbox(&live).unwrap();
@@ -1380,11 +1383,20 @@ mod tests {
 
         let now = Utc::now();
         // Threshold is 24h; this row expires in 12h → within the window.
-        let expiring = make_group_mailbox("a", group, now - Duration::hours(36), now + Duration::hours(12));
+        let expiring = make_group_mailbox(
+            "a",
+            group,
+            now - Duration::hours(36),
+            now + Duration::hours(12),
+        );
         mgr.save_our_mailbox(&expiring).unwrap();
 
         let candidates = mgr.get_expiring_group_mailboxes(24).unwrap();
-        assert_eq!(candidates, vec![group], "expiring group must be a rotation candidate");
+        assert_eq!(
+            candidates,
+            vec![group],
+            "expiring group must be a rotation candidate"
+        );
 
         // Rotation mints a fresh row alongside the old (both coexist).
         let fresh = make_group_mailbox("b", group, now, now + Duration::hours(48));
@@ -1409,10 +1421,14 @@ mod tests {
         let group = ChannelId::new();
         let stayed = UserId::new();
         let departed = UserId::new();
-        mgr.save_member_mailbox(&group, &MemberMailbox::new(stayed, [1u8; 32], None)).unwrap();
-        mgr.save_member_mailbox(&group, &MemberMailbox::new(departed, [2u8; 32], None)).unwrap();
+        mgr.save_member_mailbox(&group, &MemberMailbox::new(stayed, [1u8; 32], None))
+            .unwrap();
+        mgr.save_member_mailbox(&group, &MemberMailbox::new(departed, [2u8; 32], None))
+            .unwrap();
 
-        let dropped = mgr.drop_departed_member_mailboxes(&group, &[stayed]).unwrap();
+        let dropped = mgr
+            .drop_departed_member_mailboxes(&group, &[stayed])
+            .unwrap();
         assert_eq!(dropped, 1, "the departed member's mailbox row is removed");
 
         let state = mgr.load_group_state(&group).unwrap().unwrap();
@@ -1426,6 +1442,12 @@ mod tests {
             0,
             "an empty membership read must not wipe the rows we still trust"
         );
-        assert!(mgr.load_group_state(&group).unwrap().unwrap().member_mailboxes.contains_key(&stayed));
+        assert!(
+            mgr.load_group_state(&group)
+                .unwrap()
+                .unwrap()
+                .member_mailboxes
+                .contains_key(&stayed)
+        );
     }
 }

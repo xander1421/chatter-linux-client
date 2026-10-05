@@ -21,20 +21,20 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
-use tokio::sync::{broadcast, Mutex};
+use tokio::sync::{Mutex, broadcast};
 use tokio::task::JoinHandle;
 
 use crate::crypto::envelope_crypto::encrypt_envelope;
 use crate::domain::UserId;
 use crate::events::EventBus;
 use crate::inbox::handlers::DomainEvent;
-use crate::mailbox::dm::{release_bootstrap_lock, BootstrapResponse, DmBootstrap};
+use crate::mailbox::dm::{BootstrapResponse, DmBootstrap, release_bootstrap_lock};
+use crate::network::grpc::AnonymousMailboxClient;
 use crate::network::grpc::auth_client::AuthClient;
 use crate::network::grpc::client_pool::GrpcClientPool;
-use crate::network::grpc::AnonymousMailboxClient;
 use crate::proto::mailbox_v1::EnvelopeType;
-use crate::services::message::{queued_bubble_timestamp, MessageService, PendingFlush};
 use crate::services::SignalService;
+use crate::services::message::{MessageService, PendingFlush, queued_bubble_timestamp};
 use crate::storage::{Database, KeyStore, SettingsRepository};
 use crate::util::time::TimestampNanos;
 
@@ -61,7 +61,13 @@ pub fn spawn_dm_bootstrap_handler_from_bus(
     event_bus: &EventBus,
 ) -> JoinHandle<()> {
     let event_rx = event_bus.subscribe_domain();
-    spawn_dm_bootstrap_handler_with_receiver(database, grpc_pool, message_service, event_rx, event_bus.clone())
+    spawn_dm_bootstrap_handler_with_receiver(
+        database,
+        grpc_pool,
+        message_service,
+        event_rx,
+        event_bus.clone(),
+    )
 }
 
 /// Spawn the DM bootstrap event handler with a custom receiver.
@@ -80,7 +86,8 @@ pub fn spawn_dm_bootstrap_handler_with_receiver(
     // One bootstrap task per peer at a time: two devices answering together
     // must not both find no mailbox of ours and each spend a token on one.
     // one entry per peer ever bootstrapped, never pruned.
-    let peer_turns: Arc<Mutex<HashMap<UserId, Arc<Mutex<()>>>>> = Arc::new(Mutex::new(HashMap::new()));
+    let peer_turns: Arc<Mutex<HashMap<UserId, Arc<Mutex<()>>>>> =
+        Arc::new(Mutex::new(HashMap::new()));
 
     // Get user ID from grpc_pool for UUID comparison
     let auth_user_id = grpc_pool.auth_info().user_id.clone();
@@ -371,7 +378,12 @@ async fn handle_bootstrap_request_async(
     let peer_id_str = peer_id.to_string();
 
     let sealed_ciphertext = signal_service
-        .encrypt_message(&mut auth_client, &peer_id_str, peer_device_id, &bootstrap_result.bootstrap_message)
+        .encrypt_message(
+            &mut auth_client,
+            &peer_id_str,
+            peer_device_id,
+            &bootstrap_result.bootstrap_message,
+        )
         .await
         .map_err(|e| format!("Failed to encrypt bootstrap: {}", e))?;
 
@@ -462,7 +474,12 @@ async fn handle_bootstrap_async(
     // Process the incoming bootstrap
     tracing::info!(peer = %peer_id, "BOOTSTRAP[3/4] Calling handle_incoming_bootstrap");
     let response = match dm_bootstrap
-        .handle_incoming_bootstrap(peer_id, peer_device_id, ephemeral_public_key, &mut anon_mailbox_client)
+        .handle_incoming_bootstrap(
+            peer_id,
+            peer_device_id,
+            ephemeral_public_key,
+            &mut anon_mailbox_client,
+        )
         .await
     {
         Ok(Some(resp)) => {
@@ -548,9 +565,9 @@ pub(crate) async fn send_pending_messages_after_bootstrap(
     // Self-syncs what goes out, as the initiator's flush (`send_dm_content`) does.
     message_service: &MessageService,
 ) -> Option<PendingFlush> {
-    use prost::Message as ProstMessage;
     use crate::mailbox::dm::DmConversationManager;
     use crate::storage::repositories::PendingDmRepository;
+    use prost::Message as ProstMessage;
 
     let pending = match PendingDmRepository::new(database.clone()).drain(&peer_id) {
         Ok(msgs) => msgs,
@@ -588,7 +605,10 @@ pub(crate) async fn send_pending_messages_after_bootstrap(
                 .map(|(m, key)| (key, m.clone()));
             let Some((key, mailbox)) = ready else {
                 for (decoded, _) in queued {
-                    flush.record(decoded.as_ref().and_then(queued_bubble_timestamp), Err("no mailbox keys after bootstrap".into()));
+                    flush.record(
+                        decoded.as_ref().and_then(queued_bubble_timestamp),
+                        Err("no mailbox keys after bootstrap".into()),
+                    );
                 }
                 return Some(flush);
             };
@@ -603,13 +623,19 @@ pub(crate) async fn send_pending_messages_after_bootstrap(
         }
         Ok(None) => {
             for (decoded, _) in queued {
-                flush.record(decoded.as_ref().and_then(queued_bubble_timestamp), Err("no conversation state after bootstrap".into()));
+                flush.record(
+                    decoded.as_ref().and_then(queued_bubble_timestamp),
+                    Err("no conversation state after bootstrap".into()),
+                );
             }
             return Some(flush);
         }
         Err(e) => {
             for (decoded, _) in queued {
-                flush.record(decoded.as_ref().and_then(queued_bubble_timestamp), Err(e.to_string()));
+                flush.record(
+                    decoded.as_ref().and_then(queued_bubble_timestamp),
+                    Err(e.to_string()),
+                );
             }
             return Some(flush);
         }
@@ -627,7 +653,18 @@ pub(crate) async fn send_pending_messages_after_bootstrap(
             None => Ok(()),
         };
         let result = match snapshot {
-            Ok(()) => deposit(signal_service, auth_client, &mut anon_mailbox_client, &peer_id, &peer_mailbox, &send_key, &content).await,
+            Ok(()) => {
+                deposit(
+                    signal_service,
+                    auth_client,
+                    &mut anon_mailbox_client,
+                    &peer_id,
+                    &peer_mailbox,
+                    &send_key,
+                    &content,
+                )
+                .await
+            }
             Err(e) => Err(e),
         };
         if let Err(e) = &result {
@@ -640,7 +677,9 @@ pub(crate) async fn send_pending_messages_after_bootstrap(
             }
             // Self-synced when delivered, never when queued (F61 note b).
             if let Some(decoded) = &decoded {
-                message_service.sync_sent_to_own_devices(auth_client, &peer_id, decoded).await;
+                message_service
+                    .sync_sent_to_own_devices(auth_client, &peer_id, decoded)
+                    .await;
             }
         }
         flush.record(decoded.as_ref().and_then(queued_bubble_timestamp), result);
@@ -651,12 +690,24 @@ pub(crate) async fn send_pending_messages_after_bootstrap(
     match conversations.drain_device_queue(&peer_id, peer_device_id) {
         Ok(owed) => {
             for content in owed {
-                if let Err(e) = deposit(signal_service, auth_client, &mut anon_mailbox_client, &peer_id, &peer_mailbox, &send_key, &content).await {
+                if let Err(e) = deposit(
+                    signal_service,
+                    auth_client,
+                    &mut anon_mailbox_client,
+                    &peer_id,
+                    &peer_mailbox,
+                    &send_key,
+                    &content,
+                )
+                .await
+                {
                     tracing::warn!(peer = %peer_id, peer_device_id, error = %e, "Owed copy to a late device lost");
                 }
             }
         }
-        Err(e) => tracing::warn!(peer = %peer_id, peer_device_id, error = %e, "Owed copies: drain failed"),
+        Err(e) => {
+            tracing::warn!(peer = %peer_id, peer_device_id, error = %e, "Owed copies: drain failed")
+        }
     }
 
     tracing::info!(
@@ -678,9 +729,22 @@ async fn deposit(
     send_key: &[u8; 32],
     content: &[u8],
 ) -> Result<(), String> {
-    for envelope in seal_for_peer_mailbox(signal_service, auth_client, peer_id, peer_mailbox.device_id, content, send_key).await? {
+    for envelope in seal_for_peer_mailbox(
+        signal_service,
+        auth_client,
+        peer_id,
+        peer_mailbox.device_id,
+        content,
+        send_key,
+    )
+    .await?
+    {
         anon_mailbox_client
-            .send_to_ephemeral_mailbox(peer_mailbox.public_key.to_vec(), envelope, EnvelopeType::Message as i32)
+            .send_to_ephemeral_mailbox(
+                peer_mailbox.public_key.to_vec(),
+                envelope,
+                EnvelopeType::Message as i32,
+            )
             .await
             .map_err(|e| format!("mailbox send: {e}"))?;
     }
@@ -704,7 +768,12 @@ pub async fn seal_for_peer_mailbox(
     send_key: &[u8; 32],
 ) -> Result<Vec<Vec<u8>>, String> {
     signal_service
-        .encrypt_message_session_devices(auth_client, &peer_id.to_string(), vec![peer_device_id], plaintext)
+        .encrypt_message_session_devices(
+            auth_client,
+            &peer_id.to_string(),
+            vec![peer_device_id],
+            plaintext,
+        )
         .await
         .map_err(|e| format!("Signal encrypt: {e}"))?
         .into_values()

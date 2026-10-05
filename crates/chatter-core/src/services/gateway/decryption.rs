@@ -1,8 +1,8 @@
 //! Decryption operations for the message gateway.
 
 use libsignal_protocol::{
-    extract_decryption_error_message_from_serialized_content, CiphertextMessageType,
-    DecryptionErrorMessage, PlaintextContent, Timestamp,
+    CiphertextMessageType, DecryptionErrorMessage, PlaintextContent, Timestamp,
+    extract_decryption_error_message_from_serialized_content,
 };
 use prost::Message as ProstMessage;
 use zeroize::Zeroize;
@@ -41,8 +41,8 @@ pub(crate) fn unratcheted_plaintext_rejected(sender: &str) -> ServiceError {
 }
 
 use super::block_filter::sender_is_blocked;
-use super::{CallHangupReason, DecryptResult, DmContent, MessageGateway, SealedSenderResult};
 use super::inbound::content_type_name;
+use super::{CallHangupReason, DecryptResult, DmContent, MessageGateway, SealedSenderResult};
 
 impl MessageGateway {
     /// Process an incoming sealed sender message.
@@ -109,14 +109,18 @@ impl MessageGateway {
                 self.handle_decryption_error_report(&sender_address, &plaintext)
                     .await
             } else {
-                Err(unratcheted_plaintext_rejected(&sender_address.name().to_string()))
+                Err(unratcheted_plaintext_rejected(
+                    &sender_address.name().to_string(),
+                ))
             };
             plaintext.zeroize();
             return result;
         }
 
         // Use a scope guard to ensure plaintext is always zeroized
-        let result = self.process_incoming_message_inner(&sender_address, &plaintext).await;
+        let result = self
+            .process_incoming_message_inner(&sender_address, &plaintext)
+            .await;
 
         // Zeroize decrypted plaintext before returning (security: prevent heap residue)
         plaintext.zeroize();
@@ -354,9 +358,13 @@ impl MessageGateway {
 
             // Check for SenderKeyRequest - someone wants our SKDM
             if let Some(content::Content::SenderKeyRequest(request)) = content_proto.content {
-                let channel_id: crate::domain::ids::ChannelId = request.channel_id.parse().map_err(|e| {
-                    ServiceError::Validation(format!("Invalid channel_id in SenderKeyRequest: {}", e))
-                })?;
+                let channel_id: crate::domain::ids::ChannelId =
+                    request.channel_id.parse().map_err(|e| {
+                        ServiceError::Validation(format!(
+                            "Invalid channel_id in SenderKeyRequest: {}",
+                            e
+                        ))
+                    })?;
                 tracing::info!(
                     sender_id = %sender_id,
                     channel_id = %channel_id,
@@ -370,9 +378,10 @@ impl MessageGateway {
 
             // Handle SenderKey (SKDM) - someone is distributing their sender key to us
             if let Some(content::Content::SenderKey(skdm)) = content_proto.content {
-                let channel_id: crate::domain::ids::ChannelId = skdm.channel_id.parse().map_err(|e| {
-                    ServiceError::Validation(format!("Invalid channel_id in SenderKey: {}", e))
-                })?;
+                let channel_id: crate::domain::ids::ChannelId =
+                    skdm.channel_id.parse().map_err(|e| {
+                        ServiceError::Validation(format!("Invalid channel_id in SenderKey: {}", e))
+                    })?;
                 tracing::info!(
                     sender_id = %sender_id,
                     channel_id = %channel_id,
@@ -385,8 +394,9 @@ impl MessageGateway {
                 // devices install under the wrong address and group messages from
                 // those devices fail to decrypt.
                 let sender_device_id: u32 = sender_address.device_id().into();
-                let Some(profile_key_changed) =
-                    self.accept_skdm(&sender_id, sender_device_id, &channel_id, &skdm).await?
+                let Some(profile_key_changed) = self
+                    .accept_skdm(&sender_id, sender_device_id, &channel_id, &skdm)
+                    .await?
                 else {
                     // Not stored: the sender is outside our verified membership.
                     return Ok(SealedSenderResult::MessageStored);
@@ -406,10 +416,15 @@ impl MessageGateway {
             }
 
             // Handle GroupMailboxAddress - member is announcing their ephemeral mailbox (NDSS '21)
-            if let Some(content::Content::GroupMailboxAddress(announcement)) = content_proto.content {
-                let channel_id: crate::domain::ids::ChannelId = announcement.channel_id.parse().map_err(|e| {
-                    ServiceError::Validation(format!("Invalid channel_id in GroupMailboxAddress: {}", e))
-                })?;
+            if let Some(content::Content::GroupMailboxAddress(announcement)) = content_proto.content
+            {
+                let channel_id: crate::domain::ids::ChannelId =
+                    announcement.channel_id.parse().map_err(|e| {
+                        ServiceError::Validation(format!(
+                            "Invalid channel_id in GroupMailboxAddress: {}",
+                            e
+                        ))
+                    })?;
                 tracing::info!(
                     sender_id = %sender_id,
                     channel_id = %channel_id,
@@ -615,7 +630,13 @@ impl MessageGateway {
         // talked to. Sessions are established over sealed sender, whose
         // certificate names the sender.
         let session_key = format!("{}:{}", sender_id, sender_device_id);
-        if self.signal_service.key_store.load_session(&session_key).map_err(ServiceError::Storage)?.is_none() {
+        if self
+            .signal_service
+            .key_store
+            .load_session(&session_key)
+            .map_err(ServiceError::Storage)?
+            .is_none()
+        {
             tracing::warn!(%sender_id, sender_device_id,
                 "Identified message with no session for the sender; refusing to start one");
             return Err(ServiceError::Crypto(CryptoError::Protocol(
@@ -659,7 +680,9 @@ impl MessageGateway {
                 sender_id = %sender_id,
                 "GATEWAY: dropping identified-sender message from a blocked sender"
             );
-            return Ok(SealedSenderResult::DroppedBlockedSender { sender_id: *sender_id });
+            return Ok(SealedSenderResult::DroppedBlockedSender {
+                sender_id: *sender_id,
+            });
         }
 
         // First try to parse as Content proto (preferred, contains KeyExchange)
@@ -683,7 +706,9 @@ impl MessageGateway {
 
             // Handle DataMessage inside Content
             if let Some(content::Content::DataMessage(data_message)) = content_proto.content {
-                return self.store_data_message(data_message, Some(*sender_id)).await;
+                return self
+                    .store_data_message(data_message, Some(*sender_id))
+                    .await;
             }
 
             // Other content types
@@ -768,7 +793,10 @@ impl MessageGateway {
             );
 
             let mut dm_content = Self::parse_content(content_proto)?;
-            if let DmContent::KeyExchange { sender_device_id, .. } = &mut dm_content {
+            if let DmContent::KeyExchange {
+                sender_device_id, ..
+            } = &mut dm_content
+            {
                 *sender_device_id = u32::from(sender_address.device_id());
             }
             tracing::info!(sender_id = %sender_id, dm_content_type = ?std::mem::discriminant(&dm_content), "DM_DECRYPT: Content parsed to DmContent");
@@ -827,7 +855,11 @@ impl MessageGateway {
             Some(content::Content::Typing(msg)) => {
                 tracing::info!(
                     action = msg.action,
-                    action_name = if msg.action == 1 { "STARTED" } else { "STOPPED" },
+                    action_name = if msg.action == 1 {
+                        "STARTED"
+                    } else {
+                        "STOPPED"
+                    },
                     timestamp = msg.timestamp,
                     "DM_DECRYPT: Parsed Typing content from peer"
                 );
@@ -836,31 +868,26 @@ impl MessageGateway {
                     timestamp: msg.timestamp,
                 })
             }
-            Some(content::Content::Receipt(msg)) => {
-                Ok(DmContent::Receipt {
-                    receipt_type: msg.r#type,
-                    timestamps: msg.timestamps,
-                })
-            }
-            Some(content::Content::Reaction(msg)) => {
-                Ok(DmContent::Reaction {
-                    emoji: msg.emoji,
-                    remove: msg.remove,
-                    target_author_aci: msg.target_author_aci,
-                    target_sent_timestamp: msg.target_sent_timestamp,
-                    timestamp: msg.timestamp,
-                })
-            }
-            Some(content::Content::Pin(msg)) => {
-                Ok(DmContent::Pin {
-                    target_author_aci: msg.target_author_aci,
-                    target_sent_timestamp: msg.target_sent_timestamp,
-                    unpin: msg.unpin,
-                    timestamp: msg.timestamp,
-                })
-            }
+            Some(content::Content::Receipt(msg)) => Ok(DmContent::Receipt {
+                receipt_type: msg.r#type,
+                timestamps: msg.timestamps,
+            }),
+            Some(content::Content::Reaction(msg)) => Ok(DmContent::Reaction {
+                emoji: msg.emoji,
+                remove: msg.remove,
+                target_author_aci: msg.target_author_aci,
+                target_sent_timestamp: msg.target_sent_timestamp,
+                timestamp: msg.timestamp,
+            }),
+            Some(content::Content::Pin(msg)) => Ok(DmContent::Pin {
+                target_author_aci: msg.target_author_aci,
+                target_sent_timestamp: msg.target_sent_timestamp,
+                unpin: msg.unpin,
+                timestamp: msg.timestamp,
+            }),
             Some(content::Content::Edit(msg)) => {
-                let (new_body, edit_timestamp) = msg.data_message
+                let (new_body, edit_timestamp) = msg
+                    .data_message
                     .map(|dm| (dm.body, dm.timestamp))
                     .unwrap_or_default();
                 Ok(DmContent::Edit {
@@ -872,12 +899,16 @@ impl MessageGateway {
             Some(content::Content::DeleteForMeSync(_)) => {
                 // Own-device only (`sync_to_own_devices`, device inbox): on
                 // the mailbox it can only come from a peer.
-                Err(ServiceError::Validation("DeleteForMeSync received on DM mailbox path".into()))
+                Err(ServiceError::Validation(
+                    "DeleteForMeSync received on DM mailbox path".into(),
+                ))
             }
             Some(content::Content::SavedMessageSync(_)) => {
                 // Own-device only (saved.rs sends it to our device inbox): on
                 // the mailbox it can only come from a peer.
-                Err(ServiceError::Validation("SavedMessageSync received on DM mailbox path".into()))
+                Err(ServiceError::Validation(
+                    "SavedMessageSync received on DM mailbox path".into(),
+                ))
             }
             Some(content::Content::KeyExchange(kx)) => {
                 // Key exchange received in DM mailbox (bootstrap response from peer)
@@ -892,13 +923,13 @@ impl MessageGateway {
             Some(content::Content::CallKey(call_key)) => {
                 // Call key exchange with ephemeral keys for PFS
                 // key_material contains ephemeral X25519 public key (32 bytes)
-                let ephemeral_pk: [u8; 32] = call_key.key_material
-                    .as_slice()
-                    .try_into()
-                    .map_err(|_| ServiceError::Validation(format!(
-                        "Invalid ephemeral key length: {} (expected 32)",
-                        call_key.key_material.len()
-                    )))?;
+                let ephemeral_pk: [u8; 32] =
+                    call_key.key_material.as_slice().try_into().map_err(|_| {
+                        ServiceError::Validation(format!(
+                            "Invalid ephemeral key length: {} (expected 32)",
+                            call_key.key_material.len()
+                        ))
+                    })?;
 
                 if call_key.is_offer {
                     // Offer from caller - they're initiating a call
@@ -925,17 +956,23 @@ impl MessageGateway {
                     Some(Signal::Ring(_)) => GroupCallSignal::Ring,
                     Some(Signal::KeyRequest(_)) => GroupCallSignal::KeyRequest,
                     Some(Signal::Key(update)) => {
-                        let key: [u8; 32] = update.key_material.as_slice().try_into().map_err(|_| {
-                            ServiceError::Validation(format!(
-                                "Invalid group call key length: {} (expected 32)",
-                                update.key_material.len()
-                            ))
-                        })?;
+                        let key: [u8; 32] =
+                            update.key_material.as_slice().try_into().map_err(|_| {
+                                ServiceError::Validation(format!(
+                                    "Invalid group call key length: {} (expected 32)",
+                                    update.key_material.len()
+                                ))
+                            })?;
                         // Epoch 0 is a participant's own starting key, never sent.
                         if update.key_epoch == 0 {
-                            return Err(ServiceError::Validation("group call key at epoch 0".into()));
+                            return Err(ServiceError::Validation(
+                                "group call key at epoch 0".into(),
+                            ));
                         }
-                        GroupCallSignal::Key { key, epoch: update.key_epoch }
+                        GroupCallSignal::Key {
+                            key,
+                            epoch: update.key_epoch,
+                        }
                     }
                     None => return Err(ServiceError::Validation("empty group call signal".into())),
                 };
@@ -955,8 +992,12 @@ impl MessageGateway {
                     Ok(call_hangup::Reason::Busy) => CallHangupReason::Busy,
                     Ok(call_hangup::Reason::Timeout) => CallHangupReason::Timeout,
                     Ok(call_hangup::Reason::NetworkError) => CallHangupReason::NetworkError,
-                    Ok(call_hangup::Reason::AcceptedElsewhere) => CallHangupReason::AcceptedElsewhere,
-                    Ok(call_hangup::Reason::DeclinedElsewhere) => CallHangupReason::DeclinedElsewhere,
+                    Ok(call_hangup::Reason::AcceptedElsewhere) => {
+                        CallHangupReason::AcceptedElsewhere
+                    }
+                    Ok(call_hangup::Reason::DeclinedElsewhere) => {
+                        CallHangupReason::DeclinedElsewhere
+                    }
                     _ => CallHangupReason::Normal,
                 };
                 Ok(DmContent::CallHangup {
@@ -965,34 +1006,32 @@ impl MessageGateway {
                     timestamp: hangup.timestamp,
                 })
             }
-            Some(content::Content::SenderKey(_)) |
-            Some(content::Content::GroupEncrypted(_)) |
-            Some(content::Content::SenderKeyRequest(_)) => {
+            Some(content::Content::SenderKey(_))
+            | Some(content::Content::GroupEncrypted(_))
+            | Some(content::Content::SenderKeyRequest(_)) => {
                 // Group messages shouldn't come through DM path
-                Err(ServiceError::Validation("Group message received on DM path".into()))
+                Err(ServiceError::Validation(
+                    "Group message received on DM path".into(),
+                ))
             }
             // Anonymous group messages (NDSS'21 style - sent via pairwise DM)
-            Some(content::Content::AnonGroupInvite(invite)) => {
-                Ok(DmContent::AnonGroupInvite {
-                    group_id: invite.group_id,
-                    group_name: invite.group_name,
-                    inviter_mailbox_pk: invite.inviter_mailbox_pk,
-                    timestamp: invite.timestamp,
-                    profile_key: invite.profile_key,
-                    encrypted_display_name: invite.encrypted_display_name,
-                    encrypted_avatar: invite.encrypted_avatar,
-                })
-            }
-            Some(content::Content::AnonGroupJoinAck(ack)) => {
-                Ok(DmContent::AnonGroupJoinAck {
-                    group_id: ack.group_id,
-                    joiner_mailbox_pk: ack.joiner_mailbox_pk,
-                    timestamp: ack.timestamp,
-                    profile_key: ack.profile_key,
-                    encrypted_display_name: ack.encrypted_display_name,
-                    encrypted_avatar: ack.encrypted_avatar,
-                })
-            }
+            Some(content::Content::AnonGroupInvite(invite)) => Ok(DmContent::AnonGroupInvite {
+                group_id: invite.group_id,
+                group_name: invite.group_name,
+                inviter_mailbox_pk: invite.inviter_mailbox_pk,
+                timestamp: invite.timestamp,
+                profile_key: invite.profile_key,
+                encrypted_display_name: invite.encrypted_display_name,
+                encrypted_avatar: invite.encrypted_avatar,
+            }),
+            Some(content::Content::AnonGroupJoinAck(ack)) => Ok(DmContent::AnonGroupJoinAck {
+                group_id: ack.group_id,
+                joiner_mailbox_pk: ack.joiner_mailbox_pk,
+                timestamp: ack.timestamp,
+                profile_key: ack.profile_key,
+                encrypted_display_name: ack.encrypted_display_name,
+                encrypted_avatar: ack.encrypted_avatar,
+            }),
             Some(content::Content::AnonGroupMemberList(list)) => {
                 Ok(DmContent::AnonGroupMemberList {
                     group_id: list.group_id,
@@ -1000,20 +1039,16 @@ impl MessageGateway {
                     timestamp: list.timestamp,
                 })
             }
-            Some(content::Content::AnonGroupLeave(leave)) => {
-                Ok(DmContent::AnonGroupLeave {
-                    group_id: leave.group_id,
-                    timestamp: leave.timestamp,
-                })
-            }
-            Some(content::Content::AnonGroupKick(kick)) => {
-                Ok(DmContent::AnonGroupKick {
-                    group_id: kick.group_id,
-                    kicked_user_id: kick.kicked_user_id,
-                    admin_signature: kick.admin_signature,
-                    timestamp: kick.timestamp,
-                })
-            }
+            Some(content::Content::AnonGroupLeave(leave)) => Ok(DmContent::AnonGroupLeave {
+                group_id: leave.group_id,
+                timestamp: leave.timestamp,
+            }),
+            Some(content::Content::AnonGroupKick(kick)) => Ok(DmContent::AnonGroupKick {
+                group_id: kick.group_id,
+                kicked_user_id: kick.kicked_user_id,
+                admin_signature: kick.admin_signature,
+                timestamp: kick.timestamp,
+            }),
             Some(content::Content::AnonGroupUpdate(update)) => {
                 let timestamp = update.timestamp;
                 Ok(DmContent::AnonGroupUpdate {
@@ -1022,61 +1057,51 @@ impl MessageGateway {
                     timestamp,
                 })
             }
-            Some(content::Content::AnonGroupMessage(msg)) => {
-                Ok(DmContent::AnonGroupMessage {
-                    group_id: msg.group_id,
-                    inner_content: msg.inner_content.ok_or_else(|| {
-                        ServiceError::Validation("AnonGroupMessage missing inner_content".into())
-                    })?,
-                })
-            }
+            Some(content::Content::AnonGroupMessage(msg)) => Ok(DmContent::AnonGroupMessage {
+                group_id: msg.group_id,
+                inner_content: msg.inner_content.ok_or_else(|| {
+                    ServiceError::Validation("AnonGroupMessage missing inner_content".into())
+                })?,
+            }),
             // Anonymous DM content types
-            Some(content::Content::AnonDmRequest(request)) => {
-                Ok(DmContent::AnonDmRequest {
-                    conversation_id: request.conversation_id,
-                    initiator_mailbox_pk: request.initiator_mailbox_pk,
-                    intro_message: if request.intro_message.is_empty() {
-                        None
-                    } else {
-                        Some(request.intro_message)
-                    },
-                    profile_key: request.profile_key,
-                    encrypted_display_name: request.encrypted_display_name,
-                    encrypted_avatar: request.encrypted_avatar,
-                    timestamp: request.timestamp,
-                })
-            }
-            Some(content::Content::AnonDmAccept(accept)) => {
-                Ok(DmContent::AnonDmAccept {
-                    conversation_id: accept.conversation_id,
-                    responder_mailbox_pk: accept.responder_mailbox_pk,
-                    profile_key: accept.profile_key,
-                    encrypted_display_name: accept.encrypted_display_name,
-                    encrypted_avatar: accept.encrypted_avatar,
-                    timestamp: accept.timestamp,
-                })
-            }
-            Some(content::Content::AnonDmMessage(msg)) => {
-                Ok(DmContent::AnonDmMessage {
-                    conversation_id: msg.conversation_id,
-                    inner_content: msg.inner_content.ok_or_else(|| {
-                        ServiceError::Validation("AnonDmMessage missing inner_content".into())
-                    })?,
-                })
-            }
+            Some(content::Content::AnonDmRequest(request)) => Ok(DmContent::AnonDmRequest {
+                conversation_id: request.conversation_id,
+                initiator_mailbox_pk: request.initiator_mailbox_pk,
+                intro_message: if request.intro_message.is_empty() {
+                    None
+                } else {
+                    Some(request.intro_message)
+                },
+                profile_key: request.profile_key,
+                encrypted_display_name: request.encrypted_display_name,
+                encrypted_avatar: request.encrypted_avatar,
+                timestamp: request.timestamp,
+            }),
+            Some(content::Content::AnonDmAccept(accept)) => Ok(DmContent::AnonDmAccept {
+                conversation_id: accept.conversation_id,
+                responder_mailbox_pk: accept.responder_mailbox_pk,
+                profile_key: accept.profile_key,
+                encrypted_display_name: accept.encrypted_display_name,
+                encrypted_avatar: accept.encrypted_avatar,
+                timestamp: accept.timestamp,
+            }),
+            Some(content::Content::AnonDmMessage(msg)) => Ok(DmContent::AnonDmMessage {
+                conversation_id: msg.conversation_id,
+                inner_content: msg.inner_content.ok_or_else(|| {
+                    ServiceError::Validation("AnonDmMessage missing inner_content".into())
+                })?,
+            }),
             // L4 mailbox rotation announce: peer minted a new mailbox and wants
             // future sends directed there. Does not touch the ratchet.
-            Some(content::Content::DmMailboxRotation(rotation)) => {
-                Ok(DmContent::MailboxRotation {
-                    new_mailbox_pk: rotation.new_mailbox_pk,
-                })
-            }
+            Some(content::Content::DmMailboxRotation(rotation)) => Ok(DmContent::MailboxRotation {
+                new_mailbox_pk: rotation.new_mailbox_pk,
+            }),
             // Session switch after the peer reset its sessions with us: the
             // decrypt that produced this already adopted the new session.
             Some(content::Content::NullMessage(_)) => Ok(DmContent::NullMessage),
-            _ => {
-                Err(ServiceError::Validation("Unknown or empty content type".into()))
-            }
+            _ => Err(ServiceError::Validation(
+                "Unknown or empty content type".into(),
+            )),
         }
     }
 
@@ -1130,7 +1155,10 @@ impl MessageGateway {
         // name and avatar. Stored against the sealed-sender-authenticated
         // sender only — the key is theirs; a blocked sender never reaches
         // this point (checked by the caller).
-        Ok(Some(self.store_skdm_profile_key(sender_id, skdm.profile_key.as_deref())))
+        Ok(Some(self.store_skdm_profile_key(
+            sender_id,
+            skdm.profile_key.as_deref(),
+        )))
     }
 
     pub async fn process_group_encrypted_message(
@@ -1220,9 +1248,16 @@ impl MessageGateway {
                 // ahead is recorded; `MessageService::sync_channel_state_if_behind`
                 // has the channel service fetch the changes.
                 if let Some(content::Content::DataMessage(dm)) =
-                    Content::decode(plaintext.as_slice()).ok().and_then(|c| c.content)
+                    Content::decode(plaintext.as_slice())
+                        .ok()
+                        .and_then(|c| c.content)
                 {
-                    gate.cross_check(&channel_id, true, dm.group_state_revision, &dm.group_state_hash);
+                    gate.cross_check(
+                        &channel_id,
+                        true,
+                        dm.group_state_revision,
+                        &dm.group_state_hash,
+                    );
                 }
                 tracing::info!(
                     sender_id = %sender_id,
@@ -1270,7 +1305,6 @@ impl MessageGateway {
     }
 }
 
-
 #[cfg(test)]
 mod thread_id_tests {
     //! Regression test for a real bug: `DmContent::Text` (and, downstream,
@@ -1289,15 +1323,28 @@ mod thread_id_tests {
     #[test]
     fn parse_content_carries_the_edit_timestamp() {
         let content = Content {
-            content: Some(content::Content::Edit(crate::proto::content_v1::EditMessage {
-                target_sent_timestamp: 100,
-                data_message: Some(DataMessage { body: "fixed".into(), timestamp: 150, ..Default::default() }),
-            })),
+            content: Some(content::Content::Edit(
+                crate::proto::content_v1::EditMessage {
+                    target_sent_timestamp: 100,
+                    data_message: Some(DataMessage {
+                        body: "fixed".into(),
+                        timestamp: 150,
+                        ..Default::default()
+                    }),
+                },
+            )),
             ..Default::default()
         };
         match MessageGateway::parse_content(content).expect("parse_content failed") {
-            DmContent::Edit { target_sent_timestamp, new_body, edit_timestamp } => {
-                assert_eq!((target_sent_timestamp, new_body.as_str(), edit_timestamp), (100, "fixed", 150));
+            DmContent::Edit {
+                target_sent_timestamp,
+                new_body,
+                edit_timestamp,
+            } => {
+                assert_eq!(
+                    (target_sent_timestamp, new_body.as_str(), edit_timestamp),
+                    (100, "fixed", 150)
+                );
             }
             other => panic!("expected DmContent::Edit, got {other:?}"),
         }
@@ -1310,17 +1357,37 @@ mod thread_id_tests {
     fn group_call_signals_parse_and_epoch_zero_keys_are_refused() {
         use crate::domain::call::GroupCallSignal;
         use crate::services::gateway::build_group_call_signal_content;
-        let parse = |s| MessageGateway::parse_content(build_group_call_signal_content("c", "ch", s));
-        for signal in [GroupCallSignal::Ring, GroupCallSignal::KeyRequest, GroupCallSignal::Key { key: [3; 32], epoch: 2 }] {
+        let parse =
+            |s| MessageGateway::parse_content(build_group_call_signal_content("c", "ch", s));
+        for signal in [
+            GroupCallSignal::Ring,
+            GroupCallSignal::KeyRequest,
+            GroupCallSignal::Key {
+                key: [3; 32],
+                epoch: 2,
+            },
+        ] {
             match parse(signal).expect("parse_content failed") {
-                DmContent::GroupCallSignal { call_id, channel_id, signal: parsed, .. } => {
+                DmContent::GroupCallSignal {
+                    call_id,
+                    channel_id,
+                    signal: parsed,
+                    ..
+                } => {
                     assert_eq!((call_id.as_str(), channel_id.as_str()), ("c", "ch"));
                     assert_eq!(parsed, signal);
                 }
                 other => panic!("expected DmContent::GroupCallSignal, got {other:?}"),
             }
         }
-        assert!(parse(GroupCallSignal::Key { key: [3; 32], epoch: 0 }).is_err(), "epoch-0 key accepted");
+        assert!(
+            parse(GroupCallSignal::Key {
+                key: [3; 32],
+                epoch: 0
+            })
+            .is_err(),
+            "epoch-0 key accepted"
+        );
     }
 
     #[test]
@@ -1362,7 +1429,10 @@ mod thread_id_tests {
         let parsed = MessageGateway::parse_content(content).expect("parse_content failed");
         match parsed {
             DmContent::Text { thread_id, .. } => {
-                assert_eq!(thread_id, None, "empty wire thread_id must map to None, not Some(\"\")");
+                assert_eq!(
+                    thread_id, None,
+                    "empty wire thread_id must map to None, not Some(\"\")"
+                );
             }
             other => panic!("expected DmContent::Text, got {other:?}"),
         }
@@ -1379,12 +1449,15 @@ mod null_message_tests {
     #[test]
     fn null_message_parses_as_handled_no_op() {
         let content = Content {
-            content: Some(content::Content::NullMessage(crate::proto::content_v1::NullMessage::default())),
+            content: Some(content::Content::NullMessage(
+                crate::proto::content_v1::NullMessage::default(),
+            )),
             padding: vec![0; 200],
             ..Default::default()
         };
         assert_eq!(content_type_name(&content.content), "NullMessage");
-        let parsed = MessageGateway::parse_content(content).expect("NullMessage must not be an error");
+        let parsed =
+            MessageGateway::parse_content(content).expect("NullMessage must not be an error");
         assert!(matches!(parsed, DmContent::NullMessage), "got {parsed:?}");
     }
 }
@@ -1393,5 +1466,7 @@ mod null_message_tests {
 /// its plaintext in `Content` (the bare-`DataMessage` and raw-UTF-8 fallbacks
 /// that used to accept anything here were removed), so this is refused.
 fn not_content(len: usize) -> ServiceError {
-    ServiceError::Validation(format!("decrypted plaintext ({len} bytes) is not a Content proto"))
+    ServiceError::Validation(format!(
+        "decrypted plaintext ({len} bytes) is not a Content proto"
+    ))
 }

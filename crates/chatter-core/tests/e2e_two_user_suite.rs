@@ -57,7 +57,12 @@ fn unique_user(prefix: &str) -> String {
         .as_millis();
     let mut rng_bytes = [0u8; 4];
     rand::RngCore::fill_bytes(&mut rand::rng(), &mut rng_bytes);
-    format!("{}_{:x}_{}", prefix, u32::from_le_bytes(rng_bytes), ts % 100000)
+    format!(
+        "{}_{:x}_{}",
+        prefix,
+        u32::from_le_bytes(rng_bytes),
+        ts % 100000
+    )
 }
 
 /// Wait for a specific DomainEvent predicate on the event bus, with timeout.
@@ -98,7 +103,14 @@ async fn register_and_start(
 ) -> UserId {
     client.connect().await.expect("connect failed");
     let result = client
-        .register(username, PASSWORD, display_name, "e2e-test", None, Some(PIN))
+        .register(
+            username,
+            PASSWORD,
+            display_name,
+            "e2e-test",
+            None,
+            Some(PIN),
+        )
         .await
         .expect("registration failed");
     if let Err(e) = client.start().await {
@@ -147,10 +159,7 @@ async fn t1_registration() {
         !res_b.user_id.to_string().is_empty(),
         "User B should have a user_id"
     );
-    assert_ne!(
-        res_a.user_id, res_b.user_id,
-        "User IDs should be distinct"
-    );
+    assert_ne!(res_a.user_id, res_b.user_id, "User IDs should be distinct");
     assert!(res_a.device_id > 0, "User A device_id should be positive");
     assert!(res_b.device_id > 0, "User B device_id should be positive");
 
@@ -189,7 +198,10 @@ async fn t2_friend_request() {
         .connect_via_friend_code(&friend_code, Some("Hey from Bob!"))
         .await
         .expect("connect_via_friend_code failed");
-    println!("  B connected to A, friendship status: {:?}", friendship.status);
+    println!(
+        "  B connected to A, friendship status: {:?}",
+        friendship.status
+    );
 
     // Give the server a moment to process the friend request
     tokio::time::sleep(Duration::from_secs(2)).await;
@@ -204,11 +216,21 @@ async fn t2_friend_request() {
     // Verify: both users see each other as friends
     tokio::time::sleep(Duration::from_secs(1)).await;
 
-    let a_friends = client_a.list_friends(50, 0).await.expect("list_friends failed for A");
-    let b_friends = client_b.list_friends(50, 0).await.expect("list_friends failed for B");
+    let a_friends = client_a
+        .list_friends(50, 0)
+        .await
+        .expect("list_friends failed for A");
+    let b_friends = client_b
+        .list_friends(50, 0)
+        .await
+        .expect("list_friends failed for B");
 
-    let a_has_b = a_friends.iter().any(|f| f.other_party(&uid_a) == Some(&uid_b));
-    let b_has_a = b_friends.iter().any(|f| f.other_party(&uid_b) == Some(&uid_a));
+    let a_has_b = a_friends
+        .iter()
+        .any(|f| f.other_party(&uid_a) == Some(&uid_b));
+    let b_has_a = b_friends
+        .iter()
+        .any(|f| f.other_party(&uid_b) == Some(&uid_a));
 
     assert!(a_has_b, "A should see B as friend");
     assert!(b_has_a, "B should see A as friend");
@@ -258,13 +280,13 @@ async fn t3_direct_message() {
     // User A sends a text message to User B, keyed by B's user_id.
     let test_message = "Hello from T3 — E2E test message!";
     let send_result = client_a
-        .send_text(ActiveConversation::ServerDm { peer_id: uid_b }, test_message)
+        .send_text(
+            ActiveConversation::ServerDm { peer_id: uid_b },
+            test_message,
+        )
         .await
         .expect("send_text failed");
-    println!(
-        "  A sent message, id={}",
-        send_result.message_id_string()
-    );
+    println!("  A sent message, id={}", send_result.message_id_string());
 
     // Verify: User B receives the message. On B's side the DM is bucketed by
     // the SENDER's user_id (A), so conversation_id == ChannelId::from(uid_a).
@@ -304,7 +326,10 @@ async fn t4_channel_create_and_join() {
     let _uid_b = register_and_start(&client_b, &unique_user("t4b"), "Bob").await;
 
     // User A creates a public channel
-    let channel_name = format!("test-channel-{}", chrono::Utc::now().timestamp_millis() % 100000);
+    let channel_name = format!(
+        "test-channel-{}",
+        chrono::Utc::now().timestamp_millis() % 100000
+    );
     let channel = client_a
         .create_channel(
             &channel_name,
@@ -325,7 +350,10 @@ async fn t4_channel_create_and_join() {
         .await
         .expect("search_channels failed");
     let found = search_results.iter().find(|c| c.id == channel.id);
-    assert!(found.is_some(), "B should find the channel in search results");
+    assert!(
+        found.is_some(),
+        "B should find the channel in search results"
+    );
     println!("  B found channel in search");
 
     let joined = client_b
@@ -343,7 +371,10 @@ async fn t4_channel_create_and_join() {
     // User A sends message in channel
     let test_message = "Hello channel from T4!";
     let send_result = client_a
-        .send_text(ActiveConversation::Channel(channel.id.clone()), test_message)
+        .send_text(
+            ActiveConversation::Channel(channel.id.clone()),
+            test_message,
+        )
         .await
         .expect("send_text to channel failed");
     println!(
@@ -393,7 +424,10 @@ async fn t5_anonymous_dm() {
     let private_code = client_a
         .generate_private_friend_code()
         .expect("generate_private_friend_code failed");
-    println!("  A's private friend code generated (length: {})", private_code.len());
+    println!(
+        "  A's private friend code generated (length: {})",
+        private_code.len()
+    );
 
     // User B starts anonymous DM with User A
     let anon_dm = client_b
@@ -438,7 +472,10 @@ async fn t6_group_chat() {
     let uid_b = register_and_start(&client_b, &unique_user("t6b"), "Bob").await;
 
     // User A creates a private group with User B as member
-    let group_name = format!("e2e-group-{}", chrono::Utc::now().timestamp_millis() % 100000);
+    let group_name = format!(
+        "e2e-group-{}",
+        chrono::Utc::now().timestamp_millis() % 100000
+    );
     let group = client_a
         .create_channel(
             &group_name,
@@ -530,8 +567,11 @@ async fn t7_file_transfer() {
 
     // Create a test file to upload
     let test_file_path = dir_a.path().join("test_attachment.txt");
-    std::fs::write(&test_file_path, "Hello from E2E file transfer test! This is test content.")
-        .expect("Failed to write test file");
+    std::fs::write(
+        &test_file_path,
+        "Hello from E2E file transfer test! This is test content.",
+    )
+    .expect("Failed to write test file");
 
     // Create pending attachment (the send_message method handles upload internally)
     let pending = PendingAttachment::new(
@@ -574,7 +614,10 @@ async fn t7_file_transfer() {
         "B should receive the message with attachment"
     );
     if let Some(DomainEvent::MessageReceived { message }) = &received {
-        println!("  B received message with {} attachment id(s)", message.attachments.len());
+        println!(
+            "  B received message with {} attachment id(s)",
+            message.attachments.len()
+        );
         if !message.attachments.is_empty() {
             println!("  Attachment ID: {}", message.attachments[0]);
         }
@@ -630,17 +673,36 @@ async fn full_e2e_suite() {
         }};
     }
 
-    run_test!("T1: Registration", { t1_inner().await; });
-    run_test!("T2: Friend Request", { t2_inner().await; });
-    run_test!("T3: Direct Message", { t3_inner().await; });
-    run_test!("T4: Channel Create + Join", { t4_inner().await; });
-    run_test!("T5: Anonymous DM", { t5_inner().await; });
-    run_test!("T6: Group Chat", { t6_inner().await; });
-    run_test!("T7: File Transfer", { t7_inner().await; });
+    run_test!("T1: Registration", {
+        t1_inner().await;
+    });
+    run_test!("T2: Friend Request", {
+        t2_inner().await;
+    });
+    run_test!("T3: Direct Message", {
+        t3_inner().await;
+    });
+    run_test!("T4: Channel Create + Join", {
+        t4_inner().await;
+    });
+    run_test!("T5: Anonymous DM", {
+        t5_inner().await;
+    });
+    run_test!("T6: Group Chat", {
+        t6_inner().await;
+    });
+    run_test!("T7: File Transfer", {
+        t7_inner().await;
+    });
 
     println!();
     println!("═══════════════════════════════════════════════════════");
-    println!(" Results: {} passed, {} failed (total: {:.1}s)", passed, failed, suite_start.elapsed().as_secs_f64());
+    println!(
+        " Results: {} passed, {} failed (total: {:.1}s)",
+        passed,
+        failed,
+        suite_start.elapsed().as_secs_f64()
+    );
     println!("═══════════════════════════════════════════════════════");
     for (name, ok, detail) in &results {
         let status = if *ok { "PASS" } else { "FAIL" };
@@ -670,8 +732,28 @@ async fn t1_inner() {
     let client_b = build_client(&dir_b);
     client_a.connect().await.unwrap();
     client_b.connect().await.unwrap();
-    let res_a = client_a.register(&unique_user("t1a"), PASSWORD, "User A", "e2e-test", None, Some(PIN)).await.unwrap();
-    let res_b = client_b.register(&unique_user("t1b"), PASSWORD, "User B", "e2e-test", None, Some(PIN)).await.unwrap();
+    let res_a = client_a
+        .register(
+            &unique_user("t1a"),
+            PASSWORD,
+            "User A",
+            "e2e-test",
+            None,
+            Some(PIN),
+        )
+        .await
+        .unwrap();
+    let res_b = client_b
+        .register(
+            &unique_user("t1b"),
+            PASSWORD,
+            "User B",
+            "e2e-test",
+            None,
+            Some(PIN),
+        )
+        .await
+        .unwrap();
     assert_ne!(res_a.user_id, res_b.user_id);
     assert!(res_a.device_id > 0);
     assert!(res_b.device_id > 0);
@@ -687,14 +769,25 @@ async fn t2_inner() {
     let uid_a = register_and_start(&client_a, &unique_user("t2a"), "Alice").await;
     let uid_b = register_and_start(&client_b, &unique_user("t2b"), "Bob").await;
     let friend_code = client_a.generate_friend_code().unwrap();
-    client_b.connect_via_friend_code(&friend_code, Some("Hey!")).await.unwrap();
+    client_b
+        .connect_via_friend_code(&friend_code, Some("Hey!"))
+        .await
+        .unwrap();
     tokio::time::sleep(Duration::from_secs(2)).await;
     client_a.respond_friend_request(&uid_b, true).await.unwrap();
     tokio::time::sleep(Duration::from_secs(1)).await;
     let a_friends = client_a.list_friends(50, 0).await.unwrap();
     let b_friends = client_b.list_friends(50, 0).await.unwrap();
-    assert!(a_friends.iter().any(|f| f.other_party(&uid_a) == Some(&uid_b)));
-    assert!(b_friends.iter().any(|f| f.other_party(&uid_b) == Some(&uid_a)));
+    assert!(
+        a_friends
+            .iter()
+            .any(|f| f.other_party(&uid_a) == Some(&uid_b))
+    );
+    assert!(
+        b_friends
+            .iter()
+            .any(|f| f.other_party(&uid_b) == Some(&uid_a))
+    );
     client_a.shutdown().await;
     client_b.shutdown().await;
 }
@@ -712,7 +805,10 @@ async fn t3_inner() {
     tokio::time::sleep(Duration::from_secs(3)).await;
     let mut events_b = client_b.subscribe_events();
     let msg = "T3 test message";
-    client_a.send_text(ActiveConversation::ServerDm { peer_id: uid_b }, msg).await.unwrap();
+    client_a
+        .send_text(ActiveConversation::ServerDm { peer_id: uid_b }, msg)
+        .await
+        .unwrap();
     // On B's side the DM buckets by the sender's user_id (A).
     let expected_conv_id = ChannelId::from(uid_a);
     let ev = wait_for_event(&mut events_b, EVENT_TIMEOUT, |e| {
@@ -734,14 +830,28 @@ async fn t4_inner() {
     register_and_start(&client_a, &unique_user("t4a"), "Alice").await;
     register_and_start(&client_b, &unique_user("t4b"), "Bob").await;
     let ch_name = format!("e2e-ch-{}", chrono::Utc::now().timestamp_millis() % 100000);
-    let ch = client_a.create_channel(&ch_name, ChannelType::Public, None, Some("test"), None, None, vec![]).await.unwrap();
+    let ch = client_a
+        .create_channel(
+            &ch_name,
+            ChannelType::Public,
+            None,
+            Some("test"),
+            None,
+            None,
+            vec![],
+        )
+        .await
+        .unwrap();
     let results = client_b.search_channels(&ch_name, 10).await.unwrap();
     assert!(results.iter().any(|c| c.id == ch.id));
     client_b.join_channel(&ch.id, None).await.unwrap();
     tokio::time::sleep(Duration::from_secs(3)).await;
     let mut events_b = client_b.subscribe_events();
     let msg = "T4 channel message";
-    client_a.send_text(ActiveConversation::Channel(ch.id.clone()), msg).await.unwrap();
+    client_a
+        .send_text(ActiveConversation::Channel(ch.id.clone()), msg)
+        .await
+        .unwrap();
     let ev = wait_for_event(&mut events_b, EVENT_TIMEOUT, |e| {
         matches!(e, DomainEvent::MessageReceived { message } if message.conversation_id == ch.id)
     }).await;
@@ -758,7 +868,10 @@ async fn t5_inner() {
     let uid_a = register_and_start(&client_a, &unique_user("t5a"), "Alice").await;
     register_and_start(&client_b, &unique_user("t5b"), "Bob").await;
     let _code = client_a.generate_private_friend_code().unwrap();
-    let anon = client_b.start_anon_dm(uid_a, Some("Hi anon")).await.unwrap();
+    let anon = client_b
+        .start_anon_dm(uid_a, Some("Hi anon"))
+        .await
+        .unwrap();
     assert!(!anon.id.to_string().is_empty());
     tokio::time::sleep(Duration::from_secs(5)).await;
     client_a.shutdown().await;
@@ -773,7 +886,18 @@ async fn t6_inner() {
     register_and_start(&client_a, &unique_user("t6a"), "Alice").await;
     let uid_b = register_and_start(&client_b, &unique_user("t6b"), "Bob").await;
     let grp_name = format!("e2e-grp-{}", chrono::Utc::now().timestamp_millis() % 100000);
-    let grp = client_a.create_channel(&grp_name, ChannelType::Private, None, Some("test"), None, None, vec![uid_b]).await.unwrap();
+    let grp = client_a
+        .create_channel(
+            &grp_name,
+            ChannelType::Private,
+            None,
+            Some("test"),
+            None,
+            None,
+            vec![uid_b],
+        )
+        .await
+        .unwrap();
     // Wait for SKDM propagation — needs longer in suite mode when server is under load
     tokio::time::sleep(Duration::from_secs(5)).await;
     client_b.resubscribe_channel_messages();
@@ -782,7 +906,10 @@ async fn t6_inner() {
     // Brief drain period for any pending events
     tokio::time::sleep(Duration::from_millis(500)).await;
     let msg = "T6 group message";
-    client_a.send_text(ActiveConversation::Channel(grp.id.clone()), msg).await.unwrap();
+    client_a
+        .send_text(ActiveConversation::Channel(grp.id.clone()), msg)
+        .await
+        .unwrap();
     let ev = wait_for_event(&mut events_b, EVENT_TIMEOUT, |e| {
         matches!(e, DomainEvent::MessageReceived { message } if message.conversation_id == grp.id)
     }).await;
@@ -812,13 +939,16 @@ async fn t7_inner() {
         "text/plain".into(),
     );
     let mut events_b = client_b.subscribe_events();
-    client_a.send_message(
-        ActiveConversation::ServerDm { peer_id: uid_b },
-        "File attached",
-        &[pending],
-        None,
-        None,
-    ).await.unwrap();
+    client_a
+        .send_message(
+            ActiveConversation::ServerDm { peer_id: uid_b },
+            "File attached",
+            &[pending],
+            None,
+            None,
+        )
+        .await
+        .unwrap();
     let expected_conv_id = ChannelId::from(uid_a);
     let ev = wait_for_event(&mut events_b, EVENT_TIMEOUT, |e| {
         matches!(e, DomainEvent::MessageReceived { message } if message.conversation_id == expected_conv_id)

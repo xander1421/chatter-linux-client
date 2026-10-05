@@ -15,7 +15,7 @@
 //! Wire format for encrypted backup:
 //!   nonce(12) || ciphertext || tag(16)
 
-use aes_gcm::{aead::Aead, Aes256Gcm, KeyInit, Nonce};
+use aes_gcm::{Aes256Gcm, KeyInit, Nonce, aead::Aead};
 use zeroize::Zeroize;
 
 use crate::crypto::svr::svr_subkey;
@@ -121,11 +121,10 @@ impl KeyBackupPayload {
         }
 
         // Identity keypair
-        let identity_len = u32::from_le_bytes(
-            bytes[offset..offset + 4]
-                .try_into()
-                .map_err(|_| CryptoError::DecryptionFailed("invalid identity length field".into()))?,
-        ) as usize;
+        let identity_len =
+            u32::from_le_bytes(bytes[offset..offset + 4].try_into().map_err(|_| {
+                CryptoError::DecryptionFailed("invalid identity length field".into())
+            })?) as usize;
         offset += 4;
 
         if identity_len != IDENTITY_KEYPAIR_SIZE {
@@ -152,11 +151,10 @@ impl KeyBackupPayload {
             ));
         }
 
-        let profile_len = u32::from_le_bytes(
-            bytes[offset..offset + 4]
-                .try_into()
-                .map_err(|_| CryptoError::DecryptionFailed("invalid profile length field".into()))?,
-        ) as usize;
+        let profile_len =
+            u32::from_le_bytes(bytes[offset..offset + 4].try_into().map_err(|_| {
+                CryptoError::DecryptionFailed("invalid profile length field".into())
+            })?) as usize;
         offset += 4;
 
         if profile_len != PROFILE_KEY_SIZE {
@@ -178,11 +176,10 @@ impl KeyBackupPayload {
 
         // Username (total size is fixed and checked above, so the length
         // field and the padded field are both in bounds)
-        let username_len = u32::from_le_bytes(
-            bytes[offset..offset + 4]
-                .try_into()
-                .map_err(|_| CryptoError::DecryptionFailed("invalid username length field".into()))?,
-        ) as usize;
+        let username_len =
+            u32::from_le_bytes(bytes[offset..offset + 4].try_into().map_err(|_| {
+                CryptoError::DecryptionFailed("invalid username length field".into())
+            })?) as usize;
         offset += 4;
 
         if username_len == 0 || username_len > USERNAME_FIELD_SIZE {
@@ -192,7 +189,9 @@ impl KeyBackupPayload {
         }
         let (username, padding) = bytes[offset..].split_at(username_len);
         if padding.iter().any(|&b| b != 0) {
-            return Err(CryptoError::Validation("backup username padding is not zero".into()));
+            return Err(CryptoError::Validation(
+                "backup username padding is not zero".into(),
+            ));
         }
         let full_username = std::str::from_utf8(username)
             .map_err(|_| CryptoError::Validation("backup username is not UTF-8".into()))?
@@ -214,13 +213,17 @@ pub fn encrypt_backup(
     svr_secret: &[u8; 32],
 ) -> Result<Vec<u8>, CryptoError> {
     let mut aes_key = svr_subkey(svr_secret, SVR_INFO_BACKUP_AES);
-    let cipher = Aes256Gcm::new_from_slice(&aes_key)
-        .map_err(|_| CryptoError::InvalidKeyFormat)?;
+    let cipher = Aes256Gcm::new_from_slice(&aes_key).map_err(|_| CryptoError::InvalidKeyFormat)?;
     aes_key.zeroize();
 
     // Generate random 12-byte nonce
     let mut nonce_bytes = [0u8; NONCE_SIZE];
-    {use rand::TryRngCore; rand::rngs::OsRng.try_fill_bytes(&mut nonce_bytes).expect("OS CSPRNG must not fail");}
+    {
+        use rand::TryRngCore;
+        rand::rngs::OsRng
+            .try_fill_bytes(&mut nonce_bytes)
+            .expect("OS CSPRNG must not fail");
+    }
     let nonce = Nonce::from_slice(&nonce_bytes);
 
     // Serialize then encrypt
@@ -258,8 +261,7 @@ pub fn decrypt_backup(
     let nonce = Nonce::from_slice(nonce_bytes);
 
     let mut aes_key = svr_subkey(svr_secret, SVR_INFO_BACKUP_AES);
-    let cipher = Aes256Gcm::new_from_slice(&aes_key)
-        .map_err(|_| CryptoError::InvalidKeyFormat)?;
+    let cipher = Aes256Gcm::new_from_slice(&aes_key).map_err(|_| CryptoError::InvalidKeyFormat)?;
     aes_key.zeroize();
 
     let mut plaintext = cipher

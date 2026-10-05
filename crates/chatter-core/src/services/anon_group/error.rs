@@ -1,12 +1,14 @@
 //! Error types for anonymous group service.
 
-use crate::domain::anon_group::AnonGroupId;
 use crate::domain::UserId;
+use crate::domain::anon_group::AnonGroupId;
 use crate::error::StorageError;
 
 /// Anon group service errors.
 #[derive(Debug, thiserror::Error)]
 pub enum AnonGroupError {
+    #[error("Delivery unconfirmed; the original submission is retained and retry is disabled")]
+    DeliveryUnconfirmed,
     /// Not logged in.
     #[error("not logged in")]
     NotLoggedIn,

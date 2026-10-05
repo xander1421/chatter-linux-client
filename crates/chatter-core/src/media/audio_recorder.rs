@@ -65,9 +65,9 @@ impl AudioRecorder {
             MediaError::RecordingError("no audio input device available".to_string())
         })?;
 
-        let supported_config = device
-            .default_input_config()
-            .map_err(|e| MediaError::RecordingError(format!("failed to get input config: {}", e)))?;
+        let supported_config = device.default_input_config().map_err(|e| {
+            MediaError::RecordingError(format!("failed to get input config: {}", e))
+        })?;
 
         let config: StreamConfig = supported_config.config();
         let sample_rate = config.sample_rate.0;
@@ -106,10 +106,9 @@ impl AudioRecorder {
         let samples_clone = Arc::clone(&self.samples);
 
         // Get supported sample format
-        let supported_config = self
-            .device
-            .default_input_config()
-            .map_err(|e| MediaError::RecordingError(format!("failed to get input config: {}", e)))?;
+        let supported_config = self.device.default_input_config().map_err(|e| {
+            MediaError::RecordingError(format!("failed to get input config: {}", e))
+        })?;
 
         let err_fn = |err| {
             tracing::error!("Recording stream error: {}", err);
@@ -129,7 +128,7 @@ impl AudioRecorder {
             _ => {
                 return Err(MediaError::RecordingError(
                     "unsupported sample format".to_string(),
-                ))
+                ));
             }
         };
 
@@ -156,7 +155,8 @@ impl AudioRecorder {
         f32: cpal::FromSample<T>,
     {
         // Bound memory even if the recording worker is temporarily delayed.
-        let max_samples = self.sample_rate as usize * self.channels as usize
+        let max_samples = self.sample_rate as usize
+            * self.channels as usize
             * crate::services::voice_recording::MAX_RECORDING_SECONDS as usize;
         self.device
             .build_input_stream(
@@ -218,7 +218,9 @@ impl AudioRecorder {
         match &self.state {
             RecordingState::Stopped { .. } => {}
             RecordingState::Idle => {
-                return Err(MediaError::RecordingError("no recording to save".to_string()));
+                return Err(MediaError::RecordingError(
+                    "no recording to save".to_string(),
+                ));
             }
             RecordingState::Recording { .. } => {
                 return Err(MediaError::RecordingError(

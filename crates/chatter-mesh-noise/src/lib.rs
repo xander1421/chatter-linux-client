@@ -19,7 +19,10 @@
 //! Those have no upstream vectors and are where the care belongs.
 
 #![forbid(unsafe_code)]
-#![cfg_attr(not(test), deny(clippy::unwrap_used, clippy::expect_used, clippy::panic))]
+#![cfg_attr(
+    not(test),
+    deny(clippy::unwrap_used, clippy::expect_used, clippy::panic)
+)]
 
 pub mod error;
 pub mod identity;

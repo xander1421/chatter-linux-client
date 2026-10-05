@@ -48,10 +48,9 @@ pub fn install_key_wrap(wrap: Box<dyn KeyWrap>) {
 
 /// The installed wrapper, or why there is none.
 pub fn installed_key_wrap() -> Result<&'static dyn KeyWrap, String> {
-    KEY_WRAP
-        .get()
-        .map(|b| b.as_ref())
-        .ok_or_else(|| "no platform key wrapper is installed; refusing to keep a secret in plaintext".to_string())
+    KEY_WRAP.get().map(|b| b.as_ref()).ok_or_else(|| {
+        "no platform key wrapper is installed; refusing to keep a secret in plaintext".to_string()
+    })
 }
 
 /// Read and unseal the secret in `path`. `Ok(None)` only when the file does
@@ -60,7 +59,11 @@ pub fn installed_key_wrap() -> Result<&'static dyn KeyWrap, String> {
 /// absent would generate a replacement over data the real key still opens.
 ///
 /// A legacy plaintext file is sealed and replaced before returning.
-pub fn read(path: &Path, alias: &str, wrap: &dyn KeyWrap) -> Result<Option<Zeroizing<String>>, String> {
+pub fn read(
+    path: &Path,
+    alias: &str,
+    wrap: &dyn KeyWrap,
+) -> Result<Option<Zeroizing<String>>, String> {
     let contents = match std::fs::read_to_string(path) {
         Ok(c) => Zeroizing::new(c),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
@@ -72,14 +75,19 @@ pub fn read(path: &Path, alias: &str, wrap: &dyn KeyWrap) -> Result<Option<Zeroi
         let blob = base64::engine::general_purpose::STANDARD
             .decode(encoded)
             .map_err(|e| format!("{} is not a valid sealed secret: {e}", path.display()))?;
-        let plain = Zeroizing::new(
-            wrap.unseal(alias, &blob)
-                .map_err(|e| format!("the Android Keystore could not unseal {}: {e}", path.display()))?,
-        );
+        let plain = Zeroizing::new(wrap.unseal(alias, &blob).map_err(|e| {
+            format!(
+                "the Android Keystore could not unseal {}: {e}",
+                path.display()
+            )
+        })?);
         let secret = std::str::from_utf8(&plain)
             .map_err(|_| format!("{} unsealed to non-text", path.display()))?;
         if !is_hex_secret(secret) {
-            return Err(format!("{} unsealed to an unexpected secret shape", path.display()));
+            return Err(format!(
+                "{} unsealed to an unexpected secret shape",
+                path.display()
+            ));
         }
         return Ok(Some(Zeroizing::new(secret.to_string())));
     }
@@ -92,7 +100,10 @@ pub fn read(path: &Path, alias: &str, wrap: &dyn KeyWrap) -> Result<Option<Zeroi
         return Ok(Some(secret));
     }
 
-    Err(format!("{} is neither a sealed secret nor a legacy key", path.display()))
+    Err(format!(
+        "{} is neither a sealed secret nor a legacy key",
+        path.display()
+    ))
 }
 
 /// Seal `secret` and write it to `path` atomically (temp file 0600, fsync,
@@ -101,16 +112,22 @@ pub fn write(path: &Path, alias: &str, wrap: &dyn KeyWrap, secret: &str) -> Resu
     let blob = wrap
         .seal(alias, secret.as_bytes())
         .map_err(|e| format!("the Android Keystore could not seal a new secret: {e}"))?;
-    let encoded = format!("{PREFIX}{}", base64::engine::general_purpose::STANDARD.encode(&blob));
+    let encoded = format!(
+        "{PREFIX}{}",
+        base64::engine::general_purpose::STANDARD.encode(&blob)
+    );
 
     let mut tmp = path.as_os_str().to_owned();
     tmp.push(".tmp");
     let tmp = std::path::PathBuf::from(tmp);
     if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent).map_err(|e| format!("{} could not be created: {e}", parent.display()))?;
+        std::fs::create_dir_all(parent)
+            .map_err(|e| format!("{} could not be created: {e}", parent.display()))?;
     }
-    write_private(&tmp, encoded.as_bytes()).map_err(|e| format!("{} could not be written: {e}", tmp.display()))?;
-    std::fs::rename(&tmp, path).map_err(|e| format!("{} could not be replaced: {e}", path.display()))?;
+    write_private(&tmp, encoded.as_bytes())
+        .map_err(|e| format!("{} could not be written: {e}", tmp.display()))?;
+    std::fs::rename(&tmp, path)
+        .map_err(|e| format!("{} could not be replaced: {e}", path.display()))?;
     if let Some(parent) = path.parent() {
         if let Ok(dir) = std::fs::File::open(parent) {
             let _ = dir.sync_all();
@@ -160,7 +177,10 @@ pub(crate) mod tests {
                 return Err("keystore key invalidated".into());
             }
             let tag_len = alias.len() + 1;
-            if blob.len() < tag_len || &blob[..alias.len()] != alias.as_bytes() || blob[alias.len()] != 0 {
+            if blob.len() < tag_len
+                || &blob[..alias.len()] != alias.as_bytes()
+                || blob[alias.len()] != 0
+            {
                 return Err("wrong key".into());
             }
             Ok(blob[tag_len..].iter().map(|b| b ^ 0x5a).collect())
@@ -173,7 +193,11 @@ pub(crate) mod tests {
     #[test]
     fn missing_file_is_absent() {
         let dir = tempfile::tempdir().unwrap();
-        assert!(read(&dir.path().join("k"), DB_ALIAS, &OK).unwrap().is_none());
+        assert!(
+            read(&dir.path().join("k"), DB_ALIAS, &OK)
+                .unwrap()
+                .is_none()
+        );
     }
 
     #[test]
@@ -184,11 +208,17 @@ pub(crate) mod tests {
         let on_disk = std::fs::read_to_string(&path).unwrap();
         assert!(on_disk.starts_with("ks1:"));
         assert!(!on_disk.contains(SECRET));
-        assert_eq!(read(&path, DB_ALIAS, &OK).unwrap().unwrap().as_str(), SECRET);
+        assert_eq!(
+            read(&path, DB_ALIAS, &OK).unwrap().unwrap().as_str(),
+            SECRET
+        );
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
-            assert_eq!(std::fs::metadata(&path).unwrap().permissions().mode() & 0o777, 0o600);
+            assert_eq!(
+                std::fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+                0o600
+            );
         }
         assert!(!dir.path().join("k.tmp").exists());
     }
@@ -198,10 +228,16 @@ pub(crate) mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("k");
         std::fs::write(&path, format!("{SECRET}\n")).unwrap();
-        assert_eq!(read(&path, DB_ALIAS, &OK).unwrap().unwrap().as_str(), SECRET);
+        assert_eq!(
+            read(&path, DB_ALIAS, &OK).unwrap().unwrap().as_str(),
+            SECRET
+        );
         let on_disk = std::fs::read_to_string(&path).unwrap();
         assert!(on_disk.starts_with("ks1:") && !on_disk.contains(SECRET));
-        assert_eq!(read(&path, DB_ALIAS, &OK).unwrap().unwrap().as_str(), SECRET);
+        assert_eq!(
+            read(&path, DB_ALIAS, &OK).unwrap().unwrap().as_str(),
+            SECRET
+        );
     }
 
     #[test]
@@ -211,7 +247,11 @@ pub(crate) mod tests {
         write(&path, DB_ALIAS, &OK, SECRET).unwrap();
         let before = std::fs::read(&path).unwrap();
         assert!(read(&path, DB_ALIAS, &FakeWrap { fail_unseal: true }).is_err());
-        assert_eq!(std::fs::read(&path).unwrap(), before, "a failed unseal must not touch the file");
+        assert_eq!(
+            std::fs::read(&path).unwrap(),
+            before,
+            "a failed unseal must not touch the file"
+        );
     }
 
     #[test]
@@ -226,7 +266,14 @@ pub(crate) mod tests {
     fn malformed_contents_are_refused() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("k");
-        for bad in ["ks1:!!notbase64", "ks2:AAAA", "short", "", &SECRET.to_uppercase(), &SECRET[..62]] {
+        for bad in [
+            "ks1:!!notbase64",
+            "ks2:AAAA",
+            "short",
+            "",
+            &SECRET.to_uppercase(),
+            &SECRET[..62],
+        ] {
             std::fs::write(&path, bad).unwrap();
             assert!(read(&path, DB_ALIAS, &OK).is_err(), "accepted {bad:?}");
         }

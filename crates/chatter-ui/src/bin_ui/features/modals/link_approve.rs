@@ -21,9 +21,7 @@ use slint::ComponentHandle;
 
 use chatter_core::client::ChatterClient;
 use chatter_core::prelude::SecretString;
-use chatter_core::services::link_device_service::{
-    LinkDeviceError, PendingDeviceLink,
-};
+use chatter_core::services::link_device_service::{LinkDeviceError, PendingDeviceLink};
 
 use crate::MainWindow;
 
@@ -122,15 +120,9 @@ fn wire_paste(window: &MainWindow, ui_ctx: &Arc<ChatterClient>, pending: Pending
         match ui_ctx.prepare_link_from_url(&s) {
             Ok(preview) => {
                 w.set_link_approve_preview_ready(true);
-                w.set_link_approve_preview_name(
-                    preview.device_name().unwrap_or_default().into(),
-                );
-                w.set_link_approve_preview_server(
-                    preview.server_url().unwrap_or_default().into(),
-                );
-                w.set_link_approve_verification_code(
-                    preview.verification_code().into(),
-                );
+                w.set_link_approve_preview_name(preview.device_name().unwrap_or_default().into());
+                w.set_link_approve_preview_server(preview.server_url().unwrap_or_default().into());
+                w.set_link_approve_verification_code(preview.verification_code().into());
                 w.set_link_approve_error("".into());
                 *pending.lock().unwrap() = Some(preview);
             }
@@ -149,11 +141,7 @@ fn wire_paste(window: &MainWindow, ui_ctx: &Arc<ChatterClient>, pending: Pending
     });
 }
 
-fn wire_submit(
-    window: &MainWindow,
-    ui_ctx: &Arc<ChatterClient>,
-    pending: PendingSlot,
-) {
+fn wire_submit(window: &MainWindow, ui_ctx: &Arc<ChatterClient>, pending: PendingSlot) {
     let weak = window.as_weak();
     let ui_ctx = ui_ctx.clone();
 
@@ -169,9 +157,7 @@ fn wire_submit(
             Some(t) => t,
             None => {
                 if let Some(w) = weak.upgrade() {
-                    w.set_link_approve_error(
-                        "Paste a link URL first.".into(),
-                    );
+                    w.set_link_approve_error("Paste a link URL first.".into());
                 }
                 return;
             }
@@ -189,7 +175,9 @@ fn wire_submit(
             let weak_for_ui = weak.clone();
             let pending_for_ui = pending.clone();
             let _ = slint::invoke_from_event_loop(move || {
-                let Some(w) = weak_for_ui.upgrade() else { return };
+                let Some(w) = weak_for_ui.upgrade() else {
+                    return;
+                };
                 w.set_link_approve_busy(false);
                 match result {
                     Ok(approved) => {

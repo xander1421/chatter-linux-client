@@ -38,7 +38,10 @@ impl RecentEmojiStore {
         recent.truncate(MAX_RECENT);
 
         // Best-effort persist — don't block on errors
-        let _ = std::fs::write(&self.path, serde_json::to_string(&*recent).unwrap_or_default());
+        let _ = std::fs::write(
+            &self.path,
+            serde_json::to_string(&*recent).unwrap_or_default(),
+        );
     }
 
     /// Get ordered list of recently used emoji (most recent first).

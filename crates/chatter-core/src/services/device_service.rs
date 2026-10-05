@@ -15,7 +15,7 @@ use crate::network::grpc::auth_client::AuthClient;
 use crate::services::channel::ChannelService;
 use crate::services::signal::SignalService;
 use crate::storage::key_store::KeyStore;
-use crate::storage::repositories::settings_repo::{keys, SettingsRepository};
+use crate::storage::repositories::settings_repo::{SettingsRepository, keys};
 
 /// This account's identity key pair — the key every device name is encrypted
 /// to. Every device of the account holds it.
@@ -103,9 +103,7 @@ pub enum DeviceError {
         "{} channel(s) failed sender-key rotation marking after revoke",
         failures.len()
     )]
-    RotationMarkingFailed {
-        failures: Vec<(ChannelId, String)>,
-    },
+    RotationMarkingFailed { failures: Vec<(ChannelId, String)> },
 }
 
 /// Device management service.
@@ -144,7 +142,10 @@ impl DeviceService {
 
     /// Get the current device ID if logged in.
     fn current_device_id(&self) -> Option<u32> {
-        self.settings_repo.get(keys::CURRENT_DEVICE_ID).ok().flatten()
+        self.settings_repo
+            .get(keys::CURRENT_DEVICE_ID)
+            .ok()
+            .flatten()
     }
 
     /// List all devices for the current user.

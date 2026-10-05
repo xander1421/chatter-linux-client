@@ -8,21 +8,23 @@ use std::sync::Arc;
 use tokio::sync::broadcast;
 
 use crate::crypto::envelope_crypto::decrypt_envelope;
-use crate::inbox::ack_policy::{self, AckDecision};
+use crate::domain::UserId;
 use crate::domain::ids::{AttachmentId, ChannelId, MessageId};
 use crate::domain::message::{ConversationType, Message};
-use crate::domain::UserId;
 use crate::error::MailboxError;
+use crate::inbox::ack_policy::{self, AckDecision};
 use crate::inbox::events::InboxEvent;
 use crate::inbox::handlers::DomainEvent;
 use crate::mailbox::dm::{DmConversationManager, TwoWayAnonymity};
 use crate::network::grpc::AnonymousMailboxClient;
 use crate::network::validation::MessageDeduplicator;
-use crate::services::gateway::{DmContent, MessageGateway};
 use crate::services::attachment::AttachmentService;
+use crate::services::gateway::{DmContent, MessageGateway};
 use crate::storage::repositories::settings_repo::keys;
 use crate::storage::repositories::user_repo::UserRepository;
-use crate::storage::{AttachmentRepository, ChannelRepository, MessageRepository, SettingsRepository};
+use crate::storage::{
+    AttachmentRepository, ChannelRepository, MessageRepository, SettingsRepository,
+};
 
 /// Decide what to do with a DM envelope whose decrypt failed.
 ///
@@ -56,7 +58,8 @@ pub(crate) fn dm_failure_decision(
 /// 36-byte `SignalMessage.addresses` field (libsignal `protocol.rs`
 /// `serialize_addresses`).
 fn local_recipient_address(local_uuid: &UserId, local_device_id: u32) -> Option<Vec<u8>> {
-    let service_id = libsignal_core::ServiceId::parse_from_service_id_string(&local_uuid.to_string())?;
+    let service_id =
+        libsignal_core::ServiceId::parse_from_service_id_string(&local_uuid.to_string())?;
     let mut bytes = service_id.service_id_fixed_width_binary().to_vec();
     bytes.push(u8::try_from(local_device_id).ok()?);
     Some(bytes)
@@ -79,7 +82,10 @@ fn sealed_recipient(msg_type: u8, ciphertext: &[u8]) -> Option<Vec<u8>> {
     }
 
     let signal = if msg_type == CiphertextMessageType::PreKey as u8 {
-        PreKeySignalMessage::try_from(ciphertext).ok()?.message().clone()
+        PreKeySignalMessage::try_from(ciphertext)
+            .ok()?
+            .message()
+            .clone()
     } else if msg_type == CiphertextMessageType::Whisper as u8 {
         SignalMessage::try_from(ciphertext).ok()?
     } else {
@@ -88,7 +94,9 @@ fn sealed_recipient(msg_type: u8, ciphertext: &[u8]) -> Option<Vec<u8>> {
     // Serialized as version byte ++ protobuf ++ 8-byte MAC.
     let serialized = signal.serialized();
     let proto = serialized.get(1..serialized.len().checked_sub(8)?)?;
-    let addresses = <WireAddresses as prost::Message>::decode(proto).ok()?.addresses?;
+    let addresses = <WireAddresses as prost::Message>::decode(proto)
+        .ok()?
+        .addresses?;
     (addresses.len() == 36).then(|| addresses[18..].to_vec())
 }
 
@@ -100,9 +108,18 @@ fn sealed_recipient(msg_type: u8, ciphertext: &[u8]) -> Option<Vec<u8>> {
 /// refuses those ("Address mismatch" / "Bad Mac!") and they surface as
 /// `SessionDesync` — which is not a failure of a message addressed to us:
 /// nothing was lost here, so there is no marker, no notice and no report.
-fn addressed_to_another_device(err: &crate::error::ServiceError, local_recipient: Option<&[u8]>) -> bool {
-    let (Some(local), crate::error::ServiceError::Crypto(crate::error::CryptoError::SessionDesync { msg_type, ciphertext, .. })) =
-        (local_recipient, err)
+fn addressed_to_another_device(
+    err: &crate::error::ServiceError,
+    local_recipient: Option<&[u8]>,
+) -> bool {
+    let (
+        Some(local),
+        crate::error::ServiceError::Crypto(crate::error::CryptoError::SessionDesync {
+            msg_type,
+            ciphertext,
+            ..
+        }),
+    ) = (local_recipient, err)
     else {
         return false;
     };
@@ -144,7 +161,10 @@ pub async fn poll_dm_mailboxes(
         .flatten()
         .and_then(|s| s.parse().ok());
     let local_recipient = current_user_id.as_ref().and_then(|uuid| {
-        let device_id = settings_repo.get::<u32>(keys::CURRENT_DEVICE_ID).ok().flatten()?;
+        let device_id = settings_repo
+            .get::<u32>(keys::CURRENT_DEVICE_ID)
+            .ok()
+            .flatten()?;
         local_recipient_address(uuid, device_id)
     });
     let mut client = mailbox_client.lock().await;
@@ -166,7 +186,10 @@ pub async fn poll_dm_mailboxes(
 
             // Handle failures first (healing path)
             for (peer_id, error) in failures {
-                if matches!(error, MailboxError::MailboxNotFound | MailboxError::TokenExpired) {
+                if matches!(
+                    error,
+                    MailboxError::MailboxNotFound | MailboxError::TokenExpired
+                ) {
                     tracing::info!(
                         peer_id = %peer_id,
                         error = %error,
@@ -189,7 +212,9 @@ pub async fn poll_dm_mailboxes(
                 // Per-device, per-direction keys: every peer device deposits
                 // into our one mailbox under its own secret, so the key that
                 // opens an envelope also names the device that sent it.
-                let mut recv_keys: Vec<(u32, [u8; 32])> = match conversation_manager.load_conversation(&peer_id) {
+                let mut recv_keys: Vec<(u32, [u8; 32])> = match conversation_manager
+                    .load_conversation(&peer_id)
+                {
                     Ok(Some(conv)) => conv.recv_keys(),
                     Ok(None) => {
                         tracing::warn!(peer_id = %peer_id, "No conversation state for DM");
@@ -228,7 +253,10 @@ pub async fn poll_dm_mailboxes(
                     // envelope) or a failure, reported under the first key.
                     let opening = recv_keys
                         .iter()
-                        .find(|(_, key)| crate::crypto::dm_crypto::decrypt_dm_bytes(&msg.encrypted_envelope, key).is_ok())
+                        .find(|(_, key)| {
+                            crate::crypto::dm_crypto::decrypt_dm_bytes(&msg.encrypted_envelope, key)
+                                .is_ok()
+                        })
                         .copied();
                     let response = if opening.is_none() {
                         try_parse_bootstrap_response(
@@ -262,10 +290,16 @@ pub async fn poll_dm_mailboxes(
                         // Flushes what is queued, and what is owed to this device.
                         let _ = event_tx.send(InboxEvent::DmBootstrapCompleted { peer_id });
                         AckDecision::Ack
-                    } else if let Some((sender_device_id, secret)) = opening.or(recv_keys.first().copied()) {
+                    } else if let Some((sender_device_id, secret)) =
+                        opening.or(recv_keys.first().copied())
+                    {
                         // Decrypt with Signal Protocol (forward secrecy via Double Ratchet)
                         match message_gateway
-                            .process_dm_message(&msg.encrypted_envelope, &secret, msg.server_timestamp)
+                            .process_dm_message(
+                                &msg.encrypted_envelope,
+                                &secret,
+                                msg.server_timestamp,
+                            )
                             .await
                         {
                             // Blocked sender: the gateway authenticated them
@@ -293,8 +327,15 @@ pub async fn poll_dm_mailboxes(
                                         timestamp,
                                         ..
                                     } => Some((
-                                        crate::services::disappearing::DmTimer { seconds: *secs, version: *timer_version },
-                                        if *timestamp > 0 { *timestamp } else { msg.server_timestamp },
+                                        crate::services::disappearing::DmTimer {
+                                            seconds: *secs,
+                                            version: *timer_version,
+                                        },
+                                        if *timestamp > 0 {
+                                            *timestamp
+                                        } else {
+                                            msg.server_timestamp
+                                        },
                                         *timer_update,
                                         !body.is_empty() || !attachments.is_empty(),
                                     )),
@@ -302,10 +343,16 @@ pub async fn poll_dm_mailboxes(
                                 };
                                 if let Some((timer, sent_at, update, visible)) = disappearing {
                                     if update || visible {
-                                        let notice = message_gateway
-                                            .adopt_server_dm_timer(&peer_id, &sender_id, Some(timer), sent_at);
+                                        let notice = message_gateway.adopt_server_dm_timer(
+                                            &peer_id,
+                                            &sender_id,
+                                            Some(timer),
+                                            sent_at,
+                                        );
                                         if let (Some(notice), Some(tx)) = (notice, domain_tx) {
-                                            let _ = tx.send(DomainEvent::MessageReceived { message: notice });
+                                            let _ = tx.send(DomainEvent::MessageReceived {
+                                                message: notice,
+                                            });
                                         }
                                     }
                                 }
@@ -331,8 +378,8 @@ pub async fn poll_dm_mailboxes(
                                 if let Some((timer, sent_at, _, true)) = disappearing {
                                     let secs = timer.seconds;
                                     if secs > 0 {
-                                        if let Ok(Some(stored)) =
-                                            message_repo.get_by_sender_timestamp(&sender_id, sent_at)
+                                        if let Ok(Some(stored)) = message_repo
+                                            .get_by_sender_timestamp(&sender_id, sent_at)
                                         {
                                             message_gateway.arm_disappearing(&stored.id, secs);
                                         }
@@ -340,7 +387,9 @@ pub async fn poll_dm_mailboxes(
                                 }
                                 AckDecision::Ack
                             }
-                            Err(e) if addressed_to_another_device(&e, local_recipient.as_deref()) => {
+                            Err(e)
+                                if addressed_to_another_device(&e, local_recipient.as_deref()) =>
+                            {
                                 ack_policy::drop_and_ack(
                                     "sealed for another of our devices",
                                     &msg.message_id,
@@ -492,13 +541,22 @@ fn dispatch_dm_content(
     );
 
     match dm_content {
-        DmContent::Text { body, timestamp, attachments, profile_key, quote, thread_id, .. } => {
+        DmContent::Text {
+            body,
+            timestamp,
+            attachments,
+            profile_key,
+            quote,
+            thread_id,
+            ..
+        } => {
             // Store sender's profile key if present (for decrypting their display_name)
             if let Some(ref key) = profile_key {
                 if key.len() == 32 {
                     if let Some(current_user) = current_user_id {
                         let key_array: [u8; 32] = key.as_slice().try_into().unwrap();
-                        match user_repo.set_friend_profile_key(current_user, sender_id, &key_array) {
+                        match user_repo.set_friend_profile_key(current_user, sender_id, &key_array)
+                        {
                             Ok(changed) => {
                                 tracing::info!(
                                     sender_id = %sender_id,
@@ -549,7 +607,11 @@ fn dispatch_dm_content(
 
                 // Use sender's timestamp for Signal-style dedup (sender_id + sent_at)
                 // Both timestamp and server_timestamp are in nanoseconds
-                let sent_at = if timestamp > 0 { timestamp } else { server_timestamp };
+                let sent_at = if timestamp > 0 {
+                    timestamp
+                } else {
+                    server_timestamp
+                };
                 tracing::debug!(
                     proto_timestamp = timestamp,
                     server_timestamp = server_timestamp,
@@ -557,7 +619,13 @@ fn dispatch_dm_content(
                     peer_id = %peer_id,
                     "dispatch_dm_content: timestamp selection"
                 );
-                let mut message = Message::new_text(dm_channel_id, ConversationType::ServerDm, Some(*sender_id), body.clone(), sent_at);
+                let mut message = Message::new_text(
+                    dm_channel_id,
+                    ConversationType::ServerDm,
+                    Some(*sender_id),
+                    body.clone(),
+                    sent_at,
+                );
                 message.id = msg_id;
                 // Thread root rides on the wire (DataMessage.thread_id).
                 // Mirrors the ServerDm inbound path in gateway/mod.rs — see
@@ -631,7 +699,11 @@ fn dispatch_dm_content(
                 peer_id,
                 text: body,
                 // Both timestamp and server_timestamp are in nanoseconds
-                timestamp: if timestamp > 0 { timestamp } else { server_timestamp },
+                timestamp: if timestamp > 0 {
+                    timestamp
+                } else {
+                    server_timestamp
+                },
                 message_id: message_id.to_string(),
                 attachments,
             });
@@ -646,7 +718,11 @@ fn dispatch_dm_content(
                 action_name = if action == 1 { "STARTED" } else { "STOPPED" },
                 "DM_MAILBOX: Emitting DmTyping event"
             );
-            let _ = event_tx.send(InboxEvent::DmTyping { peer_id, action, timestamp });
+            let _ = event_tx.send(InboxEvent::DmTyping {
+                peer_id,
+                action,
+                timestamp,
+            });
         }
 
         DmContent::Receipt {
@@ -676,7 +752,11 @@ fn dispatch_dm_content(
                 remove,
                 target_author_aci,
                 target_sent_timestamp,
-                timestamp: if timestamp > 0 { timestamp } else { server_timestamp },
+                timestamp: if timestamp > 0 {
+                    timestamp
+                } else {
+                    server_timestamp
+                },
             });
         }
 
@@ -692,7 +772,11 @@ fn dispatch_dm_content(
                 target_author_aci,
                 target_sent_timestamp,
                 unpin,
-                timestamp: if timestamp > 0 { timestamp } else { server_timestamp },
+                timestamp: if timestamp > 0 {
+                    timestamp
+                } else {
+                    server_timestamp
+                },
             });
         }
 
@@ -742,16 +826,14 @@ fn dispatch_dm_content(
             // Emit domain event for the bootstrap handler to process
             if let Some(tx) = domain_tx {
                 // Parse conversation_id as ChannelId
-                let conv_id: ChannelId = conversation_id
-                    .parse()
-                    .unwrap_or_else(|_| {
-                        // Fallback: derive from peer
-                        if let Some(current_user) = current_user_id {
-                            ChannelId::from_dm_participants(current_user, sender_id)
-                        } else {
-                            ChannelId::new()
-                        }
-                    });
+                let conv_id: ChannelId = conversation_id.parse().unwrap_or_else(|_| {
+                    // Fallback: derive from peer
+                    if let Some(current_user) = current_user_id {
+                        ChannelId::from_dm_participants(current_user, sender_id)
+                    } else {
+                        ChannelId::new()
+                    }
+                });
 
                 let _ = tx.send(DomainEvent::KeyExchangeReceived {
                     sender_id: *sender_id,
@@ -856,7 +938,11 @@ fn dispatch_dm_content(
                 ephemeral_public_key,
                 call_type: resolved_call_type,
                 channel_id: resolved_channel_id,
-                timestamp: if server_timestamp > 0 { server_timestamp } else { timestamp },
+                timestamp: if server_timestamp > 0 {
+                    server_timestamp
+                } else {
+                    timestamp
+                },
             });
         }
 
@@ -1057,8 +1143,12 @@ fn dispatch_dm_content(
                 "Anonymous group message received"
             );
             let _ = event_tx.send(
-                InboxEvent::AnonGroupMessage { peer_id, group_id, inner_content }
-                    .server_stamp_call_offer(server_timestamp),
+                InboxEvent::AnonGroupMessage {
+                    peer_id,
+                    group_id,
+                    inner_content,
+                }
+                .server_stamp_call_offer(server_timestamp),
             );
         }
         // =====================================================================
@@ -1129,8 +1219,12 @@ fn dispatch_dm_content(
                 "Anonymous DM message received"
             );
             let _ = event_tx.send(
-                InboxEvent::AnonDmMessage { peer_id, conversation_id, inner_content }
-                    .server_stamp_call_offer(server_timestamp),
+                InboxEvent::AnonDmMessage {
+                    peer_id,
+                    conversation_id,
+                    inner_content,
+                }
+                .server_stamp_call_offer(server_timestamp),
             );
         }
         // Unreachable in practice — the poll loop routes this to
@@ -1337,7 +1431,9 @@ fn process_bootstrap_key_exchange(
     // The RESPONSE's encryption key goes unused: nothing is HPKE-sealed to
     // the responder's mailbox after the bootstrap (deposits there use the
     // conversation key). It is announced so both directions share one layout.
-    let Some(announcement) = crate::mailbox::dm::bootstrap::MailboxAnnouncement::parse(ephemeral_pk) else {
+    let Some(announcement) =
+        crate::mailbox::dm::bootstrap::MailboxAnnouncement::parse(ephemeral_pk)
+    else {
         tracing::error!(
             peer_id = %peer_id,
             key_len = ephemeral_pk.len(),
@@ -1357,7 +1453,12 @@ fn process_bootstrap_key_exchange(
     // That device's half only: a late device adds its own mailbox and
     // secret beside the others', never over them. Our half must exist — we
     // announced it in the bootstrap this answers.
-    match conversation_manager.record_peer_device(&peer_id, peer_device_id, peer_mailbox_pk, peer_conversation_pk) {
+    match conversation_manager.record_peer_device(
+        &peer_id,
+        peer_device_id,
+        peer_mailbox_pk,
+        peer_conversation_pk,
+    ) {
         Ok(_) => {
             tracing::info!(peer_id = %peer_id, peer_device_id, "Recorded peer device's half from its bootstrap response");
             Some(ephemeral_pk.to_vec())
@@ -1378,30 +1479,44 @@ mod tests {
     /// are genuine failures and keep their marker and report.
     #[test]
     fn a_copy_for_a_sibling_device_is_not_a_failure_of_ours() {
-        use libsignal_protocol::{CiphertextMessageType, DeviceId, KeyPair, ProtocolAddress, SignalMessage};
+        use libsignal_protocol::{
+            CiphertextMessageType, DeviceId, KeyPair, ProtocolAddress, SignalMessage,
+        };
         use rand::TryRngCore;
 
         let mut rng = rand::rngs::OsRng.unwrap_err();
         let us: UserId = "14142135-6237-3095-0488-016887242096".parse().unwrap();
-        let address = |uuid: &str, device: u8| ProtocolAddress::new(uuid.to_owned(), DeviceId::new(device).unwrap());
+        let address = |uuid: &str, device: u8| {
+            ProtocolAddress::new(uuid.to_owned(), DeviceId::new(device).unwrap())
+        };
         let sender = address("16180339-8874-9894-8482-045868343656", 2);
         let mut sealed_for = |recipient: Option<&ProtocolAddress>| {
             let identity = KeyPair::generate(&mut rng).public_key.into();
             SignalMessage::new(
-                4, &[7u8; 32], recipient.map(|r| (&sender, r)), KeyPair::generate(&mut rng).public_key,
-                11, 0, &[0u8; 20], &identity, &identity, b"",
+                4,
+                &[7u8; 32],
+                recipient.map(|r| (&sender, r)),
+                KeyPair::generate(&mut rng).public_key,
+                11,
+                0,
+                &[0u8; 20],
+                &identity,
+                &identity,
+                b"",
             )
             .unwrap()
             .serialized()
             .to_vec()
         };
-        let desync = |ciphertext: Vec<u8>| crate::error::ServiceError::Crypto(crate::error::CryptoError::SessionDesync {
-            sender_uuid: sender.name().to_owned(),
-            sender_device_id: 2,
-            msg_type: CiphertextMessageType::Whisper as u8,
-            ciphertext,
-            reason: "Bad Mac".into(),
-        });
+        let desync = |ciphertext: Vec<u8>| {
+            crate::error::ServiceError::Crypto(crate::error::CryptoError::SessionDesync {
+                sender_uuid: sender.name().to_owned(),
+                sender_device_id: 2,
+                msg_type: CiphertextMessageType::Whisper as u8,
+                ciphertext,
+                reason: "Bad Mac".into(),
+            })
+        };
         let local = local_recipient_address(&us, 6).unwrap();
         let local = Some(local.as_slice());
 
@@ -1422,14 +1537,20 @@ mod tests {
     #[test]
     fn mailbox_dm_joins_the_friends_one_conversation() {
         let dir = tempfile::tempdir().unwrap();
-        let db = Arc::new(crate::storage::Database::open(&dir.path().join("t.db"), "testpass").unwrap());
+        let db =
+            Arc::new(crate::storage::Database::open(&dir.path().join("t.db"), "testpass").unwrap());
         db.run_migrations().unwrap();
         let message_repo = Arc::new(MessageRepository::new(db.clone()));
         let (me, friend) = (UserId::new(), UserId::new());
         let conversation = ChannelId::from(friend);
 
-        let streamed =
-            Message::new_text(conversation, ConversationType::ServerDm, Some(friend), "streamed".into(), 1);
+        let streamed = Message::new_text(
+            conversation,
+            ConversationType::ServerDm,
+            Some(friend),
+            "streamed".into(),
+            1,
+        );
         message_repo.insert(&streamed).unwrap();
 
         let (event_tx, _rx) = broadcast::channel(16);

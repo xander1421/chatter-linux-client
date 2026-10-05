@@ -104,14 +104,20 @@ pub struct OnionConnector {
 impl OnionConnector {
     /// Build a connector over the shared (authenticated) Tor client.
     pub fn new(tor: SharedTorClient) -> Self {
-        Self { tor, isolated: None }
+        Self {
+            tor,
+            isolated: None,
+        }
     }
 
     /// Build a connector that dials over a SEPARATE, isolated circuit — for the
     /// anonymous mailbox channel. `iso` caches the isolated client so every anon
     /// dial reuses the same isolated circuit-group (distinct from auth).
     pub fn new_isolated(tor: SharedTorClient, iso: SharedTorClient) -> Self {
-        Self { tor, isolated: Some(iso) }
+        Self {
+            tor,
+            isolated: Some(iso),
+        }
     }
 }
 
@@ -160,7 +166,8 @@ impl Service<Uri> for OnionConnector {
             // failed attempt is re-tried on the next dial.
             let base = tor
                 .get_or_try_init(|| async {
-                    let config = tor_client_config().map_err(|e| io_err(format!("onion transport: {e}")))?;
+                    let config =
+                        tor_client_config().map_err(|e| io_err(format!("onion transport: {e}")))?;
                     let jh = tor_runtime().spawn(async {
                         // Arti's rustls runtime needs a process-wide default rustls
                         // CryptoProvider. Without it, guard/HS-descriptor/rendezvous
@@ -171,9 +178,15 @@ impl Service<Uri> for OnionConnector {
                         TorClient::create_bootstrapped(config).await
                     });
                     match tokio::time::timeout(Duration::from_secs(120), jh).await {
-                        Err(_) => Err(io_err("onion transport: Tor bootstrap timed out after 120s")),
-                        Ok(Err(join)) => Err(io_err(format!("onion transport: Tor bootstrap task panicked: {join}"))),
-                        Ok(Ok(Err(e))) => Err(io_err(format!("onion transport: Tor bootstrap failed: {e}"))),
+                        Err(_) => Err(io_err(
+                            "onion transport: Tor bootstrap timed out after 120s",
+                        )),
+                        Ok(Err(join)) => Err(io_err(format!(
+                            "onion transport: Tor bootstrap task panicked: {join}"
+                        ))),
+                        Ok(Ok(Err(e))) => Err(io_err(format!(
+                            "onion transport: Tor bootstrap failed: {e}"
+                        ))),
                         Ok(Ok(Ok(c))) => Ok(c),
                     }
                 })
@@ -185,7 +198,10 @@ impl Service<Uri> for OnionConnector {
             // uses the base client directly. Cloning a TorClient is cheap (Arc) and
             // keeps the client bound to the Tor runtime.
             let client = match &isolated {
-                Some(cell) => cell.get_or_init(|| async { base.isolated_client() }).await.clone(),
+                Some(cell) => cell
+                    .get_or_init(|| async { base.isolated_client() })
+                    .await
+                    .clone(),
                 None => base.clone(),
             };
 
@@ -202,17 +218,23 @@ impl Service<Uri> for OnionConnector {
             let stream = match tokio::time::timeout(Duration::from_secs(90), jh).await {
                 Err(_) => {
                     tracing::error!(host = %host, port, "onion transport: Tor connect timed out after 90s");
-                    return Err(io_err(format!("onion transport: Tor connect to {host}:{port} timed out after 90s")));
+                    return Err(io_err(format!(
+                        "onion transport: Tor connect to {host}:{port} timed out after 90s"
+                    )));
                 }
                 Ok(Err(join)) => {
-                    return Err(io_err(format!("onion transport: Tor connect task panicked: {join}")));
+                    return Err(io_err(format!(
+                        "onion transport: Tor connect task panicked: {join}"
+                    )));
                 }
                 Ok(Ok(Err(e))) => {
                     // Surface the real Arti error — tonic otherwise collapses it
                     // into an opaque "Unknown"/"server unavailable". `{e:?}` gives
                     // the full source chain (descriptor fetch / rendezvous / etc).
                     tracing::error!(host = %host, port, error = ?e, "onion transport: Tor connect failed");
-                    return Err(io_err(format!("onion transport: Tor connect to {host}:{port} failed: {e}")));
+                    return Err(io_err(format!(
+                        "onion transport: Tor connect to {host}:{port} failed: {e}"
+                    )));
                 }
                 Ok(Ok(Ok(s))) => s,
             };

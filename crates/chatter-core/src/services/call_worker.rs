@@ -11,11 +11,13 @@ use std::str::FromStr;
 use std::sync::Arc;
 
 use parking_lot::RwLock;
-use tokio::sync::{broadcast, mpsc, oneshot, Mutex as TokioMutex};
+use tokio::sync::{Mutex as TokioMutex, broadcast, mpsc, oneshot};
 
-use crate::calls::{LiveKitRoomEvent, RoomManager, RoomState, SharedVideoFrames, VideoCaptureConfig};
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 use crate::calls::ScreenSource;
+use crate::calls::{
+    LiveKitRoomEvent, RoomManager, RoomState, SharedVideoFrames, VideoCaptureConfig,
+};
 use crate::crypto::call_key_provider::CallKeyState;
 use crate::domain::call::{Call, CallState, CallType, Participant};
 use crate::domain::ids::{CallId, ChannelId, UserId};
@@ -348,9 +350,7 @@ enum CallCommand {
     /// The command loop is strictly sequential and fully awaits each call
     /// operation before dequeuing the next, so this is only ever processed
     /// BETWEEN complete operations — never mid-RPC — making the swap safe.
-    SwapCallClient {
-        client: CallClient,
-    },
+    SwapCallClient { client: CallClient },
     /// Get active call info.
     GetActiveCall {
         response: oneshot::Sender<Option<Call>>,
@@ -360,9 +360,7 @@ enum CallCommand {
         response: oneshot::Sender<Option<String>>,
     },
     /// Check if in a call.
-    IsInCall {
-        response: oneshot::Sender<bool>,
-    },
+    IsInCall { response: oneshot::Sender<bool> },
     /// Get room state.
     GetRoomState {
         response: oneshot::Sender<RoomState>,
@@ -377,9 +375,7 @@ enum CallCommand {
     },
     /// Test-only: how many tracks we publish.
     #[cfg(feature = "testing")]
-    GetLocalTrackCount {
-        response: oneshot::Sender<usize>,
-    },
+    GetLocalTrackCount { response: oneshot::Sender<usize> },
     /// The active call's group-key standing.
     GetGroupKeyStatus {
         response: oneshot::Sender<Option<GroupKeyStatus>>,
@@ -402,13 +398,9 @@ enum CallCommand {
     /// Set microphone muted.
     SetMicrophoneMuted { muted: bool },
     /// Get microphone muted state.
-    IsMicrophoneMuted {
-        response: oneshot::Sender<bool>,
-    },
+    IsMicrophoneMuted { response: oneshot::Sender<bool> },
     /// Get camera enabled state.
-    IsCameraEnabled {
-        response: oneshot::Sender<bool>,
-    },
+    IsCameraEnabled { response: oneshot::Sender<bool> },
     /// Locally mute/unmute a specific remote participant's audio.
     SetPeerAudioMuted { participant_id: String, muted: bool },
     /// Route remote audio to an output device (CPAL device name).
@@ -417,7 +409,10 @@ enum CallCommand {
         response: oneshot::Sender<Result<(), String>>,
     },
     /// Locally pause/resume a specific remote participant's video.
-    SetPeerVideoPaused { participant_id: String, paused: bool },
+    SetPeerVideoPaused {
+        participant_id: String,
+        paused: bool,
+    },
     /// Publish screen share (desktop only).
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
     PublishScreenShare {
@@ -428,9 +423,7 @@ enum CallCommand {
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
     StopScreenShare,
     /// Check if screen sharing.
-    IsScreenSharing {
-        response: oneshot::Sender<bool>,
-    },
+    IsScreenSharing { response: oneshot::Sender<bool> },
     /// Ratchet the encryption key for forward secrecy.
     RatchetKey {
         response: oneshot::Sender<Option<u32>>,
@@ -441,9 +434,7 @@ enum CallCommand {
         response: oneshot::Sender<bool>,
     },
     /// Get current key epoch.
-    GetKeyEpoch {
-        response: oneshot::Sender<u32>,
-    },
+    GetKeyEpoch { response: oneshot::Sender<u32> },
     /// Test-only: the epoch and the whole shared-key ring LiveKit holds.
     #[cfg(feature = "testing")]
     GetInstalledKeyRing {
@@ -486,9 +477,7 @@ enum CallCommand {
     // ========================================================================
     /// Record a newly received incoming call offer. The orchestrator decides
     /// whether to present it fresh or flag it as replacing the active call.
-    OrchPresentIncoming {
-        incoming: PendingIncoming,
-    },
+    OrchPresentIncoming { incoming: PendingIncoming },
     /// Withdraw a previously presented incoming call (caller hung up / timed
     /// out / remote-declined before we acted).
     OrchWithdrawIncoming {
@@ -496,9 +485,7 @@ enum CallCommand {
         reason: CallEndReason,
     },
     /// Register an outgoing call that was just dialed.
-    OrchRegisterOutgoing {
-        outgoing: PendingOutgoing,
-    },
+    OrchRegisterOutgoing { outgoing: PendingOutgoing },
     /// Notify the orchestrator that a pending (incoming or outgoing) call
     /// has connected and should be installed as the active call.
     OrchMarkConnected {
@@ -666,7 +653,9 @@ impl CallWorkerHandle {
             channel_context,
             conversation_id,
         };
-        let _ = self.cmd_tx.try_send(CallCommand::OrchPresentIncoming { incoming });
+        let _ = self
+            .cmd_tx
+            .try_send(CallCommand::OrchPresentIncoming { incoming });
     }
 
     /// Record an incoming call whose offer is too old to ring. Touches no
@@ -680,13 +669,15 @@ impl CallWorkerHandle {
         conversation_id: String,
     ) {
         tracing::info!(call = %call.as_str(), "Incoming call offer is past the ring timeout — recording as missed, not ringing");
-        let _ = self.call_events_tx.send(CallOrchestratorEvent::IncomingMissed {
-            call,
-            kind,
-            peer_name,
-            is_video,
-            conversation_id,
-        });
+        let _ = self
+            .call_events_tx
+            .send(CallOrchestratorEvent::IncomingMissed {
+                call,
+                kind,
+                peer_name,
+                is_video,
+                conversation_id,
+            });
     }
 
     /// Withdraw a previously presented incoming call.
@@ -705,8 +696,16 @@ impl CallWorkerHandle {
         peer_name: String,
         is_video: bool,
     ) {
-        let outgoing = PendingOutgoing { call, kind, peer_id, peer_name, is_video };
-        let _ = self.cmd_tx.try_send(CallCommand::OrchRegisterOutgoing { outgoing });
+        let outgoing = PendingOutgoing {
+            call,
+            kind,
+            peer_id,
+            peer_name,
+            is_video,
+        };
+        let _ = self
+            .cmd_tx
+            .try_send(CallCommand::OrchRegisterOutgoing { outgoing });
     }
 
     /// Notify the orchestrator that a pending call has connected.
@@ -759,10 +758,7 @@ impl CallWorkerHandle {
     ) -> Result<PendingIncomingSnapshot, CallError> {
         let (tx, rx) = oneshot::channel();
         self.cmd_tx
-            .try_send(CallCommand::OrchAcceptIncomingReplacingActive {
-                call,
-                response: tx,
-            })
+            .try_send(CallCommand::OrchAcceptIncomingReplacingActive { call, response: tx })
             .map_err(|_| CallError::WorkerShutdown)?;
         rx.await
             .map_err(|_| CallError::WorkerShutdown)?
@@ -851,10 +847,19 @@ impl CallWorkerHandle {
     /// of our own that is never sent, and publish nothing until the key
     /// authority's rotation is installed ([`Self::install_group_key`]) or we
     /// rotate ourselves ([`Self::rotate_key`]).
-    pub async fn join_group_call(&self, call_id: CallId, joiner_id: UserId) -> Result<Call, CallError> {
+    pub async fn join_group_call(
+        &self,
+        call_id: CallId,
+        joiner_id: UserId,
+    ) -> Result<Call, CallError> {
         let (tx, rx) = oneshot::channel();
         self.cmd_tx
-            .try_send(CallCommand::JoinCall { call_id, encryption_root_key: None, joiner_id, response: tx })
+            .try_send(CallCommand::JoinCall {
+                call_id,
+                encryption_root_key: None,
+                joiner_id,
+                response: tx,
+            })
             .map_err(|_| CallError::WorkerShutdown)?;
         rx.await.map_err(|_| CallError::WorkerShutdown)?
     }
@@ -894,7 +899,10 @@ impl CallWorkerHandle {
     pub async fn leave_call(&self, reason: CallEndReason) -> Result<(), CallError> {
         let (tx, rx) = oneshot::channel();
         self.cmd_tx
-            .try_send(CallCommand::LeaveCall { reason, response: tx })
+            .try_send(CallCommand::LeaveCall {
+                reason,
+                response: tx,
+            })
             .map_err(|_| CallError::WorkerShutdown)?;
         rx.await.map_err(|_| CallError::WorkerShutdown)?
     }
@@ -915,7 +923,11 @@ impl CallWorkerHandle {
     /// emitted `ActiveEnded` reports, so the UI can say why the call went away.
     pub async fn disconnect_local(&self, reason: CallEndReason) {
         let (tx, rx) = oneshot::channel();
-        let _ = self.cmd_tx.try_send(CallCommand::DisconnectLocal { call: None, reason, response: tx });
+        let _ = self.cmd_tx.try_send(CallCommand::DisconnectLocal {
+            call: None,
+            reason,
+            response: tx,
+        });
         let _ = rx.await;
     }
 
@@ -927,7 +939,11 @@ impl CallWorkerHandle {
     /// is the active call.
     pub fn disconnect_local_nonblocking(&self, call: Option<CallHandle>, reason: CallEndReason) {
         let (tx, _rx) = oneshot::channel();
-        let _ = self.cmd_tx.try_send(CallCommand::DisconnectLocal { call, reason, response: tx });
+        let _ = self.cmd_tx.try_send(CallCommand::DisconnectLocal {
+            call,
+            reason,
+            response: tx,
+        });
     }
 
     /// Get the currently active call.
@@ -951,7 +967,11 @@ impl CallWorkerHandle {
     /// Check if currently in a call.
     pub async fn is_in_call(&self) -> bool {
         let (tx, rx) = oneshot::channel();
-        if self.cmd_tx.try_send(CallCommand::IsInCall { response: tx }).is_err() {
+        if self
+            .cmd_tx
+            .try_send(CallCommand::IsInCall { response: tx })
+            .is_err()
+        {
             return false;
         }
         rx.await.unwrap_or(false)
@@ -964,7 +984,11 @@ impl CallWorkerHandle {
     /// is actually in the call right now" (notably key rotation) reads this.
     pub async fn remote_participant_identities(&self) -> Vec<String> {
         let (tx, rx) = oneshot::channel();
-        if self.cmd_tx.try_send(CallCommand::GetRemoteParticipants { response: tx }).is_err() {
+        if self
+            .cmd_tx
+            .try_send(CallCommand::GetRemoteParticipants { response: tx })
+            .is_err()
+        {
             return Vec::new();
         }
         rx.await.unwrap_or_default()
@@ -974,7 +998,9 @@ impl CallWorkerHandle {
     /// authority is chosen by. `None` when not connected.
     pub async fn room_seniority(&self) -> Option<RoomSeniority> {
         let (tx, rx) = oneshot::channel();
-        self.cmd_tx.try_send(CallCommand::GetRoomSeniority { response: tx }).ok()?;
+        self.cmd_tx
+            .try_send(CallCommand::GetRoomSeniority { response: tx })
+            .ok()?;
         rx.await.ok().flatten()
     }
 
@@ -983,14 +1009,20 @@ impl CallWorkerHandle {
     /// still held back for want of a key. `None` when not in a call.
     pub async fn group_key_status(&self) -> Option<GroupKeyStatus> {
         let (tx, rx) = oneshot::channel();
-        self.cmd_tx.try_send(CallCommand::GetGroupKeyStatus { response: tx }).ok()?;
+        self.cmd_tx
+            .try_send(CallCommand::GetGroupKeyStatus { response: tx })
+            .ok()?;
         rx.await.ok().flatten()
     }
 
     /// Get room connection state.
     pub async fn room_state(&self) -> RoomState {
         let (tx, rx) = oneshot::channel();
-        if self.cmd_tx.try_send(CallCommand::GetRoomState { response: tx }).is_err() {
+        if self
+            .cmd_tx
+            .try_send(CallCommand::GetRoomState { response: tx })
+            .is_err()
+        {
             return RoomState::Disconnected;
         }
         rx.await.unwrap_or(RoomState::Disconnected)
@@ -1033,13 +1065,19 @@ impl CallWorkerHandle {
 
     /// Set microphone muted.
     pub fn set_microphone_muted(&self, muted: bool) {
-        let _ = self.cmd_tx.try_send(CallCommand::SetMicrophoneMuted { muted });
+        let _ = self
+            .cmd_tx
+            .try_send(CallCommand::SetMicrophoneMuted { muted });
     }
 
     /// Check if microphone is muted.
     pub async fn is_microphone_muted(&self) -> bool {
         let (tx, rx) = oneshot::channel();
-        if self.cmd_tx.try_send(CallCommand::IsMicrophoneMuted { response: tx }).is_err() {
+        if self
+            .cmd_tx
+            .try_send(CallCommand::IsMicrophoneMuted { response: tx })
+            .is_err()
+        {
             return false;
         }
         rx.await.unwrap_or(false)
@@ -1048,27 +1086,41 @@ impl CallWorkerHandle {
     /// Locally mute/unmute a specific remote peer's audio. Fire-and-forget;
     /// drops silently if the worker has shut down.
     pub fn set_peer_audio_muted(&self, participant_id: String, muted: bool) {
-        let _ = self.cmd_tx.try_send(CallCommand::SetPeerAudioMuted { participant_id, muted });
+        let _ = self.cmd_tx.try_send(CallCommand::SetPeerAudioMuted {
+            participant_id,
+            muted,
+        });
     }
 
     /// Route remote audio to the named output device.
     pub async fn set_audio_output(&self, device: String) -> Result<(), String> {
         let (tx, rx) = oneshot::channel();
         self.cmd_tx
-            .try_send(CallCommand::SetAudioOutput { device, response: tx })
+            .try_send(CallCommand::SetAudioOutput {
+                device,
+                response: tx,
+            })
             .map_err(|_| "call worker is not running".to_string())?;
-        rx.await.map_err(|_| "call worker dropped the request".to_string())?
+        rx.await
+            .map_err(|_| "call worker dropped the request".to_string())?
     }
 
     /// Locally pause/resume a specific remote peer's video.
     pub fn set_peer_video_paused(&self, participant_id: String, paused: bool) {
-        let _ = self.cmd_tx.try_send(CallCommand::SetPeerVideoPaused { participant_id, paused });
+        let _ = self.cmd_tx.try_send(CallCommand::SetPeerVideoPaused {
+            participant_id,
+            paused,
+        });
     }
 
     /// Check if camera is enabled.
     pub async fn is_camera_enabled(&self) -> bool {
         let (tx, rx) = oneshot::channel();
-        if self.cmd_tx.try_send(CallCommand::IsCameraEnabled { response: tx }).is_err() {
+        if self
+            .cmd_tx
+            .try_send(CallCommand::IsCameraEnabled { response: tx })
+            .is_err()
+        {
             return false;
         }
         rx.await.unwrap_or(false)
@@ -1096,7 +1148,11 @@ impl CallWorkerHandle {
     /// Check if screen sharing.
     pub async fn is_screen_sharing(&self) -> bool {
         let (tx, rx) = oneshot::channel();
-        if self.cmd_tx.try_send(CallCommand::IsScreenSharing { response: tx }).is_err() {
+        if self
+            .cmd_tx
+            .try_send(CallCommand::IsScreenSharing { response: tx })
+            .is_err()
+        {
             return false;
         }
         rx.await.unwrap_or(false)
@@ -1109,7 +1165,11 @@ impl CallWorkerHandle {
     /// Returns the new key epoch, or None if not connected.
     pub async fn ratchet_key(&self) -> Option<u32> {
         let (tx, rx) = oneshot::channel();
-        if self.cmd_tx.try_send(CallCommand::RatchetKey { response: tx }).is_err() {
+        if self
+            .cmd_tx
+            .try_send(CallCommand::RatchetKey { response: tx })
+            .is_err()
+        {
             return None;
         }
         rx.await.ok().flatten()
@@ -1122,7 +1182,10 @@ impl CallWorkerHandle {
     pub async fn rotate_key(&self, new_key: [u8; 32]) -> Result<u32, CallError> {
         let (tx, rx) = oneshot::channel();
         self.cmd_tx
-            .try_send(CallCommand::RotateKey { new_key, response: tx })
+            .try_send(CallCommand::RotateKey {
+                new_key,
+                response: tx,
+            })
             .map_err(|_| CallError::WorkerShutdown)?;
         rx.await.map_err(|_| CallError::WorkerShutdown)?
     }
@@ -1138,7 +1201,12 @@ impl CallWorkerHandle {
     ) -> Result<bool, CallError> {
         let (tx, rx) = oneshot::channel();
         self.cmd_tx
-            .try_send(CallCommand::InstallGroupKey { call_id, key, epoch, response: tx })
+            .try_send(CallCommand::InstallGroupKey {
+                call_id,
+                key,
+                epoch,
+                response: tx,
+            })
             .map_err(|_| CallError::WorkerShutdown)?;
         rx.await.map_err(|_| CallError::WorkerShutdown)?
     }
@@ -1148,7 +1216,11 @@ impl CallWorkerHandle {
     /// Use this when managing keys via the Signal-based CallKeyState.
     pub async fn set_encryption_key(&self, key: Vec<u8>) -> bool {
         let (tx, rx) = oneshot::channel();
-        if self.cmd_tx.try_send(CallCommand::SetEncryptionKey { key, response: tx }).is_err() {
+        if self
+            .cmd_tx
+            .try_send(CallCommand::SetEncryptionKey { key, response: tx })
+            .is_err()
+        {
             return false;
         }
         rx.await.unwrap_or(false)
@@ -1157,7 +1229,11 @@ impl CallWorkerHandle {
     /// Get the current key epoch.
     pub async fn key_epoch(&self) -> u32 {
         let (tx, rx) = oneshot::channel();
-        if self.cmd_tx.try_send(CallCommand::GetKeyEpoch { response: tx }).is_err() {
+        if self
+            .cmd_tx
+            .try_send(CallCommand::GetKeyEpoch { response: tx })
+            .is_err()
+        {
             return 0;
         }
         rx.await.unwrap_or(0)
@@ -1169,7 +1245,9 @@ impl CallWorkerHandle {
     #[cfg(feature = "testing")]
     pub async fn installed_key_ring(&self) -> Option<(u32, Vec<Option<Vec<u8>>>)> {
         let (tx, rx) = oneshot::channel();
-        self.cmd_tx.try_send(CallCommand::GetInstalledKeyRing { response: tx }).ok()?;
+        self.cmd_tx
+            .try_send(CallCommand::GetInstalledKeyRing { response: tx })
+            .ok()?;
         rx.await.ok().flatten()
     }
 
@@ -1177,7 +1255,11 @@ impl CallWorkerHandle {
     #[cfg(feature = "testing")]
     pub async fn local_track_count(&self) -> usize {
         let (tx, rx) = oneshot::channel();
-        if self.cmd_tx.try_send(CallCommand::GetLocalTrackCount { response: tx }).is_err() {
+        if self
+            .cmd_tx
+            .try_send(CallCommand::GetLocalTrackCount { response: tx })
+            .is_err()
+        {
             return 0;
         }
         rx.await.unwrap_or(0)
@@ -1969,7 +2051,11 @@ struct DeferredMedia {
 impl PublishGate {
     /// A joiner's gate: closed, with the call's auto-publish waiting in it.
     fn awaiting_key(is_video: bool) -> Self {
-        Self { closed: true, mic: Some(None), camera: is_video }
+        Self {
+            closed: true,
+            mic: Some(None),
+            camera: is_video,
+        }
     }
 
     fn is_closed(&self) -> bool {
@@ -2007,7 +2093,10 @@ impl PublishGate {
             return None;
         }
         self.closed = false;
-        Some(DeferredMedia { mic: self.mic.take(), camera: std::mem::take(&mut self.camera) })
+        Some(DeferredMedia {
+            mic: self.mic.take(),
+            camera: std::mem::take(&mut self.camera),
+        })
     }
 }
 
@@ -2016,14 +2105,30 @@ fn gate_defers(
     active_call: &Rc<RefCell<Option<ActiveCallState>>>,
     f: impl FnOnce(&mut PublishGate) -> bool,
 ) -> bool {
-    active_call.borrow_mut().as_mut().is_some_and(|s| f(&mut s.publish_gate))
+    active_call
+        .borrow_mut()
+        .as_mut()
+        .is_some_and(|s| f(&mut s.publish_gate))
 }
 
 /// Open the active call's publish gate and publish what it held back.
 /// Spawned: capture start-up must not hold the command loop.
-fn open_publish_gate(active_call: &Rc<RefCell<Option<ActiveCallState>>>, room_manager: &Arc<RoomManager>) {
-    let Some(media) = active_call.borrow_mut().as_mut().and_then(|s| s.publish_gate.open()) else { return };
-    tracing::info!(mic = media.mic.is_some(), camera = media.camera, "Call key held: publishing");
+fn open_publish_gate(
+    active_call: &Rc<RefCell<Option<ActiveCallState>>>,
+    room_manager: &Arc<RoomManager>,
+) {
+    let Some(media) = active_call
+        .borrow_mut()
+        .as_mut()
+        .and_then(|s| s.publish_gate.open())
+    else {
+        return;
+    };
+    tracing::info!(
+        mic = media.mic.is_some(),
+        camera = media.camera,
+        "Call key held: publishing"
+    );
     let rm = room_manager.clone();
     tokio::task::spawn_local(async move {
         if let Some(device) = media.mic {
@@ -2047,7 +2152,9 @@ fn adopt_into_call(
     epoch: u32,
 ) -> Result<Option<(u32, Vec<u8>, Vec<u8>)>, CallError> {
     match active {
-        Some(state) if state.call.id == call_id => Ok(adopt_group_key(&mut state.key_state, key, epoch)),
+        Some(state) if state.call.id == call_id => {
+            Ok(adopt_group_key(&mut state.key_state, key, epoch))
+        }
         _ => Err(CallError::NotInCall),
     }
 }
@@ -2129,13 +2236,14 @@ async fn initiate_call_impl(
         .await?;
 
     // Create domain call object
-    let call_id =
-        CallId::from_str(&response.call_id).map_err(|_| CallError::InvalidCallId)?;
+    let call_id = CallId::from_str(&response.call_id).map_err(|_| CallError::InvalidCallId)?;
 
     // `CreateCall` hands back a group channel's live call when there is one:
     // then its creator is someone else and we have joined it, holding none of
     // its keys (the key we connected with is ours alone).
-    let creator = response.call_info.as_ref()
+    let creator = response
+        .call_info
+        .as_ref()
         .and_then(|ci| UserId::from_str(&ci.created_by).ok())
         .unwrap_or(initiator_id);
     let joined_existing = creator != initiator_id && encryption_root_key != &[0u8; 32];
@@ -2149,7 +2257,11 @@ async fn initiate_call_impl(
         call.start();
     }
     // Retain server creation time for signaling, separate from connected_at.
-    if let Some(dt) = response.call_info.as_ref().and_then(|ci| server_ns_to_utc(ci.created_at)) {
+    if let Some(dt) = response
+        .call_info
+        .as_ref()
+        .and_then(|ci| server_ns_to_utc(ci.created_at))
+    {
         call.started_at = Some(dt);
     }
     call.add_participant(Participant::new(initiator_id));
@@ -2198,7 +2310,11 @@ async fn join_call_impl(
         let rpc_started = std::time::Instant::now();
         tracing::info!(stage = "join_call_rpc_begin", %call_id, elapsed_us = 0u64, "Call stage");
         let joined = client.join_call(&call_id.to_string()).await;
-        let stage = if joined.is_ok() { "join_call_rpc_succeeded" } else { "join_call_rpc_failed" };
+        let stage = if joined.is_ok() {
+            "join_call_rpc_succeeded"
+        } else {
+            "join_call_rpc_failed"
+        };
         tracing::info!(stage, %call_id, elapsed_us = rpc_started.elapsed().as_micros() as u64, "Call stage");
         joined.map_err(|e| CallError::ServerError(e.to_string()))?
     };
@@ -2223,18 +2339,18 @@ async fn join_call_impl(
 
     // Convert proto to domain
     let call_info = response.call_info.ok_or(CallError::NotFound)?;
-    let server_channel_id = ChannelId::from_str(&call_info.channel_id)
-        .map_err(|_| CallError::InvalidChannelId)?;
+    let server_channel_id =
+        ChannelId::from_str(&call_info.channel_id).map_err(|_| CallError::InvalidChannelId)?;
     let initiator_id =
         UserId::from_str(&call_info.created_by).map_err(|_| CallError::InvalidUserId)?;
     let channel_id = joined_channel_id(server_channel_id, &initiator_id, &joiner_id);
 
-    let call_type = match ProtoCallType::try_from(call_info.r#type).unwrap_or(ProtoCallType::Unspecified)
-    {
-        ProtoCallType::Voice => CallType::Voice,
-        ProtoCallType::Video | ProtoCallType::ScreenShare => CallType::Video,
-        _ => CallType::Voice,
-    };
+    let call_type =
+        match ProtoCallType::try_from(call_info.r#type).unwrap_or(ProtoCallType::Unspecified) {
+            ProtoCallType::Voice => CallType::Voice,
+            ProtoCallType::Video | ProtoCallType::ScreenShare => CallType::Video,
+            _ => CallType::Voice,
+        };
 
     let mut call = Call::new(channel_id, initiator_id, call_type);
     call.id = call_id;
@@ -2270,7 +2386,11 @@ async fn join_call_impl(
 /// server. Filed verbatim, that is the callee's Saved Messages; from here the
 /// conversation is the DM with the caller. Group and channel-backed DM calls
 /// carry a real channel id and pass through.
-fn joined_channel_id(server_channel_id: ChannelId, initiator_id: &UserId, joiner_id: &UserId) -> ChannelId {
+fn joined_channel_id(
+    server_channel_id: ChannelId,
+    initiator_id: &UserId,
+    joiner_id: &UserId,
+) -> ChannelId {
     if server_channel_id == ChannelId::from(*joiner_id) {
         ChannelId::from(*initiator_id)
     } else {
@@ -2279,7 +2399,7 @@ fn joined_channel_id(server_channel_id: ChannelId, initiator_id: &UserId, joiner
 }
 
 /// Connect directly to LiveKit with a pre-made access token (for anonymous calls).
-/// 
+///
 /// This bypasses the server call creation and directly connects to LiveKit.
 /// Used for anonymous calls where we get the token from the anonymous call service.
 async fn connect_with_token_impl(
@@ -2307,7 +2427,7 @@ async fn connect_with_token_impl(
         id: call_id,
         channel_id,
         initiator_id: UserId::new(), // Anonymous
-        call_type: CallType::Voice, // Default to voice for anonymous calls
+        call_type: CallType::Voice,  // Default to voice for anonymous calls
         state: CallState::Connected,
         participants: vec![],
         started_at: Some(chrono::Utc::now()),
@@ -2318,7 +2438,9 @@ async fn connect_with_token_impl(
 
     // Create key state from real encryption key
     let mut key_arr = [0u8; 32];
-    if encryption_key.len() >= 32 { key_arr.copy_from_slice(&encryption_key[..32]); }
+    if encryption_key.len() >= 32 {
+        key_arr.copy_from_slice(&encryption_key[..32]);
+    }
     // Use room_name as call_id for CallKeyState — both sides know it, ensuring
     // coordinated ratcheting produces identical keys on both sides
     let key_state = CallKeyState::new(&key_arr, &room_name)
@@ -2349,7 +2471,10 @@ async fn leave_call_impl(
     let (call_id, is_anonymous) = {
         let active = active_call.borrow();
         let state = active.as_ref().ok_or(CallError::NotInCall)?;
-        (state.call.id.to_string(), state.room_name.starts_with("anon-"))
+        (
+            state.call.id.to_string(),
+            state.room_name.starts_with("anon-"),
+        )
     };
 
     // Skip server leave_call for anonymous calls (no server-side call state)
@@ -2489,7 +2614,11 @@ const MAX_RATCHET_CATCH_UP: u32 = 24 * 60 * 2;
 /// started at `call_start`.
 fn wall_clock_epoch(call_start: chrono::DateTime<chrono::Utc>) -> u32 {
     let elapsed = (chrono::Utc::now() - call_start).num_milliseconds() as f64 / 1000.0;
-    aligned_ratchet_schedule(elapsed + RATCHET_TICK_TOLERANCE_SECS, KEY_RATCHET_INTERVAL_SECS).0
+    aligned_ratchet_schedule(
+        elapsed + RATCHET_TICK_TOLERANCE_SECS,
+        KEY_RATCHET_INTERVAL_SECS,
+    )
+    .0
 }
 
 /// Ratchet `key_state` up to chain position `target`, returning what to hand
@@ -2502,7 +2631,11 @@ fn wall_clock_epoch(call_start: chrono::DateTime<chrono::Utc>) -> u32 {
 fn ratchet_to(key_state: &mut CallKeyState, target: u32) -> Option<(u32, Vec<u8>, Vec<u8>)> {
     let behind = target.checked_sub(key_state.epoch()).filter(|n| *n > 0)?;
     if behind > MAX_RATCHET_CATCH_UP {
-        tracing::error!(epoch = key_state.epoch(), target, "Call key ratchet target out of range; not advancing");
+        tracing::error!(
+            epoch = key_state.epoch(),
+            target,
+            "Call key ratchet target out of range; not advancing"
+        );
         return None;
     }
     while key_state.epoch() < target {
@@ -2548,7 +2681,10 @@ fn start_key_ratchet_timer(
     *ratchet_cancel.borrow_mut() = Some(cancel_tx);
 
     // Shared wall-clock anchor. Read once — it's fixed for the call's lifetime.
-    let call_start = active_call.borrow().as_ref().and_then(|s| s.call.started_at);
+    let call_start = active_call
+        .borrow()
+        .as_ref()
+        .and_then(|s| s.call.started_at);
 
     let room_manager = room_manager.clone();
     let active_call = active_call.clone();
@@ -2671,9 +2807,7 @@ async fn auto_publish_media(room_manager: &RoomManager, is_video: bool) {
 }
 
 /// Stop the periodic key ratchet timer.
-fn stop_key_ratchet_timer(
-    ratchet_cancel: &Rc<RefCell<Option<tokio::sync::oneshot::Sender<()>>>>,
-) {
+fn stop_key_ratchet_timer(ratchet_cancel: &Rc<RefCell<Option<tokio::sync::oneshot::Sender<()>>>>) {
     if let Some(cancel_tx) = ratchet_cancel.borrow_mut().take() {
         let _ = cancel_tx.send(());
     }
@@ -2753,7 +2887,11 @@ fn peer_left_ends_call(
 ) -> bool {
     matches!(
         kind,
-        Some(OrchestratedCallKind::DmStandard | OrchestratedCallKind::AnonDm | OrchestratedCallKind::AnonGroup)
+        Some(
+            OrchestratedCallKind::DmStandard
+                | OrchestratedCallKind::AnonDm
+                | OrchestratedCallKind::AnonGroup
+        )
     ) && remaining.iter().all(|id| id == departed)
 }
 
@@ -2768,7 +2906,9 @@ fn peer_left_ends_call(
 /// are alone. Channel calls are untouched: the initiator rekeys instead.
 fn spawn_end_if_left_alone(worker: CallWorkerHandle, departed: String) {
     tokio::spawn(async move {
-        let Some(call) = worker.active_call().await.map(|c| c.id) else { return };
+        let Some(call) = worker.active_call().await.map(|c| c.id) else {
+            return;
+        };
         let still_ends = || async {
             peer_left_ends_call(
                 worker.orch_active_kind().await,
@@ -2867,7 +3007,11 @@ fn handle_domain_event(
             );
         }
 
-        DomainEvent::CallHangupReceived { call_id, peer_id, reason } => {
+        DomainEvent::CallHangupReceived {
+            call_id,
+            peer_id,
+            reason,
+        } => {
             // Signal's Hangup ACCEPTED/DECLINED: another of OUR devices took
             // this call. Only our own user may say so, and it only stops the
             // ringing — it must never tear down a call this device is in.
@@ -2955,11 +3099,31 @@ fn handle_domain_event(
             );
         }
 
-        DomainEvent::AnonCallHangupReceived { call_room_id, sender_id, .. } => {
-            handle_anon_hangup(worker, signaling, OrchestratedCallKind::AnonDm, &call_room_id, sender_id);
+        DomainEvent::AnonCallHangupReceived {
+            call_room_id,
+            sender_id,
+            ..
+        } => {
+            handle_anon_hangup(
+                worker,
+                signaling,
+                OrchestratedCallKind::AnonDm,
+                &call_room_id,
+                sender_id,
+            );
         }
-        DomainEvent::AnonGroupCallHangupReceived { call_room_id, sender_id, .. } => {
-            handle_anon_hangup(worker, signaling, OrchestratedCallKind::AnonGroup, &call_room_id, sender_id);
+        DomainEvent::AnonGroupCallHangupReceived {
+            call_room_id,
+            sender_id,
+            ..
+        } => {
+            handle_anon_hangup(
+                worker,
+                signaling,
+                OrchestratedCallKind::AnonGroup,
+                &call_room_id,
+                sender_id,
+            );
         }
 
         DomainEvent::AnonGroupCallOfferReceived {
@@ -3026,8 +3190,8 @@ fn handle_domain_event(
         // ChatterClient API; group-call signals (ring, rotation, key request)
         // by `ChatterClient::handle_group_call_signal`, which needs channel
         // membership and the server's view of the call.
-        DomainEvent::CallKeyAnswerReceived { .. }
-        | DomainEvent::GroupCallSignalReceived { .. } => {}
+        DomainEvent::CallKeyAnswerReceived { .. } | DomainEvent::GroupCallSignalReceived { .. } => {
+        }
 
         _ => {}
     }
@@ -3048,7 +3212,10 @@ fn handle_anon_hangup(
     sender: UserId,
 ) {
     let Some(call) = anon_room_handle(call_room_id) else {
-        tracing::debug!(len = call_room_id.len(), "Anon hangup with a malformed call_room_id; ignored");
+        tracing::debug!(
+            len = call_room_id.len(),
+            "Anon hangup with a malformed call_room_id; ignored"
+        );
         return;
     };
     let rang_us = signaling.take_incoming_anon_call(call.as_str(), sender);
@@ -3078,7 +3245,10 @@ fn anon_hangup_ends_call(kind: OrchestratedCallKind) -> bool {
 /// the 16-byte `call_room_id` every anon offer, answer and hangup carries.
 fn anon_room_handle(call_room_id: &[u8]) -> Option<CallHandle> {
     let id: [u8; 16] = call_room_id.try_into().ok()?;
-    Some(CallHandle::from(format!("anon-{}", uuid::Uuid::from_bytes(id))))
+    Some(CallHandle::from(format!(
+        "anon-{}",
+        uuid::Uuid::from_bytes(id)
+    )))
 }
 
 /// Handle an anonymous call answer (DM or group) inside the orchestrator.
@@ -3135,11 +3305,13 @@ fn spawn_anon_call_answer_task(
                     UserId(uuid::Uuid::nil()),
                     setup.is_video,
                 );
-                let _ = worker.call_events_tx.send(CallOrchestratorEvent::AnonCallConnected {
-                    call: handle,
-                    kind,
-                    info,
-                });
+                let _ = worker
+                    .call_events_tx
+                    .send(CallOrchestratorEvent::AnonCallConnected {
+                        call: handle,
+                        kind,
+                        info,
+                    });
             }
             Ok(crate::domain::call::AnonCallAnswerOutcome::Declined) => {
                 worker.orch_mark_ended(room_handle, CallEndReason::Declined);
@@ -3158,10 +3330,7 @@ fn spawn_anon_call_answer_task(
             }
             Err(e) => {
                 tracing::error!(error = %e, "Anon call answer handling failed");
-                worker.orch_mark_ended(
-                    room_handle,
-                    CallEndReason::Error(e.to_string()),
-                );
+                worker.orch_mark_ended(room_handle, CallEndReason::Error(e.to_string()));
             }
         }
     });
@@ -3169,7 +3338,7 @@ fn spawn_anon_call_answer_task(
 
 #[cfg(test)]
 mod ring_timeout_tests {
-    use super::{offer_is_stale, RING_TIMEOUT};
+    use super::{RING_TIMEOUT, offer_is_stale};
 
     #[test]
     fn only_offers_past_the_ring_timeout_are_stale() {
@@ -3188,13 +3357,16 @@ mod ring_timeout_tests {
 
 #[cfg(test)]
 mod joined_channel_tests {
-    use super::{joined_channel_id, ChannelId, UserId};
+    use super::{ChannelId, UserId, joined_channel_id};
 
     #[test]
     fn callee_files_a_channel_free_dm_call_under_the_caller() {
         let (caller, callee) = (UserId::new(), UserId::new());
         // The caller scoped it to us: file under our DM with the caller, not Saved Messages.
-        assert_eq!(joined_channel_id(callee.into(), &caller, &callee), ChannelId::from(caller));
+        assert_eq!(
+            joined_channel_id(callee.into(), &caller, &callee),
+            ChannelId::from(caller)
+        );
         // A real channel id (group, or channel-backed DM) is kept.
         let channel = ChannelId::new();
         assert_eq!(joined_channel_id(channel, &caller, &callee), channel);
@@ -3203,7 +3375,10 @@ mod joined_channel_tests {
 
 #[cfg(test)]
 mod orchestrator_kind_tests {
-    use super::{CallHandle, OrchestratedActive, OrchestratedCallKind as K, OrchestratorState, PendingOutgoing, UserId};
+    use super::{
+        CallHandle, OrchestratedActive, OrchestratedCallKind as K, OrchestratorState,
+        PendingOutgoing, UserId,
+    };
 
     /// `end_active_call` dispatches on this kind; `None` returns early with no
     /// hangup sent. A DM call cancelled while it rings must resolve to
@@ -3214,32 +3389,42 @@ mod orchestrator_kind_tests {
         assert_eq!(orch.call_kind(), None);
 
         let call = CallHandle::from("ringing");
-        orch.outgoing.insert(call.clone(), PendingOutgoing {
-            call: call.clone(),
-            kind: K::DmStandard,
-            peer_id: UserId::new(),
-            peer_name: String::new(),
-            is_video: false,
-        });
+        orch.outgoing.insert(
+            call.clone(),
+            PendingOutgoing {
+                call: call.clone(),
+                kind: K::DmStandard,
+                peer_id: UserId::new(),
+                peer_name: String::new(),
+                is_video: false,
+            },
+        );
         assert_eq!(orch.call_kind(), Some(K::DmStandard));
 
         // Connected: the active slot is what counts.
         orch.outgoing.remove(&call);
-        orch.active = Some(OrchestratedActive { call, kind: K::DmStandard });
+        orch.active = Some(OrchestratedActive {
+            call,
+            kind: K::DmStandard,
+        });
         assert_eq!(orch.call_kind(), Some(K::DmStandard));
     }
 }
 
 #[cfg(test)]
 mod peer_left_tests {
-    use super::{peer_left_ends_call, OrchestratedCallKind as K};
+    use super::{OrchestratedCallKind as K, peer_left_ends_call};
 
     #[test]
     fn one_to_one_ends_only_when_the_room_is_empty() {
         let gone = vec!["peer".to_string()];
         assert!(peer_left_ends_call(Some(K::DmStandard), &[], "peer"));
         assert!(peer_left_ends_call(Some(K::AnonDm), &gone, "peer"));
-        assert!(!peer_left_ends_call(Some(K::DmStandard), &["other".into()], "peer"));
+        assert!(!peer_left_ends_call(
+            Some(K::DmStandard),
+            &["other".into()],
+            "peer"
+        ));
         // Channel calls and no-call are never ended by a departure.
         assert!(!peer_left_ends_call(Some(K::GroupChannel), &[], "peer"));
         assert!(!peer_left_ends_call(None, &[], "peer"));
@@ -3247,8 +3432,16 @@ mod peer_left_tests {
 
     #[test]
     fn anon_group_ends_only_when_we_are_left_alone() {
-        assert!(!peer_left_ends_call(Some(K::AnonGroup), &["other".into()], "peer"));
-        assert!(peer_left_ends_call(Some(K::AnonGroup), &["peer".into()], "peer"));
+        assert!(!peer_left_ends_call(
+            Some(K::AnonGroup),
+            &["other".into()],
+            "peer"
+        ));
+        assert!(peer_left_ends_call(
+            Some(K::AnonGroup),
+            &["peer".into()],
+            "peer"
+        ));
         assert!(peer_left_ends_call(Some(K::AnonGroup), &[], "peer"));
     }
 
@@ -3262,7 +3455,7 @@ mod peer_left_tests {
 
 #[cfg(test)]
 mod ratchet_align_tests {
-    use super::{aligned_ratchet_schedule, KEY_RATCHET_INTERVAL_SECS};
+    use super::{KEY_RATCHET_INTERVAL_SECS, aligned_ratchet_schedule};
 
     #[test]
     fn two_peers_align_to_same_boundaries() {
@@ -3276,7 +3469,10 @@ mod ratchet_align_tests {
         // call_start + da (from A) == call_start + 4.0 + db (from B) == boundary 30.
         assert!((da - 29.8).abs() < 1e-6, "A delay {}", da);
         assert!((db - 25.8).abs() < 1e-6, "B delay {}", db);
-        assert!(((0.2 + da) - (4.2 + db)).abs() < 1e-6, "boundaries must match");
+        assert!(
+            ((0.2 + da) - (4.2 + db)).abs() < 1e-6,
+            "boundaries must match"
+        );
     }
 
     #[test]
@@ -3300,7 +3496,10 @@ mod ratchet_align_tests {
 
 #[cfg(test)]
 mod failed_accept_tests {
-    use super::{CallEndReason, CallHandle, CallOrchestratorEvent, CallWorkerHandle, OrchestratedCallKind, UserId};
+    use super::{
+        CallEndReason, CallHandle, CallOrchestratorEvent, CallWorkerHandle, OrchestratedCallKind,
+        UserId,
+    };
 
     /// An accept takes the call out of the ringing set before it connects, so
     /// a failed connect leaves it in no slot. `accept_presented_incoming_call`
@@ -3318,15 +3517,32 @@ mod failed_accept_tests {
         let call = CallHandle::from("accepted-then-failed");
 
         worker.orch_present_incoming(
-            call.clone(), OrchestratedCallKind::DmStandard, UserId::new(), "Peer".into(),
-            false, true, String::new(), Some([0; 32]), None, String::new(),
+            call.clone(),
+            OrchestratedCallKind::DmStandard,
+            UserId::new(),
+            "Peer".into(),
+            false,
+            true,
+            String::new(),
+            Some([0; 32]),
+            None,
+            String::new(),
         );
-        worker.orch_accept_incoming(call.clone()).await.expect("presented call accepts");
-        worker.orch_mark_ended(call.clone(), CallEndReason::Error("connect timed out".into()));
+        worker
+            .orch_accept_incoming(call.clone())
+            .await
+            .expect("presented call accepts");
+        worker.orch_mark_ended(
+            call.clone(),
+            CallEndReason::Error("connect timed out".into()),
+        );
 
         loop {
             match tokio::time::timeout(std::time::Duration::from_secs(5), events.recv()).await {
-                Ok(Ok(CallOrchestratorEvent::ActiveEnded { call: ended, reason })) => {
+                Ok(Ok(CallOrchestratorEvent::ActiveEnded {
+                    call: ended,
+                    reason,
+                })) => {
                     assert_eq!(ended, call);
                     assert!(matches!(reason, CallEndReason::Error(_)));
                     break;
@@ -3350,16 +3566,34 @@ mod anon_cancel_tests {
     /// The hangup's delivery to the callee is not covered here.
     #[tokio::test]
     async fn a_ringing_anon_call_cancels_through_the_hangup_path() {
-        for kind in [OrchestratedCallKind::AnonDm, OrchestratedCallKind::AnonGroup] {
-            let channel = tonic::transport::Endpoint::from_static("http://127.0.0.1:9").connect_lazy();
+        for kind in [
+            OrchestratedCallKind::AnonDm,
+            OrchestratedCallKind::AnonGroup,
+        ] {
+            let channel =
+                tonic::transport::Endpoint::from_static("http://127.0.0.1:9").connect_lazy();
             let worker = CallWorkerHandle::spawn(crate::network::grpc::CallClient::new(
                 channel.into(),
                 crate::network::grpc::interceptors::AuthInterceptor::new(),
             ));
             let room = format!("anon-{}", uuid::Uuid::new_v4());
-            worker.orch_register_outgoing(CallHandle::from(room.as_str()), kind, UserId(uuid::Uuid::nil()), String::new(), false);
-            assert_eq!(worker.orch_active_kind().await, Some(kind), "a ringing {kind:?} call is not what End ends");
-            assert_eq!(worker.get_room_name().await, None, "ringing, yet in a room: the cancel would skip the hangup");
+            worker.orch_register_outgoing(
+                CallHandle::from(room.as_str()),
+                kind,
+                UserId(uuid::Uuid::nil()),
+                String::new(),
+                false,
+            );
+            assert_eq!(
+                worker.orch_active_kind().await,
+                Some(kind),
+                "a ringing {kind:?} call is not what End ends"
+            );
+            assert_eq!(
+                worker.get_room_name().await,
+                None,
+                "ringing, yet in a room: the cancel would skip the hangup"
+            );
             worker.shutdown();
         }
     }
@@ -3375,9 +3609,18 @@ mod publish_gate_tests {
     fn a_joiner_publishes_only_once_keyed() {
         let mut gate = PublishGate::awaiting_key(false);
         assert!(gate.is_closed());
-        assert!(gate.defer_mic(Some("usb".into())), "mic held back while keyless");
+        assert!(
+            gate.defer_mic(Some("usb".into())),
+            "mic held back while keyless"
+        );
         assert!(gate.defer_camera(), "camera held back while keyless");
-        assert_eq!(gate.open(), Some(DeferredMedia { mic: Some(Some("usb".into())), camera: true }));
+        assert_eq!(
+            gate.open(),
+            Some(DeferredMedia {
+                mic: Some(Some("usb".into())),
+                camera: true
+            })
+        );
         assert!(!gate.is_closed());
         assert_eq!(gate.open(), None, "published once");
         assert!(!gate.defer_mic(None), "open: publishes go straight out");
@@ -3389,7 +3632,13 @@ mod publish_gate_tests {
         let mut gate = PublishGate::awaiting_key(true);
         gate.drop_camera();
         gate.drop_mic();
-        assert_eq!(gate.open(), Some(DeferredMedia { mic: None, camera: false }));
+        assert_eq!(
+            gate.open(),
+            Some(DeferredMedia {
+                mic: None,
+                camera: false
+            })
+        );
     }
 
     #[test]
@@ -3403,7 +3652,11 @@ mod publish_gate_tests {
 
 #[cfg(test)]
 mod group_key_install_tests {
-    use super::{adopt_group_key, adopt_into_call, chain_install, ratchet_to, MAX_RATCHET_CATCH_UP, ActiveCallState, Call, CallError, CallId, CallKeyState, CallType, ChannelId, PublishGate, UserId};
+    use super::{
+        ActiveCallState, Call, CallError, CallId, CallKeyState, CallType, ChannelId,
+        MAX_RATCHET_CATCH_UP, PublishGate, UserId, adopt_group_key, adopt_into_call, chain_install,
+        ratchet_to,
+    };
 
     const CALL: &str = "11111111-2222-4333-8444-555555555555";
 
@@ -3455,10 +3708,15 @@ mod group_key_install_tests {
         let mut rotator = CallKeyState::new(&root, CALL).unwrap();
         ratchet_to(&mut rotator, 10).unwrap();
         for _ in 0..3 {
-            rotator.rotate(crate::crypto::generate_group_call_key()).unwrap();
+            rotator
+                .rotate(crate::crypto::generate_group_call_key())
+                .unwrap();
         }
         assert_eq!(rotator.epoch(), 13);
-        assert!(ratchet_to(&mut rotator, 11).is_none(), "ahead of the clock: wait for it");
+        assert!(
+            ratchet_to(&mut rotator, 11).is_none(),
+            "ahead of the clock: wait for it"
+        );
         assert!(ratchet_to(&mut rotator, 12).is_none());
 
         let mut joiner = CallKeyState::new(&root, CALL).unwrap();
@@ -3471,7 +3729,11 @@ mod group_key_install_tests {
             ratchet_to(&mut rotator, wall);
             ratchet_to(&mut joiner, wall);
             assert_eq!(rotator.epoch(), wall.max(14));
-            assert_eq!(joiner.current_key(), rotator.current_key(), "wall epoch {wall}");
+            assert_eq!(
+                joiner.current_key(),
+                rotator.current_key(),
+                "wall epoch {wall}"
+            );
         }
     }
 
@@ -3488,7 +3750,10 @@ mod group_key_install_tests {
         ratchet_to(&mut member, 4).unwrap();
         let key = fresh();
         let at = rotator.rotate(key).unwrap();
-        assert!(adopt_group_key(&mut member, key, at).is_some(), "the member's own join rotation");
+        assert!(
+            adopt_group_key(&mut member, key, at).is_some(),
+            "the member's own join rotation"
+        );
 
         // They leave: the leave rotation keys the call while they are away.
         rotator.rotate(fresh()).unwrap();
@@ -3497,7 +3762,10 @@ mod group_key_install_tests {
             ratchet_to(&mut rotator, wall);
             while_away.push(*rotator.current_key());
             ratchet_to(&mut member, wall);
-            assert!(!while_away.contains(member.current_key()), "their old chain, wall epoch {wall}");
+            assert!(
+                !while_away.contains(member.current_key()),
+                "their old chain, wall epoch {wall}"
+            );
         }
 
         // They rejoin: the join rotation's key is all they are sent.
@@ -3509,7 +3777,10 @@ mod group_key_install_tests {
             ratchet_to(&mut rotator, wall);
             ratchet_to(&mut member, wall);
             assert_eq!(member.current_key(), rotator.current_key());
-            assert!(!while_away.contains(member.current_key()), "after rejoining, wall epoch {wall}");
+            assert!(
+                !while_away.contains(member.current_key()),
+                "after rejoining, wall epoch {wall}"
+            );
         }
     }
 
@@ -3530,7 +3801,11 @@ mod group_key_install_tests {
         let join_key = fresh();
         let at = rotator.rotate(join_key).unwrap();
         let (_, sent, _) = chain_install(&rotator);
-        assert_eq!(sent, join_key.to_vec(), "what goes to the joiner is the rotation's key");
+        assert_eq!(
+            sent,
+            join_key.to_vec(),
+            "what goes to the joiner is the rotation's key"
+        );
         assert!(!before_join.contains(&join_key));
 
         let mut joiner = CallKeyState::new(&[7u8; 32], CALL).unwrap();
@@ -3538,7 +3813,10 @@ mod group_key_install_tests {
         assert!(adopt_group_key(&mut joiner, join_key, at).is_some());
         for wall in 10..40 {
             ratchet_to(&mut joiner, wall);
-            assert!(!before_join.contains(joiner.current_key()), "wall epoch {wall}");
+            assert!(
+                !before_join.contains(joiner.current_key()),
+                "wall epoch {wall}"
+            );
         }
     }
 
@@ -3554,10 +3832,17 @@ mod group_key_install_tests {
     fn stale_epoch_changes_nothing() {
         let mut state = active([7u8; 32]);
         let call: CallId = CALL.parse().unwrap();
-        assert!(adopt_into_call(Some(&mut state), call, [9u8; 32], 2).unwrap().is_some());
+        assert!(
+            adopt_into_call(Some(&mut state), call, [9u8; 32], 2)
+                .unwrap()
+                .is_some()
+        );
         let held = *state.key_state.current_key();
         for stale in [0, 1, 2] {
-            assert_eq!(adopt_into_call(Some(&mut state), call, [5u8; 32], stale).unwrap(), None);
+            assert_eq!(
+                adopt_into_call(Some(&mut state), call, [5u8; 32], stale).unwrap(),
+                None
+            );
         }
         assert_eq!(*state.key_state.current_key(), held);
         assert_eq!(state.key_state.epoch(), 2);
@@ -3568,8 +3853,14 @@ mod group_key_install_tests {
         let mut state = active([7u8; 32]);
         let other = CallId(uuid::Uuid::new_v4());
         let before = *state.key_state.current_key();
-        assert!(matches!(adopt_into_call(Some(&mut state), other, [9u8; 32], 5), Err(CallError::NotInCall)));
-        assert!(matches!(adopt_into_call(None, other, [9u8; 32], 5), Err(CallError::NotInCall)));
+        assert!(matches!(
+            adopt_into_call(Some(&mut state), other, [9u8; 32], 5),
+            Err(CallError::NotInCall)
+        ));
+        assert!(matches!(
+            adopt_into_call(None, other, [9u8; 32], 5),
+            Err(CallError::NotInCall)
+        ));
         assert_eq!(*state.key_state.current_key(), before);
         assert_eq!(state.key_state.epoch(), 0);
     }

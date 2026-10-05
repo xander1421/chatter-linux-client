@@ -16,12 +16,12 @@
 
 pub mod auth_state;
 pub mod chat_state;
+#[cfg(feature = "jarvis")]
+pub mod jarvis_state;
 pub mod message_state;
 pub mod offline_state;
 pub mod store;
 pub mod user_state;
-#[cfg(feature = "jarvis")]
-pub mod jarvis_state;
 
 // Re-export core state types
 pub use auth_state::{AuthState, AuthStateData};

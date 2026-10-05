@@ -40,7 +40,15 @@ fn names_outside_signal_grammar_have_no_hash() {
     // No discriminator, single-digit or zero-padded discriminator, leading
     // digit, non-ASCII, empty part: every one is refused rather than hashed
     // some other way.
-    for u in ["alice", "alice.4", "alice.042", "1alice.42", "用户.42", "alice.", ".42"] {
+    for u in [
+        "alice",
+        "alice.4",
+        "alice.042",
+        "1alice.42",
+        "用户.42",
+        "alice.",
+        ".42",
+    ] {
         assert!(hash_username_lookup(u).is_err(), "{u} must be rejected");
     }
 }

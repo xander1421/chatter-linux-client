@@ -59,19 +59,28 @@ pub trait IsHeartbeat {
 
 impl IsHeartbeat for chat_v1::MessageEvent {
     fn is_heartbeat(&self) -> bool {
-        matches!(self.event, Some(chat_v1::message_event::Event::Heartbeat(_)))
+        matches!(
+            self.event,
+            Some(chat_v1::message_event::Event::Heartbeat(_))
+        )
     }
 }
 
 impl IsHeartbeat for chat_v1::StreamMessagesResponse {
     fn is_heartbeat(&self) -> bool {
-        matches!(self.item, Some(chat_v1::stream_messages_response::Item::Heartbeat(_)))
+        matches!(
+            self.item,
+            Some(chat_v1::stream_messages_response::Item::Heartbeat(_))
+        )
     }
 }
 
 impl IsHeartbeat for chat_v1::ChannelEvent {
     fn is_heartbeat(&self) -> bool {
-        matches!(self.event, Some(chat_v1::channel_event::Event::Heartbeat(_)))
+        matches!(
+            self.event,
+            Some(chat_v1::channel_event::Event::Heartbeat(_))
+        )
     }
 }
 
@@ -89,13 +98,19 @@ impl IsHeartbeat for chat_v1::CallEvent {
 
 impl IsHeartbeat for chat_v1::StreamNotificationsResponse {
     fn is_heartbeat(&self) -> bool {
-        matches!(self.item, Some(chat_v1::stream_notifications_response::Item::Heartbeat(_)))
+        matches!(
+            self.item,
+            Some(chat_v1::stream_notifications_response::Item::Heartbeat(_))
+        )
     }
 }
 
 impl IsHeartbeat for chat_v1::StreamIntegrationEventsResponse {
     fn is_heartbeat(&self) -> bool {
-        matches!(self.item, Some(chat_v1::stream_integration_events_response::Item::Heartbeat(_)))
+        matches!(
+            self.item,
+            Some(chat_v1::stream_integration_events_response::Item::Heartbeat(_))
+        )
     }
 }
 
@@ -107,7 +122,10 @@ mod tests {
     #[test]
     fn the_silence_limit_spans_more_than_two_jittered_intervals() {
         // The server's longest gap is interval + 10%.
-        assert!(STREAM_SILENCE_LIMIT > SERVER_HEARTBEAT_INTERVAL * 2 + SERVER_HEARTBEAT_INTERVAL / 10 * 2);
+        assert!(
+            STREAM_SILENCE_LIMIT
+                > SERVER_HEARTBEAT_INTERVAL * 2 + SERVER_HEARTBEAT_INTERVAL / 10 * 2
+        );
         // And it must expire before the server's own 5-minute idle cut would.
         assert!(STREAM_SILENCE_LIMIT < Duration::from_secs(300));
     }
@@ -115,41 +133,120 @@ mod tests {
     #[test]
     fn every_subscription_type_recognises_its_heartbeat_and_only_it() {
         use chat_v1::*;
-        assert!(MessageEvent { event: Some(message_event::Event::Heartbeat(Hb {})), ..Default::default() }.is_heartbeat());
-        assert!(!MessageEvent { event: Some(message_event::Event::MessageDeletedId("x".into())), ..Default::default() }.is_heartbeat());
+        assert!(
+            MessageEvent {
+                event: Some(message_event::Event::Heartbeat(Hb {})),
+                ..Default::default()
+            }
+            .is_heartbeat()
+        );
+        assert!(
+            !MessageEvent {
+                event: Some(message_event::Event::MessageDeletedId("x".into())),
+                ..Default::default()
+            }
+            .is_heartbeat()
+        );
         assert!(!MessageEvent::default().is_heartbeat());
 
-        assert!(StreamMessagesResponse { item: Some(stream_messages_response::Item::Heartbeat(Hb {})) }.is_heartbeat());
-        assert!(!StreamMessagesResponse { item: Some(stream_messages_response::Item::Message(Message::default())) }.is_heartbeat());
+        assert!(
+            StreamMessagesResponse {
+                item: Some(stream_messages_response::Item::Heartbeat(Hb {}))
+            }
+            .is_heartbeat()
+        );
+        assert!(
+            !StreamMessagesResponse {
+                item: Some(stream_messages_response::Item::Message(Message::default()))
+            }
+            .is_heartbeat()
+        );
 
-        assert!(ChannelEvent { event: Some(channel_event::Event::Heartbeat(Hb {})), ..Default::default() }.is_heartbeat());
-        assert!(!ChannelEvent { event: Some(channel_event::Event::ChannelDeleted("x".into())), ..Default::default() }.is_heartbeat());
+        assert!(
+            ChannelEvent {
+                event: Some(channel_event::Event::Heartbeat(Hb {})),
+                ..Default::default()
+            }
+            .is_heartbeat()
+        );
+        assert!(
+            !ChannelEvent {
+                event: Some(channel_event::Event::ChannelDeleted("x".into())),
+                ..Default::default()
+            }
+            .is_heartbeat()
+        );
 
-        assert!(UserEvent { event: Some(user_event::Event::Heartbeat(Hb {})), ..Default::default() }.is_heartbeat());
+        assert!(
+            UserEvent {
+                event: Some(user_event::Event::Heartbeat(Hb {})),
+                ..Default::default()
+            }
+            .is_heartbeat()
+        );
         assert!(!UserEvent::default().is_heartbeat());
 
-        assert!(CallEvent { data: Some(call_event::Data::Heartbeat(Hb {})), ..Default::default() }.is_heartbeat());
+        assert!(
+            CallEvent {
+                data: Some(call_event::Data::Heartbeat(Hb {})),
+                ..Default::default()
+            }
+            .is_heartbeat()
+        );
         assert!(!CallEvent::default().is_heartbeat());
 
-        assert!(StreamNotificationsResponse { item: Some(stream_notifications_response::Item::Heartbeat(Hb {})) }.is_heartbeat());
-        assert!(!StreamNotificationsResponse { item: Some(stream_notifications_response::Item::Notification(Notification::default())) }.is_heartbeat());
+        assert!(
+            StreamNotificationsResponse {
+                item: Some(stream_notifications_response::Item::Heartbeat(Hb {}))
+            }
+            .is_heartbeat()
+        );
+        assert!(
+            !StreamNotificationsResponse {
+                item: Some(stream_notifications_response::Item::Notification(
+                    Notification::default()
+                ))
+            }
+            .is_heartbeat()
+        );
 
-        assert!(StreamIntegrationEventsResponse { item: Some(stream_integration_events_response::Item::Heartbeat(Hb {})) }.is_heartbeat());
-        assert!(!StreamIntegrationEventsResponse { item: Some(stream_integration_events_response::Item::Event(IntegrationEvent::default())) }.is_heartbeat());
+        assert!(
+            StreamIntegrationEventsResponse {
+                item: Some(stream_integration_events_response::Item::Heartbeat(Hb {}))
+            }
+            .is_heartbeat()
+        );
+        assert!(
+            !StreamIntegrationEventsResponse {
+                item: Some(stream_integration_events_response::Item::Event(
+                    IntegrationEvent::default()
+                ))
+            }
+            .is_heartbeat()
+        );
     }
 
     #[tokio::test(start_paused = true)]
     async fn a_silent_stream_is_reported_dead_and_a_beating_one_is_not() {
         // Silent: nothing ever arrives.
         let mut silent = futures::stream::pending::<u8>();
-        assert!(matches!(next_or_silent(&mut silent, STREAM_SILENCE_LIMIT).await, Next::Silent));
+        assert!(matches!(
+            next_or_silent(&mut silent, STREAM_SILENCE_LIMIT).await,
+            Next::Silent
+        ));
 
         // Beating: an item arrives one interval in.
         let mut beating = Box::pin(futures::stream::once(async {
             tokio::time::sleep(SERVER_HEARTBEAT_INTERVAL).await;
             7u8
         }));
-        assert!(matches!(next_or_silent(&mut beating, STREAM_SILENCE_LIMIT).await, Next::Item(7)));
-        assert!(matches!(next_or_silent(&mut beating, STREAM_SILENCE_LIMIT).await, Next::Ended));
+        assert!(matches!(
+            next_or_silent(&mut beating, STREAM_SILENCE_LIMIT).await,
+            Next::Item(7)
+        ));
+        assert!(matches!(
+            next_or_silent(&mut beating, STREAM_SILENCE_LIMIT).await,
+            Next::Ended
+        ));
     }
 }

@@ -10,12 +10,12 @@
 
 use std::sync::Arc;
 
+use crate::ai_policy::channel_ai::{self, SiloPreference};
+use crate::cloud_ai::{CloudMode, CloudProviderKind, CloudSettings};
 use crate::error::ServiceError;
 use crate::local_ai::backend::{
     AvailableModel, BackendError, ChatMessage, ChatResponse, GenerateParams, LocalAIBackend,
 };
-use crate::ai_policy::channel_ai::{self, SiloPreference};
-use crate::cloud_ai::{CloudMode, CloudProviderKind, CloudSettings};
 use crate::local_ai::embeddings::EmbeddingGenerator;
 use crate::local_ai::model_manager::ModelManager;
 use crate::local_ai::ollama::OllamaBackend;
@@ -71,10 +71,7 @@ impl HttpLocalAIService {
     /// Create a new service from infrastructure dependencies.
     ///
     /// Reads settings to determine which backend and models to use.
-    pub fn new(
-        settings_repo: Arc<SettingsRepository>,
-        vector_repo: Arc<VectorRepository>,
-    ) -> Self {
+    pub fn new(settings_repo: Arc<SettingsRepository>, vector_repo: Arc<VectorRepository>) -> Self {
         let settings = Self::load_settings(&settings_repo);
 
         let backend = Arc::new(OllamaBackend::new(
@@ -85,8 +82,7 @@ impl HttpLocalAIService {
         // The model manager borrows a *separate* OllamaBackend because
         // ModelManager<B> owns its backend.  Cheap to construct (just an
         // HTTP client + URL).
-        let manager_backend =
-            OllamaBackend::new(&settings.ollama_url, settings.request_timeout);
+        let manager_backend = OllamaBackend::new(&settings.ollama_url, settings.request_timeout);
         let model_manager = ModelManager::new(manager_backend);
 
         let embedding_gen = Arc::new(EmbeddingGenerator::new(
@@ -147,7 +143,10 @@ impl HttpLocalAIService {
 
     /// Pull/download a model on the backend server.
     pub async fn pull_model(&self, name: &str) -> Result<(), HttpLocalAIError> {
-        self.model_manager.pull_model(name).await.map_err(Into::into)
+        self.model_manager
+            .pull_model(name)
+            .await
+            .map_err(Into::into)
     }
 
     /// Ensure the configured chat model is available, pulling if needed.
@@ -298,7 +297,9 @@ impl HttpLocalAIService {
             let (indexer, worker) =
                 crate::local_ai::indexer::MessageIndexer::spawn(indexing.search.clone());
             indexing.tasks.push(worker);
-            indexing.tasks.push(indexer.subscribe_events(indexing.events.subscribe_domain()));
+            indexing
+                .tasks
+                .push(indexer.subscribe_events(indexing.events.subscribe_domain()));
             let manager = ModelManager::new(OllamaBackend::new(
                 &self.settings.ollama_url,
                 self.settings.request_timeout,
@@ -351,7 +352,8 @@ impl HttpLocalAIService {
     /// Persist whether the cloud silo uses the user's own key or the metered
     /// server broker.
     pub fn set_cloud_mode(&self, mode: CloudMode) -> Result<(), crate::error::StorageError> {
-        self.settings_repo.set_string("cloud_ai.mode", mode.as_str())
+        self.settings_repo
+            .set_string("cloud_ai.mode", mode.as_str())
     }
 
     /// Persist the model used when the active provider is a cloud one.
@@ -520,10 +522,10 @@ impl HttpLocalAIService {
 #[cfg(test)]
 mod per_conversation_ai_tests {
     use super::*;
-    use crate::domain::message::ConversationType;
     use crate::ai_policy::channel_ai::Resolved;
     use crate::ai_policy::policy::Silo;
     use crate::cloud_ai::CloudMode;
+    use crate::domain::message::ConversationType;
     use crate::storage::Database;
 
     /// Same pattern as the other repository tests: SQLCipher needs a real path.
@@ -544,30 +546,50 @@ mod per_conversation_ai_tests {
     async fn local_ai_toggle_updates_live_service_and_indexer() {
         let svc = Arc::new(service());
         let settings = crate::services::ai::LocalAIService::new(
-            crate::services::ai::LocalAIActorHandle::spawn(), svc.settings_repo.clone(),
+            crate::services::ai::LocalAIActorHandle::spawn(),
+            svc.settings_repo.clone(),
         );
         settings.attach_http_service(svc.clone());
-        svc.configure_indexing(Arc::new(SemanticSearchService::new(
-            {
-                let dir = tempfile::tempdir().unwrap();
-                let db = Arc::new(Database::open(&dir.path().join("index.db"), "testpass").unwrap());
-                db.run_migrations().unwrap();
-                crate::test_tempdir::hold(dir);
-                Arc::new(VectorRepository::new(db))
-            },
-            Arc::new(EmbeddingGenerator::new(OllamaBackend::default_local(), &svc.settings)),
-        )), crate::events::EventBus::new());
+        svc.configure_indexing(
+            Arc::new(SemanticSearchService::new(
+                {
+                    let dir = tempfile::tempdir().unwrap();
+                    let db =
+                        Arc::new(Database::open(&dir.path().join("index.db"), "testpass").unwrap());
+                    db.run_migrations().unwrap();
+                    crate::test_tempdir::hold(dir);
+                    Arc::new(VectorRepository::new(db))
+                },
+                Arc::new(EmbeddingGenerator::new(
+                    OllamaBackend::default_local(),
+                    &svc.settings,
+                )),
+            )),
+            crate::events::EventBus::new(),
+        );
         assert!(!svc.is_enabled());
-        assert!(matches!(svc.check_enabled(), Err(HttpLocalAIError::Disabled)));
+        assert!(matches!(
+            svc.check_enabled(),
+            Err(HttpLocalAIError::Disabled)
+        ));
         // Settings callbacks run on the UI thread, outside the Tokio context.
         let settings = std::thread::spawn(move || {
             settings.set_enabled(true).unwrap();
             settings.set_enabled(true).unwrap();
             settings
-        }).join().unwrap();
+        })
+        .join()
+        .unwrap();
         assert!(svc.check_enabled().is_ok());
-        let tasks: Vec<_> = svc.indexing.lock().as_ref().unwrap().tasks.iter()
-            .map(|task| task.abort_handle()).collect();
+        let tasks: Vec<_> = svc
+            .indexing
+            .lock()
+            .as_ref()
+            .unwrap()
+            .tasks
+            .iter()
+            .map(|task| task.abort_handle())
+            .collect();
         assert_eq!(tasks.len(), 3);
         settings.set_enabled(false).unwrap();
         assert!(!svc.is_enabled());
@@ -624,7 +646,8 @@ mod per_conversation_ai_tests {
         svc.set_ai_enabled_for("dm-1", true).expect("set");
         // Cloud fully configured and preferred — the DM must still not use it.
         svc.set_anthropic_api_key("sk-ant-example").expect("key");
-        svc.set_silo_preference(SiloPreference::PreferCloud).expect("pref");
+        svc.set_silo_preference(SiloPreference::PreferCloud)
+            .expect("pref");
 
         assert!(svc.cloud_settings().is_available());
         assert_eq!(
@@ -643,7 +666,8 @@ mod per_conversation_ai_tests {
     fn cloud_preference_without_a_key_stays_local_on_a_channel() {
         let svc = service();
         svc.set_ai_enabled_for("chan-x", true).expect("set");
-        svc.set_silo_preference(SiloPreference::PreferCloud).expect("pref");
+        svc.set_silo_preference(SiloPreference::PreferCloud)
+            .expect("pref");
 
         assert_eq!(
             svc.resolve_ai_for("chan-x", &ConversationType::Channel, false),
@@ -660,23 +684,26 @@ mod per_conversation_ai_tests {
         assert!(!svc.cloud_settings().is_available());
 
         // Broker mode needs no key - the server holds the org key.
-        svc.set_cloud_mode(CloudMode::ServerBroker).expect("set mode");
+        svc.set_cloud_mode(CloudMode::ServerBroker)
+            .expect("set mode");
         assert_eq!(svc.cloud_settings().mode, CloudMode::ServerBroker);
         assert!(svc.cloud_settings().is_available());
 
         // Back to BYOK: unavailable again until a key is set.
-        svc.set_cloud_mode(CloudMode::DirectAnthropic).expect("set mode");
+        svc.set_cloud_mode(CloudMode::DirectAnthropic)
+            .expect("set mode");
         assert!(!svc.cloud_settings().is_available());
         svc.set_anthropic_api_key("sk-ant-x").expect("set key");
         assert!(svc.cloud_settings().is_available());
     }
 
     #[test]
-    fn silo_preference_round_trips_and_defaults_local(){
+    fn silo_preference_round_trips_and_defaults_local() {
         let svc = service();
         assert_eq!(svc.silo_preference(), SiloPreference::LocalOnly);
 
-        svc.set_silo_preference(SiloPreference::PreferCloud).expect("set");
+        svc.set_silo_preference(SiloPreference::PreferCloud)
+            .expect("set");
         assert_eq!(svc.silo_preference(), SiloPreference::PreferCloud);
     }
 

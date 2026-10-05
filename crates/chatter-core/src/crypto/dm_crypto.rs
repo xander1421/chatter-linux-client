@@ -4,8 +4,8 @@
 //! derived from X25519 key exchange.
 
 use chacha20poly1305::{
-    aead::{Aead, KeyInit},
     XChaCha20Poly1305, XNonce,
+    aead::{Aead, KeyInit},
 };
 
 use crate::error::CryptoError;
@@ -26,14 +26,22 @@ const NONCE_SIZE: usize = 24;
 /// # Returns
 ///
 /// Encrypted message: `nonce (24 bytes) || ciphertext || tag (16 bytes)`
-pub fn encrypt_dm_message(plaintext: &str, shared_secret: &[u8; 32]) -> Result<Vec<u8>, CryptoError> {
+pub fn encrypt_dm_message(
+    plaintext: &str,
+    shared_secret: &[u8; 32],
+) -> Result<Vec<u8>, CryptoError> {
     // Create cipher from shared secret
     let cipher = XChaCha20Poly1305::new_from_slice(shared_secret)
         .map_err(|e| CryptoError::EncryptionFailed(e.to_string()))?;
 
     // Generate random nonce
     let mut nonce_bytes = [0u8; NONCE_SIZE];
-    {use rand::TryRngCore; rand::rngs::OsRng.try_fill_bytes(&mut nonce_bytes).expect("OS CSPRNG must not fail");}
+    {
+        use rand::TryRngCore;
+        rand::rngs::OsRng
+            .try_fill_bytes(&mut nonce_bytes)
+            .expect("OS CSPRNG must not fail");
+    }
     let nonce = XNonce::from_slice(&nonce_bytes);
 
     // Encrypt
@@ -62,14 +70,22 @@ pub fn encrypt_dm_message(plaintext: &str, shared_secret: &[u8; 32]) -> Result<V
 /// # Returns
 ///
 /// Encrypted bytes: `nonce (24 bytes) || ciphertext || tag (16 bytes)`
-pub fn encrypt_dm_bytes(plaintext: &[u8], shared_secret: &[u8; 32]) -> Result<Vec<u8>, CryptoError> {
+pub fn encrypt_dm_bytes(
+    plaintext: &[u8],
+    shared_secret: &[u8; 32],
+) -> Result<Vec<u8>, CryptoError> {
     // Create cipher from shared secret
     let cipher = XChaCha20Poly1305::new_from_slice(shared_secret)
         .map_err(|e| CryptoError::EncryptionFailed(e.to_string()))?;
 
     // Generate random nonce
     let mut nonce_bytes = [0u8; NONCE_SIZE];
-    {use rand::TryRngCore; rand::rngs::OsRng.try_fill_bytes(&mut nonce_bytes).expect("OS CSPRNG must not fail");}
+    {
+        use rand::TryRngCore;
+        rand::rngs::OsRng
+            .try_fill_bytes(&mut nonce_bytes)
+            .expect("OS CSPRNG must not fail");
+    }
     let nonce = XNonce::from_slice(&nonce_bytes);
 
     // Encrypt
@@ -97,7 +113,10 @@ pub fn encrypt_dm_bytes(plaintext: &[u8], shared_secret: &[u8; 32]) -> Result<Ve
 /// # Returns
 ///
 /// Decrypted bytes.
-pub fn decrypt_dm_bytes(encrypted: &[u8], shared_secret: &[u8; 32]) -> Result<Vec<u8>, CryptoError> {
+pub fn decrypt_dm_bytes(
+    encrypted: &[u8],
+    shared_secret: &[u8; 32],
+) -> Result<Vec<u8>, CryptoError> {
     if encrypted.len() < NONCE_SIZE + 16 {
         // Minimum: nonce + tag
         return Err(CryptoError::DecryptionFailed(
@@ -130,7 +149,10 @@ pub fn decrypt_dm_bytes(encrypted: &[u8], shared_secret: &[u8; 32]) -> Result<Ve
 /// # Returns
 ///
 /// Decrypted message as a string.
-pub fn decrypt_dm_message(encrypted: &[u8], shared_secret: &[u8; 32]) -> Result<String, CryptoError> {
+pub fn decrypt_dm_message(
+    encrypted: &[u8],
+    shared_secret: &[u8; 32],
+) -> Result<String, CryptoError> {
     if encrypted.len() < NONCE_SIZE + 16 {
         // Minimum: nonce + tag
         return Err(CryptoError::DecryptionFailed(

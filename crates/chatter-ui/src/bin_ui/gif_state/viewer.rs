@@ -7,16 +7,13 @@ use std::time::Duration;
 
 use slint::{Image, Timer, TimerMode, Weak};
 
-use chatter_core::media::gif::{
-    decode_first_frame_only,
-    is_gpu_acceleration_available,
-};
 use crate::bin_ui::slint_conversions::gif_frame_to_slint_image;
+use chatter_core::media::gif::{decode_first_frame_only, is_gpu_acceleration_available};
 use tokio::sync::mpsc;
 
-use crate::MainWindow;
-use super::RawFrame;
 use super::MAX_VIEWER_FRAMES;
+use super::RawFrame;
+use crate::MainWindow;
 
 thread_local! {
     /// Current GIF animation state for image viewer (must be on UI thread).
@@ -43,7 +40,10 @@ struct ViewerGifState {
 
 impl ViewerGifState {
     fn current_image(&self) -> Image {
-        self.frames.get(self.current_frame).cloned().unwrap_or_default()
+        self.frames
+            .get(self.current_frame)
+            .cloned()
+            .unwrap_or_default()
     }
 
     fn current_delay_ms(&self) -> u64 {
@@ -55,7 +55,6 @@ impl ViewerGifState {
             self.current_frame = (self.current_frame + 1) % self.frames.len();
         }
     }
-
 }
 
 /// Start GIF animation in viewer AND register for inline animation.
@@ -166,10 +165,7 @@ pub fn start_gif_animation_and_inline(
 /// 1. GStreamer + GL (GPU accelerated)
 /// 2. GStreamer + CPU
 /// 3. Pure Rust `image` crate
-fn decode_gif_with_best_backend(
-    data: &[u8],
-    tx: &mpsc::Sender<RawFrame>,
-) -> Result<usize, String> {
+fn decode_gif_with_best_backend(data: &[u8], tx: &mpsc::Sender<RawFrame>) -> Result<usize, String> {
     // Fast, reliable CPU GStreamer decode (stride-honored, ~0.15s, no flaky GL).
     // Decodes all frames up front, then streams them to the animation channel.
     #[cfg(feature = "desktop-gstreamer")]
@@ -205,12 +201,9 @@ fn decode_gif_with_best_backend(
 }
 
 /// Fallback decoder using the `image` crate (pure Rust, no GPU).
-fn decode_gif_with_image_crate(
-    data: &[u8],
-    tx: &mpsc::Sender<RawFrame>,
-) -> Result<usize, String> {
-    use image::codecs::gif::GifDecoder as ImageGifDecoder;
+fn decode_gif_with_image_crate(data: &[u8], tx: &mpsc::Sender<RawFrame>) -> Result<usize, String> {
     use image::AnimationDecoder;
+    use image::codecs::gif::GifDecoder as ImageGifDecoder;
     use std::io::Cursor;
 
     let cursor = Cursor::new(data);
@@ -237,14 +230,21 @@ fn decode_gif_with_image_crate(
         // Extract frame data
         let delay = frame.delay();
         let (numer, denom) = delay.numer_denom_ms();
-        let delay_ms = if denom == 0 { 100 } else { (numer as u64) / (denom as u64) };
+        let delay_ms = if denom == 0 {
+            100
+        } else {
+            (numer as u64) / (denom as u64)
+        };
 
         let buffer = frame.into_buffer();
         let (width, height) = buffer.dimensions();
         let frame_data = buffer.into_raw();
 
         // Send frame immediately
-        if tx.blocking_send((frame_data, width, height, delay_ms)).is_err() {
+        if tx
+            .blocking_send((frame_data, width, height, delay_ms))
+            .is_err()
+        {
             tracing::debug!("GIF receiver dropped at frame {}", idx);
             break;
         }
@@ -265,7 +265,11 @@ fn start_viewer_timer(window: Weak<MainWindow>) {
 
         // Get initial delay from state
         let initial_delay = VIEWER_GIF_STATE.with(|state_cell| {
-            state_cell.borrow().as_ref().map(|s| s.current_delay_ms()).unwrap_or(100)
+            state_cell
+                .borrow()
+                .as_ref()
+                .map(|s| s.current_delay_ms())
+                .unwrap_or(100)
         });
 
         tracing::debug!("GIF timer starting with initial delay {}ms", initial_delay);
@@ -295,28 +299,29 @@ fn advance_viewer_frame(window: Weak<MainWindow>) {
         tracing::debug!("GIF added {} new frames from stream", new_frames);
     }
 
-    let (next_image, next_delay, should_continue, frame_idx, total_frames) = VIEWER_GIF_STATE.with(|state_cell| {
-        let mut state_ref = state_cell.borrow_mut();
-        if let Some(ref mut state) = *state_ref {
-            if !state.playing {
-                tracing::debug!("GIF advance_frame: not playing, skipping");
-                return (None, 0, false, 0, 0);
+    let (next_image, next_delay, should_continue, frame_idx, total_frames) =
+        VIEWER_GIF_STATE.with(|state_cell| {
+            let mut state_ref = state_cell.borrow_mut();
+            if let Some(ref mut state) = *state_ref {
+                if !state.playing {
+                    tracing::debug!("GIF advance_frame: not playing, skipping");
+                    return (None, 0, false, 0, 0);
+                }
+                if state.frames.is_empty() {
+                    tracing::warn!("GIF advance_frame: no frames available");
+                    return (None, 100, true, 0, 0); // Keep trying, might get frames from stream
+                }
+                state.advance_frame();
+                let image = state.current_image();
+                let delay = state.current_delay_ms().max(10); // Minimum 10ms delay
+                let idx = state.current_frame;
+                let total = state.frames.len();
+                (Some(image), delay, true, idx, total)
+            } else {
+                tracing::debug!("GIF advance_frame: no state");
+                (None, 0, false, 0, 0)
             }
-            if state.frames.is_empty() {
-                tracing::warn!("GIF advance_frame: no frames available");
-                return (None, 100, true, 0, 0); // Keep trying, might get frames from stream
-            }
-            state.advance_frame();
-            let image = state.current_image();
-            let delay = state.current_delay_ms().max(10); // Minimum 10ms delay
-            let idx = state.current_frame;
-            let total = state.frames.len();
-            (Some(image), delay, true, idx, total)
-        } else {
-            tracing::debug!("GIF advance_frame: no state");
-            (None, 0, false, 0, 0)
-        }
-    });
+        });
 
     if !should_continue {
         tracing::debug!("GIF advance_frame: should not continue");
@@ -327,7 +332,12 @@ fn advance_viewer_frame(window: Weak<MainWindow>) {
     if let Some(image) = next_image {
         if let Some(w) = window.upgrade() {
             w.set_image_viewer_source(image);
-            tracing::trace!("GIF frame {}/{} displayed, next delay {}ms", frame_idx, total_frames, next_delay);
+            tracing::trace!(
+                "GIF frame {}/{} displayed, next delay {}ms",
+                frame_idx,
+                total_frames,
+                next_delay
+            );
         } else {
             tracing::debug!("GIF advance_frame: window gone");
             return;
@@ -366,21 +376,25 @@ fn poll_streaming_frames() -> usize {
                 Ok((data, width, height, delay_ms)) => {
                     // Check frame limit before adding
                     let at_limit = VIEWER_GIF_STATE.with(|state_cell| {
-                        state_cell.borrow().as_ref()
+                        state_cell
+                            .borrow()
+                            .as_ref()
                             .map(|s| s.frames.len() >= MAX_VIEWER_FRAMES)
                             .unwrap_or(true)
                     });
 
                     if at_limit {
-                        tracing::debug!("GIF frame limit reached ({}), stopping decode", MAX_VIEWER_FRAMES);
+                        tracing::debug!(
+                            "GIF frame limit reached ({}), stopping decode",
+                            MAX_VIEWER_FRAMES
+                        );
                         // Don't put receiver back - stop receiving
                         break;
                     }
 
                     // Convert to Slint Image and add to state
-                    let image = crate::bin_ui::slint_conversions::rgba_to_slint_image(&data,
-                        width,
-                        height,);
+                    let image =
+                        crate::bin_ui::slint_conversions::rgba_to_slint_image(&data, width, height);
 
                     VIEWER_GIF_STATE.with(|state_cell| {
                         if let Some(ref mut state) = *state_cell.borrow_mut() {
@@ -459,10 +473,7 @@ pub fn resume() {
 ///
 /// This is an optimization: if a GIF is already animating in a message bubble,
 /// we reuse those decoded frames instead of re-decrypting and re-decoding.
-pub fn start_viewer_from_inline(
-    attachment_id: &str,
-    window: &Weak<MainWindow>,
-) -> Option<Image> {
+pub fn start_viewer_from_inline(attachment_id: &str, window: &Weak<MainWindow>) -> Option<Image> {
     // Check if we have inline frames for this attachment
     let inline_state = super::inline::get_inline_gif(attachment_id);
 

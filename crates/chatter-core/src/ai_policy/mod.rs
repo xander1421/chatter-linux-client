@@ -14,4 +14,4 @@ pub mod channel_ai;
 pub mod policy;
 
 pub use channel_ai::{Resolved, SiloPreference};
-pub use policy::{ai_access, AiAccess, AiWorkspace, Silo};
+pub use policy::{AiAccess, AiWorkspace, Silo, ai_access};

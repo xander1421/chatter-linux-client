@@ -56,7 +56,11 @@ impl EphemeralRepository {
     /// Takes arbitrary `ttl_seconds` (a peer's timer need not be a preset).
     /// `INSERT OR REPLACE` so re-arming the same message (a retry, a
     /// self-sync copy after the primary) is idempotent.
-    pub fn insert_armed(&self, message_id: &MessageId, ttl_seconds: u32) -> Result<(), StorageError> {
+    pub fn insert_armed(
+        &self,
+        message_id: &MessageId,
+        ttl_seconds: u32,
+    ) -> Result<(), StorageError> {
         let conn = self.db.connection()?;
         conn.execute(
             "INSERT OR REPLACE INTO ephemeral_messages
@@ -79,9 +83,7 @@ impl EphemeralRepository {
              FROM ephemeral_messages WHERE message_id = ?1",
         )?;
 
-        let result = stmt.query_row(params![message_id.to_string()], |row| {
-            row_to_ephemeral(row)
-        });
+        let result = stmt.query_row(params![message_id.to_string()], |row| row_to_ephemeral(row));
 
         match result {
             Ok(ephemeral) => Ok(Some(ephemeral?)),
@@ -235,7 +237,7 @@ fn row_to_ephemeral(
             return Ok(Err(StorageError::InvalidData(format!(
                 "Invalid message ID: {}",
                 message_id_str
-            ))))
+            ))));
         }
     };
 

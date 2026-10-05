@@ -7,8 +7,16 @@
 use super::Migration;
 pub struct V079MessageDeletionToken;
 impl Migration for V079MessageDeletionToken {
-    fn version(&self) -> u32 { 79 }
-    fn description(&self) -> &'static str { "Store sealed-sender deletion token on sent messages" }
-    fn up(&self) -> &'static str { "ALTER TABLE messages ADD COLUMN deletion_token BLOB;" }
-    fn down(&self) -> Option<&'static str> { None }
+    fn version(&self) -> u32 {
+        79
+    }
+    fn description(&self) -> &'static str {
+        "Store sealed-sender deletion token on sent messages"
+    }
+    fn up(&self) -> &'static str {
+        "ALTER TABLE messages ADD COLUMN deletion_token BLOB;"
+    }
+    fn down(&self) -> Option<&'static str> {
+        None
+    }
 }

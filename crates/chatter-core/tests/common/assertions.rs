@@ -19,7 +19,10 @@ pub fn assert_not_found<T>(result: Result<T, NetworkError>) {
         Err(NetworkError::NotFound(_)) => {}
         Err(NetworkError::PermissionDenied) => {}
         Err(NetworkError::ServerError(_)) => {} // Some endpoints return this for non-existent resources
-        Err(e) => panic!("Expected NotFound/PermissionDenied/ServerError, got: {:?}", e),
+        Err(e) => panic!(
+            "Expected NotFound/PermissionDenied/ServerError, got: {:?}",
+            e
+        ),
         Ok(_) => panic!("Expected error for non-existent resource, but got Ok"),
     }
 }

@@ -611,7 +611,11 @@ impl ConnectionScheduler {
         // probably just out of range, and starting the count again is what stops
         // one bad patch of radio from blacklisting it for the session.
         let expired = now_ms.saturating_sub(entry.1) > CONNECT_FAILURE_FORGET_MS;
-        entry.0 = if expired { 1 } else { entry.0.saturating_add(1) };
+        entry.0 = if expired {
+            1
+        } else {
+            entry.0.saturating_add(1)
+        };
         entry.1 = now_ms;
     }
 
@@ -666,7 +670,8 @@ impl ConnectionScheduler {
     /// nothing and bounds the map.
     pub fn prune_backoff(&mut self, now_ms: u64) {
         let cutoff = now_ms.saturating_sub(CONNECT_TIMEOUT_BACKOFF_WINDOW_MS);
-        self.recent_connect_timeouts.retain(|_, &mut at| at >= cutoff);
+        self.recent_connect_timeouts
+            .retain(|_, &mut at| at >= cutoff);
         self.recent_connect_failures
             .retain(|_, &mut (_, at)| now_ms.saturating_sub(at) <= CONNECT_FAILURE_FORGET_MS);
         self.recent_disconnects.retain(|_, &mut at| at >= cutoff);
@@ -787,11 +792,7 @@ impl ConnectionScheduler {
     /// queued while the device was still connected would otherwise reconnect the
     /// instant the link dropped, bypassing the window and recreating the exact
     /// reconnect/cancel thrash it exists to prevent.
-    fn disconnect_settle_delay(
-        &self,
-        candidate: &ConnectionCandidate,
-        now_ms: u64,
-    ) -> Option<u64> {
+    fn disconnect_settle_delay(&self, candidate: &ConnectionCandidate, now_ms: u64) -> Option<u64> {
         let last_disconnect = *self.recent_disconnects.get(&candidate.address)?;
         let elapsed = now_ms.saturating_sub(last_disconnect);
         if elapsed >= DISCONNECT_DISCOVERY_IGNORE_MS {
@@ -852,9 +853,7 @@ mod tests {
 
     // MARK: outright connect failures (a BlueZ-only divergence from iOS)
 
-    use super::{
-        CONNECT_FAILURE_FORGET_MS, CONNECT_FAILURE_RETRY_DELAY_MS, MAX_CONNECT_FAILURES,
-    };
+    use super::{CONNECT_FAILURE_FORGET_MS, CONNECT_FAILURE_RETRY_DELAY_MS, MAX_CONNECT_FAILURES};
 
     #[test]
     fn one_failure_holds_the_address_for_the_retry_delay() {
@@ -893,7 +892,10 @@ mod tests {
         assert!(s.is_failing_too_fast("aa", now));
 
         let much_later = now + CONNECT_FAILURE_FORGET_MS + 1;
-        assert!(!s.is_failing_too_fast("aa", much_later), "the record aged out");
+        assert!(
+            !s.is_failing_too_fast("aa", much_later),
+            "the record aged out"
+        );
 
         // And the next failure counts as the first, not the fourth.
         s.note_connect_failed("aa", much_later);
@@ -914,7 +916,10 @@ mod tests {
         assert!(s.is_failing_too_fast("aa", now));
 
         s.note_connected("aa");
-        assert!(!s.is_failing_too_fast("aa", now), "success clears the record");
+        assert!(
+            !s.is_failing_too_fast("aa", now),
+            "success clears the record"
+        );
     }
 
     #[test]
@@ -922,7 +927,10 @@ mod tests {
         let mut s = ConnectionScheduler::default();
         s.note_connect_failed("aa", 0);
         assert!(s.is_failing_too_fast("aa", 0));
-        assert!(!s.is_failing_too_fast("bb", 0), "an unrelated peer is unaffected");
+        assert!(
+            !s.is_failing_too_fast("bb", 0),
+            "an unrelated peer is unaffected"
+        );
     }
     use super::*;
 
@@ -960,27 +968,29 @@ mod tests {
         assert_eq!(s.rssi_threshold(), -90);
 
         // Strictly greater than the threshold is the only thing that connects.
-        assert_eq!(discover(&mut s, P1, -89, 1_000), DiscoveryDecision::ConnectNow);
+        assert_eq!(
+            discover(&mut s, P1, -89, 1_000),
+            DiscoveryDecision::ConnectNow
+        );
         assert_eq!(s.candidate_count(), 0);
 
         assert_eq!(discover(&mut s, P2, -90, 1_000), DiscoveryDecision::Queued);
         assert_eq!(s.candidate_count(), 1);
 
         assert_eq!(discover(&mut s, P2, -91, 1_000), DiscoveryDecision::Queued);
-        assert_eq!(s.candidate_count(), 1, "same address replaces, never duplicates");
+        assert_eq!(
+            s.candidate_count(),
+            1,
+            "same address replaces, never duplicates"
+        );
     }
 
     #[test]
     fn unconnectable_adverts_are_dropped_not_queued() {
         let mut s = ConnectionScheduler::new();
         let c = candidate(P1, -40, 1_000).with_connectable(false);
-        let decision = s.handle_discovery(
-            &c,
-            0,
-            None,
-            PeripheralConnectionState::Disconnected,
-            1_000,
-        );
+        let decision =
+            s.handle_discovery(&c, 0, None, PeripheralConnectionState::Disconnected, 1_000);
         assert_eq!(decision, DiscoveryDecision::Ignore);
         assert_eq!(s.candidate_count(), 0);
     }
@@ -1057,7 +1067,11 @@ mod tests {
             ),
             DiscoveryDecision::ScheduleRetry { after_ms: 51 }
         );
-        assert_eq!(s.candidate_count(), 1, "rate-limited adverts are kept, not lost");
+        assert_eq!(
+            s.candidate_count(),
+            1,
+            "rate-limited adverts are kept, not lost"
+        );
 
         // Exactly 500 ms: the limit has expired.
         let mut s = ConnectionScheduler::new();
@@ -1211,7 +1225,10 @@ mod tests {
         let mut s = ConnectionScheduler::new();
         s.note_duplicate_peer(P1, 10_000);
 
-        assert_eq!(discover(&mut s, P1, -50, 309_999), DiscoveryDecision::Ignore);
+        assert_eq!(
+            discover(&mut s, P1, -50, 309_999),
+            DiscoveryDecision::Ignore
+        );
         assert_eq!(
             discover(&mut s, P1, -50, 310_000),
             DiscoveryDecision::ConnectNow
@@ -1480,7 +1497,11 @@ mod tests {
             QueueDecision::Connect(c) => assert_eq!(c.address, "free"),
             other => panic!("expected a connect, got {other:?}"),
         }
-        assert_eq!(s.candidate_count(), 0, "the busy candidate is discarded too");
+        assert_eq!(
+            s.candidate_count(),
+            0,
+            "the busy candidate is discarded too"
+        );
     }
 
     #[test]
@@ -1684,7 +1705,10 @@ mod tests {
         assert_eq!(s.isolated_for_ms(2_000), None);
         // The rate-limit clock is cleared too: the first advert after a reset
         // connects immediately.
-        assert_eq!(discover(&mut s, P1, -50, 1_100), DiscoveryDecision::ConnectNow);
+        assert_eq!(
+            discover(&mut s, P1, -50, 1_100),
+            DiscoveryDecision::ConnectNow
+        );
     }
 
     #[test]

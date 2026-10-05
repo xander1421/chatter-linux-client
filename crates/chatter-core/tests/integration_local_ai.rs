@@ -4,11 +4,10 @@
 
 #[cfg(feature = "local-ai")]
 mod local_ai_tests {
-    use std::sync::Arc;
     use mistralrs::{
-        IsqType, Model, PagedAttentionMetaBuilder,
-        TextMessageRole, TextMessages, TextModelBuilder,
+        IsqType, Model, PagedAttentionMetaBuilder, TextMessageRole, TextMessages, TextModelBuilder,
     };
+    use std::sync::Arc;
 
     /// Test loading a model and doing a simple completion.
     #[tokio::test]
@@ -48,8 +47,7 @@ mod local_ai_tests {
         let prompt = "What is 2 + 2? Answer with just the number.";
         println!("\nPrompt: {}", prompt);
 
-        let messages = TextMessages::new()
-            .add_message(TextMessageRole::User, prompt);
+        let messages = TextMessages::new().add_message(TextMessageRole::User, prompt);
 
         match model.send_chat_request(messages).await {
             Ok(response) => {
@@ -67,7 +65,6 @@ mod local_ai_tests {
             }
         }
     }
-
 }
 
 /// Stub tests when local-ai feature is disabled.
@@ -116,8 +113,11 @@ mod actor_tests {
         // Check model info
         match handle.get_model_info().await {
             Ok(Some(info)) => {
-                println!("Model info: {} ({})", info.model_id,
-                    info.quantization.as_deref().unwrap_or("default"));
+                println!(
+                    "Model info: {} ({})",
+                    info.model_id,
+                    info.quantization.as_deref().unwrap_or("default")
+                );
             }
             Ok(None) => {
                 println!("No model loaded");
@@ -155,7 +155,9 @@ mod actor_tests {
         let handle = LocalAIActorHandle::spawn();
 
         // Try to complete without loading a model
-        let result = handle.complete("Hello".to_string(), SampleParams::default()).await;
+        let result = handle
+            .complete("Hello".to_string(), SampleParams::default())
+            .await;
 
         match result {
             Err(chatter_core::services::ai::LocalAIError::NoModel) => {

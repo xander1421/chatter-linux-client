@@ -161,12 +161,24 @@ mod radio_down_tests {
 
     #[test]
     fn only_an_unpowered_adapter_reads_as_bluetooth_off() {
-        let up = MeshStatus { radio_running: true, adapter_powered: true, ..Default::default() };
+        let up = MeshStatus {
+            radio_running: true,
+            adapter_powered: true,
+            ..Default::default()
+        };
         assert_eq!(up.radio_down(), None);
-        let off = MeshStatus { radio_running: false, adapter_powered: false, ..Default::default() };
+        let off = MeshStatus {
+            radio_running: false,
+            adapter_powered: false,
+            ..Default::default()
+        };
         assert_eq!(off.radio_down(), Some(RadioDown::BluetoothOff));
         // The S9 case: Bluetooth on, radio refused to start over unreadable pins.
-        let refused = MeshStatus { radio_running: false, adapter_powered: true, ..Default::default() };
+        let refused = MeshStatus {
+            radio_running: false,
+            adapter_powered: true,
+            ..Default::default()
+        };
         assert_eq!(refused.radio_down(), Some(RadioDown::Unavailable));
     }
 }

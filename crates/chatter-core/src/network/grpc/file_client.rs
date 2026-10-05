@@ -3,17 +3,18 @@
 //! Client for Signal-style encrypted attachments: presigned upload/download
 //! URLs. Bytes go directly to RustFS; the server only brokers URLs.
 
-use tonic::service::interceptor::InterceptedService;
 use crate::network::grpc::transport::GrpcTransport;
+use tonic::service::interceptor::InterceptedService;
 
 use crate::error::NetworkError;
 use crate::network::grpc::interceptors::AuthInterceptor;
 use crate::proto::chat_v1::{
-    file_service_client::FileServiceClient, AbortAttachmentMultipartUploadRequest,
-    CompleteAttachmentMultipartUploadRequest, ConfirmAttachmentUploadRequest,
-    ConfirmAttachmentUploadResponse, CreateAttachmentMultipartUploadRequest,
-    CreateAttachmentMultipartUploadResponse, GetAttachmentDownloadUrlRequest,
-    GetAttachmentDownloadUrlResponse, GetAttachmentUploadUrlRequest, GetAttachmentUploadUrlResponse,
+    AbortAttachmentMultipartUploadRequest, CompleteAttachmentMultipartUploadRequest,
+    ConfirmAttachmentUploadRequest, ConfirmAttachmentUploadResponse,
+    CreateAttachmentMultipartUploadRequest, CreateAttachmentMultipartUploadResponse,
+    GetAttachmentDownloadUrlRequest, GetAttachmentDownloadUrlResponse,
+    GetAttachmentUploadUrlRequest, GetAttachmentUploadUrlResponse,
+    file_service_client::FileServiceClient,
 };
 
 /// File service client wrapper.

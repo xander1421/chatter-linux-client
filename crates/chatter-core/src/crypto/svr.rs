@@ -77,7 +77,10 @@ fn estimate_pin_entropy_bits(pin: &str) -> f64 {
     if pin.chars().any(|c| c.is_ascii_uppercase()) {
         charset += 26;
     }
-    if pin.chars().any(|c| c.is_ascii_graphic() && !c.is_ascii_alphanumeric()) {
+    if pin
+        .chars()
+        .any(|c| c.is_ascii_graphic() && !c.is_ascii_alphanumeric())
+    {
         charset += 32;
     }
     if charset == 0 {
@@ -99,26 +102,98 @@ fn estimate_pin_entropy_bits(pin: &str) -> f64 {
 /// because past the head the structural checks and the entropy floor carry
 /// the weight.
 const BLOCKED_PINS: &[&str] = &[
-    "password", "password1", "password12", "password123", "passw0rd", "p@ssw0rd",
-    "12345678", "123456789", "1234567890", "123123123", "987654321", "11111111",
-    "00000000", "1q2w3e4r", "1q2w3e4r5t", "1qaz2wsx", "qazwsx123", "aa123456",
-    "abc12345", "abcd1234", "qwertyui", "qwertyuiop", "asdfghjk", "asdfghjkl",
-    "zxcvbnm123", "iloveyou", "iloveyou1", "sunshine", "princess", "football",
-    "baseball", "superman", "trustno1", "welcome1", "michelle", "jennifer",
-    "computer", "whatever", "chocolate", "butterfly", "liverpool", "starwars",
-    "pokemon1", "michael1", "jordan23", "harley123", "shadow123", "monkey123",
-    "dragon123", "master123", "samantha", "anthony1", "danielle", "jessica1",
-    "charlie1", "internet", "creative", "adventure", "elephant", "November",
-    "December", "September", "alexander", "victoria", "kimberly", "veronica",
-    "corvette", "mercedes", "midnight", "snickers", "mountain", "dinosaur",
-    "hardcore", "lovelove", "loveyou2", "babygirl", "babygirl1", "angelina",
-    "valentina", "isabella", "gabriella", "benjamin", "nicholas", "matthew1",
+    "password",
+    "password1",
+    "password12",
+    "password123",
+    "passw0rd",
+    "p@ssw0rd",
+    "12345678",
+    "123456789",
+    "1234567890",
+    "123123123",
+    "987654321",
+    "11111111",
+    "00000000",
+    "1q2w3e4r",
+    "1q2w3e4r5t",
+    "1qaz2wsx",
+    "qazwsx123",
+    "aa123456",
+    "abc12345",
+    "abcd1234",
+    "qwertyui",
+    "qwertyuiop",
+    "asdfghjk",
+    "asdfghjkl",
+    "zxcvbnm123",
+    "iloveyou",
+    "iloveyou1",
+    "sunshine",
+    "princess",
+    "football",
+    "baseball",
+    "superman",
+    "trustno1",
+    "welcome1",
+    "michelle",
+    "jennifer",
+    "computer",
+    "whatever",
+    "chocolate",
+    "butterfly",
+    "liverpool",
+    "starwars",
+    "pokemon1",
+    "michael1",
+    "jordan23",
+    "harley123",
+    "shadow123",
+    "monkey123",
+    "dragon123",
+    "master123",
+    "samantha",
+    "anthony1",
+    "danielle",
+    "jessica1",
+    "charlie1",
+    "internet",
+    "creative",
+    "adventure",
+    "elephant",
+    "November",
+    "December",
+    "September",
+    "alexander",
+    "victoria",
+    "kimberly",
+    "veronica",
+    "corvette",
+    "mercedes",
+    "midnight",
+    "snickers",
+    "mountain",
+    "dinosaur",
+    "hardcore",
+    "lovelove",
+    "loveyou2",
+    "babygirl",
+    "babygirl1",
+    "angelina",
+    "valentina",
+    "isabella",
+    "gabriella",
+    "benjamin",
+    "nicholas",
+    "matthew1",
 ];
 
 /// Blocklist membership, case-insensitive.
 fn is_blocklisted_pin(pin: &str) -> bool {
     let lowered = pin.to_ascii_lowercase();
-    BLOCKED_PINS.iter().any(|b| b.eq_ignore_ascii_case(&lowered))
+    BLOCKED_PINS
+        .iter()
+        .any(|b| b.eq_ignore_ascii_case(&lowered))
 }
 
 /// Structural weakness: patterns whose keyspace is tiny regardless of what
@@ -251,13 +326,11 @@ pub fn derive_svr_secret(pin: &str, salt: &str) -> Result<[u8; 32], CryptoError>
     if salt_bytes.len() < 8 {
         salt_bytes.resize(8, 0);
     }
-    
-    argon2.hash_password_into(
-        pin.as_bytes(),
-        &salt_bytes,
-        &mut output,
-    ).map_err(|e| CryptoError::KeyDerivationFailed(e.to_string()))?;
-    
+
+    argon2
+        .hash_password_into(pin.as_bytes(), &salt_bytes, &mut output)
+        .map_err(|e| CryptoError::KeyDerivationFailed(e.to_string()))?;
+
     Ok(output)
 }
 
@@ -394,7 +467,7 @@ impl SvrKeypair {
     pub fn public_key_bytes(&self) -> [u8; 32] {
         self.public.to_bytes()
     }
-    
+
     /// Borrow the static secret (private key) bytes for the duration of `f`.
     ///
     /// # Why a closure?
@@ -426,14 +499,14 @@ mod tests {
     #[test]
     fn common_and_predictable_pins_are_rejected_despite_high_charset_entropy() {
         for pin in [
-            "password",  // 37.6 "bits", first line of rockyou (§10's own example)
-            "Password1", // blocklist is case-insensitive
-            "iloveyou",  // common-list
-            "aaaaaaaa",  // one repeated char — 37.6 "bits" under the charset model
-            "abcdefgh",  // +1 run
-            "hgfedcba",  // -1 run
-            "12341234",  // repeated block, integer tiling
-            "abcabcab",  // repeated block, NON-integer tiling (period 3 over 8)
+            "password",   // 37.6 "bits", first line of rockyou (§10's own example)
+            "Password1",  // blocklist is case-insensitive
+            "iloveyou",   // common-list
+            "aaaaaaaa",   // one repeated char — 37.6 "bits" under the charset model
+            "abcdefgh",   // +1 run
+            "hgfedcba",   // -1 run
+            "12341234",   // repeated block, integer tiling
+            "abcabcab",   // repeated block, NON-integer tiling (period 3 over 8)
             "xyxyxyxyxy", // period 2
         ] {
             assert!(
@@ -447,7 +520,12 @@ mod tests {
     /// this check can never lock the integration suite out.
     #[test]
     fn reasonable_pins_still_pass() {
-        for pin in ["Va1idPin!x9", "tr0mb0ne-cloud", "Bl4ckb1rd$", "novemberrain77"] {
+        for pin in [
+            "Va1idPin!x9",
+            "tr0mb0ne-cloud",
+            "Bl4ckb1rd$",
+            "novemberrain77",
+        ] {
             assert!(
                 validate_pin(pin).is_ok(),
                 "{pin:?} should pass but was rejected"
@@ -519,7 +597,10 @@ mod tests {
         let kp2 = SvrKeypair::new_from_pin("123456", "alice").unwrap();
 
         let eq = kp1.with_secret_bytes(|a| kp2.with_secret_bytes(|b| a == b));
-        assert!(eq, "same (pin, username) must produce the same secret bytes");
+        assert!(
+            eq,
+            "same (pin, username) must produce the same secret bytes"
+        );
     }
 
     /// The `*_from_secret` variants exist so the registration/login paths can
@@ -545,7 +626,9 @@ mod tests {
         );
         assert_eq!(
             SvrKeypair::from_secret(&secret).public_key_bytes(),
-            SvrKeypair::new_from_pin(pin, user).unwrap().public_key_bytes(),
+            SvrKeypair::new_from_pin(pin, user)
+                .unwrap()
+                .public_key_bytes(),
             "SvrKeypair::from_secret must equal SvrKeypair::new_from_pin"
         );
     }
@@ -585,8 +668,14 @@ mod tests {
         // NOT "abcdefgh" — that is a keyboard-walk run the structural check
         // now rejects (§10); an 8-char PIN must be fine when it isn't a
         // pattern.
-        assert!(validate_pin("kf8mq2xp").is_ok(), "8 mixed lowercase+digits accepted");
-        assert!(validate_pin("AaBbCc12").is_ok(), "mixed alphanumeric accepted");
+        assert!(
+            validate_pin("kf8mq2xp").is_ok(),
+            "8 mixed lowercase+digits accepted"
+        );
+        assert!(
+            validate_pin("AaBbCc12").is_ok(),
+            "mixed alphanumeric accepted"
+        );
         assert!(validate_pin("Pa$$w0rd!").is_ok(), "symbols accepted");
     }
 
@@ -594,13 +683,22 @@ mod tests {
     fn validate_pin_rejects_low_entropy() {
         // 8-digit numeric (~26.6 bits) is below the entropy floor — the case a
         // software-only SVR can't defend against.
-        assert!(validate_pin("12345678").is_err(), "8-digit numeric rejected");
+        assert!(
+            validate_pin("12345678").is_err(),
+            "8-digit numeric rejected"
+        );
         // A longer numeric PIN clears the entropy floor (10 digits ~= 33
         // bits), but "1234567890" specifically is a +1 run AND on the
         // blocklist — the §10 case of a high-scoring first-guess. A
         // non-pattern 10-digit PIN passes.
-        assert!(validate_pin("1234567890").is_err(), "the canonical 10-digit run rejected");
-        assert!(validate_pin("8629174035").is_ok(), "non-pattern 10-digit numeric accepted");
+        assert!(
+            validate_pin("1234567890").is_err(),
+            "the canonical 10-digit run rejected"
+        );
+        assert!(
+            validate_pin("8629174035").is_ok(),
+            "non-pattern 10-digit numeric accepted"
+        );
     }
 
     #[test]

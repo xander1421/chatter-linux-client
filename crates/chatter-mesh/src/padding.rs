@@ -159,7 +159,11 @@ mod tests {
         assert_eq!(padded.len(), 256);
         // Corrupt one interior pad byte; PKCS#7 verification must fail.
         padded[252] = 0x05;
-        assert_eq!(unpad(&padded), padded, "mismatched tail must not be stripped");
+        assert_eq!(
+            unpad(&padded),
+            padded,
+            "mismatched tail must not be stripped"
+        );
 
         // Corrupting the marker itself is caught the same way.
         let mut bad_marker = pad(&vec![0x99; 250], 256);

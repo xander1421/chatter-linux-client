@@ -151,7 +151,7 @@ fn test_all_content_types_listed() {
         "DeleteForMeSync",
         "GroupCallSignal",
         "AnonGroupInvite",
-        "AnonGroupJoinAck",     // <-- This was the one missing handling
+        "AnonGroupJoinAck", // <-- This was the one missing handling
         "AnonGroupMemberList",
         "AnonGroupLeave",
         "AnonGroupKick",

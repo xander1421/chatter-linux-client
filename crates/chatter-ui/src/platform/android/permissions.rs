@@ -11,9 +11,9 @@
 //! re-prompting when already granted. `ensure()` is the awaitable form, for an
 //! action that must not start until the user has answered (placing a call).
 
+use jni::JNIEnv;
 use jni::objects::{JObject, JObjectArray, JString, JValue};
 use jni::sys::jsize;
-use jni::JNIEnv;
 use std::sync::Mutex;
 
 use super::activity;
@@ -83,13 +83,17 @@ fn check(permission: &str) -> Result<bool, String> {
     if res.is_err() {
         activity::clear_exception(&mut env);
     }
-    res.map_err(|e| e.to_string())?.z().map_err(|e| e.to_string())
+    res.map_err(|e| e.to_string())?
+        .z()
+        .map_err(|e| e.to_string())
 }
 
 fn launch_request(permissions: &[&str]) -> Result<(), String> {
     let mut env = activity::jni_env()?;
     let act = activity::activity()?;
-    let string_class = env.find_class("java/lang/String").map_err(|e| e.to_string())?;
+    let string_class = env
+        .find_class("java/lang/String")
+        .map_err(|e| e.to_string())?;
     let arr = env
         .new_object_array(permissions.len() as jsize, &string_class, JObject::null())
         .map_err(|e| e.to_string())?;
@@ -138,7 +142,9 @@ fn read_string_array(env: &mut JNIEnv, arr: &JObjectArray) -> Result<Vec<String>
     let len = env.get_array_length(arr).map_err(|e| e.to_string())?;
     let mut out = Vec::with_capacity(len as usize);
     for i in 0..len {
-        let elem = env.get_object_array_element(arr, i).map_err(|e| e.to_string())?;
+        let elem = env
+            .get_object_array_element(arr, i)
+            .map_err(|e| e.to_string())?;
         let s: String = env
             .get_string(&JString::from(elem))
             .map_err(|e| e.to_string())?
@@ -151,22 +157,34 @@ fn read_string_array(env: &mut JNIEnv, arr: &JObjectArray) -> Result<Vec<String>
 // Requested only from mesh user actions, never from startup.
 pub async fn ensure_mesh() -> bool {
     let sdk = activity::jni_env().ok().and_then(|mut env| {
-        env.get_static_field("android/os/Build$VERSION", "SDK_INT", "I").ok()?.i().ok()
+        env.get_static_field("android/os/Build$VERSION", "SDK_INT", "I")
+            .ok()?
+            .i()
+            .ok()
     });
     match sdk {
-        Some(31..) => ensure(&[
-            "android.permission.BLUETOOTH_SCAN",
-            "android.permission.BLUETOOTH_ADVERTISE",
-            "android.permission.BLUETOOTH_CONNECT",
-        ]).await,
+        Some(31..) => {
+            ensure(&[
+                "android.permission.BLUETOOTH_SCAN",
+                "android.permission.BLUETOOTH_ADVERTISE",
+                "android.permission.BLUETOOTH_CONNECT",
+            ])
+            .await
+        }
         Some(_) => ensure(&["android.permission.ACCESS_FINE_LOCATION"]).await,
         None => false,
     }
 }
 
 pub fn mesh_location_enabled() -> bool {
-    let Ok(mut env) = activity::jni_env() else { return false; };
-    let Ok(act) = activity::activity() else { return false; };
+    let Ok(mut env) = activity::jni_env() else {
+        return false;
+    };
+    let Ok(act) = activity::activity() else {
+        return false;
+    };
     env.call_method(act, "meshLocationEnabled", "()Z", &[])
-        .ok().and_then(|value| value.z().ok()).unwrap_or(false)
+        .ok()
+        .and_then(|value| value.z().ok())
+        .unwrap_or(false)
 }

@@ -14,7 +14,11 @@ use std::str::FromStr;
 
 /// Load and display messages for a private group.
 /// This can be called both when a group is selected and when member profiles are updated.
-pub fn load_private_group_messages(window: &MainWindow, ui_ctx: &Arc<ChatterClient>, group_id_str: &str) {
+pub fn load_private_group_messages(
+    window: &MainWindow,
+    ui_ctx: &Arc<ChatterClient>,
+    group_id_str: &str,
+) {
     let group_id = match AnonGroupId::from_str(group_id_str) {
         Ok(id) => id,
         Err(e) => {
@@ -22,7 +26,7 @@ pub fn load_private_group_messages(window: &MainWindow, ui_ctx: &Arc<ChatterClie
             return;
         }
     };
-    
+
     let ui_ctx = ui_ctx.clone();
     let auth_state = ui_ctx.auth_state().clone();
     let weak_window = window.as_weak();
@@ -46,10 +50,18 @@ pub fn load_private_group_messages(window: &MainWindow, ui_ctx: &Arc<ChatterClie
         let current_user_id_str = current_user_id.map(|id| id.to_string()).unwrap_or_default();
 
         // Load messages for this group (reaction counts populated in core).
-        let messages = match ui_ctx.get_anon_group_messages_asc(&group_id, None, chatter_core::config::MESSAGE_PAGE_SIZE) {
+        let messages = match ui_ctx.get_anon_group_messages_asc(
+            &group_id,
+            None,
+            chatter_core::config::MESSAGE_PAGE_SIZE,
+        ) {
             Ok(msgs) => msgs,
             Err(e) => {
-                tracing::error!("Failed to load messages for private group {}: {}", group_id, e);
+                tracing::error!(
+                    "Failed to load messages for private group {}: {}",
+                    group_id,
+                    e
+                );
                 Vec::new()
             }
         };
@@ -70,7 +82,12 @@ pub fn load_private_group_messages(window: &MainWindow, ui_ctx: &Arc<ChatterClie
         let ui_ctx_for_ui = ui_ctx.clone();
         run_ui!(weak_window, |w| {
             // Clear unread count in sidebar
-            crate::bin_ui::features::auth::inbox::domain_handler::update_unread_count(&w, &ui_ctx_for_ui, &group_id_str, 0);
+            crate::bin_ui::features::auth::inbox::domain_handler::update_unread_count(
+                &w,
+                &ui_ctx_for_ui,
+                &group_id_str,
+                0,
+            );
 
             // Clear composer state
             w.set_composer_is_replying(false);
@@ -85,8 +102,10 @@ pub fn load_private_group_messages(window: &MainWindow, ui_ctx: &Arc<ChatterClie
             // Set chat header info for private group
             w.set_channel_name(group_name.into());
             crate::bin_ui::converters::set_conversation_kind(
-            &w, &chatter_core::domain::message::ConversationType::AnonGroup, false,
-        );
+                &w,
+                &chatter_core::domain::message::ConversationType::AnonGroup,
+                false,
+            );
             w.set_is_dm(false);
             w.set_member_count(member_count);
             w.set_topic("".into());
@@ -101,7 +120,7 @@ pub fn load_private_group_messages(window: &MainWindow, ui_ctx: &Arc<ChatterClie
                 .collect();
             w.set_messages(ModelRc::new(VecModel::from(slint_messages)));
             w.set_loading_messages(false);
-            
+
             // Auto-register GIF animations
             crate::bin_ui::gif_state::auto_register_gifs_from_messages(w.as_weak(), ui_ctx_gifs);
         });
@@ -125,7 +144,9 @@ pub(crate) fn wire_private_group_selected(window: &MainWindow, ui_ctx: &Arc<Chat
         // Commit active-conversation state SYNCHRONOUSLY on the UI thread
         // (same race fix as dm.rs — see comment there).
         if let Ok(parsed) = group_id_str.parse::<AnonGroupId>() {
-            ui_ctx.chat_state().set_active_conversation(chatter_core::state::ActiveConversation::AnonGroup(parsed));
+            ui_ctx.chat_state().set_active_conversation(
+                chatter_core::state::ActiveConversation::AnonGroup(parsed),
+            );
         }
 
         tokio::spawn(async move {
@@ -148,7 +169,8 @@ pub(crate) fn wire_private_group_selected(window: &MainWindow, ui_ctx: &Arc<Chat
                 (vec![], String::new())
             } else {
                 let ids = pinned.iter().map(|m| m.id).collect();
-                let preview = pinned[0].as_text()
+                let preview = pinned[0]
+                    .as_text()
                     .filter(|t| !t.is_empty())
                     .map(|t| ui_ctx.truncate_message_preview(&t))
                     .unwrap_or_else(|| "[Pinned message]".to_string());
@@ -157,7 +179,8 @@ pub(crate) fn wire_private_group_selected(window: &MainWindow, ui_ctx: &Arc<Chat
             super::apply_pinned_ui(&weak, &ui_ctx.chat_state(), msg_ids, preview);
 
             // Mark messages as read
-            let handle = ui_ctx.conversation(chatter_core::state::ActiveConversation::AnonGroup(group_id));
+            let handle =
+                ui_ctx.conversation(chatter_core::state::ActiveConversation::AnonGroup(group_id));
             // Where the user left off — the mark is what destroys it.
             let anchor = handle.mark_as_read().await.unwrap_or_default();
             // Reading a foldered group has to clear its folder badge too.
@@ -189,10 +212,16 @@ async fn load_private_group_messages_internal(
 
     let member_count = ui_ctx.get_anon_group_members(&group_id).len() as i32;
 
-    let current_user_id_str = auth_state.get().current_user_id.map(|id| id.to_string()).unwrap_or_default();
+    let current_user_id_str = auth_state
+        .get()
+        .current_user_id
+        .map(|id| id.to_string())
+        .unwrap_or_default();
 
     // Reaction counts populated in core.
-    let messages = ui_ctx.get_anon_group_messages_asc(&group_id, None, chatter_core::config::MESSAGE_PAGE_SIZE).unwrap_or_default();
+    let messages = ui_ctx
+        .get_anon_group_messages_asc(&group_id, None, chatter_core::config::MESSAGE_PAGE_SIZE)
+        .unwrap_or_default();
 
     let display_messages = crate::bin_ui::converters::messages_to_display_batch(
         &messages,
@@ -212,11 +241,18 @@ async fn load_private_group_messages_internal(
     run_ui!(weak, |w| {
         super::apply_unread_anchor(&w, anchor, &anchor_page);
         // Clear unread count in sidebar
-        crate::bin_ui::features::auth::inbox::domain_handler::update_unread_count(&w, &ui_ctx_for_ui, &group_id_str, 0);
+        crate::bin_ui::features::auth::inbox::domain_handler::update_unread_count(
+            &w,
+            &ui_ctx_for_ui,
+            &group_id_str,
+            0,
+        );
 
         w.set_channel_name(group_name.into());
         crate::bin_ui::converters::set_conversation_kind(
-            &w, &chatter_core::domain::message::ConversationType::AnonGroup, false,
+            &w,
+            &chatter_core::domain::message::ConversationType::AnonGroup,
+            false,
         );
         w.set_is_dm(false);
         w.set_member_count(member_count);
@@ -225,10 +261,13 @@ async fn load_private_group_messages_internal(
         w.set_channel_has_avatar(false);
         w.set_channel_avatar_source(slint::Image::default());
 
-        let slint_messages: Vec<_> = display_messages.iter().map(|m| m.to_slint_with_user(&current_user_id_str)).collect();
+        let slint_messages: Vec<_> = display_messages
+            .iter()
+            .map(|m| m.to_slint_with_user(&current_user_id_str))
+            .collect();
         w.set_messages(ModelRc::new(VecModel::from(slint_messages)));
         w.set_loading_messages(false);
-        
+
         crate::bin_ui::gif_state::auto_register_gifs_from_messages(w.as_weak(), ui_ctx_gifs);
     });
 }

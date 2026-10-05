@@ -5,10 +5,10 @@ use std::sync::Arc;
 use slint::{ComponentHandle, Model, ModelRc, VecModel};
 
 use chatter_core::client::{ChatterClient, InviteCandidate};
+use chatter_core::domain::ChannelType;
 use chatter_core::domain::anon_group::AnonGroupId;
 use chatter_core::domain::ids::{ChannelId, UserId};
 use chatter_core::domain::message::ConversationType;
-use chatter_core::domain::ChannelType;
 use chatter_core::state::ActiveConversation;
 
 use crate::{BannedMemberData, ChannelMemberData, InviteUser, MainWindow, PrivateGroupFriend};
@@ -63,20 +63,25 @@ pub fn open_channel_settings(
 
         let current_user_id = ui_ctx.session_current_user_id();
         let is_dm = channel.is_dm();
-        let (is_owner, can_edit, can_manage_members, can_archive, can_delete) = match current_user_id.as_ref() {
-            Some(uid) => (
-                channel.is_owner(uid),
-                channel.can_user_edit(uid),
-                channel.can_user_manage_members(uid),
-                channel.can_user_archive(uid),
-                channel.can_user_delete(uid),
-            ),
-            None => (false, false, false, false, false),
-        };
+        let (is_owner, can_edit, can_manage_members, can_archive, can_delete) =
+            match current_user_id.as_ref() {
+                Some(uid) => (
+                    channel.is_owner(uid),
+                    channel.can_user_edit(uid),
+                    channel.can_user_manage_members(uid),
+                    channel.can_user_archive(uid),
+                    channel.can_user_delete(uid),
+                ),
+                None => (false, false, false, false, false),
+            };
 
         let can_leave = ui_ctx.can_leave_channel(&channel_id);
 
-        let created_at = channel.created_at.with_timezone(&chrono::Local).format("%b %d, %Y").to_string();
+        let created_at = channel
+            .created_at
+            .with_timezone(&chrono::Local)
+            .format("%b %d, %Y")
+            .to_string();
 
         // Core shapes the rows; the images are decoded on the UI thread below
         // (a slint::Image is not Send).
@@ -147,15 +152,21 @@ type BannedMembers = Option<Vec<chatter_core::domain::channel::BannedMember>>;
 async fn load_member_lists(
     ui_ctx: &ChatterClient,
     channel_id: &ChannelId,
-) -> (Vec<chatter_core::domain::channel::MemberWithProfile>, BannedMembers) {
+) -> (
+    Vec<chatter_core::domain::channel::MemberWithProfile>,
+    BannedMembers,
+) {
     let members = ui_ctx
         .list_members_with_profiles(channel_id, 100, 0)
         .await
         .unwrap_or_default();
-    let bans = ui_ctx.list_banned_members(channel_id).await.unwrap_or_else(|e| {
-        tracing::warn!(error = %e, "Failed to list channel bans");
-        None
-    });
+    let bans = ui_ctx
+        .list_banned_members(channel_id)
+        .await
+        .unwrap_or_else(|e| {
+            tracing::warn!(error = %e, "Failed to list channel bans");
+            None
+        });
     (members, bans)
 }
 
@@ -165,8 +176,10 @@ fn apply_member_lists(
     members: &[chatter_core::domain::channel::MemberWithProfile],
     bans: Option<&[chatter_core::domain::channel::BannedMember]>,
 ) {
-    let rows: Vec<ChannelMemberData> =
-        members.iter().map(crate::bin_ui::converters::member_to_slint).collect();
+    let rows: Vec<ChannelMemberData> = members
+        .iter()
+        .map(crate::bin_ui::converters::member_to_slint)
+        .collect();
     w.set_channel_settings_member_count(rows.len() as i32);
     w.set_channel_settings_members(ModelRc::new(VecModel::from(rows)));
     w.set_channel_settings_can_view_bans(bans.is_some());
@@ -180,7 +193,11 @@ fn apply_member_lists(
 
 /// Re-fetch the members pane after a moderation action, leaving the rest of
 /// the modal (unsaved name/description drafts) alone.
-fn refresh_member_lists(weak: slint::Weak<MainWindow>, ui_ctx: Arc<ChatterClient>, channel_id: ChannelId) {
+fn refresh_member_lists(
+    weak: slint::Weak<MainWindow>,
+    ui_ctx: Arc<ChatterClient>,
+    channel_id: ChannelId,
+) {
     tokio::spawn(async move {
         let (members, bans) = load_member_lists(&ui_ctx, &channel_id).await;
         let _ = slint::invoke_from_event_loop(move || {
@@ -200,7 +217,11 @@ fn refresh_member_lists(weak: slint::Weak<MainWindow>, ui_ctx: Arc<ChatterClient
 /// still "1 member". Called from the same membership-event path that updates
 /// the header — for private groups too (`anon.rs` passes the group id), whose
 /// roster is re-read from the local anon-group store instead of the server.
-pub fn refresh_members_if_open(weak: slint::Weak<MainWindow>, ui_ctx: Arc<ChatterClient>, channel_id: ChannelId) {
+pub fn refresh_members_if_open(
+    weak: slint::Weak<MainWindow>,
+    ui_ctx: Arc<ChatterClient>,
+    channel_id: ChannelId,
+) {
     let _ = slint::invoke_from_event_loop(move || {
         let Some(w) = weak.upgrade() else { return };
         let id = channel_id.to_string();
@@ -213,10 +234,14 @@ pub fn refresh_members_if_open(weak: slint::Weak<MainWindow>, ui_ctx: Arc<Chatte
             refresh_member_lists(weak.clone(), ui_ctx, channel_id);
             return;
         }
-        let Ok(group_id) = id.parse::<AnonGroupId>() else { return };
+        let Ok(group_id) = id.parse::<AnonGroupId>() else {
+            return;
+        };
         let weak = weak.clone();
         std::thread::spawn(move || {
-            let Some(roster) = load_private_group_roster(&ui_ctx, group_id) else { return };
+            let Some(roster) = load_private_group_roster(&ui_ctx, group_id) else {
+                return;
+            };
             let _ = slint::invoke_from_event_loop(move || {
                 let Some(w) = weak.upgrade() else { return };
                 // Still the same group's settings: the read took a moment.
@@ -243,7 +268,10 @@ pub struct PrivateGroupRoster {
 
 /// Blocking DB reads — call off the UI thread. `None` when the group is not
 /// stored locally or no user is signed in.
-pub fn load_private_group_roster(ui_ctx: &ChatterClient, group_id: AnonGroupId) -> Option<PrivateGroupRoster> {
+pub fn load_private_group_roster(
+    ui_ctx: &ChatterClient,
+    group_id: AnonGroupId,
+) -> Option<PrivateGroupRoster> {
     let Some(group) = ui_ctx.get_anon_group(&group_id) else {
         tracing::error!("Private group not found: {}", group_id);
         return None;
@@ -299,27 +327,29 @@ pub fn apply_private_group_roster(w: &MainWindow, roster: PrivateGroupRoster) {
     let rows: Vec<ChannelMemberData> = roster
         .members
         .into_iter()
-        .map(|(user_id, display_name, role, avatar, is_me, blocked)| ChannelMemberData {
-            user_id: user_id.into(),
-            display_name: display_name.into(),
-            username: "".into(),
-            role: role.into(),
-            joined_at: "".into(),
-            avatar_source: avatar
-                .as_deref()
-                .and_then(crate::bin_ui::converters::avatar_bytes_to_image)
-                .unwrap_or_default(),
-            // Anon groups have no mute/ban RPCs.
-            muted: false,
-            can_ban: false,
-            can_mute: false,
-            can_make_owner: is_owner && !is_me,
-            // Anon-group membership is owner-authoritative,
-            // not the signed channel log.
-            unverified: false,
-            can_block: !is_me,
-            blocked,
-        })
+        .map(
+            |(user_id, display_name, role, avatar, is_me, blocked)| ChannelMemberData {
+                user_id: user_id.into(),
+                display_name: display_name.into(),
+                username: "".into(),
+                role: role.into(),
+                joined_at: "".into(),
+                avatar_source: avatar
+                    .as_deref()
+                    .and_then(crate::bin_ui::converters::avatar_bytes_to_image)
+                    .unwrap_or_default(),
+                // Anon groups have no mute/ban RPCs.
+                muted: false,
+                can_ban: false,
+                can_mute: false,
+                can_make_owner: is_owner && !is_me,
+                // Anon-group membership is owner-authoritative,
+                // not the signed channel log.
+                unverified: false,
+                can_block: !is_me,
+                blocked,
+            },
+        )
         .collect();
     w.set_channel_settings_members(ModelRc::new(VecModel::from(rows)));
 }
@@ -335,7 +365,10 @@ fn wire_save_settings(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
         let desc_str = description.to_string();
 
         // Read on the UI thread: a Slint Weak never upgrades inside tokio::spawn.
-        let channel_id = weak.upgrade().map(|w| w.get_channel_settings_id().to_string()).unwrap_or_default();
+        let channel_id = weak
+            .upgrade()
+            .map(|w| w.get_channel_settings_id().to_string())
+            .unwrap_or_default();
         // The picked icon file (if any) so Save uploads it alongside the
         // name/description. Empty path = icon unchanged.
         let icon_path = weak
@@ -343,7 +376,9 @@ fn wire_save_settings(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             .map(|w| w.get_channel_settings_icon_path().to_string())
             .unwrap_or_default();
         tokio::spawn(async move {
-            if channel_id.is_empty() { return; }
+            if channel_id.is_empty() {
+                return;
+            }
             let channel_uuid = match channel_id.parse::<uuid::Uuid>() {
                 Ok(id) => ChannelId::from(id),
                 Err(_) => return,
@@ -361,17 +396,33 @@ fn wire_save_settings(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                 }
             };
 
-            let desc_opt = if desc_str.is_empty() { None } else { Some(desc_str.as_str()) };
-            match ui_ctx.update_channel(&channel_uuid, Some(&name_str), desc_opt, icon_bytes.as_deref()).await {
+            let desc_opt = if desc_str.is_empty() {
+                None
+            } else {
+                Some(desc_str.as_str())
+            };
+            match ui_ctx
+                .update_channel(
+                    &channel_uuid,
+                    Some(&name_str),
+                    desc_opt,
+                    icon_bytes.as_deref(),
+                )
+                .await
+            {
                 Ok(_) => {
                     let _ = slint::invoke_from_event_loop(move || {
-                        if let Some(w) = weak.upgrade() { crate::bin_ui::features::back::close(&w, "channel-settings"); }
+                        if let Some(w) = weak.upgrade() {
+                            crate::bin_ui::features::back::close(&w, "channel-settings");
+                        }
                     });
                 }
                 Err(e) => {
                     let err_msg = e.to_string();
                     let _ = slint::invoke_from_event_loop(move || {
-                        if let Some(w) = weak.upgrade() { w.set_channel_settings_error(err_msg.into()); }
+                        if let Some(w) = weak.upgrade() {
+                            w.set_channel_settings_error(err_msg.into());
+                        }
                     });
                 }
             }
@@ -407,7 +458,9 @@ fn wire_pick_icon(window: &MainWindow, _ui_ctx: &Arc<ChatterClient>) {
                 let _ = slint::invoke_from_event_loop(move || {
                     if let Some(w) = weak.upgrade() {
                         w.set_channel_settings_icon_path(path_string.into());
-                        if let Ok(img) = crate::bin_ui::slint_conversions::memory_to_slint_image(&data) {
+                        if let Ok(img) =
+                            crate::bin_ui::slint_conversions::memory_to_slint_image(&data)
+                        {
                             w.set_channel_settings_icon_preview(img);
                             w.set_channel_settings_has_icon_preview(true);
                         }
@@ -434,7 +487,9 @@ fn wire_notification_settings(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) 
         let weak = weak_window.clone();
         let pref_str = preference.to_string();
         let _ = slint::invoke_from_event_loop(move || {
-            if let Some(w) = weak.upgrade() { w.set_channel_settings_notification_pref(pref_str.into()); }
+            if let Some(w) = weak.upgrade() {
+                w.set_channel_settings_notification_pref(pref_str.into());
+            }
         });
     });
 
@@ -472,12 +527,19 @@ fn wire_notification_settings(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) 
         // Reflect the toggle immediately, then persist off the UI thread.
         let weak_ui = weak.clone();
         let _ = slint::invoke_from_event_loop(move || {
-            if let Some(w) = weak_ui.upgrade() { w.set_channel_settings_muted(muted); }
+            if let Some(w) = weak_ui.upgrade() {
+                w.set_channel_settings_muted(muted);
+            }
         });
         // Read on the UI thread: a Slint Weak never upgrades inside tokio::spawn.
-        let channel_id = weak.upgrade().map(|w| w.get_channel_settings_id().to_string()).unwrap_or_default();
+        let channel_id = weak
+            .upgrade()
+            .map(|w| w.get_channel_settings_id().to_string())
+            .unwrap_or_default();
         tokio::spawn(async move {
-            if channel_id.is_empty() { return; }
+            if channel_id.is_empty() {
+                return;
+            }
             let channel_uuid = match channel_id.parse::<uuid::Uuid>() {
                 Ok(id) => ChannelId::from(id),
                 Err(_) => return,
@@ -490,7 +552,9 @@ fn wire_notification_settings(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) 
                 // Snap the switch back so it never shows a state we did not
                 // manage to persist (same as the AI toggle above).
                 let _ = slint::invoke_from_event_loop(move || {
-                    if let Some(w) = weak.upgrade() { w.set_channel_settings_muted(!muted); }
+                    if let Some(w) = weak.upgrade() {
+                        w.set_channel_settings_muted(!muted);
+                    }
                 });
             }
         });
@@ -509,9 +573,14 @@ fn wire_member_management(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
         let role_str = role.to_string();
 
         // Read on the UI thread: a Slint Weak never upgrades inside tokio::spawn.
-        let channel_id = weak.upgrade().map(|w| w.get_channel_settings_id().to_string()).unwrap_or_default();
+        let channel_id = weak
+            .upgrade()
+            .map(|w| w.get_channel_settings_id().to_string())
+            .unwrap_or_default();
         tokio::spawn(async move {
-            if channel_id.is_empty() { return; }
+            if channel_id.is_empty() {
+                return;
+            }
             let channel_uuid = match channel_id.parse::<uuid::Uuid>() {
                 Ok(id) => ChannelId::from(id),
                 Err(_) => return,
@@ -520,8 +589,12 @@ fn wire_member_management(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                 Ok(id) => chatter_core::domain::ids::UserId::from(id),
                 Err(_) => return,
             };
-            let Some(new_role) = chatter_core::domain::channel::MemberRole::parse(&role_str) else { return };
-            let result = ui_ctx.update_channel_member_role(&channel_uuid, &user_uuid, new_role).await;
+            let Some(new_role) = chatter_core::domain::channel::MemberRole::parse(&role_str) else {
+                return;
+            };
+            let result = ui_ctx
+                .update_channel_member_role(&channel_uuid, &user_uuid, new_role)
+                .await;
             let _ = slint::invoke_from_event_loop(move || {
                 let Some(w) = weak.upgrade() else { return };
                 match result {
@@ -551,8 +624,15 @@ fn wire_member_management(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
         let weak = weak_window.clone();
         let ui_ctx = ui_ctx.clone();
         // Read on the UI thread: a Slint Weak never upgrades inside tokio::spawn.
-        let Some(conv) = weak.upgrade().and_then(|w| settings_conversation(&w, &ui_ctx)) else { return };
-        let Ok(user) = user_id.as_str().parse::<UserId>() else { return };
+        let Some(conv) = weak
+            .upgrade()
+            .and_then(|w| settings_conversation(&w, &ui_ctx))
+        else {
+            return;
+        };
+        let Ok(user) = user_id.as_str().parse::<UserId>() else {
+            return;
+        };
         tokio::spawn(async move {
             let result = ui_ctx.remove_conversation_member(conv, &user).await;
             match result {
@@ -566,7 +646,9 @@ fn wire_member_management(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                     tracing::warn!(error = %e, "Failed to remove member");
                     let _ = slint::invoke_from_event_loop(move || {
                         if let Some(w) = weak.upgrade() {
-                            w.set_channel_settings_error(format!("Couldn't remove member: {e}").into());
+                            w.set_channel_settings_error(
+                                format!("Couldn't remove member: {e}").into(),
+                            );
                         }
                     });
                 }
@@ -585,7 +667,6 @@ fn settings_conversation(w: &MainWindow, ui_ctx: &ChatterClient) -> Option<Activ
     };
     ui_ctx.resolve_row_conversation(w.get_channel_settings_id().as_str(), &kind)
 }
-
 
 /// A members-pane moderation action; core does the work and the server
 /// authorizes it (the buttons only appear where core's `MemberModeration`
@@ -607,17 +688,23 @@ fn wire_moderation(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             let weak = weak_window.clone();
             let ui_ctx = ui_ctx.clone();
             // Read on the UI thread: a Slint Weak never upgrades inside tokio::spawn.
-            let channel_id = weak.upgrade().map(|w| w.get_channel_settings_id().to_string()).unwrap_or_default();
-            let (Ok(channel_id), Ok(user_id)) =
-                (channel_id.parse::<ChannelId>(), user_id.as_str().parse::<UserId>())
-            else {
+            let channel_id = weak
+                .upgrade()
+                .map(|w| w.get_channel_settings_id().to_string())
+                .unwrap_or_default();
+            let (Ok(channel_id), Ok(user_id)) = (
+                channel_id.parse::<ChannelId>(),
+                user_id.as_str().parse::<UserId>(),
+            ) else {
                 return;
             };
             tokio::spawn(async move {
                 let result = match action {
                     ModAction::Ban => ui_ctx.ban_user(&channel_id, &user_id, None).await,
                     ModAction::Unban => ui_ctx.unban_user(&channel_id, &user_id).await,
-                    ModAction::Mute(duration) => ui_ctx.mute_user(&channel_id, &user_id, duration).await,
+                    ModAction::Mute(duration) => {
+                        ui_ctx.mute_user(&channel_id, &user_id, duration).await
+                    }
                     ModAction::Unmute => ui_ctx.unmute_user(&channel_id, &user_id).await,
                 };
                 let error = match &result {
@@ -653,7 +740,12 @@ fn wire_moderation(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
         let action = if !muted {
             ModAction::Unmute
         } else {
-            ModAction::Mute(u64::try_from(minutes).ok().filter(|&m| m > 0).map(|m| std::time::Duration::from_secs(m * 60)))
+            ModAction::Mute(
+                u64::try_from(minutes)
+                    .ok()
+                    .filter(|&m| m > 0)
+                    .map(|m| std::time::Duration::from_secs(m * 60)),
+            )
         };
         run(user_id, action)
     });
@@ -679,7 +771,9 @@ fn wire_transfer_ownership(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             return;
         };
         tokio::spawn(async move {
-            let result = ui_ctx.transfer_conversation_ownership(conv, &new_owner).await;
+            let result = ui_ctx
+                .transfer_conversation_ownership(conv, &new_owner)
+                .await;
             let _ = slint::invoke_from_event_loop(move || {
                 let Some(w) = weak.upgrade() else { return };
                 match result {
@@ -695,7 +789,9 @@ fn wire_transfer_ownership(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                     }
                     Err(e) => {
                         tracing::warn!(%channel_uuid, error = %e, "Ownership transfer failed");
-                        w.set_channel_settings_error(format!("Couldn't transfer ownership: {e}").into());
+                        w.set_channel_settings_error(
+                            format!("Couldn't transfer ownership: {e}").into(),
+                        );
                     }
                 }
             });
@@ -709,12 +805,18 @@ fn wire_transfer_ownership(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
 fn wire_group_blocking(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     let (weak, ctx) = (window.as_weak(), ui_ctx.clone());
     window.on_channel_settings_block_group(move |block| {
-        change_group_block(&weak, &ctx, move |ctx, conv| ctx.set_conversation_blocked(conv, block));
+        change_group_block(&weak, &ctx, move |ctx, conv| {
+            ctx.set_conversation_blocked(conv, block)
+        });
     });
     let (weak, ctx) = (window.as_weak(), ui_ctx.clone());
     window.on_channel_settings_block_member(move |user_id, block| {
-        let Ok(user) = user_id.as_str().parse::<UserId>() else { return };
-        change_group_block(&weak, &ctx, move |ctx, conv| ctx.set_conversation_member_blocked(conv, &user, block));
+        let Ok(user) = user_id.as_str().parse::<UserId>() else {
+            return;
+        };
+        change_group_block(&weak, &ctx, move |ctx, conv| {
+            ctx.set_conversation_member_blocked(conv, &user, block)
+        });
     });
 }
 
@@ -724,13 +826,19 @@ fn wire_group_blocking(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
 fn change_group_block(
     weak: &slint::Weak<MainWindow>,
     ui_ctx: &Arc<ChatterClient>,
-    change: impl FnOnce(&Arc<ChatterClient>, ActiveConversation) -> Result<(), chatter_core::services::conversation::ConversationError>
-        + Send
-        + 'static,
+    change: impl FnOnce(
+        &Arc<ChatterClient>,
+        ActiveConversation,
+    ) -> Result<(), chatter_core::services::conversation::ConversationError>
+    + Send
+    + 'static,
 ) {
     // Read on the UI thread: a Slint Weak never upgrades off it.
     let Some(w) = weak.upgrade() else { return };
-    let Some(conv @ ActiveConversation::AnonGroup(group_id)) = settings_conversation(&w, ui_ctx) else { return };
+    let Some(conv @ ActiveConversation::AnonGroup(group_id)) = settings_conversation(&w, ui_ctx)
+    else {
+        return;
+    };
     let (weak, ui_ctx) = (weak.clone(), ui_ctx.clone());
     std::thread::spawn(move || match change(&ui_ctx, conv) {
         Ok(()) => refresh_members_if_open(weak, ui_ctx, group_id.into()),
@@ -752,19 +860,31 @@ fn wire_channel_actions(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     window.on_channel_settings_archive(move || {
         let weak = weak_window.clone();
         let ui_ctx = ui_ctx_archive.clone();
-        let currently_archived = weak.upgrade().map(|w| w.get_channel_settings_archived()).unwrap_or(false);
+        let currently_archived = weak
+            .upgrade()
+            .map(|w| w.get_channel_settings_archived())
+            .unwrap_or(false);
         // Read on the UI thread: a Slint Weak never upgrades inside tokio::spawn.
-        let channel_id = weak.upgrade().map(|w| w.get_channel_settings_id().to_string()).unwrap_or_default();
+        let channel_id = weak
+            .upgrade()
+            .map(|w| w.get_channel_settings_id().to_string())
+            .unwrap_or_default();
         tokio::spawn(async move {
-            if channel_id.is_empty() { return; }
+            if channel_id.is_empty() {
+                return;
+            }
             let channel_uuid = match channel_id.parse::<uuid::Uuid>() {
                 Ok(id) => ChannelId::from(id),
                 Err(_) => return,
             };
-            let result = ui_ctx.archive_channel(&channel_uuid, !currently_archived).await;
+            let result = ui_ctx
+                .archive_channel(&channel_uuid, !currently_archived)
+                .await;
             if result.is_ok() {
                 let _ = slint::invoke_from_event_loop(move || {
-                    if let Some(w) = weak.upgrade() { crate::bin_ui::features::back::close(&w, "channel-settings"); }
+                    if let Some(w) = weak.upgrade() {
+                        crate::bin_ui::features::back::close(&w, "channel-settings");
+                    }
                 });
             }
         });
@@ -774,7 +894,12 @@ fn wire_channel_actions(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     let ui_ctx_leave = ui_ctx.clone();
     window.on_channel_settings_leave(move || {
         // Read on the UI thread: a Slint Weak never upgrades inside tokio::spawn.
-        let Some(conv) = weak_window.upgrade().and_then(|w| settings_conversation(&w, &ui_ctx_leave)) else { return };
+        let Some(conv) = weak_window
+            .upgrade()
+            .and_then(|w| settings_conversation(&w, &ui_ctx_leave))
+        else {
+            return;
+        };
         leave_conversation(weak_window.clone(), ui_ctx_leave.clone(), conv);
     });
 
@@ -783,7 +908,9 @@ fn wire_channel_actions(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     let ui_ctx_leave = ui_ctx.clone();
     window.on_leave_conversation(move |row_id, kind| {
         let kind = crate::bin_ui::converters::conversation_type(kind);
-        let Some(conv) = ui_ctx_leave.resolve_row_conversation(row_id.as_str(), &kind) else { return };
+        let Some(conv) = ui_ctx_leave.resolve_row_conversation(row_id.as_str(), &kind) else {
+            return;
+        };
         leave_conversation(weak_window.clone(), ui_ctx_leave.clone(), conv);
     });
 
@@ -793,9 +920,14 @@ fn wire_channel_actions(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
         let weak = weak_window.clone();
         let ui_ctx = ui_ctx_delete.clone();
         // Read on the UI thread: a Slint Weak never upgrades inside tokio::spawn.
-        let channel_id = weak.upgrade().map(|w| w.get_channel_settings_id().to_string()).unwrap_or_default();
+        let channel_id = weak
+            .upgrade()
+            .map(|w| w.get_channel_settings_id().to_string())
+            .unwrap_or_default();
         tokio::spawn(async move {
-            if channel_id.is_empty() { return; }
+            if channel_id.is_empty() {
+                return;
+            }
             let channel_uuid = match channel_id.parse::<uuid::Uuid>() {
                 Ok(id) => ChannelId::from(id),
                 Err(_) => return,
@@ -804,7 +936,9 @@ fn wire_channel_actions(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                 let _ = slint::invoke_from_event_loop(move || {
                     if let Some(w) = weak.upgrade() {
                         crate::bin_ui::features::back::close(&w, "channel-settings");
-                        ui_ctx.chat_state().set_active_conversation(chatter_core::state::ActiveConversation::None);
+                        ui_ctx
+                            .chat_state()
+                            .set_active_conversation(chatter_core::state::ActiveConversation::None);
                         w.set_channel_name("".into());
                         crate::bin_ui::features::sidebar::refresh_selection(&w, &ui_ctx);
                     }
@@ -817,7 +951,11 @@ fn wire_channel_actions(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
 /// Leave a channel or private group (Settings and the sidebar row menu).
 /// A channel's row stays, read-only, like a removal (core files "You left
 /// the channel"); a group is gone from this device, so its chat closes.
-fn leave_conversation(weak: slint::Weak<MainWindow>, ui_ctx: Arc<ChatterClient>, conv: ActiveConversation) {
+fn leave_conversation(
+    weak: slint::Weak<MainWindow>,
+    ui_ctx: Arc<ChatterClient>,
+    conv: ActiveConversation,
+) {
     let id = conv.channel_id().map(|c| c.to_string()).unwrap_or_default();
     tokio::spawn(async move {
         let result = ui_ctx.leave_conversation(conv).await;
@@ -862,7 +1000,6 @@ fn wire_invite_members(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             .unwrap_or_default();
 
         tokio::spawn(async move {
-
             if group_id_str.is_empty() {
                 return;
             }
@@ -881,7 +1018,11 @@ fn wire_invite_members(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                 .map(|c| PrivateGroupFriend {
                     user_id: c.user_id.to_string().into(),
                     display_name: c.display_name.into(),
-                    username: if c.is_anonymous { "(anonymous)".into() } else { "".into() },
+                    username: if c.is_anonymous {
+                        "(anonymous)".into()
+                    } else {
+                        "".into()
+                    },
                     selected: false,
                     role: "member".into(),
                 })
@@ -906,7 +1047,11 @@ fn wire_invite_members(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
 /// Callable from any entry point that opens the channel invite modal (header
 /// button, channel settings). Populates friends list so users see candidates
 /// immediately; the search input can then hit the server for non-friend users.
-pub fn open_invite_member_modal(weak: slint::Weak<MainWindow>, ui_ctx: Arc<ChatterClient>, channel_id: ChannelId) {
+pub fn open_invite_member_modal(
+    weak: slint::Weak<MainWindow>,
+    ui_ctx: Arc<ChatterClient>,
+    channel_id: ChannelId,
+) {
     tokio::spawn(async move {
         let channel_id_str = channel_id.to_string();
 
@@ -924,8 +1069,10 @@ pub fn open_invite_member_modal(weak: slint::Weak<MainWindow>, ui_ctx: Arc<Chatt
 
         let _ = slint::invoke_from_event_loop(move || {
             if let Some(w) = weak.upgrade() {
-                let user_data: Vec<InviteUser> =
-                    candidates.into_iter().map(candidate_to_invite_user).collect();
+                let user_data: Vec<InviteUser> = candidates
+                    .into_iter()
+                    .map(candidate_to_invite_user)
+                    .collect();
                 w.set_invite_member_channel_id(channel_id_str.into());
                 w.set_invite_member_channel_name(channel_name.into());
                 w.set_invite_member_users(ModelRc::new(VecModel::from(user_data)));
@@ -994,9 +1141,7 @@ fn wire_invite_channel_members(window: &MainWindow, ui_ctx: &Arc<ChatterClient>)
                     users.set_row_data(index, user);
 
                     // Recalculate selected count
-                    let count = users.iter()
-                        .filter(|u| u.selected)
-                        .count() as i32;
+                    let count = users.iter().filter(|u| u.selected).count() as i32;
                     w.set_invite_member_selected_count(count);
                 }
             }

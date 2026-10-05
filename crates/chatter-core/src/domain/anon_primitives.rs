@@ -4,12 +4,12 @@
 //! and Anon Group infrastructures. Uses phantom types to preserve
 //! type safety while eliminating boilerplate duplication.
 
-use std::marker::PhantomData;
-use std::str::FromStr;
-use std::fmt;
-use uuid::Uuid;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use std::fmt;
+use std::marker::PhantomData;
+use std::str::FromStr;
+use uuid::Uuid;
 
 // ============================================================================
 // Generic Identifiers

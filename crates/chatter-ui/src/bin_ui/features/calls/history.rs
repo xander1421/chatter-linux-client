@@ -11,8 +11,8 @@ use std::sync::Arc;
 
 use slint::{ComponentHandle, ModelRc, SharedString, VecModel};
 
-use chatter_core::client::calls::CallHistoryPage;
 use chatter_core::client::ChatterClient;
+use chatter_core::client::calls::CallHistoryPage;
 use chatter_core::domain::call::CallHistoryFilter;
 
 use crate::bin_ui::converters::avatar_bytes_to_image;
@@ -174,10 +174,13 @@ pub(crate) fn refresh_badge(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
 /// Load core's page off the event loop; `paint` turns it into Slint rows
 /// there, since a `slint::Image` (the avatar) cannot cross threads.
 async fn load_page(ui_ctx: &Arc<ChatterClient>, filter: CallHistoryFilter) -> CallHistoryPage {
-    ui_ctx.call_history_page(filter, HISTORY_PAGE).await.unwrap_or_else(|e| {
-        tracing::error!(error = %e, "Failed to load call history");
-        CallHistoryPage::default()
-    })
+    ui_ctx
+        .call_history_page(filter, HISTORY_PAGE)
+        .await
+        .unwrap_or_else(|e| {
+            tracing::error!(error = %e, "Failed to load call history");
+            CallHistoryPage::default()
+        })
 }
 
 fn paint(window: &MainWindow, page: CallHistoryPage) {

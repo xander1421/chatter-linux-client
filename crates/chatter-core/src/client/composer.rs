@@ -16,11 +16,15 @@ pub struct ComposerReply {
     pub timestamp: String,
     pub sender_name: String,
     pub preview: String,
+    /// Presentation-only RGBA thumbnail, retained across delayed send recovery.
+    pub thumbnail: Option<(Vec<u8>, u32, u32)>,
 }
 
 /// Everything one send commits to: where it goes and what it carries.
 #[derive(Clone, Debug)]
 pub struct ComposerSend {
+    /// Captured before uploads/deposits; cloning a frozen send keeps its identity.
+    pub attempt_id: uuid::Uuid,
     pub session_revision: u64,
     pub conversation: ActiveConversation,
     pub text: String,
@@ -66,11 +70,20 @@ impl ChatterClient {
         {
             return Err("Send the Jarvis request on its own first.".into());
         }
+        self.ensure_send_available(conversation)
+            .map_err(|e| e.to_string())?;
         let attachments = self
             .chat_state()
             .take_pending_attachments_for(conversation)
             .ok_or_else(|| "The conversation changed. Nothing was sent.".to_string())?;
-        Ok(ComposerSend { session_revision, conversation, text, reply, attachments })
+        Ok(ComposerSend {
+            attempt_id: uuid::Uuid::new_v4(),
+            session_revision,
+            conversation,
+            text,
+            reply,
+            attachments,
+        })
     }
 
     pub fn composer_session_is_current(&self, revision: u64) -> bool {
@@ -82,11 +95,22 @@ impl ChatterClient {
         &self,
         send: &ComposerSend,
         quote: Option<crate::services::gateway::QuoteIntent>,
-    ) -> Option<Result<super::messaging::SendMessageUiResult, crate::services::gateway::SendError>> {
+    ) -> Option<Result<super::messaging::SendMessageUiResult, crate::services::gateway::SendError>>
+    {
         if !self.composer_session_is_current(send.session_revision) {
             return None;
         }
-        Some(self.send_message_ui(send.conversation, &send.text, &send.attachments, quote, None).await)
+        Some(
+            self.send_message_ui_attempt(
+                send.attempt_id,
+                send.conversation,
+                &send.text,
+                &send.attachments,
+                quote,
+                None,
+            )
+            .await,
+        )
     }
 
     /// Account-local drafts and failed sends never survive sign-out.
@@ -95,15 +119,20 @@ impl ChatterClient {
         self.parked_sends.lock().clear();
         self.composer_drafts.lock().clear();
         self.composer_owner.lock().clear();
-        self.chat_state().clear_pending_attachments();
-        self.chat_state().set_active_conversation(ActiveConversation::None);
+        self.chat_state().clear_attachment_trays();
+        self.chat_state()
+            .set_active_conversation(ActiveConversation::None);
     }
 
     /// Hand a failed send back. `Some`: restore it now — its conversation is
     /// open and `composer_empty` (nothing typed, replied to, or edited since)
     /// with nothing staged. Otherwise it is kept, never written over newer
     /// input, until [`Self::take_parked_send`] finds room for it.
-    pub fn recover_composer_send(&self, send: ComposerSend, composer_empty: bool) -> Option<ComposerSend> {
+    pub fn recover_composer_send(
+        &self,
+        send: ComposerSend,
+        composer_empty: bool,
+    ) -> Option<ComposerSend> {
         if !self.composer_session_is_current(send.session_revision) {
             return None;
         }
@@ -132,7 +161,12 @@ impl ChatterClient {
     /// composer still holds the old one's draft (the UI's watcher has not
     /// swapped it yet): the composer belongs to neither.
     fn composer_shows_active(&self) -> bool {
-        let shown = self.chat_state().get().active_channel_id.map(|id| id.to_string()).unwrap_or_default();
+        let shown = self
+            .chat_state()
+            .get()
+            .active_channel_id
+            .map(|id| id.to_string())
+            .unwrap_or_default();
         *self.composer_owner.lock() == shown
     }
 
@@ -161,7 +195,13 @@ mod tests {
         let db = crate::system::Directories::with_base_dir(dir.path().to_path_buf())
             .unwrap()
             .database_path();
-        std::fs::write(db.parent().unwrap().join(crate::system::keyring::NO_KEYRING_MARKER), b"").unwrap();
+        std::fs::write(
+            db.parent()
+                .unwrap()
+                .join(crate::system::keyring::NO_KEYRING_MARKER),
+            b"",
+        )
+        .unwrap();
         let client = ChatterClient::builder()
             .server_url("https://localhost:1")
             .data_dir(dir.path().to_str().unwrap())
@@ -171,12 +211,20 @@ mod tests {
     }
 
     fn staged(name: &str) -> PendingAttachment {
-        PendingAttachment::new(AttachmentId::new(), name.into(), Default::default(), 1, "image/png".into())
+        PendingAttachment::new(
+            AttachmentId::new(),
+            name.into(),
+            Default::default(),
+            1,
+            "image/png".into(),
+        )
     }
 
     /// Navigate as the app does: core state, then the UI's draft swap.
     fn open(client: &ChatterClient, id: ChannelId) {
-        client.chat_state().set_active_conversation(ActiveConversation::Channel(id));
+        client
+            .chat_state()
+            .set_active_conversation(ActiveConversation::Channel(id));
         client.swap_composer_draft("", String::new(), &id.to_string());
     }
 
@@ -185,16 +233,23 @@ mod tests {
         let (client, _dir) = client();
         let a = ChannelId::new();
         open(&client, a);
-        client.chat_state().add_pending_attachment(staged("cat.png"));
+        client
+            .chat_state()
+            .add_pending_attachment(staged("cat.png"));
         let send = client.begin_composer_send("caption".into(), None).unwrap();
         assert_eq!(send.conversation, ActiveConversation::Channel(a));
         assert_eq!(send.text, "caption");
         assert_eq!(send.attachments.len(), 1);
-        assert!(client.chat_state().get_pending_attachments().is_empty(), "the staged file went to two sends");
+        assert!(
+            client.chat_state().get_pending_attachments().is_empty(),
+            "the staged file went to two sends"
+        );
 
         // Later navigation and staging do not reach into the frozen send.
         open(&client, ChannelId::new());
-        client.chat_state().add_pending_attachment(staged("later.png"));
+        client
+            .chat_state()
+            .add_pending_attachment(staged("later.png"));
         assert_eq!(send.conversation, ActiveConversation::Channel(a));
         assert_eq!(send.attachments[0].filename, "cat.png");
     }
@@ -206,16 +261,24 @@ mod tests {
         client.auth_state().set_logged_in(user, 1, "A".into());
         let channel = ChannelId::new();
         open(&client, channel);
-        let send = client.begin_composer_send("private caption".into(), None).unwrap();
+        let send = client
+            .begin_composer_send("private caption".into(), None)
+            .unwrap();
         assert!(client.recover_composer_send(send.clone(), false).is_none());
 
         client.auth_state().set_logged_out();
         // Even another login of the same account is a new session.
         client.auth_state().set_logged_in(user, 1, "A again".into());
         assert!(!client.composer_session_is_current(send.session_revision));
-        assert!(client.send_composer_message(&send, None).await.is_none(), "expired intent entered the send path");
+        assert!(
+            client.send_composer_message(&send, None).await.is_none(),
+            "expired intent entered the send path"
+        );
         assert!(client.recover_composer_send(send, true).is_none());
-        assert!(client.take_parked_send(true).is_none(), "old caption restored in a new session");
+        assert!(
+            client.take_parked_send(true).is_none(),
+            "old caption restored in a new session"
+        );
     }
 
     #[tokio::test]
@@ -223,26 +286,41 @@ mod tests {
         let (client, _dir) = client();
         let channel = ChannelId::new();
         open(&client, channel);
-        let send = client.begin_composer_send("failed caption".into(), None).unwrap();
+        let send = client
+            .begin_composer_send("failed caption".into(), None)
+            .unwrap();
         assert!(client.recover_composer_send(send.clone(), false).is_none());
-        client.chat_state().add_pending_attachment(staged("private.png"));
+        client
+            .chat_state()
+            .add_pending_attachment(staged("private.png"));
         client.swap_composer_draft(&channel.to_string(), "private draft".into(), "elsewhere");
 
         client.clear_composer_session();
-        assert_eq!(client.chat_state().active_conversation(), ActiveConversation::None);
+        assert_eq!(
+            client.chat_state().active_conversation(),
+            ActiveConversation::None
+        );
         assert!(client.chat_state().get_pending_attachments().is_empty());
         assert!(!client.composer_session_is_current(send.session_revision));
         client.swap_composer_draft(&channel.to_string(), "late old UI draft".into(), "");
-        client.auth_state().set_logged_in(crate::domain::ids::UserId::new(), 1, "B".into());
+        client
+            .auth_state()
+            .set_logged_in(crate::domain::ids::UserId::new(), 1, "B".into());
         open(&client, channel);
-        assert!(client.swap_composer_draft("", String::new(), &channel.to_string()).is_empty());
+        assert!(
+            client
+                .swap_composer_draft("", String::new(), &channel.to_string())
+                .is_empty()
+        );
         assert!(client.take_parked_send(true).is_none());
     }
 
     #[tokio::test]
     async fn begin_with_no_conversation_consumes_nothing() {
         let (client, _dir) = client();
-        client.chat_state().add_pending_attachment(staged("cat.png"));
+        client
+            .chat_state()
+            .add_pending_attachment(staged("cat.png"));
         assert!(client.begin_composer_send("x".into(), None).is_err());
         assert_eq!(client.chat_state().get_pending_attachments().len(), 1);
     }
@@ -252,7 +330,9 @@ mod tests {
     async fn begin_refuses_a_jarvis_request_before_consuming() {
         let (client, _dir) = client();
         open(&client, ChannelId::new());
-        client.chat_state().add_pending_attachment(staged("cat.png"));
+        client
+            .chat_state()
+            .add_pending_attachment(staged("cat.png"));
         assert!(client.begin_composer_send("/ask why".into(), None).is_err());
         assert_eq!(client.chat_state().get_pending_attachments().len(), 1);
     }
@@ -266,19 +346,29 @@ mod tests {
 
         // Same chat, newer draft typed: kept, not written over it.
         assert!(client.recover_composer_send(send.clone(), false).is_none());
-        assert!(client.take_parked_send(false).is_none(), "newer draft still there");
+        assert!(
+            client.take_parked_send(false).is_none(),
+            "newer draft still there"
+        );
 
         // Navigated to B: B's empty composer is no home for A's send.
         open(&client, b);
-        assert!(client.take_parked_send(true).is_none(), "A's send restored into B");
+        assert!(
+            client.take_parked_send(true).is_none(),
+            "A's send restored into B"
+        );
 
         // Back in A, composer empty but a file staged since: still kept.
         open(&client, a);
-        client.chat_state().add_pending_attachment(staged("new.png"));
+        client
+            .chat_state()
+            .add_pending_attachment(staged("new.png"));
         assert!(client.take_parked_send(true).is_none());
         client.chat_state().clear_pending_attachments();
 
-        let back = client.take_parked_send(true).expect("A's composer has room now");
+        let back = client
+            .take_parked_send(true)
+            .expect("A's composer has room now");
         assert_eq!(back.text, "caption");
         assert!(client.take_parked_send(true).is_none(), "restored twice");
 
@@ -293,7 +383,10 @@ mod tests {
         open(&client, a);
         let send = client.begin_composer_send("for A".into(), None).unwrap();
         open(&client, b);
-        assert!(client.recover_composer_send(send, true).is_none(), "restored into B");
+        assert!(
+            client.recover_composer_send(send, true).is_none(),
+            "restored into B"
+        );
         open(&client, a);
         assert_eq!(client.take_parked_send(true).unwrap().text, "for A");
     }
@@ -304,8 +397,17 @@ mod tests {
         let (a, b) = (ChannelId::new(), ChannelId::new());
         open(&client, b);
         client.chat_state().add_pending_attachment(staged("b.png"));
-        assert!(client.chat_state().take_pending_attachments_for(ActiveConversation::Channel(a)).is_none());
-        assert_eq!(client.chat_state().get_pending_attachments().len(), 1, "B's file was taken for A");
+        assert!(
+            client
+                .chat_state()
+                .take_pending_attachments_for(ActiveConversation::Channel(a))
+                .is_none()
+        );
+        assert_eq!(
+            client.chat_state().get_pending_attachments().len(),
+            1,
+            "B's file was taken for A"
+        );
     }
 
     #[tokio::test]
@@ -314,7 +416,9 @@ mod tests {
         let (a, b) = (ChannelId::new(), ChannelId::new());
         open(&client, a);
         // Core has moved to B; the composer still holds A's draft.
-        client.chat_state().set_active_conversation(ActiveConversation::Channel(b));
+        client
+            .chat_state()
+            .set_active_conversation(ActiveConversation::Channel(b));
         client.chat_state().add_pending_attachment(staged("a.png"));
         assert!(client.begin_composer_send("for A".into(), None).is_err());
         assert_eq!(client.chat_state().get_pending_attachments().len(), 1);
@@ -328,8 +432,13 @@ mod tests {
         let send = client.begin_composer_send("for A".into(), None).unwrap();
         open(&client, b);
         // Back to A in core; the composer still shows B's (empty) draft.
-        client.chat_state().set_active_conversation(ActiveConversation::Channel(a));
-        assert!(client.recover_composer_send(send, true).is_none(), "A's send restored into B's composer");
+        client
+            .chat_state()
+            .set_active_conversation(ActiveConversation::Channel(a));
+        assert!(
+            client.recover_composer_send(send, true).is_none(),
+            "A's send restored into B's composer"
+        );
         client.swap_composer_draft(&b.to_string(), String::new(), &a.to_string());
         assert_eq!(client.take_parked_send(true).unwrap().text, "for A");
     }

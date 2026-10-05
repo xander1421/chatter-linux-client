@@ -337,10 +337,16 @@ mod tests {
         assert!(!dedup.is_duplicate("k8", 0));
         assert_eq!(dedup.len(), 6);
         for i in 0..3 {
-            assert!(!dedup.contains(&format!("k{i}")), "k{i} should have been evicted");
+            assert!(
+                !dedup.contains(&format!("k{i}")),
+                "k{i} should have been evicted"
+            );
         }
         for i in 3..=8 {
-            assert!(dedup.contains(&format!("k{i}")), "k{i} should have survived");
+            assert!(
+                dedup.contains(&format!("k{i}")),
+                "k{i} should have survived"
+            );
         }
     }
 

@@ -2,11 +2,11 @@
 //!
 //! Provides a mock gRPC server and network simulation.
 
+use super::services::{MockError, MockResult};
+use crate::framework::fixtures::{TestChannel, TestMessage, TestUser};
 use std::collections::HashMap;
 use std::sync::RwLock;
 use std::time::Duration;
-use crate::framework::fixtures::{TestMessage, TestChannel, TestUser};
-use super::services::{MockError, MockResult};
 
 // ============================================================================
 // Network Simulation
@@ -168,7 +168,10 @@ impl MockGrpcServer {
     /// Create a channel.
     pub fn create_channel(&self, channel: TestChannel) -> String {
         let channel_id = channel.id.clone();
-        self.channels.write().unwrap().insert(channel_id.clone(), channel);
+        self.channels
+            .write()
+            .unwrap()
+            .insert(channel_id.clone(), channel);
         channel_id
     }
 
@@ -180,7 +183,10 @@ impl MockGrpcServer {
     /// Store a message.
     pub fn store_message(&self, message: TestMessage) -> String {
         let message_id = message.id.clone();
-        self.messages.write().unwrap().insert(message_id.clone(), message);
+        self.messages
+            .write()
+            .unwrap()
+            .insert(message_id.clone(), message);
         message_id
     }
 
@@ -200,10 +206,10 @@ impl MockGrpcServer {
     /// Create a session token.
     pub fn create_session(&self, user_id: &str, device_id: u32) -> String {
         let token = uuid::Uuid::new_v4().to_string();
-        self.sessions.write().unwrap().insert(
-            token.clone(),
-            (user_id.to_string(), device_id),
-        );
+        self.sessions
+            .write()
+            .unwrap()
+            .insert(token.clone(), (user_id.to_string(), device_id));
         token
     }
 

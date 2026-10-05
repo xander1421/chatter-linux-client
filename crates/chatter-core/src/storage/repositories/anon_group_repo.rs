@@ -3,11 +3,11 @@
 //! Data access for NDSS'21 style anonymous groups.
 //! Message operations are handled by the unified MessageRepository.
 
+use crate::domain::UserId;
 use crate::domain::anon_group::{
     AnonGroup, AnonGroupId, AnonGroupMailbox, AnonGroupMember, AnonGroupPending, AnonGroupRole,
     PendingActionType,
 };
-use crate::domain::UserId;
 use crate::error::StorageError;
 use crate::storage::Database;
 use chrono::Utc;
@@ -92,7 +92,12 @@ impl AnonGroupRepository {
         let conn = self.db.connection()?;
         let rows = conn.execute(
             "UPDATE anon_groups SET owner_id = ?1, my_role = ?2, updated_at = ?3 WHERE id = ?4",
-            params![owner.to_string(), my_role.to_i32(), chrono::Utc::now().to_rfc3339(), id.to_string()],
+            params![
+                owner.to_string(),
+                my_role.to_i32(),
+                chrono::Utc::now().to_rfc3339(),
+                id.to_string()
+            ],
         )?;
         if rows == 0 {
             return Err(StorageError::NotFound(format!("AnonGroup {}", id)));
@@ -163,14 +168,15 @@ impl AnonGroupRepository {
     }
 
     /// Remove a member from a group.
-    pub fn remove_member(&self, group_id: &AnonGroupId, user_id: &UserId) -> Result<(), StorageError> {
+    pub fn remove_member(
+        &self,
+        group_id: &AnonGroupId,
+        user_id: &UserId,
+    ) -> Result<(), StorageError> {
         let conn = self.db.connection()?;
         let rows = conn.execute(
             "DELETE FROM anon_group_members WHERE group_id = ?1 AND user_id = ?2",
-            params![
-                group_id.to_string(),
-                user_id.to_string(),
-            ],
+            params![group_id.to_string(), user_id.to_string(),],
         )?;
         if rows == 0 {
             return Err(StorageError::NotFound(format!(
@@ -291,11 +297,7 @@ impl AnonGroupRepository {
         let conn = self.db.connection()?;
         let rows = conn.execute(
             "UPDATE anon_group_members SET role = ?1 WHERE group_id = ?2 AND user_id = ?3",
-            params![
-                role.to_i32(),
-                group_id.to_string(),
-                user_id.to_string(),
-            ],
+            params![role.to_i32(), group_id.to_string(), user_id.to_string(),],
         )?;
         if rows == 0 {
             return Err(StorageError::NotFound(format!(
@@ -307,7 +309,10 @@ impl AnonGroupRepository {
     }
 
     /// Get all members of a group.
-    pub fn get_members(&self, group_id: &AnonGroupId) -> Result<Vec<AnonGroupMember>, StorageError> {
+    pub fn get_members(
+        &self,
+        group_id: &AnonGroupId,
+    ) -> Result<Vec<AnonGroupMember>, StorageError> {
         let conn = self.db.read_connection()?;
         let mut stmt = conn.prepare(
             "SELECT id, group_id, user_id, role, mailbox_pk, joined_at, profile_key, display_name, avatar
@@ -325,7 +330,10 @@ impl AnonGroupRepository {
     }
 
     /// Get members that have confirmed their mailbox key (for sending messages).
-    pub fn get_members_with_mailbox(&self, group_id: &AnonGroupId) -> Result<Vec<AnonGroupMember>, StorageError> {
+    pub fn get_members_with_mailbox(
+        &self,
+        group_id: &AnonGroupId,
+    ) -> Result<Vec<AnonGroupMember>, StorageError> {
         let conn = self.db.read_connection()?;
         let mut stmt = conn.prepare(
             "SELECT id, group_id, user_id, role, mailbox_pk, joined_at, profile_key, display_name, avatar
@@ -348,7 +356,10 @@ impl AnonGroupRepository {
     /// These are invitees whose JoinAck has not yet been received. Messages
     /// destined for them must be queued via `enqueue_pending_message` and
     /// drained once the JoinAck arrives.
-    pub fn get_members_without_mailbox(&self, group_id: &AnonGroupId) -> Result<Vec<AnonGroupMember>, StorageError> {
+    pub fn get_members_without_mailbox(
+        &self,
+        group_id: &AnonGroupId,
+    ) -> Result<Vec<AnonGroupMember>, StorageError> {
         let conn = self.db.read_connection()?;
         let mut stmt = conn.prepare(
             "SELECT id, group_id, user_id, role, mailbox_pk, joined_at, profile_key, display_name, avatar
@@ -367,7 +378,11 @@ impl AnonGroupRepository {
     }
 
     /// Get a member of a group.
-    pub fn get_member(&self, group_id: &AnonGroupId, user_id: &UserId) -> Result<Option<AnonGroupMember>, StorageError> {
+    pub fn get_member(
+        &self,
+        group_id: &AnonGroupId,
+        user_id: &UserId,
+    ) -> Result<Option<AnonGroupMember>, StorageError> {
         let conn = self.db.read_connection()?;
         let mut stmt = conn.prepare(
             "SELECT id, group_id, user_id, role, mailbox_pk, joined_at, profile_key, display_name, avatar
@@ -375,10 +390,7 @@ impl AnonGroupRepository {
         )?;
 
         let result = stmt.query_row(
-            params![
-                group_id.to_string(),
-                user_id.to_string(),
-            ],
+            params![group_id.to_string(), user_id.to_string(),],
             row_to_member,
         );
 
@@ -390,28 +402,30 @@ impl AnonGroupRepository {
     }
 
     /// Check if a user is a member of a group.
-    pub fn is_member(&self, group_id: &AnonGroupId, user_id: &UserId) -> Result<bool, StorageError> {
+    pub fn is_member(
+        &self,
+        group_id: &AnonGroupId,
+        user_id: &UserId,
+    ) -> Result<bool, StorageError> {
         let conn = self.db.read_connection()?;
         let count: i32 = conn.query_row(
             "SELECT COUNT(*) FROM anon_group_members WHERE group_id = ?1 AND user_id = ?2",
-            params![
-                group_id.to_string(),
-                user_id.to_string(),
-            ],
+            params![group_id.to_string(), user_id.to_string(),],
             |row| row.get(0),
         )?;
         Ok(count > 0)
     }
 
     /// Get a member's role in a group.
-    pub fn get_member_role(&self, group_id: &AnonGroupId, user_id: &UserId) -> Result<Option<AnonGroupRole>, StorageError> {
+    pub fn get_member_role(
+        &self,
+        group_id: &AnonGroupId,
+        user_id: &UserId,
+    ) -> Result<Option<AnonGroupRole>, StorageError> {
         let conn = self.db.read_connection()?;
         let result: Result<i32, _> = conn.query_row(
             "SELECT role FROM anon_group_members WHERE group_id = ?1 AND user_id = ?2",
-            params![
-                group_id.to_string(),
-                user_id.to_string(),
-            ],
+            params![group_id.to_string(), user_id.to_string(),],
             |row| row.get(0),
         );
 
@@ -427,7 +441,10 @@ impl AnonGroupRepository {
     ///
     /// Used by `UserService::get_display_name` to avoid raw-UUID fallback for
     /// anon group members who aren't in the main user directory.
-    pub fn find_display_name_for_user(&self, user_id: &UserId) -> Result<Option<String>, StorageError> {
+    pub fn find_display_name_for_user(
+        &self,
+        user_id: &UserId,
+    ) -> Result<Option<String>, StorageError> {
         let conn = self.db.read_connection()?;
         let result: Result<Option<String>, _> = conn.query_row(
             "SELECT display_name FROM anon_group_members \
@@ -442,14 +459,15 @@ impl AnonGroupRepository {
         }
     }
 
-    pub fn get_member_display_name(&self, group_id: &AnonGroupId, user_id: &UserId) -> Result<Option<String>, StorageError> {
+    pub fn get_member_display_name(
+        &self,
+        group_id: &AnonGroupId,
+        user_id: &UserId,
+    ) -> Result<Option<String>, StorageError> {
         let conn = self.db.read_connection()?;
         let result: Result<Option<String>, _> = conn.query_row(
             "SELECT display_name FROM anon_group_members WHERE group_id = ?1 AND user_id = ?2",
-            params![
-                group_id.to_string(),
-                user_id.to_string(),
-            ],
+            params![group_id.to_string(), user_id.to_string(),],
             |row| row.get(0),
         );
 
@@ -484,7 +502,10 @@ impl AnonGroupRepository {
     }
 
     /// Get the mailbox for a group.
-    pub fn get_mailbox(&self, group_id: &AnonGroupId) -> Result<Option<AnonGroupMailbox>, StorageError> {
+    pub fn get_mailbox(
+        &self,
+        group_id: &AnonGroupId,
+    ) -> Result<Option<AnonGroupMailbox>, StorageError> {
         let conn = self.db.connection()?;
         let mut stmt = conn.prepare(
             "SELECT id, group_id, mailbox_public_key, mailbox_private_key, token_id, created_at, expires_at
@@ -543,11 +564,7 @@ impl AnonGroupRepository {
         let conn = self.db.connection()?;
         conn.execute(
             "DELETE FROM anon_group_pending WHERE group_id = ?1 AND user_id = ?2 AND action = ?3",
-            params![
-                group_id.to_string(),
-                user_id.to_string(),
-                action.as_str(),
-            ],
+            params![group_id.to_string(), user_id.to_string(), action.as_str(),],
         )?;
         Ok(())
     }
@@ -608,11 +625,7 @@ impl AnonGroupRepository {
     ) -> Result<(), StorageError> {
         use crate::domain::anon_group::AnonGroupBlockedUser;
 
-        let blocked = AnonGroupBlockedUser::new(
-            *group_id,
-            *user_id,
-            reason.map(String::from),
-        );
+        let blocked = AnonGroupBlockedUser::new(*group_id, *user_id, reason.map(String::from));
 
         let conn = self.db.connection()?;
         conn.execute(
@@ -638,10 +651,7 @@ impl AnonGroupRepository {
         let conn = self.db.connection()?;
         conn.execute(
             "DELETE FROM anon_group_blocked_users WHERE group_id = ?1 AND user_id = ?2",
-            params![
-                group_id.to_string(),
-                user_id.to_string(),
-            ],
+            params![group_id.to_string(), user_id.to_string(),],
         )?;
         Ok(())
     }
@@ -655,31 +665,26 @@ impl AnonGroupRepository {
         let conn = self.db.read_connection()?;
         let count: i64 = conn.query_row(
             "SELECT COUNT(*) FROM anon_group_blocked_users WHERE group_id = ?1 AND user_id = ?2",
-            params![
-                group_id.to_string(),
-                user_id.to_string(),
-            ],
+            params![group_id.to_string(), user_id.to_string(),],
             |row| row.get(0),
         )?;
         Ok(count > 0)
     }
 
     /// Get all blocked users in a group.
-    pub fn get_blocked_users(
-        &self,
-        group_id: &AnonGroupId,
-    ) -> Result<Vec<UserId>, StorageError> {
+    pub fn get_blocked_users(&self, group_id: &AnonGroupId) -> Result<Vec<UserId>, StorageError> {
         let conn = self.db.read_connection()?;
-        let mut stmt = conn.prepare(
-            "SELECT user_id FROM anon_group_blocked_users WHERE group_id = ?1",
-        )?;
+        let mut stmt =
+            conn.prepare("SELECT user_id FROM anon_group_blocked_users WHERE group_id = ?1")?;
 
         let mut rows = stmt.query(params![group_id.to_string()])?;
         let mut users = Vec::new();
 
         while let Some(row) = rows.next()? {
             let user_id_str: String = row.get(0)?;
-            let user_id = user_id_str.parse().map_err(|_| rusqlite::Error::InvalidQuery)?;
+            let user_id = user_id_str
+                .parse()
+                .map_err(|_| rusqlite::Error::InvalidQuery)?;
             users.push(user_id);
         }
 
@@ -704,7 +709,12 @@ impl AnonGroupRepository {
         group_id: &AnonGroupId,
         window_duration: chrono::Duration,
     ) -> Result<u32, StorageError> {
-        super::repo_utils::increment_rate_limit(&self.db, "group", group_id.as_bytes().as_slice(), window_duration)
+        super::repo_utils::increment_rate_limit(
+            &self.db,
+            "group",
+            group_id.as_bytes().as_slice(),
+            window_duration,
+        )
     }
 
     // ========================================================================
@@ -755,10 +765,7 @@ impl AnonGroupRepository {
              ORDER BY id ASC",
         )?;
 
-        let mut rows = stmt.query(params![
-            group_id.to_string(),
-            recipient_user_id.to_string(),
-        ])?;
+        let mut rows = stmt.query(params![group_id.to_string(), recipient_user_id.to_string(),])?;
         let mut out = Vec::new();
         while let Some(row) = rows.next()? {
             let id: i64 = row.get(0)?;
@@ -795,7 +802,7 @@ impl AnonGroupRepository {
 // Helper functions
 // ============================================================================
 
-use super::repo_utils::{parse_datetime, vec_to_array_32, require_array_32, require_array_64};
+use super::repo_utils::{parse_datetime, require_array_32, require_array_64, vec_to_array_32};
 
 fn row_to_group(row: &rusqlite::Row<'_>) -> rusqlite::Result<AnonGroup> {
     use crate::domain::anon_group::AnonGroupStatus;
@@ -807,7 +814,9 @@ fn row_to_group(row: &rusqlite::Row<'_>) -> rusqlite::Result<AnonGroup> {
     let status: i32 = row.get(6).unwrap_or(0);
 
     let owner_id_str: String = row.get(7)?;
-    let owner_id = owner_id_str.parse().map_err(|_| rusqlite::Error::InvalidQuery)?;
+    let owner_id = owner_id_str
+        .parse()
+        .map_err(|_| rusqlite::Error::InvalidQuery)?;
 
     Ok(AnonGroup {
         id,
@@ -823,10 +832,14 @@ fn row_to_group(row: &rusqlite::Row<'_>) -> rusqlite::Result<AnonGroup> {
 
 fn row_to_member(row: &rusqlite::Row<'_>) -> rusqlite::Result<AnonGroupMember> {
     let group_id_str: String = row.get(1)?;
-    let group_id = group_id_str.parse().map_err(|_| rusqlite::Error::InvalidQuery)?;
+    let group_id = group_id_str
+        .parse()
+        .map_err(|_| rusqlite::Error::InvalidQuery)?;
 
     let user_id_str: String = row.get(2)?;
-    let user_id = user_id_str.parse().map_err(|_| rusqlite::Error::InvalidQuery)?;
+    let user_id = user_id_str
+        .parse()
+        .map_err(|_| rusqlite::Error::InvalidQuery)?;
 
     let mailbox_pk = vec_to_array_32(row.get(4)?);
     let profile_key = vec_to_array_32(row.get(6)?);
@@ -846,7 +859,9 @@ fn row_to_member(row: &rusqlite::Row<'_>) -> rusqlite::Result<AnonGroupMember> {
 
 fn row_to_mailbox(row: &rusqlite::Row<'_>) -> rusqlite::Result<AnonGroupMailbox> {
     let group_id_str: String = row.get(1)?;
-    let group_id = group_id_str.parse().map_err(|_| rusqlite::Error::InvalidQuery)?;
+    let group_id = group_id_str
+        .parse()
+        .map_err(|_| rusqlite::Error::InvalidQuery)?;
 
     let pk_bytes: Vec<u8> = row.get(2)?;
     let sk_bytes: Vec<u8> = row.get(3)?;
@@ -866,4 +881,3 @@ fn row_to_mailbox(row: &rusqlite::Row<'_>) -> rusqlite::Result<AnonGroupMailbox>
         expires_at: parse_datetime(&row.get::<_, String>(6)?),
     })
 }
-

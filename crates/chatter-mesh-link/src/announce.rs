@@ -386,8 +386,8 @@ pub fn evaluate_announce(
         &preflight.announcement.signing_public_key,
     );
 
-    let direct_hint = packet.msg_type == MessageType::Announce.as_u8()
-        && packet.ttl == link.direct_announce_ttl;
+    let direct_hint =
+        packet.msg_type == MessageType::Announce.as_u8() && packet.ttl == link.direct_announce_ttl;
 
     Ok(AcceptedAnnounce {
         peer_id: preflight.derived_peer_id,
@@ -398,7 +398,6 @@ pub fn evaluate_announce(
         has_direct_link: link.has_peripheral_link || link.has_central_link,
     })
 }
-
 
 #[cfg(test)]
 mod tests {
@@ -411,7 +410,6 @@ mod tests {
     const OTHER_NOISE_KEY: &[u8] = b"a-completely-different-noise-key!";
     const SIGNING_KEY: &[u8] = b"ed25519-signing-public-key------";
     const OTHER_SIGNING_KEY: &[u8] = b"an-attackers-own-signing-key----";
-
 
     fn announcement() -> AnnouncementPacket {
         AnnouncementPacket::new(
@@ -580,7 +578,10 @@ mod tests {
             evaluate_announce_trust(
                 true,
                 true,
-                PinnedKeys { noise: Some(OTHER_NOISE_KEY), signing: Some(SIGNING_KEY) },
+                PinnedKeys {
+                    noise: Some(OTHER_NOISE_KEY),
+                    signing: Some(SIGNING_KEY)
+                },
                 NOISE_KEY,
                 SIGNING_KEY
             ),
@@ -591,7 +592,10 @@ mod tests {
             evaluate_announce_trust(
                 true,
                 true,
-                PinnedKeys { noise: Some(NOISE_KEY), signing: Some(SIGNING_KEY) },
+                PinnedKeys {
+                    noise: Some(NOISE_KEY),
+                    signing: Some(SIGNING_KEY)
+                },
                 NOISE_KEY,
                 SIGNING_KEY
             ),
@@ -613,7 +617,10 @@ mod tests {
         let attacker = evaluate_announce_trust(
             true,
             true, // the attacker's self-signature verifies: they hold that key
-            PinnedKeys { noise: Some(NOISE_KEY), signing: Some(SIGNING_KEY) },
+            PinnedKeys {
+                noise: Some(NOISE_KEY),
+                signing: Some(SIGNING_KEY),
+            },
             NOISE_KEY,         // the victim's key, heard off the air
             OTHER_SIGNING_KEY, // the attacker's own
         );
@@ -848,5 +855,4 @@ mod tests {
         // never be able to make us spend one.
         assert_eq!(verify_calls.get(), 0);
     }
-
 }

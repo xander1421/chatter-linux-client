@@ -65,10 +65,7 @@ const EPHEMERAL_CALL_INFO: &[u8] = b"Chatter_Calling_EphemeralDH_SRTPKey_KDF";
 ///
 /// # Returns
 /// 32-byte AES-256 key suitable for LiveKit E2EE.
-pub fn derive_call_key(
-    shared_secret: &[u8; 32],
-    call_id: &str,
-) -> Result<[u8; 32], CryptoError> {
+pub fn derive_call_key(shared_secret: &[u8; 32], call_id: &str) -> Result<[u8; 32], CryptoError> {
     let hkdf = Hkdf::<Sha256>::new(Some(CALL_KEY_SALT), shared_secret);
 
     // Combine prefix with call_id for info parameter
@@ -353,7 +350,9 @@ impl CallKeyState {
     /// chain, so a departed member cannot follow. Returns the epoch the key
     /// is issued at — what the other participants are sent.
     pub fn rotate(&mut self, key: [u8; 32]) -> Result<u32, CryptoError> {
-        let epoch = self.epoch.checked_add(1)
+        let epoch = self
+            .epoch
+            .checked_add(1)
             .ok_or_else(|| CryptoError::KeyDerivationFailed("call key epoch exhausted".into()))?;
         self.current_key = key;
         self.epoch = epoch;
@@ -375,7 +374,11 @@ impl CallKeyState {
     /// that arrives late still replaces the chain the departed member can
     /// derive. A key ahead of us moves us up to its epoch.
     pub fn adopt(&mut self, key: [u8; 32], epoch: u32) -> Result<bool, CryptoError> {
-        let lead = if self.anchor == 0 { MAX_JOIN_LEAD } else { MAX_ADOPT_LEAD };
+        let lead = if self.anchor == 0 {
+            MAX_JOIN_LEAD
+        } else {
+            MAX_ADOPT_LEAD
+        };
         if epoch <= self.anchor || epoch > self.epoch.saturating_add(lead) {
             return Ok(false);
         }
@@ -415,7 +418,8 @@ impl CallKeyState {
     }
 
     fn next_epoch(&self) -> Result<u32, CryptoError> {
-        self.epoch.checked_add(1)
+        self.epoch
+            .checked_add(1)
             .ok_or_else(|| CryptoError::KeyDerivationFailed("call key epoch exhausted".into()))
     }
 
@@ -608,7 +612,8 @@ mod tests {
             callee_identity.identity_key(),
             call_id,
             true,
-        ).unwrap();
+        )
+        .unwrap();
 
         // Callee derives key (we_are_caller = false)
         let callee_key = derive_call_key_ephemeral(
@@ -617,10 +622,14 @@ mod tests {
             caller_identity.identity_key(),
             call_id,
             false,
-        ).unwrap();
+        )
+        .unwrap();
 
         // Both should derive the same call key
-        assert_eq!(caller_key, callee_key, "Both parties should derive same call key");
+        assert_eq!(
+            caller_key, callee_key,
+            "Both parties should derive same call key"
+        );
     }
 
     #[test]
@@ -632,26 +641,32 @@ mod tests {
         // Call 1
         let caller_eph1 = EphemeralCallKey::generate();
         let callee_eph1 = EphemeralCallKey::generate();
-        let shared1 = caller_eph1.diffie_hellman(&callee_eph1.public_key_bytes()).unwrap();
+        let shared1 = caller_eph1
+            .diffie_hellman(&callee_eph1.public_key_bytes())
+            .unwrap();
         let key1 = derive_call_key_ephemeral(
             &shared1,
             &caller_identity,
             callee_identity.identity_key(),
             "call-1",
             true,
-        ).unwrap();
+        )
+        .unwrap();
 
         // Call 2 (different ephemeral keys)
         let caller_eph2 = EphemeralCallKey::generate();
         let callee_eph2 = EphemeralCallKey::generate();
-        let shared2 = caller_eph2.diffie_hellman(&callee_eph2.public_key_bytes()).unwrap();
+        let shared2 = caller_eph2
+            .diffie_hellman(&callee_eph2.public_key_bytes())
+            .unwrap();
         let key2 = derive_call_key_ephemeral(
             &shared2,
             &caller_identity,
             callee_identity.identity_key(),
             "call-2",
             true,
-        ).unwrap();
+        )
+        .unwrap();
 
         // Different calls should have different keys (PFS)
         assert_ne!(key1, key2, "Different calls should have different keys");
@@ -745,9 +760,16 @@ mod tests {
         receiver.ratchet().unwrap();
         assert_eq!(receiver.epoch(), 7);
 
-        assert!(receiver.adopt(key, issued).unwrap(), "a late rotation is not stale");
+        assert!(
+            receiver.adopt(key, issued).unwrap(),
+            "a late rotation is not stale"
+        );
         assert_eq!(receiver.epoch(), 7);
-        assert_eq!(receiver.current_key(), rotator.current_key(), "same chain as the rotator");
+        assert_eq!(
+            receiver.current_key(),
+            rotator.current_key(),
+            "same chain as the rotator"
+        );
     }
 
     #[test]
@@ -770,14 +792,23 @@ mod tests {
         let first_at = rotator.rotate(first).unwrap();
         let second = generate_group_call_key();
         let second_at = rotator.rotate(second).unwrap();
-        assert!(second_at > first_at, "two rotations in one 30 s window stay ordered");
+        assert!(
+            second_at > first_at,
+            "two rotations in one 30 s window stay ordered"
+        );
 
         assert!(receiver.adopt(second, second_at).unwrap());
         let held = *receiver.current_key();
-        assert!(!receiver.adopt(first, first_at).unwrap(), "superseded rotation arrives late");
+        assert!(
+            !receiver.adopt(first, first_at).unwrap(),
+            "superseded rotation arrives late"
+        );
         assert!(!receiver.adopt(second, second_at).unwrap(), "replay");
         assert_eq!(*receiver.current_key(), held);
-        assert!(!receiver.adopt(generate_group_call_key(), 0).unwrap(), "epoch 0 is the root");
+        assert!(
+            !receiver.adopt(generate_group_call_key(), 0).unwrap(),
+            "epoch 0 is the root"
+        );
     }
 
     #[test]
@@ -788,7 +819,10 @@ mod tests {
         assert!(!receiver.adopt([9u8; 32], u32::MAX).unwrap());
         assert_eq!(receiver.epoch(), 5);
         assert_eq!(*receiver.current_key(), held);
-        assert!(receiver.adopt([9u8; 32], 5 + MAX_JOIN_LEAD).unwrap(), "a joiner's first key: edge of the window");
+        assert!(
+            receiver.adopt([9u8; 32], 5 + MAX_JOIN_LEAD).unwrap(),
+            "a joiner's first key: edge of the window"
+        );
 
         // Once keyed, the window is the rotation lead.
         let at = receiver.epoch();

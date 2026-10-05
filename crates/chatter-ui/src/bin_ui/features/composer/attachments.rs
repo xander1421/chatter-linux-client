@@ -16,6 +16,8 @@ use crate::{MainWindow, PendingAttachmentData};
 pub(crate) async fn process_and_add_file(
     file_path: PathBuf,
     chat_state: &ChatState,
+    conversation: ActiveConversation,
+    revision: u64,
     weak: &Weak<MainWindow>,
 ) -> Result<(), String> {
     // Get file metadata for display
@@ -52,7 +54,7 @@ pub(crate) async fn process_and_add_file(
         metadata.len(),
         mime_type,
     );
-    chat_state.add_pending_attachment(pending);
+    chat_state.add_pending_attachment_for(conversation, revision, pending);
 
     // Update UI immediately
     update_attachments_ui(chat_state, weak);
@@ -62,18 +64,21 @@ pub(crate) async fn process_and_add_file(
 
 /// Update the UI with current pending attachments.
 pub(crate) fn update_attachments_ui(chat_state: &ChatState, weak: &Weak<MainWindow>) {
-    let attachments = chat_state.get_pending_attachments();
+    let chat_state = chat_state.clone();
     let weak_update = weak.clone();
 
     let _ = slint::invoke_from_event_loop(move || {
         if let Some(w) = weak_update.upgrade() {
-            render_attachments(&w, &attachments);
+            render_attachments(&w, &chat_state.get_pending_attachments());
         }
     });
 }
 
 /// Show `attachments` in the composer's tray.
-pub(crate) fn render_attachments(w: &MainWindow, attachments: &[chatter_core::state::PendingAttachment]) {
+pub(crate) fn render_attachments(
+    w: &MainWindow,
+    attachments: &[chatter_core::state::PendingAttachment],
+) {
     let slint_attachments: Vec<PendingAttachmentData> = attachments
         .iter()
         .map(pending_attachment_to_slint)
@@ -129,6 +134,7 @@ pub(crate) fn wire_attachment_clicked(
 
         // Check if we have an active conversation BEFORE opening file picker
         let conversation = chat_state.active_conversation();
+        let revision = chat_state.get().attachment_revision;
 
         tracing::info!(
             conversation = ?conversation,
@@ -164,7 +170,10 @@ pub(crate) fn wire_attachment_clicked(
                 tracing::info!("Selected {} file(s) for attachment", selected_files.len());
 
                 for file_path in selected_files {
-                    if let Err(e) = process_and_add_file(file_path, &chat_state, &weak).await {
+                    if let Err(e) =
+                        process_and_add_file(file_path, &chat_state, conversation, revision, &weak)
+                            .await
+                    {
                         tracing::error!("{}", e);
                     }
                 }
@@ -188,7 +197,10 @@ pub(crate) fn wire_attachment_clicked(
                 tracing::info!("Selected {} file(s) for attachment", selected_files.len());
 
                 for file_path in selected_files {
-                    if let Err(e) = process_and_add_file(file_path, &chat_state, &weak).await {
+                    if let Err(e) =
+                        process_and_add_file(file_path, &chat_state, conversation, revision, &weak)
+                            .await
+                    {
                         tracing::error!("{}", e);
                     }
                 }
@@ -216,6 +228,8 @@ pub(crate) fn wire_paste_image(window: &MainWindow, chat_state: ChatState) {
         let weak = weak_window.clone();
         let chat_state = chat_state.clone();
 
+        let conversation = chat_state.active_conversation();
+        let revision = chat_state.get().attachment_revision;
         // No point reading the clipboard if there's nowhere to attach.
         if matches!(chat_state.active_conversation(), ActiveConversation::None) {
             return;
@@ -236,7 +250,7 @@ pub(crate) fn wire_paste_image(window: &MainWindow, chat_state: ChatState) {
                 }
             };
 
-            match process_and_add_file(path, &chat_state, &weak).await {
+            match process_and_add_file(path, &chat_state, conversation, revision, &weak).await {
                 Ok(()) => tracing::info!("Attached image pasted from clipboard"),
                 Err(e) => tracing::error!("{e}"),
             }

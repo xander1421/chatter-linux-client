@@ -5,11 +5,13 @@
 //! pre-send and answered locally.
 
 pub mod channel_view;
-pub mod memory_view;
 mod local_messages;
+pub mod memory_view;
 pub mod mention_handler;
 
+pub use channel_view::{
+    handle_jarvis_channel_send, is_jarvis_channel_str, load_jarvis_channel_into_ui,
+};
 pub use chatter_core::services::jarvis::{JarvisCommand, parse_slash_command};
-pub use channel_view::{handle_jarvis_channel_send, is_jarvis_channel_str, load_jarvis_channel_into_ui};
 pub use local_messages::{add_jarvis_thinking_placeholder, replace_thinking_with_response};
 pub use mention_handler::handle_jarvis_mention;

@@ -55,7 +55,9 @@ impl HardwareProfile {
         Self {
             arch: std::env::consts::ARCH,
             cpu_cores: std::thread::available_parallelism().map_or(1, |n| n.get()),
-            ram_gb: read_meminfo_total_gb(&std::fs::read_to_string("/proc/meminfo").unwrap_or_default()),
+            ram_gb: read_meminfo_total_gb(
+                &std::fs::read_to_string("/proc/meminfo").unwrap_or_default(),
+            ),
             gpus: detect_gpus(),
         }
     }
@@ -110,7 +112,10 @@ fn detect_gpus() -> Vec<GpuInfo> {
 
 fn detect_nvidia() -> Vec<GpuInfo> {
     let Ok(output) = Command::new("nvidia-smi")
-        .args(["--query-gpu=name,memory.total", "--format=csv,noheader,nounits"])
+        .args([
+            "--query-gpu=name,memory.total",
+            "--format=csv,noheader,nounits",
+        ])
         .output()
     else {
         return Vec::new();
@@ -205,7 +210,8 @@ mod tests {
 
     #[test]
     fn rocm_csv_parses() {
-        let csv = "device,VRAM Total Memory (B),VRAM Total Used Memory (B)\ncard0,17163091968,1000000\n";
+        let csv =
+            "device,VRAM Total Memory (B),VRAM Total Used Memory (B)\ncard0,17163091968,1000000\n";
         let gpus = parse_rocm_smi_csv(csv);
         assert_eq!(gpus.len(), 1);
         assert_eq!(gpus[0].vendor, GpuVendor::Amd);

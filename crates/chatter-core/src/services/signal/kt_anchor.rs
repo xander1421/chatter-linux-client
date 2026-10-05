@@ -43,7 +43,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::crypto::keytransparency::{verify_consistency_proof, KtError};
+use crate::crypto::keytransparency::{KtError, verify_consistency_proof};
 use std::future::Future;
 use std::time::Duration;
 
@@ -81,7 +81,10 @@ fn root_of(sth: &SignedTreeHead) -> Result<[u8; 32], KtError> {
 
 /// Read the pinned head, if any.
 pub fn pinned_head(settings: &SettingsRepository) -> Option<PinnedTreeHead> {
-    settings.get::<PinnedTreeHead>(KT_PINNED_TREE_HEAD).ok().flatten()
+    settings
+        .get::<PinnedTreeHead>(KT_PINNED_TREE_HEAD)
+        .ok()
+        .flatten()
 }
 
 /// What the caller must do about an offered tree head.
@@ -251,7 +254,10 @@ where
 {
     match classify_head(settings, sth)? {
         AnchorAction::Settled(outcome) => Ok(outcome),
-        AnchorAction::NeedsProof { old_epoch, new_epoch } => {
+        AnchorAction::NeedsProof {
+            old_epoch,
+            new_epoch,
+        } => {
             let resp = pinned_rpc(fetch(old_epoch, new_epoch))
                 .await
                 .map_err(|_| KtError::ConsistencyUnavailable)?;
@@ -329,7 +335,13 @@ mod tests {
         let (s, _dir) = settings();
         let a = classify_head(&s, &sth(7, [1u8; 32])).unwrap();
         assert_eq!(a, AnchorAction::Settled(AnchorOutcome::FirstPin));
-        assert_eq!(pinned_head(&s).unwrap(), PinnedTreeHead { epoch: 7, root: [1u8; 32] });
+        assert_eq!(
+            pinned_head(&s).unwrap(),
+            PinnedTreeHead {
+                epoch: 7,
+                root: [1u8; 32]
+            }
+        );
     }
 
     #[test]
@@ -381,7 +393,10 @@ mod tests {
 
         assert_eq!(
             classify_head(&s, &sth(9, [2u8; 32])).unwrap(),
-            AnchorAction::NeedsProof { old_epoch: 7, new_epoch: 9 }
+            AnchorAction::NeedsProof {
+                old_epoch: 7,
+                new_epoch: 9
+            }
         );
         assert_eq!(
             pinned_head(&s).unwrap().epoch,
@@ -394,7 +409,9 @@ mod tests {
     /// signed with the development tree-head key, which `cargo test` pins.
     fn dev_consistency_vector() -> Option<GetConsistencyProofResponse> {
         use prost::Message;
-        let dev_head = hex::decode("88ad412806054a7534e1b9deb42ef249bd7c92709f5bebf1d6be7b0e40926f72").unwrap();
+        let dev_head =
+            hex::decode("88ad412806054a7534e1b9deb42ef249bd7c92709f5bebf1d6be7b0e40926f72")
+                .unwrap();
         if crate::config::KT_TREE_HEAD_PUBLIC_KEY_BYTES[..] != dev_head[..] {
             return None;
         }
@@ -405,7 +422,11 @@ mod tests {
     fn fetch_ok(
         resp: GetConsistencyProofResponse,
         asked: &mut Option<(u64, u64)>,
-    ) -> impl FnOnce(u64, u64) -> std::future::Ready<Result<GetConsistencyProofResponse, NetworkError>> + '_ {
+    ) -> impl FnOnce(
+        u64,
+        u64,
+    ) -> std::future::Ready<Result<GetConsistencyProofResponse, NetworkError>>
+    + '_ {
         move |old, new| {
             *asked = Some((old, new));
             std::future::ready(Ok(resp))
@@ -422,20 +443,34 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(outcome, AnchorOutcome::FirstPin);
-        assert_eq!(pinned_head(&s).unwrap(), PinnedTreeHead { epoch: 7, root: [1u8; 32] });
+        assert_eq!(
+            pinned_head(&s).unwrap(),
+            PinnedTreeHead {
+                epoch: 7,
+                root: [1u8; 32]
+            }
+        );
     }
 
     #[tokio::test]
     async fn hold_head_advances_on_a_valid_consistency_proof() {
-        let Some(resp) = dev_consistency_vector() else { return };
+        let Some(resp) = dev_consistency_vector() else {
+            return;
+        };
         let (s, _dir) = settings();
         let old = resp.old_signed_tree_head.clone().unwrap();
         let new = resp.new_signed_tree_head.clone().unwrap();
         classify_head(&s, &old).unwrap();
         let mut asked = None;
-        let outcome = hold_head(&s, &new, fetch_ok(resp, &mut asked)).await.unwrap();
+        let outcome = hold_head(&s, &new, fetch_ok(resp, &mut asked))
+            .await
+            .unwrap();
         assert_eq!(outcome, AnchorOutcome::Advanced);
-        assert_eq!(asked, Some((3, 5)), "the proof is fetched for exactly pinned->offered");
+        assert_eq!(
+            asked,
+            Some((3, 5)),
+            "the proof is fetched for exactly pinned->offered"
+        );
         assert_eq!(pinned_head(&s).unwrap().epoch, 5);
     }
 
@@ -444,7 +479,9 @@ mod tests {
     /// the advanced pin, not reject its own proof as a rewritten log.
     #[tokio::test]
     async fn concurrent_checks_of_one_new_head_both_pass() {
-        let Some(resp) = dev_consistency_vector() else { return };
+        let Some(resp) = dev_consistency_vector() else {
+            return;
+        };
         let (s, _dir) = settings();
         let old = resp.old_signed_tree_head.clone().unwrap();
         let new = resp.new_signed_tree_head.clone().unwrap();
@@ -452,11 +489,20 @@ mod tests {
 
         // The interleaving the lock forbids: both classify against the old
         // pin, the first advances it, the second's proof no longer starts there.
-        let needs = AnchorAction::NeedsProof { old_epoch: 3, new_epoch: 5 };
+        let needs = AnchorAction::NeedsProof {
+            old_epoch: 3,
+            new_epoch: 5,
+        };
         assert_eq!(classify_head(&s, &new).unwrap(), needs);
         assert_eq!(classify_head(&s, &new).unwrap(), needs);
-        assert_eq!(accept_advance(&s, &new, &resp).unwrap(), AnchorOutcome::Advanced);
-        assert_eq!(accept_advance(&s, &new, &resp).unwrap_err(), KtError::ConsistencyRootMismatch);
+        assert_eq!(
+            accept_advance(&s, &new, &resp).unwrap(),
+            AnchorOutcome::Advanced
+        );
+        assert_eq!(
+            accept_advance(&s, &new, &resp).unwrap_err(),
+            KtError::ConsistencyRootMismatch
+        );
         let (s, _dir) = settings();
         classify_head(&s, &old).unwrap();
 
@@ -473,7 +519,10 @@ mod tests {
         );
         let mut outcomes = [a.unwrap(), b.unwrap()];
         outcomes.sort_by_key(|o| *o as u8);
-        assert_eq!(outcomes, [AnchorOutcome::Unchanged, AnchorOutcome::Advanced]);
+        assert_eq!(
+            outcomes,
+            [AnchorOutcome::Unchanged, AnchorOutcome::Advanced]
+        );
         assert_eq!(pinned_head(&s).unwrap().epoch, 5);
     }
 
@@ -481,24 +530,34 @@ mod tests {
     /// pinned: the log this client saw was not the one the server extended.
     #[tokio::test]
     async fn hold_head_rejects_a_fork_and_keeps_the_pin() {
-        let Some(resp) = dev_consistency_vector() else { return };
+        let Some(resp) = dev_consistency_vector() else {
+            return;
+        };
         let (s, _dir) = settings();
         let new = resp.new_signed_tree_head.clone().unwrap();
         classify_head(&s, &sth(3, [9u8; 32])).unwrap();
         let mut asked = None;
         assert_eq!(
-            hold_head(&s, &new, fetch_ok(resp, &mut asked)).await.unwrap_err(),
+            hold_head(&s, &new, fetch_ok(resp, &mut asked))
+                .await
+                .unwrap_err(),
             KtError::ConsistencyRootMismatch
         );
-        assert_eq!(pinned_head(&s).unwrap(), PinnedTreeHead { epoch: 3, root: [9u8; 32] });
+        assert_eq!(
+            pinned_head(&s).unwrap(),
+            PinnedTreeHead {
+                epoch: 3,
+                root: [9u8; 32]
+            }
+        );
 
         // A failed fetch is a rejection too, never a pass.
         assert_eq!(
             hold_head(&s, &new, |_, _| async {
                 Err::<GetConsistencyProofResponse, _>(NetworkError::ConnectionFailed("down".into()))
             })
-                .await
-                .unwrap_err(),
+            .await
+            .unwrap_err(),
             KtError::ConsistencyUnavailable
         );
         assert_eq!(pinned_head(&s).unwrap().epoch, 3);
@@ -531,23 +590,40 @@ mod tests {
         store(&s, 0, [9u8; 32]).unwrap();
         assert_eq!(
             classify_head(&s, &sth(5, [2u8; 32])).unwrap(),
-            AnchorAction::NeedsProof { old_epoch: 0, new_epoch: 5 }
+            AnchorAction::NeedsProof {
+                old_epoch: 0,
+                new_epoch: 5
+            }
         );
         assert_eq!(
             hold_head(&s, &sth(5, [2u8; 32]), |_, _| async {
-                Err::<GetConsistencyProofResponse, _>(NetworkError::InvalidRequest("old_epoch 0".into()))
+                Err::<GetConsistencyProofResponse, _>(NetworkError::InvalidRequest(
+                    "old_epoch 0".into(),
+                ))
             })
             .await
             .unwrap_err(),
             KtError::ConsistencyUnavailable
         );
-        assert_eq!(pinned_head(&s).unwrap(), PinnedTreeHead { epoch: 0, root: [9u8; 32] });
+        assert_eq!(
+            pinned_head(&s).unwrap(),
+            PinnedTreeHead {
+                epoch: 0,
+                root: [9u8; 32]
+            }
+        );
 
         // A genuine, correctly signed proof that does not start at this pin.
-        let Some(resp) = dev_consistency_vector() else { return };
+        let Some(resp) = dev_consistency_vector() else {
+            return;
+        };
         let new = resp.new_signed_tree_head.clone().unwrap();
         let mut asked = None;
-        assert!(hold_head(&s, &new, fetch_ok(resp, &mut asked)).await.is_err());
+        assert!(
+            hold_head(&s, &new, fetch_ok(resp, &mut asked))
+                .await
+                .is_err()
+        );
         assert_eq!(pinned_head(&s).unwrap().epoch, 0);
     }
 
@@ -568,7 +644,10 @@ mod tests {
     /// needing a real signing key, and keeps it failing for the right reason.
     #[test]
     fn a_proof_that_does_not_start_at_our_pin_is_rejected() {
-        let pin = PinnedTreeHead { epoch: 7, root: [1u8; 32] };
+        let pin = PinnedTreeHead {
+            epoch: 7,
+            root: [1u8; 32],
+        };
         let resp = GetConsistencyProofResponse {
             // Correctly signed, correctly ordered — but of a tree we never saw.
             old_signed_tree_head: Some(sth(7, [0xAAu8; 32])),
@@ -586,7 +665,10 @@ mod tests {
     /// us pin head Y.
     #[test]
     fn a_proof_that_does_not_end_at_the_offered_head_is_rejected() {
-        let pin = PinnedTreeHead { epoch: 7, root: [1u8; 32] };
+        let pin = PinnedTreeHead {
+            epoch: 7,
+            root: [1u8; 32],
+        };
         let resp = GetConsistencyProofResponse {
             old_signed_tree_head: Some(sth(7, [1u8; 32])),
             new_signed_tree_head: Some(sth(8, [0xBBu8; 32])),
@@ -601,7 +683,10 @@ mod tests {
     /// Same roots, wrong epoch labels — the epoch half of both comparisons.
     #[test]
     fn a_proof_with_mismatched_epochs_is_rejected() {
-        let pin = PinnedTreeHead { epoch: 7, root: [1u8; 32] };
+        let pin = PinnedTreeHead {
+            epoch: 7,
+            root: [1u8; 32],
+        };
         let resp = GetConsistencyProofResponse {
             old_signed_tree_head: Some(sth(6, [1u8; 32])),
             new_signed_tree_head: Some(sth(8, [2u8; 32])),
@@ -615,7 +700,10 @@ mod tests {
 
     #[test]
     fn a_proof_from_our_pin_to_the_offered_head_is_accepted() {
-        let pin = PinnedTreeHead { epoch: 7, root: [1u8; 32] };
+        let pin = PinnedTreeHead {
+            epoch: 7,
+            root: [1u8; 32],
+        };
         let resp = GetConsistencyProofResponse {
             old_signed_tree_head: Some(sth(7, [1u8; 32])),
             new_signed_tree_head: Some(sth(8, [2u8; 32])),

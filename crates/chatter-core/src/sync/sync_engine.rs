@@ -11,20 +11,20 @@
 //! runs again. One cycle is in flight at a time.
 
 use std::future::Future;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 use tokio::sync::watch;
 
 use crate::domain::ids::ChannelId;
-use crate::network::connection::{subscribe_server_status, ServerStatus};
 use crate::events::EventBus;
 use crate::inbox::DomainEvent;
+use crate::network::connection::{ServerStatus, subscribe_server_status};
 use crate::network::grpc::client_pool::GrpcClientPool;
+use crate::services::message::channel_inbound::ChannelInbound;
 use crate::storage::repositories::channel_repo::ChannelRepository;
 use crate::storage::repositories::settings_repo::SettingsRepository;
-use crate::services::message::channel_inbound::ChannelInbound;
 use crate::storage::repositories::user_repo::UserRepository;
 
 use super::channel_sync::{ChannelSync, ChannelSyncResult};
@@ -69,13 +69,20 @@ struct Coalescer {
 
 impl Coalescer {
     fn new() -> Self {
-        Self { started: AtomicU64::new(0), last_done: tokio::sync::Mutex::new(None) }
+        Self {
+            started: AtomicU64::new(0),
+            last_done: tokio::sync::Mutex::new(None),
+        }
     }
 
     /// Run `cycle` unless a cycle that started after this call has finished by
     /// the time the lock is ours, or one finished within `skip_if_fresh`
     /// (`Duration::ZERO` = never skip on age). `None` when skipped.
-    async fn run<F: Future>(&self, skip_if_fresh: Duration, cycle: impl FnOnce() -> F) -> Option<F::Output> {
+    async fn run<F: Future>(
+        &self,
+        skip_if_fresh: Duration,
+        cycle: impl FnOnce() -> F,
+    ) -> Option<F::Output> {
         let seen = self.started.load(Ordering::SeqCst);
         let mut last_done = self.last_done.lock().await;
         if self.started.load(Ordering::SeqCst) != seen {
@@ -147,11 +154,7 @@ impl SyncEngine {
                 channel_events,
             ),
             message_sync: MessageSync::new(grpc_pool.clone(), settings_repo.clone(), inbound),
-            user_sync: UserSync::new(
-                grpc_pool,
-                user_repo,
-                settings_repo.clone(),
-            ),
+            user_sync: UserSync::new(grpc_pool, user_repo, settings_repo.clone()),
             event_bus,
             coalescer: Coalescer::new(),
             needs_retry: AtomicBool::new(false),
@@ -223,20 +226,27 @@ impl SyncEngine {
         result.users.blocked_synced = blocked_synced;
 
         result.duration_ms = start.elapsed().as_millis() as u64;
-        self.needs_retry.store(result.needs_retry(), Ordering::SeqCst);
+        self.needs_retry
+            .store(result.needs_retry(), Ordering::SeqCst);
 
         // Emit sync complete event. `blocks_changed` is what rebuilds the
         // blocked-people lists. A newly accepted friend is a different event:
         // the contacts tab reloads every friend from storage when it hears
         // one `FriendAccepted`, so a single id covers the whole pass.
-        let _ = self.event_bus.domain_sender().send(DomainEvent::SyncComplete {
-            channels_synced: result.channels.synced,
-            messages_synced: result.messages.total_inserted,
-            duration_ms: result.duration_ms,
-            blocks_changed,
-        });
+        let _ = self
+            .event_bus
+            .domain_sender()
+            .send(DomainEvent::SyncComplete {
+                channels_synced: result.channels.synced,
+                messages_synced: result.messages.total_inserted,
+                duration_ms: result.duration_ms,
+                blocks_changed,
+            });
         if let Some(friend_id) = result.users.new_friend_ids.first().copied() {
-            let _ = self.event_bus.domain_sender().send(DomainEvent::FriendAccepted { friend_id });
+            let _ = self
+                .event_bus
+                .domain_sender()
+                .send(DomainEvent::FriendAccepted { friend_id });
         }
 
         tracing::info!(
@@ -538,22 +548,31 @@ mod coalescer_tests {
         let runs = Arc::new(AtomicUsize::new(0));
         let release = Arc::new(tokio::sync::Notify::new());
 
-        let spawn = |c: Arc<Coalescer>, runs: Arc<AtomicUsize>, release: Arc<tokio::sync::Notify>| {
-            tokio::spawn(async move {
-                c.run(Duration::ZERO, || gated_cycle(&runs, &release)).await.is_some()
-            })
-        };
+        let spawn =
+            |c: Arc<Coalescer>, runs: Arc<AtomicUsize>, release: Arc<tokio::sync::Notify>| {
+                tokio::spawn(async move {
+                    c.run(Duration::ZERO, || gated_cycle(&runs, &release))
+                        .await
+                        .is_some()
+                })
+            };
 
         let first = spawn(c.clone(), runs.clone(), release.clone());
         while runs.load(Ordering::SeqCst) == 0 {
             tokio::task::yield_now().await;
         }
         // Five triggers land while the first cycle is in flight.
-        let burst: Vec<_> = (0..5).map(|_| spawn(c.clone(), runs.clone(), release.clone())).collect();
+        let burst: Vec<_> = (0..5)
+            .map(|_| spawn(c.clone(), runs.clone(), release.clone()))
+            .collect();
         for _ in 0..20 {
             tokio::task::yield_now().await;
         }
-        assert_eq!(runs.load(Ordering::SeqCst), 1, "no second cycle while one is in flight");
+        assert_eq!(
+            runs.load(Ordering::SeqCst),
+            1,
+            "no second cycle while one is in flight"
+        );
 
         release.notify_one(); // finish the first cycle
         while runs.load(Ordering::SeqCst) < 2 {
@@ -567,7 +586,11 @@ mod coalescer_tests {
             ran += h.await.unwrap() as usize;
         }
         assert_eq!(ran, 1, "exactly one burst trigger runs the follow-up");
-        assert_eq!(runs.load(Ordering::SeqCst), 2, "the burst cost one follow-up, not five");
+        assert_eq!(
+            runs.load(Ordering::SeqCst),
+            2,
+            "the burst cost one follow-up, not five"
+        );
     }
 
     #[tokio::test]
@@ -632,10 +655,22 @@ mod retry_tests {
             plan_after_cycle(true, ServerStatus::Unreachable, backoff, periodic),
             WaitPlan::UntilOnline
         );
-        assert!(became_reachable(ServerStatus::Unreachable, ServerStatus::Reachable));
-        assert!(became_reachable(ServerStatus::Unknown, ServerStatus::Reachable));
-        assert!(!became_reachable(ServerStatus::Reachable, ServerStatus::Reachable));
-        assert_eq!(next_backoff(Duration::from_secs(8), RETRY_MAX), Duration::from_secs(16));
+        assert!(became_reachable(
+            ServerStatus::Unreachable,
+            ServerStatus::Reachable
+        ));
+        assert!(became_reachable(
+            ServerStatus::Unknown,
+            ServerStatus::Reachable
+        ));
+        assert!(!became_reachable(
+            ServerStatus::Reachable,
+            ServerStatus::Reachable
+        ));
+        assert_eq!(
+            next_backoff(Duration::from_secs(8), RETRY_MAX),
+            Duration::from_secs(16)
+        );
         assert_eq!(next_backoff(Duration::from_secs(32), RETRY_MAX), RETRY_MAX);
     }
 
@@ -679,7 +714,11 @@ mod retry_tests {
             .await
             .expect("retry converged without a restart")
             .unwrap();
-        assert_eq!(runs.load(Ordering::SeqCst), 2, "fail once, then the retry succeeds");
+        assert_eq!(
+            runs.load(Ordering::SeqCst),
+            2,
+            "fail once, then the retry succeeds"
+        );
     }
 
     /// Finding #7: a step that keeps failing must not be rerun on every
@@ -699,15 +738,22 @@ mod retry_tests {
         timing.retry_max = Duration::from_secs(3600);
 
         let driver = tokio::spawn(async move {
-            drive(timing, &coalescer, needs_c.as_ref(), shut_rx, status_rx, || {
-                let runs = Arc::clone(&runs_c);
-                let needs = Arc::clone(&needs_c);
-                async move {
-                    runs.fetch_add(1, Ordering::SeqCst);
-                    needs.store(true, Ordering::SeqCst);
-                    true
-                }
-            })
+            drive(
+                timing,
+                &coalescer,
+                needs_c.as_ref(),
+                shut_rx,
+                status_rx,
+                || {
+                    let runs = Arc::clone(&runs_c);
+                    let needs = Arc::clone(&needs_c);
+                    async move {
+                        runs.fetch_add(1, Ordering::SeqCst);
+                        needs.store(true, Ordering::SeqCst);
+                        true
+                    }
+                },
+            )
             .await;
         });
 
@@ -720,13 +766,24 @@ mod retry_tests {
         tokio::time::sleep(Duration::from_millis(50)).await;
         assert_eq!(runs.load(Ordering::SeqCst), 1);
         flap().await;
-        assert_eq!(runs.load(Ordering::SeqCst), 2, "a first failure retries on the online edge");
+        assert_eq!(
+            runs.load(Ordering::SeqCst),
+            2,
+            "a first failure retries on the online edge"
+        );
         flap().await;
         flap().await;
-        assert_eq!(runs.load(Ordering::SeqCst), 2, "a repeat failure keeps its backoff across flaps");
+        assert_eq!(
+            runs.load(Ordering::SeqCst),
+            2,
+            "a repeat failure keeps its backoff across flaps"
+        );
 
         shut_tx.send(true).unwrap();
-        tokio::time::timeout(Duration::from_secs(5), driver).await.unwrap().unwrap();
+        tokio::time::timeout(Duration::from_secs(5), driver)
+            .await
+            .unwrap()
+            .unwrap();
     }
 
     #[tokio::test]
@@ -860,7 +917,11 @@ mod retry_tests {
         for _ in 0..20 {
             tokio::task::yield_now().await;
         }
-        assert_eq!(runs.load(Ordering::SeqCst), 1, "no second cycle while one is in flight");
+        assert_eq!(
+            runs.load(Ordering::SeqCst),
+            1,
+            "no second cycle while one is in flight"
+        );
         assert_eq!(inflight.load(Ordering::SeqCst), 1);
 
         release.notify_one();

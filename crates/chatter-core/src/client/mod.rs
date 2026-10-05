@@ -25,13 +25,17 @@ pub mod events;
 #[cfg(feature = "jarvis")]
 mod jarvis;
 #[cfg(feature = "jarvis")]
-pub use jarvis::{is_jarvis_channel, jarvis_channel_id, jarvis_channel_reply_text, JarvisRow, JARVIS_CHANNEL_NAME};
+pub use jarvis::{
+    JARVIS_CHANNEL_NAME, JarvisRow, is_jarvis_channel, jarvis_channel_id, jarvis_channel_reply_text,
+};
 mod link_device;
 pub mod membership;
 mod messaging;
+mod send_attempt;
+pub use send_attempt::await_send_with_notice;
 mod receipts;
-pub use messaging::{InviteCandidate, ReplyParentMedia};
 pub use anon_group::AnonGroupInviteCandidate;
+pub use messaging::{InviteCandidate, ReplyParentMedia};
 
 /// A user-search hit surfaced to the UI (friends modal search).
 ///
@@ -61,8 +65,8 @@ mod profile;
 mod profile_visibility;
 mod shared_content;
 
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use parking_lot::Mutex;
 use tokio::task::JoinHandle;
@@ -74,40 +78,38 @@ use crate::domain::channel::{Channel, ChannelType};
 use crate::domain::message::{ConversationType, Message};
 use crate::error::NetworkError;
 use crate::events::{DomainEvent, EventBus};
-use crate::services::auth_service::AuthError;
 use crate::inbox::DeviceInboxProvider;
 use crate::mailbox::group::GroupFanout;
 use crate::proto::content_v1::AttachmentPointer;
+use crate::services::ai::LocalAIService;
 use crate::services::ai_service::AIService;
 use crate::services::anon_dm::AnonDmService;
 use crate::services::anon_group::AnonGroupService;
 use crate::services::attachment::{AttachmentError, AttachmentService};
+use crate::services::auth_service::AuthError;
 use crate::services::auth_service::AuthService;
 #[cfg(feature = "media")]
 use crate::services::call_worker::CallWorkerHandle;
 use crate::services::channel::ChannelService;
+use crate::services::conversation::ConversationHandle;
 use crate::services::dm_bootstrap_service::DmBootstrapService;
 use crate::services::gateway::outgoing::{
-    OwnedOutgoingServices, OutgoingIntent, QuoteIntent, SendError, SendResult,
-    route_outgoing_owned,
+    OutgoingIntent, OwnedOutgoingServices, QuoteIntent, SendError, SendResult, route_outgoing_owned,
 };
 #[cfg(feature = "jarvis")]
 use crate::services::jarvis::JarvisService;
-use crate::services::ai::LocalAIService;
 use crate::services::message::MessageService;
 use crate::services::pin_service::PinService;
+use crate::services::section_service::SectionService;
 use crate::services::session_service::{SessionError, SessionService};
 use crate::services::signal::SignalService;
-use crate::services::section_service::SectionService;
 use crate::services::user::UserService;
-use crate::services::conversation::ConversationHandle;
-use crate::state::{
-    ActiveConversation, AuthState, ChatState, MessageState, OfflineState,
-    UserState,
-};
 #[cfg(feature = "jarvis")]
 use crate::state::JarvisState;
 use crate::state::chat_state::PendingAttachment;
+use crate::state::{
+    ActiveConversation, AuthState, ChatState, MessageState, OfflineState, UserState,
+};
 use crate::storage::settings_keys;
 use crate::system::Directories;
 
@@ -157,7 +159,11 @@ impl ClientBuilder {
     /// Must be called within a tokio runtime (e.g. inside `#[tokio::main]`
     /// or after `Runtime::new()`).
     pub fn build(self) -> Result<Arc<ChatterClient>, ClientError> {
-        let ctx = AppContext::with_config_and_sink(self.server_url, self.data_dir, self.notification_sink)?;
+        let ctx = AppContext::with_config_and_sink(
+            self.server_url,
+            self.data_dir,
+            self.notification_sink,
+        )?;
         let services = ctx.core_services();
         let anon_mode = services.message_service.shield_mode.clone();
         Ok(Arc::new(ChatterClient {
@@ -336,7 +342,8 @@ pub struct ChatterClient {
         std::sync::OnceLock<crate::services::message_backup_service::MessageBackupService>,
     /// Cached device-linking service (lazy because deps are read-only and only
     /// touched when the user opens the link-device flow).
-    link_device_service: std::sync::OnceLock<Arc<crate::services::link_device_service::LinkDeviceService>>,
+    link_device_service:
+        std::sync::OnceLock<Arc<crate::services::link_device_service::LinkDeviceService>>,
     /// In-memory Shield ("anon mode") flag. When set, the UI hides public
     /// channels, and a friend DM travels over the NDSS'21 mailbox instead of
     /// sealed-sender streaming — the flag is the SAME `Arc` `MessageService`
@@ -395,18 +402,35 @@ impl ChatterClient {
     }
 
     /// Server-backed account inbox / channel management presentation.
-    pub async fn server_records_page(&self, kind: &str, channel: &str, cursor: &str)
-        -> Result<crate::services::server_records::RecordPage, crate::error::NetworkError>
-    {
-        let user = self.session_current_user_id()
-            .ok_or(crate::error::NetworkError::Unauthenticated)?.to_string();
-        crate::services::server_records::page(&self.services.grpc_pool, kind, channel, cursor, &user).await
+    pub async fn server_records_page(
+        &self,
+        kind: &str,
+        channel: &str,
+        cursor: &str,
+    ) -> Result<crate::services::server_records::RecordPage, crate::error::NetworkError> {
+        let user = self
+            .session_current_user_id()
+            .ok_or(crate::error::NetworkError::Unauthenticated)?
+            .to_string();
+        crate::services::server_records::page(
+            &self.services.grpc_pool,
+            kind,
+            channel,
+            cursor,
+            &user,
+        )
+        .await
     }
 
-    pub async fn server_records_action(&self, kind: &str, channel: &str, id: &str, action: &str)
-        -> Result<(), crate::error::NetworkError>
-    {
-        crate::services::server_records::action(&self.services.grpc_pool, kind, channel, id, action).await
+    pub async fn server_records_action(
+        &self,
+        kind: &str,
+        channel: &str,
+        id: &str,
+        action: &str,
+    ) -> Result<(), crate::error::NetworkError> {
+        crate::services::server_records::action(&self.services.grpc_pool, kind, channel, id, action)
+            .await
     }
 
     // ── Services (return &Arc<T> so .clone() yields Arc<T>) ─────────────
@@ -465,8 +489,10 @@ impl ChatterClient {
     #[cfg(feature = "mesh")]
     pub fn mesh_conversations(
         &self,
-    ) -> Result<Vec<crate::domain::unified_conversation::UnifiedConversation>, crate::services::mesh::MeshError>
-    {
+    ) -> Result<
+        Vec<crate::domain::unified_conversation::UnifiedConversation>,
+        crate::services::mesh::MeshError,
+    > {
         self.mesh().conversations()
     }
 
@@ -530,10 +556,7 @@ impl ChatterClient {
     /// user repository, so `UserService::get_display_name` falls through to
     /// stringifying the id and the UI showed a raw UUID.
     #[cfg(feature = "mesh")]
-    pub fn mesh_sender_display_name(
-        &self,
-        sender: &crate::domain::ids::UserId,
-    ) -> Option<String> {
+    pub fn mesh_sender_display_name(&self, sender: &crate::domain::ids::UserId) -> Option<String> {
         self.mesh().sender_display_name(sender)
     }
 
@@ -891,7 +914,6 @@ impl ChatterClient {
         })
     }
 
-
     // ── Safety number verification ────────────────────────────────────
 
     /// Get the safety number for a peer (60-digit numeric fingerprint).
@@ -902,12 +924,18 @@ impl ChatterClient {
         &self,
         peer_user_id: &crate::domain::ids::UserId,
     ) -> Result<String, ClientError> {
-        let local_user_id = self.services.auth_state.get().current_user_id
+        let local_user_id = self
+            .services
+            .auth_state
+            .get()
+            .current_user_id
             .as_ref()
             .ok_or_else(|| ClientError::Validation("Not logged in".into()))?
             .to_string();
 
-        let safety_number = self.services.signal_service
+        let safety_number = self
+            .services
+            .signal_service
             .generate_safety_number(&local_user_id, &peer_user_id.to_string())
             .await
             .map_err(|e| ClientError::Validation(e.to_string()))?;
@@ -920,7 +948,8 @@ impl ChatterClient {
         &self,
         peer_user_id: &crate::domain::ids::UserId,
     ) -> Result<bool, ClientError> {
-        self.services.signal_service
+        self.services
+            .signal_service
             .is_peer_verified(&peer_user_id.to_string())
             .map_err(|e| ClientError::Validation(e.to_string()))
     }
@@ -931,7 +960,8 @@ impl ChatterClient {
         peer_user_id: &crate::domain::ids::UserId,
     ) -> Result<(), ClientError> {
         let safety_number = self.get_safety_number(peer_user_id).await?;
-        self.services.signal_service
+        self.services
+            .signal_service
             .set_peer_verified(&peer_user_id.to_string(), &safety_number, true)
             .map_err(|e| ClientError::Validation(e.to_string()))
     }
@@ -942,10 +972,14 @@ impl ChatterClient {
         peer_user_id: &crate::domain::ids::UserId,
     ) -> Result<(), ClientError> {
         // Get existing safety number to preserve it
-        if let Ok(Some((safety_number, _))) = self.services.signal_service.key_store
+        if let Ok(Some((safety_number, _))) = self
+            .services
+            .signal_service
+            .key_store
             .get_peer_verification(&peer_user_id.to_string())
         {
-            self.services.signal_service
+            self.services
+                .signal_service
                 .set_peer_verified(&peer_user_id.to_string(), &safety_number, false)
                 .map_err(|e| ClientError::Validation(e.to_string()))?;
         }
@@ -987,9 +1021,11 @@ impl ChatterClient {
         &self,
         peer_user_id: &crate::domain::ids::UserId,
     ) -> Result<Option<IdentityChangePrompt>, ClientError> {
-        Ok(self.pending_identity_change(peer_user_id)?.map(|attributed| {
-            IdentityChangePrompt::new(attributed, &self.display_name(peer_user_id))
-        }))
+        Ok(self
+            .pending_identity_change(peer_user_id)?
+            .map(|attributed| {
+                IdentityChangePrompt::new(attributed, &self.display_name(peer_user_id))
+            }))
     }
 
     /// Accept the peer's new identity key, unwedging the conversation in both
@@ -1029,7 +1065,9 @@ impl ChatterClient {
 
     // ── Events ──────────────────────────────────────────────────────────
 
-    pub fn event_bus(&self) -> &EventBus { &self.services.event_bus }
+    pub fn event_bus(&self) -> &EventBus {
+        &self.services.event_bus
+    }
 
     pub fn subscribe_events(&self) -> tokio::sync::broadcast::Receiver<DomainEvent> {
         self.services.event_bus.subscribe_domain()
@@ -1065,15 +1103,18 @@ impl ChatterClient {
                         sender_display_name,
                         sender_avatar,
                     }) => {
-                        if tx.send(events::AnonDmRequestEvent::Received {
-                            conversation_id,
-                            sender_id,
-                            sender_mailbox_pk,
-                            intro_message,
-                            profile_key,
-                            sender_display_name,
-                            sender_avatar,
-                        }).is_err() {
+                        if tx
+                            .send(events::AnonDmRequestEvent::Received {
+                                conversation_id,
+                                sender_id,
+                                sender_mailbox_pk,
+                                intro_message,
+                                profile_key,
+                                sender_display_name,
+                                sender_avatar,
+                            })
+                            .is_err()
+                        {
                             break;
                         }
                     }
@@ -1085,14 +1126,17 @@ impl ChatterClient {
                         peer_display_name,
                         peer_avatar,
                     }) => {
-                        if tx.send(events::AnonDmRequestEvent::Accepted {
-                            conversation_id,
-                            peer_id,
-                            peer_mailbox_pk,
-                            profile_key,
-                            peer_display_name,
-                            peer_avatar,
-                        }).is_err() {
+                        if tx
+                            .send(events::AnonDmRequestEvent::Accepted {
+                                conversation_id,
+                                peer_id,
+                                peer_mailbox_pk,
+                                profile_key,
+                                peer_display_name,
+                                peer_avatar,
+                            })
+                            .is_err()
+                        {
                             break;
                         }
                     }
@@ -1107,17 +1151,20 @@ impl ChatterClient {
                         intro_message,
                         server_timestamp,
                     }) => {
-                        if tx.send(events::AnonDmRequestEvent::Init {
-                            conversation_id,
-                            sender_id,
-                            sender_display_name,
-                            sender_avatar,
-                            peer_mailbox_pk,
-                            peer_identity_key,
-                            peer_delivery_token,
-                            intro_message,
-                            server_timestamp,
-                        }).is_err() {
+                        if tx
+                            .send(events::AnonDmRequestEvent::Init {
+                                conversation_id,
+                                sender_id,
+                                sender_display_name,
+                                sender_avatar,
+                                peer_mailbox_pk,
+                                peer_identity_key,
+                                peer_delivery_token,
+                                intro_message,
+                                server_timestamp,
+                            })
+                            .is_err()
+                        {
                             break;
                         }
                     }
@@ -1150,15 +1197,18 @@ impl ChatterClient {
                         inviter_display_name,
                         inviter_avatar,
                     }) => {
-                        if tx.send(events::AnonGroupInviteEvent {
-                            group_id,
-                            group_name,
-                            inviter_id,
-                            inviter_mailbox_pk,
-                            profile_key,
-                            inviter_display_name,
-                            inviter_avatar,
-                        }).is_err() {
+                        if tx
+                            .send(events::AnonGroupInviteEvent {
+                                group_id,
+                                group_name,
+                                inviter_id,
+                                inviter_mailbox_pk,
+                                profile_key,
+                                inviter_display_name,
+                                inviter_avatar,
+                            })
+                            .is_err()
+                        {
                             break;
                         }
                     }
@@ -1187,11 +1237,14 @@ impl ChatterClient {
                         peer_id,
                         ephemeral_public_key,
                     }) => {
-                        if tx.send(events::CallKeyEvent::AnswerReceived {
-                            call_id,
-                            peer_id,
-                            ephemeral_public_key,
-                        }).is_err() {
+                        if tx
+                            .send(events::CallKeyEvent::AnswerReceived {
+                                call_id,
+                                peer_id,
+                                ephemeral_public_key,
+                            })
+                            .is_err()
+                        {
                             break;
                         }
                     }
@@ -1215,8 +1268,19 @@ impl ChatterClient {
         tokio::spawn(async move {
             loop {
                 match src.recv().await {
-                    Ok(DomainEvent::CallHangupReceived { call_id, peer_id, reason }) => {
-                        if tx.send(events::RemoteCallHangup { call_id, peer_id, reason }).is_err() {
+                    Ok(DomainEvent::CallHangupReceived {
+                        call_id,
+                        peer_id,
+                        reason,
+                    }) => {
+                        if tx
+                            .send(events::RemoteCallHangup {
+                                call_id,
+                                peer_id,
+                                reason,
+                            })
+                            .is_err()
+                        {
                             break;
                         }
                     }
@@ -1254,16 +1318,13 @@ impl ChatterClient {
     /// Sends STOPPED and cancels timers if typing was active.
     pub fn typing_clear(self: &Arc<Self>) {
         let client = Arc::clone(self);
-        self.outgoing_typing.clear(move |conversation| {
-            Some(client.conversation(conversation.clone()))
-        });
+        self.outgoing_typing
+            .clear(move |conversation| Some(client.conversation(conversation.clone())));
     }
 
     /// Compute the local Signal identity fingerprint (displayed in settings /
     /// safety-number flows).
-    pub async fn my_identity_fingerprint(
-        &self,
-    ) -> Result<String, crate::error::ServiceError> {
+    pub async fn my_identity_fingerprint(&self) -> Result<String, crate::error::ServiceError> {
         self.signal().get_identity_fingerprint().await
     }
 
@@ -1343,7 +1404,8 @@ impl ChatterClient {
         conversation_id: &str,
         enabled: bool,
     ) -> Result<(), crate::error::StorageError> {
-        self.http_local_ai().set_ai_enabled_for(conversation_id, enabled)
+        self.http_local_ai()
+            .set_ai_enabled_for(conversation_id, enabled)
     }
 
     /// What would actually run for this conversation, after the mesh/DM policy
@@ -1373,7 +1435,8 @@ impl ChatterClient {
         model_id: &str,
         quantized_file: Option<&str>,
     ) -> Result<(), crate::services::ai::LocalAIError> {
-        self.local_ai().set_preferred_model(model_id, quantized_file)
+        self.local_ai()
+            .set_preferred_model(model_id, quantized_file)
     }
 
     pub async fn load_local_ai_model(
@@ -1402,8 +1465,10 @@ impl ChatterClient {
         &self,
         mode: &str,
     ) -> Result<(), crate::services::session_service::SessionError> {
-        self.sessions()
-            .set_string_setting(crate::storage::repositories::settings_repo::keys::PRESENCE_MODE, mode)
+        self.sessions().set_string_setting(
+            crate::storage::repositories::settings_repo::keys::PRESENCE_MODE,
+            mode,
+        )
     }
 
     /// Read the sealed-sender RECEIVING policy from the SERVER
@@ -1459,7 +1524,9 @@ impl ChatterClient {
         &self,
         discoverable: bool,
     ) -> Result<bool, crate::services::user::UserError> {
-        self.users().set_username_discoverability(discoverable).await
+        self.users()
+            .set_username_discoverability(discoverable)
+            .await
     }
 
     /// Session-level current user id (None when logged out).
@@ -1469,7 +1536,10 @@ impl ChatterClient {
 
     pub async fn list_sessions(
         &self,
-    ) -> Result<Vec<crate::services::session_service::Session>, crate::services::session_service::SessionError> {
+    ) -> Result<
+        Vec<crate::services::session_service::Session>,
+        crate::services::session_service::SessionError,
+    > {
         self.sessions().list_sessions().await
     }
 
@@ -1516,8 +1586,10 @@ impl ChatterClient {
     /// stayed clickable — in the wrong mode.
     pub fn list_sections_with_conversations(
         &self,
-    ) -> Result<Vec<crate::domain::section::CustomSection>, crate::services::section_service::SectionError>
-    {
+    ) -> Result<
+        Vec<crate::domain::section::CustomSection>,
+        crate::services::section_service::SectionError,
+    > {
         let mut sections = self.sections().list_sections_with_conversations()?;
         for section in sections.iter_mut() {
             section.conversations.retain(|c| {
@@ -1552,7 +1624,8 @@ impl ChatterClient {
         &self,
         name: &str,
         emoji: &str,
-    ) -> Result<crate::domain::section::CustomSection, crate::services::section_service::SectionError> {
+    ) -> Result<crate::domain::section::CustomSection, crate::services::section_service::SectionError>
+    {
         self.sections().create_section(name, emoji)
     }
 
@@ -1663,9 +1736,9 @@ impl ChatterClient {
     ) -> String {
         use crate::domain::message::ConversationType;
         match conversation_type {
-            ConversationType::ServerDm => {
-                self.display_name(&crate::domain::ids::UserId::from_uuid(*conversation_id.as_uuid()))
-            }
+            ConversationType::ServerDm => self.display_name(
+                &crate::domain::ids::UserId::from_uuid(*conversation_id.as_uuid()),
+            ),
             // The stored name of the note-to-self channel is its internal
             // `saved_messages_<uuid>` id, not something to show a person.
             ConversationType::SavedMessages => "Saved Messages".to_string(),
@@ -1691,9 +1764,8 @@ impl ChatterClient {
         use crate::state::ActiveConversation;
         match conversation {
             ActiveConversation::AnonGroup(_) => {
-                let anon_id = crate::domain::anon_group::AnonGroupMessageId::from_string(
-                    msg_id.to_string(),
-                );
+                let anon_id =
+                    crate::domain::anon_group::AnonGroupMessageId::from_string(msg_id.to_string());
                 self.get_anon_group_message(&anon_id)
                     .and_then(|m| {
                         m.as_text()
@@ -1755,7 +1827,12 @@ impl ChatterClient {
         self.get_channels_mru()
             .iter()
             .filter(|c| !c.id.0.is_nil()) // never auto-select the local AI channel
-            .find(|c| !matches!(c.channel_type, ChannelType::DirectMessage | ChannelType::SavedMessages))
+            .find(|c| {
+                !matches!(
+                    c.channel_type,
+                    ChannelType::DirectMessage | ChannelType::SavedMessages
+                )
+            })
             .map(|c| c.id)
     }
 
@@ -1794,8 +1871,12 @@ impl ChatterClient {
     /// Local logout (best-effort server notify + clear local state).
     // ── State stores ────────────────────────────────────────────────────
 
-    pub fn auth_state(&self) -> &AuthState { &self.services.auth_state }
-    pub fn chat_state(&self) -> &ChatState { &self.services.chat_state }
+    pub fn auth_state(&self) -> &AuthState {
+        &self.services.auth_state
+    }
+    pub fn chat_state(&self) -> &ChatState {
+        &self.services.chat_state
+    }
 
     /// Resolve the current active conversation's `ConversationType`,
     /// looking up the channel row when the active conversation is a
@@ -1824,8 +1905,12 @@ impl ChatterClient {
     pub fn active_conversation(&self) -> crate::state::ActiveConversation {
         self.services.chat_state.active_conversation()
     }
-    pub fn message_state(&self) -> &MessageState { &self.services.message_state }
-    pub fn user_state(&self) -> &UserState { &self.services.user_state }
+    pub fn message_state(&self) -> &MessageState {
+        &self.services.message_state
+    }
+    pub fn user_state(&self) -> &UserState {
+        &self.services.user_state
+    }
 
     /// Persistent sidebar collapsed flag (settings-backed). Defaults to false.
     pub fn sidebar_collapsed(&self) -> bool {
@@ -1848,7 +1933,7 @@ impl ChatterClient {
 
     /// Read the user's search-shortcut preference (defaults to `Both`).
     pub fn get_search_shortcut(&self) -> crate::services::search::SearchShortcut {
-        use crate::storage::repositories::settings_repo::{keys, SettingsRepository};
+        use crate::storage::repositories::settings_repo::{SettingsRepository, keys};
         let repo = SettingsRepository::new(self.services.database.clone());
         let raw = repo
             .get_string(keys::SEARCH_SHORTCUT)
@@ -1862,7 +1947,7 @@ impl ChatterClient {
     /// chosen at registration and persisted under `keys::FULL_USERNAME`. This is
     /// the exact form `lookup_by_username` expects. `None` before registration.
     pub fn full_username(&self) -> Option<String> {
-        use crate::storage::repositories::settings_repo::{keys, SettingsRepository};
+        use crate::storage::repositories::settings_repo::{SettingsRepository, keys};
         SettingsRepository::new(self.services.database.clone())
             .get_string(keys::FULL_USERNAME)
             .ok()
@@ -1874,7 +1959,7 @@ impl ChatterClient {
         &self,
         shortcut: crate::services::search::SearchShortcut,
     ) -> Result<(), crate::error::StorageError> {
-        use crate::storage::repositories::settings_repo::{keys, SettingsRepository};
+        use crate::storage::repositories::settings_repo::{SettingsRepository, keys};
         let repo = SettingsRepository::new(self.services.database.clone());
         repo.set_string(keys::SEARCH_SHORTCUT, shortcut.as_str())
     }
@@ -1931,7 +2016,11 @@ impl ChatterClient {
         // transport — the UI filter still applies, but we must NOT pretend the
         // network location is hidden when it isn't.
         use crate::network::grpc::client_pool::TransportMode;
-        let mode = if enabled { TransportMode::Onion } else { TransportMode::Direct };
+        let mode = if enabled {
+            TransportMode::Onion
+        } else {
+            TransportMode::Direct
+        };
         let switch_result = self.services.grpc_pool.set_transport_mode(mode);
 
         // Reflect the pool's ACTUAL transport into the process-global HTTP flag
@@ -2116,14 +2205,22 @@ impl ChatterClient {
         Ok(())
     }
 
-    pub fn offline_state(&self) -> &OfflineState { &self.services.offline_state }
+    pub fn offline_state(&self) -> &OfflineState {
+        &self.services.offline_state
+    }
     #[cfg(feature = "jarvis")]
-    pub fn jarvis_state(&self) -> &JarvisState { &self.services.jarvis_state }
+    pub fn jarvis_state(&self) -> &JarvisState {
+        &self.services.jarvis_state
+    }
 
     // ── Infrastructure ──────────────────────────────────────────────────
 
-    pub fn runtime_handle(&self) -> &tokio::runtime::Handle { &self.services.runtime_handle }
-    pub fn directories(&self) -> &Directories { &self.services.directories }
+    pub fn runtime_handle(&self) -> &tokio::runtime::Handle {
+        &self.services.runtime_handle
+    }
+    pub fn directories(&self) -> &Directories {
+        &self.services.directories
+    }
 
     /// Post-boot call service handle (OnceLock).
     #[cfg(feature = "media")]
@@ -2207,11 +2304,13 @@ impl ChatterClient {
         }
         match self.services.auth_service.connect().await {
             Ok(()) => {
-                self.offline_state().set_connection_state(ConnectionState::Connected);
+                self.offline_state()
+                    .set_connection_state(ConnectionState::Connected);
                 Ok(())
             }
             Err(e) => {
-                self.offline_state().set_connection_state(ConnectionState::Disconnected);
+                self.offline_state()
+                    .set_connection_state(ConnectionState::Disconnected);
                 Err(e.into())
             }
         }
@@ -2242,12 +2341,22 @@ impl ChatterClient {
         tokio::spawn(async move {
             loop {
                 match rx.recv().await {
-                    Ok(DomainEvent::SenderKeyReceived { sender_id, sender_device_id, channel_id, .. }) => {
-                        client.messages().retry_pending_group_decrypts(
-                            channel_id, sender_id, sender_device_id,
-                        ).await;
+                    Ok(DomainEvent::SenderKeyReceived {
+                        sender_id,
+                        sender_device_id,
+                        channel_id,
+                        ..
+                    }) => {
+                        client
+                            .messages()
+                            .retry_pending_group_decrypts(channel_id, sender_id, sender_device_id)
+                            .await;
                     }
-                    Ok(DomainEvent::ChannelMemberLeft { channel_id, user_id, .. }) => {
+                    Ok(DomainEvent::ChannelMemberLeft {
+                        channel_id,
+                        user_id,
+                        ..
+                    }) => {
                         if Some(user_id) == own_user_id {
                             continue;
                         }
@@ -2434,7 +2543,9 @@ impl ChatterClient {
         let h_inbox = tokio::spawn(async move {
             loop {
                 match inbox_rx.recv().await {
-                    Ok(event) => { processor.process(&event).await; }
+                    Ok(event) => {
+                        processor.process(&event).await;
+                    }
                     Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
                         tracing::warn!(skipped = n, "InboxEventProcessor lagged");
                     }
@@ -2471,17 +2582,17 @@ impl ChatterClient {
 
         // ── AI services ─────────────────────────────────────────────
         #[cfg(feature = "jarvis")]
-        let jarvis = crate::services::jarvis::JarvisBackgroundBuilder::new(
-            self.jarvis().clone(),
-        )
-        .with_event_bus(self.event_bus().clone())
-        .spawn();
+        let jarvis = crate::services::jarvis::JarvisBackgroundBuilder::new(self.jarvis().clone())
+            .with_event_bus(self.event_bus().clone())
+            .spawn();
 
         let h_ai = tokio::spawn({
             let local_ai = self.local_ai().clone();
             async move {
                 match local_ai.load_preferred_model().await {
-                    Ok(Some(info)) => tracing::info!("Auto-loaded local AI model: {}", info.model_id),
+                    Ok(Some(info)) => {
+                        tracing::info!("Auto-loaded local AI model: {}", info.model_id)
+                    }
                     Ok(None) => {}
                     Err(e) => tracing::warn!("Failed to auto-load local AI model: {}", e),
                 }
@@ -2541,7 +2652,10 @@ impl ChatterClient {
                     ticker.tick().await;
                     match crate::services::disappearing::reap_expired(&db) {
                         Ok(gone) if !gone.is_empty() => {
-                            tracing::info!(count = gone.len(), "ephemeral reaper: removed expired local messages");
+                            tracing::info!(
+                                count = gone.len(),
+                                "ephemeral reaper: removed expired local messages"
+                            );
                             let _ = expired.send(gone);
                         }
                         Ok(_) => {}
@@ -2558,14 +2672,30 @@ impl ChatterClient {
         {
             let client = self.clone();
             tokio::spawn(async move {
-                client.set_presence(crate::domain::user::PresenceStatus::Online).await;
+                client
+                    .set_presence(crate::domain::user::PresenceStatus::Online)
+                    .await;
             });
         }
         self.touch_activity();
 
         // ── Store handles for shutdown ───────────────────────────────
         let mut tasks = self.tasks.lock();
-        tasks.extend([h_events, h_inbox, h_skdm_retry, h_channel_stream, h_channel_messages, h_channel_bootstrap, h_dm_bootstrap, h_ai, h_sync, h_prekey, h_key_rolling, h_token_refill, h_ephemeral_reaper]);
+        tasks.extend([
+            h_events,
+            h_inbox,
+            h_skdm_retry,
+            h_channel_stream,
+            h_channel_messages,
+            h_channel_bootstrap,
+            h_dm_bootstrap,
+            h_ai,
+            h_sync,
+            h_prekey,
+            h_key_rolling,
+            h_token_refill,
+            h_ephemeral_reaper,
+        ]);
         #[cfg(feature = "jarvis")]
         {
             tasks.push(jarvis.maintenance);
@@ -2576,7 +2706,6 @@ impl ChatterClient {
 
         Ok(())
     }
-
 
     // ── High-level messaging ─────────────────────────────────────────
 
@@ -2598,13 +2727,131 @@ impl ChatterClient {
         quote: Option<QuoteIntent>,
         options: Option<SendOptions>,
     ) -> Result<SendResult, SendError> {
-        let uploaded = upload_attachments(pending_attachments, self.attachments()).await?;
+        self.send_message_attempt(
+            uuid::Uuid::new_v4(),
+            conversation,
+            text,
+            pending_attachments,
+            quote,
+            options,
+        )
+        .await
+    }
+
+    async fn send_message_attempt(
+        &self,
+        attempt: uuid::Uuid,
+        conversation: ActiveConversation,
+        text: &str,
+        pending_attachments: &[PendingAttachment],
+        quote: Option<QuoteIntent>,
+        options: Option<SendOptions>,
+    ) -> Result<SendResult, SendError> {
+        let session = crate::services::gateway::submission::SendSession::capture(self.auth_state());
+        let key = self.retain_send_attempt(
+            attempt,
+            conversation,
+            text,
+            pending_attachments,
+            quote.as_ref(),
+            options.as_ref(),
+        )?;
+        let (outcome, started, original_row) = crate::services::gateway::submission::SEND_SESSION
+            .scope(
+                session,
+                crate::services::gateway::submission::track_submission(
+                    self.send_message_untracked(
+                        conversation,
+                        text,
+                        pending_attachments,
+                        quote,
+                        options,
+                    ),
+                    Some((
+                        self.services.database.clone(),
+                        key.clone(),
+                        attempt.to_string(),
+                    )),
+                ),
+            )
+            .await;
+        match outcome {
+            Ok(mut result) => {
+                let confirmed = !result.bootstrap_initiated
+                    && result.send_error.is_none()
+                    && !result.message.as_ref().is_some_and(|m| {
+                        matches!(m.delivery_status.as_str(), "failed" | "sending")
+                    });
+                if !confirmed && !started {
+                    // Local preparation failed before the boundary. The stored
+                    // failed bubble remains retryable; no remote send exists.
+                    self.finish_send_attempt(&key, attempt, None, true)?;
+                    return Ok(result);
+                }
+                if !confirmed {
+                    if let Some(message) = result.message.as_mut() {
+                        *message = self
+                            .messages()
+                            .finish_retry_row(&message.id, "sending", Some("Delivery unconfirmed"))
+                            .map_err(|_| SendError::DeliveryUnconfirmed)?;
+                    }
+                }
+                self.finish_send_attempt(
+                    &key,
+                    attempt,
+                    if confirmed {
+                        Some(result.message_id_string()).filter(|id| !id.is_empty())
+                    } else {
+                        original_row.or_else(|| {
+                            Some(result.message_id_string()).filter(|id| !id.is_empty())
+                        })
+                    },
+                    confirmed,
+                )
+                .map_err(|_| SendError::DeliveryUnconfirmed)?;
+                Ok(result)
+            }
+            Err(error) => Err(send_attempt::settle_failure(
+                &self.services.database,
+                &key,
+                attempt,
+                started,
+                original_row,
+                error,
+            )
+            .map_err(|_| SendError::DeliveryUnconfirmed)?),
+        }
+    }
+
+    async fn send_message_untracked(
+        &self,
+        conversation: ActiveConversation,
+        text: &str,
+        pending_attachments: &[PendingAttachment],
+        quote: Option<QuoteIntent>,
+        options: Option<SendOptions>,
+    ) -> Result<SendResult, SendError> {
+        if text.trim().is_empty() && pending_attachments.is_empty() {
+            return Err(SendError::Message(
+                crate::services::message::MessageError::InvalidContent(
+                    "message must have text or attachments".into(),
+                ),
+            )
+            .before_submission());
+        }
+        let uploaded = upload_attachments(pending_attachments, self.attachments())
+            .await
+            .map_err(|e| SendError::from(e).before_submission())?;
+        crate::services::gateway::submission::check_send_session()
+            .map_err(|_| SendError::NotLoggedIn.before_submission())?;
         let quote = if let Some(mut q) = quote {
             if q.target_preview.is_none() && !conversation.is_anon() {
                 let attachments_svc = self.attachments();
-                q.target_preview = self.messages()
+                q.target_preview = self
+                    .messages()
                     .get_by_sender_timestamp(&q.target_author_id, q.target_timestamp)
-                    .ok().flatten()
+                    .ok()
+                    .flatten()
                     .map(|m| {
                         let atts: Vec<_> = m
                             .attachments
@@ -2616,8 +2863,18 @@ impl ChatterClient {
                     .filter(|t| !t.is_empty());
             }
             Some(q)
-        } else { None };
-        let intent = build_intent(conversation, text, uploaded.pointers, quote, &options.unwrap_or_default(), self.channels())?;
+        } else {
+            None
+        };
+        let intent = build_intent(
+            conversation,
+            text,
+            uploaded.pointers,
+            quote,
+            &options.unwrap_or_default(),
+            self.channels(),
+        )
+        .map_err(SendError::before_submission)?;
         let services = OwnedOutgoingServices::from_client(self);
         route_outgoing_owned(intent, &services).await
     }
@@ -2637,25 +2894,72 @@ impl ChatterClient {
         quote: Option<QuoteIntent>,
         options: Option<SendOptions>,
     ) -> Result<crate::client::messaging::SendMessageUiResult, SendError> {
+        self.send_message_ui_attempt(
+            uuid::Uuid::new_v4(),
+            conversation,
+            text,
+            pending_attachments,
+            quote,
+            options,
+        )
+        .await
+    }
+
+    async fn send_message_ui_attempt(
+        &self,
+        attempt: uuid::Uuid,
+        conversation: ActiveConversation,
+        text: &str,
+        pending_attachments: &[PendingAttachment],
+        quote: Option<QuoteIntent>,
+        options: Option<SendOptions>,
+    ) -> Result<crate::client::messaging::SendMessageUiResult, SendError> {
         use crate::client::messaging::SendMessageUiResult;
         use crate::domain::message::truncate_preview_text;
 
         let mut result = self
-            .send_message(conversation, text, pending_attachments, quote, options)
+            .send_message_attempt(
+                attempt,
+                conversation,
+                text,
+                pending_attachments,
+                quote,
+                options,
+            )
             .await?;
 
-        // Stored but not delivered: the bubble shows "not sent" (tap to retry,
-        // `retry_failed_message`) and the reason is surfaced once.
-        let failure_notice = result
-            .send_error
-            .take()
-            .map(|e| crate::services::gateway::shared::handle_send_error(&SendError::Message(e), "send"));
+        // No receipt does not prove non-delivery. Keep the original row
+        // pending, with retry locked by its durable attempt journal.
+        let known_failed = result
+            .message
+            .as_ref()
+            .is_some_and(|m| m.delivery_status == "failed");
+        let unresolved = !known_failed
+            && !result.bootstrap_initiated
+            && (result.send_error.is_some()
+                || result
+                    .message
+                    .as_ref()
+                    .is_some_and(|m| matches!(m.delivery_status.as_str(), "failed" | "sending")));
+        result.send_error.take();
+        let failure_notice = if known_failed {
+            Some("Message was not submitted. Tap to retry.".to_owned())
+        } else {
+            unresolved.then(|| SendError::DeliveryUnconfirmed.to_string())
+        };
 
         let real_message_id = result.message_id_string();
-        let (message_id_effective, delivery_status) = if result.bootstrap_initiated {
-            (queued_bubble_id(real_message_id, result.sent_at), "sending")
-        } else if failure_notice.is_some() || result.message.as_ref().is_some_and(|m| m.delivery_status == "failed") {
+        let (message_id_effective, delivery_status) = if known_failed {
             (real_message_id, "failed")
+        } else if result.bootstrap_initiated {
+            (queued_bubble_id(real_message_id, result.sent_at), "sending")
+        } else if failure_notice.is_some()
+            || result
+                .message
+                .as_ref()
+                .is_some_and(|m| matches!(m.delivery_status.as_str(), "failed" | "sending"))
+        {
+            (real_message_id, "sending")
         } else {
             (real_message_id, "sent")
         };
@@ -2714,37 +3018,107 @@ impl ChatterClient {
             reply_thumbnail_bytes,
             reply_parent_media,
             failure_notice,
-            failure_reason: result.message.as_ref().and_then(|m| m.failure_reason.clone()),
+            failure_reason: result
+                .message
+                .as_ref()
+                .and_then(|m| m.failure_reason.clone()),
         })
     }
 
     /// Retry a failed channel message or friend DM and return the updated row.
     /// Channels acquire the server message ID; DMs retain their original identity.
-    pub async fn retry_failed_message(&self, message_id: &str) -> Result<crate::domain::message::Message, SendError> {
+    pub async fn retry_failed_message(
+        &self,
+        message_id: &str,
+    ) -> Result<crate::domain::message::Message, SendError> {
         use crate::services::message::MessageError;
-        let id = message_id.parse::<crate::domain::ids::MessageId>()
-            .map_err(|_| SendError::Message(MessageError::InvalidContent("Invalid message ID".into())))?;
+        let id = message_id
+            .parse::<crate::domain::ids::MessageId>()
+            .map_err(|_| {
+                SendError::Message(MessageError::InvalidContent("Invalid message ID".into()))
+            })?;
         let service = &self.services.message_service;
-        let message = service.get_message_local(&id)?.ok_or(MessageError::MessageNotFound(id))?;
-        let result = if message.conversation_type == crate::domain::message::ConversationType::Channel {
-            service.retry_channel_message(&id).await
-        } else {
-            match service.retry_server_dm(&id).await {
-                Ok(_) => service.get_message_local(&id)?.ok_or(MessageError::MessageNotFound(id)),
-                Err(error) => Err(error),
-            }
-        };
+        let message = service
+            .get_message_local(&id)?
+            .ok_or(MessageError::MessageNotFound(id))?;
+        let conversation = ActiveConversation::from_routing_key(
+            &message.conversation_type,
+            &message.conversation_id.to_string(),
+        )
+        .ok_or(SendError::UnsupportedAction)?;
+        // Anonymous rows never fall through to a fresh server DM post. Their
+        // exact-envelope admission is owned by the anonymous submission layer.
+        if !matches!(
+            message.conversation_type,
+            crate::domain::message::ConversationType::Channel
+                | crate::domain::message::ConversationType::ServerDm
+        ) {
+            return Err(SendError::UnsupportedAction);
+        }
+        let session = crate::services::gateway::submission::SendSession::capture(self.auth_state());
+        let (key, attempt) = self.retain_retry_attempt(conversation, &message)?;
+        let (result, route_started, retry_row) = crate::services::gateway::submission::SEND_SESSION
+            .scope(
+                session,
+                crate::services::gateway::submission::track_submission(
+                    async {
+                        if message.conversation_type
+                            == crate::domain::message::ConversationType::Channel
+                        {
+                            service.retry_channel_message(&id).await
+                        } else {
+                            match service.retry_server_dm(&id).await {
+                                Ok(_) => service
+                                    .get_message_local(&id)?
+                                    .ok_or(MessageError::MessageNotFound(id)),
+                                Err(error) => Err(error),
+                            }
+                        }
+                    },
+                    Some((
+                        self.services.database.clone(),
+                        key.clone(),
+                        attempt.to_string(),
+                    )),
+                ),
+            )
+            .await;
         match result {
-            Ok(message) => Ok(message),
-            Err(error) => {
-                // Preparation (e.g. an attachment deleted since the first send)
-                // can fail before the transport. Persist its refusal as well.
-                if message.can_retry_send() {
-                    let mut failed = message;
-                    failed.failure_reason = error.permanent_send_failure_reason().map(str::to_owned);
-                    service.update_message(&failed)?;
+            Ok(mut updated) => {
+                let confirmed = matches!(
+                    updated.delivery_status.as_str(),
+                    "sent" | "delivered" | "read"
+                );
+                if !confirmed {
+                    updated = service.finish_retry_row(
+                        &updated.id,
+                        "sending",
+                        Some("Delivery unconfirmed"),
+                    )?;
                 }
-                Err(error.into())
+                self.finish_send_attempt(&key, attempt, Some(updated.id.to_string()), confirmed)
+                    .map_err(|_| SendError::DeliveryUnconfirmed)?;
+                Ok(updated)
+            }
+            Err(error) => {
+                if !route_started {
+                    self.finish_send_attempt(&key, attempt, None, true)?;
+                    return Err(error.into());
+                }
+                // Retain the original exact identity even after partial fanout,
+                // response loss or a failure while persisting the receipt.
+                // Preserve a receipt that arrived concurrently with the error.
+                if service.get_message_local(&id)?.is_some() {
+                    service.finish_retry_row(&id, "sending", Some("Delivery unconfirmed"))?;
+                }
+                self.finish_send_attempt(
+                    &key,
+                    attempt,
+                    retry_row.or_else(|| Some(id.to_string())),
+                    false,
+                )
+                .map_err(|_| SendError::DeliveryUnconfirmed)?;
+                Err(SendError::DeliveryUnconfirmed)
             }
         }
     }
@@ -2838,7 +3212,9 @@ impl ChatterClient {
         conv: ActiveConversation,
         seconds: u32,
     ) -> Result<(), crate::services::conversation::ConversationError> {
-        self.conversation(conv).set_disappearing_timer(seconds).await
+        self.conversation(conv)
+            .set_disappearing_timer(seconds)
+            .await
     }
 
     /// A conversation's disappearing-messages timer in seconds (`0` = off).
@@ -2871,7 +3247,9 @@ impl ChatterClient {
                     Ok(DomainEvent::MessageReceived { message })
                         if message.conversation_type == ConversationType::ServerDm =>
                     {
-                        let peer = crate::domain::ids::UserId::from_uuid(*message.conversation_id.as_uuid());
+                        let peer = crate::domain::ids::UserId::from_uuid(
+                            *message.conversation_id.as_uuid(),
+                        );
                         let now = crate::services::disappearing::server_dm_timer(&settings, &peer);
                         let notice = matches!(
                             message.content,
@@ -2945,7 +3323,8 @@ impl ChatterClient {
     ///
     /// Returns 0 on storage error: a missing badge beats a UI hard-fail.
     pub fn unread_conversation_count(&self) -> u32 {
-        self.unread_badges(&crate::state::ActiveConversation::None).total
+        self.unread_badges(&crate::state::ActiveConversation::None)
+            .total
     }
 
     /// Absolute unread values for one sidebar row and the Chats total, from
@@ -2980,7 +3359,10 @@ impl ChatterClient {
 
     /// Unread messages in a private group, for its sidebar row — the same
     /// count `unread_badges` gives the row live, so a rebuild keeps the badge.
-    pub fn anon_group_unread_count(&self, group_id: &crate::domain::anon_group::AnonGroupId) -> u32 {
+    pub fn anon_group_unread_count(
+        &self,
+        group_id: &crate::domain::anon_group::AnonGroupId,
+    ) -> u32 {
         self.messages()
             .message_repo
             .get_unread_count(&(*group_id).into(), &ConversationType::AnonGroup)
@@ -3047,8 +3429,14 @@ impl ChatterClient {
         channel_id: &crate::domain::ids::ChannelId,
         limit: u32,
         offset: u32,
-    ) -> Result<Vec<crate::domain::channel::MemberWithProfile>, crate::services::channel::ChannelError> {
-        let members = self.channels().get_channel_members(channel_id, limit, offset).await?;
+    ) -> Result<
+        Vec<crate::domain::channel::MemberWithProfile>,
+        crate::services::channel::ChannelError,
+    > {
+        let members = self
+            .channels()
+            .get_channel_members(channel_id, limit, offset)
+            .await?;
         let me = self.session_current_user_id();
         // Refetch stale member profiles first, as a DM open does for its peer
         // (Signal-Desktop fetches every member's profile on conversation
@@ -3059,10 +3447,12 @@ impl ChatterClient {
         futures::future::join_all(
             members
                 .iter()
-                .filter(|m| me.as_ref().is_some_and(|me| {
-                    me != &m.user_id
-                        && matches!(users.get_friend_profile_key(me, &m.user_id), Ok(Some(_)))
-                }))
+                .filter(|m| {
+                    me.as_ref().is_some_and(|me| {
+                        me != &m.user_id
+                            && matches!(users.get_friend_profile_key(me, &m.user_id), Ok(Some(_)))
+                    })
+                })
                 .map(|m| self.refresh_profile_if_stale(&m.user_id)),
         )
         .await;
@@ -3119,7 +3509,9 @@ impl ChatterClient {
     }
 
     /// List all anonymous DM conversations.
-    pub fn list_anon_dms(&self) -> Result<Vec<crate::domain::anon_dm::AnonDm>, crate::services::anon_dm::AnonDmError> {
+    pub fn list_anon_dms(
+        &self,
+    ) -> Result<Vec<crate::domain::anon_dm::AnonDm>, crate::services::anon_dm::AnonDmError> {
         self.anon_dms().list_conversations()
     }
 
@@ -3163,11 +3555,16 @@ impl ChatterClient {
         } else {
             self.signal()
                 .actor
-                .open_identity_hpke(crate::crypto::ecies::IdentityHpkeUse::FriendRequest, ciphertext.to_vec())
+                .open_identity_hpke(
+                    crate::crypto::ecies::IdentityHpkeUse::FriendRequest,
+                    ciphertext.to_vec(),
+                )
                 .await
                 .ok()
         };
-        self.users().ingest_received_friend_request(sender_id, plaintext).await
+        self.users()
+            .ingest_received_friend_request(sender_id, plaintext)
+            .await
     }
 
     /// Accept or decline a friend request.
@@ -3299,7 +3696,15 @@ impl ChatterClient {
     }
 
     /// List friends with their profile data (display name, avatar, etc.).
-    pub async fn list_friends_with_profiles(&self) -> Result<Vec<(crate::domain::user::Friendship, crate::domain::user::Profile)>, crate::services::user::UserError> {
+    pub async fn list_friends_with_profiles(
+        &self,
+    ) -> Result<
+        Vec<(
+            crate::domain::user::Friendship,
+            crate::domain::user::Profile,
+        )>,
+        crate::services::user::UserError,
+    > {
         self.users().list_friends_with_profiles(100, 0).await
     }
 
@@ -3336,16 +3741,25 @@ impl ChatterClient {
     pub async fn create_anon_group(
         &self,
         name: String,
-        members: Vec<(crate::domain::ids::UserId, crate::domain::anon_group::AnonGroupRole)>,
-    ) -> Result<crate::domain::anon_group::AnonGroup, crate::services::anon_group::AnonGroupError> {
-        self.anon_groups().create_group_with_roles(name, members).await
+        members: Vec<(
+            crate::domain::ids::UserId,
+            crate::domain::anon_group::AnonGroupRole,
+        )>,
+    ) -> Result<crate::domain::anon_group::AnonGroup, crate::services::anon_group::AnonGroupError>
+    {
+        self.anon_groups()
+            .create_group_with_roles(name, members)
+            .await
     }
 
     /// Invite members to an anonymous group.
     pub async fn invite_to_anon_group(
         &self,
         group_id: &crate::domain::anon_group::AnonGroupId,
-        members: Vec<(crate::domain::ids::UserId, crate::domain::anon_group::AnonGroupRole)>,
+        members: Vec<(
+            crate::domain::ids::UserId,
+            crate::domain::anon_group::AnonGroupRole,
+        )>,
     ) -> Result<(), crate::services::anon_group::AnonGroupError> {
         self.anon_groups().invite_members(group_id, members).await
     }
@@ -3353,7 +3767,10 @@ impl ChatterClient {
     // ── Profile ─────────────────────────────────────────────────────
 
     /// Store the user's avatar bytes locally (never uploaded).
-    pub fn set_avatar_bytes(&self, bytes: &[u8]) -> Result<(), crate::services::auth_service::AuthError> {
+    pub fn set_avatar_bytes(
+        &self,
+        bytes: &[u8],
+    ) -> Result<(), crate::services::auth_service::AuthError> {
         self.anon_dms()
             .set_my_avatar_bytes(bytes)
             .map_err(|e| crate::services::auth_service::AuthError::InvalidInput(e.to_string()))
@@ -3418,16 +3835,12 @@ impl ChatterClient {
 
     /// Create (or rotate) this account's username link; returns the shareable
     /// `chatter://u/{link_id}#{entropy}` URL. Rotation kills old URLs.
-    pub async fn create_username_link(
-        &self,
-    ) -> Result<String, crate::services::user::UserError> {
+    pub async fn create_username_link(&self) -> Result<String, crate::services::user::UserError> {
         self.users().create_username_link().await
     }
 
     /// The locally stored username-link URL, if one exists on this device.
-    pub fn username_link_local(
-        &self,
-    ) -> Result<Option<String>, crate::services::user::UserError> {
+    pub fn username_link_local(&self) -> Result<Option<String>, crate::services::user::UserError> {
         self.users().username_link_local()
     }
 
@@ -3447,8 +3860,7 @@ impl ChatterClient {
     pub async fn resolve_username_link(
         &self,
         url: &str,
-    ) -> Result<(String, crate::domain::ids::UserId), crate::services::user::UserError>
-    {
+    ) -> Result<(String, crate::domain::ids::UserId), crate::services::user::UserError> {
         // An identified server request, like `lookup_by_username`.
         if self.anon_mode_enabled() {
             return Err(crate::services::user::UserError::HandleLookupForbiddenInAnonMode);
@@ -3482,13 +3894,14 @@ impl ChatterClient {
         }
         match self.users().refresh_profile_if_stale(user_id).await {
             Ok(Some(profile)) => {
-                self.event_bus().emit_domain(DomainEvent::UserProfileUpdated {
-                    user_id: *user_id,
-                    display_name: profile.display_name,
-                    status_message: profile.status_message.map(|s| s.text),
-                    avatar_bytes: profile.avatar_bytes,
-                    timestamp: chrono::Utc::now().timestamp_millis() as u64,
-                });
+                self.event_bus()
+                    .emit_domain(DomainEvent::UserProfileUpdated {
+                        user_id: *user_id,
+                        display_name: profile.display_name,
+                        status_message: profile.status_message.map(|s| s.text),
+                        avatar_bytes: profile.avatar_bytes,
+                        timestamp: chrono::Utc::now().timestamp_millis() as u64,
+                    });
             }
             Ok(None) => {}
             Err(e) => tracing::warn!(peer_id = %user_id, error = %e, "profile refresh failed"),
@@ -3509,7 +3922,8 @@ impl ChatterClient {
         match self.users().refresh_profile_if_stale(&me).await {
             Ok(Some(profile)) => {
                 if let Some(device_id) = self.auth_state().get().device_id {
-                    self.auth_state().set_logged_in(me, device_id, profile.display_name.clone());
+                    self.auth_state()
+                        .set_logged_in(me, device_id, profile.display_name.clone());
                 }
                 Some(profile)
             }
@@ -3594,11 +4008,13 @@ impl ChatterClient {
                     &self.services.channel_repo,
                     id,
                 );
-                self.messages().get_messages_local(id, &conv_type, None, limit)
+                self.messages()
+                    .get_messages_local(id, &conv_type, None, limit)
             }
             ActiveConversation::ServerDm { peer_id } => {
                 let id: crate::domain::ids::ChannelId = (*peer_id).into();
-                self.messages().get_messages_local(&id, &ConversationType::ServerDm, None, limit)
+                self.messages()
+                    .get_messages_local(&id, &ConversationType::ServerDm, None, limit)
             }
             ActiveConversation::AnonDm(id) => {
                 // Anon DM messages live in the anon_dm service's own store;
@@ -3606,17 +4022,20 @@ impl ChatterClient {
                 // branch on conversation type.
                 self.anon_dms()
                     .get_messages(id, None, limit as i32)
-                    .map_err(|e| crate::services::message::MessageError::Storage(
-                        crate::error::StorageError::InvalidData(e.to_string()),
-                    ))
+                    .map_err(|e| {
+                        crate::services::message::MessageError::Storage(
+                            crate::error::StorageError::InvalidData(e.to_string()),
+                        )
+                    })
             }
-            ActiveConversation::AnonGroup(id) => {
-                self.anon_groups()
-                    .get_messages(id, None, limit as i32)
-                    .map_err(|e| crate::services::message::MessageError::Storage(
+            ActiveConversation::AnonGroup(id) => self
+                .anon_groups()
+                .get_messages(id, None, limit as i32)
+                .map_err(|e| {
+                    crate::services::message::MessageError::Storage(
                         crate::error::StorageError::InvalidData(e.to_string()),
-                    ))
-            }
+                    )
+                }),
             _ => Ok(vec![]),
         }
     }
@@ -3666,13 +4085,15 @@ impl ChatterClient {
         // makes: auto-away after idle, the return to online on activity, login
         // with a persisted manual mode.
         if let Some(me) = self.session_current_user_id() {
-            let _ = self.services.event_bus.domain_sender().send(
-                DomainEvent::UserPresenceChanged {
-                    user_id: me,
-                    presence,
-                    timestamp: chrono::Utc::now().timestamp_millis() as u64,
-                },
-            );
+            let _ =
+                self.services
+                    .event_bus
+                    .domain_sender()
+                    .send(DomainEvent::UserPresenceChanged {
+                        user_id: me,
+                        presence,
+                        timestamp: chrono::Utc::now().timestamp_millis() as u64,
+                    });
         }
     }
 
@@ -3697,7 +4118,8 @@ impl ChatterClient {
         &self,
         provider: &str,
     ) -> Result<Vec<(String, String)>, ClientError> {
-        self.ai().list_models_by_name(provider)
+        self.ai()
+            .list_models_by_name(provider)
             .await
             .map_err(|e| ClientError::Inbox(e.to_string()))
     }
@@ -3710,7 +4132,8 @@ impl ChatterClient {
         model: &str,
         channel_id: &str,
     ) -> Result<(), ClientError> {
-        self.ai().create_integration_for_channel(name, provider, model, channel_id)
+        self.ai()
+            .create_integration_for_channel(name, provider, model, channel_id)
             .await
             .map_err(|e| ClientError::Inbox(e.to_string()))
     }
@@ -3720,7 +4143,9 @@ impl ChatterClient {
     /// to inspect call state.
     #[cfg(feature = "media")]
     pub async fn handle_remote_hangup(&self, call_id: &str) -> Result<(), ClientError> {
-        let call_worker = self.call_service().get()
+        let call_worker = self
+            .call_service()
+            .get()
             .ok_or_else(|| ClientError::Inbox("call service not initialized".into()))?;
         self.call_signaling()
             .handle_remote_hangup(call_worker, Some(call_id))
@@ -3752,14 +4177,16 @@ impl ChatterClient {
 
     /// Enable or disable sending read receipts, on every one of our devices.
     pub fn set_read_receipts_enabled(&self, enabled: bool) -> Result<(), SessionError> {
-        self.sessions().set_bool_setting(settings_keys::SEND_READ_RECEIPTS, enabled)?;
+        self.sessions()
+            .set_bool_setting(settings_keys::SEND_READ_RECEIPTS, enabled)?;
         self.sync_configuration_to_own_devices();
         Ok(())
     }
 
     /// Enable or disable typing indicators, on every one of our devices.
     pub fn set_typing_indicators_enabled(&self, enabled: bool) -> Result<(), SessionError> {
-        self.sessions().set_bool_setting(settings_keys::SHOW_TYPING_INDICATORS, enabled)?;
+        self.sessions()
+            .set_bool_setting(settings_keys::SHOW_TYPING_INDICATORS, enabled)?;
         self.sync_configuration_to_own_devices();
         Ok(())
     }
@@ -3776,19 +4203,27 @@ impl ChatterClient {
             crate::util::time::TimestampNanos::now().as_u64(),
         );
         self.services.runtime_handle.spawn(async move {
-            let devices = messages.sync_to_own_devices(&mut messages.auth_client(), content).await;
+            let devices = messages
+                .sync_to_own_devices(&mut messages.auth_client(), content)
+                .await;
             tracing::info!(devices, "ConfigurationSync sent to our other devices");
         });
     }
 
     /// Check if read receipts are enabled (defaults to true).
     pub fn read_receipts_enabled(&self) -> Result<bool, SessionError> {
-        Ok(self.sessions().get_bool_setting(settings_keys::SEND_READ_RECEIPTS)?.unwrap_or(true))
+        Ok(self
+            .sessions()
+            .get_bool_setting(settings_keys::SEND_READ_RECEIPTS)?
+            .unwrap_or(true))
     }
 
     /// Check if typing indicators are enabled (defaults to true).
     pub fn typing_indicators_enabled(&self) -> Result<bool, SessionError> {
-        Ok(self.sessions().get_bool_setting(settings_keys::SHOW_TYPING_INDICATORS)?.unwrap_or(true))
+        Ok(self
+            .sessions()
+            .get_bool_setting(settings_keys::SHOW_TYPING_INDICATORS)?
+            .unwrap_or(true))
     }
 
     // ── Lifecycle ───────────────────────────────────────────────────
@@ -3845,7 +4280,8 @@ impl ChatterClient {
         // Publish OFFLINE presence so our friends see us go offline. Best-effort
         // and done BEFORE the gRPC disconnect below so the RPC can still reach the
         // server (set_presence awaits the identified UpdatePresence internally).
-        self.set_presence(crate::domain::user::PresenceStatus::Offline).await;
+        self.set_presence(crate::domain::user::PresenceStatus::Offline)
+            .await;
 
         // Disconnect gRPC
         self.services.auth_service.disconnect();
@@ -3898,7 +4334,7 @@ impl ChatterClient {
         &self,
         level: crate::services::notification_service::NotificationDetailLevel,
     ) -> Result<(), crate::error::StorageError> {
-        use crate::storage::repositories::settings_repo::{keys, SettingsRepository};
+        use crate::storage::repositories::settings_repo::{SettingsRepository, keys};
         SettingsRepository::new(self.services.database.clone())
             .set_string(keys::NOTIFICATION_DETAIL_LEVEL, level.as_str())?;
         self.services.notification_service.set_detail_level(level);
@@ -3975,7 +4411,7 @@ impl ChatterClient {
         // disabled server-side (or we haven't logged in since the field was
         // added) — nothing to subscribe to.
         let topic = {
-            use crate::storage::repositories::settings_repo::{keys, SettingsRepository};
+            use crate::storage::repositories::settings_repo::{SettingsRepository, keys};
             SettingsRepository::new(self.services.database.clone())
                 .get_string(keys::PUSH_TOPIC)
                 .ok()
@@ -4038,10 +4474,7 @@ impl ChatterClient {
                         }
                     }
                     Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
-                        tracing::warn!(
-                            dropped = n,
-                            "Push wake-up router lagged — dropped events"
-                        );
+                        tracing::warn!(dropped = n, "Push wake-up router lagged — dropped events");
                     }
                     Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
                 }
@@ -4055,12 +4488,11 @@ impl ChatterClient {
             tasks.push(h_router);
         }
 
-        tracing::info!(topic = %topic, "Ntfy push listener configured");
+        tracing::info!("Ntfy push listener configured");
         Ok(())
     }
 
     // ── Escape hatches ──────────────────────────────────────────────────
-
 }
 
 impl Drop for ChatterClient {
@@ -4092,19 +4524,26 @@ pub struct UploadedAttachments {
 // Private helpers
 // =============================================================================
 
-async fn upload_attachments(pending: &[PendingAttachment], attachment_service: &AttachmentService) -> Result<UploadedAttachments, AttachmentError> {
+async fn upload_attachments(
+    pending: &[PendingAttachment],
+    attachment_service: &AttachmentService,
+) -> Result<UploadedAttachments, AttachmentError> {
     let mut pointers = Vec::with_capacity(pending.len());
     let mut attachments = Vec::with_capacity(pending.len());
     for att in pending {
         if let Some(pointer) = &att.pointer {
             pointers.push(pointer.clone());
-            if let Ok(Some(full_att)) = attachment_service.get(&att.id) { attachments.push(full_att); }
+            if let Ok(Some(full_att)) = attachment_service.get(&att.id) {
+                attachments.push(full_att);
+            }
             continue;
         }
         match attachment_service.upload_to_cdn_encrypted(&att.path).await {
             Ok(res) => {
                 pointers.push(res.to_attachment_pointer());
-                if let Ok(Some(full_att)) = attachment_service.get(&res.attachment_id) { attachments.push(full_att); }
+                if let Ok(Some(full_att)) = attachment_service.get(&res.attachment_id) {
+                    attachments.push(full_att);
+                }
             }
             Err(e) => {
                 // Propagate rather than silently dropping the attachment: if this
@@ -4116,7 +4555,10 @@ async fn upload_attachments(pending: &[PendingAttachment], attachment_service: &
             }
         }
     }
-    Ok(UploadedAttachments { pointers, attachments })
+    Ok(UploadedAttachments {
+        pointers,
+        attachments,
+    })
 }
 
 /// Received group-call keys handled at once by the call-policy listener;
@@ -4154,34 +4596,62 @@ fn roster_changes(
     before: &std::collections::HashSet<String>,
     now: &std::collections::HashSet<String>,
 ) -> (Vec<String>, Vec<String>) {
-    (before.difference(now).cloned().collect(), now.difference(before).cloned().collect())
+    (
+        before.difference(now).cloned().collect(),
+        now.difference(before).cloned().collect(),
+    )
 }
 
 fn build_intent(
-    conversation: ActiveConversation, text: &str, attachment_pointers: Vec<AttachmentPointer>,
-    quote: Option<QuoteIntent>, options: &SendOptions, channel_service: &ChannelService,
+    conversation: ActiveConversation,
+    text: &str,
+    attachment_pointers: Vec<AttachmentPointer>,
+    quote: Option<QuoteIntent>,
+    options: &SendOptions,
+    channel_service: &ChannelService,
 ) -> Result<OutgoingIntent, SendError> {
     match conversation {
         ActiveConversation::AnonDm(id) => Ok(OutgoingIntent::AnonDm {
-            conversation_id: id, text: text.to_string(), attachment_pointers, quote,
+            conversation_id: id,
+            text: text.to_string(),
+            attachment_pointers,
+            quote,
         }),
         ActiveConversation::AnonGroup(id) => Ok(OutgoingIntent::AnonGroup {
-            group_id: id, text: text.to_string(), attachment_pointers, quote,
+            group_id: id,
+            text: text.to_string(),
+            attachment_pointers,
+            quote,
         }),
         ActiveConversation::ServerDm { peer_id } => Ok(OutgoingIntent::ServerDm {
-            peer_id, text: text.to_string(), attachment_pointers, quote,
+            peer_id,
+            text: text.to_string(),
+            attachment_pointers,
+            quote,
         }),
         ActiveConversation::Channel(id) => {
-            let is_saved = channel_service.get_channel_local(&id).ok().flatten()
-                .map(|c| c.channel_type == ChannelType::SavedMessages).unwrap_or(false);
+            let is_saved = channel_service
+                .get_channel_local(&id)
+                .ok()
+                .flatten()
+                .map(|c| c.channel_type == ChannelType::SavedMessages)
+                .unwrap_or(false);
             if is_saved {
-                let att_ids = attachment_pointers.iter()
-                    .map(|p| crate::domain::AttachmentId::from_cdn_key(&p.cdn_key)).collect();
-                Ok(OutgoingIntent::SavedMessages { text: text.to_string(), attachment_ids: att_ids })
+                let att_ids = attachment_pointers
+                    .iter()
+                    .map(|p| crate::domain::AttachmentId::from_cdn_key(&p.cdn_key))
+                    .collect();
+                Ok(OutgoingIntent::SavedMessages {
+                    text: text.to_string(),
+                    attachment_ids: att_ids,
+                })
             } else {
                 Ok(OutgoingIntent::Channel {
-                    channel_id: id, text: text.to_string(), attachment_pointers,
-                    file_paths: vec![], thread_id: options.thread_id,
+                    channel_id: id,
+                    text: text.to_string(),
+                    attachment_pointers,
+                    file_paths: vec![],
+                    thread_id: options.thread_id,
                     mentioned_integrations: options.mentioned_integrations.clone(),
                     targets_ai_bot: options.targets_ai_bot,
                     quote,
@@ -4257,13 +4727,19 @@ mod upload_attachments_tests {
         let input = tempfile::NamedTempFile::new().unwrap();
         std::fs::write(input.path(), &payload).unwrap();
 
-        let pending = vec![pending_for(input.path().to_path_buf(), payload.len() as u64)];
+        let pending = vec![pending_for(
+            input.path().to_path_buf(),
+            payload.len() as u64,
+        )];
         let result = upload_attachments(&pending, &svc).await;
-
 
         match result {
             Err(AttachmentError::EncryptionError(msg)) => {
-                assert!(msg.contains("attachment too large"), "unexpected msg: {}", msg);
+                assert!(
+                    msg.contains("attachment too large"),
+                    "unexpected msg: {}",
+                    msg
+                );
             }
             other => panic!(
                 "expected propagated AttachmentError::EncryptionError(AttachmentTooLarge), got {:?}",
@@ -4320,10 +4796,19 @@ mod transport_switch_tests {
         client.rebuild_transport_loops().await;
 
         // Shutdown fired and the slot was taken.
-        assert!(rx.try_recv().is_ok(), "push shutdown signal must fire on anon enter");
-        assert!(client.push_shutdown.lock().is_none(), "push slot must be cleared");
+        assert!(
+            rx.try_recv().is_ok(),
+            "push shutdown signal must fire on anon enter"
+        );
+        assert!(
+            client.push_shutdown.lock().is_none(),
+            "push slot must be cleared"
+        );
         // The URL is remembered so exit can restore it.
-        assert_eq!(client.push_url.lock().clone(), Some("http://push.example".into()));
+        assert_eq!(
+            client.push_url.lock().clone(),
+            Some("http://push.example".into())
+        );
 
         // Idempotent: second enter with no live listener does not panic.
         client.rebuild_transport_loops().await;
@@ -4344,8 +4829,14 @@ mod transport_switch_tests {
         client.rebuild_transport_loops().await;
 
         // anon=false → push must be left intact (no shutdown fired).
-        assert!(rx.try_recv().is_err(), "push must not be suspended when live anon=false");
-        assert!(client.push_shutdown.lock().is_some(), "push slot must be preserved");
+        assert!(
+            rx.try_recv().is_err(),
+            "push must not be suspended when live anon=false"
+        );
+        assert!(
+            client.push_shutdown.lock().is_some(),
+            "push slot must be preserved"
+        );
     }
 
     /// Fix 1: `refresh_client` on the group fanout runs without deadlock and is
@@ -4409,7 +4900,10 @@ mod transport_switch_tests {
         assert!(!client.shield_available());
         assert!(client.set_shield_before_login(true).is_err());
         assert!(!client.anon_mode_enabled());
-        assert_eq!(client.services.grpc_pool.transport_mode(), TransportMode::Direct);
+        assert_eq!(
+            client.services.grpc_pool.transport_mode(),
+            TransportMode::Direct
+        );
     }
 
     /// Signed-out startup contacts nothing: no boot connect, no reachability
@@ -4440,11 +4934,24 @@ mod transport_switch_tests {
 
         let started = std::time::Instant::now();
         assert!(!client.startup_connect(Duration::from_secs(5)).await);
-        assert!(started.elapsed() < Duration::from_secs(1), "signed-out startup must not dial");
-        assert!(!client.server_unreachable(), "no contact yet: unreachable would be a guess");
-        assert!(!client.server_monitor_started.load(Ordering::SeqCst), "monitor must wait");
+        assert!(
+            started.elapsed() < Duration::from_secs(1),
+            "signed-out startup must not dial"
+        );
+        assert!(
+            !client.server_unreachable(),
+            "no contact yet: unreachable would be a guess"
+        );
+        assert!(
+            !client.server_monitor_started.load(Ordering::SeqCst),
+            "monitor must wait"
+        );
         tokio::time::sleep(Duration::from_secs(6)).await; // past one monitor tick
-        assert_eq!(accepts.load(Ordering::SeqCst), 0, "signed-out startup dialled the server");
+        assert_eq!(
+            accepts.load(Ordering::SeqCst),
+            0,
+            "signed-out startup dialled the server"
+        );
 
         // The user picks Shield, then signs up: still nothing direct.
         client
@@ -4454,12 +4961,26 @@ mod transport_switch_tests {
         client.set_shield_before_login(true).unwrap();
         let _ = tokio::time::timeout(
             Duration::from_secs(5),
-            client.register("deferred", "pw-123456789012", "D", "dev", None, Some("correct-horse-9")),
+            client.register(
+                "deferred",
+                "pw-123456789012",
+                "D",
+                "dev",
+                None,
+                Some("correct-horse-9"),
+            ),
         )
         .await;
-        assert!(client.server_monitor_started.load(Ordering::SeqCst), "first contact starts the monitor");
+        assert!(
+            client.server_monitor_started.load(Ordering::SeqCst),
+            "first contact starts the monitor"
+        );
         tokio::time::sleep(Duration::from_secs(6)).await; // monitor never probes on onion
-        assert_eq!(accepts.load(Ordering::SeqCst), 0, "Shield sign-up after a deferred start dialled direct");
+        assert_eq!(
+            accepts.load(Ordering::SeqCst),
+            0,
+            "Shield sign-up after a deferred start dialled direct"
+        );
 
         // Control: Shield off, a direct connect does reach the listener.
         client.set_shield_before_login(false).unwrap();
@@ -4470,7 +4991,10 @@ mod transport_switch_tests {
             }
             tokio::time::sleep(Duration::from_millis(100)).await;
         }
-        assert!(accepts.load(Ordering::SeqCst) > 0, "listener should see the direct dial");
+        assert!(
+            accepts.load(Ordering::SeqCst) > 0,
+            "listener should see the direct dial"
+        );
     }
 
     /// The owner requirement: with Shield chosen before sign-in, onboarding
@@ -4516,44 +5040,83 @@ mod transport_switch_tests {
             .expect("build client");
         client.set_server_url(&direct_url).unwrap();
         let fake_onion = format!("http://{}.onion:443", "a".repeat(56));
-        client.services.grpc_pool.set_onion_address(Some(fake_onion));
+        client
+            .services
+            .grpc_pool
+            .set_onion_address(Some(fake_onion));
 
         assert!(client.shield_available());
-        client.set_shield_before_login(true).expect("Shield before login");
-        assert!(client.anon_mode_enabled(), "the session must come up in Shield");
-        assert_eq!(client.services.grpc_pool.transport_mode(), TransportMode::Onion);
+        client
+            .set_shield_before_login(true)
+            .expect("Shield before login");
+        assert!(
+            client.anon_mode_enabled(),
+            "the session must come up in Shield"
+        );
+        assert_eq!(
+            client.services.grpc_pool.transport_mode(),
+            TransportMode::Onion
+        );
 
         // The register form always re-applies its Server URL field.
         client.set_server_url(&direct_url).unwrap();
-        assert!(client.endpoint().contains(".onion"), "a URL change must not leave onion");
+        assert!(
+            client.endpoint().contains(".onion"),
+            "a URL change must not leave onion"
+        );
 
         let budget = Duration::from_secs(5);
         let registered = tokio::time::timeout(
             budget,
-            client.register("shieldtest", "pw-123456789012", "S", "dev", None, Some("correct-horse-9")),
+            client.register(
+                "shieldtest",
+                "pw-123456789012",
+                "S",
+                "dev",
+                None,
+                Some("correct-horse-9"),
+            ),
         )
         .await;
-        assert!(!matches!(registered, Ok(Ok(_))), "fake .onion cannot register");
+        assert!(
+            !matches!(registered, Ok(Ok(_))),
+            "fake .onion cannot register"
+        );
         let logged_in = tokio::time::timeout(
             budget,
             client.login("shieldtest", "pw-123456789012", "dev", None),
         )
         .await;
-        assert!(!matches!(logged_in, Ok(Ok(_))), "fake .onion cannot sign in");
+        assert!(
+            !matches!(logged_in, Ok(Ok(_))),
+            "fake .onion cannot sign in"
+        );
         let connected = tokio::time::timeout(budget, client.connect()).await;
         assert!(!matches!(connected, Ok(Ok(()))));
         // Storage transfers (link-device archive) ride Tor too, never direct.
         let uploaded = tokio::time::timeout(
             budget,
-            client.message_backup().upload_link_archive(b"archive", &format!("{direct_url}/blob")),
+            client
+                .message_backup()
+                .upload_link_archive(b"archive", &format!("{direct_url}/blob")),
         )
         .await;
         assert!(!matches!(uploaded, Ok(Ok(()))));
 
         tokio::time::sleep(Duration::from_millis(200)).await;
-        assert_eq!(accepts.load(Ordering::SeqCst), 0, "Shield onboarding dialled the server directly");
-        assert!(client.anon_mode_enabled(), "a failed onion dial must not drop Shield");
-        assert_eq!(client.services.grpc_pool.transport_mode(), TransportMode::Onion);
+        assert_eq!(
+            accepts.load(Ordering::SeqCst),
+            0,
+            "Shield onboarding dialled the server directly"
+        );
+        assert!(
+            client.anon_mode_enabled(),
+            "a failed onion dial must not drop Shield"
+        );
+        assert_eq!(
+            client.services.grpc_pool.transport_mode(),
+            TransportMode::Onion
+        );
 
         // Sanity: the counter sees a direct dial once Shield is off.
         client.set_shield_before_login(false).unwrap();
@@ -4564,7 +5127,10 @@ mod transport_switch_tests {
             }
             tokio::time::sleep(Duration::from_millis(100)).await;
         }
-        assert!(accepts.load(Ordering::SeqCst) > 0, "listener should see the direct dial");
+        assert!(
+            accepts.load(Ordering::SeqCst) > 0,
+            "listener should see the direct dial"
+        );
     }
 }
 
@@ -4609,7 +5175,10 @@ mod unread_badge_tests {
         client
             .messages()
             .settings_repo
-            .set_string(crate::storage::repositories::settings_repo::keys::CURRENT_USER_ID, &me.to_string())
+            .set_string(
+                crate::storage::repositories::settings_repo::keys::CURRENT_USER_ID,
+                &me.to_string(),
+            )
             .unwrap();
         let users = &client.messages().user_repo;
         users.ensure_user_exists(&me).unwrap();
@@ -4626,10 +5195,24 @@ mod unread_badge_tests {
         befriend(&client, peer);
         let mut anon_dm = crate::domain::anon_dm::AnonDm::new_initiated(UserId::new());
         anon_dm.status = crate::domain::anon_dm::AnonDmStatus::Active;
-        client.anon_dms().anon_dm_repo().insert_conversation(&anon_dm).unwrap();
+        client
+            .anon_dms()
+            .anon_dm_repo()
+            .insert_conversation(&anon_dm)
+            .unwrap();
         let anon = anon_dm.id;
-        receive(&client, ChannelId::from(peer), ConversationType::ServerDm, 1);
-        receive(&client, ChannelId::from(peer), ConversationType::ServerDm, 2);
+        receive(
+            &client,
+            ChannelId::from(peer),
+            ConversationType::ServerDm,
+            1,
+        );
+        receive(
+            &client,
+            ChannelId::from(peer),
+            ConversationType::ServerDm,
+            2,
+        );
         receive(&client, anon.into(), ConversationType::AnonDm, 3);
 
         let dm = ActiveConversation::ServerDm { peer_id: peer };
@@ -4657,7 +5240,12 @@ mod unread_badge_tests {
 
         // A DM with someone who is not a friend (unfriended, or never one)
         // and a channel we are not in: neither has a row.
-        receive(&client, ChannelId::from(UserId::new()), ConversationType::ServerDm, 1);
+        receive(
+            &client,
+            ChannelId::from(UserId::new()),
+            ConversationType::ServerDm,
+            1,
+        );
         receive(&client, ChannelId::new(), ConversationType::Channel, 2);
         assert_eq!(client.unread_conversation_count(), 0);
 
@@ -4682,7 +5270,12 @@ mod unread_badge_tests {
         client.messages().store_message_local(&call).expect("store");
         assert_eq!(client.unread_conversation_count(), 0);
 
-        receive(&client, ChannelId::from(friend), ConversationType::ServerDm, 4);
+        receive(
+            &client,
+            ChannelId::from(friend),
+            ConversationType::ServerDm,
+            4,
+        );
         assert_eq!(client.unread_conversation_count(), 1);
     }
 
@@ -4710,7 +5303,9 @@ mod unread_badge_tests {
         // The subscriber reads the stored timer when it handles a message, and
         // on this current-thread runtime it only runs once the test awaits: so
         // receive each change before moving the stored timer on.
-        async fn next_change(changes: &mut tokio::sync::broadcast::Receiver<ChannelId>) -> ChannelId {
+        async fn next_change(
+            changes: &mut tokio::sync::broadcast::Receiver<ChannelId>,
+        ) -> ChannelId {
             tokio::time::timeout(Duration::from_secs(2), changes.recv())
                 .await
                 .expect("a change")
@@ -4726,14 +5321,19 @@ mod unread_badge_tests {
             .settings_repo
             .set(
                 &format!("conv.disappearing.server_dm.{peer}"),
-                &crate::services::disappearing::DmTimer { seconds: 3_600, version: 2 },
+                &crate::services::disappearing::DmTimer {
+                    seconds: 3_600,
+                    version: 2,
+                },
             )
             .expect("set timer");
         bus.emit_domain(dm(3)); // healed to 1 hour: fires
         assert_eq!(next_change(&mut changes).await, ChannelId::from(peer));
 
         assert!(
-            tokio::time::timeout(Duration::from_millis(200), changes.recv()).await.is_err(),
+            tokio::time::timeout(Duration::from_millis(200), changes.recv())
+                .await
+                .is_err(),
             "a message restating the same timer is not a change"
         );
     }

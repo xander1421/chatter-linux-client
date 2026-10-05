@@ -65,12 +65,8 @@ impl MeshConversation {
     pub fn conversation_id(&self) -> ChannelId {
         match self {
             Self::Room => ChannelId::from_uuid(derive(ROOM_KEY)),
-            Self::Geohash(cell) => {
-                ChannelId::from_uuid(derive(&format!("{GEOHASH_KEY}{cell}")))
-            }
-            Self::Dm(peer) => {
-                ChannelId::from_uuid(derive(&format!("{DM_KEY}{}", peer.as_str())))
-            }
+            Self::Geohash(cell) => ChannelId::from_uuid(derive(&format!("{GEOHASH_KEY}{cell}"))),
+            Self::Dm(peer) => ChannelId::from_uuid(derive(&format!("{DM_KEY}{}", peer.as_str()))),
         }
     }
 
@@ -243,8 +239,7 @@ fn file_row(
         millis_to_nanos(timestamp_ms),
     );
     message.id = wire_message_id(wire_id);
-    message.content =
-        MessageContent::Mixed(MixedContent::attachments_only(vec![attachment]));
+    message.content = MessageContent::Mixed(MixedContent::attachments_only(vec![attachment]));
     // Both, because the two are read by different consumers. `content` is what
     // `attachments_of` and the storage layer go through; `attachments` is the field
     // the UI converter resolves against, and it is not derived from the content.
@@ -371,7 +366,10 @@ mod tests {
         let dm = MeshConversation::Dm(peer("abcdef0123456789")).conversation_id();
 
         assert_eq!(room, MeshConversation::Room.conversation_id());
-        assert_eq!(a, MeshConversation::Geohash("u4pruy".into()).conversation_id());
+        assert_eq!(
+            a,
+            MeshConversation::Geohash("u4pruy".into()).conversation_id()
+        );
         assert_ne!(a, b);
         assert_ne!(room, a);
         assert_ne!(dm, room);
@@ -449,7 +447,10 @@ mod tests {
 
     #[test]
     fn timestamps_become_nanoseconds_without_wrapping() {
-        assert_eq!(millis_to_nanos(1_700_000_000_000), 1_700_000_000_000_000_000);
+        assert_eq!(
+            millis_to_nanos(1_700_000_000_000),
+            1_700_000_000_000_000_000
+        );
         assert_eq!(millis_to_nanos(u64::MAX), u64::MAX);
     }
 

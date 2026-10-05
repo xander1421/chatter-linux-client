@@ -13,7 +13,8 @@ use std::time::{Duration, Instant};
 /// Create a unique temp directory for a test to avoid SQLite lock contention
 /// when multiple tests run in parallel.
 fn test_data_dir(test_name: &str) -> String {
-    let dir = std::env::temp_dir().join(format!("chatter-test-{}-{}", test_name, std::process::id()));
+    let dir =
+        std::env::temp_dir().join(format!("chatter-test-{}-{}", test_name, std::process::id()));
     std::fs::create_dir_all(&dir).expect("create test data dir");
     crate::common::headless(&dir);
     dir.to_string_lossy().into_owned()
@@ -31,7 +32,10 @@ async fn test_appcontext_three_tier_initialization() {
     let start = Instant::now();
     let data_dir = test_data_dir("appcontext_init");
 
-    let ctx = chatter_core::app::AppContext::with_config(Some("https://localhost:50051".to_string()), Some(data_dir));
+    let ctx = chatter_core::app::AppContext::with_config(
+        Some("https://localhost:50051".to_string()),
+        Some(data_dir),
+    );
 
     // A hang detector, not a performance budget. This was `< 30s` and failed at
     // 44s inside `make test-rust`, where the whole workspace runs in parallel —
@@ -68,7 +72,10 @@ async fn test_appcontext_three_tier_initialization() {
             // a successful `build()` above already proves they constructed.
 
             // Tier 3: State stores are initialized
-            assert!(!client.auth_state().is_logged_in(), "Should not be logged in on fresh init");
+            assert!(
+                !client.auth_state().is_logged_in(),
+                "Should not be logged in on fresh init"
+            );
             let _ = client.chat_state();
             let _ = client.message_state();
             let _ = client.user_state();

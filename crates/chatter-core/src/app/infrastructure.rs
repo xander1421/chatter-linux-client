@@ -20,8 +20,8 @@ use crate::storage::repositories::{
 #[cfg(feature = "jarvis")]
 use crate::storage::repositories::{JarvisGraphRepository, JarvisMemoryRepository};
 use crate::storage::{
-    AttachmentRepository, ChannelRepository, Database, KeyStore,
-    MessageRepository, SearchIndex, SettingsRepository, UserRepository,
+    AttachmentRepository, ChannelRepository, Database, KeyStore, MessageRepository, SearchIndex,
+    SettingsRepository, UserRepository,
 };
 use crate::system::{Directories, Keyring};
 
@@ -44,7 +44,6 @@ pub(crate) fn resolve_server_url(explicit: Option<String>) -> String {
         .or_else(|| env::var(SERVER_URL_ENV).ok())
         .unwrap_or_else(|| DEFAULT_SERVER_URL.to_string())
 }
-
 
 /// Infrastructure container holding low-level dependencies.
 ///
@@ -123,11 +122,11 @@ pub struct InfrastructureContainer {
     // Mailbox infrastructure
     /// Token manager for blind-signed anonymous mailbox and call room tokens.
     pub(crate) token_manager: Arc<TokenManager>,
-    
+
     // Event infrastructure
     /// Event bus for domain events.
     pub(crate) event_bus: crate::events::EventBus,
-    
+
     // Shared post-boot services (initialized later)
     /// Group fanout for multi-device messaging.
     pub group_fanout: Arc<std::sync::OnceLock<Arc<crate::mailbox::group::GroupFanout>>>,
@@ -200,7 +199,11 @@ impl InfrastructureContainer {
                     .duration_since(std::time::UNIX_EPOCH)
                     .map(|d| d.as_secs())
                     .unwrap_or(0);
-                for p in [&db_path, &db_path.with_extension("db-wal"), &db_path.with_extension("db-shm")] {
+                for p in [
+                    &db_path,
+                    &db_path.with_extension("db-wal"),
+                    &db_path.with_extension("db-shm"),
+                ] {
                     if !p.exists() {
                         continue;
                     }
@@ -261,7 +264,8 @@ impl InfrastructureContainer {
         let anon_group_repo = Arc::new(AnonGroupRepository::new(database.clone()));
         let anon_dm_repo = Arc::new(AnonDmRepository::new(database.clone()));
         let ephemeral_repo = Arc::new(EphemeralRepository::new(database.clone()));
-        let unified_conversation_repo = Arc::new(UnifiedConversationRepository::new(database.clone()));
+        let unified_conversation_repo =
+            Arc::new(UnifiedConversationRepository::new(database.clone()));
         #[cfg(feature = "jarvis")]
         let jarvis_memory_repo = Arc::new(JarvisMemoryRepository::new(database.clone()));
         #[cfg(feature = "jarvis")]
@@ -361,12 +365,14 @@ impl InfrastructureContainer {
         let err = |e: String| ContextError::System(crate::error::SystemError::Keyring(e));
         let key_file = directories.data_dir().join(".db_key");
 
-        if let Some(existing) = sealed_secret::read(&key_file, sealed_secret::DB_ALIAS, wrap).map_err(|e| {
-            err(format!(
-                "{e}. The database is left untouched; the app cannot open it on this device. \
+        if let Some(existing) = sealed_secret::read(&key_file, sealed_secret::DB_ALIAS, wrap)
+            .map_err(|e| {
+                err(format!(
+                    "{e}. The database is left untouched; the app cannot open it on this device. \
                  Reinstall (clearing app data) to start over."
-            ))
-        })? {
+                ))
+            })?
+        {
             tracing::info!("unsealed the database passphrase with the Android Keystore");
             return Ok(existing.to_string());
         }
@@ -403,7 +409,10 @@ impl InfrastructureContainer {
     /// The passphrase lives in `.db_key` in the app data directory, sealed
     /// under an Android Keystore key (`system::sealed_secret`), so a copy of
     /// the app's files does not contain it.
-    fn passphrase_or_generate(keyring: &Keyring, directories: &Directories) -> Result<String, ContextError> {
+    fn passphrase_or_generate(
+        keyring: &Keyring,
+        directories: &Directories,
+    ) -> Result<String, ContextError> {
         #[cfg(target_os = "android")]
         {
             let _ = keyring;
@@ -455,11 +464,18 @@ impl InfrastructureContainer {
             let mut bytes = [0u8; 32];
             // OsRng for the DB master passphrase (highest-value key) — matches
             // the crate's stated RNG policy, not the ThreadRng userspace CSPRNG.
-            { use rand::TryRngCore; rand::rngs::OsRng.try_fill_bytes(&mut bytes).expect("OS CSPRNG must not fail"); }
+            {
+                use rand::TryRngCore;
+                rand::rngs::OsRng
+                    .try_fill_bytes(&mut bytes)
+                    .expect("OS CSPRNG must not fail");
+            }
             let passphrase = hex::encode(bytes);
 
             // Store in keyring with retries
-            tracing::info!("Please unlock your password manager to store the database passphrase...");
+            tracing::info!(
+                "Please unlock your password manager to store the database passphrase..."
+            );
             keyring.set_passphrase_with_retry(&passphrase, MAX_RETRIES, RETRY_DELAY_SECS)?;
 
             // Verify it was stored correctly
@@ -494,7 +510,10 @@ mod android_passphrase_tests {
         let on_disk = std::fs::read_to_string(dirs.data_dir().join(".db_key")).unwrap();
         assert!(on_disk.starts_with("ks1:") && !on_disk.contains(&first));
         std::fs::write(dirs.database_path(), b"db").unwrap();
-        assert_eq!(InfrastructureContainer::android_passphrase(&dirs, &OK).unwrap(), first);
+        assert_eq!(
+            InfrastructureContainer::android_passphrase(&dirs, &OK).unwrap(),
+            first
+        );
     }
 
     #[test]
@@ -503,8 +522,14 @@ mod android_passphrase_tests {
         InfrastructureContainer::android_passphrase(&dirs, &OK).unwrap();
         std::fs::write(dirs.database_path(), b"db").unwrap();
         let key_before = std::fs::read(dirs.data_dir().join(".db_key")).unwrap();
-        assert!(InfrastructureContainer::android_passphrase(&dirs, &FakeWrap { fail_unseal: true }).is_err());
-        assert_eq!(std::fs::read(dirs.data_dir().join(".db_key")).unwrap(), key_before);
+        assert!(
+            InfrastructureContainer::android_passphrase(&dirs, &FakeWrap { fail_unseal: true })
+                .is_err()
+        );
+        assert_eq!(
+            std::fs::read(dirs.data_dir().join(".db_key")).unwrap(),
+            key_before
+        );
         assert_eq!(std::fs::read(dirs.database_path()).unwrap(), b"db");
     }
 
@@ -522,7 +547,10 @@ mod android_passphrase_tests {
         let legacy = "ab".repeat(32);
         std::fs::write(dirs.data_dir().join(".db_key"), &legacy).unwrap();
         std::fs::write(dirs.database_path(), b"db").unwrap();
-        assert_eq!(InfrastructureContainer::android_passphrase(&dirs, &OK).unwrap(), legacy);
+        assert_eq!(
+            InfrastructureContainer::android_passphrase(&dirs, &OK).unwrap(),
+            legacy
+        );
         let on_disk = std::fs::read_to_string(dirs.data_dir().join(".db_key")).unwrap();
         assert!(on_disk.starts_with("ks1:") && !on_disk.contains(&legacy));
     }

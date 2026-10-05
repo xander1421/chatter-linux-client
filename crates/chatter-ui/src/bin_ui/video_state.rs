@@ -91,11 +91,8 @@ pub fn take_frame() -> Option<FrameData> {
 /// * `data` - Video data bytes
 /// * `filename` - Display filename
 /// * `on_ready` - Callback invoked when video is ready (duration, duration_str) or error
-pub fn start_video_from_memory_async<F>(
-    data: Vec<u8>,
-    filename: String,
-    on_ready: F,
-) where
+pub fn start_video_from_memory_async<F>(data: Vec<u8>, filename: String, on_ready: F)
+where
     F: FnOnce(Result<(f64, String), String>) + Send + 'static,
 {
     // Stop any existing playback
@@ -192,7 +189,11 @@ pub fn start_video_from_range_async<F>(
                     }
 
                     let duration_str = chatter_core::media::format_duration(duration);
-                    tracing::info!("HW video started (streaming): {}s ({})", duration, duration_str);
+                    tracing::info!(
+                        "HW video started (streaming): {}s ({})",
+                        duration,
+                        duration_str
+                    );
                     on_ready(Ok((duration, duration_str)));
                 }
                 None => {
@@ -212,11 +213,8 @@ pub fn start_video_from_range_async<F>(
 }
 
 /// Start video playback using software rendering.
-fn start_video_software<F>(
-    data: Vec<u8>,
-    filename: String,
-    on_ready: F,
-) where
+fn start_video_software<F>(data: Vec<u8>, filename: String, on_ready: F)
+where
     F: FnOnce(Result<(f64, String), String>) + Send + 'static,
 {
     USING_GL_VIDEO.store(false, Ordering::SeqCst);
@@ -229,21 +227,22 @@ fn start_video_software<F>(
         .name("video-loader".into())
         .spawn(move || {
             // Start the video player from memory
-            let player = match VideoPlayer::start_from_memory(data, move |width, height, rgb_data| {
-                if let Ok(mut buffer) = frame_buffer.lock() {
-                    *buffer = Some(FrameData {
-                        width,
-                        height,
-                        rgb_data,
-                    });
-                }
-            }) {
-                Ok(p) => p,
-                Err(e) => {
-                    on_ready(Err(e.to_string()));
-                    return;
-                }
-            };
+            let player =
+                match VideoPlayer::start_from_memory(data, move |width, height, rgb_data| {
+                    if let Ok(mut buffer) = frame_buffer.lock() {
+                        *buffer = Some(FrameData {
+                            width,
+                            height,
+                            rgb_data,
+                        });
+                    }
+                }) {
+                    Ok(p) => p,
+                    Err(e) => {
+                        on_ready(Err(e.to_string()));
+                        return;
+                    }
+                };
 
             // CRITICAL: Store player IMMEDIATELY after creation to prevent race condition.
             // If stop_video() is called while we're in the loading poll loop below,
@@ -263,7 +262,10 @@ fn start_video_software<F>(
                 let state = player_state.get_state();
 
                 if !state.loading {
-                    tracing::debug!("Video player finished loading: duration={}s", state.duration);
+                    tracing::debug!(
+                        "Video player finished loading: duration={}s",
+                        state.duration
+                    );
                     break;
                 }
 
@@ -305,7 +307,10 @@ fn start_video_software<F>(
 /// IMPORTANT: This function handles both UI and non-UI thread calls.
 /// For GL video, it stops directly if on UI thread, otherwise schedules on UI thread.
 pub fn stop_video() {
-    tracing::info!("stop_video called, USING_GL_VIDEO={}", USING_GL_VIDEO.load(Ordering::SeqCst));
+    tracing::info!(
+        "stop_video called, USING_GL_VIDEO={}",
+        USING_GL_VIDEO.load(Ordering::SeqCst)
+    );
 
     // Stop hardware video if active
     // CRITICAL: GL video state is thread_local - must stop on UI thread

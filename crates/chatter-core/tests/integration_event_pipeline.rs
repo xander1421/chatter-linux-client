@@ -15,7 +15,11 @@ fn test_event_bus_domain_publish_subscribe() {
     let user_id = UserId::new();
     let channel_id = ChannelId::new();
 
-    let sent = bus.emit_domain(DomainEvent::TypingStarted { user_id, channel_id, timestamp: 0 });
+    let sent = bus.emit_domain(DomainEvent::TypingStarted {
+        user_id,
+        channel_id,
+        timestamp: 0,
+    });
     assert!(sent > 0, "Should have at least one subscriber");
 
     let event = rx.try_recv().expect("Should receive the domain event");
@@ -77,7 +81,11 @@ fn test_domain_event_key_variants() {
     let channel_id = ChannelId::new();
     let message_id = MessageId::new();
 
-    let typing = DomainEvent::TypingStarted { user_id, channel_id, timestamp: 0 };
+    let typing = DomainEvent::TypingStarted {
+        user_id,
+        channel_id,
+        timestamp: 0,
+    };
     let _ = typing.clone();
     let _ = format!("{:?}", typing);
 

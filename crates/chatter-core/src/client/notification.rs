@@ -60,14 +60,17 @@ impl ChatterClient {
 
         #[cfg(feature = "media")]
         if let Some(call_worker) = self.services.call_service.get() {
-            let bridge_handle = crate::services::call_notification_bridge::spawn_call_notification_bridge(
-                call_worker.subscribe_call_events(),
-                self.services.notification_service.clone(),
-            );
+            let bridge_handle =
+                crate::services::call_notification_bridge::spawn_call_notification_bridge(
+                    call_worker.subscribe_call_events(),
+                    self.services.notification_service.clone(),
+                );
             self.tasks.lock().push(bridge_handle);
             tracing::info!("call → notification bridge started");
         } else {
-            tracing::warn!("call service not ready — call ring notifications disabled this session");
+            tracing::warn!(
+                "call service not ready — call ring notifications disabled this session"
+            );
         }
     }
 
@@ -114,10 +117,18 @@ impl ChatterClient {
     pub async fn account_push_enabled(&self) -> Result<bool, crate::error::NetworkError> {
         self.session_current_user_id()
             .ok_or(crate::error::NetworkError::Unauthenticated)?;
-        let preferences = self.services.grpc_pool.notification_client()
-            .get_preferences().await?
-            .preferences.ok_or_else(|| crate::error::NetworkError::ServerError(
-                "notification preferences missing from response".into()))?;
+        let preferences = self
+            .services
+            .grpc_pool
+            .notification_client()
+            .get_preferences()
+            .await?
+            .preferences
+            .ok_or_else(|| {
+                crate::error::NetworkError::ServerError(
+                    "notification preferences missing from response".into(),
+                )
+            })?;
         Ok(preferences.push_enabled)
     }
 
@@ -130,19 +141,31 @@ impl ChatterClient {
         self.session_current_user_id()
             .ok_or(crate::error::NetworkError::Unauthenticated)?;
         let mut notification_client = self.services.grpc_pool.notification_client();
-        let mut preferences = notification_client.get_preferences().await?
-            .preferences.ok_or_else(|| crate::error::NetworkError::ServerError(
-                "notification preferences missing from response".into()))?;
+        let mut preferences = notification_client
+            .get_preferences()
+            .await?
+            .preferences
+            .ok_or_else(|| {
+                crate::error::NetworkError::ServerError(
+                    "notification preferences missing from response".into(),
+                )
+            })?;
         preferences.push_enabled = enabled;
-        let saved = notification_client.update_preferences(preferences).await?
-            .preferences.ok_or_else(|| crate::error::NetworkError::ServerError(
-                "notification preferences missing from response".into()))?;
+        let saved = notification_client
+            .update_preferences(preferences)
+            .await?
+            .preferences
+            .ok_or_else(|| {
+                crate::error::NetworkError::ServerError(
+                    "notification preferences missing from response".into(),
+                )
+            })?;
         Ok(saved.push_enabled)
     }
 
     /// Whether message notifications make a sound (desktop; default on).
     pub fn notification_sound_enabled(&self) -> bool {
-        use crate::storage::repositories::settings_repo::{keys, SettingsRepository};
+        use crate::storage::repositories::settings_repo::{SettingsRepository, keys};
         SettingsRepository::new(self.services.database.clone())
             .get_bool(keys::NOTIFICATION_SOUND)
             .ok()
@@ -156,10 +179,12 @@ impl ChatterClient {
         &self,
         enabled: bool,
     ) -> Result<(), crate::error::StorageError> {
-        use crate::storage::repositories::settings_repo::{keys, SettingsRepository};
+        use crate::storage::repositories::settings_repo::{SettingsRepository, keys};
         SettingsRepository::new(self.services.database.clone())
             .set_bool(keys::NOTIFICATION_SOUND, enabled)?;
-        self.services.notification_service.set_sound_enabled(enabled);
+        self.services
+            .notification_service
+            .set_sound_enabled(enabled);
         Ok(())
     }
 }

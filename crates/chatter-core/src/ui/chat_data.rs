@@ -90,7 +90,10 @@ pub fn sidebar_time_at(
 /// run of messages, so the list draws a chip wherever the label changes.
 #[must_use]
 pub fn day_label(datetime: DateTime<Utc>) -> String {
-    day_label_at(datetime.with_timezone(&Local).date_naive(), Local::now().date_naive())
+    day_label_at(
+        datetime.with_timezone(&Local).date_naive(),
+        Local::now().date_naive(),
+    )
 }
 
 fn day_label_at(day: chrono::NaiveDate, today: chrono::NaiveDate) -> String {
@@ -137,27 +140,25 @@ pub fn extract_content_text(content: &MessageContent) -> String {
         MessageContent::Mixed(mixed) => mixed.text.clone().unwrap_or_default(),
         MessageContent::AI(ai) => ai.text.clone(),
         MessageContent::System(sys) => sys.description(),
-        MessageContent::Call(call) => {
-            match call.call_type {
-                crate::domain::message::CallMessageType::Started => {
-                    format!("{} started a call", call.initiator_name)
-                }
-                crate::domain::message::CallMessageType::Ended => {
-                    let duration = call.duration_display().unwrap_or_default();
-                    if duration.is_empty() {
-                        "Call ended".to_string()
-                    } else {
-                        format!("Call ended ({duration})")
-                    }
-                }
-                crate::domain::message::CallMessageType::Missed => {
-                    format!("Missed call from {}", call.initiator_name)
-                }
-                crate::domain::message::CallMessageType::Declined => {
-                    format!("Declined call from {}", call.initiator_name)
+        MessageContent::Call(call) => match call.call_type {
+            crate::domain::message::CallMessageType::Started => {
+                format!("{} started a call", call.initiator_name)
+            }
+            crate::domain::message::CallMessageType::Ended => {
+                let duration = call.duration_display().unwrap_or_default();
+                if duration.is_empty() {
+                    "Call ended".to_string()
+                } else {
+                    format!("Call ended ({duration})")
                 }
             }
-        }
+            crate::domain::message::CallMessageType::Missed => {
+                format!("Missed call from {}", call.initiator_name)
+            }
+            crate::domain::message::CallMessageType::Declined => {
+                format!("Declined call from {}", call.initiator_name)
+            }
+        },
         MessageContent::Encrypted(_) => "[Encrypted message]".to_string(),
         MessageContent::SealedSender(_) => "[Encrypted message]".to_string(),
     }

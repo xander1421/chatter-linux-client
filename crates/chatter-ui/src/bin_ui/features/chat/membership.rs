@@ -7,12 +7,16 @@
 
 use std::sync::Arc;
 
-use chatter_core::client::membership::{BannerSeverity, ChannelAccessView, ChannelMembershipHeader};
 use chatter_core::client::ChatterClient;
+use chatter_core::client::membership::{
+    BannerSeverity, ChannelAccessView, ChannelMembershipHeader,
+};
 use chatter_core::domain::ids::{ChannelId, UserId};
 use slint::{ComponentHandle, ModelRc, VecModel};
 
-use crate::{InviteLinkRowData, JoinRequestRowData, MainWindow, MembershipGlobal, ServerOperatedRowData};
+use crate::{
+    InviteLinkRowData, JoinRequestRowData, MainWindow, MembershipGlobal, ServerOperatedRowData,
+};
 
 /// UI thread only.
 pub fn apply_header(w: &MainWindow, header: &ChannelMembershipHeader) {
@@ -44,7 +48,10 @@ fn apply_access(w: &MainWindow, view: &ChannelAccessView) {
     let links: Vec<InviteLinkRowData> = view
         .invite_links
         .iter()
-        .map(|l| InviteLinkRowData { id: l.id.as_str().into(), summary: l.summary.as_str().into() })
+        .map(|l| InviteLinkRowData {
+            id: l.id.as_str().into(),
+            summary: l.summary.as_str().into(),
+        })
         .collect();
     g.set_invite_links(ModelRc::new(VecModel::from(links)));
     let requests: Vec<JoinRequestRowData> = view
@@ -59,7 +66,10 @@ fn apply_access(w: &MainWindow, view: &ChannelAccessView) {
     let bots: Vec<ServerOperatedRowData> = view
         .server_operated
         .iter()
-        .map(|b| ServerOperatedRowData { name: b.name.as_str().into(), label: b.label.into() })
+        .map(|b| ServerOperatedRowData {
+            name: b.name.as_str().into(),
+            label: b.label.into(),
+        })
         .collect();
     g.set_server_operated(ModelRc::new(VecModel::from(bots)));
 }
@@ -75,7 +85,11 @@ pub fn reset_access(w: &MainWindow) {
 }
 
 /// Fetch the Access pane from core and show it.
-pub fn load_access(weak: slint::Weak<MainWindow>, ui_ctx: Arc<ChatterClient>, channel_id: ChannelId) {
+pub fn load_access(
+    weak: slint::Weak<MainWindow>,
+    ui_ctx: Arc<ChatterClient>,
+    channel_id: ChannelId,
+) {
     tokio::spawn(async move {
         let view = ui_ctx.channel_access_view(&channel_id).await;
         let _ = slint::invoke_from_event_loop(move || {
@@ -96,9 +110,17 @@ fn parse_user(id: &str) -> Option<UserId> {
 
 /// Run one Access-pane action: busy while it runs, then the outcome in the
 /// status line, the pane reloaded, and the open channel's banner refreshed.
-fn run_action<F>(weak: slint::Weak<MainWindow>, ui_ctx: Arc<ChatterClient>, channel_id: ChannelId, done: &'static str, action: F)
-where
-    F: std::future::Future<Output = Result<Option<String>, chatter_core::services::channel::ChannelError>> + Send + 'static,
+fn run_action<F>(
+    weak: slint::Weak<MainWindow>,
+    ui_ctx: Arc<ChatterClient>,
+    channel_id: ChannelId,
+    done: &'static str,
+    action: F,
+) where
+    F: std::future::Future<
+            Output = Result<Option<String>, chatter_core::services::channel::ChannelError>,
+        > + Send
+        + 'static,
 {
     let busy = weak.clone();
     let _ = slint::invoke_from_event_loop(move || {
@@ -140,11 +162,21 @@ pub fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
 
     let (weak, ctx) = (window.as_weak(), ui_ctx.clone());
     g.on_create_link(move |channel_id, needs_approval| {
-        let Some(channel_id) = parse_channel(&channel_id) else { return };
+        let Some(channel_id) = parse_channel(&channel_id) else {
+            return;
+        };
         let c = ctx.clone();
-        run_action(weak.clone(), ctx.clone(), channel_id, "Link created. Copy it now: it cannot be shown again.", async move {
-            c.create_channel_invite_link(&channel_id, needs_approval).await.map(Some)
-        });
+        run_action(
+            weak.clone(),
+            ctx.clone(),
+            channel_id,
+            "Link created. Copy it now: it cannot be shown again.",
+            async move {
+                c.create_channel_invite_link(&channel_id, needs_approval)
+                    .await
+                    .map(Some)
+            },
+        );
     });
 
     let weak = window.as_weak();
@@ -155,34 +187,67 @@ pub fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
         }
         std::thread::spawn(move || super::actions::copy_text(&link));
         if let Some(w) = weak.upgrade() {
-            w.global::<MembershipGlobal>().set_access_status("Link copied".into());
+            w.global::<MembershipGlobal>()
+                .set_access_status("Link copied".into());
         }
     });
 
     let (weak, ctx) = (window.as_weak(), ui_ctx.clone());
     g.on_revoke_link(move |channel_id, link_id| {
-        let Some(channel_id) = parse_channel(&channel_id) else { return };
+        let Some(channel_id) = parse_channel(&channel_id) else {
+            return;
+        };
         let (c, link_id) = (ctx.clone(), link_id.to_string());
-        run_action(weak.clone(), ctx.clone(), channel_id, "Link revoked", async move {
-            c.revoke_channel_invite_link(&channel_id, &link_id).await.map(|()| None)
-        });
+        run_action(
+            weak.clone(),
+            ctx.clone(),
+            channel_id,
+            "Link revoked",
+            async move {
+                c.revoke_channel_invite_link(&channel_id, &link_id)
+                    .await
+                    .map(|()| None)
+            },
+        );
     });
 
     let (weak, ctx) = (window.as_weak(), ui_ctx.clone());
     g.on_approve_request(move |channel_id, user_id| {
-        let (Some(channel_id), Some(user_id)) = (parse_channel(&channel_id), parse_user(&user_id)) else { return };
+        let (Some(channel_id), Some(user_id)) = (parse_channel(&channel_id), parse_user(&user_id))
+        else {
+            return;
+        };
         let c = ctx.clone();
-        run_action(weak.clone(), ctx.clone(), channel_id, "Request approved", async move {
-            c.approve_channel_join_request(&channel_id, &user_id).await.map(|()| None)
-        });
+        run_action(
+            weak.clone(),
+            ctx.clone(),
+            channel_id,
+            "Request approved",
+            async move {
+                c.approve_channel_join_request(&channel_id, &user_id)
+                    .await
+                    .map(|()| None)
+            },
+        );
     });
 
     let (weak, ctx) = (window.as_weak(), ui_ctx.clone());
     g.on_reject_request(move |channel_id, user_id| {
-        let (Some(channel_id), Some(user_id)) = (parse_channel(&channel_id), parse_user(&user_id)) else { return };
+        let (Some(channel_id), Some(user_id)) = (parse_channel(&channel_id), parse_user(&user_id))
+        else {
+            return;
+        };
         let c = ctx.clone();
-        run_action(weak.clone(), ctx.clone(), channel_id, "Request rejected", async move {
-            c.reject_channel_join_request(&channel_id, &user_id).await.map(|()| None)
-        });
+        run_action(
+            weak.clone(),
+            ctx.clone(),
+            channel_id,
+            "Request rejected",
+            async move {
+                c.reject_channel_join_request(&channel_id, &user_id)
+                    .await
+                    .map(|()| None)
+            },
+        );
     });
 }

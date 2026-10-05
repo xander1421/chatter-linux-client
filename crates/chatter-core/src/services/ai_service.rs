@@ -74,7 +74,10 @@ pub struct AIService {
 impl AIService {
     /// Create a new AIService with dependencies.
     pub fn new(settings_repo: Arc<SettingsRepository>, grpc_pool: Arc<GrpcClientPool>) -> Self {
-        Self { settings_repo, grpc_pool }
+        Self {
+            settings_repo,
+            grpc_pool,
+        }
     }
 
     /// Create an IntegrationClient for internal use.
@@ -94,7 +97,10 @@ impl AIService {
     /// # Arguments
     ///
     /// * `provider` - AI provider type (Claude, OpenAI, GoogleAi, etc.)
-    pub async fn list_models(&self, provider: IntegrationType) -> Result<Vec<AvailableModel>, AIError> {
+    pub async fn list_models(
+        &self,
+        provider: IntegrationType,
+    ) -> Result<Vec<AvailableModel>, AIError> {
         // Check logged in
         let _ = self.settings_repo.current_user_id()?;
 
@@ -140,7 +146,10 @@ impl AIService {
     /// # Arguments
     ///
     /// * `channel_id` - Channel to query integrations for
-    pub async fn get_channel_integrations(&self, channel_id: &str) -> Result<Vec<Integration>, AIError> {
+    pub async fn get_channel_integrations(
+        &self,
+        channel_id: &str,
+    ) -> Result<Vec<Integration>, AIError> {
         // Check logged in
         let _ = self.settings_repo.current_user_id()?;
 
@@ -160,13 +169,19 @@ impl AIService {
     ///
     /// * `integration_id` - Integration to add
     /// * `channel_id` - Target channel
-    pub async fn attach_to_channel(&self, integration_id: &str, channel_id: &str) -> Result<(), AIError> {
+    pub async fn attach_to_channel(
+        &self,
+        integration_id: &str,
+        channel_id: &str,
+    ) -> Result<(), AIError> {
         // Check logged in
         let _ = self.settings_repo.current_user_id()?;
 
         // Call server
         let mut client = self.client();
-        client.add_integration_to_channel(integration_id, channel_id).await?;
+        client
+            .add_integration_to_channel(integration_id, channel_id)
+            .await?;
 
         Ok(())
     }
@@ -180,13 +195,19 @@ impl AIService {
     ///
     /// * `integration_id` - Integration to remove
     /// * `channel_id` - Target channel
-    pub async fn detach_from_channel(&self, integration_id: &str, channel_id: &str) -> Result<(), AIError> {
+    pub async fn detach_from_channel(
+        &self,
+        integration_id: &str,
+        channel_id: &str,
+    ) -> Result<(), AIError> {
         // Check logged in
         let _ = self.settings_repo.current_user_id()?;
 
         // Call server
         let mut client = self.client();
-        client.remove_integration_from_channel(integration_id, channel_id).await?;
+        client
+            .remove_integration_from_channel(integration_id, channel_id)
+            .await?;
 
         Ok(())
     }
@@ -215,7 +236,9 @@ impl AIService {
 
         // Call server
         let mut client = self.client();
-        let response = client.create_integration(name, provider as i32, config).await?;
+        let response = client
+            .create_integration(name, provider as i32, config)
+            .await?;
 
         // Return integration from response
         response.integration.ok_or_else(|| {
@@ -239,9 +262,9 @@ impl AIService {
         let response = client.get_integration(integration_id).await?;
 
         // Return integration from response
-        response.integration.ok_or_else(|| {
-            AIError::ConfigurationError("integration not found".to_string())
-        })
+        response
+            .integration
+            .ok_or_else(|| AIError::ConfigurationError("integration not found".to_string()))
     }
 
     /// Test an integration's connectivity.
@@ -387,7 +410,9 @@ impl AIService {
             ..Default::default()
         };
 
-        let integration = self.create(name, Self::provider_type(provider), Some(config)).await?;
+        let integration = self
+            .create(name, Self::provider_type(provider), Some(config))
+            .await?;
 
         // If attach fails we have an orphan integration row on the server —
         // best-effort clean it up so the user doesn't accumulate dead entries.
@@ -430,12 +455,18 @@ mod tests {
     #[test]
     fn a_heartbeat_is_not_an_integration_event() {
         use crate::proto::chat_v1::{
-            stream_integration_events_response::Item, StreamHeartbeat, StreamIntegrationEventsResponse,
+            StreamHeartbeat, StreamIntegrationEventsResponse,
+            stream_integration_events_response::Item,
         };
-        let beat = StreamIntegrationEventsResponse { item: Some(Item::Heartbeat(StreamHeartbeat {})) };
+        let beat = StreamIntegrationEventsResponse {
+            item: Some(Item::Heartbeat(StreamHeartbeat {})),
+        };
         assert!(integration_event_of(Ok(beat)).is_none());
         let event = StreamIntegrationEventsResponse {
-            item: Some(Item::Event(IntegrationEvent { id: "e1".into(), ..Default::default() })),
+            item: Some(Item::Event(IntegrationEvent {
+                id: "e1".into(),
+                ..Default::default()
+            })),
         };
         assert!(matches!(integration_event_of(Ok(event)), Some(Ok(e)) if e.id == "e1"));
     }
@@ -466,10 +497,7 @@ mod tests {
     #[test]
     fn test_ai_service_construction() {
         // Verify the AIService struct type signatures compile correctly.
-        fn _verify_types(
-            settings_repo: Arc<SettingsRepository>,
-            grpc_pool: Arc<GrpcClientPool>,
-        ) {
+        fn _verify_types(settings_repo: Arc<SettingsRepository>, grpc_pool: Arc<GrpcClientPool>) {
             let _service = AIService::new(settings_repo, grpc_pool);
         }
     }

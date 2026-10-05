@@ -49,7 +49,10 @@ fn hmac_sha256(key: &[u8], data: &[u8]) -> Zeroizing<[u8; 32]> {
     Zeroizing::new(mac.finalize().into_bytes().into())
 }
 
-fn agreement(private: &libsignal_protocol::PrivateKey, public: &PublicKey) -> Result<Zeroizing<Vec<u8>>, CryptoError> {
+fn agreement(
+    private: &libsignal_protocol::PrivateKey,
+    public: &PublicKey,
+) -> Result<Zeroizing<Vec<u8>>, CryptoError> {
     private
         .calculate_agreement(public)
         .map(|s| Zeroizing::new(s.into_vec()))
@@ -74,7 +77,10 @@ fn apply_ctr(master: &[u8], synthetic_iv: &[u8], buf: &mut [u8]) {
 /// Encrypt `name` to the account identity key and return the serialized
 /// `DeviceName` the server stores. Errors when the encoding would exceed
 /// [`MAX_ENCODED_DEVICE_NAME_LEN`] (the server would reject it).
-pub fn encrypt_device_name(name: &str, account_identity: &IdentityKey) -> Result<Vec<u8>, CryptoError> {
+pub fn encrypt_device_name(
+    name: &str,
+    account_identity: &IdentityKey,
+) -> Result<Vec<u8>, CryptoError> {
     use rand::TryRngCore as _;
     let ephemeral = KeyPair::generate(&mut rand::rngs::OsRng.unwrap_err());
     encrypt_with_ephemeral(name, account_identity.public_key(), &ephemeral)
@@ -109,14 +115,21 @@ fn encrypt_with_ephemeral(
 /// Decrypt a serialized `DeviceName` with the account identity key pair.
 /// Fails on a malformed encoding, a wrong key, or any tampering with the
 /// ciphertext or synthetic IV (the recomputed IV will not match).
-pub fn decrypt_device_name(encoded: &[u8], account_identity: &IdentityKeyPair) -> Result<String, CryptoError> {
-    let msg = DeviceName::decode(encoded)
-        .map_err(|e| CryptoError::DecryptionFailed(format!("device name: malformed encoding: {e}")))?;
+pub fn decrypt_device_name(
+    encoded: &[u8],
+    account_identity: &IdentityKeyPair,
+) -> Result<String, CryptoError> {
+    let msg = DeviceName::decode(encoded).map_err(|e| {
+        CryptoError::DecryptionFailed(format!("device name: malformed encoding: {e}"))
+    })?;
     if msg.synthetic_iv.len() != SYNTHETIC_IV_LEN {
-        return Err(CryptoError::DecryptionFailed("device name: synthetic IV must be 16 bytes".into()));
+        return Err(CryptoError::DecryptionFailed(
+            "device name: synthetic IV must be 16 bytes".into(),
+        ));
     }
-    let ephemeral_public = PublicKey::deserialize(&msg.ephemeral_public)
-        .map_err(|e| CryptoError::DecryptionFailed(format!("device name: bad ephemeral key: {e}")))?;
+    let ephemeral_public = PublicKey::deserialize(&msg.ephemeral_public).map_err(|e| {
+        CryptoError::DecryptionFailed(format!("device name: bad ephemeral key: {e}"))
+    })?;
 
     let master = agreement(account_identity.private_key(), &ephemeral_public)?;
     let mut plaintext = Zeroizing::new(msg.ciphertext);
@@ -124,7 +137,9 @@ pub fn decrypt_device_name(encoded: &[u8], account_identity: &IdentityKeyPair) -
 
     let ours = synthetic_iv(&master, &plaintext);
     if !bool::from(ours.ct_eq(&msg.synthetic_iv[..])) {
-        return Err(CryptoError::DecryptionFailed("device name: synthetic IV did not match".into()));
+        return Err(CryptoError::DecryptionFailed(
+            "device name: synthetic IV did not match".into(),
+        ));
     }
     String::from_utf8(plaintext.to_vec())
         .map_err(|_| CryptoError::DecryptionFailed("device name: plaintext is not UTF-8".into()))
@@ -141,7 +156,10 @@ mod tests {
     }
 
     fn unhex(s: &str) -> Vec<u8> {
-        (0..s.len()).step_by(2).map(|i| u8::from_str_radix(&s[i..i + 2], 16).unwrap()).collect()
+        (0..s.len())
+            .step_by(2)
+            .map(|i| u8::from_str_radix(&s[i..i + 2], 16).unwrap())
+            .collect()
     }
 
     #[test]
@@ -173,7 +191,10 @@ mod tests {
         let enc = encrypt_device_name("v1.19.0 on Windows 10", id.identity_key()).unwrap();
         let bad = tampered(&enc, |m| m.ciphertext[0] ^= 0x01);
         let err = decrypt_device_name(&bad, &id).unwrap_err();
-        assert!(err.to_string().contains("synthetic IV did not match"), "{err}");
+        assert!(
+            err.to_string().contains("synthetic IV did not match"),
+            "{err}"
+        );
     }
 
     #[test]
@@ -182,7 +203,10 @@ mod tests {
         let enc = encrypt_device_name("v1.19.0 on Windows 10", id.identity_key()).unwrap();
         let bad = tampered(&enc, |m| m.synthetic_iv[15] ^= 0x80);
         let err = decrypt_device_name(&bad, &id).unwrap_err();
-        assert!(err.to_string().contains("synthetic IV did not match"), "{err}");
+        assert!(
+            err.to_string().contains("synthetic IV did not match"),
+            "{err}"
+        );
     }
 
     #[test]
@@ -217,23 +241,39 @@ mod tests {
     /// tests (ts/test-electron/Crypto_test.preload.ts) only round-trip.
     #[test]
     fn known_answer_vector() {
-        let id_priv = PrivateKey::deserialize(&unhex("a81f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f")).unwrap();
-        let eph_priv = PrivateKey::deserialize(&unhex("482e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e")).unwrap();
+        let id_priv = PrivateKey::deserialize(&unhex(
+            "a81f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f",
+        ))
+        .unwrap();
+        let eph_priv = PrivateKey::deserialize(&unhex(
+            "482e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e",
+        ))
+        .unwrap();
         let id_pub = id_priv.public_key().unwrap();
         let eph = KeyPair::new(eph_priv.public_key().unwrap(), eph_priv);
         let mut want_id_pub = vec![0x05];
-        want_id_pub.extend(unhex("4e474f99a20034bfa43290757c2f08fdbd40a8f1d6f4a5512b9c4ab46b5cc640"));
+        want_id_pub.extend(unhex(
+            "4e474f99a20034bfa43290757c2f08fdbd40a8f1d6f4a5512b9c4ab46b5cc640",
+        ));
         assert_eq!(id_pub.serialize().to_vec(), want_id_pub);
 
         let enc = encrypt_with_ephemeral("v1.19.0 on Windows 10", &id_pub, &eph).unwrap();
         let msg = DeviceName::decode(&enc[..]).unwrap();
         let mut want_eph = vec![0x05];
-        want_eph.extend(unhex("951806acbc98909b64cbcd52bd5f9734650c636f69154ba807d6dab436a58d6d"));
+        want_eph.extend(unhex(
+            "951806acbc98909b64cbcd52bd5f9734650c636f69154ba807d6dab436a58d6d",
+        ));
         assert_eq!(msg.ephemeral_public, want_eph);
         assert_eq!(msg.synthetic_iv, unhex("e37f1af6a98c2be5a2f50a34625d7ead"));
-        assert_eq!(msg.ciphertext, unhex("993a58cc39ad3a4d2dcf80f1d16d1b7df6e6b36916"));
+        assert_eq!(
+            msg.ciphertext,
+            unhex("993a58cc39ad3a4d2dcf80f1d16d1b7df6e6b36916")
+        );
 
         let pair = IdentityKeyPair::new(IdentityKey::new(id_pub), id_priv);
-        assert_eq!(decrypt_device_name(&enc, &pair).unwrap(), "v1.19.0 on Windows 10");
+        assert_eq!(
+            decrypt_device_name(&enc, &pair).unwrap(),
+            "v1.19.0 on Windows 10"
+        );
     }
 }

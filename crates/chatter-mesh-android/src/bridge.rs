@@ -111,7 +111,10 @@ impl Methods {
 /// the frozen table, so there is exactly one place a descriptor can be wrong
 /// and one test that checks it against the compiled Kotlin.
 fn descriptor(name: &str) -> Option<&'static str> {
-    BRIDGE_METHODS.iter().find(|(method, _)| *method == name).map(|(_, sig)| *sig)
+    BRIDGE_METHODS
+        .iter()
+        .find(|(method, _)| *method == name)
+        .map(|(_, sig)| *sig)
 }
 
 /// The JNI type descriptor of the bridge class, `Lcom/chatter/client/…;`.
@@ -122,9 +125,14 @@ fn instance_descriptor() -> String {
     format!("L{BRIDGE_CLASS};")
 }
 
-fn method_id(env: &mut JNIEnv<'_>, class: &GlobalRef, name: &'static str) -> Result<JMethodID, String> {
-    let sig = descriptor(name)
-        .ok_or_else(|| format!("{name} is not listed in BRIDGE_METHODS, so it has no descriptor"))?;
+fn method_id(
+    env: &mut JNIEnv<'_>,
+    class: &GlobalRef,
+    name: &'static str,
+) -> Result<JMethodID, String> {
+    let sig = descriptor(name).ok_or_else(|| {
+        format!("{name} is not listed in BRIDGE_METHODS, so it has no descriptor")
+    })?;
     match env.get_method_id(class, name, sig) {
         Ok(id) => Ok(id),
         Err(err) => {
@@ -133,7 +141,9 @@ fn method_id(env: &mut JNIEnv<'_>, class: &GlobalRef, name: &'static str) -> Res
             let described = error::drain_exception(env, &format!("GetMethodID {name}{sig}"));
             Err(format!(
                 "{name}{sig} is missing from the Kotlin bridge: {err}{}",
-                described.map(|text| format!(" ({text})")).unwrap_or_default()
+                described
+                    .map(|text| format!(" ({text})"))
+                    .unwrap_or_default()
             ))
         }
     }
@@ -185,7 +195,11 @@ impl Bridge {
         let value = match fetched {
             Ok(value) => value,
             Err(err) => {
-                return Err(error::jni_failure(env, "GetStaticObjectField(INSTANCE)", &err));
+                return Err(error::jni_failure(
+                    env,
+                    "GetStaticObjectField(INSTANCE)",
+                    &err,
+                ));
             }
         };
 
@@ -232,7 +246,9 @@ fn app_context() -> Option<JObject<'static>> {
 /// and carries on, so every later bridge call reports
 /// [`Failure::NotInitialised`] instead.
 pub fn install(env: &mut JNIEnv<'_>, class: &JClass<'_>) -> Result<(), String> {
-    let vm = env.get_java_vm().map_err(|err| format!("GetJavaVM failed: {err}"))?;
+    let vm = env
+        .get_java_vm()
+        .map_err(|err| format!("GetJavaVM failed: {err}"))?;
     let class = env
         .new_global_ref(class)
         .map_err(|err| format!("NewGlobalRef on the bridge class failed: {err}"))?;
@@ -247,7 +263,9 @@ pub fn install(env: &mut JNIEnv<'_>, class: &JClass<'_>) -> Result<(), String> {
             return Err(format!(
                 "{INSTANCE_FIELD} {descriptor} is missing from the Kotlin bridge, so the \
                  singleton cannot be reached: {err}{}",
-                described.map(|text| format!(" ({text})")).unwrap_or_default()
+                described
+                    .map(|text| format!(" ({text})"))
+                    .unwrap_or_default()
             ));
         }
     };
@@ -281,17 +299,25 @@ fn with_bridge<T>(
 ) -> Result<T, LinkError> {
     let to_error = |failure| error::link_error(op, subject, failure);
 
-    let bridge = BRIDGE.get().ok_or(Failure::NotInitialised).map_err(to_error)?;
+    let bridge = BRIDGE
+        .get()
+        .ok_or(Failure::NotInitialised)
+        .map_err(to_error)?;
     let mut env = bridge.env().map_err(to_error)?;
     let instance = bridge.instance(&mut env).map_err(to_error)?;
-    env.with_local_frame(LOCAL_FRAME_CAPACITY, |env| body(env, bridge, &instance)).map_err(to_error)
+    env.with_local_frame(LOCAL_FRAME_CAPACITY, |env| body(env, bridge, &instance))
+        .map_err(to_error)
 }
 
 /// Map a failed JNI call, draining any exception it left pending.
 ///
 /// Always used in two steps — evaluate the call, then classify — because the
 /// call needs `&mut JNIEnv` and the classification needs `&JNIEnv`.
-fn classify<T>(env: &JNIEnv<'_>, during: &str, result: jni::errors::Result<T>) -> Result<T, Failure> {
+fn classify<T>(
+    env: &JNIEnv<'_>,
+    during: &str,
+    result: jni::errors::Result<T>,
+) -> Result<T, Failure> {
     result.map_err(|err| error::jni_failure(env, during, &err))
 }
 
@@ -354,7 +380,11 @@ pub fn start() -> Result<(), LinkError> {
             )
         };
         let started = classify(env, "MeshBleBridge.start", called)?.z()?;
-        if started { Ok(()) } else { Err(Failure::Rejected) }
+        if started {
+            Ok(())
+        } else {
+            Err(Failure::Rejected)
+        }
     })
 }
 
@@ -382,7 +412,9 @@ pub fn set_scanning(on: bool) -> Result<(), LinkError> {
         // A `jvalue` is built directly rather than through `JValue::Bool`,
         // whose object type parameter is unconstrained for a primitive-only
         // argument list. Constructing a union is safe; only reading is not.
-        let args = [jvalue { z: if on { JNI_TRUE } else { JNI_FALSE } }];
+        let args = [jvalue {
+            z: if on { JNI_TRUE } else { JNI_FALSE },
+        }];
         // SAFETY: `setScanning` was resolved from BRIDGE_METHODS as `(Z)Z` on
         // this exact class, and is called with one boolean and read as one.
         let called = unsafe {
@@ -394,7 +426,11 @@ pub fn set_scanning(on: bool) -> Result<(), LinkError> {
             )
         };
         let accepted = classify(env, "MeshBleBridge.setScanning", called)?.z()?;
-        if accepted { Ok(()) } else { Err(Failure::Rejected) }
+        if accepted {
+            Ok(())
+        } else {
+            Err(Failure::Rejected)
+        }
     })
 }
 
@@ -431,7 +467,11 @@ pub fn connect(address: &str) -> Result<String, LinkError> {
 
         let handle = JString::from(returned);
         let read = env.get_string(&handle);
-        Ok(String::from(classify(env, "GetStringUTFChars(link id)", read)?))
+        Ok(String::from(classify(
+            env,
+            "GetStringUTFChars(link id)",
+            read,
+        )?))
     })
 }
 
@@ -499,7 +539,10 @@ pub fn send(handle: &str, bytes: &[u8]) -> Result<(), LinkError> {
         let target = classify(env, "NewStringUTF(link id)", created)?;
         let allocated = env.byte_array_from_slice(bytes);
         let payload = classify(env, "NewByteArray(payload)", allocated)?;
-        let args = [JValue::Object(&target).as_jni(), JValue::Object(&payload).as_jni()];
+        let args = [
+            JValue::Object(&target).as_jni(),
+            JValue::Object(&payload).as_jni(),
+        ];
 
         // SAFETY: `send` was resolved from BRIDGE_METHODS as
         // `(Ljava/lang/String;[B)Z` on this exact class, and is called with one
@@ -513,7 +556,11 @@ pub fn send(handle: &str, bytes: &[u8]) -> Result<(), LinkError> {
             )
         };
         let accepted = classify(env, "MeshBleBridge.send", called)?.z()?;
-        if accepted { Ok(()) } else { Err(Failure::Rejected) }
+        if accepted {
+            Ok(())
+        } else {
+            Err(Failure::Rejected)
+        }
     })
 }
 
@@ -552,7 +599,9 @@ pub fn max_write(handle: &str) -> Option<i32> {
     match queried {
         Ok(reported) => usable_max_write(reported),
         Err(err) => {
-            error::log_warn(&format!("mesh: maxWrite({handle}) failed, keeping the cached size: {err}"));
+            error::log_warn(&format!(
+                "mesh: maxWrite({handle}) failed, keeping the cached size: {err}"
+            ));
             None
         }
     }
@@ -591,7 +640,10 @@ mod tests {
         // rather than the strings.
         assert_eq!(descriptor("attach"), Some("(Landroid/content/Context;)V"));
         assert_eq!(descriptor("start"), Some("()Z"));
-        assert_eq!(descriptor("connect"), Some("(Ljava/lang/String;)Ljava/lang/String;"));
+        assert_eq!(
+            descriptor("connect"),
+            Some("(Ljava/lang/String;)Ljava/lang/String;")
+        );
         assert_eq!(descriptor("send"), Some("(Ljava/lang/String;[B)Z"));
         assert_eq!(descriptor("maxWrite"), Some("(Ljava/lang/String;)I"));
     }
@@ -613,10 +665,16 @@ mod tests {
         // all. Both are caught without a JVM.
         assert_eq!(RESOLVED.len(), BRIDGE_METHODS.len());
         for name in RESOLVED {
-            assert!(descriptor(name).is_some(), "{name} is resolved but not in BRIDGE_METHODS");
+            assert!(
+                descriptor(name).is_some(),
+                "{name} is resolved but not in BRIDGE_METHODS"
+            );
         }
         for (name, _) in BRIDGE_METHODS {
-            assert!(RESOLVED.contains(name), "{name} is in BRIDGE_METHODS but never resolved");
+            assert!(
+                RESOLVED.contains(name),
+                "{name} is in BRIDGE_METHODS but never resolved"
+            );
         }
     }
 

@@ -8,8 +8,8 @@ use std::time::Duration;
 
 use slint::{Image, Model, Timer, TimerMode, Weak};
 
-use crate::MainWindow;
 use super::MAX_INLINE_GIFS;
+use crate::MainWindow;
 
 thread_local! {
     /// Inline GIF animations for message thumbnails (attachment_id -> frames).
@@ -37,7 +37,10 @@ pub(crate) struct InlineGifState {
 
 impl InlineGifState {
     pub(crate) fn current_image(&self) -> Image {
-        self.frames.get(self.current_frame).cloned().unwrap_or_default()
+        self.frames
+            .get(self.current_frame)
+            .cloned()
+            .unwrap_or_default()
     }
 
     fn current_delay_ms(&self) -> u64 {
@@ -89,9 +92,7 @@ pub(super) fn insert_inline_gif(att_id: String, state: InlineGifState) {
 
 /// Get a clone of an inline GIF state (used by viewer module).
 pub(super) fn get_inline_gif(attachment_id: &str) -> Option<InlineGifState> {
-    INLINE_GIFS.with(|gifs| {
-        gifs.borrow().get(attachment_id).cloned()
-    })
+    INLINE_GIFS.with(|gifs| gifs.borrow().get(attachment_id).cloned())
 }
 
 /// Initialize inline GIF animation system.
@@ -250,7 +251,8 @@ fn stop_inline_timer() {
 /// The range is the list's own estimate (`message-*-visible-row`, each within
 /// a row), widened by one row either side.
 fn tick_inline_gifs(elapsed_ms: u64) {
-    let Some(w) = INLINE_WINDOW.with(|cell| cell.borrow().as_ref().and_then(|weak| weak.upgrade())) else {
+    let Some(w) = INLINE_WINDOW.with(|cell| cell.borrow().as_ref().and_then(|weak| weak.upgrade()))
+    else {
         return;
     };
     let messages = w.get_messages();
@@ -265,7 +267,9 @@ fn tick_inline_gifs(elapsed_ms: u64) {
     // Every visible occurrence of a registered GIF: (its attachments, index, row).
     let mut shown = Vec::new();
     for msg_idx in rows {
-        let Some(msg) = messages.row_data(msg_idx) else { continue };
+        let Some(msg) = messages.row_data(msg_idx) else {
+            continue;
+        };
         for att_idx in 0..msg.attachments.row_count() {
             if let Some(att) = msg.attachments.row_data(att_idx) {
                 if INLINE_GIFS.with(|gifs| gifs.borrow().contains_key(att.id.as_str())) {
@@ -294,8 +298,13 @@ fn tick_inline_gifs(elapsed_ms: u64) {
     });
 
     for (attachments, att_idx, mut att) in shown {
-        let Some(Some(frame)) = changed.get(att.id.as_str()) else { continue };
-        let Some(model) = attachments.as_any().downcast_ref::<slint::VecModel<crate::MessageAttachmentData>>() else {
+        let Some(Some(frame)) = changed.get(att.id.as_str()) else {
+            continue;
+        };
+        let Some(model) = attachments
+            .as_any()
+            .downcast_ref::<slint::VecModel<crate::MessageAttachmentData>>()
+        else {
             continue;
         };
         att.thumbnail = frame.clone();
@@ -308,7 +317,11 @@ fn tick_inline_gifs(elapsed_ms: u64) {
 /// one row either side, clamped to the model. `None` when the list reports no
 /// rows (`last == -1`: no list, or a conversation still loading) or the model
 /// is empty.
-fn rows_to_animate(first: i32, last: i32, row_count: usize) -> Option<std::ops::RangeInclusive<usize>> {
+fn rows_to_animate(
+    first: i32,
+    last: i32,
+    row_count: usize,
+) -> Option<std::ops::RangeInclusive<usize>> {
     if last < 0 || row_count == 0 {
         return None;
     }
@@ -324,13 +337,21 @@ fn rows_to_animate(first: i32, last: i32, row_count: usize) -> Option<std::ops::
 fn set_attachment_thumbnail(window: &MainWindow, attachment_id: &str, image: Image) {
     let messages = window.get_messages();
     for msg_idx in 0..messages.row_count() {
-        let Some(msg) = messages.row_data(msg_idx) else { continue };
+        let Some(msg) = messages.row_data(msg_idx) else {
+            continue;
+        };
         for att_idx in 0..msg.attachments.row_count() {
-            let Some(mut att) = msg.attachments.row_data(att_idx) else { continue };
+            let Some(mut att) = msg.attachments.row_data(att_idx) else {
+                continue;
+            };
             if att.id.as_str() != attachment_id {
                 continue;
             }
-            if let Some(model) = msg.attachments.as_any().downcast_ref::<slint::VecModel<crate::MessageAttachmentData>>() {
+            if let Some(model) = msg
+                .attachments
+                .as_any()
+                .downcast_ref::<slint::VecModel<crate::MessageAttachmentData>>()
+            {
                 att.thumbnail = image;
                 att.has_thumbnail = true;
                 model.set_row_data(att_idx, att);
@@ -444,7 +465,10 @@ pub fn register_gif_attachment(
         let att_id: chatter_core::domain::ids::AttachmentId = match attachment_id.parse() {
             Ok(id) => id,
             Err(_) => {
-                tracing::debug!("Invalid attachment ID for GIF registration: {}", attachment_id);
+                tracing::debug!(
+                    "Invalid attachment ID for GIF registration: {}",
+                    attachment_id
+                );
                 return;
             }
         };
@@ -484,10 +508,7 @@ pub fn register_gif_attachment(
             }
         };
 
-        tracing::debug!(
-            "Decoded first frame of GIF {} immediately",
-            attachment_id
-        );
+        tracing::debug!("Decoded first frame of GIF {} immediately", attachment_id);
 
         // Register first frame on UI thread immediately (for instant display)
         let att_id_for_ui = attachment_id.clone();
@@ -498,9 +519,11 @@ pub fn register_gif_attachment(
 
         let _ = slint::invoke_from_event_loop(move || {
             // Show first frame immediately
-            let first_image = crate::bin_ui::slint_conversions::rgba_to_slint_image(&first_rgba,
+            let first_image = crate::bin_ui::slint_conversions::rgba_to_slint_image(
+                &first_rgba,
                 first_width,
-                first_height,);
+                first_height,
+            );
 
             if let Some(w) = window_weak_clone.upgrade() {
                 set_attachment_thumbnail(&w, &att_id_for_ui, first_image);
@@ -509,8 +532,8 @@ pub fn register_gif_attachment(
         });
 
         // Now decode remaining frames progressively and start animation
-        use image::codecs::gif::GifDecoder;
         use image::AnimationDecoder;
+        use image::codecs::gif::GifDecoder;
         use std::io::Cursor;
 
         let cursor = Cursor::new(&data);
@@ -539,7 +562,11 @@ pub fn register_gif_attachment(
 
             let delay = frame.delay();
             let (numer, denom) = delay.numer_denom_ms();
-            let delay_ms = if denom == 0 { 100 } else { (numer as u64) / (denom as u64) };
+            let delay_ms = if denom == 0 {
+                100
+            } else {
+                (numer as u64) / (denom as u64)
+            };
             let delay_ms = delay_ms.max(20);
 
             let buffer = frame.into_buffer();
@@ -548,9 +575,7 @@ pub fn register_gif_attachment(
 
             // Convert to Slint pixel buffer IN THE BACKGROUND THREAD (Send)
             let pixel_buffer = slint::SharedPixelBuffer::<slint::Rgba8Pixel>::clone_from_slice(
-                &raw_data,
-                width,
-                height,
+                &raw_data, width, height,
             );
 
             all_buffers.push(pixel_buffer);
@@ -564,7 +589,9 @@ pub fn register_gif_attachment(
                 let att_id_batch = attachment_id.clone();
                 let weak_batch = window_weak.clone();
                 let _ = slint::invoke_from_event_loop(move || {
-                    if let Some(first_image) = register_inline_gif_from_buffers(&att_id_batch, buffers_batch, delays_batch) {
+                    if let Some(first_image) =
+                        register_inline_gif_from_buffers(&att_id_batch, buffers_batch, delays_batch)
+                    {
                         if let Some(w) = weak_batch.upgrade() {
                             set_attachment_thumbnail(&w, &att_id_batch, first_image);
                         }
@@ -585,13 +612,19 @@ pub fn register_gif_attachment(
 
         // Final update with all frames
         if all_buffers.len() > 1 {
-            crate::bin_ui::decode_cache::put_gif(&attachment_id, all_buffers.clone(), all_delays.clone());
+            crate::bin_ui::decode_cache::put_gif(
+                &attachment_id,
+                all_buffers.clone(),
+                all_delays.clone(),
+            );
             let att_id_full = attachment_id.clone();
             let weak_full = window_weak.clone();
             let buffers_full = all_buffers.clone();
             let delays_full = all_delays.clone();
             let _ = slint::invoke_from_event_loop(move || {
-                if let Some(first_image) = register_inline_gif_from_buffers(&att_id_full, buffers_full, delays_full) {
+                if let Some(first_image) =
+                    register_inline_gif_from_buffers(&att_id_full, buffers_full, delays_full)
+                {
                     if let Some(w) = weak_full.upgrade() {
                         set_attachment_thumbnail(&w, &att_id_full, first_image);
                     }

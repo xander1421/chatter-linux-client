@@ -1,6 +1,6 @@
 //! Message builder for creating test messages.
 
-use crate::framework::fixtures::{TestMessage, TestAttachment};
+use crate::framework::fixtures::{TestAttachment, TestMessage};
 
 /// Builder for creating test messages.
 pub struct MessageBuilder {
@@ -95,7 +95,9 @@ impl MessageBuilder {
             sender_id: self.sender_id.unwrap_or_default(),
             content: self.content,
             reply_to: self.reply_to,
-            timestamp: self.timestamp.unwrap_or_else(|| chrono::Utc::now().timestamp_millis()),
+            timestamp: self
+                .timestamp
+                .unwrap_or_else(|| chrono::Utc::now().timestamp_millis()),
             encrypted: self.encrypted,
             attachments: self.attachments,
             reactions: self.reactions,
@@ -105,12 +107,16 @@ impl MessageBuilder {
     /// Build multiple messages in sequence.
     pub fn build_conversation(messages: Vec<(&str, &str)>, channel_id: &str) -> Vec<TestMessage> {
         let base_time = chrono::Utc::now().timestamp_millis();
-        messages.into_iter().enumerate().map(|(i, (sender, content))| {
-            Self::text(content)
-                .from(sender)
-                .in_channel(channel_id)
-                .at_time(base_time + (i as i64 * 1000))
-                .build()
-        }).collect()
+        messages
+            .into_iter()
+            .enumerate()
+            .map(|(i, (sender, content))| {
+                Self::text(content)
+                    .from(sender)
+                    .in_channel(channel_id)
+                    .at_time(base_time + (i as i64 * 1000))
+                    .build()
+            })
+            .collect()
     }
 }

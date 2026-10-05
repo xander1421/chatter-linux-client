@@ -155,7 +155,12 @@ fn make_seal<R: CryptoRngCore>(
     rng: &mut R,
 ) -> Result<NostrEvent, NostrError> {
     let rumor_json = to_json(rumor)?;
-    let ciphertext = encrypt(&rumor_json, recipient_pubkey_hex, sender.secret(), &mut *rng)?;
+    let ciphertext = encrypt(
+        &rumor_json,
+        recipient_pubkey_hex,
+        sender.secret(),
+        &mut *rng,
+    )?;
 
     let seal = NostrEvent::unsigned(
         sender.public_key_hex().to_string(),
@@ -176,7 +181,12 @@ fn make_wrap<R: CryptoRngCore>(
 ) -> Result<NostrEvent, NostrError> {
     let seal_json = to_json(seal)?;
     let throwaway = throwaway_identity(&mut *rng)?;
-    let ciphertext = encrypt(&seal_json, recipient_pubkey_hex, throwaway.secret(), &mut *rng)?;
+    let ciphertext = encrypt(
+        &seal_json,
+        recipient_pubkey_hex,
+        throwaway.secret(),
+        &mut *rng,
+    )?;
 
     let wrap = NostrEvent::unsigned(
         throwaway.public_key_hex().to_string(),
@@ -189,9 +199,7 @@ fn make_wrap<R: CryptoRngCore>(
 }
 
 /// A single-use key for one wrap. Discarded the moment the wrap is signed.
-fn throwaway_identity<R: CryptoRngCore>(
-    rng: &mut R,
-) -> Result<NostrIdentity, NostrError> {
+fn throwaway_identity<R: CryptoRngCore>(rng: &mut R) -> Result<NostrIdentity, NostrError> {
     for _ in 0..MAX_KEY_ATTEMPTS {
         let mut secret = [0u8; 32];
         rng.fill_bytes(&mut secret);
@@ -293,8 +301,8 @@ mod tests {
         let (alice, bob) = (alice(), bob());
         let long = "a".repeat(4096);
         for message in ["", "héllo 🌍 / \\ \" \n\t", long.as_str()] {
-            let wrap = gift_wrap(message, bob.public_key_hex(), &alice, NOW, &mut rng(2))
-                .expect("wraps");
+            let wrap =
+                gift_wrap(message, bob.public_key_hex(), &alice, NOW, &mut rng(2)).expect("wraps");
             let (content, _, _) = unwrap_gift(&wrap, bob.secret()).expect("unwraps");
             assert_eq!(content, message);
         }
@@ -303,11 +311,13 @@ mod tests {
     #[test]
     fn the_wrap_is_kind_1059_signed_and_tagged_to_the_recipient() {
         let (alice, bob) = (alice(), bob());
-        let wrap =
-            gift_wrap("hi", bob.public_key_hex(), &alice, NOW, &mut rng(3)).expect("wraps");
+        let wrap = gift_wrap("hi", bob.public_key_hex(), &alice, NOW, &mut rng(3)).expect("wraps");
 
         assert_eq!(wrap.kind, 1059);
-        assert_eq!(wrap.tags, vec![vec!["p".to_string(), bob.public_key_hex().to_string()]]);
+        assert_eq!(
+            wrap.tags,
+            vec![vec!["p".to_string(), bob.public_key_hex().to_string()]]
+        );
         assert!(wrap.sig.is_some());
         assert!(verify_event(&wrap));
     }
@@ -315,8 +325,7 @@ mod tests {
     #[test]
     fn the_wrap_pubkey_is_a_throwaway_belonging_to_neither_party() {
         let (alice, bob) = (alice(), bob());
-        let wrap =
-            gift_wrap("hi", bob.public_key_hex(), &alice, NOW, &mut rng(4)).expect("wraps");
+        let wrap = gift_wrap("hi", bob.public_key_hex(), &alice, NOW, &mut rng(4)).expect("wraps");
 
         assert_ne!(wrap.pubkey, alice.public_key_hex());
         assert_ne!(wrap.pubkey, bob.public_key_hex());
@@ -325,8 +334,7 @@ mod tests {
     #[test]
     fn every_wrap_uses_a_fresh_throwaway_key() {
         let (alice, bob) = (alice(), bob());
-        let first =
-            gift_wrap("hi", bob.public_key_hex(), &alice, NOW, &mut rng(5)).expect("wraps");
+        let first = gift_wrap("hi", bob.public_key_hex(), &alice, NOW, &mut rng(5)).expect("wraps");
         let second =
             gift_wrap("hi", bob.public_key_hex(), &alice, NOW, &mut rng(6)).expect("wraps");
         assert_ne!(
@@ -358,8 +366,8 @@ mod tests {
         let mut saw_a_different_timestamp = false;
 
         for seed in 0..32u64 {
-            let wrap = gift_wrap("hi", bob.public_key_hex(), &alice, NOW, &mut rng(seed))
-                .expect("wraps");
+            let wrap =
+                gift_wrap("hi", bob.public_key_hex(), &alice, NOW, &mut rng(seed)).expect("wraps");
             assert!(
                 (wrap.created_at - NOW).abs() <= TIMESTAMP_JITTER_SECS,
                 "jitter escaped the window: {}",
@@ -385,8 +393,8 @@ mod tests {
         assert_eq!(rumor.created_at, NOW);
         assert!(rumor.sig.is_none(), "the rumor must never be signed");
 
-        let seal = make_seal(&rumor, bob.public_key_hex(), &alice, NOW, &mut rng(8))
-            .expect("seals");
+        let seal =
+            make_seal(&rumor, bob.public_key_hex(), &alice, NOW, &mut rng(8)).expect("seals");
         assert!(seal.sig.is_some(), "the seal must be signed by the sender");
         assert_eq!(seal.pubkey, alice.public_key_hex());
     }
@@ -394,8 +402,7 @@ mod tests {
     #[test]
     fn the_recipient_is_the_only_one_who_can_unwrap() {
         let (alice, bob, mallory) = (alice(), bob(), mallory());
-        let wrap =
-            gift_wrap("hi", bob.public_key_hex(), &alice, NOW, &mut rng(9)).expect("wraps");
+        let wrap = gift_wrap("hi", bob.public_key_hex(), &alice, NOW, &mut rng(9)).expect("wraps");
 
         assert!(unwrap_gift(&wrap, bob.secret()).is_ok());
         assert!(unwrap_gift(&wrap, mallory.secret()).is_err());
@@ -433,8 +440,8 @@ mod tests {
         // The flip side: if Mallory does not lie about the rumor author, the DM
         // is valid — and attributed to her.
         let (bob, mallory) = (bob(), mallory());
-        let wrap = gift_wrap("hi", bob.public_key_hex(), &mallory, NOW, &mut rng(12))
-            .expect("wraps");
+        let wrap =
+            gift_wrap("hi", bob.public_key_hex(), &mallory, NOW, &mut rng(12)).expect("wraps");
         let (_, sender, _) = unwrap_gift(&wrap, bob.secret()).expect("unwraps");
         assert_eq!(sender, mallory.public_key_hex());
         assert_ne!(sender, alice().public_key_hex());
@@ -444,8 +451,8 @@ mod tests {
     fn a_seal_with_a_broken_signature_is_rejected() {
         let (alice, bob) = (alice(), bob());
         let rumor = make_rumor(alice.public_key_hex(), "hi", NOW);
-        let mut seal = make_seal(&rumor, bob.public_key_hex(), &alice, NOW, &mut rng(13))
-            .expect("seals");
+        let mut seal =
+            make_seal(&rumor, bob.public_key_hex(), &alice, NOW, &mut rng(13)).expect("seals");
         seal.sig = Some("0".repeat(128));
 
         let wrap = make_wrap(&seal, bob.public_key_hex(), NOW, &mut rng(14)).expect("wraps");
@@ -456,8 +463,8 @@ mod tests {
     fn an_unsigned_seal_is_rejected() {
         let (alice, bob) = (alice(), bob());
         let rumor = make_rumor(alice.public_key_hex(), "hi", NOW);
-        let mut seal = make_seal(&rumor, bob.public_key_hex(), &alice, NOW, &mut rng(15))
-            .expect("seals");
+        let mut seal =
+            make_seal(&rumor, bob.public_key_hex(), &alice, NOW, &mut rng(15)).expect("seals");
         seal.sig = None;
 
         let wrap = make_wrap(&seal, bob.public_key_hex(), NOW, &mut rng(16)).expect("wraps");
@@ -470,8 +477,8 @@ mod tests {
         // signing must not survive verification.
         let (alice, bob) = (alice(), bob());
         let rumor = make_rumor(alice.public_key_hex(), "hi", NOW);
-        let mut seal = make_seal(&rumor, bob.public_key_hex(), &alice, NOW, &mut rng(17))
-            .expect("seals");
+        let mut seal =
+            make_seal(&rumor, bob.public_key_hex(), &alice, NOW, &mut rng(17)).expect("seals");
         seal.created_at += 1;
 
         let wrap = make_wrap(&seal, bob.public_key_hex(), NOW, &mut rng(18)).expect("wraps");
@@ -522,8 +529,8 @@ mod tests {
     fn a_round_tripped_event_survives_json() {
         let (alice, bob) = (alice(), bob());
         let rumor = make_rumor(alice.public_key_hex(), "hi / there \"quoted\"", NOW);
-        let seal = make_seal(&rumor, bob.public_key_hex(), &alice, NOW, &mut rng(23))
-            .expect("seals");
+        let seal =
+            make_seal(&rumor, bob.public_key_hex(), &alice, NOW, &mut rng(23)).expect("seals");
         let parsed = from_json(&to_json(&seal).expect("serializes")).expect("parses");
         assert_eq!(parsed, seal);
     }

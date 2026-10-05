@@ -9,7 +9,6 @@ use chatter_core::client::ChatterClient;
 use crate::MainWindow;
 
 pub fn wire_settings_callbacks(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
-
     // Change password
     let weak_window = window.as_weak();
     let ui_ctx_pw = ui_ctx.clone();
@@ -338,7 +337,9 @@ pub fn wire_settings_callbacks(window: &MainWindow, ui_ctx: &Arc<ChatterClient>)
                 let weak_err = weak.clone();
                 let _ = slint::invoke_from_event_loop(move || {
                     if let Some(w) = weak_err.upgrade() {
-                        w.set_settings_change_pin_error("New PIN must be different from current PIN".into());
+                        w.set_settings_change_pin_error(
+                            "New PIN must be different from current PIN".into(),
+                        );
                     }
                 });
                 return;
@@ -444,7 +445,8 @@ pub fn wire_settings_callbacks(window: &MainWindow, ui_ctx: &Arc<ChatterClient>)
                 let _ = (&ui_ctx, &passphrase);
                 set_message_backup_status(
                     &weak,
-                    "Export to a file is not available on Android yet — use \"Back up to server\"".to_string(),
+                    "Export to a file is not available on Android yet — use \"Back up to server\""
+                        .to_string(),
                 );
             }
             #[cfg(not(target_os = "android"))]
@@ -498,7 +500,10 @@ pub fn wire_settings_callbacks(window: &MainWindow, ui_ctx: &Arc<ChatterClient>)
                     return; // user cancelled
                 };
                 let status = match ui_ctx.import_message_backup(&path, &passphrase).await {
-                    Ok(s) => format!("Restored {} of {} rows (rest already present)", s.rows_inserted, s.rows_seen),
+                    Ok(s) => format!(
+                        "Restored {} of {} rows (rest already present)",
+                        s.rows_inserted, s.rows_seen
+                    ),
                     Err(e) => format!("Restore failed: {e}"),
                 };
                 set_message_backup_status(&weak, status);
@@ -531,7 +536,10 @@ pub fn wire_settings_callbacks(window: &MainWindow, ui_ctx: &Arc<ChatterClient>)
         let pin = pin.to_string();
         tokio::spawn(async move {
             let status = match ui_ctx.restore_server_message_backup(&pin).await {
-                Ok(s) => format!("Restored {} of {} rows (rest already present)", s.rows_inserted, s.rows_seen),
+                Ok(s) => format!(
+                    "Restored {} of {} rows (rest already present)",
+                    s.rows_inserted, s.rows_seen
+                ),
                 Err(e) => format!("Server restore failed: {e}"),
             };
             set_message_backup_status(&weak, status);
@@ -558,7 +566,8 @@ pub fn wire_settings_callbacks(window: &MainWindow, ui_ctx: &Arc<ChatterClient>)
                 w.set_settings_recovery_regen_loading(false);
                 match result {
                     Ok(codes) => {
-                        let model: Vec<SharedString> = codes.iter().map(|c| c.as_str().into()).collect();
+                        let model: Vec<SharedString> =
+                            codes.iter().map(|c| c.as_str().into()).collect();
                         w.set_recovery_codes(slint::ModelRc::new(slint::VecModel::from(model)));
                         w.set_settings_recovery_regen_password("".into());
                         w.set_recovery_codes_regenerated(true);
@@ -601,10 +610,9 @@ pub fn wire_settings_callbacks(window: &MainWindow, ui_ctx: &Arc<ChatterClient>)
                     "Sealed sender onboarding policy persisted: allow_from_anyone={}",
                     persisted
                 ),
-                Err(e) => tracing::error!(
-                    "Failed to persist sealed sender onboarding policy: {}",
-                    e
-                ),
+                Err(e) => {
+                    tracing::error!("Failed to persist sealed sender onboarding policy: {}", e)
+                }
             }
         });
     });
@@ -631,18 +639,28 @@ pub fn wire_settings_callbacks(window: &MainWindow, ui_ctx: &Arc<ChatterClient>)
                         match Clipboard::new() {
                             Ok(mut clipboard) => {
                                 if let Err(e) = clipboard.set_text(&all_codes) {
-                                    tracing::error!("Failed to copy recovery codes to clipboard: {}", e);
+                                    tracing::error!(
+                                        "Failed to copy recovery codes to clipboard: {}",
+                                        e
+                                    );
                                 } else {
-                                    tracing::info!("Recovery codes copied to clipboard (auto-clears in 60s)");
+                                    tracing::info!(
+                                        "Recovery codes copied to clipboard (auto-clears in 60s)"
+                                    );
                                     // SECURITY: Auto-clear clipboard after 60 seconds
                                     std::thread::spawn(move || {
                                         std::thread::sleep(std::time::Duration::from_secs(60));
                                         let _ = slint::invoke_from_event_loop(move || {
                                             if let Ok(mut cb) = Clipboard::new() {
                                                 if let Err(e) = cb.clear() {
-                                                    tracing::warn!("Failed to auto-clear clipboard: {}", e);
+                                                    tracing::warn!(
+                                                        "Failed to auto-clear clipboard: {}",
+                                                        e
+                                                    );
                                                 } else {
-                                                    tracing::info!("Clipboard auto-cleared after 60s");
+                                                    tracing::info!(
+                                                        "Clipboard auto-cleared after 60s"
+                                                    );
                                                 }
                                             }
                                         });
@@ -703,7 +721,11 @@ pub fn wire_settings_callbacks(window: &MainWindow, ui_ctx: &Arc<ChatterClient>)
             if let Some(w) = weak.upgrade() {
                 if let Some(user_id) = auth_state.get().current_user_id {
                     crate::bin_ui::features::modals::open_user_profile(
-                        &w, &user_id, &auth_state, &user_state, Some(&ui_ctx),
+                        &w,
+                        &user_id,
+                        &auth_state,
+                        &user_state,
+                        Some(&ui_ctx),
                     );
                     crate::bin_ui::features::back::push(&w, "user-profile");
                     // The button says Edit, so open the editor, over the
@@ -803,7 +825,9 @@ pub fn wire_settings_callbacks(window: &MainWindow, ui_ctx: &Arc<ChatterClient>)
         #[cfg(feature = "jarvis")]
         {
             let (weak, ui_ctx) = (weak_ai_toggle.clone(), ui_ctx_ai.clone());
-            tokio::spawn(async move { crate::bin_ui::features::sidebar::rebuild_chat_list(&weak, &ui_ctx) });
+            tokio::spawn(async move {
+                crate::bin_ui::features::sidebar::rebuild_chat_list(&weak, &ui_ctx)
+            });
         }
     });
 
@@ -949,8 +973,12 @@ pub fn wire_settings_callbacks(window: &MainWindow, ui_ctx: &Arc<ChatterClient>)
                     let settings = ui_ctx_key.cloud_ai_settings();
                     w.set_settings_cloud_ai_configured(settings.is_available());
                     w.set_settings_cloud_ai_status(
-                        if settings.is_available() { "API key saved." } else { "API key cleared." }
-                            .into(),
+                        if settings.is_available() {
+                            "API key saved."
+                        } else {
+                            "API key cleared."
+                        }
+                        .into(),
                     );
                 }
             }
@@ -1030,13 +1058,20 @@ fn wire_profile_visibility(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     use chatter_core::services::profile_visibility::ProfileVisibility;
 
     /// Run the change off the UI thread, then show the outcome.
-    fn apply(weak: slint::Weak<MainWindow>, ui_ctx: Arc<ChatterClient>, visibility: ProfileVisibility, pin: Option<String>) {
+    fn apply(
+        weak: slint::Weak<MainWindow>,
+        ui_ctx: Arc<ChatterClient>,
+        visibility: ProfileVisibility,
+        pin: Option<String>,
+    ) {
         if let Some(w) = weak.upgrade() {
             w.set_settings_profile_visibility_busy(true);
             w.set_settings_profile_visibility_error("".into());
         }
         tokio::spawn(async move {
-            let result = ui_ctx.set_profile_visibility(visibility, pin.as_deref()).await;
+            let result = ui_ctx
+                .set_profile_visibility(visibility, pin.as_deref())
+                .await;
             let now = ui_ctx.profile_visibility().as_str();
             let _ = slint::invoke_from_event_loop(move || {
                 let Some(w) = weak.upgrade() else { return };
@@ -1059,7 +1094,9 @@ fn wire_profile_visibility(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     let ui_ctx_sel = ui_ctx.clone();
     let weak_sel = window.as_weak();
     window.on_settings_profile_visibility_selected(move |key: SharedString| {
-        let Some(visibility) = ProfileVisibility::parse(key.as_str()) else { return };
+        let Some(visibility) = ProfileVisibility::parse(key.as_str()) else {
+            return;
+        };
         let (ui_ctx, weak) = (ui_ctx_sel.clone(), weak_sel.clone());
         tokio::spawn(async move {
             match ui_ctx.profile_visibility_needs_pin(visibility).await {
@@ -1091,8 +1128,15 @@ fn wire_profile_visibility(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     let ui_ctx_conf = ui_ctx.clone();
     let weak_conf = window.as_weak();
     window.on_settings_profile_visibility_confirmed(move |key: SharedString, pin: SharedString| {
-        let Some(visibility) = ProfileVisibility::parse(key.as_str()) else { return };
-        apply(weak_conf.clone(), ui_ctx_conf.clone(), visibility, Some(pin.to_string()));
+        let Some(visibility) = ProfileVisibility::parse(key.as_str()) else {
+            return;
+        };
+        apply(
+            weak_conf.clone(),
+            ui_ctx_conf.clone(),
+            visibility,
+            Some(pin.to_string()),
+        );
     });
 
     let weak_cancel = window.as_weak();
@@ -1139,7 +1183,9 @@ fn update_notification_delivery(
                 }
                 Err(error) => {
                     delivery.set_push_enabled(delivery.get_saved_push_enabled());
-                    delivery.set_error(format!("Could not update notification preferences: {error}").into());
+                    delivery.set_error(
+                        format!("Could not update notification preferences: {error}").into(),
+                    );
                 }
             }
         });

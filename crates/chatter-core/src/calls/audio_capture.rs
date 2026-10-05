@@ -3,14 +3,14 @@
 //! Provides device enumeration and audio frame capture for LiveKit publishing.
 
 use std::borrow::Cow;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{SampleFormat, StreamConfig};
 use livekit::webrtc::audio_frame::AudioFrame;
-use livekit::webrtc::audio_source::native::NativeAudioSource;
 use livekit::webrtc::audio_source::AudioSourceOptions;
+use livekit::webrtc::audio_source::native::NativeAudioSource;
 use tokio::sync::mpsc;
 
 use crate::error::CallError;
@@ -163,9 +163,9 @@ impl AudioCapture {
         tracing::info!("Starting audio capture from device: {}", self.device_name);
 
         // Get supported config
-        let supported_config = device
-            .default_input_config()
-            .map_err(|e| CallError::TrackPublishFailed(format!("No supported audio config: {}", e)))?;
+        let supported_config = device.default_input_config().map_err(|e| {
+            CallError::TrackPublishFailed(format!("No supported audio config: {}", e))
+        })?;
 
         self.sample_rate = supported_config.sample_rate().0;
         self.num_channels = supported_config.channels() as u32;
@@ -215,7 +215,9 @@ impl AudioCapture {
                             first_frame = false;
                         }
                         if non_silent {
-                            tracing::info!("First non-silent microphone frame delivered to LiveKit");
+                            tracing::info!(
+                                "First non-silent microphone frame delivered to LiveKit"
+                            );
                             first_non_silent = false;
                         }
                     }
@@ -247,7 +249,11 @@ impl AudioCapture {
                                 .iter()
                                 .map(|&s| (s * 32767.0).clamp(-32768.0, 32767.0) as i16)
                                 .collect();
-                            let _ = tx.try_send(CapturedFrame { samples, sample_rate, num_channels });
+                            let _ = tx.try_send(CapturedFrame {
+                                samples,
+                                sample_rate,
+                                num_channels,
+                            });
                         }
                     },
                     err_fn,
@@ -261,7 +267,11 @@ impl AudioCapture {
                     move |data: &[i16], _: &cpal::InputCallbackInfo| {
                         if running.load(Ordering::SeqCst) {
                             let samples = data.to_vec();
-                            let _ = tx.try_send(CapturedFrame { samples, sample_rate, num_channels });
+                            let _ = tx.try_send(CapturedFrame {
+                                samples,
+                                sample_rate,
+                                num_channels,
+                            });
                         }
                     },
                     err_fn,
@@ -275,12 +285,14 @@ impl AudioCapture {
                 )));
             }
         }
-        .map_err(|e| CallError::TrackPublishFailed(format!("Failed to build audio stream: {}", e)))?;
+        .map_err(|e| {
+            CallError::TrackPublishFailed(format!("Failed to build audio stream: {}", e))
+        })?;
 
         // Start the stream
-        stream
-            .play()
-            .map_err(|e| CallError::TrackPublishFailed(format!("Failed to start audio stream: {}", e)))?;
+        stream.play().map_err(|e| {
+            CallError::TrackPublishFailed(format!("Failed to start audio stream: {}", e))
+        })?;
 
         self.running.store(true, Ordering::SeqCst);
         self.stream = Some(stream);
@@ -440,7 +452,10 @@ mod tests {
             }
             Err(e) => {
                 // May fail in CI/headless environments
-                eprintln!("list_output_devices failed (expected in headless env): {}", e);
+                eprintln!(
+                    "list_output_devices failed (expected in headless env): {}",
+                    e
+                );
             }
         }
     }

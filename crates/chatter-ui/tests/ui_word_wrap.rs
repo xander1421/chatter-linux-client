@@ -68,8 +68,14 @@ fn assert_wraps(probe: &WrapProbe, body: &str, what: &str) {
     // converters/markdown.rs builds a body with markdown.
     let text = format!("bold {body}");
     let formatting = vec![
-        FormattedSpan { range: 0..4, style: Style::Strong },
-        FormattedSpan { range: 5..text.len(), style: Style::Emphasis },
+        FormattedSpan {
+            range: 0..4,
+            style: Style::Strong,
+        },
+        FormattedSpan {
+            range: 5..text.len(),
+            style: Style::Emphasis,
+        },
     ];
     probe.set_styled_body(slint::StyledText::from_paragraphs([StyledTextParagraph {
         text,
@@ -85,12 +91,18 @@ fn assert_wraps(probe: &WrapProbe, body: &str, what: &str) {
         "{what}: control failed, the token is only {unwrapped}px unwrapped, \
          so it would fit without breaking and the test proves nothing"
     );
-    assert!(w <= 200.0, "{what}: text is {w}px wide, overflowing the 200px bubble");
+    assert!(
+        w <= 200.0,
+        "{what}: text is {w}px wide, overflowing the 200px bubble"
+    );
     assert!(
         h >= 2.0 * line,
         "{what}: text is {h}px tall (line {line}px): the token did not wrap"
     );
-    assert!(sw <= 200.0, "{what}: styled text is {sw}px wide, overflowing the 200px bubble");
+    assert!(
+        sw <= 200.0,
+        "{what}: styled text is {sw}px wide, overflowing the 200px bubble"
+    );
     assert!(
         sh >= 2.0 * line,
         "{what}: styled text is {sh}px tall (line {line}px): the token did not wrap"

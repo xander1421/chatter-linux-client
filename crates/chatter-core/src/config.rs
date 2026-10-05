@@ -55,10 +55,8 @@ use libsignal_protocol::PublicKey;
 /// script, so this key authenticates nobody. Kept here so the production path can refuse to equal
 /// it, and so `--features dev-trust-root` can select it on purpose.
 const DEV_TRUST_ROOT_BYTES: [u8; 32] = [
-    0xca, 0x49, 0xd9, 0x6a, 0xa6, 0x41, 0x7d, 0x72,
-    0x4b, 0x45, 0x31, 0xdf, 0xc6, 0xcb, 0xdc, 0x8e,
-    0x29, 0x1b, 0x52, 0x31, 0xca, 0xac, 0x08, 0x8a,
-    0x30, 0x92, 0xde, 0x51, 0x20, 0xbe, 0x68, 0x33,
+    0xca, 0x49, 0xd9, 0x6a, 0xa6, 0x41, 0x7d, 0x72, 0x4b, 0x45, 0x31, 0xdf, 0xc6, 0xcb, 0xdc, 0x8e,
+    0x29, 0x1b, 0x52, 0x31, 0xca, 0xac, 0x08, 0x8a, 0x30, 0x92, 0xde, 0x51, 0x20, 0xbe, 0x68, 0x33,
 ];
 
 /// The trust root a SHIPPABLE artifact of this build would pin — the cdylib,
@@ -107,7 +105,11 @@ pub const TRUST_ROOT_PUBLIC_KEY_BYTES: Option<[u8; 32]> = match SHIPPED_TRUST_RO
 /// composed into ordinary builds by the Makefile — so it disarmed this guard,
 /// and the three below, in release builds too (ANCHOR-TESTING). The feature it
 /// names now does nothing else, and build.rs refuses it in a release profile.
-#[cfg(all(not(feature = "dev-trust-root"), not(test), not(feature = "insecure-test-anchors")))]
+#[cfg(all(
+    not(feature = "dev-trust-root"),
+    not(test),
+    not(feature = "insecure-test-anchors")
+))]
 const _: () = {
     assert!(
         TRUST_ROOT_PUBLIC_KEY_BYTES.is_some(),
@@ -333,10 +335,8 @@ const _: () = {
 /// source, so anyone with either repository can sign a tree head that this key
 /// verifies. It is only ever pinned under the `dev-trust-root` feature.
 const DEV_KT_TREE_HEAD_BYTES: [u8; 32] = [
-    0x88, 0xad, 0x41, 0x28, 0x06, 0x05, 0x4a, 0x75,
-    0x34, 0xe1, 0xb9, 0xde, 0xb4, 0x2e, 0xf2, 0x49,
-    0xbd, 0x7c, 0x92, 0x70, 0x9f, 0x5b, 0xeb, 0xf1,
-    0xd6, 0xbe, 0x7b, 0x0e, 0x40, 0x92, 0x6f, 0x72,
+    0x88, 0xad, 0x41, 0x28, 0x06, 0x05, 0x4a, 0x75, 0x34, 0xe1, 0xb9, 0xde, 0xb4, 0x2e, 0xf2, 0x49,
+    0xbd, 0x7c, 0x92, 0x70, 0x9f, 0x5b, 0xeb, 0xf1, 0xd6, 0xbe, 0x7b, 0x0e, 0x40, 0x92, 0x6f, 0x72,
 ];
 
 /// The pinned key-transparency tree-head signing key.
@@ -387,7 +387,11 @@ pub const KT_TREE_HEAD_PUBLIC_KEY_BYTES: [u8; 32] =
 
 /// A non-dev build must not end up pinning the development tree-head key, even
 /// if someone exports its hex by mistake. Mirrors the trust-root assertion.
-#[cfg(all(not(feature = "dev-trust-root"), not(test), not(feature = "insecure-test-anchors")))]
+#[cfg(all(
+    not(feature = "dev-trust-root"),
+    not(test),
+    not(feature = "insecure-test-anchors")
+))]
 const _: () = {
     let mut i = 0;
     let mut same = true;
@@ -422,10 +426,8 @@ const _: () = {
 //
 // The DEVELOPMENT VRF key, derived from SHA-256("chatter-dev-kt-vrf-v1").
 const DEV_KT_VRF_BYTES: [u8; 32] = [
-    0x48, 0xaf, 0x97, 0x5f, 0xea, 0xba, 0x33, 0xea,
-    0x11, 0x0d, 0x4a, 0xb0, 0xc8, 0xf7, 0xa3, 0x8c,
-    0x5c, 0x71, 0x22, 0xdb, 0x18, 0x5f, 0xf9, 0x49,
-    0x9b, 0x81, 0xe5, 0xe7, 0x4d, 0xa6, 0xec, 0x47,
+    0x48, 0xaf, 0x97, 0x5f, 0xea, 0xba, 0x33, 0xea, 0x11, 0x0d, 0x4a, 0xb0, 0xc8, 0xf7, 0xa3, 0x8c,
+    0x5c, 0x71, 0x22, 0xdb, 0x18, 0x5f, 0xf9, 0x49, 0x9b, 0x81, 0xe5, 0xe7, 0x4d, 0xa6, 0xec, 0x47,
 ];
 
 /// The pinned KT query-privacy VRF public key.
@@ -456,14 +458,13 @@ const DEV_KT_VRF_BYTES: [u8; 32] = [
 pub const KT_VRF_PUBLIC_KEY_BYTES: [u8; 32] = DEV_KT_VRF_BYTES;
 
 #[cfg(not(feature = "dev-trust-root"))]
-pub const KT_VRF_PUBLIC_KEY_BYTES: [u8; 32] =
-    match option_env!("CHATTER_KT_VRF_PUBLIC_KEY_HEX") {
-        Some(hex) => decode_hex32(hex),
-        // Same harness carve-out as the tree-head key above: `cargo test` must
-        // not require a provisioned key. Never true for an application build.
-        None if cfg!(test) || cfg!(feature = "insecure-test-anchors") => DEV_KT_VRF_BYTES,
-        None => panic!(
-            "no key-transparency VRF public key is baked into this build.\n\n\
+pub const KT_VRF_PUBLIC_KEY_BYTES: [u8; 32] = match option_env!("CHATTER_KT_VRF_PUBLIC_KEY_HEX") {
+    Some(hex) => decode_hex32(hex),
+    // Same harness carve-out as the tree-head key above: `cargo test` must
+    // not require a provisioned key. Never true for an application build.
+    None if cfg!(test) || cfg!(feature = "insecure-test-anchors") => DEV_KT_VRF_BYTES,
+    None => panic!(
+        "no key-transparency VRF public key is baked into this build.\n\n\
              Every GetProof response carries a VRF proof binding the queried user_id\n\
              to the leaf index served. Pinned against the development key, that proof\n\
              either verifies nothing (dev server) or fails outright (real server), and\n\
@@ -473,12 +474,16 @@ pub const KT_VRF_PUBLIC_KEY_BYTES: [u8; 32] =
              CHATTER_KT_VRF_PUBLIC_KEY_HEX=<64 hex chars> cargo build --release\n\n\
              It is printed by `make provision-keys` alongside the tree-head key.\n\n\
              For local development only, build with --features dev-trust-root."
-        ),
-    };
+    ),
+};
 
 /// A non-dev build must not end up pinning the development VRF key either.
 /// Mirrors the tree-head assertion above.
-#[cfg(all(not(feature = "dev-trust-root"), not(test), not(feature = "insecure-test-anchors")))]
+#[cfg(all(
+    not(feature = "dev-trust-root"),
+    not(test),
+    not(feature = "insecure-test-anchors")
+))]
 const _: () = {
     let mut i = 0;
     let mut same = true;
@@ -510,7 +515,7 @@ pub const MESSAGE_PAGE_SIZE: i32 = 50;
 #[cfg(test)]
 mod tests {
     use super::*;
-    use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
+    use base64::{Engine, engine::general_purpose::STANDARD as BASE64};
 
     /// The DEV trust root's private key is SHA-256 of a public string
     /// documented in `deploy/vault/init-and-unseal.sh`, so anyone can mint a sender

@@ -65,9 +65,8 @@ impl MeshConversationRepository {
     /// Every remembered conversation.
     pub fn list(&self) -> Result<Vec<StoredMeshConversation>, StorageError> {
         let conn = self.db.read_connection()?;
-        let mut stmt = conn.prepare(
-            "SELECT conversation_id, kind, wire_id, label FROM mesh_conversations",
-        )?;
+        let mut stmt =
+            conn.prepare("SELECT conversation_id, kind, wire_id, label FROM mesh_conversations")?;
         let rows = stmt.query_map([], |row| {
             Ok(StoredMeshConversation {
                 conversation_id: row.get(0)?,
@@ -134,7 +133,13 @@ impl MeshConversationRepository {
             FROM mesh_sender_names s WHERE s.sender_id = ?1
             "#,
             params![sender_id],
-            |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?, row.get::<_, i64>(2)?)),
+            |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, i64>(2)?,
+                ))
+            },
         );
         let (nickname, peer_id, sharing) = match row {
             Ok(found) => found,
@@ -170,15 +175,30 @@ mod tests {
     fn a_sender_name_survives_and_is_suffixed_only_on_collision() {
         let (repo, _dir) = repo();
         assert_eq!(repo.sender_name("u1").expect("read"), None);
-        repo.remember_sender("u1", "4f74eb3eb7441921", "anon7431").expect("save");
-        assert_eq!(repo.sender_name("u1").expect("read").as_deref(), Some("anon7431"));
+        repo.remember_sender("u1", "4f74eb3eb7441921", "anon7431")
+            .expect("save");
+        assert_eq!(
+            repo.sender_name("u1").expect("read").as_deref(),
+            Some("anon7431")
+        );
 
-        repo.remember_sender("u2", "a1b2c3d4e5f60718", "anon7431").expect("save");
-        assert_eq!(repo.sender_name("u1").expect("read").as_deref(), Some("anon7431#4f74"));
-        assert_eq!(repo.sender_name("u2").expect("read").as_deref(), Some("anon7431#a1b2"));
+        repo.remember_sender("u2", "a1b2c3d4e5f60718", "anon7431")
+            .expect("save");
+        assert_eq!(
+            repo.sender_name("u1").expect("read").as_deref(),
+            Some("anon7431#4f74")
+        );
+        assert_eq!(
+            repo.sender_name("u2").expect("read").as_deref(),
+            Some("anon7431#a1b2")
+        );
 
-        repo.remember_sender("u2", "a1b2c3d4e5f60718", "").expect("empty is ignored");
-        assert_eq!(repo.sender_name("u2").expect("read").as_deref(), Some("anon7431#a1b2"));
+        repo.remember_sender("u2", "a1b2c3d4e5f60718", "")
+            .expect("empty is ignored");
+        assert_eq!(
+            repo.sender_name("u2").expect("read").as_deref(),
+            Some("anon7431#a1b2")
+        );
 
         repo.wipe().expect("wipe");
         assert_eq!(repo.sender_name("u1").expect("read"), None);
@@ -186,9 +206,7 @@ mod tests {
 
     fn repo() -> (MeshConversationRepository, tempfile::TempDir) {
         let dir = tempfile::tempdir().expect("tempdir");
-        let db = Arc::new(
-            Database::open(&dir.path().join("test.db"), "testpass").expect("open"),
-        );
+        let db = Arc::new(Database::open(&dir.path().join("test.db"), "testpass").expect("open"));
         db.run_migrations().expect("migrate");
         (MeshConversationRepository::new(db), dir)
     }

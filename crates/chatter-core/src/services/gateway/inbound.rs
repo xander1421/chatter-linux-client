@@ -39,8 +39,7 @@ pub fn apply_inbound_quote(
     message.reply_to_author_id = author;
     message.reply_to_text = (!q.text.is_empty()).then(|| q.text.clone());
     if let Some(qa) = q.attachments.first() {
-        message.reply_to_thumbnail =
-            (!qa.thumbnail.is_empty()).then(|| qa.thumbnail.clone());
+        message.reply_to_thumbnail = (!qa.thumbnail.is_empty()).then(|| qa.thumbnail.clone());
         message.reply_to_thumbnail_mime =
             (!qa.content_type.is_empty()).then(|| qa.content_type.clone());
     }
@@ -363,9 +362,7 @@ pub enum SealedSenderResult {
     /// carry the sender's profile key. The gateway already persisted the
     /// key (`store_data_message`) — no message row was created. Caller
     /// should trigger a profile refresh (fetch + decrypt) for `sender_id`.
-    ProfileKeyReceived {
-        sender_id: UserId,
-    },
+    ProfileKeyReceived { sender_id: UserId },
     /// Key exchange message received — needs bootstrap handling.
     KeyExchange {
         sender_id: UserId,
@@ -480,7 +477,5 @@ pub enum SealedSenderResult {
     /// [`crate::inbox::ack_policy::drop_and_ack`]. Leaving it queued means
     /// re-fetching and re-decrypting it on every poll for as long as the block
     /// stands.
-    DroppedBlockedSender {
-        sender_id: UserId,
-    },
+    DroppedBlockedSender { sender_id: UserId },
 }

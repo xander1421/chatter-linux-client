@@ -176,7 +176,6 @@ impl SyncTypeFlags {
             _ => return None,
         })
     }
-
 }
 
 /// The named sets Swift exposes as statics.
@@ -295,7 +294,6 @@ mod tests {
         assert!(!flags.contains(MessageType::Announce));
     }
 
-
     #[test]
     fn to_message_types_is_in_bit_order() {
         let flags = SyncTypeFlags::from_types(&[
@@ -364,5 +362,4 @@ mod tests {
             SyncTypeFlags::from_types(&[MessageType::Announce, MessageType::Message])
         );
     }
-
 }

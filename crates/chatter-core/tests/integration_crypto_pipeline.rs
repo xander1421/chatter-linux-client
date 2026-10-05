@@ -10,7 +10,7 @@
 //! These tests use pure crypto functions with no server dependencies.
 
 use chatter_core::crypto::derive_uak;
-use chatter_core::crypto::signal::sealed_sender::{UAK_LENGTH, PROFILE_KEY_LENGTH};
+use chatter_core::crypto::signal::sealed_sender::{PROFILE_KEY_LENGTH, UAK_LENGTH};
 use chatter_core::domain::ids::{ChannelId, DeviceId, MessageId, UserId};
 
 // ---------------------------------------------------------------------------
@@ -37,7 +37,11 @@ fn test_uak_derivation_from_profile_key() {
     assert_ne!(uak, [0u8; UAK_LENGTH], "UAK should not be all zeros");
 
     // UAK should not be the profile key truncated
-    assert_ne!(&uak[..], &profile_key[..UAK_LENGTH], "UAK should not be truncated profile key");
+    assert_ne!(
+        &uak[..],
+        &profile_key[..UAK_LENGTH],
+        "UAK should not be truncated profile key"
+    );
 }
 
 /// Test that UAK derivation is deterministic.
@@ -62,7 +66,10 @@ fn test_uak_derivation_different_keys() {
     let uak1 = derive_uak(&key1);
     let uak2 = derive_uak(&key2);
 
-    assert_ne!(uak1, uak2, "Different profile keys should produce different UAKs");
+    assert_ne!(
+        uak1, uak2,
+        "Different profile keys should produce different UAKs"
+    );
 }
 
 /// Profile-key length is enforced by the type system.
@@ -95,7 +102,10 @@ fn test_dm_channel_id_deterministic() {
     let channel_ab = ChannelId::from_dm_participants(&alice, &bob);
     let channel_ba = ChannelId::from_dm_participants(&bob, &alice);
 
-    assert_eq!(channel_ab, channel_ba, "DM channel ID must be same regardless of order");
+    assert_eq!(
+        channel_ab, channel_ba,
+        "DM channel ID must be same regardless of order"
+    );
 }
 
 /// Test that different user pairs produce different channel IDs.
@@ -108,7 +118,10 @@ fn test_dm_channel_id_different_pairs() {
     let channel_ab = ChannelId::from_dm_participants(&alice, &bob);
     let channel_ac = ChannelId::from_dm_participants(&alice, &charlie);
 
-    assert_ne!(channel_ab, channel_ac, "Different pairs should produce different channel IDs");
+    assert_ne!(
+        channel_ab, channel_ac,
+        "Different pairs should produce different channel IDs"
+    );
 }
 
 /// Test that DM channel ID is a valid UUID.
@@ -121,7 +134,10 @@ fn test_dm_channel_id_is_valid_uuid() {
     let uuid_str = channel_id.to_string();
 
     // Should be parseable as a UUID
-    assert!(uuid::Uuid::parse_str(&uuid_str).is_ok(), "Channel ID should be valid UUID");
+    assert!(
+        uuid::Uuid::parse_str(&uuid_str).is_ok(),
+        "Channel ID should be valid UUID"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -183,7 +199,10 @@ fn test_message_id_from_timestamp() {
     assert_eq!(id1, id2, "Same timestamp must produce same MessageId");
 
     // Different timestamp → different ID
-    assert_ne!(id1, id3, "Different timestamps should produce different MessageIds");
+    assert_ne!(
+        id1, id3,
+        "Different timestamps should produce different MessageIds"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -220,9 +239,18 @@ fn test_dm_conversation_lifecycle() {
     let conv = DmConversation::new(peer_id);
 
     // Fresh conversation needs bootstrap
-    assert!(conv.needs_bootstrap(), "New conversation should need bootstrap");
-    assert!(!conv.is_ready_to_send(), "New conversation should not be ready to send");
-    assert!(!conv.is_ready_to_receive(), "New conversation should not be ready to receive");
+    assert!(
+        conv.needs_bootstrap(),
+        "New conversation should need bootstrap"
+    );
+    assert!(
+        !conv.is_ready_to_send(),
+        "New conversation should not be ready to send"
+    );
+    assert!(
+        !conv.is_ready_to_receive(),
+        "New conversation should not be ready to receive"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -293,12 +321,7 @@ fn test_anon_dm_message_creation() {
     let peer_id = UserId::new();
     let conv = AnonDm::new_initiated(peer_id);
 
-    let msg = AnonDmMessage::new_text(
-        conv.id,
-        UserId::new(),
-        "Hello anonymously!",
-        1234567890,
-    );
+    let msg = AnonDmMessage::new_text(conv.id, UserId::new(), "Hello anonymously!", 1234567890);
 
     assert_eq!(msg.conversation_id, conv.id);
     assert_eq!(msg.as_text().as_deref(), Some("Hello anonymously!"));

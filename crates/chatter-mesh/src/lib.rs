@@ -33,7 +33,10 @@
 #![allow(clippy::collapsible_match)]
 // Production code must never panic on radio input. Tests are exempt: asserting a
 // well-formed fixture decodes is exactly what `expect` is for.
-#![cfg_attr(not(test), deny(clippy::unwrap_used, clippy::expect_used, clippy::panic))]
+#![cfg_attr(
+    not(test),
+    deny(clippy::unwrap_used, clippy::expect_used, clippy::panic)
+)]
 
 pub mod codec;
 pub mod compress;

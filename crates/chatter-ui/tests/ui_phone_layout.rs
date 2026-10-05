@@ -23,7 +23,8 @@ const PHONE_W: f32 = 412.0;
 const PHONE_H: f32 = 891.0;
 
 fn pump(w: &MainWindow) {
-    w.window().set_size(slint::LogicalSize::new(PHONE_W, PHONE_H));
+    w.window()
+        .set_size(slint::LogicalSize::new(PHONE_W, PHONE_H));
     slint::Timer::single_shot(std::time::Duration::from_millis(80), || {
         slint::quit_event_loop().unwrap();
     });
@@ -95,7 +96,10 @@ fn settings_tab_bar_and_link_device_status_land_where_designed_on_a_phone() {
     let tab = one(&w, "Linked devices");
     let (_, ty, _, th) = rect(&tab);
     println!("settings y={screen_y} h={screen_h}; 'Linked devices' tab y={ty} h={th}");
-    assert!(screen_h > 400.0, "SettingsScreen has no real height ({screen_h})");
+    assert!(
+        screen_h > 400.0,
+        "SettingsScreen has no real height ({screen_h})"
+    );
     assert!(
         ty < screen_y + 80.0,
         "settings tab bar is not at the top edge: tab y={ty}, screen y={screen_y} h={screen_h}"
@@ -136,9 +140,22 @@ fn settings_tab_bar_and_link_device_status_land_where_designed_on_a_phone() {
             kids.push((d.type_name().unwrap_or_default().to_string(), rect(&d)));
             std::ops::ControlFlow::<()>::Continue(())
         });
-        let flick = kids.iter().find(|k| k.0 == "Flickable").expect("Flickable").1;
-        let content = kids.iter().find(|k| k.0 == "VerticalLayout").expect("rows layout").1;
-        let row0 = kids.iter().filter(|k| k.0 == "VerticalLayout").nth(1).expect("row 0").1;
+        let flick = kids
+            .iter()
+            .find(|k| k.0 == "Flickable")
+            .expect("Flickable")
+            .1;
+        let content = kids
+            .iter()
+            .find(|k| k.0 == "VerticalLayout")
+            .expect("rows layout")
+            .1;
+        let row0 = kids
+            .iter()
+            .filter(|k| k.0 == "VerticalLayout")
+            .nth(1)
+            .expect("row 0")
+            .1;
         (flick, content, row0)
     };
     let (flick, content, row0) = records(&w);
@@ -159,19 +176,29 @@ fn settings_tab_bar_and_link_device_status_land_where_designed_on_a_phone() {
     pump(&w);
     let (flick, content, _) = records(&w);
     println!("40 records: list {flick:?}, content {content:?}");
-    assert!(flick.1 + flick.3 <= PHONE_H + 0.5, "records list runs off the screen");
-    assert!(content.3 > flick.3, "40 records do not overflow the list, so it cannot scroll");
+    assert!(
+        flick.1 + flick.3 <= PHONE_H + 0.5,
+        "records list runs off the screen"
+    );
+    assert!(
+        content.3 > flick.3,
+        "40 records do not overflow the list, so it cannot scroll"
+    );
     let before = content.1;
-    w.window().dispatch_event(slint::platform::WindowEvent::PointerScrolled {
-        position: slint::LogicalPosition::new(200.0, flick.1 + 200.0),
-        delta_x: 0.0,
-        delta_y: -300.0,
-    });
+    w.window()
+        .dispatch_event(slint::platform::WindowEvent::PointerScrolled {
+            position: slint::LogicalPosition::new(200.0, flick.1 + 200.0),
+            delta_x: 0.0,
+            delta_y: -300.0,
+        });
     pump(&w);
     let (_, scrolled, _) = records(&w);
     let after = scrolled.1;
     println!("records content y before scroll={before}, after={after}");
-    assert!(after < before - 50.0, "the records list did not scroll (y {before} -> {after})");
+    assert!(
+        after < before - 50.0,
+        "the records list did not scroll (y {before} -> {after})"
+    );
 
     // ── Composer: the field is concentric with the glass shell ──
     // Owner, 2026-10-05: the field's rounding did not match the shell's. The
@@ -180,18 +207,28 @@ fn settings_tab_bar_and_link_device_status_land_where_designed_on_a_phone() {
     // outer controls and field share the top/bottom inset. The leading
     // emoji toggle owns the left edge; the field follows it by one inset.
     let spacing = include_str!("../../../ui/theme/spacing.slint");
-    assert!(spacing.contains("out property <length> radius-chrome-inner: radius-chrome - chrome-inset;"));
+    assert!(
+        spacing
+            .contains("out property <length> radius-chrome-inner: radius-chrome - chrome-inset;")
+    );
     assert!(spacing.contains("out property <length> chrome-inset: xs;"));
     assert!(spacing.contains("out property <length> xs: 4px;"));
     let inset = 4.0_f32;
     let composer_src = include_str!("../../../ui/chat/message_composer.slint");
-    assert!(composer_src.contains("border-radius: Spacing.radius-chrome;"), "shell radius");
+    assert!(
+        composer_src.contains("border-radius: Spacing.radius-chrome;"),
+        "shell radius"
+    );
     assert_eq!(
-        composer_src.matches("border-radius: Spacing.radius-chrome-inner;").count(),
+        composer_src
+            .matches("border-radius: Spacing.radius-chrome-inner;")
+            .count(),
         4,
         "field, emoji, attach and send are concentric with the shell"
     );
-    w.set_modal_stack(slint::ModelRc::new(slint::VecModel::from(Vec::<slint::SharedString>::new())));
+    w.set_modal_stack(slint::ModelRc::new(slint::VecModel::from(Vec::<
+        slint::SharedString,
+    >::new())));
     w.set_conversation_kind(chatter_ui::ConversationKind::ServerDm);
     w.set_channel_name("Bob".into());
     w.set_mobile_show_chat(true);
@@ -204,7 +241,9 @@ fn settings_tab_bar_and_link_device_status_land_where_designed_on_a_phone() {
     let (bx, _, bw, _) = rect(&one(&w, "Record voice message"));
     // The emoji & GIF toggle leads the row; the field sits one inset after it.
     let (ex, _, ew, _) = rect(&one(&w, "Emoji & GIF picker"));
-    println!("composer {sx},{sy} {sw}x{sh}; leading toggle x={ex} w={ew}; field {fx},{fy} {fw}x{fh}; trailing button x={bx} w={bw}");
+    println!(
+        "composer {sx},{sy} {sw}x{sh}; leading toggle x={ex} w={ew}; field {fx},{fy} {fw}x{fh}; trailing button x={bx} w={bw}"
+    );
     for (side, got) in [
         ("left (leading toggle)", ex - sx),
         ("toggle-to-field gap", fx - (ex + ew)),
@@ -212,6 +251,9 @@ fn settings_tab_bar_and_link_device_status_land_where_designed_on_a_phone() {
         ("bottom", sy + sh - (fy + fh)),
         ("right (trailing button)", sx + sw - (bx + bw)),
     ] {
-        assert!((got - inset).abs() < 0.5, "composer {side} inset is {got}px, not chrome-inset ({inset}px)");
+        assert!(
+            (got - inset).abs() < 0.5,
+            "composer {side} inset is {got}px, not chrome-inset ({inset}px)"
+        );
     }
 }

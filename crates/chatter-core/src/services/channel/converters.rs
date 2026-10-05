@@ -34,7 +34,9 @@ pub fn proto_to_domain_channel(proto: &chat_v1::Channel) -> Result<Channel, Chan
     let config = proto_config_to_domain(proto.config.as_ref());
 
     // Convert timestamp (proto uses nanos)
-    let created_at = TimestampNanos::from_nanos(proto.created_at).to_datetime().unwrap_or_else(Utc::now);
+    let created_at = TimestampNanos::from_nanos(proto.created_at)
+        .to_datetime()
+        .unwrap_or_else(Utc::now);
 
     Ok(Channel {
         id,
@@ -162,7 +164,9 @@ pub fn proto_to_domain_membership(
         .map_err(|_| ChannelError::InvalidInput("invalid user ID in member".to_string()))?;
 
     let role = proto_role_to_domain(proto.role);
-    let joined_at = TimestampNanos::from_nanos(proto.joined_at).to_datetime().unwrap_or_else(Utc::now);
+    let joined_at = TimestampNanos::from_nanos(proto.joined_at)
+        .to_datetime()
+        .unwrap_or_else(Utc::now);
 
     Ok(Membership {
         channel_id: *channel_id,
@@ -251,7 +255,10 @@ mod tests {
 
     #[test]
     fn test_domain_role_to_proto() {
-        assert_eq!(domain_role_to_proto(MemberRole::Member), ChannelRole::Member);
+        assert_eq!(
+            domain_role_to_proto(MemberRole::Member),
+            ChannelRole::Member
+        );
         assert_eq!(
             domain_role_to_proto(MemberRole::Moderator),
             ChannelRole::Moderator

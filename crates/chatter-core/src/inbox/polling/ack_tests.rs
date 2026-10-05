@@ -21,10 +21,10 @@ use std::sync::Arc;
 
 use tempfile::TempDir;
 
+use crate::domain::UserId;
 use crate::domain::anon_dm::AnonDmId;
 use crate::domain::ids::ChannelId;
 use crate::domain::message::{ConversationType, MessageContent, SystemMessage};
-use crate::domain::UserId;
 use crate::error::{CryptoError, IdentityChangeSource, ServiceError, StorageError};
 use crate::inbox::ack_policy::AckDecision;
 use crate::storage::{Database, MessageRepository};
@@ -53,7 +53,9 @@ fn markers(
 
 /// A dead ciphertext: deterministic in the bytes, so redelivery cannot help.
 fn permanent_error() -> ServiceError {
-    ServiceError::Crypto(CryptoError::DecryptionFailed("MAC verification failed".into()))
+    ServiceError::Crypto(CryptoError::DecryptionFailed(
+        "MAC verification failed".into(),
+    ))
 }
 
 /// The peer's pinned key changed. Also permanent, but a different resolution.
@@ -142,8 +144,11 @@ fn device_inbox_transient_failure_is_not_acked() {
 // handle — including the failures the policy classifies transient by name.
 // ---------------------------------------------------------------------------
 
-fn channel_repo() -> (TempDir, Arc<crate::storage::MessageRepository>, Arc<crate::storage::ChannelRepository>)
-{
+fn channel_repo() -> (
+    TempDir,
+    Arc<crate::storage::MessageRepository>,
+    Arc<crate::storage::ChannelRepository>,
+) {
     let dir = TempDir::new().unwrap();
     let db = Arc::new(Database::open(&dir.path().join("test.db"), "test_passphrase").unwrap());
     db.run_migrations().unwrap();
@@ -823,11 +828,8 @@ fn a_blocked_senders_message_is_drained_from_the_server() {
     // exactly the state a repeat sender puts us in.
     budget.record_attempt("envelope-blocked-1", crate::inbox::ack_policy::now_ns());
 
-    let decision = super::device::blocked_sender_decision(
-        UserId::new(),
-        "envelope-blocked-1",
-        &budget,
-    );
+    let decision =
+        super::device::blocked_sender_decision(UserId::new(), "envelope-blocked-1", &budget);
 
     assert_eq!(
         decision,

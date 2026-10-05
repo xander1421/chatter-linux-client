@@ -185,11 +185,26 @@ mod tests {
     #[test]
     fn test_size_comparison_reaction_counts() {
         let data: Vec<ReactionCount> = vec![
-            ReactionCount { emoji: "👍".to_string(), count: 100 },
-            ReactionCount { emoji: "❤️".to_string(), count: 50 },
-            ReactionCount { emoji: "😂".to_string(), count: 25 },
-            ReactionCount { emoji: "🎉".to_string(), count: 10 },
-            ReactionCount { emoji: "🔥".to_string(), count: 5 },
+            ReactionCount {
+                emoji: "👍".to_string(),
+                count: 100,
+            },
+            ReactionCount {
+                emoji: "❤️".to_string(),
+                count: 50,
+            },
+            ReactionCount {
+                emoji: "😂".to_string(),
+                count: 25,
+            },
+            ReactionCount {
+                emoji: "🎉".to_string(),
+                count: 10,
+            },
+            ReactionCount {
+                emoji: "🔥".to_string(),
+                count: 5,
+            },
         ];
 
         let bincode_size = db_serialize(&data).unwrap().len();

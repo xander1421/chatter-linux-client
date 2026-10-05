@@ -10,8 +10,8 @@ mod sanitize;
 mod upload;
 
 pub use media::{GifDecodeResult, GifFullDecodeResult, ImageDecodeResult};
-pub use sanitize::{sanitize_media, sanitize_media_file, validate_media, SanitizeOutcome};
 pub use range_decrypt::{CbcRangeDecryptor, CbcRangeReader};
+pub use sanitize::{SanitizeOutcome, sanitize_media, sanitize_media_file, validate_media};
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -21,8 +21,8 @@ use thiserror::Error;
 use crate::crypto::attachment_crypto::KEY_SET_LENGTH;
 use crate::domain::attachment::{Attachment, ContentLocation};
 use crate::domain::ids::AttachmentId;
-use crate::proto::content_v1::AttachmentPointer;
 use crate::network::grpc::client_pool::GrpcClientPool;
+use crate::proto::content_v1::AttachmentPointer;
 use crate::storage::repositories::AttachmentRepository;
 
 // Submodules add impl blocks to AttachmentService
@@ -60,7 +60,6 @@ pub enum AttachmentError {
     #[error("decryption error: {0}")]
     DecryptionError(String),
 }
-
 
 /// Result of encrypted CDN upload for E2E attachments.
 ///
@@ -229,7 +228,9 @@ impl AttachmentService {
     /// Get the gRPC pool, returns error if not configured.
     pub(crate) fn grpc_pool(&self) -> Result<&GrpcClientPool, AttachmentError> {
         self.grpc_pool.as_ref().map(|p| p.as_ref()).ok_or_else(|| {
-            AttachmentError::NetworkError("gRPC pool not configured — cannot perform network operations".into())
+            AttachmentError::NetworkError(
+                "gRPC pool not configured — cannot perform network operations".into(),
+            )
         })
     }
 
@@ -258,11 +259,9 @@ impl AttachmentService {
                 .map_err(AttachmentError::NetworkError);
         }
 
-        let mut response = cdn_client()?
-            .get(url)
-            .send()
-            .await
-            .map_err(|e| AttachmentError::NetworkError(format!("HTTP download failed: {}", e.without_url())))?;
+        let mut response = cdn_client()?.get(url).send().await.map_err(|e| {
+            AttachmentError::NetworkError(format!("HTTP download failed: {}", e.without_url()))
+        })?;
         if !response.status().is_success() {
             return Err(AttachmentError::NetworkError(format!(
                 "CDN download failed with status: {}",
@@ -270,16 +269,67 @@ impl AttachmentService {
             )));
         }
         let limit = crate::network::anon_http::storage_response_limit();
-        if response.content_length().is_some_and(|len| len > limit as u64) {
-            return Err(AttachmentError::NetworkError("storage response exceeds attachment size limit".into()));
+        if response
+            .content_length()
+            .is_some_and(|len| len > limit as u64)
+        {
+            return Err(AttachmentError::NetworkError(
+                "storage response exceeds attachment size limit".into(),
+            ));
         }
         let mut body = Vec::new();
-        while let Some(chunk) = response.chunk().await
-            .map_err(|e| AttachmentError::NetworkError(format!("Failed to read response: {}", e.without_url())))? {
+        while let Some(chunk) = response.chunk().await.map_err(|e| {
+            AttachmentError::NetworkError(format!("Failed to read response: {}", e.without_url()))
+        })? {
             crate::network::anon_http::append_storage_chunk(&mut body, &chunk, limit)
                 .map_err(AttachmentError::NetworkError)?;
         }
         Ok(body)
+    }
+
+    /// Stream ciphertext into a private staging file without retaining the
+    /// entire object in RAM. Routing and trust match the in-memory CDN path.
+    pub(crate) async fn cdn_http_get_to_file(
+        &self,
+        url: &str,
+        file: &mut tokio::fs::File,
+    ) -> Result<u64, AttachmentError> {
+        let limit = crate::network::anon_http::storage_response_limit() as u64;
+        #[cfg(feature = "onion")]
+        if self.transport_is_onion() {
+            let tor = self.grpc_pool()?.onion_tor();
+            return crate::network::anon_http::get_to_file(&tor, url, file, limit)
+                .await
+                .map_err(AttachmentError::NetworkError);
+        }
+
+        let mut response = cdn_client()?
+            .get(url)
+            .send()
+            .await
+            .map_err(|_| AttachmentError::NetworkError("storage download failed".into()))?;
+        if !response.status().is_success() {
+            return Err(AttachmentError::NetworkError(format!(
+                "storage GET returned status {}",
+                response.status()
+            )));
+        }
+        if response.content_length().is_some_and(|len| len > limit) {
+            return Err(AttachmentError::NetworkError(
+                "storage response exceeds attachment size limit".into(),
+            ));
+        }
+        let mut total = 0;
+        while let Some(chunk) = response
+            .chunk()
+            .await
+            .map_err(|_| AttachmentError::NetworkError("storage response read failed".into()))?
+        {
+            total = crate::network::anon_http::write_storage_chunk(file, total, &chunk, limit)
+                .await
+                .map_err(AttachmentError::NetworkError)?;
+        }
+        Ok(total)
     }
 
     /// PUT `body` to a presigned URL, over Tor in anon mode and direct otherwise.
@@ -310,7 +360,9 @@ impl AttachmentService {
             .body(body)
             .send()
             .await
-            .map_err(|e| AttachmentError::NetworkError(format!("HTTP upload failed: {}", e.without_url())))?;
+            .map_err(|e| {
+                AttachmentError::NetworkError(format!("HTTP upload failed: {}", e.without_url()))
+            })?;
         let status = response.status().as_u16();
         let etag = response
             .headers()
@@ -391,8 +443,16 @@ impl AttachmentService {
                     size: pointer.plaintext_size,
                     sha256: pointer.digest.clone(),
                     chunk_size: 0,
-                    width: if pointer.width > 0 { Some(pointer.width) } else { None },
-                    height: if pointer.height > 0 { Some(pointer.height) } else { None },
+                    width: if pointer.width > 0 {
+                        Some(pointer.width)
+                    } else {
+                        None
+                    },
+                    height: if pointer.height > 0 {
+                        Some(pointer.height)
+                    } else {
+                        None
+                    },
                     duration_seconds: if pointer.duration_ms > 0 {
                         Some(pointer.duration_ms as f64 / 1000.0)
                     } else {
@@ -546,7 +606,10 @@ impl AttachmentService {
 
         // Download the small encrypted thumbnail blob.
         let mut file_client = self.grpc_pool().ok()?.file_client();
-        let dl = file_client.get_attachment_download_url(&cdn_key).await.ok()?;
+        let dl = file_client
+            .get_attachment_download_url(&cdn_key)
+            .await
+            .ok()?;
         // Over Tor in anon mode; cdn_http_get already fails on non-2xx.
         let ciphertext = match self.cdn_http_get(&dl.download_url).await {
             Ok(bytes) => bytes,
@@ -562,7 +625,10 @@ impl AttachmentService {
         let mut digest = [0u8; 32];
         digest.copy_from_slice(&digest_vec);
         let plaintext = match crate::crypto::attachment_crypto::AttachmentCrypto::decrypt(
-            &ciphertext, &key, &digest, plaintext_size,
+            &ciphertext,
+            &key,
+            &digest,
+            plaintext_size,
         ) {
             Ok(p) => p,
             Err(e) => {
@@ -598,8 +664,10 @@ mod waveform_tests {
     #[test]
     fn incoming_voice_pointer_preserves_waveform_in_storage() {
         let dir = tempfile::tempdir().unwrap();
-        let db = Arc::new(crate::storage::database::Database::open(
-            &dir.path().join("waveform.db"), "testpass").unwrap());
+        let db = Arc::new(
+            crate::storage::database::Database::open(&dir.path().join("waveform.db"), "testpass")
+                .unwrap(),
+        );
         db.run_migrations().unwrap();
         let service = AttachmentService::new_local(Arc::new(AttachmentRepository::new(db)));
         let pointer = AttachmentPointer {
@@ -613,17 +681,30 @@ mod waveform_tests {
         };
         let ids = service.create_from_pointers(std::slice::from_ref(&pointer));
         let stored = service.get(&ids[0]).unwrap().unwrap();
-        assert_eq!(stored.metadata.waveform_samples, Some(pointer.waveform.clone()));
+        assert_eq!(
+            stored.metadata.waveform_samples,
+            Some(pointer.waveform.clone())
+        );
         assert_eq!(stored.metadata.duration_seconds, Some(1.25));
         assert_eq!(service.create_from_pointers(&[pointer]), ids);
-        assert_eq!(service.get(&ids[0]).unwrap().unwrap().metadata.waveform_samples,
-            stored.metadata.waveform_samples);
+        assert_eq!(
+            service
+                .get(&ids[0])
+                .unwrap()
+                .unwrap()
+                .metadata
+                .waveform_samples,
+            stored.metadata.waveform_samples
+        );
     }
 
     #[test]
     fn stored_voice_note_pointer_carries_its_waveform() {
         let mut meta = crate::domain::attachment::FileMetadata::new(
-            "Voice message.wav".into(), "audio/wav".into(), 4);
+            "Voice message.wav".into(),
+            "audio/wav".into(),
+            4,
+        );
         meta.waveform_samples = Some(vec![13, 128, 255]);
         let mut att = crate::domain::attachment::Attachment::new(AttachmentId::new(), meta);
         att.remote_url = Some("cdn".into());
@@ -639,9 +720,12 @@ mod waveform_tests {
 mod cdn_security_tests {
     #[tokio::test]
     async fn direct_cdn_rejects_cleartext_before_connecting() {
-        let error = super::cdn_client().unwrap()
+        let error = super::cdn_client()
+            .unwrap()
             .get("http://127.0.0.1:1/object?secret=capability")
-            .send().await.unwrap_err();
+            .send()
+            .await
+            .unwrap_err();
         assert!(error.is_builder());
     }
 }

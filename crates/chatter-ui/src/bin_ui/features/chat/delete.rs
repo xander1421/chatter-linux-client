@@ -7,7 +7,7 @@ use slint::{ComponentHandle, Model, SharedString};
 use chatter_core::client::ChatterClient;
 use chatter_core::domain::UserId;
 
-use crate::{MessageItemData, MainWindow, run_ui};
+use crate::{MainWindow, MessageItemData, run_ui};
 
 /// Unregister any GIF animations from a message's attachments.
 ///
@@ -65,7 +65,10 @@ pub fn wire_delete_message(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             };
 
             let handle = ui_ctx_spawn.conversation(conversation);
-            if let Err(e) = handle.delete_for_me(&target_sender_id, target_sent_timestamp).await {
+            if let Err(e) = handle
+                .delete_for_me(&target_sender_id, target_sent_timestamp)
+                .await
+            {
                 tracing::error!(error = %e, "Failed to delete-for-me");
                 return;
             }
@@ -80,7 +83,12 @@ pub fn wire_delete_message(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             // to follow it here.
             crate::bin_ui::features::sidebar::history_changed(&weak, &ui_ctx_spawn);
             run_ui!(weak, |w| {
-                super::helpers::remove_message_from_ui(&w, &sender_for_ui, &timestamp_for_ui, unregister_message_gifs);
+                super::helpers::remove_message_from_ui(
+                    &w,
+                    &sender_for_ui,
+                    &timestamp_for_ui,
+                    unregister_message_gifs,
+                );
             });
         });
     });

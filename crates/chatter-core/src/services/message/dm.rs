@@ -14,7 +14,9 @@ use crate::proto::mailbox_v1::EnvelopeType;
 use crate::services::current_user::CurrentUserProvider;
 use crate::services::mailbox_manager::MailboxManager;
 
-use super::{queued_bubble_timestamp, MessageError, MessageService, PendingFlush, SendDmContentParams};
+use super::{
+    MessageError, MessageService, PendingFlush, SendDmContentParams, queued_bubble_timestamp,
+};
 
 impl MessageService {
     /// Send a Content proto to a DM peer via two-layer encryption.
@@ -80,20 +82,29 @@ impl MessageService {
                 conversation_exists = conversation.is_some(),
                 "[DM_TRANSPORT] mailbox send needs bootstrap — content queued, not delivered now"
             );
-            return self.handle_dm_bootstrap(
-                auth_client,
-                peer_id,
-                content,
-                grpc_pool,
-                attachment_ids,
-                channel_id,
-            ).await;
+            return self
+                .handle_dm_bootstrap(
+                    auth_client,
+                    peer_id,
+                    content,
+                    grpc_pool,
+                    attachment_ids,
+                    channel_id,
+                )
+                .await;
         }
 
         // Conversation is ready - proceed with sending
         let conversation = conversation.unwrap();
-        self.snapshot_dm_content_targets(*peer_id, &content,
-            &conversation.ready_devices().into_iter().map(|(mailbox, _)| mailbox.device_id).collect::<Vec<_>>())?;
+        self.snapshot_dm_content_targets(
+            *peer_id,
+            &content,
+            &conversation
+                .ready_devices()
+                .into_iter()
+                .map(|(mailbox, _)| mailbox.device_id)
+                .collect::<Vec<_>>(),
+        )?;
         let plaintext = content.encode_to_vec();
 
         // Every ready peer device gets its own copy: sealed for that device
@@ -107,8 +118,16 @@ impl MessageService {
         let mut delivered = 0usize;
         let mut last_error = None;
         for (mailbox, send_key) in conversation.ready_devices() {
+            crate::services::gateway::submission::mark_submission_started()?;
             match self
-                .send_to_peer_device(auth_client, mailbox_manager, peer_id, mailbox, &send_key, &plaintext)
+                .send_to_peer_device(
+                    auth_client,
+                    mailbox_manager,
+                    peer_id,
+                    mailbox,
+                    &send_key,
+                    &plaintext,
+                )
                 .await
             {
                 Ok(()) => delivered += 1,
@@ -119,7 +138,9 @@ impl MessageService {
             }
         }
         if delivered == 0 {
-            return Err(last_error.unwrap_or_else(|| MessageError::DmError("No ready peer device".into())));
+            return Err(
+                last_error.unwrap_or_else(|| MessageError::DmError("No ready peer device".into()))
+            );
         }
         tracing::debug!(peer_id = %peer_id, delivered, "Sent DM to the peer's ready devices");
 
@@ -127,7 +148,8 @@ impl MessageService {
             self.owe_unready_devices(auth_client, peer_id, &conversation, &plaintext, grpc_pool)
                 .await;
         }
-        self.sync_sent_to_own_devices(auth_client, peer_id, &content).await;
+        self.sync_sent_to_own_devices(auth_client, peer_id, &content)
+            .await;
         Ok(())
     }
 
@@ -176,12 +198,19 @@ impl MessageService {
             tracing::warn!(%error, "Could not snapshot own-device receipt targets");
             return 0;
         }
-        let Ok(me_id) = self.current_user_id() else { return 0 };
+        let Ok(me_id) = self.current_user_id() else {
+            return 0;
+        };
         let me = me_id.to_string();
         if !self.shield_mode.load(std::sync::atomic::Ordering::Acquire) {
             Self::pad_content_to_bucket(&mut sync);
             let outcome = self
-                .deposit_sealed_to_all_devices(auth_client, &mut self.message_client(), &me, &sync.encode_to_vec())
+                .deposit_sealed_to_all_devices(
+                    auth_client,
+                    &mut self.message_client(),
+                    &me,
+                    &sync.encode_to_vec(),
+                )
                 .await;
             // What that device's DecryptionErrorMessage will name
             // (`resend_dm_on_decryption_error`): Signal logs its sync
@@ -190,12 +219,21 @@ impl MessageService {
             self.record_dm_send(me_id, &sync, &outcome.deposits);
             return outcome.delivered;
         }
-        let this_device = self.settings_repo.get::<u32>(keys::CURRENT_DEVICE_ID).ok().flatten();
+        let this_device = self
+            .settings_repo
+            .get::<u32>(keys::CURRENT_DEVICE_ID)
+            .ok()
+            .flatten();
         let devices = self
             .signal_service
             .session_devices(&me)
             .await
-            .map(|devices| devices.into_iter().filter(|d| Some(*d) != this_device).collect());
+            .map(|devices| {
+                devices
+                    .into_iter()
+                    .filter(|d| Some(*d) != this_device)
+                    .collect()
+            });
         let devices: Vec<u32> = match devices {
             Ok(devices) => devices,
             Err(e) => {
@@ -240,15 +278,25 @@ impl MessageService {
         let device_id = mailbox.device_id;
         let peer_ciphertexts = self
             .signal_service
-            .encrypt_message_session_devices(auth_client, &peer_id.to_string(), vec![device_id], plaintext)
+            .encrypt_message_session_devices(
+                auth_client,
+                &peer_id.to_string(),
+                vec![device_id],
+                plaintext,
+            )
             .await
             .map_err(|e| MessageError::from_signal_send(e, "Mailbox DM encrypt"))?;
         for signal_ciphertext in peer_ciphertexts.into_values() {
             let mailbox_encrypted = encrypt_dm_bytes(&signal_ciphertext, send_key)
                 .map_err(|e| MessageError::EncryptionFailed(format!("Mailbox encrypt: {}", e)))?;
             self.send_to_mailbox_retried(
-                mailbox_manager, &mailbox.public_key, mailbox_encrypted, peer_id, device_id,
-            ).await?;
+                mailbox_manager,
+                &mailbox.public_key,
+                mailbox_encrypted,
+                peer_id,
+                device_id,
+            )
+            .await?;
         }
         Ok(())
     }
@@ -276,18 +324,27 @@ impl MessageService {
         };
         let conversations = DmConversationManager::new(self.database.clone());
         for device in devices {
-            if conversation.peer_mailboxes.iter().any(|m| m.device_id == device) {
+            if conversation
+                .peer_mailboxes
+                .iter()
+                .any(|m| m.device_id == device)
+            {
                 continue;
             }
             // Asked only if an ask actually reached it: one that failed
             // (empty token batch) is repeated on the next send.
-            let asked = conversations.was_device_asked(peer_id, device).unwrap_or(true);
+            let asked = conversations
+                .was_device_asked(peer_id, device)
+                .unwrap_or(true);
             if let Err(e) = conversations.queue_for_device(peer_id, device, plaintext) {
                 tracing::warn!(peer_id = %peer_id, device, error = %e, "Owed copies: queue failed");
                 continue;
             }
             if let (false, Some(grpc_pool)) = (asked, grpc_pool) {
-                if let Err(e) = self.prompt_peer_device(auth_client, peer_id, device, grpc_pool).await {
+                if let Err(e) = self
+                    .prompt_peer_device(auth_client, peer_id, device, grpc_pool)
+                    .await
+                {
                     tracing::warn!(peer_id = %peer_id, device, error = %e, "Owed copies: could not ask the device to bootstrap");
                 }
             }
@@ -322,7 +379,14 @@ impl MessageService {
             };
             for plaintext in owed {
                 if let Err(e) = self
-                    .send_to_peer_device(auth_client, mailbox_manager, peer_id, mailbox, &send_key, &plaintext)
+                    .send_to_peer_device(
+                        auth_client,
+                        mailbox_manager,
+                        peer_id,
+                        mailbox,
+                        &send_key,
+                        &plaintext,
+                    )
                     .await
                 {
                     tracing::warn!(peer_id = %peer_id, device = mailbox.device_id, error = %e, "Owed copy to a late device lost");
@@ -371,6 +435,7 @@ impl MessageService {
         let mut delivered = 0usize;
         let mut last_error = None;
         for (mailbox, send_key) in &ready {
+            crate::services::gateway::submission::mark_submission_started()?;
             match self
                 .send_to_peer_device(
                     &mut auth_client,
@@ -482,7 +547,8 @@ impl MessageService {
         }
 
         // A device that answered after another got these copies catches up.
-        self.flush_owed_copies(auth_client, peer_id, mailbox_manager).await;
+        self.flush_owed_copies(auth_client, peer_id, mailbox_manager)
+            .await;
 
         tracing::info!(
             peer_id = %peer_id,
@@ -516,7 +582,8 @@ impl MessageService {
             .map_err(|e| MessageError::from_signal_send(e, "Session archive failed"))?;
         tracing::info!(peer_id = %peer_id, archived, "Archived sessions with peer for reset");
 
-        let device_ids = self.signal_service
+        let device_ids = self
+            .signal_service
             .ensure_sessions_all_devices(auth_client, &peer)
             .await
             .map_err(|e| {
@@ -537,7 +604,9 @@ impl MessageService {
         // Signal's lightSessionReset then sends a NullMessage, so the peer
         // gets a PreKey message on the new session now instead of when the
         // user next types.
-        let reached = self.send_null_messages(auth_client, peer_id, &device_ids).await;
+        let reached = self
+            .send_null_messages(auth_client, peer_id, &device_ids)
+            .await;
         tracing::info!(peer_id = %peer_id, reached, "Sent post-reset NullMessage to the peer's devices");
 
         Ok(device_ids)
@@ -562,7 +631,9 @@ impl MessageService {
         let plaintext = null_message_content().encode_to_vec();
 
         if self.shield_mode.load(std::sync::atomic::Ordering::Acquire) {
-            let conversation = match DmConversationManager::new(self.database.clone()).load_conversation(peer_id) {
+            let conversation = match DmConversationManager::new(self.database.clone())
+                .load_conversation(peer_id)
+            {
                 Ok(Some(conversation)) => conversation,
                 Ok(None) => return 0,
                 Err(e) => {
@@ -576,11 +647,20 @@ impl MessageService {
                     continue;
                 }
                 match self
-                    .send_to_peer_device(auth_client, &self.mailbox_manager, peer_id, mailbox, &send_key, &plaintext)
+                    .send_to_peer_device(
+                        auth_client,
+                        &self.mailbox_manager,
+                        peer_id,
+                        mailbox,
+                        &send_key,
+                        &plaintext,
+                    )
                     .await
                 {
                     Ok(()) => reached += 1,
-                    Err(e) => tracing::warn!(peer_id = %peer_id, device_id = mailbox.device_id, error = %e, "NullMessage to a peer device failed"),
+                    Err(e) => {
+                        tracing::warn!(peer_id = %peer_id, device_id = mailbox.device_id, error = %e, "NullMessage to a peer device failed")
+                    }
                 }
             }
             return reached;
@@ -600,7 +680,12 @@ impl MessageService {
         };
         let uak = self.sealed_access_key(&peer, false);
         let outcome = self
-            .deposit_sealed_ciphertexts(&mut self.message_client(), &peer, ciphertexts, uak.as_ref())
+            .deposit_sealed_ciphertexts(
+                &mut self.message_client(),
+                &peer,
+                ciphertexts,
+                uak.as_ref(),
+            )
             .await;
         if outcome.delivered == 0 {
             tracing::warn!(peer_id = %peer_id, error = ?outcome.error, "NullMessage: no device reached");
@@ -709,7 +794,10 @@ impl MessageService {
 
         // Auto-enable profile sharing on first message to a friend
         if !is_sharing {
-            if let Err(e) = self.user_repo.set_profile_sharing(&our_user_id, peer_id, true) {
+            if let Err(e) = self
+                .user_repo
+                .set_profile_sharing(&our_user_id, peer_id, true)
+            {
                 tracing::warn!(
                     peer_id = %peer_id,
                     error = %e,
@@ -779,7 +867,7 @@ impl MessageService {
 /// `NullMessage` and nothing else, padded to a bucket like every DM so its
 /// size does not single it out.
 pub(crate) fn null_message_content() -> crate::proto::content_v1::Content {
-    use crate::proto::content_v1::{content, Content, NullMessage};
+    use crate::proto::content_v1::{Content, NullMessage, content};
 
     let mut null = Content {
         content: Some(content::Content::NullMessage(NullMessage::default())),
@@ -815,17 +903,23 @@ pub(super) fn own_device_copy(
 /// `SenderKey*`, `GroupMailboxAddress`) would hand our devices state that is
 /// this conversation's, not theirs; typing and receipts are not synced
 /// (Signal does not); `ReadSync`/`SyncSent` already are own-device content.
-fn bare_self_copy(content: &crate::proto::content_v1::Content) -> Option<crate::proto::content_v1::Content> {
-    use crate::proto::content_v1::{content, Content};
+fn bare_self_copy(
+    content: &crate::proto::content_v1::Content,
+) -> Option<crate::proto::content_v1::Content> {
+    use crate::proto::content_v1::{Content, content};
 
     let inner = match &content.content {
-        Some(content::Content::Reaction(_) | content::Content::Pin(_) | content::Content::Edit(_)) => {
-            content.content.clone()
-        }
+        Some(
+            content::Content::Reaction(_) | content::Content::Pin(_) | content::Content::Edit(_),
+        ) => content.content.clone(),
         Some(content::Content::DataMessage(dm)) if dm.delete.is_some() => content.content.clone(),
         _ => return None,
     };
-    Some(Content { timestamp: content.timestamp, content: inner, ..Default::default() })
+    Some(Content {
+        timestamp: content.timestamp,
+        content: inner,
+        ..Default::default()
+    })
 }
 
 /// The `SyncSent` our own other devices get for `content` sent to `peer_id`,
@@ -835,9 +929,11 @@ pub(super) fn sync_sent_copy(
     peer_id: &UserId,
     content: &crate::proto::content_v1::Content,
 ) -> Option<crate::proto::content_v1::Content> {
-    use crate::proto::content_v1::{content, Content, SyncSent};
+    use crate::proto::content_v1::{Content, SyncSent, content};
 
-    let Some(content::Content::DataMessage(dm)) = &content.content else { return None };
+    let Some(content::Content::DataMessage(dm)) = &content.content else {
+        return None;
+    };
     let is_message = !dm.body.is_empty()
         || !dm.attachments.is_empty()
         || crate::services::disappearing::is_timer_update(dm);
@@ -912,7 +1008,9 @@ impl MessageService {
             .map(|m| m.id)
             .unwrap_or_else(|| crate::domain::ids::MessageId::from_timestamp(quote_timestamp));
         let reply_to_text = if !quote_preview.is_empty() {
-            Some(crate::services::gateway::shared::truncate_preview(quote_preview))
+            Some(crate::services::gateway::shared::truncate_preview(
+                quote_preview,
+            ))
         } else {
             original.as_ref().map(|m| {
                 crate::services::gateway::shared::message_reply_preview(m, &original_attachments)
@@ -941,7 +1039,10 @@ mod null_message_tests {
     #[test]
     fn reset_sends_a_padded_null_message() {
         let null = super::null_message_content();
-        assert!(matches!(null.content, Some(content::Content::NullMessage(_))));
+        assert!(matches!(
+            null.content,
+            Some(content::Content::NullMessage(_))
+        ));
         assert_eq!(null.encoded_len(), 256, "padded to the smallest bucket");
         assert!(null.ephemeral_reply_to.is_none());
         assert!(super::own_device_copy(&UserId::new(), &null, 1).is_none());
@@ -951,13 +1052,16 @@ mod null_message_tests {
 #[cfg(test)]
 mod sync_sent_copy_tests {
     use crate::domain::ids::UserId;
-    use crate::proto::content_v1::{content, Content, DataMessage};
+    use crate::proto::content_v1::{Content, DataMessage, content};
 
     #[test]
     fn wraps_messages_only_and_names_the_peer() {
         let peer = UserId::new();
-        let copy = super::sync_sent_copy(&peer, &crate::services::build_text_content("hi", 7)).unwrap();
-        let Some(content::Content::SyncSent(sync)) = copy.content else { panic!("not a SyncSent") };
+        let copy =
+            super::sync_sent_copy(&peer, &crate::services::build_text_content("hi", 7)).unwrap();
+        let Some(content::Content::SyncSent(sync)) = copy.content else {
+            panic!("not a SyncSent")
+        };
         assert_eq!(sync.destination_user_id, peer.to_string());
         assert_eq!(sync.message.unwrap().body, "hi");
 
@@ -975,8 +1079,18 @@ mod sync_sent_copy_tests {
     fn bare_copies_only_the_allow_list() {
         use crate::proto::content_v1::*;
         let peer = UserId::new();
-        let wrap = |c| Content { timestamp: 9, content: Some(c), ephemeral_reply_to: Some(vec![1; 32]), ..Default::default() };
-        let delete = DataMessage { delete: Some(Delete { target_sent_timestamp: 3 }), ..Default::default() };
+        let wrap = |c| Content {
+            timestamp: 9,
+            content: Some(c),
+            ephemeral_reply_to: Some(vec![1; 32]),
+            ..Default::default()
+        };
+        let delete = DataMessage {
+            delete: Some(Delete {
+                target_sent_timestamp: 3,
+            }),
+            ..Default::default()
+        };
 
         for allowed in [
             content::Content::Reaction(Reaction::default()),
@@ -984,10 +1098,14 @@ mod sync_sent_copy_tests {
             content::Content::Edit(EditMessage::default()),
             content::Content::DataMessage(delete),
         ] {
-            let copy = super::own_device_copy(&peer, &wrap(allowed.clone()), 1).expect("allowed variant not copied");
+            let copy = super::own_device_copy(&peer, &wrap(allowed.clone()), 1)
+                .expect("allowed variant not copied");
             assert_eq!(copy.content, Some(allowed));
             assert_eq!(copy.timestamp, 9);
-            assert!(copy.ephemeral_reply_to.is_none(), "our mailbox address must not ride the copy");
+            assert!(
+                copy.ephemeral_reply_to.is_none(),
+                "our mailbox address must not ride the copy"
+            );
         }
 
         for internal in [
@@ -1006,7 +1124,10 @@ mod sync_sent_copy_tests {
             content::Content::DeleteForMeSync(DeleteForMeSync::default()),
             content::Content::DataMessage(DataMessage::default()),
         ] {
-            assert!(super::own_device_copy(&peer, &wrap(internal.clone()), 1).is_none(), "{internal:?} copied");
+            assert!(
+                super::own_device_copy(&peer, &wrap(internal.clone()), 1).is_none(),
+                "{internal:?} copied"
+            );
         }
     }
 }

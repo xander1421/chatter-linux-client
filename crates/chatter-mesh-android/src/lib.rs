@@ -59,7 +59,10 @@ pub const NATIVE_METHODS: &[(&str, &str)] = &[
     // The trailing string is the advertised peer id as hex, or null when the
     // scan response has not been seen. It is what makes a rotated private
     // address recognisable without connecting to find out.
-    ("nativeOnDiscovered", "(Ljava/lang/String;ILjava/lang/String;)V"),
+    (
+        "nativeOnDiscovered",
+        "(Ljava/lang/String;ILjava/lang/String;)V",
+    ),
     ("nativeOnConnected", "(Ljava/lang/String;ZI)V"),
     ("nativeOnDisconnected", "(Ljava/lang/String;)V"),
     ("nativeOnData", "(Ljava/lang/String;[B)V"),

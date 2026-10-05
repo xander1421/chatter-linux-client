@@ -2,10 +2,10 @@
 
 use std::sync::Arc;
 
+use super::{ChatterClient, ClientError, RecoveryResult};
 use crate::services::auth_service::LoginResult;
 use crate::services::key_recovery::KeyRecoveryNeed;
 use crate::storage::repositories::settings_repo::keys;
-use super::{ChatterClient, ClientError, RecoveryResult};
 
 impl ClientError {
     /// Text for the login/register screen, without the `auth error:` /
@@ -72,7 +72,9 @@ impl ChatterClient {
         let auth_state = self.auth_state().clone();
         let login = self
             .auth()
-            .do_login(username, password, device_name, pin, &move || auth_state.set_login_verifying(true))
+            .do_login(username, password, device_name, pin, &move || {
+                auth_state.set_login_verifying(true)
+            })
             .await;
         self.auth_state().set_login_verifying(false);
         let mut result = login?;
@@ -93,7 +95,9 @@ impl ChatterClient {
                 // Nothing to attempt. Left as NoPinProvided so the caller is
                 // told to ask for the PIN rather than being handed a working
                 // -looking session with no keys.
-                None => tracing::warn!("no local identity and no PIN supplied — cannot restore keys"),
+                None => {
+                    tracing::warn!("no local identity and no PIN supplied — cannot restore keys")
+                }
             }
         }
 
@@ -131,7 +135,9 @@ impl ChatterClient {
             self.signal()
                 .publish_device_bundle(&mut auth_client)
                 .await
-                .map_err(|e| ClientError::Validation(format!("failed to publish this device's keys: {e}")))?;
+                .map_err(|e| {
+                    ClientError::Validation(format!("failed to publish this device's keys: {e}"))
+                })?;
         }
 
         // Our name, bio and avatar live on the server encrypted with our
@@ -165,7 +171,11 @@ impl ChatterClient {
             tracing::warn!("no auth client; this device stays unnamed");
             return;
         };
-        if let Err(e) = self.devices().name_this_device(&mut auth_client, device_name).await {
+        if let Err(e) = self
+            .devices()
+            .name_this_device(&mut auth_client, device_name)
+            .await
+        {
             tracing::warn!(error = %e, "could not set this device's encrypted name");
         }
     }
@@ -215,7 +225,9 @@ impl ChatterClient {
 
         self.republish_identity_keys().await?;
 
-        tracing::warn!("minted and published a NEW identity key — every contact's safety number has changed");
+        tracing::warn!(
+            "minted and published a NEW identity key — every contact's safety number has changed"
+        );
         Ok(())
     }
 
@@ -294,9 +306,10 @@ impl ChatterClient {
         }
         // Self-heal a stale Disconnected state (see `login` for context).
         self.ensure_connected_for_auth().await?;
-        let result = self.auth().do_register(
-            username, password, display_name, device_name, avatar, pin,
-        ).await?;
+        let result = self
+            .auth()
+            .do_register(username, password, display_name, device_name, avatar, pin)
+            .await?;
         self.auth_state().set_logged_in(
             result.user_id,
             result.device_id,
@@ -362,13 +375,21 @@ impl ChatterClient {
     ) -> Result<RecoveryResult, ClientError> {
         // A signed-out start no longer connects at boot (`startup_connect`).
         self.ensure_connected_for_auth().await?;
-        let mut auth_client = self.auth().try_auth_client()
+        let mut auth_client = self
+            .auth()
+            .try_auth_client()
             .ok_or_else(|| ClientError::NotConnected)?;
         // Same keying as `login`: the bare nickname, whatever form was typed.
         let username = crate::crypto::auth_crypto::login_nickname(username);
         let remaining_codes = self
             .auth()
-            .use_recovery_code(&mut auth_client, username, recovery_code, new_password, new_pin)
+            .use_recovery_code(
+                &mut auth_client,
+                username,
+                recovery_code,
+                new_password,
+                new_pin,
+            )
             .await
             .map_err(ClientError::Auth)?;
 
@@ -409,8 +430,13 @@ impl ChatterClient {
     /// # Arguments
     ///
     /// * `password` - The user's current password (will be hashed before sending)
-    pub async fn regenerate_recovery_codes(&self, password: &str) -> Result<Vec<String>, ClientError> {
-        let mut auth_client = self.auth().try_auth_client()
+    pub async fn regenerate_recovery_codes(
+        &self,
+        password: &str,
+    ) -> Result<Vec<String>, ClientError> {
+        let mut auth_client = self
+            .auth()
+            .try_auth_client()
             .ok_or_else(|| ClientError::NotConnected)?;
         self.auth()
             .regenerate_recovery_codes(&mut auth_client, password)
@@ -425,7 +451,10 @@ impl ChatterClient {
     /// not block on backup upload.
     async fn perform_svr_backup(&self, pin: &str, username: &str) {
         match self.svr_backup().backup_from_pin(pin, username).await {
-            Ok(version) => tracing::info!(version, "SVR backup created successfully after registration"),
+            Ok(version) => tracing::info!(
+                version,
+                "SVR backup created successfully after registration"
+            ),
             Err(e) => tracing::warn!("SVR backup failed (non-fatal): {}", e),
         }
     }
@@ -441,7 +470,9 @@ impl ChatterClient {
             .map_err(|e| ClientError::Validation(format!("failed to read login username: {e}")))?
             .filter(|s| !s.is_empty())
             .ok_or_else(|| {
-                ClientError::Validation("no stored login username — log out and log in once, then retry".into())
+                ClientError::Validation(
+                    "no stored login username — log out and log in once, then retry".into(),
+                )
             })
     }
 
@@ -490,14 +521,16 @@ impl ChatterClient {
     /// * `username` - Plaintext username (salt for Argon2id derivation).
     pub async fn change_pin(&self, old_pin: &str, new_pin: &str) -> Result<(), ClientError> {
         use crate::crypto::svr::{
-            derive_registration_lock, derive_svr_secret, validate_pin, validate_pin_shape, SvrKeypair,
+            SvrKeypair, derive_registration_lock, derive_svr_secret, validate_pin,
+            validate_pin_shape,
         };
         use zeroize::Zeroize;
 
         // Old PIN is the EXISTING one being verified — shape-only, or a user
         // whose current PIN is now blocklisted could never change it (§10).
         // The NEW PIN is being chosen, so it gets full strength validation.
-        validate_pin_shape(old_pin).map_err(|e| ClientError::Validation(format!("old PIN: {e}")))?;
+        validate_pin_shape(old_pin)
+            .map_err(|e| ClientError::Validation(format!("old PIN: {e}")))?;
         validate_pin(new_pin).map_err(|e| ClientError::Validation(format!("new PIN: {e}")))?;
         if old_pin == new_pin {
             return Err(ClientError::Validation(
@@ -515,9 +548,19 @@ impl ChatterClient {
             .map_err(|e| ClientError::Validation(e.to_string()))?;
 
         // 2. Get identity keypair from signal store (private 32 bytes + public 33 bytes)
-        let mut private_bytes = self.signal().actor.get_identity_private_key().await
-            .map_err(|e| ClientError::Validation(format!("failed to get identity private key: {}", e)))?;
-        let public_bytes_33 = self.signal().actor.get_identity_public_key().await
+        let mut private_bytes = self
+            .signal()
+            .actor
+            .get_identity_private_key()
+            .await
+            .map_err(|e| {
+                ClientError::Validation(format!("failed to get identity private key: {}", e))
+            })?;
+        let public_bytes_33 = self
+            .signal()
+            .actor
+            .get_identity_public_key()
+            .await
             .map_err(|e| {
                 private_bytes.zeroize();
                 ClientError::Validation(format!("failed to get identity public key: {}", e))
@@ -537,11 +580,16 @@ impl ChatterClient {
             }
             Ok(_) => {
                 identity_keypair.zeroize();
-                return Err(ClientError::Validation("profile key not found or invalid length".into()));
+                return Err(ClientError::Validation(
+                    "profile key not found or invalid length".into(),
+                ));
             }
             Err(e) => {
                 identity_keypair.zeroize();
-                return Err(ClientError::Validation(format!("failed to read profile key: {}", e)));
+                return Err(ClientError::Validation(format!(
+                    "failed to read profile key: {}",
+                    e
+                )));
             }
         };
 
@@ -605,9 +653,16 @@ impl ChatterClient {
                 // first replaced a live backup without the current PIN.
                 match self.svr_backup().has_key_backup().await {
                     Ok(false) => {
-                        tracing::info!("No existing SVR backup found, creating new backup with new PIN");
+                        tracing::info!(
+                            "No existing SVR backup found, creating new backup with new PIN"
+                        );
                         self.svr_backup()
-                            .create_and_upload_backup(&new_svr_secret, &identity_keypair, &profile_key, &full_username)
+                            .create_and_upload_backup(
+                                &new_svr_secret,
+                                &identity_keypair,
+                                &profile_key,
+                                &full_username,
+                            )
                             .await
                             .map(|_| ())
                     }
@@ -668,12 +723,7 @@ impl ChatterClient {
     /// is not advisory: `login` turns it into an error, because a device with
     /// no identity key cannot send or receive anything and reporting success
     /// is what made the loss invisible.
-    async fn attempt_svr_restore(
-        &self,
-        pin: &str,
-        username: &str,
-        result: &mut LoginResult,
-    ) {
+    async fn attempt_svr_restore(&self, pin: &str, username: &str, result: &mut LoginResult) {
         use crate::crypto::svr::derive_svr_secret;
         use zeroize::Zeroize;
 
@@ -705,11 +755,17 @@ impl ChatterClient {
         };
 
         // 3. Fetch and decrypt backup from server
-        let restore_result = match self.svr_backup().fetch_and_restore_backup(&svr_secret).await {
+        let restore_result = match self
+            .svr_backup()
+            .fetch_and_restore_backup(&svr_secret)
+            .await
+        {
             Ok(r) => r,
             Err(crate::services::svr_backup_service::SvrBackupError::BackupDestroyed) => {
                 svr_secret.zeroize();
-                tracing::error!("SVR backup permanently destroyed (too many failed PIN attempts). User must re-register PIN.");
+                tracing::error!(
+                    "SVR backup permanently destroyed (too many failed PIN attempts). User must re-register PIN."
+                );
                 result.key_recovery = Some(KeyRecoveryNeed::BackupDestroyed);
                 return;
             }
@@ -748,7 +804,7 @@ impl ChatterClient {
         // 4. Hydrate identity keypair into local key store
         //    Reconstruct libsignal IdentityKeyPair from raw 32-byte private + 32-byte public
         let mut restored_keypair = restore_result.identity_keypair; // [u8; 64]
-        let mut restored_profile_key = restore_result.profile_key;  // [u8; 32]
+        let mut restored_profile_key = restore_result.profile_key; // [u8; 32]
 
         let hydrate_ok = (|| -> std::result::Result<(), String> {
             use libsignal_protocol::{IdentityKey, IdentityKeyPair, PrivateKey};
@@ -843,5 +899,4 @@ impl ChatterClient {
         result?;
         Ok(())
     }
-
 }

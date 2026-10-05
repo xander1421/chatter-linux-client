@@ -14,7 +14,10 @@ impl ChatRowExt for ChatRowSendData {
     /// UI thread only: builds the row's `slint::Image`.
     fn to_slint(self) -> crate::ChatRowData {
         let (avatar_source, has_avatar) = if let Some((w, h, pixels)) = self.avatar_decoded {
-            (crate::bin_ui::slint_conversions::rgba_to_slint_image(&pixels, w, h), true)
+            (
+                crate::bin_ui::slint_conversions::rgba_to_slint_image(&pixels, w, h),
+                true,
+            )
         } else if let Some(bytes) = &self.avatar_bytes {
             match avatar_bytes_to_image(bytes) {
                 Some(img) => (img, true),
@@ -47,7 +50,6 @@ impl ChatRowExt for ChatRowSendData {
     }
 }
 
-
 pub trait FriendDataExt {
     fn to_slint(self) -> crate::FriendData;
 }
@@ -55,7 +57,10 @@ pub trait FriendDataExt {
 impl FriendDataExt for chatter_core::ui::sidebar_data::FriendDataSendData {
     fn to_slint(self) -> crate::FriendData {
         let (avatar_source, has_avatar) = if let Some((w, h, pixels)) = self.avatar_decoded {
-            (crate::bin_ui::slint_conversions::rgba_to_slint_image(&pixels, w, h,), true)
+            (
+                crate::bin_ui::slint_conversions::rgba_to_slint_image(&pixels, w, h),
+                true,
+            )
         } else if let Some(bytes) = &self.avatar_bytes {
             match avatar_bytes_to_image(bytes) {
                 Some(img) => (img, true),
@@ -85,7 +90,10 @@ pub trait FriendRequestExt {
 impl FriendRequestExt for FriendRequestSendData {
     fn to_slint(self) -> crate::FriendRequestData {
         let (avatar_source, has_avatar) = if let Some((w, h, pixels)) = self.avatar_decoded {
-            (crate::bin_ui::slint_conversions::rgba_to_slint_image(&pixels, w, h), true)
+            (
+                crate::bin_ui::slint_conversions::rgba_to_slint_image(&pixels, w, h),
+                true,
+            )
         } else if let Some(bytes) = &self.avatar_bytes {
             match avatar_bytes_to_image(bytes) {
                 Some(img) => (img, true),
@@ -109,7 +117,9 @@ impl FriendRequestExt for FriendRequestSendData {
 
 /// Thin presentation mapping: core member → UI row. UI thread only (decodes
 /// the avatar into a `slint::Image`).
-pub fn member_to_slint(m: &chatter_core::domain::channel::MemberWithProfile) -> crate::ChannelMemberData {
+pub fn member_to_slint(
+    m: &chatter_core::domain::channel::MemberWithProfile,
+) -> crate::ChannelMemberData {
     crate::ChannelMemberData {
         user_id: m.membership.user_id.to_string().into(),
         display_name: m.display_name.as_str().into(),
@@ -133,7 +143,9 @@ pub fn member_to_slint(m: &chatter_core::domain::channel::MemberWithProfile) -> 
 }
 
 /// Thin presentation mapping: core ban → UI row. UI thread only.
-pub fn banned_member_to_slint(b: &chatter_core::domain::channel::BannedMember) -> crate::BannedMemberData {
+pub fn banned_member_to_slint(
+    b: &chatter_core::domain::channel::BannedMember,
+) -> crate::BannedMemberData {
     crate::BannedMemberData {
         user_id: b.user_id.to_string().into(),
         display_name: b.display_name.as_str().into(),

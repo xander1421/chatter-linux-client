@@ -157,8 +157,10 @@ pub async fn accept_channel_invite(
             panic!("invitee {invitee_id} failed to accept the invite to {channel_id}: {e:?}")
         })
         .unwrap_or_else(|| {
-            panic!("invitee {invitee_id} accepted the invite to {channel_id} but the server \
-                    reported the response as not accepted")
+            panic!(
+                "invitee {invitee_id} accepted the invite to {channel_id} but the server \
+                    reported the response as not accepted"
+            )
         });
 }
 

@@ -8,8 +8,8 @@ use chatter_core::client::ChatterClient;
 use chatter_core::domain::channel::ChannelType;
 use chatter_core::domain::ids::ChannelId;
 
-use crate::{MainWindow, run_ui};
 use crate::bin_ui::converters::messages_to_display_batch;
+use crate::{MainWindow, run_ui};
 
 use super::stop_audio_playback;
 
@@ -36,7 +36,9 @@ pub fn wire_channel_selected(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
         if crate::bin_ui::features::jarvis::is_jarvis_channel_str(&channel_id_str) {
             if let Ok(parsed) = channel_id_str.parse::<ChannelId>() {
                 ui_ctx.chat_state().set_active_channel(parsed);
-                ui_ctx.chat_state().set_active_conversation(chatter_core::state::ActiveConversation::Channel(parsed));
+                ui_ctx.chat_state().set_active_conversation(
+                    chatter_core::state::ActiveConversation::Channel(parsed),
+                );
             }
             let ui_ctx_for_sel = ui_ctx.clone();
             run_ui!(weak, |w| {
@@ -55,7 +57,9 @@ pub fn wire_channel_selected(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
         // (same race fix as dm.rs — see comment there).
         if let Ok(parsed) = channel_id_str.parse::<ChannelId>() {
             ui_ctx.chat_state().set_active_channel(parsed);
-            ui_ctx.chat_state().set_active_conversation(chatter_core::state::ActiveConversation::Channel(parsed));
+            ui_ctx
+                .chat_state()
+                .set_active_conversation(chatter_core::state::ActiveConversation::Channel(parsed));
         }
 
         let channel_id_str_for_ui = channel_id_str.clone();
@@ -64,7 +68,12 @@ pub fn wire_channel_selected(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             w.set_loading_messages(true);
 
             // Clear unread count in sidebar
-            crate::bin_ui::features::auth::inbox::domain_handler::update_unread_count(&w, &ui_ctx_for_ui, &channel_id_str_for_ui, 0);
+            crate::bin_ui::features::auth::inbox::domain_handler::update_unread_count(
+                &w,
+                &ui_ctx_for_ui,
+                &channel_id_str_for_ui,
+                0,
+            );
 
             // Clear composer reply/edit state to prevent stale context
             w.set_composer_is_replying(false);
@@ -75,7 +84,7 @@ pub fn wire_channel_selected(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             w.set_composer_reply_has_thumbnail(false);
             w.set_composer_reply_thumbnail(slint::Image::default());
             crate::bin_ui::features::chat::edit::end_edit(&w);
-            
+
             // Clear pinned bar immediately while loading new channel's pins
             w.set_has_pinned_messages(false);
             w.set_pinned_message_preview("".into());
@@ -97,7 +106,8 @@ pub fn wire_channel_selected(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             run_ui!(weak, |w| super::refresh_selection(&w, &ui_ctx_for_sel));
 
             // Mark as read
-            let handle = ui_ctx.conversation(chatter_core::state::ActiveConversation::Channel(channel_id));
+            let handle =
+                ui_ctx.conversation(chatter_core::state::ActiveConversation::Channel(channel_id));
             // Where the user left off. This is the only moment it exists: the
             // call that returns it is the call that clears `is_read`. The
             // receipts go out for the page `load_channel_into_ui` loads.
@@ -106,13 +116,7 @@ pub fn wire_channel_selected(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             let ui_ctx_badges = ui_ctx.clone();
             run_ui!(weak, |w| super::refresh_section_badges(&w, &ui_ctx_badges));
 
-            load_channel_into_ui(
-                weak,
-                channel_id,
-                ui_ctx.clone(),
-                anchor,
-                Some(handle),
-            ).await;
+            load_channel_into_ui(weak, channel_id, ui_ctx.clone(), anchor, Some(handle)).await;
         });
     });
 }
@@ -147,7 +151,10 @@ pub async fn load_channel_into_ui(
     // create open through this function too and never loaded their pins.
     // Load pinned messages for this channel from DB, in the channel's own
     // conversation-type bucket (the vault is `SavedMessages`, not `Channel`).
-    let (msg_ids, preview) = match ui_ctx.load_pinned_for_channel(&channel_id, &ui_ctx.channel_conversation_type(&channel_id)).await {
+    let (msg_ids, preview) = match ui_ctx
+        .load_pinned_for_channel(&channel_id, &ui_ctx.channel_conversation_type(&channel_id))
+        .await
+    {
         Ok(pinned) if !pinned.is_empty() => {
             let ids = pinned.iter().map(|p| p.message_id).collect();
             let preview = pinned[0].preview.clone();
@@ -160,7 +167,12 @@ pub async fn load_channel_into_ui(
     // 2. Load messages — use the channel's actual conversation type so
     // SavedMessages (stored as ConversationType::SavedMessages) round-trip correctly.
     let conv_type = channel.conversation_type();
-    let messages = match ui_ctx.get_messages_local_asc(&channel_id, &conv_type, None, chatter_core::config::MESSAGE_PAGE_SIZE as u32) {
+    let messages = match ui_ctx.get_messages_local_asc(
+        &channel_id,
+        &conv_type,
+        None,
+        chatter_core::config::MESSAGE_PAGE_SIZE as u32,
+    ) {
         Ok(msgs) => msgs,
         Err(e) => {
             tracing::error!("Failed to list channel messages: {}", e);
@@ -192,12 +204,23 @@ pub async fn load_channel_into_ui(
 
     // 4. Update UI
     let is_saved = matches!(channel.channel_type, ChannelType::SavedMessages);
-    let group_name = if is_saved { "Saved Messages".to_string() } else { channel.name.clone() };
-    let topic = if is_saved { String::new() } else { channel.description.clone().unwrap_or_default() };
+    let group_name = if is_saved {
+        "Saved Messages".to_string()
+    } else {
+        channel.name.clone()
+    };
+    let topic = if is_saved {
+        String::new()
+    } else {
+        channel.description.clone().unwrap_or_default()
+    };
     let conversation_type = channel.conversation_type();
     let private_channel = matches!(channel.channel_type, ChannelType::Private);
     let member_count = channel.member_count as i32;
-    let current_user_id = ui_ctx.session_current_user_id().map(|id| id.to_string()).unwrap_or_default();
+    let current_user_id = ui_ctx
+        .session_current_user_id()
+        .map(|id| id.to_string())
+        .unwrap_or_default();
     let ui_ctx_gifs = ui_ctx.clone();
 
     // Channel icon (raw bytes stored on the Channel record). Decode on the
@@ -225,7 +248,9 @@ pub async fn load_channel_into_ui(
         w.set_header_presence_status("offline".into());
         match channel_icon_pixels {
             Some((rgba, w_px, h_px)) => {
-                w.set_channel_avatar_source(crate::bin_ui::slint_conversions::rgba_to_slint_image(&rgba, w_px, h_px,));
+                w.set_channel_avatar_source(crate::bin_ui::slint_conversions::rgba_to_slint_image(
+                    &rgba, w_px, h_px,
+                ));
                 w.set_channel_has_avatar(true);
             }
             None => {
@@ -234,7 +259,10 @@ pub async fn load_channel_into_ui(
             }
         }
 
-        let slint_messages: Vec<_> = display_messages.iter().map(|m| m.to_slint_with_user(&current_user_id)).collect();
+        let slint_messages: Vec<_> = display_messages
+            .iter()
+            .map(|m| m.to_slint_with_user(&current_user_id))
+            .collect();
         w.set_messages(ModelRc::new(VecModel::from(slint_messages)));
         w.set_loading_messages(false);
 

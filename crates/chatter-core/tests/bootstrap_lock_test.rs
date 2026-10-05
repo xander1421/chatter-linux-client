@@ -4,8 +4,8 @@
 //! only ONE bootstrap REQUEST should be sent. The bootstrap lock ensures
 //! concurrent `send_dm_content` calls don't race to send multiple REQUESTs.
 
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
 use chatter_core::domain::UserId;
@@ -336,7 +336,10 @@ async fn test_user_sends_multiple_messages_before_session() {
                 format!("Message {}: '{}' - triggered bootstrap", i, content)
             } else {
                 // Bootstrap already in progress, just queued our message
-                format!("Message {}: '{}' - queued (bootstrap in progress)", i, content)
+                format!(
+                    "Message {}: '{}' - queued (bootstrap in progress)",
+                    i, content
+                )
             }
         }));
     }

@@ -9,8 +9,12 @@
 use super::Migration;
 pub struct V077PendingDmMessages;
 impl Migration for V077PendingDmMessages {
-    fn version(&self) -> u32 { 77 }
-    fn description(&self) -> &'static str { "Pending-DM queue replaces the unused Sesame tables" }
+    fn version(&self) -> u32 {
+        77
+    }
+    fn description(&self) -> &'static str {
+        "Pending-DM queue replaces the unused Sesame tables"
+    }
     fn up(&self) -> &'static str {
         r#"
         CREATE TABLE pending_dm_messages (

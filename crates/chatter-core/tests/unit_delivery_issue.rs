@@ -16,8 +16,8 @@ use std::sync::Arc;
 use chatter_core::domain::message::{ConversationType, MessageContent, SystemMessage};
 use chatter_core::domain::{ChannelId, UserId};
 use chatter_core::inbox::polling::device::delivery_issue_message;
-use chatter_core::storage::repositories::MessageRepository;
 use chatter_core::storage::Database;
+use chatter_core::storage::repositories::MessageRepository;
 use tempfile::TempDir;
 
 fn setup_test_db() -> (TempDir, Arc<Database>) {
@@ -55,7 +55,10 @@ fn delivery_issue_marker_is_a_system_entry_in_the_peers_dm_conversation() {
     );
 
     let MessageContent::System(SystemMessage::DeliveryIssue) = &msg.content else {
-        panic!("expected a System(DeliveryIssue) entry, got {:?}", msg.content);
+        panic!(
+            "expected a System(DeliveryIssue) entry, got {:?}",
+            msg.content
+        );
     };
 
     let text = SystemMessage::DeliveryIssue.description();
@@ -225,8 +228,12 @@ fn identity_change_and_delivery_issue_markers_coexist() {
 
     repo.insert(&delivery_issue_message(peer, 1_777_000_000_000_000_000))
         .expect("insert delivery-issue marker");
-    repo.insert(&identity_changed_message(peer, 1_777_000_000_000_000_001, true))
-        .expect("insert identity-change marker");
+    repo.insert(&identity_changed_message(
+        peer,
+        1_777_000_000_000_000_001,
+        true,
+    ))
+    .expect("insert identity-change marker");
 
     let listed = repo
         .list_for_conversation(&conversation, &ConversationType::ServerDm, None, 50)
@@ -260,5 +267,9 @@ fn replaying_the_same_identity_change_envelope_does_not_stack_markers() {
         .list_for_conversation(&conversation, &ConversationType::ServerDm, None, 50)
         .expect("list conversation");
 
-    assert_eq!(listed.len(), 1, "a replayed queue will spam the conversation");
+    assert_eq!(
+        listed.len(),
+        1,
+        "a replayed queue will spam the conversation"
+    );
 }

@@ -156,7 +156,10 @@ fn xchacha_seal_vectors_with_empty_aad() {
         checked += 1;
     }
 
-    assert!(checked >= 5, "expected several empty-AAD vectors, ran {checked}");
+    assert!(
+        checked >= 5,
+        "expected several empty-AAD vectors, ran {checked}"
+    );
 }
 
 /// The two AAD vectors, including the published draft one, go straight at the
@@ -330,7 +333,12 @@ fn ecdh_shared_secret_is_the_compressed_point() {
 
         assert_eq!(forward, backward, "{}: ECDH is not symmetric", vector.name);
         assert_eq!(forward.len(), crypto::SHARED_SECRET_LEN);
-        assert_eq!(hex::encode(forward), vector.shared_secret_hex, "{}", vector.name);
+        assert_eq!(
+            hex::encode(forward),
+            vector.shared_secret_hex,
+            "{}",
+            vector.name
+        );
 
         // The two plausible wrong answers.
         assert_ne!(hex::encode(forward), vector.wrong_x_only_shared_secret_hex);
@@ -416,7 +424,12 @@ fn hkdf_orientation_is_salt_empty_info_nip44v2() {
         let ikm = unhex_n::<33>(&vector.ikm_hex);
         let key = crypto::derive_conversation_key(&ikm);
 
-        assert_eq!(hex::encode(key), vector.conversation_key_hex, "{}", vector.name);
+        assert_eq!(
+            hex::encode(key),
+            vector.conversation_key_hex,
+            "{}",
+            vector.name
+        );
         assert_ne!(
             hex::encode(key),
             vector.swapped_salt_and_info_key_hex,
@@ -623,10 +636,7 @@ fn forward_slashes_are_never_escaped() {
 
     assert!(vector.serialized.contains("https://example.com/a/b?c=d"));
     assert!(!vector.serialized.contains("\\/"));
-    assert_eq!(
-        event::event_id_hex(&vector.to_event()).unwrap(),
-        vector.id
-    );
+    assert_eq!(event::event_id_hex(&vector.to_event()).unwrap(), vector.id);
 }
 
 /// Signatures verify; they are never compared byte for byte. See the module docs.
@@ -821,7 +831,10 @@ fn geohash_alphabet_excludes_confusable_letters() {
     assert_eq!(file.alphabet, "0123456789bcdefghjkmnpqrstuvwxyz");
     assert_eq!(file.alphabet.chars().count(), 32);
     for c in ['a', 'i', 'l', 'o'] {
-        assert!(!file.alphabet.contains(c), "{c} must not be in the alphabet");
+        assert!(
+            !file.alphabet.contains(c),
+            "{c} must not be in the alphabet"
+        );
     }
 
     // And no encoding can ever emit one.
@@ -966,8 +979,18 @@ fn derived_identity_vectors() {
             "{:?}: pubkey",
             vector.label
         );
-        assert_eq!(derived.npub().unwrap(), vector.npub, "{:?}: npub", vector.label);
-        assert_eq!(derived.nsec().unwrap(), vector.nsec, "{:?}: nsec", vector.label);
+        assert_eq!(
+            derived.npub().unwrap(),
+            vector.npub,
+            "{:?}: npub",
+            vector.label
+        );
+        assert_eq!(
+            derived.nsec().unwrap(),
+            vector.nsec,
+            "{:?}: nsec",
+            vector.label
+        );
     }
 }
 
@@ -1025,8 +1048,18 @@ fn nip19_bech32_vectors() {
         let (Some(pubkey), Some(npub)) = (&vector.pubkey_hex, &vector.npub) else {
             continue; // the nsec reference is covered by the derived identities
         };
-        assert_eq!(identity::npub_encode(pubkey).unwrap(), *npub, "{}", vector.name);
-        assert_eq!(identity::npub_decode(npub).unwrap(), *pubkey, "{}", vector.name);
+        assert_eq!(
+            identity::npub_encode(pubkey).unwrap(),
+            *npub,
+            "{}",
+            vector.name
+        );
+        assert_eq!(
+            identity::npub_decode(npub).unwrap(),
+            *pubkey,
+            "{}",
+            vector.name
+        );
     }
 
     for invalid in &file.invalid_npub {
@@ -1124,7 +1157,10 @@ fn blank_nickname_is_omitted() {
         let event =
             builders::geohash_message("u4pru", "hi", blank, false, &sender, 1_700_000_000).unwrap();
         assert!(
-            !event.tags.iter().any(|t| t.first().map(String::as_str) == Some("n")),
+            !event
+                .tags
+                .iter()
+                .any(|t| t.first().map(String::as_str) == Some("n")),
             "{blank:?} should not produce an n tag"
         );
     }
@@ -1380,7 +1416,10 @@ mod relay_frames {
                     assert_eq!(Some(subscription_id), vector.subscription_id.as_ref());
                 }
                 (expected, actual) => {
-                    panic!("{}: expected a {expected} frame, got {actual:?}", vector.name)
+                    panic!(
+                        "{}: expected a {expected} frame, got {actual:?}",
+                        vector.name
+                    )
                 }
             }
         }

@@ -51,7 +51,9 @@ pub(crate) fn wire_gif_selected(window: &MainWindow, ui_ctx: &Arc<ChatterClient>
     let ui_ctx = ui_ctx.clone();
 
     window.on_composer_gif_selected(move |gif_id: SharedString, gif_url: SharedString| {
-        let Some(w) = weak_window.upgrade() else { return };
+        let Some(w) = weak_window.upgrade() else {
+            return;
+        };
         let id = gif_id.to_string();
         let url = gif_url.to_string();
         tracing::debug!("GIF selected: id={}, url={}", id, url);
@@ -61,7 +63,9 @@ pub(crate) fn wire_gif_selected(window: &MainWindow, ui_ctx: &Arc<ChatterClient>
         w.invoke_release_text_focus();
         crate::bin_ui::gif_state::clear_picker_gifs();
 
-        let Some(send) = begin_gif_send(&w, &ui_ctx) else { return };
+        let Some(send) = begin_gif_send(&w, &ui_ctx) else {
+            return;
+        };
         let (weak, ctx) = (w.as_weak(), ui_ctx.clone());
         tokio::spawn(async move {
             let upload = upload_gif(ctx.clone(), url, id);
@@ -92,8 +96,15 @@ pub fn begin_gif_send(w: &MainWindow, ui_ctx: &ChatterClient) -> Option<Composer
 
 /// Download the GIF, encrypt it and upload it to our CDN, as an attachment
 /// that is already uploaded.
-async fn upload_gif(ui_ctx: Arc<ChatterClient>, url: String, gif_id: String) -> Result<PendingAttachment, String> {
-    let upload = ui_ctx.download_and_upload_gif(&url, &gif_id).await.map_err(|e| e.to_string())?;
+async fn upload_gif(
+    ui_ctx: Arc<ChatterClient>,
+    url: String,
+    gif_id: String,
+) -> Result<PendingAttachment, String> {
+    let upload = ui_ctx
+        .download_and_upload_gif(&url, &gif_id)
+        .await
+        .map_err(|e| e.to_string())?;
     tracing::info!(
         "GIF uploaded to CDN: {} -> {} (encrypted on filesystem)",
         gif_id,
@@ -132,7 +143,9 @@ pub async fn finish_gif_send(
         return None;
     }
     let started = std::time::Instant::now();
-    if crate::bin_ui::features::chat::send_message::deliver(weak, ui_ctx, send.clone(), started).await {
+    if crate::bin_ui::features::chat::send_message::deliver(weak, ui_ctx, send.clone(), started)
+        .await
+    {
         return None;
     }
     Some(send)
@@ -141,12 +154,17 @@ pub async fn finish_gif_send(
 /// A GIF send that did not go: back into its own composer if that is open
 /// and empty, otherwise kept by core until it is (never over newer input).
 pub fn recover_gif_send(w: &MainWindow, ui_ctx: &ChatterClient, send: ComposerSend) {
-    if !ui_ctx.composer_session_is_current(send.session_revision) { return; }
+    if !ui_ctx.composer_session_is_current(send.session_revision) {
+        return;
+    }
     use crate::bin_ui::features::chat::send_message::{composer_is_empty, restore_composer};
     match ui_ctx.recover_composer_send(send, composer_is_empty(w)) {
         Some(send) => {
             restore_composer(w, ui_ctx, send);
-            toast(w, "The GIF was not sent. Your message is back in the composer.");
+            toast(
+                w,
+                "The GIF was not sent. Your message is back in the composer.",
+            );
         }
         None => toast(
             w,

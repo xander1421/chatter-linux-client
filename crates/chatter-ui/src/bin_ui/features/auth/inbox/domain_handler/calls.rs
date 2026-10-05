@@ -4,9 +4,9 @@ use std::sync::Arc;
 
 use slint::Weak;
 
+use crate::MainWindow;
 use chatter_core::client::ChatterClient;
 use chatter_core::domain::ids::UserId;
-use crate::MainWindow;
 
 /// Handle incoming call key offer.
 ///
@@ -60,8 +60,8 @@ pub(super) fn handle_call_hangup(
             // dismiss or tear down the call on screen now.
             let ringing = w.get_incoming_call_visible()
                 && w.get_incoming_call_data().call_id == call_id.as_str();
-            let active = w.get_active_call_visible()
-                && w.get_active_call_data().call_id == call_id.as_str();
+            let active =
+                w.get_active_call_visible() && w.get_active_call_data().call_id == call_id.as_str();
             if !ringing && !active {
                 tracing::info!(call_id = %call_id, "Hangup for a call not on screen; ignored");
                 return;

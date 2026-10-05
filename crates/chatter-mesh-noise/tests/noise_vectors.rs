@@ -48,9 +48,7 @@
 //! `if is_oneway || i % 2 == 0` over the global message index for both.
 
 use chatter_mesh_noise::identity::MeshIdentity;
-use chatter_mesh_noise::session::{
-    HandshakeRole, NONCE_PREFIX_LEN, NoiseHandshake, NoiseSession,
-};
+use chatter_mesh_noise::session::{HandshakeRole, NONCE_PREFIX_LEN, NoiseHandshake, NoiseSession};
 use chatter_mesh_noise::{NOISE_X_PROTOCOL, NOISE_XX_PROTOCOL};
 use serde::Deserialize;
 
@@ -192,20 +190,44 @@ fn run_xx_vector(vector: &Vector, index: usize) {
 
     // -- Message 1: initiator -> responder, `e`. The payload travels in the
     //    clear (no key exists yet), so the ciphertext is `e ‖ payload`.
-    exchange(&mut initiator, &mut responder, &vector.messages[0], &label, 1);
+    exchange(
+        &mut initiator,
+        &mut responder,
+        &vector.messages[0],
+        &label,
+        1,
+    );
     assert!(
         !initiator.is_complete() && !responder.is_complete(),
         "{label}: XX is not done after one message"
     );
 
     // -- Message 2: responder -> initiator, `e, ee, s, es`.
-    exchange(&mut responder, &mut initiator, &vector.messages[1], &label, 2);
+    exchange(
+        &mut responder,
+        &mut initiator,
+        &vector.messages[1],
+        &label,
+        2,
+    );
 
     // -- Message 3: initiator -> responder, `s, se`.
-    exchange(&mut initiator, &mut responder, &vector.messages[2], &label, 3);
+    exchange(
+        &mut initiator,
+        &mut responder,
+        &vector.messages[2],
+        &label,
+        3,
+    );
 
-    assert!(initiator.is_complete(), "{label}: initiator must be complete");
-    assert!(responder.is_complete(), "{label}: responder must be complete");
+    assert!(
+        initiator.is_complete(),
+        "{label}: initiator must be complete"
+    );
+    assert!(
+        responder.is_complete(),
+        "{label}: responder must be complete"
+    );
 
     // -- Each side learned the other's static key from the transcript. That is
     //    the mutual authentication XX buys, and everything above this crate
@@ -316,7 +338,13 @@ fn the_official_x_vector_reproduces_every_ciphertext_byte() {
         "X is one-way; the responder has no ephemeral to pin"
     );
 
-    exchange(&mut initiator, &mut responder, &vector.messages[0], &label, 1);
+    exchange(
+        &mut initiator,
+        &mut responder,
+        &vector.messages[0],
+        &label,
+        1,
+    );
 
     assert!(initiator.is_complete(), "X completes in one message");
     assert!(responder.is_complete(), "X completes in one message");

@@ -92,7 +92,9 @@ fn on_load(raw_vm: *mut jni::sys::JavaVM) -> Result<(), String> {
 
     // The thread running `JNI_OnLoad` is attached by definition — it is the one
     // that called `System.loadLibrary`.
-    let mut env = vm.get_env().map_err(|err| format!("no JNIEnv in JNI_OnLoad: {err}"))?;
+    let mut env = vm
+        .get_env()
+        .map_err(|err| format!("no JNIEnv in JNI_OnLoad: {err}"))?;
 
     // FindClass resolves through the classloader of whatever is on the call
     // stack. Doing it here works because `System.loadLibrary` was called from
@@ -105,7 +107,9 @@ fn on_load(raw_vm: *mut jni::sys::JavaVM) -> Result<(), String> {
             let described = error::drain_exception(&env, "FindClass");
             return Err(format!(
                 "{BRIDGE_CLASS} was not found: {err}{}",
-                described.map(|text| format!(" ({text})")).unwrap_or_default()
+                described
+                    .map(|text| format!(" ({text})"))
+                    .unwrap_or_default()
             ));
         }
     };
@@ -121,7 +125,10 @@ fn handlers() -> [(&'static str, *mut c_void); 5] {
         (HANDLER_NAMES[1], native_on_connected as *mut c_void),
         (HANDLER_NAMES[2], native_on_disconnected as *mut c_void),
         (HANDLER_NAMES[3], native_on_data as *mut c_void),
-        (HANDLER_NAMES[4], native_on_adapter_power_changed as *mut c_void),
+        (
+            HANDLER_NAMES[4],
+            native_on_adapter_power_changed as *mut c_void,
+        ),
     ]
 }
 
@@ -135,7 +142,9 @@ fn register_natives(env: &mut JNIEnv<'_>, class: &JClass<'_>) -> Result<(), Stri
     let mut methods = Vec::with_capacity(NATIVE_METHODS.len());
     for (name, descriptor) in NATIVE_METHODS {
         let Some((_, fn_ptr)) = handlers.iter().find(|(handler, _)| handler == name) else {
-            return Err(format!("{name}{descriptor} has no native handler behind it"));
+            return Err(format!(
+                "{name}{descriptor} has no native handler behind it"
+            ));
         };
         methods.push(NativeMethod {
             name: (*name).into(),
@@ -150,7 +159,9 @@ fn register_natives(env: &mut JNIEnv<'_>, class: &JClass<'_>) -> Result<(), Stri
             let described = error::drain_exception(env, "RegisterNatives");
             Err(format!(
                 "RegisterNatives on {BRIDGE_CLASS} failed: {err}{}",
-                described.map(|text| format!(" ({text})")).unwrap_or_default()
+                described
+                    .map(|text| format!(" ({text})"))
+                    .unwrap_or_default()
             ))
         }
     }
@@ -219,7 +230,11 @@ fn to_bool(raw: jboolean) -> bool {
 /// the central and we send by writing a characteristic. Getting this backwards
 /// picks the wrong send path for the link's whole life.
 fn role_for(is_peripheral_role: bool) -> LinkRole {
-    if is_peripheral_role { LinkRole::Peripheral } else { LinkRole::Central }
+    if is_peripheral_role {
+        LinkRole::Peripheral
+    } else {
+        LinkRole::Central
+    }
 }
 
 /// Narrow an advertisement's RSSI to the event's width.
@@ -257,7 +272,11 @@ extern "system" fn native_on_discovered(
             .then(|| read_string(&mut env, &peer, "nativeOnDiscovered(peer)"))
             .flatten()
             .and_then(|hex| decode_peer_hex(&hex));
-        link::dispatch(LinkEvent::Discovered { address, rssi: clamp_rssi(rssi), peer });
+        link::dispatch(LinkEvent::Discovered {
+            address,
+            rssi: clamp_rssi(rssi),
+            peer,
+        });
     });
 }
 
@@ -344,7 +363,9 @@ extern "system" fn native_on_adapter_power_changed(
     powered: jboolean,
 ) {
     guard("nativeOnAdapterPowerChanged", || {
-        link::dispatch(LinkEvent::AdapterPowerChanged { powered: to_bool(powered) });
+        link::dispatch(LinkEvent::AdapterPowerChanged {
+            powered: to_bool(powered),
+        });
     });
 }
 
@@ -358,7 +379,10 @@ mod tests {
         // fails at the first callback, on a phone. Cheap to rule out here.
         assert_eq!(HANDLER_NAMES.len(), NATIVE_METHODS.len());
         for (name, _) in NATIVE_METHODS {
-            assert!(HANDLER_NAMES.contains(name), "{name} is declared but has no handler");
+            assert!(
+                HANDLER_NAMES.contains(name),
+                "{name} is declared but has no handler"
+            );
         }
         for name in HANDLER_NAMES {
             assert!(
@@ -374,7 +398,10 @@ mod tests {
         // out of order would bind the wrong pointer — a mismatch RegisterNatives
         // accepts happily, because both the name and the descriptor still exist.
         for (index, (declared, _)) in NATIVE_METHODS.iter().enumerate() {
-            assert_eq!(HANDLER_NAMES[index], *declared, "handler {index} is out of order");
+            assert_eq!(
+                HANDLER_NAMES[index], *declared,
+                "handler {index} is out of order"
+            );
         }
     }
 
@@ -429,11 +456,15 @@ mod tests {
     #[test]
     fn adapter_power_marshals_both_ways() {
         assert_eq!(
-            LinkEvent::AdapterPowerChanged { powered: to_bool(1) },
+            LinkEvent::AdapterPowerChanged {
+                powered: to_bool(1)
+            },
             LinkEvent::AdapterPowerChanged { powered: true }
         );
         assert_eq!(
-            LinkEvent::AdapterPowerChanged { powered: to_bool(0) },
+            LinkEvent::AdapterPowerChanged {
+                powered: to_bool(0)
+            },
             LinkEvent::AdapterPowerChanged { powered: false }
         );
     }

@@ -23,7 +23,10 @@
 //! enforces it; call sites cannot opt out.
 
 #![forbid(unsafe_code)]
-#![cfg_attr(not(test), deny(clippy::unwrap_used, clippy::expect_used, clippy::panic))]
+#![cfg_attr(
+    not(test),
+    deny(clippy::unwrap_used, clippy::expect_used, clippy::panic)
+)]
 
 pub mod builders;
 pub mod crypto;

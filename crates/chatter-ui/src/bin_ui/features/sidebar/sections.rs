@@ -29,8 +29,11 @@ struct SectionSendData {
 
 impl SectionSendData {
     fn to_slint(self) -> CustomSectionData {
-        let rows: Vec<ChatRowData> =
-            self.conversations.into_iter().map(ChatRowExt::to_slint).collect();
+        let rows: Vec<ChatRowData> = self
+            .conversations
+            .into_iter()
+            .map(ChatRowExt::to_slint)
+            .collect();
         CustomSectionData {
             section_id: self.section_id.into(),
             name: self.name.into(),
@@ -141,7 +144,8 @@ fn wire_rename_section(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
         window.on_rename_section_clicked(move |section_id: SharedString| {
             let section_id_str = section_id.to_string();
             if let Ok(sections) = ui_ctx.list_sections_with_conversations() {
-                if let Some(section) = sections.iter().find(|s| s.id.to_string() == section_id_str) {
+                if let Some(section) = sections.iter().find(|s| s.id.to_string() == section_id_str)
+                {
                     let name: SharedString = section.name.clone().into();
                     let emoji: SharedString = section.icon_emoji.clone().into();
                     run_ui!(weak, |w| {
@@ -156,30 +160,37 @@ fn wire_rename_section(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     let ui_ctx = ui_ctx.clone();
     let weak = window.as_weak();
 
-    window.on_rename_section(move |section_id: SharedString, name: SharedString, emoji: SharedString| {
-        let section_id_str = section_id.to_string();
-        let name_str = name.to_string();
-        let emoji_str = emoji.to_string();
-        let ui_ctx = ui_ctx.clone();
-        let weak_clone = weak.clone();
+    window.on_rename_section(
+        move |section_id: SharedString, name: SharedString, emoji: SharedString| {
+            let section_id_str = section_id.to_string();
+            let name_str = name.to_string();
+            let emoji_str = emoji.to_string();
+            let ui_ctx = ui_ctx.clone();
+            let weak_clone = weak.clone();
 
-        tokio::spawn(async move {
-            let Ok(id) = section_id_str.parse::<SectionId>() else { return };
+            tokio::spawn(async move {
+                let Ok(id) = section_id_str.parse::<SectionId>() else {
+                    return;
+                };
 
-            if let Err(e) = ui_ctx.rename_section(&id, &name_str) {
-                tracing::error!(error = %e, "Failed to rename section");
-                return;
-            }
+                if let Err(e) = ui_ctx.rename_section(&id, &name_str) {
+                    tracing::error!(error = %e, "Failed to rename section");
+                    return;
+                }
 
-            if let Err(e) = ui_ctx.change_section_icon(&id, &emoji_str) {
-                tracing::error!(error = %e, "Failed to change icon");
-                return;
-            }
+                if let Err(e) = ui_ctx.change_section_icon(&id, &emoji_str) {
+                    tracing::error!(error = %e, "Failed to change icon");
+                    return;
+                }
 
-            run_ui!(weak_clone, |w| crate::bin_ui::features::back::close(&w, "create-section"));
-            refresh_sections_ui(&weak_clone, &ui_ctx);
-        });
-    });
+                run_ui!(weak_clone, |w| crate::bin_ui::features::back::close(
+                    &w,
+                    "create-section"
+                ));
+                refresh_sections_ui(&weak_clone, &ui_ctx);
+            });
+        },
+    );
 }
 
 fn wire_toggle_expanded(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
@@ -192,7 +203,9 @@ fn wire_toggle_expanded(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
         let weak_clone = weak.clone();
 
         tokio::spawn(async move {
-            let Ok(id) = section_id_str.parse::<SectionId>() else { return };
+            let Ok(id) = section_id_str.parse::<SectionId>() else {
+                return;
+            };
 
             if let Ok(sections) = ui_ctx.list_sections_with_conversations() {
                 if let Some(section) = sections.iter().find(|s| s.id == id) {
@@ -333,28 +346,27 @@ fn wire_remove_from_section(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
 fn wire_section_conversation_selected(window: &MainWindow, _ui_ctx: &Arc<ChatterClient>) {
     let weak = window.as_weak();
 
-    window.on_section_conversation_selected(move |conv_id: SharedString, kind: crate::ConversationKind| {
-        use crate::ConversationKind as K;
-        let conv_id_str = conv_id.to_string();
-        run_ui!(weak, |w| {
-            match kind {
-                K::Channel | K::SavedMessages => w.invoke_channel_selected(conv_id_str.into()),
-                K::ServerDm | K::AnonDm => w.invoke_dm_selected(conv_id_str.into()),
-                K::AnonGroup => w.invoke_private_group_selected(conv_id_str.into()),
-                // Mesh conversations are never filed into folders.
-                K::Mesh | K::MeshDm => {}
-            }
-        });
-    });
+    window.on_section_conversation_selected(
+        move |conv_id: SharedString, kind: crate::ConversationKind| {
+            use crate::ConversationKind as K;
+            let conv_id_str = conv_id.to_string();
+            run_ui!(weak, |w| {
+                match kind {
+                    K::Channel | K::SavedMessages => w.invoke_channel_selected(conv_id_str.into()),
+                    K::ServerDm | K::AnonDm => w.invoke_dm_selected(conv_id_str.into()),
+                    K::AnonGroup => w.invoke_private_group_selected(conv_id_str.into()),
+                    // Mesh conversations are never filed into folders.
+                    K::Mesh | K::MeshDm => {}
+                }
+            });
+        },
+    );
 }
 
 /// Rebuild the folder models. Queries run on the caller's (runtime) thread;
 /// only the model swap runs on the UI thread. The rebuild clears every row's
 /// selection flag, so the open conversation is re-marked after it.
-pub(crate) fn refresh_sections_ui(
-    weak: &slint::Weak<MainWindow>,
-    ui_ctx: &Arc<ChatterClient>,
-) {
+pub(crate) fn refresh_sections_ui(weak: &slint::Weak<MainWindow>, ui_ctx: &Arc<ChatterClient>) {
     if let Ok(sections) = ui_ctx.list_sections_with_conversations() {
         let send_data = build_section_data(&sections, ui_ctx);
         let ui_ctx = ui_ctx.clone();

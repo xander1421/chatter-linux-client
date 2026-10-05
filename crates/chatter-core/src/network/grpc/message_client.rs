@@ -3,22 +3,20 @@
 //! Client for message service operations including messaging, reactions,
 //! read receipts, typing indicators, pins, search, and streaming.
 
+use crate::network::grpc::transport::GrpcTransport;
 use tokio_stream::{Stream, StreamExt};
 use tonic::service::interceptor::InterceptedService;
-use crate::network::grpc::transport::GrpcTransport;
 
 use crate::error::NetworkError;
 use crate::network::grpc::interceptors::AuthInterceptor;
 use crate::proto::chat_v1::{
-    message_service_client::MessageServiceClient, AcknowledgeMessagesRequest,
-    AcknowledgeMessagesResponse, DeleteMessageRequest, EditMessageRequest, GetDeviceMessagesRequest,
-    GetDeviceMessagesResponse,
-    GetMessagesRequest, GetMessagesResponse,
-    ListPinnedMessagesResponse, Message, MessageEvent, MessageSearchRequest, MessageSearchResponse,
-    MessageSortDirection, MessageUpdate, SealedDelivery, SealedDeviceMessage,
-    SendMessageRequest, SendSealedMessageRequest, SendSealedMessageResponse,
-    StreamGlobalEventsRequest, StreamMessageEventsRequest,
-    StreamMessagesRequest, StreamMessagesResponse,
+    AcknowledgeMessagesRequest, AcknowledgeMessagesResponse, DeleteMessageRequest,
+    EditMessageRequest, GetDeviceMessagesRequest, GetDeviceMessagesResponse, GetMessagesRequest,
+    GetMessagesResponse, ListPinnedMessagesResponse, Message, MessageEvent, MessageSearchRequest,
+    MessageSearchResponse, MessageSortDirection, MessageUpdate, SealedDelivery,
+    SealedDeviceMessage, SendMessageRequest, SendSealedMessageRequest, SendSealedMessageResponse,
+    StreamGlobalEventsRequest, StreamMessageEventsRequest, StreamMessagesRequest,
+    StreamMessagesResponse, message_service_client::MessageServiceClient,
 };
 
 /// Message service client wrapper.
@@ -204,14 +202,18 @@ impl MessageClient {
         channel_id: &str,
         page_token: Option<&str>,
     ) -> Result<GetMessagesResponse, NetworkError> {
-        self.inner.get_messages(GetMessagesRequest {
-            channel_id: channel_id.to_string(),
-            limit: 50,
-            sort_direction: MessageSortDirection::SortOldestFirst.into(),
-            page_token: page_token.unwrap_or("").to_string(),
-            updated_since: Some(0),
-            ..Default::default()
-        }).await.map(|r| r.into_inner()).map_err(|s| NetworkError::from_status(&s))
+        self.inner
+            .get_messages(GetMessagesRequest {
+                channel_id: channel_id.to_string(),
+                limit: 50,
+                sort_direction: MessageSortDirection::SortOldestFirst.into(),
+                page_token: page_token.unwrap_or("").to_string(),
+                updated_since: Some(0),
+                ..Default::default()
+            })
+            .await
+            .map(|r| r.into_inner())
+            .map_err(|s| NetworkError::from_status(&s))
     }
 
     /// Stream messages from a channel.
@@ -230,7 +232,8 @@ impl MessageClient {
         &mut self,
         channel_id: &str,
         resume_from: Option<&str>,
-    ) -> Result<impl Stream<Item = Result<StreamMessagesResponse, NetworkError>>, NetworkError> {
+    ) -> Result<impl Stream<Item = Result<StreamMessagesResponse, NetworkError>>, NetworkError>
+    {
         let request = StreamMessagesRequest {
             channel_id: channel_id.to_string(),
             resume_from_message_id: resume_from.unwrap_or("").to_string(),
@@ -479,6 +482,8 @@ impl MessageClient {
     ///
     /// * `channel_ids` - Channels to stream from (empty for all user's channels)
     /// * `resume_from` - Optional event ID to resume from
+    /// Global resume is a bounded v1 channel-position checkpoint. The
+    /// per-channel stream's scalar Redis cursor remains a separate protocol.
     pub async fn stream_global_events(
         &mut self,
         channel_ids: Vec<String>,

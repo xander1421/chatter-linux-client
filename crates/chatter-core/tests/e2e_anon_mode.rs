@@ -72,7 +72,12 @@ fn unique_user(prefix: &str) -> String {
         .as_millis();
     let mut rng_bytes = [0u8; 4];
     rand::RngCore::fill_bytes(&mut rand::rng(), &mut rng_bytes);
-    format!("{}_{:x}_{}", prefix, u32::from_le_bytes(rng_bytes), ts % 100000)
+    format!(
+        "{}_{:x}_{}",
+        prefix,
+        u32::from_le_bytes(rng_bytes),
+        ts % 100000
+    )
 }
 
 async fn wait_for_event<F>(
@@ -111,7 +116,14 @@ async fn register_and_start(
 ) -> UserId {
     client.connect().await.expect("connect failed");
     let result = client
-        .register(username, PASSWORD, display_name, "e2e-test", None, Some(PIN))
+        .register(
+            username,
+            PASSWORD,
+            display_name,
+            "e2e-test",
+            None,
+            Some(PIN),
+        )
         .await
         .expect("registration failed");
     if let Err(e) = client.start().await {
@@ -321,7 +333,10 @@ async fn t18_anon_mode_does_not_affect_message_delivery() {
 
     let test_message = "T18 — sender in anon mode, receiver normal";
     client_a
-        .send_text(ActiveConversation::ServerDm { peer_id: uid_b }, test_message)
+        .send_text(
+            ActiveConversation::ServerDm { peer_id: uid_b },
+            test_message,
+        )
         .await
         .expect("A: send_text failed (anon mode must NOT block sends)");
     println!("  A sent: {:?}", test_message);
@@ -453,7 +468,10 @@ async fn t20_wrong_pin_does_not_silently_flip_flag() {
     assert!(!client.anon_mode_enabled(), "baseline: anon_mode off");
 
     let ok = client.verify_pin_for_anon_mode("999999");
-    assert!(!ok, "verify_pin_for_anon_mode(\"999999\") must return false");
+    assert!(
+        !ok,
+        "verify_pin_for_anon_mode(\"999999\") must return false"
+    );
     println!("  wrong PIN -> false (as expected)");
 
     // The crux: a failed verify MUST NOT have side effects on the flag.

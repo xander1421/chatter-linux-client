@@ -4,11 +4,11 @@
 //! Jarvis remembers conversations, learns facts about users and topics,
 //! and tracks entity relationships for context-aware responses.
 
-use std::fmt;
 use chrono::{DateTime, Utc};
+use std::fmt;
 use uuid::Uuid;
 
-use super::{ChannelId, UserId, AnonDmId, AnonGroupId};
+use super::{AnonDmId, AnonGroupId, ChannelId, UserId};
 
 // ============================================================================
 // Identifiers
@@ -373,7 +373,6 @@ pub struct JarvisContext {
 }
 
 impl JarvisContext {
-
     /// The conversation kind this context refers to, for AI policy decisions.
     ///
     /// Maps onto [`crate::domain::message::ConversationType`] so
@@ -429,7 +428,6 @@ impl JarvisContext {
             context_id: uuid::Uuid::nil().to_string(),
         }
     }
-
 }
 
 // ============================================================================
@@ -459,11 +457,7 @@ pub struct JarvisConversation {
 
 impl JarvisConversation {
     /// Create a new conversation entry.
-    pub fn new(
-        context: &JarvisContext,
-        role: Role,
-        content: String,
-    ) -> Self {
+    pub fn new(context: &JarvisContext, role: Role, content: String) -> Self {
         let now = Utc::now();
         Self {
             id: JarvisConversationId::new(),
@@ -566,7 +560,6 @@ impl JarvisFact {
         let days_since = (Utc::now() - self.last_reinforced_at).num_days() as f64;
         (self.confidence * (-self.decay_rate * days_since).exp()).max(0.0)
     }
-
 }
 
 /// A compressed conversation summary.
@@ -590,8 +583,7 @@ pub struct JarvisSummary {
     pub created_at: DateTime<Utc>,
 }
 
-impl JarvisSummary {
-}
+impl JarvisSummary {}
 
 /// An entity in the knowledge graph.
 #[derive(Debug, Clone)]
@@ -636,7 +628,6 @@ impl JarvisEntity {
             created_at: now,
         }
     }
-
 }
 
 /// A relationship between entities.
@@ -679,7 +670,6 @@ impl JarvisRelationship {
             created_at: now,
         }
     }
-
 }
 
 /// An entity mention in a specific context.
@@ -729,7 +719,6 @@ pub struct EntityKnowledge {
 }
 
 impl EntityKnowledge {
-
     /// Format as context string for LLM.
     pub fn to_context_string(&self) -> String {
         let mut parts = Vec::new();

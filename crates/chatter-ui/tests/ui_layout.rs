@@ -26,9 +26,10 @@ fn pump_at(w: &MainWindow, width: f32, height: f32) {
     // Re-entering run() after quit returns immediately. Drive real frames and
     // wall-clock time so size/focus/height animations settle on every pump.
     for _ in 0..12 {
-        w.window().dispatch_event(slint::platform::WindowEvent::Resized {
-            size: slint::LogicalSize::new(width, height),
-        });
+        w.window()
+            .dispatch_event(slint::platform::WindowEvent::Resized {
+                size: slint::LogicalSize::new(width, height),
+            });
         slint::Timer::single_shot(std::time::Duration::from_millis(1), || {
             slint::quit_event_loop().unwrap();
         });
@@ -38,16 +39,22 @@ fn pump_at(w: &MainWindow, width: f32, height: f32) {
 }
 
 fn click(w: &MainWindow, label: &str) {
-    let element = testing::ElementHandle::find_by_accessible_label(w, label).next().unwrap();
+    let element = testing::ElementHandle::find_by_accessible_label(w, label)
+        .next()
+        .unwrap();
     let pos = element.absolute_position();
     let size = element.size();
     let position = slint::LogicalPosition::new(pos.x + size.width / 2.0, pos.y + size.height / 2.0);
-    w.window().dispatch_event(slint::platform::WindowEvent::PointerPressed {
-        position, button: slint::platform::PointerEventButton::Left,
-    });
-    w.window().dispatch_event(slint::platform::WindowEvent::PointerReleased {
-        position, button: slint::platform::PointerEventButton::Left,
-    });
+    w.window()
+        .dispatch_event(slint::platform::WindowEvent::PointerPressed {
+            position,
+            button: slint::platform::PointerEventButton::Left,
+        });
+    w.window()
+        .dispatch_event(slint::platform::WindowEvent::PointerReleased {
+            position,
+            button: slint::platform::PointerEventButton::Left,
+        });
 }
 
 fn pump(w: &MainWindow) {
@@ -148,24 +155,45 @@ fn composer_drawer_and_recording_have_usable_geometry() {
     w.set_channel_name("Composer geometry".into());
     w.set_mobile_show_chat(true);
     w.set_composer_text("Draft stays here".into());
-    for (mobile, width, height) in [(true, 320.0, 800.0), (true, 360.0, 480.0), (false, 1200.0, 900.0)] {
+    for (mobile, width, height) in [
+        (true, 320.0, 800.0),
+        (true, 360.0, 480.0),
+        (false, 1200.0, 900.0),
+    ] {
         w.set_is_mobile_platform(mobile);
         w.window().set_size(slint::LogicalSize::new(width, height));
         pump_at(&w, width, height);
         click(&w, "Message input");
-        w.window().dispatch_event(slint::platform::WindowEvent::KeyPressed { text: slint::platform::Key::End.into() });
-        w.window().dispatch_event(slint::platform::WindowEvent::KeyPressed { text: slint::platform::Key::LeftArrow.into() });
+        w.window()
+            .dispatch_event(slint::platform::WindowEvent::KeyPressed {
+                text: slint::platform::Key::End.into(),
+            });
+        w.window()
+            .dispatch_event(slint::platform::WindowEvent::KeyPressed {
+                text: slint::platform::Key::LeftArrow.into(),
+            });
         click(&w, "Emoji & GIF picker");
         pump_at(&w, width, height);
         assert!(w.get_composer_emoji_picker_visible());
-        assert!((w.window().size().to_logical(w.window().scale_factor()).width - width).abs() < 1.0);
+        assert!(
+            (w.window()
+                .size()
+                .to_logical(w.window().scale_factor())
+                .width
+                - width)
+                .abs()
+                < 1.0
+        );
         w.invoke_insert_composer_emoji("😀".into());
         pump_at(&w, width, height);
         assert_eq!(w.get_composer_text().as_str(), "Draft stays her😀e");
         click(&w, "Show keyboard");
         pump_at(&w, width, height);
         assert!(!w.get_composer_emoji_picker_visible());
-        w.window().dispatch_event(slint::platform::WindowEvent::KeyPressed { text: slint::platform::Key::Backspace.into() });
+        w.window()
+            .dispatch_event(slint::platform::WindowEvent::KeyPressed {
+                text: slint::platform::Key::Backspace.into(),
+            });
         assert_eq!(w.get_composer_text().as_str(), "Draft stays here");
         w.set_composer_emoji_picker_visible(true);
         pump_at(&w, width, height);
@@ -188,20 +216,39 @@ fn composer_drawer_and_recording_have_usable_geometry() {
         // updates. Inspect the visible input, not just the backing query.
         click(&w, "Search emoji and GIFs");
         for text in ["c", "a", "t"] {
-            w.window().dispatch_event(slint::platform::WindowEvent::KeyPressed { text: text.into() });
+            w.window()
+                .dispatch_event(slint::platform::WindowEvent::KeyPressed { text: text.into() });
         }
         pump_at(&w, width, height);
         assert_eq!(w.get_composer_emoji_search().as_str(), "cat");
-        let search_value = || testing::ElementHandle::find_by_accessible_label(&w, "Search emoji and GIFs")
-            .next().unwrap().accessible_value().unwrap().to_string();
+        let search_value = || {
+            testing::ElementHandle::find_by_accessible_label(&w, "Search emoji and GIFs")
+                .next()
+                .unwrap()
+                .accessible_value()
+                .unwrap()
+                .to_string()
+        };
         assert_eq!(search_value(), "cat");
         w.set_active_call_fullscreen(true);
         pump_at(&w, width, height);
-        assert!(testing::ElementHandle::find_by_element_type_name(&w, "ChatLayout").next().is_none());
+        assert!(
+            testing::ElementHandle::find_by_element_type_name(&w, "ChatLayout")
+                .next()
+                .is_none()
+        );
         w.set_active_call_fullscreen(false);
         pump_at(&w, width, height);
-        assert_eq!(search_value(), "cat", "remounted drawer lost its visible query");
-        assert_eq!(w.get_composer_text().as_str(), "Draft stays here", "open drawer remount replayed emoji insertion");
+        assert_eq!(
+            search_value(),
+            "cat",
+            "remounted drawer lost its visible query"
+        );
+        assert_eq!(
+            w.get_composer_text().as_str(),
+            "Draft stays here",
+            "open drawer remount replayed emoji insertion"
+        );
         click(&w, "GIFs");
         pump_at(&w, width, height);
         assert_eq!(search_value(), w.get_composer_gif_picker_search().as_str());
@@ -218,12 +265,21 @@ fn composer_drawer_and_recording_have_usable_geometry() {
         let backs = std::rc::Rc::new(std::cell::Cell::new(0));
         let capture = backs.clone();
         w.on_back_pressed(move || capture.set(capture.get() + 1));
-        w.window().dispatch_event(slint::platform::WindowEvent::KeyPressed { text: slint::platform::Key::Escape.into() });
-        assert_eq!(backs.get(), 1, "drawer must retain a Back/Escape focus owner");
+        w.window()
+            .dispatch_event(slint::platform::WindowEvent::KeyPressed {
+                text: slint::platform::Key::Escape.into(),
+            });
+        assert_eq!(
+            backs.get(),
+            1,
+            "drawer must retain a Back/Escape focus owner"
+        );
         w.set_composer_emoji_picker_visible(false);
         w.set_composer_gif_picker_visible(true);
         pump_at(&w, width, height);
-        let chat = testing::ElementHandle::find_by_element_type_name(&w, "ChatLayout").next().unwrap();
+        let chat = testing::ElementHandle::find_by_element_type_name(&w, "ChatLayout")
+            .next()
+            .unwrap();
         let cp = chat.absolute_position();
         let gif = testing::ElementHandle::find_by_element_type_name(&w, "GifPicker")
             .next()
@@ -306,34 +362,57 @@ fn composer_drawer_and_recording_have_usable_geometry() {
             w.global::<VoiceRecording>().set_active(true);
             w.global::<VoiceRecording>().set_locked(false);
         });
-        let mic = testing::ElementHandle::find_by_accessible_label(&w, "Record voice message").next().unwrap();
+        let mic = testing::ElementHandle::find_by_accessible_label(&w, "Record voice message")
+            .next()
+            .unwrap();
         let p = mic.absolute_position();
         let size = mic.size();
         let position = slint::LogicalPosition::new(p.x + size.width / 2.0, p.y + size.height / 2.0);
-        w.window().dispatch_event(slint::platform::WindowEvent::PointerPressed {
-            position, button: slint::platform::PointerEventButton::Left,
-        });
+        w.window()
+            .dispatch_event(slint::platform::WindowEvent::PointerPressed {
+                position,
+                button: slint::platform::PointerEventButton::Left,
+            });
         pump_at(&w, width, height);
         let slid = slint::LogicalPosition::new(position.x, position.y - 65.0);
-        w.window().dispatch_event(slint::platform::WindowEvent::PointerMoved { position: slid });
-        assert!(w.global::<VoiceRecording>().get_locked(), "recording expansion changed slide-to-lock distance");
-        w.window().dispatch_event(slint::platform::WindowEvent::PointerReleased {
-            position: slid, button: slint::platform::PointerEventButton::Left,
-        });
-        assert_eq!(finishes.get(), 1, "releasing a locked recording must not send");
+        w.window()
+            .dispatch_event(slint::platform::WindowEvent::PointerMoved { position: slid });
+        assert!(
+            w.global::<VoiceRecording>().get_locked(),
+            "recording expansion changed slide-to-lock distance"
+        );
+        w.window()
+            .dispatch_event(slint::platform::WindowEvent::PointerReleased {
+                position: slid,
+                button: slint::platform::PointerEventButton::Left,
+            });
+        assert_eq!(
+            finishes.get(),
+            1,
+            "releasing a locked recording must not send"
+        );
         w.global::<VoiceRecording>().set_active(false);
         w.set_composer_text("Draft stays here".into());
         pump_at(&w, width, height);
         click(&w, "Message input");
         w.set_selection_mode(true);
         pump_at(&w, width, height);
-        w.window().dispatch_event(slint::platform::WindowEvent::KeyPressed { text: "x".into() });
-        assert_eq!(w.get_composer_text().as_str(), "Draft stays here", "hidden composer retained typing focus");
+        w.window()
+            .dispatch_event(slint::platform::WindowEvent::KeyPressed { text: "x".into() });
+        assert_eq!(
+            w.get_composer_text().as_str(),
+            "Draft stays here",
+            "hidden composer retained typing focus"
+        );
         w.set_selection_mode(false);
         w.set_mobile_show_chat(false);
         pump_at(&w, width, height);
         w.set_mobile_show_chat(true);
         pump_at(&w, width, height);
-        assert_eq!(w.get_composer_text().as_str(), "Draft stays here", "mount replayed the previous emoji insertion");
+        assert_eq!(
+            w.get_composer_text().as_str(),
+            "Draft stays here",
+            "mount replayed the previous emoji insertion"
+        );
     }
 }

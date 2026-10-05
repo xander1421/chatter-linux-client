@@ -154,7 +154,13 @@ impl TwoWayAnonymity {
 
         for (peer_id, public_key, private_key, mailbox_id) in active_keys {
             match self
-                .poll_single_mailbox(mailbox_client, &peer_id, &public_key, &private_key, &mailbox_id)
+                .poll_single_mailbox(
+                    mailbox_client,
+                    &peer_id,
+                    &public_key,
+                    &private_key,
+                    &mailbox_id,
+                )
                 .await
             {
                 Ok(result) => results.push(result),
@@ -196,7 +202,8 @@ impl TwoWayAnonymity {
                 .get_mailbox_challenge(public_key.to_vec())
                 .await
             {
-                Ok(resp) => resp,                Err(e) => return Err(MailboxError::Network(e.to_string())),
+                Ok(resp) => resp,
+                Err(e) => return Err(MailboxError::Network(e.to_string())),
             };
 
             let signature = signing_key.sign(&challenge_response.challenge);
@@ -212,7 +219,8 @@ impl TwoWayAnonymity {
                 )
                 .await
             {
-                Ok(resp) => resp,                Err(e) => return Err(MailboxError::Network(e.to_string())),
+                Ok(resp) => resp,
+                Err(e) => return Err(MailboxError::Network(e.to_string())),
             };
 
             let page_count = poll_response.messages.len();
@@ -302,9 +310,7 @@ impl TwoWayAnonymity {
     /// Check if conversation is ready for sending.
     pub fn can_send(&self, peer_id: &UserId) -> Result<bool, MailboxError> {
         let conversation = self.conversation_manager.load_conversation(peer_id)?;
-        Ok(conversation
-            .map(|c| c.is_ready_to_send())
-            .unwrap_or(false))
+        Ok(conversation.map(|c| c.is_ready_to_send()).unwrap_or(false))
     }
 
     /// Check if conversation is ready for receiving.
@@ -320,7 +326,8 @@ impl TwoWayAnonymity {
         &self,
         within_hours: i64,
     ) -> Result<Vec<UserId>, MailboxError> {
-        self.conversation_manager.get_expiring_mailboxes(within_hours)
+        self.conversation_manager
+            .get_expiring_mailboxes(within_hours)
     }
 
     /// Clean up expired mailbox state.

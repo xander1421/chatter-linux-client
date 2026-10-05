@@ -243,7 +243,11 @@ async fn process_sealed_sender_group_message(
         // The pairwise session with this member is desynced. Same self-heal
         // as the device inbox (polling/device.rs): the InboxEventProcessor
         // ships the DecryptionErrorMessage back to the sending device.
-        SealedSenderResult::DecryptionErrorNeedsReport { sender_id, sender_device_id, dem_serialized } => {
+        SealedSenderResult::DecryptionErrorNeedsReport {
+            sender_id,
+            sender_device_id,
+            dem_serialized,
+        } => {
             tracing::warn!(
                 group_id = %group_id,
                 message_id = %message_id,
@@ -273,14 +277,23 @@ async fn process_sealed_sender_group_message(
         }
         // A member's retry request that arrived here rather than in the
         // device inbox is answered all the same.
-        SealedSenderResult::ResendRequested { peer_id, peer_device_id, timestamp_ms } => {
+        SealedSenderResult::ResendRequested {
+            peer_id,
+            peer_device_id,
+            timestamp_ms,
+        } => {
             let _ = event_tx.send(InboxEvent::GroupResendRequested {
                 peer_id,
                 peer_device_id,
                 timestamp_ms,
             });
         }
-        SealedSenderResult::SessionHealed { peer_id, peer_device_id, archived, timestamp_ms } => {
+        SealedSenderResult::SessionHealed {
+            peer_id,
+            peer_device_id,
+            archived,
+            timestamp_ms,
+        } => {
             tracing::info!(
                 group_id = %group_id,
                 message_id = %message_id,
@@ -428,8 +441,12 @@ async fn process_sealed_sender_group_message(
 
             // Emit UI event for the anonymous group message
             let _ = event_tx.send(
-                InboxEvent::AnonGroupMessage { peer_id: sender_id, group_id: anon_group_id, inner_content }
-                    .server_stamp_call_offer(envelope_ts_ns),
+                InboxEvent::AnonGroupMessage {
+                    peer_id: sender_id,
+                    group_id: anon_group_id,
+                    inner_content,
+                }
+                .server_stamp_call_offer(envelope_ts_ns),
             );
         }
         SealedSenderResult::AnonGroupJoinAckReceived {
@@ -489,4 +506,3 @@ async fn process_sealed_sender_group_message(
     // Every arm above is a handled outcome.
     AckDecision::Ack
 }
-

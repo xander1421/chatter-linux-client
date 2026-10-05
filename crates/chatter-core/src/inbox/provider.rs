@@ -19,13 +19,18 @@ use crate::network::grpc::{AnonymousMailboxClient, MessageClient};
 use crate::network::validation::MessageValidationPipeline;
 use crate::services::gateway::MessageGateway;
 use crate::services::pairwise::PairwiseService;
-use crate::storage::{AttachmentRepository, ChannelRepository, Database, MessageRepository, SettingsRepository, UserRepository};
+use crate::storage::{
+    AttachmentRepository, ChannelRepository, Database, MessageRepository, SettingsRepository,
+    UserRepository,
+};
 
 use super::config::InboxConfig;
 use super::error::InboxError;
 use super::events::InboxEvent;
 use super::poller::InboxPoller;
-use super::polling::{poll_dm_mailboxes, poll_group_mailboxes, process_anon_dm_results, process_device_message};
+use super::polling::{
+    poll_dm_mailboxes, poll_group_mailboxes, process_anon_dm_results, process_device_message,
+};
 use super::state::{InboxState, InboxStats};
 use super::streaming::spawn_user_events_stream;
 
@@ -55,10 +60,18 @@ impl Drop for ResponsivePollGuard {
 
 impl PollHints {
     fn begin(self: &Arc<Self>) -> ResponsivePollGuard {
-        let id = self.next_id.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        self.leases.lock().push((id, std::time::Instant::now() + std::time::Duration::from_secs(65)));
+        let id = self
+            .next_id
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        self.leases.lock().push((
+            id,
+            std::time::Instant::now() + std::time::Duration::from_secs(65),
+        ));
         self.wake.notify_one();
-        ResponsivePollGuard { hints: self.clone(), id }
+        ResponsivePollGuard {
+            hints: self.clone(),
+            id,
+        }
     }
 
     fn interval(&self, base: std::time::Duration, direct: bool) -> std::time::Duration {
@@ -74,7 +87,12 @@ impl PollHints {
 
     /// Return false on shutdown. Restore the original deadline if transport
     /// changes to Shield, including after a wake shortened the sleep.
-    async fn wait(&self, base: std::time::Duration, shutdown: &mut watch::Receiver<bool>, direct: impl Fn() -> bool) -> bool {
+    async fn wait(
+        &self,
+        base: std::time::Duration,
+        shutdown: &mut watch::Receiver<bool>,
+        direct: impl Fn() -> bool,
+    ) -> bool {
         let original = tokio::time::Instant::now() + base;
         let mut target = tokio::time::Instant::now() + self.interval(base, direct());
         loop {
@@ -119,7 +137,12 @@ async fn perform_dummy_poll(
         let mut decoys_guard = decoys.write().await;
         while decoys_guard.len() < MAX_DECOY_MAILBOXES {
             let mut seed = [0u8; 32];
-            {use rand::TryRngCore; rand::rngs::OsRng.try_fill_bytes(&mut seed[..]).expect("OS CSPRNG must not fail");}
+            {
+                use rand::TryRngCore;
+                rand::rngs::OsRng
+                    .try_fill_bytes(&mut seed[..])
+                    .expect("OS CSPRNG must not fail");
+            }
             decoys_guard.push(SigningKey::from_bytes(&seed));
         }
     }
@@ -263,7 +286,17 @@ impl DeviceInboxProvider {
         grpc_pool: Arc<GrpcClientPool>,
         attachment_repo: Arc<AttachmentRepository>,
     ) -> Self {
-        Self::with_event_bus(config, message_client, mailbox_client, pipeline, message_gateway, database, grpc_pool, attachment_repo, None)
+        Self::with_event_bus(
+            config,
+            message_client,
+            mailbox_client,
+            pipeline,
+            message_gateway,
+            database,
+            grpc_pool,
+            attachment_repo,
+            None,
+        )
     }
 
     /// Create a new device inbox provider with an event bus for domain events.
@@ -313,7 +346,9 @@ impl DeviceInboxProvider {
             database,
             grpc_pool,
             event_bus,
-            dm_deduplicator: Arc::new(crate::network::validation::MessageDeduplicator::with_default_capacity()),
+            dm_deduplicator: Arc::new(
+                crate::network::validation::MessageDeduplicator::with_default_capacity(),
+            ),
             attachment_repo,
             timing,
             dummy_poll_probability: 0.2, // 20% dummy polls per NDSS '21
@@ -505,14 +540,21 @@ impl DeviceInboxProvider {
         let channel_repo = Arc::new(ChannelRepository::new(database.clone()));
         let user_repo = Arc::new(UserRepository::new(database.clone()));
         let ephemeral_repo = Arc::new(
-            crate::storage::repositories::ephemeral_repo::EphemeralRepository::new(database.clone()),
+            crate::storage::repositories::ephemeral_repo::EphemeralRepository::new(
+                database.clone(),
+            ),
         );
 
         // Create group mailbox infrastructure
         let group_mailbox_manager = Arc::new(GroupMailboxManager::new(database.clone()));
-        let group_coordinator =
-            Arc::new(GroupCoordinator::new(database.clone(), group_mailbox_manager.clone()));
-        let group_fanout = Arc::new(GroupFanout::new(group_mailbox_manager, mailbox_client.clone()));
+        let group_coordinator = Arc::new(GroupCoordinator::new(
+            database.clone(),
+            group_mailbox_manager.clone(),
+        ));
+        let group_fanout = Arc::new(GroupFanout::new(
+            group_mailbox_manager,
+            mailbox_client.clone(),
+        ));
 
         // Start user events stream for real-time friend request notifications
         tracing::info!("Checking for user ID to start user events stream...");
@@ -591,7 +633,11 @@ impl DeviceInboxProvider {
                 Ok(Some(messages)) => {
                     let count = messages.len();
                     if count > 0 {
-                        tracing::info!(cycle = poll_cycle, count, "Device inbox: received messages");
+                        tracing::info!(
+                            cycle = poll_cycle,
+                            count,
+                            "Device inbox: received messages"
+                        );
                     } else {
                         tracing::info!(cycle = poll_cycle, "Device inbox: empty");
                     }
@@ -628,9 +674,8 @@ impl DeviceInboxProvider {
                         if decision.should_ack() {
                             handled.push(guid);
                         } else {
-                            lowest_retained = Some(
-                                lowest_retained.map_or(queue_id, |lo: i64| lo.min(queue_id)),
-                            );
+                            lowest_retained =
+                                Some(lowest_retained.map_or(queue_id, |lo: i64| lo.min(queue_id)));
                             tracing::info!(
                                 cycle = poll_cycle,
                                 message_guid = %guid,
@@ -748,7 +793,9 @@ impl DeviceInboxProvider {
             .await;
 
             // 4. Poll anonymous DM mailboxes (if configured)
-            if let (Some(anon_poller), Some(pairwise), Some(anon_client)) = (&anon_dm_poller, &pairwise_service, &anon_mailbox_client) {
+            if let (Some(anon_poller), Some(pairwise), Some(anon_client)) =
+                (&anon_dm_poller, &pairwise_service, &anon_mailbox_client)
+            {
                 // Random delay before anon DM polling
                 timing.delay_between_batch_items().await;
 
@@ -758,7 +805,8 @@ impl DeviceInboxProvider {
                 }
 
                 // Check how many mailboxes we have to poll
-                let mailbox_count = anon_poller.get_active_mailbox_keys()
+                let mailbox_count = anon_poller
+                    .get_active_mailbox_keys()
                     .map(|keys| keys.len())
                     .unwrap_or(0);
 
@@ -776,15 +824,22 @@ impl DeviceInboxProvider {
                             let (tx, mut rx) = tokio::sync::mpsc::channel(64);
                             // Blocking check closure — uses the DB directly to
                             // avoid threading AnonDmService through the polling layer.
-                            let anon_repo = crate::storage::repositories::AnonDmRepository::new(database.clone());
-                            let is_blocked = |sender: &crate::domain::UserId, conv: &crate::domain::anon_dm::AnonDmId| -> bool {
+                            let anon_repo = crate::storage::repositories::AnonDmRepository::new(
+                                database.clone(),
+                            );
+                            let is_blocked = |sender: &crate::domain::UserId,
+                                              conv: &crate::domain::anon_dm::AnonDmId|
+                             -> bool {
                                 if anon_repo.is_user_blocked(sender).unwrap_or(false) {
                                     return true;
                                 }
-                                anon_repo.get_conversation(conv)
+                                anon_repo
+                                    .get_conversation(conv)
                                     .ok()
                                     .flatten()
-                                    .map(|dm| dm.status == crate::domain::anon_dm::AnonDmStatus::Blocked)
+                                    .map(|dm| {
+                                        dm.status == crate::domain::anon_dm::AnonDmStatus::Blocked
+                                    })
                                     .unwrap_or(false)
                             };
                             // Use deduplicator to prevent re-decryption when ack fails
@@ -810,7 +865,11 @@ impl DeviceInboxProvider {
                             for (conversation_id, message_ids) in processed {
                                 if !message_ids.is_empty() {
                                     if let Err(e) = anon_poller
-                                        .acknowledge_messages(&conversation_id, message_ids, &mut client)
+                                        .acknowledge_messages(
+                                            &conversation_id,
+                                            message_ids,
+                                            &mut client,
+                                        )
                                         .await
                                     {
                                         tracing::warn!(
@@ -844,9 +903,13 @@ impl DeviceInboxProvider {
             // actually paces the loop. Honour shutdown during the wait.
             let base = poller.current_interval();
             let wait = timing.jitter_interval(base).min(base);
-            if !poll_hints.wait(wait, &mut shutdown_rx, || {
-                grpc_pool.transport_mode() == crate::network::grpc::client_pool::TransportMode::Direct
-            }).await {
+            if !poll_hints
+                .wait(wait, &mut shutdown_rx, || {
+                    grpc_pool.transport_mode()
+                        == crate::network::grpc::client_pool::TransportMode::Direct
+                })
+                .await
+            {
                 break;
             }
         }
@@ -901,9 +964,15 @@ mod responsive_poll_tests {
         let base = Duration::from_secs(5);
         assert_eq!(hints.interval(base, true), base);
         let guard = hints.begin();
-        tokio::time::timeout(Duration::from_millis(50), hints.wake.notified()).await.unwrap();
+        tokio::time::timeout(Duration::from_millis(50), hints.wake.notified())
+            .await
+            .unwrap();
         assert_eq!(hints.interval(base, true), Duration::from_millis(250));
-        assert_eq!(hints.interval(base, false), base, "Shield cadence stays unchanged");
+        assert_eq!(
+            hints.interval(base, false),
+            base,
+            "Shield cadence stays unchanged"
+        );
         let other = hints.begin();
         drop(guard);
         assert_eq!(hints.interval(base, true), Duration::from_millis(250));
@@ -915,9 +984,15 @@ mod responsive_poll_tests {
     fn abandoned_lease_expires_and_never_slows_a_shorter_base() {
         let hints = Arc::new(PollHints::default());
         let _guard = hints.begin();
-        assert_eq!(hints.interval(Duration::from_millis(100), true), Duration::from_millis(100));
+        assert_eq!(
+            hints.interval(Duration::from_millis(100), true),
+            Duration::from_millis(100)
+        );
         hints.leases.lock()[0].1 = Instant::now() - Duration::from_secs(1);
-        assert_eq!(hints.interval(Duration::from_secs(5), true), Duration::from_secs(5));
+        assert_eq!(
+            hints.interval(Duration::from_secs(5), true),
+            Duration::from_secs(5)
+        );
     }
 
     #[tokio::test]
@@ -932,7 +1007,11 @@ mod responsive_poll_tests {
             let task_direct = direct.clone();
             let start = tokio::time::Instant::now();
             let task = tokio::spawn(async move {
-                task_hints.wait(Duration::from_millis(600), &mut rx, || task_direct.load(Ordering::Relaxed)).await
+                task_hints
+                    .wait(Duration::from_millis(600), &mut rx, || {
+                        task_direct.load(Ordering::Relaxed)
+                    })
+                    .await
             });
             tokio::time::sleep(Duration::from_millis(20)).await;
             hints.wake.notify_one();
@@ -962,8 +1041,16 @@ mod responsive_poll_tests {
     #[tokio::test]
     async fn push_bursts_coalesce_to_one_pending_wake() {
         let hints = PollHints::default();
-        for _ in 0..100 { hints.wake.notify_one(); }
-        tokio::time::timeout(Duration::from_millis(50), hints.wake.notified()).await.unwrap();
-        assert!(tokio::time::timeout(Duration::from_millis(20), hints.wake.notified()).await.is_err());
+        for _ in 0..100 {
+            hints.wake.notify_one();
+        }
+        tokio::time::timeout(Duration::from_millis(50), hints.wake.notified())
+            .await
+            .unwrap();
+        assert!(
+            tokio::time::timeout(Duration::from_millis(20), hints.wake.notified())
+                .await
+                .is_err()
+        );
     }
 }

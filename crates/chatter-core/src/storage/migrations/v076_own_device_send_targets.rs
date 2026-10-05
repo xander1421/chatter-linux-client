@@ -3,8 +3,12 @@
 use super::Migration;
 pub struct V076OwnDeviceSendTargets;
 impl Migration for V076OwnDeviceSendTargets {
-    fn version(&self) -> u32 { 76 }
-    fn description(&self) -> &'static str { "Snapshot own other devices per send" }
+    fn version(&self) -> u32 {
+        76
+    }
+    fn description(&self) -> &'static str {
+        "Snapshot own other devices per send"
+    }
     fn up(&self) -> &'static str {
         r#"
         CREATE TABLE own_device_send_targets (
@@ -18,5 +22,7 @@ impl Migration for V076OwnDeviceSendTargets {
         CREATE INDEX own_device_send_targets_sent_at ON own_device_send_targets(sent_at);
         "#
     }
-    fn down(&self) -> Option<&'static str> { Some("DROP TABLE own_device_send_targets;") }
+    fn down(&self) -> Option<&'static str> {
+        Some("DROP TABLE own_device_send_targets;")
+    }
 }

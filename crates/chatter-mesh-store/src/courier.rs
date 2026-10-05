@@ -123,7 +123,10 @@ pub struct AnnounceIngress {
 impl AnnounceIngress {
     /// Both facts stated explicitly. The named constructors below are clearer at a
     /// call site; this exists for callers computing the facts from predicates.
-    pub const fn new(verified_direct_announce: bool, link_is_noise_authenticated_now: bool) -> Self {
+    pub const fn new(
+        verified_direct_announce: bool,
+        link_is_noise_authenticated_now: bool,
+    ) -> Self {
         Self {
             verified_direct_announce,
             link_is_noise_authenticated_now,
@@ -406,10 +409,15 @@ impl<S: Storage> CourierStore<S> {
         ingress: AnnounceIngress,
     ) -> Result<Vec<CourierEnvelope>, StoreError> {
         let mut taken = Vec::new();
-        self.handover_envelopes(recipient_noise_static_key, now_unix_secs, ingress, |envelope| {
-            taken.push(envelope.clone());
-            true
-        })?;
+        self.handover_envelopes(
+            recipient_noise_static_key,
+            now_unix_secs,
+            ingress,
+            |envelope| {
+                taken.push(envelope.clone());
+                true
+            },
+        )?;
         Ok(taken)
     }
 
@@ -592,7 +600,8 @@ fn decode_pool(bytes: &[u8]) -> Result<Vec<StoredEnvelope>, StoreError> {
 
     let mut envelopes = Vec::with_capacity(count);
     for _ in 0..count {
-        let recipient_tag = <[u8; TAG_LEN]>::try_from(cursor.take(TAG_LEN)?).map_err(|_| malformed())?;
+        let recipient_tag =
+            <[u8; TAG_LEN]>::try_from(cursor.take(TAG_LEN)?).map_err(|_| malformed())?;
         let expiry_ms = cursor.u64()?;
 
         let ciphertext_len = cursor.u32()? as usize;
@@ -688,7 +697,13 @@ mod tests {
 
     /// Envelopes are identified by ciphertext, so every fixture needs a distinct
     /// one or the store treats them as the same mail.
-    fn envelope_at(recipient: &[u8], nonce: u32, lifetime_secs: u64, copies: u8, now: u64) -> CourierEnvelope {
+    fn envelope_at(
+        recipient: &[u8],
+        nonce: u32,
+        lifetime_secs: u64,
+        copies: u8,
+        now: u64,
+    ) -> CourierEnvelope {
         let mut ciphertext = vec![0x5A; 96];
         ciphertext[..4].copy_from_slice(&nonce.to_be_bytes());
         CourierEnvelope::new(
@@ -720,11 +735,11 @@ mod tests {
         let recipient = key(0xB0);
         let mail = envelope(&recipient, 1);
 
-        store
-            .deposit(&mail, &key(0xA1), NOW)
-            .expect("deposit");
+        store.deposit(&mail, &key(0xA1), NOW).expect("deposit");
 
-        let taken = store.take_envelopes(&recipient, NOW, direct()).expect("take");
+        let taken = store
+            .take_envelopes(&recipient, NOW, direct())
+            .expect("take");
         assert_eq!(taken, vec![mail]);
         // Delivery removes the envelope.
         assert!(store.is_empty());
@@ -762,7 +777,10 @@ mod tests {
                 .is_empty()
         );
         assert_eq!(
-            store.take_envelopes(&key(0xB0), NOW, direct()).expect("take").len(),
+            store
+                .take_envelopes(&key(0xB0), NOW, direct())
+                .expect("take")
+                .len(),
             1
         );
     }
@@ -772,9 +790,7 @@ mod tests {
         let mut store = store();
         let recipient = key(0xB0);
         let mail = envelope(&recipient, 1);
-        store
-            .deposit(&mail, &key(0xA1), NOW)
-            .expect("deposit");
+        store.deposit(&mail, &key(0xA1), NOW).expect("deposit");
 
         let mut offers = Vec::new();
         let outcome = store
@@ -888,7 +904,6 @@ mod tests {
         assert!(AnnounceIngress::verified_direct_on_authenticated_link().releases_mail());
     }
 
-
     // MARK: - Non-negotiable 1: quotas
 
     #[test]
@@ -965,8 +980,13 @@ mod tests {
         store.deposit(&greedy, &key(0xA1), NOW).expect("deposit");
 
         assert_eq!(MAX_COPIES, 8);
-        let taken = store.take_envelopes(&recipient, NOW, direct()).expect("take");
-        assert_eq!(taken.iter().map(|e| e.copies).collect::<Vec<_>>(), vec![MAX_COPIES]);
+        let taken = store
+            .take_envelopes(&recipient, NOW, direct())
+            .expect("take");
+        assert_eq!(
+            taken.iter().map(|e| e.copies).collect::<Vec<_>>(),
+            vec![MAX_COPIES]
+        );
     }
 
     #[test]
@@ -982,7 +1002,9 @@ mod tests {
             .expect("higher-budget original followed");
         assert_eq!(store.carried_count(), 1);
 
-        let taken = store.take_envelopes(&recipient, NOW, direct()).expect("take");
+        let taken = store
+            .take_envelopes(&recipient, NOW, direct())
+            .expect("take");
         assert_eq!(taken.iter().map(|e| e.copies).collect::<Vec<_>>(), vec![4]);
     }
 
@@ -1069,11 +1091,7 @@ mod tests {
         let mut store = store();
         let recipient = key(0xB0);
         store
-            .deposit(
-                &envelope_at(&recipient, 1, HOUR, 1, NOW),
-                &key(0xA1),
-                NOW,
-            )
+            .deposit(&envelope_at(&recipient, 1, HOUR, 1, NOW), &key(0xA1), NOW)
             .expect("short-lived");
         store
             .deposit(
@@ -1099,17 +1117,24 @@ mod tests {
         assert!(store.is_empty());
     }
 
-
     // MARK: - Persistence and wipe
 
     #[test]
     fn the_pool_round_trips_through_storage() {
         let mut store = store();
         store
-            .deposit(&envelope_at(&key(0xE0), 1, 12 * HOUR, 4, NOW), &key(0xA1), NOW)
+            .deposit(
+                &envelope_at(&key(0xE0), 1, 12 * HOUR, 4, NOW),
+                &key(0xA1),
+                NOW,
+            )
             .expect("deposit");
         store
-            .deposit(&envelope_at(&key(0xE1), 2, 12 * HOUR, 1, NOW), &key(0xA2), NOW)
+            .deposit(
+                &envelope_at(&key(0xE1), 2, 12 * HOUR, 1, NOW),
+                &key(0xA2),
+                NOW,
+            )
             .expect("deposit");
 
         let before = store.envelopes.clone();
@@ -1152,7 +1177,9 @@ mod tests {
 
     #[test]
     fn restore_re_applies_the_per_depositor_quota() {
-        let envelopes: Vec<_> = (0..8u32).map(|index| stored(index, vec![0xA1; 32])).collect();
+        let envelopes: Vec<_> = (0..8u32)
+            .map(|index| stored(index, vec![0xA1; 32]))
+            .collect();
         let storage = MemoryStorage::new();
         storage
             .save(StorageKey::CourierPool, &encode_pool(&envelopes))
@@ -1170,11 +1197,7 @@ mod tests {
     fn restore_drops_expired_mail_and_a_malformed_blob_starts_empty() {
         let mut store = store();
         store
-            .deposit(
-                &envelope_at(&key(0xB0), 1, HOUR, 1, NOW),
-                &key(0xA1),
-                NOW,
-            )
+            .deposit(&envelope_at(&key(0xB0), 1, HOUR, 1, NOW), &key(0xA1), NOW)
             .expect("deposit");
 
         let storage = store.into_storage();
@@ -1205,7 +1228,10 @@ mod tests {
 
         store.wipe().expect("wipe");
         assert!(store.is_empty());
-        assert!(store.storage().is_empty(), "panic wipe leaves nothing behind");
+        assert!(
+            store.storage().is_empty(),
+            "panic wipe leaves nothing behind"
+        );
         assert!(
             store
                 .take_envelopes(&recipient, NOW, direct())
@@ -1223,7 +1249,9 @@ mod tests {
             .expect("deposit");
         assert!(!store.storage().is_empty());
 
-        store.take_envelopes(&recipient, NOW, direct()).expect("take");
+        store
+            .take_envelopes(&recipient, NOW, direct())
+            .expect("take");
         assert!(
             store.storage().is_empty(),
             "the last envelope leaving must not leave a stale blob behind"

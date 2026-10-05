@@ -10,7 +10,7 @@ Lookup the [`crate::items`] module documentation.
 */
 use super::{
     EventResult, FontMetrics, InputType, Item, ItemConsts, ItemRc, ItemRef, KeyEventArg,
-    KeyEventResult, KeyEventType, PointArg, PointerEventButton, RenderingResult, StringArg,
+    KeyEventResult, KeyEventType, PointArg, PointerEvent, PointerEventArg, PointerEventButton, PointerEventKind, RenderingResult, StringArg,
     TextHorizontalAlignment, TextOverflow, TextStrokeStyle, TextVerticalAlignment, TextWrap,
     VoidArg,
 };
@@ -23,7 +23,7 @@ use crate::item_rendering::{
     CachedRenderingData, HasFont, ItemRenderer, PlainOrStyledText, RenderString, RenderText,
 };
 use crate::layout::{LayoutInfo, Orientation};
-use crate::lengths::{LogicalLength, LogicalPoint, LogicalRect, LogicalSize};
+use crate::lengths::{LogicalLength, LogicalPoint, LogicalRect, LogicalSize, PointLengths};
 use crate::platform::Clipboard;
 #[cfg(feature = "rtti")]
 use crate::rtti::*;
@@ -32,7 +32,7 @@ use crate::window::{InputMethodProperties, InputMethodRequest, WindowAdapter, Wi
 use crate::{Callback, Coord, Property, SharedString, SharedVector};
 use alloc::{rc::Rc, string::String};
 use const_field_offset::FieldOffsets;
-use core::cell::Cell;
+use core::cell::{Cell, RefCell};
 use core::pin::Pin;
 #[allow(unused)]
 use euclid::num::Ceil;
@@ -245,6 +245,12 @@ pub struct StyledTextItem {
     pub vertical_alignment: Property<TextVerticalAlignment>,
     pub link_clicked: Callback<StringArg>,
     pub link_color: Property<Color>,
+    // Chatter: observe the link-owned pointer stream without duplicating taps.
+    pub pointer_event: Callback<PointerEventArg>,
+    pub mouse_x: Property<LogicalLength>,
+    pub mouse_y: Property<LogicalLength>,
+    // Chatter: an explicit short tap, not a hold/drag or unmatched release.
+    link_press: RefCell<Option<(String, LogicalPoint, u64, i32)>>,
     pub cached_rendering_data: CachedRenderingData,
 }
 
@@ -302,40 +308,90 @@ impl Item for StyledTextItem {
                 None,
             )
         };
-        // Chatter patch: only a press on a link belongs to the text. Upstream
-        // accepted every press, move and release, so a TouchArea around the
-        // text (long-press, right-click, tap, hover) never saw one. Text
-        // without links is now as transparent to input as a plain `Text`.
+        // Link presses own their stream; other text and right-click still reach
+        // the bubble. Its TouchArea is a sibling, so notify the message explicitly
+        // rather than expecting its before-children filter to receive this press.
+        #[cfg(feature = "shared-parley")]
+        let notify = |kind, button, position: LogicalPoint, touch_finger_id| {
+            self.mouse_x.set(position.x_length());
+            self.mouse_y.set(position.y_length());
+            Self::FIELD_OFFSETS.pointer_event().apply_pin(self).call(&(PointerEvent {
+                kind,
+                button,
+                modifiers: window_adapter.window().0.context().0.modifiers.get().into(),
+                touch_finger_id,
+            },));
+        };
         #[cfg(feature = "shared-parley")]
         if self.text().paragraphs.iter().all(|p| p.links.is_empty()) {
+            let cancelled = self.link_press.borrow_mut().take();
+            if let Some((_, origin, _, finger)) = cancelled {
+                notify(PointerEventKind::Cancel, PointerEventButton::Other, origin, finger);
+            }
             return InputEventResult::EventIgnored;
         }
         match event {
             #[cfg(feature = "shared-parley")]
-            MouseEvent::Released {
-                position,
-                button: PointerEventButton::Left,
-                click_count: _,
-                touch_finger_id: _,
-            } => {
+            MouseEvent::Pressed { position, button: PointerEventButton::Left, touch_finger_id, .. } => {
+                let cancelled = self.link_press.borrow_mut().take();
+                if let Some((_, origin, _, finger)) = cancelled {
+                    notify(PointerEventKind::Cancel, PointerEventButton::Other, origin, finger);
+                }
                 let Some(link) = find_link(position) else {
                     return InputEventResult::EventIgnored;
                 };
+                *self.link_press.borrow_mut() = Some((link, *position, crate::animations::Instant::now().0, *touch_finger_id));
+                notify(PointerEventKind::Down, PointerEventButton::Left, *position, *touch_finger_id);
                 *cursor = super::MouseCursor::Pointer;
-                Self::FIELD_OFFSETS.link_clicked().apply_pin(self).call(&(link.into(),));
+                // Keep release/movement paired even outside the glyphs. Flickable
+                // ancestors can still steal this grab and deliver Exit/Cancel.
+                InputEventResult::GrabMouse
+            }
+            #[cfg(feature = "shared-parley")]
+            MouseEvent::Released { position, button: PointerEventButton::Left, touch_finger_id, .. } => {
+                let pressed = self.link_press.borrow_mut().take();
+                notify(PointerEventKind::Up, PointerEventButton::Left, *position, *touch_finger_id);
+                let Some((pressed_link, origin, tick, finger)) = pressed else {
+                    return InputEventResult::EventIgnored;
+                };
+                let Some(link) = find_link(position) else { return InputEventResult::EventAccepted; };
+                let delta = *position - origin;
+                if finger == *touch_finger_id && link == pressed_link
+                    && delta.square_length() <= 64.0
+                    && crate::animations::Instant::now().0.saturating_sub(tick) < 500 {
+                    Self::FIELD_OFFSETS.link_clicked().apply_pin(self).call(&(link.into(),));
+                }
                 InputEventResult::EventAccepted
             }
             #[cfg(feature = "shared-parley")]
-            MouseEvent::Moved { position, .. }
-            | MouseEvent::Pressed { position, .. }
-            | MouseEvent::Released { position, .. } => {
-                if find_link(position).is_none() {
-                    return InputEventResult::EventIgnored;
+            MouseEvent::Moved { position, touch_finger_id } => {
+                let cancel = self.link_press.borrow().as_ref().is_some_and(|(_, origin, _, finger)| {
+                    finger != touch_finger_id || (*position - *origin).square_length() > 64.0
+                });
+                if cancel {
+                    self.link_press.borrow_mut().take();
+                    notify(PointerEventKind::Cancel, PointerEventButton::Other, *position, *touch_finger_id);
+                } else if self.link_press.borrow().is_some() {
+                    notify(PointerEventKind::Move, PointerEventButton::Other, *position, *touch_finger_id);
                 }
-                *cursor = super::MouseCursor::Pointer;
-                InputEventResult::EventAccepted
+                if find_link(position).is_some() { *cursor = super::MouseCursor::Pointer; }
+                if self.link_press.borrow().is_some() || cancel {
+                    InputEventResult::GrabMouse
+                } else {
+                    InputEventResult::EventIgnored
+                }
             }
-            _ => InputEventResult::EventIgnored,
+            // Right-click belongs to the bubble/context menu. Exit, wheel and
+            // other gestures cancel both the pending tap and message hold timer.
+            _ => {
+                #[cfg(feature = "shared-parley")]
+                let cancelled = self.link_press.borrow_mut().take();
+                #[cfg(feature = "shared-parley")]
+                if let Some((_, origin, _, finger)) = cancelled {
+                    notify(PointerEventKind::Cancel, PointerEventButton::Other, origin, finger);
+                }
+                InputEventResult::EventIgnored
+            }
         }
     }
 

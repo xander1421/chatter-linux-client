@@ -93,14 +93,24 @@ impl MessageService {
             targets.extend(devices.into_iter().map(|device| (peer, DeviceId(device))));
         }
         let receipts = MessageReceiptRepository::new(self.database.clone());
-        receipts.snapshot_for_send(channel, self.conversation_type(&channel), author, sent_at, &targets)?;
+        receipts.snapshot_for_send(
+            channel,
+            self.conversation_type(&channel),
+            author,
+            sent_at,
+            &targets,
+        )?;
         // Our other devices read this send through the same sender key, so a
         // resend may go to them too, but only to the ones that exist now: a
         // device linked later gets nothing, as for any member. If the list
         // cannot be fetched, nothing is recorded and no own device gets a
         // resend of this message.
         if author_is_member {
-            let current = self.settings_repo.get::<u32>(keys::CURRENT_DEVICE_ID).ok().flatten();
+            let current = self
+                .settings_repo
+                .get::<u32>(keys::CURRENT_DEVICE_ID)
+                .ok()
+                .flatten();
             let own: Vec<DeviceId> = self
                 .own_device_ids()
                 .await
@@ -109,7 +119,13 @@ impl MessageService {
                 .filter(|device| Some(*device) != current)
                 .map(DeviceId)
                 .collect();
-            receipts.snapshot_own_devices_for_send(channel, self.conversation_type(&channel), author, sent_at, &own)?;
+            receipts.snapshot_own_devices_for_send(
+                channel,
+                self.conversation_type(&channel),
+                author,
+                sent_at,
+                &own,
+            )?;
         }
         Ok(())
     }
@@ -331,7 +347,12 @@ mod tests {
             );
             let mut wrong_target = sync.clone();
             wrong_target.receipt_targets[0].user_id = UserId::new().to_string();
-            assert!(gateway.store_synced_sent_message(wrong_target, author).await.is_err());
+            assert!(
+                gateway
+                    .store_synced_sent_message(wrong_target, author)
+                    .await
+                    .is_err()
+            );
             if early {
                 target
                     .apply_peer_receipt(

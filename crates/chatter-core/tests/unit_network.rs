@@ -97,26 +97,22 @@ async fn test_network_bandwidth_simulation() {
 
 #[tokio::test]
 async fn test_network_execute_success() {
-    use framework::mocks::{NetworkSimulator, MockResult};
+    use framework::mocks::{MockResult, NetworkSimulator};
 
     let network = NetworkSimulator::perfect();
 
-    let result: MockResult<i32> = network
-        .execute(|| async { Ok(42) })
-        .await;
+    let result: MockResult<i32> = network.execute(|| async { Ok(42) }).await;
 
     assert_eq!(result.unwrap(), 42);
 }
 
 #[tokio::test]
 async fn test_network_execute_failure() {
-    use framework::mocks::{NetworkSimulator, MockError};
+    use framework::mocks::{MockError, NetworkSimulator};
 
     let network = NetworkSimulator::offline();
 
-    let result: Result<i32, MockError> = network
-        .execute(|| async { Ok(42) })
-        .await;
+    let result: Result<i32, MockError> = network.execute(|| async { Ok(42) }).await;
 
     assert!(result.is_err(), "Offline network should cause failure");
     match result {
@@ -173,8 +169,12 @@ async fn test_mock_server_message_operations() {
     let channel_id = server.create_channel(channel);
 
     // Store messages
-    let msg1 = MessageBuilder::text("Hello").in_channel(&channel_id).build();
-    let msg2 = MessageBuilder::text("World").in_channel(&channel_id).build();
+    let msg1 = MessageBuilder::text("Hello")
+        .in_channel(&channel_id)
+        .build();
+    let msg2 = MessageBuilder::text("World")
+        .in_channel(&channel_id)
+        .build();
 
     server.store_message(msg1);
     server.store_message(msg2);
@@ -231,8 +231,8 @@ async fn test_mock_server_clear() {
 async fn test_mock_server_with_network_conditions() {
     use framework::mocks::{MockGrpcServer, NetworkSimulator};
 
-    let server = MockGrpcServer::new()
-        .with_network(NetworkSimulator::slow(Duration::from_millis(10)));
+    let server =
+        MockGrpcServer::new().with_network(NetworkSimulator::slow(Duration::from_millis(10)));
 
     // Server should still work, just with latency
     let user = UserBuilder::named("SlowUser").build();
@@ -247,20 +247,17 @@ async fn test_mock_server_with_network_conditions() {
 
 #[tokio::test]
 async fn test_harness_mock_network() {
-    let harness = TestHarness::builder()
-        .with_mock_network()
-        .build()
-        .await;
+    let harness = TestHarness::builder().with_mock_network().build().await;
 
-    assert!(harness.mock_server.is_some(), "Mock network should have mock server");
+    assert!(
+        harness.mock_server.is_some(),
+        "Mock network should have mock server"
+    );
 }
 
 #[tokio::test]
 async fn test_harness_offline_mode() {
-    let harness = TestHarness::builder()
-        .offline()
-        .build()
-        .await;
+    let harness = TestHarness::builder().offline().build().await;
 
     // In offline mode, network operations should fail
     assert!(harness.network.should_fail());
@@ -268,10 +265,7 @@ async fn test_harness_offline_mode() {
 
 #[tokio::test]
 async fn test_harness_flaky_network() {
-    let harness = TestHarness::builder()
-        .with_flaky_network(0.3)
-        .build()
-        .await;
+    let harness = TestHarness::builder().with_flaky_network(0.3).build().await;
 
     // Should have mock server even with flaky network
     assert!(harness.mock_server.is_some());
@@ -378,7 +372,11 @@ async fn test_complete_flow_with_network_sim() {
     for i in 0..5 {
         let msg = MessageBuilder::text(&format!("Message {}", i))
             .in_channel(&channel_id)
-            .from(if i % 2 == 0 { alice.user_id() } else { bob.user_id() })
+            .from(if i % 2 == 0 {
+                alice.user_id()
+            } else {
+                bob.user_id()
+            })
             .build();
         harness.mock_server().store_message(msg);
     }
@@ -415,11 +413,17 @@ async fn test_network_failure_rate_clamping() {
     // Values outside 0-1 should be clamped
     let network_negative = NetworkSimulator::flaky(-0.5);
     for _ in 0..10 {
-        assert!(!network_negative.should_fail(), "Negative rate should be clamped to 0");
+        assert!(
+            !network_negative.should_fail(),
+            "Negative rate should be clamped to 0"
+        );
     }
 
     let network_over = NetworkSimulator::flaky(2.0);
     for _ in 0..10 {
-        assert!(network_over.should_fail(), "Rate > 1 should be clamped to 1");
+        assert!(
+            network_over.should_fail(),
+            "Rate > 1 should be clamped to 1"
+        );
     }
 }

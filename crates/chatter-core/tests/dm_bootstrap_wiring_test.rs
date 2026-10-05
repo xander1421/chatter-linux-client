@@ -12,7 +12,7 @@ use prost::Message as ProstMessage;
 use chatter_core::domain::{ChannelId, UserId};
 use chatter_core::events::EventBus;
 use chatter_core::inbox::handlers::DomainEvent;
-use chatter_core::proto::content_v1::{content, Content, KeyExchange};
+use chatter_core::proto::content_v1::{Content, KeyExchange, content};
 use chatter_core::services::gateway::SealedSenderResult;
 
 /// Test that SealedSenderResult::KeyExchange is returned for KeyExchange content.
@@ -380,7 +380,10 @@ async fn test_event_bus_doesnt_block_on_slow_receiver() {
     }
 
     // Fast receiver should still get events
-    let event = fast_rx.recv().await.expect("Fast receiver should get event");
+    let event = fast_rx
+        .recv()
+        .await
+        .expect("Fast receiver should get event");
     assert!(matches!(event, DomainEvent::KeyExchangeReceived { .. }));
 }
 
@@ -393,8 +396,8 @@ async fn test_event_bus_doesnt_block_on_slow_receiver() {
 /// 4. Handler identifies 64-byte key as bootstrap and would process it
 #[tokio::test]
 async fn test_full_key_exchange_event_flow() {
-    use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, Ordering};
 
     let event_bus = EventBus::new();
     let bootstrap_detected = Arc::new(AtomicBool::new(false));
@@ -447,8 +450,8 @@ async fn test_full_key_exchange_event_flow() {
 /// Test that 32-byte keys don't trigger bootstrap detection in handler simulation.
 #[tokio::test]
 async fn test_32_byte_key_does_not_trigger_bootstrap() {
-    use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, Ordering};
 
     let event_bus = EventBus::new();
     let bootstrap_detected = Arc::new(AtomicBool::new(false));

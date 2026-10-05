@@ -7,12 +7,12 @@
 pub fn category_icon(category: &str) -> &'static str {
     match category {
         "image" => "\u{1F5BC}\u{FE0F}", // Framed picture
-        "video" => "\u{1F3AC}",          // Clapper board
-        "audio" => "\u{1F3B5}",          // Musical note
-        "document" => "\u{1F4C4}",       // Page facing up
-        "code" => "\u{1F4DD}",           // Memo
-        "archive" => "\u{1F4E6}",        // Package
-        _ => "\u{1F4CE}",                // Paperclip (default)
+        "video" => "\u{1F3AC}",         // Clapper board
+        "audio" => "\u{1F3B5}",         // Musical note
+        "document" => "\u{1F4C4}",      // Page facing up
+        "code" => "\u{1F4DD}",          // Memo
+        "archive" => "\u{1F4E6}",       // Package
+        _ => "\u{1F4CE}",               // Paperclip (default)
     }
 }
 

@@ -29,12 +29,10 @@ pub fn init_hw_video(window: &MainWindow) -> bool {
         gl_linux::init_gl_video(window)
     }
 
-
     #[cfg(target_os = "windows")]
     {
         d3d11_windows::init_d3d11_video(window)
     }
-
 
     #[cfg(not(any(target_os = "linux", target_os = "windows")))]
     {
@@ -51,12 +49,10 @@ pub fn is_hw_available() -> bool {
         gl_linux::is_gl_available()
     }
 
-
     #[cfg(target_os = "windows")]
     {
         d3d11_windows::is_d3d11_available()
     }
-
 
     #[cfg(not(any(target_os = "linux", target_os = "windows")))]
     {
@@ -71,12 +67,10 @@ pub fn is_hw_connected() -> bool {
         gl_linux::is_gl_connected()
     }
 
-
     #[cfg(target_os = "windows")]
     {
         d3d11_windows::is_d3d11_connected()
     }
-
 
     #[cfg(not(any(target_os = "linux", target_os = "windows")))]
     {
@@ -92,12 +86,10 @@ pub fn start_hw_video(data: Vec<u8>) -> Option<f64> {
         gl_linux::start_gl_video(data)
     }
 
-
     #[cfg(target_os = "windows")]
     {
         d3d11_windows::start_d3d11_video(data)
     }
-
 
     #[cfg(not(any(target_os = "linux", target_os = "windows")))]
     {
@@ -133,12 +125,10 @@ pub fn stop_hw_video() {
         gl_linux::stop_gl_video();
     }
 
-
     #[cfg(target_os = "windows")]
     {
         d3d11_windows::stop_d3d11_video();
     }
-
 }
 
 /// Set hardware video playing state.
@@ -148,12 +138,10 @@ pub fn set_hw_video_playing(playing: bool) {
         gl_linux::set_gl_video_playing(playing);
     }
 
-
     #[cfg(target_os = "windows")]
     {
         d3d11_windows::set_d3d11_video_playing(playing);
     }
-
 
     // No hw video path on this platform (e.g. macOS) — see init_hw_video above.
     #[cfg(not(any(target_os = "linux", target_os = "windows")))]
@@ -167,12 +155,10 @@ pub fn is_hw_video_active() -> bool {
         gl_linux::is_gl_video_active()
     }
 
-
     #[cfg(target_os = "windows")]
     {
         d3d11_windows::is_d3d11_video_active()
     }
-
 
     #[cfg(not(any(target_os = "linux", target_os = "windows")))]
     {
@@ -187,12 +173,10 @@ pub fn get_hw_video_position() -> Option<f64> {
         gl_linux::get_gl_video_position()
     }
 
-
     #[cfg(target_os = "windows")]
     {
         d3d11_windows::get_d3d11_video_position()
     }
-
 
     #[cfg(not(any(target_os = "linux", target_os = "windows")))]
     {
@@ -207,12 +191,10 @@ pub fn get_hw_video_duration() -> Option<f64> {
         gl_linux::get_gl_video_duration()
     }
 
-
     #[cfg(target_os = "windows")]
     {
         d3d11_windows::get_d3d11_video_duration()
     }
-
 
     #[cfg(not(any(target_os = "linux", target_os = "windows")))]
     {
@@ -227,12 +209,10 @@ pub fn seek_hw_video(position: f64) {
         gl_linux::seek_gl_video(position);
     }
 
-
     #[cfg(target_os = "windows")]
     {
         d3d11_windows::seek_d3d11_video(position);
     }
-
 
     #[cfg(not(any(target_os = "linux", target_os = "windows")))]
     {
@@ -247,12 +227,10 @@ pub fn set_hw_video_volume(volume: f64) {
         gl_linux::set_gl_video_volume(volume);
     }
 
-
     #[cfg(target_os = "windows")]
     {
         d3d11_windows::set_d3d11_video_volume(volume);
     }
-
 
     #[cfg(not(any(target_os = "linux", target_os = "windows")))]
     {

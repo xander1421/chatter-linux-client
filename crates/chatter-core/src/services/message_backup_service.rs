@@ -21,16 +21,16 @@ use std::sync::Arc;
 use zeroize::Zeroize;
 
 use crate::crypto::message_backup::{
-    decrypt_backup_file, derive_message_backup_id, derive_passphrase_kek, derive_server_kek,
-    encrypt_backup_file, parse_backup_file, ARGON2_SALT_LEN, KEY_MODE_LINK, KEY_MODE_PASSPHRASE,
-    KEY_MODE_SVR,
+    ARGON2_SALT_LEN, KEY_MODE_LINK, KEY_MODE_PASSPHRASE, KEY_MODE_SVR, decrypt_backup_file,
+    derive_message_backup_id, derive_passphrase_kek, derive_server_kek, encrypt_backup_file,
+    parse_backup_file,
 };
 use crate::error::{CryptoError, NetworkError, StorageError};
 use crate::network::grpc::client_pool::GrpcClientPool;
 use crate::network::storage_http::storage_client;
-use crate::storage::backup_data::{dump_frames, import_frames, ImportSummary};
-use crate::storage::repositories::settings_repo::{keys, SettingsRepository};
 use crate::storage::Database;
+use crate::storage::backup_data::{ImportSummary, dump_frames, import_frames};
+use crate::storage::repositories::settings_repo::{SettingsRepository, keys};
 
 /// Errors from message-backup operations.
 #[derive(Debug, thiserror::Error)]
@@ -296,7 +296,11 @@ impl MessageBackupService {
         self.storage_put(&upload.upload_url, container.clone(), "blob upload failed")
             .await?;
 
-        tracing::info!(rows, bytes = container.len(), "message backup uploaded to server");
+        tracing::info!(
+            rows,
+            bytes = container.len(),
+            "message backup uploaded to server"
+        );
         Ok(BackupStats {
             rows,
             bytes: container.len(),
@@ -328,7 +332,9 @@ impl MessageBackupService {
             }
         };
 
-        let blob = self.storage_get(&download.download_url, "blob download failed").await;
+        let blob = self
+            .storage_get(&download.download_url, "blob download failed")
+            .await;
         let blob = match blob {
             Ok(b) => b,
             Err(e) => {
@@ -351,8 +357,7 @@ impl MessageBackupService {
     /// Delete the server-side backup (metadata row + blob).
     pub async fn delete_server_backup(&self, pin: &str) -> Result<(), MessageBackupError> {
         let username = self.salt_username()?;
-        let mut svr_secret =
-            crate::crypto::svr::derive_svr_secret_async(pin, &username).await?;
+        let mut svr_secret = crate::crypto::svr::derive_svr_secret_async(pin, &username).await?;
         let backup_id = derive_message_backup_id(&svr_secret);
         svr_secret.zeroize();
 
@@ -382,7 +387,9 @@ impl MessageBackupService {
         context: &str,
     ) -> Result<(), MessageBackupError> {
         #[cfg(feature = "onion")]
-        if self.grpc_pool.transport_mode() == crate::network::grpc::client_pool::TransportMode::Onion {
+        if self.grpc_pool.transport_mode()
+            == crate::network::grpc::client_pool::TransportMode::Onion
+        {
             let tor = self.grpc_pool.onion_tor();
             let resp = crate::network::anon_http::put(&tor, url, body, "application/octet-stream")
                 .await
@@ -396,7 +403,8 @@ impl MessageBackupService {
             return Ok(());
         }
 
-        let response = storage_client().map_err(MessageBackupError::Generic)?
+        let response = storage_client()
+            .map_err(MessageBackupError::Generic)?
             .put(url)
             .header("Content-Type", "application/octet-stream")
             .body(body)
@@ -418,14 +426,17 @@ impl MessageBackupService {
     /// going direct.
     async fn storage_get(&self, url: &str, context: &str) -> Result<Vec<u8>, MessageBackupError> {
         #[cfg(feature = "onion")]
-        if self.grpc_pool.transport_mode() == crate::network::grpc::client_pool::TransportMode::Onion {
+        if self.grpc_pool.transport_mode()
+            == crate::network::grpc::client_pool::TransportMode::Onion
+        {
             let tor = self.grpc_pool.onion_tor();
             return crate::network::anon_http::get(&tor, url)
                 .await
                 .map_err(|e| MessageBackupError::Generic(format!("{context}: {e}")));
         }
 
-        let response = storage_client().map_err(MessageBackupError::Generic)?
+        let response = storage_client()
+            .map_err(MessageBackupError::Generic)?
             .get(url)
             .send()
             .await
@@ -459,8 +470,12 @@ impl MessageBackupService {
         container: &[u8],
         upload_url: &str,
     ) -> Result<(), MessageBackupError> {
-        self.storage_put(upload_url, container.to_vec(), "transfer archive upload failed")
-            .await
+        self.storage_put(
+            upload_url,
+            container.to_vec(),
+            "transfer archive upload failed",
+        )
+        .await
     }
 
     /// Download the transfer archive from the primary-supplied presigned URL,
@@ -490,14 +505,14 @@ impl MessageBackupService {
 mod tests {
     use super::*;
     use crate::crypto::message_backup::{
-        decrypt_backup_file, derive_link_sync_kek, parse_backup_file, KEY_MODE_LINK,
+        KEY_MODE_LINK, decrypt_backup_file, derive_link_sync_kek, parse_backup_file,
     };
     use crate::domain::ids::UserId;
     use crate::domain::user::User;
     use crate::network::grpc::client_pool::GrpcClientPool;
+    use crate::storage::Database;
     use crate::storage::backup_data::import_frames;
     use crate::storage::repositories::user_repo::UserRepository;
-    use crate::storage::Database;
     use tempfile::NamedTempFile;
 
     fn svc_with_db() -> (MessageBackupService, Arc<Database>, NamedTempFile) {
@@ -530,7 +545,10 @@ mod tests {
     async fn link_transfers_reject_cleartext_without_leaking_capabilities() {
         let (service, _db, _file) = svc_with_db();
         let url = "http://127.0.0.1:1/private-object?secret=capability";
-        let upload = service.upload_link_archive(b"archive", url).await.unwrap_err();
+        let upload = service
+            .upload_link_archive(b"archive", url)
+            .await
+            .unwrap_err();
         let download = service
             .download_and_import_link_archive(url, &[7; 32])
             .await
@@ -581,8 +599,7 @@ mod tests {
 
         // New device: fresh store, derive the same KEK, decrypt + import.
         let (_dst, dst_db, _f2) = svc_with_db();
-        let payload =
-            decrypt_backup_file(&parse_backup_file(&container).unwrap(), &kek).unwrap();
+        let payload = decrypt_backup_file(&parse_backup_file(&container).unwrap(), &kek).unwrap();
         {
             let mut conn = dst_db.connection().unwrap();
             import_frames(&mut conn, &payload).unwrap();
@@ -598,8 +615,6 @@ mod tests {
         // A wrong ephemeral key (attacker holding the CDN blob but not the
         // envelope) fails at the file-key unwrap — nothing to import.
         let wrong = derive_link_sync_kek(&[9u8; 32], aci, 42);
-        assert!(
-            decrypt_backup_file(&parse_backup_file(&container).unwrap(), &wrong).is_err()
-        );
+        assert!(decrypt_backup_file(&parse_backup_file(&container).unwrap(), &wrong).is_err());
     }
 }

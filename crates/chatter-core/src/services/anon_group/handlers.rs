@@ -1,8 +1,8 @@
 //! Handlers for incoming group messages (leave, kick, update).
 
-use crate::domain::anon_group::{AnonGroupId, AnonGroupRole};
 use crate::domain::UserId;
-use crate::proto::content_v1::{anon_group_update, AnonGroupUpdate};
+use crate::domain::anon_group::{AnonGroupId, AnonGroupRole};
+use crate::proto::content_v1::{AnonGroupUpdate, anon_group_update};
 
 use super::{AnonGroupError, AnonGroupService};
 
@@ -22,7 +22,7 @@ impl AnonGroupService {
 
         // SECURITY: A member can only leave for themselves.
         // If sender_id != current_member_leaving, it's an invalid leave message.
-        // (For anonymous groups, the leave message doesn't contain a target ID, 
+        // (For anonymous groups, the leave message doesn't contain a target ID,
         // it implicitly means the sender is leaving).
         // Since sender_id is authenticated via Sealed Sender, this is safe.
 
@@ -188,9 +188,10 @@ impl AnonGroupService {
                     return Ok(false);
                 }
 
-                let target_user_id = UserId::try_from_slice(&role_change.user_id).ok_or_else(|| {
-                    AnonGroupError::InvalidData("Invalid user ID in role change".to_string())
-                })?;
+                let target_user_id =
+                    UserId::try_from_slice(&role_change.user_id).ok_or_else(|| {
+                        AnonGroupError::InvalidData("Invalid user ID in role change".to_string())
+                    })?;
 
                 let new_role = AnonGroupRole::from_i32(role_change.new_role);
 
@@ -215,8 +216,18 @@ impl AnonGroupService {
                         tracing::warn!(group_id = %group_id, "Ownership transfer to a non-member - ignoring");
                         return Ok(false);
                     }
-                    self.apply_ownership_transfer(&group_id, &sender_id, &target_user_id, &current_user)?;
-                    tracing::info!("Group {} handed from {} to {}", group_id, sender_id, target_user_id);
+                    self.apply_ownership_transfer(
+                        &group_id,
+                        &sender_id,
+                        &target_user_id,
+                        &current_user,
+                    )?;
+                    tracing::info!(
+                        "Group {} handed from {} to {}",
+                        group_id,
+                        sender_id,
+                        target_user_id
+                    );
                     return Ok(true);
                 }
 

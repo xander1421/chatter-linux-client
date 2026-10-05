@@ -41,7 +41,8 @@ pub(crate) fn wire_saved_messages(window: &MainWindow, ui_ctx: &Arc<ChatterClien
         // Commit active-conversation state SYNCHRONOUSLY on the UI thread
         // (same race fix as dm.rs — see comment there).
         chat_state.set_active_channel(channel_id);
-        chat_state.set_active_conversation(chatter_core::state::ActiveConversation::Channel(channel_id));
+        chat_state
+            .set_active_conversation(chatter_core::state::ActiveConversation::Channel(channel_id));
 
         run_ui!(weak, |w| {
             w.set_loading_messages(true);
@@ -77,13 +78,7 @@ pub(crate) fn wire_saved_messages(window: &MainWindow, ui_ctx: &Arc<ChatterClien
             // Load the saved messages channel and its messages
             // Saved Messages is your own notepad: nothing in it is ever
             // "unread", so it always opens at the newest entry.
-            load_channel_into_ui(
-                weak,
-                channel_id,
-                ui_ctx,
-                Default::default(),
-                None,
-            ).await;
+            load_channel_into_ui(weak, channel_id, ui_ctx, Default::default(), None).await;
         });
     });
 }
@@ -143,7 +138,9 @@ pub(crate) fn wire_settings_clicked(window: &MainWindow, ui_ctx: &Arc<ChatterCli
                 w.set_settings_notification_detail(
                     ui_ctx_settings.notification_detail_level().as_str().into(),
                 );
-                w.set_settings_profile_visibility(ui_ctx_settings.profile_visibility().as_str().into());
+                w.set_settings_profile_visibility(
+                    ui_ctx_settings.profile_visibility().as_str().into(),
+                );
                 w.set_settings_profile_visibility_pending("".into());
                 w.set_settings_profile_visibility_error("".into());
 
@@ -211,7 +208,10 @@ pub(crate) fn wire_settings_clicked(window: &MainWindow, ui_ctx: &Arc<ChatterCli
                     });
                 }
                 Err(e) => {
-                    tracing::error!("Failed to load username discoverability for settings: {}", e);
+                    tracing::error!(
+                        "Failed to load username discoverability for settings: {}",
+                        e
+                    );
                 }
             }
         });
@@ -235,7 +235,11 @@ pub(crate) fn wire_profile_clicked(window: &MainWindow, ui_ctx: &Arc<ChatterClie
             if let Some(w) = weak.upgrade() {
                 if let Some(user_id) = auth_state.get().current_user_id {
                     crate::bin_ui::features::modals::open_user_profile(
-                        &w, &user_id, &auth_state, &user_state, Some(&ui_ctx),
+                        &w,
+                        &user_id,
+                        &auth_state,
+                        &user_state,
+                        Some(&ui_ctx),
                     );
                 }
             }
@@ -298,7 +302,9 @@ pub(crate) fn wire_message_requests_clicked(window: &MainWindow, ui_ctx: &Arc<Ch
                     .iter()
                     .map(|dm| {
                         // Use stored display name, not user_service (strangers)
-                        let peer_name = dm.peer_display_name.clone()
+                        let peer_name = dm
+                            .peer_display_name
+                            .clone()
                             .unwrap_or_else(|| ui_ctx.fallback_display_name(&dm.peer_id));
 
                         crate::FriendRequestData {
@@ -307,7 +313,8 @@ pub(crate) fn wire_message_requests_clicked(window: &MainWindow, ui_ctx: &Arc<Ch
                             username: "Private".into(),
                             avatar_source: slint::Image::default(),
                             has_avatar: false,
-                            sent_at: dm.created_at
+                            sent_at: dm
+                                .created_at
                                 .with_timezone(&chrono::Local)
                                 .format("%b %d, %H:%M")
                                 .to_string()
@@ -325,50 +332,56 @@ pub(crate) fn wire_message_requests_clicked(window: &MainWindow, ui_ctx: &Arc<Ch
 
                 // Update both the badge count and the requests list
                 w.set_pending_message_requests(count);
-                w.set_friends_private_requests(slint::ModelRc::new(slint::VecModel::from(private_requests)));
+                w.set_friends_private_requests(slint::ModelRc::new(slint::VecModel::from(
+                    private_requests,
+                )));
             }
         });
     });
 }
 
 /// Load pending message requests count and list into the sidebar.
-pub(crate) fn load_pending_message_requests_count(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
+pub(crate) fn load_pending_message_requests_count(
+    window: &MainWindow,
+    ui_ctx: &Arc<ChatterClient>,
+) {
     let requests = ui_ctx.list_anon_dm_message_requests();
     {
-            let count = requests.len() as i32;
+        let count = requests.len() as i32;
 
-            // Build UI data for private requests
-            let private_requests: Vec<crate::FriendRequestData> = requests
-                .iter()
-                .map(|dm| {
-                    // Use stored display name, not user_service (strangers)
-                    let peer_name = dm.peer_display_name.clone()
-                        .unwrap_or_else(|| ui_ctx.fallback_display_name(&dm.peer_id));
+        // Build UI data for private requests
+        let private_requests: Vec<crate::FriendRequestData> = requests
+            .iter()
+            .map(|dm| {
+                // Use stored display name, not user_service (strangers)
+                let peer_name = dm
+                    .peer_display_name
+                    .clone()
+                    .unwrap_or_else(|| ui_ctx.fallback_display_name(&dm.peer_id));
 
-                    crate::FriendRequestData {
-                        user_id: dm.id.to_string().into(),
-                        display_name: peer_name.into(),
-                        username: "Private".into(),
-                        avatar_source: slint::Image::default(),
-                        has_avatar: false,
-                        sent_at: dm.created_at
-                            .with_timezone(&chrono::Local)
-                            .format("%b %d, %H:%M")
-                            .to_string()
-                            .into(),
-                        note: "".into(),
-                    }
-                })
-                .collect();
+                crate::FriendRequestData {
+                    user_id: dm.id.to_string().into(),
+                    display_name: peer_name.into(),
+                    username: "Private".into(),
+                    avatar_source: slint::Image::default(),
+                    has_avatar: false,
+                    sent_at: dm
+                        .created_at
+                        .with_timezone(&chrono::Local)
+                        .format("%b %d, %H:%M")
+                        .to_string()
+                        .into(),
+                    note: "".into(),
+                }
+            })
+            .collect();
 
-            tracing::info!(
-                count = count,
-                "Loaded {} pending message requests",
-                count
-            );
+        tracing::info!(count = count, "Loaded {} pending message requests", count);
 
-            window.set_pending_message_requests(count);
-            window.set_friends_private_requests(slint::ModelRc::new(slint::VecModel::from(private_requests)));
+        window.set_pending_message_requests(count);
+        window.set_friends_private_requests(slint::ModelRc::new(slint::VecModel::from(
+            private_requests,
+        )));
     }
 }
 

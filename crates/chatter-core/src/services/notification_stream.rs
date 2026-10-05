@@ -40,7 +40,8 @@ use crate::inbox::handlers::DomainEvent;
 use crate::network::grpc::GrpcClientPool;
 use crate::network::streaming::heartbeat::{self, Next};
 use crate::proto::chat_v1::{
-    stream_notifications_response::Item, Notification, NotificationType, StreamNotificationsResponse,
+    Notification, NotificationType, StreamNotificationsResponse,
+    stream_notifications_response::Item,
 };
 
 /// Bounded LRU set of recently-seen notification IDs. Used to short-circuit
@@ -137,7 +138,12 @@ pub fn spawn_grpc_notification_consumer(
                     tokio::pin!(stream);
 
                     loop {
-                        match heartbeat::next_or_silent(&mut stream, heartbeat::STREAM_SILENCE_LIMIT).await {
+                        match heartbeat::next_or_silent(
+                            &mut stream,
+                            heartbeat::STREAM_SILENCE_LIMIT,
+                        )
+                        .await
+                        {
                             Next::Item(Ok(resp)) => {
                                 route_item(&event_bus, &notifications, &mut recent_ids, resp);
                             }
@@ -303,7 +309,10 @@ fn dispatch_notification(
         }
 
         NotificationType::Unspecified => {
-            warn!(raw = notif.r#type, "notification_stream: unspecified notification type");
+            warn!(
+                raw = notif.r#type,
+                "notification_stream: unspecified notification type"
+            );
         }
     }
 }
@@ -344,7 +353,10 @@ mod tests {
             body: &str,
             _priority: NotificationPriority,
         ) -> Result<(), crate::error::SystemError> {
-            self.0.lock().unwrap().push((title.to_string(), body.to_string()));
+            self.0
+                .lock()
+                .unwrap()
+                .push((title.to_string(), body.to_string()));
             Ok(())
         }
     }
@@ -393,8 +405,14 @@ mod tests {
                 item: Some(Item::Heartbeat(crate::proto::chat_v1::StreamHeartbeat {})),
             },
         );
-        assert!(matches!(rx.try_recv(), Err(TryRecvError::Empty)), "a heartbeat produced a domain event");
-        assert!(sink.0.lock().unwrap().is_empty(), "a heartbeat produced a toast");
+        assert!(
+            matches!(rx.try_recv(), Err(TryRecvError::Empty)),
+            "a heartbeat produced a domain event"
+        );
+        assert!(
+            sink.0.lock().unwrap().is_empty(),
+            "a heartbeat produced a toast"
+        );
 
         // And a real notification still gets through the same path.
         route_item(
@@ -408,7 +426,10 @@ mod tests {
                 ))),
             },
         );
-        assert!(matches!(rx.try_recv(), Ok(DomainEvent::DeviceLinked { .. })));
+        assert!(matches!(
+            rx.try_recv(),
+            Ok(DomainEvent::DeviceLinked { .. })
+        ));
     }
 
     #[test]
@@ -435,13 +456,25 @@ mod tests {
     fn dispatch_device_linked_emits_event() {
         let (bus, mut rx) = bus_with_receiver();
         let meta = r#"{"device_id":7,"linked_device_id":7,"device_info":"chrome-linux"}"#;
-        dispatch_notification(&bus, &recording_service().0, notif(NotificationType::DeviceLinked, meta));
+        dispatch_notification(
+            &bus,
+            &recording_service().0,
+            notif(NotificationType::DeviceLinked, meta),
+        );
         match rx.try_recv().expect("event expected") {
-            DomainEvent::DeviceLinked { device_id, device_name, device_info, approved_by_self } => {
+            DomainEvent::DeviceLinked {
+                device_id,
+                device_name,
+                device_info,
+                approved_by_self,
+            } => {
                 assert_eq!(device_id, 7);
                 assert_eq!(device_name, None, "the server never carries a device name");
                 assert_eq!(device_info.as_deref(), Some("chrome-linux"));
-                assert!(!approved_by_self, "stream-side receiver is never the approver");
+                assert!(
+                    !approved_by_self,
+                    "stream-side receiver is never the approver"
+                );
             }
             other => panic!("wrong event variant: {:?}", other),
         }
@@ -453,7 +486,11 @@ mod tests {
         // parse it (forward-compat for older servers).
         let (bus, mut rx) = bus_with_receiver();
         let meta = r#"{"device_id":5,"linked_device_id":0}"#;
-        dispatch_notification(&bus, &recording_service().0, notif(NotificationType::DeviceLinked, meta));
+        dispatch_notification(
+            &bus,
+            &recording_service().0,
+            notif(NotificationType::DeviceLinked, meta),
+        );
         match rx.try_recv().expect("event expected") {
             DomainEvent::DeviceLinked { device_id, .. } => assert_eq!(device_id, 5),
             other => panic!("wrong event variant: {:?}", other),
@@ -468,9 +505,17 @@ mod tests {
             r#"{{"peer_user_id":"{}","device_id":3,"change_type":"added"}}"#,
             peer
         );
-        dispatch_notification(&bus, &recording_service().0, notif(NotificationType::PeerDevicesChanged, &meta));
+        dispatch_notification(
+            &bus,
+            &recording_service().0,
+            notif(NotificationType::PeerDevicesChanged, &meta),
+        );
         match rx.try_recv().expect("event expected") {
-            DomainEvent::PeerDevicesChanged { peer_user_id, device_id, change_type } => {
+            DomainEvent::PeerDevicesChanged {
+                peer_user_id,
+                device_id,
+                change_type,
+            } => {
                 assert_eq!(peer_user_id.to_string(), peer);
                 assert_eq!(device_id, 3);
                 assert_eq!(change_type, "added");
@@ -484,28 +529,44 @@ mod tests {
         let (bus, mut rx) = bus_with_receiver();
         // MESSAGE type is defined but intentionally ignored — mailbox poll
         // is the authoritative content path for it.
-        dispatch_notification(&bus, &recording_service().0, notif(NotificationType::Message, "{}"));
+        dispatch_notification(
+            &bus,
+            &recording_service().0,
+            notif(NotificationType::Message, "{}"),
+        );
         assert!(matches!(rx.try_recv(), Err(TryRecvError::Empty)));
     }
 
     #[test]
     fn dispatch_unspecified_type_drops_silently() {
         let (bus, mut rx) = bus_with_receiver();
-        dispatch_notification(&bus, &recording_service().0, notif(NotificationType::Unspecified, "{}"));
+        dispatch_notification(
+            &bus,
+            &recording_service().0,
+            notif(NotificationType::Unspecified, "{}"),
+        );
         assert!(matches!(rx.try_recv(), Err(TryRecvError::Empty)));
     }
 
     #[test]
     fn dispatch_empty_metadata_drops() {
         let (bus, mut rx) = bus_with_receiver();
-        dispatch_notification(&bus, &recording_service().0, notif(NotificationType::DeviceLinked, ""));
+        dispatch_notification(
+            &bus,
+            &recording_service().0,
+            notif(NotificationType::DeviceLinked, ""),
+        );
         assert!(matches!(rx.try_recv(), Err(TryRecvError::Empty)));
     }
 
     #[test]
     fn dispatch_malformed_json_drops() {
         let (bus, mut rx) = bus_with_receiver();
-        dispatch_notification(&bus, &recording_service().0, notif(NotificationType::DeviceLinked, "{not valid json"));
+        dispatch_notification(
+            &bus,
+            &recording_service().0,
+            notif(NotificationType::DeviceLinked, "{not valid json"),
+        );
         assert!(matches!(rx.try_recv(), Err(TryRecvError::Empty)));
     }
 
@@ -513,7 +574,11 @@ mod tests {
     fn dispatch_peer_devices_changed_rejects_invalid_user_id() {
         let (bus, mut rx) = bus_with_receiver();
         let meta = r#"{"peer_user_id":"not-a-uuid","device_id":3,"change_type":"added"}"#;
-        dispatch_notification(&bus, &recording_service().0, notif(NotificationType::PeerDevicesChanged, meta));
+        dispatch_notification(
+            &bus,
+            &recording_service().0,
+            notif(NotificationType::PeerDevicesChanged, meta),
+        );
         assert!(matches!(rx.try_recv(), Err(TryRecvError::Empty)));
     }
 
@@ -546,11 +611,15 @@ mod tests {
             "a user-facing notification type reached the user nowhere: {shown:?}"
         );
         assert!(
-            shown.iter().any(|(_, body)| body.contains("invited to a channel")),
+            shown
+                .iter()
+                .any(|(_, body)| body.contains("invited to a channel")),
             "CHANNEL_INVITE produced no invite toast: {shown:?}"
         );
         assert!(
-            shown.iter().any(|(_, body)| body.contains("friend request")),
+            shown
+                .iter()
+                .any(|(_, body)| body.contains("friend request")),
             "FRIEND_REQUEST produced no friend-request toast: {shown:?}"
         );
         // The server's own strings are never rendered.

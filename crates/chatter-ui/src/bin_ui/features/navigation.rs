@@ -65,7 +65,9 @@ fn wire_continue_without_account(window: &MainWindow, ui_ctx: &Arc<ChatterClient
     let ui_ctx = ui_ctx.clone();
 
     window.on_continue_without_account(move || {
-        let Some(w) = weak_window.upgrade() else { return };
+        let Some(w) = weak_window.upgrade() else {
+            return;
+        };
 
         if !ui_ctx.has_account_free_surfaces() {
             // Nothing to go to. Say so where the user is looking instead of
@@ -141,4 +143,3 @@ fn wire_go_to_recovery(window: &MainWindow) {
         }
     });
 }
-

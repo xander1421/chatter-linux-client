@@ -264,8 +264,9 @@ impl FileManifest {
         chunk_size: u32,
         sha256: [u8; 32],
     ) -> Result<Self, MeshError> {
-        let chunk_count = chunk_count_for(total_size, chunk_size)
-            .ok_or(MeshError::OutOfRange("file manifest chunk count out of range"))?;
+        let chunk_count = chunk_count_for(total_size, chunk_size).ok_or(MeshError::OutOfRange(
+            "file manifest chunk count out of range",
+        ))?;
         let manifest = Self {
             transfer_id,
             file_name,
@@ -289,7 +290,9 @@ impl FileManifest {
     /// fewer than the file needs (so a "complete" transfer is missing its tail).
     pub fn validate(&self) -> Result<(), MeshError> {
         if self.total_size == 0 {
-            return Err(MeshError::OutOfRange("file manifest declares an empty file"));
+            return Err(MeshError::OutOfRange(
+                "file manifest declares an empty file",
+            ));
         }
         if self.total_size > MAX_STREAMED_FILE_BYTES as u64 {
             return Err(MeshError::LengthExceeded {
@@ -641,7 +644,10 @@ mod tests {
         let full = FileChunkRequest::new(ID, (0..MAX_REQUESTED_CHUNKS as u32 * 4).collect())
             .expect("valid");
         let encoded = full.encode().expect("encodes");
-        assert_eq!(encoded.len(), TRANSFER_ID_LEN + 2 + MAX_REQUESTED_CHUNKS * 4);
+        assert_eq!(
+            encoded.len(),
+            TRANSFER_ID_LEN + 2 + MAX_REQUESTED_CHUNKS * 4
+        );
         assert_eq!(
             wire_bytes_for_payload(encoded.len()),
             WIRE_BLOCK_BYTES,
@@ -741,7 +747,9 @@ mod tests {
             [0u8; 32],
         );
         assert!(matches!(huge, Err(MeshError::OutOfRange(_))));
-        assert!(!fits_fragment_lifetime(CHUNK_HEADER_LEN + MAX_CHUNK_BYTES * 4));
+        assert!(!fits_fragment_lifetime(
+            CHUNK_HEADER_LEN + MAX_CHUNK_BYTES * 4
+        ));
     }
 
     #[test]
@@ -861,7 +869,9 @@ mod tests {
         let encoded = chunk.encode().unwrap();
         assert_eq!(
             encoded,
-            vec![0xA1, 0xA2, 0xA3, 0xA4, 0xA5, 0xA6, 0xA7, 0xA8, 1, 2, 3, 4, 9, 8, 7]
+            vec![
+                0xA1, 0xA2, 0xA3, 0xA4, 0xA5, 0xA6, 0xA7, 0xA8, 1, 2, 3, 4, 9, 8, 7
+            ]
         );
         assert_eq!(FileChunk::decode(&encoded).unwrap(), chunk);
     }

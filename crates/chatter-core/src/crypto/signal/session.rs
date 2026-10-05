@@ -3,8 +3,8 @@
 //! Signal Protocol session creation and management for encrypted messaging.
 
 use libsignal_protocol::{
-    Fingerprint, IdentityKey, IdentityKeyStore, PreKeyBundle, ProtocolAddress,
-    SessionRecord, SessionStore, SignalProtocolError, process_prekey_bundle,
+    Fingerprint, IdentityKey, IdentityKeyStore, PreKeyBundle, ProtocolAddress, SessionRecord,
+    SessionStore, SignalProtocolError, process_prekey_bundle,
 };
 use rand::{CryptoRng, Rng};
 use std::time::SystemTime;
@@ -159,17 +159,14 @@ impl SessionManager {
             "SessionManager: checking if session exists"
         );
 
-        let session = store
-            .load_session(remote_address)
-            .await
-            .map_err(|e| {
-                tracing::error!(
-                    address = %remote_address,
-                    error = %e,
-                    "SessionManager: failed to load session"
-                );
-                CryptoError::Protocol(e.to_string())
-            })?;
+        let session = store.load_session(remote_address).await.map_err(|e| {
+            tracing::error!(
+                address = %remote_address,
+                error = %e,
+                "SessionManager: failed to load session"
+            );
+            CryptoError::Protocol(e.to_string())
+        })?;
 
         let exists = session.is_some();
         tracing::debug!(
@@ -198,19 +195,17 @@ impl SessionManager {
             Some(record) => {
                 // Validate: can the session be round-tripped?
                 match record.serialize() {
-                    Ok(bytes) => {
-                        match SessionRecord::deserialize(&bytes) {
-                            Ok(_) => Ok(true),
-                            Err(e) => {
-                                tracing::warn!(
-                                    address = %remote_address,
-                                    error = %e,
-                                    "SessionManager: session exists but is corrupted (deserialize failed)"
-                                );
-                                Ok(false)
-                            }
+                    Ok(bytes) => match SessionRecord::deserialize(&bytes) {
+                        Ok(_) => Ok(true),
+                        Err(e) => {
+                            tracing::warn!(
+                                address = %remote_address,
+                                error = %e,
+                                "SessionManager: session exists but is corrupted (deserialize failed)"
+                            );
+                            Ok(false)
                         }
-                    }
+                    },
                     Err(e) => {
                         tracing::warn!(
                             address = %remote_address,
@@ -251,7 +246,7 @@ impl SessionManager {
         remote_key: &IdentityKey,
     ) -> Result<String, CryptoError> {
         let fingerprint = Fingerprint::new(
-            2, // Version 2 fingerprints
+            2,    // Version 2 fingerprints
             5200, // Iterations (Signal spec)
             local_id.as_bytes(),
             local_key,
@@ -294,9 +289,7 @@ impl SessionManager {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use libsignal_protocol::{
-        DeviceId, IdentityKeyPair, InMemSignalProtocolStore, KeyPair, kem,
-    };
+    use libsignal_protocol::{DeviceId, IdentityKeyPair, InMemSignalProtocolStore, KeyPair, kem};
     use rand::SeedableRng;
     use rand::rngs::StdRng;
 
@@ -314,10 +307,7 @@ mod tests {
     }
 
     /// Construct a fully-signed PQXDH PreKeyBundle for `bob_store`.
-    async fn build_bundle(
-        bob_store: &InMemSignalProtocolStore,
-        rng: &mut StdRng,
-    ) -> PreKeyBundle {
+    async fn build_bundle(bob_store: &InMemSignalProtocolStore, rng: &mut StdRng) -> PreKeyBundle {
         let signed_pre_key_pair = KeyPair::generate(rng);
         let kyber_pre_key_pair = kem::KeyPair::generate(kem::KeyType::Kyber1024, rng);
 
@@ -360,8 +350,7 @@ mod tests {
         let bob_store = make_store(&mut rng);
 
         let bundle = build_bundle(&bob_store, &mut rng).await;
-        let bob_addr =
-            ProtocolAddress::new("bob".to_string(), DeviceId::new(1).unwrap());
+        let bob_addr = ProtocolAddress::new("bob".to_string(), DeviceId::new(1).unwrap());
 
         let mut alice_store2 = alice_store.clone();
         let res = SessionManager::establish_session(
@@ -400,8 +389,7 @@ mod tests {
             })
             .expect("modify bundle");
 
-        let bob_addr =
-            ProtocolAddress::new("bob".to_string(), DeviceId::new(1).unwrap());
+        let bob_addr = ProtocolAddress::new("bob".to_string(), DeviceId::new(1).unwrap());
         let mut alice_store2 = alice_store.clone();
         let res = SessionManager::establish_session(
             &bob_addr,
@@ -419,9 +407,9 @@ mod tests {
                 // not libsignal's internal verify (which would surface as
                 // CryptoError::Protocol).
             }
-            other => panic!(
-                "expected CryptoError::InvalidSignature from local verify, got {other:?}"
-            ),
+            other => {
+                panic!("expected CryptoError::InvalidSignature from local verify, got {other:?}")
+            }
         }
 
         let exists = SessionManager::has_session(&alice_store, &bob_addr)

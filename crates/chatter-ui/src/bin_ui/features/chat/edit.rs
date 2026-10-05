@@ -7,10 +7,10 @@ use std::sync::Arc;
 
 use slint::{ComponentHandle, SharedString};
 
+use crate::MainWindow;
 use chatter_core::client::ChatterClient;
 use chatter_core::domain::ids::UserId;
 use chatter_core::state::ActiveConversation;
-use crate::MainWindow;
 
 /// Wire edit-message callback - enters edit mode by populating composer.
 pub fn wire_edit_message(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {

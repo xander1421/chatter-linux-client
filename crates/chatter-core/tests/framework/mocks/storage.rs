@@ -1,8 +1,8 @@
 //! In-memory storage for testing without SQLite.
 
+use crate::framework::fixtures::{TestChannel, TestMessage, TestUser};
 use std::collections::HashMap;
 use std::sync::RwLock;
-use crate::framework::fixtures::{TestMessage, TestChannel, TestUser};
 
 // ============================================================================
 // In-Memory Storage
@@ -29,7 +29,10 @@ impl InMemoryStorage {
 
     /// Save a message.
     pub fn save_message(&self, message: TestMessage) {
-        self.messages.write().unwrap().insert(message.id.clone(), message);
+        self.messages
+            .write()
+            .unwrap()
+            .insert(message.id.clone(), message);
     }
 
     /// Get a message by ID.
@@ -68,7 +71,10 @@ impl InMemoryStorage {
 
     /// Save a channel.
     pub fn save_channel(&self, channel: TestChannel) {
-        self.channels.write().unwrap().insert(channel.id.clone(), channel);
+        self.channels
+            .write()
+            .unwrap()
+            .insert(channel.id.clone(), channel);
     }
 
     /// Get a channel by ID.
@@ -103,7 +109,6 @@ impl InMemoryStorage {
     pub fn channel_count(&self) -> usize {
         self.channels.read().unwrap().len()
     }
-
 }
 
 impl Default for InMemoryStorage {

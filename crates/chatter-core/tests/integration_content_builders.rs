@@ -10,19 +10,14 @@
 
 use chatter_core::proto::content_v1::{self, content};
 use chatter_core::services::{
-    build_text_content, build_data_message_content, build_reply_content,
-    build_typing_content, build_typing_content_with_channel,
-    build_read_receipt_content, build_read_receipt_content_with_channel,
-    build_delivery_receipt_content,
-    build_reaction_content, build_reaction_content_with_channel,
-    build_pin_content,
-    build_edit_content, build_edit_content_with_channel,
-    build_delete_for_me_content, build_saved_message_sync_content,
-    build_delete_for_everyone_content,
-    build_call_key_offer, build_call_key_answer,
-    build_group_call_signal_content, build_call_hangup_content,
-    generate_padding, PADDING_GROUP_CONTROL, PADDING_MESSAGE, PADDING_LARGE,
-    CallHangupReason,
+    CallHangupReason, PADDING_GROUP_CONTROL, PADDING_LARGE, PADDING_MESSAGE,
+    build_call_hangup_content, build_call_key_answer, build_call_key_offer,
+    build_data_message_content, build_delete_for_everyone_content, build_delete_for_me_content,
+    build_delivery_receipt_content, build_edit_content, build_edit_content_with_channel,
+    build_group_call_signal_content, build_pin_content, build_reaction_content,
+    build_reaction_content_with_channel, build_read_receipt_content,
+    build_read_receipt_content_with_channel, build_reply_content, build_saved_message_sync_content,
+    build_text_content, build_typing_content, build_typing_content_with_channel, generate_padding,
 };
 
 // ---------------------------------------------------------------------------
@@ -38,7 +33,10 @@ use chatter_core::services::{
 #[test]
 fn test_generate_padding_sizes() {
     // Padding constants are defined for traffic analysis protection
-    assert!(PADDING_GROUP_CONTROL > 0, "Group control padding should be non-zero");
+    assert!(
+        PADDING_GROUP_CONTROL > 0,
+        "Group control padding should be non-zero"
+    );
     assert!(PADDING_MESSAGE > 0, "Message padding should be non-zero");
     assert!(PADDING_LARGE > 0, "Large padding should be non-zero");
 
@@ -295,7 +293,8 @@ fn test_build_reaction_remove() {
 /// otherwise check the emoji to verify the reaction was created correctly.
 #[test]
 fn test_build_reaction_with_channel() {
-    let content = build_reaction_content_with_channel("❤️", false, "author-xyz", 99, Some("ch-789"));
+    let content =
+        build_reaction_content_with_channel("❤️", false, "author-xyz", 99, Some("ch-789"));
     match content.content.unwrap() {
         content::Content::Reaction(r) => {
             assert_eq!(r.emoji, "❤️");
@@ -473,7 +472,10 @@ fn test_build_group_call_signal() {
     use chatter_core::domain::call::GroupCallSignal;
     use chatter_core::proto::content_v1::group_call_signal::Signal;
     let key = [55u8; 32];
-    let signal_of = |s| match build_group_call_signal_content("group-call-789", "ch-999", s).content.unwrap() {
+    let signal_of = |s| match build_group_call_signal_content("group-call-789", "ch-999", s)
+        .content
+        .unwrap()
+    {
         content::Content::GroupCallSignal(gcs) => {
             assert_eq!(gcs.call_id, "group-call-789");
             assert_eq!(gcs.channel_id, "ch-999");
@@ -488,8 +490,14 @@ fn test_build_group_call_signal() {
         }
         other => panic!("Expected Key, got {:?}", other),
     }
-    assert!(matches!(signal_of(GroupCallSignal::Ring), Signal::Ring(_)), "a ring carries no key");
-    assert!(matches!(signal_of(GroupCallSignal::KeyRequest), Signal::KeyRequest(_)));
+    assert!(
+        matches!(signal_of(GroupCallSignal::Ring), Signal::Ring(_)),
+        "a ring carries no key"
+    );
+    assert!(matches!(
+        signal_of(GroupCallSignal::KeyRequest),
+        Signal::KeyRequest(_)
+    ));
 }
 
 /// Test building a call hangup notification.
@@ -517,7 +525,11 @@ fn test_call_hangup_reasons() {
 
     for reason in reasons {
         let content = build_call_hangup_content("call-999", reason);
-        assert!(content.content.is_some(), "Hangup with {:?} should produce content", reason);
+        assert!(
+            content.content.is_some(),
+            "Hangup with {:?} should produce content",
+            reason
+        );
     }
 }
 
@@ -541,8 +553,8 @@ fn test_content_proto_roundtrip() {
     assert!(!bytes.is_empty(), "Serialized content should not be empty");
 
     // Deserialize
-    let decoded = content_v1::Content::decode(bytes.as_slice())
-        .expect("Should decode successfully");
+    let decoded =
+        content_v1::Content::decode(bytes.as_slice()).expect("Should decode successfully");
 
     // Verify
     assert_eq!(original, decoded);

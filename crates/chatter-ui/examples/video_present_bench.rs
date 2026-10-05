@@ -54,7 +54,12 @@ fn make_buffer(tick: u32) -> SharedPixelBuffer<Rgba8Pixel> {
     for (i, p) in buf.make_mut_slice().iter_mut().enumerate() {
         let x = (i % w) + t;
         let y = i / w;
-        *p = Rgba8Pixel { r: x as u8, g: y as u8, b: (x ^ y) as u8, a: 255 };
+        *p = Rgba8Pixel {
+            r: x as u8,
+            g: y as u8,
+            b: (x ^ y) as u8,
+            a: 255,
+        };
     }
     buf
 }

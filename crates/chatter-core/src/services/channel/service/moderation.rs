@@ -13,8 +13,8 @@ use crate::services::current_user::CurrentUserProvider;
 
 use crate::services::channel::error::ChannelError;
 
-use super::membership::{action, drain};
 use super::ChannelService;
+use super::membership::{action, drain};
 use pb::channel_action::Action;
 use pb::remove_member::Reason;
 
@@ -30,7 +30,8 @@ impl ChannelService {
         user_id: &UserId,
         reason: Option<&str>,
     ) -> Result<SenderKeyDistribution, ChannelError> {
-        self.remove_member(channel_id, user_id, Reason::Kicked, reason).await
+        self.remove_member(channel_id, user_id, Reason::Kicked, reason)
+            .await
     }
 
     /// Ban a user from a channel, permanently until unbanned. Like kick, the
@@ -41,7 +42,8 @@ impl ChannelService {
         user_id: &UserId,
         reason: Option<&str>,
     ) -> Result<SenderKeyDistribution, ChannelError> {
-        self.remove_member(channel_id, user_id, Reason::Banned, reason).await
+        self.remove_member(channel_id, user_id, Reason::Banned, reason)
+            .await
     }
 
     /// Signed `RemoveMember{KICKED|BANNED}`, then rotate. The rotation is
@@ -67,7 +69,12 @@ impl ChannelService {
                 channel_id,
                 AuthorBase::Verified,
                 None,
-                |_| Ok(vec![action(Action::RemoveMember(pb::RemoveMember { user_id: target.clone(), reason: why as i32 }))]),
+                |_| {
+                    Ok(vec![action(Action::RemoveMember(pb::RemoveMember {
+                        user_id: target.clone(),
+                        reason: why as i32,
+                    }))])
+                },
                 |change| {
                     let mut client = self.channel_client();
                     let (cid, reason) = (cid.clone(), reason.clone());
@@ -75,7 +82,11 @@ impl ChannelService {
                         if why == Reason::Banned {
                             client.ban_user(&cid, change, reason.as_deref()).await
                         } else {
-                            drain(client.kick_user(&cid, change, reason.as_deref()).await?, "kick").await
+                            drain(
+                                client.kick_user(&cid, change, reason.as_deref()).await?,
+                                "kick",
+                            )
+                            .await
                         }
                     }
                 },
@@ -90,7 +101,10 @@ impl ChannelService {
         // Our accepted change is committed by `author`; if that failed, catch
         // up before trusting the distribution set.
         let still_listed = |log: &crate::services::channel::membership_log::MembershipLog| {
-            log.load(channel_id).ok().flatten().is_some_and(|v| v.state.members.contains_key(&target))
+            log.load(channel_id)
+                .ok()
+                .flatten()
+                .is_some_and(|v| v.state.members.contains_key(&target))
         };
         if still_listed(&self.membership_log) {
             if let Err(e) = self.membership_log.catch_up(channel_id).await {
@@ -157,15 +171,19 @@ impl ChannelService {
     ) -> Result<(), ChannelError> {
         let skdm = self.kick_user(channel_id, user_id, reason).await?;
 
-        if let Err(e) = self.message_service.distribute_skdm(channel_id, &skdm).await {
+        if let Err(e) = self
+            .message_service
+            .distribute_skdm(channel_id, &skdm)
+            .await
+        {
             tracing::error!(
                 channel_id = %channel_id,
                 error = %e,
                 "Failed to distribute SKDM after kick — sending remains blocked"
             );
-            return Err(ChannelError::SenderKeyRotationFailed(
-                format!("SKDM distribution failed after kick: {e}"),
-            ));
+            return Err(ChannelError::SenderKeyRotationFailed(format!(
+                "SKDM distribution failed after kick: {e}"
+            )));
         }
 
         if let Err(e) = self.signal_service.unblock_channel_send(channel_id) {
@@ -197,7 +215,11 @@ impl ChannelService {
     }
 
     /// Lift a mute set by [`Self::mute_user`].
-    pub async fn unmute_user(&self, channel_id: &ChannelId, user_id: &UserId) -> Result<(), ChannelError> {
+    pub async fn unmute_user(
+        &self,
+        channel_id: &ChannelId,
+        user_id: &UserId,
+    ) -> Result<(), ChannelError> {
         let _ = self.settings_repo.current_user_id()?;
         self.channel_client()
             .unmute_user(&channel_id.to_string(), &user_id.to_string())
@@ -207,7 +229,12 @@ impl ChannelService {
 
     /// Mirror a server-confirmed mute onto the local membership row, if this
     /// device has one (the next member fetch refreshes it anyway).
-    fn mirror_member_muted(&self, channel_id: &ChannelId, user_id: &UserId, muted: bool) -> Result<(), ChannelError> {
+    fn mirror_member_muted(
+        &self,
+        channel_id: &ChannelId,
+        user_id: &UserId,
+        muted: bool,
+    ) -> Result<(), ChannelError> {
         if let Some(mut membership) = self.channel_repo.get_membership(channel_id, user_id)? {
             membership.is_muted = muted;
             membership.muted_until = None;
@@ -234,7 +261,10 @@ impl ChannelService {
         if !may_unban {
             return Ok(None);
         }
-        let bans = self.channel_client().list_banned_users(&channel_id.to_string()).await?;
+        let bans = self
+            .channel_client()
+            .list_banned_users(&channel_id.to_string())
+            .await?;
         Ok(Some(
             bans.into_iter()
                 .filter_map(|b| {
@@ -261,15 +291,19 @@ impl ChannelService {
     ) -> Result<(), ChannelError> {
         let skdm = self.ban_user(channel_id, user_id, reason).await?;
 
-        if let Err(e) = self.message_service.distribute_skdm(channel_id, &skdm).await {
+        if let Err(e) = self
+            .message_service
+            .distribute_skdm(channel_id, &skdm)
+            .await
+        {
             tracing::error!(
                 channel_id = %channel_id,
                 error = %e,
                 "Failed to distribute SKDM after ban — sending remains blocked"
             );
-            return Err(ChannelError::SenderKeyRotationFailed(
-                format!("SKDM distribution failed after ban: {e}"),
-            ));
+            return Err(ChannelError::SenderKeyRotationFailed(format!(
+                "SKDM distribution failed after ban: {e}"
+            )));
         }
 
         if let Err(e) = self.signal_service.unblock_channel_send(channel_id) {

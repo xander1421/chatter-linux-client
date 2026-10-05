@@ -32,8 +32,10 @@ impl Migration for V029AnonGroupSentAt {
     }
 
     fn down(&self) -> Option<&'static str> {
-        Some(r#"
+        Some(
+            r#"
         DROP INDEX IF EXISTS idx_anon_group_messages_sent_at;
-        "#)
+        "#,
+        )
     }
 }

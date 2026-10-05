@@ -85,7 +85,9 @@ pub fn open_with_identity(
     ciphertext: &[u8],
 ) -> Result<Vec<u8>, CryptoError> {
     if ciphertext.len() < OVERHEAD {
-        return Err(CryptoError::DecryptionFailed("identity HPKE message too short".into()));
+        return Err(CryptoError::DecryptionFailed(
+            "identity HPKE message too short".into(),
+        ));
     }
     ours.private_key()
         .open(purpose.info(), &ours.identity_key().serialize(), ciphertext)
@@ -105,7 +107,8 @@ mod tests {
     fn roundtrip() {
         let ours = identity();
         let plaintext = b"Hello, this is an initial contact message!";
-        let sealed = seal_to_identity(ours.identity_key(), IdentityHpkeUse::AnonDmInit, plaintext).unwrap();
+        let sealed =
+            seal_to_identity(ours.identity_key(), IdentityHpkeUse::AnonDmInit, plaintext).unwrap();
         assert_eq!(sealed.len(), plaintext.len() + OVERHEAD);
         assert_eq!(sealed[0], 1, "libsignal HPKE type byte");
         let opened = open_with_identity(&ours, IdentityHpkeUse::AnonDmInit, &sealed).unwrap();
@@ -115,15 +118,31 @@ mod tests {
     #[test]
     fn empty_and_large_plaintext() {
         let ours = identity();
-        for plaintext in [Vec::new(), (0..1_000_000).map(|i| (i % 256) as u8).collect()] {
-            let sealed = seal_to_identity(ours.identity_key(), IdentityHpkeUse::FriendRequest, &plaintext).unwrap();
-            assert_eq!(open_with_identity(&ours, IdentityHpkeUse::FriendRequest, &sealed).unwrap(), plaintext);
+        for plaintext in [
+            Vec::new(),
+            (0..1_000_000).map(|i| (i % 256) as u8).collect(),
+        ] {
+            let sealed = seal_to_identity(
+                ours.identity_key(),
+                IdentityHpkeUse::FriendRequest,
+                &plaintext,
+            )
+            .unwrap();
+            assert_eq!(
+                open_with_identity(&ours, IdentityHpkeUse::FriendRequest, &sealed).unwrap(),
+                plaintext
+            );
         }
     }
 
     #[test]
     fn wrong_identity_fails() {
-        let sealed = seal_to_identity(identity().identity_key(), IdentityHpkeUse::AnonDmInit, b"secret").unwrap();
+        let sealed = seal_to_identity(
+            identity().identity_key(),
+            IdentityHpkeUse::AnonDmInit,
+            b"secret",
+        )
+        .unwrap();
         assert!(open_with_identity(&identity(), IdentityHpkeUse::AnonDmInit, &sealed).is_err());
     }
 
@@ -131,27 +150,41 @@ mod tests {
     #[test]
     fn uses_do_not_cross() {
         let ours = identity();
-        let sealed = seal_to_identity(ours.identity_key(), IdentityHpkeUse::FriendRequest, b"note").unwrap();
+        let sealed =
+            seal_to_identity(ours.identity_key(), IdentityHpkeUse::FriendRequest, b"note").unwrap();
         assert!(open_with_identity(&ours, IdentityHpkeUse::AnonDmInit, &sealed).is_err());
     }
 
     #[test]
     fn tamper_anywhere_rejected() {
         let ours = identity();
-        let sealed = seal_to_identity(ours.identity_key(), IdentityHpkeUse::AnonDmInit, b"important").unwrap();
+        let sealed = seal_to_identity(
+            ours.identity_key(),
+            IdentityHpkeUse::AnonDmInit,
+            b"important",
+        )
+        .unwrap();
         for i in [0, 1, 32, 33, sealed.len() - 1] {
             let mut t = sealed.clone();
             t[i] ^= 0x01;
-            assert!(open_with_identity(&ours, IdentityHpkeUse::AnonDmInit, &t).is_err(), "flip at {i}");
+            assert!(
+                open_with_identity(&ours, IdentityHpkeUse::AnonDmInit, &t).is_err(),
+                "flip at {i}"
+            );
         }
-        assert!(open_with_identity(&ours, IdentityHpkeUse::AnonDmInit, &sealed[..OVERHEAD - 1]).is_err());
+        assert!(
+            open_with_identity(&ours, IdentityHpkeUse::AnonDmInit, &sealed[..OVERHEAD - 1])
+                .is_err()
+        );
     }
 
     #[test]
     fn encryption_is_randomized() {
         let ours = identity();
-        let a = seal_to_identity(ours.identity_key(), IdentityHpkeUse::AnonDmInit, b"same").unwrap();
-        let b = seal_to_identity(ours.identity_key(), IdentityHpkeUse::AnonDmInit, b"same").unwrap();
+        let a =
+            seal_to_identity(ours.identity_key(), IdentityHpkeUse::AnonDmInit, b"same").unwrap();
+        let b =
+            seal_to_identity(ours.identity_key(), IdentityHpkeUse::AnonDmInit, b"same").unwrap();
         assert_ne!(a, b);
     }
 }

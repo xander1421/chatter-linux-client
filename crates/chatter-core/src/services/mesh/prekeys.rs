@@ -326,7 +326,9 @@ pub fn open_envelope(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use chatter_mesh_noise::prekey::{CONSUMED_GRACE_MS, MAX_BUNDLE_AGE_FOR_SEALING_MS, REPLENISH_THRESHOLD};
+    use chatter_mesh_noise::prekey::{
+        CONSUMED_GRACE_MS, MAX_BUNDLE_AGE_FOR_SEALING_MS, REPLENISH_THRESHOLD,
+    };
     use rand_core_06::OsRng;
 
     const NOW: u64 = 1_800_000_000_000;
@@ -366,8 +368,16 @@ mod tests {
         assert_eq!(from, sender.static_public());
 
         // Redelivery inside the grace window still opens; after it, never.
-        assert!(local.open(prekey.id, &sealed, &me, NOW + CONSUMED_GRACE_MS).is_some());
-        assert!(local.open(prekey.id, &sealed, &me, NOW + CONSUMED_GRACE_MS + 1).is_none());
+        assert!(
+            local
+                .open(prekey.id, &sealed, &me, NOW + CONSUMED_GRACE_MS)
+                .is_some()
+        );
+        assert!(
+            local
+                .open(prekey.id, &sealed, &me, NOW + CONSUMED_GRACE_MS + 1)
+                .is_none()
+        );
 
         // The consumed prekey leaves the next bundle, under a newer stamp.
         assert!(local.refresh(NOW + 1, &mut OsRng));
@@ -423,7 +433,10 @@ mod tests {
             .filter_map(|_| peers.take(&me.static_public(), NOW).map(|p| p.id))
             .collect();
         assert_eq!(ids.len(), MAX_PREKEYS);
-        assert!(peers.take(&me.static_public(), NOW).is_some(), "then reused");
+        assert!(
+            peers.take(&me.static_public(), NOW).is_some(),
+            "then reused"
+        );
 
         assert!(
             peers

@@ -10,8 +10,8 @@
 use crate::domain::call::{CallDirection, CallHistoryEntry, CallHistoryFilter, CallResult};
 use crate::domain::message::ConversationType;
 use crate::error::StorageError;
-use crate::storage::repositories::SettingsRepository;
 use crate::storage::Database;
+use crate::storage::repositories::SettingsRepository;
 use chrono::{DateTime, Utc};
 use rusqlite::{params, params_from_iter, types::Value as SqlValue};
 use std::sync::Arc;
@@ -350,7 +350,10 @@ mod tests {
         assert_eq!(rows[0].peer_name, "Alice");
         assert_eq!(rows[0].duration_secs, Some(42));
         assert_eq!(rows[0].result, CallResult::Completed);
-        assert_eq!(repo.get("call-1").unwrap().map(|e| e.peer_name), Some("Alice".into()));
+        assert_eq!(
+            repo.get("call-1").unwrap().map(|e| e.peer_name),
+            Some("Alice".into())
+        );
         assert!(repo.get("call-2").unwrap().is_none());
     }
 
@@ -608,7 +611,10 @@ mod tests {
         let rows = repo.list(CallHistoryFilter::All, 10, None).unwrap();
         assert_eq!(rows.len(), types.len());
         for ct in &types {
-            assert!(rows.iter().any(|r| &r.conversation_type == ct), "{ct:?} lost");
+            assert!(
+                rows.iter().any(|r| &r.conversation_type == ct),
+                "{ct:?} lost"
+            );
         }
     }
 }

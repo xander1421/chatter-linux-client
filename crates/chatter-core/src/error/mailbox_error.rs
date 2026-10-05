@@ -103,7 +103,10 @@ mod tests {
     #[test]
     fn test_error_display() {
         let err = MailboxError::BlindSignature("failed to blind key".to_string());
-        assert_eq!(err.to_string(), "blind signature error: failed to blind key");
+        assert_eq!(
+            err.to_string(),
+            "blind signature error: failed to blind key"
+        );
 
         let err = MailboxError::TokenExpired;
         assert_eq!(err.to_string(), "token expired");
@@ -195,7 +198,10 @@ mod tests {
     #[test]
     fn test_content_error_display() {
         let err = ContentError::ContentTooLarge(100_000, 65_536);
-        assert_eq!(err.to_string(), "content too large: 100000 bytes (max 65536)");
+        assert_eq!(
+            err.to_string(),
+            "content too large: 100000 bytes (max 65536)"
+        );
 
         let err = ContentError::InvalidPadding("corrupt data".to_string());
         assert_eq!(err.to_string(), "invalid padded content: corrupt data");

@@ -113,7 +113,9 @@ impl NotificationService {
             // Sealed sender: NEVER show sender, regardless of setting
             (_, true) => ("Chatter".to_string(), "New message".to_string()),
             // None: maximum privacy
-            (NotificationDetailLevel::None, false) => ("Chatter".to_string(), "New message".to_string()),
+            (NotificationDetailLevel::None, false) => {
+                ("Chatter".to_string(), "New message".to_string())
+            }
             // Name only: show sender, hide content
             (NotificationDetailLevel::NameOnly, false) => (
                 sender_name.unwrap_or("Someone").to_string(),
@@ -126,11 +128,16 @@ impl NotificationService {
             ),
         };
 
-        self.deliver(|sink| sink.show_conversation(&notification_key(conversation_id), &title, &body, priority))
+        self.deliver(|sink| {
+            sink.show_conversation(&notification_key(conversation_id), &title, &body, priority)
+        })
     }
 
     /// Dismiss `conversation_id`'s notification (it was read).
-    pub fn cancel_conversation(&self, conversation_id: &crate::domain::ids::ChannelId) -> Result<(), SystemError> {
+    pub fn cancel_conversation(
+        &self,
+        conversation_id: &crate::domain::ids::ChannelId,
+    ) -> Result<(), SystemError> {
         self.deliver(|sink| sink.cancel_conversation(&notification_key(conversation_id)))
     }
 
@@ -139,9 +146,11 @@ impl NotificationService {
         let level = self.detail_level();
 
         match level {
-            NotificationDetailLevel::None => {
-                self.show_platform_notification("Chatter", "New notification", NotificationPriority::Normal)
-            }
+            NotificationDetailLevel::None => self.show_platform_notification(
+                "Chatter",
+                "New notification",
+                NotificationPriority::Normal,
+            ),
             _ => self.deliver(|sink| sink.show_domain(notification)),
         }
     }
@@ -201,7 +210,11 @@ impl NotificationService {
         f: impl FnOnce(&dyn NotificationSink) -> Result<(), SystemError>,
     ) -> Result<(), SystemError> {
         std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| f(self.sink.as_ref())))
-            .unwrap_or_else(|_| Err(SystemError::NotificationSend("notification sink panicked".into())))
+            .unwrap_or_else(|_| {
+                Err(SystemError::NotificationSend(
+                    "notification sink panicked".into(),
+                ))
+            })
     }
 }
 
@@ -268,8 +281,15 @@ pub fn spawn_notification_listener(
 
             match &event {
                 DomainEvent::MessageReceived { message } => {
-                    let Some(client) = client.upgrade() else { break };
-                    if let Err(error) = crate::services::conversation::ConversationHandle::mark_received_as_read(&client, message).await {
+                    let Some(client) = client.upgrade() else {
+                        break;
+                    };
+                    if let Err(error) =
+                        crate::services::conversation::ConversationHandle::mark_received_as_read(
+                            &client, message,
+                        )
+                        .await
+                    {
                         tracing::warn!(%error, "Failed to mark visible incoming message read");
                     }
                     let (on_screen, muted) = conversation_attention(&client, message);
@@ -280,7 +300,11 @@ pub fn spawn_notification_listener(
                     // In an anon group the per-group name, never the global
                     // profile name of a contact who happens to be in it.
                     let sender_name = message.sender_id.map(|id| {
-                        client.display_name_in(&message.conversation_type, &message.conversation_id, &id)
+                        client.display_name_in(
+                            &message.conversation_type,
+                            &message.conversation_id,
+                            &id,
+                        )
                     });
                     let preview = message.as_text();
 
@@ -292,15 +316,25 @@ pub fn spawn_notification_listener(
                         NotificationPriority::Normal,
                     );
                 }
-                DomainEvent::ReactionAdded { sender_id, sent_at_ns, emoji, reactor_id, .. } => {
+                DomainEvent::ReactionAdded {
+                    sender_id,
+                    sent_at_ns,
+                    emoji,
+                    reactor_id,
+                    ..
+                } => {
                     if me.is_none() || Some(*reactor_id) == me {
                         continue;
                     }
-                    let Some(client) = client.upgrade() else { break };
+                    let Some(client) = client.upgrade() else {
+                        break;
+                    };
                     // Same mute / on-screen rules as the message it reacts
                     // to. A target we do not hold names no conversation to
                     // check, so it stays silent.
-                    let Some(target) = client.get_message_by_sender_timestamp(sender_id, *sent_at_ns) else {
+                    let Some(target) =
+                        client.get_message_by_sender_timestamp(sender_id, *sent_at_ns)
+                    else {
                         continue;
                     };
                     let (on_screen, muted) = conversation_attention(&client, &target);
@@ -318,7 +352,9 @@ pub fn spawn_notification_listener(
 
                 // Read here or on another of our devices: the notification is
                 // stale (Signal cancels a thread's notification either way).
-                DomainEvent::ConversationsRead { conversation_ids, .. } => {
+                DomainEvent::ConversationsRead {
+                    conversation_ids, ..
+                } => {
                     for id in conversation_ids {
                         let _ = notification_service.cancel_conversation(id);
                     }
@@ -328,7 +364,12 @@ pub fn spawn_notification_listener(
                 // Typed lifecycle events (from gRPC notification stream).
                 // Side-effects run in spawned tasks so the event loop stays hot.
                 // ================================================================
-                DomainEvent::DeviceLinked { device_id, device_name, device_info, approved_by_self } => {
+                DomainEvent::DeviceLinked {
+                    device_id,
+                    device_name,
+                    device_info,
+                    approved_by_self,
+                } => {
                     // Skip the toast on the device that just approved the
                     // pairing — the UI there already showed a confirm
                     // screen. Only fan-out to siblings raises a toast.
@@ -352,15 +393,23 @@ pub fn spawn_notification_listener(
                     );
                 }
 
-                DomainEvent::PeerDevicesChanged { peer_user_id, device_id, change_type } => {
+                DomainEvent::PeerDevicesChanged {
+                    peer_user_id,
+                    device_id,
+                    change_type,
+                } => {
                     // Per Signal: an added device of a staying member needs
                     // only our SKDM, a removed one no key reset — see
                     // `MessageService::handle_peer_device_change`.
-                    let Some(client) = client.upgrade() else { break };
+                    let Some(client) = client.upgrade() else {
+                        break;
+                    };
                     let messages = client.messages().clone();
                     let (peer, device, change) = (*peer_user_id, *device_id, change_type.clone());
                     tokio::spawn(async move {
-                        messages.handle_peer_device_change(peer, device, &change).await;
+                        messages
+                            .handle_peer_device_change(peer, device, &change)
+                            .await;
                     });
                 }
 
@@ -395,7 +444,10 @@ fn should_notify_message(
         && !on_screen
         && !muted
         && !message.content.is_system()
-        && !matches!(message.content, crate::domain::message::MessageContent::Call(_))
+        && !matches!(
+            message.content,
+            crate::domain::message::MessageContent::Call(_)
+        )
 }
 
 /// `(on_screen, muted)` for the conversation `message` belongs to. On screen
@@ -427,7 +479,15 @@ mod tests {
 
         let me = UserId::new();
         let peer = UserId::new();
-        let msg = |sender| Message::new_text(ChannelId::new(), ConversationType::ServerDm, Some(sender), "hi".into(), 1);
+        let msg = |sender| {
+            Message::new_text(
+                ChannelId::new(),
+                ConversationType::ServerDm,
+                Some(sender),
+                "hi".into(),
+                1,
+            )
+        };
 
         // Ours: silent whatever else holds.
         assert!(!should_notify_message(&msg(me), Some(&me), false, false));
@@ -457,23 +517,44 @@ mod tests {
     fn test_set_detail_level() {
         let service = NotificationService::noop();
         service.set_detail_level(NotificationDetailLevel::NameAndMessage);
-        assert_eq!(service.detail_level(), NotificationDetailLevel::NameAndMessage);
+        assert_eq!(
+            service.detail_level(),
+            NotificationDetailLevel::NameAndMessage
+        );
     }
 
     #[test]
     fn test_detail_level_from_str() {
-        assert_eq!(NotificationDetailLevel::from_str("none"), NotificationDetailLevel::None);
-        assert_eq!(NotificationDetailLevel::from_str("name_only"), NotificationDetailLevel::NameOnly);
-        assert_eq!(NotificationDetailLevel::from_str("name_and_message"), NotificationDetailLevel::NameAndMessage);
-        assert_eq!(NotificationDetailLevel::from_str("garbage"), NotificationDetailLevel::None);
-        assert_eq!(NotificationDetailLevel::from_str(""), NotificationDetailLevel::None);
+        assert_eq!(
+            NotificationDetailLevel::from_str("none"),
+            NotificationDetailLevel::None
+        );
+        assert_eq!(
+            NotificationDetailLevel::from_str("name_only"),
+            NotificationDetailLevel::NameOnly
+        );
+        assert_eq!(
+            NotificationDetailLevel::from_str("name_and_message"),
+            NotificationDetailLevel::NameAndMessage
+        );
+        assert_eq!(
+            NotificationDetailLevel::from_str("garbage"),
+            NotificationDetailLevel::None
+        );
+        assert_eq!(
+            NotificationDetailLevel::from_str(""),
+            NotificationDetailLevel::None
+        );
     }
 
     #[test]
     fn test_detail_level_as_str() {
         assert_eq!(NotificationDetailLevel::None.as_str(), "none");
         assert_eq!(NotificationDetailLevel::NameOnly.as_str(), "name_only");
-        assert_eq!(NotificationDetailLevel::NameAndMessage.as_str(), "name_and_message");
+        assert_eq!(
+            NotificationDetailLevel::NameAndMessage.as_str(),
+            "name_and_message"
+        );
     }
 
     /// The level decides what reaches the platform sink (desktop notify-rust
@@ -483,7 +564,12 @@ mod tests {
     fn detail_level_shapes_what_reaches_the_sink() {
         struct Capture(std::sync::Mutex<Vec<(String, String)>>);
         impl NotificationSink for Capture {
-            fn show(&self, title: &str, body: &str, _: NotificationPriority) -> Result<(), SystemError> {
+            fn show(
+                &self,
+                title: &str,
+                body: &str,
+                _: NotificationPriority,
+            ) -> Result<(), SystemError> {
                 self.0.lock().unwrap().push((title.into(), body.into()));
                 Ok(())
             }
@@ -494,16 +580,34 @@ mod tests {
         let shown = |level, sealed| {
             service.set_detail_level(level);
             service
-                .show_message_notification(&conversation, Some("Alice"), Some("are you free?"), sealed, NotificationPriority::Normal)
+                .show_message_notification(
+                    &conversation,
+                    Some("Alice"),
+                    Some("are you free?"),
+                    sealed,
+                    NotificationPriority::Normal,
+                )
                 .unwrap();
             sink.0.lock().unwrap().pop().unwrap()
         };
         let pair = |t: &str, b: &str| (t.to_string(), b.to_string());
 
-        assert_eq!(shown(NotificationDetailLevel::NameAndMessage, false), pair("Alice", "are you free?"));
-        assert_eq!(shown(NotificationDetailLevel::NameOnly, false), pair("Alice", "New message"));
-        assert_eq!(shown(NotificationDetailLevel::None, false), pair("Chatter", "New message"));
-        assert_eq!(shown(NotificationDetailLevel::NameAndMessage, true), pair("Chatter", "New message"));
+        assert_eq!(
+            shown(NotificationDetailLevel::NameAndMessage, false),
+            pair("Alice", "are you free?")
+        );
+        assert_eq!(
+            shown(NotificationDetailLevel::NameOnly, false),
+            pair("Alice", "New message")
+        );
+        assert_eq!(
+            shown(NotificationDetailLevel::None, false),
+            pair("Chatter", "New message")
+        );
+        assert_eq!(
+            shown(NotificationDetailLevel::NameAndMessage, true),
+            pair("Chatter", "New message")
+        );
     }
 
     /// A panicking sink is one failed notification, not a dead caller loop.
@@ -520,20 +624,31 @@ mod tests {
         }
         let service = NotificationService::new(Arc::new(Panics));
         assert!(service.show_incoming_call("c", "t", "b").is_err());
-        assert!(service.show_message("t", "b", NotificationPriority::Normal).is_ok());
+        assert!(
+            service
+                .show_message("t", "b", NotificationPriority::Normal)
+                .is_ok()
+        );
     }
 
     #[test]
     fn notification_key_is_stable_and_hides_the_id() {
         let id = crate::domain::ids::ChannelId::new();
         assert_eq!(notification_key(&id), notification_key(&id));
-        assert_ne!(notification_key(&id), notification_key(&crate::domain::ids::ChannelId::new()));
+        assert_ne!(
+            notification_key(&id),
+            notification_key(&crate::domain::ids::ChannelId::new())
+        );
         assert!(!notification_key(&id).contains(&id.to_string()));
     }
 
     #[test]
     fn test_detail_level_roundtrip() {
-        for level in [NotificationDetailLevel::None, NotificationDetailLevel::NameOnly, NotificationDetailLevel::NameAndMessage] {
+        for level in [
+            NotificationDetailLevel::None,
+            NotificationDetailLevel::NameOnly,
+            NotificationDetailLevel::NameAndMessage,
+        ] {
             assert_eq!(NotificationDetailLevel::from_str(level.as_str()), level);
         }
     }

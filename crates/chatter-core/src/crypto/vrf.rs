@@ -77,8 +77,12 @@ mod tests {
     #[test]
     fn rfc9381_vectors_verify() {
         for (pk, alpha, pi, beta) in RFC9381 {
-            let idx = vrf_verify(&key(pk), &hex::decode(alpha).unwrap(), &hex::decode(pi).unwrap())
-                .expect("RFC 9381 vector must verify");
+            let idx = vrf_verify(
+                &key(pk),
+                &hex::decode(alpha).unwrap(),
+                &hex::decode(pi).unwrap(),
+            )
+            .expect("RFC 9381 vector must verify");
             assert_eq!(hex::encode(idx), beta);
         }
     }
@@ -105,7 +109,10 @@ mod tests {
         for i in 0..proof.len() {
             let mut bad = proof.clone();
             bad[i] ^= 1;
-            assert!(vrf_verify(&key(PK), &alpha, &bad).is_none(), "byte {i} flipped");
+            assert!(
+                vrf_verify(&key(PK), &alpha, &bad).is_none(),
+                "byte {i} flipped"
+            );
         }
     }
 

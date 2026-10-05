@@ -27,48 +27,48 @@ macro_rules! service_accessor {
 
 // ── Public API ──────────────────────────────────────────────────────────────
 
-#[cfg(test)]
-pub(crate) mod test_tempdir;
-pub mod client;
-pub mod prelude;
-pub mod domain;
-pub mod events;
-pub mod state;
-pub mod error;
-pub mod wire;
-pub mod media;
 #[cfg(feature = "media")]
 pub mod calls;
+pub mod client;
 pub mod crypto;
+pub mod domain;
+pub mod error;
+pub mod events;
+pub mod media;
+pub mod prelude;
+pub mod state;
 pub mod system;
+#[cfg(test)]
+pub(crate) mod test_tempdir;
+pub mod wire;
 
 // ── Internal modules ────────────────────────────────────────────────────────
 
-#[doc(hidden)]
-pub mod app;
-#[doc(hidden)]
-pub mod storage;
-#[doc(hidden)]
-pub mod network;
-#[doc(hidden)]
-pub mod services;
-#[doc(hidden)]
-pub mod sync;
-#[doc(hidden)]
-pub mod inbox;
-#[doc(hidden)]
-pub mod mailbox;
-#[doc(hidden)]
-pub mod ui;
-#[doc(hidden)]
-pub mod local_ai;
-/// Off-device inference providers. Siloed from `local_ai`.
-pub mod cloud_ai;
 /// Arbiter between the two AI silos — outside both by design.
 pub mod ai_policy;
 #[doc(hidden)]
-pub mod util;
+pub mod app;
+/// Off-device inference providers. Siloed from `local_ai`.
+pub mod cloud_ai;
+#[doc(hidden)]
+pub mod config;
+#[doc(hidden)]
+pub mod inbox;
+#[doc(hidden)]
+pub mod local_ai;
+#[doc(hidden)]
+pub mod mailbox;
+#[doc(hidden)]
+pub mod network;
 #[doc(hidden)]
 pub mod proto;
 #[doc(hidden)]
-pub mod config;
+pub mod services;
+#[doc(hidden)]
+pub mod storage;
+#[doc(hidden)]
+pub mod sync;
+#[doc(hidden)]
+pub mod ui;
+#[doc(hidden)]
+pub mod util;

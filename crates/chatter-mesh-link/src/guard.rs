@@ -99,7 +99,6 @@ impl PacketFreshnessPolicy {
     pub fn skew_millis(timestamp_millis: u64, now_unix_millis: u64) -> u64 {
         timestamp_millis.abs_diff(now_unix_millis)
     }
-
 }
 
 /// Identifies one packet for self-broadcast purposes.
@@ -178,7 +177,8 @@ impl SelfBroadcastTracker {
 
     /// True when this packet is an echo of something we sent.
     pub fn contains(&self, packet: &BitchatPacket) -> bool {
-        self.entries.contains_key(&SelfBroadcastKey::for_packet(packet))
+        self.entries
+            .contains_key(&SelfBroadcastKey::for_packet(packet))
     }
 
     /// The local message ID for an echo, without consuming the record.
@@ -570,7 +570,11 @@ mod tests {
 
         // Exactly at the boundary is not stale: Swift uses a strict `<`.
         assert!(!PacketFreshnessPolicy::is_stale(now - window, now, window));
-        assert!(PacketFreshnessPolicy::is_stale(now - window - 1, now, window));
+        assert!(PacketFreshnessPolicy::is_stale(
+            now - window - 1,
+            now,
+            window
+        ));
         // The future is never stale by this policy — the skew check catches it.
         assert!(!PacketFreshnessPolicy::is_stale(
             now + 10_000_000,
@@ -591,8 +595,14 @@ mod tests {
         let now = 1_000_000;
         assert_eq!(PacketFreshnessPolicy::age_millis(now + 10_000, now), 0);
         assert_eq!(PacketFreshnessPolicy::age_millis(now - 10_000, now), 10_000);
-        assert_eq!(PacketFreshnessPolicy::skew_millis(now + 10_000, now), 10_000);
-        assert_eq!(PacketFreshnessPolicy::skew_millis(now - 10_000, now), 10_000);
+        assert_eq!(
+            PacketFreshnessPolicy::skew_millis(now + 10_000, now),
+            10_000
+        );
+        assert_eq!(
+            PacketFreshnessPolicy::skew_millis(now - 10_000, now),
+            10_000
+        );
     }
 
     #[test]
@@ -709,11 +719,9 @@ mod tests {
 
         let echo = BitchatPacket { ttl: 2, ..ours };
         let rejection = guard
-            .evaluate(
-                input(&echo, &sender, None, &local, now),
-                &tracker,
-                |_| false,
-            )
+            .evaluate(input(&echo, &sender, None, &local, now), &tracker, |_| {
+                false
+            })
             .expect_err("our own packet coming back must not be processed");
         assert_eq!(
             rejection,

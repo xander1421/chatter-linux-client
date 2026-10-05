@@ -14,8 +14,8 @@
 use crate::proto::mailbox_v1::GetBlindSignaturePublicKeyResponse;
 use blind_rsa_signatures::{BlindSignature, BlindingResult, Options, PublicKey, Secret};
 use ed25519_dalek::{Signature, VerifyingKey};
-use rsa::pkcs8::DecodePublicKey;
 use rsa::PublicKeyParts;
+use rsa::pkcs8::DecodePublicKey;
 
 use std::future::Future;
 
@@ -123,10 +123,10 @@ impl ServerPublicKey {
         kt_anchor::hold_head_locked(&pin, settings, sth, fetch_consistency)
             .await
             .map_err(|e| {
-            MailboxError::InvalidServerKey(format!(
-                "manifest tree head contradicts this device's pinned head: {e}"
-            ))
-        })?;
+                MailboxError::InvalidServerKey(format!(
+                    "manifest tree head contradicts this device's pinned head: {e}"
+                ))
+            })?;
         Ok((manifest, key))
     }
 
@@ -587,7 +587,9 @@ pub(crate) mod tests {
         use prost::Message;
         // Only meaningful when the build pins the development KT keys, which
         // `cargo test` does unless provisioned ones are exported.
-        let dev_head = hex::decode("88ad412806054a7534e1b9deb42ef249bd7c92709f5bebf1d6be7b0e40926f72").unwrap();
+        let dev_head =
+            hex::decode("88ad412806054a7534e1b9deb42ef249bd7c92709f5bebf1d6be7b0e40926f72")
+                .unwrap();
         if crate::config::KT_TREE_HEAD_PUBLIC_KEY_BYTES[..] != dev_head[..] {
             return None;
         }
@@ -601,8 +603,13 @@ pub(crate) mod tests {
 
     #[test]
     fn manifest_requires_a_valid_kt_inclusion_proof() {
-        let Some(m) = kt_manifest_vector() else { return };
-        assert_eq!(ServerPublicKey::from_manifest(&m).unwrap().key_id, "vector-current");
+        let Some(m) = kt_manifest_vector() else {
+            return;
+        };
+        assert_eq!(
+            ServerPublicKey::from_manifest(&m).unwrap().key_id,
+            "vector-current"
+        );
 
         let mut missing = m.clone();
         missing.kt_proof = None;
@@ -610,28 +617,59 @@ pub(crate) mod tests {
 
         // Committed value is not this manifest's digest.
         let mut wrong_value = m.clone();
-        wrong_value.kt_proof.as_mut().unwrap().inclusion_proof.as_mut().unwrap().value[0] ^= 1;
+        wrong_value
+            .kt_proof
+            .as_mut()
+            .unwrap()
+            .inclusion_proof
+            .as_mut()
+            .unwrap()
+            .value[0] ^= 1;
         assert!(ServerPublicKey::from_manifest(&wrong_value).is_err());
 
         // Inclusion path does not reach the committed root.
         let mut bad_path = m.clone();
-        bad_path.kt_proof.as_mut().unwrap().inclusion_proof.as_mut().unwrap().sibling_hashes.last_mut().unwrap()[0] ^= 1;
+        bad_path
+            .kt_proof
+            .as_mut()
+            .unwrap()
+            .inclusion_proof
+            .as_mut()
+            .unwrap()
+            .sibling_hashes
+            .last_mut()
+            .unwrap()[0] ^= 1;
         assert!(ServerPublicKey::from_manifest(&bad_path).is_err());
 
         // Tree head not signed by the pinned key.
         let mut bad_head = m.clone();
-        bad_head.kt_proof.as_mut().unwrap().signed_tree_head.as_mut().unwrap().signature[0] ^= 1;
+        bad_head
+            .kt_proof
+            .as_mut()
+            .unwrap()
+            .signed_tree_head
+            .as_mut()
+            .unwrap()
+            .signature[0] ^= 1;
         assert!(ServerPublicKey::from_manifest(&bad_head).is_err());
 
         // A valid proof for a different label (a user's, or another key's) does
         // not cover this manifest.
         assert_ne!(manifest_label(&m.key_id), "vector-current");
-        assert!(crate::crypto::verify_kt_proof(
-            "vector-current",
-            &m.kt_proof.as_ref().unwrap().inclusion_proof.as_ref().unwrap().value,
-            m.kt_proof.as_ref().unwrap(),
-        )
-        .is_err());
+        assert!(
+            crate::crypto::verify_kt_proof(
+                "vector-current",
+                &m.kt_proof
+                    .as_ref()
+                    .unwrap()
+                    .inclusion_proof
+                    .as_ref()
+                    .unwrap()
+                    .value,
+                m.kt_proof.as_ref().unwrap(),
+            )
+            .is_err()
+        );
     }
 
     /// The manifest is fetched only once the pin lock is held, so its head
@@ -639,7 +677,9 @@ pub(crate) mod tests {
     #[tokio::test]
     async fn manifest_is_fetched_under_the_pin_lock() {
         use std::sync::atomic::{AtomicBool, Ordering};
-        let Some(m) = kt_manifest_vector() else { return };
+        let Some(m) = kt_manifest_vector() else {
+            return;
+        };
         let dir = tempfile::tempdir().unwrap();
         let db = std::sync::Arc::new(
             crate::storage::Database::open(&dir.path().join("kt.db"), "testpass").unwrap(),
@@ -651,7 +691,10 @@ pub(crate) mod tests {
         let pin = kt_anchor::lock_pin().await;
         let other_check = async {
             tokio::task::yield_now().await;
-            assert!(!fetched.load(Ordering::SeqCst), "fetched while another check held the pin");
+            assert!(
+                !fetched.load(Ordering::SeqCst),
+                "fetched while another check held the pin"
+            );
             drop(pin);
         };
         let fetch = ServerPublicKey::fetch_manifest(
@@ -660,7 +703,11 @@ pub(crate) mod tests {
                 Ok(m)
             },
             &settings,
-            |_, _| async { Err(NetworkError::ConnectionFailed("first pin needs no proof".into())) },
+            |_, _| async {
+                Err(NetworkError::ConnectionFailed(
+                    "first pin needs no proof".into(),
+                ))
+            },
         );
         let ((), result) = tokio::join!(other_check, fetch);
         assert_eq!(result.unwrap().1.key_id, "vector-current");
@@ -685,7 +732,10 @@ pub(crate) mod tests {
             signature: vec![],
             kt_proof: None,
         };
-        assert_eq!(hex::encode(manifest_bytes(&m)), "636861747465722f6d61696c626f782d626c696e642d6b65792d6d616e69666573742f7631000000000201020000000161000000000000000100000000000000030000000103000000016200000000000000020000000000000004");
+        assert_eq!(
+            hex::encode(manifest_bytes(&m)),
+            "636861747465722f6d61696c626f782d626c696e642d6b65792d6d616e69666573742f7631000000000201020000000161000000000000000100000000000000030000000103000000016200000000000000020000000000000004"
+        );
     }
 
     #[test]

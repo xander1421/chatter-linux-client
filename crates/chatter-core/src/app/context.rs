@@ -6,16 +6,16 @@
 use std::sync::Arc;
 
 use crate::error::{NetworkError, StorageError, SystemError};
+use crate::inbox::provider::DeviceInboxProvider;
+use crate::mailbox::anon_dm::AnonDmPoller;
+use crate::mailbox::group::GroupFanout;
 #[cfg(feature = "media")]
 use crate::services::CallWorkerHandle;
-use crate::mailbox::group::GroupFanout;
-use crate::mailbox::anon_dm::AnonDmPoller;
-use crate::inbox::provider::DeviceInboxProvider;
 use crate::system::notification_sink::NotificationSink;
 
+use super::core_services::CoreServices;
 use super::infrastructure::InfrastructureContainer;
 use super::services::ServiceContainer;
-use super::core_services::CoreServices;
 
 /// Application context error.
 #[derive(Debug, thiserror::Error)]
@@ -77,7 +77,10 @@ impl AppContext {
     /// `CHATTER_SERVER_URL` environment variable or the built-in default.
     /// If `data_dir` is `Some(path)`, that path is used as the base directory
     /// for config, data, and cache (required on Android).
-    pub fn with_config(server_url: Option<String>, data_dir: Option<String>) -> Result<Self, ContextError> {
+    pub fn with_config(
+        server_url: Option<String>,
+        data_dir: Option<String>,
+    ) -> Result<Self, ContextError> {
         Self::with_config_and_sink(server_url, data_dir, None)
     }
 
@@ -136,9 +139,8 @@ impl AppContext {
             let pipeline = Arc::new(crate::network::validation::MessageValidationPipeline::new());
 
             // Create anonymous DM poller for stranger messaging
-            let anon_dm_poller = Arc::new(AnonDmPoller::new(
-                self.infrastructure.anon_dm_repo.clone(),
-            ));
+            let anon_dm_poller =
+                Arc::new(AnonDmPoller::new(self.infrastructure.anon_dm_repo.clone()));
 
             Arc::new(
                 DeviceInboxProvider::with_event_bus(
@@ -244,15 +246,18 @@ impl AppContext {
 
         handlers.spawn(self.core_services.event_bus.clone())
     }
-    
+
     /// Start the channel event stream service.
     ///
     /// This starts the background service that owns the gRPC stream,
     /// handles reconnection, and emits domain events.
     pub fn start_channel_event_stream(&self) -> tokio::task::JoinHandle<()> {
-        self.services.channel_event_service.clone().start_event_stream()
+        self.services
+            .channel_event_service
+            .clone()
+            .start_event_stream()
     }
-    
+
     /// Restart the channel event stream service.
     ///
     /// This is needed after re-login to ensure the stream uses the new
@@ -261,17 +266,20 @@ impl AppContext {
         // The service handles stream lifecycle internally with retry logic
         // Just start a new instance - the old one will eventually stop
         // when it fails to authenticate with old credentials
-        self.services.channel_event_service.clone().start_event_stream()
+        self.services
+            .channel_event_service
+            .clone()
+            .start_event_stream()
     }
-    
+
     /// Start the channel bootstrap service.
     ///
     /// This starts the background service that listens for GroupMailboxReceived
     /// events and flushes pending messages to new members.
     pub fn start_channel_bootstrap_service(&self) -> tokio::task::JoinHandle<()> {
-        self.services.channel_bootstrap_service.start(
-            self.core_services.event_bus.subscribe_domain()
-        )
+        self.services
+            .channel_bootstrap_service
+            .start(self.core_services.event_bus.subscribe_domain())
     }
 }
 
@@ -293,7 +301,13 @@ mod server_url_tests {
         let url = "https://explicit.invalid:1";
         AppContext::with_config(Some(url.into()), Some(dir.path().to_str().unwrap().into()))
             .expect("context");
-        assert_ne!(std::env::var("CHATTER_SERVER_URL").ok().as_deref(), Some(url));
-        assert_eq!(super::super::infrastructure::resolve_server_url(Some(url.into())), url);
+        assert_ne!(
+            std::env::var("CHATTER_SERVER_URL").ok().as_deref(),
+            Some(url)
+        );
+        assert_eq!(
+            super::super::infrastructure::resolve_server_url(Some(url.into())),
+            url
+        );
     }
 }

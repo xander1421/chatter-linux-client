@@ -9,8 +9,8 @@ use std::sync::Arc;
 
 use rusqlite::params;
 
-use crate::domain::ids::{AttachmentId, ChannelId};
 use crate::domain::UserId;
+use crate::domain::ids::{AttachmentId, ChannelId};
 use crate::error::StorageError;
 use crate::storage::Database;
 
@@ -65,7 +65,9 @@ impl PendingDmRepository {
     pub fn drain(&self, peer_id: &UserId) -> Result<Vec<PendingDm>, StorageError> {
         let conn = self.db.connection()?;
         let peer = peer_id.to_string();
-        let tx = conn.unchecked_transaction().map_err(StorageError::Database)?;
+        let tx = conn
+            .unchecked_transaction()
+            .map_err(StorageError::Database)?;
 
         let mut stmt = tx.prepare(
             "SELECT content, attachment_ids_blob, channel_id FROM pending_dm_messages
@@ -87,7 +89,10 @@ impl PendingDmRepository {
             .collect();
         drop(stmt);
 
-        tx.execute("DELETE FROM pending_dm_messages WHERE peer_id = ?1", params![peer])?;
+        tx.execute(
+            "DELETE FROM pending_dm_messages WHERE peer_id = ?1",
+            params![peer],
+        )?;
         tx.commit().map_err(StorageError::Database)?;
         Ok(messages)
     }

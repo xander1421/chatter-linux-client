@@ -88,7 +88,9 @@ fn detail_line(entry: &CallHistoryEntry, is_incoming: bool) -> String {
         CallResult::Completed => "Outgoing",
     };
     match entry.duration_secs {
-        Some(secs) if secs > 0 && entry.result == CallResult::Completed => format!("{} \u{00B7} {}", outcome, format_call_duration(secs)),
+        Some(secs) if secs > 0 && entry.result == CallResult::Completed => {
+            format!("{} \u{00B7} {}", outcome, format_call_duration(secs))
+        }
         _ => outcome.to_string(),
     }
 }
@@ -111,7 +113,11 @@ mod tests {
     use crate::domain::ids::UserId;
     use crate::domain::message::ConversationType;
 
-    fn entry(result: CallResult, direction: CallDirection, duration: Option<i64>) -> CallHistoryEntry {
+    fn entry(
+        result: CallResult,
+        direction: CallDirection,
+        duration: Option<i64>,
+    ) -> CallHistoryEntry {
         CallHistoryEntry {
             id: "call-1".into(),
             conversation_id: UserId::new().to_string(),

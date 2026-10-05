@@ -40,7 +40,10 @@ impl ChatterClient {
     /// Whether moving to `visibility` needs the PIN: it restricts (so the key
     /// rotates) and the account has an SVR backup that holds the key. The UI
     /// asks for the PIN before calling [`Self::set_profile_visibility`].
-    pub async fn profile_visibility_needs_pin(&self, visibility: ProfileVisibility) -> Result<bool, ClientError> {
+    pub async fn profile_visibility_needs_pin(
+        &self,
+        visibility: ProfileVisibility,
+    ) -> Result<bool, ClientError> {
         if visibility <= self.profile_visibility() {
             return Ok(false);
         }
@@ -76,22 +79,31 @@ impl ChatterClient {
         // opened its profile UI yet. Fetch/decrypt missing profile fields
         // BEFORE replacing that key or its backup: after the commit the old
         // server ciphertext can no longer be read with our current key.
-        let me = settings.current_user_id().map_err(|e| ClientError::Validation(e.to_string()))?;
-        if self.messages().user_repo.get_profile(&me).map_err(storage)?.is_none() {
-            self.users()
-                .get_user_profile(&me)
-                .await
-                .map_err(|e| ClientError::Validation(format!("couldn't load your profile before changing visibility: {e}")))?;
+        let me = settings
+            .current_user_id()
+            .map_err(|e| ClientError::Validation(e.to_string()))?;
+        if self
+            .messages()
+            .user_repo
+            .get_profile(&me)
+            .map_err(storage)?
+            .is_none()
+        {
+            self.users().get_user_profile(&me).await.map_err(|e| {
+                ClientError::Validation(format!(
+                    "couldn't load your profile before changing visibility: {e}"
+                ))
+            })?;
         }
 
         let next = policy::next_profile_key(settings).map_err(storage)?;
-        let has_backup = self
-            .svr_backup()
-            .has_key_backup()
-            .await
-            .map_err(|e| ClientError::Validation(format!("couldn't check the key backup: {e}")))?;
+        let has_backup =
+            self.svr_backup().has_key_backup().await.map_err(|e| {
+                ClientError::Validation(format!("couldn't check the key backup: {e}"))
+            })?;
         if has_backup {
-            let pin = pin.ok_or_else(|| ClientError::Validation("Enter your PIN to change this".into()))?;
+            let pin =
+                pin.ok_or_else(|| ClientError::Validation("Enter your PIN to change this".into()))?;
             let username = self.svr_salt_username()?;
             // A wrong PIN must never reach the upload: the backup would be
             // replaced by one the real PIN cannot open.
@@ -103,7 +115,10 @@ impl ChatterClient {
         }
 
         policy::commit_rotation(settings, visibility).map_err(storage)?;
-        tracing::info!(visibility = visibility.as_str(), "profile key rotated locally");
+        tracing::info!(
+            visibility = visibility.as_str(),
+            "profile key rotated locally"
+        );
         self.finish_profile_key_rotation().await
     }
 
@@ -113,7 +128,11 @@ impl ChatterClient {
     /// read; it does not report attempts left on a miss, so the user is told
     /// the tries are limited rather than a count. On success the fingerprint
     /// is stored, so the next check is local.
-    async fn check_pin_before_backup_write(&self, pin: &str, username: &str) -> Result<(), ClientError> {
+    async fn check_pin_before_backup_write(
+        &self,
+        pin: &str,
+        username: &str,
+    ) -> Result<(), ClientError> {
         use crate::services::link_device_service::LinkDeviceError;
         use crate::services::svr_backup_service::SvrBackupError;
         use crate::storage::repositories::settings_repo::keys;
@@ -122,8 +141,13 @@ impl ChatterClient {
             Ok(true) => return Ok(()),
             Ok(false) => return Err(ClientError::Validation("Wrong PIN".into())),
             // No fingerprint here: ask the backup.
-            Err(LinkDeviceError::Invalid(_)) if crate::crypto::svr::validate_pin_shape(pin).is_ok() => {}
-            Err(e) => return Err(ClientError::Validation(format!("Can't check your PIN: {e}"))),
+            Err(LinkDeviceError::Invalid(_))
+                if crate::crypto::svr::validate_pin_shape(pin).is_ok() => {}
+            Err(e) => {
+                return Err(ClientError::Validation(format!(
+                    "Can't check your PIN: {e}"
+                )));
+            }
         }
 
         let mut fingerprint = match self.svr_backup().verify_pin_against_backup(pin, username).await {
@@ -145,7 +169,10 @@ impl ChatterClient {
             }
             Err(e) => return Err(ClientError::Validation(format!("couldn't check your PIN: {e}"))),
         };
-        let stored = self.messages().settings_repo.set_bytes(keys::PIN_FINGERPRINT, &fingerprint);
+        let stored = self
+            .messages()
+            .settings_repo
+            .set_bytes(keys::PIN_FINGERPRINT, &fingerprint);
         zeroize::Zeroize::zeroize(&mut fingerprint);
         stored.map_err(storage)
     }
@@ -174,11 +201,16 @@ impl ChatterClient {
     /// every own-device sync; a device that misses it keeps the old key until
     /// the next change.
     async fn sync_profile_key_to_own_devices(&self) {
-        use crate::proto::content_v1::{content, Content, ProfileKeySync};
+        use crate::proto::content_v1::{Content, ProfileKeySync, content};
 
         let settings = &self.messages().settings_repo;
-        let Some(key) = policy::own_profile_key(settings) else { return };
-        let mut sync = ProfileKeySync { profile_key: key.to_vec(), ..Default::default() };
+        let Some(key) = policy::own_profile_key(settings) else {
+            return;
+        };
+        let mut sync = ProfileKeySync {
+            profile_key: key.to_vec(),
+            ..Default::default()
+        };
         sync.set_visibility(ProfileVisibility::load(settings).to_proto());
         let content = Content {
             timestamp: crate::util::time::TimestampNanos::now().as_u64(),
@@ -186,7 +218,9 @@ impl ChatterClient {
             ..Default::default()
         };
         let messages = self.messages();
-        let devices = messages.sync_to_own_devices(&mut messages.auth_client(), content).await;
+        let devices = messages
+            .sync_to_own_devices(&mut messages.auth_client(), content)
+            .await;
         tracing::info!(devices, "ProfileKeySync sent to our other devices");
     }
 
@@ -198,8 +232,16 @@ impl ChatterClient {
         use crate::storage::repositories::settings_repo::keys;
 
         let m = self.messages();
-        let me = m.settings_repo.current_user_id().map_err(|e| ClientError::Validation(e.to_string()))?;
-        let name = m.settings_repo.get_string(keys::DISPLAY_NAME).ok().flatten().filter(|n| !n.is_empty());
+        let me = m
+            .settings_repo
+            .current_user_id()
+            .map_err(|e| ClientError::Validation(e.to_string()))?;
+        let name = m
+            .settings_repo
+            .get_string(keys::DISPLAY_NAME)
+            .ok()
+            .flatten()
+            .filter(|n| !n.is_empty());
         let status = m
             .user_repo
             .get_profile(&me)

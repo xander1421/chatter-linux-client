@@ -8,14 +8,17 @@ use crate::{common, skip_if_no_server};
 use chatter_core::error::NetworkError;
 use chatter_core::network::grpc::{ChannelClient, MessageClient};
 use chatter_core::proto::chat_v1::{
-    message::content::Type as ContentType, message::Content, ChannelType, MessageSortDirection,
+    ChannelType, MessageSortDirection, message::Content, message::content::Type as ContentType,
 };
 use tokio_stream::StreamExt;
 
 use common::*;
 
 /// Helper to create a test channel and return its ID.
-async fn create_test_channel(pool: &chatter_core::network::grpc::GrpcClientPool, user: &TestUser) -> String {
+async fn create_test_channel(
+    pool: &chatter_core::network::grpc::GrpcClientPool,
+    user: &TestUser,
+) -> String {
     let mut channel_client = ChannelClient::new(pool.channel(), pool.auth_clone());
     let channel_name = format!("test_channel_{}", unique_username());
 
@@ -27,7 +30,8 @@ async fn create_test_channel(pool: &chatter_core::network::grpc::GrpcClientPool,
             Some("Test channel for integration tests"),
             None,
             Some(membership::genesis(user, true).1),
-        ).await
+        )
+        .await
         .expect("Failed to create channel");
 
     tokio::pin!(stream);
@@ -162,7 +166,9 @@ async fn test_delete_message() {
     );
 
     // Delete it
-    let result = msg_client.delete_message(&message.id, &channel_id, Vec::new()).await;
+    let result = msg_client
+        .delete_message(&message.id, &channel_id, Vec::new())
+        .await;
     assert!(result.is_ok(), "Delete should succeed");
 
     // Verify it's gone (might still show as deleted or not appear)
@@ -341,11 +347,7 @@ async fn test_stream_messages() {
     // Optionally consume the initial "stream ready" message
     let mut stream = stream_result.unwrap();
     use tokio_stream::StreamExt;
-    let first_msg = tokio::time::timeout(
-        std::time::Duration::from_secs(2),
-        stream.next(),
-    )
-    .await;
+    let first_msg = tokio::time::timeout(std::time::Duration::from_secs(2), stream.next()).await;
 
     // Should receive initial message within 2 seconds
     assert!(first_msg.is_ok(), "Should receive initial stream message");

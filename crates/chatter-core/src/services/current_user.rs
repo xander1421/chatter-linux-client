@@ -6,8 +6,8 @@
 
 use crate::domain::ids::UserId;
 use crate::error::StorageError;
-use crate::storage::repositories::settings_repo::keys;
 use crate::storage::SettingsRepository;
+use crate::storage::repositories::settings_repo::keys;
 
 /// Error type for current user operations.
 #[derive(Debug, thiserror::Error)]
@@ -56,6 +56,8 @@ impl CurrentUserProvider for SettingsRepository {
             .get_string(keys::CURRENT_USER_ID)
             .map_err(CurrentUserError::Storage)?
             .ok_or(CurrentUserError::NotLoggedIn)?;
-        user_id_str.parse().map_err(|_| CurrentUserError::NotLoggedIn)
+        user_id_str
+            .parse()
+            .map_err(|_| CurrentUserError::NotLoggedIn)
     }
 }

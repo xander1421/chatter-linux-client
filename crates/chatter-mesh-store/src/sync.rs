@@ -1612,7 +1612,10 @@ mod tests {
 
         manager.initial_sync_to(&them(), NOW).expect("request");
         assert!(manager.awaits_answer_from(&them(), NOW));
-        assert!(!manager.is_valid_response(&them(), false, NOW), "RSR path unchanged");
+        assert!(
+            !manager.is_valid_response(&them(), false, NOW),
+            "RSR path unchanged"
+        );
         let stranger = PeerId::from_bytes(&[0x42; 8]);
         assert!(!manager.awaits_answer_from(&stranger, NOW));
         assert!(!manager.awaits_answer_from(&them(), NOW + RESPONSE_WINDOW_SECS + 1));
@@ -2294,10 +2297,7 @@ mod tests {
         assert_eq!(manager.message_count(), 1);
 
         // A relayed announce 90 s old is presence, not departure.
-        manager.on_public_packet_seen(
-            &packet_of(MessageType::Announce, b"", NOW_MS - 90_000),
-            NOW,
-        );
+        manager.on_public_packet_seen(&packet_of(MessageType::Announce, b"", NOW_MS - 90_000), NOW);
         assert_eq!(manager.message_count(), 1);
 
         // Silent past bitchat-android's 180 s: gone, with its traffic.

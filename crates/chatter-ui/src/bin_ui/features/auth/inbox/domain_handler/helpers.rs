@@ -4,8 +4,8 @@ use std::sync::Arc;
 
 use slint::{Model, Weak};
 
-use chatter_core::client::ChatterClient;
 use crate::MainWindow;
+use chatter_core::client::ChatterClient;
 
 /// Update a chat-list row's unread badge.
 pub(crate) fn update_unread_count(
@@ -75,12 +75,19 @@ pub(super) fn handle_pin_ui_update(
 
                     let mut updated_msg = msg.clone();
                     updated_msg.is_pinned = new_pinned;
-                    if let Some(model) = messages.as_any().downcast_ref::<slint::VecModel<crate::MessageItemData>>() {
+                    if let Some(model) = messages
+                        .as_any()
+                        .downcast_ref::<slint::VecModel<crate::MessageItemData>>()
+                    {
                         model.set_row_data(i, updated_msg);
                     }
 
                     // Update pinned-bar substate with the real message_id from the UI model
-                    if let Ok(msg_id) = msg.message_id.to_string().parse::<chatter_core::domain::ids::MessageId>() {
+                    if let Ok(msg_id) = msg
+                        .message_id
+                        .to_string()
+                        .parse::<chatter_core::domain::ids::MessageId>()
+                    {
                         if new_pinned {
                             chat_state.add_pinned_message(msg_id);
                         } else {

@@ -27,9 +27,9 @@
 //! send takes, and whether a cell is a cell. This module chooses wording and
 //! glyphs, and nothing else. [`core_api`] is the single seam.
 
-pub mod core_api;
 mod attach;
 mod conversation;
+pub mod core_api;
 mod send;
 
 pub use attach::intercept_attachment;
@@ -196,7 +196,8 @@ pub fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                         w.global::<MeshGlobal>()
                             .set_notice(format!("Mesh wipe incomplete: {error}").into());
                     } else {
-                        w.global::<MeshGlobal>().set_notice("Mesh data wiped from this device.".into());
+                        w.global::<MeshGlobal>()
+                            .set_notice("Mesh data wiped from this device.".into());
                     }
                     w.global::<MeshGlobal>().invoke_set_mesh_on(false);
                 });
@@ -321,7 +322,8 @@ fn deselect_rows(window: &MainWindow) {
     use slint::Model;
 
     let model = window.global::<MeshGlobal>().get_conversations();
-    let rows: Vec<MeshConversationData> = model.iter()
+    let rows: Vec<MeshConversationData> = model
+        .iter()
         .map(|mut row| {
             row.is_selected = false;
             row
@@ -402,11 +404,15 @@ fn handle_event(event: MeshEvent, weak: &slint::Weak<MainWindow>, ui_ctx: &Arc<C
                 refresh_rows(&w, &ui_ctx);
             });
         }
-        MeshEvent::Delivery { message_id, state, .. } => {
+        MeshEvent::Delivery {
+            message_id, state, ..
+        } => {
             let label = core_api::delivery_label(state);
             let domain_id =
                 chatter_core::services::mesh::mapping::wire_message_id(&message_id).to_string();
-            run_ui!(weak, |w| conversation::apply_delivery(&w, &domain_id, label));
+            run_ui!(weak, |w| conversation::apply_delivery(
+                &w, &domain_id, label
+            ));
         }
         MeshEvent::Peers(_) => {
             // The count itself comes from `status()`, which is the same number
@@ -431,7 +437,10 @@ fn handle_event(event: MeshEvent, weak: &slint::Weak<MainWindow>, ui_ctx: &Arc<C
         }
         MeshEvent::IdentityKeyChanged { peer } => {
             run_ui!(weak, |w| w.global::<MeshGlobal>().set_notice(
-                format!("Identity key change refused for {peer}. A new identity appears as a new peer.").into()
+                format!(
+                    "Identity key change refused for {peer}. A new identity appears as a new peer."
+                )
+                .into()
             ));
         }
         MeshEvent::Degraded(reason) => {

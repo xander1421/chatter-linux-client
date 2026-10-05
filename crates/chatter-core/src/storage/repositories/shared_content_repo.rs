@@ -18,14 +18,14 @@
 //! the caller's already-open write connection rather than taking the write
 //! lock twice.
 
-use crate::domain::attachment::{extract_links, FileMetadata, SharedCategory};
+use crate::domain::attachment::{FileMetadata, SharedCategory, extract_links};
 use crate::domain::ids::AttachmentId;
 use crate::domain::message::{ConversationType, Message};
 use crate::error::StorageError;
-use crate::storage::serialization::db_deserialize;
 use crate::storage::Database;
+use crate::storage::serialization::db_deserialize;
 use crate::ui::chat_data::extract_content_text;
-use rusqlite::{params, Connection};
+use rusqlite::{Connection, params};
 use std::sync::Arc;
 
 /// One row of a shared-content tab, straight off the index.
@@ -347,7 +347,12 @@ mod tests {
         }
     }
 
-    fn message(conv: &ChannelId, sent_at: u64, content: MessageContent, atts: Vec<AttachmentId>) -> Message {
+    fn message(
+        conv: &ChannelId,
+        sent_at: u64,
+        content: MessageContent,
+        atts: Vec<AttachmentId>,
+    ) -> Message {
         let mut m = Message::new_text(
             *conv,
             ConversationType::ServerDm,
@@ -369,7 +374,12 @@ mod tests {
             ("clip.mp4", "video/mp4", false, SharedCategory::Media),
             ("wave.gif", "image/gif", false, SharedCategory::Gif),
             // GIF wins over Media even when the MIME lies.
-            ("wave.gif", "application/octet-stream", false, SharedCategory::Gif),
+            (
+                "wave.gif",
+                "application/octet-stream",
+                false,
+                SharedCategory::Gif,
+            ),
             ("note.ogg", "audio/ogg", true, SharedCategory::Voice),
             ("song.mp3", "audio/mpeg", false, SharedCategory::Music),
             ("spec.pdf", "application/pdf", false, SharedCategory::File),
@@ -389,7 +399,10 @@ mod tests {
     fn extracts_only_tappable_urls() {
         assert_eq!(
             extract_links("see https://example.com/a. and http://b.dev, not ftp://c or bare.com"),
-            vec!["https://example.com/a".to_string(), "http://b.dev".to_string()],
+            vec![
+                "https://example.com/a".to_string(),
+                "http://b.dev".to_string()
+            ],
         );
         assert!(extract_links("no links here").is_empty());
     }
@@ -451,7 +464,13 @@ mod tests {
         .unwrap();
 
         let page = shared
-            .list(&ConversationType::ServerDm, &conv.to_string(), SharedCategory::Media, 10, 0)
+            .list(
+                &ConversationType::ServerDm,
+                &conv.to_string(),
+                SharedCategory::Media,
+                10,
+                0,
+            )
             .unwrap();
         assert_eq!(page.len(), 3, "only this conversation's media");
         assert_eq!(page[0].title, "c.mp4", "newest first");
@@ -459,20 +478,34 @@ mod tests {
 
         // Paging.
         let page2 = shared
-            .list(&ConversationType::ServerDm, &conv.to_string(), SharedCategory::Media, 2, 2)
+            .list(
+                &ConversationType::ServerDm,
+                &conv.to_string(),
+                SharedCategory::Media,
+                2,
+                2,
+            )
             .unwrap();
         assert_eq!(page2.len(), 1);
         assert_eq!(page2[0].title, "a.jpg");
 
         // Files tab sees the doc and nothing else.
         let files = shared
-            .list(&ConversationType::ServerDm, &conv.to_string(), SharedCategory::File, 10, 0)
+            .list(
+                &ConversationType::ServerDm,
+                &conv.to_string(),
+                SharedCategory::File,
+                10,
+                0,
+            )
             .unwrap();
         assert_eq!(files.len(), 1);
         assert_eq!(files[0].title, "spec.pdf");
         assert_eq!(files[0].size_bytes, 4096);
 
-        let counts = shared.counts(&ConversationType::ServerDm, &conv.to_string()).unwrap();
+        let counts = shared
+            .counts(&ConversationType::ServerDm, &conv.to_string())
+            .unwrap();
         assert_eq!(counts.iter().find(|(c, _)| c == "media").unwrap().1, 3);
         assert_eq!(counts.iter().find(|(c, _)| c == "file").unwrap().1, 1);
     }
@@ -498,7 +531,13 @@ mod tests {
 
         assert!(
             shared
-                .list(&ConversationType::ServerDm, &conv.to_string(), SharedCategory::Media, 10, 0)
+                .list(
+                    &ConversationType::ServerDm,
+                    &conv.to_string(),
+                    SharedCategory::Media,
+                    10,
+                    0
+                )
                 .unwrap()
                 .is_empty(),
             "unresolved item must not render"
@@ -507,7 +546,13 @@ mod tests {
         atts.insert(&att).unwrap();
 
         let page = shared
-            .list(&ConversationType::ServerDm, &conv.to_string(), SharedCategory::Media, 10, 0)
+            .list(
+                &ConversationType::ServerDm,
+                &conv.to_string(),
+                SharedCategory::Media,
+                10,
+                0,
+            )
             .unwrap();
         assert_eq!(page.len(), 1);
         assert_eq!(page[0].title, "late.jpg");
@@ -538,26 +583,50 @@ mod tests {
             .unwrap()
             .execute("DELETE FROM shared_content", [])
             .unwrap();
-        assert!(shared
-            .list(&ConversationType::ServerDm, &conv.to_string(), SharedCategory::Media, 10, 0)
-            .unwrap()
-            .is_empty());
+        assert!(
+            shared
+                .list(
+                    &ConversationType::ServerDm,
+                    &conv.to_string(),
+                    SharedCategory::Media,
+                    10,
+                    0
+                )
+                .unwrap()
+                .is_empty()
+        );
 
         assert_eq!(
-            shared.backfill(&msgs, &ConversationType::ServerDm, &conv).unwrap(),
+            shared
+                .backfill(&msgs, &ConversationType::ServerDm, &conv)
+                .unwrap(),
             1
         );
         let page = shared
-            .list(&ConversationType::ServerDm, &conv.to_string(), SharedCategory::Media, 10, 0)
+            .list(
+                &ConversationType::ServerDm,
+                &conv.to_string(),
+                SharedCategory::Media,
+                10,
+                0,
+            )
             .unwrap();
         assert_eq!(page.len(), 1);
         assert_eq!(page[0].title, "old.jpg");
 
         // Idempotent — running it twice must not duplicate tiles.
-        shared.backfill(&msgs, &ConversationType::ServerDm, &conv).unwrap();
+        shared
+            .backfill(&msgs, &ConversationType::ServerDm, &conv)
+            .unwrap();
         assert_eq!(
             shared
-                .list(&ConversationType::ServerDm, &conv.to_string(), SharedCategory::Media, 10, 0)
+                .list(
+                    &ConversationType::ServerDm,
+                    &conv.to_string(),
+                    SharedCategory::Media,
+                    10,
+                    0
+                )
                 .unwrap()
                 .len(),
             1
@@ -578,11 +647,22 @@ mod tests {
             vec![],
         ))
         .unwrap();
-        msgs.insert(&message(&conv, 101, MessageContent::Text("no link".into()), vec![]))
-            .unwrap();
+        msgs.insert(&message(
+            &conv,
+            101,
+            MessageContent::Text("no link".into()),
+            vec![],
+        ))
+        .unwrap();
 
         let links = shared
-            .list(&ConversationType::ServerDm, &conv.to_string(), SharedCategory::Link, 10, 0)
+            .list(
+                &ConversationType::ServerDm,
+                &conv.to_string(),
+                SharedCategory::Link,
+                10,
+                0,
+            )
             .unwrap();
         assert_eq!(links.len(), 1);
         assert_eq!(links[0].title, "https://rust-lang.org");

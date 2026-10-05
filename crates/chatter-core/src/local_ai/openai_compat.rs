@@ -168,7 +168,10 @@ impl LocalAIBackend for OpenAiCompatBackend {
     }
 
     async fn embed(&self, model: &str, texts: &[String]) -> Result<Vec<Vec<f32>>, BackendError> {
-        let request = OaiEmbedRequest { model, input: texts };
+        let request = OaiEmbedRequest {
+            model,
+            input: texts,
+        };
 
         let resp = self
             .client

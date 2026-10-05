@@ -30,20 +30,32 @@ pub struct BleAdapter {
 impl BleAdapter {
     /// Open a session and take the default adapter (`hci0` when present).
     pub async fn acquire() -> Result<Self, LinkError> {
-        let session = Session::new().await.map_err(|err| error::classify_adapter(&err))?;
-        let adapter = session.default_adapter().await.map_err(|err| error::classify_adapter(&err))?;
+        let session = Session::new()
+            .await
+            .map_err(|err| error::classify_adapter(&err))?;
+        let adapter = session
+            .default_adapter()
+            .await
+            .map_err(|err| error::classify_adapter(&err))?;
         Ok(Self { session, adapter })
     }
 
     /// Open a session and take a named adapter, e.g. `hci1` on a machine with
     /// more than one controller.
     pub async fn acquire_named(name: &str) -> Result<Self, LinkError> {
-        let session = Session::new().await.map_err(|err| error::classify_adapter(&err))?;
-        let adapter = session.adapter(name).map_err(|err| error::classify_adapter(&err))?;
+        let session = Session::new()
+            .await
+            .map_err(|err| error::classify_adapter(&err))?;
+        let adapter = session
+            .adapter(name)
+            .map_err(|err| error::classify_adapter(&err))?;
         // `Session::adapter` only builds a proxy; it does not check that the
         // adapter exists. Touch a mandatory property so a typo fails here rather
         // than as a confusing GATT registration error later.
-        adapter.address().await.map_err(|err| error::classify_adapter(&err))?;
+        adapter
+            .address()
+            .await
+            .map_err(|err| error::classify_adapter(&err))?;
         Ok(Self { session, adapter })
     }
 
@@ -66,7 +78,10 @@ impl BleAdapter {
 
     /// Is the controller currently powered?
     pub async fn is_powered(&self) -> Result<bool, LinkError> {
-        self.adapter.is_powered().await.map_err(|err| error::classify_adapter(&err))
+        self.adapter
+            .is_powered()
+            .await
+            .map_err(|err| error::classify_adapter(&err))
     }
 
     /// Bring the controller up if it is not already.
@@ -80,7 +95,10 @@ impl BleAdapter {
         if self.is_powered().await? {
             return Ok(());
         }
-        self.adapter.set_powered(true).await.map_err(|err| error::classify_adapter(&err))?;
+        self.adapter
+            .set_powered(true)
+            .await
+            .map_err(|err| error::classify_adapter(&err))?;
         if self.is_powered().await? {
             Ok(())
         } else {
@@ -94,7 +112,9 @@ impl BleAdapter {
 
 impl core::fmt::Debug for BleAdapter {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        f.debug_struct("BleAdapter").field("adapter", &self.name()).finish()
+        f.debug_struct("BleAdapter")
+            .field("adapter", &self.name())
+            .finish()
     }
 }
 

@@ -141,9 +141,9 @@ mod tests {
         // The single most dangerous misclassification: a typo must not be
         // allowed to look like "this account has no backup", because the
         // response to that is to mint a key and abandon the real one.
-        let need = classify_restore_failure(&SvrBackupError::Crypto(
-            CryptoError::Protocol("decrypt failed".into()),
-        ));
+        let need = classify_restore_failure(&SvrBackupError::Crypto(CryptoError::Protocol(
+            "decrypt failed".into(),
+        )));
         assert_eq!(need, KeyRecoveryNeed::WrongPin);
         assert!(
             need.is_retryable(),
@@ -183,7 +183,10 @@ mod tests {
     fn rate_limiting_is_retryable() {
         let need = classify_restore_failure(&SvrBackupError::RateLimited);
         assert_eq!(need, KeyRecoveryNeed::RateLimited);
-        assert!(need.is_retryable(), "the backup is intact; only waiting is needed");
+        assert!(
+            need.is_retryable(),
+            "the backup is intact; only waiting is needed"
+        );
     }
 
     #[test]
@@ -212,7 +215,10 @@ mod tests {
             KeyRecoveryNeed::Unavailable,
         ] {
             // The whole defect was silence. An empty message would reproduce it.
-            assert!(!need.user_message().is_empty(), "{need:?} has nothing to say");
+            assert!(
+                !need.user_message().is_empty(),
+                "{need:?} has nothing to say"
+            );
         }
     }
 }

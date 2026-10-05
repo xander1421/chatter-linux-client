@@ -49,7 +49,10 @@ impl ChannelBootstrapService {
     ///
     /// This spawns a background task that listens for GroupMailboxReceived events
     /// and flushes pending messages to new members.
-    pub fn start(&self, mut event_rx: broadcast::Receiver<DomainEvent>) -> tokio::task::JoinHandle<()> {
+    pub fn start(
+        &self,
+        mut event_rx: broadcast::Receiver<DomainEvent>,
+    ) -> tokio::task::JoinHandle<()> {
         let grpc_pool = self.grpc_pool.clone();
         let signal_service = self.signal_service.clone();
         let group_fanout = self.group_fanout.clone();
@@ -77,10 +80,9 @@ impl ChannelBootstrapService {
 
                     // Check for pending messages using nil member (broadcast queue)
                     let nil_member = UserId::from_uuid(uuid::Uuid::nil());
-                    let pending_messages = match group_mailbox_manager.drain_pending_messages(
-                        &channel_id,
-                        &nil_member,
-                    ) {
+                    let pending_messages = match group_mailbox_manager
+                        .drain_pending_messages(&channel_id, &nil_member)
+                    {
                         Ok(msgs) => msgs,
                         Err(e) => {
                             tracing::warn!(
@@ -150,10 +152,7 @@ impl ChannelBootstrapService {
         member_id: &UserId,
         pending_messages: Vec<(Vec<u8>, u64)>,
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        let mut auth_client = AuthClient::new(
-            grpc_pool.channel(),
-            grpc_pool.auth_clone(),
-        );
+        let mut auth_client = AuthClient::new(grpc_pool.channel(), grpc_pool.auth_clone());
 
         // Get the member's mailbox from group state
         let group_state = group_fanout

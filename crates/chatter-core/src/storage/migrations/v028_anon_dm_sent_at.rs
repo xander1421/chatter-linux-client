@@ -32,9 +32,11 @@ impl Migration for V028AnonDmSentAt {
     }
 
     fn down(&self) -> Option<&'static str> {
-        Some(r#"
+        Some(
+            r#"
         DROP INDEX IF EXISTS idx_anon_dm_messages_sent_at;
         -- SQLite doesn't support DROP COLUMN, would need table rebuild
-        "#)
+        "#,
+        )
     }
 }

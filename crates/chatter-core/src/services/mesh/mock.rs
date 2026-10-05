@@ -9,8 +9,8 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use chatter_mesh_link::link::{BoxFuture, LinkEvent, LinkId, MeshLink};
 use chatter_mesh_link::LinkError;
+use chatter_mesh_link::link::{BoxFuture, LinkEvent, LinkId, MeshLink};
 use chatter_mesh_nostr::NostrError;
 use chatter_mesh_nostr::relay::{
     BoxFuture as RelayBoxFuture, RelayConnection, RelayConnector, RelaySink, RelayStream,
@@ -199,7 +199,10 @@ impl MeshLink for MockLink {
 pub struct OfflineConnector;
 
 impl RelayConnector for OfflineConnector {
-    fn connect<'a>(&'a self, url: &'a str) -> RelayBoxFuture<'a, Result<RelayConnection, NostrError>> {
+    fn connect<'a>(
+        &'a self,
+        url: &'a str,
+    ) -> RelayBoxFuture<'a, Result<RelayConnection, NostrError>> {
         let url = url.to_string();
         Box::pin(async move { Err(NostrError::Relay(format!("offline: {url}"))) })
     }
@@ -225,7 +228,6 @@ impl LoopbackConnector {
             sent: Arc::new(Mutex::new(Vec::new())),
         }
     }
-
 }
 
 struct LoopbackSink {
@@ -265,7 +267,10 @@ impl RelayStream for LoopbackStream {
 }
 
 impl RelayConnector for LoopbackConnector {
-    fn connect<'a>(&'a self, _url: &'a str) -> RelayBoxFuture<'a, Result<RelayConnection, NostrError>> {
+    fn connect<'a>(
+        &'a self,
+        _url: &'a str,
+    ) -> RelayBoxFuture<'a, Result<RelayConnection, NostrError>> {
         let sink = LoopbackSink {
             sent: Arc::clone(&self.sent),
         };

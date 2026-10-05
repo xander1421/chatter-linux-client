@@ -66,7 +66,11 @@ const ANDROID_LOG_ERROR: c_int = 6;
 /// never happens — and a logging failure must never take a caller down,
 /// especially since some callers are binder threads.
 fn write(priority: c_int, message: &str) {
-    let sanitised = if message.contains('\0') { message.replace('\0', "\u{fffd}") } else { message.to_string() };
+    let sanitised = if message.contains('\0') {
+        message.replace('\0', "\u{fffd}")
+    } else {
+        message.to_string()
+    };
     let Ok(text) = CString::new(sanitised) else {
         return;
     };
@@ -129,7 +133,9 @@ pub fn drain_exception(env: &JNIEnv<'_>, during: &str) -> Option<String> {
     // Order matters: describe first (it does not clear), then clear.
     let _ = env.exception_describe();
     let _ = env.exception_clear();
-    Some(format!("a java exception was thrown during {during}; stack trace is in logcat"))
+    Some(format!(
+        "a java exception was thrown during {during}; stack trace is in logcat"
+    ))
 }
 
 /// Turn a failed JNI call into a [`Failure`], draining any exception it left
@@ -271,9 +277,10 @@ pub fn link_error(op: Op, subject: &str, failure: Failure) -> LinkError {
             // From the caller's point of view "the JVM misbehaved" and "the
             // peer refused" are the same event: no link came up, and the
             // scheduler moves on to another candidate.
-            Op::Connect => {
-                LinkError::ConnectFailed { address: subject.to_string(), reason: detail }
-            }
+            Op::Connect => LinkError::ConnectFailed {
+                address: subject.to_string(),
+                reason: detail,
+            },
             _ => LinkError::Backend(format!("{method}(): {detail}")),
         },
     }
@@ -282,7 +289,10 @@ pub fn link_error(op: Op, subject: &str, failure: Failure) -> LinkError {
 /// A connect attempt that failed before or after the bridge call itself, e.g.
 /// Kotlin handing back an empty handle.
 pub fn connect_failed(address: &str, reason: impl Into<String>) -> LinkError {
-    LinkError::ConnectFailed { address: address.to_string(), reason: reason.into() }
+    LinkError::ConnectFailed {
+        address: address.to_string(),
+        reason: reason.into(),
+    }
 }
 
 /// This link is gone and the caller should drop its state for it.
@@ -348,7 +358,11 @@ mod tests {
     fn op_methods_are_distinct() {
         for (index, op) in EVERY_OP.iter().enumerate() {
             for other in &EVERY_OP[index + 1..] {
-                assert_ne!(op.method(), other.method(), "{op:?} and {other:?} share a method name");
+                assert_ne!(
+                    op.method(),
+                    other.method(),
+                    "{op:?} and {other:?} share a method name"
+                );
             }
         }
     }
@@ -369,7 +383,10 @@ mod tests {
         match err {
             LinkError::ConnectFailed { address, reason } => {
                 assert_eq!(address, ADDRESS);
-                assert!(reason.contains("null"), "reason should say what happened: {reason}");
+                assert!(
+                    reason.contains("null"),
+                    "reason should say what happened: {reason}"
+                );
             }
             other => panic!("expected ConnectFailed, got {other:?}"),
         }
@@ -379,7 +396,11 @@ mod tests {
     fn a_jni_failure_during_connect_still_reads_as_a_connect_failure() {
         // "The JVM misbehaved" and "the peer refused" are the same event to the
         // scheduler: no link came up, try someone else.
-        let err = link_error(Op::Connect, ADDRESS, Failure::Jni("detached thread".to_string()));
+        let err = link_error(
+            Op::Connect,
+            ADDRESS,
+            Failure::Jni("detached thread".to_string()),
+        );
         match err {
             LinkError::ConnectFailed { address, reason } => {
                 assert_eq!(address, ADDRESS);
@@ -428,7 +449,11 @@ mod tests {
 
     #[test]
     fn an_unclassified_jni_failure_names_the_method_that_failed() {
-        let err = link_error(Op::Send, HANDLE, Failure::Jni("NewByteArray returned null".to_string()));
+        let err = link_error(
+            Op::Send,
+            HANDLE,
+            Failure::Jni("NewByteArray returned null".to_string()),
+        );
         match err {
             LinkError::Backend(message) => {
                 assert!(message.contains("send()"), "{message}");
@@ -442,9 +467,14 @@ mod tests {
     fn only_a_gone_link_is_terminal() {
         assert!(is_terminal(&LinkError::LinkGone(HANDLE.to_string())));
         assert!(!is_terminal(&LinkError::WriteRejected(HANDLE.to_string())));
-        assert!(!is_terminal(&LinkError::PayloadTooLarge { actual: 300, max: 244 }));
+        assert!(!is_terminal(&LinkError::PayloadTooLarge {
+            actual: 300,
+            max: 244
+        }));
         assert!(!is_terminal(&LinkError::Backend("whatever".to_string())));
-        assert!(!is_terminal(&LinkError::AdapterUnavailable("off".to_string())));
+        assert!(!is_terminal(&LinkError::AdapterUnavailable(
+            "off".to_string()
+        )));
     }
 
     #[test]

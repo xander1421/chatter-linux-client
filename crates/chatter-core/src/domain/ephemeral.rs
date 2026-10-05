@@ -278,7 +278,10 @@ mod tests {
         assert_eq!(MessageTTL::Minutes1.as_duration(), Duration::from_secs(60));
         assert_eq!(MessageTTL::Minutes5.as_duration(), Duration::from_secs(300));
         assert_eq!(MessageTTL::Hours1.as_duration(), Duration::from_secs(3600));
-        assert_eq!(MessageTTL::Hours24.as_duration(), Duration::from_secs(86400));
+        assert_eq!(
+            MessageTTL::Hours24.as_duration(),
+            Duration::from_secs(86400)
+        );
     }
 
     #[test]

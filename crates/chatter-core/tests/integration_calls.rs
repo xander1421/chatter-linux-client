@@ -3,8 +3,7 @@
 //! Tests screen capture, audio capture, and call timer functionality.
 
 use chatter_core::calls::{
-    AudioCapture, AudioDevice,
-    ScreenCapture, ScreenCaptureConfig, ScreenSource, ScreenSourceType,
+    AudioCapture, AudioDevice, ScreenCapture, ScreenCaptureConfig, ScreenSource, ScreenSourceType,
 };
 
 // =============================================================================
@@ -35,7 +34,10 @@ fn test_screen_capture_config_values() {
         default_config.fps, 144,
         "the default targets the high-refresh path"
     );
-    assert!(default_config.capture_cursor, "Default should capture cursor");
+    assert!(
+        default_config.capture_cursor,
+        "Default should capture cursor"
+    );
 
     let custom_config = ScreenCaptureConfig {
         fps: 15,
@@ -103,7 +105,11 @@ fn test_list_sources_on_wayland() {
     match ScreenCapture::list_sources() {
         Ok(sources) => {
             // On Wayland, we should get a single portal source
-            assert_eq!(sources.len(), 1, "Wayland should return exactly one portal source");
+            assert_eq!(
+                sources.len(),
+                1,
+                "Wayland should return exactly one portal source"
+            );
 
             let portal_source = &sources[0];
             assert_eq!(portal_source.id, 0, "Portal source ID should be 0");
@@ -454,7 +460,8 @@ fn test_wayland_detection_variants() {
                 .unwrap_or(false);
 
             assert_eq!(
-                is_wayland, *expected_wayland,
+                is_wayland,
+                *expected_wayland,
                 "Session type '{}' should {} be detected as Wayland",
                 session_type,
                 if *expected_wayland { "" } else { "not" }

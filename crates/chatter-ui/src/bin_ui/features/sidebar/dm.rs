@@ -9,8 +9,8 @@ use slint::{ComponentHandle, ModelRc, SharedString, VecModel};
 use chatter_core::client::ChatterClient;
 use chatter_core::domain::ids::{ChannelId, UserId};
 
-use crate::{MainWindow, run_ui};
 use crate::bin_ui::converters::messages_to_display_batch;
+use crate::{MainWindow, run_ui};
 
 use super::stop_audio_playback;
 

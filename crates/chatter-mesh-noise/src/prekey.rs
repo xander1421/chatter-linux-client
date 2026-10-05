@@ -154,7 +154,10 @@ pub fn next_generated_at(previous_ms: u64, now_ms: u64) -> u64 {
 ///
 /// The secret is returned as raw bytes because its custody (sealed storage,
 /// consumption, expiry) belongs to the caller; this crate holds no store.
-pub fn generate_prekey(id: u32, rng: &mut impl rand_core::CryptoRngCore) -> (Prekey, [u8; KEY_LEN]) {
+pub fn generate_prekey(
+    id: u32,
+    rng: &mut impl rand_core::CryptoRngCore,
+) -> (Prekey, [u8; KEY_LEN]) {
     let secret = x25519_dalek::StaticSecret::random_from_rng(rng);
     let public_key = x25519_dalek::PublicKey::from(&secret).to_bytes();
     (Prekey { id, public_key }, secret.to_bytes())
@@ -296,15 +299,15 @@ impl PrekeyBundle {
                     prekeys = Some(decode_prekeys(value)?);
                 }
                 TLV_GENERATED_AT => {
-                    let raw: [u8; 8] = value.try_into().map_err(|_| {
-                        NoiseError::MalformedBundle("generatedAt must be 8 bytes")
-                    })?;
+                    let raw: [u8; 8] = value
+                        .try_into()
+                        .map_err(|_| NoiseError::MalformedBundle("generatedAt must be 8 bytes"))?;
                     generated_at = Some(u64::from_be_bytes(raw));
                 }
                 TLV_SIGNATURE => {
-                    let sig: [u8; SIGNATURE_LEN] = value.try_into().map_err(|_| {
-                        NoiseError::MalformedBundle("signature must be 64 bytes")
-                    })?;
+                    let sig: [u8; SIGNATURE_LEN] = value
+                        .try_into()
+                        .map_err(|_| NoiseError::MalformedBundle("signature must be 64 bytes"))?;
                     signature = Some(sig);
                 }
                 // Unknown TLV: skip for forward compatibility.
@@ -406,7 +409,9 @@ fn decode_prekeys(value: &[u8]) -> Result<Vec<Prekey>, NoiseError> {
         return Err(NoiseError::MalformedBundle("prekey list is empty"));
     }
     if value.len() % PREKEY_ENTRY_LEN != 0 {
-        return Err(NoiseError::MalformedBundle("prekey list is not a whole number of entries"));
+        return Err(NoiseError::MalformedBundle(
+            "prekey list is not a whole number of entries",
+        ));
     }
     if value.len() / PREKEY_ENTRY_LEN > MAX_PREKEYS {
         return Err(NoiseError::MalformedBundle("prekey list exceeds 8 entries"));
@@ -429,7 +434,11 @@ fn decode_prekeys(value: &[u8]) -> Result<Vec<Prekey>, NoiseError> {
 
     // At most 8 entries, so the quadratic scan is cheaper than a set.
     for (index, prekey) in parsed.iter().enumerate() {
-        if parsed.iter().skip(index + 1).any(|other| other.id == prekey.id) {
+        if parsed
+            .iter()
+            .skip(index + 1)
+            .any(|other| other.id == prekey.id)
+        {
             return Err(NoiseError::MalformedBundle("duplicate prekey ID"));
         }
     }
@@ -797,12 +806,20 @@ mod tests {
         let now = 10_000_000_000u64;
         assert!(!prekey_is_expired(now, None, now));
         assert!(!prekey_is_expired(now - UNCONSUMED_RETENTION_MS, None, now));
-        assert!(prekey_is_expired(now - UNCONSUMED_RETENTION_MS - 1, None, now));
+        assert!(prekey_is_expired(
+            now - UNCONSUMED_RETENTION_MS - 1,
+            None,
+            now
+        ));
 
         // Once consumed, only the grace window matters — age is irrelevant.
         let ancient = now - UNCONSUMED_RETENTION_MS - 1;
         assert!(!prekey_is_expired(ancient, Some(now), now));
-        assert!(prekey_is_expired(ancient, Some(now - CONSUMED_GRACE_MS - 1), now));
+        assert!(prekey_is_expired(
+            ancient,
+            Some(now - CONSUMED_GRACE_MS - 1),
+            now
+        ));
     }
 
     #[test]
@@ -810,8 +827,14 @@ mod tests {
         let now = 10_000_000_000u64;
         assert!(bundle_is_sealable(now, now));
         assert!(bundle_is_sealable(now - MAX_BUNDLE_AGE_FOR_SEALING_MS, now));
-        assert!(!bundle_is_sealable(now - MAX_BUNDLE_AGE_FOR_SEALING_MS - 1, now));
-        assert!(bundle_is_sealable(now + 60_000, now), "future stamps are fresh");
+        assert!(!bundle_is_sealable(
+            now - MAX_BUNDLE_AGE_FOR_SEALING_MS - 1,
+            now
+        ));
+        assert!(
+            bundle_is_sealable(now + 60_000, now),
+            "future stamps are fresh"
+        );
     }
 
     #[test]

@@ -203,12 +203,13 @@ pub fn server_status_age() -> Option<std::time::Duration> {
     if at == 0 {
         return None;
     }
-    Some(std::time::Duration::from_millis(now_ms().saturating_sub(at)))
+    Some(std::time::Duration::from_millis(
+        now_ms().saturating_sub(at),
+    ))
 }
 
 /// Connection state for the state machine.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[derive(Default)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum ConnectionState {
     /// Not connected to server.
     #[default]
@@ -228,7 +229,6 @@ pub enum ConnectionState {
         reason: FailReason,
     },
 }
-
 
 impl ConnectionState {
     /// Check if this is a terminal failure state.
@@ -277,10 +277,12 @@ mod tests {
         assert!(ConnectionState::Reconnecting { attempt: 1 }.is_connecting());
         assert!(!ConnectionState::Connected.is_connecting());
 
-        assert!(ConnectionState::Failed {
-            reason: FailReason::AuthExpired
-        }
-        .is_failed());
+        assert!(
+            ConnectionState::Failed {
+                reason: FailReason::AuthExpired
+            }
+            .is_failed()
+        );
         assert!(!ConnectionState::Connected.is_failed());
     }
 }

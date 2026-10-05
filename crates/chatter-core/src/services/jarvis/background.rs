@@ -26,10 +26,7 @@ impl JarvisBackground {
     /// Spawn the message observer task.
     ///
     /// Subscribes to the event bus and observes messages for learning.
-    pub fn spawn_observer(
-        jarvis: Arc<JarvisService>,
-        event_bus: EventBus,
-    ) -> JoinHandle<()> {
+    pub fn spawn_observer(jarvis: Arc<JarvisService>, event_bus: EventBus) -> JoinHandle<()> {
         tokio::spawn(async move {
             let mut rx = event_bus.subscribe_domain();
 
@@ -169,14 +166,12 @@ impl JarvisBackgroundBuilder {
     ///
     /// Returns handles to the spawned tasks.
     pub fn spawn(self) -> JarvisBackgroundHandles {
-        let observer = self.event_bus.map(|bus| {
-            JarvisBackground::spawn_observer(self.jarvis.clone(), bus)
-        });
+        let observer = self
+            .event_bus
+            .map(|bus| JarvisBackground::spawn_observer(self.jarvis.clone(), bus));
 
-        let maintenance = JarvisBackground::spawn_maintenance(
-            self.jarvis.clone(),
-            self.maintenance_interval,
-        );
+        let maintenance =
+            JarvisBackground::spawn_maintenance(self.jarvis.clone(), self.maintenance_interval);
 
         JarvisBackgroundHandles {
             observer,
@@ -216,18 +211,23 @@ mod tests {
         use crate::storage::repositories::{JarvisGraphRepository, JarvisMemoryRepository};
 
         let dir = tempfile::tempdir().unwrap();
-        let db = Arc::new(Database::open(&dir.path().join("jarvis.db"), "test-passphrase").unwrap());
+        let db =
+            Arc::new(Database::open(&dir.path().join("jarvis.db"), "test-passphrase").unwrap());
         db.run_migrations().unwrap();
         let engine = SharedJarvisEngine::new(JarvisEngine::from_settings(
-            &LocalAISettings::default(), LocalAIActorHandle::spawn(),
+            &LocalAISettings::default(),
+            LocalAIActorHandle::spawn(),
         ));
         let jarvis = Arc::new(JarvisService::new(
             Arc::new(JarvisMemoryRepository::new(db.clone())),
             Arc::new(JarvisGraphRepository::new(db)),
-            engine, None,
+            engine,
+            None,
         ));
         let builder = JarvisBackgroundBuilder::new(jarvis);
-        assert_eq!(builder.maintenance_interval, Duration::from_secs(24 * 60 * 60));
+        assert_eq!(
+            builder.maintenance_interval,
+            Duration::from_secs(24 * 60 * 60)
+        );
     }
-
 }

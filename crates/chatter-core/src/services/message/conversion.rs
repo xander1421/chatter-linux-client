@@ -5,7 +5,9 @@
 use chrono::Utc;
 
 use crate::domain::ids::{AttachmentId, ChannelId, IntegrationId, MessageId};
-use crate::domain::message::{ConversationType, Message, MessageContent, MixedContent, ReactionCount};
+use crate::domain::message::{
+    ConversationType, Message, MessageContent, MixedContent, ReactionCount,
+};
 use crate::proto::chat_v1;
 use crate::storage::repositories::channel_repo::ChannelRepository;
 use crate::util::time::TimestampNanos;
@@ -111,9 +113,13 @@ pub fn proto_to_domain_message_with_sender(
         .collect();
 
     // Convert timestamp (proto uses nanos)
-    let created_at = TimestampNanos::from_nanos(proto.timestamp).to_datetime().unwrap_or_else(Utc::now);
+    let created_at = TimestampNanos::from_nanos(proto.timestamp)
+        .to_datetime()
+        .unwrap_or_else(Utc::now);
     let updated_at = if proto.updated_at > 0 {
-        TimestampNanos::from_nanos(proto.updated_at).to_datetime().unwrap_or(created_at)
+        TimestampNanos::from_nanos(proto.updated_at)
+            .to_datetime()
+            .unwrap_or(created_at)
     } else {
         created_at
     };
@@ -128,7 +134,11 @@ pub fn proto_to_domain_message_with_sender(
         conversation_id: channel_id,
         conversation_type,
         sender_id,
-        device_id: if proto.author_device_id != 0 { Some(proto.author_device_id) } else { None },
+        device_id: if proto.author_device_id != 0 {
+            Some(proto.author_device_id)
+        } else {
+            None
+        },
         content,
         encrypted_content: None,
         thread_id,
@@ -171,7 +181,11 @@ pub fn extract_quote_from_content_json(content_json: &str) -> Option<(String, St
         .or_else(|| quote.get("author_id").and_then(|n| n.as_str()))
         .unwrap_or_default()
         .to_string();
-    let preview = quote.get("preview")?.as_str().unwrap_or_default().to_string();
+    let preview = quote
+        .get("preview")?
+        .as_str()
+        .unwrap_or_default()
+        .to_string();
     if author_name.is_empty() && preview.is_empty() {
         return None;
     }
@@ -215,9 +229,8 @@ fn extract_attachment_ids_from_content(
 pub fn proto_content_to_domain(
     proto_content: Option<&chat_v1::message::Content>,
 ) -> Result<MessageContent, MessageError> {
-    let content = proto_content.ok_or_else(|| {
-        MessageError::InvalidContent("message has no content".to_string())
-    })?;
+    let content = proto_content
+        .ok_or_else(|| MessageError::InvalidContent("message has no content".to_string()))?;
 
     match &content.r#type {
         Some(chat_v1::message::content::Type::Text(text)) => {
@@ -240,7 +253,9 @@ pub fn proto_content_to_domain(
                 .id
                 .parse()
                 .map_err(|_| MessageError::InvalidContent("invalid file ID".to_string()))?;
-            Ok(MessageContent::Mixed(MixedContent::attachments_only(vec![attachment_id])))
+            Ok(MessageContent::Mixed(MixedContent::attachments_only(vec![
+                attachment_id,
+            ])))
         }
         Some(chat_v1::message::content::Type::Mixed(mixed)) => {
             // Text + attachments (how encrypted channel messages arrive post-refactor).
@@ -280,9 +295,9 @@ mod tests {
     /// read the `channel` bucket.
     #[test]
     fn an_encrypted_server_channels_received_message_is_filed_as_channel() {
+        use crate::domain::UserId;
         use crate::domain::channel::{Channel, ChannelType};
         use crate::domain::message::Message;
-        use crate::domain::UserId;
         use crate::storage::{Database, MessageRepository};
         use std::sync::Arc;
 
@@ -292,17 +307,33 @@ mod tests {
         let channels = ChannelRepository::new(db.clone());
         let messages = MessageRepository::new(db);
 
-        let channel = Channel::new(ChannelId::new(), "ux-sweep".into(), ChannelType::Private, UserId::new());
-        assert!(channel.config.require_encryption, "encryption is the default");
+        let channel = Channel::new(
+            ChannelId::new(),
+            "ux-sweep".into(),
+            ChannelType::Private,
+            UserId::new(),
+        );
+        assert!(
+            channel.config.require_encryption,
+            "encryption is the default"
+        );
         channels.insert(&channel).unwrap();
 
         let conv_type = conversation_type_for_channel(&channels, &channel.id);
         assert_eq!(conv_type, ConversationType::Channel);
 
-        let received = Message::new_text(channel.id, conv_type, Some(UserId::new()), "badge two".into(), 1_777_000_000_000_000_000);
+        let received = Message::new_text(
+            channel.id,
+            conv_type,
+            Some(UserId::new()),
+            "badge two".into(),
+            1_777_000_000_000_000_000,
+        );
         messages.insert(&received).unwrap();
 
-        let listed = messages.list_for_conversation(&channel.id, &ConversationType::Channel, None, 50).unwrap();
+        let listed = messages
+            .list_for_conversation(&channel.id, &ConversationType::Channel, None, 50)
+            .unwrap();
         assert_eq!(listed.len(), 1, "channel view lists the message");
         let row = channels.get(&channel.id).unwrap().unwrap();
         assert_eq!(row.unread_count, 1, "sidebar badge counts it");
@@ -331,8 +362,8 @@ mod tests {
 
     #[test]
     fn test_proto_content_to_domain_text() {
-        use chat_v1::message::content::Type;
         use chat_v1::message::Content;
+        use chat_v1::message::content::Type;
 
         let proto_content = Content {
             r#type: Some(Type::Text("Hello world".to_string())),
@@ -360,8 +391,8 @@ mod tests {
 
     #[test]
     fn test_proto_content_to_domain_encrypted() {
-        use chat_v1::message::content::Type;
         use chat_v1::message::Content;
+        use chat_v1::message::content::Type;
 
         let proto_content = Content {
             r#type: Some(Type::Encrypted(chat_v1::EncryptedData {
@@ -380,8 +411,8 @@ mod tests {
 
     #[test]
     fn test_proto_content_to_domain_file() {
-        use chat_v1::message::content::Type;
         use chat_v1::message::Content;
+        use chat_v1::message::content::Type;
 
         let file_id = uuid::Uuid::new_v4().to_string();
         let proto_content = Content {
@@ -419,8 +450,8 @@ mod tests {
 
     #[test]
     fn test_proto_content_to_domain_reaction() {
-        use chat_v1::message::content::Type;
         use chat_v1::message::Content;
+        use chat_v1::message::content::Type;
 
         // Reaction content should return placeholder
         let proto_content = Content {
@@ -445,8 +476,8 @@ mod tests {
 
     #[test]
     fn test_file_id_parsing_error() {
-        use chat_v1::message::content::Type;
         use chat_v1::message::Content;
+        use chat_v1::message::content::Type;
 
         // Invalid file ID should return error
         let proto_content = Content {

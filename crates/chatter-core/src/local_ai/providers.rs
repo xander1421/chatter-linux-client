@@ -124,8 +124,10 @@ pub async fn detect_providers(ollama_url: &str) -> Vec<DetectedProvider> {
 
     let (ollama, lm_studio, llama_cpp, vllm) = tokio::join!(ollama, lm_studio, llama_cpp, vllm);
 
-    let mut detected: Vec<DetectedProvider> =
-        [ollama, lm_studio, llama_cpp, vllm].into_iter().flatten().collect();
+    let mut detected: Vec<DetectedProvider> = [ollama, lm_studio, llama_cpp, vllm]
+        .into_iter()
+        .flatten()
+        .collect();
 
     if mistralrs_available() {
         detected.push(DetectedProvider {
@@ -188,7 +190,6 @@ impl AnyBackend {
             ProviderKind::MistralRs => None,
         }
     }
-
 }
 
 impl LocalAIBackend for AnyBackend {
@@ -297,6 +298,12 @@ mod tests {
         let detected = detect_providers("http://localhost:11434").await;
         let ollama = detected.iter().find(|p| p.kind == ProviderKind::Ollama);
         assert!(ollama.is_some(), "Ollama not detected — is it running?");
-        println!("detected: {:?}", detected.iter().map(|p| (p.kind, p.models.len())).collect::<Vec<_>>());
+        println!(
+            "detected: {:?}",
+            detected
+                .iter()
+                .map(|p| (p.kind, p.models.len()))
+                .collect::<Vec<_>>()
+        );
     }
 }

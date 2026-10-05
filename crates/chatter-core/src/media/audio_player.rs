@@ -78,8 +78,9 @@ impl AudioPlayer {
     ///
     /// Returns an error if the audio output stream cannot be created.
     pub fn new() -> Result<Self, MediaError> {
-        let stream = OutputStreamBuilder::open_default_stream()
-            .map_err(|e| MediaError::PlaybackError(format!("failed to create audio output: {}", e)))?;
+        let stream = OutputStreamBuilder::open_default_stream().map_err(|e| {
+            MediaError::PlaybackError(format!("failed to create audio output: {}", e))
+        })?;
 
         Ok(Self {
             _stream: stream,
@@ -140,7 +141,11 @@ impl AudioPlayer {
     ///
     /// * `data` - Audio data bytes
     /// * `mime_type` - Optional MIME type hint (e.g., "audio/mpeg")
-    pub fn load_from_memory_with_mime(&mut self, data: Vec<u8>, mime_type: Option<String>) -> Result<Duration, MediaError> {
+    pub fn load_from_memory_with_mime(
+        &mut self,
+        data: Vec<u8>,
+        mime_type: Option<String>,
+    ) -> Result<Duration, MediaError> {
         // Stop any current playback
         self.stop();
 
@@ -161,7 +166,10 @@ impl AudioPlayer {
             "Loaded audio for streaming playback"
         );
 
-        self.current_source = Some(AudioSource::Stream { data: data_arc, mime_type });
+        self.current_source = Some(AudioSource::Stream {
+            data: data_arc,
+            mime_type,
+        });
         self.current_duration = Some(duration);
 
         Ok(duration)
@@ -218,7 +226,10 @@ impl AudioPlayer {
         // Mutex<AudioPlayer> guard and poison it for every future playback.
         match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| builder.build())) {
             Ok(Ok(decoder)) => Ok(decoder),
-            Ok(Err(e)) => Err(MediaError::InvalidFormat(format!("failed to decode audio: {}", e))),
+            Ok(Err(e)) => Err(MediaError::InvalidFormat(format!(
+                "failed to decode audio: {}",
+                e
+            ))),
             Err(_) => Err(MediaError::InvalidFormat(
                 "failed to decode audio: decoder panicked on malformed data".to_string(),
             )),
@@ -253,9 +264,11 @@ impl AudioPlayer {
         }
 
         // Need to create new sink and start playback
-        let source = self.current_source.as_ref().ok_or_else(|| {
-            MediaError::PlaybackError("no audio loaded".to_string())
-        })?.clone();
+        let source = self
+            .current_source
+            .as_ref()
+            .ok_or_else(|| MediaError::PlaybackError("no audio loaded".to_string()))?
+            .clone();
 
         let sink = Sink::connect_new(self._stream.mixer());
 
@@ -268,18 +281,26 @@ impl AudioPlayer {
                 let decoder = self.build_seekable_decoder(reader, byte_len, None)?;
                 sink.append(decoder);
             }
-            AudioSource::Stream { ref data, ref mime_type } => {
+            AudioSource::Stream {
+                ref data,
+                ref mime_type,
+            } => {
                 tracing::info!(data_size = data.len(), "Streaming audio from memory");
                 let byte_len = data.len() as u64;
                 let cursor = Cursor::new(data.as_ref().clone());
-                let decoder = self.build_seekable_decoder(cursor, byte_len, mime_type.as_deref())?;
+                let decoder =
+                    self.build_seekable_decoder(cursor, byte_len, mime_type.as_deref())?;
                 sink.append(decoder);
             }
-            AudioSource::Range { ref dec, ref mime_type } => {
+            AudioSource::Range {
+                ref dec,
+                ref mime_type,
+            } => {
                 let reader = crate::services::attachment::CbcRangeReader::new(dec.clone());
                 let byte_len = reader.len();
                 tracing::info!(data_size = byte_len, "Streaming audio from range decryptor");
-                let decoder = self.build_seekable_decoder(reader, byte_len, mime_type.as_deref())?;
+                let decoder =
+                    self.build_seekable_decoder(reader, byte_len, mime_type.as_deref())?;
                 sink.append(decoder);
             }
         }
@@ -331,7 +352,9 @@ impl AudioPlayer {
             }
         }
 
-        Err(MediaError::PlaybackError("no active playback to seek".to_string()))
+        Err(MediaError::PlaybackError(
+            "no active playback to seek".to_string(),
+        ))
     }
 
     /// Sets the playback volume.
@@ -370,7 +393,8 @@ impl AudioPlayer {
     ///
     /// Uses rodio's native `get_pos()` for accurate position tracking.
     pub fn position(&self) -> Duration {
-        self.sink.as_ref()
+        self.sink
+            .as_ref()
             .map(|s| s.get_pos())
             .unwrap_or(Duration::ZERO)
     }
@@ -382,16 +406,15 @@ impl AudioPlayer {
 
     /// Returns true if audio is currently playing.
     pub fn is_playing(&self) -> bool {
-        self.sink.as_ref()
+        self.sink
+            .as_ref()
             .map(|s| !s.is_paused() && !s.empty())
             .unwrap_or(false)
     }
 
     /// Returns true if audio is paused.
     pub fn is_paused(&self) -> bool {
-        self.sink.as_ref()
-            .map(|s| s.is_paused())
-            .unwrap_or(false)
+        self.sink.as_ref().map(|s| s.is_paused()).unwrap_or(false)
     }
 
     /// Get the duration of an audio file without creating a full player.
@@ -415,7 +438,10 @@ fn decode_catching_panics<R: Read + Seek + Send + Sync + 'static>(
 ) -> Result<Decoder<R>, MediaError> {
     match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| Decoder::new(reader))) {
         Ok(Ok(decoder)) => Ok(decoder),
-        Ok(Err(e)) => Err(MediaError::InvalidFormat(format!("failed to decode audio: {}", e))),
+        Ok(Err(e)) => Err(MediaError::InvalidFormat(format!(
+            "failed to decode audio: {}",
+            e
+        ))),
         Err(_) => Err(MediaError::InvalidFormat(
             "failed to decode audio: decoder panicked on malformed data".to_string(),
         )),

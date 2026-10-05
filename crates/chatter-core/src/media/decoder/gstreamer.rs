@@ -15,8 +15,8 @@ use gstreamer::prelude::*;
 use gstreamer_app as gst_app;
 use gstreamer_video as gst_video;
 
-use crate::error::MediaError;
 use super::{DecodedAudio, DecodedFrame, VideoDecoder, VideoInfo};
+use crate::error::MediaError;
 
 /// Lazy GStreamer initialization - only called once when first needed.
 static GST_INIT: Once = Once::new();
@@ -120,7 +120,9 @@ impl GStreamerDecoder {
         let (result, _current, _pending) = pipeline.state(gst::ClockTime::from_seconds(10));
         if result.is_err() {
             pipeline.set_state(gst::State::Null).ok();
-            return Err(MediaError::PlaybackError("Pipeline failed to preroll".to_string()));
+            return Err(MediaError::PlaybackError(
+                "Pipeline failed to preroll".to_string(),
+            ));
         }
 
         // Get video info from the sink caps
@@ -141,11 +143,15 @@ impl GStreamerDecoder {
         if let Some(pos) = pipeline.query_position::<gst::ClockTime>() {
             let pos_ms = pos.mseconds();
             // If position is still near the end, seek failed - retry with ACCURATE flag
-            let threshold = info.duration_ms.saturating_sub(500).max(info.duration_ms * 80 / 100);
+            let threshold = info
+                .duration_ms
+                .saturating_sub(500)
+                .max(info.duration_ms * 80 / 100);
             if pos_ms > threshold && info.duration_ms > 1000 {
                 tracing::warn!(
                     "Initial seek to 0 failed, position is {}ms / {}ms - retrying with ACCURATE",
-                    pos_ms, info.duration_ms
+                    pos_ms,
+                    info.duration_ms
                 );
                 // ACCURATE flag forces precise positioning (slower but reliable)
                 if let Err(e) = pipeline.seek_simple(
@@ -186,8 +192,11 @@ impl GStreamerDecoder {
             .format(gst::Format::Bytes)
             .build();
 
-        tracing::info!("Memory pipeline: data_len={}, detected format: {:?}",
-            data_len, Self::detect_video_caps(&data).map(|c| c.to_string()));
+        tracing::info!(
+            "Memory pipeline: data_len={}, detected format: {:?}",
+            data_len,
+            Self::detect_video_caps(&data).map(|c| c.to_string())
+        );
 
         // Store data for seeking - Arc allows sharing between callbacks
         let data_arc = Arc::new(data);
@@ -237,7 +246,11 @@ impl GStreamerDecoder {
                         buffer_ref.set_offset_end(offset + chunk_size as u64);
                     }
 
-                    tracing::trace!("AppSrc: pushing {} bytes from offset {}", chunk_size, offset);
+                    tracing::trace!(
+                        "AppSrc: pushing {} bytes from offset {}",
+                        chunk_size,
+                        offset
+                    );
 
                     if let Err(e) = appsrc.push_buffer(buffer) {
                         tracing::error!("Failed to push buffer at offset {}: {:?}", *pos, e);
@@ -251,7 +264,11 @@ impl GStreamerDecoder {
                     let data = data_for_seek.as_ref();
 
                     if offset_usize > data.len() {
-                        tracing::warn!("AppSrc: seek beyond data length {} > {}", offset, data.len());
+                        tracing::warn!(
+                            "AppSrc: seek beyond data length {} > {}",
+                            offset,
+                            data.len()
+                        );
                         return false;
                     }
 
@@ -263,7 +280,7 @@ impl GStreamerDecoder {
 
                     true
                 })
-                .build()
+                .build(),
         );
 
         tracing::info!("Created memory pipeline with {} bytes of data", data_len);
@@ -285,12 +302,14 @@ impl GStreamerDecoder {
 
         // IMPORTANT: Only add appsrc + decodebin upfront
         // Sink elements are added dynamically in pad-added to avoid preroll blocking
-        pipeline.add_many([appsrc.upcast_ref(), &decodebin])
+        pipeline
+            .add_many([appsrc.upcast_ref(), &decodebin])
             .map_err(|e| MediaError::PlaybackError(format!("Failed to add elements: {}", e)))?;
 
         // Link appsrc -> decodebin
-        appsrc.link(&decodebin)
-            .map_err(|e| MediaError::PlaybackError(format!("Failed to link appsrc to decodebin: {}", e)))?;
+        appsrc.link(&decodebin).map_err(|e| {
+            MediaError::PlaybackError(format!("Failed to link appsrc to decodebin: {}", e))
+        })?;
 
         // Clone sink for use in pad-added callback
         let video_sink_clone = video_sink.clone();
@@ -302,7 +321,9 @@ impl GStreamerDecoder {
 
         // Connect decodebin pad-added for DYNAMIC element creation (per Context7 best practice)
         decodebin.connect_pad_added(move |_decodebin, src_pad| {
-            let caps = src_pad.current_caps().unwrap_or_else(|| src_pad.query_caps(None));
+            let caps = src_pad
+                .current_caps()
+                .unwrap_or_else(|| src_pad.query_caps(None));
             let Some(structure) = caps.structure(0) else {
                 tracing::warn!("Decodebin pad has no caps structure");
                 return;
@@ -334,8 +355,10 @@ impl GStreamerDecoder {
                         .map_err(|e| format!("Failed to create videoscale: {}", e))?;
 
                     // Add all elements to pipeline
-                    let elements: &[&gst::Element] = &[&queue, &convert, &scale, video_sink_clone.upcast_ref()];
-                    pipeline.add_many(elements)
+                    let elements: &[&gst::Element] =
+                        &[&queue, &convert, &scale, video_sink_clone.upcast_ref()];
+                    pipeline
+                        .add_many(elements)
                         .map_err(|e| format!("Failed to add video elements: {}", e))?;
 
                     // Link elements together
@@ -349,9 +372,11 @@ impl GStreamerDecoder {
                     }
 
                     // Link decodebin's output to queue's input
-                    let sink_pad = queue.static_pad("sink")
+                    let sink_pad = queue
+                        .static_pad("sink")
                         .ok_or_else(|| "No sink pad on video queue".to_string())?;
-                    src_pad.link(&sink_pad)
+                    src_pad
+                        .link(&sink_pad)
                         .map_err(|e| format!("Failed to link video pad: {:?}", e))?;
 
                     // Mark that video track was found and linked
@@ -378,7 +403,8 @@ impl GStreamerDecoder {
 
                     // Add all elements to pipeline
                     let elements: &[&gst::Element] = &[&queue, &convert, &resample, &audiosink];
-                    pipeline.add_many(elements)
+                    pipeline
+                        .add_many(elements)
                         .map_err(|e| format!("Failed to add audio elements: {}", e))?;
 
                     // Link elements together
@@ -392,9 +418,11 @@ impl GStreamerDecoder {
                     }
 
                     // Link decodebin's output to queue's input
-                    let sink_pad = queue.static_pad("sink")
+                    let sink_pad = queue
+                        .static_pad("sink")
                         .ok_or_else(|| "No sink pad on audio queue".to_string())?;
-                    src_pad.link(&sink_pad)
+                    src_pad
+                        .link(&sink_pad)
                         .map_err(|e| format!("Failed to link audio pad: {:?}", e))?;
 
                     tracing::info!("Audio pipeline linked successfully (autoaudiosink)");
@@ -415,7 +443,12 @@ impl GStreamerDecoder {
 
         // Wait for state change with timeout - handle async completion
         let (result, current, pending) = pipeline.state(gst::ClockTime::from_seconds(10));
-        tracing::info!("Pipeline state change result: {:?}, current: {:?}, pending: {:?}", result, current, pending);
+        tracing::info!(
+            "Pipeline state change result: {:?}, current: {:?}, pending: {:?}",
+            result,
+            current,
+            pending
+        );
 
         // If state change is async, wait for it on the bus
         if result == Ok(gst::StateChangeSuccess::Async) {
@@ -439,8 +472,16 @@ impl GStreamerDecoder {
                             return Err(MediaError::PlaybackError(err_msg));
                         }
                         gst::MessageView::StateChanged(sc) => {
-                            if sc.src().map(|s| *s == pipeline.clone().upcast::<gst::Object>()).unwrap_or(false) {
-                                tracing::debug!("Pipeline state: {:?} -> {:?}", sc.old(), sc.current());
+                            if sc
+                                .src()
+                                .map(|s| *s == pipeline.clone().upcast::<gst::Object>())
+                                .unwrap_or(false)
+                            {
+                                tracing::debug!(
+                                    "Pipeline state: {:?} -> {:?}",
+                                    sc.old(),
+                                    sc.current()
+                                );
                                 if sc.current() == gst::State::Paused {
                                     tracing::info!("Pipeline reached PAUSED state");
                                     break;
@@ -467,14 +508,20 @@ impl GStreamerDecoder {
                             return Err(MediaError::PlaybackError(err_msg));
                         }
                         gst::MessageView::Warning(warn) => {
-                            tracing::warn!("Pipeline warning: {} (debug: {:?})", warn.error(), warn.debug());
+                            tracing::warn!(
+                                "Pipeline warning: {} (debug: {:?})",
+                                warn.error(),
+                                warn.debug()
+                            );
                         }
                         _ => {}
                     }
                 }
             }
             pipeline.set_state(gst::State::Null).ok();
-            return Err(MediaError::PlaybackError("Pipeline failed to preroll".to_string()));
+            return Err(MediaError::PlaybackError(
+                "Pipeline failed to preroll".to_string(),
+            ));
         }
 
         // Wait for video sink to receive caps - this indicates the video pipeline is connected.
@@ -526,14 +573,20 @@ impl GStreamerDecoder {
         if !has_video_caps {
             pipeline.set_state(gst::State::Null).ok();
             return Err(MediaError::InvalidFormat(
-                "No video track found - file may be audio-only or codec not supported".to_string()
+                "No video track found - file may be audio-only or codec not supported".to_string(),
             ));
         }
 
         // Get video info from the sink caps
         tracing::debug!("Extracting video info from sink caps...");
         let info = Self::extract_video_info(&pipeline, &video_sink)?;
-        tracing::info!("Extracted video info: {}x{}, {}ms, {}fps", info.width, info.height, info.duration_ms, info.fps);
+        tracing::info!(
+            "Extracted video info: {}x{}, {}ms, {}fps",
+            info.width,
+            info.height,
+            info.duration_ms,
+            info.fps
+        );
 
         // Seek to position 0 to ensure video starts from the beginning.
         // Some containers (especially MP4 with moov atom at end) may have
@@ -552,11 +605,15 @@ impl GStreamerDecoder {
         if let Some(pos) = pipeline.query_position::<gst::ClockTime>() {
             let pos_ms = pos.mseconds();
             // If position is still near the end, seek failed - retry with ACCURATE flag
-            let threshold = info.duration_ms.saturating_sub(500).max(info.duration_ms * 80 / 100);
+            let threshold = info
+                .duration_ms
+                .saturating_sub(500)
+                .max(info.duration_ms * 80 / 100);
             if pos_ms > threshold && info.duration_ms > 1000 {
                 tracing::warn!(
                     "Initial seek to 0 failed, position is {}ms / {}ms - retrying with ACCURATE",
-                    pos_ms, info.duration_ms
+                    pos_ms,
+                    info.duration_ms
                 );
                 // ACCURATE flag forces precise positioning (slower but reliable)
                 if let Err(e) = pipeline.seek_simple(
@@ -608,20 +665,28 @@ impl GStreamerDecoder {
 
         let convert = gst::ElementFactory::make("videoconvert")
             .build()
-            .map_err(|e| MediaError::PlaybackError(format!("Failed to create videoconvert: {}", e)))?;
+            .map_err(|e| {
+                MediaError::PlaybackError(format!("Failed to create videoconvert: {}", e))
+            })?;
 
         let scale = gst::ElementFactory::make("videoscale")
             .build()
-            .map_err(|e| MediaError::PlaybackError(format!("Failed to create videoscale: {}", e)))?;
+            .map_err(|e| {
+                MediaError::PlaybackError(format!("Failed to create videoscale: {}", e))
+            })?;
 
         bin.add_many([&convert, &scale, sink.upcast_ref()])
-            .map_err(|e| MediaError::PlaybackError(format!("Failed to add elements to video bin: {}", e)))?;
+            .map_err(|e| {
+                MediaError::PlaybackError(format!("Failed to add elements to video bin: {}", e))
+            })?;
 
-        gst::Element::link_many([&convert, &scale, sink.upcast_ref()])
-            .map_err(|e| MediaError::PlaybackError(format!("Failed to link video elements: {}", e)))?;
+        gst::Element::link_many([&convert, &scale, sink.upcast_ref()]).map_err(|e| {
+            MediaError::PlaybackError(format!("Failed to link video elements: {}", e))
+        })?;
 
         // Create ghost pad for the bin
-        let pad = convert.static_pad("sink")
+        let pad = convert
+            .static_pad("sink")
             .ok_or_else(|| MediaError::PlaybackError("No sink pad on videoconvert".to_string()))?;
         let ghost_pad = gst::GhostPad::with_target(&pad)
             .map_err(|e| MediaError::PlaybackError(format!("Failed to create ghost pad: {}", e)))?;
@@ -683,7 +748,10 @@ impl GStreamerDecoder {
     }
 
     /// Extract video information from the pipeline.
-    fn extract_video_info(pipeline: &gst::Pipeline, video_sink: &gst_app::AppSink) -> Result<VideoInfo, MediaError> {
+    fn extract_video_info(
+        pipeline: &gst::Pipeline,
+        video_sink: &gst_app::AppSink,
+    ) -> Result<VideoInfo, MediaError> {
         // Query duration
         let duration_ms = pipeline
             .query_duration::<gst::ClockTime>()
@@ -692,38 +760,50 @@ impl GStreamerDecoder {
         tracing::info!("Queried duration: {}ms", duration_ms);
 
         // Get video caps from sink pad
-        let pad = video_sink.static_pad("sink")
+        let pad = video_sink
+            .static_pad("sink")
             .ok_or_else(|| MediaError::PlaybackError("No sink pad".to_string()))?;
 
-        tracing::info!("Sink pad linked: {}, has current caps: {}",
+        tracing::info!(
+            "Sink pad linked: {}, has current caps: {}",
             pad.is_linked(),
-            pad.current_caps().is_some());
+            pad.current_caps().is_some()
+        );
 
-        let caps = pad.current_caps()
-            .ok_or_else(|| {
-                // No caps means no video data reached the sink - likely audio-only file
-                if pad.is_linked() {
-                    tracing::error!("Video sink linked but no caps - codec may not be supported");
-                    MediaError::InvalidFormat("Video codec not supported or file is corrupted".to_string())
-                } else {
-                    tracing::error!("Video sink not linked - file may be audio-only");
-                    MediaError::InvalidFormat("No video track found - file may be audio-only".to_string())
-                }
-            })?;
+        let caps = pad.current_caps().ok_or_else(|| {
+            // No caps means no video data reached the sink - likely audio-only file
+            if pad.is_linked() {
+                tracing::error!("Video sink linked but no caps - codec may not be supported");
+                MediaError::InvalidFormat(
+                    "Video codec not supported or file is corrupted".to_string(),
+                )
+            } else {
+                tracing::error!("Video sink not linked - file may be audio-only");
+                MediaError::InvalidFormat(
+                    "No video track found - file may be audio-only".to_string(),
+                )
+            }
+        })?;
 
         tracing::info!("Got caps: {}", caps);
 
-        let structure = caps.structure(0)
+        let structure = caps
+            .structure(0)
             .ok_or_else(|| MediaError::PlaybackError("No structure in caps".to_string()))?;
 
-        let width = structure.get::<i32>("width")
-            .map_err(|_| MediaError::PlaybackError("No width in caps".to_string()))? as u32;
+        let width = structure
+            .get::<i32>("width")
+            .map_err(|_| MediaError::PlaybackError("No width in caps".to_string()))?
+            as u32;
 
-        let height = structure.get::<i32>("height")
-            .map_err(|_| MediaError::PlaybackError("No height in caps".to_string()))? as u32;
+        let height = structure
+            .get::<i32>("height")
+            .map_err(|_| MediaError::PlaybackError("No height in caps".to_string()))?
+            as u32;
 
         // Get framerate
-        let fps = structure.get::<gst::Fraction>("framerate")
+        let fps = structure
+            .get::<gst::Fraction>("framerate")
             .map(|f| f.numer() as f64 / f.denom() as f64)
             .unwrap_or(30.0);
 
@@ -771,10 +851,14 @@ impl VideoDecoder for GStreamerDecoder {
     }
 
     fn decode_video_frame(&mut self) -> Result<Option<DecodedFrame>, MediaError> {
-        let video_sink = self.video_sink.as_ref()
+        let video_sink = self
+            .video_sink
+            .as_ref()
             .ok_or_else(|| MediaError::PlaybackError("No video sink".to_string()))?;
 
-        let pipeline = self.pipeline.as_ref()
+        let pipeline = self
+            .pipeline
+            .as_ref()
             .ok_or_else(|| MediaError::PlaybackError("No pipeline".to_string()))?;
 
         // Check pipeline state to determine how to get frames:
@@ -815,10 +899,12 @@ impl VideoDecoder for GStreamerDecoder {
             }
         };
 
-        let buffer = sample.buffer()
+        let buffer = sample
+            .buffer()
             .ok_or_else(|| MediaError::PlaybackError("No buffer in sample".to_string()))?;
 
-        let caps = sample.caps()
+        let caps = sample
+            .caps()
             .ok_or_else(|| MediaError::PlaybackError("No caps in sample".to_string()))?;
 
         let video_info = gst_video::VideoInfo::from_caps(caps)
@@ -828,7 +914,8 @@ impl VideoDecoder for GStreamerDecoder {
         let height = video_info.height();
 
         // Map buffer for reading
-        let map = buffer.map_readable()
+        let map = buffer
+            .map_readable()
             .map_err(|e| MediaError::PlaybackError(format!("Failed to map buffer: {}", e)))?;
 
         let data = map.as_slice().to_vec();
@@ -836,16 +923,13 @@ impl VideoDecoder for GStreamerDecoder {
         // Use buffer PTS (Presentation Time Stamp) for the frame's actual timestamp.
         // This is the correct timestamp for this specific frame.
         // Pipeline position can lag behind or jump ahead during seeks.
-        let timestamp_ms = buffer
-            .pts()
-            .map(|pts| pts.mseconds())
-            .unwrap_or_else(|| {
-                // Fall back to pipeline position if buffer has no PTS
-                pipeline
-                    .query_position::<gst::ClockTime>()
-                    .map(|pos| pos.mseconds())
-                    .unwrap_or(0)
-            });
+        let timestamp_ms = buffer.pts().map(|pts| pts.mseconds()).unwrap_or_else(|| {
+            // Fall back to pipeline position if buffer has no PTS
+            pipeline
+                .query_position::<gst::ClockTime>()
+                .map(|pos| pos.mseconds())
+                .unwrap_or(0)
+        });
 
         // Update cached position
         *self.position_ms.lock().unwrap() = timestamp_ms;
@@ -865,7 +949,9 @@ impl VideoDecoder for GStreamerDecoder {
     }
 
     fn seek(&mut self, timestamp_ms: u64) -> Result<(), MediaError> {
-        let pipeline = self.pipeline.as_ref()
+        let pipeline = self
+            .pipeline
+            .as_ref()
             .ok_or_else(|| MediaError::PlaybackError("No pipeline".to_string()))?;
 
         // Ensure pipeline is at least PAUSED before seeking - FLUSH seek requires this
@@ -891,15 +977,15 @@ impl VideoDecoder for GStreamerDecoder {
             gst::SeekFlags::FLUSH | gst::SeekFlags::KEY_UNIT
         };
 
-        pipeline.seek_simple(flags, seek_pos).map_err(|e| {
-            MediaError::PlaybackError(format!("Seek failed: {}", e))
-        })?;
+        pipeline
+            .seek_simple(flags, seek_pos)
+            .map_err(|e| MediaError::PlaybackError(format!("Seek failed: {}", e)))?;
 
         // Wait for seek to complete by waiting for ASYNC_DONE or state to settle
         // The seek causes an async state change internally
-        let bus = pipeline.bus().ok_or_else(|| {
-            MediaError::PlaybackError("No bus on pipeline".to_string())
-        })?;
+        let bus = pipeline
+            .bus()
+            .ok_or_else(|| MediaError::PlaybackError("No bus on pipeline".to_string()))?;
 
         // Wait for ASYNC_DONE message which indicates seek completed
         // Timeout after 2 seconds
@@ -947,7 +1033,9 @@ impl VideoDecoder for GStreamerDecoder {
     }
 
     fn query_actual_position_ms(&self) -> Result<u64, MediaError> {
-        let pipeline = self.pipeline.as_ref()
+        let pipeline = self
+            .pipeline
+            .as_ref()
             .ok_or_else(|| MediaError::PlaybackError("No pipeline".to_string()))?;
 
         pipeline
@@ -965,7 +1053,8 @@ impl VideoDecoder for GStreamerDecoder {
     }
 
     fn dimensions(&self) -> (u32, u32) {
-        self.info.as_ref()
+        self.info
+            .as_ref()
             .map(|i| (i.width, i.height))
             .unwrap_or((0, 0))
     }
@@ -979,7 +1068,9 @@ impl VideoDecoder for GStreamerDecoder {
     }
 
     fn play(&mut self) -> Result<(), MediaError> {
-        let pipeline = self.pipeline.as_ref()
+        let pipeline = self
+            .pipeline
+            .as_ref()
             .ok_or_else(|| MediaError::PlaybackError("No pipeline".to_string()))?;
 
         pipeline.set_state(gst::State::Playing).map_err(|e| {
@@ -996,7 +1087,9 @@ impl VideoDecoder for GStreamerDecoder {
     }
 
     fn pause(&mut self) -> Result<(), MediaError> {
-        let pipeline = self.pipeline.as_ref()
+        let pipeline = self
+            .pipeline
+            .as_ref()
             .ok_or_else(|| MediaError::PlaybackError("No pipeline".to_string()))?;
 
         pipeline.set_state(gst::State::Paused).map_err(|e| {

@@ -24,6 +24,7 @@ mod membership;
 mod messaging;
 mod processing;
 mod removal;
+pub(crate) mod send_ledger;
 mod storage;
 
 pub use error::AnonGroupError;

@@ -34,9 +34,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use crate::network::connection::{
-    server_status, server_status_age, ConnectionState, ServerStatus,
-};
+use crate::network::connection::{ConnectionState, ServerStatus, server_status, server_status_age};
 use crate::network::grpc::GrpcClientPool;
 use crate::state::OfflineState;
 

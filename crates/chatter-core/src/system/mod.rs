@@ -23,7 +23,10 @@ pub mod tray;
 #[cfg(target_os = "windows")]
 pub mod tray_windows;
 
-pub use antidebug::{check_debugger, init_protection as init_antidebug, periodic_check as antidebug_check, DebuggerStatus};
+pub use antidebug::{
+    DebuggerStatus, check_debugger, init_protection as init_antidebug,
+    periodic_check as antidebug_check,
+};
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 pub use clipboard::{Clipboard, ImageData};
 pub use directories::Directories;

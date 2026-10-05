@@ -9,15 +9,15 @@ use std::time::Instant;
 use tokio::sync::broadcast;
 use tokio::sync::watch;
 
-use crate::inbox::events::{FriendRequestInfo, InboxEvent};
-use crate::inbox::handlers::DomainEvent;
-use crate::proto::chat_v1::FriendStatus;
-use crate::network::grpc::client_pool::GrpcClientPool;
-use crate::network::streaming::heartbeat::{self, Next};
-use crate::proto::chat_v1::{friend_requests_filter, user_event};
-use crate::proto::UserPresence;
 use crate::domain::ids::UserId;
 use crate::domain::user::{FriendshipStatus, Profile};
+use crate::inbox::events::{FriendRequestInfo, InboxEvent};
+use crate::inbox::handlers::DomainEvent;
+use crate::network::grpc::client_pool::GrpcClientPool;
+use crate::network::streaming::heartbeat::{self, Next};
+use crate::proto::UserPresence;
+use crate::proto::chat_v1::FriendStatus;
+use crate::proto::chat_v1::{friend_requests_filter, user_event};
 use crate::services::user::PROFILE_REFRESH_INTERVAL;
 use crate::services::user::conversions::proto_to_domain_profile;
 use crate::storage::repositories::UserRepository;
@@ -82,7 +82,13 @@ pub async fn spawn_user_events_stream(
                             let (grpc_pool, user_repo, domain_tx) =
                                 (grpc_pool.clone(), user_repo.clone(), domain_tx.clone());
                             tokio::spawn(async move {
-                                refresh_friend_profiles(&grpc_pool, &user_repo, &me, domain_tx.as_ref()).await;
+                                refresh_friend_profiles(
+                                    &grpc_pool,
+                                    &user_repo,
+                                    &me,
+                                    domain_tx.as_ref(),
+                                )
+                                .await;
                             });
                         }
                     }
@@ -133,7 +139,9 @@ pub async fn spawn_user_events_stream(
             // been healthy for a while reconnects at once: its loss is routine
             // (server close, network change), and friend requests and presence
             // pushed in the gap are only refetched once we are back.
-            let wait = if connected_at.is_some_and(|t: Instant| t.elapsed() >= heartbeat::HEALTHY_STREAM_AFTER) {
+            let wait = if connected_at
+                .is_some_and(|t: Instant| t.elapsed() >= heartbeat::HEALTHY_STREAM_AFTER)
+            {
                 std::time::Duration::from_millis(250)
             } else {
                 std::time::Duration::from_secs(5)
@@ -241,11 +249,10 @@ async fn handle_user_event(
                 }
             };
 
-            let proto_presence = UserPresence::try_from(presence.presence)
-                .unwrap_or(UserPresence::Offline);
-            let domain_presence = crate::services::presence_service::proto_presence_to_domain(
-                proto_presence,
-            );
+            let proto_presence =
+                UserPresence::try_from(presence.presence).unwrap_or(UserPresence::Offline);
+            let domain_presence =
+                crate::services::presence_service::proto_presence_to_domain(proto_presence);
 
             // Persist before emitting. The event only patches the rows that are
             // on screen right now; every list that rebuilds from storage (the DM
@@ -322,7 +329,12 @@ fn apply_profile(
     // upsert keeps the old one when this is `None`).
     profile.avatar_bytes = current_user_id
         .filter(|_| !proto.encrypted_avatar.is_empty())
-        .and_then(|cur| user_repo.get_friend_profile_key(cur, &profile.user_id).ok().flatten())
+        .and_then(|cur| {
+            user_repo
+                .get_friend_profile_key(cur, &profile.user_id)
+                .ok()
+                .flatten()
+        })
         .and_then(|key| {
             crate::crypto::profile_crypto::decrypt_avatar(&key, &proto.encrypted_avatar).ok()
         });
@@ -354,7 +366,8 @@ fn apply_profile(
 fn profile_changed(before: Option<&Profile>, after: &Profile) -> bool {
     let Some(before) = before else { return true };
     before.display_name != after.display_name
-        || before.status_message.as_ref().map(|s| &s.text) != after.status_message.as_ref().map(|s| &s.text)
+        || before.status_message.as_ref().map(|s| &s.text)
+            != after.status_message.as_ref().map(|s| &s.text)
         || (after.avatar_bytes.is_some() && before.avatar_bytes != after.avatar_bytes)
 }
 
@@ -377,8 +390,15 @@ async fn refresh_friend_profiles(
         }
     };
     let mut client = grpc_pool.user_client();
-    for f in friends.iter().filter(|f| f.status == FriendshipStatus::Accepted) {
-        let peer = if f.requester_id == *current_user_id { f.addressee_id } else { f.requester_id };
+    for f in friends
+        .iter()
+        .filter(|f| f.status == FriendshipStatus::Accepted)
+    {
+        let peer = if f.requester_id == *current_user_id {
+            f.addressee_id
+        } else {
+            f.requester_id
+        };
         match client.get_user_profile(&peer.to_string()).await {
             Ok(proto) => apply_profile(&proto, user_repo, Some(current_user_id), domain_tx, false),
             Err(e) => tracing::debug!(%peer, error = %e, "Friend profile refresh failed"),
@@ -457,7 +477,10 @@ mod heartbeat_tests {
         let (domain_tx, mut domain_rx) = broadcast::channel(4);
 
         handle_user_event(
-            UserEvent { timestamp: 1, event: Some(user_event::Event::Heartbeat(StreamHeartbeat {})) },
+            UserEvent {
+                timestamp: 1,
+                event: Some(user_event::Event::Heartbeat(StreamHeartbeat {})),
+            },
             &pool,
             &event_tx,
             &user_repo,
@@ -466,7 +489,13 @@ mod heartbeat_tests {
         )
         .await;
 
-        assert!(event_rx.try_recv().is_err(), "a heartbeat produced an inbox event");
-        assert!(domain_rx.try_recv().is_err(), "a heartbeat produced a domain event");
+        assert!(
+            event_rx.try_recv().is_err(),
+            "a heartbeat produced an inbox event"
+        );
+        assert!(
+            domain_rx.try_recv().is_err(),
+            "a heartbeat produced a domain event"
+        );
     }
 }

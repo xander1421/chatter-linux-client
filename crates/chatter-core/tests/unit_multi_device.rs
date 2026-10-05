@@ -8,8 +8,8 @@ use crate::framework;
 use std::collections::{HashMap, HashSet};
 
 use chatter_core::proto::chat_v1::{
-    get_pre_key_bundle_response, GetPreKeyBundleResponse, PreKeyBundleDeviceList,
-    SignalPreKeyBundle,
+    GetPreKeyBundleResponse, PreKeyBundleDeviceList, SignalPreKeyBundle,
+    get_pre_key_bundle_response,
 };
 use framework::prelude::*;
 
@@ -166,7 +166,10 @@ async fn test_self_device_exclusion_for_sync() {
     // Then: Returns [1, 3] (excludes current device)
     assert_eq!(sync_devices.len(), 2);
     assert!(sync_devices.contains(&1));
-    assert!(!sync_devices.contains(&2), "Current device should be excluded");
+    assert!(
+        !sync_devices.contains(&2),
+        "Current device should be excluded"
+    );
     assert!(sync_devices.contains(&3));
 }
 
@@ -216,7 +219,10 @@ async fn test_partial_device_failure_continues() {
     // Then: Devices 1 and 3 succeed
     assert_eq!(ciphertexts.len(), 2);
     assert!(ciphertexts.contains_key(&1));
-    assert!(!ciphertexts.contains_key(&2), "Failed device should not have ciphertext");
+    assert!(
+        !ciphertexts.contains_key(&2),
+        "Failed device should not have ciphertext"
+    );
     assert!(ciphertexts.contains_key(&3));
 
     // And: Error was recorded for device 2

@@ -59,7 +59,10 @@ impl InMemorySignalStores {
 
     /// Store a session.
     pub fn store_session(&self, address: &str, record: Vec<u8>) {
-        self.sessions.write().unwrap().insert(address.to_string(), record);
+        self.sessions
+            .write()
+            .unwrap()
+            .insert(address.to_string(), record);
     }
 
     /// Load a session.
@@ -79,7 +82,10 @@ impl InMemorySignalStores {
 
     /// Store identity.
     pub fn store_identity(&self, address: &str, identity: Vec<u8>) {
-        self.identities.write().unwrap().insert(address.to_string(), identity);
+        self.identities
+            .write()
+            .unwrap()
+            .insert(address.to_string(), identity);
     }
 
     /// Load identity.

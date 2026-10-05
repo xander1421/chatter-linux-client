@@ -13,8 +13,8 @@ use super::animator::GifFrame;
 ///
 /// Much faster than full decode - only processes first frame.
 pub fn decode_first_frame_only(bytes: &[u8]) -> Result<Option<GifFrame>, MediaError> {
-    let format = image::guess_format(bytes)
-        .map_err(|e| MediaError::InvalidFormat(e.to_string()))?;
+    let format =
+        image::guess_format(bytes).map_err(|e| MediaError::InvalidFormat(e.to_string()))?;
 
     if format != ImageFormat::Gif {
         return Ok(None);

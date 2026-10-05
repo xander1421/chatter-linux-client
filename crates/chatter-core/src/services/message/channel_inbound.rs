@@ -39,6 +39,19 @@ pub enum Ingested {
     DeferredPendingSenderKey,
     /// Could not be used at all (bad proto, undecryptable, conversion failed).
     Dropped,
+    /// Storage or recoverable decrypt failure; stream must not acknowledge it.
+    RetryableFailure,
+}
+
+fn ensure_resync_ingested(outcome: Ingested) -> Result<(), MessageError> {
+    match outcome {
+        Ingested::RetryableFailure | Ingested::DeferredPendingSenderKey => Err(
+            MessageError::InvalidContent("resync ingestion not yet applied".into()),
+        ),
+        // Terminal rejection, duplicate/tombstone and own-device messages do
+        // not become valid through retry; preserving them would poison a stream.
+        Ingested::Stored | Ingested::OwnMessage | Ingested::Dropped => Ok(()),
+    }
 }
 
 /// Shared decrypt → persist → announce path for channel messages.
@@ -49,7 +62,10 @@ pub struct ChannelInbound {
 
 impl ChannelInbound {
     pub fn new(messages: Arc<MessageService>, attachments: Arc<AttachmentService>) -> Self {
-        Self { messages, attachments }
+        Self {
+            messages,
+            attachments,
+        }
     }
 
     fn event_bus(&self) -> &EventBus {
@@ -79,7 +95,7 @@ impl ChannelInbound {
         };
 
         if !self.persist(&mut message, channel_id) {
-            return Ingested::Dropped;
+            return Ingested::RetryableFailure;
         }
 
         if emit {
@@ -132,28 +148,38 @@ impl ChannelInbound {
             Err(e) => {
                 tracing::warn!(%channel_id, message_id = %message.id, error = %e,
                     "Failed to read the edited message; dropped");
-                return Ingested::Dropped;
+                return Ingested::RetryableFailure;
             }
         };
         let body = message.as_text().unwrap_or_default();
         let edit_ts = proto_msg.edited_at;
-        match self.messages.apply_channel_edit(&channel_id, &author, target_sent_at, body, edit_ts, edit_ts) {
+        match self.messages.apply_channel_edit(
+            &channel_id,
+            &author,
+            target_sent_at,
+            body,
+            edit_ts,
+            edit_ts,
+        ) {
             Ok(Some(edited)) => {
-                let _ = self.event_bus().domain_sender().send(DomainEvent::MessageEdited {
-                    message_id: edited.id,
-                    new_content: edited.content,
-                    channel_id,
-                    conversation_type: edited.conversation_type,
-                    author_id: author,
-                    target_sent_timestamp: target_sent_at,
-                });
+                let _ = self
+                    .event_bus()
+                    .domain_sender()
+                    .send(DomainEvent::MessageEdited {
+                        message_id: edited.id,
+                        new_content: edited.content,
+                        channel_id,
+                        conversation_type: edited.conversation_type,
+                        author_id: author,
+                        target_sent_timestamp: target_sent_at,
+                    });
                 Ingested::Stored
             }
             // Held for its message, refused, or already shown.
             Ok(None) => Ingested::Dropped,
             Err(e) => {
                 tracing::warn!(%channel_id, error = %e, "Failed to apply a server channel edit");
-                Ingested::Dropped
+                Ingested::RetryableFailure
             }
         }
     }
@@ -161,12 +187,10 @@ impl ChannelInbound {
     /// One undeleted message from a resync page (`get_message_changes`).
     ///
     /// Errors only for a bad message id or a local storage failure. Whatever
-    /// the message's own outcome — stored, parked for its sender key, unusable
-    /// — the resync goes on to the next one: a parked message already has its
-    /// SKDM request out (and, on expiry, a resend request), and an unusable one
-    /// was handled where it failed. Stopping kept the stream cursor in place,
-    /// so one undecryptable message made every reconnect resync again and
-    /// stalled every channel behind it.
+    /// Retryable storage/decrypt failure or memory-only sender-key deferral
+    /// stops recovery before the stream checkpoint can advance. Terminal
+    /// malformed/member-rejected payloads and already applied messages remain
+    /// handled outcomes, so an invalid payload does not poison every reconnect.
     pub async fn ingest_resynced(
         &self,
         proto_msg: &chat_v1::Message,
@@ -183,14 +207,17 @@ impl ChannelInbound {
         match &existing {
             // Never seen: store it as the server has it, edit included.
             None => {
-                self.ingest(proto_msg, channel_id, false).await;
+                ensure_resync_ingested(self.ingest(proto_msg, channel_id, false).await)?;
             }
             Some(local) if is_newer_edit(proto_msg, local) => {
-                self.ingest_edit(proto_msg, channel_id).await;
+                ensure_resync_ingested(self.ingest_edit(proto_msg, channel_id).await)?;
             }
             Some(_) => {}
         }
-        match self.messages.reconcile_channel_reactions(proto_msg, channel_id) {
+        match self
+            .messages
+            .reconcile_channel_reactions(proto_msg, channel_id)
+        {
             // A malformed reaction is this message's problem, not the resync's.
             Err(MessageError::InvalidContent(e)) => {
                 tracing::warn!(%channel_id, message_id = %id, error = %e,
@@ -223,7 +250,7 @@ impl ChannelInbound {
                 Err(e) => {
                     tracing::warn!(%channel_id, message_id = %id, error = %e,
                         "Failed to check delete tombstone; dropping");
-                    return Err(Ingested::Dropped);
+                    return Err(Ingested::RetryableFailure);
                 }
             }
         }
@@ -290,10 +317,12 @@ impl ChannelInbound {
             // message key, so a second one fails as a duplicate — which is not a
             // failure, and must not ask the sender for a resend.
             if let Ok(id) = proto_msg.id.parse::<crate::domain::ids::MessageId>() {
-                if let Ok(Some(existing)) = self.messages.get_message_local(&id) {
-                    if !is_newer_edit(proto_msg, &existing) {
+                match self.messages.get_message_local(&id) {
+                    Ok(Some(existing)) if !is_newer_edit(proto_msg, &existing) => {
                         return Err(Ingested::Dropped);
                     }
+                    Err(_) => return Err(Ingested::RetryableFailure),
+                    _ => {}
                 }
             }
 
@@ -363,7 +392,9 @@ impl ChannelInbound {
                     // DataMessage clock, as the sender stores it. The server's
                     // envelope timestamp is only transport metadata.
                     patched.timestamp = dm.timestamp;
-                    patched.content = Some(chat_v1::message::Content { r#type: Some(new_type) });
+                    patched.content = Some(chat_v1::message::Content {
+                        r#type: Some(new_type),
+                    });
                     patched
                 }
                 Err(e) => {
@@ -377,10 +408,15 @@ impl ChannelInbound {
                         // own previous install) will never send its SKDM:
                         // parking the message only ends in a request to a
                         // device that does not exist.
-                        if self.messages.is_retired_device(sid, device_id, proto_msg.timestamp).await {
+                        if self
+                            .messages
+                            .is_retired_device(sid, device_id, proto_msg.timestamp)
+                            .await
+                        {
                             tracing::debug!(%channel_id, %sid, device_id, message_id = %proto_msg.id,
                                 "Channel message from a retired device is unrecoverable; dropped");
-                            self.messages.record_channel_delivery_issue(channel_id, sid, proto_msg);
+                            self.messages
+                                .record_channel_delivery_issue(channel_id, sid, proto_msg);
                             return Err(Ingested::Dropped);
                         }
                         tracing::warn!(
@@ -393,10 +429,15 @@ impl ChannelInbound {
                             device_id,
                             proto_msg.clone(),
                         );
-                        if self.messages.should_request_sender_key(channel_id, sid, device_id) {
+                        if self
+                            .messages
+                            .should_request_sender_key(channel_id, sid, device_id)
+                        {
                             let msg_svc = self.messages.clone();
                             tokio::spawn(async move {
-                                if let Err(e) = msg_svc.send_sender_key_request(&channel_id, &sid).await {
+                                if let Err(e) =
+                                    msg_svc.send_sender_key_request(&channel_id, &sid).await
+                                {
                                     tracing::warn!(
                                         %channel_id, %sid, error = %e,
                                         "Failed to send SenderKeyRequest"
@@ -415,10 +456,16 @@ impl ChannelInbound {
                     let proto = proto_msg.clone();
                     tokio::spawn(async move {
                         msg_svc
-                            .request_group_resend(channel_id, sid, device_id, &proto, &group_encrypted.ciphertext)
+                            .request_group_resend(
+                                channel_id,
+                                sid,
+                                device_id,
+                                &proto,
+                                &group_encrypted.ciphertext,
+                            )
                             .await;
                     });
-                    return Err(Ingested::Dropped);
+                    return Err(Ingested::RetryableFailure);
                 }
             }
         } else {
@@ -426,7 +473,9 @@ impl ChannelInbound {
         };
 
         let conv_type = conversation_type_for_channel(&self.messages.channel_repo, &channel_id);
-        let mut message = match proto_to_domain_message_with_sender(&decrypted, sender_id, conv_type) {
+        let mut message = match proto_to_domain_message_with_sender(
+            &decrypted, sender_id, conv_type,
+        ) {
             Ok(m) => m,
             Err(e) => {
                 tracing::warn!(%channel_id, error = %e, "Failed to convert channel message to domain");
@@ -502,9 +551,14 @@ impl ChannelInbound {
 /// A new edit has fresh ciphertext; only duplicate/older versions reuse the
 /// consumed sender key. This comparison also avoids replaying an old edit.
 pub(crate) fn is_newer_edit(proto: &chat_v1::Message, existing: &Message) -> bool {
-    proto.edited && proto.edited_at > 0 && proto.edited_at > existing.edited_at
-        .and_then(|time| time.timestamp_nanos_opt())
-        .and_then(|ns| u64::try_from(ns).ok()).unwrap_or(0)
+    proto.edited
+        && proto.edited_at > 0
+        && proto.edited_at
+            > existing
+                .edited_at
+                .and_then(|time| time.timestamp_nanos_opt())
+                .and_then(|ns| u64::try_from(ns).ok())
+                .unwrap_or(0)
 }
 
 #[cfg(test)]
@@ -516,13 +570,24 @@ mod tests {
     #[test]
     fn a_new_edit_is_not_a_duplicate_of_the_original() {
         let mut original = Message::new_text(
-            ChannelId::new(), ConversationType::Channel, None, "original".into(), 1_000_000,
+            ChannelId::new(),
+            ConversationType::Channel,
+            None,
+            "original".into(),
+            1_000_000,
         );
-        let edit = chat_v1::Message { edited: true, edited_at: 2_000_000, ..Default::default() };
+        let edit = chat_v1::Message {
+            edited: true,
+            edited_at: 2_000_000,
+            ..Default::default()
+        };
         assert!(is_newer_edit(&edit, &original));
         original.edited_at = Some(chrono::DateTime::from_timestamp_nanos(2_000_000));
         assert!(!is_newer_edit(&edit, &original));
-        let older = chat_v1::Message { edited_at: 1_000_000, ..edit.clone() };
+        let older = chat_v1::Message {
+            edited_at: 1_000_000,
+            ..edit.clone()
+        };
         assert!(!is_newer_edit(&older, &original));
         assert!(!is_newer_edit(&chat_v1::Message::default(), &original));
     }
@@ -563,11 +628,23 @@ mod tests {
                 .unwrap()
         };
 
-        assert_eq!(inbound.ingest(&proto, channel_id, false).await, Ingested::Stored);
-        assert_eq!(unread(), 1, "positive control: a received message starts unread");
+        assert_eq!(
+            inbound.ingest(&proto, channel_id, false).await,
+            Ingested::Stored
+        );
+        assert_eq!(
+            unread(),
+            1,
+            "positive control: a received message starts unread"
+        );
 
-        client.mark_conversation_read(&channel_id, &ConversationType::Channel).unwrap();
-        assert_eq!(inbound.ingest(&proto, channel_id, false).await, Ingested::Stored);
+        client
+            .mark_conversation_read(&channel_id, &ConversationType::Channel)
+            .unwrap();
+        assert_eq!(
+            inbound.ingest(&proto, channel_id, false).await,
+            Ingested::Stored
+        );
         assert_eq!(unread(), 0);
     }
 
@@ -599,16 +676,32 @@ mod tests {
             }),
             ..Default::default()
         };
-        assert_eq!(inbound.ingest(&proto, channel_id, false).await, Ingested::Stored);
+        assert_eq!(
+            inbound.ingest(&proto, channel_id, false).await,
+            Ingested::Stored
+        );
 
-        let mut edited = client.messages().get_message_local(&id).unwrap().expect("stored");
+        let mut edited = client
+            .messages()
+            .get_message_local(&id)
+            .unwrap()
+            .expect("stored");
         edited.content = crate::domain::message::MessageContent::Text("edited".into());
         edited.is_edited = true;
         client.messages().update_message(&edited).unwrap();
 
-        assert_eq!(inbound.ingest(&proto, channel_id, false).await, Ingested::Stored);
-        let stored = client.messages().get_message_local(&id).unwrap().expect("stored");
-        assert!(matches!(stored.content, crate::domain::message::MessageContent::Text(ref t) if t == "edited"));
+        assert_eq!(
+            inbound.ingest(&proto, channel_id, false).await,
+            Ingested::Stored
+        );
+        let stored = client
+            .messages()
+            .get_message_local(&id)
+            .unwrap()
+            .expect("stored");
+        assert!(
+            matches!(stored.content, crate::domain::message::MessageContent::Text(ref t) if t == "edited")
+        );
         assert!(stored.is_edited);
     }
 
@@ -650,8 +743,12 @@ mod tests {
                 }),
                 ..Default::default()
             };
-            let m = proto_to_domain_message_with_sender(&proto, Some(sender), ConversationType::Channel)
-                .unwrap();
+            let m = proto_to_domain_message_with_sender(
+                &proto,
+                Some(sender),
+                ConversationType::Channel,
+            )
+            .unwrap();
             assert!(!m.is_read);
             client.messages().store_message_local(&m).unwrap();
         };
@@ -664,7 +761,11 @@ mod tests {
         };
 
         store(UserId::new());
-        assert_eq!(unread(), 1, "positive control: someone else's message is unread");
+        assert_eq!(
+            unread(),
+            1,
+            "positive control: someone else's message is unread"
+        );
         store(me);
         assert_eq!(unread(), 1, "our own message counted as unread");
     }
@@ -699,14 +800,29 @@ mod tests {
             ..Default::default()
         };
 
-        assert_eq!(inbound.ingest(&proto, channel_id, false).await, Ingested::Stored);
-        assert!(client.messages().get_message_local(&message_id).unwrap().is_some(),
-            "positive control: the message was stored");
+        assert_eq!(
+            inbound.ingest(&proto, channel_id, false).await,
+            Ingested::Stored
+        );
+        assert!(
+            client
+                .messages()
+                .get_message_local(&message_id)
+                .unwrap()
+                .is_some(),
+            "positive control: the message was stored"
+        );
 
         client.messages().delete_message_local(&message_id).unwrap();
         inbound.ingest(&proto, channel_id, false).await;
-        assert!(client.messages().get_message_local(&message_id).unwrap().is_none(),
-            "a re-fetched copy resurrected a deleted message");
+        assert!(
+            client
+                .messages()
+                .get_message_local(&message_id)
+                .unwrap()
+                .is_none(),
+            "a re-fetched copy resurrected a deleted message"
+        );
     }
 
     /// A server `message_updated` edit goes through the same edit logic as a
@@ -726,8 +842,18 @@ mod tests {
             .expect("build client");
         // The resync path reads the current user (own-message handling).
         let settings = &client.messages().settings_repo;
-        settings.set(crate::storage::repositories::settings_repo::keys::CURRENT_USER_ID, &UserId::new().to_string()).unwrap();
-        settings.set(crate::storage::repositories::settings_repo::keys::CURRENT_DEVICE_ID, &1u32).unwrap();
+        settings
+            .set(
+                crate::storage::repositories::settings_repo::keys::CURRENT_USER_ID,
+                &UserId::new().to_string(),
+            )
+            .unwrap();
+        settings
+            .set(
+                crate::storage::repositories::settings_repo::keys::CURRENT_DEVICE_ID,
+                &1u32,
+            )
+            .unwrap();
         let inbound = ChannelInbound::new(client.messages().clone(), client.attachments().clone());
         let mut events = client.messages().event_bus.subscribe_domain();
         let mut edits = || {
@@ -740,7 +866,10 @@ mod tests {
         let window = MessageService::EDIT_MAX_AGE_NS;
         let (channel_id, author, stranger) = (ChannelId::new(), UserId::new(), UserId::new());
         let sent = 1_700_000_000_000_000_000u64;
-        let message = |id: &crate::domain::ids::MessageId, by: UserId, body: &str, edited_at: u64| chat_v1::Message {
+        let message = |id: &crate::domain::ids::MessageId,
+                       by: UserId,
+                       body: &str,
+                       edited_at: u64| chat_v1::Message {
             id: id.to_string(),
             channel_id: channel_id.to_string(),
             author_id: by.to_string(),
@@ -753,37 +882,173 @@ mod tests {
             ..Default::default()
         };
         let id = crate::domain::ids::MessageId::new();
-        let body = || client.messages().get_message_local(&id).unwrap().map(|m| m.content);
+        let body = || {
+            client
+                .messages()
+                .get_message_local(&id)
+                .unwrap()
+                .map(|m| m.content)
+        };
         let text = |s: &str| Some(crate::domain::message::MessageContent::Text(s.into()));
 
         // Early: held, then applied when the message arrives.
-        assert_eq!(inbound.ingest_edit(&message(&id, author, "early", sent + 10), channel_id).await, Ingested::Dropped);
+        assert_eq!(
+            inbound
+                .ingest_edit(&message(&id, author, "early", sent + 10), channel_id)
+                .await,
+            Ingested::Dropped
+        );
         assert_eq!(body(), None, "an edit alone does not create the message");
-        assert_eq!(inbound.ingest(&message(&id, author, "original", 0), channel_id, false).await, Ingested::Stored);
+        assert_eq!(
+            inbound
+                .ingest(&message(&id, author, "original", 0), channel_id, false)
+                .await,
+            Ingested::Stored
+        );
         assert_eq!(body(), text("early"));
         edits();
 
-        assert_eq!(inbound.ingest_edit(&message(&id, author, "newer", sent + 30), channel_id).await, Ingested::Stored);
+        assert_eq!(
+            inbound
+                .ingest_edit(&message(&id, author, "newer", sent + 30), channel_id)
+                .await,
+            Ingested::Stored
+        );
         assert_eq!(edits(), 1);
         // Older than the edit shown, a re-delivery of it, another author's,
         // and one past 48h: all ignored, nothing announced.
-        inbound.ingest_edit(&message(&id, author, "older", sent + 20), channel_id).await;
-        inbound.ingest_edit(&message(&id, author, "newer", sent + 30), channel_id).await;
-        inbound.ingest_edit(&message(&id, stranger, "hijack", sent + 40), channel_id).await;
-        inbound.ingest_edit(&message(&id, author, "late", sent + window + 1), channel_id).await;
+        inbound
+            .ingest_edit(&message(&id, author, "older", sent + 20), channel_id)
+            .await;
+        inbound
+            .ingest_edit(&message(&id, author, "newer", sent + 30), channel_id)
+            .await;
+        inbound
+            .ingest_edit(&message(&id, stranger, "hijack", sent + 40), channel_id)
+            .await;
+        inbound
+            .ingest_edit(&message(&id, author, "late", sent + window + 1), channel_id)
+            .await;
         assert_eq!(edits(), 0);
         let stored = client.messages().get_message_local(&id).unwrap().unwrap();
         assert_eq!(Some(stored.content), text("newer"));
-        assert_eq!(stored.edited_at, Some(chrono::DateTime::from_timestamp_nanos((sent + 30) as i64)));
+        assert_eq!(
+            stored.edited_at,
+            Some(chrono::DateTime::from_timestamp_nanos((sent + 30) as i64))
+        );
 
         // A resync re-fetch of the applied edit: no event, no edited_at churn.
-        inbound.ingest_resynced(&message(&id, author, "newer", sent + 30), channel_id).await.unwrap();
+        inbound
+            .ingest_resynced(&message(&id, author, "newer", sent + 30), channel_id)
+            .await
+            .unwrap();
         assert_eq!(edits(), 0);
-        assert_eq!(client.messages().get_message_local(&id).unwrap().unwrap().edited_at, stored.edited_at);
+        assert_eq!(
+            client
+                .messages()
+                .get_message_local(&id)
+                .unwrap()
+                .unwrap()
+                .edited_at,
+            stored.edited_at
+        );
         // A resync of a message never seen stores it, edit included.
         let unseen = crate::domain::ids::MessageId::new();
-        inbound.ingest_resynced(&chat_v1::Message { timestamp: sent + 1, ..message(&unseen, author, "edited", sent + 5) }, channel_id).await.unwrap();
-        let unseen = client.messages().get_message_local(&unseen).unwrap().expect("stored");
+        inbound
+            .ingest_resynced(
+                &chat_v1::Message {
+                    timestamp: sent + 1,
+                    ..message(&unseen, author, "edited", sent + 5)
+                },
+                channel_id,
+            )
+            .await
+            .unwrap();
+        let unseen = client
+            .messages()
+            .get_message_local(&unseen)
+            .unwrap()
+            .expect("stored");
         assert_eq!(Some(unseen.content), text("edited"));
+    }
+}
+
+#[cfg(test)]
+mod replay_failure_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn failed_sqlite_write_is_not_acknowledged_by_live_or_resync_ingestion() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = crate::system::Directories::with_base_dir(dir.path().to_path_buf())
+            .unwrap()
+            .database_path();
+        std::fs::write(
+            db.parent()
+                .unwrap()
+                .join(crate::system::keyring::NO_KEYRING_MARKER),
+            b"",
+        )
+        .unwrap();
+        let client = crate::client::ChatterClient::builder()
+            .server_url("https://localhost:1")
+            .data_dir(dir.path().to_str().unwrap())
+            .build()
+            .unwrap();
+        let inbound = ChannelInbound::new(client.messages().clone(), client.attachments().clone());
+        let channel = ChannelId::new();
+        let message = chat_v1::Message {
+            id: crate::domain::MessageId::new().to_string(),
+            channel_id: channel.to_string(),
+            author_id: crate::domain::UserId::new().to_string(),
+            timestamp: 1000,
+            content: Some(chat_v1::message::Content {
+                r#type: Some(chat_v1::message::content::Type::Text("retry me".into())),
+            }),
+            ..Default::default()
+        };
+        inbound
+            .messages
+            .database
+            .connection()
+            .unwrap()
+            .execute_batch("PRAGMA query_only=ON")
+            .unwrap();
+        assert_eq!(
+            inbound.ingest(&message, channel, false).await,
+            Ingested::RetryableFailure
+        );
+        assert!(inbound.ingest_resynced(&message, channel).await.is_err());
+        inbound
+            .messages
+            .database
+            .connection()
+            .unwrap()
+            .execute_batch("PRAGMA query_only=OFF")
+            .unwrap();
+        assert_eq!(
+            inbound.ingest(&message, channel, false).await,
+            Ingested::Stored
+        );
+        assert!(
+            inbound
+                .messages
+                .get_message_local(&message.id.parse().unwrap())
+                .unwrap()
+                .is_some()
+        );
+    }
+}
+
+#[cfg(test)]
+mod resync_acknowledgement_tests {
+    use super::*;
+
+    #[test]
+    fn deferred_or_failed_resync_requires_retry_but_terminal_rejection_does_not() {
+        assert!(ensure_resync_ingested(Ingested::DeferredPendingSenderKey).is_err());
+        assert!(ensure_resync_ingested(Ingested::RetryableFailure).is_err());
+        assert!(ensure_resync_ingested(Ingested::Dropped).is_ok());
+        assert!(ensure_resync_ingested(Ingested::Stored).is_ok());
     }
 }

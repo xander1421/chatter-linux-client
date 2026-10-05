@@ -23,11 +23,15 @@ fn wire_close_thread(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     let chat_state = ui_ctx.chat_state().clone();
     window.on_close_thread_clicked(move || {
         let weak = weak_window.clone();
-        if let Some(thread) = chat_state.active_thread() { chat_state.close_thread(thread.root_message_id); }
-        let _ = slint::invoke_from_event_loop(move || { if let Some(w) = weak.upgrade() {
-            w.set_thread_panel_visible(false);
-            w.set_thread_replies(ModelRc::new(VecModel::default()));
-        }});
+        if let Some(thread) = chat_state.active_thread() {
+            chat_state.close_thread(thread.root_message_id);
+        }
+        let _ = slint::invoke_from_event_loop(move || {
+            if let Some(w) = weak.upgrade() {
+                w.set_thread_panel_visible(false);
+                w.set_thread_replies(ModelRc::new(VecModel::default()));
+            }
+        });
     });
 }
 
@@ -37,31 +41,48 @@ fn wire_send_thread_reply(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     let ui_ctx = ui_ctx.clone();
     window.on_send_thread_reply(move |text: SharedString| {
         let text = text.to_string();
-        if text.trim().is_empty() { return; }
+        if text.trim().is_empty() {
+            return;
+        }
         let weak = weak_window.clone();
         let chat_state = chat_state.clone();
         let ui_ctx = ui_ctx.clone();
         tokio::spawn(async move {
-            let thread = match chat_state.active_thread() { Some(t) => t, None => return };
+            let thread = match chat_state.active_thread() {
+                Some(t) => t,
+                None => return,
+            };
             let sent = ui_ctx
-                .send_channel_message(None, &thread.channel_id, &text, vec![], vec![], Some(&thread.root_message_id), vec![], false)
+                .send_channel_message(
+                    None,
+                    &thread.channel_id,
+                    &text,
+                    vec![],
+                    vec![],
+                    Some(&thread.root_message_id),
+                    vec![],
+                    false,
+                )
                 .await;
             if let Err(e) = &sent {
                 // The panel cleared its composer on tap. A reply that did not
                 // leave must say so and give the text back — it used to vanish.
                 tracing::error!(error = %e, "thread reply send failed");
-                let _ = slint::invoke_from_event_loop(move || { if let Some(w) = weak.upgrade() {
-                    if w.get_thread_composer_text().is_empty() {
-                        w.set_thread_composer_text(text.into());
+                let _ = slint::invoke_from_event_loop(move || {
+                    if let Some(w) = weak.upgrade() {
+                        if w.get_thread_composer_text().is_empty() {
+                            w.set_thread_composer_text(text.into());
+                        }
+                        w.set_toast_message("Couldn't send your reply. Try again.".into());
+                        w.set_toast_variant("error".into());
+                        w.set_toast_visible(true);
                     }
-                    w.set_toast_message("Couldn't send your reply. Try again.".into());
-                    w.set_toast_variant("error".into());
-                    w.set_toast_visible(true);
-                }});
+                });
                 return;
             }
             if let Ok(msg) = sent {
-                chat_state.update_thread_reply_count(thread.root_message_id, thread.reply_count + 1);
+                chat_state
+                    .update_thread_reply_count(thread.root_message_id, thread.reply_count + 1);
                 // Show our own reply in the panel immediately — the send path
                 // stores it locally but emits no MessageReceived event, so
                 // without this it only appeared after re-opening the thread.
@@ -71,12 +92,17 @@ fn wire_send_thread_reply(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                     .map(|id| id.to_string())
                     .unwrap_or_default();
                 let root_id = thread.root_message_id;
-                let _ = slint::invoke_from_event_loop(move || { if let Some(w) = weak.upgrade() {
-                    w.set_thread_composer_text(SharedString::default());
-                    apply_live_thread_reply(
-                        &w, &root_id, reply.to_slint_with_user(&current_user_id), true,
-                    );
-                }});
+                let _ = slint::invoke_from_event_loop(move || {
+                    if let Some(w) = weak.upgrade() {
+                        w.set_thread_composer_text(SharedString::default());
+                        apply_live_thread_reply(
+                            &w,
+                            &root_id,
+                            reply.to_slint_with_user(&current_user_id),
+                            true,
+                        );
+                    }
+                });
             }
         });
     });
@@ -93,13 +119,25 @@ fn wire_load_more_thread_replies(window: &MainWindow, ui_ctx: &Arc<ChatterClient
         // Cursor = the oldest reply on screen. Read on the UI thread: a Slint
         // Weak never upgrades inside tokio::spawn.
         let Some(w) = weak.upgrade() else { return };
-        let Some(oldest) = w.get_thread_replies().row_data(0)
-            .and_then(|row| row.message_id.parse::<MessageId>().ok()) else { return };
+        let Some(oldest) = w
+            .get_thread_replies()
+            .row_data(0)
+            .and_then(|row| row.message_id.parse::<MessageId>().ok())
+        else {
+            return;
+        };
         tokio::spawn(async move {
-            let thread = match chat_state.active_thread() { Some(t) => t, None => return };
+            let thread = match chat_state.active_thread() {
+                Some(t) => t,
+                None => return,
+            };
             let root = thread.root_message_id;
-            let Ok(page) = ui_ctx.list_thread_replies(&root, Some(&oldest), 50) else { return };
-            if page.is_empty() { return; }
+            let Ok(page) = ui_ctx.list_thread_replies(&root, Some(&oldest), 50) else {
+                return;
+            };
+            if page.is_empty() {
+                return;
+            }
             let display = messages_to_display_batch(
                 &page,
                 |ms| ui_ctx.message_sender_display_names(ms),
@@ -109,14 +147,21 @@ fn wire_load_more_thread_replies(window: &MainWindow, ui_ctx: &Arc<ChatterClient
                 |m| ui_ctx.reply_parent_missing_for(m),
                 |m| ui_ctx.reply_parent_media(m),
             );
-            let current_user_id = ui_ctx.session_current_user_id().map(|id| id.to_string()).unwrap_or_default();
+            let current_user_id = ui_ctx
+                .session_current_user_id()
+                .map(|id| id.to_string())
+                .unwrap_or_default();
             let _ = slint::invoke_from_event_loop(move || {
                 let Some(w) = weak.upgrade() else { return };
                 // The user may have switched threads while this page loaded.
-                if w.get_thread_root_message_id() != root.to_string().as_str() { return; }
+                if w.get_thread_root_message_id() != root.to_string().as_str() {
+                    return;
+                }
                 let current = w.get_thread_replies();
-                let mut rows: Vec<MessageItemData> =
-                    display.iter().map(|d| d.to_slint_with_user(&current_user_id)).collect();
+                let mut rows: Vec<MessageItemData> = display
+                    .iter()
+                    .map(|d| d.to_slint_with_user(&current_user_id))
+                    .collect();
                 rows.extend(current.iter());
                 w.set_thread_replies(ModelRc::new(VecModel::from(rows)));
             });
@@ -138,14 +183,12 @@ pub fn apply_live_thread_reply(
 ) {
     if panel_shows_this_thread {
         let replies = w.get_thread_replies();
-        let already_present = replies.iter()
-            .any(|m| m.message_id == reply.message_id);
+        let already_present = replies.iter().any(|m| m.message_id == reply.message_id);
         if !already_present {
             match replies.as_any().downcast_ref::<VecModel<MessageItemData>>() {
                 Some(model) => model.push(reply),
                 None => {
-                    let mut all: Vec<MessageItemData> =
-                        replies.iter().collect();
+                    let mut all: Vec<MessageItemData> = replies.iter().collect();
                     all.push(reply);
                     w.set_thread_replies(ModelRc::new(VecModel::from(all)));
                 }
@@ -169,7 +212,13 @@ pub fn apply_thread_edit(
     target_sent_timestamp: u64,
     new_text: &str,
 ) {
-    patch_edited_row(&w.get_thread_replies(), message_id, author, target_sent_timestamp, new_text);
+    patch_edited_row(
+        &w.get_thread_replies(),
+        message_id,
+        author,
+        target_sent_timestamp,
+        new_text,
+    );
     if !message_id.is_empty() && w.get_thread_root_message_id().as_str() == message_id {
         w.set_thread_root_content_preview(
             chatter_core::domain::message::truncate_preview_text(new_text, 100).into(),
@@ -200,11 +249,15 @@ fn patch_edited_row(
                 }
         })
     });
-    let (Some(i), Some(model)) = (hit, rows.as_any().downcast_ref::<VecModel<MessageItemData>>())
-    else {
+    let (Some(i), Some(model)) = (
+        hit,
+        rows.as_any().downcast_ref::<VecModel<MessageItemData>>(),
+    ) else {
         return false;
     };
-    let Some(mut row) = model.row_data(i) else { return false };
+    let Some(mut row) = model.row_data(i) else {
+        return false;
+    };
     crate::bin_ui::converters::apply_edit(&mut row, new_text);
     model.set_row_data(i, row);
     true
@@ -214,11 +267,16 @@ fn patch_edited_row(
 fn bump_root_reply_count(w: &MainWindow, root_message_id: &MessageId) {
     let root_id = root_message_id.to_string();
     let messages = w.get_messages();
-    let Some(model) = messages.as_any().downcast_ref::<VecModel<MessageItemData>>() else {
+    let Some(model) = messages
+        .as_any()
+        .downcast_ref::<VecModel<MessageItemData>>()
+    else {
         return;
     };
     for i in 0..messages.row_count() {
-        let Some(msg) = messages.row_data(i) else { continue };
+        let Some(msg) = messages.row_data(i) else {
+            continue;
+        };
         if msg.message_id.as_str() != root_id {
             continue;
         }
@@ -268,7 +326,9 @@ pub fn load_thread_data(
                 .as_text()
                 .map(|t| chatter_core::domain::message::truncate_preview_text(t, 100))
                 .unwrap_or_else(|| "[Attachment]".to_string());
-            let replies = ui_ctx.list_thread_replies(&root_message_id, None, 50).unwrap_or_default();
+            let replies = ui_ctx
+                .list_thread_replies(&root_message_id, None, 50)
+                .unwrap_or_default();
             // The true total, not the page size: the panel offers "earlier
             // replies" while it shows fewer than this.
             let total_replies = ui_ctx.thread_reply_count(&root_message_id);
@@ -281,17 +341,25 @@ pub fn load_thread_data(
                 |m| ui_ctx.reply_parent_missing_for(m),
                 |m| ui_ctx.reply_parent_media(m),
             );
-            let current_user_id = ui_ctx.session_current_user_id().map(|id| id.to_string()).unwrap_or_default();
-            let _ = slint::invoke_from_event_loop(move || { if let Some(w) = window.upgrade() {
-                w.set_thread_panel_visible(true);
-                w.set_thread_root_message_id(root_message_id.to_string().into());
-                w.set_thread_root_sender_name(sender_name.into());
-                w.set_thread_root_content_preview(content_preview.into());
-                w.set_thread_reply_count(total_replies as i32);
-                w.set_thread_loading(false);
-                let slint_replies: Vec<_> = display.iter().map(|d| d.to_slint_with_user(&current_user_id)).collect();
-                w.set_thread_replies(ModelRc::new(VecModel::from(slint_replies)));
-            }});
+            let current_user_id = ui_ctx
+                .session_current_user_id()
+                .map(|id| id.to_string())
+                .unwrap_or_default();
+            let _ = slint::invoke_from_event_loop(move || {
+                if let Some(w) = window.upgrade() {
+                    w.set_thread_panel_visible(true);
+                    w.set_thread_root_message_id(root_message_id.to_string().into());
+                    w.set_thread_root_sender_name(sender_name.into());
+                    w.set_thread_root_content_preview(content_preview.into());
+                    w.set_thread_reply_count(total_replies as i32);
+                    w.set_thread_loading(false);
+                    let slint_replies: Vec<_> = display
+                        .iter()
+                        .map(|d| d.to_slint_with_user(&current_user_id))
+                        .collect();
+                    w.set_thread_replies(ModelRc::new(VecModel::from(slint_replies)));
+                }
+            });
         }
     });
 }
@@ -312,8 +380,10 @@ mod tests {
 
     #[test]
     fn edit_patches_the_matching_thread_reply_only() {
-        let rows: ModelRc<MessageItemData> =
-            ModelRc::new(VecModel::from(vec![row("a", "100", "one"), row("b", "200", "two")]));
+        let rows: ModelRc<MessageItemData> = ModelRc::new(VecModel::from(vec![
+            row("a", "100", "one"),
+            row("b", "200", "two"),
+        ]));
 
         // Another member reusing the reply's timestamp does not rewrite it.
         assert!(!patch_edited_row(&rows, "b", "mallory", 200, "forged"));

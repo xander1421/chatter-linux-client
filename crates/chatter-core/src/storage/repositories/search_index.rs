@@ -162,9 +162,9 @@ fn collect_results(rows: &mut rusqlite::Rows<'_>) -> Result<Vec<SearchResult>, S
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::storage::Database;
     use crate::domain::ids::UserId;
-    use crate::domain::message::{Message, ConversationType};
+    use crate::domain::message::{ConversationType, Message};
+    use crate::storage::Database;
     use crate::storage::repositories::MessageRepository;
 
     fn setup_db() -> Arc<Database> {
@@ -172,10 +172,10 @@ mod tests {
         let db_path = temp_dir.path().join("test.db");
         let db = Arc::new(Database::open(&db_path, "testpass").unwrap());
         db.run_migrations().unwrap();
-        
+
         // Keep temp_dir alive until the test ends.
         crate::test_tempdir::hold(temp_dir);
-        
+
         db
     }
 
@@ -189,7 +189,11 @@ mod tests {
             |row| row.get(0),
         );
         assert!(res.is_ok(), "Query failed: {:?}", res.err());
-        assert_eq!(res.unwrap(), 1, "messages_fts table not found in sqlite_master");
+        assert_eq!(
+            res.unwrap(),
+            1,
+            "messages_fts table not found in sqlite_master"
+        );
     }
 
     #[test]
@@ -258,7 +262,8 @@ mod tests {
             Some(user_id.clone()),
             "the quick brown fox".to_string(),
             0,
-        )).unwrap();
+        ))
+        .unwrap();
 
         index.reindex_all().unwrap();
 

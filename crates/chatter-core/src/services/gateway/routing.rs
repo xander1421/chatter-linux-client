@@ -32,7 +32,9 @@ impl MessageGateway {
     }
 
     /// Check if an EncryptedData is a sender key distribution message.
-    pub fn is_sender_key_distribution(encrypted_data: &crate::proto::chat_v1::EncryptedData) -> bool {
+    pub fn is_sender_key_distribution(
+        encrypted_data: &crate::proto::chat_v1::EncryptedData,
+    ) -> bool {
         encrypted_data.associated_data == b"sender_key_distribution"
     }
 
@@ -117,13 +119,19 @@ impl MessageGateway {
                     );
                     Ok(RouteResult::Decrypted(plaintext))
                 }
-                DecryptResult::NeedsSenderKey { channel_id, sender_id } => {
+                DecryptResult::NeedsSenderKey {
+                    channel_id,
+                    sender_id,
+                } => {
                     tracing::warn!(
                         sender_id = %sender_id,
                         channel_id = %channel_id,
                         "[MSG_ROUTE] Cannot decrypt - missing sender key"
                     );
-                    Ok(RouteResult::NeedsSenderKey { channel_id, sender_id })
+                    Ok(RouteResult::NeedsSenderKey {
+                        channel_id,
+                        sender_id,
+                    })
                 }
             }
         } else if Self::is_sender_key_control(encrypted_data) {
@@ -139,7 +147,9 @@ impl MessageGateway {
                 DecryptResult::Plaintext(plaintext) => {
                     // Check if this is a GroupMailboxAddress announcement
                     if let Ok(content) = Content::decode(plaintext.as_slice()) {
-                        if let Some(content::Content::GroupMailboxAddress(announcement)) = content.content {
+                        if let Some(content::Content::GroupMailboxAddress(announcement)) =
+                            content.content
+                        {
                             // Parse channel_id from announcement
                             if let Ok(channel_id) = announcement.channel_id.parse::<ChannelId>() {
                                 tracing::info!(
@@ -162,13 +172,19 @@ impl MessageGateway {
                     );
                     Ok(RouteResult::ControlContent(plaintext))
                 }
-                DecryptResult::NeedsSenderKey { channel_id, sender_id } => {
+                DecryptResult::NeedsSenderKey {
+                    channel_id,
+                    sender_id,
+                } => {
                     tracing::warn!(
                         sender_id = %sender_id,
                         channel_id = %channel_id,
                         "[MSG_ROUTE] Cannot decrypt control - missing sender key"
                     );
-                    Ok(RouteResult::NeedsSenderKey { channel_id, sender_id })
+                    Ok(RouteResult::NeedsSenderKey {
+                        channel_id,
+                        sender_id,
+                    })
                 }
             }
         } else if Self::is_sender_key_request(encrypted_data) {

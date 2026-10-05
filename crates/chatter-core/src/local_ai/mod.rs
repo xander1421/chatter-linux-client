@@ -6,12 +6,12 @@
 
 pub mod backend;
 pub mod catalog;
+pub mod embeddings;
 pub mod hardware;
+pub mod indexer;
+pub mod model_manager;
 pub mod ollama;
 pub mod openai_compat;
 pub mod providers;
-pub mod model_manager;
-pub mod embeddings;
-pub mod vector_store;
-pub mod indexer;
 pub mod settings;
+pub mod vector_store;

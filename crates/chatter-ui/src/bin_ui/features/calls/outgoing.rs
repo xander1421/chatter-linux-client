@@ -10,13 +10,13 @@ use std::sync::Arc;
 
 use slint::{ComponentHandle, ModelRc, VecModel};
 
+use crate::bin_ui::converters::avatar_bytes_to_image;
+use crate::{ActiveCallData, CallParticipantData, MainWindow};
 use chatter_core::client::ChatterClient;
 use chatter_core::client::calls::OutgoingCallStart;
 use chatter_core::domain::call::CallType;
 use chatter_core::state::ActiveConversation;
 use chatter_core::ui::initials_from_name;
-use crate::bin_ui::converters::avatar_bytes_to_image;
-use crate::{ActiveCallData, CallParticipantData, MainWindow};
 
 use super::timers::{start_call_timer, start_video_frame_timer};
 
@@ -31,7 +31,12 @@ pub fn wire_start_call(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
         let chat_state = ctx_chat_state.clone();
         let ui_ctx = ctx_ui.clone();
         move || {
-            spawn_start(weak.clone(), chat_state.active_conversation(), CallType::Voice, ui_ctx.clone());
+            spawn_start(
+                weak.clone(),
+                chat_state.active_conversation(),
+                CallType::Voice,
+                ui_ctx.clone(),
+            );
         }
     });
 
@@ -40,7 +45,12 @@ pub fn wire_start_call(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
         let chat_state = ctx_chat_state.clone();
         let ui_ctx = ctx_ui.clone();
         move || {
-            spawn_start(weak.clone(), chat_state.active_conversation(), CallType::Video, ui_ctx.clone());
+            spawn_start(
+                weak.clone(),
+                chat_state.active_conversation(),
+                CallType::Video,
+                ui_ctx.clone(),
+            );
         }
     });
 }
@@ -60,7 +70,9 @@ pub fn wire_start_call(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
 fn show_dialling(weak: &slint::Weak<MainWindow>, call_type: CallType, ui_ctx: &Arc<ChatterClient>) {
     let Some(w) = weak.upgrade() else { return };
     let is_video = matches!(call_type, CallType::Video);
-    let display_name = ui_ctx.my_display_name().unwrap_or_else(|| "Anonymous".to_string());
+    let display_name = ui_ctx
+        .my_display_name()
+        .unwrap_or_else(|| "Anonymous".to_string());
     let initials = initials_from_name(&display_name);
 
     let local_participant = CallParticipantData {
@@ -180,7 +192,9 @@ async fn start_call_impl(
             return;
         }
     };
-    let display_name = ui_ctx.my_display_name().unwrap_or_else(|| "Anonymous".to_string());
+    let display_name = ui_ctx
+        .my_display_name()
+        .unwrap_or_else(|| "Anonymous".to_string());
     let channel_name = weak
         .upgrade()
         .map(|w| w.get_channel_name().to_string())
@@ -194,7 +208,8 @@ async fn start_call_impl(
     // panic in the LiveKit/gRPC start path into a panic on the event loop and
     // took the whole app down — including the mesh, which had nothing to do with
     // the call. A failed call should close the call view, not the process.
-    let joined = tokio::spawn(async move { ctx.start_call(conversation, call_type, &dn).await }).await;
+    let joined =
+        tokio::spawn(async move { ctx.start_call(conversation, call_type, &dn).await }).await;
     let start = match joined {
         Ok(Ok(s)) => s,
         Ok(Err(e)) => {
@@ -269,7 +284,11 @@ fn render_calling_placeholder(
     }
     participants.push(local_participant);
 
-    let title = if setup.title.is_empty() { channel_name } else { setup.title.clone() };
+    let title = if setup.title.is_empty() {
+        channel_name
+    } else {
+        setup.title.clone()
+    };
 
     let call_data = ActiveCallData {
         call_id: setup.call_id.clone().into(),
@@ -323,7 +342,10 @@ mod tests {
             .unwrap()
             .database_path();
         std::fs::write(
-            db_path.parent().unwrap().join(chatter_core::system::keyring::NO_KEYRING_MARKER),
+            db_path
+                .parent()
+                .unwrap()
+                .join(chatter_core::system::keyring::NO_KEYRING_MARKER),
             b"",
         )
         .unwrap();

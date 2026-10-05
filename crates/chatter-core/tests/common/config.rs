@@ -36,7 +36,9 @@ pub fn should_skip_integration_tests() -> bool {
 /// Set `CHATTER_REQUIRE_SERVER=1` when the run is supposed to prove something.
 /// See [`skip_if_no_server`] for why that matters.
 pub fn require_server() -> bool {
-    std::env::var("CHATTER_REQUIRE_SERVER").map(|v| v == "1").unwrap_or(false)
+    std::env::var("CHATTER_REQUIRE_SERVER")
+        .map(|v| v == "1")
+        .unwrap_or(false)
 }
 
 /// Macro to skip tests when integration tests are not enabled.
@@ -74,7 +76,10 @@ pub fn require_server() -> bool {
 macro_rules! skip_if_no_server {
     () => {
         if $crate::common::should_skip_integration_tests() {
-            let test = std::thread::current().name().unwrap_or("<unknown>").to_string();
+            let test = std::thread::current()
+                .name()
+                .unwrap_or("<unknown>")
+                .to_string();
             if $crate::common::require_server() {
                 panic!(
                     "{test}: CHATTER_REQUIRE_SERVER=1 but INTEGRATION_TESTS is not 1.\n\

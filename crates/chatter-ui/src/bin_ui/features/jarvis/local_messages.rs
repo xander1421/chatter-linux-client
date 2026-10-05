@@ -18,11 +18,21 @@ pub fn row_to_item(row: JarvisRow) -> MessageItemData {
     MessageItemData {
         message_id: row.id.into(),
         sender_id: if row.is_own { "me" } else { "jarvis" }.into(),
-        sender_initials: row.sender_name.chars().next().unwrap_or('J').to_string().into(),
+        sender_initials: row
+            .sender_name
+            .chars()
+            .next()
+            .unwrap_or('J')
+            .to_string()
+            .into(),
         sender_name: row.sender_name.into(),
         content,
         rich_content,
-        timestamp: ts.with_timezone(&chrono::Local).format("%H:%M").to_string().into(),
+        timestamp: ts
+            .with_timezone(&chrono::Local)
+            .format("%H:%M")
+            .to_string()
+            .into(),
         timestamp_ns: row.timestamp_ns.to_string().into(),
         is_own: row.is_own,
         is_ai: !row.is_own,
@@ -61,5 +71,9 @@ pub fn replace_thinking_with_response(
     query: &str,
     response: &str,
 ) {
-    push_rows(window, Some(thinking_id), vec![JarvisRow::inline_reply(query, response)]);
+    push_rows(
+        window,
+        Some(thinking_id),
+        vec![JarvisRow::inline_reply(query, response)],
+    );
 }

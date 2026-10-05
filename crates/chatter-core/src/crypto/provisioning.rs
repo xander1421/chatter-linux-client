@@ -38,9 +38,7 @@
 //!   QR payload, builds a [`ProvisionMessage`] from local identity/profile
 //!   state, and calls [`encrypt_envelope`] before uploading.
 
-use aes::cipher::{
-    block_padding::Pkcs7, BlockDecryptMut, BlockEncryptMut, KeyIvInit,
-};
+use aes::cipher::{BlockDecryptMut, BlockEncryptMut, KeyIvInit, block_padding::Pkcs7};
 use hkdf::Hkdf;
 use hmac::{Hmac, Mac};
 use prost::Message;
@@ -139,7 +137,12 @@ pub fn encrypt_envelope(
     let (aes_key, mac_key) = derive_keys(&shared)?;
 
     let mut iv = [0u8; IV_LEN];
-    {use rand::TryRngCore; rand::rngs::OsRng.try_fill_bytes(&mut iv).expect("OS CSPRNG must not fail");}
+    {
+        use rand::TryRngCore;
+        rand::rngs::OsRng
+            .try_fill_bytes(&mut iv)
+            .expect("OS CSPRNG must not fail");
+    }
 
     // Carries the identity private key.
     let plaintext = Zeroizing::new(message.encode_to_vec());
@@ -302,7 +305,10 @@ mod tests {
         assert_eq!(decoded.aci, msg.aci);
         assert_eq!(decoded.provisioning_code, msg.provisioning_code);
         assert_eq!(decoded.profile_key, msg.profile_key);
-        assert_eq!(decoded.aci_identity_key_private, msg.aci_identity_key_private);
+        assert_eq!(
+            decoded.aci_identity_key_private,
+            msg.aci_identity_key_private
+        );
         assert_eq!(
             decoded.primary_device_registration_id,
             msg.primary_device_registration_id

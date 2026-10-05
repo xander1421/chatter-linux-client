@@ -8,17 +8,17 @@
 
 use std::sync::Arc;
 
+use crate::domain::UserId;
 use crate::domain::jarvis::{
     JarvisContext, JarvisConversation, JarvisFact, JarvisSummary, JarvisSummaryId, Role,
 };
-use crate::domain::UserId;
 use crate::services::ai::SampleParams;
 use crate::storage::repositories::{JarvisGraphRepository, JarvisMemoryRepository};
 
 use super::context_builder::HISTORY_TURN_LIMIT;
 use super::engine::SharedJarvisEngine;
-use crate::ai_policy::policy::AiAccess;
 use super::error::JarvisError;
+use crate::ai_policy::policy::AiAccess;
 
 /// Memory manager for Jarvis.
 #[derive(Clone)]
@@ -75,7 +75,11 @@ impl MemoryManager {
         graph_repo: Arc<JarvisGraphRepository>,
         ai: SharedJarvisEngine,
     ) -> Self {
-        Self { memory_repo, graph_repo, ai }
+        Self {
+            memory_repo,
+            graph_repo,
+            ai,
+        }
     }
 
     /// Store a user message in memory.
@@ -86,8 +90,7 @@ impl MemoryManager {
         author_id: Option<&UserId>,
     ) -> Result<(), JarvisError> {
         let conv = if let Some(user_id) = author_id {
-            JarvisConversation::user_message(context, content.to_string())
-                .with_author(user_id)
+            JarvisConversation::user_message(context, content.to_string()).with_author(user_id)
         } else {
             JarvisConversation::user_message(context, content.to_string())
         };
@@ -152,7 +155,8 @@ impl MemoryManager {
             tracing::warn!(context_id = %context.context_id, "Empty summary; history left uncompressed");
             return Ok(None);
         }
-        self.apply_compression(context, &batch, summary_text).map(Some)
+        self.apply_compression(context, &batch, summary_text)
+            .map(Some)
     }
 
     /// The oldest turns to summarize, or `None` when the context is under
@@ -170,7 +174,9 @@ impl MemoryManager {
         if to_compress < config.min_messages {
             return Ok(None);
         }
-        let batch = self.memory_repo.get_oldest_conversations(context, to_compress)?;
+        let batch = self
+            .memory_repo
+            .get_oldest_conversations(context, to_compress)?;
         Ok((!batch.is_empty()).then_some(batch))
     }
 
@@ -283,16 +289,25 @@ mod tests {
     use crate::services::jarvis::engine::JarvisEngine;
     use crate::storage::Database;
 
-    fn manager() -> (MemoryManager, Arc<JarvisMemoryRepository>, tempfile::TempDir) {
+    fn manager() -> (
+        MemoryManager,
+        Arc<JarvisMemoryRepository>,
+        tempfile::TempDir,
+    ) {
         let dir = tempfile::tempdir().unwrap();
-        let db = Arc::new(Database::open(&dir.path().join("jarvis.db"), "test-passphrase").unwrap());
+        let db =
+            Arc::new(Database::open(&dir.path().join("jarvis.db"), "test-passphrase").unwrap());
         db.run_migrations().unwrap();
         let memory = Arc::new(JarvisMemoryRepository::new(db.clone()));
         let engine = SharedJarvisEngine::new(JarvisEngine::from_settings(
             &LocalAISettings::default(),
             LocalAIActorHandle::spawn(),
         ));
-        let mm = MemoryManager::new(memory.clone(), Arc::new(JarvisGraphRepository::new(db)), engine);
+        let mm = MemoryManager::new(
+            memory.clone(),
+            Arc::new(JarvisGraphRepository::new(db)),
+            engine,
+        );
         (mm, memory, dir)
     }
 
@@ -321,7 +336,11 @@ mod tests {
         let (mm, memory, _d) = manager();
         let ctx = JarvisContext::general();
         seed(&memory, &ctx, HISTORY_TURN_LIMIT - 1);
-        assert!(mm.select_for_compression(&ctx, &CompressionConfig::default()).unwrap().is_none());
+        assert!(
+            mm.select_for_compression(&ctx, &CompressionConfig::default())
+                .unwrap()
+                .is_none()
+        );
     }
 
     /// Over budget, the OLDEST turns are summarized and deleted; the most
@@ -336,17 +355,28 @@ mod tests {
         seed(&memory, &other, 5);
         let config = CompressionConfig::default();
 
-        let batch = mm.select_for_compression(&ctx, &config).unwrap().expect("over budget");
+        let batch = mm
+            .select_for_compression(&ctx, &config)
+            .unwrap()
+            .expect("over budget");
         assert_eq!(batch.len() as u32, HISTORY_TURN_LIMIT - config.keep_recent);
         assert_eq!(batch.first().unwrap().content, "turn 0");
 
-        let summary = mm.apply_compression(&ctx, &batch, "they talked".into()).unwrap();
+        let summary = mm
+            .apply_compression(&ctx, &batch, "they talked".into())
+            .unwrap();
         assert_eq!(summary.message_count, batch.len() as u32);
 
         let left = memory.get_recent_conversations(&ctx, 1000).unwrap();
         assert_eq!(left.len() as u32, config.keep_recent);
-        assert_eq!(left.first().unwrap().content, format!("turn {}", HISTORY_TURN_LIMIT - config.keep_recent));
-        assert_eq!(memory.get_summaries(&ctx, 10).unwrap()[0].summary, "they talked");
+        assert_eq!(
+            left.first().unwrap().content,
+            format!("turn {}", HISTORY_TURN_LIMIT - config.keep_recent)
+        );
+        assert_eq!(
+            memory.get_summaries(&ctx, 10).unwrap()[0].summary,
+            "they talked"
+        );
         // Another context is untouched.
         assert_eq!(memory.count_conversations(&other).unwrap(), 5);
 
@@ -365,7 +395,10 @@ mod tests {
         let other = JarvisContext::channel(crate::domain::ids::ChannelId::new());
         seed(&memory, &ctx, HISTORY_TURN_LIMIT);
         seed(&memory, &other, 3);
-        let batch = mm.select_for_compression(&ctx, &CompressionConfig::default()).unwrap().unwrap();
+        let batch = mm
+            .select_for_compression(&ctx, &CompressionConfig::default())
+            .unwrap()
+            .unwrap();
         mm.apply_compression(&ctx, &batch, "s".into()).unwrap();
 
         let deleted = mm.clear_context(&ctx).unwrap();

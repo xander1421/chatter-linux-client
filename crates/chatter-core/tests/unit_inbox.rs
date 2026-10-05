@@ -248,7 +248,9 @@ async fn test_session_creation_event() {
     let harness = TestHarness::unit().await;
     let user = harness.register_user("SessionUser").await;
 
-    let token = harness.mock_server().create_session(&user.user_id, user.device_id);
+    let token = harness
+        .mock_server()
+        .create_session(&user.user_id, user.device_id);
 
     let session = harness.mock_server().validate_session(&token);
     assert!(session.is_some());
@@ -337,7 +339,7 @@ async fn test_mock_result_ok() {
 
 #[tokio::test]
 async fn test_mock_result_err() {
-    use framework::mocks::{MockResult, MockError};
+    use framework::mocks::{MockError, MockResult};
 
     let result: MockResult<String> = Err(MockError::NotFound("item".to_string()));
     assert!(result.is_err());
@@ -391,10 +393,14 @@ async fn test_messages_isolated_by_channel() {
 
     // Add messages to each channel
     harness.mock_server().store_message(
-        MessageBuilder::text("Message in channel 1").in_channel(&id1).build()
+        MessageBuilder::text("Message in channel 1")
+            .in_channel(&id1)
+            .build(),
     );
     harness.mock_server().store_message(
-        MessageBuilder::text("Message in channel 2").in_channel(&id2).build()
+        MessageBuilder::text("Message in channel 2")
+            .in_channel(&id2)
+            .build(),
     );
 
     // Each channel should only have its messages

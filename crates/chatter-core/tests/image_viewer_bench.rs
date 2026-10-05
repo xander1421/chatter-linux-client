@@ -24,9 +24,16 @@ fn bench_image_decode_pipeline() {
     let data = std::fs::read(benchmark_file).expect("Failed to read benchmark file");
     let read_time = start.elapsed();
     println!("\n=== Image Viewer Pipeline Benchmark ===");
-    println!("File: {} ({:.2} MB)", benchmark_file.display(), data.len() as f64 / 1_000_000.0);
-    println!("1. File read: {:?} ({:.2} GB/s)", read_time,
-        data.len() as f64 / read_time.as_secs_f64() / 1_000_000_000.0);
+    println!(
+        "File: {} ({:.2} MB)",
+        benchmark_file.display(),
+        data.len() as f64 / 1_000_000.0
+    );
+    println!(
+        "1. File read: {:?} ({:.2} GB/s)",
+        read_time,
+        data.len() as f64 / read_time.as_secs_f64() / 1_000_000_000.0
+    );
 
     // Step 2: PNG decode
     let start = Instant::now();
@@ -36,14 +43,23 @@ fn bench_image_decode_pipeline() {
         .expect("Failed to guess format");
     let image = reader.decode().expect("Failed to decode image");
     let decode_time = start.elapsed();
-    println!("2. PNG decode: {:?} ({}x{})", decode_time, image.width(), image.height());
+    println!(
+        "2. PNG decode: {:?} ({}x{})",
+        decode_time,
+        image.width(),
+        image.height()
+    );
 
     // Step 3: to_rgba8() conversion
     let start = Instant::now();
     let rgba = image.to_rgba8();
     let rgba_time = start.elapsed();
     let rgba_size = rgba.width() as usize * rgba.height() as usize * 4;
-    println!("3. to_rgba8(): {:?} ({:.2} MB output)", rgba_time, rgba_size as f64 / 1_000_000.0);
+    println!(
+        "3. to_rgba8(): {:?} ({:.2} MB output)",
+        rgba_time,
+        rgba_size as f64 / 1_000_000.0
+    );
 
     // Step 4: into_raw() - get raw bytes
     let start = Instant::now();
@@ -57,24 +73,45 @@ fn bench_image_decode_pipeline() {
     let start = Instant::now();
     let _buffer_copy: Vec<u8> = raw_data.clone();
     let copy_time = start.elapsed();
-    println!("5. Buffer copy: {:?} ({:.2} GB/s)", copy_time,
-        raw_data.len() as f64 / copy_time.as_secs_f64() / 1_000_000_000.0);
+    println!(
+        "5. Buffer copy: {:?} ({:.2} GB/s)",
+        copy_time,
+        raw_data.len() as f64 / copy_time.as_secs_f64() / 1_000_000_000.0
+    );
 
     // Calculate totals
     let total = read_time + decode_time + rgba_time + raw_time + copy_time;
     println!("\n=== Summary ===");
     println!("Total pipeline: {:?}", total);
     println!("Image dimensions: {}x{}", width, height);
-    println!("Decompressed size: {:.2} MB", rgba_size as f64 / 1_000_000.0);
+    println!(
+        "Decompressed size: {:.2} MB",
+        rgba_size as f64 / 1_000_000.0
+    );
 
     // Breakdown percentages
     let total_ns = total.as_nanos() as f64;
     println!("\nBreakdown:");
-    println!("  Read:    {:.1}%", read_time.as_nanos() as f64 / total_ns * 100.0);
-    println!("  Decode:  {:.1}%", decode_time.as_nanos() as f64 / total_ns * 100.0);
-    println!("  RGBA:    {:.1}%", rgba_time.as_nanos() as f64 / total_ns * 100.0);
-    println!("  Raw:     {:.1}%", raw_time.as_nanos() as f64 / total_ns * 100.0);
-    println!("  Copy:    {:.1}%", copy_time.as_nanos() as f64 / total_ns * 100.0);
+    println!(
+        "  Read:    {:.1}%",
+        read_time.as_nanos() as f64 / total_ns * 100.0
+    );
+    println!(
+        "  Decode:  {:.1}%",
+        decode_time.as_nanos() as f64 / total_ns * 100.0
+    );
+    println!(
+        "  RGBA:    {:.1}%",
+        rgba_time.as_nanos() as f64 / total_ns * 100.0
+    );
+    println!(
+        "  Raw:     {:.1}%",
+        raw_time.as_nanos() as f64 / total_ns * 100.0
+    );
+    println!(
+        "  Copy:    {:.1}%",
+        copy_time.as_nanos() as f64 / total_ns * 100.0
+    );
 }
 
 /// Benchmark decryption performance for large files.
@@ -87,15 +124,24 @@ fn bench_decryption_pipeline() {
     let plaintext: Vec<u8> = (0..plaintext_size).map(|i| (i % 256) as u8).collect();
 
     println!("\n=== Decryption Pipeline Benchmark ===");
-    println!("Plaintext size: {:.2} MB", plaintext_size as f64 / 1_000_000.0);
+    println!(
+        "Plaintext size: {:.2} MB",
+        plaintext_size as f64 / 1_000_000.0
+    );
 
     // Encrypt
     let start = Instant::now();
     let encrypted = AttachmentCrypto::encrypt(&plaintext).expect("Encryption failed");
     let encrypt_time = start.elapsed();
-    println!("1. Encrypt: {:?} ({:.2} GB/s)", encrypt_time,
-        plaintext_size as f64 / encrypt_time.as_secs_f64() / 1_000_000_000.0);
-    println!("   Ciphertext size: {:.2} MB", encrypted.ciphertext.len() as f64 / 1_000_000.0);
+    println!(
+        "1. Encrypt: {:?} ({:.2} GB/s)",
+        encrypt_time,
+        plaintext_size as f64 / encrypt_time.as_secs_f64() / 1_000_000_000.0
+    );
+    println!(
+        "   Ciphertext size: {:.2} MB",
+        encrypted.ciphertext.len() as f64 / 1_000_000.0
+    );
 
     // Decrypt with zero-copy (parallel)
     let start = Instant::now();
@@ -104,17 +150,23 @@ fn bench_decryption_pipeline() {
         &encrypted.key,
         &encrypted.digest,
         encrypted.plaintext_size,
-    ).expect("Decryption failed");
+    )
+    .expect("Decryption failed");
     let decrypt_time = start.elapsed();
-    println!("2. Decrypt (parallel): {:?} ({:.2} GB/s)", decrypt_time,
-        plaintext_size as f64 / decrypt_time.as_secs_f64() / 1_000_000_000.0);
+    println!(
+        "2. Decrypt (parallel): {:?} ({:.2} GB/s)",
+        decrypt_time,
+        plaintext_size as f64 / decrypt_time.as_secs_f64() / 1_000_000_000.0
+    );
 
     assert_eq!(decrypted.len(), plaintext_size);
     assert_eq!(&decrypted[..100], &plaintext[..100]);
 
     println!("\n=== Summary ===");
-    println!("Decryption throughput: {:.2} GB/s",
-        plaintext_size as f64 / decrypt_time.as_secs_f64() / 1_000_000_000.0);
+    println!(
+        "Decryption throughput: {:.2} GB/s",
+        plaintext_size as f64 / decrypt_time.as_secs_f64() / 1_000_000_000.0
+    );
 }
 
 /// Full pipeline benchmark: decrypt + decode + display.
@@ -147,7 +199,8 @@ fn bench_full_pipeline() {
         &encrypted.key,
         &encrypted.digest,
         encrypted.plaintext_size,
-    ).expect("Decryption failed");
+    )
+    .expect("Decryption failed");
     let decrypt_time = start.elapsed();
     println!("2. Decrypt: {:?}", decrypt_time);
 
@@ -159,7 +212,12 @@ fn bench_full_pipeline() {
         .expect("Failed to guess format");
     let image = reader.decode().expect("Failed to decode image");
     let decode_time = start.elapsed();
-    println!("3. PNG decode: {:?} ({}x{})", decode_time, image.width(), image.height());
+    println!(
+        "3. PNG decode: {:?} ({}x{})",
+        decode_time,
+        image.width(),
+        image.height()
+    );
 
     // Step 4: RGBA conversion
     let start = Instant::now();

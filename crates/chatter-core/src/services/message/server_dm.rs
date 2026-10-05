@@ -26,7 +26,9 @@ use crate::domain::ids::{AttachmentId, ChannelId, UserId};
 use crate::domain::message::{ConversationType, Message, MessageContent, MixedContent};
 use crate::network::grpc::auth_client::AuthClient;
 use crate::network::grpc::message_client::MessageClient;
-use crate::proto::chat_v1::{SealedDelivery, SealedDeviceMessage, SealedSenderMessage, SendSealedMessageResponse};
+use crate::proto::chat_v1::{
+    SealedDelivery, SealedDeviceMessage, SealedSenderMessage, SendSealedMessageResponse,
+};
 use crate::proto::content_v1::AttachmentPointer;
 use crate::services::current_user::CurrentUserProvider;
 
@@ -80,7 +82,10 @@ impl MessageService {
         // A delivery failure is stored too, as a "failed" bubble the user can
         // retry (`retry_server_dm`), Signal's "Not sent, tap to retry" — not
         // handed back as an error that leaves the text in the composer.
-        let (bootstrap_initiated, send_error) = match self.send_friend_dm_content(peer_id, content).await {
+        let (bootstrap_initiated, send_error) = match self
+            .send_friend_dm_content(peer_id, content)
+            .await
+        {
             Ok(()) => (false, None),
             Err(MessageError::BootstrapInitiated) => (true, None),
             Err(e) => {
@@ -175,7 +180,10 @@ impl MessageService {
     ) -> Result<
         (
             crate::proto::content_v1::Content,
-            Option<(&'q crate::services::gateway::outgoing::QuoteIntent, super::dm::OutboundReplyParts)>,
+            Option<(
+                &'q crate::services::gateway::outgoing::QuoteIntent,
+                super::dm::OutboundReplyParts,
+            )>,
             Option<u32>,
         ),
         MessageError,
@@ -229,7 +237,9 @@ impl MessageService {
         let timer = crate::services::disappearing::server_dm_state(&self.settings_repo, peer_id);
         let disappearing_ttl_secs: Option<u32> = Some(timer.seconds).filter(|s| *s > 0);
         let mut content = content;
-        if let Some(crate::proto::content_v1::content::Content::DataMessage(dm)) = content.content.as_mut() {
+        if let Some(crate::proto::content_v1::content::Content::DataMessage(dm)) =
+            content.content.as_mut()
+        {
             crate::services::disappearing::stamp_timer(dm, timer);
         }
 
@@ -242,11 +252,11 @@ impl MessageService {
     /// the retry. Returns the new status, `"sent"` or `"sending"` (queued
     /// behind a Shield bootstrap); on failure the bubble stays `"failed"` and
     /// the error is returned.
-    pub async fn retry_server_dm(
+    pub(crate) async fn retry_server_dm(
         &self,
         message_id: &crate::domain::ids::MessageId,
     ) -> Result<&'static str, MessageError> {
-        let mut message = self
+        let message = self
             .message_repo
             .get(message_id)?
             .ok_or(MessageError::MessageNotFound(*message_id))?;
@@ -256,7 +266,9 @@ impl MessageService {
             || message.delivery_status != "failed"
             || message.is_deleted
         {
-            return Err(MessageError::InvalidContent("only a failed friend DM can be retried".into()));
+            return Err(MessageError::InvalidContent(
+                "only a failed friend DM can be retried".into(),
+            ));
         }
         let peer_id = UserId::from_uuid(*message.conversation_id.as_uuid());
 
@@ -283,21 +295,30 @@ impl MessageService {
         // now. A device linked after the send is not in that set. No fallback
         // when the set is empty: we do not know who the original was for.
         let devices = self.original_dm_devices(peer_id, message.sent_at)?;
-        let status = match self.send_friend_dm_to_original_devices(&peer_id, content, &devices).await {
+        let status = match self
+            .send_friend_dm_to_original_devices(&peer_id, content, &devices)
+            .await
+        {
             Ok(()) => "sent",
             Err(MessageError::BootstrapInitiated) => "sending",
             Err(e) => {
-                message.failure_reason = e.permanent_send_failure_reason().map(str::to_owned);
-                self.message_repo.update(&message)?;
+                let current = self.finish_retry_row(
+                    &message.id,
+                    "failed",
+                    e.permanent_send_failure_reason(),
+                )?;
+                if matches!(
+                    current.delivery_status.as_str(),
+                    "sent" | "delivered" | "read"
+                ) {
+                    return Ok("sent");
+                }
                 return Err(e);
             }
         };
         // `set_friend_dm_delivery_status` writes the status only, so a previous
         // failure label would stay on the bubble. Update the same row.
-        message.delivery_status = status.into();
-        message.failure_reason = None;
-        message.updated_at = chrono::Utc::now();
-        self.message_repo.update(&message)?;
+        self.finish_retry_row(&message.id, status, None)?;
         Ok(status)
     }
 
@@ -345,7 +366,9 @@ impl MessageService {
     /// Whether `peer_id` is an accepted friend, in either direction of the
     /// original request (`UserService::is_friend_local`).
     fn is_accepted_friend(&self, peer_id: &UserId) -> bool {
-        let Ok(me) = self.settings_repo.current_user_id() else { return false };
+        let Ok(me) = self.settings_repo.current_user_id() else {
+            return false;
+        };
         [(me, *peer_id), (*peer_id, me)].iter().any(|(a, b)| {
             matches!(
                 self.user_repo.get_friendship(a, b),
@@ -420,14 +443,20 @@ impl MessageService {
     /// Devices of `peer` recorded for the DM sent at `sent_at`.
     fn original_dm_devices(&self, peer: UserId, sent_at: u64) -> Result<Vec<u32>, MessageError> {
         let me = self.current_user_id()?;
-        let devices = crate::storage::repositories::message_receipt_repo::MessageReceiptRepository::new(
-            self.database.clone(),
-        )
-        .targets_for_send(ChannelId::from(peer), ConversationType::ServerDm, me, sent_at)?
-        .into_iter()
-        .filter(|(user, _)| *user == peer)
-        .map(|(_, device)| device.0)
-        .collect::<Vec<_>>();
+        let devices =
+            crate::storage::repositories::message_receipt_repo::MessageReceiptRepository::new(
+                self.database.clone(),
+            )
+            .targets_for_send(
+                ChannelId::from(peer),
+                ConversationType::ServerDm,
+                me,
+                sent_at,
+            )?
+            .into_iter()
+            .filter(|(user, _)| *user == peer)
+            .map(|(_, device)| device.0)
+            .collect::<Vec<_>>();
         if devices.is_empty() {
             return Err(MessageError::InvalidContent(
                 "no original device of this message can be retried".into(),
@@ -446,9 +475,11 @@ impl MessageService {
         devices: &[u32],
     ) -> Result<(), MessageError> {
         if self.shield_mode.load(std::sync::atomic::Ordering::Acquire) {
-            self.send_shield_dm_to_devices(peer_id, content, devices).await
+            self.send_shield_dm_to_devices(peer_id, content, devices)
+                .await
         } else {
-            self.send_sealed_dm_to_devices(peer_id, content, devices).await
+            self.send_sealed_dm_to_devices(peer_id, content, devices)
+                .await
         }
     }
 
@@ -476,6 +507,7 @@ impl MessageService {
         let mut auth_client = self.auth_client();
         let mut ciphertexts = std::collections::HashMap::new();
         let mut error = None;
+        crate::services::gateway::submission::mark_submission_started()?;
         for &device_id in devices {
             match self
                 .signal_service
@@ -547,11 +579,18 @@ impl MessageService {
         // Recipient: every device. A device list that went stale is
         // reconciled and the send retried inside (Signal's 409/410).
         let peer = self
-            .deposit_sealed_to_all_devices(&mut auth_client, &mut message_client, &peer_id_str, &plaintext)
+            .deposit_sealed_to_all_devices(
+                &mut auth_client,
+                &mut message_client,
+                &peer_id_str,
+                &plaintext,
+            )
             .await;
 
         if peer.delivered == 0 {
-            if let Some(error) = peer.error { return Err(error); }
+            if let Some(error) = peer.error {
+                return Err(error);
+            }
             return Err(MessageError::DmError(format!(
                 "Failed to deliver sealed DM to any device of {peer_id}"
             )));
@@ -563,7 +602,9 @@ impl MessageService {
 
         // Self-sync: every one of our own devices except this one.
         // One policy for both DM transports (`sync_sent_to_own_devices`).
-        let own_delivered = self.sync_sent_to_own_devices(&mut auth_client, peer_id, &content).await;
+        let own_delivered = self
+            .sync_sent_to_own_devices(&mut auth_client, peer_id, &content)
+            .await;
 
         // Surface degradation at the top of the send, not just at the deposit
         // site: this is the one place that knows the whole message failed to be
@@ -609,11 +650,15 @@ impl MessageService {
         peer_device_id: u32,
         dem_serialized: Vec<u8>,
     ) -> Result<(), MessageError> {
-        let original_ms = libsignal_protocol::DecryptionErrorMessage::try_from(dem_serialized.as_slice())
-            .map_err(|e| MessageError::InvalidContent(format!("DecryptionErrorMessage: {e}")))?
-            .timestamp()
-            .epoch_millis();
-        if !count_dem_retry(&mut DEM_RETRIES.lock(), (*peer_id, peer_device_id, original_ms)) {
+        let original_ms =
+            libsignal_protocol::DecryptionErrorMessage::try_from(dem_serialized.as_slice())
+                .map_err(|e| MessageError::InvalidContent(format!("DecryptionErrorMessage: {e}")))?
+                .timestamp()
+                .epoch_millis();
+        if !count_dem_retry(
+            &mut DEM_RETRIES.lock(),
+            (*peer_id, peer_device_id, original_ms),
+        ) {
             tracing::warn!(peer_id = %peer_id, peer_device_id, original_ms,
                 "DecryptionErrorMessage retry limit reached for this message; not sending another");
             return Ok(());
@@ -650,7 +695,11 @@ impl MessageService {
                  (Basic auth) — the server WILL record us as the sender"
             );
         }
-        let message = SealedDeviceMessage { device_id: peer_device_id, registration_id: 0, sealed_message: Some(sealed_message) };
+        let message = SealedDeviceMessage {
+            device_id: peer_device_id,
+            registration_id: 0,
+            sealed_message: Some(sealed_message),
+        };
         let (_, uak_rejected) = self
             .send_sealed_batch(
                 &mut self.message_client(),
@@ -708,7 +757,13 @@ impl MessageService {
     ) -> DepositOutcome {
         let client_request_id = uuid::Uuid::new_v4().to_string();
         let mismatch = match self
-            .deposit_sealed_to_session_devices(auth_client, message_client, recipient_id, plaintext, &client_request_id)
+            .deposit_sealed_to_session_devices(
+                auth_client,
+                message_client,
+                recipient_id,
+                plaintext,
+                &client_request_id,
+            )
             .await
         {
             Ok(outcome) => return outcome,
@@ -719,8 +774,16 @@ impl MessageService {
             %mismatch,
             "Sealed send: recipient's devices changed — reconciling sessions and retrying once"
         );
-        let crate::error::NetworkError::MismatchedDevices { missing, extra, stale } = &mismatch else {
-            return DepositOutcome { error: Some(MessageError::Network(mismatch)), ..Default::default() };
+        let crate::error::NetworkError::MismatchedDevices {
+            missing,
+            extra,
+            stale,
+        } = &mismatch
+        else {
+            return DepositOutcome {
+                error: Some(MessageError::Network(mismatch)),
+                ..Default::default()
+            };
         };
         if let Err(e) = self
             .signal_service
@@ -739,10 +802,19 @@ impl MessageService {
                 rate_limited,
                 "Sealed send: could not reconcile the recipient's devices"
             );
-            return DepositOutcome { error: Some(MessageError::from_signal_send(e, "device reconciliation")), ..Default::default() };
+            return DepositOutcome {
+                error: Some(MessageError::from_signal_send(e, "device reconciliation")),
+                ..Default::default()
+            };
         }
         match self
-            .deposit_sealed_to_session_devices(auth_client, message_client, recipient_id, plaintext, &client_request_id)
+            .deposit_sealed_to_session_devices(
+                auth_client,
+                message_client,
+                recipient_id,
+                plaintext,
+                &client_request_id,
+            )
             .await
         {
             Ok(outcome) => outcome,
@@ -752,7 +824,10 @@ impl MessageService {
                     %mismatch,
                     "Sealed send: devices still mismatched after reconciling — not sent"
                 );
-                DepositOutcome { error: Some(MessageError::Network(mismatch)), ..Default::default() }
+                DepositOutcome {
+                    error: Some(MessageError::Network(mismatch)),
+                    ..Default::default()
+                }
             }
         }
     }
@@ -770,16 +845,27 @@ impl MessageService {
         // To our own user (self-sync, SKDM, SenderKeyRequest) the deposit is
         // identified on the authenticated channel, never UAK on the anonymous
         // one — see `sync_to_own_devices`. That is not a degradation.
-        let is_self = self.current_user_id().is_ok_and(|me| me.to_string() == recipient_id);
+        let is_self = self
+            .current_user_id()
+            .is_ok_and(|me| me.to_string() == recipient_id);
         let has_profile_key = recipient_id
             .parse::<UserId>()
             .ok()
             .and_then(|peer| {
                 let me = self.settings_repo.current_user_id().ok()?;
-                self.user_repo.get_friend_profile_key(&me, &peer).ok().flatten()
+                self.user_repo
+                    .get_friend_profile_key(&me, &peer)
+                    .ok()
+                    .flatten()
             })
             .is_some();
 
+        if crate::services::gateway::submission::mark_submission_started().is_err() {
+            return Ok(DepositOutcome {
+                error: Some(MessageError::NotLoggedIn),
+                ..Default::default()
+            });
+        }
         let (sealed, unrestricted) = match self
             .signal_service
             .encrypt_message_all_devices_with_access_policy(
@@ -804,19 +890,31 @@ impl MessageService {
                     rate_limited,
                     "Sealed DM: failed to encrypt for recipient's devices"
                 );
-                return Ok(DepositOutcome { error: Some(MessageError::from_signal_send(e, "device encryption")), ..Default::default() });
+                return Ok(DepositOutcome {
+                    error: Some(MessageError::from_signal_send(e, "device encryption")),
+                    ..Default::default()
+                });
             }
         };
         if let (Ok(peer), Ok(content)) = (
-            recipient_id.parse::<UserId>(), crate::proto::content_v1::Content::decode(plaintext),
+            recipient_id.parse::<UserId>(),
+            crate::proto::content_v1::Content::decode(plaintext),
         ) {
-            self.snapshot_dm_content_targets(peer, &content, &sealed.keys().copied().collect::<Vec<_>>())
-                .map_err(|error| crate::error::NetworkError::ServerError(format!("persist receipt targets: {error}")))?;
+            self.snapshot_dm_content_targets(
+                peer,
+                &content,
+                &sealed.keys().copied().collect::<Vec<_>>(),
+            )
+            .map_err(|error| {
+                crate::error::NetworkError::ServerError(format!("persist receipt targets: {error}"))
+            })?;
         }
         // Each device under the registration id of the session that
         // encrypted to it — never 0, which the server reads as stale.
-        let registration_ids: std::collections::HashMap<u32, u32> =
-            sealed.iter().map(|(&device_id, s)| (device_id, s.registration_id)).collect();
+        let registration_ids: std::collections::HashMap<u32, u32> = sealed
+            .iter()
+            .map(|(&device_id, s)| (device_id, s.registration_id))
+            .collect();
         let timestamp = crate::util::time::TimestampNanos::now_anonymized().as_u64();
         let server_key_id = self.signal_service.get_server_key_id();
         let mut messages: Vec<SealedDeviceMessage> = sealed
@@ -824,12 +922,20 @@ impl MessageService {
             .map(|(device_id, s)| SealedDeviceMessage {
                 device_id,
                 registration_id: s.registration_id,
-                sealed_message: Some(SealedSenderMessage { sealed_body: s.ciphertext, server_key_id, timestamp }),
+                sealed_message: Some(SealedSenderMessage {
+                    sealed_body: s.ciphertext,
+                    server_key_id,
+                    timestamp,
+                }),
             })
             .collect();
         messages.sort_by_key(|m| m.device_id);
 
-        let recipient_uak = if is_self { None } else { self.sealed_access_key(recipient_id, unrestricted) };
+        let recipient_uak = if is_self {
+            None
+        } else {
+            self.sealed_access_key(recipient_id, unrestricted)
+        };
 
         // DEGRADATION, not a normal path: we hold no profile key for this
         // recipient and they do not accept sealed sender from anyone. We can
@@ -862,7 +968,10 @@ impl MessageService {
             Err(e @ crate::error::NetworkError::MismatchedDevices { .. }) => return Err(e),
             Err(e) => {
                 tracing::warn!(recipient = recipient_id, error = %e, "Sealed send: deposit failed, no device reached");
-                return Ok(DepositOutcome { error: Some(MessageError::Network(e)), ..Default::default() });
+                return Ok(DepositOutcome {
+                    error: Some(MessageError::Network(e)),
+                    ..Default::default()
+                });
             }
         };
         let mut outcome = DepositOutcome::delivered(&response);
@@ -879,10 +988,17 @@ impl MessageService {
     /// anyone, random bytes the server does not check; else `None` (deliver
     /// identified). The server never serves a UAK — holding the profile key is
     /// what authorizes a sealed sender.
-    pub(super) fn sealed_access_key(&self, recipient_id: &str, unrestricted: bool) -> Option<[u8; 16]> {
+    pub(super) fn sealed_access_key(
+        &self,
+        recipient_id: &str,
+        unrestricted: bool,
+    ) -> Option<[u8; 16]> {
         let profile_key = recipient_id.parse::<UserId>().ok().and_then(|peer| {
             let me = self.settings_repo.current_user_id().ok()?;
-            self.user_repo.get_friend_profile_key(&me, &peer).ok().flatten()
+            self.user_repo
+                .get_friend_profile_key(&me, &peer)
+                .ok()
+                .flatten()
         });
         pick_sealed_access_key(profile_key.as_ref(), unrestricted)
     }
@@ -910,7 +1026,11 @@ impl MessageService {
             .map(|(device_id, sealed_body)| SealedDeviceMessage {
                 device_id,
                 registration_id: 0,
-                sealed_message: Some(SealedSenderMessage { sealed_body, server_key_id, timestamp }),
+                sealed_message: Some(SealedSenderMessage {
+                    sealed_body,
+                    server_key_id,
+                    timestamp,
+                }),
             })
             .collect();
         messages.sort_by_key(|m| m.device_id);
@@ -944,7 +1064,9 @@ impl MessageService {
                 // Out / unlink). Signal's 410 handling: archive the session
                 // so we stop encrypting to it, and send to the rest.
                 Err(e) if e.is_unknown_destination_device() => {
-                    let crate::error::NetworkError::MismatchedDevices { extra, .. } = &e else { unreachable!() };
+                    let crate::error::NetworkError::MismatchedDevices { extra, .. } = &e else {
+                        unreachable!()
+                    };
                     for &device_id in extra {
                         tracing::info!(
                             recipient = recipient_id,
@@ -979,7 +1101,10 @@ impl MessageService {
                 }
             }
         }
-        DepositOutcome { error, ..Default::default() }
+        DepositOutcome {
+            error,
+            ..Default::default()
+        }
     }
 
     /// One `SendSealedMessage`: with `uak` on the anonymous channel (no
@@ -1009,7 +1134,13 @@ impl MessageService {
             match self
                 .grpc_pool
                 .anonymous_message_client()
-                .send_sealed_messages_with_uak(recipient_id, messages.clone(), delivery, client_request_id, uak)
+                .send_sealed_messages_with_uak(
+                    recipient_id,
+                    messages.clone(),
+                    delivery,
+                    client_request_id,
+                    uak,
+                )
                 .await
             {
                 Err(e) if e.is_auth_error() => {
@@ -1110,7 +1241,10 @@ static DEM_RETRIES: std::sync::LazyLock<
 > = std::sync::LazyLock::new(Default::default);
 
 /// Count one more report for `key`; `false` once it is past the limit.
-fn count_dem_retry(retries: &mut std::collections::HashMap<(UserId, u32, u64), u32>, key: (UserId, u32, u64)) -> bool {
+fn count_dem_retry(
+    retries: &mut std::collections::HashMap<(UserId, u32, u64), u32>,
+    key: (UserId, u32, u64),
+) -> bool {
     if retries.len() >= DEM_RETRY_CAP && !retries.contains_key(&key) {
         retries.clear();
     }
@@ -1187,16 +1321,25 @@ mod tests {
 
     #[test]
     fn decryption_error_reports_stop_after_five_per_message() {
-        use super::{count_dem_retry, DEM_RETRY_CAP, DEM_RETRY_LIMIT};
+        use super::{DEM_RETRY_CAP, DEM_RETRY_LIMIT, count_dem_retry};
         use crate::domain::ids::UserId;
         let mut retries = std::collections::HashMap::new();
         let (peer, ts) = (UserId::new(), 1_700_000_000_000);
         for _ in 0..DEM_RETRY_LIMIT {
             assert!(count_dem_retry(&mut retries, (peer, 2, ts)));
         }
-        assert!(!count_dem_retry(&mut retries, (peer, 2, ts)), "sixth report for one message");
-        assert!(count_dem_retry(&mut retries, (peer, 3, ts)), "another device's message");
-        assert!(count_dem_retry(&mut retries, (peer, 2, ts + 1)), "another message");
+        assert!(
+            !count_dem_retry(&mut retries, (peer, 2, ts)),
+            "sixth report for one message"
+        );
+        assert!(
+            count_dem_retry(&mut retries, (peer, 3, ts)),
+            "another device's message"
+        );
+        assert!(
+            count_dem_retry(&mut retries, (peer, 2, ts + 1)),
+            "another message"
+        );
 
         for i in 0..DEM_RETRY_CAP as u64 {
             count_dem_retry(&mut retries, (peer, 9, i));
@@ -1206,7 +1349,7 @@ mod tests {
 
     #[tokio::test]
     async fn retry_while_retries_until_success_and_stops_when_unwanted() {
-        use super::{retry_while, Backoff, MessageError};
+        use super::{Backoff, MessageError, retry_while};
         use std::cell::Cell;
         let quick = Backoff {
             attempts: 5,
@@ -1217,42 +1360,87 @@ mod tests {
 
         // Two transient failures, then delivered.
         let calls = Cell::new(0);
-        let ok = retry_while(quick, || {
-            calls.set(calls.get() + 1);
-            let n = calls.get();
-            async move { if n < 3 { Err(fail()) } else { Ok(()) } }
-        }, || true).await;
+        let ok = retry_while(
+            quick,
+            || {
+                calls.set(calls.get() + 1);
+                let n = calls.get();
+                async move { if n < 3 { Err(fail()) } else { Ok(()) } }
+            },
+            || true,
+        )
+        .await;
         assert!(ok.is_ok());
         assert_eq!(calls.get(), 3);
 
         // Bounded: gives up after `attempts`.
         let calls = Cell::new(0);
-        assert!(retry_while(quick, || { calls.set(calls.get() + 1); async { Err(fail()) } }, || true).await.is_err());
+        assert!(
+            retry_while(
+                quick,
+                || {
+                    calls.set(calls.get() + 1);
+                    async { Err(fail()) }
+                },
+                || true
+            )
+            .await
+            .is_err()
+        );
         assert_eq!(calls.get(), 5);
 
         // No longer a friend: no further attempt.
         let calls = Cell::new(0);
-        assert!(retry_while(quick, || { calls.set(calls.get() + 1); async { Err(fail()) } }, || false).await.is_err());
+        assert!(
+            retry_while(
+                quick,
+                || {
+                    calls.set(calls.get() + 1);
+                    async { Err(fail()) }
+                },
+                || false
+            )
+            .await
+            .is_err()
+        );
         assert_eq!(calls.get(), 1);
     }
 
     #[test]
     fn deposit_failure_keeps_typed_retry_and_permanent_causes() {
-        use super::{record_deposit_error, DepositOutcome, MessageError};
+        use super::{DepositOutcome, MessageError, record_deposit_error};
         use crate::error::NetworkError;
-        for cause in [NetworkError::RateLimited, NetworkError::Timeout,
-            NetworkError::MismatchedDevices { missing: vec![2], extra: vec![], stale: vec![] }] {
-            let result = DepositOutcome { error: Some(MessageError::Network(cause)), ..Default::default() };
+        for cause in [
+            NetworkError::RateLimited,
+            NetworkError::Timeout,
+            NetworkError::MismatchedDevices {
+                missing: vec![2],
+                extra: vec![],
+                stale: vec![],
+            },
+        ] {
+            let result = DepositOutcome {
+                error: Some(MessageError::Network(cause)),
+                ..Default::default()
+            };
             assert_eq!(result.error.unwrap().permanent_send_failure_reason(), None);
         }
         let mut cause = None;
-        record_deposit_error(&mut cause, MessageError::Network(NetworkError::PermissionDenied));
-        assert_eq!(cause.as_ref().unwrap().permanent_send_failure_reason(), Some("Not delivered"));
+        record_deposit_error(
+            &mut cause,
+            MessageError::Network(NetworkError::PermissionDenied),
+        );
+        assert_eq!(
+            cause.as_ref().unwrap().permanent_send_failure_reason(),
+            Some("Not delivered")
+        );
         record_deposit_error(&mut cause, MessageError::Network(NetworkError::Unavailable));
-        record_deposit_error(&mut cause, MessageError::Network(NetworkError::InvalidRequest("too large".into())));
+        record_deposit_error(
+            &mut cause,
+            MessageError::Network(NetworkError::InvalidRequest("too large".into())),
+        );
         assert_eq!(cause.unwrap().permanent_send_failure_reason(), None);
     }
-
 
     #[test]
     fn sealed_access_key_comes_from_the_profile_key_we_hold() {

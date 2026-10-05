@@ -17,6 +17,9 @@ cd "$(dirname "$0")"
 PROJECT_ROOT="$(cd .. && pwd)"
 # Cargo honours CARGO_TARGET_DIR (a worktree sharing one build cache); so must we.
 TARGET_DIR="${CARGO_TARGET_DIR:-$PROJECT_ROOT/target}"
+# Relative Cargo target paths are relative to the workspace, not android/.
+[[ "$TARGET_DIR" = /* ]] || TARGET_DIR="$PROJECT_ROOT/$TARGET_DIR"
+export CARGO_TARGET_DIR="$TARGET_DIR"
 
 # ── Toolchain / cross-compile env ───────────────────────────────────────────
 export ANDROID_HOME="${ANDROID_HOME:-$HOME/Android/Sdk}"
@@ -45,14 +48,12 @@ export PKG_CONFIG_PATH="$GSTREAMER_ROOT_ANDROID/arm64/lib/pkgconfig"
 # needs (EVP_*, HMAC, PKCS5_PBKDF2_HMAC, RAND_bytes — verified).
 setup_boringssl_for_sqlcipher() {
     local webrtc_a webrtc_inc stage
-    webrtc_a="$(find "$TARGET_DIR" -name libwebrtc.a -path '*android-arm64-release*' 2>/dev/null | head -1)"
-    webrtc_inc="$(find "$TARGET_DIR" -type d -path '*android-arm64-release*/third_party/boringssl/src/include' 2>/dev/null | head -1)"
-    if [ -z "$webrtc_a" ] || [ -z "$webrtc_inc" ]; then
-        echo "ERROR: webrtc BoringSSL artifacts not found under target/."
-        echo "       Run a normal cargo-ndk build once so webrtc-sys downloads libwebrtc.a, then re-run."
-        echo "       (looked for libwebrtc.a + third_party/boringssl/src/include)"
-        exit 1
-    fi
+    # Bootstrap before any Cargo step: SQLCipher needs these headers/archive
+    # while compiling, so asking for a prior successful build was circular.
+    export LK_CUSTOM_WEBRTC
+    LK_CUSTOM_WEBRTC="$(python3 "$PROJECT_ROOT/android/bootstrap-webrtc.py" "$PROJECT_ROOT" "$TARGET_DIR")"
+    webrtc_a="$LK_CUSTOM_WEBRTC/libwebrtc.a"
+    webrtc_inc="$LK_CUSTOM_WEBRTC/third_party/boringssl/src/include"
     stage="$TARGET_DIR/boringssl-sqlcipher"
     mkdir -p "$stage/lib"
     # -lcrypto resolves to webrtc's BoringSSL. Duplicate of the main libwebrtc.a

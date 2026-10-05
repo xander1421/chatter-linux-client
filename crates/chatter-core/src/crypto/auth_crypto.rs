@@ -163,13 +163,22 @@ mod tests {
     fn profile_key_is_random() {
         let k1 = generate_profile_key();
         let k2 = generate_profile_key();
-        assert_ne!(k1, k2, "two CSPRNG draws must differ with overwhelming probability");
+        assert_ne!(
+            k1, k2,
+            "two CSPRNG draws must differ with overwhelming probability"
+        );
         assert_ne!(k1, [0u8; 32], "must not be all zeros");
     }
 
     #[test]
     fn login_nickname_accepts_every_shown_form() {
-        for typed in ["carolsweep", "carolsweep.76", "@carolsweep.76", "@carolsweep", "  carolsweep.76 "] {
+        for typed in [
+            "carolsweep",
+            "carolsweep.76",
+            "@carolsweep.76",
+            "@carolsweep",
+            "  carolsweep.76 ",
+        ] {
             assert_eq!(login_nickname(typed), "carolsweep", "{typed:?}");
         }
         // Not a discriminator: left alone so the server rejects it as typed.
@@ -235,8 +244,8 @@ mod tests {
             username_proof: proof,
             ..Default::default()
         };
-        let wire = crate::proto::chat_v1::RegisterRequest::decode(req.encode_to_vec().as_slice())
-            .unwrap();
+        let wire =
+            crate::proto::chat_v1::RegisterRequest::decode(req.encode_to_vec().as_slice()).unwrap();
         assert_eq!(wire.username_proof.len(), 128);
         let wire_hash: [u8; 32] = wire.username_lookup_hash.as_slice().try_into().unwrap();
         assert!(verify_username_proof(&wire.username_proof, wire_hash).is_ok());

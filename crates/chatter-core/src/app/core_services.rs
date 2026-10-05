@@ -5,46 +5,44 @@
 
 use std::sync::Arc;
 
+use crate::events::EventBus;
 use crate::inbox::DeviceInboxProvider;
+use crate::mailbox::TokenManager;
+use crate::mailbox::group::GroupFanout;
+use crate::network::grpc::client_pool::GrpcClientPool;
 #[cfg(feature = "media")]
 use crate::services::CallWorkerHandle;
-use crate::events::EventBus;
-use crate::mailbox::group::GroupFanout;
-use crate::mailbox::TokenManager;
-use crate::network::grpc::client_pool::GrpcClientPool;
+use crate::services::ai::LocalAIService;
 use crate::services::ai_service::AIService;
 use crate::services::anon_dm::AnonDmService;
-use crate::services::ai::LocalAIService;
-use crate::services::local_ai_service::HttpLocalAIService;
-use crate::services::semantic_search::SemanticSearchService;
-#[cfg(feature = "jarvis")]
-use crate::services::jarvis::{JarvisService, SharedJarvisEngine};
-use crate::services::notification_service::NotificationService;
-use crate::system::notification_sink::NotificationSink;
 use crate::services::anon_group::AnonGroupService;
 use crate::services::attachment::AttachmentService;
 use crate::services::auth_service::AuthService;
 use crate::services::channel::ChannelService;
 use crate::services::channel_event_service::ChannelEventService;
-use crate::services::dm_bootstrap_service::DmBootstrapService;
+use crate::services::conversation_pins::ConversationPins;
 use crate::services::device_service::DeviceService;
+use crate::services::dm_bootstrap_service::DmBootstrapService;
 use crate::services::ephemeral_service::EphemeralService;
+use crate::services::gateway::MessageGateway;
+#[cfg(feature = "jarvis")]
+use crate::services::jarvis::{JarvisService, SharedJarvisEngine};
+use crate::services::local_ai_service::HttpLocalAIService;
 use crate::services::mailbox_manager::MailboxManager;
 use crate::services::message::MessageService;
-use crate::services::gateway::MessageGateway;
+use crate::services::notification_service::NotificationService;
 use crate::services::pin_service::PinService;
+use crate::services::section_service::SectionService;
+use crate::services::semantic_search::SemanticSearchService;
 use crate::services::session_service::SessionService;
 use crate::services::signal::SignalService;
-use crate::services::conversation_pins::ConversationPins;
-use crate::services::section_service::SectionService;
 use crate::services::user::UserService;
-use crate::state::{
-    AuthState, ChatState, MessageState, OfflineState, UserState,
-};
 #[cfg(feature = "jarvis")]
 use crate::state::JarvisState;
+use crate::state::{AuthState, ChatState, MessageState, OfflineState, UserState};
 use crate::storage::Database;
 use crate::system::Directories;
+use crate::system::notification_sink::NotificationSink;
 
 use super::infrastructure::InfrastructureContainer;
 use super::services::ServiceContainer;
@@ -144,24 +142,29 @@ impl CoreServices {
         infra: &InfrastructureContainer,
         services: &ServiceContainer,
         group_fanout: Arc<std::sync::OnceLock<Arc<GroupFanout>>>,
-        #[cfg(feature = "media")]
-        call_service: Arc<std::sync::OnceLock<CallWorkerHandle>>,
+        #[cfg(feature = "media")] call_service: Arc<std::sync::OnceLock<CallWorkerHandle>>,
         device_inbox_provider: Arc<std::sync::OnceLock<Arc<DeviceInboxProvider>>>,
         notification_sink: Option<Arc<dyn NotificationSink>>,
     ) -> Self {
         let notification_sink: Arc<dyn NotificationSink> = notification_sink.unwrap_or_else(|| {
             #[cfg(not(any(target_os = "android", target_os = "ios")))]
-            { Arc::new(crate::system::notifications::DesktopNotifications::new()) }
+            {
+                Arc::new(crate::system::notifications::DesktopNotifications::new())
+            }
             #[cfg(any(target_os = "android", target_os = "ios"))]
-            { Arc::new(crate::system::notification_sink::NoopNotificationSink) }
+            {
+                Arc::new(crate::system::notification_sink::NoopNotificationSink)
+            }
         });
         // Shared decrypt -> persist path for server-managed channel messages.
         // Both the live stream and the durable catch-up fetch go through it,
         // so a message reads the same whichever way it arrived.
-        let channel_inbound = Arc::new(crate::services::message::channel_inbound::ChannelInbound::new(
-            services.message_service.clone(),
-            services.attachment_service.clone(),
-        ));
+        let channel_inbound = Arc::new(
+            crate::services::message::channel_inbound::ChannelInbound::new(
+                services.message_service.clone(),
+                services.attachment_service.clone(),
+            ),
+        );
 
         let sync_service = Arc::new(crate::services::sync_service::SyncService::new(
             infra.grpc_pool.clone(),
@@ -210,13 +213,17 @@ impl CoreServices {
                     crate::storage::repositories::settings_repo::keys::NOTIFICATION_DETAIL_LEVEL,
                 ) {
                     svc.set_detail_level(
-                        crate::services::notification_service::NotificationDetailLevel::from_str(&level_str),
+                        crate::services::notification_service::NotificationDetailLevel::from_str(
+                            &level_str,
+                        ),
                     );
                 }
                 svc.set_sound_enabled(
                     infra
                         .settings_repo
-                        .get_bool(crate::storage::repositories::settings_repo::keys::NOTIFICATION_SOUND)
+                        .get_bool(
+                            crate::storage::repositories::settings_repo::keys::NOTIFICATION_SOUND,
+                        )
                         .ok()
                         .flatten()
                         .unwrap_or(true),
@@ -313,7 +320,10 @@ impl CoreServices {
     ///
     /// Ensures tokens are available before the first SKDM distribution.
     /// Returns the number of mailbox tokens fetched, or 0 if already sufficient.
-    pub async fn prefetch_tokens(&self, target_count: u32) -> Result<u32, crate::error::MailboxError> {
+    pub async fn prefetch_tokens(
+        &self,
+        target_count: u32,
+    ) -> Result<u32, crate::error::MailboxError> {
         // A call claims only from the call-room pool, so fill it at login too
         // or the first anonymous call waits for the refill loop.
         let calls = TokenPool::CallRoom;
@@ -348,7 +358,10 @@ impl CoreServices {
         let mut mailbox_client = self.grpc_pool.mailbox_client();
         let mut kt = self.grpc_pool.anonymous_kt_client();
 
-        let fetched = self.token_manager.request_tokens(&mut mailbox_client, &mut kt, needed).await?;
+        let fetched = self
+            .token_manager
+            .request_tokens(&mut mailbox_client, &mut kt, needed)
+            .await?;
         tracing::info!("Pre-fetched {} anonymous tokens", fetched);
         Ok(fetched)
     }
@@ -367,7 +380,9 @@ impl CoreServices {
     /// retry right after a refill would spend the fresh tokens next to the
     /// request that fetched them. Aborting the returned handle stops both.
     pub fn spawn_token_refill(&self) -> tokio::task::JoinHandle<()> {
-        use crate::mailbox::{DEFAULT_CALL_ROOM_TOKEN_REQUEST_COUNT, MIN_CALL_ROOM_TOKEN_THRESHOLD};
+        use crate::mailbox::{
+            DEFAULT_CALL_ROOM_TOKEN_REQUEST_COUNT, MIN_CALL_ROOM_TOKEN_THRESHOLD,
+        };
 
         /// Refill to this many claimable tokens…
         ///
@@ -391,17 +406,27 @@ impl CoreServices {
                 for pool in [TokenPool::Mailbox, TokenPool::CallRoom] {
                     let (target, low_water) = match pool {
                         TokenPool::Mailbox => (BATCH, LOW_WATER),
-                        TokenPool::CallRoom => {
-                            (DEFAULT_CALL_ROOM_TOKEN_REQUEST_COUNT, MIN_CALL_ROOM_TOKEN_THRESHOLD)
-                        }
+                        TokenPool::CallRoom => (
+                            DEFAULT_CALL_ROOM_TOKEN_REQUEST_COUNT,
+                            MIN_CALL_ROOM_TOKEN_THRESHOLD,
+                        ),
                     };
                     match pool.count(&token_manager) {
                         Ok(current) if current < low_water => {
-                            let now = pool.top_up(&token_manager, &mut client, &mut kt, current, target).await;
-                            tracing::info!(?pool, had = current, now, "Token refill: pool topped up");
+                            let now = pool
+                                .top_up(&token_manager, &mut client, &mut kt, current, target)
+                                .await;
+                            tracing::info!(
+                                ?pool,
+                                had = current,
+                                now,
+                                "Token refill: pool topped up"
+                            );
                         }
                         Ok(_) => {}
-                        Err(e) => tracing::warn!(?pool, "Token refill: could not count tokens: {}", e),
+                        Err(e) => {
+                            tracing::warn!(?pool, "Token refill: could not count tokens: {}", e)
+                        }
                     }
                 }
             }
@@ -441,8 +466,8 @@ impl CoreServices {
     ///
     /// Returns a JoinHandle that should be stored for graceful shutdown.
     pub fn spawn_prekey_replenishment(&self) -> tokio::task::JoinHandle<()> {
-        use std::time::Duration;
         use crate::crypto::signal::PreKeyManager;
+        use std::time::Duration;
 
         /// How often to check prekey count (6 hours).
         const REPLENISH_INTERVAL: Duration = Duration::from_secs(6 * 60 * 60);
@@ -488,12 +513,12 @@ impl CoreServices {
                                 "PreKey count low, generating new batch"
                             );
 
-                            match signal_service.refresh_prekeys(&mut auth_client, PREKEY_BATCH_SIZE).await {
+                            match signal_service
+                                .refresh_prekeys(&mut auth_client, PREKEY_BATCH_SIZE)
+                                .await
+                            {
                                 Ok(uploaded) => {
-                                    tracing::info!(
-                                        uploaded,
-                                        "PreKey replenishment complete"
-                                    );
+                                    tracing::info!(uploaded, "PreKey replenishment complete");
                                 }
                                 Err(e) => {
                                     tracing::warn!("PreKey refresh failed: {}", e);
@@ -511,14 +536,19 @@ impl CoreServices {
 
                         // Check signed prekey age — rotate if older than 48h
                         let prekey_manager = PreKeyManager::new(key_store.clone());
-                        match prekey_manager.needs_signed_prekey_rotation(SIGNED_PREKEY_MAX_AGE_HOURS) {
+                        match prekey_manager
+                            .needs_signed_prekey_rotation(SIGNED_PREKEY_MAX_AGE_HOURS)
+                        {
                             Ok(true) => {
                                 tracing::info!(
                                     max_age_hours = SIGNED_PREKEY_MAX_AGE_HOURS,
                                     "Signed prekey stale, rotating signed + Kyber prekey pair"
                                 );
                                 let mut rotation_client = grpc_pool.auth_client();
-                                match signal_service.rotate_signed_prekey(&mut rotation_client).await {
+                                match signal_service
+                                    .rotate_signed_prekey(&mut rotation_client)
+                                    .await
+                                {
                                     Ok(()) => {
                                         tracing::info!("Signed prekey rotation complete");
                                     }
@@ -563,13 +593,15 @@ impl CoreServices {
     ///
     /// Returns a JoinHandle that should be stored for graceful shutdown.
     pub fn spawn_key_rolling(&self) -> tokio::task::JoinHandle<()> {
-        use std::time::Duration;
         use crate::mailbox::dm::DmConversationManager;
         use crate::mailbox::group::GroupMailboxManager;
-        use crate::mailbox::key_rolling::{KeyRollingService, RotationTarget, DEFAULT_CHECK_INTERVAL_SECS};
+        use crate::mailbox::key_rolling::{
+            DEFAULT_CHECK_INTERVAL_SECS, KeyRollingService, RotationTarget,
+        };
         use crate::proto::content_v1;
         use crate::services::message::SendDmContentParams;
         use crate::util::time::TimestampNanos;
+        use std::time::Duration;
 
         let grpc_pool = self.grpc_pool.clone();
         let database = self.database.clone();
@@ -582,12 +614,8 @@ impl CoreServices {
         tokio::spawn(async move {
             let dm_manager = Arc::new(DmConversationManager::new(database.clone()));
             let group_manager = Arc::new(GroupMailboxManager::new(database.clone()));
-            let svc = KeyRollingService::new(
-                token_manager,
-                dm_manager,
-                group_manager,
-                grpc_pool.clone(),
-            );
+            let svc =
+                KeyRollingService::new(token_manager, dm_manager, group_manager, grpc_pool.clone());
 
             loop {
                 tokio::time::sleep(Duration::from_secs(DEFAULT_CHECK_INTERVAL_SECS)).await;
@@ -675,11 +703,11 @@ impl CoreServices {
         self.device_inbox_provider.get_or_init(|| {
             let message_client = self.grpc_pool.message_client();
             let mailbox_client = self.grpc_pool.anonymous_mailbox_client();
-            let pipeline = std::sync::Arc::new(crate::network::validation::MessageValidationPipeline::new());
+            let pipeline =
+                std::sync::Arc::new(crate::network::validation::MessageValidationPipeline::new());
 
-            let anon_dm_poller = std::sync::Arc::new(AnonDmPoller::new(
-                self.anon_dm_service.anon_dm_repo(),
-            ));
+            let anon_dm_poller =
+                std::sync::Arc::new(AnonDmPoller::new(self.anon_dm_service.anon_dm_repo()));
 
             std::sync::Arc::new(
                 DeviceInboxProvider::with_event_bus(
@@ -705,7 +733,9 @@ impl CoreServices {
     ///
     /// Auto-initializes the provider if it hasn't been set up yet (e.g., when
     /// the initial server connection failed but login/register succeeded later).
-    pub async fn start_inbox_provider(&self) -> Option<tokio::sync::broadcast::Receiver<crate::inbox::InboxEvent>> {
+    pub async fn start_inbox_provider(
+        &self,
+    ) -> Option<tokio::sync::broadcast::Receiver<crate::inbox::InboxEvent>> {
         // Auto-initialize if not yet set (handles dev mode + offline startup)
         self.ensure_device_inbox_provider();
         let provider = self.device_inbox_provider.get()?.clone();
@@ -727,7 +757,6 @@ impl CoreServices {
             }
         }
     }
-
 }
 
 /// Tell every device of every member who is still in `group_id` the new
@@ -795,7 +824,8 @@ async fn announce_rotated_group_mailbox(
             }
         }
     }
-    let recipients = crate::mailbox::key_rolling::group_rotation_recipients(&me, &member_ids, &session_devices);
+    let recipients =
+        crate::mailbox::key_rolling::group_rotation_recipients(&me, &member_ids, &session_devices);
     if recipients.is_empty() {
         tracing::info!(group_id = %group_id, "KeyRolling: group rotated; no remaining member device to tell");
         return;
@@ -815,7 +845,11 @@ async fn announce_rotated_group_mailbox(
 
     for recipient in recipients {
         let ciphertext = match signal_service
-            .encrypt_message_anonymous(&recipient.user_id.to_string(), recipient.device_id, &plaintext)
+            .encrypt_message_anonymous(
+                &recipient.user_id.to_string(),
+                recipient.device_id,
+                &plaintext,
+            )
             .await
         {
             Ok(bytes) => bytes,

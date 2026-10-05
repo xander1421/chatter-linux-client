@@ -8,8 +8,8 @@ use chrono::{DateTime, Utc};
 use rusqlite::params;
 
 use crate::domain::jarvis::{
-    ContextType, JarvisContext, JarvisConversation, JarvisConversationId,
-    JarvisFact, JarvisFactId, JarvisSummary, JarvisSummaryId, Role, SubjectType,
+    ContextType, JarvisContext, JarvisConversation, JarvisConversationId, JarvisFact, JarvisFactId,
+    JarvisSummary, JarvisSummaryId, Role, SubjectType,
 };
 use crate::error::StorageError;
 use crate::storage::Database;
@@ -185,7 +185,9 @@ impl JarvisMemoryRepository {
         let now = Utc::now().to_rfc3339();
         match existing {
             Some((existing_id, existing_object))
-                if existing_object.trim().eq_ignore_ascii_case(fact.object.trim()) =>
+                if existing_object
+                    .trim()
+                    .eq_ignore_ascii_case(fact.object.trim()) =>
             {
                 // REINFORCE
                 conn.execute(
@@ -209,10 +211,7 @@ impl JarvisMemoryRepository {
         }
     }
 
-    fn insert_fact_row(
-        conn: &rusqlite::Connection,
-        fact: &JarvisFact,
-    ) -> Result<(), StorageError> {
+    fn insert_fact_row(conn: &rusqlite::Connection, fact: &JarvisFact) -> Result<(), StorageError> {
         conn.execute(
             "INSERT INTO jarvis_facts (id, subject_type, subject_id, predicate, object, confidence, source_context_id, last_reinforced_at, decay_rate, created_at, valid_from, valid_until, superseded_by)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
@@ -389,7 +388,10 @@ impl JarvisMemoryRepository {
     /// Delete a specific fact.
     pub fn delete_fact(&self, id: &JarvisFactId) -> Result<(), StorageError> {
         let conn = self.db.connection()?;
-        conn.execute("DELETE FROM jarvis_facts WHERE id = ?1", params![id.as_str()])?;
+        conn.execute(
+            "DELETE FROM jarvis_facts WHERE id = ?1",
+            params![id.as_str()],
+        )?;
         Ok(())
     }
 
@@ -447,7 +449,10 @@ impl JarvisMemoryRepository {
     }
 
     /// Delete all summaries for a context.
-    pub fn delete_summaries_for_context(&self, context: &JarvisContext) -> Result<u32, StorageError> {
+    pub fn delete_summaries_for_context(
+        &self,
+        context: &JarvisContext,
+    ) -> Result<u32, StorageError> {
         let conn = self.db.connection()?;
         let rows = conn.execute(
             "DELETE FROM jarvis_summaries WHERE context_type = ?1 AND context_id = ?2",
@@ -455,7 +460,6 @@ impl JarvisMemoryRepository {
         )?;
         Ok(rows as u32)
     }
-
 }
 
 // ============================================================================

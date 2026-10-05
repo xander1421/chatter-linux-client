@@ -20,7 +20,7 @@ use prost::Message as _;
 
 use super::{MessageError, MessageService};
 use crate::domain::ids::UserId;
-use crate::proto::content_v1::{content, Content, DataMessage};
+use crate::proto::content_v1::{Content, DataMessage, content};
 use crate::services::current_user::CurrentUserProvider;
 use crate::storage::repositories::send_log_repo::SendLogRepository;
 use crate::util::time::TimestampNanos;
@@ -58,9 +58,12 @@ fn loggable(content: &Content) -> Option<Option<u64>> {
         | content::Content::AnonCallAnswer(_)
         | content::Content::AnonCallHangup(_) => None,
         content::Content::DataMessage(dm) => Some(has_payload(dm).then_some(dm.timestamp)),
-        content::Content::SyncSent(sync) => {
-            Some(sync.message.as_ref().is_some_and(has_payload).then_some(sync.timestamp))
-        }
+        content::Content::SyncSent(sync) => Some(
+            sync.message
+                .as_ref()
+                .is_some_and(has_payload)
+                .then_some(sync.timestamp),
+        ),
         content::Content::Edit(edit) => Some(Some(edit.target_sent_timestamp)),
         _ => Some(None),
     }
@@ -91,7 +94,9 @@ impl MessageService {
     /// nanos)` per device reached. The bytes logged are the ones every one of
     /// those devices was sent (`encode_to_vec` of this same `content`).
     pub(crate) fn record_dm_send(&self, peer: UserId, content: &Content, deposits: &[(u32, u64)]) {
-        let Some(message_ts) = loggable(content) else { return };
+        let Some(message_ts) = loggable(content) else {
+            return;
+        };
         if deposits.is_empty() {
             return;
         }
@@ -121,8 +126,10 @@ impl MessageService {
         match self.resend_dm(peer_id, peer_device_id, timestamp_ms).await {
             Ok(Some(Resend::Original(_))) => tracing::info!(%peer_id, peer_device_id, timestamp_ms,
                 "Resent a DM after the peer's DecryptionErrorMessage"),
-            Ok(Some(Resend::NullMessage(_))) => tracing::info!(%peer_id, peer_device_id, timestamp_ms,
-                "DM retry request matched nothing we may resend; sent a NullMessage"),
+            Ok(Some(Resend::NullMessage(_))) => {
+                tracing::info!(%peer_id, peer_device_id, timestamp_ms,
+                "DM retry request matched nothing we may resend; sent a NullMessage")
+            }
             Ok(None) => tracing::info!(%peer_id, peer_device_id, timestamp_ms,
                 "DM retry request not answered in Shield mode"),
             Err(e) => tracing::warn!(%peer_id, peer_device_id, timestamp_ms, error = %e,
@@ -148,7 +155,12 @@ impl MessageService {
         };
         let sealed_body = self
             .signal_service
-            .encrypt_message(&mut self.auth_client(), &peer_id.to_string(), peer_device_id, plaintext)
+            .encrypt_message(
+                &mut self.auth_client(),
+                &peer_id.to_string(),
+                peer_device_id,
+                plaintext,
+            )
             .await
             .map_err(|e| match e {
                 crate::error::ServiceError::Network(e) => MessageError::Network(e),
@@ -159,15 +171,21 @@ impl MessageService {
             // copy is (`sync_to_own_devices`).
             let ciphertexts = std::collections::HashMap::from([(peer_device_id, sealed_body)]);
             let outcome = self
-                .deposit_sealed_ciphertexts(&mut self.message_client(), &peer_id.to_string(), ciphertexts, None)
+                .deposit_sealed_ciphertexts(
+                    &mut self.message_client(),
+                    &peer_id.to_string(),
+                    ciphertexts,
+                    None,
+                )
                 .await;
             if outcome.delivered == 0 {
-                return Err(outcome
-                    .error
-                    .unwrap_or_else(|| MessageError::DmError("own-device resend reached no device".into())));
+                return Err(outcome.error.unwrap_or_else(|| {
+                    MessageError::DmError("own-device resend reached no device".into())
+                }));
             }
         } else {
-            self.deposit_sealed_to_device(peer_id, peer_device_id, sealed_body).await?;
+            self.deposit_sealed_to_device(peer_id, peer_device_id, sealed_body)
+                .await?;
         }
         Ok(Some(resend))
     }
@@ -208,7 +226,11 @@ mod tests {
     use crate::proto::content_v1::Reaction;
     use crate::storage::repositories::settings_repo::keys;
 
-    fn client() -> (tempfile::TempDir, std::sync::Arc<crate::client::ChatterClient>, UserId) {
+    fn client() -> (
+        tempfile::TempDir,
+        std::sync::Arc<crate::client::ChatterClient>,
+        UserId,
+    ) {
         static MOCK_KEYRING: std::sync::Once = std::sync::Once::new();
         MOCK_KEYRING.call_once(|| {
             keyring::set_default_credential_builder(keyring::mock::default_credential_builder());
@@ -220,14 +242,27 @@ mod tests {
             .build()
             .expect("build client");
         let me = UserId::new();
-        client.messages().settings_repo.set(keys::CURRENT_USER_ID, &me.to_string()).unwrap();
-        client.messages().settings_repo.set(keys::CURRENT_DEVICE_ID, &1u32).unwrap();
+        client
+            .messages()
+            .settings_repo
+            .set(keys::CURRENT_USER_ID, &me.to_string())
+            .unwrap();
+        client
+            .messages()
+            .settings_repo
+            .set(keys::CURRENT_DEVICE_ID, &1u32)
+            .unwrap();
         (dir, client, me)
     }
 
     fn is_null_message(resend: &Resend) -> bool {
-        let Resend::NullMessage(bytes) = resend else { return false };
-        matches!(Content::decode(bytes.as_slice()).unwrap().content, Some(content::Content::NullMessage(_)))
+        let Resend::NullMessage(bytes) = resend else {
+            return false;
+        };
+        matches!(
+            Content::decode(bytes.as_slice()).unwrap().content,
+            Some(content::Content::NullMessage(_))
+        )
     }
 
     /// Bob could not decrypt Alice's DM; Alice has edited it since. The
@@ -238,10 +273,16 @@ mod tests {
         let m = alice.messages();
         let bob = UserId::new();
         let sent_at = TimestampNanos::now().as_u64();
-        let mut message =
-            Message::new_text(bob.into(), ConversationType::ServerDm, Some(alice_id), "did this arrive?".into(), sent_at);
+        let mut message = Message::new_text(
+            bob.into(),
+            ConversationType::ServerDm,
+            Some(alice_id),
+            "did this arrive?".into(),
+            sent_at,
+        );
         m.message_repo.insert_outgoing(&message).unwrap();
-        let mut content = crate::services::build_data_message_content("did this arrive?", vec![], sent_at);
+        let mut content =
+            crate::services::build_data_message_content("did this arrive?", vec![], sent_at);
         MessageService::pad_content_to_bucket(&mut content);
         let server_ts = sent_at + 5_000_000;
         m.record_dm_send(bob, &content, &[(1, server_ts), (2, server_ts + 1_000_000)]);
@@ -250,14 +291,28 @@ mod tests {
         m.message_repo.update(&message).unwrap();
 
         let ms = server_ts / 1_000_000;
-        assert!(is_null_message(&m.dm_resend_plaintext(&UserId::new(), 1, ms).unwrap()), "not theirs to ask for");
-        assert!(is_null_message(&m.dm_resend_plaintext(&bob, 2, ms).unwrap()), "device 2's deposit has its own timestamp");
-        assert_eq!(m.dm_resend_plaintext(&bob, 1, ms).unwrap(), Resend::Original(content.encode_to_vec()));
-        assert!(is_null_message(&m.dm_resend_plaintext(&bob, 1, ms).unwrap()), "one resend per deposit");
+        assert!(
+            is_null_message(&m.dm_resend_plaintext(&UserId::new(), 1, ms).unwrap()),
+            "not theirs to ask for"
+        );
+        assert!(
+            is_null_message(&m.dm_resend_plaintext(&bob, 2, ms).unwrap()),
+            "device 2's deposit has its own timestamp"
+        );
+        assert_eq!(
+            m.dm_resend_plaintext(&bob, 1, ms).unwrap(),
+            Resend::Original(content.encode_to_vec())
+        );
+        assert!(
+            is_null_message(&m.dm_resend_plaintext(&bob, 1, ms).unwrap()),
+            "one resend per deposit"
+        );
 
         // Deleted for everyone since: device 2 gets a NullMessage, not the text.
         m.message_repo.delete(&message.id).unwrap();
-        assert!(is_null_message(&m.dm_resend_plaintext(&bob, 2, ms + 1).unwrap()));
+        assert!(is_null_message(
+            &m.dm_resend_plaintext(&bob, 2, ms + 1).unwrap()
+        ));
     }
 
     /// A reaction has no stored row to rebuild from; the send log still has
@@ -281,8 +336,14 @@ mod tests {
         };
         m.record_dm_send(bob, &reaction, &[(1, 9_000_000)]);
         m.record_dm_send(alice_id, &reaction, &[(2, 9_000_000)]);
-        assert_eq!(m.dm_resend_plaintext(&bob, 1, 9).unwrap(), Resend::Original(reaction.encode_to_vec()));
-        assert_eq!(m.dm_resend_plaintext(&alice_id, 2, 9).unwrap(), Resend::Original(reaction.encode_to_vec()));
+        assert_eq!(
+            m.dm_resend_plaintext(&bob, 1, 9).unwrap(),
+            Resend::Original(reaction.encode_to_vec())
+        );
+        assert_eq!(
+            m.dm_resend_plaintext(&alice_id, 2, 9).unwrap(),
+            Resend::Original(reaction.encode_to_vec())
+        );
 
         // Typing is never logged.
         let typing = Content {
@@ -290,13 +351,18 @@ mod tests {
             ..Default::default()
         };
         m.record_dm_send(bob, &typing, &[(1, 10_000_000)]);
-        assert!(is_null_message(&m.dm_resend_plaintext(&bob, 1, 10).unwrap()));
+        assert!(is_null_message(
+            &m.dm_resend_plaintext(&bob, 1, 10).unwrap()
+        ));
     }
 
     #[tokio::test]
     async fn a_miss_is_answered_with_a_null_message() {
         let (_dir, alice, _) = client();
-        let resend = alice.messages().dm_resend_plaintext(&UserId::new(), 1, 42).unwrap();
+        let resend = alice
+            .messages()
+            .dm_resend_plaintext(&UserId::new(), 1, 42)
+            .unwrap();
         assert!(is_null_message(&resend));
     }
 

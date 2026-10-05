@@ -11,8 +11,8 @@ use chatter_core::system::ExternalOpener;
 #[cfg(feature = "desktop")]
 use slint::ComponentHandle;
 
-use crate::bin_ui::preview_state;
 use crate::MainWindow;
+use crate::bin_ui::preview_state;
 
 /// Wire PDF preview callbacks.
 pub fn wire_pdf_preview_callbacks(window: &MainWindow) {
@@ -105,8 +105,8 @@ mod pdf_renderer {
 
     use pdfium_render::prelude::*;
 
-    use crate::bin_ui::slint_conversions::rgba_to_slint_image;
     use crate::MainWindow;
+    use crate::bin_ui::slint_conversions::rgba_to_slint_image;
 
     /// Target render width in pixels. Height is calculated from page aspect ratio.
     const RENDER_WIDTH: u32 = 800;
@@ -158,7 +158,9 @@ mod pdf_renderer {
     /// Load a PDF from bytes, render the first page, and update the UI.
     pub fn load_and_render(window: &MainWindow, pdf_data: &[u8]) {
         let Some(pdfium) = get_pdfium() else {
-            window.set_pdf_preview_error("PDF rendering unavailable. Install libpdfium for in-app viewing.".into());
+            window.set_pdf_preview_error(
+                "PDF rendering unavailable. Install libpdfium for in-app viewing.".into(),
+            );
             return;
         };
 

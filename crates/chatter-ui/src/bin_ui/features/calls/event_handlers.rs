@@ -6,9 +6,9 @@ use std::sync::Arc;
 
 use slint::ComponentHandle;
 
+use crate::MainWindow;
 use chatter_core::client::ChatterClient;
 use chatter_core::client::events::CallKeyEvent;
-use crate::MainWindow;
 
 use super::key_exchange::handle_call_key_answer;
 
@@ -26,7 +26,10 @@ pub fn wire_call_key_answer_handler(window: &MainWindow, ui_ctx: &Arc<ChatterCli
             let event = match event_rx.recv().await {
                 Ok(event) => event,
                 Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
-                    tracing::warn!(dropped_count = n, "Call key event receiver lagged, continuing");
+                    tracing::warn!(
+                        dropped_count = n,
+                        "Call key event receiver lagged, continuing"
+                    );
                     continue;
                 }
                 Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
@@ -51,10 +54,12 @@ pub fn wire_call_key_answer_handler(window: &MainWindow, ui_ctx: &Arc<ChatterCli
                             ephemeral_public_key,
                             call_id,
                             peer_id,
-                        ).await;
+                        )
+                        .await;
                     }
                 }
             }
         }
-    }).unwrap();
+    })
+    .unwrap();
 }

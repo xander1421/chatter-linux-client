@@ -30,8 +30,8 @@ use chatter_mesh_noise::MeshIdentity;
 use chatter_mesh_noise::seal::open_courier;
 use chatter_mesh_nostr::identity::NostrIdentity;
 use chatter_mesh_store::bridge_drop::{
-    AbandonedDrop, BridgeCourier, DedupSnapshot, DepositOutcome, DepositRefusal,
-    DropEvent, DropOperationId, DropRelay, DropSink, PublishRequest, PublisherKey,
+    AbandonedDrop, BridgeCourier, DedupSnapshot, DepositOutcome, DepositRefusal, DropEvent,
+    DropOperationId, DropRelay, DropSink, PublishRequest, PublisherKey,
 };
 use chatter_mesh_store::outbox::{AckKind, DropReason, LinkState, OutboxStore, Sealer};
 use chatter_mesh_store::router::{MessageRouter, RouterEvent, SendOutcome};
@@ -48,9 +48,7 @@ use super::events::{MeshDelivery, MeshEvent, MeshMessage};
 use super::mapping::{InboundMessage, MeshConversation};
 use super::state::{MeshState, NostrState, now_secs};
 use super::timeline::MeshEvents;
-use super::transport::{
-    BleCommand, BleTransport, MeshDirectory, NostrCommand, NostrTransport,
-};
+use super::transport::{BleCommand, BleTransport, MeshDirectory, NostrCommand, NostrTransport};
 
 /// The bridge courier, shared between the actor and the router's deposit
 /// closure. Single-threaded by construction, so `Rc`/`RefCell` rather than a
@@ -320,8 +318,8 @@ fn load_dedup(storage: &dyn Storage, sealer: &dyn Sealer) -> Result<DedupSnapsho
         });
     };
     let plaintext = sealer.open(&sealed)?;
-    let blob: DedupBlob = bincode::deserialize(&plaintext)
-        .map_err(|_| StoreError::Malformed("bridge drop dedup"))?;
+    let blob: DedupBlob =
+        bincode::deserialize(&plaintext).map_err(|_| StoreError::Malformed("bridge drop dedup"))?;
     Ok(DedupSnapshot {
         published_drop_keys: blob.published,
         seen_drop_event_ids: blob.seen,
@@ -414,9 +412,14 @@ impl Actor {
         let deposit_abandoned = Rc::clone(&abandoned);
         router.set_bridge_deposit(Box::new(move |content, message_id, recipient_key| {
             let now = now_secs();
-            let Some(envelope) =
-                seal_for_drop(&deposit_state, &deposit_identity, content, message_id, recipient_key, now)
-            else {
+            let Some(envelope) = seal_for_drop(
+                &deposit_state,
+                &deposit_identity,
+                content,
+                message_id,
+                recipient_key,
+                now,
+            ) else {
                 return false;
             };
             let deposited = deposit_bridge
@@ -453,7 +456,10 @@ impl Actor {
 
     fn restore(&mut self) {
         match load_dedup(self.storage.as_ref(), self.sealer.as_ref()) {
-            Ok(snapshot) => self.bridge.borrow_mut().restore_dedup(&snapshot, now_secs()),
+            Ok(snapshot) => self
+                .bridge
+                .borrow_mut()
+                .restore_dedup(&snapshot, now_secs()),
             Err(error) => {
                 // A locked keyring is not an empty set. Starting empty would
                 // republish every drop this device has ever sent, which is the
@@ -585,7 +591,9 @@ impl Actor {
                 // sealed to them. Panic wipe destroys both explicitly in
                 // MeshService.
                 for key in StorageKey::ALL {
-                    if matches!(key, StorageKey::PeerPins | StorageKey::LocalPrekeys) { continue; }
+                    if matches!(key, StorageKey::PeerPins | StorageKey::LocalPrekeys) {
+                        continue;
+                    }
                     if let Err(error) = self.storage.wipe(*key) {
                         self.events.send(MeshEvent::Degraded(format!(
                             "mesh storage wipe failed: {error}"

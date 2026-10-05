@@ -11,7 +11,7 @@ use crate::{common, skip_if_no_server};
 
 use chatter_core::network::grpc::{ChannelClient, MessageClient};
 use chatter_core::proto::chat_v1::{
-    message::content::Type as ContentType, message::Content, ChannelType, MessageSortDirection,
+    ChannelType, MessageSortDirection, message::Content, message::content::Type as ContentType,
 };
 use tokio_stream::StreamExt;
 
@@ -64,7 +64,14 @@ async fn create_channel_and_wait(
 ) -> String {
     let (_, genesis) = membership::genesis(user, channel_type == ChannelType::ChannelPublic);
     let stream = channel_client
-        .create_channel(name, channel_type, None, Some("E2E test channel"), None, Some(genesis))
+        .create_channel(
+            name,
+            channel_type,
+            None,
+            Some("E2E test channel"),
+            None,
+            Some(genesis),
+        )
         .await
         .expect("Failed to start channel creation");
 
@@ -94,7 +101,11 @@ async fn create_channel_and_wait(
 }
 
 /// Helper for a user to join a channel and wait for completion.
-async fn join_channel_and_wait(channel_client: &mut ChannelClient, channel_id: &str, user: &TestUser) {
+async fn join_channel_and_wait(
+    channel_client: &mut ChannelClient,
+    channel_id: &str,
+    user: &TestUser,
+) {
     let user_id = &user.user_id;
     let join = membership::open_join(user, channel_client, channel_id).await;
     let join_stream = channel_client
@@ -137,7 +148,10 @@ async fn test_e2e_multiple_users_create_and_join_channel() {
         .with_test_writer()
         .try_init();
 
-    tracing::info!("=== Starting E2E test: {} users create and join channel ===", NUM_USERS);
+    tracing::info!(
+        "=== Starting E2E test: {} users create and join channel ===",
+        NUM_USERS
+    );
 
     // Step 1: Register all users
     let users = setup_users(NUM_USERS).await;
@@ -146,9 +160,13 @@ async fn test_e2e_multiple_users_create_and_join_channel() {
     // Step 2: User 0 creates a public channel
     let channel_name = format!("e2e_test_{}", unique_username());
     let mut creator_channel_client = users[0].channel_client();
-    let channel_id =
-        create_channel_and_wait(&mut creator_channel_client, &users[0].user, &channel_name, ChannelType::ChannelPublic)
-            .await;
+    let channel_id = create_channel_and_wait(
+        &mut creator_channel_client,
+        &users[0].user,
+        &channel_name,
+        ChannelType::ChannelPublic,
+    )
+    .await;
 
     tracing::info!(
         creator = %users[0].user.username,
@@ -219,9 +237,13 @@ async fn test_e2e_users_send_messages_in_channel() {
 
     let channel_name = format!("e2e_msg_test_{}", unique_username());
     let mut creator_channel_client = users[0].channel_client();
-    let channel_id =
-        create_channel_and_wait(&mut creator_channel_client, &users[0].user, &channel_name, ChannelType::ChannelPublic)
-            .await;
+    let channel_id = create_channel_and_wait(
+        &mut creator_channel_client,
+        &users[0].user,
+        &channel_name,
+        ChannelType::ChannelPublic,
+    )
+    .await;
 
     // All other users join
     for user_ctx in users.iter().skip(1) {
@@ -338,9 +360,13 @@ async fn test_e2e_user_leaves_channel() {
 
     let channel_name = format!("e2e_leave_test_{}", unique_username());
     let mut creator_channel_client = users[0].channel_client();
-    let channel_id =
-        create_channel_and_wait(&mut creator_channel_client, &users[0].user, &channel_name, ChannelType::ChannelPublic)
-            .await;
+    let channel_id = create_channel_and_wait(
+        &mut creator_channel_client,
+        &users[0].user,
+        &channel_name,
+        ChannelType::ChannelPublic,
+    )
+    .await;
 
     // Users 1 and 2 join
     for user_ctx in users.iter().skip(1) {
@@ -387,16 +413,17 @@ async fn test_e2e_user_leaves_channel() {
             .await,
     );
 
-    assert_eq!(members_after.members.len(), 2, "Should have 2 members after leave");
+    assert_eq!(
+        members_after.members.len(),
+        2,
+        "Should have 2 members after leave"
+    );
 
     let user2_still_member = members_after
         .members
         .iter()
         .any(|m| m.user_id == users[2].user.user_id);
-    assert!(
-        !user2_still_member,
-        "User 2 should no longer be a member"
-    );
+    assert!(!user2_still_member, "User 2 should no longer be a member");
 
     tracing::info!("=== E2E leave test completed successfully ===");
 }

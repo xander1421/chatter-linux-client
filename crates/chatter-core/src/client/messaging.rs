@@ -2,10 +2,10 @@
 
 use std::sync::Arc;
 
+use super::ChatterClient;
 use crate::domain::channel::Channel;
 use crate::domain::message::ConversationType;
 use crate::state::ActiveConversation;
-use super::ChatterClient;
 
 use crate::ui::chat_data::sidebar_time_at;
 
@@ -18,7 +18,10 @@ mod sidebar_time_tests {
         assert_eq!(today, now.format("%H:%M").to_string());
         let at = |days: i64| {
             let t = now - chrono::Duration::days(days);
-            (t, super::sidebar_time_at(t.with_timezone(&chrono::Utc), now))
+            (
+                t,
+                super::sidebar_time_at(t.with_timezone(&chrono::Utc), now),
+            )
         };
         assert_eq!(at(1).1, "Yesterday");
         let (t, s) = at(3);
@@ -90,7 +93,8 @@ impl ChatterClient {
         if !self.chat_state().is_app_visible() {
             return Ok(Default::default());
         }
-        self.messages().mark_conversation_read(conversation_id, conversation_type)
+        self.messages()
+            .mark_conversation_read(conversation_id, conversation_type)
     }
 
     pub fn classify_active_conversation(
@@ -99,7 +103,8 @@ impl ChatterClient {
         conversation_type: &crate::domain::message::ConversationType,
         peer_id: Option<crate::domain::ids::UserId>,
     ) -> crate::state::ActiveConversation {
-        self.messages().classify_active_conversation(channel_id, conversation_type, peer_id)
+        self.messages()
+            .classify_active_conversation(channel_id, conversation_type, peer_id)
     }
 
     pub fn user_has_reacted(
@@ -108,7 +113,9 @@ impl ChatterClient {
         sent_at_ns: u64,
         emoji: &str,
     ) -> bool {
-        self.messages().user_has_reacted(sender_id, sent_at_ns, emoji).unwrap_or(false)
+        self.messages()
+            .user_has_reacted(sender_id, sent_at_ns, emoji)
+            .unwrap_or(false)
     }
 
     pub fn get_message_local(
@@ -163,13 +170,17 @@ impl ChatterClient {
             .iter()
             .map(|msg| {
                 // System lines about us read "You left the channel", as Signal's do.
-                if matches!(msg.content, crate::domain::message::MessageContent::System(_))
-                    && msg.sender_id.is_some()
+                if matches!(
+                    msg.content,
+                    crate::domain::message::MessageContent::System(_)
+                ) && msg.sender_id.is_some()
                     && msg.sender_id == me
                 {
                     return "You".to_string();
                 }
-                let Some(id) = msg.sender_id else { return "Anonymous".to_string() };
+                let Some(id) = msg.sender_id else {
+                    return "Anonymous".to_string();
+                };
                 if msg.conversation_type == ConversationType::AnonGroup {
                     let group_name = group_names
                         .entry((msg.conversation_id, id))
@@ -185,7 +196,10 @@ impl ChatterClient {
                         return name;
                     }
                 }
-                names.get(&id).cloned().unwrap_or_else(|| self.display_name(&id))
+                names
+                    .get(&id)
+                    .cloned()
+                    .unwrap_or_else(|| self.display_name(&id))
             })
             .collect()
     }
@@ -224,7 +238,9 @@ impl ChatterClient {
     /// warn. Non-anon replies use the real parent lookup.
     pub fn reply_parent_missing_for(&self, msg: &crate::domain::message::Message) -> bool {
         match msg.reply_to {
-            Some(ref parent) if !msg.conversation_type.is_anon() => self.reply_parent_missing(parent),
+            Some(ref parent) if !msg.conversation_type.is_anon() => {
+                self.reply_parent_missing(parent)
+            }
             _ => false,
         }
     }
@@ -235,16 +251,21 @@ impl ChatterClient {
     /// plain text. Returns a default (all-empty) descriptor when the message is
     /// not a reply, the parent or its first attachment can't be resolved
     /// locally, or the parent carries no renderable media.
-    pub fn reply_parent_media(
-        &self,
-        msg: &crate::domain::message::Message,
-    ) -> ReplyParentMedia {
+    pub fn reply_parent_media(&self, msg: &crate::domain::message::Message) -> ReplyParentMedia {
         use crate::domain::attachment::FileCategory;
 
-        let Some(parent_id) = msg.reply_to.as_ref() else { return ReplyParentMedia::default() };
-        let Some(parent) = self.get_message_local(parent_id) else { return ReplyParentMedia::default() };
-        let Some(att_id) = parent.attachments.first() else { return ReplyParentMedia::default() };
-        let Some(att) = self.get_attachment(att_id) else { return ReplyParentMedia::default() };
+        let Some(parent_id) = msg.reply_to.as_ref() else {
+            return ReplyParentMedia::default();
+        };
+        let Some(parent) = self.get_message_local(parent_id) else {
+            return ReplyParentMedia::default();
+        };
+        let Some(att_id) = parent.attachments.first() else {
+            return ReplyParentMedia::default();
+        };
+        let Some(att) = self.get_attachment(att_id) else {
+            return ReplyParentMedia::default();
+        };
 
         let meta = &att.metadata;
         // GIFs are an image MIME but read as animated — split them out before
@@ -307,10 +328,12 @@ impl ChatterClient {
         match msg.conversation_type {
             ConversationType::ServerDm | ConversationType::AnonDm => None,
             ConversationType::AnonGroup => {
-                let group_id =
-                    crate::domain::anon_group::AnonGroupId::from_uuid(*msg.conversation_id.as_uuid());
+                let group_id = crate::domain::anon_group::AnonGroupId::from_uuid(
+                    *msg.conversation_id.as_uuid(),
+                );
                 let sid = msg.sender_id?;
-                self.get_anon_group_member(&group_id, &sid).and_then(|m| m.avatar)
+                self.get_anon_group_member(&group_id, &sid)
+                    .and_then(|m| m.avatar)
             }
             _ => self.user_avatar(&msg.sender_id?),
         }
@@ -357,7 +380,9 @@ impl ChatterClient {
         &self,
         channel_id: &crate::domain::ids::ChannelId,
     ) -> Vec<crate::domain::channel::Membership> {
-        self.channels().list_members_local(channel_id).unwrap_or_default()
+        self.channels()
+            .list_members_local(channel_id)
+            .unwrap_or_default()
     }
 
     pub async fn get_channel(
@@ -382,13 +407,20 @@ impl ChatterClient {
     /// "🎬 Video +2", "📄 report.pdf" (see `FileMetadata::preview_label`).
     /// `None` when the message carries no attachment or its metadata has not
     /// landed locally yet; the caller then falls back to a plain count.
-    fn attachment_preview_label(&self, message: &crate::domain::message::Message) -> Option<String> {
+    fn attachment_preview_label(
+        &self,
+        message: &crate::domain::message::Message,
+    ) -> Option<String> {
         let label = self
             .get_attachment_metadata(message.attachments.first()?)?
             .metadata
             .preview_label();
         let extra = message.attachments.len() - 1;
-        Some(if extra > 0 { format!("{} +{}", label, extra) } else { label })
+        Some(if extra > 0 {
+            format!("{} +{}", label, extra)
+        } else {
+            label
+        })
     }
 
     /// The one-line sidebar preview for a message. `Message::sidebar_preview`
@@ -402,7 +434,10 @@ impl ChatterClient {
         );
         // A notice is worded to follow its actor ("left the channel"), as the
         // message list renders it; alone in a preview it named nobody.
-        if matches!(message.content, crate::domain::message::MessageContent::System(_)) {
+        if matches!(
+            message.content,
+            crate::domain::message::MessageContent::System(_)
+        ) {
             return format!("{} {}", self.message_sender_display_name(message), preview);
         }
         preview
@@ -420,7 +455,10 @@ impl ChatterClient {
         latest: Option<&crate::domain::message::Message>,
     ) -> (String, String) {
         match latest {
-            Some(msg) => (self.message_sidebar_preview(msg), self.sidebar_time(msg.created_at)),
+            Some(msg) => (
+                self.message_sidebar_preview(msg),
+                self.sidebar_time(msg.created_at),
+            ),
             None => (String::new(), String::new()),
         }
     }
@@ -464,7 +502,10 @@ impl ChatterClient {
                 display_name = self.display_name(&peer_id);
             }
         }
-        let channel_id = conv.conversation_id.parse::<crate::domain::ids::ChannelId>().ok();
+        let channel_id = conv
+            .conversation_id
+            .parse::<crate::domain::ids::ChannelId>()
+            .ok();
         let is_channel = conv.conversation_type == CT::Channel;
         let mut row = ChatRowSendData {
             initials: crate::ui::chat_data::initials_from_name(&display_name),
@@ -480,7 +521,11 @@ impl ChatterClient {
                 _ => false,
             },
             can_delete: is_channel && channel_id.is_some_and(|id| self.is_former_channel(&id)),
-            ..ChatRowSendData::new(conv.conversation_type.clone(), conv.conversation_id.clone(), display_name)
+            ..ChatRowSendData::new(
+                conv.conversation_type.clone(),
+                conv.conversation_id.clone(),
+                display_name,
+            )
         };
 
         let Some(id) = channel_id else { return row };
@@ -498,9 +543,9 @@ impl ChatterClient {
             }
             _ => {
                 let channel = self.channels().channel_repo.get(&id).ok().flatten();
-                row.private_channel = channel
-                    .as_ref()
-                    .is_some_and(|c| c.channel_type == crate::domain::channel::ChannelType::Private);
+                row.private_channel = channel.as_ref().is_some_and(|c| {
+                    c.channel_type == crate::domain::channel::ChannelType::Private
+                });
                 // A channel's icon is raw bytes on its record, not a URL.
                 row.avatar_bytes = channel.and_then(|c| c.icon).filter(|b| !b.is_empty());
             }
@@ -567,7 +612,11 @@ impl ChatterClient {
                 timestamp,
                 unread_count,
                 last_activity: latest.map(|m| m.created_at),
-                ..ChatRowSendData::new(ConversationType::ServerDm, peer_id.to_string(), display_name)
+                ..ChatRowSendData::new(
+                    ConversationType::ServerDm,
+                    peer_id.to_string(),
+                    display_name,
+                )
             });
         }
         self.finish_dm_sidebar(out)
@@ -603,7 +652,7 @@ impl ChatterClient {
     /// UI must not merge two separate lists (that races and drops fresh DMs).
     pub fn list_dm_sidebar(&self) -> Vec<crate::ui::sidebar_data::ChatRowSendData> {
         use crate::domain::anon_dm::AnonDmStatus;
-        use crate::domain::message::{truncate_preview_text, ConversationType};
+        use crate::domain::message::{ConversationType, truncate_preview_text};
         use crate::ui::chat_data::initials_from_name;
         use crate::ui::sidebar_data::ChatRowSendData;
 
@@ -614,108 +663,114 @@ impl ChatterClient {
         if self.anon_mode_enabled() {
             let mut out: Vec<ChatRowSendData> = self.list_regular_dm_sidebar();
 
-        // Anon DMs — active conversations.
-        for dm in self.list_anon_dm_conversations() {
-            if dm.status == AnonDmStatus::Pending {
-                continue;
+            // Anon DMs — active conversations.
+            for dm in self.list_anon_dm_conversations() {
+                if dm.status == AnonDmStatus::Pending {
+                    continue;
+                }
+                let display_name = dm
+                    .peer_display_name
+                    .clone()
+                    .unwrap_or_else(|| self.fallback_display_name(&dm.peer_id));
+                let latest = self.get_latest_anon_dm_message(&dm.id);
+                let (last_message, timestamp) = match &latest {
+                    Some(msg) => {
+                        let preview = msg
+                            .as_text()
+                            .map(|t| truncate_preview_text(t, 50))
+                            .unwrap_or_else(|| "[Attachment]".to_string());
+                        (preview, self.sidebar_time(msg.created_at))
+                    }
+                    None => (String::new(), String::new()),
+                };
+                out.push(ChatRowSendData {
+                    user_id: dm.peer_id.to_string(),
+                    initials: initials_from_name(&display_name),
+                    avatar_bytes: dm.peer_avatar.clone(),
+                    presence_status: if dm.status == AnonDmStatus::Active {
+                        "online".to_string()
+                    } else {
+                        "offline".to_string()
+                    },
+                    last_message,
+                    timestamp,
+                    unread_count: dm.unread_count,
+                    last_activity: latest.map(|m| m.created_at),
+                    ..ChatRowSendData::new(
+                        ConversationType::AnonDm,
+                        dm.id.to_string(),
+                        display_name,
+                    )
+                });
             }
-            let display_name = dm
-                .peer_display_name
-                .clone()
-                .unwrap_or_else(|| self.fallback_display_name(&dm.peer_id));
-            let latest = self.get_latest_anon_dm_message(&dm.id);
-            let (last_message, timestamp) = match &latest {
-                Some(msg) => {
-                    let preview = msg
-                        .as_text()
-                        .map(|t| truncate_preview_text(t, 50))
-                        .unwrap_or_else(|| "[Attachment]".to_string());
-                    (
-                        preview,
-                        self.sidebar_time(msg.created_at),
-                    )
-                }
-                None => (String::new(), String::new()),
-            };
-            out.push(ChatRowSendData {
-                user_id: dm.peer_id.to_string(),
-                initials: initials_from_name(&display_name),
-                avatar_bytes: dm.peer_avatar.clone(),
-                presence_status: if dm.status == AnonDmStatus::Active {
-                    "online".to_string()
-                } else {
-                    "offline".to_string()
-                },
-                last_message,
-                timestamp,
-                unread_count: dm.unread_count,
-                last_activity: latest.map(|m| m.created_at),
-                ..ChatRowSendData::new(ConversationType::AnonDm, dm.id.to_string(), display_name)
-            });
-        }
 
-        // Anon DMs — incoming message requests awaiting acceptance.
-        for dm in self.list_anon_dm_message_requests() {
-            let peer_name = dm
-                .peer_display_name
-                .clone()
-                .unwrap_or_else(|| self.fallback_display_name(&dm.peer_id));
-            let latest = self.get_latest_anon_dm_message(&dm.id);
-            let last_message = match &latest {
-                Some(msg) => self.message_sidebar_preview(msg),
-                None => "Message request".to_string(),
-            };
-            out.push(ChatRowSendData {
-                user_id: dm.peer_id.to_string(),
-                initials: initials_from_name(&peer_name),
-                avatar_bytes: dm.peer_avatar.clone(),
-                presence_status: "pending".to_string(),
-                last_message,
-                timestamp: self.sidebar_time(dm.created_at),
-                unread_count: 1,
-                last_activity: Some(latest.map_or(dm.created_at, |m| m.created_at)),
-                // Envelope marker distinguishes a pending request from an
-                // active conversation in the sidebar.
-                ..ChatRowSendData::new(ConversationType::AnonDm, dm.id.to_string(), format!("\u{1F4E9} {}", peer_name))
-            });
-        }
-
-        // Anon DMs — outgoing requests we sent, awaiting acceptance.
-        for dm in self.list_anon_dm_outgoing_requests() {
-            let peer_name = dm
-                .peer_display_name
-                .clone()
-                .unwrap_or_else(|| self.fallback_display_name(&dm.peer_id));
-            let latest = self.get_latest_anon_dm_message(&dm.id);
-            let (last_message, timestamp) = match &latest {
-                Some(msg) => {
-                    let preview = msg
-                        .as_text()
-                        .filter(|t| !t.is_empty())
-                        .map(|t| format!("You: {}", truncate_preview_text(t, 50)))
-                        .unwrap_or_else(|| "Message request sent".to_string());
-                    (
-                        preview,
-                        self.sidebar_time(msg.created_at),
+            // Anon DMs — incoming message requests awaiting acceptance.
+            for dm in self.list_anon_dm_message_requests() {
+                let peer_name = dm
+                    .peer_display_name
+                    .clone()
+                    .unwrap_or_else(|| self.fallback_display_name(&dm.peer_id));
+                let latest = self.get_latest_anon_dm_message(&dm.id);
+                let last_message = match &latest {
+                    Some(msg) => self.message_sidebar_preview(msg),
+                    None => "Message request".to_string(),
+                };
+                out.push(ChatRowSendData {
+                    user_id: dm.peer_id.to_string(),
+                    initials: initials_from_name(&peer_name),
+                    avatar_bytes: dm.peer_avatar.clone(),
+                    presence_status: "pending".to_string(),
+                    last_message,
+                    timestamp: self.sidebar_time(dm.created_at),
+                    unread_count: 1,
+                    last_activity: Some(latest.map_or(dm.created_at, |m| m.created_at)),
+                    // Envelope marker distinguishes a pending request from an
+                    // active conversation in the sidebar.
+                    ..ChatRowSendData::new(
+                        ConversationType::AnonDm,
+                        dm.id.to_string(),
+                        format!("\u{1F4E9} {}", peer_name),
                     )
-                }
-                None => (
-                    "Waiting for response...".to_string(),
-                    self.sidebar_time(dm.created_at),
-                ),
-            };
-            out.push(ChatRowSendData {
-                user_id: dm.peer_id.to_string(),
-                initials: initials_from_name(&peer_name),
-                avatar_bytes: dm.peer_avatar.clone(),
-                presence_status: "offline".to_string(),
-                last_message,
-                timestamp,
-                last_activity: Some(latest.map_or(dm.created_at, |m| m.created_at)),
-                // Postbox marker distinguishes an outgoing pending request.
-                ..ChatRowSendData::new(ConversationType::AnonDm, dm.id.to_string(), format!("\u{1F4EE} {} (pending)", peer_name))
-            });
-        }
+                });
+            }
+
+            // Anon DMs — outgoing requests we sent, awaiting acceptance.
+            for dm in self.list_anon_dm_outgoing_requests() {
+                let peer_name = dm
+                    .peer_display_name
+                    .clone()
+                    .unwrap_or_else(|| self.fallback_display_name(&dm.peer_id));
+                let latest = self.get_latest_anon_dm_message(&dm.id);
+                let (last_message, timestamp) = match &latest {
+                    Some(msg) => {
+                        let preview = msg
+                            .as_text()
+                            .filter(|t| !t.is_empty())
+                            .map(|t| format!("You: {}", truncate_preview_text(t, 50)))
+                            .unwrap_or_else(|| "Message request sent".to_string());
+                        (preview, self.sidebar_time(msg.created_at))
+                    }
+                    None => (
+                        "Waiting for response...".to_string(),
+                        self.sidebar_time(dm.created_at),
+                    ),
+                };
+                out.push(ChatRowSendData {
+                    user_id: dm.peer_id.to_string(),
+                    initials: initials_from_name(&peer_name),
+                    avatar_bytes: dm.peer_avatar.clone(),
+                    presence_status: "offline".to_string(),
+                    last_message,
+                    timestamp,
+                    last_activity: Some(latest.map_or(dm.created_at, |m| m.created_at)),
+                    // Postbox marker distinguishes an outgoing pending request.
+                    ..ChatRowSendData::new(
+                        ConversationType::AnonDm,
+                        dm.id.to_string(),
+                        format!("\u{1F4EE} {} (pending)", peer_name),
+                    )
+                });
+            }
 
             self.finish_dm_sidebar(out)
         } else {
@@ -733,7 +788,11 @@ impl ChatterClient {
     pub fn sidebar_rows(&self) -> Vec<crate::ui::sidebar_data::ChatRowSendData> {
         let mut rows = self.list_dm_sidebar();
         rows.extend(self.sidebar_channels().iter().map(|c| self.channel_row(c)));
-        rows.extend(self.sidebar_private_groups().iter().map(|g| self.private_group_row(g)));
+        rows.extend(
+            self.sidebar_private_groups()
+                .iter()
+                .map(|g| self.private_group_row(g)),
+        );
         crate::ui::sidebar_data::order_chat_rows(&mut rows);
         // The local AI channel leads the list while it is on; it cannot be
         // pinned, so no activity order may bury it.
@@ -749,7 +808,10 @@ impl ChatterClient {
     }
 
     /// A channel's chat-list row.
-    fn channel_row(&self, channel: &crate::domain::channel::Channel) -> crate::ui::sidebar_data::ChatRowSendData {
+    fn channel_row(
+        &self,
+        channel: &crate::domain::channel::Channel,
+    ) -> crate::ui::sidebar_data::ChatRowSendData {
         use crate::ui::sidebar_data::ChatRowSendData;
         let id = channel.id.to_string();
         let latest = self.latest_message(&channel.id, &channel.conversation_type());
@@ -771,12 +833,19 @@ impl ChatterClient {
             can_leave: self.can_leave_channel(&channel.id),
             can_delete: self.is_former_channel(&channel.id),
             last_activity: Some(last_activity),
-            ..ChatRowSendData::new(crate::domain::message::ConversationType::Channel, id, channel.name.clone())
+            ..ChatRowSendData::new(
+                crate::domain::message::ConversationType::Channel,
+                id,
+                channel.name.clone(),
+            )
         }
     }
 
     /// A private (anon) group's chat-list row.
-    fn private_group_row(&self, group: &crate::domain::anon_group::AnonGroup) -> crate::ui::sidebar_data::ChatRowSendData {
+    fn private_group_row(
+        &self,
+        group: &crate::domain::anon_group::AnonGroup,
+    ) -> crate::ui::sidebar_data::ChatRowSendData {
         use crate::ui::sidebar_data::ChatRowSendData;
         let latest = self.get_latest_anon_group_message(&group.id);
         let (last_message, _) = self.sidebar_activity(latest.as_ref());
@@ -792,7 +861,11 @@ impl ChatterClient {
             // or nobody else is left (`AnonGroupService::can_leave`).
             can_leave: self.anon_groups().can_leave(&group.id),
             last_activity: Some(last_activity),
-            ..ChatRowSendData::new(crate::domain::message::ConversationType::AnonGroup, group.id.to_string(), group.name.clone())
+            ..ChatRowSendData::new(
+                crate::domain::message::ConversationType::AnonGroup,
+                group.id.to_string(),
+                group.name.clone(),
+            )
         }
     }
 
@@ -816,12 +889,14 @@ impl ChatterClient {
         kind: &crate::domain::message::ConversationType,
     ) -> Option<crate::state::ActiveConversation> {
         match kind {
-            crate::domain::message::ConversationType::Channel => {
-                row_id.parse().ok().map(crate::state::ActiveConversation::Channel)
-            }
-            crate::domain::message::ConversationType::AnonGroup => {
-                row_id.parse().ok().map(crate::state::ActiveConversation::AnonGroup)
-            }
+            crate::domain::message::ConversationType::Channel => row_id
+                .parse()
+                .ok()
+                .map(crate::state::ActiveConversation::Channel),
+            crate::domain::message::ConversationType::AnonGroup => row_id
+                .parse()
+                .ok()
+                .map(crate::state::ActiveConversation::AnonGroup),
             _ => self.resolve_dm_conversation(row_id),
         }
     }
@@ -846,7 +921,9 @@ impl ChatterClient {
             return Some(ActiveConversation::ServerDm { peer_id });
         }
         if self.anon_mode_enabled() || self.known_only_from_anon_group(&peer_id) {
-            return self.find_anon_dm_by_peer(&peer_id).map(ActiveConversation::AnonDm);
+            return self
+                .find_anon_dm_by_peer(&peer_id)
+                .map(ActiveConversation::AnonDm);
         }
         Some(ActiveConversation::ServerDm { peer_id })
     }
@@ -857,13 +934,20 @@ impl ChatterClient {
     /// friend or an existing DM that link already exists.
     fn known_only_from_anon_group(&self, peer: &crate::domain::ids::UserId) -> bool {
         let comember = self.list_anon_groups().unwrap_or_default().iter().any(|g| {
-            self.get_anon_group_members(&g.id).iter().any(|m| &m.user_id == peer)
+            self.get_anon_group_members(&g.id)
+                .iter()
+                .any(|m| &m.user_id == peer)
         });
         if !comember || self.is_friend(peer) {
             return false;
         }
         let has_server_dm = self
-            .get_messages_local_asc(&crate::domain::ids::ChannelId::from(*peer), &ConversationType::ServerDm, None, 1)
+            .get_messages_local_asc(
+                &crate::domain::ids::ChannelId::from(*peer),
+                &ConversationType::ServerDm,
+                None,
+                1,
+            )
             .is_ok_and(|m| !m.is_empty());
         !has_server_dm
     }
@@ -890,7 +974,11 @@ impl ChatterClient {
                 name: dm.display_name,
             });
         }
-        for channel in self.sidebar_channels().into_iter().filter(|c| !self.is_former_channel(&c.id)) {
+        for channel in self
+            .sidebar_channels()
+            .into_iter()
+            .filter(|c| !self.is_former_channel(&c.id))
+        {
             out.push(ForwardDestination {
                 kind: CT::Channel,
                 id: channel.id.to_string(),
@@ -1038,7 +1126,11 @@ impl ChatterClient {
     /// shield on never surfaces an identified conversation's messages, and
     /// off never surfaces an anon DM's. Returns the matching messages, best
     /// match first.
-    pub fn search_messages_visible(&self, query: &str, limit: u32) -> Vec<crate::domain::message::Message> {
+    pub fn search_messages_visible(
+        &self,
+        query: &str,
+        limit: u32,
+    ) -> Vec<crate::domain::message::Message> {
         let hits = match self.messages().search_local(query, None, limit) {
             Ok(hits) => hits,
             Err(e) => {
@@ -1050,7 +1142,10 @@ impl ChatterClient {
             .filter_map(|hit| self.get_message_local(&hit.message_id))
             .filter(|msg| {
                 self.visible_in_mode(&msg.conversation_type)
-                    && !self.is_blocked_conversation(&msg.conversation_type, &msg.conversation_id.to_string())
+                    && !self.is_blocked_conversation(
+                        &msg.conversation_type,
+                        &msg.conversation_id.to_string(),
+                    )
             })
             .collect()
     }
@@ -1071,19 +1166,26 @@ impl ChatterClient {
         use crate::domain::message::ConversationType as CT;
         use crate::services::quick_switcher::QuickSwitcherEntry;
 
-        let stats = self.services.conversation_repo.conversation_stats().unwrap_or_default();
+        let stats = self
+            .services
+            .conversation_repo
+            .conversation_stats()
+            .unwrap_or_default();
         let unread = |id: &str, kind: CT| {
-            stats.get(&(id.to_string(), kind)).map_or(0, |s| s.unread_count)
+            stats
+                .get(&(id.to_string(), kind))
+                .map_or(0, |s| s.unread_count)
         };
-        let entry = |id: String, name: String, conv_type: &str, presence: String, unread_count: u32| {
-            QuickSwitcherEntry {
-                id,
-                name,
-                conv_type: conv_type.to_string(),
-                presence_status: presence,
-                unread_count: i32::try_from(unread_count).unwrap_or(i32::MAX),
-            }
-        };
+        let entry =
+            |id: String, name: String, conv_type: &str, presence: String, unread_count: u32| {
+                QuickSwitcherEntry {
+                    id,
+                    name,
+                    conv_type: conv_type.to_string(),
+                    presence_status: presence,
+                    unread_count: i32::try_from(unread_count).unwrap_or(i32::MAX),
+                }
+            };
 
         let mut entries = Vec::new();
         if !self.anon_mode_enabled() {
@@ -1097,7 +1199,13 @@ impl ChatterClient {
         }
         for dm in self.list_dm_sidebar() {
             let kind = if dm.is_anon_dm() { "anon_dm" } else { "dm" };
-            entries.push(entry(dm.id, dm.display_name, kind, dm.presence_status, dm.unread_count));
+            entries.push(entry(
+                dm.id,
+                dm.display_name,
+                kind,
+                dm.presence_status,
+                dm.unread_count,
+            ));
         }
         for channel in self.sidebar_channels() {
             let id = channel.id.to_string();
@@ -1120,11 +1228,20 @@ impl ChatterClient {
                     // Saved Messages has its own row.
                     CT::SavedMessages => continue,
                 };
-                entries.push(entry(conv.conversation_id, conv.display_name, kind, String::new(), conv.unread_count));
+                entries.push(entry(
+                    conv.conversation_id,
+                    conv.display_name,
+                    kind,
+                    String::new(),
+                    conv.unread_count,
+                ));
             }
         }
         #[cfg(feature = "mesh")]
-        let sectioned = self.sections().all_sectioned_conversation_ids().unwrap_or_default();
+        let sectioned = self
+            .sections()
+            .all_sectioned_conversation_ids()
+            .unwrap_or_default();
         #[cfg(feature = "mesh")]
         for conv in self.mesh_conversations().unwrap_or_default() {
             // Foldered rows came from the section loop; unresolvable ones
@@ -1132,7 +1249,13 @@ impl ChatterClient {
             if sectioned.contains(&conv.id) || self.mesh_conversation_for(&conv.id).is_none() {
                 continue;
             }
-            entries.push(entry(conv.id, conv.name, "mesh", String::new(), conv.unread_count));
+            entries.push(entry(
+                conv.id,
+                conv.name,
+                "mesh",
+                String::new(),
+                conv.unread_count,
+            ));
         }
 
         crate::services::search::filter_conversations(query, entries)
@@ -1143,7 +1266,10 @@ impl ChatterClient {
     /// a message hit and a conversation hit open through one path. A friend
     /// DM's `conversation_id` is the peer (the DM row's id); Saved Messages
     /// opens by its sentinel.
-    pub fn search_hit_target(&self, msg: &crate::domain::message::Message) -> (&'static str, String) {
+    pub fn search_hit_target(
+        &self,
+        msg: &crate::domain::message::Message,
+    ) -> (&'static str, String) {
         use crate::domain::message::ConversationType as CT;
         let kind = match msg.conversation_type {
             CT::Channel => "channel",
@@ -1216,7 +1342,9 @@ impl ChatterClient {
             };
             let user_id_str = member.user_id.to_string();
             let name_lower = display_name.to_lowercase();
-            if name_lower.contains(&query_lower) || user_id_str.to_lowercase().contains(&query_lower) {
+            if name_lower.contains(&query_lower)
+                || user_id_str.to_lowercase().contains(&query_lower)
+            {
                 out.push(MentionSuggestionInfo {
                     id: user_id_str,
                     display: format!("@{}", display_name),
@@ -1235,8 +1363,11 @@ impl ChatterClient {
         channel_id: &crate::domain::ids::ChannelId,
         limit: u32,
         offset: u32,
-    ) -> Result<Vec<crate::domain::channel::Membership>, crate::services::channel::ChannelError> {
-        self.channels().get_channel_members(channel_id, limit, offset).await
+    ) -> Result<Vec<crate::domain::channel::Membership>, crate::services::channel::ChannelError>
+    {
+        self.channels()
+            .get_channel_members(channel_id, limit, offset)
+            .await
     }
 
     pub async fn update_channel_member_role(
@@ -1245,7 +1376,9 @@ impl ChatterClient {
         user_id: &crate::domain::ids::UserId,
         new_role: crate::domain::channel::MemberRole,
     ) -> Result<crate::domain::channel::Membership, crate::services::channel::ChannelError> {
-        self.channels().update_member_role(channel_id, user_id, new_role).await
+        self.channels()
+            .update_member_role(channel_id, user_id, new_role)
+            .await
     }
 
     pub async fn delete_channel(
@@ -1261,7 +1394,9 @@ impl ChatterClient {
         invitee_id: &crate::domain::ids::UserId,
         message: Option<&str>,
     ) -> Result<(), crate::services::channel::ChannelError> {
-        self.channels().invite_user(channel_id, invitee_id, message).await
+        self.channels()
+            .invite_user(channel_id, invitee_id, message)
+            .await
     }
 
     /// List the current user's pending channel invitations (server scopes to
@@ -1294,7 +1429,11 @@ impl ChatterClient {
         channel_id: &crate::domain::ids::ChannelId,
         accept: bool,
     ) -> Result<Option<Channel>, crate::services::channel::ChannelError> {
-        let Some(channel) = self.channels().respond_to_invite(channel_id, accept).await? else {
+        let Some(channel) = self
+            .channels()
+            .respond_to_invite(channel_id, accept)
+            .await?
+        else {
             return Ok(None);
         };
 
@@ -1320,7 +1459,11 @@ impl ChatterClient {
 
         // Pull SKDMs from the existing members so their next message decrypts
         // without the no-sender-key defer/retry round-trip.
-        if let Err(e) = self.messages().request_skdms_from_channel_members(channel_id).await {
+        if let Err(e) = self
+            .messages()
+            .request_skdms_from_channel_members(channel_id)
+            .await
+        {
             tracing::warn!(
                 channel_id = %channel_id,
                 error = %e,
@@ -1347,7 +1490,10 @@ impl ChatterClient {
         query: &str,
         superseded: impl Fn() -> bool,
     ) -> Option<Vec<InviteCandidate>> {
-        let mut cands = self.list_channel_invite_candidates(channel_id).await.unwrap_or_default();
+        let mut cands = self
+            .list_channel_invite_candidates(channel_id)
+            .await
+            .unwrap_or_default();
         let trimmed = query.trim();
         cands.retain(|c| c.matches(trimmed));
         if !crate::services::user::is_lookup_handle(trimmed) {
@@ -1364,14 +1510,18 @@ impl ChatterClient {
                     Ok(profile) => cands.push(InviteCandidate {
                         user_id,
                         display_name: profile.display_name,
-                        username: self.known_username(&user_id).unwrap_or_else(|| trimmed.to_string()),
+                        username: self
+                            .known_username(&user_id)
+                            .unwrap_or_else(|| trimmed.to_string()),
                         avatar_bytes: profile.avatar_bytes.unwrap_or_default(),
                         // A non-contact found by exact username; if already a
                         // member or banned, the invite RPC rejects it server-side.
                         already_member: false,
                         banned: false,
                     }),
-                    Err(e) => tracing::warn!(error = %e, %user_id, "lookup hit but profile fetch failed"),
+                    Err(e) => {
+                        tracing::warn!(error = %e, %user_id, "lookup hit but profile fetch failed")
+                    }
                 }
             }
             Ok(_) => {}
@@ -1390,8 +1540,8 @@ impl ChatterClient {
         &self,
         channel_id: &crate::domain::ids::ChannelId,
     ) -> Result<Vec<InviteCandidate>, crate::services::channel::ChannelError> {
-        use std::collections::HashSet;
         use crate::domain::ids::UserId;
+        use std::collections::HashSet;
 
         // Full membership, paginated — an already-joined member past the
         // server's page size would otherwise show up as invitable.
@@ -1420,9 +1570,9 @@ impl ChatterClient {
         let mut out: Vec<InviteCandidate> = Vec::new();
 
         let push = |out: &mut Vec<InviteCandidate>,
-                        seen: &mut HashSet<UserId>,
-                        user_id: UserId,
-                        display_name: String| {
+                    seen: &mut HashSet<UserId>,
+                    user_id: UserId,
+                    display_name: String| {
             if !seen.insert(user_id) {
                 return;
             }
@@ -1470,7 +1620,9 @@ impl ChatterClient {
         offset: u32,
         type_filter: Vec<crate::domain::channel::ChannelType>,
     ) -> Result<Vec<crate::domain::channel::Channel>, crate::services::channel::ChannelError> {
-        self.channels().search_channels(query, limit, offset, type_filter).await
+        self.channels()
+            .search_channels(query, limit, offset, type_filter)
+            .await
     }
 
     /// Reply count per thread root in a conversation, for the "N replies"
@@ -1493,13 +1645,16 @@ impl ChatterClient {
         before: Option<&crate::domain::ids::MessageId>,
         limit: u32,
     ) -> Result<Vec<crate::domain::message::Message>, crate::services::message::MessageError> {
-        self.messages().list_for_thread(thread_root_id, before, limit)
+        self.messages()
+            .list_for_thread(thread_root_id, before, limit)
     }
 
     /// Total replies in a thread, so the panel knows whether earlier ones
     /// remain to be loaded.
     pub fn thread_reply_count(&self, thread_root_id: &crate::domain::ids::MessageId) -> u32 {
-        self.messages().count_for_thread(thread_root_id).unwrap_or(0)
+        self.messages()
+            .count_for_thread(thread_root_id)
+            .unwrap_or(0)
     }
 
     /// Send a channel/DM message (convenience façade over `MessageService::send`).
@@ -1685,8 +1840,8 @@ impl MentionSuggestionKind {
 mod shield_mode_tests {
     //! Shield (anon) mode is enforced in core: identity-revealing calls refuse
     //! or take the anon path themselves, whatever the UI offers.
-    use std::sync::atomic::Ordering;
     use std::sync::Arc;
+    use std::sync::atomic::Ordering;
 
     use crate::client::ChatterClient;
     use crate::domain::ids::UserId;
@@ -1720,7 +1875,9 @@ mod shield_mode_tests {
             Err(UserError::ForbiddenInAnonMode)
         ));
         assert!(matches!(
-            client.connect_via_friend_code("chatter://connect/x", None).await,
+            client
+                .connect_via_friend_code("chatter://connect/x", None)
+                .await,
             Err(UserError::ForbiddenInAnonMode)
         ));
         assert!(matches!(
@@ -1737,7 +1894,10 @@ mod shield_mode_tests {
         client
             .messages()
             .settings_repo
-            .set_string(crate::storage::repositories::settings_repo::keys::CURRENT_USER_ID, &me.to_string())
+            .set_string(
+                crate::storage::repositories::settings_repo::keys::CURRENT_USER_ID,
+                &me.to_string(),
+            )
             .unwrap();
         users.ensure_user_exists(&me).unwrap();
         users.ensure_user_exists(&friend).unwrap();
@@ -1754,10 +1914,12 @@ mod shield_mode_tests {
         assert!(client.visible_in_mode(&ConversationType::ServerDm));
         assert!(!client.visible_in_mode(&ConversationType::SavedMessages));
         assert!(client.visible_in_mode(&ConversationType::AnonDm));
-        assert!(client
-            .quick_switcher_entries("")
-            .iter()
-            .all(|e| e.conv_type != "saved_messages"));
+        assert!(
+            client
+                .quick_switcher_entries("")
+                .iter()
+                .all(|e| e.conv_type != "saved_messages")
+        );
 
         client.anon_mode.store(false, Ordering::Release);
         assert_eq!(
@@ -1779,7 +1941,12 @@ mod shield_mode_tests {
         let group = AnonGroup::new_as_owner("g".into(), me);
         let repo = &client.anon_groups().anon_group_repo;
         repo.insert_group(&group).unwrap();
-        repo.add_member(&AnonGroupMember::new(group.id, member, AnonGroupRole::Member)).unwrap();
+        repo.add_member(&AnonGroupMember::new(
+            group.id,
+            member,
+            AnonGroupRole::Member,
+        ))
+        .unwrap();
 
         assert!(!client.anon_mode_enabled());
         // No anon DM with the member either: nothing to open.
@@ -1817,7 +1984,8 @@ mod local_friends_tests {
     #[tokio::test]
     async fn local_friends_list_without_network() {
         let client = build_test_client();
-        let (me, friend, pending, blocked) = (UserId::new(), UserId::new(), UserId::new(), UserId::new());
+        let (me, friend, pending, blocked) =
+            (UserId::new(), UserId::new(), UserId::new(), UserId::new());
         client.auth_state().set_logged_in(me, 1, "Me".into());
         client
             .messages()
@@ -1891,10 +2059,19 @@ mod search_hit_tests {
         let peer = UserId::new();
         let store = |id: ChannelId, kind: ConversationType, text: &str, n: u64| {
             let m = Message::new_text(id, kind, Some(peer), text.to_string(), n);
-            client.messages().message_repo.insert(&m).expect("store message");
+            client
+                .messages()
+                .message_repo
+                .insert(&m)
+                .expect("store message");
         };
         store(peer.into(), ConversationType::ServerDm, "badge two", 1);
-        store(ChannelId::new(), ConversationType::SavedMessages, "badge note", 2);
+        store(
+            ChannelId::new(),
+            ConversationType::SavedMessages,
+            "badge note",
+            2,
+        );
 
         let mut targets: Vec<_> = client
             .search_messages_visible("badge", 10)
@@ -1904,7 +2081,10 @@ mod search_hit_tests {
         targets.sort();
         assert_eq!(
             targets,
-            vec![("dm", peer.to_string()), ("saved_messages", "saved-messages".to_string())]
+            vec![
+                ("dm", peer.to_string()),
+                ("saved_messages", "saved-messages".to_string())
+            ]
         );
     }
 }
@@ -1912,7 +2092,9 @@ mod search_hit_tests {
 #[cfg(test)]
 mod new_channel_row_tests {
     use crate::client::ChatterClient;
-    use crate::domain::channel::{Channel, ChannelType, MemberRole, Membership, NotificationPreference};
+    use crate::domain::channel::{
+        Channel, ChannelType, MemberRole, Membership, NotificationPreference,
+    };
     use crate::domain::ids::{ChannelId, UserId};
 
     /// A just-created channel has no messages. It used to sort below every
@@ -1933,7 +2115,10 @@ mod new_channel_row_tests {
         client
             .messages()
             .settings_repo
-            .set_string(crate::storage::repositories::settings_repo::keys::CURRENT_USER_ID, &me.to_string())
+            .set_string(
+                crate::storage::repositories::settings_repo::keys::CURRENT_USER_ID,
+                &me.to_string(),
+            )
             .unwrap();
         client.messages().user_repo.ensure_user_exists(&me).unwrap();
         let repo = &client.services.channel_repo;
@@ -1960,7 +2145,10 @@ mod new_channel_row_tests {
         let rows = client.sidebar_rows();
         let ids: Vec<_> = rows.iter().map(|r| r.id.clone()).collect();
         assert_eq!(ids, [new, old], "the new channel leads the list");
-        assert!(!rows[0].timestamp.is_empty(), "the new channel shows its creation time");
+        assert!(
+            !rows[0].timestamp.is_empty(),
+            "the new channel shows its creation time"
+        );
     }
 }
 
@@ -1985,7 +2173,13 @@ mod older_messages_tests {
         let (conv, peer) = (ChannelId::new(), UserId::new());
         let ids = (1..=120u64)
             .map(|ts| {
-                let msg = Message::new_text(conv, ConversationType::ServerDm, Some(peer), "hi".into(), ts);
+                let msg = Message::new_text(
+                    conv,
+                    ConversationType::ServerDm,
+                    Some(peer),
+                    "hi".into(),
+                    ts,
+                );
                 client.messages().store_message_local(&msg).expect("store");
                 msg.id
             })
@@ -2001,7 +2195,9 @@ mod older_messages_tests {
         let (client, conv, ids) = conversation();
         let kind = ConversationType::ServerDm;
         let page = |before: &MessageId| {
-            let rows = client.get_older_messages_local_asc(&conv, &kind, before, None).unwrap();
+            let rows = client
+                .get_older_messages_local_asc(&conv, &kind, before, None)
+                .unwrap();
             rows.iter().map(|m| m.sent_at).collect::<Vec<_>>()
         };
         // The open loaded 71..=120.
@@ -2034,9 +2230,18 @@ mod older_messages_tests {
             "other conversation".into(),
             5,
         );
-        client.messages().store_message_local(&elsewhere).expect("store");
-        assert!(until(&elsewhere.id).is_empty(), "a target in another conversation");
-        assert!(until(&MessageId::new()).is_empty(), "a target that is not stored");
+        client
+            .messages()
+            .store_message_local(&elsewhere)
+            .expect("store");
+        assert!(
+            until(&elsewhere.id).is_empty(),
+            "a target in another conversation"
+        );
+        assert!(
+            until(&MessageId::new()).is_empty(),
+            "a target that is not stored"
+        );
     }
 }
 
@@ -2077,16 +2282,34 @@ mod section_row_tests {
     async fn group_row_offers_leave_and_carries_badge_and_initials() {
         let (client, _dir) = client();
         // A group we belong to (not its owner): Leave is offered.
-        client.messages().settings_repo
-            .set(crate::storage::repositories::settings_repo::keys::CURRENT_USER_ID, &UserId::new().to_string())
+        client
+            .messages()
+            .settings_repo
+            .set(
+                crate::storage::repositories::settings_repo::keys::CURRENT_USER_ID,
+                &UserId::new().to_string(),
+            )
             .unwrap();
         let id = crate::domain::anon_group::AnonGroupId::new();
-        client.anon_groups().anon_group_repo
-            .insert_group(&crate::domain::anon_group::AnonGroup::from_invite(id, "Book Club".into(), UserId::new()))
+        client
+            .anon_groups()
+            .anon_group_repo
+            .insert_group(&crate::domain::anon_group::AnonGroup::from_invite(
+                id,
+                "Book Club".into(),
+                UserId::new(),
+            ))
             .unwrap();
-        let row = client.section_row(&conv(id.to_string(), ConversationType::AnonGroup, "Book Club"));
+        let row = client.section_row(&conv(
+            id.to_string(),
+            ConversationType::AnonGroup,
+            "Book Club",
+        ));
         assert_eq!(row.display_name, "Book Club");
-        assert_eq!(row.initials, crate::ui::chat_data::initials_from_name("Book Club"));
+        assert_eq!(
+            row.initials,
+            crate::ui::chat_data::initials_from_name("Book Club")
+        );
         assert!(row.can_leave && !row.can_delete);
         assert!(row.is_pinned);
         assert_eq!(row.unread_count, 3);
@@ -2097,7 +2320,11 @@ mod section_row_tests {
     #[tokio::test]
     async fn unknown_channel_offers_neither_leave_nor_delete() {
         let (client, _dir) = client();
-        let row = client.section_row(&conv(ChannelId::new().to_string(), ConversationType::Channel, "general"));
+        let row = client.section_row(&conv(
+            ChannelId::new().to_string(),
+            ConversationType::Channel,
+            "general",
+        ));
         assert!(!row.can_leave && !row.can_delete);
         assert!(!row.private_channel);
         assert!(row.avatar_bytes.is_none());
@@ -2108,13 +2335,23 @@ mod section_row_tests {
         let (client, _dir) = client();
         let peer = UserId::new();
         let id: ChannelId = peer.into();
-        let msg = Message::new_text(id, ConversationType::ServerDm, Some(peer), "hello there".into(), 5);
+        let msg = Message::new_text(
+            id,
+            ConversationType::ServerDm,
+            Some(peer),
+            "hello there".into(),
+            5,
+        );
         client.messages().store_message_local(&msg).unwrap();
 
         let row = client.section_row(&conv(peer.to_string(), ConversationType::ServerDm, ""));
         assert_eq!(row.display_name, client.display_name(&peer));
         assert!(!row.display_name.is_empty());
-        assert!(row.last_message.contains("hello there"), "{}", row.last_message);
+        assert!(
+            row.last_message.contains("hello there"),
+            "{}",
+            row.last_message
+        );
         assert_eq!(row.presence_status, "offline");
         assert!(!row.can_leave);
     }
@@ -2129,26 +2366,45 @@ mod section_row_tests {
         use crate::storage::repositories::settings_repo::keys::CURRENT_USER_ID;
         let (client, _dir) = client();
         let me = UserId::new();
-        client.messages().settings_repo.set(CURRENT_USER_ID, &me.to_string()).unwrap();
+        client
+            .messages()
+            .settings_repo
+            .set(CURRENT_USER_ID, &me.to_string())
+            .unwrap();
         client.auth_state().set_logged_in(me, 1, "me".into());
         let peer = UserId::new();
         let id: ChannelId = peer.into();
         let sent = 1_700_000_000_000_000_000u64;
         let store = |from: UserId, text: &str, at: u64| {
-            let msg = Message::new_text(id, ConversationType::ServerDm, Some(from), text.into(), at);
+            let msg =
+                Message::new_text(id, ConversationType::ServerDm, Some(from), text.into(), at);
             client.messages().store_message_local(&msg).unwrap();
             msg
         };
-        let preview = || client.section_row(&conv(peer.to_string(), ConversationType::ServerDm, "")).last_message;
+        let preview = || {
+            client
+                .section_row(&conv(peer.to_string(), ConversationType::ServerDm, ""))
+                .last_message
+        };
 
         // Receiver: the peer edits, then deletes, its last message.
         store(peer, "earlier", sent);
         store(peer, "routing check harmless", sent + 1_000);
         assert_eq!(preview(), "routing check harmless");
         let m = client.messages();
-        m.apply_dm_edit(&peer, sent + 1_000, "edited from S9", sent + 2_000, sent + 2_000).unwrap().expect("applied");
+        m.apply_dm_edit(
+            &peer,
+            sent + 1_000,
+            "edited from S9",
+            sent + 2_000,
+            sent + 2_000,
+        )
+        .unwrap()
+        .expect("applied");
         assert_eq!(preview(), "edited from S9");
-        m.apply_dm_delete(&peer, sent + 1_000).unwrap().expect("matched");
+        m.apply_dm_delete(&peer, sent + 1_000)
+            .unwrap()
+            .expect("matched");
         assert_eq!(preview(), "earlier");
 
         // Sender: our own edit is persisted the way `send_edit` does it.
@@ -2167,11 +2423,18 @@ mod section_row_tests {
         let (client, _dir) = client();
         let channel = ChannelId::new();
         let started = std::time::Instant::now();
-        assert!(client.search_channel_invite_candidates(&channel, "alice.4711", || true).await.is_none());
+        assert!(
+            client
+                .search_channel_invite_candidates(&channel, "alice.4711", || true)
+                .await
+                .is_none()
+        );
         assert!(started.elapsed() >= ChatterClient::INVITE_LOOKUP_PAUSE);
 
         // Not a complete handle: no pause, so nothing to supersede.
-        let cands = client.search_channel_invite_candidates(&channel, "alice.", || true).await;
+        let cands = client
+            .search_channel_invite_candidates(&channel, "alice.", || true)
+            .await;
         assert_eq!(cands.map(|c| c.len()), Some(0));
     }
 }

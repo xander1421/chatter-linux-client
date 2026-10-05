@@ -83,7 +83,9 @@ impl ChannelError {
                     .map(|f| f.to_uppercase().chain(c).collect::<String>() + ".")
                     .unwrap_or_else(|| "Something went wrong. Try again.".to_string())
             }
-            Self::Network(NetworkError::RateLimited) => "Too many requests. Try again later.".to_string(),
+            Self::Network(NetworkError::RateLimited) => {
+                "Too many requests. Try again later.".to_string()
+            }
             Self::Network(_) => "Couldn't reach the server. Try again.".to_string(),
             Self::Storage(_) | Self::SenderKeyRotationFailed(_) => {
                 "Something went wrong. Try again.".to_string()
@@ -118,7 +120,10 @@ mod tests {
         let err = ChannelError::Network(NetworkError::InvalidRequest(
             "already exists: user is already a member of this channel".to_string(),
         ));
-        assert_eq!(err.user_message(), "User is already a member of this channel.");
+        assert_eq!(
+            err.user_message(),
+            "User is already a member of this channel."
+        );
 
         let err = ChannelError::Network(NetworkError::InvalidRequest(
             "precondition failed: user is banned from this channel".to_string(),

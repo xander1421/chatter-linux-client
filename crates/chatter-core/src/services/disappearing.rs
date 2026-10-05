@@ -29,8 +29,8 @@
 use crate::domain::ids::{ChannelId, UserId};
 use crate::domain::message::{ConversationType, Message, MessageContent, SystemMessage};
 use crate::error::StorageError;
-use crate::storage::repositories::settings_repo::SettingsRepository;
 use crate::storage::repositories::MessageRepository;
+use crate::storage::repositories::settings_repo::SettingsRepository;
 
 /// The picker's choices, in seconds (Signal's presets). `0` = off.
 pub const TIMER_PRESETS: [u32; 8] = [0, 30, 300, 3_600, 28_800, 86_400, 604_800, 2_419_200];
@@ -69,7 +69,13 @@ pub fn timer_short_label(seconds: u32) -> String {
     if seconds == 0 {
         return String::new();
     }
-    const UNITS: [(u32, &str); 5] = [(604_800, "w"), (86_400, "d"), (3_600, "h"), (60, "m"), (1, "s")];
+    const UNITS: [(u32, &str); 5] = [
+        (604_800, "w"),
+        (86_400, "d"),
+        (3_600, "h"),
+        (60, "m"),
+        (1, "s"),
+    ];
     let (size, suffix) = UNITS
         .iter()
         .copied()
@@ -120,7 +126,10 @@ pub const INITIAL_TIMER_VERSION: u32 = 1;
 /// one.
 #[must_use]
 pub fn stated_timer(dm: &crate::proto::content_v1::DataMessage) -> Option<DmTimer> {
-    (dm.expire_timer_version > 0).then(|| DmTimer { seconds: message_ttl(dm), version: dm.expire_timer_version })
+    (dm.expire_timer_version > 0).then(|| DmTimer {
+        seconds: message_ttl(dm),
+        version: dm.expire_timer_version,
+    })
 }
 
 /// Stamp `dm` with the conversation's timer: the ttl this message is sent
@@ -134,8 +143,12 @@ pub fn stamp_timer(dm: &mut crate::proto::content_v1::DataMessage, timer: DmTime
 /// The empty-bodied announcement of a new timer for a friend DM.
 #[must_use]
 pub fn timer_update_content(timer: DmTimer, sent_at: u64) -> crate::proto::content_v1::Content {
-    use crate::proto::content_v1::{content, Content, DataMessage};
-    let mut dm = DataMessage { timestamp: sent_at, flags: TIMER_UPDATE_FLAG, ..Default::default() };
+    use crate::proto::content_v1::{Content, DataMessage, content};
+    let mut dm = DataMessage {
+        timestamp: sent_at,
+        flags: TIMER_UPDATE_FLAG,
+        ..Default::default()
+    };
     stamp_timer(&mut dm, timer);
     Content {
         timestamp: sent_at,
@@ -156,7 +169,10 @@ pub fn server_dm_state(settings: &SettingsRepository, peer_id: &UserId) -> DmTim
         .get::<DmTimer>(&server_dm_key(peer_id))
         .ok()
         .flatten()
-        .unwrap_or(DmTimer { seconds: 0, version: INITIAL_TIMER_VERSION })
+        .unwrap_or(DmTimer {
+            seconds: 0,
+            version: INITIAL_TIMER_VERSION,
+        })
 }
 
 /// This DM's timer in seconds; `0` = off (also when nothing was ever set).
@@ -181,9 +197,15 @@ pub fn change_server_dm_timer(
     if current.seconds == seconds {
         return Ok(None);
     }
-    let next = DmTimer { seconds, version: current.version.saturating_add(1) };
+    let next = DmTimer {
+        seconds,
+        version: current.version.saturating_add(1),
+    };
     settings.set(&server_dm_key(peer_id), &next)?;
-    Ok(Some((file_notice(message_repo, peer_id, me, seconds, sent_at)?, next)))
+    Ok(Some((
+        file_notice(message_repo, peer_id, me, seconds, sent_at)?,
+        next,
+    )))
 }
 
 /// Adopt a timer `stated` by a received message (the peer's, or our own from
@@ -216,7 +238,13 @@ pub fn adopt_server_dm_timer(
         // Only the version moved on.
         return Ok(None);
     }
-    Ok(Some(file_notice(message_repo, peer_id, author, stated.seconds, sent_at)?))
+    Ok(Some(file_notice(
+        message_repo,
+        peer_id,
+        author,
+        stated.seconds,
+        sent_at,
+    )?))
 }
 
 fn file_notice(
@@ -246,7 +274,9 @@ fn file_notice(
 /// was deleted so the open chat can drop the bubbles. Driven by the reaper in
 /// `ChatterClient::start`; a message hard-deleted here is tombstoned
 /// (`delete_batch`) so a re-fetch cannot bring it back.
-pub fn reap_expired(db: &std::sync::Arc<crate::storage::Database>) -> Result<Vec<Message>, StorageError> {
+pub fn reap_expired(
+    db: &std::sync::Arc<crate::storage::Database>,
+) -> Result<Vec<Message>, StorageError> {
     use crate::storage::repositories::attachment_repo::AttachmentRepository;
     use crate::storage::repositories::ephemeral_repo::EphemeralRepository;
 
@@ -290,7 +320,16 @@ mod tests {
         let labels: Vec<String> = TIMER_PRESETS.iter().map(|s| timer_label(*s)).collect();
         assert_eq!(
             labels,
-            ["Off", "30 seconds", "5 minutes", "1 hour", "8 hours", "1 day", "1 week", "4 weeks"]
+            [
+                "Off",
+                "30 seconds",
+                "5 minutes",
+                "1 hour",
+                "8 hours",
+                "1 day",
+                "1 week",
+                "4 weeks"
+            ]
         );
         assert_eq!(timer_label(90), "90 seconds");
         assert_eq!(timer_short_label(28_800), "8h");
@@ -315,7 +354,13 @@ mod tests {
         let ephemeral = EphemeralRepository::new(db.clone());
         let conv = ChannelId::from(peer);
         let store = |sender: UserId, sent_at: u64| {
-            let m = Message::new_text(conv, ConversationType::ServerDm, Some(sender), "hi".into(), sent_at);
+            let m = Message::new_text(
+                conv,
+                ConversationType::ServerDm,
+                Some(sender),
+                "hi".into(),
+                sent_at,
+            );
             messages.insert(&m).expect("insert");
             // A zero timer: expired the moment its clock starts.
             ephemeral.insert_armed(&m.id, 0).expect("arm");
@@ -323,23 +368,43 @@ mod tests {
         };
 
         let received = store(peer, 1);
-        assert!(reap_expired(&db).expect("reap").is_empty(), "an unread message's clock has not started");
+        assert!(
+            reap_expired(&db).expect("reap").is_empty(),
+            "an unread message's clock has not started"
+        );
 
         let own = store(me, 2);
-        let reaped: Vec<_> = reap_expired(&db).expect("reap").iter().map(|m| m.id).collect();
+        let reaped: Vec<_> = reap_expired(&db)
+            .expect("reap")
+            .iter()
+            .map(|m| m.id)
+            .collect();
         assert_eq!(reaped, [own], "our own message's clock starts at once");
 
-        messages.mark_conversation_read(&conv, &ConversationType::ServerDm).expect("read");
-        let reaped: Vec<_> = reap_expired(&db).expect("reap").iter().map(|m| m.id).collect();
+        messages
+            .mark_conversation_read(&conv, &ConversationType::ServerDm)
+            .expect("read");
+        let reaped: Vec<_> = reap_expired(&db)
+            .expect("reap")
+            .iter()
+            .map(|m| m.id)
+            .collect();
         assert_eq!(reaped, [received], "reading it starts the clock");
-        assert!(messages.get(&received).expect("get").is_none(), "deleted from storage");
+        assert!(
+            messages.get(&received).expect("get").is_none(),
+            "deleted from storage"
+        );
     }
 
     fn repos() -> (tempfile::TempDir, SettingsRepository, MessageRepository) {
         let dir = tempfile::tempdir().expect("tempdir");
         let db = Arc::new(Database::open(&dir.path().join("t.db"), "testpass").expect("db"));
         db.run_migrations().expect("migrations");
-        (dir, SettingsRepository::new(db.clone()), MessageRepository::new(db))
+        (
+            dir,
+            SettingsRepository::new(db.clone()),
+            MessageRepository::new(db),
+        )
     }
 
     const fn t(seconds: u32, version: u32) -> DmTimer {
@@ -350,7 +415,10 @@ mod tests {
     fn a_newer_version_is_adopted_with_one_notice_per_change() {
         let (_dir, settings, messages) = repos();
         let peer = UserId::new();
-        assert_eq!(server_dm_state(&settings, &peer), t(0, INITIAL_TIMER_VERSION));
+        assert_eq!(
+            server_dm_state(&settings, &peer),
+            t(0, INITIAL_TIMER_VERSION)
+        );
 
         let notice = adopt_server_dm_timer(&settings, &messages, &peer, &peer, t(3_600, 2), 1_000)
             .expect("adopt")
@@ -360,18 +428,25 @@ mod tests {
             notice.content,
             MessageContent::System(SystemMessage::DisappearingTimerChanged { seconds: 3_600 })
         );
-        assert_eq!(notice.sent_at, 999, "filed just before the announcing message");
+        assert_eq!(
+            notice.sent_at, 999,
+            "filed just before the announcing message"
+        );
 
         // The same statement again (a redelivery, or every later message
         // carrying it) is not a change.
-        assert!(adopt_server_dm_timer(&settings, &messages, &peer, &peer, t(3_600, 2), 2_000)
-            .expect("adopt")
-            .is_none());
+        assert!(
+            adopt_server_dm_timer(&settings, &messages, &peer, &peer, t(3_600, 2), 2_000)
+                .expect("adopt")
+                .is_none()
+        );
 
         // A newer version turning it off is a change.
-        assert!(adopt_server_dm_timer(&settings, &messages, &peer, &peer, t(0, 3), 3_000)
-            .expect("adopt")
-            .is_some());
+        assert!(
+            adopt_server_dm_timer(&settings, &messages, &peer, &peer, t(0, 3), 3_000)
+                .expect("adopt")
+                .is_some()
+        );
         assert_eq!(server_dm_state(&settings, &peer), t(0, 3));
     }
 
@@ -382,14 +457,19 @@ mod tests {
     fn an_older_or_absent_version_is_ignored() {
         let (_dir, settings, messages) = repos();
         let peer = UserId::new();
-        adopt_server_dm_timer(&settings, &messages, &peer, &peer, t(86_400, 5), 1_000).expect("adopt");
+        adopt_server_dm_timer(&settings, &messages, &peer, &peer, t(86_400, 5), 1_000)
+            .expect("adopt");
 
-        assert!(adopt_server_dm_timer(&settings, &messages, &peer, &peer, t(0, 4), 2_000)
-            .expect("adopt")
-            .is_none());
-        assert!(adopt_server_dm_timer(&settings, &messages, &peer, &peer, t(30, 0), 3_000)
-            .expect("adopt")
-            .is_none());
+        assert!(
+            adopt_server_dm_timer(&settings, &messages, &peer, &peer, t(0, 4), 2_000)
+                .expect("adopt")
+                .is_none()
+        );
+        assert!(
+            adopt_server_dm_timer(&settings, &messages, &peer, &peer, t(30, 0), 3_000)
+                .expect("adopt")
+                .is_none()
+        );
         assert_eq!(server_dm_state(&settings, &peer), t(86_400, 5), "unchanged");
     }
 
@@ -404,7 +484,10 @@ mod tests {
 
         let notice = adopt_server_dm_timer(&settings, &messages, &peer, &peer, t(3_600, 2), 2_000)
             .expect("adopt");
-        assert!(notice.is_some(), "a different timer at the same version is adopted");
+        assert!(
+            notice.is_some(),
+            "a different timer at the same version is adopted"
+        );
         assert_eq!(server_dm_state(&settings, &peer), t(3_600, 2));
     }
 
@@ -413,14 +496,18 @@ mod tests {
         let (_dir, settings, messages) = repos();
         let (me, peer) = (UserId::new(), UserId::new());
 
-        let (notice, announced) = change_server_dm_timer(&settings, &messages, &peer, &me, 3_600, 1_000)
-            .expect("change")
-            .expect("a change");
+        let (notice, announced) =
+            change_server_dm_timer(&settings, &messages, &peer, &me, 3_600, 1_000)
+                .expect("change")
+                .expect("a change");
         assert_eq!(announced, t(3_600, 2));
         assert_eq!(notice.sender_id, Some(me));
-        assert!(change_server_dm_timer(&settings, &messages, &peer, &me, 3_600, 2_000)
-            .expect("change")
-            .is_none(), "same value: no change, no bump");
+        assert!(
+            change_server_dm_timer(&settings, &messages, &peer, &me, 3_600, 2_000)
+                .expect("change")
+                .is_none(),
+            "same value: no change, no bump"
+        );
         assert_eq!(server_dm_state(&settings, &peer), t(3_600, 2));
 
         let (_, announced) = change_server_dm_timer(&settings, &messages, &peer, &me, 0, 3_000)
@@ -430,7 +517,8 @@ mod tests {
 
         // What goes on the wire states that version, and reads back as it.
         let content = timer_update_content(announced, 3_000);
-        let Some(crate::proto::content_v1::content::Content::DataMessage(dm)) = content.content else {
+        let Some(crate::proto::content_v1::content::Content::DataMessage(dm)) = content.content
+        else {
             panic!("a DataMessage");
         };
         assert!(is_timer_update(&dm));

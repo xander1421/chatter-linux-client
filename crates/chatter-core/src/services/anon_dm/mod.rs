@@ -12,37 +12,42 @@
 //! - `blocking` - Blocking and rate limiting
 //! - `helpers` - Misc helpers (profile key, avatar, etc.)
 
-mod initiation;
 mod acceptance;
+mod blocking;
+mod calls;
+mod helpers;
+mod infrastructure;
+mod initiation;
 mod messaging;
 mod processing;
 mod queries;
-mod infrastructure;
-mod blocking;
-mod helpers;
-mod calls;
 
 // Re-export call types for external use
-pub use calls::{AnonCallOfferResult, AnonCallRoomCredentials, ReceivedCallOffer, ReceivedCallAnswer, PendingAnonCall};
+pub use calls::{
+    AnonCallOfferResult, AnonCallRoomCredentials, PendingAnonCall, ReceivedCallAnswer,
+    ReceivedCallOffer,
+};
 
 use std::sync::Arc;
 
-use crate::domain::anon_dm::AnonDmId;
 use crate::domain::UserId;
+use crate::domain::anon_dm::AnonDmId;
 use crate::error::StorageError;
 use crate::mailbox::token_manager::TokenManager;
 use crate::network::grpc::client_pool::GrpcClientPool;
+use crate::services::current_user::CurrentUserProvider;
 use crate::services::mailbox_manager::MailboxManager;
 use crate::services::pairwise::PairwiseService;
-use crate::services::current_user::CurrentUserProvider;
 use crate::storage::repositories::AnonDmRepository;
 use crate::storage::repositories::AttachmentRepository;
-use crate::storage::repositories::SettingsRepository;
 use crate::storage::repositories::MessageRepository;
+use crate::storage::repositories::SettingsRepository;
 
 /// Anonymous DM service errors.
 #[derive(Debug, thiserror::Error)]
 pub enum AnonDmError {
+    #[error("Delivery unconfirmed; the original submission is retained and retry is disabled")]
+    DeliveryUnconfirmed,
     /// Not logged in.
     #[error("not logged in")]
     NotLoggedIn,
@@ -205,7 +210,6 @@ impl AnonDmService {
         Ok(())
     }
 
-    
     // CRYPTO-2: there used to be `download_avatar_direct` / `download_and_store_avatar`
     // here, which GETted a URL chosen by an anonymous DM peer with no user
     // interaction, no scheme allowlist, no size cap (`response.bytes()` buffers

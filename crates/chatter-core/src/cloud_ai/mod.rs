@@ -265,14 +265,20 @@ mod tests {
 
     #[test]
     fn blank_api_key_is_treated_as_absent() {
-        let settings = CloudSettings { api_key: Some("   ".into()), ..Default::default() };
+        let settings = CloudSettings {
+            api_key: Some("   ".into()),
+            ..Default::default()
+        };
         assert!(!settings.is_available());
         assert!(AnyCloudBackend::for_settings(&settings).is_none());
     }
 
     #[test]
     fn configured_key_yields_a_backend() {
-        let settings = CloudSettings { api_key: Some("sk-ant-x".into()), ..Default::default() };
+        let settings = CloudSettings {
+            api_key: Some("sk-ant-x".into()),
+            ..Default::default()
+        };
         let backend = AnyCloudBackend::for_settings(&settings).expect("backend");
         assert_eq!(backend.kind(), CloudProviderKind::Anthropic);
         assert_eq!(backend.name(), "anthropic");
@@ -280,7 +286,10 @@ mod tests {
 
     #[test]
     fn api_key_is_never_serialized() {
-        let settings = CloudSettings { api_key: Some("sk-ant-secret".into()), ..Default::default() };
+        let settings = CloudSettings {
+            api_key: Some("sk-ant-secret".into()),
+            ..Default::default()
+        };
         let json = serde_json::to_string(&settings).expect("serialize");
         assert!(!json.contains("sk-ant-secret"), "{json}");
         assert!(!json.contains("api_key"), "{json}");
@@ -289,14 +298,20 @@ mod tests {
     #[test]
     fn broker_mode_needs_no_api_key() {
         // The server holds the org key, so a signed-in user needs nothing else.
-        let settings = CloudSettings { mode: CloudMode::ServerBroker, ..Default::default() };
+        let settings = CloudSettings {
+            mode: CloudMode::ServerBroker,
+            ..Default::default()
+        };
         assert!(settings.api_key.is_none());
         assert!(settings.is_available());
     }
 
     #[test]
     fn direct_mode_without_a_key_is_unavailable() {
-        let settings = CloudSettings { mode: CloudMode::DirectAnthropic, ..Default::default() };
+        let settings = CloudSettings {
+            mode: CloudMode::DirectAnthropic,
+            ..Default::default()
+        };
         assert!(!settings.is_available());
     }
 

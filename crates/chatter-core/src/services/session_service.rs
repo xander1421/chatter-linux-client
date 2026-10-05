@@ -10,7 +10,7 @@ use crate::network::grpc::auth_client::AuthClient;
 use crate::network::grpc::client_pool::GrpcClientPool;
 use crate::services::device_service::readable_device_name;
 use crate::storage::key_store::KeyStore;
-use crate::storage::repositories::settings_repo::{keys, SettingsRepository};
+use crate::storage::repositories::settings_repo::{SettingsRepository, keys};
 
 /// Session information for a device.
 #[derive(Debug, Clone)]
@@ -76,7 +76,11 @@ impl SessionService {
         settings_repo: Arc<SettingsRepository>,
         key_store: Arc<KeyStore>,
     ) -> Self {
-        Self { grpc_pool, settings_repo, key_store }
+        Self {
+            grpc_pool,
+            settings_repo,
+            key_store,
+        }
     }
 
     /// Create an auth client for network operations.
@@ -95,7 +99,10 @@ impl SessionService {
 
     /// Get the current device ID if logged in.
     pub fn current_device_id(&self) -> Option<u32> {
-        self.settings_repo.get(keys::CURRENT_DEVICE_ID).ok().flatten()
+        self.settings_repo
+            .get(keys::CURRENT_DEVICE_ID)
+            .ok()
+            .flatten()
     }
 
     /// Get the current user ID if logged in.
@@ -162,7 +169,9 @@ impl SessionService {
 
     /// Save a boolean setting.
     pub fn set_bool_setting(&self, key: &str, value: bool) -> Result<(), SessionError> {
-        self.settings_repo.set(key, &value).map_err(SessionError::from)
+        self.settings_repo
+            .set(key, &value)
+            .map_err(SessionError::from)
     }
 
     /// Get a boolean setting.
@@ -172,12 +181,16 @@ impl SessionService {
 
     /// Save a string setting.
     pub fn set_string_setting(&self, key: &str, value: &str) -> Result<(), SessionError> {
-        self.settings_repo.set_string(key, value).map_err(SessionError::from)
+        self.settings_repo
+            .set_string(key, value)
+            .map_err(SessionError::from)
     }
 
     /// Get a string setting.
     pub fn get_string_setting(&self, key: &str) -> Result<Option<String>, SessionError> {
-        self.settings_repo.get_string(key).map_err(SessionError::from)
+        self.settings_repo
+            .get_string(key)
+            .map_err(SessionError::from)
     }
 }
 

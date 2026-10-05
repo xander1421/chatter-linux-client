@@ -100,7 +100,6 @@ impl OfflineState {
         self.store.get().connection_state
     }
 
-
     /// Get the current reconnection attempt number if reconnecting.
     #[must_use]
     pub fn reconnect_attempt(&self) -> Option<u32> {
@@ -114,7 +113,6 @@ impl OfflineState {
     pub fn subscribe(&self) -> broadcast::Receiver<super::StateSnapshot<OfflineStateData>> {
         self.store.subscribe()
     }
-
 }
 
 impl Default for OfflineState {
@@ -163,5 +161,4 @@ mod tests {
     // ==================== Clone Tests ====================
 
     // ==================== Default Tests ====================
-
 }

@@ -110,7 +110,10 @@ impl AnthropicBackend {
             .build()
             .expect("failed to build reqwest client");
 
-        Self { client, api_key: api_key.into() }
+        Self {
+            client,
+            api_key: api_key.into(),
+        }
     }
 
     /// Build and verify the URL for `path`.
@@ -159,14 +162,22 @@ fn split_system(messages: &[ChatMessage]) -> (Option<String>, Vec<WireMessage<'_
     for m in messages {
         match m.role {
             ChatRole::System => system.push(m.content.as_str()),
-            ChatRole::User => wire.push(WireMessage { role: "user", content: &m.content }),
-            ChatRole::Assistant => {
-                wire.push(WireMessage { role: "assistant", content: &m.content })
-            }
+            ChatRole::User => wire.push(WireMessage {
+                role: "user",
+                content: &m.content,
+            }),
+            ChatRole::Assistant => wire.push(WireMessage {
+                role: "assistant",
+                content: &m.content,
+            }),
         }
     }
 
-    let system = if system.is_empty() { None } else { Some(system.join("\n\n")) };
+    let system = if system.is_empty() {
+        None
+    } else {
+        Some(system.join("\n\n"))
+    };
     (system, wire)
 }
 
@@ -188,7 +199,10 @@ fn text_from(blocks: Vec<ContentBlock>) -> String {
 impl LocalAIBackend for AnthropicBackend {
     async fn health_check(&self) -> Result<bool, BackendError> {
         // Cheapest authenticated call: lists models, bills nothing.
-        let resp = self.request(reqwest::Method::GET, "/v1/models")?.send().await?;
+        let resp = self
+            .request(reqwest::Method::GET, "/v1/models")?
+            .send()
+            .await?;
         Ok(resp.status().is_success())
     }
 
@@ -273,7 +287,10 @@ impl LocalAIBackend for AnthropicBackend {
     }
 
     async fn list_models(&self) -> Result<Vec<AvailableModel>, BackendError> {
-        let resp = self.request(reqwest::Method::GET, "/v1/models")?.send().await?;
+        let resp = self
+            .request(reqwest::Method::GET, "/v1/models")?
+            .send()
+            .await?;
 
         if !resp.status().is_success() {
             let status = resp.status();
@@ -320,7 +337,10 @@ mod tests {
     use super::*;
 
     fn msg(role: ChatRole, content: &str) -> ChatMessage {
-        ChatMessage { role, content: content.to_string() }
+        ChatMessage {
+            role,
+            content: content.to_string(),
+        }
     }
 
     #[test]
@@ -369,13 +389,20 @@ mod tests {
                     msg(ChatRole::System, "Reply with exactly one word."),
                     msg(ChatRole::User, "Say PONG and nothing else."),
                 ],
-                &GenerateParams { max_tokens: 16, ..Default::default() },
+                &GenerateParams {
+                    max_tokens: 16,
+                    ..Default::default()
+                },
             )
             .await
             .expect("chat");
 
         println!("model={} content={:?}", resp.model, resp.content);
-        assert!(resp.content.to_uppercase().contains("PONG"), "{}", resp.content);
+        assert!(
+            resp.content.to_uppercase().contains("PONG"),
+            "{}",
+            resp.content
+        );
         // The system turn was hoisted, not dropped: a one-word reply proves it
         // reached the model.
         assert!(resp.prompt_tokens.unwrap_or(0) > 0);
@@ -396,7 +423,10 @@ mod tests {
             .chat(
                 "claude-haiku-4-5",
                 &[msg(ChatRole::User, "hi")],
-                &GenerateParams { max_tokens: 8, ..Default::default() },
+                &GenerateParams {
+                    max_tokens: 8,
+                    ..Default::default()
+                },
             )
             .await
             .expect_err("bad key must fail");

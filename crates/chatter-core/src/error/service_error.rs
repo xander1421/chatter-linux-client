@@ -1,7 +1,7 @@
-use thiserror::Error;
 use crate::error::CryptoError;
 use crate::error::NetworkError;
 use crate::error::StorageError;
+use thiserror::Error;
 
 #[derive(Debug, Error)]
 pub enum ServiceError {

@@ -161,8 +161,7 @@ pub fn scan_duty_plan(
 ) -> ScanDutyPlan {
     // Two independent reasons to stay awake: too few peers to stop looking for
     // more, or something actively happening.
-    let force_continuous =
-        connected_count <= FORCE_CONTINUOUS_MAX_PEERS || has_recent_traffic;
+    let force_continuous = connected_count <= FORCE_CONTINUOUS_MAX_PEERS || has_recent_traffic;
     let should_duty_cycle =
         duty_enabled && app_is_active && connected_count > 0 && !force_continuous;
 
@@ -534,7 +533,10 @@ mod tests {
     #[test]
     fn continuous_scanning_starts_once_and_never_flips() {
         let mut cycle = ScanDutyCycle::new();
-        assert_eq!(cycle.update(true, true, 0, false, 1_000), ScanCommand::StartScanning);
+        assert_eq!(
+            cycle.update(true, true, 0, false, 1_000),
+            ScanCommand::StartScanning
+        );
         assert!(cycle.should_scan());
         assert_eq!(cycle.next_transition_at(), None);
 
@@ -610,9 +612,15 @@ mod tests {
 
         // Peer count moved but the plan did not; the on-phase must still end at 5 s
         // rather than being restarted by every maintenance tick.
-        assert_eq!(cycle.update(true, true, 4, false, 4_000), ScanCommand::Unchanged);
+        assert_eq!(
+            cycle.update(true, true, 4, false, 4_000),
+            ScanCommand::Unchanged
+        );
         assert_eq!(cycle.next_transition_at(), Some(5_000));
-        assert_eq!(cycle.update(true, true, 5, false, 5_000), ScanCommand::StopScanning);
+        assert_eq!(
+            cycle.update(true, true, 5, false, 5_000),
+            ScanCommand::StopScanning
+        );
     }
 
     #[test]

@@ -8,7 +8,7 @@ use crate::domain::ephemeral::{EphemeralMessage, MessageTTL};
 use crate::domain::ids::MessageId;
 use crate::error::StorageError;
 use crate::storage::repositories::ephemeral_repo::EphemeralRepository;
-use crate::storage::repositories::settings_repo::{keys, SettingsRepository};
+use crate::storage::repositories::settings_repo::{SettingsRepository, keys};
 
 /// Ephemeral service errors.
 #[derive(Debug, thiserror::Error)]
@@ -104,7 +104,11 @@ impl EphemeralService {
     /// Unlike [`track`](Self::track) this accepts arbitrary `ttl_seconds`
     /// (a conversation timer is not restricted to the `MessageTTL` menu).
     /// `ttl_seconds == 0` is a no-op (timer disabled).
-    pub fn track_armed(&self, message_id: MessageId, ttl_seconds: u32) -> Result<(), EphemeralError> {
+    pub fn track_armed(
+        &self,
+        message_id: MessageId,
+        ttl_seconds: u32,
+    ) -> Result<(), EphemeralError> {
         if ttl_seconds == 0 {
             return Ok(());
         }

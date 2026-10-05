@@ -33,7 +33,8 @@ impl AnonDmService {
     /// Encrypts avatar with profile key for privacy-preserving sharing.
     pub(crate) fn get_encrypted_avatar(&self, profile_key: &[u8; 32]) -> Option<Vec<u8>> {
         use crate::storage::repositories::settings_keys;
-        let avatar = self.settings_repo
+        let avatar = self
+            .settings_repo
             .get_bytes(settings_keys::AVATAR)
             .ok()
             .flatten()?;

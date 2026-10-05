@@ -211,7 +211,7 @@ pub fn encrypt_backup_file(
         _ => {
             return Err(CryptoError::Validation(
                 "invalid backup key mode / salt combination".into(),
-            ))
+            ));
         }
     }
 
@@ -252,8 +252,7 @@ pub fn encrypt_backup_file(
         )
         .map_err(|e| CryptoError::EncryptionFailed(format!("payload encrypt failed: {e}")))?;
 
-    let mut out =
-        Vec::with_capacity(MAGIC.len() + 4 + header_bytes.len() + ciphertext.len());
+    let mut out = Vec::with_capacity(MAGIC.len() + 4 + header_bytes.len() + ciphertext.len());
     out.extend_from_slice(MAGIC);
     out.extend_from_slice(&(header_bytes.len() as u32).to_le_bytes());
     out.extend_from_slice(&header_bytes);
@@ -401,13 +400,21 @@ mod tests {
         );
 
         // Each binding is load-bearing.
-        assert_ne!(k, derive_link_sync_kek(&[9u8; 32], aci, 7), "ephemeral key binds");
+        assert_ne!(
+            k,
+            derive_link_sync_kek(&[9u8; 32], aci, 7),
+            "ephemeral key binds"
+        );
         assert_ne!(
             k,
             derive_link_sync_kek(&eph, "22222222-2222-2222-2222-222222222222", 7),
             "ACI salt binds — a blob cannot be replayed across accounts"
         );
-        assert_ne!(k, derive_link_sync_kek(&eph, aci, 8), "primary reg-id binds");
+        assert_ne!(
+            k,
+            derive_link_sync_kek(&eph, aci, 8),
+            "primary reg-id binds"
+        );
         // Domain separation from the SVR KEK built on the same 32 bytes.
         assert_ne!(k, derive_server_kek(&eph));
     }
@@ -432,14 +439,18 @@ mod tests {
         assert!(decrypt_backup_file(&parsed, &wrong).is_err());
 
         // A link-mode file must carry no Argon2 salt.
-        assert!(encrypt_backup_file(&payload, &kek, KEY_MODE_LINK, &[0u8; ARGON2_SALT_LEN]).is_err());
+        assert!(
+            encrypt_backup_file(&payload, &kek, KEY_MODE_LINK, &[0u8; ARGON2_SALT_LEN]).is_err()
+        );
 
         // Header tamper (flip a byte in the header) breaks the AAD bind.
         let mut tampered = file.clone();
         tampered[MAGIC.len() + 4] ^= 0x01;
-        assert!(parse_backup_file(&tampered)
-            .and_then(|p| decrypt_backup_file(&p, &kek))
-            .is_err());
+        assert!(
+            parse_backup_file(&tampered)
+                .and_then(|p| decrypt_backup_file(&p, &kek))
+                .is_err()
+        );
     }
 
     /// Passphrase KEK: deterministic for same (passphrase, salt), distinct
@@ -476,9 +487,7 @@ mod tests {
 
         // Ciphertext must not contain the plaintext (sanity for the
         // no-plaintext greps in V50/V51)
-        assert!(!file
-            .windows(payload.len())
-            .any(|w| w == payload.as_slice()));
+        assert!(!file.windows(payload.len()).any(|w| w == payload.as_slice()));
 
         // Wrong KEK
         let wrong = derive_server_kek(&[9u8; 32]);

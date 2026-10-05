@@ -12,15 +12,15 @@ use tokio_stream::{Stream, StreamExt};
 
 use crate::domain::channel::{MemberRole, Membership};
 use crate::domain::ids::{ChannelId, UserId};
+use crate::error::NetworkError;
 use crate::mailbox::group::GroupMailboxSetupResult;
 use crate::network::grpc::channel_client::ChannelClient;
-use crate::proto::chat_v1::{self as pb, channel_event, ChannelEvent};
+use crate::proto::chat_v1::{self as pb, ChannelEvent, channel_event};
 use crate::services::channel::membership_log::{
-    invite_pub_of, password_invite_key, AuthorBase, IntentContext, InviteLink, LogError,
+    AuthorBase, IntentContext, InviteLink, LogError, invite_pub_of, password_invite_key,
 };
 use crate::services::channel::verified_state::{ChannelRole, MemberStatus, UnsignedEvent};
 use crate::services::current_user::CurrentUserProvider;
-use crate::error::NetworkError;
 
 use crate::services::channel::converters::{domain_role_to_proto, proto_to_domain_membership};
 use crate::services::channel::error::ChannelError;
@@ -65,11 +65,15 @@ where
 }
 
 fn status_of(ctx: &IntentContext<'_>, user: &str) -> Option<MemberStatus> {
-    ctx.state.and_then(|s| s.members.get(user)).map(|m| m.status)
+    ctx.state
+        .and_then(|s| s.members.get(user))
+        .map(|m| m.status)
 }
 
 fn intent_error(msg: &str) -> LogError {
-    LogError::Intent(crate::services::channel::verified_state::VerifyError::InvalidAction(msg.to_string()))
+    LogError::Intent(
+        crate::services::channel::verified_state::VerifyError::InvalidAction(msg.to_string()),
+    )
 }
 
 /// How a joiner proves the right to join.
@@ -87,7 +91,13 @@ impl ChannelService {
         &self,
         channel_id: &ChannelId,
         password: Option<&str>,
-    ) -> Result<(crate::domain::channel::Channel, Option<GroupMailboxSetupResult>), ChannelError> {
+    ) -> Result<
+        (
+            crate::domain::channel::Channel,
+            Option<GroupMailboxSetupResult>,
+        ),
+        ChannelError,
+    > {
         let proof = match password.filter(|p| !p.is_empty()) {
             Some(p) => JoinProof::Key(password_invite_key(channel_id, p)?),
             None => JoinProof::None,
@@ -97,12 +107,21 @@ impl ChannelService {
     }
 
     /// Join through a `chatter://join/...` link.
-    pub async fn join_via_link(&self, url: &str) -> Result<crate::domain::channel::Channel, ChannelError> {
-        let link = InviteLink::parse(url).ok_or_else(|| ChannelError::InvalidInput("not a channel invite link".into()))?;
-        self.join_with(&link.channel_id, JoinProof::Key(link.invite_key)).await
+    pub async fn join_via_link(
+        &self,
+        url: &str,
+    ) -> Result<crate::domain::channel::Channel, ChannelError> {
+        let link = InviteLink::parse(url)
+            .ok_or_else(|| ChannelError::InvalidInput("not a channel invite link".into()))?;
+        self.join_with(&link.channel_id, JoinProof::Key(link.invite_key))
+            .await
     }
 
-    async fn join_with(&self, channel_id: &ChannelId, proof: JoinProof) -> Result<crate::domain::channel::Channel, ChannelError> {
+    async fn join_with(
+        &self,
+        channel_id: &ChannelId,
+        proof: JoinProof,
+    ) -> Result<crate::domain::channel::Channel, ChannelError> {
         let me = self.settings_repo.current_user_id()?;
         let cid = channel_id.to_string();
         let (invite_key, invite_pub) = match &proof {
@@ -132,12 +151,19 @@ impl ChannelService {
             .await?;
 
         let mut channel_client = self.channel_client();
-        let channel = self.get_channel_internal(&mut channel_client, channel_id).await?;
+        let channel = self
+            .get_channel_internal(&mut channel_client, channel_id)
+            .await?;
 
         let active = self
             .membership_log
             .load(channel_id)?
-            .and_then(|v| v.state.members.get(&me.to_string()).map(|m| m.status == MemberStatus::Active))
+            .and_then(|v| {
+                v.state
+                    .members
+                    .get(&me.to_string())
+                    .map(|m| m.status == MemberStatus::Active)
+            })
             .unwrap_or(false);
         if !active {
             // A needs_approval link: we are REQUESTING until an admin's
@@ -145,14 +171,22 @@ impl ChannelService {
             tracing::info!(%channel_id, "Join requested; waiting for approval");
             return Ok(channel);
         }
-        self.after_becoming_member(&mut channel_client, channel_id).await;
+        self.after_becoming_member(&mut channel_client, channel_id)
+            .await;
         Ok(channel)
     }
 
     /// Create and distribute our sender key once we are an ACTIVE member.
-    async fn after_becoming_member(&self, channel_client: &mut ChannelClient, channel_id: &ChannelId) {
+    async fn after_becoming_member(
+        &self,
+        channel_client: &mut ChannelClient,
+        channel_id: &ChannelId,
+    ) {
         // Display roster for the UI; key decisions read the verified state.
-        if let Err(e) = self.sync_channel_members_internal(channel_client, channel_id).await {
+        if let Err(e) = self
+            .sync_channel_members_internal(channel_client, channel_id)
+            .await
+        {
             tracing::warn!(%channel_id, error = %e, "Failed to sync channel roster after join");
         }
         let skdm = match self.signal_service.create_sender_key(channel_id).await {
@@ -163,15 +197,23 @@ impl ChannelService {
             }
         };
         // Best-effort: peers that miss it heal via SenderKeyRequest.
-        if let Err(e) = self.message_service.distribute_skdm(channel_id, &skdm).await {
+        if let Err(e) = self
+            .message_service
+            .distribute_skdm(channel_id, &skdm)
+            .await
+        {
             tracing::warn!(%channel_id, error = %e, "Failed to distribute SKDM on join (peers will heal via SenderKeyRequest)");
         }
     }
 
     /// Sync channel members from the server to local storage (display only).
-    pub async fn sync_channel_members(&self, channel_id: &ChannelId) -> Result<usize, ChannelError> {
+    pub async fn sync_channel_members(
+        &self,
+        channel_id: &ChannelId,
+    ) -> Result<usize, ChannelError> {
         let mut channel_client = self.channel_client();
-        self.sync_channel_members_internal(&mut channel_client, channel_id).await
+        self.sync_channel_members_internal(&mut channel_client, channel_id)
+            .await
     }
 
     /// Internal: Sync channel members using an existing client.
@@ -185,14 +227,24 @@ impl ChannelService {
         channel_client: &mut ChannelClient,
         channel_id: &ChannelId,
     ) -> Result<usize, ChannelError> {
-        let proto_members = channel_client.get_all_channel_members(&channel_id.to_string()).await?;
+        let proto_members = channel_client
+            .get_all_channel_members(&channel_id.to_string())
+            .await?;
         let memberships = full_member_list(channel_id, &proto_members)?;
-        let refresh = self.channel_repo.replace_memberships(channel_id, &memberships)?;
-        self.classify_roster_changes(channel_id, &refresh.added, &refresh.removed).await;
+        let refresh = self
+            .channel_repo
+            .replace_memberships(channel_id, &memberships)?;
+        self.classify_roster_changes(channel_id, &refresh.added, &refresh.removed)
+            .await;
         Ok(proto_members.len())
     }
 
-    pub(super) async fn classify_roster_changes(&self, channel_id: &ChannelId, added: &[Membership], removed: &[Membership]) {
+    pub(super) async fn classify_roster_changes(
+        &self,
+        channel_id: &ChannelId,
+        added: &[Membership],
+        removed: &[Membership],
+    ) {
         // A legitimate joiner shows up in the roster a moment before their
         // signed change reaches us. Fetch the signed log first, as Signal
         // fetches group changes before trusting a roster, so only an add that
@@ -204,8 +256,12 @@ impl ChannelService {
         }
         let events = added
             .iter()
-            .map(|m| UnsignedEvent::Added { user_id: m.user_id.to_string() })
-            .chain(removed.iter().map(|m| UnsignedEvent::Removed { user_id: m.user_id.to_string() }));
+            .map(|m| UnsignedEvent::Added {
+                user_id: m.user_id.to_string(),
+            })
+            .chain(removed.iter().map(|m| UnsignedEvent::Removed {
+                user_id: m.user_id.to_string(),
+            }));
         for event in events {
             if let Err(e) = self.membership_log.apply_unsigned(channel_id, event) {
                 tracing::warn!(%channel_id, error = %e, "Could not apply an unsigned roster change");
@@ -225,12 +281,16 @@ impl ChannelService {
         if let Err(e) = self.signal_service.block_channel_send(channel_id) {
             tracing::error!(%channel_id, error = %e, "Failed to block channel send before leave");
         }
-        let skdm = self.signal_service.rotate_sender_key(channel_id).await.map_err(|e| {
-            let _ = self.signal_service.mark_channel_for_rotation(channel_id);
-            ChannelError::SenderKeyRotationFailed(format!(
-                "rotation failed before leaving: {e} — message sending blocked until resolved"
-            ))
-        })?;
+        let skdm = self
+            .signal_service
+            .rotate_sender_key(channel_id)
+            .await
+            .map_err(|e| {
+                let _ = self.signal_service.mark_channel_for_rotation(channel_id);
+                ChannelError::SenderKeyRotationFailed(format!(
+                    "rotation failed before leaving: {e} — message sending blocked until resolved"
+                ))
+            })?;
 
         let cid = channel_id.to_string();
         let left = self
@@ -258,7 +318,11 @@ impl ChannelService {
             return Err(e.into());
         }
 
-        if let Err(e) = self.signal_service.clear_channel_sender_keys(channel_id).await {
+        if let Err(e) = self
+            .signal_service
+            .clear_channel_sender_keys(channel_id)
+            .await
+        {
             tracing::warn!(%channel_id, error = %e, "Failed to clear sender keys when leaving channel");
         }
         if let Err(e) = self.group_coordinator.cleanup_channel(channel_id) {
@@ -299,7 +363,13 @@ impl ChannelService {
                 |change| {
                     let mut client = self.channel_client();
                     let (cid, message) = (cid.clone(), message.clone());
-                    async move { drain(client.invite_user(&cid, change, message.as_deref()).await?, "invite").await }
+                    async move {
+                        drain(
+                            client.invite_user(&cid, change, message.as_deref()).await?,
+                            "invite",
+                        )
+                        .await
+                    }
                 },
             )
             .await?;
@@ -327,14 +397,23 @@ impl ChannelService {
                     let a = if accept {
                         Action::AcceptInvite(pb::AcceptInvite {})
                     } else {
-                        Action::RemoveMember(pb::RemoveMember { user_id: ctx.me.to_string(), reason: Reason::Left as i32 })
+                        Action::RemoveMember(pb::RemoveMember {
+                            user_id: ctx.me.to_string(),
+                            reason: Reason::Left as i32,
+                        })
                     };
                     Ok(vec![action(a)])
                 },
                 |change| {
                     let mut client = self.channel_client();
                     let cid = cid.clone();
-                    async move { drain(client.respond_to_invite(&cid, change).await?, "respond to invite").await }
+                    async move {
+                        drain(
+                            client.respond_to_invite(&cid, change).await?,
+                            "respond to invite",
+                        )
+                        .await
+                    }
                 },
             )
             .await?;
@@ -342,14 +421,21 @@ impl ChannelService {
             return Ok(None);
         }
         let mut channel_client = self.channel_client();
-        let channel = self.get_channel_internal(&mut channel_client, channel_id).await?;
-        self.after_becoming_member(&mut channel_client, channel_id).await;
+        let channel = self
+            .get_channel_internal(&mut channel_client, channel_id)
+            .await?;
+        self.after_becoming_member(&mut channel_client, channel_id)
+            .await;
         Ok(Some(channel))
     }
 
     /// Approve a REQUESTING joiner (a `needs_approval` link): a signed
     /// `AddMember` that keeps the joiner's own identity key.
-    pub async fn approve_join_request(&self, channel_id: &ChannelId, user_id: &UserId) -> Result<(), ChannelError> {
+    pub async fn approve_join_request(
+        &self,
+        channel_id: &ChannelId,
+        user_id: &UserId,
+    ) -> Result<(), ChannelError> {
         let user = user_id.to_string();
         self.submit(channel_id, |ctx| {
             let m = ctx
@@ -369,14 +455,21 @@ impl ChannelService {
 
     /// Reject a join request, or withdraw an invite we (or another admin)
     /// sent: a signed `RemoveMember` of a not-yet-active user.
-    pub async fn remove_pending_member(&self, channel_id: &ChannelId, user_id: &UserId) -> Result<(), ChannelError> {
+    pub async fn remove_pending_member(
+        &self,
+        channel_id: &ChannelId,
+        user_id: &UserId,
+    ) -> Result<(), ChannelError> {
         let user = user_id.to_string();
         self.submit(channel_id, |ctx| {
             match status_of(ctx, &user) {
                 Some(MemberStatus::Requesting | MemberStatus::Invited) => {}
                 _ => return Err(intent_error("no pending request or invite for that user")),
             }
-            Ok(vec![action(Action::RemoveMember(pb::RemoveMember { user_id: user.clone(), reason: Reason::Kicked as i32 }))])
+            Ok(vec![action(Action::RemoveMember(pb::RemoveMember {
+                user_id: user.clone(),
+                reason: Reason::Kicked as i32,
+            }))])
         })
         .await
     }
@@ -396,23 +489,35 @@ impl ChannelService {
         let capability = pb::InviteCapability {
             invite_pub: link.invite_pub().to_vec(),
             role: domain_role_to_proto(role) as i32,
-            expires_at: expires_at.and_then(|t| t.timestamp_nanos_opt()).map_or(0, |n| n.max(1) as u64),
+            expires_at: expires_at
+                .and_then(|t| t.timestamp_nanos_opt())
+                .map_or(0, |n| n.max(1) as u64),
             max_uses,
             needs_approval,
             uses: 0,
         };
         self.submit(channel_id, |_| {
-            Ok(vec![action(Action::CreateInvite(pb::CreateInvite { capability: Some(capability.clone()) }))])
+            Ok(vec![action(Action::CreateInvite(pb::CreateInvite {
+                capability: Some(capability.clone()),
+            }))])
         })
         .await?;
         Ok(link)
     }
 
     /// Revoke a join link by its public key.
-    pub async fn revoke_invite_link(&self, channel_id: &ChannelId, invite_pub: &[u8]) -> Result<(), ChannelError> {
+    pub async fn revoke_invite_link(
+        &self,
+        channel_id: &ChannelId,
+        invite_pub: &[u8],
+    ) -> Result<(), ChannelError> {
         let invite_pub = invite_pub.to_vec();
-        self.submit(channel_id, |_| Ok(vec![action(Action::RevokeInvite(pb::RevokeInvite { invite_pub: invite_pub.clone() }))]))
-            .await
+        self.submit(channel_id, |_| {
+            Ok(vec![action(Action::RevokeInvite(pb::RevokeInvite {
+                invite_pub: invite_pub.clone(),
+            }))])
+        })
+        .await
     }
 
     /// Author a change on the verified state and send it with
@@ -485,14 +590,21 @@ impl ChannelService {
             .await?;
 
         let memberships = full_member_list(channel_id, &proto_members)?;
-        let refresh = self.channel_repo.replace_memberships(channel_id, &memberships)?;
-        self.classify_roster_changes(channel_id, &refresh.added, &refresh.removed).await;
+        let refresh = self
+            .channel_repo
+            .replace_memberships(channel_id, &memberships)?;
+        self.classify_roster_changes(channel_id, &refresh.added, &refresh.removed)
+            .await;
 
         Ok(memberships)
     }
 
     /// Hand the channel to `new_owner`, a current member; we become an admin.
-    pub async fn transfer_ownership(&self, channel_id: &ChannelId, new_owner: &UserId) -> Result<(), ChannelError> {
+    pub async fn transfer_ownership(
+        &self,
+        channel_id: &ChannelId,
+        new_owner: &UserId,
+    ) -> Result<(), ChannelError> {
         let to = new_owner.to_string();
         let cid = channel_id.to_string();
         self.membership_log
@@ -500,7 +612,13 @@ impl ChannelService {
                 channel_id,
                 AuthorBase::Verified,
                 None,
-                |_| Ok(vec![action(Action::TransferOwnership(pb::TransferOwnershipAction { new_owner_user_id: to.clone() }))]),
+                |_| {
+                    Ok(vec![action(Action::TransferOwnership(
+                        pb::TransferOwnershipAction {
+                            new_owner_user_id: to.clone(),
+                        },
+                    ))])
+                },
                 |change| {
                     let mut client = self.channel_client();
                     let cid = cid.clone();
@@ -520,7 +638,9 @@ impl ChannelService {
     ) -> Result<Membership, ChannelError> {
         // Ownership is not grantable; only TransferOwnership moves it.
         if new_role == MemberRole::Owner {
-            return Err(ChannelError::InvalidInput("ownership cannot be granted".to_string()));
+            return Err(ChannelError::InvalidInput(
+                "ownership cannot be granted".to_string(),
+            ));
         }
         let target = user_id.to_string();
         let role = domain_role_to_proto(new_role) as i32;
@@ -530,11 +650,22 @@ impl ChannelService {
                 channel_id,
                 AuthorBase::Verified,
                 None,
-                |_| Ok(vec![action(Action::SetRole(pb::SetRole { user_id: target.clone(), role }))]),
+                |_| {
+                    Ok(vec![action(Action::SetRole(pb::SetRole {
+                        user_id: target.clone(),
+                        role,
+                    }))])
+                },
                 |change| {
                     let mut client = self.channel_client();
                     let cid = cid.clone();
-                    async move { drain(client.update_member_role(&cid, change).await?, "update role").await }
+                    async move {
+                        drain(
+                            client.update_member_role(&cid, change).await?,
+                            "update role",
+                        )
+                        .await
+                    }
                 },
             )
             .await?;
@@ -549,13 +680,14 @@ impl ChannelService {
     ///
     /// SKDM distribution failure is best-effort: remaining members will
     /// rotate themselves via `mark_channel_for_rotation` on their next send.
-    pub async fn leave_channel_complete(
-        &self,
-        channel_id: &ChannelId,
-    ) -> Result<(), ChannelError> {
+    pub async fn leave_channel_complete(&self, channel_id: &ChannelId) -> Result<(), ChannelError> {
         let skdm = self.leave_channel(channel_id).await?;
 
-        if let Err(e) = self.message_service.distribute_skdm(channel_id, &skdm).await {
+        if let Err(e) = self
+            .message_service
+            .distribute_skdm(channel_id, &skdm)
+            .await
+        {
             tracing::warn!(
                 channel_id = %channel_id,
                 error = %e,
@@ -567,7 +699,11 @@ impl ChannelService {
             tracing::warn!(channel_id = %channel_id, error = %e, "Failed to unblock channel send after leave");
         }
 
-        if let Err(e) = self.signal_service.clear_channel_sender_keys(channel_id).await {
+        if let Err(e) = self
+            .signal_service
+            .clear_channel_sender_keys(channel_id)
+            .await
+        {
             tracing::warn!(
                 channel_id = %channel_id,
                 error = %e,

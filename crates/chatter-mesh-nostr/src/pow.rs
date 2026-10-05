@@ -190,7 +190,11 @@ mod tests {
 
         let tag = event.tags.last().expect("a tag was appended");
         assert_eq!(tag[0], "nonce");
-        assert_eq!(tag[1].len(), NONCE_HEX_WIDTH, "fixed-width hex, like bitchat");
+        assert_eq!(
+            tag[1].len(),
+            NONCE_HEX_WIDTH,
+            "fixed-width hex, like bitchat"
+        );
         assert_eq!(tag[2], TARGET_BITS.to_string());
 
         let id = event_id(&event).expect("id");

@@ -7,8 +7,8 @@ use crate::{common, skip_if_no_server};
 use base64::Engine;
 use chatter_core::network::grpc::{ChannelClient, MessageClient};
 use chatter_core::proto::chat_v1::{
-    message::content::Type as ContentType, message::Content, Channel as ChannelProto, ChannelType,
-    MessageSortDirection,
+    Channel as ChannelProto, ChannelType, MessageSortDirection, message::Content,
+    message::content::Type as ContentType,
 };
 use tokio_stream::StreamExt;
 
@@ -16,7 +16,12 @@ use common::*;
 
 // Helper to consume a channel creation stream and get the channel ID
 async fn consume_create_stream_get_id(
-    stream: impl futures::Stream<Item = Result<chatter_core::proto::chat_v1::ChannelEvent, chatter_core::error::NetworkError>>,
+    stream: impl futures::Stream<
+        Item = Result<
+            chatter_core::proto::chat_v1::ChannelEvent,
+            chatter_core::error::NetworkError,
+        >,
+    >,
 ) -> String {
     tokio::pin!(stream);
     let mut channel_id = String::new();
@@ -61,7 +66,8 @@ async fn test_create_private_group() {
             Some("A private group for testing"),
             None,
             Some(membership::genesis(&user, false).1),
-        ).await
+        )
+        .await
         .expect("Failed to create group");
 
     let channel_id = consume_create_stream_get_id(stream).await;
@@ -99,7 +105,8 @@ async fn test_create_group_with_initial_members() {
             Some("Team group with members"),
             None,
             Some(membership::genesis(&user1, false).1),
-        ).await
+        )
+        .await
         .expect("Failed to create group with members");
 
     let channel_id = consume_create_stream_get_id(stream).await;
@@ -112,10 +119,7 @@ async fn test_create_group_with_initial_members() {
     );
 
     // Should have at least the creator
-    assert!(
-        members.members.len() >= 1,
-        "Group should have members"
-    );
+    assert!(members.members.len() >= 1, "Group should have members");
 }
 
 // ============================================================================
@@ -151,7 +155,8 @@ async fn test_invite_user_to_group() {
             None,
             None,
             Some(membership::genesis(&user1, false).1),
-        ).await
+        )
+        .await
         .expect("Failed to create group");
 
     let channel_id = consume_create_stream_get_id(stream).await;
@@ -200,7 +205,8 @@ async fn test_kick_user_from_group() {
             None,
             None,
             Some(membership::genesis(&user1, false).1),
-        ).await
+        )
+        .await
         .expect("Failed to create group");
 
     let channel_id = consume_create_stream_get_id(stream).await;
@@ -248,7 +254,8 @@ async fn test_send_message_to_group() {
             None,
             None,
             Some(membership::genesis(&user, false).1),
-        ).await
+        )
+        .await
         .expect("Failed to create group");
 
     let channel_id = consume_create_stream_get_id(stream).await;
@@ -298,7 +305,8 @@ async fn test_group_message_thread() {
             None,
             None,
             Some(membership::genesis(&user, false).1),
-        ).await
+        )
+        .await
         .expect("Failed to create group");
 
     let channel_id = consume_create_stream_get_id(stream).await;
@@ -373,7 +381,8 @@ async fn test_update_group_settings() {
             Some("Original description"),
             None,
             Some(membership::genesis(&user, false).1),
-        ).await
+        )
+        .await
         .expect("Failed to create group");
 
     let channel_id = consume_create_stream_get_id(stream).await;
@@ -457,7 +466,8 @@ async fn test_update_group_settings_rejects_empty_update_mask() {
             Some("Original description"),
             None,
             Some(membership::genesis(&user, false).1),
-        ).await
+        )
+        .await
         .expect("Failed to create group");
     let channel_id = consume_create_stream_get_id(stream).await;
 
@@ -537,7 +547,8 @@ async fn test_leave_group() {
             None,
             None,
             Some(membership::genesis(&user1, false).1),
-        ).await
+        )
+        .await
         .expect("Failed to create group");
 
     let channel_id = consume_create_stream_get_id(stream).await;
@@ -551,7 +562,9 @@ async fn test_leave_group() {
 
     let mut user2_channel_client = ChannelClient::new(pool.channel(), pool.auth_clone());
     let change = membership::leave(&user2, &mut user2_channel_client, &channel_id).await;
-    let leave_result = user2_channel_client.leave_channel(&channel_id, change).await;
+    let leave_result = user2_channel_client
+        .leave_channel(&channel_id, change)
+        .await;
 
     match leave_result {
         Ok(stream) => {
@@ -586,7 +599,8 @@ async fn test_group_message_pagination() {
             None,
             None,
             Some(membership::genesis(&user, false).1),
-        ).await
+        )
+        .await
         .expect("Failed to create group");
 
     let channel_id = consume_create_stream_get_id(stream).await;
@@ -628,7 +642,10 @@ async fn test_group_message_pagination() {
             .await,
     );
 
-    assert!(page1.messages.len() <= 5, "First page should have at most 5 messages");
+    assert!(
+        page1.messages.len() <= 5,
+        "First page should have at most 5 messages"
+    );
 
     // Get second page using next_page_token. `reference_message_id` is a
     // "messages around this ID" cursor (returns both newer and older
@@ -652,8 +669,7 @@ async fn test_group_message_pagination() {
         // Second page should have different messages
         if !page2.messages.is_empty() {
             assert_ne!(
-                page2.messages[0].id,
-                page1.messages[0].id,
+                page2.messages[0].id, page1.messages[0].id,
                 "Pages should have different messages"
             );
         }
@@ -683,7 +699,8 @@ async fn test_non_member_cannot_send_to_private_group() {
             None,
             None,
             Some(membership::genesis(&user1, false).1),
-        ).await
+        )
+        .await
         .expect("Failed to create group");
 
     let channel_id = consume_create_stream_get_id(stream).await;
@@ -735,7 +752,10 @@ async fn join_by_invite(
     invitee: &TestUser,
 ) {
     let change = membership::invite(owner, owner_client, channel_id, invitee).await;
-    let stream = owner_client.invite_user(channel_id, change, None).await.expect("invite");
+    let stream = owner_client
+        .invite_user(channel_id, change, None)
+        .await
+        .expect("invite");
     tokio::pin!(stream);
     while let Some(ev) = stream.next().await {
         ev.expect("invite stream");
@@ -749,7 +769,10 @@ async fn join_by_invite(
     as_(invitee);
     let mut client = ChannelClient::new(pool.channel(), pool.auth_clone());
     let change = membership::accept(invitee, &mut client, channel_id).await;
-    let stream = client.respond_to_invite(channel_id, change).await.expect("accept");
+    let stream = client
+        .respond_to_invite(channel_id, change)
+        .await
+        .expect("accept");
     tokio::pin!(stream);
     while let Some(ev) = stream.next().await {
         ev.expect("accept stream");

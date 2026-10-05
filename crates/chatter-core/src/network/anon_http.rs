@@ -34,18 +34,43 @@ pub static ANON_HTTP_ACTIVE: AtomicBool = AtomicBool::new(false);
 /// alignment, IV and MAC. Do not trust a response's Content-Length for allocation.
 pub(crate) fn storage_response_limit() -> usize {
     let size = crate::crypto::attachment_crypto::max_attachment_size();
-    usize::try_from(size.saturating_add(size / 20).saturating_add(1024))
-        .unwrap_or(usize::MAX)
+    usize::try_from(size.saturating_add(size / 20).saturating_add(1024)).unwrap_or(usize::MAX)
 }
 
-pub(crate) fn append_storage_chunk(body: &mut Vec<u8>, chunk: &[u8], limit: usize) -> Result<(), String> {
-    let len = body.len().checked_add(chunk.len())
+pub(crate) fn append_storage_chunk(
+    body: &mut Vec<u8>,
+    chunk: &[u8],
+    limit: usize,
+) -> Result<(), String> {
+    let len = body
+        .len()
+        .checked_add(chunk.len())
         .filter(|len| *len <= limit)
         .ok_or_else(|| "storage response exceeds attachment size limit".to_string())?;
     body.try_reserve(len - body.len())
         .map_err(|_| "not enough memory for storage response".to_string())?;
     body.extend_from_slice(chunk);
     Ok(())
+}
+
+/// Account before writing: oversize/truncated transfers never replace an
+/// existing encrypted attachment. The caller owns atomic staging/cleanup.
+pub(crate) async fn write_storage_chunk<W: tokio::io::AsyncWrite + Unpin>(
+    writer: &mut W,
+    total: u64,
+    chunk: &[u8],
+    limit: u64,
+) -> Result<u64, String> {
+    use tokio::io::AsyncWriteExt;
+    let next = total
+        .checked_add(chunk.len() as u64)
+        .filter(|n| *n <= limit)
+        .ok_or_else(|| "storage response exceeds attachment size limit".to_string())?;
+    writer
+        .write_all(chunk)
+        .await
+        .map_err(|_| "storage file write failed".to_string())?;
+    Ok(next)
 }
 
 /// Parsed components of an absolute http(s) URL.
@@ -88,13 +113,20 @@ pub(crate) fn parse_url(url: &str) -> Result<ParsedUrl, String> {
         return Err("storage URL must not contain credentials".to_string());
     }
     // `port_or_known_default` fills in 443/80 for https/http when absent.
-    let port = u.port_or_known_default().unwrap_or(if https { 443 } else { 80 });
+    let port = u
+        .port_or_known_default()
+        .unwrap_or(if https { 443 } else { 80 });
     let mut path_and_query = u.path().to_string();
     if let Some(q) = u.query() {
         path_and_query.push('?');
         path_and_query.push_str(q);
     }
-    Ok(ParsedUrl { https, host, port, path_and_query })
+    Ok(ParsedUrl {
+        https,
+        host,
+        port,
+        path_and_query,
+    })
 }
 
 /// Response of a [`put`]: status code plus the ETag header (needed to complete
@@ -112,14 +144,21 @@ mod tor {
     use http_body_util::{BodyExt, Full};
     use hyper::body::Bytes;
     use hyper_util::rt::TokioIo;
+    use tokio_rustls::TlsConnector;
     use tokio_rustls::rustls::pki_types::ServerName;
     use tokio_rustls::rustls::{ClientConfig, RootCertStore};
-    use tokio_rustls::TlsConnector;
 
     use arti_client::TorClient;
 
-    use super::{parse_url, ParsedUrl, PutResponse};
+    use super::{ParsedUrl, PutResponse, parse_url};
     use crate::network::grpc::onion_transport::SharedTorClient;
+
+    struct TorTask<T>(tokio::task::JoinHandle<T>);
+    impl<T> Drop for TorTask<T> {
+        fn drop(&mut self) {
+            self.0.abort();
+        }
+    }
 
     /// Host header value: bare host, or `host:port` when the port is non-default.
     fn host_header(p: &ParsedUrl) -> String {
@@ -139,7 +178,7 @@ mod tor {
     /// connect time. Uses the `ring` crypto provider explicitly so we never
     /// depend on a process-global default being installed.
     fn tls_config() -> ClientConfig {
-        use tokio_rustls::rustls::pki_types::{pem::PemObject, CertificateDer};
+        use tokio_rustls::rustls::pki_types::{CertificateDer, pem::PemObject};
 
         let mut roots = RootCertStore::empty();
         if let Some(ca_pem) = crate::config::TLS_ROOT_CA_PEM {
@@ -186,12 +225,12 @@ mod tor {
         let base = tor
             .get_or_try_init(|| async {
                 let config = crate::network::grpc::onion_transport::tor_client_config()?;
-                let jh = tor_runtime().spawn(async {
-                    let _ = tokio_rustls::rustls::crypto::ring::default_provider()
-                        .install_default();
+                let mut task = TorTask(tor_runtime().spawn(async {
+                    let _ =
+                        tokio_rustls::rustls::crypto::ring::default_provider().install_default();
                     TorClient::create_bootstrapped(config).await
-                });
-                match tokio::time::timeout(std::time::Duration::from_secs(120), jh).await {
+                }));
+                match tokio::time::timeout(std::time::Duration::from_secs(120), &mut task.0).await {
                     Err(_) => Err("Tor bootstrap timed out after 120s".to_string()),
                     Ok(Err(join)) => Err(format!("Tor bootstrap task panicked: {join}")),
                     Ok(Ok(Err(e))) => Err(format!("Tor bootstrap failed: {e}")),
@@ -201,9 +240,11 @@ mod tor {
             .await?;
         let client = base.clone();
         let (dial_host, dial_port) = (host.to_string(), port);
-        let jh = tor_runtime()
-            .spawn(async move { client.connect((dial_host.as_str(), dial_port)).await });
-        match tokio::time::timeout(std::time::Duration::from_secs(90), jh).await {
+        let mut task = TorTask(
+            tor_runtime()
+                .spawn(async move { client.connect((dial_host.as_str(), dial_port)).await }),
+        );
+        match tokio::time::timeout(std::time::Duration::from_secs(90), &mut task.0).await {
             Err(_) => Err(format!("Tor connect to {host}:{port} timed out after 90s")),
             Ok(Err(join)) => Err(format!("Tor connect task panicked: {join}")),
             Ok(Ok(Err(e))) => Err(format!("Tor connect to {host}:{port} failed: {e}")),
@@ -283,6 +324,85 @@ mod tor {
         Ok(body)
     }
 
+    /// Stream the authenticated Tor/TLS response into an encrypted staging
+    /// file. No redirect, direct fallback or full-body allocation is used.
+    pub async fn get_to_file(
+        tor: &SharedTorClient,
+        url: &str,
+        file: &mut tokio::fs::File,
+        limit: u64,
+    ) -> Result<u64, String> {
+        let p = parse_url(url)?;
+        let req = hyper::Request::builder()
+            .method(hyper::Method::GET)
+            .uri(&p.path_and_query)
+            .header(hyper::header::HOST, host_header(&p))
+            .body(Full::new(Bytes::new()))
+            .map_err(|_| "storage request construction failed".to_string())?;
+        let stream = connect_tor(tor, &p.host, p.port)
+            .await
+            .map_err(|_| "storage Tor connection failed".to_string())?;
+        if p.https {
+            let name = ServerName::try_from(p.host.clone())
+                .map_err(|_| "storage TLS hostname invalid".to_string())?;
+            let tls = TlsConnector::from(Arc::new(tls_config()))
+                .connect(name, stream)
+                .await
+                .map_err(|_| "storage TLS handshake failed".to_string())?;
+            send_to_file(TokioIo::new(tls), req, file, limit).await
+        } else {
+            send_to_file(TokioIo::new(stream), req, file, limit).await
+        }
+    }
+
+    async fn send_to_file<T>(
+        io: TokioIo<T>,
+        req: hyper::Request<Full<Bytes>>,
+        file: &mut tokio::fs::File,
+        limit: u64,
+    ) -> Result<u64, String>
+    where
+        T: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static,
+    {
+        let (mut sender, connection) = hyper::client::conn::http1::handshake(io)
+            .await
+            .map_err(|_| "storage HTTP handshake failed".to_string())?;
+        struct Driver(tokio::task::JoinHandle<()>);
+        impl Drop for Driver {
+            fn drop(&mut self) {
+                self.0.abort();
+            }
+        }
+        let _driver = Driver(tokio::spawn(async move {
+            let _ = connection.await;
+        }));
+        let response = sender
+            .send_request(req)
+            .await
+            .map_err(|_| "storage request failed".to_string())?;
+        if !response.status().is_success() {
+            return Err(format!("storage GET returned status {}", response.status()));
+        }
+        if response
+            .headers()
+            .get(hyper::header::CONTENT_LENGTH)
+            .and_then(|h| h.to_str().ok())
+            .and_then(|h| h.parse::<u64>().ok())
+            .is_some_and(|len| len > limit)
+        {
+            return Err("storage response exceeds attachment size limit".into());
+        }
+        let mut incoming = response.into_body();
+        let mut total = 0;
+        while let Some(frame) = incoming.frame().await {
+            let frame = frame.map_err(|_| "storage response read failed".to_string())?;
+            if let Ok(data) = frame.into_data() {
+                total = super::write_storage_chunk(file, total, &data, limit).await?;
+            }
+        }
+        Ok(total)
+    }
+
     /// HTTP PUT over Tor. Returns the status and ETag; the caller decides how to
     /// treat non-2xx (part uploads retry, single PUTs error).
     pub async fn put(
@@ -310,11 +430,47 @@ mod tor {
 }
 
 #[cfg(feature = "onion")]
-pub use tor::{get, put};
+pub use tor::{get, get_to_file, put};
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn streamed_ciphertext_limit_rejects_before_writing_or_overflowing() {
+        use tokio::io::AsyncWriteExt;
+        let staging = tempfile::NamedTempFile::new().unwrap();
+        let mut file = tokio::fs::File::from_std(staging.reopen().unwrap());
+        let total = write_storage_chunk(&mut file, 0, b"abc", 6).await.unwrap();
+        let total = write_storage_chunk(&mut file, total, b"def", 6)
+            .await
+            .unwrap();
+        assert_eq!(total, 6);
+        assert!(
+            write_storage_chunk(&mut file, total, b"g", 6)
+                .await
+                .is_err()
+        );
+        assert!(
+            write_storage_chunk(&mut file, u64::MAX, b"x", u64::MAX)
+                .await
+                .is_err()
+        );
+        file.flush().await.unwrap();
+        file.sync_all().await.unwrap();
+        assert_eq!(std::fs::read(staging.path()).unwrap(), b"abcdef");
+    }
+
+    #[tokio::test]
+    async fn streamed_ciphertext_buffered_write_failure_is_detected_before_publish() {
+        use tokio::io::AsyncWriteExt;
+        let staging = tempfile::NamedTempFile::new().unwrap();
+        let mut file = tokio::fs::File::from_std(std::fs::File::open(staging.path()).unwrap());
+        let write = write_storage_chunk(&mut file, 0, b"ciphertext", 128).await;
+        let flush = file.flush().await;
+        assert!(write.is_err() || flush.is_err());
+        assert!(std::fs::read(staging.path()).unwrap().is_empty());
+    }
 
     #[test]
     fn storage_response_limit_is_enforced_before_append() {

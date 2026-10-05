@@ -24,11 +24,11 @@ use uuid::Uuid;
 
 use crate::error::MailboxError;
 use crate::mailbox::blind_signature::{
-    blind_key, unblind, BlindingSecret, MessageRandomizer, ServerPublicKey,
+    BlindingSecret, MessageRandomizer, ServerPublicKey, blind_key, unblind,
 };
 use crate::network::grpc::{AnonymousKtClient, MailboxClient};
-use crate::storage::repositories::SettingsRepository;
 use crate::storage::Database;
+use crate::storage::repositories::SettingsRepository;
 
 /// Default number of mailbox tokens to request at once.
 pub const DEFAULT_TOKEN_REQUEST_COUNT: u32 = 5;
@@ -914,7 +914,9 @@ impl TokenManager {
         match result {
             Ok(token) => Ok(token),
             Err(rusqlite::Error::QueryReturnedNoRows) => {
-                tracing::warn!("TokenManager: pre-fetched call-room pool is empty; refusing to request-then-spend");
+                tracing::warn!(
+                    "TokenManager: pre-fetched call-room pool is empty; refusing to request-then-spend"
+                );
                 Err(MailboxError::NoTokensAvailable)
             }
             Err(e) => Err(MailboxError::Storage(e.to_string())),
@@ -1002,7 +1004,9 @@ mod tests {
     #[test]
     fn cached_manifest_is_reverified_with_its_kt_proof() {
         use crate::mailbox::blind_signature::tests::kt_manifest_vector;
-        let Some(m) = kt_manifest_vector() else { return };
+        let Some(m) = kt_manifest_vector() else {
+            return;
+        };
         let tm = TokenManager::new(test_db());
         let cache = |m: &GetBlindSignaturePublicKeyResponse| {
             tm.db.connection().unwrap().execute(
@@ -1011,7 +1015,10 @@ mod tests {
             ).unwrap();
         };
         cache(&m);
-        assert_eq!(tm.get_cached_server_key().unwrap().unwrap().key_id, "vector-current");
+        assert_eq!(
+            tm.get_cached_server_key().unwrap().unwrap().key_id,
+            "vector-current"
+        );
         let mut stripped = m.clone();
         stripped.kt_proof = None;
         cache(&stripped);

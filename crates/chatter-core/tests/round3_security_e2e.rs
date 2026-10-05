@@ -32,16 +32,14 @@ use std::sync::Arc;
 
 use chatter_core::crypto::SignalStore;
 use chatter_core::domain::ids::{ChannelId, UserId};
-use chatter_core::domain::{Channel, ChannelType, Membership, MemberRole, NotificationPreference};
+use chatter_core::domain::{Channel, ChannelType, MemberRole, Membership, NotificationPreference};
 use chatter_core::mailbox::dm::ConversationKey;
 use chatter_core::storage::repositories::channel_repo::ChannelRepository;
 use chatter_core::storage::{Database, KeyStore};
 
 use chrono::Utc;
-use libsignal_protocol::{
-    DeviceId, Direction, IdentityKeyPair, IdentityKeyStore, ProtocolAddress,
-};
-use rand::{rngs::StdRng, SeedableRng};
+use libsignal_protocol::{DeviceId, Direction, IdentityKeyPair, IdentityKeyStore, ProtocolAddress};
+use rand::{SeedableRng, rngs::StdRng};
 use tempfile::NamedTempFile;
 
 // ============================================================================
@@ -94,7 +92,8 @@ fn round3_finding_1_2_membership_gate_distinguishes_member_from_non_member() {
     let mallory = UserId::new();
 
     repo.insert(&make_channel(channel_id)).unwrap();
-    repo.insert_membership(&make_membership(channel_id, alice)).unwrap();
+    repo.insert_membership(&make_membership(channel_id, alice))
+        .unwrap();
 
     // Member → Some
     let alice_m = repo.get_membership(&channel_id, &alice).unwrap();
@@ -120,8 +119,10 @@ fn round3_finding_2_membership_gate_drops_after_kick() {
     let bob = UserId::new();
 
     repo.insert(&make_channel(channel_id)).unwrap();
-    repo.insert_membership(&make_membership(channel_id, alice)).unwrap();
-    repo.insert_membership(&make_membership(channel_id, bob)).unwrap();
+    repo.insert_membership(&make_membership(channel_id, alice))
+        .unwrap();
+    repo.insert_membership(&make_membership(channel_id, bob))
+        .unwrap();
 
     // Bob in: gate would respond to his SenderKeyRequest.
     assert!(repo.get_membership(&channel_id, &bob).unwrap().is_some());
@@ -217,7 +218,7 @@ fn round3_finding_3_6_different_ephemeral_against_established_key_is_a_replay_si
 
 #[test]
 fn round3_finding_4_call_keys_are_random_per_draw() {
-    use chatter_core::crypto::call_key_provider::{generate_group_call_key, EphemeralCallKey};
+    use chatter_core::crypto::call_key_provider::{EphemeralCallKey, generate_group_call_key};
 
     // Two ephemeral call keys must differ - covered by the unit test in
     // crypto/call_key_provider.rs but re-asserted here as a public-API

@@ -19,17 +19,17 @@ use std::sync::Arc;
 use prost::Message as ProstMessage;
 use tokio::sync::mpsc;
 
-use crate::domain::anon_dm::AnonDmId;
 use crate::domain::UserId;
+use crate::domain::anon_dm::AnonDmId;
+use crate::domain::ids::ChannelId;
+use crate::domain::message::ConversationType;
+use crate::inbox::ack_policy::{self, AckDecision, MarkerTarget};
 use crate::inbox::events::InboxEvent;
+use crate::inbox::handlers::DomainEvent;
 use crate::mailbox::anon_dm::AnonDmPollResult;
 use crate::network::validation::MessageDeduplicator;
 use crate::proto::content_v1::{self, Content};
 use crate::services::pairwise::PairwiseService;
-use crate::domain::ids::ChannelId;
-use crate::domain::message::ConversationType;
-use crate::inbox::ack_policy::{self, AckDecision, MarkerTarget};
-use crate::inbox::handlers::DomainEvent;
 use crate::storage::MessageRepository;
 
 /// Decide what to do with an anonymous-DM envelope whose decrypt or decode
@@ -231,9 +231,9 @@ pub(crate) fn route_anon_dm_content(
                 status = ?presence.status,
                 "[ANON_DM] Received presence update from peer"
             );
-            AnonDmRoute::Deliver(vec![rewrap(
-                content_v1::content::Content::AnonDmPresence(presence),
-            )])
+            AnonDmRoute::Deliver(vec![rewrap(content_v1::content::Content::AnonDmPresence(
+                presence,
+            ))])
         }
         Some(content_v1::content::Content::AnonDmProfileUpdate(profile_update)) => {
             // Handle profile updates
@@ -317,7 +317,10 @@ pub async fn process_anon_dm_results(
                     "Anon DM message already processed, skipping decryption"
                 );
                 // Still add to processed list so we acknowledge it again
-                processed.entry(conversation_id).or_default().push(message_id);
+                processed
+                    .entry(conversation_id)
+                    .or_default()
+                    .push(message_id);
                 continue;
             }
 
@@ -346,7 +349,10 @@ pub async fn process_anon_dm_results(
                     .should_ack()
                     {
                         deduplicator.mark_processed(&message_id);
-                        processed.entry(conversation_id).or_default().push(message_id);
+                        processed
+                            .entry(conversation_id)
+                            .or_default()
+                            .push(message_id);
                     }
                     continue;
                 }
@@ -371,7 +377,10 @@ pub async fn process_anon_dm_results(
                     .should_ack()
                     {
                         deduplicator.mark_processed(&message_id);
-                        processed.entry(conversation_id).or_default().push(message_id);
+                        processed
+                            .entry(conversation_id)
+                            .or_default()
+                            .push(message_id);
                     }
                     continue;
                 }
@@ -387,7 +396,10 @@ pub async fn process_anon_dm_results(
                     "Skipping own message echoed back from anon DM mailbox poll"
                 );
                 deduplicator.mark_processed(&message_id);
-                processed.entry(conversation_id).or_default().push(message_id);
+                processed
+                    .entry(conversation_id)
+                    .or_default()
+                    .push(message_id);
                 continue;
             }
 
@@ -401,7 +413,10 @@ pub async fn process_anon_dm_results(
                     "Dropping message from blocked sender/conversation"
                 );
                 deduplicator.mark_processed(&message_id);
-                processed.entry(conversation_id).or_default().push(message_id);
+                processed
+                    .entry(conversation_id)
+                    .or_default()
+                    .push(message_id);
                 continue;
             }
 
@@ -433,7 +448,10 @@ pub async fn process_anon_dm_results(
                     .should_ack()
                     {
                         deduplicator.mark_processed(&message_id);
-                        processed.entry(conversation_id).or_default().push(message_id);
+                        processed
+                            .entry(conversation_id)
+                            .or_default()
+                            .push(message_id);
                     }
                     continue;
                 }
@@ -445,7 +463,9 @@ pub async fn process_anon_dm_results(
             let decision = match route_anon_dm_content(content, sender_id, conversation_id) {
                 AnonDmRoute::Deliver(events) => {
                     for event in events {
-                        let _ = event_tx.send(event.server_stamp_call_offer(msg.server_timestamp)).await;
+                        let _ = event_tx
+                            .send(event.server_stamp_call_offer(msg.server_timestamp))
+                            .await;
                     }
                     AckDecision::Ack
                 }

@@ -99,7 +99,10 @@ impl AiWorkspace {
         if access == AiAccess::Denied {
             return None;
         }
-        Some(Self { channel_id: channel_id.into(), access })
+        Some(Self {
+            channel_id: channel_id.into(),
+            access,
+        })
     }
 
     pub fn channel_id(&self) -> &str {
@@ -130,7 +133,10 @@ impl AiWorkspace {
     where
         F: Fn(&T) -> Option<&'a str>,
     {
-        files.iter().filter(|f| self.allows_file(channel_of(f))).collect()
+        files
+            .iter()
+            .filter(|f| self.allows_file(channel_of(f)))
+            .collect()
     }
 }
 
@@ -146,13 +152,20 @@ mod tests {
             ConversationType::AnonDm,
             ConversationType::AnonGroup,
         ] {
-            assert_eq!(ai_access(conv, true), AiAccess::Denied, "{conv:?} over mesh");
+            assert_eq!(
+                ai_access(conv, true),
+                AiAccess::Denied,
+                "{conv:?} over mesh"
+            );
         }
     }
 
     #[test]
     fn dms_are_local_only_and_channels_may_use_cloud() {
-        assert_eq!(ai_access(&ConversationType::Channel, false), AiAccess::LocalOrCloud);
+        assert_eq!(
+            ai_access(&ConversationType::Channel, false),
+            AiAccess::LocalOrCloud
+        );
 
         for conv in &[
             ConversationType::ServerDm,
@@ -167,7 +180,10 @@ mod tests {
     #[test]
     fn local_only_rejects_the_cloud_silo_and_admits_the_local_one() {
         let dm = ai_access(&ConversationType::ServerDm, false);
-        assert!(!dm.permits_silo(Silo::Cloud), "cloud silo reachable from a DM");
+        assert!(
+            !dm.permits_silo(Silo::Cloud),
+            "cloud silo reachable from a DM"
+        );
         assert!(dm.permits_silo(Silo::Local));
 
         let channel = ai_access(&ConversationType::Channel, false);

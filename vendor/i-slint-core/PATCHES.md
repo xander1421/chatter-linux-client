@@ -30,3 +30,19 @@ Standalone demo/fallback check without application media dependencies:
 `cargo test --manifest-path vendor/i-slint-core/tests/backdrop-demo/Cargo.toml --target-dir target -j 2`.
 It compiles the actual app demo against the patched core/compiler and asserts
 software-rendered foreground/background pixels with optics enabled.
+
+
+Chatter message web links (2026-10-06): `items/text.rs` `StyledTextItem`
+records the left-press URL, position, finger and platform clock. Only a
+matching release under 500 ms and within 8 logical pixels activates the link.
+Drag, exit, wheel, unmatched release and changed URL/finger revoke activation;
+right-button events pass through to the bubble/context menu. Non-link text
+still ignores events as before. Link presses grab their stream and emit
+`pointer-event` with `mouse-x`/`mouse-y`, registered by the matching compiler
+builtin patch. `MessageItem` routes that stream and ordinary bubble presses
+through shared hold functions: mobile link holds open the message menu, while
+release never launches a URL after a hold; desktop left holds remain inert.
+Drag/cancel revoke the pending URL and stop the message timer. Right-click and
+non-link presses remain bubble-owned. Selection-mode taps toggle once through
+the link callback, guarded against an already-fired hold. Coverage is added to
+`crates/chatter-ui/tests/ui_rich_text.rs`; no vendor version upgrade.

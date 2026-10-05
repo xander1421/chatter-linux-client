@@ -6,15 +6,17 @@
 //!   - Profile encryption (AES-256-GCM with padding, section 6)
 //!   - DM message crypto edge cases (XChaCha20-Poly1305, section 3)
 
+use chatter_core::crypto::ecies::{IdentityHpkeUse, open_with_identity, seal_to_identity};
+use chatter_core::crypto::envelope_crypto;
+use chatter_core::crypto::profile_crypto;
 use chatter_core::crypto::{
-    // DM message crypto
-    encrypt_dm_bytes, decrypt_dm_bytes, decrypt_dm_message,
     // Attachment crypto (padding)
     AttachmentCrypto,
+    decrypt_dm_bytes,
+    decrypt_dm_message,
+    // DM message crypto
+    encrypt_dm_bytes,
 };
-use chatter_core::crypto::profile_crypto;
-use chatter_core::crypto::ecies::{open_with_identity, seal_to_identity, IdentityHpkeUse};
-use chatter_core::crypto::envelope_crypto;
 use libsignal_protocol::IdentityKeyPair;
 
 fn identity() -> IdentityKeyPair {
@@ -34,16 +36,26 @@ fn identity() -> IdentityKeyPair {
 fn test_anon_first_contact_roundtrip() {
     let recipient = identity();
     let plaintext = b"init || pk_e || identity || delivery token";
-    let sealed = seal_to_identity(recipient.identity_key(), IdentityHpkeUse::AnonDmInit, plaintext)
-        .expect("seal");
-    let opened = open_with_identity(&recipient, IdentityHpkeUse::AnonDmInit, &sealed).expect("open");
+    let sealed = seal_to_identity(
+        recipient.identity_key(),
+        IdentityHpkeUse::AnonDmInit,
+        plaintext,
+    )
+    .expect("seal");
+    let opened =
+        open_with_identity(&recipient, IdentityHpkeUse::AnonDmInit, &sealed).expect("open");
     assert_eq!(opened, plaintext);
 }
 
 /// Only the holder of the recipient identity key can open it.
 #[test]
 fn test_anon_first_contact_wrong_identity_fails() {
-    let sealed = seal_to_identity(identity().identity_key(), IdentityHpkeUse::AnonDmInit, b"secret").unwrap();
+    let sealed = seal_to_identity(
+        identity().identity_key(),
+        IdentityHpkeUse::AnonDmInit,
+        b"secret",
+    )
+    .unwrap();
     assert!(open_with_identity(&identity(), IdentityHpkeUse::AnonDmInit, &sealed).is_err());
 }
 
@@ -51,11 +63,19 @@ fn test_anon_first_contact_wrong_identity_fails() {
 #[test]
 fn test_anon_first_contact_tamper_detected() {
     let recipient = identity();
-    let sealed = seal_to_identity(recipient.identity_key(), IdentityHpkeUse::AnonDmInit, b"important data").unwrap();
+    let sealed = seal_to_identity(
+        recipient.identity_key(),
+        IdentityHpkeUse::AnonDmInit,
+        b"important data",
+    )
+    .unwrap();
     for i in [1, sealed.len() - 1] {
         let mut t = sealed.clone();
         t[i] ^= 0xFF;
-        assert!(open_with_identity(&recipient, IdentityHpkeUse::AnonDmInit, &t).is_err(), "flip at {i}");
+        assert!(
+            open_with_identity(&recipient, IdentityHpkeUse::AnonDmInit, &t).is_err(),
+            "flip at {i}"
+        );
     }
 }
 
@@ -127,7 +147,11 @@ fn test_profile_display_name_roundtrip() {
     let encrypted = profile_crypto::encrypt_display_name(&profile_key, name)
         .expect("Encrypt display name should succeed");
 
-    assert_ne!(encrypted.as_slice(), name.as_bytes(), "Encrypted should differ from plaintext");
+    assert_ne!(
+        encrypted.as_slice(),
+        name.as_bytes(),
+        "Encrypted should differ from plaintext"
+    );
 
     let decrypted = profile_crypto::decrypt_display_name(&profile_key, &encrypted)
         .expect("Decrypt display name should succeed");
@@ -155,12 +179,18 @@ fn test_profile_padding_normalizes_size() {
     let key = [99u8; 32];
 
     let short_enc = profile_crypto::encrypt_display_name(&key, "A").unwrap();
-    let long_enc = profile_crypto::encrypt_display_name(&key, "A Very Long Display Name That Is Much Longer").unwrap();
+    let long_enc =
+        profile_crypto::encrypt_display_name(&key, "A Very Long Display Name That Is Much Longer")
+            .unwrap();
 
     // Both names fit the 53-byte short-name bucket, so ciphertexts have
     // identical length; only their lengths within the bucket are hidden.
     let size_diff = (short_enc.len() as i64 - long_enc.len() as i64).unsigned_abs();
-    assert!(size_diff == 0, "Padded ciphertext sizes should be identical, got diff={}", size_diff);
+    assert!(
+        size_diff == 0,
+        "Padded ciphertext sizes should be identical, got diff={}",
+        size_diff
+    );
 }
 
 /// Profile status encrypt/decrypt roundtrip.
@@ -195,7 +225,11 @@ fn test_profile_unicode_name() {
     for name in ["", "日本語テスト", "Ёмаё", "🔐🔑💬"] {
         let encrypted = profile_crypto::encrypt_display_name(&key, name).unwrap();
         let decrypted = profile_crypto::decrypt_display_name(&key, &encrypted).unwrap();
-        assert_eq!(decrypted, name, "Unicode name roundtrip failed for: {}", name);
+        assert_eq!(
+            decrypted, name,
+            "Unicode name roundtrip failed for: {}",
+            name
+        );
     }
 }
 
@@ -215,7 +249,10 @@ fn test_dm_nonce_uniqueness() {
     let ct1 = encrypt_dm_bytes(plaintext, &shared_secret).unwrap();
     let ct2 = encrypt_dm_bytes(plaintext, &shared_secret).unwrap();
 
-    assert_ne!(ct1, ct2, "Same plaintext must produce different ciphertext (fresh nonce)");
+    assert_ne!(
+        ct1, ct2,
+        "Same plaintext must produce different ciphertext (fresh nonce)"
+    );
 
     // Both must decrypt correctly
     let pt1 = decrypt_dm_bytes(&ct1, &shared_secret).unwrap();
@@ -261,9 +298,14 @@ fn test_dm_ciphertext_structure() {
 
     // XChaCha20-Poly1305: 24-byte nonce + plaintext_len + 16-byte tag
     let expected_len = 24 + plaintext.len() + 16;
-    assert_eq!(encrypted.len(), expected_len,
+    assert_eq!(
+        encrypted.len(),
+        expected_len,
         "Ciphertext should be nonce(24) + plaintext({}) + tag(16) = {}, got {}",
-        plaintext.len(), expected_len, encrypted.len());
+        plaintext.len(),
+        expected_len,
+        encrypted.len()
+    );
 }
 
 /// DM string message: UTF-8 validation on decrypt.
@@ -280,7 +322,10 @@ fn test_dm_message_utf8_validation() {
 
     // decrypt_dm_message should fail (expects valid UTF-8)
     let result = decrypt_dm_message(&encrypted, &shared_secret);
-    assert!(result.is_err(), "Invalid UTF-8 should be rejected by string decryption");
+    assert!(
+        result.is_err(),
+        "Invalid UTF-8 should be rejected by string decryption"
+    );
 
     // decrypt_dm_bytes should succeed (raw bytes, no UTF-8 check)
     let raw = decrypt_dm_bytes(&encrypted, &shared_secret).unwrap();
@@ -329,12 +374,22 @@ fn test_dm_single_bit_flip_detected() {
 #[test]
 fn test_attachment_padding_log_bucketing() {
     // Different sizes should map to a smaller set of bucket sizes
-    let sizes = [1, 100, 500, 1000, 5000, 10000, 50000, 100000, 500000, 1000000];
-    let padded: Vec<usize> = sizes.iter().map(|&s| AttachmentCrypto::padded_size(s)).collect();
+    let sizes = [
+        1, 100, 500, 1000, 5000, 10000, 50000, 100000, 500000, 1000000,
+    ];
+    let padded: Vec<usize> = sizes
+        .iter()
+        .map(|&s| AttachmentCrypto::padded_size(s))
+        .collect();
 
     // Padded size should always be >= original
     for (i, &s) in sizes.iter().enumerate() {
-        assert!(padded[i] >= s, "Padded size {} must be >= original {}", padded[i], s);
+        assert!(
+            padded[i] >= s,
+            "Padded size {} must be >= original {}",
+            padded[i],
+            s
+        );
     }
 
     // Padded size should always be 16-byte aligned (AES block size)
@@ -348,7 +403,11 @@ fn test_attachment_padding_log_bucketing() {
     let p_1001 = AttachmentCrypto::padded_size(1001);
     // At least two of these three should be equal (same bucket)
     let same_bucket = (p_999 == p_1000) || (p_1000 == p_1001) || (p_999 == p_1001);
-    assert!(same_bucket, "Log bucketing should group nearby sizes: 999→{}, 1000→{}, 1001→{}", p_999, p_1000, p_1001);
+    assert!(
+        same_bucket,
+        "Log bucketing should group nearby sizes: 999→{}, 1000→{}, 1001→{}",
+        p_999, p_1000, p_1001
+    );
 }
 
 /// Attachment padding has a minimum size.
@@ -360,7 +419,18 @@ fn test_attachment_padding_minimum_size() {
     let padded_0 = AttachmentCrypto::padded_size(0);
     let padded_1 = AttachmentCrypto::padded_size(1);
 
-    assert!(padded_0 > 0, "Even empty file should have padding: {}", padded_0);
-    assert!(padded_0 >= 541, "Minimum padded size should be >= 541 (Signal compat): {}", padded_0);
-    assert_eq!(padded_0, padded_1, "0-byte and 1-byte files should have same padded size");
+    assert!(
+        padded_0 > 0,
+        "Even empty file should have padding: {}",
+        padded_0
+    );
+    assert!(
+        padded_0 >= 541,
+        "Minimum padded size should be >= 541 (Signal compat): {}",
+        padded_0
+    );
+    assert_eq!(
+        padded_0, padded_1,
+        "0-byte and 1-byte files should have same padded size"
+    );
 }

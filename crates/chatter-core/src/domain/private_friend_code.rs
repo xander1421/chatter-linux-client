@@ -79,11 +79,7 @@ impl PrivateFriendCode {
     pub const URL_PREFIX: &'static str = "chatter://private/";
 
     /// Create a new private friend code.
-    pub fn new(
-        user_id: UserId,
-        identity_key: [u8; 33],
-        delivery_token: [u8; 12],
-    ) -> Self {
+    pub fn new(user_id: UserId, identity_key: [u8; 33], delivery_token: [u8; 12]) -> Self {
         Self {
             user_id,
             identity_key,
@@ -200,10 +196,20 @@ mod tests {
         let user_id = UserId::new();
         let mut identity_key = [0u8; 33];
         identity_key[0] = 0x05; // Type byte
-        {use rand::TryRngCore; rand::rngs::OsRng.try_fill_bytes(&mut identity_key[1..]).expect("OS CSPRNG must not fail");}
+        {
+            use rand::TryRngCore;
+            rand::rngs::OsRng
+                .try_fill_bytes(&mut identity_key[1..])
+                .expect("OS CSPRNG must not fail");
+        }
 
         let mut delivery_token = [0u8; 12];
-        {use rand::TryRngCore; rand::rngs::OsRng.try_fill_bytes(&mut delivery_token).expect("OS CSPRNG must not fail");}
+        {
+            use rand::TryRngCore;
+            rand::rngs::OsRng
+                .try_fill_bytes(&mut delivery_token)
+                .expect("OS CSPRNG must not fail");
+        }
 
         let code = PrivateFriendCode::new(user_id, identity_key, delivery_token);
 
@@ -229,7 +235,12 @@ mod tests {
     #[test]
     fn test_delivery_token_derivation() {
         let mut profile_key = [0u8; 32];
-        {use rand::TryRngCore; rand::rngs::OsRng.try_fill_bytes(&mut profile_key).expect("OS CSPRNG must not fail");}
+        {
+            use rand::TryRngCore;
+            rand::rngs::OsRng
+                .try_fill_bytes(&mut profile_key)
+                .expect("OS CSPRNG must not fail");
+        }
 
         let token1 = PrivateFriendCode::derive_delivery_token(&profile_key);
         let token2 = PrivateFriendCode::derive_delivery_token(&profile_key);
@@ -269,7 +280,9 @@ mod tests {
         let url = code.to_url();
 
         assert!(PrivateFriendCode::is_private_code(&url));
-        assert!(!PrivateFriendCode::is_private_code("chatter://connect/user-id"));
+        assert!(!PrivateFriendCode::is_private_code(
+            "chatter://connect/user-id"
+        ));
     }
 
     #[test]

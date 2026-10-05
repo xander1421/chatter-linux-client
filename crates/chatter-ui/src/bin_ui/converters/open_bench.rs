@@ -17,13 +17,15 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use chatter_core::client::ChatterClient;
-use chatter_core::domain::attachment::{Attachment, AttachmentStatus, ContentLocation, FileMetadata};
+use chatter_core::domain::attachment::{
+    Attachment, AttachmentStatus, ContentLocation, FileMetadata,
+};
 use chatter_core::domain::ids::{AttachmentId, ChannelId, MessageId, UserId};
 use chatter_core::domain::message::{ConversationType, Message};
 use chatter_core::domain::user::Profile;
 use chatter_core::storage::{AttachmentRepository, Database, MessageRepository, UserRepository};
 
-use super::{messages_to_display_batch, MessageDisplayData};
+use super::{MessageDisplayData, messages_to_display_batch};
 use crate::bin_ui::decode_cache;
 
 const HISTORY: usize = 100;
@@ -42,7 +44,12 @@ fn photo(w: u32, h: u32, seed: u32) -> image::RgbaImage {
         s ^= s << 5;
         let n = (s % 24) as i32 - 12;
         let c = |v: i32| (v + n).clamp(0, 255) as u8;
-        image::Rgba([c((x * 255 / w) as i32), c((y * 255 / h) as i32), c(((x + y) / 3 % 256) as i32), 255])
+        image::Rgba([
+            c((x * 255 / w) as i32),
+            c((y * 255 / h) as i32),
+            c(((x + y) / 3 % 256) as i32),
+            255,
+        ])
     })
 }
 
@@ -51,7 +58,12 @@ fn photo(w: u32, h: u32, seed: u32) -> image::RgbaImage {
 fn webp(img: &image::RgbaImage) -> Vec<u8> {
     let mut out = Vec::new();
     image::codecs::webp::WebPEncoder::new_lossless(&mut out)
-        .encode(img.as_raw(), img.width(), img.height(), image::ExtendedColorType::Rgba8)
+        .encode(
+            img.as_raw(),
+            img.width(),
+            img.height(),
+            image::ExtendedColorType::Rgba8,
+        )
         .unwrap();
     out
 }
@@ -67,7 +79,10 @@ struct Fixture {
 
 fn fixture() -> Fixture {
     let tmp = tempfile::TempDir::new().unwrap();
-    let rt = tokio::runtime::Builder::new_multi_thread().enable_all().build().unwrap();
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .unwrap();
     let _guard = rt.enter();
 
     // Off the OS keyring (no desktop prompt): the passphrase lives in a file
@@ -76,7 +91,10 @@ fn fixture() -> Fixture {
         .unwrap()
         .database_path();
     std::fs::write(
-        db_path.parent().unwrap().join(chatter_core::system::keyring::NO_KEYRING_MARKER),
+        db_path
+            .parent()
+            .unwrap()
+            .join(chatter_core::system::keyring::NO_KEYRING_MARKER),
         b"",
     )
     .unwrap();
@@ -109,7 +127,11 @@ fn fixture() -> Fixture {
     let mut ts = 1_700_000_000_000_000_000u64;
     for (conv, conv_type, senders) in [
         (dm, ConversationType::ServerDm, vec![me, peers[0]]),
-        (channel, ConversationType::Channel, vec![me, peers[0], peers[1], peers[2]]),
+        (
+            channel,
+            ConversationType::Channel,
+            vec![me, peers[0], peers[1], peers[2]],
+        ),
     ] {
         let mut ids: Vec<MessageId> = Vec::new();
         for i in 0..HISTORY {
@@ -164,17 +186,35 @@ fn fixture() -> Fixture {
             messages.insert(&msg).unwrap();
         }
     }
-    Fixture { _tmp: tmp, _rt: rt, client, me, dm, channel }
+    Fixture {
+        _tmp: tmp,
+        _rt: rt,
+        client,
+        me,
+        dm,
+        channel,
+    }
 }
 
 /// One open, as the sidebar runs it. Returns the rows and the time from the
 /// history page to the Slint model (the part this fix is about).
-fn open(f: &Fixture, conv: ChannelId, conv_type: ConversationType) -> (Vec<MessageDisplayData>, Duration) {
+fn open(
+    f: &Fixture,
+    conv: ChannelId,
+    conv_type: ConversationType,
+) -> (Vec<MessageDisplayData>, Duration) {
     let client = &f.client;
     let _ = client.mark_conversation_read(&conv, &conv_type);
-    let _ = f._rt.block_on(client.load_pinned_for_channel(&conv, &conv_type));
+    let _ = f
+        ._rt
+        .block_on(client.load_pinned_for_channel(&conv, &conv_type));
     let page = client
-        .get_messages_local_asc(&conv, &conv_type, None, chatter_core::config::MESSAGE_PAGE_SIZE as u32)
+        .get_messages_local_asc(
+            &conv,
+            &conv_type,
+            None,
+            chatter_core::config::MESSAGE_PAGE_SIZE as u32,
+        )
         .unwrap();
     assert_eq!(page.len(), chatter_core::config::MESSAGE_PAGE_SIZE as usize);
     let started = Instant::now();
@@ -197,7 +237,9 @@ fn open(f: &Fixture, conv: ChannelId, conv_type: ConversationType) -> (Vec<Messa
 
 #[test]
 fn conversation_open_stays_fast() {
-    let _serial = decode_cache::TEST_SERIAL.lock().unwrap_or_else(|p| p.into_inner());
+    let _serial = decode_cache::TEST_SERIAL
+        .lock()
+        .unwrap_or_else(|p| p.into_inner());
     let f = fixture();
 
     for (name, conv, conv_type) in [
@@ -207,25 +249,46 @@ fn conversation_open_stays_fast() {
         decode_cache::wipe();
         let (_, cold) = open(&f, conv, conv_type.clone());
         let (rows, warm) = open(&f, conv, conv_type.clone());
-        println!("open {name}: cold {cold:?}, warm {warm:?} (budgets {COLD_BUDGET:?} / {WARM_BUDGET:?})");
+        println!(
+            "open {name}: cold {cold:?}, warm {warm:?} (budgets {COLD_BUDGET:?} / {WARM_BUDGET:?})"
+        );
 
         if conv_type == ConversationType::ServerDm {
             // A DM row draws no avatar, so none is resolved or decoded.
-            assert!(rows.iter().all(|r| r.sender_avatar_bytes.is_none() && r.sender_avatar_decoded.is_none()));
+            assert!(
+                rows.iter()
+                    .all(|r| r.sender_avatar_bytes.is_none() && r.sender_avatar_decoded.is_none())
+            );
         } else {
             // One decoded avatar per sender, at row size, shared by its rows.
             let mut by_sender = std::collections::HashMap::new();
             for row in &rows {
-                let px = row.sender_avatar_decoded.as_ref().expect("channel rows carry an avatar");
+                let px = row
+                    .sender_avatar_decoded
+                    .as_ref()
+                    .expect("channel rows carry an avatar");
                 assert_eq!(px.width().max(px.height()), decode_cache::AVATAR_PX);
                 let ptr = px.as_bytes().as_ptr() as usize;
-                assert_eq!(*by_sender.entry(row.sender_id.clone()).or_insert(ptr), ptr, "avatar decoded per row");
+                assert_eq!(
+                    *by_sender.entry(row.sender_id.clone()).or_insert(ptr),
+                    ptr,
+                    "avatar decoded per row"
+                );
             }
         }
         // Thumbnails come back from the cache on a reopen.
-        let thumbs = rows.iter().flat_map(|r| &r.attachments).filter(|a| a.is_image).count();
+        let thumbs = rows
+            .iter()
+            .flat_map(|r| &r.attachments)
+            .filter(|a| a.is_image)
+            .count();
         assert!(thumbs > 0);
-        assert!(rows.iter().flat_map(|r| &r.attachments).filter(|a| a.is_image).all(|a| a.thumbnail_pixels.is_some()));
+        assert!(
+            rows.iter()
+                .flat_map(|r| &r.attachments)
+                .filter(|a| a.is_image)
+                .all(|a| a.thumbnail_pixels.is_some())
+        );
 
         assert!(cold < COLD_BUDGET, "{name}: first open took {cold:?}");
         assert!(warm < WARM_BUDGET, "{name}: reopen took {warm:?}");

@@ -29,8 +29,11 @@ pub fn headless(base_dir: &std::path::Path) {
         .expect("create test directories")
         .database_path();
     let db_dir = db_path.parent().expect("database path has a parent");
-    std::fs::write(db_dir.join(chatter_core::system::keyring::NO_KEYRING_MARKER), b"")
-        .expect("write no-keyring marker");
+    std::fs::write(
+        db_dir.join(chatter_core::system::keyring::NO_KEYRING_MARKER),
+        b"",
+    )
+    .expect("write no-keyring marker");
 }
 
 pub mod fixtures;
@@ -43,4 +46,3 @@ pub use config::*;
 pub use fixtures::*;
 #[allow(unused_imports)] // used only by tests/validated.rs
 pub use groups::*;
-

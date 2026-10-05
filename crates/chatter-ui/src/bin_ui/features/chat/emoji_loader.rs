@@ -6,7 +6,7 @@ use std::sync::Arc;
 use slint::{ComponentHandle, ModelRc, VecModel};
 
 use chatter_core::client::ChatterClient;
-use chatter_core::ui::emoji_data::{self, PickerEmoji, PEOPLE_CATEGORY};
+use chatter_core::ui::emoji_data::{self, PEOPLE_CATEGORY, PickerEmoji};
 use chatter_core::ui::recent_emoji::RecentEmojiStore;
 
 use crate::{EmojiData, MainWindow};
@@ -15,7 +15,11 @@ fn model(emojis: Vec<PickerEmoji>) -> ModelRc<EmojiData> {
     ModelRc::new(VecModel::from(
         emojis
             .into_iter()
-            .map(|e| EmojiData { emoji: e.emoji.into(), name: e.name.into(), category: e.category })
+            .map(|e| EmojiData {
+                emoji: e.emoji.into(),
+                name: e.name.into(),
+                category: e.category,
+            })
             .collect::<Vec<_>>(),
     ))
 }
@@ -124,4 +128,3 @@ pub fn wire_emoji_loader(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
         }
     });
 }
-

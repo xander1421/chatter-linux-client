@@ -4736,8 +4736,8 @@ pub struct StreamGlobalEventsRequest {
     /// 500 is the same ceiling auto-subscribe uses.
     #[prost(string, repeated, tag="1")]
     pub channel_ids: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
-    /// Optional: resume from a specific event point. See
-    /// StreamMessageEventsRequest.resume_from_event_id.
+    /// Versioned v1 JSON object of channel UUID -> independent Redis stream ID.
+    /// Empty or legacy scalar starts at tails with authoritative resync.
     #[prost(string, tag="2")]
     pub resume_from_event_id: ::prost::alloc::string::String,
 }

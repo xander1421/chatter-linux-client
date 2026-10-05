@@ -7,7 +7,7 @@ use crate::{common, skip_if_no_server};
 use base64::Engine;
 use chatter_core::network::grpc::{ChannelClient, MessageClient};
 use chatter_core::proto::chat_v1::{
-    message::content::Type as ContentType, message::Content, ChannelType, MessageSortDirection,
+    ChannelType, MessageSortDirection, message::Content, message::content::Type as ContentType,
 };
 use tokio_stream::StreamExt;
 
@@ -36,7 +36,8 @@ async fn test_create_saved_messages_channel() {
             Some("Note to self"),
             None,
             None,
-        ).await;
+        )
+        .await;
 
     match create_result {
         Ok(stream) => {
@@ -100,7 +101,8 @@ async fn test_get_or_create_saved_messages() {
                 None,
                 None,
                 None,
-            ).await;
+            )
+            .await;
 
         if let Ok(stream) = attempt {
             tokio::pin!(stream);
@@ -122,7 +124,8 @@ async fn test_get_or_create_saved_messages() {
                 None,
                 None,
                 None,
-            ).await;
+            )
+            .await;
 
         if let Ok(stream) = attempt {
             tokio::pin!(stream);
@@ -163,7 +166,8 @@ async fn test_send_message_to_saved_messages() {
             None,
             None,
             None,
-        ).await;
+        )
+        .await;
 
     let channel_id = match create_result {
         Ok(stream) => {
@@ -185,7 +189,11 @@ async fn test_send_message_to_saved_messages() {
                     Err(_) => break, // already-exists / other; fall through to user_id default
                 }
             }
-            if id.is_empty() { user.user_id.clone() } else { id }
+            if id.is_empty() {
+                user.user_id.clone()
+            } else {
+                id
+            }
         }
         Err(_) => {
             // If creation fails, use user_id as channel_id (SavedMessages convention)
@@ -196,7 +204,9 @@ async fn test_send_message_to_saved_messages() {
     // Send a message to SavedMessages
     let mut msg_client = MessageClient::new(pool.channel(), pool.auth_clone());
     let content = Content {
-        r#type: Some(ContentType::Text("Note to self: this is a test".to_string())),
+        r#type: Some(ContentType::Text(
+            "Note to self: this is a test".to_string(),
+        )),
     };
 
     let result = msg_client
@@ -243,7 +253,8 @@ async fn test_retrieve_saved_messages() {
             None,
             None,
             None,
-        ).await;
+        )
+        .await;
 
     let channel_id = match create_result {
         Ok(stream) => {
@@ -265,7 +276,11 @@ async fn test_retrieve_saved_messages() {
                     Err(_) => break,
                 }
             }
-            if id.is_empty() { user.user_id.clone() } else { id }
+            if id.is_empty() {
+                user.user_id.clone()
+            } else {
+                id
+            }
         }
         Err(_) => user.user_id.clone(),
     };
@@ -306,10 +321,7 @@ async fn test_retrieve_saved_messages() {
 
     match messages_result {
         Ok(response) => {
-            eprintln!(
-                "Retrieved {} saved messages",
-                response.messages.len()
-            );
+            eprintln!("Retrieved {} saved messages", response.messages.len());
             // Verify at least some messages exist
             // (may have messages from previous tests)
         }
@@ -343,7 +355,8 @@ async fn test_saved_message_with_text_only() {
             None,
             None,
             None,
-        ).await;
+        )
+        .await;
 
     // Send text-only saved message
     let mut msg_client = MessageClient::new(pool.channel(), pool.auth_clone());
@@ -399,7 +412,8 @@ async fn test_saved_messages_pagination() {
             None,
             None,
             None,
-        ).await;
+        )
+        .await;
 
     // Send several messages
     let mut msg_client = MessageClient::new(pool.channel(), pool.auth_clone());
@@ -488,7 +502,8 @@ async fn test_saved_messages_not_visible_to_others() {
                 None,
                 None,
                 None,
-            ).await;
+            )
+            .await;
 
         let mut msg_client = MessageClient::new(pool.channel(), pool.auth_clone());
         let content = Content {
@@ -543,7 +558,10 @@ async fn test_saved_messages_not_visible_to_others() {
         }
         Err(e) => {
             // Error is expected - user2 shouldn't access user1's SavedMessages
-            eprintln!("Expected error accessing other user's SavedMessages: {:?}", e);
+            eprintln!(
+                "Expected error accessing other user's SavedMessages: {:?}",
+                e
+            );
         }
     }
 }
@@ -569,7 +587,8 @@ async fn test_get_saved_messages_channel_info() {
             Some("Personal notes"),
             None,
             None,
-        ).await;
+        )
+        .await;
 
     // Get channel info
     let channel_id = user.user_id.clone();
@@ -579,8 +598,7 @@ async fn test_get_saved_messages_channel_info() {
         Ok(channel) => {
             eprintln!(
                 "SavedMessages channel: name='{}', type={}",
-                channel.name,
-                channel.r#type
+                channel.name, channel.r#type
             );
             assert_eq!(channel.r#type, ChannelType::SavedMessages as i32);
         }
@@ -614,14 +632,13 @@ async fn test_saved_messages_from_single_device() {
             None,
             None,
             None,
-        ).await;
+        )
+        .await;
 
     // With single device, SavedMessages should work (stored locally + server)
     let mut msg_client = MessageClient::new(pool.channel(), pool.auth_clone());
     let content = Content {
-        r#type: Some(ContentType::Text(
-            "Single device note".to_string(),
-        )),
+        r#type: Some(ContentType::Text("Single device note".to_string())),
     };
 
     let result = msg_client

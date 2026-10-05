@@ -101,7 +101,10 @@ impl EventHandlers {
     }
 
     /// Set the message service for DB persistence.
-    pub fn with_message_service(mut self, service: Arc<crate::services::message::MessageService>) -> Self {
+    pub fn with_message_service(
+        mut self,
+        service: Arc<crate::services::message::MessageService>,
+    ) -> Self {
         self.message_service = Some(service);
         self
     }
@@ -115,19 +118,28 @@ impl EventHandlers {
     }
 
     /// Set the anon group service for profile sharing after member list updates.
-    pub fn with_anon_group_service(mut self, service: Arc<crate::services::anon_group::AnonGroupService>) -> Self {
+    pub fn with_anon_group_service(
+        mut self,
+        service: Arc<crate::services::anon_group::AnonGroupService>,
+    ) -> Self {
         self.anon_group_service = Some(service);
         self
     }
 
     /// Set the anon DM service for conversation creation from ECIES init messages.
-    pub fn with_anon_dm_service(mut self, service: Arc<crate::services::anon_dm::AnonDmService>) -> Self {
+    pub fn with_anon_dm_service(
+        mut self,
+        service: Arc<crate::services::anon_dm::AnonDmService>,
+    ) -> Self {
         self.anon_dm_service = Some(service);
         self
     }
 
     /// Set the signal service for sender key rotation on member departure.
-    pub fn with_signal_service(mut self, service: Arc<crate::services::signal::SignalService>) -> Self {
+    pub fn with_signal_service(
+        mut self,
+        service: Arc<crate::services::signal::SignalService>,
+    ) -> Self {
         self.signal_service = Some(service);
         self
     }
@@ -405,7 +417,7 @@ impl EventHandlers {
                     ?pinner_id,
                     "Inbox event: MessagePinned received"
                 );
-                
+
                 self.message_state
                     .update_message(&channel_id, &message_id, |msg| {
                         msg.is_pinned = true;
@@ -430,7 +442,7 @@ impl EventHandlers {
                     ?unpinner_id,
                     "Inbox event: MessageUnpinned received"
                 );
-                
+
                 self.message_state
                     .update_message(&channel_id, &message_id, |msg| {
                         msg.is_pinned = false;
@@ -440,10 +452,10 @@ impl EventHandlers {
                         tracing::warn!(?message_id, error = %e, "Failed to persist unpin to DB");
                     }
                 }
-                
+
                 // Remove from pinned state
                 self.chat_state.remove_pinned_message(&message_id);
-                
+
                 tracing::debug!(?channel_id, ?message_id, "Marked message as unpinned in state and DB");
             }
 
@@ -892,28 +904,28 @@ impl EventHandlers {
                 trace!(?user_id, ?presence, ?timestamp, "User presence changed");
                 // TODO: Consider adding a presence state store if needed for caching
             }
-            
-            DomainEvent::AnonDmProfileUpdated { 
-                conversation_id, 
-                user_id, 
-                display_name, 
+
+            DomainEvent::AnonDmProfileUpdated {
+                conversation_id,
+                user_id,
+                display_name,
                 avatar,
-                avatar_url, 
-                bio, 
-                timestamp 
+                avatar_url,
+                bio,
+                timestamp
             } => {
                 // Profile updates for anonymous DMs
                 trace!(
-                    ?conversation_id, 
-                    ?user_id, 
+                    ?conversation_id,
+                    ?user_id,
                     ?display_name,
                     has_avatar = avatar.is_some(),
                     ?avatar_url,
                     ?bio,
-                    ?timestamp, 
+                    ?timestamp,
                     "Anonymous DM profile updated"
                 );
-                
+
                 // The profile update is already stored by the inbox handler
                 // This event is just for notifying other components
             }
@@ -1027,7 +1039,84 @@ mod tests {
     }
 
     fn create_test_message(channel_id: ChannelId) -> Message {
-        Message::new_text(channel_id, ConversationType::Channel, Some(UserId::new()), "Test message".to_string(), 0)
+        Message::new_text(
+            channel_id,
+            ConversationType::Channel,
+            Some(UserId::new()),
+            "Test message".to_string(),
+            0,
+        )
+    }
+
+    #[test]
+    fn real_bootstrap_events_and_anonymous_success_preserve_persisted_receipts() {
+        static MOCK_KEYRING: std::sync::Once = std::sync::Once::new();
+        MOCK_KEYRING.call_once(|| {
+            keyring::set_default_credential_builder(keyring::mock::default_credential_builder());
+        });
+        let dir = tempfile::tempdir().unwrap();
+        let client = crate::client::ChatterClient::builder()
+            .server_url("https://localhost:1")
+            .data_dir(dir.path().to_str().unwrap())
+            .build()
+            .unwrap();
+        let mut handlers = create_handlers();
+        handlers.message_service = Some(client.messages().clone());
+        let peer = UserId::new();
+        for receipt in ["sent", "delivered", "read"] {
+            let mut row = Message::new_text(
+                peer.into(),
+                ConversationType::ServerDm,
+                Some(UserId::new()),
+                "original".into(),
+                51,
+            );
+            row.delivery_status = receipt.into();
+            client.messages().store_message_local(&row).unwrap();
+            handlers.handle_domain_event(DomainEvent::DmBootstrapCompleted {
+                peer_id: peer,
+                sent_timestamps: vec![51],
+            });
+            handlers.handle_domain_event(DomainEvent::MessageSendFailed {
+                channel_id: peer.into(),
+                error: "late failure".into(),
+                message_timestamps: vec![51],
+            });
+            assert_eq!(
+                client
+                    .messages()
+                    .get_message_local(&row.id)
+                    .unwrap()
+                    .unwrap()
+                    .delivery_status,
+                receipt
+            );
+            client.messages().delete_message_local(&row.id).unwrap();
+        }
+        // This is the actual repository entry used by anonymous-DM success.
+        let repo = crate::storage::repositories::UnifiedMessageRepository::new(
+            client.messages().database.clone(),
+        );
+        let channel = ChannelId::new();
+        let mut row = Message::new_text(
+            channel,
+            ConversationType::AnonDm,
+            Some(UserId::new()),
+            "anonymous".into(),
+            52,
+        );
+        row.delivery_status = "read".into();
+        repo.insert_outgoing(&row).unwrap();
+        for status in ["sent", "failed", "delivered"] {
+            repo.update_delivery_status_by_timestamps(
+                &channel,
+                &ConversationType::AnonDm,
+                &[52],
+                status,
+            )
+            .unwrap();
+            assert_eq!(repo.get(&row.id).unwrap().unwrap().delivery_status, "read");
+        }
     }
 
     // ========================================================================
@@ -1133,10 +1222,7 @@ mod tests {
             channel_id,
             timestamp: 0,
         });
-        assert_eq!(
-            handlers.chat_state.get_typing_users(&channel_id).len(),
-            1
-        );
+        assert_eq!(handlers.chat_state.get_typing_users(&channel_id).len(), 1);
 
         // Stop typing
         handlers.handle_domain_event(DomainEvent::TypingStopped {
@@ -1144,10 +1230,7 @@ mod tests {
             channel_id,
             timestamp: 0,
         });
-        assert!(handlers
-            .chat_state
-            .get_typing_users(&channel_id)
-            .is_empty());
+        assert!(handlers.chat_state.get_typing_users(&channel_id).is_empty());
     }
 
     #[test]
@@ -1296,7 +1379,10 @@ mod tests {
 
         // Check pinned state
         assert_eq!(handlers.chat_state.pinned_total_count(), 1);
-        assert_eq!(handlers.chat_state.pinned_current_message_id(), Some(message_id));
+        assert_eq!(
+            handlers.chat_state.pinned_current_message_id(),
+            Some(message_id)
+        );
     }
 
     #[test]

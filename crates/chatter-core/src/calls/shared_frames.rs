@@ -3,9 +3,9 @@
 //! Video frames are stored here by the call worker and can be read
 //! by the UI thread for display.
 
+use parking_lot::RwLock;
 use std::collections::HashMap;
 use std::sync::Arc;
-use parking_lot::RwLock;
 
 /// Raw video frame data (Send + Sync safe).
 ///
@@ -120,13 +120,28 @@ impl SharedVideoFrames {
     /// Accepts an `Arc<Vec<u8>>` so callers can share the same buffer between
     /// the shared store and their own local caches without a deep copy of
     /// the RGBA pixel data on every frame.
-    pub fn set_frame(&self, participant_id: String, rgba_data: Arc<Vec<u8>>, width: u32, height: u32, is_screen_share: bool) {
+    pub fn set_frame(
+        &self,
+        participant_id: String,
+        rgba_data: Arc<Vec<u8>>,
+        width: u32,
+        height: u32,
+        is_screen_share: bool,
+    ) {
         self.set_frame_rotated(participant_id, rgba_data, width, height, is_screen_share, 0);
     }
 
     /// Same as `set_frame` but carries capture rotation so the renderer
     /// can apply it in its fragment shader.
-    pub fn set_frame_rotated(&self, participant_id: String, rgba_data: Arc<Vec<u8>>, width: u32, height: u32, is_screen_share: bool, rotation_degrees: u32) {
+    pub fn set_frame_rotated(
+        &self,
+        participant_id: String,
+        rgba_data: Arc<Vec<u8>>,
+        width: u32,
+        height: u32,
+        is_screen_share: bool,
+        rotation_degrees: u32,
+    ) {
         let frame_id = {
             let mut counter = self.frame_counter.write();
             *counter += 1;
@@ -134,14 +149,17 @@ impl SharedVideoFrames {
         };
 
         let mut frames = self.frames.write();
-        frames.insert(participant_id, VideoFrameData {
-            rgba_data,
-            width,
-            height,
-            is_screen_share,
-            frame_id,
-            rotation_degrees,
-        });
+        frames.insert(
+            participant_id,
+            VideoFrameData {
+                rgba_data,
+                width,
+                height,
+                is_screen_share,
+                frame_id,
+                rotation_degrees,
+            },
+        );
         drop(frames);
 
         // Wake the UI subscriber so it renders this frame without waiting
@@ -218,7 +236,6 @@ impl SharedVideoFrames {
             .map(|(id, frame)| (id.clone(), frame.frame_id))
             .collect()
     }
-
 }
 
 #[cfg(test)]

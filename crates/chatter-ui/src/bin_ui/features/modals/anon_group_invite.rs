@@ -7,11 +7,11 @@ use std::sync::{Arc, Mutex, OnceLock};
 
 use slint::{ComponentHandle, ModelRc, SharedString, VecModel, Weak};
 
+use crate::{FriendRequestData, MainWindow};
 use chatter_core::client::ChatterClient;
 use chatter_core::client::events::AnonGroupInviteEvent;
-use chatter_core::domain::anon_group::AnonGroupId;
 use chatter_core::domain::UserId;
-use crate::{FriendRequestData, MainWindow};
+use chatter_core::domain::anon_group::AnonGroupId;
 
 /// All data needed to accept a group invite later.
 #[derive(Clone)]
@@ -62,10 +62,9 @@ fn refresh_group_invites_ui(weak: &Weak<MainWindow>) {
     let send_items: Vec<GroupInviteSendData> = invites
         .iter()
         .map(|inv| {
-            let inviter_name = inv
-                .inviter_display_name
-                .clone()
-                .unwrap_or_else(|| chatter_core::services::user::friend_display_name_placeholder(&inv.inviter_id));
+            let inviter_name = inv.inviter_display_name.clone().unwrap_or_else(|| {
+                chatter_core::services::user::friend_display_name_placeholder(&inv.inviter_id)
+            });
             GroupInviteSendData {
                 group_id: inv.group_id.to_string(),
                 group_name: inv.group_name.clone(),
@@ -122,13 +121,17 @@ pub fn spawn_anon_group_invite_handler(
             } = match event_rx.recv().await {
                 Ok(event) => event,
                 Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
-                    tracing::warn!(dropped_count = n, "Anon group invite receiver lagged, continuing");
+                    tracing::warn!(
+                        dropped_count = n,
+                        "Anon group invite receiver lagged, continuing"
+                    );
                     continue;
                 }
                 Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
             };
 
-            let inviter_name = inviter_display_name.clone()
+            let inviter_name = inviter_display_name
+                .clone()
                 .unwrap_or_else(|| ui_ctx_handler.display_name(&inviter_id));
             tracing::info!(
                 group_id = %group_id,
@@ -175,7 +178,10 @@ pub fn wire_group_invite_callbacks(window: &MainWindow, ui_ctx: &Arc<ChatterClie
                 // Pull invite data from pending store
                 let invite = {
                     let invites = pending_invites().lock().unwrap();
-                    invites.iter().find(|i| i.group_id.to_string() == gid_str).cloned()
+                    invites
+                        .iter()
+                        .find(|i| i.group_id.to_string() == gid_str)
+                        .cloned()
                 };
 
                 let Some(invite) = invite else {
@@ -183,16 +189,19 @@ pub fn wire_group_invite_callbacks(window: &MainWindow, ui_ctx: &Arc<ChatterClie
                     return;
                 };
 
-                match ui_ctx.accept_anon_group_invite(
-                    invite.group_id,
-                    invite.group_name.clone(),
-                    invite.inviter_id, // owner_id
-                    invite.inviter_id,
-                    invite.inviter_mailbox_pk,
-                    invite.profile_key,
-                    invite.inviter_display_name,
-                    invite.inviter_avatar,
-                ).await {
+                match ui_ctx
+                    .accept_anon_group_invite(
+                        invite.group_id,
+                        invite.group_name.clone(),
+                        invite.inviter_id, // owner_id
+                        invite.inviter_id,
+                        invite.inviter_mailbox_pk,
+                        invite.profile_key,
+                        invite.inviter_display_name,
+                        invite.inviter_avatar,
+                    )
+                    .await
+                {
                     Ok(_group) => {
                         tracing::info!(group_id = %gid_str, "Accepted anon group invite");
 

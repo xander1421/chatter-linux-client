@@ -9,15 +9,12 @@
 //!   - Sealed sender certificate validation (section 3)
 //!   - SVR PIN-based key derivation (section 2)
 
-use chatter_core::crypto::{
-    DeviceCredentials, DeviceToken, derive_uak,
-    EphemeralCallKey, derive_call_key, generate_group_call_key,
-    SecretKey32, SecretKey64, SecretString, SecureBuffer,
-};
-use chatter_core::crypto::signal::sealed_sender::{
-    UAK_LENGTH, PROFILE_KEY_LENGTH,
-};
+use chatter_core::crypto::signal::sealed_sender::{PROFILE_KEY_LENGTH, UAK_LENGTH};
 use chatter_core::crypto::svr;
+use chatter_core::crypto::{
+    DeviceCredentials, DeviceToken, EphemeralCallKey, SecretKey32, SecretKey64, SecretString,
+    SecureBuffer, derive_call_key, derive_uak, generate_group_call_key,
+};
 
 // ===========================================================================
 // Device Credentials & UAK
@@ -47,9 +44,18 @@ fn test_device_token_roundtrip() {
 /// Device token rejects invalid length.
 #[test]
 fn test_device_token_invalid_length() {
-    assert!(DeviceToken::from_bytes(&[0u8; 16]).is_err(), "16-byte slice should be rejected");
-    assert!(DeviceToken::from_bytes(&[0u8; 64]).is_err(), "64-byte slice should be rejected");
-    assert!(DeviceToken::from_bytes(&[]).is_err(), "Empty slice should be rejected");
+    assert!(
+        DeviceToken::from_bytes(&[0u8; 16]).is_err(),
+        "16-byte slice should be rejected"
+    );
+    assert!(
+        DeviceToken::from_bytes(&[0u8; 64]).is_err(),
+        "64-byte slice should be rejected"
+    );
+    assert!(
+        DeviceToken::from_bytes(&[]).is_err(),
+        "Empty slice should be rejected"
+    );
 }
 
 /// UAK derivation via HMAC-SHA256 is deterministic.
@@ -92,7 +98,10 @@ fn test_device_credentials_uak_verification() {
     // Single byte difference
     let mut almost_right = correct_uak;
     almost_right[0] ^= 0x01;
-    assert!(!creds.verify_uak(&almost_right), "Single bit difference must fail");
+    assert!(
+        !creds.verify_uak(&almost_right),
+        "Single bit difference must fail"
+    );
 }
 
 /// DeviceCredentials auth_username format matches server expectations.
@@ -102,7 +111,10 @@ fn test_device_credentials_uak_verification() {
 fn test_device_credentials_auth_format() {
     let creds = DeviceCredentials::generate(42, &[0u8; 32]);
     let username = creds.auth_username("user-123-uuid");
-    assert_eq!(username, "user-123-uuid.42", "Auth username should be userId.deviceId");
+    assert_eq!(
+        username, "user-123-uuid.42",
+        "Auth username should be userId.deviceId"
+    );
 }
 
 // ===========================================================================
@@ -119,13 +131,23 @@ fn test_ephemeral_call_key_ecdh_agreement() {
     let bob_key = EphemeralCallKey::generate();
 
     // Alice computes shared secret with Bob's public key
-    let alice_shared = alice_key.diffie_hellman(&bob_key.public_key_bytes()).unwrap();
+    let alice_shared = alice_key
+        .diffie_hellman(&bob_key.public_key_bytes())
+        .unwrap();
 
     // Bob computes shared secret with Alice's public key
-    let bob_shared = bob_key.diffie_hellman(&alice_key.public_key_bytes()).unwrap();
+    let bob_shared = bob_key
+        .diffie_hellman(&alice_key.public_key_bytes())
+        .unwrap();
 
-    assert_eq!(alice_shared, bob_shared, "Both parties must derive identical shared secret");
-    assert_ne!(alice_shared, [0u8; 32], "Shared secret should not be all zeros");
+    assert_eq!(
+        alice_shared, bob_shared,
+        "Both parties must derive identical shared secret"
+    );
+    assert_ne!(
+        alice_shared, [0u8; 32],
+        "Shared secret should not be all zeros"
+    );
 }
 
 /// Ephemeral call keys are unique per generation.
@@ -136,8 +158,11 @@ fn test_ephemeral_call_key_unique() {
     let key1 = EphemeralCallKey::generate();
     let key2 = EphemeralCallKey::generate();
 
-    assert_ne!(key1.public_key_bytes(), key2.public_key_bytes(),
-        "Each generation must produce a unique key");
+    assert_ne!(
+        key1.public_key_bytes(),
+        key2.public_key_bytes(),
+        "Each generation must produce a unique key"
+    );
 }
 
 /// Call key derivation: HKDF-SHA256 produces 32-byte key.
@@ -146,8 +171,8 @@ fn test_ephemeral_call_key_unique() {
 #[test]
 fn test_call_key_hkdf_derivation() {
     let shared_secret = [42u8; 32];
-    let key = derive_call_key(&shared_secret, "call-uuid-123")
-        .expect("HKDF derivation should succeed");
+    let key =
+        derive_call_key(&shared_secret, "call-uuid-123").expect("HKDF derivation should succeed");
 
     assert_eq!(key.len(), 32, "Call key should be 32 bytes (AES-256)");
     assert_ne!(key, shared_secret, "Derived key should differ from input");
@@ -218,8 +243,16 @@ fn test_secret_key_64_key_split() {
     bytes[32..].fill(0xBB); // HMAC key
 
     let key = SecretKey64::new(bytes);
-    assert_eq!(key.aes_key(), &[0xAA; 32], "AES portion should be first 32 bytes");
-    assert_eq!(key.hmac_key(), &[0xBB; 32], "HMAC portion should be last 32 bytes");
+    assert_eq!(
+        key.aes_key(),
+        &[0xAA; 32],
+        "AES portion should be first 32 bytes"
+    );
+    assert_eq!(
+        key.hmac_key(),
+        &[0xBB; 32],
+        "HMAC portion should be last 32 bytes"
+    );
 }
 
 /// SecretKey64 zeroization.
@@ -227,7 +260,11 @@ fn test_secret_key_64_key_split() {
 fn test_secret_key_64_zeroize() {
     let mut key = SecretKey64::new([0xFF; 64]);
     key.zeroize();
-    assert_eq!(key.expose(), &[0u8; 64], "Key must be zeroed after zeroize()");
+    assert_eq!(
+        key.expose(),
+        &[0u8; 64],
+        "Key must be zeroed after zeroize()"
+    );
 }
 
 // ===========================================================================
@@ -276,8 +313,10 @@ fn test_secret_string_zeroize() {
     let mut secret = SecretString::new("password".to_string());
     secret.zeroize();
     // After zeroize, the string should be empty or zeroed
-    assert!(secret.is_empty() || secret.expose_secret().bytes().all(|b| b == 0),
-        "Secret string must be zeroed after zeroize()");
+    assert!(
+        secret.is_empty() || secret.expose_secret().bytes().all(|b| b == 0),
+        "Secret string must be zeroed after zeroize()"
+    );
 }
 
 /// SecretString clone is explicit (prevents accidental copies of secrets).
@@ -298,10 +337,10 @@ fn test_secret_string_explicit_clone() {
 ///   This protects against offline brute-force attacks on the PIN.
 #[test]
 fn test_svr_pin_derivation_deterministic() {
-    let secret1 = svr::derive_svr_secret("1234", "salt-username")
-        .expect("SVR derivation should succeed");
-    let secret2 = svr::derive_svr_secret("1234", "salt-username")
-        .expect("SVR derivation should succeed");
+    let secret1 =
+        svr::derive_svr_secret("1234", "salt-username").expect("SVR derivation should succeed");
+    let secret2 =
+        svr::derive_svr_secret("1234", "salt-username").expect("SVR derivation should succeed");
 
     assert_eq!(secret1, secret2, "Same PIN+salt must produce same secret");
     assert_eq!(secret1.len(), 32, "SVR secret should be 32 bytes");
@@ -320,7 +359,10 @@ fn test_svr_different_pins_different_secrets() {
 fn test_svr_different_salts_different_secrets() {
     let s1 = svr::derive_svr_secret("1234", "user1").unwrap();
     let s2 = svr::derive_svr_secret("1234", "user2").unwrap();
-    assert_ne!(s1, s2, "Different users must have different SVR secrets even with same PIN");
+    assert_ne!(
+        s1, s2,
+        "Different users must have different SVR secrets even with same PIN"
+    );
 }
 
 /// Registration lock derivation from SVR secret.
@@ -331,7 +373,10 @@ fn test_svr_registration_lock_deterministic() {
     let lock1 = svr::derive_registration_lock("1234", "user1").unwrap();
     let lock2 = svr::derive_registration_lock("1234", "user1").unwrap();
 
-    assert_eq!(lock1, lock2, "Same inputs must produce same registration lock");
+    assert_eq!(
+        lock1, lock2,
+        "Same inputs must produce same registration lock"
+    );
     assert_eq!(lock1.len(), 32);
 }
 
@@ -340,7 +385,10 @@ fn test_svr_registration_lock_deterministic() {
 fn test_svr_registration_lock_differs_from_secret() {
     let secret = svr::derive_svr_secret("1234", "user1").unwrap();
     let lock = svr::derive_registration_lock("1234", "user1").unwrap();
-    assert_ne!(secret, lock, "Registration lock must differ from SVR secret (HMAC domain separation)");
+    assert_ne!(
+        secret, lock,
+        "Registration lock must differ from SVR secret (HMAC domain separation)"
+    );
 }
 
 /// SVR keypair from PIN: deterministic X25519 keypair.
@@ -351,10 +399,18 @@ fn test_svr_keypair_from_pin() {
     let kp1 = svr::SvrKeypair::new_from_pin("1234", "user1").unwrap();
     let kp2 = svr::SvrKeypair::new_from_pin("1234", "user1").unwrap();
 
-    assert_eq!(kp1.public_key_bytes(), kp2.public_key_bytes(), "Same PIN must produce same keypair");
+    assert_eq!(
+        kp1.public_key_bytes(),
+        kp2.public_key_bytes(),
+        "Same PIN must produce same keypair"
+    );
     let secrets_match = kp1.with_secret_bytes(|a| kp2.with_secret_bytes(|b| a == b));
     assert!(secrets_match, "Same PIN must produce same secret bytes");
-    assert_ne!(kp1.public_key_bytes(), [0u8; 32], "Public key should not be all zeros");
+    assert_ne!(
+        kp1.public_key_bytes(),
+        [0u8; 32],
+        "Public key should not be all zeros"
+    );
 }
 
 /// Different PINs produce different SVR keypairs.
@@ -394,7 +450,9 @@ fn test_cached_certificate_properties() {
     let uak_a = derive_uak(&profile_key);
     let uak_b = derive_uak(&profile_key);
 
-    assert_eq!(uak_a, uak_b,
-        "derive_uak must be deterministic for the same profile key");
+    assert_eq!(
+        uak_a, uak_b,
+        "derive_uak must be deterministic for the same profile key"
+    );
     assert_eq!(uak_a.len(), UAK_LENGTH);
 }

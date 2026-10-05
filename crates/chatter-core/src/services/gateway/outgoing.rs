@@ -15,19 +15,19 @@
 //! 2. Add a match arm in `route_outgoing`
 //! 3. Map the service result to `SendResult`
 
-use std::sync::Arc;
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use crate::domain::anon_dm::AnonDmId;
 use crate::domain::anon_group::AnonGroupId;
+use crate::domain::attachment::Attachment;
 use crate::domain::ids::{AttachmentId, ChannelId, IntegrationId, MessageId, UserId};
 use crate::domain::message::Message;
-use crate::mailbox::group::GroupFanout;
 use crate::mailbox::CallRoomToken;
+use crate::mailbox::group::GroupFanout;
 use crate::proto::content_v1::{AttachmentPointer, anon_call_answer, anon_call_hangup};
 use crate::services::anon_dm::{AnonDmError, AnonDmService};
 use crate::services::anon_group::{AnonGroupError, AnonGroupService};
-use crate::domain::attachment::Attachment;
 use crate::services::attachment::{AttachmentError, AttachmentService};
 use crate::services::message::{MessageError, MessageService};
 use crate::services::user::{UserError, UserService};
@@ -178,6 +178,17 @@ pub struct CallOfferResult {
 /// Unified send error across all channel types.
 #[derive(Debug, thiserror::Error)]
 pub enum SendError {
+    /// Construct only at a boundary proven to precede message submission.
+    #[error(transparent)]
+    BeforeSubmission(Box<SendError>),
+    #[error(
+        "Delivery is unconfirmed. The original attempt is retained; retry is disabled to avoid sending twice."
+    )]
+    DeliveryUnconfirmed,
+    #[error("An earlier message has unconfirmed delivery. This new draft has not been sent.")]
+    SendInProgress,
+    #[error("This send attempt was already confirmed. It was not sent again.")]
+    AttemptAlreadyConfirmed,
     #[error(transparent)]
     Message(#[from] MessageError),
 
@@ -201,10 +212,19 @@ pub enum SendError {
 }
 
 impl SendError {
+    pub(crate) fn before_submission(self) -> Self {
+        Self::BeforeSubmission(Box::new(self))
+    }
+
     /// The server's `send_message` check refused us: in a channel, a
     /// moderator mute or a removal (schema.zed). Retrying cannot succeed.
     pub fn is_refused(&self) -> bool {
-        matches!(self, Self::Message(MessageError::Network(crate::error::NetworkError::PermissionDenied)))
+        matches!(
+            self,
+            Self::Message(MessageError::Network(
+                crate::error::NetworkError::PermissionDenied
+            ))
+        )
     }
 }
 
@@ -223,16 +243,14 @@ pub async fn route_outgoing(
             text,
             attachment_pointers,
             quote,
-        } => {
-            Ok(route_server_dm(
-                services.message_service,
-                &peer_id,
-                &text,
-                attachment_pointers,
-                quote,
-            )
-            .await?)
-        }
+        } => Ok(route_server_dm(
+            services.message_service,
+            &peer_id,
+            &text,
+            attachment_pointers,
+            quote,
+        )
+        .await?),
 
         OutgoingIntent::Channel {
             channel_id,
@@ -243,21 +261,19 @@ pub async fn route_outgoing(
             mentioned_integrations,
             targets_ai_bot,
             quote,
-        } => {
-            Ok(route_channel(
-                services.message_service,
-                services.group_fanout,
-                &channel_id,
-                &text,
-                attachment_pointers,
-                file_paths,
-                thread_id,
-                mentioned_integrations,
-                targets_ai_bot,
-                quote,
-            )
-            .await?)
-        }
+        } => Ok(route_channel(
+            services.message_service,
+            services.group_fanout,
+            &channel_id,
+            &text,
+            attachment_pointers,
+            file_paths,
+            thread_id,
+            mentioned_integrations,
+            targets_ai_bot,
+            quote,
+        )
+        .await?),
 
         OutgoingIntent::AnonDm {
             conversation_id,
@@ -265,12 +281,17 @@ pub async fn route_outgoing(
             attachment_pointers,
             quote,
         } => {
-            let anon_dm_service = services.anon_dm_service
-                .ok_or_else(|| SendError::NotLoggedIn)?;
-            
+            let anon_dm_service = services
+                .anon_dm_service
+                .ok_or_else(|| SendError::NotLoggedIn.before_submission())?;
+
             // Safety Check: Centralized Block/Rate Limit
-            anon_dm_service.check_conversation_not_blocked(&conversation_id)?;
-            anon_dm_service.check_rate_limit(&conversation_id)?;
+            anon_dm_service
+                .check_conversation_not_blocked(&conversation_id)
+                .map_err(|e| SendError::from(e).before_submission())?;
+            anon_dm_service
+                .check_rate_limit(&conversation_id)
+                .map_err(|e| SendError::from(e).before_submission())?;
 
             route_anon_dm(
                 anon_dm_service,
@@ -288,12 +309,17 @@ pub async fn route_outgoing(
             attachment_pointers,
             quote,
         } => {
-            let anon_group_service = services.anon_group_service
-                .ok_or_else(|| SendError::NotLoggedIn)?;
-            
+            let anon_group_service = services
+                .anon_group_service
+                .ok_or_else(|| SendError::NotLoggedIn.before_submission())?;
+
             // Safety Check: Centralized Block/Rate Limit
-            anon_group_service.check_group_not_blocked(&group_id)?;
-            anon_group_service.check_rate_limit(&group_id)?;
+            anon_group_service
+                .check_group_not_blocked(&group_id)
+                .map_err(|e| SendError::from(e).before_submission())?;
+            anon_group_service
+                .check_rate_limit(&group_id)
+                .map_err(|e| SendError::from(e).before_submission())?;
 
             route_anon_group(
                 anon_group_service,
@@ -305,8 +331,12 @@ pub async fn route_outgoing(
             .await
         }
 
-        OutgoingIntent::SavedMessages { text, attachment_ids } => {
-            let message = services.message_service
+        OutgoingIntent::SavedMessages {
+            text,
+            attachment_ids,
+        } => {
+            let message = services
+                .message_service
                 .save_message(&text, attachment_ids)
                 .await?;
             let sent_at = message.sent_at;
@@ -323,12 +353,19 @@ pub async fn route_outgoing(
             })
         }
 
-        OutgoingIntent::CallOffer { channel_id, video, display_name, token } => {
+        OutgoingIntent::CallOffer {
+            channel_id,
+            video,
+            display_name,
+            token,
+        } => {
             match channel_id {
                 CallChannelId::AnonDm(cid) => {
                     let anon_dm_service = services.anon_dm_service.ok_or(SendError::NotLoggedIn)?;
                     let t = token.ok_or(SendError::UnsupportedAction)?;
-                    let res = anon_dm_service.send_call_offer(&cid, &t, video, Some(&display_name)).await?;
+                    let res = anon_dm_service
+                        .send_call_offer(&cid, &t, video, Some(&display_name))
+                        .await?;
                     Ok(SendResult::from_call(res))
                 }
                 CallChannelId::Standard(_cid) => {
@@ -338,46 +375,88 @@ pub async fn route_outgoing(
             }
         }
 
-        OutgoingIntent::CallAnswer { channel_id, call_room_id, accept, token, decline_reason, display_name } => {
-            let room_id_arr: [u8; 16] = call_room_id.try_into().map_err(|_| SendError::UnsupportedAction)?;
+        OutgoingIntent::CallAnswer {
+            channel_id,
+            call_room_id,
+            accept,
+            token,
+            decline_reason,
+            display_name,
+        } => {
+            let room_id_arr: [u8; 16] = call_room_id
+                .try_into()
+                .map_err(|_| SendError::UnsupportedAction)?;
             match channel_id {
                 CallChannelId::AnonDm(cid) => {
                     let anon_dm_service = services.anon_dm_service.ok_or(SendError::NotLoggedIn)?;
-                    let reason = decline_reason.and_then(|r| anon_call_answer::DeclineReason::try_from(r).ok());
-                    anon_dm_service.send_call_answer(&cid, &room_id_arr, accept, token.as_ref(), reason, Some(&display_name)).await?;
+                    let reason = decline_reason
+                        .and_then(|r| anon_call_answer::DeclineReason::try_from(r).ok());
+                    anon_dm_service
+                        .send_call_answer(
+                            &cid,
+                            &room_id_arr,
+                            accept,
+                            token.as_ref(),
+                            reason,
+                            Some(&display_name),
+                        )
+                        .await?;
                     Ok(SendResult::empty())
                 }
                 CallChannelId::Standard(_cid) => Err(SendError::UnsupportedAction),
             }
         }
 
-        OutgoingIntent::CallHangup { channel_id, call_room_id, reason } => {
-            let room_id_arr: [u8; 16] = call_room_id.try_into().map_err(|_| SendError::UnsupportedAction)?;
+        OutgoingIntent::CallHangup {
+            channel_id,
+            call_room_id,
+            reason,
+        } => {
+            let room_id_arr: [u8; 16] = call_room_id
+                .try_into()
+                .map_err(|_| SendError::UnsupportedAction)?;
             match channel_id {
                 CallChannelId::AnonDm(cid) => {
                     let anon_dm_service = services.anon_dm_service.ok_or(SendError::NotLoggedIn)?;
-                    let r = anon_call_hangup::Reason::try_from(reason).unwrap_or(anon_call_hangup::Reason::Normal);
-                    anon_dm_service.send_call_hangup(&cid, &room_id_arr, r).await?;
+                    let r = anon_call_hangup::Reason::try_from(reason)
+                        .unwrap_or(anon_call_hangup::Reason::Normal);
+                    anon_dm_service
+                        .send_call_hangup(&cid, &room_id_arr, r)
+                        .await?;
                     Ok(SendResult::empty())
                 }
                 CallChannelId::Standard(_cid) => Err(SendError::UnsupportedAction),
             }
         }
 
-        OutgoingIntent::Connect { peer_id, message, use_anonymous_dm, private_friend_code } => {
+        OutgoingIntent::Connect {
+            peer_id,
+            message,
+            use_anonymous_dm,
+            private_friend_code,
+        } => {
             if use_anonymous_dm {
                 let anon_dm_service = services.anon_dm_service.ok_or(SendError::NotLoggedIn)?;
                 if let Some(code_str) = private_friend_code {
-                    let code = crate::domain::private_friend_code::PrivateFriendCode::parse(&code_str)
-                        .map_err(|e| SendError::AnonDm(AnonDmError::InvalidFriendCode(e.to_string())))?;
-                    anon_dm_service.start_conversation_private(&code, message.as_deref(), None).await?;
+                    let code =
+                        crate::domain::private_friend_code::PrivateFriendCode::parse(&code_str)
+                            .map_err(|e| {
+                                SendError::AnonDm(AnonDmError::InvalidFriendCode(e.to_string()))
+                            })?;
+                    anon_dm_service
+                        .start_conversation_private(&code, message.as_deref(), None)
+                        .await?;
                 } else {
-                    anon_dm_service.start_conversation(peer_id, message.as_deref()).await?;
+                    anon_dm_service
+                        .start_conversation(peer_id, message.as_deref())
+                        .await?;
                 }
                 Ok(SendResult::empty())
             } else {
                 let user_service = services.user_service.ok_or(SendError::NotLoggedIn)?;
-                user_service.send_friend_request(&peer_id, message.as_deref()).await?;
+                user_service
+                    .send_friend_request(&peer_id, message.as_deref())
+                    .await?;
                 Ok(SendResult::empty())
             }
         }
@@ -547,19 +626,37 @@ async fn route_channel(
 ) -> Result<SendResult, MessageError> {
     // Use pre-uploaded pointers if available, otherwise upload from file paths
     let message = if !attachment_pointers.is_empty() {
-        let attachment_ids = attachment_pointers.iter()
+        let attachment_ids = attachment_pointers
+            .iter()
             .map(|p| crate::domain::AttachmentId::from_cdn_key(&p.cdn_key))
             .collect();
-        message_service.send_with_pointers(
-            group_fanout, channel_id, text, attachment_pointers, attachment_ids,
-            thread_id.as_ref(), mentioned_integrations, targets_ai_bot, quote.as_ref(),
-        ).await?
+        message_service
+            .send_with_pointers(
+                group_fanout,
+                channel_id,
+                text,
+                attachment_pointers,
+                attachment_ids,
+                thread_id.as_ref(),
+                mentioned_integrations,
+                targets_ai_bot,
+                quote.as_ref(),
+            )
+            .await?
     } else {
         let path_refs: Vec<&std::path::Path> = file_paths.iter().map(|p| p.as_path()).collect();
-        message_service.send_with_files(
-            group_fanout, channel_id, text, path_refs,
-            thread_id.as_ref(), mentioned_integrations, targets_ai_bot, quote.as_ref(),
-        ).await?
+        message_service
+            .send_with_files(
+                group_fanout,
+                channel_id,
+                text,
+                path_refs,
+                thread_id.as_ref(),
+                mentioned_integrations,
+                targets_ai_bot,
+                quote.as_ref(),
+            )
+            .await?
     };
 
     // Persist quote/reply context so reply bubbles survive a channel reload.
@@ -610,7 +707,13 @@ async fn route_anon_dm(
 
     let (message_id, sent_at) = if let Some(q) = quote {
         anon_dm_service
-            .send_reply(conversation_id, text, attachment_pointers, &q.target_author_id, q.target_timestamp)
+            .send_reply(
+                conversation_id,
+                text,
+                attachment_pointers,
+                &q.target_author_id,
+                q.target_timestamp,
+            )
             .await?
     } else {
         anon_dm_service
@@ -650,12 +753,16 @@ async fn route_anon_group(
 
     let (message_id, sent_at) = if let Some(q) = quote {
         anon_group_service
-            .send_reply(group_id, text, attachment_pointers, &q.target_author_id, q.target_timestamp)
+            .send_reply(
+                group_id,
+                text,
+                attachment_pointers,
+                &q.target_author_id,
+                q.target_timestamp,
+            )
             .await?
     } else if attachment_pointers.is_empty() {
-        anon_group_service
-            .send_text(group_id, text)
-            .await?
+        anon_group_service.send_text(group_id, text).await?
     } else {
         anon_group_service
             .send_with_attachments(group_id, text, attachment_pointers)
@@ -668,14 +775,26 @@ async fn route_anon_group(
         .as_str()
         .parse::<crate::domain::ids::MessageId>()
         .ok()
-        .and_then(|mid| anon_group_service.message_service.get_message_local(&mid).ok().flatten());
+        .and_then(|mid| {
+            anon_group_service
+                .message_service
+                .get_message_local(&mid)
+                .ok()
+                .flatten()
+        });
+
+    let complete = crate::services::anon_group::send_ledger::row_complete(
+        &anon_group_service.message_service.database,
+        message_id.as_str(),
+    )
+    .map_err(|e| SendError::Message(MessageError::Storage(e)))?;
 
     Ok(SendResult {
         sent_at,
         message,
         attachment_ids,
         gif_attachment_ids: vec![],
-        bootstrap_initiated: false,
+        bootstrap_initiated: complete != Some(true),
         anon_message_id: Some(message_id.as_str().to_string()),
         call_result: None,
         send_error: None,
@@ -739,6 +858,8 @@ pub async fn upload_attachments(
         }
     }
 
-    UploadedAttachments { pointers, attachments }
+    UploadedAttachments {
+        pointers,
+        attachments,
+    }
 }
-

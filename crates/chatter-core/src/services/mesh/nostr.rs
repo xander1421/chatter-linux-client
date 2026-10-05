@@ -179,7 +179,10 @@ impl NostrRuntime {
                 message_id,
                 content,
                 nickname,
-            } => self.publish_geohash(&cell, &message_id, &content, &nickname).await,
+            } => {
+                self.publish_geohash(&cell, &message_id, &content, &nickname)
+                    .await
+            }
             NostrCommand::Dm {
                 peer,
                 message_id,
@@ -197,8 +200,14 @@ impl NostrRuntime {
                 expires_at_unix_secs,
                 publisher_secret,
             } => {
-                self.publish_drop(operation, &tag, &sealed, expires_at_unix_secs, publisher_secret)
-                    .await;
+                self.publish_drop(
+                    operation,
+                    &tag,
+                    &sealed,
+                    expires_at_unix_secs,
+                    publisher_secret,
+                )
+                .await;
             }
             NostrCommand::WatchTags(tags) => self.watch_tags(&tags).await,
             NostrCommand::CloseWatch => {
@@ -215,7 +224,10 @@ impl NostrRuntime {
             self.degraded(format!("not a geohash: {cell}"));
             return;
         }
-        if self.state.with(|state| !state.joined.insert(cell.to_string())) {
+        if self
+            .state
+            .with(|state| !state.joined.insert(cell.to_string()))
+        {
             return;
         }
 
@@ -265,9 +277,7 @@ impl NostrRuntime {
         // should stop being derivable from live state.
         self.identities.forget(cell);
         self.state.with(|state| {
-            state
-                .dm_origin
-                .retain(|_, origin| origin.as_str() != cell);
+            state.dm_origin.retain(|_, origin| origin.as_str() != cell);
         });
         self.events.send(MeshEvent::GeohashLeft(cell.to_string()));
     }
@@ -355,13 +365,7 @@ impl NostrRuntime {
             }
         };
 
-        let wrapped = wrap::gift_wrap(
-            &rumor,
-            &recipient,
-            &identity,
-            now_secs() as i64,
-            &mut OsRng,
-        );
+        let wrapped = wrap::gift_wrap(&rumor, &recipient, &identity, now_secs() as i64, &mut OsRng);
         match wrapped {
             Ok(event) => {
                 if let Err(error) = self.pool.publish(&event, &self.relays).await {
@@ -396,13 +400,9 @@ impl NostrRuntime {
         else {
             return;
         };
-        if let Ok(event) = wrap::gift_wrap(
-            &rumor,
-            &recipient,
-            &identity,
-            now_secs() as i64,
-            &mut OsRng,
-        ) {
+        if let Ok(event) =
+            wrap::gift_wrap(&rumor, &recipient, &identity, now_secs() as i64, &mut OsRng)
+        {
             let _ = self.pool.publish(&event, &self.relays).await;
         }
     }
@@ -481,9 +481,7 @@ impl NostrRuntime {
     async fn on_relay_event(&mut self, event: RelayEvent) {
         match event {
             RelayEvent::Connected { url } => {
-                let changed = self
-                    .state
-                    .with(|state| state.connected_relays.insert(url));
+                let changed = self.state.with(|state| state.connected_relays.insert(url));
                 if changed {
                     self.emit_status();
                 }

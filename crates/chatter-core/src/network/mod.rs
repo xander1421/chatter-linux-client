@@ -11,5 +11,5 @@ pub(crate) mod storage_http;
 pub mod streaming;
 pub mod validation;
 
-pub use connection::{server_status, ConnectionState, FailReason, ServerStatus};
+pub use connection::{ConnectionState, FailReason, ServerStatus, server_status};
 pub use reconnect_config::ReconnectConfig;

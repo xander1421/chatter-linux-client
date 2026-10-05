@@ -89,9 +89,14 @@ impl PairwiseService {
     ///
     /// # Returns
     /// The sealed sender ciphertext (Signal Protocol encrypted).
-    pub async fn encrypt(&self, peer_id: &UserId, plaintext: &[u8]) -> Result<Vec<u8>, PairwiseError> {
+    pub async fn encrypt(
+        &self,
+        peer_id: &UserId,
+        plaintext: &[u8],
+    ) -> Result<Vec<u8>, PairwiseError> {
         let mut auth_client = self.auth_client();
-        self.encrypt_with_client(&mut auth_client, peer_id, plaintext).await
+        self.encrypt_with_client(&mut auth_client, peer_id, plaintext)
+            .await
     }
 
     /// Encrypt with a provided auth client (for batching).
@@ -131,7 +136,8 @@ impl PairwiseService {
         ciphertext: &[u8],
         server_timestamp_ns: u64,
     ) -> Result<(String, Vec<u8>), PairwiseError> {
-        let (address, plaintext, msg_type) = self.signal_service
+        let (address, plaintext, msg_type) = self
+            .signal_service
             .decrypt_message(ciphertext, server_timestamp_ns)
             .await
             .map_err(|e| PairwiseError::DecryptionFailed(e.to_string()))?;
@@ -210,7 +216,10 @@ impl PairwiseService {
     /// Ensure sessions exist for all devices of a peer.
     ///
     /// Use this to pre-warm sessions before encryption.
-    pub async fn ensure_sessions_all_devices(&self, peer_id: &UserId) -> Result<Vec<u32>, PairwiseError> {
+    pub async fn ensure_sessions_all_devices(
+        &self,
+        peer_id: &UserId,
+    ) -> Result<Vec<u32>, PairwiseError> {
         let mut auth_client = self.auth_client();
         let peer_id_str = peer_id.to_string();
 
@@ -260,7 +269,9 @@ impl PairwiseService {
                 token.randomizer.as_deref(),
             )
             .await
-            .map_err(|e| PairwiseError::SessionError(format!("Anonymous prekey fetch failed: {}", e)))?;
+            .map_err(|e| {
+                PairwiseError::SessionError(format!("Anonymous prekey fetch failed: {}", e))
+            })?;
 
         // Establish session using the anonymously-fetched bundle.
         //
@@ -273,12 +284,17 @@ impl PairwiseService {
         // query-privacy for that lookup is the remaining Phase 3b work.
         let mut anon_kt_client = self.grpc_pool.anonymous_kt_client();
         self.signal_service
-            .ensure_session_with_bundle(&mut anon_kt_client, &peer_id_str, device_id, bundle_response)
+            .ensure_session_with_bundle(
+                &mut anon_kt_client,
+                &peer_id_str,
+                device_id,
+                bundle_response,
+            )
             .await
             .map_err(|e| match e {
-                crate::error::ServiceError::Crypto(crate::error::CryptoError::NotInTransparencyLog { peer_id }) => {
-                    PairwiseError::RecipientKeyUnverified { peer_id }
-                }
+                crate::error::ServiceError::Crypto(
+                    crate::error::CryptoError::NotInTransparencyLog { peer_id },
+                ) => PairwiseError::RecipientKeyUnverified { peer_id },
                 e => PairwiseError::SessionError(e.to_string()),
             })?;
 

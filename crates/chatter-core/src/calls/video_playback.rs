@@ -4,8 +4,8 @@
 //! them to Slint-compatible images for display.
 
 use std::collections::{HashMap, HashSet};
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use futures::StreamExt;
 use livekit::track::RemoteVideoTrack;
@@ -87,7 +87,12 @@ impl VideoPlayback {
     }
 
     /// Add a remote video track for playback.
-    pub fn add_track(&self, participant_id: String, track: RemoteVideoTrack, is_screen_share: bool) {
+    pub fn add_track(
+        &self,
+        participant_id: String,
+        track: RemoteVideoTrack,
+        is_screen_share: bool,
+    ) {
         let track_sid = track.sid().to_string();
         // Camera and screen share are separate tracks from the SAME peer. Store
         // them under distinct frame keys so they don't overwrite each other (one
@@ -374,14 +379,17 @@ impl VideoPlayback {
             .iter()
             .filter(|(_, frame)| !frame.is_screen_share)
             .map(|(participant_id, frame)| {
-                (participant_id.clone(), VideoFrameData {
-                    rgba_data: frame.rgba_data.clone(),
-                    width: frame.width,
-                    height: frame.height,
-                    is_screen_share: frame.is_screen_share,
-                    frame_id: 0,
-                    rotation_degrees: frame.rotation_degrees,
-                })
+                (
+                    participant_id.clone(),
+                    VideoFrameData {
+                        rgba_data: frame.rgba_data.clone(),
+                        width: frame.width,
+                        height: frame.height,
+                        is_screen_share: frame.is_screen_share,
+                        frame_id: 0,
+                        rotation_degrees: frame.rotation_degrees,
+                    },
+                )
             })
             .collect()
     }
@@ -393,14 +401,17 @@ impl VideoPlayback {
             .iter()
             .filter(|(_, frame)| frame.is_screen_share)
             .map(|(participant_id, frame)| {
-                (participant_id.clone(), VideoFrameData {
-                    rgba_data: frame.rgba_data.clone(),
-                    width: frame.width,
-                    height: frame.height,
-                    is_screen_share: frame.is_screen_share,
-                    frame_id: 0,
-                    rotation_degrees: frame.rotation_degrees,
-                })
+                (
+                    participant_id.clone(),
+                    VideoFrameData {
+                        rgba_data: frame.rgba_data.clone(),
+                        width: frame.width,
+                        height: frame.height,
+                        is_screen_share: frame.is_screen_share,
+                        frame_id: 0,
+                        rotation_degrees: frame.rotation_degrees,
+                    },
+                )
             })
             .collect()
     }
@@ -546,11 +557,16 @@ fn i420_to_rgba_buf(
     let dst_stride = width * 4;
 
     livekit::webrtc::native::yuv_helper::i420_to_abgr(
-        y_data, y_stride,
-        u_data, u_stride,
-        v_data, v_stride,
-        dst, dst_stride,
-        width as i32, height as i32,
+        y_data,
+        y_stride,
+        u_data,
+        u_stride,
+        v_data,
+        v_stride,
+        dst,
+        dst_stride,
+        width as i32,
+        height as i32,
     );
 }
 
@@ -569,10 +585,14 @@ fn nv12_to_rgba_buf(
     let dst_stride = width * 4;
 
     livekit::webrtc::native::yuv_helper::nv12_to_abgr(
-        y_data, y_stride,
-        uv_data, uv_stride,
-        dst, dst_stride,
-        width as i32, height as i32,
+        y_data,
+        y_stride,
+        uv_data,
+        uv_stride,
+        dst,
+        dst_stride,
+        width as i32,
+        height as i32,
     );
 }
 

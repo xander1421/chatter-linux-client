@@ -578,12 +578,24 @@ mod preview_label_tests {
             meta.waveform_samples = waveform;
             meta.preview_label()
         };
-        assert_eq!(label("Voice message.wav", "audio/wav", Some(vec![13; 32])), "\u{1F3A4} Voice message");
+        assert_eq!(
+            label("Voice message.wav", "audio/wav", Some(vec![13; 32])),
+            "\u{1F3A4} Voice message"
+        );
         assert_eq!(label("song.mp3", "audio/mpeg", None), "\u{1F3B5} Audio");
-        assert_eq!(label("IMG_1.HEIC", "image/heic", None), "\u{1F5BC}\u{FE0F} Photo");
+        assert_eq!(
+            label("IMG_1.HEIC", "image/heic", None),
+            "\u{1F5BC}\u{FE0F} Photo"
+        );
         assert_eq!(label("a.gif", "image/gif", None), "\u{1F39E}\u{FE0F} GIF");
         assert_eq!(label("clip.mp4", "video/mp4", None), "\u{1F3AC} Video");
-        assert_eq!(label("report.pdf", "application/pdf", None), "\u{1F4C4} report.pdf");
-        assert_eq!(label(" ", "application/octet-stream", None), "\u{1F4CE} File");
+        assert_eq!(
+            label("report.pdf", "application/pdf", None),
+            "\u{1F4C4} report.pdf"
+        );
+        assert_eq!(
+            label(" ", "application/octet-stream", None),
+            "\u{1F4CE} File"
+        );
     }
 }

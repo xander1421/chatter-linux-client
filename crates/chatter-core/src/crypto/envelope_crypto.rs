@@ -157,7 +157,10 @@ mod tests {
         let plaintext = b"Hello, this is a secret message!";
         let envelope = encrypt_envelope(plaintext, &public).unwrap();
         assert_eq!(envelope.len(), plaintext.len() + ENVELOPE_OVERHEAD);
-        assert_eq!(envelope[0], 1, "libsignal HPKE type byte (Base_X25519_HkdfSha256_Aes256Gcm)");
+        assert_eq!(
+            envelope[0], 1,
+            "libsignal HPKE type byte (Base_X25519_HkdfSha256_Aes256Gcm)"
+        );
         assert_eq!(decrypt_envelope(&envelope, &private).unwrap(), plaintext);
     }
 
@@ -172,17 +175,31 @@ mod tests {
         use sha2::{Digest, Sha512};
 
         let mut seed = [0u8; 32];
-        {use rand::TryRngCore; rand::rngs::OsRng.try_fill_bytes(&mut seed).expect("OS CSPRNG must not fail");}
+        {
+            use rand::TryRngCore;
+            rand::rngs::OsRng
+                .try_fill_bytes(&mut seed)
+                .expect("OS CSPRNG must not fail");
+        }
         let signing = SigningKey::from_bytes(&seed);
         let (enc_private, enc_public) = generate_mailbox_encryption_key();
         assert_ne!(enc_public, signing.verifying_key().to_bytes());
 
         let envelope = encrypt_envelope(b"bootstrap", &enc_public).unwrap();
-        assert!(decrypt_envelope(&envelope, &seed).is_err(), "signing seed opened the envelope");
+        assert!(
+            decrypt_envelope(&envelope, &seed).is_err(),
+            "signing seed opened the envelope"
+        );
         let mut scalar = [0u8; 32];
         scalar.copy_from_slice(&Sha512::digest(seed)[..32]);
-        assert!(decrypt_envelope(&envelope, &scalar).is_err(), "converted signing scalar opened the envelope");
-        assert_eq!(decrypt_envelope(&envelope, &enc_private).unwrap(), b"bootstrap");
+        assert!(
+            decrypt_envelope(&envelope, &scalar).is_err(),
+            "converted signing scalar opened the envelope"
+        );
+        assert_eq!(
+            decrypt_envelope(&envelope, &enc_private).unwrap(),
+            b"bootstrap"
+        );
     }
 
     #[test]
@@ -208,7 +225,10 @@ mod tests {
         for i in [0, 1, 32, 33, envelope.len() - 17, envelope.len() - 1] {
             let mut t = envelope.clone();
             t[i] ^= 0x01;
-            assert!(decrypt_envelope(&t, &private).is_err(), "flip at byte {i} accepted");
+            assert!(
+                decrypt_envelope(&t, &private).is_err(),
+                "flip at byte {i} accepted"
+            );
         }
         assert!(decrypt_envelope(&envelope[..envelope.len() - 1], &private).is_err());
         assert!(decrypt_envelope(&envelope[..ENVELOPE_OVERHEAD - 1], &private).is_err());
@@ -225,7 +245,9 @@ mod tests {
         let ok = pk.seal(ENVELOPE_HPKE_INFO, &public, b"m").unwrap();
         assert_eq!(decrypt_envelope(&ok, &private).unwrap(), b"m");
 
-        let wrong_info = pk.seal(b"NDSS21-MailboxEnvelope-HPKE-v1", &public, b"m").unwrap();
+        let wrong_info = pk
+            .seal(b"NDSS21-MailboxEnvelope-HPKE-v1", &public, b"m")
+            .unwrap();
         assert!(decrypt_envelope(&wrong_info, &private).is_err());
         let no_aad = pk.seal(ENVELOPE_HPKE_INFO, &[], b"m").unwrap();
         assert!(decrypt_envelope(&no_aad, &private).is_err());

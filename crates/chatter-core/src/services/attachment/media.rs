@@ -5,8 +5,8 @@
 use std::time::Duration;
 
 use crate::domain::ids::AttachmentId;
-use crate::media::gif::{decode_first_frame_only, GifFrame};
 use crate::media::ImageProcessor;
+use crate::media::gif::{GifFrame, decode_first_frame_only};
 
 use super::{AttachmentError, AttachmentService};
 
@@ -94,8 +94,8 @@ impl AttachmentService {
         let image_bytes = secure_buffer.as_slice().to_vec();
 
         // Get dimensions
-        let (width, height) = ImageProcessor::get_dimensions_from_memory(&image_bytes)
-            .map_err(|e| {
+        let (width, height) =
+            ImageProcessor::get_dimensions_from_memory(&image_bytes).map_err(|e| {
                 AttachmentError::DecryptionError(format!("Failed to get image dimensions: {:?}", e))
             })?;
 
@@ -188,15 +188,16 @@ impl AttachmentService {
     }
 
     /// Pure-Rust `image` crate GIF decode — fallback for `decode_gif_all_frames`.
-    fn decode_gif_all_frames_image(gif_bytes: &[u8]) -> Result<GifFullDecodeResult, AttachmentError> {
-        use image::codecs::gif::GifDecoder;
+    fn decode_gif_all_frames_image(
+        gif_bytes: &[u8],
+    ) -> Result<GifFullDecodeResult, AttachmentError> {
         use image::AnimationDecoder;
+        use image::codecs::gif::GifDecoder;
         use std::io::Cursor;
 
         let cursor = Cursor::new(gif_bytes);
-        let decoder = GifDecoder::new(cursor).map_err(|e| {
-            AttachmentError::DecryptionError(format!("GIF decoder error: {}", e))
-        })?;
+        let decoder = GifDecoder::new(cursor)
+            .map_err(|e| AttachmentError::DecryptionError(format!("GIF decoder error: {}", e)))?;
 
         let mut frames = Vec::new();
         for frame_result in decoder.into_frames() {

@@ -60,10 +60,19 @@ pub fn options() -> Vec<DisappearingOption> {
 /// Fill the DM-settings row for the contact screen of `peer_id`. Friends
 /// only — core announces a timer over the friend DM and has none with anyone
 /// else. Called from `open_user_profile` on the UI thread.
-pub fn show_for_profile(w: &MainWindow, ui_ctx: &Arc<ChatterClient>, peer_id: &UserId, is_friend: bool) {
+pub fn show_for_profile(
+    w: &MainWindow,
+    ui_ctx: &Arc<ChatterClient>,
+    peer_id: &UserId,
+    is_friend: bool,
+) {
     let dm = ActiveConversation::ServerDm { peer_id: *peer_id };
     let can_set = is_friend && ui_ctx.can_set_disappearing_timer(dm.clone());
-    let seconds = if can_set { ui_ctx.disappearing_timer(dm) } else { 0 };
+    let seconds = if can_set {
+        ui_ctx.disappearing_timer(dm)
+    } else {
+        0
+    };
     let g = w.global::<DisappearingGlobal>();
     g.set_dm_can_set(can_set);
     g.set_dm_seconds(seconds as i32);

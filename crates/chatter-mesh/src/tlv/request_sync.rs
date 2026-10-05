@@ -183,8 +183,7 @@ impl RequestSyncPacket {
                     // Same acceptance cap as the GCS payload, but an oversized
                     // filter is ignored rather than failing the whole request.
                     if length <= max_accept_bytes {
-                        fragment_id_filter =
-                            Some(utf8(value, "request_sync.fragment_id_filter")?);
+                        fragment_id_filter = Some(utf8(value, "request_sync.fragment_id_filter")?);
                     }
                 }
                 // Forward compatible: ignore unknown TLVs.
@@ -317,9 +316,8 @@ mod tests {
         assert_eq!(
             packet.encode().unwrap(),
             vec![
-                TLV_P, 0x00, 0x01, 19,
-                TLV_M, 0x00, 0x04, 0x00, 0x00, 0x10, 0x00,
-                TLV_DATA, 0x00, 0x01, 0xAA,
+                TLV_P, 0x00, 0x01, 19, TLV_M, 0x00, 0x04, 0x00, 0x00, 0x10, 0x00, TLV_DATA, 0x00,
+                0x01, 0xAA,
             ]
         );
     }
@@ -355,7 +353,9 @@ mod tests {
         let mut bytes = sample().encode().unwrap();
         put_tlv_u16_len(&mut bytes, TLV_SINCE_TIMESTAMP, &[0, 0, 0, 1]).unwrap();
         assert_eq!(
-            RequestSyncPacket::decode(&bytes).unwrap().since_timestamp_ms,
+            RequestSyncPacket::decode(&bytes)
+                .unwrap()
+                .since_timestamp_ms,
             None
         );
     }
@@ -371,7 +371,10 @@ mod tests {
             encoded.get(tail_start..),
             Some(&[TLV_TYPES, 0x00, 0x02, 0x00, 0x01][..])
         );
-        assert_eq!(RequestSyncPacket::decode(&encoded).unwrap().types, Some(1 << 8));
+        assert_eq!(
+            RequestSyncPacket::decode(&encoded).unwrap().types,
+            Some(1 << 8)
+        );
     }
 
     #[test]
@@ -390,7 +393,10 @@ mod tests {
         let encoded = packet.encode().unwrap();
         // Only bit 1 survives, so the field is a single byte.
         assert_eq!(encoded.last().copied(), Some(0x02));
-        assert_eq!(RequestSyncPacket::decode(&encoded).unwrap().types, Some(0b10));
+        assert_eq!(
+            RequestSyncPacket::decode(&encoded).unwrap().types,
+            Some(0b10)
+        );
     }
 
     #[test]
@@ -453,7 +459,10 @@ mod tests {
             put_tlv_u16_len(&mut bytes, TLV_M, &16u32.to_be_bytes()).unwrap();
             put_tlv_u16_len(&mut bytes, TLV_DATA, &[1]).unwrap();
             assert!(
-                matches!(RequestSyncPacket::decode(&bytes), Err(MeshError::OutOfRange(_))),
+                matches!(
+                    RequestSyncPacket::decode(&bytes),
+                    Err(MeshError::OutOfRange(_))
+                ),
                 "P={p} must be rejected"
             );
         }
@@ -559,10 +568,7 @@ mod tests {
     fn fragment_id_filter_round_trips() {
         let ids = [[0x00u8; 8], [0xFFu8; 8], [0x01, 2, 3, 4, 5, 6, 7, 8]];
         let filter = encode_fragment_id_filter(&ids).unwrap();
-        assert_eq!(
-            filter,
-            "0000000000000000,ffffffffffffffff,0102030405060708"
-        );
+        assert_eq!(filter, "0000000000000000,ffffffffffffffff,0102030405060708");
         let decoded = decode_fragment_id_filter(Some(&filter)).unwrap();
         assert_eq!(decoded.len(), 3);
         for id in ids {
@@ -612,10 +618,7 @@ mod tests {
         let mut packet = sample();
         assert_eq!(packet.fragment_ids(), None);
         packet.fragment_id_filter = Some("0102030405060708".to_string());
-        assert_eq!(
-            packet.fragment_ids().map(|ids| ids.len()),
-            Some(1)
-        );
+        assert_eq!(packet.fragment_ids().map(|ids| ids.len()), Some(1));
     }
 
     #[test]

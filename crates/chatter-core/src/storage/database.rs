@@ -13,8 +13,8 @@ use parking_lot::{Condvar, Mutex, MutexGuard};
 use rusqlite::{Connection, OpenFlags};
 use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 use zeroize::Zeroizing;
 
@@ -75,11 +75,16 @@ impl ReaderPool {
         // and both create a connection, exceeding the pool size.
         let current = self.count.load(Ordering::Relaxed);
         if current < READER_POOL_SIZE {
-            if self.count.compare_exchange(
-                current, current + 1, Ordering::AcqRel, Ordering::Relaxed,
-            ).is_ok() {
+            if self
+                .count
+                .compare_exchange(current, current + 1, Ordering::AcqRel, Ordering::Relaxed)
+                .is_ok()
+            {
                 return match self.open_reader() {
-                    Ok(conn) => Ok(PooledReader { conn: Some(conn), pool: self }),
+                    Ok(conn) => Ok(PooledReader {
+                        conn: Some(conn),
+                        pool: self,
+                    }),
                     Err(e) => {
                         self.count.fetch_sub(1, Ordering::Relaxed);
                         Err(e)
@@ -94,7 +99,10 @@ impl ReaderPool {
         let start = std::time::Instant::now();
         loop {
             if let Some(conn) = available.pop_front() {
-                return Ok(PooledReader { conn: Some(conn), pool: self });
+                return Ok(PooledReader {
+                    conn: Some(conn),
+                    pool: self,
+                });
             }
             let elapsed = start.elapsed();
             if elapsed >= deadline {
@@ -124,11 +132,15 @@ impl ReaderPool {
             .map_err(|e| StorageError::Encryption(format!("Failed to set reader key: {}", e)))?;
         // Pin KDF params (see writer-side comment).
         conn.pragma_update(None, "cipher_compatibility", "4")
-            .map_err(|e| StorageError::Encryption(format!("Failed to pin cipher_compatibility: {}", e)))?;
+            .map_err(|e| {
+                StorageError::Encryption(format!("Failed to pin cipher_compatibility: {}", e))
+            })?;
         conn.pragma_update(None, "kdf_iter", "256000")
             .map_err(|e| StorageError::Encryption(format!("Failed to pin kdf_iter: {}", e)))?;
         conn.pragma_update(None, "cipher_page_size", "4096")
-            .map_err(|e| StorageError::Encryption(format!("Failed to pin cipher_page_size: {}", e)))?;
+            .map_err(|e| {
+                StorageError::Encryption(format!("Failed to pin cipher_page_size: {}", e))
+            })?;
 
         conn.execute_batch("SELECT count(*) FROM sqlite_master;")
             .map_err(|e| StorageError::Encryption(format!("Invalid reader key: {}", e)))?;
@@ -190,8 +202,9 @@ impl Database {
 
         // Set SQLCipher encryption key
         // The passphrase must be set before any other operations
-        conn.pragma_update(None, "key", passphrase)
-            .map_err(|e| StorageError::Encryption(format!("Failed to set encryption key: {}", e)))?;
+        conn.pragma_update(None, "key", passphrase).map_err(|e| {
+            StorageError::Encryption(format!("Failed to set encryption key: {}", e))
+        })?;
 
         // SECURITY: pin SQLCipher KDF parameters so a future library bump
         // can't silently lower them. SQLCipher 4 defaults are PBKDF2-SHA512
@@ -199,11 +212,15 @@ impl Database {
         // explicitly so the values are part of our schema contract, not a
         // dependency-version contract.
         conn.pragma_update(None, "cipher_compatibility", "4")
-            .map_err(|e| StorageError::Encryption(format!("Failed to pin cipher_compatibility: {}", e)))?;
+            .map_err(|e| {
+                StorageError::Encryption(format!("Failed to pin cipher_compatibility: {}", e))
+            })?;
         conn.pragma_update(None, "kdf_iter", "256000")
             .map_err(|e| StorageError::Encryption(format!("Failed to pin kdf_iter: {}", e)))?;
         conn.pragma_update(None, "cipher_page_size", "4096")
-            .map_err(|e| StorageError::Encryption(format!("Failed to pin cipher_page_size: {}", e)))?;
+            .map_err(|e| {
+                StorageError::Encryption(format!("Failed to pin cipher_page_size: {}", e))
+            })?;
 
         // Verify the key is correct by selecting from sqlite_master
         // This works for both new and existing databases
@@ -240,10 +257,7 @@ impl Database {
         // OS page cache. Don't set it.
 
         // Create reader pool for concurrent read access
-        let readers = Arc::new(ReaderPool::new(
-            path.to_path_buf(),
-            passphrase.to_string(),
-        ));
+        let readers = Arc::new(ReaderPool::new(path.to_path_buf(), passphrase.to_string()));
 
         Ok(Self {
             writer: Arc::new(Mutex::new(conn)),
@@ -298,11 +312,15 @@ impl Database {
             .map_err(|e| StorageError::Encryption(format!("Failed to set reader key: {}", e)))?;
         // Pin KDF params (see writer-side comment).
         conn.pragma_update(None, "cipher_compatibility", "4")
-            .map_err(|e| StorageError::Encryption(format!("Failed to pin cipher_compatibility: {}", e)))?;
+            .map_err(|e| {
+                StorageError::Encryption(format!("Failed to pin cipher_compatibility: {}", e))
+            })?;
         conn.pragma_update(None, "kdf_iter", "256000")
             .map_err(|e| StorageError::Encryption(format!("Failed to pin kdf_iter: {}", e)))?;
         conn.pragma_update(None, "cipher_page_size", "4096")
-            .map_err(|e| StorageError::Encryption(format!("Failed to pin cipher_page_size: {}", e)))?;
+            .map_err(|e| {
+                StorageError::Encryption(format!("Failed to pin cipher_page_size: {}", e))
+            })?;
 
         // Verify the key
         conn.execute_batch("SELECT count(*) FROM sqlite_master;")

@@ -20,18 +20,20 @@ use crate::domain::user::{Friendship, FriendshipStatus, Profile, StatusMessage, 
 use crate::error::{CryptoError, NetworkError, StorageError};
 use crate::network::grpc::client_pool::GrpcClientPool;
 use crate::network::grpc::user_client::UserClient;
-use crate::proto::chat_v1::{friend_requests_filter, user_event, FriendStatus, UserProfile};
+use crate::proto::chat_v1::{FriendStatus, UserProfile, friend_requests_filter, user_event};
 use crate::services::current_user::{CurrentUserError, CurrentUserProvider};
-use crate::storage::repositories::settings_repo::{keys, SettingsRepository};
 use crate::storage::repositories::anon_dm_repo::AnonDmRepository;
 use crate::storage::repositories::anon_group_repo::AnonGroupRepository;
+use crate::storage::repositories::settings_repo::{SettingsRepository, keys};
 use crate::storage::repositories::user_repo::UserRepository;
 
 pub(crate) mod conversions;
 #[cfg(test)]
 mod tests;
 
-use conversions::{domain_presence_to_proto, proto_friend_status_to_domain, proto_to_domain_profile};
+use conversions::{
+    domain_presence_to_proto, proto_friend_status_to_domain, proto_to_domain_profile,
+};
 
 /// Decrypt a friend's server `display_name` (encrypted base64) with their
 /// stored profile key.
@@ -291,7 +293,9 @@ pub const PROFILE_REFRESH_INTERVAL: Duration = Duration::from_secs(5 * 60);
 
 /// Whether a profile last fetched at `last` is due for a refetch at `now`.
 fn profile_fetch_due(last: Option<Instant>, now: Instant) -> bool {
-    last.map_or(true, |t| now.saturating_duration_since(t) >= PROFILE_REFRESH_INTERVAL)
+    last.map_or(true, |t| {
+        now.saturating_duration_since(t) >= PROFILE_REFRESH_INTERVAL
+    })
 }
 
 impl UserService {
@@ -330,9 +334,7 @@ impl UserService {
         let current_user = self.settings_repo.current_user_id()?;
 
         let mut user_client = self.user_client();
-        let proto_profile = user_client
-            .get_user_profile(&user_id.to_string())
-            .await?;
+        let proto_profile = user_client.get_user_profile(&user_id.to_string()).await?;
 
         let mut profile = proto_to_domain_profile(&proto_profile)?;
 
@@ -340,7 +342,9 @@ impl UserService {
             self.restore_own_profile(&mut profile, &proto_profile)?;
             self.user_repo.ensure_user_exists(user_id)?;
             self.user_repo.upsert_profile(&profile)?;
-            self.profile_fetched_at.lock().insert(*user_id, Instant::now());
+            self.profile_fetched_at
+                .lock()
+                .insert(*user_id, Instant::now());
             return Ok(profile);
         }
 
@@ -358,7 +362,10 @@ impl UserService {
             &proto_profile.display_name,
         )
         .or_else(|| {
-            stored.as_ref().map(|p| p.display_name.clone()).filter(|n| !n.is_empty())
+            stored
+                .as_ref()
+                .map(|p| p.display_name.clone())
+                .filter(|n| !n.is_empty())
         })
         .unwrap_or_else(|| friend_display_name_placeholder(user_id));
 
@@ -388,7 +395,9 @@ impl UserService {
 
         self.user_repo.ensure_user_exists(user_id)?;
         self.user_repo.upsert_profile(&profile)?;
-        self.profile_fetched_at.lock().insert(*user_id, Instant::now());
+        self.profile_fetched_at
+            .lock()
+            .insert(*user_id, Instant::now());
 
         Ok(profile)
     }
@@ -408,24 +417,31 @@ impl UserService {
         profile: &mut Profile,
         proto: &UserProfile,
     ) -> Result<(), UserError> {
-        use base64::Engine;
         use crate::crypto::profile_crypto;
+        use base64::Engine;
 
         let key: Option<[u8; 32]> = self
             .settings_repo
             .get_bytes(keys::PROFILE_KEY)?
             .and_then(|b| b.try_into().ok());
         let b64 = |s: &str| {
-            base64::engine::general_purpose::STANDARD.decode(s).ok().filter(|b| !b.is_empty())
+            base64::engine::general_purpose::STANDARD
+                .decode(s)
+                .ok()
+                .filter(|b| !b.is_empty())
         };
 
         let name = key.as_ref().and_then(|k| {
             let bytes = b64(&proto.display_name)?;
-            profile_crypto::decrypt_display_name(k, &bytes).ok().filter(|n| !n.is_empty())
+            profile_crypto::decrypt_display_name(k, &bytes)
+                .ok()
+                .filter(|n| !n.is_empty())
         });
         let status = key.as_ref().and_then(|k| {
             let bytes = b64(&proto.status_message)?;
-            profile_crypto::decrypt_status(k, &bytes).ok().filter(|s| !s.is_empty())
+            profile_crypto::decrypt_status(k, &bytes)
+                .ok()
+                .filter(|s| !s.is_empty())
         });
         let avatar = key.as_ref().and_then(|k| {
             if proto.encrypted_avatar.is_empty() {
@@ -454,7 +470,8 @@ impl UserService {
         profile.status_message = status
             .map(StatusMessage::new)
             .or_else(|| existing.as_ref().and_then(|p| p.status_message.clone()));
-        profile.avatar_bytes = avatar.or_else(|| self.settings_repo.get_bytes(keys::AVATAR).ok().flatten());
+        profile.avatar_bytes =
+            avatar.or_else(|| self.settings_repo.get_bytes(keys::AVATAR).ok().flatten());
         Ok(())
     }
 
@@ -493,7 +510,8 @@ impl UserService {
             return None;
         }
 
-        let profile_key = self.user_repo
+        let profile_key = self
+            .user_repo
             .get_friend_profile_key(current_user_id, friend_id)
             .ok()
             .flatten()?;
@@ -537,7 +555,8 @@ impl UserService {
         // SECURITY: Encrypt display_name with profile_key if being updated
         let encrypted_display_name = if let Some(ref name) = display_name {
             let profile_key = profile_key.ok_or(UserError::NotLoggedIn)?;
-            let encrypted = crate::crypto::profile_crypto::encrypt_display_name(&profile_key, name)?;
+            let encrypted =
+                crate::crypto::profile_crypto::encrypt_display_name(&profile_key, name)?;
             Some(base64::engine::general_purpose::STANDARD.encode(encrypted))
         } else {
             None
@@ -559,46 +578,46 @@ impl UserService {
         // (downscale/re-encode to WebP via the canonical avatar normalizer) when
         // it exceeds the ~64 KB target, then encrypt. If the encrypted blob would
         // still exceed the wire cap, skip it so the rest of the update succeeds.
-        let (encrypted_avatar, own_avatar_bytes): (Vec<u8>, Option<Vec<u8>>) =
-            match (profile_key, self.settings_repo.get_bytes(keys::AVATAR)?) {
-                (Some(pk), Some(avatar)) if !avatar.is_empty() => {
-                    const AVATAR_TARGET_BYTES: usize = 64 * 1024;
-                    // Match the anon-DM avatar ceiling; the profile RPC rides a
-                    // normal gRPC stream (MB-scale limit), so the old 96 KB was
-                    // needlessly tight — a 512² WebP-lossless photo (~120-200 KB)
-                    // was being dropped. WebP-lossless of a 512² image never
-                    // approaches 1 MB, so this is a safety net, not a real gate.
-                    const ENCRYPTED_AVATAR_CAP: usize =
-                        crate::domain::anon_dm_init::MAX_AVATAR_SIZE;
-                    let normalized = if avatar.len() > AVATAR_TARGET_BYTES {
-                        crate::media::ImageProcessor::process_avatar_from_memory(&avatar)
-                            .unwrap_or(avatar)
-                    } else {
-                        avatar
-                    };
-                    match crate::crypto::profile_crypto::encrypt_avatar(&pk, &normalized) {
-                        Ok(enc) if enc.len() <= ENCRYPTED_AVATAR_CAP => (enc, Some(normalized)),
-                        Ok(enc) => {
-                            tracing::warn!(
-                                encrypted_len = enc.len(),
-                                cap = ENCRYPTED_AVATAR_CAP,
-                                "Encrypted avatar exceeds wire cap; omitting from profile update"
-                            );
-                            (Vec::new(), Some(normalized))
-                        }
-                        Err(e) => {
-                            tracing::warn!(error = %e, "Failed to encrypt avatar; omitting from profile update");
-                            (Vec::new(), None)
-                        }
+        let (encrypted_avatar, own_avatar_bytes): (Vec<u8>, Option<Vec<u8>>) = match (
+            profile_key,
+            self.settings_repo.get_bytes(keys::AVATAR)?,
+        ) {
+            (Some(pk), Some(avatar)) if !avatar.is_empty() => {
+                const AVATAR_TARGET_BYTES: usize = 64 * 1024;
+                // Match the anon-DM avatar ceiling; the profile RPC rides a
+                // normal gRPC stream (MB-scale limit), so the old 96 KB was
+                // needlessly tight — a 512² WebP-lossless photo (~120-200 KB)
+                // was being dropped. WebP-lossless of a 512² image never
+                // approaches 1 MB, so this is a safety net, not a real gate.
+                const ENCRYPTED_AVATAR_CAP: usize = crate::domain::anon_dm_init::MAX_AVATAR_SIZE;
+                let normalized = if avatar.len() > AVATAR_TARGET_BYTES {
+                    crate::media::ImageProcessor::process_avatar_from_memory(&avatar)
+                        .unwrap_or(avatar)
+                } else {
+                    avatar
+                };
+                match crate::crypto::profile_crypto::encrypt_avatar(&pk, &normalized) {
+                    Ok(enc) if enc.len() <= ENCRYPTED_AVATAR_CAP => (enc, Some(normalized)),
+                    Ok(enc) => {
+                        tracing::warn!(
+                            encrypted_len = enc.len(),
+                            cap = ENCRYPTED_AVATAR_CAP,
+                            "Encrypted avatar exceeds wire cap; omitting from profile update"
+                        );
+                        (Vec::new(), Some(normalized))
+                    }
+                    Err(e) => {
+                        tracing::warn!(error = %e, "Failed to encrypt avatar; omitting from profile update");
+                        (Vec::new(), None)
                     }
                 }
-                _ => (Vec::new(), None),
-            };
+            }
+            _ => (Vec::new(), None),
+        };
 
         let proto_profile = UserProfile {
             user_id: current_user.to_string(),
-            display_name: encrypted_display_name
-                .unwrap_or_else(|| existing.display_name.clone()),
+            display_name: encrypted_display_name.unwrap_or_else(|| existing.display_name.clone()),
             // Encrypted when we're updating status; otherwise a throwaway value
             // (status_message is only in the update mask when actually changed).
             status_message: encrypted_status
@@ -763,8 +782,9 @@ impl UserService {
             .auth_client()
             .get_pre_key_bundles_all_devices(&recipient.to_string())
             .await?;
-        let identity_key = libsignal_protocol::IdentityKey::decode(&friend_request_identity_key(resp)?)
-            .map_err(|e| UserError::InvalidInput(format!("identity key decode failed: {e}")))?;
+        let identity_key =
+            libsignal_protocol::IdentityKey::decode(&friend_request_identity_key(resp)?)
+                .map_err(|e| UserError::InvalidInput(format!("identity key decode failed: {e}")))?;
 
         let mut plaintext = Vec::with_capacity(1 + 32 + note.len());
         plaintext.push(u8::from(profile_key.is_some()));
@@ -773,8 +793,12 @@ impl UserService {
         }
         plaintext.extend_from_slice(note.as_bytes());
 
-        ecies::seal_to_identity(&identity_key, ecies::IdentityHpkeUse::FriendRequest, &plaintext)
-            .map_err(|e| UserError::InvalidInput(format!("envelope encryption failed: {e}")))
+        ecies::seal_to_identity(
+            &identity_key,
+            ecies::IdentityHpkeUse::FriendRequest,
+            &plaintext,
+        )
+        .map_err(|e| UserError::InvalidInput(format!("envelope encryption failed: {e}")))
     }
 
     /// Resolve the sender's profile from an opened friend-request envelope.
@@ -803,7 +827,7 @@ impl UserService {
                 (Some(<[u8; 32]>::try_from(key).expect("32 bytes")), note)
             }
             Some((0, note)) => (None, note), // their visibility setting withheld it
-            _ => return out, // malformed
+            _ => return out,                 // malformed
         };
         out.note = String::from_utf8(note.to_vec())
             .ok()
@@ -814,7 +838,10 @@ impl UserService {
         };
 
         // Persist the sender's key, then decrypt their real name + avatar.
-        if self.store_friend_request_sender_key(sender_id, &profile_key).is_ok() {
+        if self
+            .store_friend_request_sender_key(sender_id, &profile_key)
+            .is_ok()
+        {
             if let Ok(profile) = self.get_user_profile(sender_id).await {
                 out.display_name = Some(profile.display_name).filter(|s| !s.is_empty());
                 out.avatar_bytes = profile.avatar_bytes;
@@ -876,8 +903,7 @@ impl UserService {
         // returns a DM channel_id here, just the terminal friend status.
         while let Some(event_result) = stream.next().await {
             let event = event_result?;
-            if let Some(user_event::Event::FriendStatusChanged(ref status_response)) = event.event
-            {
+            if let Some(user_event::Event::FriendStatusChanged(ref status_response)) = event.event {
                 let status = status_response.status();
                 tracing::debug!("Friend response event: status={:?}", status);
 
@@ -911,7 +937,11 @@ impl UserService {
     }
 
     /// List accepted friends.
-    pub async fn list_friends(&self, limit: u32, offset: u32) -> Result<Vec<Friendship>, UserError> {
+    pub async fn list_friends(
+        &self,
+        limit: u32,
+        offset: u32,
+    ) -> Result<Vec<Friendship>, UserError> {
         let current_user = self.settings_repo.current_user_id()?;
 
         let mut user_client = self.user_client();
@@ -1102,7 +1132,11 @@ impl UserService {
                 };
                 // A peer's local username can be a placeholder user id; never
                 // hand that to Jarvis as a handle.
-                self.user_repo.get(&other).ok().flatten().map(|u| u.username)
+                self.user_repo
+                    .get(&other)
+                    .ok()
+                    .flatten()
+                    .map(|u| u.username)
                     .filter(|u| !u.is_empty() && u.parse::<uuid::Uuid>().is_err())
             })
             .take(20)
@@ -1256,7 +1290,9 @@ impl UserService {
     /// local friendships table (either direction of the original request).
     pub fn is_friend_local(&self, user_id: &UserId) -> bool {
         use crate::domain::user::FriendshipStatus;
-        let Ok(me) = self.settings_repo.current_user_id() else { return false };
+        let Ok(me) = self.settings_repo.current_user_id() else {
+            return false;
+        };
         [(me, *user_id), (*user_id, me)].iter().any(|(a, b)| {
             matches!(
                 self.user_repo.get_friendship(a, b),
@@ -1268,18 +1304,24 @@ impl UserService {
     /// Server-side blocks this user made, from the durable friendships table
     /// (kept in step with the server by `UserSync::sync_blocked_users`).
     pub fn blocked_local(&self) -> Vec<UserId> {
-        let Ok(me) = self.settings_repo.current_user_id() else { return Vec::new() };
+        let Ok(me) = self.settings_repo.current_user_id() else {
+            return Vec::new();
+        };
         self.user_repo.list_blocked_by(&me).unwrap_or_default()
     }
 
     /// Whether this user blocked `user_id` server-side (durable table).
     pub fn is_blocked_local(&self, user_id: &UserId) -> bool {
-        let Ok(me) = self.settings_repo.current_user_id() else { return false };
+        let Ok(me) = self.settings_repo.current_user_id() else {
+            return false;
+        };
         self.user_repo.is_blocked(&me, user_id).unwrap_or(false)
     }
 
     pub fn get_profile_local(&self, user_id: &UserId) -> Result<Option<Profile>, UserError> {
-        self.user_repo.get_profile(user_id).map_err(UserError::Storage)
+        self.user_repo
+            .get_profile(user_id)
+            .map_err(UserError::Storage)
     }
 
     /// Get a user's display name from local storage.
@@ -1302,13 +1344,22 @@ impl UserService {
     /// (`UserRepository::display_name_sources`); only an id that neither
     /// resolves walks the per-id anon fallbacks. Opening a conversation names
     /// all its senders through this.
-    pub fn get_display_names(&self, user_ids: &[UserId]) -> std::collections::HashMap<UserId, String> {
-        let sources = self.user_repo.display_name_sources(user_ids).unwrap_or_default();
+    pub fn get_display_names(
+        &self,
+        user_ids: &[UserId],
+    ) -> std::collections::HashMap<UserId, String> {
+        let sources = self
+            .user_repo
+            .display_name_sources(user_ids)
+            .unwrap_or_default();
         user_ids
             .iter()
             .map(|user_id| {
                 let (profile_name, username) = sources.get(user_id).cloned().unwrap_or_default();
-                (*user_id, self.resolve_display_name(user_id, profile_name, username))
+                (
+                    *user_id,
+                    self.resolve_display_name(user_id, profile_name, username),
+                )
             })
             .collect()
     }
@@ -1359,7 +1410,9 @@ impl UserService {
 
     /// Get the current user's ID.
     pub fn current_user_id(&self) -> Result<UserId, UserError> {
-        self.settings_repo.current_user_id().map_err(UserError::from)
+        self.settings_repo
+            .current_user_id()
+            .map_err(UserError::from)
     }
 
     // ========================================================================
@@ -1380,7 +1433,9 @@ impl UserService {
         // the server — a caller that fires per keystroke must not turn it into
         // a prefix/enumeration probe.
         if !is_lookup_handle(username) {
-            return Err(UserError::InvalidInput("not a nickname.discriminator handle".into()));
+            return Err(UserError::InvalidInput(
+                "not a nickname.discriminator handle".into(),
+            ));
         }
         let _ = self.settings_repo.current_user_id()?;
         let hash = crate::crypto::auth_crypto::hash_username_lookup(username)
@@ -1404,10 +1459,15 @@ impl UserService {
     /// server. With `false` the server answers "no match" to everyone else's
     /// username lookup for this account; friend codes and username links
     /// still reach it. Returns the value the server persisted.
-    pub async fn set_username_discoverability(&self, discoverable: bool) -> Result<bool, UserError> {
+    pub async fn set_username_discoverability(
+        &self,
+        discoverable: bool,
+    ) -> Result<bool, UserError> {
         let _ = self.settings_repo.current_user_id()?;
         let mut user_client = self.user_client();
-        Ok(user_client.set_username_discoverability(discoverable).await?)
+        Ok(user_client
+            .set_username_discoverability(discoverable)
+            .await?)
     }
 
     // ========================================================================
@@ -1449,31 +1509,21 @@ impl UserService {
         let code_url = self.generate_friend_code()?;
 
         // Generate QR code
-        let qr = QrCode::new(code_url.as_bytes()).map_err(|e| {
-            UserError::InvalidInput(format!("Failed to generate QR code: {}", e))
-        })?;
+        let qr = QrCode::new(code_url.as_bytes())
+            .map_err(|e| UserError::InvalidInput(format!("Failed to generate QR code: {}", e)))?;
 
         // Render to image with quiet zone
         let qr_image = qr.render::<Luma<u8>>().quiet_zone(true).build();
 
         // Scale to requested size
-        let scaled = image::imageops::resize(
-            &qr_image,
-            size,
-            size,
-            image::imageops::FilterType::Nearest,
-        );
+        let scaled =
+            image::imageops::resize(&qr_image, size, size, image::imageops::FilterType::Nearest);
 
         // Encode as PNG
         let mut png_bytes = Vec::new();
         let encoder = image::codecs::png::PngEncoder::new(&mut png_bytes);
         encoder
-            .write_image(
-                scaled.as_raw(),
-                size,
-                size,
-                image::ExtendedColorType::L8,
-            )
+            .write_image(scaled.as_raw(), size, size, image::ExtendedColorType::L8)
             .map_err(|e| UserError::InvalidInput(format!("Failed to encode PNG: {}", e)))?;
 
         Ok(png_bytes)
@@ -1568,35 +1618,23 @@ impl UserService {
         let code_url = self.generate_private_friend_code()?;
 
         // Generate QR code (private codes are longer, may need higher error correction)
-        let qr = QrCode::with_error_correction_level(
-            code_url.as_bytes(),
-            qrcode::EcLevel::M,
-        )
-        .map_err(|e| {
-            UserError::InvalidInput(format!("Failed to generate private QR code: {}", e))
-        })?;
+        let qr = QrCode::with_error_correction_level(code_url.as_bytes(), qrcode::EcLevel::M)
+            .map_err(|e| {
+                UserError::InvalidInput(format!("Failed to generate private QR code: {}", e))
+            })?;
 
         // Render to image with quiet zone
         let qr_image = qr.render::<Luma<u8>>().quiet_zone(true).build();
 
         // Scale to requested size
-        let scaled = image::imageops::resize(
-            &qr_image,
-            size,
-            size,
-            image::imageops::FilterType::Nearest,
-        );
+        let scaled =
+            image::imageops::resize(&qr_image, size, size, image::imageops::FilterType::Nearest);
 
         // Encode as PNG
         let mut png_bytes = Vec::new();
         let encoder = image::codecs::png::PngEncoder::new(&mut png_bytes);
         encoder
-            .write_image(
-                scaled.as_raw(),
-                size,
-                size,
-                image::ExtendedColorType::L8,
-            )
+            .write_image(scaled.as_raw(), size, size, image::ExtendedColorType::L8)
             .map_err(|e| UserError::InvalidInput(format!("Failed to encode PNG: {}", e)))?;
 
         Ok(png_bytes)
@@ -1629,10 +1667,8 @@ impl UserService {
                 )
             })?;
 
-        let (entropy, blob) =
-            usernames::create_for_username(&mut rand::rng(), full_username, None).map_err(
-                |e| UserError::InvalidInput(format!("Failed to encrypt username: {e}")),
-            )?;
+        let (entropy, blob) = usernames::create_for_username(&mut rand::rng(), full_username, None)
+            .map_err(|e| UserError::InvalidInput(format!("Failed to encrypt username: {e}")))?;
 
         let mut user_client = self.user_client();
         let link_id = user_client.set_username_link(blob).await?;
@@ -1654,16 +1690,11 @@ impl UserService {
         use image::{ImageEncoder, Luma};
         use qrcode::QrCode;
 
-        let qr = QrCode::new(url.as_bytes()).map_err(|e| {
-            UserError::InvalidInput(format!("Failed to generate QR code: {}", e))
-        })?;
+        let qr = QrCode::new(url.as_bytes())
+            .map_err(|e| UserError::InvalidInput(format!("Failed to generate QR code: {}", e)))?;
         let qr_image = qr.render::<Luma<u8>>().quiet_zone(true).build();
-        let scaled = image::imageops::resize(
-            &qr_image,
-            size,
-            size,
-            image::imageops::FilterType::Nearest,
-        );
+        let scaled =
+            image::imageops::resize(&qr_image, size, size, image::imageops::FilterType::Nearest);
         let mut png_bytes = Vec::new();
         let encoder = image::codecs::png::PngEncoder::new(&mut png_bytes);
         encoder
@@ -1681,10 +1712,7 @@ impl UserService {
     /// is a capability like a friend code, so it must still reach an owner
     /// who set "Who can find me by my username" to Nobody. Decryption still
     /// runs first, so a URL with the wrong fragment fails as before.
-    pub async fn resolve_username_link(
-        &self,
-        url: &str,
-    ) -> Result<(String, UserId), UserError> {
+    pub async fn resolve_username_link(&self, url: &str) -> Result<(String, UserId), UserError> {
         let link = crate::domain::UsernameLink::parse(url)
             .map_err(|e| UserError::InvalidInput(format!("Invalid username link: {e}")))?;
 
@@ -1735,9 +1763,8 @@ impl UserService {
         }
 
         // Try plain UUID
-        code.parse::<UserId>().map_err(|_| {
-            UserError::InvalidInput(format!("Invalid friend code format: {}", code))
-        })
+        code.parse::<UserId>()
+            .map_err(|_| UserError::InvalidInput(format!("Invalid friend code format: {}", code)))
     }
 
     /// Connect with a user via friend code.

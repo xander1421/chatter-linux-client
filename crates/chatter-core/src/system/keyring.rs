@@ -43,7 +43,6 @@ pub fn keyring_disabled(db_path: &std::path::Path) -> bool {
         .is_some_and(|dir| dir.join(NO_KEYRING_MARKER).exists())
 }
 
-
 /// Secure credential storage using the system keyring.
 ///
 /// Uses the Secret Service API (GNOME Keyring, KWallet) on Linux
@@ -88,7 +87,11 @@ impl Keyring {
         let mut local_path = db_path.clone();
         local_path.set_extension("passphrase");
 
-        Self { username, local_path, db_path }
+        Self {
+            username,
+            local_path,
+            db_path,
+        }
     }
 
     /// Creates a new keyring Entry for the database passphrase.
@@ -171,7 +174,9 @@ impl Keyring {
                     // transient case this loop exists for: the backend
                     // itself being unavailable (e.g. Secret Service not up
                     // yet at login on Linux).
-                    Err(e @ keyring::Error::NoStorageAccess(_)) => return Err(map_keyring_error(e)),
+                    Err(e @ keyring::Error::NoStorageAccess(_)) => {
+                        return Err(map_keyring_error(e));
+                    }
                     Err(_) => continue,
                 },
                 Err(e) => return Err(e),
@@ -282,9 +287,7 @@ impl Keyring {
     /// - The keyring service is unavailable
     /// - Access is denied
     pub fn delete_passphrase(&self) -> Result<(), SystemError> {
-        self.entry()?
-            .delete_credential()
-            .map_err(map_keyring_error)
+        self.entry()?.delete_credential().map_err(map_keyring_error)
     }
 
     /// Checks if a passphrase exists in the keyring or environment.

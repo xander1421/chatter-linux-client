@@ -84,7 +84,8 @@ pub fn event_id_hex(event: &NostrEvent) -> Result<String, NostrError> {
 /// **not** deterministic. Two signings of the same event produce different `sig`
 /// values and both verify. Never assert on signature bytes.
 pub fn sign_event(event: NostrEvent, secret_key: &[u8; 32]) -> Result<NostrEvent, NostrError> {
-    let secret = SecretKey::from_byte_array(secret_key).map_err(|_| NostrError::InvalidPrivateKey)?;
+    let secret =
+        SecretKey::from_byte_array(secret_key).map_err(|_| NostrError::InvalidPrivateKey)?;
     let keypair = Keypair::from_secret_key(SECP256K1, &secret);
     let (xonly, _parity) = keypair.x_only_public_key();
     let pubkey_hex = hex::encode(xonly.serialize());
@@ -177,10 +178,13 @@ pub fn from_value(value: &Value) -> Result<NostrEvent, NostrError> {
         .and_then(Value::as_str)
         .ok_or(NostrError::InvalidEvent("missing or non-string pubkey"))?;
 
-    let created_at = value
-        .get("created_at")
-        .and_then(Value::as_i64)
-        .ok_or(NostrError::InvalidEvent("missing or non-integer created_at"))?;
+    let created_at =
+        value
+            .get("created_at")
+            .and_then(Value::as_i64)
+            .ok_or(NostrError::InvalidEvent(
+                "missing or non-integer created_at",
+            ))?;
 
     let kind = value
         .get("kind")
@@ -235,7 +239,8 @@ pub fn from_value(value: &Value) -> Result<NostrEvent, NostrError> {
 /// x-only means the 32-byte X coordinate with the Y parity dropped — a Nostr
 /// `pubkey` is never the 33-byte compressed form.
 pub fn public_key_hex(secret_key: &[u8; 32]) -> Result<String, NostrError> {
-    let secret = SecretKey::from_byte_array(secret_key).map_err(|_| NostrError::InvalidPrivateKey)?;
+    let secret =
+        SecretKey::from_byte_array(secret_key).map_err(|_| NostrError::InvalidPrivateKey)?;
     let keypair = Keypair::from_secret_key(SECP256K1, &secret);
     let (xonly, _parity) = keypair.x_only_public_key();
     Ok(hex::encode(xonly.serialize()))
@@ -313,7 +318,10 @@ mod tests {
             pubkey: "79be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798",
             created_at: 1712345678,
             kind: 1059,
-            tags: &[&["p", "3bf0c63fcb93463407af97a5e5ee64fa883d107ef9e558472c4eb9aaaefa459d"]],
+            tags: &[&[
+                "p",
+                "3bf0c63fcb93463407af97a5e5ee64fa883d107ef9e558472c4eb9aaaefa459d",
+            ]],
             content: "v2:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
             serialized: "[0,\"79be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798\",1712345678,1059,[[\"p\",\"3bf0c63fcb93463407af97a5e5ee64fa883d107ef9e558472c4eb9aaaefa459d\"]],\"v2:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\"]",
             id: "2d01ff7ba847d92ad877094b68e91ad44ed06b50c3b6a4b476468cdd3059e3a5",
@@ -329,26 +337,126 @@ mod tests {
     /// ID computation must not validate it — bitchat's does not, and an event with a
     /// junk pubkey has to hash to something before it can be rejected.
     const ESCAPING: &[(&str, &str, &str, &str)] = &[
-        ("quote", "say \"hi\"", "[0,\"0000000000000000000000000000000000000000000000000000000000000000\",0,1,[],\"say \\\"hi\\\"\"]", "786c223f8133574027627f9b486a393231e0f463e423c268d2b0672fc610b41a"),
-        ("backslash", "a\\b", "[0,\"0000000000000000000000000000000000000000000000000000000000000000\",0,1,[],\"a\\\\b\"]", "29c80051531c33eefcb02a6f02087f6af9436cf461c4d991a7075b1a74c9eccb"),
-        ("slash", "https://example.com/path", "[0,\"0000000000000000000000000000000000000000000000000000000000000000\",0,1,[],\"https://example.com/path\"]", "7d20e143e6355298b9c82ce524789a9f347df74dcd6e8d3e9e1f08207d93dc39"),
-        ("newline", "line1\nline2", "[0,\"0000000000000000000000000000000000000000000000000000000000000000\",0,1,[],\"line1\\nline2\"]", "bd074562120d45321d3f4bd2a566a7315d5616d54d8422ec72a1b831e087daf4"),
-        ("tab", "a\tb", "[0,\"0000000000000000000000000000000000000000000000000000000000000000\",0,1,[],\"a\\tb\"]", "a298a932065d20f716d5f81aa7c24f6be918afb57c8b4eedafb85f3e74594c85"),
-        ("carriage_return", "a\rb", "[0,\"0000000000000000000000000000000000000000000000000000000000000000\",0,1,[],\"a\\rb\"]", "b1fe842d3d28fb315ce194fb7afc0f7f75becb259dce61e7039d80faf95dc326"),
-        ("backspace", "a\u{8}b", "[0,\"0000000000000000000000000000000000000000000000000000000000000000\",0,1,[],\"a\\bb\"]", "bd9054f5ec9c5640159c0c69e2caa7534d5bf72c0696e49b257be6c14a5bcd91"),
-        ("form_feed", "a\u{c}b", "[0,\"0000000000000000000000000000000000000000000000000000000000000000\",0,1,[],\"a\\fb\"]", "6a86e6dfc0a5b98ba437b0e32b75b8145146469a7655493a86c6233be5779c05"),
-        ("nul", "a\u{0}b", "[0,\"0000000000000000000000000000000000000000000000000000000000000000\",0,1,[],\"a\\u0000b\"]", "1d60f8f83dbfad5e321aa29303d77b3a5ca8f92725a0912148185b8218905a6d"),
-        ("control_0x01", "a\u{1}b", "[0,\"0000000000000000000000000000000000000000000000000000000000000000\",0,1,[],\"a\\u0001b\"]", "ea18e9f81f9532e128213791e41b686d85480f537d404353c0910084f2c6ff34"),
-        ("control_0x1f", "a\u{1f}b", "[0,\"0000000000000000000000000000000000000000000000000000000000000000\",0,1,[],\"a\\u001fb\"]", "3dacac6bae1fd16594ab8bdc174de3cfea39d6f1f7f60fb659f4750990422cc0"),
-        ("del_0x7f_is_not_escaped", "a\u{7f}b", "[0,\"0000000000000000000000000000000000000000000000000000000000000000\",0,1,[],\"a\u{7f}b\"]", "00b23738be6449cfbd746eeabeabad37e48c5fa66f986321a1d382fa6dd00a50"),
-        ("emoji", "gm \u{1f30a}\u{1f41f}", "[0,\"0000000000000000000000000000000000000000000000000000000000000000\",0,1,[],\"gm \u{1f30a}\u{1f41f}\"]", "fde07b2c968bcaf7a9794667b53775aa810c5c65ce31533d22451e3ee5653977"),
-        ("accented", "caf\u{e9} na\u{ef}ve", "[0,\"0000000000000000000000000000000000000000000000000000000000000000\",0,1,[],\"caf\u{e9} na\u{ef}ve\"]", "8c6662ce19cdeb569694e62a1e254ab2b46e946f6c4953bbd088ef2bc1c5ba54"),
-        ("rtl_override", "a\u{202e}RTL\u{202c}b", "[0,\"0000000000000000000000000000000000000000000000000000000000000000\",0,1,[],\"a\u{202e}RTL\u{202c}b\"]", "c589432e0dfd7a0c23ac269f4dc6c21d9a2181ce628940164bb7716a05d5a954"),
-        ("rtl_mark", "a\u{200f}b", "[0,\"0000000000000000000000000000000000000000000000000000000000000000\",0,1,[],\"a\u{200f}b\"]", "d13b446e8bbae7494e213a1c5337855ed265869ec894b624bc206932ad79ae15"),
-        ("hebrew", "\u{5e9}\u{5dc}\u{5d5}\u{5dd}", "[0,\"0000000000000000000000000000000000000000000000000000000000000000\",0,1,[],\"\u{5e9}\u{5dc}\u{5d5}\u{5dd}\"]", "4692b78e22c37301e04c714d28d7bfea31f72a4bffa292b536bc351780dbfd09"),
-        ("arabic", "\u{645}\u{631}\u{62d}\u{628}\u{627}", "[0,\"0000000000000000000000000000000000000000000000000000000000000000\",0,1,[],\"\u{645}\u{631}\u{62d}\u{628}\u{627}\"]", "bd15c1a1ce707ceef5b2383f3045abf99a23c7a19132ed89730ec8c5262d2985"),
-        ("line_and_paragraph_separator", "a\u{2028}b\u{2029}c", "[0,\"0000000000000000000000000000000000000000000000000000000000000000\",0,1,[],\"a\u{2028}b\u{2029}c\"]", "349c04ba6cfff3d30d5ee2f6bfac395aaeed53bb03d4b7366330d67428a7f8e2"),
-        ("all_of_it_at_once", "\"\\/\n\t\u{0}\r\u{8}\u{c} \u{1f389} \u{645}\u{631}\u{62d}\u{628}\u{627}", "[0,\"0000000000000000000000000000000000000000000000000000000000000000\",0,1,[],\"\\\"\\\\/\\n\\t\\u0000\\r\\b\\f \u{1f389} \u{645}\u{631}\u{62d}\u{628}\u{627}\"]", "08bde01f166b84326a3d9d41abc65e6b18f34c0763d45ffef2066dfa5e18afcc"),
+        (
+            "quote",
+            "say \"hi\"",
+            "[0,\"0000000000000000000000000000000000000000000000000000000000000000\",0,1,[],\"say \\\"hi\\\"\"]",
+            "786c223f8133574027627f9b486a393231e0f463e423c268d2b0672fc610b41a",
+        ),
+        (
+            "backslash",
+            "a\\b",
+            "[0,\"0000000000000000000000000000000000000000000000000000000000000000\",0,1,[],\"a\\\\b\"]",
+            "29c80051531c33eefcb02a6f02087f6af9436cf461c4d991a7075b1a74c9eccb",
+        ),
+        (
+            "slash",
+            "https://example.com/path",
+            "[0,\"0000000000000000000000000000000000000000000000000000000000000000\",0,1,[],\"https://example.com/path\"]",
+            "7d20e143e6355298b9c82ce524789a9f347df74dcd6e8d3e9e1f08207d93dc39",
+        ),
+        (
+            "newline",
+            "line1\nline2",
+            "[0,\"0000000000000000000000000000000000000000000000000000000000000000\",0,1,[],\"line1\\nline2\"]",
+            "bd074562120d45321d3f4bd2a566a7315d5616d54d8422ec72a1b831e087daf4",
+        ),
+        (
+            "tab",
+            "a\tb",
+            "[0,\"0000000000000000000000000000000000000000000000000000000000000000\",0,1,[],\"a\\tb\"]",
+            "a298a932065d20f716d5f81aa7c24f6be918afb57c8b4eedafb85f3e74594c85",
+        ),
+        (
+            "carriage_return",
+            "a\rb",
+            "[0,\"0000000000000000000000000000000000000000000000000000000000000000\",0,1,[],\"a\\rb\"]",
+            "b1fe842d3d28fb315ce194fb7afc0f7f75becb259dce61e7039d80faf95dc326",
+        ),
+        (
+            "backspace",
+            "a\u{8}b",
+            "[0,\"0000000000000000000000000000000000000000000000000000000000000000\",0,1,[],\"a\\bb\"]",
+            "bd9054f5ec9c5640159c0c69e2caa7534d5bf72c0696e49b257be6c14a5bcd91",
+        ),
+        (
+            "form_feed",
+            "a\u{c}b",
+            "[0,\"0000000000000000000000000000000000000000000000000000000000000000\",0,1,[],\"a\\fb\"]",
+            "6a86e6dfc0a5b98ba437b0e32b75b8145146469a7655493a86c6233be5779c05",
+        ),
+        (
+            "nul",
+            "a\u{0}b",
+            "[0,\"0000000000000000000000000000000000000000000000000000000000000000\",0,1,[],\"a\\u0000b\"]",
+            "1d60f8f83dbfad5e321aa29303d77b3a5ca8f92725a0912148185b8218905a6d",
+        ),
+        (
+            "control_0x01",
+            "a\u{1}b",
+            "[0,\"0000000000000000000000000000000000000000000000000000000000000000\",0,1,[],\"a\\u0001b\"]",
+            "ea18e9f81f9532e128213791e41b686d85480f537d404353c0910084f2c6ff34",
+        ),
+        (
+            "control_0x1f",
+            "a\u{1f}b",
+            "[0,\"0000000000000000000000000000000000000000000000000000000000000000\",0,1,[],\"a\\u001fb\"]",
+            "3dacac6bae1fd16594ab8bdc174de3cfea39d6f1f7f60fb659f4750990422cc0",
+        ),
+        (
+            "del_0x7f_is_not_escaped",
+            "a\u{7f}b",
+            "[0,\"0000000000000000000000000000000000000000000000000000000000000000\",0,1,[],\"a\u{7f}b\"]",
+            "00b23738be6449cfbd746eeabeabad37e48c5fa66f986321a1d382fa6dd00a50",
+        ),
+        (
+            "emoji",
+            "gm \u{1f30a}\u{1f41f}",
+            "[0,\"0000000000000000000000000000000000000000000000000000000000000000\",0,1,[],\"gm \u{1f30a}\u{1f41f}\"]",
+            "fde07b2c968bcaf7a9794667b53775aa810c5c65ce31533d22451e3ee5653977",
+        ),
+        (
+            "accented",
+            "caf\u{e9} na\u{ef}ve",
+            "[0,\"0000000000000000000000000000000000000000000000000000000000000000\",0,1,[],\"caf\u{e9} na\u{ef}ve\"]",
+            "8c6662ce19cdeb569694e62a1e254ab2b46e946f6c4953bbd088ef2bc1c5ba54",
+        ),
+        (
+            "rtl_override",
+            "a\u{202e}RTL\u{202c}b",
+            "[0,\"0000000000000000000000000000000000000000000000000000000000000000\",0,1,[],\"a\u{202e}RTL\u{202c}b\"]",
+            "c589432e0dfd7a0c23ac269f4dc6c21d9a2181ce628940164bb7716a05d5a954",
+        ),
+        (
+            "rtl_mark",
+            "a\u{200f}b",
+            "[0,\"0000000000000000000000000000000000000000000000000000000000000000\",0,1,[],\"a\u{200f}b\"]",
+            "d13b446e8bbae7494e213a1c5337855ed265869ec894b624bc206932ad79ae15",
+        ),
+        (
+            "hebrew",
+            "\u{5e9}\u{5dc}\u{5d5}\u{5dd}",
+            "[0,\"0000000000000000000000000000000000000000000000000000000000000000\",0,1,[],\"\u{5e9}\u{5dc}\u{5d5}\u{5dd}\"]",
+            "4692b78e22c37301e04c714d28d7bfea31f72a4bffa292b536bc351780dbfd09",
+        ),
+        (
+            "arabic",
+            "\u{645}\u{631}\u{62d}\u{628}\u{627}",
+            "[0,\"0000000000000000000000000000000000000000000000000000000000000000\",0,1,[],\"\u{645}\u{631}\u{62d}\u{628}\u{627}\"]",
+            "bd15c1a1ce707ceef5b2383f3045abf99a23c7a19132ed89730ec8c5262d2985",
+        ),
+        (
+            "line_and_paragraph_separator",
+            "a\u{2028}b\u{2029}c",
+            "[0,\"0000000000000000000000000000000000000000000000000000000000000000\",0,1,[],\"a\u{2028}b\u{2029}c\"]",
+            "349c04ba6cfff3d30d5ee2f6bfac395aaeed53bb03d4b7366330d67428a7f8e2",
+        ),
+        (
+            "all_of_it_at_once",
+            "\"\\/\n\t\u{0}\r\u{8}\u{c} \u{1f389} \u{645}\u{631}\u{62d}\u{628}\u{627}",
+            "[0,\"0000000000000000000000000000000000000000000000000000000000000000\",0,1,[],\"\\\"\\\\/\\n\\t\\u0000\\r\\b\\f \u{1f389} \u{645}\u{631}\u{62d}\u{628}\u{627}\"]",
+            "08bde01f166b84326a3d9d41abc65e6b18f34c0763d45ffef2066dfa5e18afcc",
+        ),
     ];
 
     const ZERO_PUBKEY: &str = "0000000000000000000000000000000000000000000000000000000000000000";
@@ -514,16 +622,27 @@ mod tests {
     fn public_key_hex_is_thirty_two_bytes_of_lowercase_hex() {
         let hex_key = public_key_hex(&secret_bytes(GOLDEN[0].secret)).unwrap();
         assert_eq!(hex_key.len(), 64);
-        assert!(hex_key.chars().all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase()));
+        assert!(
+            hex_key
+                .chars()
+                .all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase())
+        );
     }
 
     #[test]
     fn out_of_range_secret_keys_are_rejected() {
-        assert_eq!(public_key_hex(&[0u8; 32]), Err(NostrError::InvalidPrivateKey));
+        assert_eq!(
+            public_key_hex(&[0u8; 32]),
+            Err(NostrError::InvalidPrivateKey)
+        );
         // The group order itself is not a valid scalar.
-        let order = secret_bytes("fffffffffffffffffffffffffffffffebaaedce6af48a03bbfd25e8cd0364141");
+        let order =
+            secret_bytes("fffffffffffffffffffffffffffffffebaaedce6af48a03bbfd25e8cd0364141");
         assert_eq!(public_key_hex(&order), Err(NostrError::InvalidPrivateKey));
-        assert_eq!(public_key_hex(&[0xffu8; 32]), Err(NostrError::InvalidPrivateKey));
+        assert_eq!(
+            public_key_hex(&[0xffu8; 32]),
+            Err(NostrError::InvalidPrivateKey)
+        );
     }
 
     // ---- signing ----------------------------------------------------------
@@ -583,7 +702,10 @@ mod tests {
     #[test]
     fn signing_with_an_invalid_secret_key_is_rejected() {
         let event = GOLDEN[0].unsigned();
-        assert_eq!(sign_event(event, &[0u8; 32]), Err(NostrError::InvalidPrivateKey));
+        assert_eq!(
+            sign_event(event, &[0u8; 32]),
+            Err(NostrError::InvalidPrivateKey)
+        );
     }
 
     // ---- verification -----------------------------------------------------
@@ -725,16 +847,18 @@ mod tests {
             let event = content_event(content);
             let parsed = from_json(&to_json(&event).unwrap()).unwrap();
             assert_eq!(parsed, event, "round trip lost bytes for `{name}`");
-            assert_eq!(event_id_hex(&parsed).unwrap(), event_id_hex(&event).unwrap());
+            assert_eq!(
+                event_id_hex(&parsed).unwrap(),
+                event_id_hex(&event).unwrap()
+            );
         }
     }
 
     #[test]
     fn from_json_defaults_a_missing_id_and_sig() {
-        let parsed = from_json(
-            r#"{"pubkey":"ab","created_at":1,"kind":14,"tags":[],"content":"rumor"}"#,
-        )
-        .unwrap();
+        let parsed =
+            from_json(r#"{"pubkey":"ab","created_at":1,"kind":14,"tags":[],"content":"rumor"}"#)
+                .unwrap();
         assert_eq!(parsed.id, "");
         assert_eq!(parsed.sig, None);
         assert_eq!(parsed.kind, 14);
@@ -804,9 +928,8 @@ mod tests {
             .map(|i| format!("\"v{i}\""))
             .collect::<Vec<_>>()
             .join(",");
-        let json = format!(
-            r#"{{"pubkey":"ab","created_at":1,"kind":1,"tags":[[{tag}]],"content":""}}"#
-        );
+        let json =
+            format!(r#"{{"pubkey":"ab","created_at":1,"kind":1,"tags":[[{tag}]],"content":""}}"#);
         let parsed = from_json(&json).unwrap();
         assert_eq!(parsed.tags.len(), 1);
         assert_eq!(parsed.tags[0].len(), 64);

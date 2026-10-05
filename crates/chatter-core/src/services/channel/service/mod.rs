@@ -16,26 +16,23 @@ use std::sync::Arc;
 
 use tokio_stream::StreamExt;
 
-use crate::domain::channel::{
-    Channel, ChannelConfig, ChannelType,
-};
+use crate::domain::channel::{Channel, ChannelConfig, ChannelType};
 use crate::domain::ids::{ChannelId, UserId};
 use crate::mailbox::group::{GroupCoordinator, GroupMailboxSetupResult};
 use crate::network::grpc::channel_client::ChannelClient;
 use crate::network::grpc::client_pool::GrpcClientPool;
 use crate::proto::chat_v1::{self, self as pb, channel_event};
-use pb::channel_action::Action;
 use crate::services::current_user::CurrentUserProvider;
 use crate::storage::repositories::channel_repo::ChannelRepository;
 use crate::storage::repositories::section_repo::SectionRepository;
 use crate::storage::repositories::settings_repo::SettingsRepository;
+use pb::channel_action::Action;
 
 use super::converters::{
-    domain_channel_type_to_proto, domain_config_to_proto,
-    proto_to_domain_channel,
+    domain_channel_type_to_proto, domain_config_to_proto, proto_to_domain_channel,
 };
 use super::error::ChannelError;
-use super::membership_log::{password_invite_key, AuthorBase, MembershipLog};
+use super::membership_log::{AuthorBase, MembershipLog, password_invite_key};
 use super::verified_state::{ChannelRole, Policy};
 use membership::action;
 
@@ -89,7 +86,9 @@ impl ChannelService {
 
     /// Get the current user's ID.
     pub fn current_user_id(&self) -> Result<UserId, ChannelError> {
-        self.settings_repo.current_user_id().map_err(ChannelError::from)
+        self.settings_repo
+            .current_user_id()
+            .map_err(ChannelError::from)
     }
 
     /// Create a channel client for network operations.
@@ -158,7 +157,10 @@ impl ChannelService {
             }
             genesis.insert(
                 0,
-                action(Action::Genesis(pb::Genesis { policy: Some(policy.to_proto()), disappearing_seconds: 0 })),
+                action(Action::Genesis(pb::Genesis {
+                    policy: Some(policy.to_proto()),
+                    disappearing_seconds: 0,
+                })),
             );
             self.membership_log
                 .author(
@@ -166,12 +168,28 @@ impl ChannelService {
                     AuthorBase::Genesis,
                     None,
                     |_| Ok(genesis.clone()),
-                    |change| self.create_on_server(trimmed_name, proto_type, proto_config.clone(), description, icon, Some(change)),
+                    |change| {
+                        self.create_on_server(
+                            trimmed_name,
+                            proto_type,
+                            proto_config.clone(),
+                            description,
+                            icon,
+                            Some(change),
+                        )
+                    },
                 )
                 .await?
         } else {
-            self.create_on_server(trimmed_name, proto_type, proto_config.clone(), description, icon, None)
-                .await?
+            self.create_on_server(
+                trimmed_name,
+                proto_type,
+                proto_config.clone(),
+                description,
+                icon,
+                None,
+            )
+            .await?
         };
 
         // Initial members are invitees: each gets a signed invite and joins
@@ -212,13 +230,18 @@ impl ChannelService {
                     return Ok(channel);
                 }
                 Some(channel_event::Event::OperationFailed(failure)) => {
-                    let msg = failure.error.map(|e| e.message).unwrap_or_else(|| "channel creation failed".into());
+                    let msg = failure
+                        .error
+                        .map(|e| e.message)
+                        .unwrap_or_else(|| "channel creation failed".into());
                     return Err(crate::error::NetworkError::InvalidRequest(msg));
                 }
                 _ => {}
             }
         }
-        Err(crate::error::NetworkError::InvalidRequest("no channel created event received".into()))
+        Err(crate::error::NetworkError::InvalidRequest(
+            "no channel created event received".into(),
+        ))
     }
 
     // ==================== CRUD Operations ====================
@@ -230,9 +253,7 @@ impl ChannelService {
         let _ = self.settings_repo.current_user_id()?;
 
         let mut channel_client = self.channel_client();
-        let proto_channel = channel_client
-            .get_channel(&channel_id.to_string())
-            .await?;
+        let proto_channel = channel_client.get_channel(&channel_id.to_string()).await?;
 
         let channel = proto_to_domain_channel(&proto_channel)?;
         self.channel_repo.upsert(&channel)?;
@@ -246,9 +267,7 @@ impl ChannelService {
         channel_client: &mut ChannelClient,
         channel_id: &ChannelId,
     ) -> Result<Channel, ChannelError> {
-        let proto_channel = channel_client
-            .get_channel(&channel_id.to_string())
-            .await?;
+        let proto_channel = channel_client.get_channel(&channel_id.to_string()).await?;
 
         let channel = proto_to_domain_channel(&proto_channel)?;
         self.channel_repo.upsert(&channel)?;

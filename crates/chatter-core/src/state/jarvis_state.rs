@@ -2,8 +2,8 @@
 //!
 //! UI state for Jarvis interactions - panel visibility, thinking state, conversation history.
 
-use std::sync::Arc;
 use parking_lot::RwLock;
+use std::sync::Arc;
 use uuid::Uuid;
 
 /// Jarvis conversation entry.
@@ -100,4 +100,3 @@ impl Default for JarvisState {
         Self::new()
     }
 }
-

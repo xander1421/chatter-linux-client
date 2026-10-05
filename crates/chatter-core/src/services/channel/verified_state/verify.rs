@@ -19,9 +19,12 @@ use async_trait::async_trait;
 use libsignal_protocol::PublicKey;
 use tokio::sync::Mutex;
 
-use super::canonical::{signed_message, CHANGE_DOMAIN};
-use super::rules::{apply, ApplyContext, ProofCheck};
-use super::{is_canonical_uuid, key33, malformed, KeyBytes, MemberStatus, MembershipState, StateHash, VerifyError};
+use super::canonical::{CHANGE_DOMAIN, signed_message};
+use super::rules::{ApplyContext, ProofCheck, apply};
+use super::{
+    KeyBytes, MemberStatus, MembershipState, StateHash, VerifyError, is_canonical_uuid, key33,
+    malformed,
+};
 use crate::proto::chat_v1 as pb;
 
 /// A change that passed every check except the KT lookup of its author.
@@ -50,7 +53,11 @@ impl VerifiedChange {
         let Some(prev) = prev else { return Vec::new() };
         prev.active_members()
             .filter(|(id, _)| {
-                self.0.new_state.members.get(*id).is_none_or(|m| m.status != MemberStatus::Active)
+                self.0
+                    .new_state
+                    .members
+                    .get(*id)
+                    .is_none_or(|m| m.status != MemberStatus::Active)
             })
             .map(|(id, _)| id.clone())
             .collect()
@@ -62,7 +69,8 @@ impl VerifiedChange {
             .new_state
             .active_members()
             .filter(|(id, _)| {
-                prev.and_then(|p| p.members.get(*id)).is_none_or(|m| m.status != MemberStatus::Active)
+                prev.and_then(|p| p.members.get(*id))
+                    .is_none_or(|m| m.status != MemberStatus::Active)
             })
             .map(|(id, _)| id.clone())
             .collect()
@@ -83,8 +91,9 @@ pub fn check_change(
     if change.actions.is_empty() {
         return Err(malformed("empty change"));
     }
-    let actions = <pb::channel_change::Actions as prost::Message>::decode(change.actions.as_slice())
-        .map_err(|e| VerifyError::Malformed(format!("actions: {e}")))?;
+    let actions =
+        <pb::channel_change::Actions as prost::Message>::decode(change.actions.as_slice())
+            .map_err(|e| VerifyError::Malformed(format!("actions: {e}")))?;
 
     if actions.channel_id != channel_id || !is_canonical_uuid(channel_id) {
         return Err(VerifyError::WrongChannel);
@@ -101,23 +110,33 @@ pub fn check_change(
     let local_revision = local.map_or(0, |s| s.revision);
     let expected = local_revision + 1;
     if actions.revision > expected {
-        return Err(VerifyError::Gap { expected, got: actions.revision });
+        return Err(VerifyError::Gap {
+            expected,
+            got: actions.revision,
+        });
     }
     if actions.revision < expected {
-        return Err(VerifyError::Stale { local: local_revision, got: actions.revision });
+        return Err(VerifyError::Stale {
+            local: local_revision,
+            got: actions.revision,
+        });
     }
     match local {
         None if !actions.prev_state_hash.is_empty() => return Err(VerifyError::PrevHashMismatch),
         Some(s) if actions.prev_state_hash.as_slice() != s.hash().as_slice() => {
-            return Err(VerifyError::PrevHashMismatch)
+            return Err(VerifyError::PrevHashMismatch);
         }
         _ => {}
     }
 
     // 2. Signature by the claimed author key (libsignal XEdDSA verify).
-    let author_key = PublicKey::deserialize(&author_identity_key).map_err(|_| malformed("author key"))?;
+    let author_key =
+        PublicKey::deserialize(&author_identity_key).map_err(|_| malformed("author key"))?;
     if change.signature.len() != 64
-        || !author_key.verify_signature(&signed_message(CHANGE_DOMAIN, &change.actions), &change.signature)
+        || !author_key.verify_signature(
+            &signed_message(CHANGE_DOMAIN, &change.actions),
+            &change.signature,
+        )
     {
         return Err(VerifyError::BadSignature);
     }
@@ -132,7 +151,10 @@ pub fn check_change(
             author: &actions.author_user_id,
             author_key: author_identity_key,
             timestamp: actions.timestamp,
-            proof: ProofCheck::Verify { actions_bytes: &change.actions, invite_proof: &change.invite_proof },
+            proof: ProofCheck::Verify {
+                actions_bytes: &change.actions,
+                invite_proof: &change.invite_proof,
+            },
         },
     )?;
 
@@ -160,7 +182,10 @@ pub async fn verify_change(
     kt: &dyn IdentityKeyVerifier,
 ) -> Result<VerifiedChange, VerifyError> {
     let pending = check_change(channel_id, local, change)?;
-    if kt.is_current_identity_key(&pending.author_user_id, &pending.author_identity_key).await? {
+    if kt
+        .is_current_identity_key(&pending.author_user_id, &pending.author_identity_key)
+        .await?
+    {
         Ok(VerifiedChange(pending))
     } else {
         Err(VerifyError::KtMismatch)
@@ -252,7 +277,11 @@ pub enum UnsignedDisposition {
 pub fn classify_unsigned(state: &MembershipState, event: &UnsignedEvent) -> UnsignedDisposition {
     match event {
         UnsignedEvent::Added { user_id } => {
-            if state.members.get(user_id).is_some_and(|m| m.status == MemberStatus::Active) {
+            if state
+                .members
+                .get(user_id)
+                .is_some_and(|m| m.status == MemberStatus::Active)
+            {
                 UnsignedDisposition::NoOp
             } else {
                 UnsignedDisposition::IgnoreAndSurface
@@ -275,7 +304,11 @@ pub trait IdentityKeyVerifier: Send + Sync {
     /// `Ok(true)` iff `identity_key` is `user_id`'s current KT-verified ACI
     /// identity key; `Ok(false)` if KT proves another key (or none);
     /// `Err(VerifyError::KtUnavailable)` when the lookup could not complete.
-    async fn is_current_identity_key(&self, user_id: &str, identity_key: &KeyBytes) -> Result<bool, VerifyError>;
+    async fn is_current_identity_key(
+        &self,
+        user_id: &str,
+        identity_key: &KeyBytes,
+    ) -> Result<bool, VerifyError>;
 }
 
 /// Caches positive KT answers per `(user, key)` for `ttl`. Negative answers
@@ -289,7 +322,11 @@ pub struct CachedKtVerifier<V> {
 
 impl<V: IdentityKeyVerifier> CachedKtVerifier<V> {
     pub fn new(inner: V, ttl: Duration) -> Self {
-        Self { inner, ttl, cache: Mutex::new(HashMap::new()) }
+        Self {
+            inner,
+            ttl,
+            cache: Mutex::new(HashMap::new()),
+        }
     }
 
     /// Drop every cached answer for `user_id` (their identity changed).
@@ -300,14 +337,21 @@ impl<V: IdentityKeyVerifier> CachedKtVerifier<V> {
 
 #[async_trait]
 impl<V: IdentityKeyVerifier> IdentityKeyVerifier for CachedKtVerifier<V> {
-    async fn is_current_identity_key(&self, user_id: &str, identity_key: &KeyBytes) -> Result<bool, VerifyError> {
+    async fn is_current_identity_key(
+        &self,
+        user_id: &str,
+        identity_key: &KeyBytes,
+    ) -> Result<bool, VerifyError> {
         let key = (user_id.to_string(), *identity_key);
         if let Some(at) = self.cache.lock().await.get(&key) {
             if at.elapsed() < self.ttl {
                 return Ok(true);
             }
         }
-        let ok = self.inner.is_current_identity_key(user_id, identity_key).await?;
+        let ok = self
+            .inner
+            .is_current_identity_key(user_id, identity_key)
+            .await?;
         let mut cache = self.cache.lock().await;
         if ok {
             cache.insert(key, Instant::now());

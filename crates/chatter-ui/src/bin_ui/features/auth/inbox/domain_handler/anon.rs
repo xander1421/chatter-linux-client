@@ -7,21 +7,18 @@ use std::sync::Arc;
 
 use slint::Weak;
 
+use crate::MainWindow;
 use chatter_core::client::ChatterClient;
 use chatter_core::domain::anon_dm::AnonDmId;
 use chatter_core::domain::anon_group::AnonGroupId;
 use chatter_core::domain::ids::UserId;
 use chatter_core::domain::message::SystemMessage;
-use crate::MainWindow;
 
 // =========================================================================
 // Anonymous DM Lifecycle Events
 // =========================================================================
 
-pub(super) fn handle_dm_request_received(
-    window: &Weak<MainWindow>,
-    ui_ctx: &Arc<ChatterClient>,
-) {
+pub(super) fn handle_dm_request_received(window: &Weak<MainWindow>, ui_ctx: &Arc<ChatterClient>) {
     let weak = window.clone();
     let ui_ctx = ui_ctx.clone();
     let _ = slint::invoke_from_event_loop(move || {
@@ -53,10 +50,7 @@ pub(super) fn handle_dm_request_accepted(
     });
 }
 
-pub(super) fn handle_dm_init_received(
-    window: &Weak<MainWindow>,
-    ui_ctx: &Arc<ChatterClient>,
-) {
+pub(super) fn handle_dm_init_received(window: &Weak<MainWindow>, ui_ctx: &Arc<ChatterClient>) {
     let weak = window.clone();
     let ui_ctx = ui_ctx.clone();
     let _ = slint::invoke_from_event_loop(move || {
@@ -117,7 +111,11 @@ pub(super) fn handle_group_member_list_received(
         "Received anon group member list"
     );
     // The whole roster was replaced: an open settings modal re-reads it.
-    crate::bin_ui::features::modals::refresh_members_if_open(window.clone(), ui_ctx.clone(), group_id.into());
+    crate::bin_ui::features::modals::refresh_members_if_open(
+        window.clone(),
+        ui_ctx.clone(),
+        group_id.into(),
+    );
 
     let weak = window.clone();
     let ui_ctx = ui_ctx.clone();
@@ -126,7 +124,10 @@ pub(super) fn handle_group_member_list_received(
         if let Some(w) = weak.upgrade() {
             let is_active = ui_ctx.active_conversation().matches_anon_group(&group_id);
             if is_active {
-                tracing::debug!("Refreshing message list for group {} after member list update", group_id_str);
+                tracing::debug!(
+                    "Refreshing message list for group {} after member list update",
+                    group_id_str
+                );
                 crate::bin_ui::features::sidebar::private_group::load_private_group_messages(
                     &w,
                     &ui_ctx,
@@ -172,11 +173,8 @@ pub(super) fn handle_group_member_joined(
     group_id: AnonGroupId,
     user_id: UserId,
 ) {
-    let message = ui_ctx.anon_group_system_message(
-        group_id,
-        user_id,
-        SystemMessage::UserJoined(user_id),
-    );
+    let message =
+        ui_ctx.anon_group_system_message(group_id, user_id, SystemMessage::UserJoined(user_id));
     super::messaging::handle_message_received(window, ui_ctx, message);
     super::messaging::update_active_channel_member_count(window, ui_ctx, group_id.into());
 }
@@ -187,11 +185,8 @@ pub(super) fn handle_group_member_left(
     group_id: AnonGroupId,
     user_id: UserId,
 ) {
-    let message = ui_ctx.anon_group_system_message(
-        group_id,
-        user_id,
-        SystemMessage::UserLeft(user_id),
-    );
+    let message =
+        ui_ctx.anon_group_system_message(group_id, user_id, SystemMessage::UserLeft(user_id));
     super::messaging::handle_message_received(window, ui_ctx, message);
     super::messaging::update_active_channel_member_count(window, ui_ctx, group_id.into());
 }
@@ -208,7 +203,9 @@ pub(super) fn handle_group_member_kicked(
         let (weak, ui_ctx) = (window.clone(), ui_ctx.clone());
         tokio::spawn(async move {
             crate::bin_ui::features::sidebar::conversation_removed(
-                &weak, &ui_ctx, chatter_core::state::ActiveConversation::AnonGroup(group_id),
+                &weak,
+                &ui_ctx,
+                chatter_core::state::ActiveConversation::AnonGroup(group_id),
             );
         });
         return;
@@ -219,7 +216,11 @@ pub(super) fn handle_group_member_kicked(
         SystemMessage::UserRemoved {
             by: kicked_by,
             removed: user_id,
-            removed_name: Some(ui_ctx.display_name_in(&chatter_core::domain::message::ConversationType::AnonGroup, &group_id.into(), &user_id)),
+            removed_name: Some(ui_ctx.display_name_in(
+                &chatter_core::domain::message::ConversationType::AnonGroup,
+                &group_id.into(),
+                &user_id,
+            )),
         },
     );
     super::messaging::handle_message_received(window, ui_ctx, message);

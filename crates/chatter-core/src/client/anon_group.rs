@@ -7,7 +7,10 @@ impl ChatterClient {
 
     pub fn list_anon_groups(
         &self,
-    ) -> Result<Vec<crate::domain::anon_group::AnonGroup>, crate::services::anon_group::AnonGroupError> {
+    ) -> Result<
+        Vec<crate::domain::anon_group::AnonGroup>,
+        crate::services::anon_group::AnonGroupError,
+    > {
         self.anon_groups().list_groups()
     }
 
@@ -53,7 +56,9 @@ impl ChatterClient {
         &self,
         group_id: &crate::domain::anon_group::AnonGroupId,
     ) -> Vec<crate::domain::ids::UserId> {
-        self.anon_groups().get_blocked_users(group_id).unwrap_or_default()
+        self.anon_groups()
+            .get_blocked_users(group_id)
+            .unwrap_or_default()
     }
 
     pub fn get_anon_group_member_display_name(
@@ -61,7 +66,10 @@ impl ChatterClient {
         group_id: &crate::domain::anon_group::AnonGroupId,
         user_id: &crate::domain::ids::UserId,
     ) -> Option<String> {
-        self.anon_groups().get_member_display_name(group_id, user_id).ok().flatten()
+        self.anon_groups()
+            .get_member_display_name(group_id, user_id)
+            .ok()
+            .flatten()
     }
 
     /// Build the synthetic system `Message` shown for an anon-group membership
@@ -113,7 +121,10 @@ impl ChatterClient {
         &self,
         group_id: &crate::domain::anon_group::AnonGroupId,
     ) -> Option<crate::domain::message::Message> {
-        self.anon_groups().get_latest_message(group_id).ok().flatten()
+        self.anon_groups()
+            .get_latest_message(group_id)
+            .ok()
+            .flatten()
     }
 
     pub fn get_anon_group_messages_asc(
@@ -121,12 +132,18 @@ impl ChatterClient {
         group_id: &crate::domain::anon_group::AnonGroupId,
         before: Option<&chrono::DateTime<chrono::Utc>>,
         limit: i32,
-    ) -> Result<Vec<crate::domain::message::Message>, crate::services::anon_group::AnonGroupError> {
-        let mut messages = self.anon_groups().get_messages_asc(group_id, before, limit)?;
+    ) -> Result<Vec<crate::domain::message::Message>, crate::services::anon_group::AnonGroupError>
+    {
+        let mut messages = self
+            .anon_groups()
+            .get_messages_asc(group_id, before, limit)?;
         // Join reaction counts here (keyed by sent_at) so callers render a
         // complete Message. Previously the UI issued a second call and merged —
         // duplicated across sidebar sites and a data-shaping leak into the view.
-        let reactions = self.anon_groups().get_all_reaction_counts(group_id).unwrap_or_default();
+        let reactions = self
+            .anon_groups()
+            .get_all_reaction_counts(group_id)
+            .unwrap_or_default();
         for msg in &mut messages {
             if let Some(counts) = reactions.get(&msg.sent_at) {
                 msg.reaction_counts = counts
@@ -150,7 +167,10 @@ impl ChatterClient {
 
     pub async fn refresh_expiring_group_mailboxes(
         &self,
-    ) -> Result<Vec<crate::domain::anon_group::AnonGroupId>, crate::services::anon_group::AnonGroupError> {
+    ) -> Result<
+        Vec<crate::domain::anon_group::AnonGroupId>,
+        crate::services::anon_group::AnonGroupError,
+    > {
         self.anon_groups().refresh_expiring_group_mailboxes().await
     }
 
@@ -172,7 +192,11 @@ impl ChatterClient {
         let me = self.auth_state().get().current_user_id;
         let mut seen: HashSet<UserId> = me.into_iter().collect();
         if let Some(group) = group {
-            seen.extend(self.get_anon_group_members(group).into_iter().map(|m| m.user_id));
+            seen.extend(
+                self.get_anon_group_members(group)
+                    .into_iter()
+                    .map(|m| m.user_id),
+            );
         }
 
         let mut out = Vec::new();
@@ -218,7 +242,8 @@ impl ChatterClient {
         inviter_profile_key: Option<[u8; 32]>,
         inviter_display_name: Option<String>,
         inviter_avatar: Option<Vec<u8>>,
-    ) -> Result<crate::domain::anon_group::AnonGroup, crate::services::anon_group::AnonGroupError> {
+    ) -> Result<crate::domain::anon_group::AnonGroup, crate::services::anon_group::AnonGroupError>
+    {
         self.anon_groups()
             .accept_invite(
                 group_id,

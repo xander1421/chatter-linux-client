@@ -166,7 +166,8 @@ impl<R: Read + Seek> StreamingDecryptor<R> {
             }
 
             // Both digest and HMAC include IV + encrypted data
-            digest_hasher.update(&chunk[..n])
+            digest_hasher
+                .update(&chunk[..n])
                 .map_err(|e| CryptoError::AttachmentDecryptionFailed(format!("SHA256: {}", e)))?;
             hmac.update(&chunk[..n])
                 .map_err(|e| CryptoError::AttachmentDecryptionFailed(format!("HMAC: {}", e)))?;
@@ -180,17 +181,25 @@ impl<R: Read + Seek> StreamingDecryptor<R> {
             .map_err(|e| CryptoError::AttachmentDecryptionFailed(format!("read hmac: {}", e)))?;
 
         // Digest also includes HMAC bytes
-        digest_hasher.update(&expected_hmac)
+        digest_hasher
+            .update(&expected_hmac)
             .map_err(|e| CryptoError::AttachmentDecryptionFailed(format!("SHA256: {}", e)))?;
 
         // Finalize
-        let actual_digest = digest_hasher.finish()
-            .map_err(|e| CryptoError::AttachmentDecryptionFailed(format!("SHA256 finalize: {}", e)))?;
-        let computed_hmac = hmac.finalize()
-            .map_err(|e| CryptoError::AttachmentDecryptionFailed(format!("HMAC finalize: {}", e)))?;
+        let actual_digest = digest_hasher.finish().map_err(|e| {
+            CryptoError::AttachmentDecryptionFailed(format!("SHA256 finalize: {}", e))
+        })?;
+        let computed_hmac = hmac.finalize().map_err(|e| {
+            CryptoError::AttachmentDecryptionFailed(format!("HMAC finalize: {}", e))
+        })?;
 
         // Verify digest (constant-time)
-        if actual_digest.as_slice().ct_eq(&self.expected_digest).unwrap_u8() != 1 {
+        if actual_digest
+            .as_slice()
+            .ct_eq(&self.expected_digest)
+            .unwrap_u8()
+            != 1
+        {
             return Err(CryptoError::AttachmentDigestMismatch);
         }
 
@@ -335,7 +344,13 @@ mod tests {
         let digest = [0u8; 32];
 
         let total_size = 100; // IV(16) + HMAC(32) overhead → body = 52
-        let d = StreamingDecryptor::new(Cursor::new(Vec::<u8>::new()), &key, &digest, usize::MAX, total_size);
+        let d = StreamingDecryptor::new(
+            Cursor::new(Vec::<u8>::new()),
+            &key,
+            &digest,
+            usize::MAX,
+            total_size,
+        );
         assert_eq!(d.plaintext_size, total_size - IV_LENGTH - HMAC_LENGTH);
 
         // Degenerate total_size smaller than the IV+HMAC overhead must clamp to
@@ -365,8 +380,14 @@ mod tests {
             encrypted.plaintext_size,
             total,
         );
-        assert!(matches!(d.decrypt_all(), Err(CryptoError::AttachmentMacMismatch)));
-        assert!(d.decryptor.is_none(), "AES initialised for unauthenticated ciphertext");
+        assert!(matches!(
+            d.decrypt_all(),
+            Err(CryptoError::AttachmentMacMismatch)
+        ));
+        assert!(
+            d.decryptor.is_none(),
+            "AES initialised for unauthenticated ciphertext"
+        );
     }
 
     /// `total_size` is the size of whatever the storage server returned.
@@ -376,11 +397,22 @@ mod tests {
         let digest = [0u8; 32];
         // Shorter than the HMAC, shorter than IV + HMAC + one block, and a
         // body that is not a whole number of blocks.
-        for total_size in [0, 10, IV_LENGTH + HMAC_LENGTH, IV_LENGTH + HMAC_LENGTH + AES_BLOCK + 1] {
+        for total_size in [
+            0,
+            10,
+            IV_LENGTH + HMAC_LENGTH,
+            IV_LENGTH + HMAC_LENGTH + AES_BLOCK + 1,
+        ] {
             let blob = vec![0u8; total_size];
             let mut d = StreamingDecryptor::new(Cursor::new(blob), &key, &digest, 1, total_size);
-            assert!(matches!(d.verify(), Err(CryptoError::AttachmentDecryptionFailed(_))));
-            assert!(matches!(d.decrypt_all(), Err(CryptoError::AttachmentDecryptionFailed(_))));
+            assert!(matches!(
+                d.verify(),
+                Err(CryptoError::AttachmentDecryptionFailed(_))
+            ));
+            assert!(matches!(
+                d.decrypt_all(),
+                Err(CryptoError::AttachmentDecryptionFailed(_))
+            ));
         }
     }
 

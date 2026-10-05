@@ -14,3 +14,9 @@ Run from linux-client:
 
 On upgrade, port with the matching core item/vtable and Skia renderer changes,
 then run the compiler test, demo software fallback test, and Skia pixel tests.
+
+- `builtins.slint` `StyledTextItem`: register `pointer-event(PointerEvent)` and
+  read-only `mouse-x`/`mouse-y` with the matching core patch. This exposes only
+  the link-owned pointer stream so message link holds share the bubble timer;
+  non-link gestures and right-click remain bubble-owned. Regression source:
+  `crates/chatter-ui/tests/ui_rich_text.rs`.

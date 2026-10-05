@@ -34,7 +34,12 @@ pub async fn download_attachments(
         let is_image = att.metadata.is_image();
         let is_video = att.metadata.is_video();
         let is_gif = att.metadata.is_gif();
-        let has_thumbnail = att.metadata.thumbnail.as_ref().map(|t| !t.is_empty()).unwrap_or(false);
+        let has_thumbnail = att
+            .metadata
+            .thumbnail
+            .as_ref()
+            .map(|t| !t.is_empty())
+            .unwrap_or(false);
 
         tracing::info!(
             cdn_key = %cdn_key,
@@ -71,9 +76,14 @@ pub async fn download_attachments(
                 let ui_p = ui_ctx.clone();
                 let _ = slint::invoke_from_event_loop(move || {
                     if let Some(window) = weak.upgrade() {
-                        match crate::bin_ui::slint_conversions::memory_to_slint_image(&thumb_bytes) {
-                            Ok(image) => update_attachment_thumbnail(&window, &ui_p, &cdn_key_p, image, &conv),
-                            Err(e) => tracing::debug!(error = ?e, "Failed to decode sidecar thumbnail for preview"),
+                        match crate::bin_ui::slint_conversions::memory_to_slint_image(&thumb_bytes)
+                        {
+                            Ok(image) => update_attachment_thumbnail(
+                                &window, &ui_p, &cdn_key_p, image, &conv,
+                            ),
+                            Err(e) => {
+                                tracing::debug!(error = ?e, "Failed to decode sidecar thumbnail for preview")
+                            }
                         }
                     }
                 });
@@ -141,12 +151,20 @@ fn handle_gif(
     let conv_id_first = conv_id.clone();
 
     let _ = slint::invoke_from_event_loop(move || {
-        let first_image = crate::bin_ui::slint_conversions::rgba_to_slint_image(&first_rgba,
+        let first_image = crate::bin_ui::slint_conversions::rgba_to_slint_image(
+            &first_rgba,
             first_width,
-            first_height,);
+            first_height,
+        );
 
         if let Some(window) = weak_first.upgrade() {
-            update_attachment_thumbnail(&window, &ui_ctx_gif, &att_id_first, first_image, &conv_id_first);
+            update_attachment_thumbnail(
+                &window,
+                &ui_ctx_gif,
+                &att_id_first,
+                first_image,
+                &conv_id_first,
+            );
             tracing::info!("GIF first frame displayed: {}", att_id_first);
         }
     });

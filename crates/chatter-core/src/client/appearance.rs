@@ -1,7 +1,7 @@
 //! Appearance façade: persisted theme, text size, message density and glass effects.
 
 use crate::services::appearance::{MessageDensity, TextSize, ThemeMode};
-use crate::storage::repositories::settings_repo::{keys, SettingsRepository};
+use crate::storage::repositories::settings_repo::{SettingsRepository, keys};
 
 use super::ChatterClient;
 
@@ -16,7 +16,10 @@ impl ChatterClient {
     }
 
     /// Persist the device-local glass effects preference.
-    pub fn set_glass_effects_enabled(&self, enabled: bool) -> Result<(), crate::error::StorageError> {
+    pub fn set_glass_effects_enabled(
+        &self,
+        enabled: bool,
+    ) -> Result<(), crate::error::StorageError> {
         SettingsRepository::new(self.services.database.clone())
             .set_bool(keys::GLASS_EFFECTS, enabled)
     }

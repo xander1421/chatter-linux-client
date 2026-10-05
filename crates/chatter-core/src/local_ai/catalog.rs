@@ -44,17 +44,94 @@ impl CatalogModel {
 /// The curated catalog, smallest chat models first. 2026 generation —
 /// every tag verified against registry.ollama.ai before inclusion.
 pub const CATALOG: &[CatalogModel] = &[
-    CatalogModel { name: "Qwen 3 0.6B", ollama_tag: "qwen3:0.6b", hf_id: Some("Qwen/Qwen3-0.6B-GGUF"), params_b: 0.6, size_gb: 0.5, kind: ModelKind::Chat },
-    CatalogModel { name: "Phi-4 Mini", ollama_tag: "phi4-mini", hf_id: None, params_b: 3.8, size_gb: 2.5, kind: ModelKind::Chat },
-    CatalogModel { name: "Qwen 3 4B", ollama_tag: "qwen3:4b", hf_id: Some("Qwen/Qwen3-4B-GGUF"), params_b: 4.0, size_gb: 2.6, kind: ModelKind::Chat },
-    CatalogModel { name: "Gemma 3 4B (vision)", ollama_tag: "gemma3:4b", hf_id: None, params_b: 4.3, size_gb: 3.3, kind: ModelKind::Chat },
-    CatalogModel { name: "DeepSeek R1 7B", ollama_tag: "deepseek-r1:7b", hf_id: None, params_b: 7.6, size_gb: 4.7, kind: ModelKind::Chat },
-    CatalogModel { name: "Qwen 3 8B", ollama_tag: "qwen3:8b", hf_id: Some("Qwen/Qwen3-8B-GGUF"), params_b: 8.2, size_gb: 5.2, kind: ModelKind::Chat },
-    CatalogModel { name: "Gemma 4 12B (multimodal)", ollama_tag: "gemma4:12b", hf_id: None, params_b: 12.0, size_gb: 8.0, kind: ModelKind::Chat },
-    CatalogModel { name: "DeepSeek R1 14B", ollama_tag: "deepseek-r1:14b", hf_id: None, params_b: 14.8, size_gb: 9.0, kind: ModelKind::Chat },
-    CatalogModel { name: "Qwen 3 14B", ollama_tag: "qwen3:14b", hf_id: Some("Qwen/Qwen3-14B-GGUF"), params_b: 14.8, size_gb: 9.3, kind: ModelKind::Chat },
-    CatalogModel { name: "Nomic Embed Text", ollama_tag: "nomic-embed-text", hf_id: None, params_b: 0.14, size_gb: 0.27, kind: ModelKind::Embedding },
-    CatalogModel { name: "All-MiniLM", ollama_tag: "all-minilm", hf_id: None, params_b: 0.02, size_gb: 0.05, kind: ModelKind::Embedding },
+    CatalogModel {
+        name: "Qwen 3 0.6B",
+        ollama_tag: "qwen3:0.6b",
+        hf_id: Some("Qwen/Qwen3-0.6B-GGUF"),
+        params_b: 0.6,
+        size_gb: 0.5,
+        kind: ModelKind::Chat,
+    },
+    CatalogModel {
+        name: "Phi-4 Mini",
+        ollama_tag: "phi4-mini",
+        hf_id: None,
+        params_b: 3.8,
+        size_gb: 2.5,
+        kind: ModelKind::Chat,
+    },
+    CatalogModel {
+        name: "Qwen 3 4B",
+        ollama_tag: "qwen3:4b",
+        hf_id: Some("Qwen/Qwen3-4B-GGUF"),
+        params_b: 4.0,
+        size_gb: 2.6,
+        kind: ModelKind::Chat,
+    },
+    CatalogModel {
+        name: "Gemma 3 4B (vision)",
+        ollama_tag: "gemma3:4b",
+        hf_id: None,
+        params_b: 4.3,
+        size_gb: 3.3,
+        kind: ModelKind::Chat,
+    },
+    CatalogModel {
+        name: "DeepSeek R1 7B",
+        ollama_tag: "deepseek-r1:7b",
+        hf_id: None,
+        params_b: 7.6,
+        size_gb: 4.7,
+        kind: ModelKind::Chat,
+    },
+    CatalogModel {
+        name: "Qwen 3 8B",
+        ollama_tag: "qwen3:8b",
+        hf_id: Some("Qwen/Qwen3-8B-GGUF"),
+        params_b: 8.2,
+        size_gb: 5.2,
+        kind: ModelKind::Chat,
+    },
+    CatalogModel {
+        name: "Gemma 4 12B (multimodal)",
+        ollama_tag: "gemma4:12b",
+        hf_id: None,
+        params_b: 12.0,
+        size_gb: 8.0,
+        kind: ModelKind::Chat,
+    },
+    CatalogModel {
+        name: "DeepSeek R1 14B",
+        ollama_tag: "deepseek-r1:14b",
+        hf_id: None,
+        params_b: 14.8,
+        size_gb: 9.0,
+        kind: ModelKind::Chat,
+    },
+    CatalogModel {
+        name: "Qwen 3 14B",
+        ollama_tag: "qwen3:14b",
+        hf_id: Some("Qwen/Qwen3-14B-GGUF"),
+        params_b: 14.8,
+        size_gb: 9.3,
+        kind: ModelKind::Chat,
+    },
+    CatalogModel {
+        name: "Nomic Embed Text",
+        ollama_tag: "nomic-embed-text",
+        hf_id: None,
+        params_b: 0.14,
+        size_gb: 0.27,
+        kind: ModelKind::Embedding,
+    },
+    CatalogModel {
+        name: "All-MiniLM",
+        ollama_tag: "all-minilm",
+        hf_id: None,
+        params_b: 0.02,
+        size_gb: 0.05,
+        kind: ModelKind::Embedding,
+    },
 ];
 
 #[cfg(test)]
@@ -68,7 +145,11 @@ mod tests {
             cpu_cores: 8,
             ram_gb,
             gpus: if vram_gb > 0.0 {
-                vec![GpuInfo { vendor: GpuVendor::Nvidia, name: "test".into(), vram_gb }]
+                vec![GpuInfo {
+                    vendor: GpuVendor::Nvidia,
+                    name: "test".into(),
+                    vram_gb,
+                }]
             } else {
                 vec![]
             },
@@ -94,8 +175,14 @@ mod tests {
         let small = profile(0.0, 8.0); // 8 GB laptop, no GPU
         let big = profile(24.0, 64.0); // workstation
 
-        let tiny = CATALOG.iter().find(|m| m.ollama_tag == "qwen3:0.6b").unwrap();
-        let big14 = CATALOG.iter().find(|m| m.ollama_tag == "qwen3:14b").unwrap();
+        let tiny = CATALOG
+            .iter()
+            .find(|m| m.ollama_tag == "qwen3:0.6b")
+            .unwrap();
+        let big14 = CATALOG
+            .iter()
+            .find(|m| m.ollama_tag == "qwen3:14b")
+            .unwrap();
 
         assert_eq!(tiny.fit(&small), ModelFit::CpuSlow);
         assert_eq!(tiny.fit(&big), ModelFit::Gpu);

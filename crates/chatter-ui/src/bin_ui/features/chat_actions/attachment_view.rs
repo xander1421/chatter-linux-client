@@ -10,17 +10,17 @@ use slint::{ComponentHandle, SharedString};
 use chatter_core::client::ChatterClient;
 use chatter_core::domain::attachment::{AttachmentStatus, ContentLocation, FileMetadata};
 use chatter_core::domain::ids::AttachmentId;
+use chatter_core::media::ImageProcessor;
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 use chatter_core::media::{FilePicker, FilePickerConfig};
-use chatter_core::media::ImageProcessor;
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 use chatter_core::system::ExternalOpener;
 
+use crate::MainWindow;
 use crate::bin_ui::audio_state;
 use crate::bin_ui::converters::format_file_size;
 use crate::bin_ui::preview_state;
 use crate::bin_ui::video_state;
-use crate::MainWindow;
 
 use super::timers::{start_audio_progress_timer, start_video_progress_timer};
 use super::transfer_status::update_attachment_transfer_status;
@@ -100,13 +100,7 @@ pub fn wire_view_attachment(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
 
             // SECURE DOWNLOAD: Download encrypted content to database (no disk)
             if needs_download {
-                handle_download_attachment(
-                    handle,
-                    weak,
-                    ui_ctx.clone(),
-                    attachment,
-                    att_id,
-                );
+                handle_download_attachment(handle, weak, ui_ctx.clone(), attachment, att_id);
                 return;
             }
 
@@ -134,7 +128,10 @@ fn handle_local_attachment(
     file_size: u64,
     mime_type: &str,
 ) {
-    tracing::debug!("Attachment {} ready, decrypting in background thread", att_id);
+    tracing::debug!(
+        "Attachment {} ready, decrypting in background thread",
+        att_id
+    );
 
     let filename = filename.to_string();
     let mime_type = mime_type.to_string();
@@ -174,10 +171,9 @@ fn handle_local_attachment(
                 let weak_inner = w.as_weak();
 
                 // First, try to reuse inline frames (instant, no decryption)
-                if let Some(first_frame) = crate::bin_ui::gif_state::start_viewer_from_inline(
-                    &att_id_str,
-                    &weak_inner,
-                ) {
+                if let Some(first_frame) =
+                    crate::bin_ui::gif_state::start_viewer_from_inline(&att_id_str, &weak_inner)
+                {
                     w.set_image_viewer_source(first_frame);
                     w.set_image_viewer_filename(filename_for_gif.into());
                     w.set_image_viewer_size(size_display.into());
@@ -198,11 +194,13 @@ fn handle_local_attachment(
                             let _ = slint::invoke_from_event_loop(move || {
                                 if let Some(w) = weak_decrypt.upgrade() {
                                     let weak_anim = w.as_weak();
-                                    if let Some(first_frame) = crate::bin_ui::gif_state::start_gif_animation_and_inline(
-                                        &data,
-                                        &weak_anim,
-                                        &att_id_str_decrypt,
-                                    ) {
+                                    if let Some(first_frame) =
+                                        crate::bin_ui::gif_state::start_gif_animation_and_inline(
+                                            &data,
+                                            &weak_anim,
+                                            &att_id_str_decrypt,
+                                        )
+                                    {
                                         w.set_image_viewer_source(first_frame);
                                         w.set_image_viewer_filename(filename_for_gif.into());
                                         w.set_image_viewer_size(size_display.into());
@@ -226,19 +224,26 @@ fn handle_local_attachment(
     // instead of decrypting the whole file to memory first. Playback starts
     // without the multi-second full-decrypt wall (and without holding the whole
     // plaintext in RAM). Small videos keep the simple full-decrypt path.
-    const VIDEO_STREAM_THRESHOLD: u64 = 8 * 1024 * 1024; // 8MB
-    if mime_type.starts_with("video/") && file_size >= VIDEO_STREAM_THRESHOLD {
+    if crate::platform::video_source::use_video_ranges(
+        &mime_type,
+        file_size,
+        cfg!(target_os = "android"),
+    ) {
         match ui_ctx.open_attachment_range(&att_id) {
             Ok(dec) => {
                 play_video_from_range(weak, std::sync::Arc::new(dec), &filename);
                 return;
             }
             Err(e) => {
-                tracing::warn!(
-                    "Streaming video open failed ({}), falling back to full decrypt",
-                    e
-                );
-                // fall through to full-decrypt path below
+                tracing::warn!("Streaming video open failed ({})", e);
+                #[cfg(target_os = "android")]
+                {
+                    // An unavailable/unauthenticated range source must not
+                    // trigger a multi-GiB plaintext allocation on a phone.
+                    crate::platform::android::media::show_video_error();
+                    return;
+                }
+                // Desktop retains its existing full-decrypt fallback.
             }
         }
     }
@@ -342,7 +347,9 @@ fn show_image_preview(
         if let Some(w) = weak_loading.upgrade() {
             if let Some((rgba, width, height)) = preview_data {
                 // Show thumbnail preview immediately
-                w.set_image_viewer_source(crate::bin_ui::slint_conversions::rgba_to_slint_image(&rgba, width, height));
+                w.set_image_viewer_source(crate::bin_ui::slint_conversions::rgba_to_slint_image(
+                    &rgba, width, height,
+                ));
                 w.set_image_viewer_filename(format!("{} (loading...)", preview_filename).into());
                 w.set_image_viewer_size(preview_size.into());
             } else {
@@ -503,7 +510,10 @@ fn display_image_from_buffer(
         let _ = slint::invoke_from_event_loop(move || {
             if let Some(w) = weak.upgrade() {
                 let weak_for_gif = w.as_weak();
-                tracing::info!("CLICK: Calling start_gif_animation_and_inline for {}", att_id_for_inline);
+                tracing::info!(
+                    "CLICK: Calling start_gif_animation_and_inline for {}",
+                    att_id_for_inline
+                );
                 if let Some(first_frame) = crate::bin_ui::gif_state::start_gif_animation_and_inline(
                     &data,
                     &weak_for_gif,
@@ -517,7 +527,9 @@ fn display_image_from_buffer(
                     crate::bin_ui::gif_state::resume();
                     tracing::info!("Opened animated GIF in viewer");
                 } else {
-                    tracing::warn!("CLICK: start_gif_animation_and_inline returned None, trying static");
+                    tracing::warn!(
+                        "CLICK: start_gif_animation_and_inline returned None, trying static"
+                    );
                     // Not animated, decode as static image
                     match crate::bin_ui::slint_conversions::memory_to_slint_image(&data) {
                         Ok(img) => {
@@ -545,7 +557,10 @@ fn display_image_from_buffer(
                 let decode_ms = t0.elapsed();
                 tracing::info!(
                     "IMG TIMING decode={:?} {}x{} rgba={:.1}MB",
-                    decode_ms, width, height, mb
+                    decode_ms,
+                    width,
+                    height,
+                    mb
                 );
 
                 let queued = std::time::Instant::now();
@@ -563,7 +578,9 @@ fn display_image_from_buffer(
                         w.set_image_viewer_visible(true);
                         tracing::info!(
                             "IMG TIMING invoke_latency={:?} clone+setsource={:?} total={:?} — Opened image in viewer",
-                            invoke_latency, clone_ms, t0.elapsed()
+                            invoke_latency,
+                            clone_ms,
+                            t0.elapsed()
                         );
                     }
                 });
@@ -575,7 +592,42 @@ fn display_image_from_buffer(
     }
 }
 
+#[cfg(target_os = "android")]
+fn play_video_from_buffer(
+    _weak: slint::Weak<MainWindow>,
+    buffer: chatter_core::prelude::SecureBuffer,
+    filename: &str,
+) {
+    if crate::platform::android::media::play_video(
+        crate::platform::video_source::VideoSource::Memory(buffer),
+        filename,
+    )
+    .is_err()
+    {
+        tracing::warn!("Native video launch failed");
+        crate::platform::android::media::show_video_error();
+    }
+}
+
+#[cfg(target_os = "android")]
+fn play_video_from_range(
+    _weak: slint::Weak<MainWindow>,
+    dec: std::sync::Arc<chatter_core::services::attachment::CbcRangeDecryptor>,
+    filename: &str,
+) {
+    if crate::platform::android::media::play_video(
+        crate::platform::video_source::VideoSource::Range(dec),
+        filename,
+    )
+    .is_err()
+    {
+        tracing::warn!("Native video launch failed");
+        crate::platform::android::media::show_video_error();
+    }
+}
+
 /// Play video from decrypted buffer.
+#[cfg(not(target_os = "android"))]
 fn play_video_from_buffer(
     weak: slint::Weak<MainWindow>,
     secure_buffer: chatter_core::prelude::SecureBuffer,
@@ -584,39 +636,36 @@ fn play_video_from_buffer(
     let data = secure_buffer.as_slice().to_vec();
     let filename_for_video = filename.to_string();
 
-    video_state::start_video_from_memory_async(
-        data,
-        filename_for_video.clone(),
-        move |result| {
-            match result {
-                Ok((_, duration_str)) => {
-                    let filename_for_ui = filename_for_video.clone();
-                    let _ = slint::invoke_from_event_loop(move || {
-                        if let Some(w) = weak.upgrade() {
-                            w.set_video_player_filename(filename_for_ui.into());
-                            w.set_video_player_duration(duration_str.into());
-                            w.set_video_player_elapsed("0:00".into());
-                            w.set_video_player_progress(0.0);
-                            w.set_video_player_is_playing(true);
-                            w.set_video_player_volume(1.0);
-                            w.set_video_player_visible(true);
-                            start_video_progress_timer(&w);
-                            tracing::info!("Started video from memory: {}", filename_for_video);
-                        }
-                    });
-                }
-                Err(e) => {
-                    tracing::error!("Failed to start video from memory: {}", e);
-                }
+    video_state::start_video_from_memory_async(data, filename_for_video.clone(), move |result| {
+        match result {
+            Ok((_, duration_str)) => {
+                let filename_for_ui = filename_for_video.clone();
+                let _ = slint::invoke_from_event_loop(move || {
+                    if let Some(w) = weak.upgrade() {
+                        w.set_video_player_filename(filename_for_ui.into());
+                        w.set_video_player_duration(duration_str.into());
+                        w.set_video_player_elapsed("0:00".into());
+                        w.set_video_player_progress(0.0);
+                        w.set_video_player_is_playing(true);
+                        w.set_video_player_volume(1.0);
+                        w.set_video_player_visible(true);
+                        start_video_progress_timer(&w);
+                        tracing::info!("Started video from memory: {}", filename_for_video);
+                    }
+                });
             }
-        },
-    );
+            Err(e) => {
+                tracing::error!("Failed to start video from memory: {}", e);
+            }
+        }
+    });
 }
 
 /// Play a large video by streaming decrypted ranges on demand.
 ///
 /// No full decrypt-to-memory: the GL pipeline pulls plaintext ranges from
 /// `dec` as it needs them (see `video_state::start_video_from_range_async`).
+#[cfg(not(target_os = "android"))]
 fn play_video_from_range(
     weak: slint::Weak<MainWindow>,
     dec: std::sync::Arc<chatter_core::services::attachment::CbcRangeDecryptor>,
@@ -624,33 +673,29 @@ fn play_video_from_range(
 ) {
     let filename_for_video = filename.to_string();
 
-    video_state::start_video_from_range_async(
-        dec,
-        filename_for_video.clone(),
-        move |result| {
-            match result {
-                Ok((_, duration_str)) => {
-                    let filename_for_ui = filename_for_video.clone();
-                    let _ = slint::invoke_from_event_loop(move || {
-                        if let Some(w) = weak.upgrade() {
-                            w.set_video_player_filename(filename_for_ui.into());
-                            w.set_video_player_duration(duration_str.into());
-                            w.set_video_player_elapsed("0:00".into());
-                            w.set_video_player_progress(0.0);
-                            w.set_video_player_is_playing(true);
-                            w.set_video_player_volume(1.0);
-                            w.set_video_player_visible(true);
-                            start_video_progress_timer(&w);
-                            tracing::info!("Started streaming video: {}", filename_for_video);
-                        }
-                    });
-                }
-                Err(e) => {
-                    tracing::error!("Failed to start streaming video: {}", e);
-                }
+    video_state::start_video_from_range_async(dec, filename_for_video.clone(), move |result| {
+        match result {
+            Ok((_, duration_str)) => {
+                let filename_for_ui = filename_for_video.clone();
+                let _ = slint::invoke_from_event_loop(move || {
+                    if let Some(w) = weak.upgrade() {
+                        w.set_video_player_filename(filename_for_ui.into());
+                        w.set_video_player_duration(duration_str.into());
+                        w.set_video_player_elapsed("0:00".into());
+                        w.set_video_player_progress(0.0);
+                        w.set_video_player_is_playing(true);
+                        w.set_video_player_volume(1.0);
+                        w.set_video_player_visible(true);
+                        start_video_progress_timer(&w);
+                        tracing::info!("Started streaming video: {}", filename_for_video);
+                    }
+                });
             }
-        },
-    );
+            Err(e) => {
+                tracing::error!("Failed to start streaming video: {}", e);
+            }
+        }
+    });
 }
 
 /// Display code file from decrypted buffer as plain text.
@@ -798,7 +843,10 @@ fn handle_download_attachment(
     let ui_ctx_for_task = ui_ctx.clone();
 
     handle.spawn(async move {
-        match ui_ctx_for_task.download_attachment_to_filesystem(&att_id).await {
+        match ui_ctx_for_task
+            .download_attachment_to_filesystem(&att_id)
+            .await
+        {
             Ok(()) => {
                 tracing::info!(
                     cdn_key = %cdn_key,
@@ -811,9 +859,34 @@ fn handle_download_attachment(
                 let att_id_for_done = att_id_str_for_task.clone();
                 let _ = slint::invoke_from_event_loop(move || {
                     if let Some(window) = weak_for_done.upgrade() {
-                        update_attachment_transfer_status(&window, &att_id_for_done, false, false, 1.0);
+                        update_attachment_transfer_status(
+                            &window,
+                            &att_id_for_done,
+                            false,
+                            false,
+                            1.0,
+                        );
                     }
                 });
+
+                // Reuse the authenticated range path for downloaded videos;
+                // do not allocate a second whole-file plaintext buffer.
+                if crate::platform::video_source::use_video_ranges(
+                    &mime_type,
+                    file_size,
+                    cfg!(target_os = "android"),
+                ) {
+                    handle_local_attachment(
+                        weak,
+                        ui_ctx_for_task.clone(),
+                        att_id,
+                        att_id_str.into(),
+                        &file_name,
+                        file_size,
+                        &mime_type,
+                    );
+                    return;
+                }
 
                 // Now decrypt to memory and display
                 let secure_buffer = match ui_ctx_for_task.decrypt_attachment_auto(&att_id) {
@@ -851,7 +924,13 @@ fn handle_download_attachment(
                 let att_id_for_ui = att_id_str_for_task.clone();
                 let _ = slint::invoke_from_event_loop(move || {
                     if let Some(window) = weak_for_completion.upgrade() {
-                        update_attachment_transfer_status(&window, &att_id_for_ui, false, false, 0.0);
+                        update_attachment_transfer_status(
+                            &window,
+                            &att_id_for_ui,
+                            false,
+                            false,
+                            0.0,
+                        );
                     }
                 });
             }

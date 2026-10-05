@@ -50,9 +50,7 @@ pub struct Ban {
     pub created_at: DateTime<Utc>,
 }
 
-impl Ban {
-
-}
+impl Ban {}
 
 // ============================================================================
 // Mute
@@ -79,9 +77,7 @@ pub struct Mute {
     pub created_at: DateTime<Utc>,
 }
 
-impl Mute {
-
-}
+impl Mute {}
 
 // ============================================================================
 // Moderation Log Entry
@@ -106,7 +102,4 @@ pub struct ModerationLogEntry {
     pub created_at: DateTime<Utc>,
 }
 
-impl ModerationLogEntry {
-
-}
-
+impl ModerationLogEntry {}

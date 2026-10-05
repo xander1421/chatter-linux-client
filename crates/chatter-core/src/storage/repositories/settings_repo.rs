@@ -6,8 +6,8 @@ use crate::error::StorageError;
 use crate::storage::Database;
 use chrono::Utc;
 use rusqlite::params;
-use serde::de::DeserializeOwned;
 use serde::Serialize;
+use serde::de::DeserializeOwned;
 use std::sync::Arc;
 
 /// Well-known setting keys.
@@ -169,8 +169,12 @@ impl SettingsRepository {
 
         match result {
             Ok(json) => {
-                let value: T = serde_json::from_str(&json)
-                    .map_err(|e| StorageError::InvalidData(format!("Failed to deserialize setting '{}': {}", key, e)))?;
+                let value: T = serde_json::from_str(&json).map_err(|e| {
+                    StorageError::InvalidData(format!(
+                        "Failed to deserialize setting '{}': {}",
+                        key, e
+                    ))
+                })?;
                 Ok(Some(value))
             }
             Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
@@ -183,8 +187,9 @@ impl SettingsRepository {
     /// Uses upsert semantics: creates if new, updates if exists.
     pub fn set<T: Serialize>(&self, key: &str, value: &T) -> Result<(), StorageError> {
         let conn = self.db.connection()?;
-        let json = serde_json::to_string(value)
-            .map_err(|e| StorageError::InvalidData(format!("Failed to serialize setting '{}': {}", key, e)))?;
+        let json = serde_json::to_string(value).map_err(|e| {
+            StorageError::InvalidData(format!("Failed to serialize setting '{}': {}", key, e))
+        })?;
         let now = Utc::now().to_rfc3339();
 
         conn.execute(
@@ -272,13 +277,16 @@ impl SettingsRepository {
     ///
     /// Used for cryptographic keys like profile_key that should be stored as raw bytes.
     pub fn get_bytes(&self, key: &str) -> Result<Option<Vec<u8>>, StorageError> {
-        use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
+        use base64::{Engine, engine::general_purpose::STANDARD as BASE64};
 
         let b64: Option<String> = self.get(key)?;
         match b64 {
             Some(encoded) => {
                 let bytes = BASE64.decode(&encoded).map_err(|e| {
-                    StorageError::InvalidData(format!("Failed to decode bytes for '{}': {}", key, e))
+                    StorageError::InvalidData(format!(
+                        "Failed to decode bytes for '{}': {}",
+                        key, e
+                    ))
                 })?;
                 Ok(Some(bytes))
             }
@@ -290,7 +298,7 @@ impl SettingsRepository {
     ///
     /// Used for cryptographic keys like profile_key that should be stored as raw bytes.
     pub fn set_bytes(&self, key: &str, value: &[u8]) -> Result<(), StorageError> {
-        use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
+        use base64::{Engine, engine::general_purpose::STANDARD as BASE64};
 
         let encoded = BASE64.encode(value);
         self.set(key, &encoded)
@@ -350,7 +358,11 @@ impl SettingsRepository {
     }
 
     /// Set the local AI model configuration.
-    pub fn set_local_ai_model(&self, model_id: &str, quantized_file: Option<&str>) -> Result<(), StorageError> {
+    pub fn set_local_ai_model(
+        &self,
+        model_id: &str,
+        quantized_file: Option<&str>,
+    ) -> Result<(), StorageError> {
         self.set_string(keys::LOCAL_AI_MODEL_ID, model_id)?;
         if let Some(qf) = quantized_file {
             self.set_string(keys::LOCAL_AI_QUANTIZED_FILE, qf)?;

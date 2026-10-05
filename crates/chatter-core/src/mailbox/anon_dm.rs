@@ -98,8 +98,9 @@ impl AnonDmPoller {
         let mailbox_id = hex::encode(mailbox.public_key);
 
         // Sign challenge with private key
-        let signing_key = SigningKey::from_keypair_bytes(&mailbox.private_key)
-            .map_err(|e| MailboxError::KeyDerivationFailed(format!("Invalid signing key: {}", e)))?;
+        let signing_key = SigningKey::from_keypair_bytes(&mailbox.private_key).map_err(|e| {
+            MailboxError::KeyDerivationFailed(format!("Invalid signing key: {}", e))
+        })?;
         let signature = signing_key.sign(&challenge);
 
         // Poll mailbox with signed challenge
@@ -218,16 +219,17 @@ impl AnonDmPoller {
         let challenge = challenge_response.challenge;
 
         // Sign challenge with private key
-        let signing_key = SigningKey::from_keypair_bytes(&mailbox.private_key)
-            .map_err(|e| MailboxError::KeyDerivationFailed(format!("Invalid signing key: {}", e)))?;
+        let signing_key = SigningKey::from_keypair_bytes(&mailbox.private_key).map_err(|e| {
+            MailboxError::KeyDerivationFailed(format!("Invalid signing key: {}", e))
+        })?;
         let signature = signing_key.sign(&challenge);
 
         // Acknowledge messages
         let ack_response = client
             .acknowledge_messages(
                 mailbox.public_key.to_vec(),
-                signature.to_bytes().to_vec(),  // challenge_signature
-                challenge,                       // challenge
+                signature.to_bytes().to_vec(), // challenge_signature
+                challenge,                     // challenge
                 message_ids.clone(),
             )
             .await

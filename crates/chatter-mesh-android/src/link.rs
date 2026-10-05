@@ -161,8 +161,15 @@ fn role_tag(role: LinkRole) -> &'static str {
 fn describe(event: &LinkEvent) -> String {
     match event {
         LinkEvent::Discovered { address, rssi, .. } => format!("Discovered({address}, {rssi} dBm)"),
-        LinkEvent::Connected { link, role, max_write } => {
-            format!("Connected({link}, {}, max_write {max_write})", role_tag(*role))
+        LinkEvent::Connected {
+            link,
+            role,
+            max_write,
+        } => {
+            format!(
+                "Connected({link}, {}, max_write {max_write})",
+                role_tag(*role)
+            )
         }
         LinkEvent::Disconnected { link } => format!("Disconnected({link})"),
         LinkEvent::Data { link, bytes } => format!("Data({link}, {} bytes)", bytes.len()),
@@ -245,7 +252,13 @@ impl Connections {
         let id = LinkId::new(format!("{}#{}", handle, self.next_seq));
         self.by_id.insert(
             id.clone(),
-            Conn { role, handle: handle.to_string(), max_write, visible, writable: false },
+            Conn {
+                role,
+                handle: handle.to_string(),
+                max_write,
+                visible,
+                writable: false,
+            },
         );
         Opened { id, displaced }
     }
@@ -262,7 +275,10 @@ impl Connections {
             if let Some(conn) = self.by_id.get_mut(&id) {
                 conn.visible = true;
             }
-            return Opened { id, displaced: None };
+            return Opened {
+                id,
+                displaced: None,
+            };
         }
         self.open(LinkRole::Central, handle, max_write, true)
     }
@@ -273,9 +289,11 @@ impl Connections {
     /// in the caller's hands — so this reuses it rather than minting a second
     /// id for the same connection.
     fn establish(&mut self, role: LinkRole, handle: &str, max_write: usize) -> Established {
-        let pending_outbound = self
-            .find(handle)
-            .filter(|id| self.by_id.get(id).is_some_and(|conn| conn.role == role && !conn.writable));
+        let pending_outbound = self.find(handle).filter(|id| {
+            self.by_id
+                .get(id)
+                .is_some_and(|conn| conn.role == role && !conn.writable)
+        });
 
         let (id, displaced) = match pending_outbound {
             Some(id) => (id, None),
@@ -290,17 +308,27 @@ impl Connections {
             conn.visible = true;
             conn.writable = true;
         }
-        Established { id, displaced, flushed: self.take_pending(handle) }
+        Established {
+            id,
+            displaced,
+            flushed: self.take_pending(handle),
+        }
     }
 
     /// The link currently representing `handle`, if any.
     fn find(&self, handle: &str) -> Option<LinkId> {
-        self.by_id.iter().find(|(_, conn)| conn.handle == handle).map(|(id, _)| id.clone())
+        self.by_id
+            .iter()
+            .find(|(_, conn)| conn.handle == handle)
+            .map(|(id, _)| id.clone())
     }
 
     /// Everything held back for `handle`, oldest first.
     fn take_pending(&mut self, handle: &str) -> Vec<Vec<u8>> {
-        self.pending.remove(handle).map(|queue| queue.into_iter().collect()).unwrap_or_default()
+        self.pending
+            .remove(handle)
+            .map(|queue| queue.into_iter().collect())
+            .unwrap_or_default()
     }
 
     /// Route one inbound payload.
@@ -341,7 +369,11 @@ impl Connections {
     /// Remove every link, returning the ones the layer above knows about.
     fn drain(&mut self) -> Vec<LinkId> {
         self.pending.clear();
-        self.by_id.drain().filter(|(_, conn)| conn.visible).map(|(id, _)| id).collect()
+        self.by_id
+            .drain()
+            .filter(|(_, conn)| conn.visible)
+            .map(|(id, _)| id)
+            .collect()
     }
 
     fn max_write(&self, id: &LinkId) -> Option<usize> {
@@ -361,7 +393,9 @@ impl Connections {
 
     /// Everything `send` needs, taken under one lock.
     fn target(&self, id: &LinkId) -> Option<(String, usize)> {
-        self.by_id.get(id).map(|conn| (conn.handle.clone(), conn.max_write))
+        self.by_id
+            .get(id)
+            .map(|conn| (conn.handle.clone(), conn.max_write))
     }
 
     fn len(&self) -> usize {
@@ -406,7 +440,9 @@ impl Shared {
     // If only lifecycle events remain, allow them beyond the soft capacity.
     fn emit(&self, event: LinkEvent) {
         let mut queue = self.queue.lock().unwrap_or_else(PoisonError::into_inner);
-        if queue.1 { return; }
+        if queue.1 {
+            return;
+        }
         if queue.0.len() >= self.capacity {
             if let Some(index) = queue.0.iter().position(|event| !lifecycle(event)) {
                 queue.0.remove(index);
@@ -433,17 +469,27 @@ impl Shared {
 
     /// Kotlin says this connection is writable now.
     fn establish(&self, role: LinkRole, handle: &str, max_write: usize) {
-        let Established { id, displaced, flushed } =
-            { self.conns().establish(role, handle, max_write) };
+        let Established {
+            id,
+            displaced,
+            flushed,
+        } = { self.conns().establish(role, handle, max_write) };
         if let Some(old) = displaced {
             self.emit(LinkEvent::Disconnected { link: old });
         }
 
-        self.emit(LinkEvent::Connected { link: id.clone(), role, max_write });
+        self.emit(LinkEvent::Connected {
+            link: id.clone(),
+            role,
+            max_write,
+        });
         // Only now may inbound data be released. Doing it in this order is what
         // guarantees `Data` never precedes `Connected` for a link.
         for bytes in flushed {
-            self.emit(LinkEvent::Data { link: id.clone(), bytes });
+            self.emit(LinkEvent::Data {
+                link: id.clone(),
+                bytes,
+            });
         }
     }
 
@@ -495,7 +541,10 @@ fn set_active(shared: &Arc<Shared>) {
 
 fn clear_active(shared: &Arc<Shared>) {
     let mut slot = ACTIVE.lock().unwrap_or_else(PoisonError::into_inner);
-    let ours = slot.as_ref().and_then(Weak::upgrade).is_some_and(|current| Arc::ptr_eq(&current, shared));
+    let ours = slot
+        .as_ref()
+        .and_then(Weak::upgrade)
+        .is_some_and(|current| Arc::ptr_eq(&current, shared));
     if ours {
         *slot = None;
     }
@@ -503,9 +552,15 @@ fn clear_active(shared: &Arc<Shared>) {
 
 /// The link a callback should report into, if there is one.
 fn active(during: &str) -> Option<Arc<Shared>> {
-    let shared = ACTIVE.lock().unwrap_or_else(PoisonError::into_inner).as_ref().and_then(Weak::upgrade);
+    let shared = ACTIVE
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .as_ref()
+        .and_then(Weak::upgrade);
     if shared.is_none() {
-        error::log_warn(&format!("mesh: {during} arrived with no AndroidLink attached, dropped"));
+        error::log_warn(&format!(
+            "mesh: {during} arrived with no AndroidLink attached, dropped"
+        ));
     }
     shared
 }
@@ -747,7 +802,10 @@ impl MeshLink for AndroidLink {
                 }
             }
             if bytes.len() > max {
-                return Err(LinkError::PayloadTooLarge { actual: bytes.len(), max });
+                return Err(LinkError::PayloadTooLarge {
+                    actual: bytes.len(),
+                    max,
+                });
             }
 
             match bridge::send(&handle, &bytes) {
@@ -771,9 +829,17 @@ impl MeshLink for AndroidLink {
             loop {
                 let available = self.inner.available.notified();
                 {
-                    let mut queue = self.inner.queue.lock().unwrap_or_else(PoisonError::into_inner);
-                    if let Some(event) = queue.0.pop_front() { return Some(event); }
-                    if queue.1 { return None; }
+                    let mut queue = self
+                        .inner
+                        .queue
+                        .lock()
+                        .unwrap_or_else(PoisonError::into_inner);
+                    if let Some(event) = queue.0.pop_front() {
+                        return Some(event);
+                    }
+                    if queue.1 {
+                        return None;
+                    }
                 }
                 available.await;
             }
@@ -880,7 +946,10 @@ mod tests {
         let mut conns = table();
         let outbound = conns.open(LinkRole::Central, PEER, 244, true);
         let inbound = conns.open(LinkRole::Peripheral, INBOUND, 244, true);
-        assert!(inbound.displaced.is_none(), "the inbound link must not displace the outbound one");
+        assert!(
+            inbound.displaced.is_none(),
+            "the inbound link must not displace the outbound one"
+        );
         assert_ne!(outbound.id, inbound.id);
         assert_eq!(conns.len(), 2);
     }
@@ -931,9 +1000,16 @@ mod tests {
 
         let again = conns.open_outbound(PEER, DEFAULT_MAX_WRITE);
         assert_eq!(again.id, first);
-        assert!(again.displaced.is_none(), "the live link must survive a second connect");
+        assert!(
+            again.displaced.is_none(),
+            "the live link must survive a second connect"
+        );
         assert_eq!(conns.len(), 1);
-        assert_eq!(conns.max_write(&first), Some(244), "and must keep its negotiated size");
+        assert_eq!(
+            conns.max_write(&first),
+            Some(244),
+            "and must keep its negotiated size"
+        );
     }
 
     #[test]
@@ -945,7 +1021,11 @@ mod tests {
         let outbound = conns.open_outbound(PEER, DEFAULT_MAX_WRITE).id;
         let established = conns.establish(LinkRole::Peripheral, PEER, 244);
         assert_ne!(established.id, outbound);
-        assert_eq!(established.displaced, Some(outbound), "the outbound id was visible, so it dies");
+        assert_eq!(
+            established.displaced,
+            Some(outbound),
+            "the outbound id was visible, so it dies"
+        );
     }
 
     #[test]
@@ -1005,7 +1085,10 @@ mod tests {
         let mut conns = table();
         conns.open_outbound(PEER, DEFAULT_MAX_WRITE);
         assert_eq!(conns.accept_inbound(PEER, b"early".to_vec()), None);
-        assert_eq!(conns.establish(LinkRole::Central, PEER, 244).flushed, vec![b"early".to_vec()]);
+        assert_eq!(
+            conns.establish(LinkRole::Central, PEER, 244).flushed,
+            vec![b"early".to_vec()]
+        );
     }
 
     #[test]
@@ -1019,7 +1102,10 @@ mod tests {
         let flushed = conns.establish(LinkRole::Peripheral, INBOUND, 244).flushed;
         assert_eq!(flushed.len(), PENDING_PACKETS_PER_LINK);
         // The oldest were dropped, so the newest survive.
-        assert_eq!(flushed.last(), Some(&vec![(PENDING_PACKETS_PER_LINK + 4) as u8]));
+        assert_eq!(
+            flushed.last(),
+            Some(&vec![(PENDING_PACKETS_PER_LINK + 4) as u8])
+        );
     }
 
     #[test]
@@ -1027,7 +1113,12 @@ mod tests {
         let mut conns = table();
         conns.accept_inbound(INBOUND, b"orphan".to_vec());
         conns.close(INBOUND);
-        assert!(conns.establish(LinkRole::Peripheral, INBOUND, 244).flushed.is_empty());
+        assert!(
+            conns
+                .establish(LinkRole::Peripheral, INBOUND, 244)
+                .flushed
+                .is_empty()
+        );
     }
 
     #[test]
@@ -1074,7 +1165,12 @@ mod tests {
         let id = conns.open(LinkRole::Peripheral, INBOUND, 244, true).id;
         conns.accept_inbound(INBOUND, b"orphan".to_vec());
         conns.remove(&id);
-        assert!(conns.establish(LinkRole::Peripheral, INBOUND, 244).flushed.is_empty());
+        assert!(
+            conns
+                .establish(LinkRole::Peripheral, INBOUND, 244)
+                .flushed
+                .is_empty()
+        );
     }
 
     #[test]
@@ -1101,7 +1197,13 @@ mod tests {
         shared.establish(LinkRole::Peripheral, INBOUND, 185);
         let events = drain_events(&shared);
         let link = match &events[..] {
-            [LinkEvent::Connected { link, role, max_write }] => {
+            [
+                LinkEvent::Connected {
+                    link,
+                    role,
+                    max_write,
+                },
+            ] => {
                 assert_eq!(*role, LinkRole::Peripheral);
                 assert_eq!(*max_write, 185);
                 link.clone()
@@ -1110,7 +1212,10 @@ mod tests {
         };
 
         shared.close_link(INBOUND);
-        assert_eq!(drain_events(&shared), vec![LinkEvent::Disconnected { link }]);
+        assert_eq!(
+            drain_events(&shared),
+            vec![LinkEvent::Disconnected { link }]
+        );
     }
 
     #[test]
@@ -1118,12 +1223,18 @@ mod tests {
         // The ordering the Connected contract exists to guarantee.
         let shared = shared(8);
         shared.inbound(INBOUND, b"early".to_vec());
-        assert!(drain_events(&shared).is_empty(), "nothing may be emitted for an unknown link");
+        assert!(
+            drain_events(&shared).is_empty(),
+            "nothing may be emitted for an unknown link"
+        );
 
         shared.establish(LinkRole::Peripheral, INBOUND, 185);
         let events = drain_events(&shared);
         match &events[..] {
-            [LinkEvent::Connected { link, .. }, LinkEvent::Data { link: on, bytes }] => {
+            [
+                LinkEvent::Connected { link, .. },
+                LinkEvent::Data { link: on, bytes },
+            ] => {
                 assert_eq!(link, on);
                 assert_eq!(bytes, b"early");
             }
@@ -1131,19 +1242,29 @@ mod tests {
         }
 
         shared.inbound(INBOUND, b"live".to_vec());
-        assert!(matches!(drain_events(&shared)[..], [LinkEvent::Data { .. }]));
+        assert!(matches!(
+            drain_events(&shared)[..],
+            [LinkEvent::Data { .. }]
+        ));
     }
 
     #[test]
     fn an_outbound_attempt_emits_nothing_until_it_is_writable() {
         let shared = shared(8);
         let id = shared.open_central(PEER);
-        assert!(drain_events(&shared).is_empty(), "connect() must not announce a link it cannot write to");
+        assert!(
+            drain_events(&shared).is_empty(),
+            "connect() must not announce a link it cannot write to"
+        );
 
         shared.establish(LinkRole::Central, PEER, 244);
         assert_eq!(
             drain_events(&shared),
-            vec![LinkEvent::Connected { link: id, role: LinkRole::Central, max_write: 244 }]
+            vec![LinkEvent::Connected {
+                link: id,
+                role: LinkRole::Central,
+                max_write: 244
+            }]
         );
     }
 
@@ -1160,7 +1281,11 @@ mod tests {
         let events = drain_events(&shared);
         assert_eq!(events.len(), 3);
         assert_eq!(events[0], LinkEvent::AdapterPowerChanged { powered: false });
-        assert!(events[1..].iter().all(|event| matches!(event, LinkEvent::Disconnected { .. })));
+        assert!(
+            events[1..]
+                .iter()
+                .all(|event| matches!(event, LinkEvent::Disconnected { .. }))
+        );
         assert_eq!(shared.conns().len(), 0);
     }
 
@@ -1170,16 +1295,29 @@ mod tests {
     fn queue_pressure_keeps_every_lifecycle_transition_in_order() {
         let shared = shared(2);
         let link = LinkId::new("central:test#1");
-        let connected = LinkEvent::Connected { link: link.clone(), role: LinkRole::Central, max_write: 244 };
+        let connected = LinkEvent::Connected {
+            link: link.clone(),
+            role: LinkRole::Central,
+            max_write: 244,
+        };
         let disconnected = LinkEvent::Disconnected { link: link.clone() };
         shared.emit(connected.clone());
         for _ in 0..8 {
-            shared.emit(LinkEvent::Data { link: link.clone(), bytes: vec![1] });
+            shared.emit(LinkEvent::Data {
+                link: link.clone(),
+                bytes: vec![1],
+            });
         }
         shared.emit(disconnected.clone());
-        shared.emit(LinkEvent::Data { link: link.clone(), bytes: vec![2] });
+        shared.emit(LinkEvent::Data {
+            link: link.clone(),
+            bytes: vec![2],
+        });
         shared.emit(connected.clone()); // Lifecycle-only overflow is retained too.
-        assert_eq!(drain_events(&shared), vec![connected.clone(), disconnected, connected]);
+        assert_eq!(
+            drain_events(&shared),
+            vec![connected.clone(), disconnected, connected]
+        );
     }
 
     #[test]
@@ -1189,14 +1327,32 @@ mod tests {
         // out-of-memory kill waiting to happen.
         let shared = shared(2);
         for rssi in [-40, -50, -60, -70] {
-            shared.emit(LinkEvent::Discovered { address: PEER.to_string(), rssi, peer: None });
+            shared.emit(LinkEvent::Discovered {
+                address: PEER.to_string(),
+                rssi,
+                peer: None,
+            });
         }
 
         let events = drain_events(&shared);
         assert_eq!(events.len(), 2, "the queue must not grow past its bound");
         // Oldest non-lifecycle events are evicted.
-        assert_eq!(events[0], LinkEvent::Discovered { address: PEER.to_string(), rssi: -60, peer: None });
-        assert_eq!(events[1], LinkEvent::Discovered { address: PEER.to_string(), rssi: -70, peer: None });
+        assert_eq!(
+            events[0],
+            LinkEvent::Discovered {
+                address: PEER.to_string(),
+                rssi: -60,
+                peer: None
+            }
+        );
+        assert_eq!(
+            events[1],
+            LinkEvent::Discovered {
+                address: PEER.to_string(),
+                rssi: -70,
+                peer: None
+            }
+        );
     }
 
     #[test]
@@ -1211,7 +1367,10 @@ mod tests {
     #[test]
     fn a_log_line_for_a_data_event_never_carries_the_payload() {
         // Mesh traffic is other people's ciphertext and logcat is not private.
-        let event = LinkEvent::Data { link: LinkId::new("central:x#1"), bytes: b"secret".to_vec() };
+        let event = LinkEvent::Data {
+            link: LinkId::new("central:x#1"),
+            bytes: b"secret".to_vec(),
+        };
         let text = describe(&event);
         assert!(text.contains("6 bytes"), "{text}");
         assert!(!text.contains("secret"), "{text}");
@@ -1221,10 +1380,21 @@ mod tests {
     fn every_event_describes_itself_by_name() {
         let link = LinkId::new("central:x#1");
         for event in [
-            LinkEvent::Discovered { address: PEER.to_string(), rssi: -70, peer: None },
-            LinkEvent::Connected { link: link.clone(), role: LinkRole::Central, max_write: 244 },
+            LinkEvent::Discovered {
+                address: PEER.to_string(),
+                rssi: -70,
+                peer: None,
+            },
+            LinkEvent::Connected {
+                link: link.clone(),
+                role: LinkRole::Central,
+                max_write: 244,
+            },
             LinkEvent::Disconnected { link: link.clone() },
-            LinkEvent::Data { link, bytes: vec![0; 3] },
+            LinkEvent::Data {
+                link,
+                bytes: vec![0; 3],
+            },
             LinkEvent::AdapterPowerChanged { powered: true },
         ] {
             assert!(!describe(&event).is_empty());
@@ -1236,22 +1406,35 @@ mod tests {
     #[test]
     fn events_come_back_in_order() {
         let link = AndroidLink::new();
-        link.inner.emit(LinkEvent::Discovered { address: PEER.to_string(), rssi: -70, peer: None });
-        link.inner.emit(LinkEvent::AdapterPowerChanged { powered: true });
+        link.inner.emit(LinkEvent::Discovered {
+            address: PEER.to_string(),
+            rssi: -70,
+            peer: None,
+        });
+        link.inner
+            .emit(LinkEvent::AdapterPowerChanged { powered: true });
 
         block_on(async {
             assert_eq!(
                 link.next_event().await,
-                Some(LinkEvent::Discovered { address: PEER.to_string(), rssi: -70, peer: None })
+                Some(LinkEvent::Discovered {
+                    address: PEER.to_string(),
+                    rssi: -70,
+                    peer: None
+                })
             );
-            assert_eq!(link.next_event().await, Some(LinkEvent::AdapterPowerChanged { powered: true }));
+            assert_eq!(
+                link.next_event().await,
+                Some(LinkEvent::AdapterPowerChanged { powered: true })
+            );
         });
     }
 
     #[test]
     fn stop_drains_the_queue_and_then_ends_it() {
         let link = AndroidLink::new();
-        link.inner.emit(LinkEvent::AdapterPowerChanged { powered: false });
+        link.inner
+            .emit(LinkEvent::AdapterPowerChanged { powered: false });
 
         block_on(async {
             link.stop().await.expect("stop");
@@ -1270,8 +1453,14 @@ mod tests {
         block_on(async {
             link.stop().await.expect("stop");
             assert!(matches!(link.start().await, Err(LinkError::Backend(_))));
-            assert!(matches!(link.connect(PEER).await, Err(LinkError::Backend(_))));
-            assert!(matches!(link.set_scanning(true).await, Err(LinkError::Backend(_))));
+            assert!(matches!(
+                link.connect(PEER).await,
+                Err(LinkError::Backend(_))
+            ));
+            assert!(matches!(
+                link.set_scanning(true).await,
+                Err(LinkError::Backend(_))
+            ));
             // The duty cycle calls this unconditionally, including after stop.
             assert!(link.set_scanning(false).await.is_ok());
         });
@@ -1282,8 +1471,14 @@ mod tests {
         let link = AndroidLink::new();
         let unknown = LinkId::new("central:AA:BB:CC:DD:EE:FF#99");
         block_on(async {
-            assert_eq!(link.send(&unknown, b"hello").await, Err(error::link_gone(&unknown)));
-            assert_eq!(link.disconnect(&unknown).await, Err(error::link_gone(&unknown)));
+            assert_eq!(
+                link.send(&unknown, b"hello").await,
+                Err(error::link_gone(&unknown))
+            );
+            assert_eq!(
+                link.disconnect(&unknown).await,
+                Err(error::link_gone(&unknown))
+            );
         });
         assert_eq!(link.max_write(&unknown), None);
     }
@@ -1294,12 +1489,19 @@ mod tests {
         // to be caught here or the packet vanishes with no error anywhere.
         let link = AndroidLink::new();
         link.inner.establish(LinkRole::Peripheral, INBOUND, 20);
-        let id = link.inner.conns().find(INBOUND).expect("the link was just established");
+        let id = link
+            .inner
+            .conns()
+            .find(INBOUND)
+            .expect("the link was just established");
 
         block_on(async {
             assert_eq!(
                 link.send(&id, &[0u8; 21]).await,
-                Err(LinkError::PayloadTooLarge { actual: 21, max: 20 })
+                Err(LinkError::PayloadTooLarge {
+                    actual: 21,
+                    max: 20
+                })
             );
             // Exactly at the limit gets past the size check and on to the
             // bridge, which is not installed in a test, so it fails there.
@@ -1316,7 +1518,11 @@ mod tests {
         // must not report None for a link that exists.
         let link = AndroidLink::new();
         link.inner.establish(LinkRole::Central, PEER, 244);
-        let id = link.inner.conns().find(PEER).expect("the link was just established");
+        let id = link
+            .inner
+            .conns()
+            .find(PEER)
+            .expect("the link was just established");
         assert_eq!(link.max_write(&id), Some(244));
     }
 
@@ -1324,7 +1530,11 @@ mod tests {
     fn disconnect_announces_the_link_and_forgets_it() {
         let link = AndroidLink::new();
         link.inner.establish(LinkRole::Central, PEER, 244);
-        let id = link.inner.conns().find(PEER).expect("the link was just established");
+        let id = link
+            .inner
+            .conns()
+            .find(PEER)
+            .expect("the link was just established");
         drain_events(&link.inner);
 
         block_on(async {
@@ -1332,7 +1542,10 @@ mod tests {
             // to happen, which is what this asserts.
             let _ = link.disconnect(&id).await;
         });
-        assert_eq!(drain_events(&link.inner), vec![LinkEvent::Disconnected { link: id.clone() }]);
+        assert_eq!(
+            drain_events(&link.inner),
+            vec![LinkEvent::Disconnected { link: id.clone() }]
+        );
         assert_eq!(link.max_write(&id), None);
         assert_eq!(link.link_count(), 0);
     }
@@ -1345,7 +1558,9 @@ mod tests {
     }
 }
 
-
 fn lifecycle(event: &LinkEvent) -> bool {
-    matches!(event, LinkEvent::Connected { .. } | LinkEvent::Disconnected { .. })
+    matches!(
+        event,
+        LinkEvent::Connected { .. } | LinkEvent::Disconnected { .. }
+    )
 }

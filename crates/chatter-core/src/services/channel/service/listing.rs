@@ -7,7 +7,9 @@ use crate::domain::ids::ChannelId;
 use crate::proto::chat_v1;
 use crate::services::current_user::CurrentUserProvider;
 
-use crate::services::channel::converters::{domain_channel_type_to_proto, proto_to_domain_channel, proto_to_domain_membership};
+use crate::services::channel::converters::{
+    domain_channel_type_to_proto, proto_to_domain_channel, proto_to_domain_membership,
+};
 use crate::services::channel::error::ChannelError;
 
 use super::ChannelService;
@@ -141,7 +143,13 @@ impl ChannelService {
 
         let mut channel_client = self.channel_client();
         let response = channel_client
-            .search_channels(query, limit as i32, offset as i32, vec![], proto_type_filter)
+            .search_channels(
+                query,
+                limit as i32,
+                offset as i32,
+                vec![],
+                proto_type_filter,
+            )
             .await?;
 
         let mut channels = Vec::with_capacity(response.results.len());
@@ -168,9 +176,14 @@ impl ChannelService {
         let current_user = self.settings_repo.current_user_id()?;
         let mut channels = self.channel_repo.list_for_user(&current_user)?;
         channels.extend(self.channel_repo.list_former_for_user(&current_user)?);
-        let sectioned = self.section_repo.all_conversation_ids()
+        let sectioned = self
+            .section_repo
+            .all_conversation_ids()
             .map_err(ChannelError::Storage)?;
-        Ok(channels.into_iter().filter(|ch| !sectioned.contains(&ch.id.to_string())).collect())
+        Ok(channels
+            .into_iter()
+            .filter(|ch| !sectioned.contains(&ch.id.to_string()))
+            .collect())
     }
 
     /// Get channels sorted by most recently used (last_message_at DESC).
@@ -179,13 +192,11 @@ impl ChannelService {
     /// Channels without messages appear at the end (sorted by creation time).
     pub fn get_channels_mru(&self) -> Result<Vec<Channel>, ChannelError> {
         let mut channels = self.get_unsectioned_channels_for_user()?;
-        channels.sort_by(|a, b| {
-            match (&b.last_message_at, &a.last_message_at) {
-                (Some(b_time), Some(a_time)) => b_time.cmp(a_time),
-                (Some(_), None) => std::cmp::Ordering::Less,
-                (None, Some(_)) => std::cmp::Ordering::Greater,
-                (None, None) => b.created_at.cmp(&a.created_at),
-            }
+        channels.sort_by(|a, b| match (&b.last_message_at, &a.last_message_at) {
+            (Some(b_time), Some(a_time)) => b_time.cmp(a_time),
+            (Some(_), None) => std::cmp::Ordering::Less,
+            (None, Some(_)) => std::cmp::Ordering::Greater,
+            (None, None) => b.created_at.cmp(&a.created_at),
         });
         Ok(channels)
     }
@@ -212,7 +223,10 @@ impl ChannelService {
     ///
     /// Used for filtering invite candidates — callers can check which users
     /// are already members without loading full membership objects.
-    pub fn get_member_ids(&self, channel_id: &ChannelId) -> Result<std::collections::HashSet<crate::domain::ids::UserId>, ChannelError> {
+    pub fn get_member_ids(
+        &self,
+        channel_id: &ChannelId,
+    ) -> Result<std::collections::HashSet<crate::domain::ids::UserId>, ChannelError> {
         let members = self.channel_repo.list_members(channel_id)?;
         Ok(members.into_iter().map(|m| m.user_id).collect())
     }
@@ -245,17 +259,25 @@ impl ChannelService {
 
         Ok(None)
     }
-
 }
 
 #[cfg(test)]
 mod tests {
-    use crate::domain::channel::{Channel, ChannelType, MemberRole, Membership, NotificationPreference};
+    use crate::domain::channel::{
+        Channel, ChannelType, MemberRole, Membership, NotificationPreference,
+    };
     use crate::domain::ids::{ChannelId, UserId};
     use crate::storage::repositories::settings_repo::keys;
 
     /// A two-member channel of `channel_type` holding us and `peer`.
-    fn client_with(channel_type: ChannelType) -> (std::sync::Arc<crate::client::ChatterClient>, tempfile::TempDir, ChannelId, UserId) {
+    fn client_with(
+        channel_type: ChannelType,
+    ) -> (
+        std::sync::Arc<crate::client::ChatterClient>,
+        tempfile::TempDir,
+        ChannelId,
+        UserId,
+    ) {
         static MOCK_KEYRING: std::sync::Once = std::sync::Once::new();
         MOCK_KEYRING.call_once(|| {
             keyring::set_default_credential_builder(keyring::mock::default_credential_builder());
@@ -268,19 +290,25 @@ mod tests {
             .expect("build client");
         let (me, peer, channel) = (UserId::new(), UserId::new(), ChannelId::new());
         let svc = client.channels();
-        svc.settings_repo.set(keys::CURRENT_USER_ID, &me.to_string()).unwrap();
-        svc.channel_repo.insert(&Channel::new(channel, "c".into(), channel_type, me)).unwrap();
+        svc.settings_repo
+            .set(keys::CURRENT_USER_ID, &me.to_string())
+            .unwrap();
+        svc.channel_repo
+            .insert(&Channel::new(channel, "c".into(), channel_type, me))
+            .unwrap();
         for user_id in [me, peer] {
-            svc.channel_repo.insert_membership(&Membership {
-                channel_id: channel,
-                user_id,
-                role: MemberRole::Member,
-                joined_at: chrono::Utc::now(),
-                last_read_message_id: None,
-                is_muted: false,
-                muted_until: None,
-                notification_preference: NotificationPreference::default(),
-            }).unwrap();
+            svc.channel_repo
+                .insert_membership(&Membership {
+                    channel_id: channel,
+                    user_id,
+                    role: MemberRole::Member,
+                    joined_at: chrono::Utc::now(),
+                    last_read_message_id: None,
+                    is_muted: false,
+                    muted_until: None,
+                    notification_preference: NotificationPreference::default(),
+                })
+                .unwrap();
         }
         (client, dir, channel, peer)
     }
@@ -291,13 +319,20 @@ mod tests {
     async fn a_two_member_channel_has_no_dm_peer() {
         for channel_type in [ChannelType::Public, ChannelType::Private] {
             let (client, _dir, channel, _) = client_with(channel_type);
-            assert_eq!(client.channels().get_dm_peer_local(&channel).unwrap(), None, "{channel_type:?}");
+            assert_eq!(
+                client.channels().get_dm_peer_local(&channel).unwrap(),
+                None,
+                "{channel_type:?}"
+            );
         }
     }
 
     #[tokio::test]
     async fn a_dm_channel_names_the_other_member() {
         let (client, _dir, channel, peer) = client_with(ChannelType::DirectMessage);
-        assert_eq!(client.channels().get_dm_peer_local(&channel).unwrap(), Some(peer));
+        assert_eq!(
+            client.channels().get_dm_peer_local(&channel).unwrap(),
+            Some(peer)
+        );
     }
 }

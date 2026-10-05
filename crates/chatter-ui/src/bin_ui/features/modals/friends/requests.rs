@@ -50,7 +50,10 @@ pub(crate) fn wire_accept_request(window: &MainWindow, ui_ctx: &Arc<ChatterClien
                     let ui_ctx_refresh = ui_ctx.clone();
                     let _ = slint::invoke_from_event_loop(move || {
                         if let Some(w) = weak_refresh.upgrade() {
-                            crate::bin_ui::features::sidebar::refresh_chat_list(&w, &ui_ctx_refresh);
+                            crate::bin_ui::features::sidebar::refresh_chat_list(
+                                &w,
+                                &ui_ctx_refresh,
+                            );
                         }
                     });
                 }
@@ -122,7 +125,10 @@ pub(crate) fn wire_cancel_request(window: &MainWindow, ui_ctx: &Arc<ChatterClien
                 Ok(_) => tracing::info!("Cancelled friend request to {}", user_id_str),
                 Err(e) => {
                     tracing::error!("Failed to cancel friend request: {}", e);
-                    report_failure(&weak, "The request was not cancelled — it is still pending.");
+                    report_failure(
+                        &weak,
+                        "The request was not cancelled — it is still pending.",
+                    );
                 }
             }
             set_loading(&weak, false);
@@ -159,4 +165,3 @@ fn set_loading(weak: &slint::Weak<MainWindow>, loading: bool) {
         }
     });
 }
-

@@ -28,13 +28,13 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use crate::proto::chat_v1 as pb;
 
+pub use pb::ChannelRole;
 pub use pb::access_policy::JoinMode;
 pub use pb::state_member::Status as MemberStatus;
-pub use pb::ChannelRole;
 pub use verify::{
-    bootstrap, check_change, classify_unsigned, compare_peer_state, verify_change, CachedKtVerifier,
-    IdentityKeyVerifier, PeerStateCheck, PendingChange, UnsignedDisposition, UnsignedEvent,
-    VerifiedChange,
+    CachedKtVerifier, IdentityKeyVerifier, PeerStateCheck, PendingChange, UnsignedDisposition,
+    UnsignedEvent, VerifiedChange, bootstrap, check_change, classify_unsigned, compare_peer_state,
+    verify_change,
 };
 
 /// A serialized identity (or invite) public key: `0x05 || Curve25519 key`.
@@ -110,7 +110,10 @@ impl VerifyError {
     /// not be verified") until a later change verifies. `Gap`, `Stale` and
     /// `KtUnavailable` are not failures.
     pub fn is_failure(&self) -> bool {
-        !matches!(self, Self::Gap { .. } | Self::Stale { .. } | Self::KtUnavailable(_))
+        !matches!(
+            self,
+            Self::Gap { .. } | Self::Stale { .. } | Self::KtUnavailable(_)
+        )
     }
 }
 
@@ -136,7 +139,11 @@ impl Policy {
             set_role: ChannelRole::Admin,
             manage_invites: ChannelRole::Admin,
             set_disappearing: ChannelRole::Admin,
-            join: if public { JoinMode::Open } else { JoinMode::InviteOnly },
+            join: if public {
+                JoinMode::Open
+            } else {
+                JoinMode::InviteOnly
+            },
         }
     }
 
@@ -214,17 +221,27 @@ impl MembershipState {
         if p.revision == 0 {
             return Err(malformed("revision 0 has no state"));
         }
-        let policy = Policy::from_proto(p.policy.as_ref().ok_or_else(|| malformed("policy missing"))?)?;
+        let policy = Policy::from_proto(
+            p.policy
+                .as_ref()
+                .ok_or_else(|| malformed("policy missing"))?,
+        )?;
         let mut members = BTreeMap::new();
         for m in &p.members {
             if !is_canonical_uuid(&m.user_id) {
                 return Err(malformed("member user_id"));
             }
             let status = match MemberStatus::try_from(m.status) {
-                Ok(s @ (MemberStatus::Active | MemberStatus::Invited | MemberStatus::Requesting)) => s,
+                Ok(
+                    s @ (MemberStatus::Active | MemberStatus::Invited | MemberStatus::Requesting),
+                ) => s,
                 _ => return Err(malformed("member status")),
             };
-            let member = Member { role: role(m.role)?, status, identity_key: key33(&m.identity_key)? };
+            let member = Member {
+                role: role(m.role)?,
+                status,
+                identity_key: key33(&m.identity_key)?,
+            };
             if members.insert(m.user_id.clone(), member).is_some() {
                 return Err(malformed("duplicate member"));
             }
@@ -251,7 +268,9 @@ impl MembershipState {
             disappearing_seconds: p.disappearing_seconds,
         };
         if !state.has_one_owner() {
-            return Err(VerifyError::InvalidAction("a state must have exactly one owner".into()));
+            return Err(VerifyError::InvalidAction(
+                "a state must have exactly one owner".into(),
+            ));
         }
         Ok(state)
     }
@@ -261,7 +280,10 @@ impl MembershipState {
     /// (server-supplied at bootstrap, or the result of a change) with none or
     /// several is invalid.
     pub fn has_one_owner(&self) -> bool {
-        let mut owners = self.members.values().filter(|m| m.role == ChannelRole::Owner);
+        let mut owners = self
+            .members
+            .values()
+            .filter(|m| m.role == ChannelRole::Owner);
         matches!((owners.next(), owners.next()), (Some(m), None) if m.status == MemberStatus::Active)
     }
 
@@ -298,7 +320,9 @@ impl MembershipState {
 
     /// ACTIVE members: the only status that receives sender keys.
     pub fn active_members(&self) -> impl Iterator<Item = (&String, &Member)> {
-        self.members.iter().filter(|(_, m)| m.status == MemberStatus::Active)
+        self.members
+            .iter()
+            .filter(|(_, m)| m.status == MemberStatus::Active)
     }
 }
 
@@ -361,7 +385,11 @@ impl VerifiedMembership for VerifiedChannel {
 
     fn contains(&self, user_id: &str) -> bool {
         !self.excluded.contains(user_id)
-            && self.state.members.get(user_id).is_some_and(|m| m.status == MemberStatus::Active)
+            && self
+                .state
+                .members
+                .get(user_id)
+                .is_some_and(|m| m.status == MemberStatus::Active)
     }
 
     fn state(&self) -> &MembershipState {

@@ -2,11 +2,9 @@
 
 use crate::domain::anon_group::{AnonGroupId, AnonGroupMessageId};
 use crate::domain::ids::ChannelId;
-use crate::domain::message::ConversationType;
 use crate::proto::content_v1::{self, Content};
 use crate::services::gateway::builders::{
-    build_text_content, build_data_message_content,
-    build_data_message_content_with_quote,
+    build_data_message_content, build_data_message_content_with_quote, build_text_content,
 };
 use crate::services::gateway::shared;
 use crate::util::time::TimestampNanos;
@@ -14,6 +12,59 @@ use crate::util::time::TimestampNanos;
 use super::{AnonGroupError, AnonGroupService};
 
 impl AnonGroupService {
+    fn retain_group_row(
+        &self,
+        group_id: &AnonGroupId,
+        owner: &crate::domain::UserId,
+        inner: &Content,
+        id: &AnonGroupMessageId,
+    ) -> Result<(), AnonGroupError> {
+        // This freshly inserted row has no remote submission yet. Make its
+        // optimistic status truthful before any decorrelation wait or queue.
+        self.message_service
+            .database
+            .connection()?
+            .execute(
+                "UPDATE messages SET delivery_status='sending',failure_reason=NULL WHERE id=?1",
+                rusqlite::params![id.as_str()],
+            )
+            .map_err(crate::error::StorageError::from)?;
+        let key = super::send_ledger::key(&owner.to_string(), &group_id.to_string(), inner);
+        super::send_ledger::register(&self.message_service.database, &key, id.as_str())?;
+        crate::services::gateway::submission::bind_original_row(id.as_str().to_owned())?;
+        Ok(())
+    }
+
+    fn record_group_delivery(
+        &self,
+        group_id: &AnonGroupId,
+        content: &Content,
+        recipient: &crate::domain::UserId,
+        status: &str,
+    ) -> Result<(), AnonGroupError> {
+        let Some(content_v1::content::Content::AnonGroupMessage(message)) =
+            content.content.as_ref()
+        else {
+            return Ok(());
+        };
+        let Some(inner) = message.inner_content.as_deref() else {
+            return Ok(());
+        };
+        let owner = self.current_user_id()?;
+        let key = super::send_ledger::key(&owner.to_string(), &group_id.to_string(), inner);
+        if let Some(id) = super::send_ledger::record(
+            &self.message_service.database,
+            &key,
+            &recipient.to_string(),
+            status,
+        )? {
+            self.message_service
+                .finish_retry_row(&id, "sent", None)
+                .map_err(|e| AnonGroupError::MessageError(e.to_string()))?;
+        }
+        Ok(())
+    }
+
     /// Send a text message to all members of an anonymous group.
     ///
     /// This is a convenience wrapper around `send_message` that creates a
@@ -36,14 +87,24 @@ impl AnonGroupService {
         // Store message locally first with the same timestamp we'll send
         let message_id = self.store_text_message(group_id, &current_user, text, sent_at)?;
 
+        self.retain_group_row(group_id, &current_user, &inner_content, &message_id)?;
         // Send to all members
-        self.send_message(group_id, inner_content).await?;
+        // Persist unconfirmed before any deposit; an error or cancellation is
+        // not evidence that all recipients received nothing.
+        match self.send_message(group_id, inner_content).await {
+            Ok(()) => {}
+            Err(AnonGroupError::DeliveryUnconfirmed) => return Ok((message_id, sent_at)),
+            Err(error) => return Err(error),
+        }
 
         // Mark as "sent" for delivery status indicator
-        let channel_id: ChannelId = (*group_id).into();
-        let _ = self.message_service.message_repo.update_delivery_status_by_timestamp(
-            &channel_id, &ConversationType::AnonGroup, sent_at, "sent",
-        );
+        let id = message_id
+            .as_str()
+            .parse()
+            .map_err(|_| AnonGroupError::InvalidData("Invalid original message ID".into()))?;
+        self.message_service
+            .finish_retry_row(&id, "sent", None)
+            .map_err(|e| AnonGroupError::MessageError(e.to_string()))?;
 
         Ok((message_id, sent_at))
     }
@@ -72,9 +133,16 @@ impl AnonGroupService {
         let inner_content = build_data_message_content(text, attachments, sent_at);
 
         // Store message locally first with the same timestamp we'll send
-        let message_id =
-            self.store_message_with_attachments(group_id, &current_user, text, &attachment_ids, sent_at, None)?;
+        let message_id = self.store_message_with_attachments(
+            group_id,
+            &current_user,
+            text,
+            &attachment_ids,
+            sent_at,
+            None,
+        )?;
 
+        self.retain_group_row(group_id, &current_user, &inner_content, &message_id)?;
         // NDSS '21 decorrelation: delay anonymous mailbox send after CDN upload
         // so the server can't correlate the authenticated upload with this write.
         // Message is already visible in UI (optimistic insert above).
@@ -85,13 +153,22 @@ impl AnonGroupService {
         }
 
         // Send to all members
-        self.send_message(group_id, inner_content).await?;
+        // Persist unconfirmed before any deposit; an error or cancellation is
+        // not evidence that all recipients received nothing.
+        match self.send_message(group_id, inner_content).await {
+            Ok(()) => {}
+            Err(AnonGroupError::DeliveryUnconfirmed) => return Ok((message_id, sent_at)),
+            Err(error) => return Err(error),
+        }
 
         // Mark as "sent" for delivery status indicator
-        let channel_id: ChannelId = (*group_id).into();
-        let _ = self.message_service.message_repo.update_delivery_status_by_timestamp(
-            &channel_id, &ConversationType::AnonGroup, sent_at, "sent",
-        );
+        let id = message_id
+            .as_str()
+            .parse()
+            .map_err(|_| AnonGroupError::InvalidData("Invalid original message ID".into()))?;
+        self.message_service
+            .finish_retry_row(&id, "sent", None)
+            .map_err(|e| AnonGroupError::MessageError(e.to_string()))?;
 
         Ok((message_id, sent_at))
     }
@@ -154,7 +231,8 @@ impl AnonGroupService {
 
         let sent_at = TimestampNanos::now().as_u64();
 
-        let inner_content = build_data_message_content_with_quote(text, attachments, Some(quote), sent_at);
+        let inner_content =
+            build_data_message_content_with_quote(text, attachments, Some(quote), sent_at);
 
         // Resolve author display name for storage
         let author_display_name = self
@@ -174,7 +252,9 @@ impl AnonGroupService {
         );
 
         let quote_ctx = Some(crate::inbox::handlers::base_anon::QuoteContext {
-            reply_to: Some(crate::domain::ids::MessageId::from_timestamp(reply_to_timestamp)),
+            reply_to: Some(crate::domain::ids::MessageId::from_timestamp(
+                reply_to_timestamp,
+            )),
             reply_to_author_id: Some(*reply_to_sender),
             reply_to_text: (!preview_text.is_empty()).then(|| preview_text.clone()),
             reply_to_thumbnail: quote_thumb,
@@ -191,6 +271,7 @@ impl AnonGroupService {
             quote_ctx,
         )?;
 
+        self.retain_group_row(group_id, &current_user, &inner_content, &message_id)?;
         // NDSS '21 decorrelation: delay anonymous mailbox send after CDN upload
         if !attachment_ids.is_empty() {
             crate::mailbox::timing::TimingObfuscation::with_defaults()
@@ -198,13 +279,22 @@ impl AnonGroupService {
                 .await;
         }
 
-        self.send_message(group_id, inner_content).await?;
+        // Persist unconfirmed before any deposit; an error or cancellation is
+        // not evidence that all recipients received nothing.
+        match self.send_message(group_id, inner_content).await {
+            Ok(()) => {}
+            Err(AnonGroupError::DeliveryUnconfirmed) => return Ok((message_id, sent_at)),
+            Err(error) => return Err(error),
+        }
 
         // Mark as "sent" for delivery status indicator
-        // channel_id already bound above at line 108 from (*group_id).into()
-        let _ = self.message_service.message_repo.update_delivery_status_by_timestamp(
-            &channel_id, &ConversationType::AnonGroup, sent_at, "sent",
-        );
+        let id = message_id
+            .as_str()
+            .parse()
+            .map_err(|_| AnonGroupError::InvalidData("Invalid original message ID".into()))?;
+        self.message_service
+            .finish_retry_row(&id, "sent", None)
+            .map_err(|e| AnonGroupError::MessageError(e.to_string()))?;
 
         Ok((message_id, sent_at))
     }
@@ -246,6 +336,25 @@ impl AnonGroupService {
         // these members are enqueued and drained when their JoinAck lands.
         let pending_members = self.anon_group_repo.get_members_without_mailbox(group_id)?;
 
+        let ledger_key = super::send_ledger::key(
+            &current_user.to_string(),
+            &group_id.to_string(),
+            &inner_content,
+        );
+        let recipients: Vec<String> = members
+            .iter()
+            .map(|m| m.user_id)
+            .chain(pending_members.iter().map(|m| m.user_id))
+            .filter(|id| *id != current_user)
+            .map(|id| id.to_string())
+            .collect();
+        if super::send_ledger::initialize(&self.message_service.database, &ledger_key, &recipients)?
+            == Some(false)
+        {
+            crate::services::gateway::submission::mark_existing_submission();
+            return Err(AnonGroupError::DeliveryUnconfirmed);
+        }
+
         // Wrap the content in AnonGroupMessage
         let group_message = AnonGroupMessage {
             group_id: group_id.to_vec(),
@@ -270,6 +379,7 @@ impl AnonGroupService {
         let parkable = undelivered_post(&content).is_some();
         let mut sent_count = 0;
         let mut parked_count = 0;
+        let mut unconfirmed = false;
         // Fan out to each member's anonymous mailbox
         for member in &members {
             if member.user_id == current_user {
@@ -286,19 +396,36 @@ impl AnonGroupService {
                 .send_to_anon_mailbox(&member.user_id, &mailbox_pk, content.clone())
                 .await
             {
-                Ok(()) => sent_count += 1,
+                Ok(()) => {
+                    sent_count += 1;
+                    self.record_group_delivery(group_id, &content, &member.user_id, "confirmed")?;
+                }
+                Err(AnonGroupError::DeliveryUnconfirmed) => {
+                    unconfirmed = true;
+                    self.record_group_delivery(group_id, &content, &member.user_id, "unknown")?;
+                }
                 Err(e) if parkable => {
-                    tracing::info!("Send to member {} failed ({}); parked for retry", member.user_id, e);
-                    match self.anon_group_repo.enqueue_pending_message(
+                    // An expired originating session must not park old content.
+                    crate::services::gateway::submission::mark_submission_started()?;
+                    tracing::info!(
+                        "Send to member {} failed ({}); parked for retry",
+                        member.user_id,
+                        e
+                    );
+                    super::send_ledger::enqueue(
+                        &self.message_service.database,
+                        &self.anon_group_repo,
+                        &ledger_key,
                         group_id,
                         &member.user_id,
                         &content.encode_to_vec(),
-                    ) {
-                        Ok(()) => parked_count += 1,
-                        Err(e) => tracing::warn!("Failed to park send to member {}: {}", member.user_id, e),
-                    }
+                    )?;
+                    parked_count += 1;
                 }
-                Err(e) => tracing::warn!("Failed to send to member {}: {}", member.user_id, e),
+                Err(e) => {
+                    self.record_group_delivery(group_id, &content, &member.user_id, "failed")?;
+                    return Err(e);
+                }
             }
         }
 
@@ -311,20 +438,16 @@ impl AnonGroupService {
                 if member.user_id == current_user {
                     continue;
                 }
-                if let Err(e) = self.anon_group_repo.enqueue_pending_message(
+                crate::services::gateway::submission::mark_submission_started()?;
+                super::send_ledger::enqueue(
+                    &self.message_service.database,
+                    &self.anon_group_repo,
+                    &ledger_key,
                     group_id,
                     &member.user_id,
                     &content_blob,
-                ) {
-                    tracing::warn!(
-                        group_id = %group_id,
-                        recipient = %member.user_id,
-                        error = %e,
-                        "Failed to enqueue pending anon group message"
-                    );
-                } else {
-                    queued_count += 1;
-                }
+                )?;
+                queued_count += 1;
             }
         }
 
@@ -335,6 +458,9 @@ impl AnonGroupService {
             parked_count,
             queued_count,
         );
+        if unconfirmed || parked_count > 0 || queued_count > 0 {
+            return Err(AnonGroupError::DeliveryUnconfirmed);
+        }
         Ok(())
     }
 
@@ -391,18 +517,23 @@ impl AnonGroupService {
                 .await
             {
                 Ok(()) => {
-                    if let Err(e) = self.anon_group_repo.delete_pending_message(row_id) {
-                        tracing::warn!(
-                            row_id,
-                            error = %e,
-                            "Failed to delete drained pending anon group message row"
-                        );
-                    }
+                    // Persist the exact recipient receipt before deleting the
+                    // queue row. A deletion failure cannot trigger re-encryption.
+                    self.record_group_delivery(group_id, &content, recipient_user_id, "confirmed")?;
+                    self.anon_group_repo.delete_pending_message(row_id)?;
+                }
+                Err(AnonGroupError::DeliveryUnconfirmed) => {
+                    // Keep the row and exact encrypted submission. Do not
+                    // increment a failure ceiling or claim it was undelivered.
+                    break;
                 }
                 Err(e) => {
                     // Stop draining on first failure so messages stay in order.
                     if self.token_manager.available_token_count().unwrap_or(0) == 0 {
-                        tracing::info!(row_id, "Pending anon group message waits for the token refill");
+                        tracing::info!(
+                            row_id,
+                            "Pending anon group message waits for the token refill"
+                        );
                         break;
                     }
                     if attempts + 1 < MAX_PARKED_ATTEMPTS {
@@ -423,6 +554,7 @@ impl AnonGroupService {
                         error = %e,
                         "Giving up on pending anon group message"
                     );
+                    self.record_group_delivery(group_id, &content, recipient_user_id, "failed")?;
                     self.anon_group_repo.delete_pending_message(row_id)?;
                     if let Some(undelivered) = undelivered_post(&content) {
                         self.store_system_message(
@@ -516,7 +648,11 @@ impl AnonGroupService {
                 .send_to_anon_mailbox(&member.user_id, &mailbox_pk, content.clone())
                 .await
             {
-                tracing::warn!("Failed to send ephemeral to member {}: {}", member.user_id, e);
+                tracing::warn!(
+                    "Failed to send ephemeral to member {}: {}",
+                    member.user_id,
+                    e
+                );
             } else {
                 sent_count += 1;
             }
@@ -549,7 +685,10 @@ fn undelivered_post(content: &Content) -> Option<crate::domain::message::SystemM
     } else {
         crate::domain::message::truncate_preview_text(&dm.body, 40)
     };
-    Some(crate::domain::message::SystemMessage::Undelivered { sent_at: dm.timestamp, preview })
+    Some(crate::domain::message::SystemMessage::Undelivered {
+        sent_at: dm.timestamp,
+        preview,
+    })
 }
 
 #[cfg(test)]
@@ -561,7 +700,10 @@ mod tests {
     fn wrap(inner: Content) -> Content {
         Content {
             content: Some(content_v1::content::Content::AnonGroupMessage(Box::new(
-                AnonGroupMessage { group_id: vec![0; 16], inner_content: Some(Box::new(inner)) },
+                AnonGroupMessage {
+                    group_id: vec![0; 16],
+                    inner_content: Some(Box::new(inner)),
+                },
             ))),
             ..Default::default()
         }
@@ -587,7 +729,9 @@ mod tests {
 
         // Call signaling is never parked: a late ring is worse than none.
         let hangup = Content {
-            content: Some(content_v1::content::Content::AnonCallHangup(Default::default())),
+            content: Some(content_v1::content::Content::AnonCallHangup(
+                Default::default(),
+            )),
             ..Default::default()
         };
         assert!(undelivered_post(&wrap(hangup)).is_none());

@@ -1,7 +1,7 @@
+use crate::domain::UserId;
 use crate::domain::anon_dm::{AnonDm, AnonDmId, AnonDmMessageId};
 use crate::domain::ids::{ChannelId, MessageId};
 use crate::domain::message::{ConversationType, Message};
-use crate::domain::UserId;
 
 use super::{AnonDmError, AnonDmService};
 
@@ -15,7 +15,10 @@ impl AnonDmService {
     }
 
     /// Get a conversation by peer ID.
-    pub fn get_conversation_by_peer(&self, peer_id: &UserId) -> Result<Option<AnonDm>, AnonDmError> {
+    pub fn get_conversation_by_peer(
+        &self,
+        peer_id: &UserId,
+    ) -> Result<Option<AnonDm>, AnonDmError> {
         Ok(self.anon_dm_repo.get_conversation_by_peer(peer_id)?)
     }
 
@@ -84,11 +87,10 @@ impl AnonDmService {
     }
 
     /// Get a single message by ID.
-    pub fn get_message(
-        &self,
-        id: &AnonDmMessageId,
-    ) -> Result<Option<Message>, AnonDmError> {
-        let message_id: MessageId = id.as_str().parse()
+    pub fn get_message(&self, id: &AnonDmMessageId) -> Result<Option<Message>, AnonDmError> {
+        let message_id: MessageId = id
+            .as_str()
+            .parse()
             .map_err(|_| AnonDmError::InvalidData(format!("invalid message ID: {}", id)))?;
         Ok(self.message_repo.get(&message_id)?)
     }
@@ -104,7 +106,9 @@ impl AnonDmService {
         timestamp_ns: u64,
     ) -> Result<Option<Message>, AnonDmError> {
         let channel_id: ChannelId = (*conversation_id).into();
-        Ok(self.message_repo.get_by_conversation_timestamp(&channel_id, timestamp_ns)?)
+        Ok(self
+            .message_repo
+            .get_by_conversation_timestamp(&channel_id, timestamp_ns)?)
     }
 
     pub fn get_message_by_sender_timestamp(
@@ -114,7 +118,11 @@ impl AnonDmService {
         timestamp_ns: u64,
     ) -> Result<Option<Message>, AnonDmError> {
         let channel_id: ChannelId = (*conversation_id).into();
-        Ok(self.message_repo.get_by_conversation_sender_timestamp(&channel_id, sender_id, timestamp_ns)?)
+        Ok(self.message_repo.get_by_conversation_sender_timestamp(
+            &channel_id,
+            sender_id,
+            timestamp_ns,
+        )?)
     }
 
     /// Get the most recent message in a conversation.
@@ -123,18 +131,24 @@ impl AnonDmService {
         conversation_id: &AnonDmId,
     ) -> Result<Option<Message>, AnonDmError> {
         let channel_id: ChannelId = (*conversation_id).into();
-        Ok(self.message_repo.get_latest_for_conversation(&channel_id, &ConversationType::AnonDm)?)
+        Ok(self
+            .message_repo
+            .get_latest_for_conversation(&channel_id, &ConversationType::AnonDm)?)
     }
 
     /// Get the message count for a conversation.
     pub fn get_message_count(&self, conversation_id: &AnonDmId) -> Result<i64, AnonDmError> {
         let channel_id: ChannelId = (*conversation_id).into();
-        Ok(self.message_repo.count_in_conversation(&channel_id, &ConversationType::AnonDm)?)
+        Ok(self
+            .message_repo
+            .count_in_conversation(&channel_id, &ConversationType::AnonDm)?)
     }
 
     /// Delete a message.
     pub fn delete_message(&self, id: &AnonDmMessageId) -> Result<(), AnonDmError> {
-        let message_id: MessageId = id.as_str().parse()
+        let message_id: MessageId = id
+            .as_str()
+            .parse()
             .map_err(|_| AnonDmError::InvalidData(format!("invalid message ID: {}", id)))?;
         self.message_repo.delete(&message_id)?;
         Ok(())
@@ -165,13 +179,20 @@ impl AnonDmService {
         pinned: bool,
     ) -> Result<bool, AnonDmError> {
         let channel_id: ChannelId = (*conversation_id).into();
-        Ok(self.message_repo.set_pinned_by_timestamp(&channel_id, &ConversationType::AnonDm, sent_timestamp, pinned)?)
+        Ok(self.message_repo.set_pinned_by_timestamp(
+            &channel_id,
+            &ConversationType::AnonDm,
+            sent_timestamp,
+            pinned,
+        )?)
     }
 
     /// List all pinned messages for a conversation.
     pub fn list_pinned(&self, conversation_id: &AnonDmId) -> Result<Vec<Message>, AnonDmError> {
         let channel_id: ChannelId = (*conversation_id).into();
-        Ok(self.message_repo.list_pinned_for_conversation(&channel_id, &ConversationType::AnonDm)?)
+        Ok(self
+            .message_repo
+            .list_pinned_for_conversation(&channel_id, &ConversationType::AnonDm)?)
     }
 
     /// Add a reaction to an anon DM message in the DB.
@@ -186,7 +207,13 @@ impl AnonDmService {
         emoji: &str,
     ) -> Result<bool, AnonDmError> {
         let current_user_id = self.current_user_id()?;
-        Ok(self.message_repo.add_reaction(sender_id, sent_at_ns, reactor_id, &current_user_id, emoji)?)
+        Ok(self.message_repo.add_reaction(
+            sender_id,
+            sent_at_ns,
+            reactor_id,
+            &current_user_id,
+            emoji,
+        )?)
     }
 
     /// Remove a reaction from an anon DM message in the DB.
@@ -201,7 +228,13 @@ impl AnonDmService {
         emoji: &str,
     ) -> Result<bool, AnonDmError> {
         let current_user_id = self.current_user_id()?;
-        Ok(self.message_repo.remove_reaction(sender_id, sent_at_ns, reactor_id, &current_user_id, emoji)?)
+        Ok(self.message_repo.remove_reaction(
+            sender_id,
+            sent_at_ns,
+            reactor_id,
+            &current_user_id,
+            emoji,
+        )?)
     }
 
     /// Get all reaction counts for an anon DM conversation's messages.
@@ -212,6 +245,8 @@ impl AnonDmService {
         conversation_id: &AnonDmId,
     ) -> Result<std::collections::HashMap<u64, Vec<(String, u32)>>, AnonDmError> {
         let channel_id: ChannelId = (*conversation_id).into();
-        Ok(self.message_repo.get_reaction_counts_for_conversation(&channel_id, &ConversationType::AnonDm)?)
+        Ok(self
+            .message_repo
+            .get_reaction_counts_for_conversation(&channel_id, &ConversationType::AnonDm)?)
     }
 }

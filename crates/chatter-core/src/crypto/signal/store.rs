@@ -240,7 +240,10 @@ impl PreKeyStore for SignalStore {
 
 #[async_trait(?Send)]
 impl SignedPreKeyStore for SignalStore {
-    async fn get_signed_pre_key(&self, signed_prekey_id: SignedPreKeyId) -> Result<SignedPreKeyRecord> {
+    async fn get_signed_pre_key(
+        &self,
+        signed_prekey_id: SignedPreKeyId,
+    ) -> Result<SignedPreKeyRecord> {
         let id: u32 = signed_prekey_id.into();
         let record_bytes = self
             .key_store

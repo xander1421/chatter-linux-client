@@ -4,9 +4,9 @@ use std::sync::Arc;
 
 use slint::{Model, Weak};
 
+use crate::MainWindow;
 use chatter_core::client::ChatterClient;
 use chatter_core::domain::ids::UserId;
-use crate::MainWindow;
 
 /// Handle friend requests updated event.
 ///
@@ -53,9 +53,9 @@ pub(super) async fn handle_friend_requests_updated(
                     .ingest_received_friend_request(&sender_id, &r.encrypted_intro)
                     .await;
                 Prepped {
-                    display_name: profile
-                        .display_name
-                        .unwrap_or_else(|| ui_ctx.friend_request_peer_name(&sender_id, &r.username)),
+                    display_name: profile.display_name.unwrap_or_else(|| {
+                        ui_ctx.friend_request_peer_name(&sender_id, &r.username)
+                    }),
                     avatar: profile.avatar_bytes.as_deref().and_then(decode_avatar_rgba),
                     note: profile.note.unwrap_or_default(),
                 }
@@ -77,9 +77,10 @@ pub(super) async fn handle_friend_requests_updated(
                 .zip(prepped)
                 .map(|(r, p)| {
                     let (avatar_source, has_avatar) = match p.avatar {
-                        Some((aw, ah, px)) => {
-                            (crate::bin_ui::slint_conversions::rgba_to_slint_image(&px, aw, ah,), true)
-                        }
+                        Some((aw, ah, px)) => (
+                            crate::bin_ui::slint_conversions::rgba_to_slint_image(&px, aw, ah),
+                            true,
+                        ),
                         None => (slint::Image::default(), false),
                     };
                     crate::FriendRequestData {
@@ -112,7 +113,11 @@ pub(super) async fn handle_friend_requests_updated(
                 .collect();
 
             // Update friend requests in UI
-            super::super::super::initial_data::update_friend_requests(&w, received_model, sent_model);
+            super::super::super::initial_data::update_friend_requests(
+                &w,
+                received_model,
+                sent_model,
+            );
         }
     });
 
@@ -173,7 +178,11 @@ pub(super) fn handle_presence_changed(
     // since the server fans presence out to friends and not back to us.
     let is_self = ui_ctx.session_current_user_id() == Some(user_id);
     // A blocked peer's live presence is hidden like their stored one.
-    let presence = if is_self { presence } else { ui_ctx.peer_display_presence(&user_id, presence) };
+    let presence = if is_self {
+        presence
+    } else {
+        ui_ctx.peer_display_presence(&user_id, presence)
+    };
     let presence_str = presence.as_str();
 
     let presence_slint: slint::SharedString = presence_str.into();
@@ -385,7 +394,7 @@ pub(super) fn handle_user_profile_updated(
     // Same resolution the DM open path uses (core already stored the profile).
     let header_name: Option<slint::SharedString> = (ui_ctx.active_conversation()
         == chatter_core::state::ActiveConversation::ServerDm { peer_id: user_id })
-        .then(|| ui_ctx.display_name(&user_id).into());
+    .then(|| ui_ctx.display_name(&user_id).into());
     let user_id_str = user_id.to_string();
     let display_name_slint: slint::SharedString = display_name.clone().into();
     let initials = chatter_core::ui::chat_data::initials_from_name(&display_name);
@@ -450,4 +459,3 @@ pub(super) fn handle_user_profile_updated(
         }
     });
 }
-

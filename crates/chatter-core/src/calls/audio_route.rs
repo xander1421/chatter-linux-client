@@ -48,7 +48,11 @@ impl Default for AudioOutputs {
     /// A phone with nothing plugged in — what is assumed until the platform
     /// reports otherwise.
     fn default() -> Self {
-        Self { earpiece: true, wired_headset: false, bluetooth: false }
+        Self {
+            earpiece: true,
+            wired_headset: false,
+            bluetooth: false,
+        }
     }
 }
 
@@ -64,7 +68,11 @@ pub struct CallAudioRouting {
 
 impl CallAudioRouting {
     pub fn new(video: bool) -> Self {
-        Self { video, outputs: AudioOutputs::default(), speaker_choice: None }
+        Self {
+            video,
+            outputs: AudioOutputs::default(),
+            speaker_choice: None,
+        }
     }
 
     /// The route the call should be on now.
@@ -128,9 +136,21 @@ impl CallAudioRouting {
 mod tests {
     use super::*;
 
-    const HEADSET: AudioOutputs = AudioOutputs { earpiece: true, wired_headset: true, bluetooth: false };
-    const BT: AudioOutputs = AudioOutputs { earpiece: true, wired_headset: false, bluetooth: true };
-    const TABLET: AudioOutputs = AudioOutputs { earpiece: false, wired_headset: false, bluetooth: false };
+    const HEADSET: AudioOutputs = AudioOutputs {
+        earpiece: true,
+        wired_headset: true,
+        bluetooth: false,
+    };
+    const BT: AudioOutputs = AudioOutputs {
+        earpiece: true,
+        wired_headset: false,
+        bluetooth: true,
+    };
+    const TABLET: AudioOutputs = AudioOutputs {
+        earpiece: false,
+        wired_headset: false,
+        bluetooth: false,
+    };
 
     #[test]
     fn defaults_voice_earpiece_video_speaker() {

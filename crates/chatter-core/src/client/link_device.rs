@@ -11,8 +11,8 @@ use tokio::sync::mpsc;
 
 use crate::crypto::SecretString;
 use crate::services::link_device_service::{
-    ApprovedDevice, LinkDeviceError, LinkDeviceService, LinkProgress,
-    PendingDeviceLink, PendingLink,
+    ApprovedDevice, LinkDeviceError, LinkDeviceService, LinkProgress, PendingDeviceLink,
+    PendingLink,
 };
 use crate::storage::repositories::settings_repo::SettingsRepository;
 
@@ -90,10 +90,7 @@ impl ChatterClient {
     ///
     /// Errors:
     /// - `InvalidLinkUrl(_)` — paste was malformed
-    pub fn prepare_link_from_url(
-        &self,
-        url: &str,
-    ) -> Result<PendingDeviceLink, LinkDeviceError> {
+    pub fn prepare_link_from_url(&self, url: &str) -> Result<PendingDeviceLink, LinkDeviceError> {
         self.link_device().prepare_link_from_url(url)
     }
 

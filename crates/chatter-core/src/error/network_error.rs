@@ -53,7 +53,11 @@ pub enum NetworkError {
     /// registered devices (`SendSealedMessageResponse.mismatched_devices`,
     /// Signal-Server's 409 / 410). Nothing was queued.
     #[error("recipient devices changed: missing {missing:?}, extra {extra:?}, stale {stale:?}")]
-    MismatchedDevices { missing: Vec<u32>, extra: Vec<u32>, stale: Vec<u32> },
+    MismatchedDevices {
+        missing: Vec<u32>,
+        extra: Vec<u32>,
+        stale: Vec<u32>,
+    },
 
     /// Unknown or unclassified error.
     #[error("unknown error: {0}")]
@@ -93,7 +97,8 @@ impl NetworkError {
                 // "Service was not ready: transport error" comes from tonic's .ready()
                 // check when the HTTP/2 connection is temporarily down. Treat as Unavailable
                 // so retry logic can recover.
-                if message.contains("transport error") || message.contains("Service was not ready") {
+                if message.contains("transport error") || message.contains("Service was not ready")
+                {
                     tracing::warn!(
                         message = %message,
                         "Transport-level error detected in Code::Unknown — treating as Unavailable"
@@ -106,10 +111,14 @@ impl NetworkError {
             Code::InvalidArgument => NetworkError::InvalidRequest(message),
             Code::DeadlineExceeded => NetworkError::Timeout,
             Code::NotFound => NetworkError::NotFound(message),
-            Code::AlreadyExists => NetworkError::InvalidRequest(format!("already exists: {}", message)),
+            Code::AlreadyExists => {
+                NetworkError::InvalidRequest(format!("already exists: {}", message))
+            }
             Code::PermissionDenied => NetworkError::PermissionDenied,
             Code::ResourceExhausted => NetworkError::RateLimited,
-            Code::FailedPrecondition => NetworkError::InvalidRequest(format!("precondition failed: {}", message)),
+            Code::FailedPrecondition => {
+                NetworkError::InvalidRequest(format!("precondition failed: {}", message))
+            }
             Code::Aborted => NetworkError::ServerError(format!("aborted: {}", message)),
             Code::OutOfRange => NetworkError::InvalidRequest(format!("out of range: {}", message)),
             Code::Unimplemented => NetworkError::ServerError(format!("unimplemented: {}", message)),
@@ -304,11 +313,23 @@ mod tests {
 
     #[test]
     fn test_unknown_destination_device() {
-        let extra = NetworkError::MismatchedDevices { missing: vec![], extra: vec![3], stale: vec![] };
+        let extra = NetworkError::MismatchedDevices {
+            missing: vec![],
+            extra: vec![3],
+            stale: vec![],
+        };
         assert!(extra.is_unknown_destination_device());
-        let missing = NetworkError::MismatchedDevices { missing: vec![3], extra: vec![], stale: vec![] };
+        let missing = NetworkError::MismatchedDevices {
+            missing: vec![3],
+            extra: vec![],
+            stale: vec![],
+        };
         assert!(!missing.is_unknown_destination_device());
-        let err = NetworkError::from_status(&Status::failed_precondition("unknown destination device"));
-        assert!(!err.is_unknown_destination_device(), "the server no longer answers with a status");
+        let err =
+            NetworkError::from_status(&Status::failed_precondition("unknown destination device"));
+        assert!(
+            !err.is_unknown_destination_device(),
+            "the server no longer answers with a status"
+        );
     }
 }

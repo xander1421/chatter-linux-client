@@ -29,10 +29,9 @@ pub struct MeshIdentity {
 impl MeshIdentity {
     /// Builds an identity from raw secret material.
     pub fn from_keys(static_secret: [u8; 32], signing_secret: [u8; 32]) -> Self {
-        let static_public = x25519_dalek::PublicKey::from(&x25519_dalek::StaticSecret::from(
-            static_secret,
-        ))
-        .to_bytes();
+        let static_public =
+            x25519_dalek::PublicKey::from(&x25519_dalek::StaticSecret::from(static_secret))
+                .to_bytes();
         let signing_public = ed25519_dalek::SigningKey::from_bytes(&signing_secret)
             .verifying_key()
             .to_bytes();
@@ -163,7 +162,11 @@ mod tests {
     fn peer_id_matches_the_fingerprint_prefix() {
         let identity = MeshIdentity::from_keys(STATIC_SECRET, SIGNING_SECRET);
         // PeerID is the first 16 hex chars of the same SHA-256.
-        assert!(identity.fingerprint().starts_with(identity.peer_id().bare()));
+        assert!(
+            identity
+                .fingerprint()
+                .starts_with(identity.peer_id().bare())
+        );
     }
 
     fn hex_lower(bytes: &[u8]) -> String {

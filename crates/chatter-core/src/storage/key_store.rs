@@ -36,9 +36,8 @@ impl KeyStore {
             "SELECT registration_id, identity_key_pair FROM local_identity WHERE id = 1",
         )?;
 
-        let result: Result<(u32, Vec<u8>), _> = stmt.query_row([], |row| {
-            Ok((row.get(0)?, row.get(1)?))
-        });
+        let result: Result<(u32, Vec<u8>), _> =
+            stmt.query_row([], |row| Ok((row.get(0)?, row.get(1)?)));
 
         match result {
             Ok(data) => Ok(Some(data)),
@@ -145,9 +144,9 @@ impl KeyStore {
             result.ok()
         };
 
-        let key_changed = existing.as_ref().is_some_and(|existing_key| {
-            existing_key.as_slice() != identity_key
-        });
+        let key_changed = existing
+            .as_ref()
+            .is_some_and(|existing_key| existing_key.as_slice() != identity_key);
 
         conn.execute(
             "INSERT INTO remote_identities (address, identity_key, first_seen_at, updated_at)
@@ -563,10 +562,8 @@ impl KeyStore {
     /// simulate a device that lost its session.
     pub fn delete_session(&self, address: &str) -> Result<bool, StorageError> {
         let conn = self.db.connection()?;
-        let rows_affected = conn.execute(
-            "DELETE FROM sessions WHERE address = ?1",
-            params![address],
-        )?;
+        let rows_affected =
+            conn.execute("DELETE FROM sessions WHERE address = ?1", params![address])?;
         Ok(rows_affected > 0)
     }
 
@@ -582,10 +579,14 @@ impl KeyStore {
     ///
     /// Address format is "user_id:device_id", so we match on "user_id:%". Used
     /// to archive every device session when the account's identity key changes.
-    pub fn list_sessions_for_user(&self, user_id: &str) -> Result<Vec<(String, Vec<u8>)>, StorageError> {
+    pub fn list_sessions_for_user(
+        &self,
+        user_id: &str,
+    ) -> Result<Vec<(String, Vec<u8>)>, StorageError> {
         let conn = self.db.connection()?;
         let pattern = format!("{}:%", user_id);
-        let mut stmt = conn.prepare("SELECT address, record FROM sessions WHERE address LIKE ?1")?;
+        let mut stmt =
+            conn.prepare("SELECT address, record FROM sessions WHERE address LIKE ?1")?;
         let rows = stmt.query_map(params![pattern], |row| {
             Ok((row.get::<_, String>(0)?, row.get::<_, Vec<u8>>(1)?))
         })?;
@@ -615,9 +616,8 @@ impl KeyStore {
         );
 
         let conn = self.db.connection()?;
-        let mut stmt = conn.prepare(
-            "SELECT record FROM sender_keys WHERE sender = ?1 AND distribution_id = ?2",
-        )?;
+        let mut stmt = conn
+            .prepare("SELECT record FROM sender_keys WHERE sender = ?1 AND distribution_id = ?2")?;
 
         let result: Result<Vec<u8>, _> =
             stmt.query_row(params![sender, distribution_id], |row| row.get(0));
@@ -754,7 +754,10 @@ impl KeyStore {
 
     /// Increment message count for a sender key.
     /// Returns the new message count.
-    pub fn increment_sender_key_message_count(&self, channel_id: &str) -> Result<i64, StorageError> {
+    pub fn increment_sender_key_message_count(
+        &self,
+        channel_id: &str,
+    ) -> Result<i64, StorageError> {
         let conn = self.db.connection()?;
         let now = Utc::now().to_rfc3339();
 
@@ -765,18 +768,23 @@ impl KeyStore {
             params![channel_id, now],
         )?;
 
-        let count: i64 = conn.query_row(
-            "SELECT message_count FROM sender_key_metadata WHERE channel_id = ?1",
-            params![channel_id],
-            |row| row.get(0),
-        ).unwrap_or(0);
+        let count: i64 = conn
+            .query_row(
+                "SELECT message_count FROM sender_key_metadata WHERE channel_id = ?1",
+                params![channel_id],
+                |row| row.get(0),
+            )
+            .unwrap_or(0);
 
         Ok(count)
     }
 
     /// Check if a sender key needs rotation based on age or message count.
     /// Returns (needs_rotation, reason) where reason is "age", "messages", or empty.
-    pub fn should_rotate_sender_key(&self, channel_id: &str) -> Result<(bool, &'static str), StorageError> {
+    pub fn should_rotate_sender_key(
+        &self,
+        channel_id: &str,
+    ) -> Result<(bool, &'static str), StorageError> {
         let conn = self.db.connection()?;
 
         let result: Result<(String, i64), _> = conn.query_row(
@@ -812,7 +820,10 @@ impl KeyStore {
 
     /// Get sender key metadata for a channel.
     /// Returns (created_at, message_count) or None if not found.
-    pub fn get_sender_key_metadata(&self, channel_id: &str) -> Result<Option<(String, i64)>, StorageError> {
+    pub fn get_sender_key_metadata(
+        &self,
+        channel_id: &str,
+    ) -> Result<Option<(String, i64)>, StorageError> {
         let conn = self.db.connection()?;
 
         let result: Result<(String, i64), _> = conn.query_row(

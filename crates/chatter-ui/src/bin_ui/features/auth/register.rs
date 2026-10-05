@@ -14,9 +14,18 @@ fn selected_avatar() -> &'static Mutex<Option<Vec<u8>>> {
 }
 
 const DEFAULT_AVATARS: &[&[u8]] = &[
-    include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../assets/avatars/pepe.jpg")),
-    include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../assets/avatars/doge.jpg")),
-    include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../assets/avatars/wojak.jpg")),
+    include_bytes!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../assets/avatars/pepe.jpg"
+    )),
+    include_bytes!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../assets/avatars/doge.jpg"
+    )),
+    include_bytes!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../assets/avatars/wojak.jpg"
+    )),
 ];
 
 use super::initial_data::load_initial_data;
@@ -27,7 +36,9 @@ pub fn wire_register(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     let weak_window = window.as_weak();
 
     // Reset selection on startup
-    if let Ok(mut g) = selected_avatar().lock() { *g = None; }
+    if let Ok(mut g) = selected_avatar().lock() {
+        *g = None;
+    }
 
     window.on_register_select_default_avatar({
         let weak = weak_window.clone();
@@ -35,7 +46,9 @@ pub fn wire_register(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             let idx = idx as usize;
             if idx < DEFAULT_AVATARS.len() {
                 let bytes = DEFAULT_AVATARS[idx].to_vec();
-                if let Ok(mut g) = selected_avatar().lock() { *g = Some(bytes.clone()); }
+                if let Ok(mut g) = selected_avatar().lock() {
+                    *g = Some(bytes.clone());
+                }
 
                 let weak = weak.clone();
                 // Move image decoding to background thread
@@ -53,7 +66,11 @@ pub fn wire_register(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                             w.set_register_selected_default_idx(idx as i32);
 
                             if let Some((pixels, width, height)) = decoded {
-                                w.set_register_avatar_source(crate::bin_ui::slint_conversions::rgba_to_slint_image(&pixels, width, height,));
+                                w.set_register_avatar_source(
+                                    crate::bin_ui::slint_conversions::rgba_to_slint_image(
+                                        &pixels, width, height,
+                                    ),
+                                );
                             }
                         }
                     });

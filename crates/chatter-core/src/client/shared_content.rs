@@ -91,9 +91,8 @@ impl ChatterClient {
         if self.is_profile_user_blocked(user_id) {
             return String::new();
         }
-        let repo = crate::storage::repositories::UserRepository::new(
-            self.services.database.clone(),
-        );
+        let repo =
+            crate::storage::repositories::UserRepository::new(self.services.database.clone());
         crate::ui::chat_data::last_seen_label(
             self.peer_presence(user_id),
             repo.last_seen_at(user_id).ok().flatten(),
@@ -113,7 +112,11 @@ fn backfill_once(
     conv_id: &str,
 ) {
     let settings = crate::storage::repositories::SettingsRepository::new(db.clone());
-    let key = format!("shared_content.backfilled.{}.{}", conv_type.as_str(), conv_id);
+    let key = format!(
+        "shared_content.backfilled.{}.{}",
+        conv_type.as_str(),
+        conv_id
+    );
     if settings.get::<bool>(&key).ok().flatten().unwrap_or(false) {
         return;
     }
@@ -126,6 +129,8 @@ fn backfill_once(
             tracing::info!(count = n, conversation = %conv_id, "Backfilled shared-content index");
             let _ = settings.set(&key, &true);
         }
-        Err(e) => tracing::warn!(error = %e, conversation = %conv_id, "shared-content backfill failed"),
+        Err(e) => {
+            tracing::warn!(error = %e, conversation = %conv_id, "shared-content backfill failed")
+        }
     }
 }

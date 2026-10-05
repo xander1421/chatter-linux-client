@@ -4,11 +4,11 @@
 
 use crate::{common, skip_if_no_server};
 
-use std::time::Duration;
 use chatter_core::network::grpc::{ChannelClient, MessageClient, UserClient};
 use chatter_core::proto::chat_v1::{
-    message::content::Type as ContentType, message::Content, ChannelType, UserPresence,
+    ChannelType, UserPresence, message::Content, message::content::Type as ContentType,
 };
+use std::time::Duration;
 use tokio_stream::StreamExt;
 
 use common::*;
@@ -36,7 +36,8 @@ async fn test_message_stream_establishment() {
             None,
             None,
             Some(membership::genesis(&user, true).1),
-        ).await
+        )
+        .await
         .expect("Failed to create channel");
 
     tokio::pin!(create_stream);
@@ -62,7 +63,10 @@ async fn test_message_stream_establishment() {
     let mut stream = stream_result.unwrap();
     let first_event = tokio::time::timeout(Duration::from_secs(5), stream.next()).await;
 
-    assert!(first_event.is_ok(), "Should receive initial stream event within timeout");
+    assert!(
+        first_event.is_ok(),
+        "Should receive initial stream event within timeout"
+    );
 }
 
 #[tokio::test]
@@ -84,7 +88,8 @@ async fn test_message_stream_receives_new_messages() {
             None,
             None,
             Some(membership::genesis(&user, true).1),
-        ).await
+        )
+        .await
         .expect("Failed to create channel");
 
     tokio::pin!(create_stream);
@@ -178,7 +183,10 @@ async fn test_channel_event_stream() {
     // Start streaming all channel events
     let stream_result = channel_client.stream_channel_events(None).await;
 
-    assert!(stream_result.is_ok(), "Should establish channel event stream");
+    assert!(
+        stream_result.is_ok(),
+        "Should establish channel event stream"
+    );
 
     // Verify we can receive from the stream
     let mut stream = stream_result.unwrap();
@@ -213,7 +221,8 @@ async fn test_channel_event_stream_specific_channel() {
                 None,
                 None,
                 Some(membership::genesis(&user, true).1),
-            ).await
+            )
+            .await
             .expect("Failed to create channel");
 
         tokio::pin!(create_stream);
@@ -237,7 +246,10 @@ async fn test_channel_event_stream_specific_channel() {
         .stream_channel_events(Some(&channel_id))
         .await;
 
-    assert!(stream_result.is_ok(), "Should establish channel-specific event stream");
+    assert!(
+        stream_result.is_ok(),
+        "Should establish channel-specific event stream"
+    );
 }
 
 // ============================================================================
@@ -310,7 +322,8 @@ async fn test_stream_reconnection() {
             None,
             None,
             Some(membership::genesis(&user, true).1),
-        ).await
+        )
+        .await
         .expect("Failed to create channel");
 
     tokio::pin!(create_stream);
@@ -369,7 +382,8 @@ async fn test_multiple_channel_streams() {
                     None,
                     None,
                     Some(membership::genesis(&user, true).1),
-                ).await
+                )
+                .await
                 .expect("Failed to create channel");
 
             tokio::pin!(create_stream);
@@ -423,7 +437,8 @@ async fn test_message_stream_with_cursor() {
             None,
             None,
             Some(membership::genesis(&user, true).1),
-        ).await
+        )
+        .await
         .expect("Failed to create channel");
 
     tokio::pin!(create_stream);

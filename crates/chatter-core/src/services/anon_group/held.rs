@@ -13,8 +13,8 @@ use std::time::{Duration, Instant};
 
 use parking_lot::Mutex;
 
-use crate::domain::anon_group::AnonGroupId;
 use crate::domain::UserId;
+use crate::domain::anon_group::AnonGroupId;
 use crate::proto::content_v1::Content;
 
 /// Posts held per group; past it the oldest is dropped.
@@ -72,7 +72,11 @@ mod tests {
     use super::*;
 
     fn post(at: Instant) -> HeldPost {
-        HeldPost { at, sender: UserId::new(), content: Content::default() }
+        HeldPost {
+            at,
+            sender: UserId::new(),
+            content: Content::default(),
+        }
     }
 
     #[test]
@@ -86,7 +90,10 @@ mod tests {
         assert_eq!(held.take(&group, t0).len(), HOLD_CAP, "capped per group");
 
         held.hold(group, post(t0), t0);
-        assert!(held.take(&group, t0 + HOLD_TTL).is_empty(), "expired on take");
+        assert!(
+            held.take(&group, t0 + HOLD_TTL).is_empty(),
+            "expired on take"
+        );
         assert!(held.take(&group, t0).is_empty(), "take drains");
     }
 }

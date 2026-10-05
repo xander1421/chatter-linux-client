@@ -224,11 +224,7 @@ impl OllamaBackend {
 
 impl LocalAIBackend for OllamaBackend {
     async fn health_check(&self) -> Result<bool, BackendError> {
-        let resp = self
-            .client
-            .get(self.url("/"))
-            .send()
-            .await?;
+        let resp = self.client.get(self.url("/")).send().await?;
 
         Ok(resp.status().is_success())
     }
@@ -296,11 +292,7 @@ impl LocalAIBackend for OllamaBackend {
         })
     }
 
-    async fn embed(
-        &self,
-        model: &str,
-        texts: &[String],
-    ) -> Result<Vec<Vec<f32>>, BackendError> {
+    async fn embed(&self, model: &str, texts: &[String]) -> Result<Vec<Vec<f32>>, BackendError> {
         let request = OllamaEmbedRequest {
             model,
             input: texts,
@@ -331,11 +323,7 @@ impl LocalAIBackend for OllamaBackend {
     }
 
     async fn list_models(&self) -> Result<Vec<AvailableModel>, BackendError> {
-        let resp = self
-            .client
-            .get(self.url("/api/tags"))
-            .send()
-            .await?;
+        let resp = self.client.get(self.url("/api/tags")).send().await?;
 
         if !resp.status().is_success() {
             return Err(BackendError::Unavailable("Failed to list models".into()));
@@ -466,7 +454,10 @@ mod tests {
 
     #[test]
     fn test_parse_pull_error_line() {
-        let p = OllamaBackend::parse_pull_line(br#"{"error":"pull model manifest: file does not exist"}"#).unwrap();
+        let p = OllamaBackend::parse_pull_line(
+            br#"{"error":"pull model manifest: file does not exist"}"#,
+        )
+        .unwrap();
         assert!(p.error.is_some());
     }
 

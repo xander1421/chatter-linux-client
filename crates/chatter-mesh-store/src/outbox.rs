@@ -53,9 +53,7 @@ use chatter_mesh::ids::PeerId;
 
 use crate::error::StoreError;
 use crate::storage::{Storage, StorageKey};
-use crate::{
-    MAX_COURIERS_PER_MESSAGE, MAX_MESSAGES_PER_PEER, MAX_SEND_ATTEMPTS, MESSAGE_TTL_SECS,
-};
+use crate::{MAX_COURIERS_PER_MESSAGE, MAX_MESSAGES_PER_PEER, MAX_SEND_ATTEMPTS, MESSAGE_TTL_SECS};
 
 /// How many acked message IDs are remembered, newest wins.
 ///
@@ -353,9 +351,7 @@ impl OutboxStore {
 
     /// One retained message, if it is still queued for that peer.
     pub fn queued(&self, peer: &PeerId, message_id: &str) -> Option<&QueuedMessage> {
-        self.queue(peer)
-            .iter()
-            .find(|m| m.message_id == message_id)
+        self.queue(peer).iter().find(|m| m.message_id == message_id)
     }
 
     /// Total retained messages across all peers.
@@ -548,8 +544,7 @@ impl OutboxStore {
         // `Reachable` charges an attempt. `Insecure` and `Unreachable` leave the
         // queue byte-identical, and a flush over them owes storage nothing.
         let mutated = !plan.dropped.is_empty()
-            || (!plan.send.is_empty()
-                && matches!(link, LinkState::Secure | LinkState::Reachable));
+            || (!plan.send.is_empty() && matches!(link, LinkState::Secure | LinkState::Reachable));
         if mutated {
             self.dirty = true;
         }
@@ -950,7 +945,9 @@ mod tests {
         }
 
         fn open(&self, sealed: &[u8]) -> Result<Vec<u8>, StoreError> {
-            let (tag, body) = sealed.split_first().ok_or(StoreError::Malformed("outbox"))?;
+            let (tag, body) = sealed
+                .split_first()
+                .ok_or(StoreError::Malformed("outbox"))?;
             if *tag != self.pad {
                 return Err(StoreError::Malformed("outbox"));
             }
@@ -1157,7 +1154,10 @@ mod tests {
             Some("old")
         );
         assert_eq!(plan.send.len(), 1);
-        assert_eq!(plan.send.first().map(|m| m.message_id.as_str()), Some("new"));
+        assert_eq!(
+            plan.send.first().map(|m| m.message_id.as_str()),
+            Some("new")
+        );
     }
 
     // ---------------------------------------------------------- per-peer cap
@@ -1357,7 +1357,10 @@ mod tests {
         let outcome = store.mark_acked(&p, "m1", AckKind::Delivered);
         assert!(outcome.cleared);
         assert_eq!(outcome.strongest, AckKind::Delivered);
-        assert!(store.is_empty(), "the peer entry goes when its queue empties");
+        assert!(
+            store.is_empty(),
+            "the peer entry goes when its queue empties"
+        );
     }
 
     #[test]
@@ -1378,7 +1381,10 @@ mod tests {
         let p = peer("aa");
         assert!(store.enqueue(&p, message("m1", 100)).is_none());
 
-        assert_eq!(store.mark_acked(&p, "m1", AckKind::Read).strongest, AckKind::Read);
+        assert_eq!(
+            store.mark_acked(&p, "m1", AckKind::Read).strongest,
+            AckKind::Read
+        );
         let late = store.mark_acked(&p, "m1", AckKind::Delivered);
         assert!(!late.cleared, "there was nothing left to clear");
         assert_eq!(
@@ -1395,10 +1401,15 @@ mod tests {
         assert!(store.enqueue(&peer("aa"), message("m1", 100)).is_none());
 
         assert_eq!(
-            store.mark_acked(&peer("aa"), "m1", AckKind::Delivered).strongest,
+            store
+                .mark_acked(&peer("aa"), "m1", AckKind::Delivered)
+                .strongest,
             AckKind::Delivered
         );
-        assert_eq!(store.mark_acked(&peer("aa"), "m1", AckKind::Read).strongest, AckKind::Read);
+        assert_eq!(
+            store.mark_acked(&peer("aa"), "m1", AckKind::Read).strongest,
+            AckKind::Read
+        );
     }
 
     #[test]
@@ -1417,7 +1428,11 @@ mod tests {
         assert!(store.enqueue(&peer("aa"), message("m1", 100)).is_none());
         assert!(store.enqueue(&peer("bb"), message("m2", 100)).is_none());
 
-        assert!(store.mark_acked(&peer("bb"), "m2", AckKind::Delivered).cleared);
+        assert!(
+            store
+                .mark_acked(&peer("bb"), "m2", AckKind::Delivered)
+                .cleared
+        );
         assert_eq!(store.queue(&peer("aa")).len(), 1);
         assert!(store.queue(&peer("bb")).is_empty());
     }
@@ -1488,7 +1503,11 @@ mod tests {
         assert!(queued.is_carried_by(&key(2)));
         assert_eq!(queued.send_attempts, 1);
         assert_eq!(queued.timestamp, 150);
-        assert_eq!(store.queue(&p).len(), 1, "the ID is replaced, not duplicated");
+        assert_eq!(
+            store.queue(&p).len(),
+            1,
+            "the ID is replaced, not duplicated"
+        );
     }
 
     #[test]
@@ -1513,7 +1532,9 @@ mod tests {
         let p = peer("aa");
         assert!(store.enqueue(&p, message("m1", 100)).is_none());
         assert_eq!(
-            store.queued(&p, "m1").map(QueuedMessage::remaining_courier_slots),
+            store
+                .queued(&p, "m1")
+                .map(QueuedMessage::remaining_courier_slots),
             Some(MAX_COURIERS_PER_MESSAGE)
         );
 
@@ -1537,7 +1558,11 @@ mod tests {
         let (_storage, mut store) = new_store();
         let p = peer("aa");
         assert!(store.enqueue(&p, message("m1", 100)).is_none());
-        assert!(store.mark_acked(&peer("aa"), "m1", AckKind::Delivered).cleared);
+        assert!(
+            store
+                .mark_acked(&peer("aa"), "m1", AckKind::Delivered)
+                .cleared
+        );
 
         store.record_courier_deposit(&p, "m1", &[key(1)]);
         assert!(store.queued(&p, "m1").is_none());
@@ -1613,11 +1638,7 @@ mod tests {
         // wrong half.
         for i in 0..MAX_MESSAGES_PER_PEER {
             let id = format!("new{i}");
-            assert!(
-                store
-                    .enqueue(&p, message(&id, 10_000 + i as u64))
-                    .is_none()
-            );
+            assert!(store.enqueue(&p, message(&id, 10_000 + i as u64)).is_none());
         }
         let durable_queue: Vec<QueuedMessage> = (0..5)
             .map(|i| message(&format!("old{i}"), i as u64))
@@ -1630,7 +1651,9 @@ mod tests {
         let dropped_ids: Vec<&str> = dropped.iter().map(|d| d.message_id.as_str()).collect();
         assert_eq!(dropped_ids, vec!["old0", "old1", "old2", "old3", "old4"]);
         assert!(
-            dropped.iter().all(|d| d.reason == DropReason::QueueOverflow),
+            dropped
+                .iter()
+                .all(|d| d.reason == DropReason::QueueOverflow),
             "the UI has to be able to fail these"
         );
         assert_eq!(store.queue(&p).len(), MAX_MESSAGES_PER_PEER);
@@ -1676,10 +1699,7 @@ mod tests {
         let secret = "meet me at the usual place";
         assert!(
             store
-                .enqueue(
-                    &peer("aa"),
-                    QueuedMessage::new(secret, "nick", "m1", 100)
-                )
+                .enqueue(&peer("aa"), QueuedMessage::new(secret, "nick", "m1", 100))
                 .is_none()
         );
         store.persist().expect("persist");
@@ -1689,9 +1709,7 @@ mod tests {
             .expect("load")
             .expect("something was written");
         assert!(
-            !blob
-                .windows(secret.len())
-                .any(|w| w == secret.as_bytes()),
+            !blob.windows(secret.len()).any(|w| w == secret.as_bytes()),
             "the sealed blob must not contain message plaintext"
         );
     }
@@ -1735,7 +1753,11 @@ mod tests {
         store.persist().expect("persist");
         assert!(storage.load(StorageKey::Outbox).expect("load").is_some());
 
-        assert!(store.mark_acked(&peer("aa"), "m1", AckKind::Delivered).cleared);
+        assert!(
+            store
+                .mark_acked(&peer("aa"), "m1", AckKind::Delivered)
+                .cleared
+        );
         store.persist().expect("persist");
         assert_eq!(
             storage.load(StorageKey::Outbox).expect("load"),
@@ -1849,7 +1871,10 @@ mod tests {
 
         let mut store = OutboxStore::new(storage.clone(), Arc::new(TestSealer::new()));
         assert!(
-            store.load().expect("a corrupt blob is not fatal").is_empty(),
+            store
+                .load()
+                .expect("a corrupt blob is not fatal")
+                .is_empty(),
             "losing retained mail is bad; refusing to start is worse"
         );
         assert!(store.is_loaded());

@@ -4,17 +4,19 @@
 //! messages using both sealed sender and identified sender modes.
 //! All operations are delegated to the SignalActor for thread-safety.
 
+use libsignal_protocol::{
+    CiphertextMessageType, DeviceId, ProtocolAddress, PublicKey, SenderCertificate,
+};
 use std::collections::HashMap;
 use std::sync::Arc;
-use libsignal_protocol::{CiphertextMessageType, ProtocolAddress, DeviceId, SenderCertificate, PublicKey};
 use tokio::sync::Mutex;
 
-use crate::network::grpc::auth_client::AuthClient;
-use crate::storage::repositories::settings_repo::keys;
-use crate::error::{CryptoError, ServiceError};
-use super::{kt_anchor, SignalService};
+use super::{SignalService, kt_anchor};
 #[cfg(feature = "dev-trust-root")]
 use crate::crypto::keytransparency::KtError;
+use crate::error::{CryptoError, ServiceError};
+use crate::network::grpc::auth_client::AuthClient;
+use crate::storage::repositories::settings_repo::keys;
 
 /// Maximum number of encrypt locks to keep in cache.
 const MAX_ENCRYPT_LOCKS: usize = 500;
@@ -41,7 +43,10 @@ impl SignalService {
             }
         }
 
-        locks.entry(recipient_key.to_string()).or_insert_with(|| Arc::new(Mutex::new(()))).clone()
+        locks
+            .entry(recipient_key.to_string())
+            .or_insert_with(|| Arc::new(Mutex::new(())))
+            .clone()
     }
 
     /// Key Transparency gate (Phase 2).
@@ -90,8 +95,11 @@ impl SignalService {
     where
         F: FnOnce(u64, u64) -> Fut,
         Fut: std::future::Future<
-            Output = Result<crate::proto::chat_v1::GetConsistencyProofResponse, crate::error::NetworkError>,
-        >,
+                Output = Result<
+                    crate::proto::chat_v1::GetConsistencyProofResponse,
+                    crate::error::NetworkError,
+                >,
+            >,
     {
         let Some(sth) = proof.signed_tree_head.as_ref() else {
             return Err(ServiceError::Validation(
@@ -99,8 +107,7 @@ impl SignalService {
             ));
         };
 
-        match kt_anchor::hold_head_locked(pin, &self.settings_repo, sth, fetch_consistency).await
-        {
+        match kt_anchor::hold_head_locked(pin, &self.settings_repo, sth, fetch_consistency).await {
             Ok(kt_anchor::AnchorOutcome::FirstPin) => {
                 tracing::info!(
                     epoch = sth.epoch,
@@ -141,7 +148,8 @@ impl SignalService {
             .identity_key()
             .map_err(|e| ServiceError::Validation(format!("bundle missing identity key: {e}")))?
             .serialize();
-        self.verify_identity_key_transparency(auth_client, recipient_id, &identity_key).await
+        self.verify_identity_key_transparency(auth_client, recipient_id, &identity_key)
+            .await
     }
 
     /// The KT gate on a bare identity key: `Ok(())` iff `identity_key` is
@@ -157,10 +165,16 @@ impl SignalService {
         // never older than a pin a concurrent check just advanced
         // (`kt_anchor::lock_pin`).
         let pin = kt_anchor::lock_pin().await;
-        let fetched = kt_anchor::pinned_rpc(auth_client.get_key_transparency_proof(recipient_id)).await;
-        self.judge_kt_proof(&pin, "KT", recipient_id, identity_key, fetched, |old, new| {
-            auth_client.get_consistency_proof(old, new)
-        })
+        let fetched =
+            kt_anchor::pinned_rpc(auth_client.get_key_transparency_proof(recipient_id)).await;
+        self.judge_kt_proof(
+            &pin,
+            "KT",
+            recipient_id,
+            identity_key,
+            fetched,
+            |old, new| auth_client.get_consistency_proof(old, new),
+        )
         .await
     }
 
@@ -172,14 +186,20 @@ impl SignalService {
         path: &'static str,
         recipient_id: &str,
         identity_key: &[u8],
-        fetched: Result<Option<crate::proto::chat_v1::GetProofResponse>, crate::error::NetworkError>,
+        fetched: Result<
+            Option<crate::proto::chat_v1::GetProofResponse>,
+            crate::error::NetworkError,
+        >,
         fetch_consistency: F,
     ) -> Result<(), ServiceError>
     where
         F: FnOnce(u64, u64) -> Fut,
         Fut: std::future::Future<
-            Output = Result<crate::proto::chat_v1::GetConsistencyProofResponse, crate::error::NetworkError>,
-        >,
+                Output = Result<
+                    crate::proto::chat_v1::GetConsistencyProofResponse,
+                    crate::error::NetworkError,
+                >,
+            >,
     {
         let proof = match fetched {
             Ok(Some(proof)) => proof,
@@ -273,7 +293,11 @@ impl SignalService {
     ///
     /// Lets callers avoid an authenticated prekey fetch on first contact by
     /// branching to an anonymous session-establishment path instead.
-    pub async fn has_session(&self, recipient_id: &str, device_id: u32) -> Result<bool, ServiceError> {
+    pub async fn has_session(
+        &self,
+        recipient_id: &str,
+        device_id: u32,
+    ) -> Result<bool, ServiceError> {
         let device_id_struct = DeviceId::try_from(device_id)
             .map_err(|_| ServiceError::Validation("Invalid device ID".into()))?;
         let address = ProtocolAddress::new(recipient_id.to_string(), device_id_struct);
@@ -314,7 +338,8 @@ impl SignalService {
         recipient_id: &str,
         device_id: u32,
     ) -> Result<(), ServiceError> {
-        let device_id_struct = DeviceId::try_from(device_id).map_err(|_| ServiceError::Validation("Invalid device ID".into()))?;
+        let device_id_struct = DeviceId::try_from(device_id)
+            .map_err(|_| ServiceError::Validation("Invalid device ID".into()))?;
         let address = ProtocolAddress::new(recipient_id.to_string(), device_id_struct);
 
         // SEND HALF of the identity-change wedge, and it is NOT
@@ -357,7 +382,9 @@ impl SignalService {
             .get_pre_key_bundle(recipient_id, &device_id.to_string())
             .await?;
 
-        let result = bundle_response.result.ok_or(ServiceError::Validation("Missing bundle".into()))?;
+        let result = bundle_response
+            .result
+            .ok_or(ServiceError::Validation("Missing bundle".into()))?;
         let proto_bundle = match result {
             crate::proto::chat_v1::get_pre_key_bundle_response::Result::Bundle(b) => b,
             _ => return Err(ServiceError::Validation("Unexpected response type".into())),
@@ -386,14 +413,18 @@ impl SignalService {
         let lock = self.get_encrypt_lock(&lock_key).await;
         let _guard = lock.lock().await;
 
-        self.ensure_session(auth_client, recipient_id, device_id).await?;
+        self.ensure_session(auth_client, recipient_id, device_id)
+            .await?;
 
-        let device_id_struct = DeviceId::try_from(device_id).map_err(|_| ServiceError::Validation("Invalid device ID".into()))?;
+        let device_id_struct = DeviceId::try_from(device_id)
+            .map_err(|_| ServiceError::Validation("Invalid device ID".into()))?;
         let address = ProtocolAddress::new(recipient_id.to_string(), device_id_struct);
 
         let sender_cert = self.get_or_request_sender_certificate(auth_client).await?;
 
-        self.actor.encrypt_sealed(plaintext.to_vec(), sender_cert, address).await
+        self.actor
+            .encrypt_sealed(plaintext.to_vec(), sender_cert, address)
+            .await
     }
 
     /// Encrypt a message using basic Signal Protocol (Identified).
@@ -408,12 +439,16 @@ impl SignalService {
         let lock = self.get_encrypt_lock(&lock_key).await;
         let _guard = lock.lock().await;
 
-        self.ensure_session(auth_client, recipient_id, device_id).await?;
+        self.ensure_session(auth_client, recipient_id, device_id)
+            .await?;
 
-        let device_id_struct = DeviceId::try_from(device_id).map_err(|_| ServiceError::Validation("Invalid device ID".into()))?;
+        let device_id_struct = DeviceId::try_from(device_id)
+            .map_err(|_| ServiceError::Validation("Invalid device ID".into()))?;
         let address = ProtocolAddress::new(recipient_id.to_string(), device_id_struct);
 
-        self.actor.encrypt_identified(plaintext.to_vec(), address).await
+        self.actor
+            .encrypt_identified(plaintext.to_vec(), address)
+            .await
     }
 
     /// Seal a serialized `DecryptionErrorMessage` for one recipient device.
@@ -465,12 +500,29 @@ impl SignalService {
         }
         let validation_time =
             libsignal_protocol::Timestamp::from_epoch_millis(server_timestamp_ns / 1_000_000);
-        let local_uuid = self.settings_repo.get_string(keys::CURRENT_USER_ID)?.ok_or(ServiceError::NotLoggedIn)?;
-        let local_device_id = self.settings_repo.get::<u32>(keys::CURRENT_DEVICE_ID)?.ok_or(ServiceError::NotLoggedIn)?;
-        let device_id_struct = DeviceId::new(local_device_id.try_into().map_err(|_| ServiceError::Validation("ID too large".into()))?).map_err(|_| ServiceError::Validation("Invalid ID".into()))?;
+        let local_uuid = self
+            .settings_repo
+            .get_string(keys::CURRENT_USER_ID)?
+            .ok_or(ServiceError::NotLoggedIn)?;
+        let local_device_id = self
+            .settings_repo
+            .get::<u32>(keys::CURRENT_DEVICE_ID)?
+            .ok_or(ServiceError::NotLoggedIn)?;
+        let device_id_struct = DeviceId::new(
+            local_device_id
+                .try_into()
+                .map_err(|_| ServiceError::Validation("ID too large".into()))?,
+        )
+        .map_err(|_| ServiceError::Validation("Invalid ID".into()))?;
 
         self.actor
-            .decrypt_sealed(ciphertext.to_vec(), self.trust_root, validation_time, local_uuid, device_id_struct)
+            .decrypt_sealed(
+                ciphertext.to_vec(),
+                self.trust_root,
+                validation_time,
+                local_uuid,
+                device_id_struct,
+            )
             .await
             .inspect_err(|e| self.note_identity_change(e))
     }
@@ -482,7 +534,8 @@ impl SignalService {
         sender_id: &str,
         sender_device_id: u32,
     ) -> Result<Vec<u8>, ServiceError> {
-        let device_id_struct = DeviceId::try_from(sender_device_id).map_err(|_| ServiceError::Validation("Invalid ID".into()))?;
+        let device_id_struct = DeviceId::try_from(sender_device_id)
+            .map_err(|_| ServiceError::Validation("Invalid ID".into()))?;
         let sender_address = ProtocolAddress::new(sender_id.to_string(), device_id_struct);
 
         self.actor
@@ -504,44 +557,76 @@ impl SignalService {
         }
 
         let cert_response = auth_client.request_sender_certificate().await?;
-        let proto_cert = cert_response.certificate.ok_or(ServiceError::Validation("Missing certificate".into()))?;
-        let sender_cert = SenderCertificate::deserialize(&proto_cert.certificate).map_err(|_| ServiceError::Validation("Invalid cert".into()))?;
+        let proto_cert = cert_response
+            .certificate
+            .ok_or(ServiceError::Validation("Missing certificate".into()))?;
+        let sender_cert = SenderCertificate::deserialize(&proto_cert.certificate)
+            .map_err(|_| ServiceError::Validation("Invalid cert".into()))?;
 
         use base64::Engine;
         let cert_b64 = base64::engine::general_purpose::STANDARD.encode(&proto_cert.certificate);
         let _ = self.settings_repo.set(keys::SENDER_CERTIFICATE, &cert_b64);
-        let _ = self.settings_repo.set(keys::SENDER_CERTIFICATE_REFRESH_AFTER, &cert_response.refresh_after);
-        let _ = self.settings_repo.set(keys::SENDER_CERTIFICATE_SERVER_KEY_ID, &proto_cert.server_key_id);
+        let _ = self.settings_repo.set(
+            keys::SENDER_CERTIFICATE_REFRESH_AFTER,
+            &cert_response.refresh_after,
+        );
+        let _ = self.settings_repo.set(
+            keys::SENDER_CERTIFICATE_SERVER_KEY_ID,
+            &proto_cert.server_key_id,
+        );
 
         Ok(sender_cert)
     }
 
     /// Convert Protobuf PreKeyBundle to libsignal PreKeyBundle.
-    pub(crate) fn convert_prekey_bundle(proto: crate::proto::chat_v1::SignalPreKeyBundle) -> Result<libsignal_protocol::PreKeyBundle, ServiceError> {
+    pub(crate) fn convert_prekey_bundle(
+        proto: crate::proto::chat_v1::SignalPreKeyBundle,
+    ) -> Result<libsignal_protocol::PreKeyBundle, ServiceError> {
         let registration_id = proto.registration_id;
-        let device_id = DeviceId::try_from(proto.device_id).map_err(|_| ServiceError::Validation("Invalid device ID".into()))?;
-        let identity_key = libsignal_protocol::IdentityKey::decode(&proto.identity_key).map_err(|_| ServiceError::Validation("Invalid identity key".into()))?;
-        let signed_prekey = proto.signed_prekey.ok_or(ServiceError::Validation("Missing signed prekey".into()))?;
+        let device_id = DeviceId::try_from(proto.device_id)
+            .map_err(|_| ServiceError::Validation("Invalid device ID".into()))?;
+        let identity_key = libsignal_protocol::IdentityKey::decode(&proto.identity_key)
+            .map_err(|_| ServiceError::Validation("Invalid identity key".into()))?;
+        let signed_prekey = proto
+            .signed_prekey
+            .ok_or(ServiceError::Validation("Missing signed prekey".into()))?;
         let signed_prekey_id = libsignal_protocol::SignedPreKeyId::from(signed_prekey.id);
-        let signed_prekey_public = PublicKey::deserialize(&signed_prekey.public_key).map_err(|_| ServiceError::Validation("Invalid signed prekey public key".into()))?;
+        let signed_prekey_public = PublicKey::deserialize(&signed_prekey.public_key)
+            .map_err(|_| ServiceError::Validation("Invalid signed prekey public key".into()))?;
         let signed_prekey_signature = signed_prekey.signature;
 
         let pre_key_option = if let Some(pk) = proto.one_time_prekey {
-            Some((libsignal_protocol::PreKeyId::from(pk.id), PublicKey::deserialize(&pk.public_key).map_err(|_| ServiceError::Validation("Invalid one-time prekey".into()))?))
+            Some((
+                libsignal_protocol::PreKeyId::from(pk.id),
+                PublicKey::deserialize(&pk.public_key)
+                    .map_err(|_| ServiceError::Validation("Invalid one-time prekey".into()))?,
+            ))
         } else {
             None
         };
 
-        let kyber_prekey = proto.kyber_prekey.ok_or(ServiceError::Validation("Missing Kyber prekey".into()))?;
+        let kyber_prekey = proto
+            .kyber_prekey
+            .ok_or(ServiceError::Validation("Missing Kyber prekey".into()))?;
         let kyber_id = libsignal_protocol::KyberPreKeyId::from(kyber_prekey.id);
-        let kyber_public = libsignal_protocol::kem::Key::try_from(kyber_prekey.public_key.as_slice()).map_err(|_| ServiceError::Validation("Invalid Kyber key".into()))?;
+        let kyber_public =
+            libsignal_protocol::kem::Key::try_from(kyber_prekey.public_key.as_slice())
+                .map_err(|_| ServiceError::Validation("Invalid Kyber key".into()))?;
         let kyber_signature = kyber_prekey.signature;
 
         libsignal_protocol::PreKeyBundle::new(
-            registration_id, device_id, pre_key_option,
-            signed_prekey_id, signed_prekey_public, signed_prekey_signature,
-            kyber_id, kyber_public, kyber_signature, identity_key,
-        ).map_err(|e| ServiceError::Validation(format!("Invalid bundle: {}", e)))
+            registration_id,
+            device_id,
+            pre_key_option,
+            signed_prekey_id,
+            signed_prekey_public,
+            signed_prekey_signature,
+            kyber_id,
+            kyber_public,
+            kyber_signature,
+            identity_key,
+        )
+        .map_err(|e| ServiceError::Validation(format!("Invalid bundle: {}", e)))
     }
 
     // =========================================================================
@@ -606,13 +691,25 @@ impl SignalService {
         // new friend's prewarm and profile-key send) each fetched a bundle —
         // popping a one-time prekey apiece — and built a session over the
         // other's. The one that waits here finds the sessions the first built.
-        let build_lock = self.get_encrypt_lock(&format!("{recipient_id}:establish")).await;
+        let build_lock = self
+            .get_encrypt_lock(&format!("{recipient_id}:establish"))
+            .await;
         let _build = build_lock.lock().await;
 
-        let this_device =(self.settings_repo.get_string(keys::CURRENT_USER_ID).ok().flatten().as_deref()
+        let this_device = (self
+            .settings_repo
+            .get_string(keys::CURRENT_USER_ID)
+            .ok()
+            .flatten()
+            .as_deref()
             == Some(recipient_id))
-            .then(|| self.settings_repo.get::<u32>(keys::CURRENT_DEVICE_ID).ok().flatten())
-            .flatten();
+        .then(|| {
+            self.settings_repo
+                .get::<u32>(keys::CURRENT_DEVICE_ID)
+                .ok()
+                .flatten()
+        })
+        .flatten();
 
         let with_session: Vec<u32> = self
             .session_devices(recipient_id)
@@ -626,7 +723,10 @@ impl SignalService {
         }
 
         // Fetch prekey bundles for ALL devices using wildcard
-        let response = match auth_client.get_pre_key_bundles_all_devices(recipient_id).await {
+        let response = match auth_client
+            .get_pre_key_bundles_all_devices(recipient_id)
+            .await
+        {
             Ok(r) => r,
             // A throttled policy read must not fail a send we can already
             // encrypt: it goes identified, as it would have without the flag.
@@ -736,7 +836,9 @@ impl SignalService {
 
                 if established_device_ids.is_empty() {
                     return Err(last_error.unwrap_or_else(|| {
-                        ServiceError::Validation("Failed to establish session with any device".into())
+                        ServiceError::Validation(
+                            "Failed to establish session with any device".into(),
+                        )
                     }));
                 }
 
@@ -757,7 +859,8 @@ impl SignalService {
                 if this_device == Some(device_id) {
                     return Ok((Vec::new(), unrestricted));
                 }
-                self.ensure_session(auth_client, recipient_id, device_id).await?;
+                self.ensure_session(auth_client, recipient_id, device_id)
+                    .await?;
                 Ok((vec![device_id], unrestricted))
             }
         }
@@ -766,7 +869,11 @@ impl SignalService {
     /// The recipient's `unrestricted_unidentified_access` flag from the last
     /// bundle fetch this run, if any.
     fn unrestricted_access(&self, recipient_id: &str) -> Option<bool> {
-        self.unrestricted_access.lock().ok()?.get(recipient_id).copied()
+        self.unrestricted_access
+            .lock()
+            .ok()?
+            .get(recipient_id)
+            .copied()
     }
 
     fn record_unrestricted_access(&self, recipient_id: &str, unrestricted: bool) {
@@ -797,7 +904,8 @@ impl SignalService {
                 .await?;
         }
         for &device_id in missing.iter().chain(stale) {
-            self.ensure_session(auth_client, recipient_id, device_id).await?;
+            self.ensure_session(auth_client, recipient_id, device_id)
+                .await?;
         }
         Ok(())
     }
@@ -862,7 +970,12 @@ impl SignalService {
         plaintext: &[u8],
     ) -> Result<HashMap<u32, Vec<u8>>, ServiceError> {
         Ok(self
-            .encrypt_message_all_devices_with_access_policy(auth_client, recipient_id, plaintext, false)
+            .encrypt_message_all_devices_with_access_policy(
+                auth_client,
+                recipient_id,
+                plaintext,
+                false,
+            )
             .await?
             .0
             .into_iter()
@@ -891,7 +1004,11 @@ impl SignalService {
     ) -> Result<(HashMap<u32, DeviceCiphertext>, bool), ServiceError> {
         // First ensure we have sessions with all devices
         let (device_ids, unrestricted) = self
-            .ensure_sessions_and_access_policy_all_devices(auth_client, recipient_id, need_access_policy)
+            .ensure_sessions_and_access_policy_all_devices(
+                auth_client,
+                recipient_id,
+                need_access_policy,
+            )
             .await?;
         if device_ids.is_empty() {
             return Ok((HashMap::new(), unrestricted));
@@ -902,7 +1019,8 @@ impl SignalService {
         let sender_cert = self.get_or_request_sender_certificate(auth_client).await?;
 
         // Encrypt to each device
-        let mut ciphertexts: HashMap<u32, DeviceCiphertext> = HashMap::with_capacity(device_ids.len());
+        let mut ciphertexts: HashMap<u32, DeviceCiphertext> =
+            HashMap::with_capacity(device_ids.len());
         let mut failure_count = 0;
 
         for device_id in device_ids {
@@ -920,14 +1038,24 @@ impl SignalService {
             };
             let address = ProtocolAddress::new(recipient_id.to_string(), device_id_struct);
 
-            match self.actor.encrypt_sealed(plaintext.to_vec(), sender_cert.clone(), address).await {
+            match self
+                .actor
+                .encrypt_sealed(plaintext.to_vec(), sender_cert.clone(), address)
+                .await
+            {
                 // Read under the encrypt lock, from the session that just
                 // encrypted. A session that cannot name its device's
                 // registration id is not sent to: listing the device with 0
                 // would switch off the server's stale-device check.
                 Ok(ciphertext) => match self.session_registration_id(recipient_id, device_id) {
                     Some(registration_id) => {
-                        ciphertexts.insert(device_id, DeviceCiphertext { ciphertext, registration_id });
+                        ciphertexts.insert(
+                            device_id,
+                            DeviceCiphertext {
+                                ciphertext,
+                                registration_id,
+                            },
+                        );
                     }
                     None => {
                         tracing::warn!(
@@ -984,7 +1112,9 @@ impl SignalService {
         );
         let mut usable = Vec::with_capacity(ids.len());
         for device_id in ids {
-            let Ok(device) = DeviceId::try_from(device_id) else { continue };
+            let Ok(device) = DeviceId::try_from(device_id) else {
+                continue;
+            };
             if self
                 .actor
                 .has_session(ProtocolAddress::new(recipient_id.to_string(), device))
@@ -1012,11 +1142,19 @@ impl SignalService {
 
         let mut ciphertexts = HashMap::with_capacity(device_ids.len());
         for device_id in device_ids {
-            let Ok(device) = DeviceId::try_from(device_id) else { continue };
+            let Ok(device) = DeviceId::try_from(device_id) else {
+                continue;
+            };
             let address = ProtocolAddress::new(recipient_id.to_string(), device);
-            let lock = self.get_encrypt_lock(&format!("{recipient_id}:{device_id}")).await;
+            let lock = self
+                .get_encrypt_lock(&format!("{recipient_id}:{device_id}"))
+                .await;
             let _guard = lock.lock().await;
-            match self.actor.encrypt_sealed(plaintext.to_vec(), sender_cert.clone(), address).await {
+            match self
+                .actor
+                .encrypt_sealed(plaintext.to_vec(), sender_cert.clone(), address)
+                .await
+            {
                 Ok(ciphertext) => {
                     ciphertexts.insert(device_id, ciphertext);
                 }
@@ -1067,9 +1205,14 @@ impl SignalService {
         let fetched = kt_anchor::pinned_rpc(anon_kt_client.get_proof(recipient_id)).await;
         // The consistency proof comes over the same anonymous channel: without
         // it a server could fork the log for anonymous lookups alone.
-        self.judge_kt_proof(&pin, "KT(anon)", recipient_id, &identity_key, fetched, |old, new| {
-            anon_kt_client.get_consistency_proof(old, new)
-        })
+        self.judge_kt_proof(
+            &pin,
+            "KT(anon)",
+            recipient_id,
+            &identity_key,
+            fetched,
+            |old, new| anon_kt_client.get_consistency_proof(old, new),
+        )
         .await
     }
 
@@ -1125,18 +1268,16 @@ impl SignalService {
     ///
     /// Returns None if no valid cached certificate exists.
     pub fn get_cached_sender_certificate(&self) -> Result<Option<SenderCertificate>, ServiceError> {
-
         let cached_cert_b64: Option<String> =
             self.settings_repo.get_string(keys::SENDER_CERTIFICATE)?;
-        let cached_refresh_after: Option<u64> =
-            self.settings_repo.get::<u64>(keys::SENDER_CERTIFICATE_REFRESH_AFTER)?;
+        let cached_refresh_after: Option<u64> = self
+            .settings_repo
+            .get::<u64>(keys::SENDER_CERTIFICATE_REFRESH_AFTER)?;
 
         if let (Some(cert_b64), Some(refresh_after)) = (&cached_cert_b64, cached_refresh_after) {
             if !sender_cert_refresh_due(std::time::SystemTime::now(), refresh_after) {
                 use base64::Engine;
-                if let Ok(cert_bytes) =
-                    base64::engine::general_purpose::STANDARD.decode(cert_b64)
-                {
+                if let Ok(cert_bytes) = base64::engine::general_purpose::STANDARD.decode(cert_b64) {
                     if let Ok(cert) = SenderCertificate::deserialize(&cert_bytes) {
                         // The certificate names the sender's user AND device.
                         // Every login is a new device id, so a cert cached
@@ -1164,8 +1305,16 @@ impl SignalService {
     }
 
     fn cert_is_for_this_device(&self, cert: &SenderCertificate) -> bool {
-        let user = self.settings_repo.get_string(keys::CURRENT_USER_ID).ok().flatten();
-        let device: Option<u32> = self.settings_repo.get(keys::CURRENT_DEVICE_ID).ok().flatten();
+        let user = self
+            .settings_repo
+            .get_string(keys::CURRENT_USER_ID)
+            .ok()
+            .flatten();
+        let device: Option<u32> = self
+            .settings_repo
+            .get(keys::CURRENT_DEVICE_ID)
+            .ok()
+            .flatten();
         match (user, device, cert.sender_uuid(), cert.sender_device_id()) {
             (Some(u), Some(d), Ok(cu), Ok(cd)) => u == cu && u32::from(cd) == d,
             _ => false,
@@ -1214,11 +1363,11 @@ impl SignalService {
         }
 
         // Use cached sender certificate (must be pre-fetched during login)
-        let sender_cert = self
-            .get_cached_sender_certificate()?
-            .ok_or_else(|| ServiceError::Validation(
+        let sender_cert = self.get_cached_sender_certificate()?.ok_or_else(|| {
+            ServiceError::Validation(
                 "No cached sender certificate - ensure pre-fetch during login".into(),
-            ))?;
+            )
+        })?;
 
         self.actor
             .encrypt_sealed(plaintext.to_vec(), sender_cert, address)
@@ -1264,7 +1413,10 @@ mod sender_cert_refresh_tests {
         assert!(sender_cert_refresh_due(now, now_ns - 3_600 * 1_000_000_000));
         assert!(sender_cert_refresh_due(now, now_ns));
         // One hour ahead is not due yet.
-        assert!(!sender_cert_refresh_due(now, now_ns + 3_600 * 1_000_000_000));
+        assert!(!sender_cert_refresh_due(
+            now,
+            now_ns + 3_600 * 1_000_000_000
+        ));
     }
 
     #[test]
@@ -1283,7 +1435,10 @@ mod tests {
 
     fn bundles(ids: &[u32]) -> Vec<SignalPreKeyBundle> {
         ids.iter()
-            .map(|&device_id| SignalPreKeyBundle { device_id, ..Default::default() })
+            .map(|&device_id| SignalPreKeyBundle {
+                device_id,
+                ..Default::default()
+            })
             .collect()
     }
 
@@ -1294,8 +1449,10 @@ mod tests {
 
     #[test]
     fn skip_drops_only_the_named_device() {
-        let ids: Vec<u32> =
-            without_device(bundles(&[1, 2, 3]), Some(2)).iter().map(|b| b.device_id).collect();
+        let ids: Vec<u32> = without_device(bundles(&[1, 2, 3]), Some(2))
+            .iter()
+            .map(|b| b.device_id)
+            .collect();
         assert_eq!(ids, [1, 3]);
         assert_eq!(without_device(bundles(&[1, 2]), None).len(), 2);
     }
@@ -1309,7 +1466,10 @@ pub struct DeviceCiphertext {
 }
 
 /// Device ids of `recipient_id`'s stored session addresses (`"user:device"`).
-fn session_device_ids<'a>(recipient_id: &str, addresses: impl Iterator<Item = &'a str>) -> Vec<u32> {
+fn session_device_ids<'a>(
+    recipient_id: &str,
+    addresses: impl Iterator<Item = &'a str>,
+) -> Vec<u32> {
     let prefix = format!("{recipient_id}:");
     let mut ids: Vec<u32> = addresses
         .filter_map(|a| a.strip_prefix(prefix.as_str())?.parse().ok())
@@ -1330,25 +1490,46 @@ mod kt_pin_tests {
     #[tokio::test]
     async fn a_head_forked_from_the_pin_is_rejected() {
         let dir = tempfile::tempdir().unwrap();
-        let db = Arc::new(crate::storage::Database::open(&dir.path().join("kt.db"), "testpass").unwrap());
+        let db = Arc::new(
+            crate::storage::Database::open(&dir.path().join("kt.db"), "testpass").unwrap(),
+        );
         db.run_migrations().unwrap();
-        let settings = Arc::new(crate::storage::repositories::SettingsRepository::new(db.clone()));
-        let svc = SignalService::new(Arc::new(crate::storage::KeyStore::new(db)), settings.clone());
+        let settings = Arc::new(crate::storage::repositories::SettingsRepository::new(
+            db.clone(),
+        ));
+        let svc = SignalService::new(
+            Arc::new(crate::storage::KeyStore::new(db)),
+            settings.clone(),
+        );
 
         let head = |root: u8| GetProofResponse {
-            signed_tree_head: Some(SignedTreeHead { epoch: 5, tree_size: 5, root_hash: vec![root; 32], ..Default::default() }),
+            signed_tree_head: Some(SignedTreeHead {
+                epoch: 5,
+                tree_size: 5,
+                root_hash: vec![root; 32],
+                ..Default::default()
+            }),
             ..Default::default()
         };
         fn no_fetch(
             _: u64,
             _: u64,
-        ) -> std::future::Ready<Result<GetConsistencyProofResponse, crate::error::NetworkError>> {
+        ) -> std::future::Ready<Result<GetConsistencyProofResponse, crate::error::NetworkError>>
+        {
             panic!("a fork needs no consistency proof")
         }
         let pin = kt_anchor::lock_pin().await;
-        svc.check_tree_head_consistency(&pin, no_fetch, "bob", &head(1)).await.unwrap();
-        let err = svc.check_tree_head_consistency(&pin, no_fetch, "bob", &head(2)).await.unwrap_err();
-        assert!(err.to_string().contains("consistency check failed"), "{err}");
+        svc.check_tree_head_consistency(&pin, no_fetch, "bob", &head(1))
+            .await
+            .unwrap();
+        let err = svc
+            .check_tree_head_consistency(&pin, no_fetch, "bob", &head(2))
+            .await
+            .unwrap_err();
+        assert!(
+            err.to_string().contains("consistency check failed"),
+            "{err}"
+        );
         assert_eq!(kt_anchor::pinned_head(&settings).unwrap().root, [1u8; 32]);
     }
 
@@ -1357,14 +1538,22 @@ mod kt_pin_tests {
     #[tokio::test]
     async fn not_found_refuses_the_session() {
         let dir = tempfile::tempdir().unwrap();
-        let db = Arc::new(crate::storage::Database::open(&dir.path().join("kt.db"), "testpass").unwrap());
+        let db = Arc::new(
+            crate::storage::Database::open(&dir.path().join("kt.db"), "testpass").unwrap(),
+        );
         db.run_migrations().unwrap();
-        let settings = Arc::new(crate::storage::repositories::SettingsRepository::new(db.clone()));
-        let svc = SignalService::new(Arc::new(crate::storage::KeyStore::new(db)), settings.clone());
+        let settings = Arc::new(crate::storage::repositories::SettingsRepository::new(
+            db.clone(),
+        ));
+        let svc = SignalService::new(
+            Arc::new(crate::storage::KeyStore::new(db)),
+            settings.clone(),
+        );
         fn no_fetch(
             _: u64,
             _: u64,
-        ) -> std::future::Ready<Result<GetConsistencyProofResponse, crate::error::NetworkError>> {
+        ) -> std::future::Ready<Result<GetConsistencyProofResponse, crate::error::NetworkError>>
+        {
             panic!("no proof, nothing to hold")
         }
 
@@ -1388,6 +1577,9 @@ mod session_device_ids_tests {
     #[test]
     fn parses_only_this_recipients_devices() {
         let addrs = ["u1:1", "u1:6", "u10:2", "u1:x", "u1:6"];
-        assert_eq!(super::session_device_ids("u1", addrs.into_iter()), vec![1, 6]);
+        assert_eq!(
+            super::session_device_ids("u1", addrs.into_iter()),
+            vec![1, 6]
+        );
     }
 }

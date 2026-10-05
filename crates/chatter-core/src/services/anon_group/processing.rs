@@ -4,14 +4,14 @@
 //! `dispatch_common_content` and handles group-specific variants (calls,
 //! member list, leave, kick, profile share, update) locally.
 
+use crate::domain::UserId;
 use crate::domain::anon_group::AnonGroupId;
 use crate::domain::ids::{AttachmentId, MessageId};
 use crate::domain::message::ConversationType;
-use crate::domain::UserId;
+use crate::inbox::handlers::DomainEvent;
 use crate::inbox::handlers::base_anon::{
     AnonInboxBackend, CommonDispatchOutcome, QuoteContext, dispatch_common_content,
 };
-use crate::inbox::handlers::DomainEvent;
 use crate::proto::content_v1::{AttachmentPointer, Content};
 
 use super::{AnonGroupError, AnonGroupService};
@@ -19,8 +19,12 @@ use super::{AnonGroupError, AnonGroupService};
 impl AnonInboxBackend for AnonGroupService {
     type Id = AnonGroupId;
 
-    fn conversation_type(&self) -> ConversationType { ConversationType::AnonGroup }
-    fn label(&self) -> &'static str { "anon group" }
+    fn conversation_type(&self) -> ConversationType {
+        ConversationType::AnonGroup
+    }
+    fn label(&self) -> &'static str {
+        "anon group"
+    }
 
     // Both block lists are keyed by group, so they are enforced at the top of
     // `process_incoming_content`, which has the group id; these trait hooks
@@ -45,41 +49,64 @@ impl AnonInboxBackend for AnonGroupService {
     }
 
     fn delete_message(&self, id: &Self::Id, sender: &UserId, ts: u64) -> Result<bool, String> {
-        self.delete_message_by_timestamp(id, sender, ts).map_err(|e| e.to_string())
+        self.delete_message_by_timestamp(id, sender, ts)
+            .map_err(|e| e.to_string())
     }
 
-    fn apply_edit(&self, id: &Self::Id, sender: &UserId, target_ts: u64, text: &str, edit_ts: u64) -> Result<Option<crate::domain::message::Message>, String> {
+    fn apply_edit(
+        &self,
+        id: &Self::Id,
+        sender: &UserId,
+        target_ts: u64,
+        text: &str,
+        edit_ts: u64,
+    ) -> Result<Option<crate::domain::message::Message>, String> {
         self.message_service
             .apply_channel_edit(&(*id).into(), sender, target_ts, text, edit_ts, 0)
             .map_err(|e| e.to_string())
     }
 
     fn add_reaction(
-        &self, id: &Self::Id, target_sender: &UserId, target_ts_ns: u64,
-        reactor: &UserId, emoji: &str,
+        &self,
+        id: &Self::Id,
+        target_sender: &UserId,
+        target_ts_ns: u64,
+        reactor: &UserId,
+        emoji: &str,
     ) -> Result<bool, String> {
         AnonGroupService::add_reaction(self, id, target_sender, target_ts_ns, reactor, emoji)
             .map_err(|e| e.to_string())
     }
 
     fn remove_reaction(
-        &self, id: &Self::Id, target_sender: &UserId, target_ts_ns: u64,
-        reactor: &UserId, emoji: &str,
+        &self,
+        id: &Self::Id,
+        target_sender: &UserId,
+        target_ts_ns: u64,
+        reactor: &UserId,
+        emoji: &str,
     ) -> Result<bool, String> {
         AnonGroupService::remove_reaction(self, id, target_sender, target_ts_ns, reactor, emoji)
             .map_err(|e| e.to_string())
     }
 
     fn set_pinned(&self, id: &Self::Id, ts: u64, pinned: bool) -> Result<(), String> {
-        self.set_message_pinned(id, ts, pinned).map(|_| ()).map_err(|e| e.to_string())
+        self.set_message_pinned(id, ts, pinned)
+            .map(|_| ())
+            .map_err(|e| e.to_string())
     }
 
     fn get_message_id_by_timestamp(&self, id: &Self::Id, ts: u64) -> Option<MessageId> {
-        self.get_message_by_timestamp(id, ts).ok().flatten().map(|m| m.id)
+        self.get_message_by_timestamp(id, ts)
+            .ok()
+            .flatten()
+            .map(|m| m.id)
     }
 
     /// Group receipts are debug-only (not yet persisted or emitted to UI).
-    fn emit_receipts(&self) -> bool { false }
+    fn emit_receipts(&self) -> bool {
+        false
+    }
 }
 
 impl AnonGroupService {
@@ -143,7 +170,11 @@ impl AnonGroupService {
                 let now = std::time::Instant::now();
                 self.held_posts.hold(
                     *group_id,
-                    super::held::HeldPost { at: now, sender: *peer_id, content: inner_content.clone() },
+                    super::held::HeldPost {
+                        at: now,
+                        sender: *peer_id,
+                        content: inner_content.clone(),
+                    },
                     now,
                 );
             }
@@ -228,19 +259,17 @@ impl AnonGroupService {
 
                 tracing::info!(group_id = %group_id, sender_id = %peer_id, "Processed group member list");
             }
-            Some(ContentType::AnonGroupLeave(_)) => {
-                match self.handle_leave(*group_id, *peer_id) {
-                    Ok(true) => {
-                        events.push(DomainEvent::AnonGroupMemberLeft {
-                            group_id: *group_id,
-                            user_id: *peer_id,
-                        });
-                        tracing::info!(group_id = %group_id, sender_id = %peer_id, "Member left group");
-                    }
-                    Ok(false) => {}
-                    Err(e) => tracing::warn!(error = %e, "Failed to handle group leave"),
+            Some(ContentType::AnonGroupLeave(_)) => match self.handle_leave(*group_id, *peer_id) {
+                Ok(true) => {
+                    events.push(DomainEvent::AnonGroupMemberLeft {
+                        group_id: *group_id,
+                        user_id: *peer_id,
+                    });
+                    tracing::info!(group_id = %group_id, sender_id = %peer_id, "Member left group");
                 }
-            }
+                Ok(false) => {}
+                Err(e) => tracing::warn!(error = %e, "Failed to handle group leave"),
+            },
             Some(ContentType::AnonGroupKick(kick)) => {
                 let kicked_user_id = match UserId::try_from_slice(&kick.kicked_user_id) {
                     Some(id) => id,
@@ -253,8 +282,11 @@ impl AnonGroupService {
                 // (unsigned, forged, from a non-admin, at the owner) must
                 // not show up as "X removed by Y".
                 match self.handle_kick(
-                    *group_id, kicked_user_id, *peer_id,
-                    &kick.admin_signature, kick.timestamp,
+                    *group_id,
+                    kicked_user_id,
+                    *peer_id,
+                    &kick.admin_signature,
+                    kick.timestamp,
                 ) {
                     Ok(true) => {
                         events.push(DomainEvent::AnonGroupMemberKicked {
@@ -270,13 +302,21 @@ impl AnonGroupService {
             }
             Some(ContentType::AnonGroupProfileShare(profile)) => {
                 let profile_key = profile.profile_key.as_ref().and_then(|pk| {
-                    if pk.len() == 32 { let mut k = [0u8; 32]; k.copy_from_slice(pk); Some(k) } else { None }
+                    if pk.len() == 32 {
+                        let mut k = [0u8; 32];
+                        k.copy_from_slice(pk);
+                        Some(k)
+                    } else {
+                        None
+                    }
                 });
 
                 use crate::crypto::profile_crypto::{decrypt_avatar, decrypt_display_name};
 
                 let display_name = match (&profile_key, &profile.encrypted_display_name) {
-                    (Some(pk), Some(enc)) if !enc.is_empty() => decrypt_display_name(pk, enc).ok().filter(|n| !n.is_empty()),
+                    (Some(pk), Some(enc)) if !enc.is_empty() => {
+                        decrypt_display_name(pk, enc).ok().filter(|n| !n.is_empty())
+                    }
                     _ => None,
                 };
                 let avatar = match (&profile_key, &profile.encrypted_avatar) {
@@ -288,9 +328,16 @@ impl AnonGroupService {
                 let group_id_owned = *group_id;
                 let peer_id_owned = *peer_id;
                 tokio::spawn(async move {
-                    if let Err(e) = svc.handle_profile_share(
-                        group_id_owned, peer_id_owned, profile_key, display_name, avatar,
-                    ).await {
+                    if let Err(e) = svc
+                        .handle_profile_share(
+                            group_id_owned,
+                            peer_id_owned,
+                            profile_key,
+                            display_name,
+                            avatar,
+                        )
+                        .await
+                    {
                         tracing::warn!(error = %e, "Failed to handle profile share");
                     }
                 });
@@ -311,7 +358,9 @@ impl AnonGroupService {
                         tracing::info!(group_id = %group_id, sender_id = %peer_id, "Group updated");
                     }
                     Ok(false) => {}
-                    Err(e) => tracing::warn!(group_id = %group_id, error = %e, "Failed to handle group update"),
+                    Err(e) => {
+                        tracing::warn!(group_id = %group_id, error = %e, "Failed to handle group update")
+                    }
                 }
             }
             _ => {
@@ -334,14 +383,19 @@ impl AnonGroupService {
     /// Re-check every post held for `group` against its roster now: deliver
     /// the ones whose sender is in it, keep the rest until they expire.
     /// Returns the delivered posts' events.
-    pub fn release_held_posts(self: &std::sync::Arc<Self>, group: &AnonGroupId) -> Vec<DomainEvent> {
+    pub fn release_held_posts(
+        self: &std::sync::Arc<Self>,
+        group: &AnonGroupId,
+    ) -> Vec<DomainEvent> {
         let now = std::time::Instant::now();
         let mut events = Vec::new();
         for post in self.held_posts.take(group, now) {
             if self.sender_in_roster(group, &post.sender) {
                 match self.process_incoming_content(group, &post.sender, &post.content) {
                     Ok(delivered) => events.extend(delivered),
-                    Err(e) => tracing::warn!(group_id = %group, error = %e, "Held post failed on release"),
+                    Err(e) => {
+                        tracing::warn!(group_id = %group, error = %e, "Held post failed on release")
+                    }
                 }
             } else {
                 self.held_posts.hold(*group, post, now);

@@ -5,7 +5,6 @@
 //! - Message decryption with shared secrets
 //! - Event emission for UI updates
 
-
 use std::sync::Arc;
 use tempfile::TempDir;
 
@@ -190,7 +189,8 @@ fn test_dm_conversation_ready_states() {
 
     // Add one peer device's half (its mailbox + ephemeral)
     let peer_ephemeral = ConversationKey::new().our_ephemeral_public;
-    conv.peer_mailboxes.push(PeerMailbox::new([0u8; 32], 1, peer_ephemeral, None));
+    conv.peer_mailboxes
+        .push(PeerMailbox::new([0u8; 32], 1, peer_ephemeral, None));
     assert!(!conv.is_ready_to_send()); // Still need our half
 
     // Our half: the secret with each device is derived from it
@@ -211,7 +211,12 @@ fn setup_test_db() -> (TempDir, Arc<Database>) {
 }
 
 /// Create a test mailbox with all required parent records.
-fn create_test_mailbox(db: &Database, _peer_id: &UserId, mailbox_id: &str, token_id: &str) -> DmMailbox {
+fn create_test_mailbox(
+    db: &Database,
+    _peer_id: &UserId,
+    mailbox_id: &str,
+    token_id: &str,
+) -> DmMailbox {
     let conn = db.connection().unwrap();
 
     // Create server key first (parent of mailbox_tokens)
@@ -277,12 +282,18 @@ fn test_dm_conversation_manager_save_load() {
     manager.save_our_mailbox(&peer_id, &mailbox).unwrap();
 
     // Save our half first: a new ephemeral of ours drops every device half
-    manager.save_conversation_key(&peer_id, &ConversationKey::new()).unwrap();
+    manager
+        .save_conversation_key(&peer_id, &ConversationKey::new())
+        .unwrap();
 
     // Save one peer device's half
     let peer_ephemeral = ConversationKey::new().our_ephemeral_public;
-    let peer_mailbox =
-        PeerMailbox::new([9u8; 32], 1, peer_ephemeral, Some(Utc::now() + Duration::days(7)));
+    let peer_mailbox = PeerMailbox::new(
+        [9u8; 32],
+        1,
+        peer_ephemeral,
+        Some(Utc::now() + Duration::days(7)),
+    );
     manager.save_peer_mailbox(&peer_id, &peer_mailbox).unwrap();
 
     // Load and verify
@@ -335,7 +346,9 @@ fn test_dm_conversation_manager_cleanup_expired() {
     let mut expired_mailbox = create_test_mailbox(&db, &peer_id, "expired", "t1");
     expired_mailbox.created_at = Utc::now() - Duration::days(14);
     expired_mailbox.expires_at = Utc::now() - Duration::days(7); // Expired!
-    manager.save_our_mailbox(&peer_id, &expired_mailbox).unwrap();
+    manager
+        .save_our_mailbox(&peer_id, &expired_mailbox)
+        .unwrap();
 
     // Cleanup should remove it
     let cleaned = manager.cleanup_expired().unwrap();
@@ -408,10 +421,15 @@ fn test_two_way_anonymity_can_send_receive() {
     // Add mailboxes and key
     let mailbox = create_test_mailbox(&db, &peer_id, "mb", "t");
     manager.save_our_mailbox(&peer_id, &mailbox).unwrap();
-    manager.save_conversation_key(&peer_id, &ConversationKey::new()).unwrap();
+    manager
+        .save_conversation_key(&peer_id, &ConversationKey::new())
+        .unwrap();
     let peer_ephemeral = ConversationKey::new().our_ephemeral_public;
     manager
-        .save_peer_mailbox(&peer_id, &PeerMailbox::new([9u8; 32], 1, peer_ephemeral, None))
+        .save_peer_mailbox(
+            &peer_id,
+            &PeerMailbox::new([9u8; 32], 1, peer_ephemeral, None),
+        )
         .unwrap();
 
     // Now should be able to send and receive

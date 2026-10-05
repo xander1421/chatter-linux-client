@@ -1,12 +1,15 @@
+use crate::domain::UserId;
 use crate::domain::anon_dm::AnonDmId;
 use crate::domain::ids::{ChannelId, MessageId};
 use crate::domain::message::{ConversationType, Message, MessageContent};
-use crate::domain::UserId;
-use crate::proto::content_v1::{self, AnonDmMessage as ProtoAnonDmMessage, AnonDmPresence, AnonDmProfileUpdate, Content, anon_dm_presence};
+use crate::proto::content_v1::{
+    self, AnonDmMessage as ProtoAnonDmMessage, AnonDmPresence, AnonDmProfileUpdate, Content,
+    anon_dm_presence,
+};
 use crate::services::gateway::builders::{
-    build_typing_content, build_reaction_content, build_read_receipt_content,
-    build_delivery_receipt_content, build_delete_for_everyone_content, build_pin_content, build_edit_content,
-    build_data_message_content_with_quote,
+    build_data_message_content_with_quote, build_delete_for_everyone_content,
+    build_delivery_receipt_content, build_edit_content, build_pin_content, build_reaction_content,
+    build_read_receipt_content, build_typing_content,
 };
 use crate::util::time::TimestampNanos;
 
@@ -21,7 +24,8 @@ impl AnonDmService {
         conversation_id: &AnonDmId,
         text: &str,
     ) -> Result<(MessageId, u64), AnonDmError> {
-        self.send_with_attachments(conversation_id, text, vec![]).await
+        self.send_with_attachments(conversation_id, text, vec![])
+            .await
     }
 
     /// Send a message with optional attachments in an active conversation.
@@ -36,7 +40,8 @@ impl AnonDmService {
         text: &str,
         attachments: Vec<crate::proto::content_v1::AttachmentPointer>,
     ) -> Result<(MessageId, u64), AnonDmError> {
-        self.send_with_attachments_and_quote(conversation_id, text, attachments, None).await
+        self.send_with_attachments_and_quote(conversation_id, text, attachments, None)
+            .await
     }
 
     /// Send a reply message with optional attachments in an active conversation.
@@ -67,8 +72,7 @@ impl AnonDmService {
                     .collect();
                 let preview =
                     crate::services::gateway::shared::message_reply_preview(msg, &attachments);
-                let qa =
-                    crate::services::gateway::shared::build_quoted_attachments(&attachments);
+                let qa = crate::services::gateway::shared::build_quoted_attachments(&attachments);
                 (preview, qa)
             })
             .unwrap_or_default();
@@ -80,7 +84,8 @@ impl AnonDmService {
             quote_attachments,
         );
 
-        self.send_with_attachments_and_quote(conversation_id, text, attachments, Some(quote)).await
+        self.send_with_attachments_and_quote(conversation_id, text, attachments, Some(quote))
+            .await
     }
 
     /// Internal: Send a message with optional attachments and optional quote.
@@ -110,7 +115,8 @@ impl AnonDmService {
 
         // Create DataMessage content with attachments and optional quote
         let sent_at = TimestampNanos::now().as_u64();
-        let inner_content = build_data_message_content_with_quote(text, attachments, quote.clone(), sent_at);
+        let inner_content =
+            build_data_message_content_with_quote(text, attachments, quote.clone(), sent_at);
 
         // Store message locally
         let channel_id: ChannelId = (*conversation_id).into();
@@ -129,13 +135,16 @@ impl AnonDmService {
         };
 
         // Extract reply context from quote so reply bubbles survive reload
-        let reply_to = quote.as_ref()
-            .map(|q| MessageId::from_timestamp(q.id));
-        let reply_to_author_id = quote.as_ref()
-            .and_then(|q| {
-                if q.author_aci.is_empty() { None } else { q.author_aci.parse().ok() }
-            });
-        let reply_to_text = quote.as_ref()
+        let reply_to = quote.as_ref().map(|q| MessageId::from_timestamp(q.id));
+        let reply_to_author_id = quote.as_ref().and_then(|q| {
+            if q.author_aci.is_empty() {
+                None
+            } else {
+                q.author_aci.parse().ok()
+            }
+        });
+        let reply_to_text = quote
+            .as_ref()
             .map(|q| q.text.clone())
             .filter(|t| !t.is_empty());
         let (reply_to_thumbnail, reply_to_thumbnail_mime) = quote
@@ -175,10 +184,11 @@ impl AnonDmService {
             current_user_reactions: Vec::new(),
             mentioned_integrations: Vec::new(),
             targets_ai_bot: false,
-            delivery_status: String::new(),
+            delivery_status: "sending".into(),
             failure_reason: None,
         };
         self.message_repo.insert_outgoing(&message)?;
+        crate::services::gateway::submission::bind_original_row(message_id.to_string())?;
         tracing::info!(
             conversation_id = %conversation_id,
             message_id = %message_id,
@@ -209,7 +219,10 @@ impl AnonDmService {
         // Mark as "sent" for delivery status indicator
         let channel_id_for_status: ChannelId = (*conversation_id).into();
         let _ = self.message_repo.update_delivery_status_by_timestamps(
-            &channel_id_for_status, &ConversationType::AnonDm, &[sent_at], "sent",
+            &channel_id_for_status,
+            &ConversationType::AnonDm,
+            &[sent_at],
+            "sent",
         );
 
         Ok((message_id, sent_at))
@@ -227,7 +240,10 @@ impl AnonDmService {
     ) -> Result<(), AnonDmError> {
         use crate::domain::user::PresenceStatus;
         // Silently ignore if blocked
-        if self.check_conversation_not_blocked(conversation_id).is_err() {
+        if self
+            .check_conversation_not_blocked(conversation_id)
+            .is_err()
+        {
             return Ok(());
         }
 
@@ -268,8 +284,11 @@ impl AnonDmService {
 
         let peer_id = dm.peer_id;
         let peer_mailbox_pk = dm.peer_mailbox_pk.unwrap();
-        
-        match self.send_to_anon_mailbox(&peer_id, &peer_mailbox_pk, content).await {
+
+        match self
+            .send_to_anon_mailbox(&peer_id, &peer_mailbox_pk, content)
+            .await
+        {
             Ok(()) => {
                 tracing::info!(
                     conversation_id = %conversation_id,
@@ -300,7 +319,10 @@ impl AnonDmService {
         bio: Option<String>,
     ) -> Result<(), AnonDmError> {
         // Silently ignore if blocked
-        if self.check_conversation_not_blocked(conversation_id).is_err() {
+        if self
+            .check_conversation_not_blocked(conversation_id)
+            .is_err()
+        {
             return Ok(());
         }
 
@@ -350,13 +372,17 @@ impl AnonDmService {
             ephemeral_reply_to: None,
             timestamp: profile_update.timestamp,
             padding: Self::generate_padding(512), // Larger padding for profile updates
-            content: Some(content_v1::content::Content::AnonDmProfileUpdate(profile_update)),
+            content: Some(content_v1::content::Content::AnonDmProfileUpdate(
+                profile_update,
+            )),
         };
 
         let peer_id = dm.peer_id;
-        
+
         // Send via mailbox
-        let message = self.send_to_anon_mailbox(&peer_id, &peer_mailbox_pk, content).await;
+        let message = self
+            .send_to_anon_mailbox(&peer_id, &peer_mailbox_pk, content)
+            .await;
 
         match message {
             Ok(()) => {
@@ -376,7 +402,7 @@ impl AnonDmService {
             }
         }
     }
-    
+
     /// Send a typing indicator to the peer.
     ///
     /// Typing indicators are ephemeral - they're silently dropped if:
@@ -388,7 +414,10 @@ impl AnonDmService {
         started: bool,
     ) -> Result<(), AnonDmError> {
         // Silently ignore if blocked
-        if self.check_conversation_not_blocked(conversation_id).is_err() {
+        if self
+            .check_conversation_not_blocked(conversation_id)
+            .is_err()
+        {
             return Ok(());
         }
 
@@ -406,7 +435,8 @@ impl AnonDmService {
 
         let peer_mailbox_pk = dm.peer_mailbox_pk.unwrap();
         let content = build_typing_content(started);
-        self.send_ephemeral_message(&dm.peer_id, &peer_mailbox_pk, conversation_id, content).await
+        self.send_ephemeral_message(&dm.peer_id, &peer_mailbox_pk, conversation_id, content)
+            .await
     }
 
     /// Send a reaction to a message.
@@ -421,7 +451,10 @@ impl AnonDmService {
         remove: bool,
     ) -> Result<(), AnonDmError> {
         // Silently ignore if blocked
-        if self.check_conversation_not_blocked(conversation_id).is_err() {
+        if self
+            .check_conversation_not_blocked(conversation_id)
+            .is_err()
+        {
             return Ok(());
         }
 
@@ -438,8 +471,10 @@ impl AnonDmService {
         };
 
         let peer_mailbox_pk = dm.peer_mailbox_pk.unwrap();
-        let content = build_reaction_content(emoji, remove, target_author_aci, target_sent_timestamp);
-        self.send_ephemeral_message(&dm.peer_id, &peer_mailbox_pk, conversation_id, content).await
+        let content =
+            build_reaction_content(emoji, remove, target_author_aci, target_sent_timestamp);
+        self.send_ephemeral_message(&dm.peer_id, &peer_mailbox_pk, conversation_id, content)
+            .await
     }
 
     /// Send an ephemeral message (typing, reaction, receipt) - no rate limiting, no queueing.
@@ -480,7 +515,10 @@ impl AnonDmService {
             padding: Self::generate_padding(256),
         };
 
-        match self.send_to_anon_mailbox(peer_id, peer_mailbox_pk, content).await {
+        match self
+            .send_to_anon_mailbox(peer_id, peer_mailbox_pk, content)
+            .await
+        {
             Ok(()) => {
                 tracing::info!(
                     conversation_id = %conversation_id,
@@ -524,7 +562,10 @@ impl AnonDmService {
         }
 
         // Silently ignore if blocked
-        if self.check_conversation_not_blocked(conversation_id).is_err() {
+        if self
+            .check_conversation_not_blocked(conversation_id)
+            .is_err()
+        {
             tracing::debug!(
                 conversation_id = %conversation_id,
                 "[ANON_DM_SEND_RECEIPT] Conversation blocked - skipping"
@@ -554,7 +595,8 @@ impl AnonDmService {
             "[ANON_DM_SEND_RECEIPT] Sending read receipt to peer"
         );
 
-        self.send_ephemeral_message(&dm.peer_id, &peer_mailbox_pk, conversation_id, content).await
+        self.send_ephemeral_message(&dm.peer_id, &peer_mailbox_pk, conversation_id, content)
+            .await
     }
 
     /// Send a delivery receipt to the peer.
@@ -563,9 +605,14 @@ impl AnonDmService {
         conversation_id: &AnonDmId,
         message_timestamps: Vec<u64>,
     ) -> Result<(), AnonDmError> {
-        if message_timestamps.is_empty() { return Ok(()); }
+        if message_timestamps.is_empty() {
+            return Ok(());
+        }
 
-        if self.check_conversation_not_blocked(conversation_id).is_err() {
+        if self
+            .check_conversation_not_blocked(conversation_id)
+            .is_err()
+        {
             return Ok(());
         }
 
@@ -577,7 +624,8 @@ impl AnonDmService {
         let peer_mailbox_pk = dm.peer_mailbox_pk.unwrap();
         let content = build_delivery_receipt_content(message_timestamps);
 
-        self.send_ephemeral_message(&dm.peer_id, &peer_mailbox_pk, conversation_id, content).await
+        self.send_ephemeral_message(&dm.peer_id, &peer_mailbox_pk, conversation_id, content)
+            .await
     }
 
     /// Send a delete-for-everyone message.
@@ -620,7 +668,12 @@ impl AnonDmService {
 
         // Update message locally
         let channel_id: ChannelId = (*conversation_id).into();
-        self.message_repo.update_text_by_timestamp(&channel_id, &ConversationType::AnonDm, target_sent_timestamp, new_text)?;
+        self.message_repo.update_text_by_timestamp(
+            &channel_id,
+            &ConversationType::AnonDm,
+            target_sent_timestamp,
+            new_text,
+        )?;
 
         Ok(())
     }

@@ -41,13 +41,13 @@
 //! All tests use only libsignal's public API and do not touch production code.
 
 use libsignal_protocol::{
-    kem, message_decrypt, message_encrypt, process_prekey_bundle, CiphertextMessage,
-    DeviceId, GenericSignedPreKey, IdentityKeyPair, InMemSignalProtocolStore,
+    CiphertextMessage, DeviceId, GenericSignedPreKey, IdentityKeyPair, InMemSignalProtocolStore,
     KeyPair, KyberPreKeyRecord, PreKeyBundle, PreKeyId, PreKeyRecord, PreKeySignalMessage,
     PreKeyStore, ProtocolAddress, SenderCertificate, SenderKeyDistributionMessage,
-    ServerCertificate, SignedPreKeyId, SignedPreKeyRecord, Timestamp,
+    ServerCertificate, SignedPreKeyId, SignedPreKeyRecord, Timestamp, kem, message_decrypt,
+    message_encrypt, process_prekey_bundle,
 };
-use rand::{rngs::StdRng, SeedableRng};
+use rand::{SeedableRng, rngs::StdRng};
 use std::time::SystemTime;
 use uuid::Uuid;
 
@@ -56,9 +56,7 @@ use uuid::Uuid;
 /// Mirrors libsignal's own `tests/support/mod.rs::create_pre_key_bundle`, but
 /// driven by a caller-supplied seeded RNG so the keys are deterministic across
 /// runs (modulo the libsignal/KEM internals noted in the module docs).
-async fn build_seeded_bob_bundle(
-    rng: &mut StdRng,
-) -> (InMemSignalProtocolStore, PreKeyBundle) {
+async fn build_seeded_bob_bundle(rng: &mut StdRng) -> (InMemSignalProtocolStore, PreKeyBundle) {
     let bob_identity = IdentityKeyPair::generate(rng);
     let bob_registration_id: u32 = 0x1234;
     let mut bob_store =
@@ -157,8 +155,7 @@ async fn pqxdh_session_roundtrip_seeded() {
     let bob_address = ProtocolAddress::new("bob-uuid".to_string(), DeviceId::new(1).unwrap());
     // Hoisted: libsignal >= 0.99 needs the local address on the encrypt and
     // process-bundle calls above, not just on the decrypt below.
-    let alice_address =
-        ProtocolAddress::new("alice-uuid".to_string(), DeviceId::new(1).unwrap());
+    let alice_address = ProtocolAddress::new("alice-uuid".to_string(), DeviceId::new(1).unwrap());
 
     process_prekey_bundle(
         &bob_address,
@@ -178,7 +175,7 @@ async fn pqxdh_session_roundtrip_seeded() {
     let alice_ctext = message_encrypt(
         PLAINTEXT,
         &bob_address,
-        &alice_address,        // local side: Alice is encrypting
+        &alice_address, // local side: Alice is encrypting
         &mut alice_store.session_store,
         &mut alice_store.identity_store,
         SystemTime::now(),
@@ -202,7 +199,7 @@ async fn pqxdh_session_roundtrip_seeded() {
     let recovered = message_decrypt(
         &CiphertextMessage::PreKeySignalMessage(prekey_msg),
         &alice_address,
-        &bob_address,          // local side: Bob is decrypting
+        &bob_address, // local side: Bob is decrypting
         &mut bob_store.session_store,
         &mut bob_store.identity_store,
         &mut bob_store.pre_key_store,
@@ -263,7 +260,10 @@ fn sender_certificate_roundtrip_validates() {
         device_id
     );
     assert_eq!(
-        parsed.expiration().expect("expiration getter").epoch_millis(),
+        parsed
+            .expiration()
+            .expect("expiration getter")
+            .epoch_millis(),
         expires.epoch_millis()
     );
 
@@ -305,8 +305,7 @@ fn skdm_parse_pins_distribution_id() {
     let signing_keys = KeyPair::generate(&mut rng);
 
     // Fixed UUID chosen for deterministic output. Any v4 UUID works.
-    let distribution_id =
-        Uuid::parse_str("00112233-4455-6677-8899-aabbccddeeff").unwrap();
+    let distribution_id = Uuid::parse_str("00112233-4455-6677-8899-aabbccddeeff").unwrap();
     let chain_id: u32 = 7;
     let iteration: u32 = 0;
     // 32-byte chain key — the SKDM wire format requires at least 32 bytes here.

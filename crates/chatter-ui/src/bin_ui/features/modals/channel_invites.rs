@@ -10,9 +10,9 @@ use std::sync::Arc;
 
 use slint::{ComponentHandle, ModelRc, SharedString, VecModel, Weak};
 
+use crate::{FriendRequestData, MainWindow};
 use chatter_core::client::ChatterClient;
 use chatter_core::domain::ids::{ChannelId, UserId};
-use crate::{FriendRequestData, MainWindow};
 
 /// Send-safe intermediate type for channel invite display data.
 struct ChannelInviteSendData {

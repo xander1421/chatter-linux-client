@@ -9,9 +9,9 @@ use tokio::sync::watch;
 
 use crate::events::EventBus;
 use crate::network::grpc::client_pool::GrpcClientPool;
+use crate::services::message::channel_inbound::ChannelInbound;
 use crate::storage::repositories::channel_repo::ChannelRepository;
 use crate::storage::repositories::settings_repo::SettingsRepository;
-use crate::services::message::channel_inbound::ChannelInbound;
 use crate::storage::repositories::user_repo::UserRepository;
 use crate::sync::sync_engine::{SyncCycleResult, SyncEngine};
 

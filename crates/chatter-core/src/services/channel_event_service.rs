@@ -10,18 +10,20 @@ use chrono::Utc;
 use crate::domain::channel::Membership;
 use crate::domain::ids::{ChannelId, MessageId, UserId};
 use crate::domain::message::{Message, MessageContent, SystemMessage};
+use crate::error::NetworkError;
 use crate::error::StorageError;
-use crate::storage::repositories::channel_repo::ChannelRepository;
-use crate::storage::repositories::MessageRepository;
-use crate::storage::repositories::user_repo::UserRepository;
-use crate::network::grpc::client_pool::GrpcClientPool;
-use crate::services::current_user::CurrentUserProvider;
-use crate::proto::chat_v1::channel_event;
 use crate::events::EventBus;
 use crate::inbox::DomainEvent;
-use crate::error::NetworkError;
-use crate::services::channel::membership_log::{Applied, LogObserver, MembershipLog, MembershipNotice};
+use crate::network::grpc::client_pool::GrpcClientPool;
 use crate::network::streaming::heartbeat::{self, Next};
+use crate::proto::chat_v1::channel_event;
+use crate::services::channel::membership_log::{
+    Applied, LogObserver, MembershipLog, MembershipNotice,
+};
+use crate::services::current_user::CurrentUserProvider;
+use crate::storage::repositories::MessageRepository;
+use crate::storage::repositories::channel_repo::ChannelRepository;
+use crate::storage::repositories::user_repo::UserRepository;
 
 #[derive(Debug, thiserror::Error)]
 pub enum ChannelEventError {
@@ -36,7 +38,7 @@ pub enum ChannelEventError {
 }
 
 /// Service for handling channel events (member join/leave) and creating system messages.
-/// 
+///
 /// This service now owns the gRPC stream and handles all reconnection logic,
 /// converting proto events to domain events for the UI to consume.
 pub struct ChannelEventService {
@@ -64,7 +66,10 @@ fn unannounced_invites<T>(
     pending: Vec<(ChannelId, T)>,
 ) -> Vec<(ChannelId, T)> {
     announced.retain(|id| pending.iter().any(|(p, _)| p == id));
-    pending.into_iter().filter(|(id, _)| announced.insert(*id)).collect()
+    pending
+        .into_iter()
+        .filter(|(id, _)| announced.insert(*id))
+        .collect()
 }
 
 impl ChannelEventService {
@@ -89,7 +94,7 @@ impl ChannelEventService {
             membership_log,
         }
     }
-    
+
     /// Start the channel event stream.
     ///
     /// This spawns a background task that owns the gRPC stream,
@@ -103,8 +108,9 @@ impl ChannelEventService {
                 // to `break` here, leaving this client without channel events
                 // until restart. A stream that had been healthy reconnects at
                 // once; failures to (re)connect wait 5 s.
-                let healthy = connected_at
-                    .is_some_and(|t: std::time::Instant| t.elapsed() >= heartbeat::HEALTHY_STREAM_AFTER);
+                let healthy = connected_at.is_some_and(|t: std::time::Instant| {
+                    t.elapsed() >= heartbeat::HEALTHY_STREAM_AFTER
+                });
                 match outcome {
                     Ok(()) => tracing::info!("Channel event stream ended; reconnecting"),
                     Err(e) => tracing::warn!("Channel event stream error: {}; reconnecting", e),
@@ -118,19 +124,17 @@ impl ChannelEventService {
             }
         })
     }
-    
+
     /// Run the event stream with automatic retry on failure.
     async fn run_stream_with_retry(
         &self,
         connected_at: &mut Option<std::time::Instant>,
     ) -> Result<(), ChannelEventError> {
         let mut channel_client = self.grpc_pool.channel_client();
-        
+
         // Stream events for all channels
-        let mut stream = channel_client
-            .stream_channel_events(None)
-            .await?;
-        
+        let mut stream = channel_client.stream_channel_events(None).await?;
+
         *connected_at = Some(std::time::Instant::now());
         tracing::info!("Channel event stream started");
 
@@ -147,7 +151,8 @@ impl ChannelEventService {
             match heartbeat::next_or_silent(&mut stream, heartbeat::STREAM_SILENCE_LIMIT).await {
                 Next::Item(Ok(event)) => {
                     if let Some(event_data) = event.event {
-                        self.handle_stream_event(event_data, &event.channel_id).await;
+                        self.handle_stream_event(event_data, &event.channel_id)
+                            .await;
                     }
                 }
                 Next::Item(Err(e)) => {
@@ -156,16 +161,20 @@ impl ChannelEventService {
                 }
                 Next::Ended => return Ok(()),
                 Next::Silent => {
-                    return Err(ChannelEventError::Stream("missed its heartbeats".to_string()));
+                    return Err(ChannelEventError::Stream(
+                        "missed its heartbeats".to_string(),
+                    ));
                 }
             }
         }
     }
-    
+
     /// `GetChannelChanges` for every server channel we are in.
     fn catch_up_membership_logs(&self) {
         use crate::domain::channel::ChannelType;
-        let Ok(me) = self.settings_repo.current_user_id() else { return };
+        let Ok(me) = self.settings_repo.current_user_id() else {
+            return;
+        };
         let channels: Vec<ChannelId> = match self.channel_repo.list_for_user(&me) {
             Ok(list) => list
                 .into_iter()
@@ -202,23 +211,24 @@ impl ChannelEventService {
             .collect();
         let missed = unannounced_invites(&mut self.announced_invites.lock(), pending);
         for (channel_id, inv) in missed {
-            let Ok(inviter) = inv.inviter_id.parse::<uuid::Uuid>() else { continue };
-            let _ = self.event_bus.domain_sender().send(DomainEvent::ChannelInviteReceived {
-                channel_id,
-                inviter_id: UserId::from(inviter),
-                message: (!inv.message.is_empty()).then_some(inv.message),
-                expires_at: inv.expires_at,
-            });
+            let Ok(inviter) = inv.inviter_id.parse::<uuid::Uuid>() else {
+                continue;
+            };
+            let _ = self
+                .event_bus
+                .domain_sender()
+                .send(DomainEvent::ChannelInviteReceived {
+                    channel_id,
+                    inviter_id: UserId::from(inviter),
+                    message: (!inv.message.is_empty()).then_some(inv.message),
+                    expires_at: inv.expires_at,
+                });
             tracing::info!(%channel_id, "Pending channel invitation announced on reconnect");
         }
     }
 
     /// Handle a channel event from the stream.
-    async fn handle_stream_event(
-        &self,
-        event: channel_event::Event,
-        channel_id: &str,
-    ) {
+    async fn handle_stream_event(&self, event: channel_event::Event, channel_id: &str) {
         use channel_event::Event;
 
         // The server's keepalive (also its first item once subscribed). It
@@ -236,7 +246,7 @@ impl ChannelEventService {
                 return;
             }
         };
-        
+
         match event {
             // A signed membership change: verified against our own state
             // before anything is applied (MembershipLog -> `applied`).
@@ -293,11 +303,14 @@ impl ChannelEventService {
                 if let Err(e) = self.event_bus.domain_sender().send(event) {
                     tracing::warn!("Failed to publish ChannelUpdated event: {}", e);
                 }
-                tracing::info!("Channel updated: channel={}, name={}", channel_id, updated.name);
+                tracing::info!(
+                    "Channel updated: channel={}, name={}",
+                    channel_id,
+                    updated.name
+                );
             }
             // ── INFRA-29: the arms that used to fall into a silent
             // `_ => debug!("Unhandled channel event type")`.
-
             Event::ChannelCreated(proto_channel) => {
                 use crate::services::channel::converters::proto_to_domain_channel;
                 let created = match proto_to_domain_channel(&proto_channel) {
@@ -311,11 +324,18 @@ impl ChannelEventService {
                     tracing::warn!("Failed to upsert created channel locally: {}", e);
                     return;
                 }
-                let _ = self.event_bus.domain_sender().send(DomainEvent::ChannelCreated {
+                let _ = self
+                    .event_bus
+                    .domain_sender()
+                    .send(DomainEvent::ChannelCreated {
+                        channel_id,
+                        name: created.name.clone(),
+                    });
+                tracing::info!(
+                    "Channel created: channel={}, name={}",
                     channel_id,
-                    name: created.name.clone(),
-                });
-                tracing::info!("Channel created: channel={}, name={}", channel_id, created.name);
+                    created.name
+                );
             }
 
             Event::ChannelDeleted(deleted_id) => {
@@ -340,8 +360,12 @@ impl ChannelEventService {
                 };
                 let user_id = UserId::from(user_uuid);
                 // Empty for a mute the server's expiry sweep lifted.
-                let moderator_id =
-                    UserId::from(action.moderator_id.parse::<uuid::Uuid>().unwrap_or(uuid::Uuid::nil()));
+                let moderator_id = UserId::from(
+                    action
+                        .moderator_id
+                        .parse::<uuid::Uuid>()
+                        .unwrap_or(uuid::Uuid::nil()),
+                );
                 let action_name = proto_moderation_action_name(action.action);
                 let is_self = self
                     .settings_repo
@@ -350,21 +374,32 @@ impl ChannelEventService {
                     .unwrap_or(false);
 
                 if matches!(action_name, "MUTE" | "UNMUTE") {
-                    self.mirror_mute(&channel_id, &user_id, action_name == "MUTE", action.duration.as_ref());
+                    self.mirror_mute(
+                        &channel_id,
+                        &user_id,
+                        action_name == "MUTE",
+                        action.duration.as_ref(),
+                    );
                 }
 
                 let reason = (!action.reason.is_empty()).then(|| action.reason.clone());
-                let _ = self.event_bus.domain_sender().send(DomainEvent::ChannelModerationAction {
-                    channel_id,
-                    user_id,
-                    moderator_id,
-                    action: action_name.to_string(),
-                    reason,
-                    is_self,
-                });
+                let _ = self
+                    .event_bus
+                    .domain_sender()
+                    .send(DomainEvent::ChannelModerationAction {
+                        channel_id,
+                        user_id,
+                        moderator_id,
+                        action: action_name.to_string(),
+                        reason,
+                        is_self,
+                    });
                 tracing::info!(
                     "Channel moderation: channel={}, user={}, action={}, self={}",
-                    channel_id, user_id, action_name, is_self
+                    channel_id,
+                    user_id,
+                    action_name,
+                    is_self
                 );
             }
 
@@ -375,12 +410,15 @@ impl ChannelEventService {
                 };
                 let message = (!invite.message.is_empty()).then(|| invite.message.clone());
                 self.announced_invites.lock().insert(channel_id);
-                let _ = self.event_bus.domain_sender().send(DomainEvent::ChannelInviteReceived {
-                    channel_id,
-                    inviter_id: UserId::from(inviter_uuid),
-                    message,
-                    expires_at: invite.expires_at,
-                });
+                let _ = self
+                    .event_bus
+                    .domain_sender()
+                    .send(DomainEvent::ChannelInviteReceived {
+                        channel_id,
+                        inviter_id: UserId::from(inviter_uuid),
+                        message,
+                        expires_at: invite.expires_at,
+                    });
                 tracing::info!("Channel invitation received: channel={}", channel_id);
             }
 
@@ -389,14 +427,18 @@ impl ChannelEventService {
                     tracing::error!("Invitation response with unparseable inviter id");
                     return;
                 };
-                let _ = self.event_bus.domain_sender().send(DomainEvent::ChannelInviteResponded {
-                    channel_id,
-                    inviter_id: UserId::from(inviter_uuid),
-                    accepted: response.accepted,
-                });
+                let _ = self
+                    .event_bus
+                    .domain_sender()
+                    .send(DomainEvent::ChannelInviteResponded {
+                        channel_id,
+                        inviter_id: UserId::from(inviter_uuid),
+                        accepted: response.accepted,
+                    });
                 tracing::info!(
                     "Channel invitation answered: channel={}, accepted={}",
-                    channel_id, response.accepted
+                    channel_id,
+                    response.accepted
                 );
             }
 
@@ -405,7 +447,8 @@ impl ChannelEventService {
                 // is the "accepted, working on it" tick. Nothing to persist.
                 tracing::debug!(
                     "Channel operation started: channel={}, operation={}",
-                    channel_id, started.operation_id
+                    channel_id,
+                    started.operation_id
                 );
             }
 
@@ -419,17 +462,23 @@ impl ChannelEventService {
                 let code = proto_channel_error_code_name(error.code).to_string();
                 tracing::warn!(
                     "Channel operation FAILED (saga compensated): channel={}, operation={}, code={}, message={}",
-                    channel_id, failed.operation_id, code, error.message
+                    channel_id,
+                    failed.operation_id,
+                    code,
+                    error.message
                 );
 
                 self.rollback_channel(&channel_id).await;
 
-                let _ = self.event_bus.domain_sender().send(DomainEvent::ChannelOperationFailed {
-                    channel_id,
-                    operation_id: failed.operation_id.clone(),
-                    code,
-                    message: error.message.clone(),
-                });
+                let _ = self
+                    .event_bus
+                    .domain_sender()
+                    .send(DomainEvent::ChannelOperationFailed {
+                        channel_id,
+                        operation_id: failed.operation_id.clone(),
+                        code,
+                        message: error.message.clone(),
+                    });
             }
 
             // Returned above, before the channel_id parse.
@@ -439,8 +488,16 @@ impl ChannelEventService {
 
     /// Mirror a server mute onto the local roster row (display only; the
     /// server enforces it). `duration` unset = until lifted.
-    fn mirror_mute(&self, channel_id: &ChannelId, user_id: &UserId, muted: bool, duration: Option<&prost_types::Duration>) {
-        let Ok(Some(mut membership)) = self.channel_repo.get_membership(channel_id, user_id) else { return };
+    fn mirror_mute(
+        &self,
+        channel_id: &ChannelId,
+        user_id: &UserId,
+        muted: bool,
+        duration: Option<&prost_types::Duration>,
+    ) {
+        let Ok(Some(mut membership)) = self.channel_repo.get_membership(channel_id, user_id) else {
+            return;
+        };
         membership.is_muted = muted;
         membership.muted_until = duration
             .filter(|_| muted)
@@ -450,11 +507,14 @@ impl ChannelEventService {
             tracing::warn!(%channel_id, %user_id, error = %e, "Failed to mirror mute locally");
             return;
         }
-        let _ = self.event_bus.domain_sender().send(DomainEvent::ChannelMemberUpdated {
-            channel_id: *channel_id,
-            user_id: *user_id,
-            role: membership.role,
-        });
+        let _ = self
+            .event_bus
+            .domain_sender()
+            .send(DomainEvent::ChannelMemberUpdated {
+                channel_id: *channel_id,
+                user_id: *user_id,
+                role: membership.role,
+            });
     }
 
     /// Persist a channel's archived flag and announce it.
@@ -485,10 +545,14 @@ impl ChannelEventService {
         let _ = self
             .event_bus
             .domain_sender()
-            .send(DomainEvent::ChannelArchivedChanged { channel_id: target, archived });
+            .send(DomainEvent::ChannelArchivedChanged {
+                channel_id: target,
+                archived,
+            });
         tracing::info!(
             "Channel archive state changed: channel={}, archived={}",
-            target, archived
+            target,
+            archived
         );
     }
 
@@ -552,12 +616,18 @@ impl ChannelEventService {
     /// [`Self::handle_member_joined`], then tell the UI.
     fn publish_member_joined(&self, membership: &Membership, event_ts: u64) {
         let (channel_id, user_id) = (membership.channel_id, membership.user_id);
-        let Ok(Some((message, display_name))) = self.handle_member_joined(&channel_id, &user_id, membership, event_ts)
+        let Ok(Some((message, display_name))) =
+            self.handle_member_joined(&channel_id, &user_id, membership, event_ts)
         else {
             return;
         };
         tracing::info!(%channel_id, %user_id, %display_name, "Channel member joined");
-        let event = DomainEvent::ChannelMemberJoined { channel_id, user_id, display_name, message };
+        let event = DomainEvent::ChannelMemberJoined {
+            channel_id,
+            user_id,
+            display_name,
+            message,
+        };
         if let Err(e) = self.event_bus.domain_sender().send(event) {
             tracing::warn!("Failed to publish ChannelMemberJoined event: {}", e);
         }
@@ -576,7 +646,11 @@ impl ChannelEventService {
     fn classify_unsigned(&self, channel_id: &ChannelId, user_id: &UserId, added: bool) {
         use crate::services::channel::verified_state::UnsignedEvent;
         let user_id = user_id.to_string();
-        let event = if added { UnsignedEvent::Added { user_id } } else { UnsignedEvent::Removed { user_id } };
+        let event = if added {
+            UnsignedEvent::Added { user_id }
+        } else {
+            UnsignedEvent::Removed { user_id }
+        };
         if let Err(e) = self.membership_log.apply_unsigned(channel_id, event) {
             tracing::warn!(%channel_id, error = %e, "Could not apply an unsigned roster change");
         }
@@ -616,15 +690,22 @@ impl ChannelEventService {
             tracing::warn!(%channel_id, error = %e, "Membership log catch-up failed; roster changes shown without reasons");
         }
         let me = self.settings_repo.current_user_id().ok();
-        let own_joined = memberships.iter().find(|m| Some(m.user_id) == me).map(|m| m.joined_at);
-        let refresh = self.channel_repo.replace_memberships(channel_id, memberships)?;
+        let own_joined = memberships
+            .iter()
+            .find(|m| Some(m.user_id) == me)
+            .map(|m| m.joined_at);
+        let refresh = self
+            .channel_repo
+            .replace_memberships(channel_id, memberships)?;
         for member in &refresh.removed {
             if Some(member.user_id) != me {
                 self.record_synced_departure(member);
             }
         }
         for membership in &refresh.added {
-            if Some(membership.user_id) != me && join_is_news(membership.joined_at, last_sync, own_joined) {
+            if Some(membership.user_id) != me
+                && join_is_news(membership.joined_at, last_sync, own_joined)
+            {
                 self.record_synced_join(membership);
             }
         }
@@ -651,7 +732,11 @@ impl ChannelEventService {
                 let removal = match &departure.change {
                     Some(change) => {
                         self.membership_log
-                            .verify_own_removal(&own.channel_id, change, departure.prev_state.as_ref())
+                            .verify_own_removal(
+                                &own.channel_id,
+                                change,
+                                departure.prev_state.as_ref(),
+                            )
                             .await?
                     }
                     None => None,
@@ -673,7 +758,10 @@ impl ChannelEventService {
         removal: Option<crate::services::channel::membership_log::OwnRemoval>,
     ) {
         use crate::proto::chat_v1::remove_member::Reason;
-        let author = removal.as_ref().and_then(|r| r.author.parse::<uuid::Uuid>().ok()).map(UserId::from);
+        let author = removal
+            .as_ref()
+            .and_then(|r| r.author.parse::<uuid::Uuid>().ok())
+            .map(UserId::from);
         let (reason, ts) = match (removal, author) {
             (Some(r), Some(by)) => (
                 match r.reason {
@@ -693,8 +781,10 @@ impl ChannelEventService {
     /// the channel", as Signal keeps an ended group. One notice per channel
     /// however many times it is heard. A channel never stored here is ignored.
     pub fn record_channel_deleted(&self, channel_id: &ChannelId) {
-        let (Ok(Some(channel)), Ok(me)) = (self.channel_repo.get(channel_id), self.settings_repo.current_user_id())
-        else {
+        let (Ok(Some(channel)), Ok(me)) = (
+            self.channel_repo.get(channel_id),
+            self.settings_repo.current_user_id(),
+        ) else {
             return;
         };
         if let Err(e) = self.apply_channel_deleted(&channel, &me) {
@@ -702,7 +792,11 @@ impl ChannelEventService {
         }
     }
 
-    fn apply_channel_deleted(&self, channel: &crate::domain::channel::Channel, me: &UserId) -> Result<(), ChannelEventError> {
+    fn apply_channel_deleted(
+        &self,
+        channel: &crate::domain::channel::Channel,
+        me: &UserId,
+    ) -> Result<(), ChannelEventError> {
         match self.channel_repo.delete_membership(&channel.id, me) {
             Ok(()) | Err(StorageError::NotFound(_)) => {}
             Err(e) => return Err(e.into()),
@@ -712,7 +806,12 @@ impl ChannelEventService {
             &uuid::Uuid::nil(),
             format!("channel_deleted_notice:{}", channel.id).as_bytes(),
         ));
-        let message = self.create_system_message(id, &channel.id, SystemMessage::ChannelDeleted, Some(channel.owner_id));
+        let message = self.create_system_message(
+            id,
+            &channel.id,
+            SystemMessage::ChannelDeleted,
+            Some(channel.owner_id),
+        );
         if !self.message_repo.insert_or_ignore(&message)? {
             return Ok(());
         }
@@ -732,21 +831,39 @@ impl ChannelEventService {
     /// The owner handed the channel to `to` (a verified
     /// `TransferOwnershipAction`): record the new owner and roles and file
     /// "{from} made {to} the owner" once per change.
-    fn record_ownership_transferred(&self, channel_id: &ChannelId, from: &UserId, to: &UserId, event_ts: u64) {
-        if let Err(e) = crate::services::channel::apply_ownership_transfer(&self.channel_repo, channel_id, from, to) {
+    fn record_ownership_transferred(
+        &self,
+        channel_id: &ChannelId,
+        from: &UserId,
+        to: &UserId,
+        event_ts: u64,
+    ) {
+        if let Err(e) = crate::services::channel::apply_ownership_transfer(
+            &self.channel_repo,
+            channel_id,
+            from,
+            to,
+        ) {
             tracing::warn!(%channel_id, error = %e, "Failed to record ownership transfer");
             return;
         }
         let content = if self.settings_repo.current_user_id().ok() == Some(*to) {
             SystemMessage::MadeYouOwner
         } else {
-            SystemMessage::OwnershipTransferred { to: *to, to_name: self.known_name(to) }
+            SystemMessage::OwnershipTransferred {
+                to: *to,
+                to_name: self.known_name(to),
+            }
         };
         let id = member_notice_id(channel_id, to, "owner", event_ts);
         let message = self.create_system_message(id, channel_id, content, Some(*from));
         match self.message_repo.insert_or_ignore(&message) {
             Ok(true) => {
-                if let Err(e) = self.event_bus.domain_sender().send(DomainEvent::MessageReceived { message }) {
+                if let Err(e) = self
+                    .event_bus
+                    .domain_sender()
+                    .send(DomainEvent::MessageReceived { message })
+                {
                     tracing::warn!("Failed to publish ownership notice: {}", e);
                 }
             }
@@ -779,11 +896,19 @@ impl ChannelEventService {
             MemberRemoval::Unexplained if is_self => (SystemMessage::NoLongerMember, *user_id),
             MemberRemoval::Unexplained => (SystemMessage::UserGone(*user_id), *user_id),
             MemberRemoval::Kicked(by) => (
-                SystemMessage::UserRemoved { by, removed: *user_id, removed_name: self.known_name(user_id) },
+                SystemMessage::UserRemoved {
+                    by,
+                    removed: *user_id,
+                    removed_name: self.known_name(user_id),
+                },
                 by,
             ),
             MemberRemoval::Banned(by) => (
-                SystemMessage::UserBanned { by, banned: *user_id, banned_name: self.known_name(user_id) },
+                SystemMessage::UserBanned {
+                    by,
+                    banned: *user_id,
+                    banned_name: self.known_name(user_id),
+                },
                 by,
             ),
         };
@@ -805,7 +930,10 @@ impl ChannelEventService {
         // Our own leave reaches us twice with unrelated timestamps: the leave
         // RPC (`record_own_leave`) and the server's broadcast on the channel
         // stream we are still subscribed to. Neither can key off the other.
-        if is_self && reason == MemberRemoval::Left && self.recently_recorded_own_leave(channel_id, user_id) {
+        if is_self
+            && reason == MemberRemoval::Left
+            && self.recently_recorded_own_leave(channel_id, user_id)
+        {
             return Ok(None);
         }
 
@@ -818,13 +946,25 @@ impl ChannelEventService {
 
     /// [`Self::handle_member_removed`], then tell the UI, which appends the
     /// notice to the open chat.
-    fn publish_member_removed(&self, channel_id: &ChannelId, user_id: &UserId, reason: MemberRemoval, event_ts: u64) {
-        let Ok(Some((message, display_name))) = self.handle_member_removed(channel_id, user_id, reason, event_ts)
+    fn publish_member_removed(
+        &self,
+        channel_id: &ChannelId,
+        user_id: &UserId,
+        reason: MemberRemoval,
+        event_ts: u64,
+    ) {
+        let Ok(Some((message, display_name))) =
+            self.handle_member_removed(channel_id, user_id, reason, event_ts)
         else {
             return;
         };
         tracing::info!(%channel_id, %user_id, %display_name, "Channel member left");
-        let event = DomainEvent::ChannelMemberLeft { channel_id: *channel_id, user_id: *user_id, display_name, message };
+        let event = DomainEvent::ChannelMemberLeft {
+            channel_id: *channel_id,
+            user_id: *user_id,
+            display_name,
+            message,
+        };
         if let Err(e) = self.event_bus.domain_sender().send(event) {
             tracing::warn!("Failed to publish ChannelMemberLeft event: {}", e);
         }
@@ -836,7 +976,9 @@ impl ChannelEventService {
     pub fn record_own_leave(&self, channel_id: &ChannelId) {
         match self.settings_repo.current_user_id() {
             Ok(me) => self.publish_member_removed(channel_id, &me, MemberRemoval::Left, 0),
-            Err(e) => tracing::warn!(%channel_id, error = %e, "No current user; leave notice not filed"),
+            Err(e) => {
+                tracing::warn!(%channel_id, error = %e, "No current user; leave notice not filed")
+            }
         }
     }
 
@@ -845,11 +987,18 @@ impl ChannelEventService {
     // time window, because the RPC and the broadcast carry no shared
     // id; a server-issued departure id on both would make this exact.
     fn recently_recorded_own_leave(&self, channel_id: &ChannelId, me: &UserId) -> bool {
-        let conv_type = crate::services::message::conversion::conversation_type_for_channel(&self.channel_repo, channel_id);
-        let Ok(recent) = self.message_repo.list(channel_id, &conv_type, None, 20) else { return false };
+        let conv_type = crate::services::message::conversion::conversation_type_for_channel(
+            &self.channel_repo,
+            channel_id,
+        );
+        let Ok(recent) = self.message_repo.list(channel_id, &conv_type, None, 20) else {
+            return false;
+        };
         let newest_own = recent.iter().find_map(|m| match &m.content {
             MessageContent::System(SystemMessage::UserJoined(u)) if u == me => Some(None),
-            MessageContent::System(SystemMessage::UserLeft(u)) if u == me => Some(Some(m.created_at)),
+            MessageContent::System(SystemMessage::UserLeft(u)) if u == me => {
+                Some(Some(m.created_at))
+            }
             _ => None,
         });
         matches!(newest_own, Some(Some(at)) if Utc::now() - at < chrono::Duration::minutes(2))
@@ -952,12 +1101,20 @@ impl LogObserver for ChannelEventService {
         use crate::services::channel::verified_state::MemberStatus;
 
         let parse = |u: &str| u.parse::<uuid::Uuid>().ok().map(UserId::from);
-        let Some(author) = parse(&a.author) else { return };
-        let ts = a.timestamp;
-        let active = |s: Option<&crate::services::channel::verified_state::MembershipState>, u: &str| {
-            s.and_then(|s| s.members.get(u)).filter(|m| m.status == MemberStatus::Active).map(|m| m.role)
+        let Some(author) = parse(&a.author) else {
+            return;
         };
-        let genesis = a.actions.iter().any(|x| matches!(x.action, Some(Action::Genesis(_))));
+        let ts = a.timestamp;
+        let active = |s: Option<&crate::services::channel::verified_state::MembershipState>,
+                      u: &str| {
+            s.and_then(|s| s.members.get(u))
+                .filter(|m| m.status == MemberStatus::Active)
+                .map(|m| m.role)
+        };
+        let genesis = a
+            .actions
+            .iter()
+            .any(|x| matches!(x.action, Some(Action::Genesis(_))));
         let notify = !a.backfill;
 
         // Departures, with the signed reason.
@@ -1005,22 +1162,29 @@ impl LogObserver for ChannelEventService {
                     };
                     if notify && !(genesis && user == author) {
                         self.publish_member_joined(&membership, ts);
-                    } else if let Err(e) = self.channel_repo.insert_or_ignore_membership(&membership) {
+                    } else if let Err(e) =
+                        self.channel_repo.insert_or_ignore_membership(&membership)
+                    {
                         tracing::warn!(channel_id = %a.channel_id, %user, error = %e, "Failed to store member");
                     }
                 }
                 Some(old) if old != m.role => {
-                    if let Ok(Some(mut row)) = self.channel_repo.get_membership(&a.channel_id, &user) {
+                    if let Ok(Some(mut row)) =
+                        self.channel_repo.get_membership(&a.channel_id, &user)
+                    {
                         row.role = role;
                         if let Err(e) = self.channel_repo.update_membership(&row) {
                             tracing::warn!(channel_id = %a.channel_id, %user, error = %e, "Failed to store role change");
                         }
                     }
-                    let _ = self.event_bus.domain_sender().send(DomainEvent::ChannelMemberUpdated {
-                        channel_id: a.channel_id,
-                        user_id: user,
-                        role,
-                    });
+                    let _ =
+                        self.event_bus
+                            .domain_sender()
+                            .send(DomainEvent::ChannelMemberUpdated {
+                                channel_id: a.channel_id,
+                                user_id: user,
+                                role,
+                            });
                 }
                 Some(_) => {}
             }
@@ -1031,9 +1195,12 @@ impl LogObserver for ChannelEventService {
                 if let Some(to) = parse(&t.new_owner_user_id) {
                     if notify {
                         self.record_ownership_transferred(&a.channel_id, &author, &to, ts);
-                    } else if let Err(e) =
-                        crate::services::channel::apply_ownership_transfer(&self.channel_repo, &a.channel_id, &author, &to)
-                    {
+                    } else if let Err(e) = crate::services::channel::apply_ownership_transfer(
+                        &self.channel_repo,
+                        &a.channel_id,
+                        &author,
+                        &to,
+                    ) {
                         tracing::warn!(channel_id = %a.channel_id, error = %e, "Failed to record ownership transfer");
                     }
                 }
@@ -1045,7 +1212,10 @@ impl LogObserver for ChannelEventService {
         let _ = self
             .event_bus
             .domain_sender()
-            .send(DomainEvent::ChannelMembershipNotice { channel_id: *channel_id, notice });
+            .send(DomainEvent::ChannelMembershipNotice {
+                channel_id: *channel_id,
+                notice,
+            });
     }
 }
 
@@ -1057,7 +1227,12 @@ impl LogObserver for ChannelEventService {
 /// same `timestamp`). With a deterministic id `insert_or_ignore` files it once
 /// however many paths deliver it. A zero timestamp carries no identity, so it
 /// gets a fresh id rather than colliding with every other such event.
-fn member_notice_id(channel_id: &ChannelId, user_id: &UserId, kind: &str, event_ts: u64) -> MessageId {
+fn member_notice_id(
+    channel_id: &ChannelId,
+    user_id: &UserId,
+    kind: &str,
+    event_ts: u64,
+) -> MessageId {
     if event_ts == 0 {
         return MessageId::new();
     }
@@ -1132,21 +1307,36 @@ fn proto_channel_error_code_name(code: i32) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::domain::message::ConversationType;
     use crate::proto::chat_v1::{
         ChannelError as ProtoChannelError, ChannelModeration, OperationFailed,
     };
-    use crate::domain::message::ConversationType;
     use crate::storage::Database;
 
     #[test]
     fn only_joins_after_the_last_sync_and_our_own_are_news() {
         let t = |secs| chrono::DateTime::from_timestamp(secs, 0).unwrap();
         let (last_sync, own) = (Some(t(100)), Some(t(50)));
-        assert!(join_is_news(t(150), last_sync, own), "joined while we were away");
-        assert!(!join_is_news(t(90), last_sync, own), "already a member at the last sync");
-        assert!(!join_is_news(t(150), last_sync, Some(t(200))), "was there before we joined");
-        assert!(!join_is_news(t(150), None, own), "first sync backfills silently");
-        assert!(!join_is_news(t(150), last_sync, None), "not a member ourselves");
+        assert!(
+            join_is_news(t(150), last_sync, own),
+            "joined while we were away"
+        );
+        assert!(
+            !join_is_news(t(90), last_sync, own),
+            "already a member at the last sync"
+        );
+        assert!(
+            !join_is_news(t(150), last_sync, Some(t(200))),
+            "was there before we joined"
+        );
+        assert!(
+            !join_is_news(t(150), None, own),
+            "first sync backfills silently"
+        );
+        assert!(
+            !join_is_news(t(150), last_sync, None),
+            "not a member ourselves"
+        );
     }
 
     #[test]
@@ -1154,17 +1344,28 @@ mod tests {
         let (a, b) = (ChannelId::new(), ChannelId::new());
         let mut announced = std::collections::HashSet::from([a]); // `a` came live
         let missed = unannounced_invites(&mut announced, vec![(a, ()), (b, ())]);
-        assert_eq!(missed.iter().map(|(id, _)| *id).collect::<Vec<_>>(), vec![b]);
+        assert_eq!(
+            missed.iter().map(|(id, _)| *id).collect::<Vec<_>>(),
+            vec![b]
+        );
         assert!(unannounced_invites(&mut announced, vec![(a, ()), (b, ())]).is_empty());
 
         // `a` answered, then re-sent: announced again.
         assert!(unannounced_invites(&mut announced, vec![(b, ())]).is_empty());
-        assert_eq!(unannounced_invites(&mut announced, vec![(a, ()), (b, ())]).len(), 1);
+        assert_eq!(
+            unannounced_invites(&mut announced, vec![(a, ()), (b, ())]).len(),
+            1
+        );
     }
 
     fn setup() -> (Arc<ChannelEventService>, EventBus, Arc<ChannelRepository>) {
         let db = crate::services::channel::membership_log::test_support::test_db();
-        let (service, bus, repo, _) = setup_on(db, &crate::services::channel::membership_log::test_support::who(0xfe), &Default::default(), &[]);
+        let (service, bus, repo, _) = setup_on(
+            db,
+            &crate::services::channel::membership_log::test_support::who(0xfe),
+            &Default::default(),
+            &[],
+        );
         (service, bus, repo)
     }
 
@@ -1175,7 +1376,12 @@ mod tests {
         me: &crate::services::channel::membership_log::test_support::Who,
         server: &Arc<crate::services::channel::membership_log::test_support::FakeServer>,
         people: &[&crate::services::channel::membership_log::test_support::Who],
-    ) -> (Arc<ChannelEventService>, EventBus, Arc<ChannelRepository>, Arc<MembershipLog>) {
+    ) -> (
+        Arc<ChannelEventService>,
+        EventBus,
+        Arc<ChannelRepository>,
+        Arc<MembershipLog>,
+    ) {
         let channel_repo = Arc::new(ChannelRepository::new(db.clone()));
         let event_bus = EventBus::new();
         // Never reachable: the rollback fetch is expected to fail, which is
@@ -1183,7 +1389,12 @@ mod tests {
         let grpc_pool = Arc::new(
             crate::network::grpc::client_pool::GrpcClientPool::new("https://127.0.0.1:1").unwrap(),
         );
-        let (log, _, _) = crate::services::channel::membership_log::test_support::device_on(db.clone(), me, server, people);
+        let (log, _, _) = crate::services::channel::membership_log::test_support::device_on(
+            db.clone(),
+            me,
+            server,
+            people,
+        );
 
         let service = Arc::new(ChannelEventService::new(
             Arc::new(MessageRepository::new(db.clone())),
@@ -1211,7 +1422,10 @@ mod tests {
                 "",
             )
             .await;
-        assert!(rx.try_recv().is_err(), "a heartbeat produced a domain event");
+        assert!(
+            rx.try_recv().is_err(),
+            "a heartbeat produced a domain event"
+        );
     }
 
     /// INFRA-29 regression: `OperationFailed` is the saga-compensation signal.
@@ -1279,18 +1493,43 @@ mod tests {
         channel_repo.insert_or_ignore_membership(&own).unwrap();
 
         let deleted = || channel_event::Event::ChannelDeleted(channel_id.to_string());
-        service.handle_stream_event(deleted(), &channel_id.to_string()).await;
+        service
+            .handle_stream_event(deleted(), &channel_id.to_string())
+            .await;
         service.record_channel_deleted(&channel_id); // the sync finding it too
 
-        assert!(channel_repo.get(&channel_id).unwrap().is_some(), "history must stay");
-        assert!(channel_repo.get_membership(&channel_id, &me).unwrap().is_none());
+        assert!(
+            channel_repo.get(&channel_id).unwrap().is_some(),
+            "history must stay"
+        );
+        assert!(
+            channel_repo
+                .get_membership(&channel_id, &me)
+                .unwrap()
+                .is_none()
+        );
         assert_eq!(channel_repo.former_state(&channel_id).unwrap(), Some(true));
-        assert_eq!(channel_repo.list_former_for_user(&me).unwrap().len(), 1, "not listed read-only");
-        assert_eq!(service.message_repo.count(&channel_id, &ConversationType::Channel).unwrap(), 1);
+        assert_eq!(
+            channel_repo.list_former_for_user(&me).unwrap().len(),
+            1,
+            "not listed read-only"
+        );
+        assert_eq!(
+            service
+                .message_repo
+                .count(&channel_id, &ConversationType::Channel)
+                .unwrap(),
+            1
+        );
         match rx.try_recv() {
-            Ok(DomainEvent::ChannelMemberLeft { user_id, message, .. }) => {
+            Ok(DomainEvent::ChannelMemberLeft {
+                user_id, message, ..
+            }) => {
                 assert_eq!(user_id, me);
-                assert!(matches!(message.content, MessageContent::System(SystemMessage::ChannelDeleted)));
+                assert!(matches!(
+                    message.content,
+                    MessageContent::System(SystemMessage::ChannelDeleted)
+                ));
             }
             other => panic!("expected ChannelMemberLeft, got {other:?}"),
         }
@@ -1306,9 +1545,11 @@ mod tests {
         assert_eq!(channel_repo.former_state(&unknown).unwrap(), None);
     }
 
-    use crate::proto::chat_v1::{self as pb, channel_action::Action, remove_member::Reason as RmReason};
-    use crate::services::channel::membership_log::test_support::{who, FakeServer, Who};
+    use crate::proto::chat_v1::{
+        self as pb, channel_action::Action, remove_member::Reason as RmReason,
+    };
     use crate::services::channel::membership_log::AuthorBase;
+    use crate::services::channel::membership_log::test_support::{FakeServer, Who, who};
     use crate::services::channel::verified_state::{ChannelRole, Policy};
 
     fn act(a: Action) -> pb::ChannelAction {
@@ -1339,9 +1580,14 @@ mod tests {
             let (service, bus, channel_repo, my_log) = setup_on(db, &me, &server, &people);
             service
                 .settings_repo
-                .set_string(crate::storage::repositories::settings_repo::keys::CURRENT_USER_ID, &me.id)
+                .set_string(
+                    crate::storage::repositories::settings_repo::keys::CURRENT_USER_ID,
+                    &me.id,
+                )
                 .unwrap();
-            let (o_log, _, _) = crate::services::channel::membership_log::test_support::device(&owner, &server, &people);
+            let (o_log, _, _) = crate::services::channel::membership_log::test_support::device(
+                &owner, &server, &people,
+            );
             let ch = ChannelId::from(uuid::Uuid::new_v4());
             let channel = crate::domain::channel::Channel::new(
                 ch,
@@ -1350,7 +1596,18 @@ mod tests {
                 UserId::from(owner.id.parse::<uuid::Uuid>().unwrap()),
             );
             channel_repo.upsert(&channel).unwrap();
-            let w = World { server, owner, me, other, o_log, my_log, service, bus, channel_repo, ch };
+            let w = World {
+                server,
+                owner,
+                me,
+                other,
+                o_log,
+                my_log,
+                service,
+                bus,
+                channel_repo,
+                ch,
+            };
             w.by_owner(vec![act(Action::Genesis(pb::Genesis {
                 policy: Some(Policy::defaults(false).to_proto()),
                 disappearing_seconds: 0,
@@ -1358,7 +1615,11 @@ mod tests {
             .await;
             w.by_owner(vec![w.add(&w.me)]).await;
             w.relay_last().await;
-            w.author(&w.my_log, vec![act(Action::AcceptInvite(pb::AcceptInvite {}))]).await;
+            w.author(
+                &w.my_log,
+                vec![act(Action::AcceptInvite(pb::AcceptInvite {}))],
+            )
+            .await;
             w
         }
 
@@ -1372,15 +1633,24 @@ mod tests {
         }
 
         async fn author(&self, log: &MembershipLog, acts: Vec<pb::ChannelAction>) {
-            let base = if acts.iter().any(|a| matches!(a.action, Some(Action::Genesis(_)))) {
+            let base = if acts
+                .iter()
+                .any(|a| matches!(a.action, Some(Action::Genesis(_))))
+            {
                 AuthorBase::Genesis
             } else {
                 AuthorBase::Verified
             };
-            log.author(&self.ch, base, None, |_| Ok(acts.clone()), |c| {
-                let r = self.server.append(&self.ch, c);
-                async move { r }
-            })
+            log.author(
+                &self.ch,
+                base,
+                None,
+                |_| Ok(acts.clone()),
+                |c| {
+                    let r = self.server.append(&self.ch, c);
+                    async move { r }
+                },
+            )
             .await
             .unwrap();
         }
@@ -1395,7 +1665,12 @@ mod tests {
         }
 
         async fn relay(&self, change: pb::ChannelChange) {
-            self.service.handle_stream_event(channel_event::Event::ChannelChange(change), &self.ch.to_string()).await;
+            self.service
+                .handle_stream_event(
+                    channel_event::Event::ChannelChange(change),
+                    &self.ch.to_string(),
+                )
+                .await;
         }
 
         async fn relay_last(&self) {
@@ -1403,7 +1678,10 @@ mod tests {
         }
 
         fn count(&self) -> u64 {
-            self.service.message_repo.count(&self.ch, &ConversationType::Channel).unwrap()
+            self.service
+                .message_repo
+                .count(&self.ch, &ConversationType::Channel)
+                .unwrap()
         }
 
         fn uid(w: &Who) -> UserId {
@@ -1427,26 +1705,50 @@ mod tests {
             &w.server,
             &[&w.owner, &w.me, &w.other],
         );
-        w.author(&x_log, vec![act(Action::AcceptInvite(pb::AcceptInvite {}))]).await;
+        w.author(&x_log, vec![act(Action::AcceptInvite(pb::AcceptInvite {}))])
+            .await;
         let accept = w.last();
         for _ in 0..2 {
             w.relay(accept.clone()).await;
         }
         assert_eq!(w.count(), base + 1, "one join filed two notices");
-        assert!(matches!(rx.try_recv(), Ok(DomainEvent::ChannelMemberJoined { .. })));
+        assert!(matches!(
+            rx.try_recv(),
+            Ok(DomainEvent::ChannelMemberJoined { .. })
+        ));
         assert!(rx.try_recv().is_err(), "the duplicate reached the UI");
-        assert!(w.channel_repo.get_membership(&w.ch, &World::uid(&w.other)).unwrap().is_some());
+        assert!(
+            w.channel_repo
+                .get_membership(&w.ch, &World::uid(&w.other))
+                .unwrap()
+                .is_some()
+        );
 
         // Other leaves: "left", once.
-        w.author(&x_log, vec![act(Action::RemoveMember(pb::RemoveMember { user_id: w.other.id.clone(), reason: RmReason::Left as i32 }))]).await;
+        w.author(
+            &x_log,
+            vec![act(Action::RemoveMember(pb::RemoveMember {
+                user_id: w.other.id.clone(),
+                reason: RmReason::Left as i32,
+            }))],
+        )
+        .await;
         let leave = w.last();
         for _ in 0..2 {
             w.relay(leave.clone()).await;
         }
         assert_eq!(w.count(), base + 2, "one leave filed two notices");
-        assert!(matches!(rx.try_recv(), Ok(DomainEvent::ChannelMemberLeft { .. })));
+        assert!(matches!(
+            rx.try_recv(),
+            Ok(DomainEvent::ChannelMemberLeft { .. })
+        ));
         assert!(rx.try_recv().is_err(), "the duplicate reached the UI");
-        assert!(w.channel_repo.get_membership(&w.ch, &World::uid(&w.other)).unwrap().is_none());
+        assert!(
+            w.channel_repo
+                .get_membership(&w.ch, &World::uid(&w.other))
+                .unwrap()
+                .is_none()
+        );
     }
 
     /// A signed kick is shown as a kick by its author, and the kicked
@@ -1460,11 +1762,20 @@ mod tests {
             &w.server,
             &[&w.owner, &w.me, &w.other],
         );
-        w.author(&x_log, vec![act(Action::AcceptInvite(pb::AcceptInvite {}))]).await;
-        w.by_owner(vec![act(Action::RemoveMember(pb::RemoveMember { user_id: w.other.id.clone(), reason: RmReason::Kicked as i32 }))]).await;
+        w.author(&x_log, vec![act(Action::AcceptInvite(pb::AcceptInvite {}))])
+            .await;
+        w.by_owner(vec![act(Action::RemoveMember(pb::RemoveMember {
+            user_id: w.other.id.clone(),
+            reason: RmReason::Kicked as i32,
+        }))])
+        .await;
         let mut rx = w.bus.domain_sender().subscribe();
         w.relay_last().await; // gap: catches up the accept, then the kick
-        let notices = w.service.message_repo.list(&w.ch, &ConversationType::Channel, None, 20).unwrap();
+        let notices = w
+            .service
+            .message_repo
+            .list(&w.ch, &ConversationType::Channel, None, 20)
+            .unwrap();
         assert!(notices.iter().any(|m| matches!(&m.content,
             MessageContent::System(SystemMessage::UserRemoved { by, removed, .. })
                 if *by == World::uid(&w.owner) && *removed == World::uid(&w.other))));
@@ -1473,7 +1784,15 @@ mod tests {
             left |= matches!(ev, DomainEvent::ChannelMemberLeft { .. });
         }
         assert!(left);
-        assert!(!w.my_log.load(&w.ch).unwrap().unwrap().state.members.contains_key(&w.other.id));
+        assert!(
+            !w.my_log
+                .load(&w.ch)
+                .unwrap()
+                .unwrap()
+                .state
+                .members
+                .contains_key(&w.other.id)
+        );
     }
 
     /// The server's roster: owner and us, as `GetChannelMembers` lists them.
@@ -1494,7 +1813,10 @@ mod tests {
     }
 
     fn removal(w: &Who, reason: RmReason) -> pb::ChannelAction {
-        act(Action::RemoveMember(pb::RemoveMember { user_id: w.id.clone(), reason: reason as i32 }))
+        act(Action::RemoveMember(pb::RemoveMember {
+            user_id: w.id.clone(),
+            reason: reason as i32,
+        }))
     }
 
     /// F79: a kick, a leave and a ban that all happened while we were offline
@@ -1506,26 +1828,37 @@ mod tests {
     async fn offline_kick_leave_and_ban_read_with_their_signed_reasons() {
         let w = World::new().await;
         let people = [&w.owner, &w.me, &w.other];
-        let (x_log, _, _) = crate::services::channel::membership_log::test_support::device(&w.other, &w.server, &people);
+        let (x_log, _, _) = crate::services::channel::membership_log::test_support::device(
+            &w.other, &w.server, &people,
+        );
         let accept = || vec![act(Action::AcceptInvite(pb::AcceptInvite {}))];
         w.by_owner(vec![w.add(&w.other)]).await;
         w.author(&x_log, accept()).await;
         w.relay_last().await;
-        assert!(w.channel_repo.get_membership(&w.ch, &World::uid(&w.other)).unwrap().is_some());
+        assert!(
+            w.channel_repo
+                .get_membership(&w.ch, &World::uid(&w.other))
+                .unwrap()
+                .is_some()
+        );
 
         // Offline from here: nothing is relayed to us.
         w.by_owner(vec![removal(&w.other, RmReason::Kicked)]).await;
         w.by_owner(vec![w.add(&w.other)]).await;
         x_log.catch_up(&w.ch).await.unwrap();
         w.author(&x_log, accept()).await;
-        w.author(&x_log, vec![removal(&w.other, RmReason::Left)]).await;
+        w.author(&x_log, vec![removal(&w.other, RmReason::Left)])
+            .await;
         w.by_owner(vec![w.add(&w.other)]).await;
         x_log.catch_up(&w.ch).await.unwrap();
         w.author(&x_log, accept()).await;
         w.by_owner(vec![removal(&w.other, RmReason::Banned)]).await;
 
         // Back online: the roster sync for the channel.
-        w.service.reconcile_roster(&w.ch, &server_roster(&w), None).await.unwrap();
+        w.service
+            .reconcile_roster(&w.ch, &server_roster(&w), None)
+            .await
+            .unwrap();
 
         let (owner, other) = (World::uid(&w.owner), World::uid(&w.other));
         let notices: Vec<SystemMessage> = w
@@ -1539,24 +1872,60 @@ mod tests {
                 _ => None,
             })
             .collect();
-        let has = |want: &dyn Fn(&SystemMessage) -> bool| notices.iter().filter(|n| want(n)).count();
-        assert_eq!(has(&|n| matches!(n, SystemMessage::UserRemoved { by, removed, .. } if *by == owner && *removed == other)), 1, "{notices:?}");
-        assert_eq!(has(&|n| matches!(n, SystemMessage::UserLeft(u) if *u == other)), 1, "{notices:?}");
-        assert_eq!(has(&|n| matches!(n, SystemMessage::UserBanned { by, banned, .. } if *by == owner && *banned == other)), 1, "{notices:?}");
-        assert_eq!(has(&|n| matches!(n, SystemMessage::UserGone(_))), 0, "an explained removal read as unexplained: {notices:?}");
-        assert!(w.channel_repo.get_membership(&w.ch, &other).unwrap().is_none());
+        let has =
+            |want: &dyn Fn(&SystemMessage) -> bool| notices.iter().filter(|n| want(n)).count();
+        assert_eq!(
+            has(
+                &|n| matches!(n, SystemMessage::UserRemoved { by, removed, .. } if *by == owner && *removed == other)
+            ),
+            1,
+            "{notices:?}"
+        );
+        assert_eq!(
+            has(&|n| matches!(n, SystemMessage::UserLeft(u) if *u == other)),
+            1,
+            "{notices:?}"
+        );
+        assert_eq!(
+            has(
+                &|n| matches!(n, SystemMessage::UserBanned { by, banned, .. } if *by == owner && *banned == other)
+            ),
+            1,
+            "{notices:?}"
+        );
+        assert_eq!(
+            has(&|n| matches!(n, SystemMessage::UserGone(_))),
+            0,
+            "an explained removal read as unexplained: {notices:?}"
+        );
+        assert!(
+            w.channel_repo
+                .get_membership(&w.ch, &other)
+                .unwrap()
+                .is_none()
+        );
     }
 
     /// `GetDeparture` for us after `change` (revision N) removed us: the
     /// change and the server's state at N-1.
     fn departure_for(w: &World, change: pb::ChannelChange) -> pb::Departure {
-        let rev = <pb::channel_change::Actions as prost::Message>::decode(change.actions.as_slice()).unwrap().revision;
+        let rev =
+            <pb::channel_change::Actions as prost::Message>::decode(change.actions.as_slice())
+                .unwrap()
+                .revision;
         let prev = w.server.states.lock()[rev as usize - 2].to_proto();
-        pb::Departure { reason: pb::departure::Reason::Removed as i32, change: Some(change), prev_state: Some(prev) }
+        pb::Departure {
+            reason: pb::departure::Reason::Removed as i32,
+            change: Some(change),
+            prev_state: Some(prev),
+        }
     }
 
     fn own_row(w: &World) -> Membership {
-        w.channel_repo.get_membership(&w.ch, &World::uid(&w.me)).unwrap().expect("our own roster row")
+        w.channel_repo
+            .get_membership(&w.ch, &World::uid(&w.me))
+            .unwrap()
+            .expect("our own roster row")
     }
 
     /// F79: kicked while offline, the channel gone from our list: the sync
@@ -1569,12 +1938,33 @@ mod tests {
         w.by_owner(vec![removal(&w.me, RmReason::Kicked)]).await;
         let kick = w.last();
 
-        w.service.record_departure(&own, &departure_for(&w, kick.clone())).await.unwrap();
+        w.service
+            .record_departure(&own, &departure_for(&w, kick.clone()))
+            .await
+            .unwrap();
         let base = w.count();
-        let newest = w.service.message_repo.list(&w.ch, &ConversationType::Channel, None, 1).unwrap();
-        assert_eq!(newest[0].content, MessageContent::System(SystemMessage::SelfRemoved { by: World::uid(&w.owner) }));
-        assert!(w.channel_repo.get_membership(&w.ch, &World::uid(&w.me)).unwrap().is_none());
-        assert_eq!(w.channel_repo.former_state(&w.ch).unwrap(), Some(false), "listed read-only, history kept");
+        let newest = w
+            .service
+            .message_repo
+            .list(&w.ch, &ConversationType::Channel, None, 1)
+            .unwrap();
+        assert_eq!(
+            newest[0].content,
+            MessageContent::System(SystemMessage::SelfRemoved {
+                by: World::uid(&w.owner)
+            })
+        );
+        assert!(
+            w.channel_repo
+                .get_membership(&w.ch, &World::uid(&w.me))
+                .unwrap()
+                .is_none()
+        );
+        assert_eq!(
+            w.channel_repo.former_state(&w.ch).unwrap(),
+            Some(false),
+            "listed read-only, history kept"
+        );
 
         w.relay(kick).await; // a public channel's log is still readable
         assert_eq!(w.count(), base, "the same kick filed twice");
@@ -1590,9 +1980,21 @@ mod tests {
         let own = own_row(&w);
         w.by_owner(vec![w.add(&w.other)]).await; // unseen
         w.by_owner(vec![removal(&w.me, RmReason::Banned)]).await;
-        w.service.record_departure(&own, &departure_for(&w, w.last())).await.unwrap();
-        let newest = w.service.message_repo.list(&w.ch, &ConversationType::Channel, None, 1).unwrap();
-        assert_eq!(newest[0].content, MessageContent::System(SystemMessage::SelfBanned { by: World::uid(&w.owner) }));
+        w.service
+            .record_departure(&own, &departure_for(&w, w.last()))
+            .await
+            .unwrap();
+        let newest = w
+            .service
+            .message_repo
+            .list(&w.ch, &ConversationType::Channel, None, 1)
+            .unwrap();
+        assert_eq!(
+            newest[0].content,
+            MessageContent::System(SystemMessage::SelfBanned {
+                by: World::uid(&w.owner)
+            })
+        );
 
         let w = World::new().await;
         let own = own_row(&w);
@@ -1601,10 +2003,21 @@ mod tests {
             &w.server,
             &[&w.owner, &w.me, &w.other],
         );
-        w.author(&other_device, vec![removal(&w.me, RmReason::Left)]).await;
-        w.service.record_departure(&own, &departure_for(&w, w.last())).await.unwrap();
-        let newest = w.service.message_repo.list(&w.ch, &ConversationType::Channel, None, 1).unwrap();
-        assert_eq!(newest[0].content, MessageContent::System(SystemMessage::UserLeft(World::uid(&w.me))));
+        w.author(&other_device, vec![removal(&w.me, RmReason::Left)])
+            .await;
+        w.service
+            .record_departure(&own, &departure_for(&w, w.last()))
+            .await
+            .unwrap();
+        let newest = w
+            .service
+            .message_repo
+            .list(&w.ch, &ConversationType::Channel, None, 1)
+            .unwrap();
+        assert_eq!(
+            newest[0].content,
+            MessageContent::System(SystemMessage::UserLeft(World::uid(&w.me)))
+        );
     }
 
     /// F79: the server's departure is believed only as far as the signature
@@ -1618,17 +2031,35 @@ mod tests {
         w.by_owner(vec![removal(&w.me, RmReason::Kicked)]).await;
         let mut doctored = departure_for(&w, w.last());
         doctored.prev_state.as_mut().unwrap().disappearing_seconds = 60;
-        assert_eq!(removal_of_in(&w, &doctored).await, None, "a doctored base verified");
-        assert!(removal_of_in(&w, &departure_for(&w, w.last())).await.is_some());
+        assert_eq!(
+            removal_of_in(&w, &doctored).await,
+            None,
+            "a doctored base verified"
+        );
+        assert!(
+            removal_of_in(&w, &departure_for(&w, w.last()))
+                .await
+                .is_some()
+        );
 
         // Someone else's removal handed over as ours.
         let w = World::new().await;
-        let x = crate::services::channel::membership_log::test_support::device(&w.other, &w.server, &[&w.owner, &w.me, &w.other]).0;
+        let x = crate::services::channel::membership_log::test_support::device(
+            &w.other,
+            &w.server,
+            &[&w.owner, &w.me, &w.other],
+        )
+        .0;
         w.by_owner(vec![w.add(&w.other)]).await;
-        w.author(&x, vec![act(Action::AcceptInvite(pb::AcceptInvite {}))]).await;
+        w.author(&x, vec![act(Action::AcceptInvite(pb::AcceptInvite {}))])
+            .await;
         w.by_owner(vec![removal(&w.other, RmReason::Kicked)]).await;
         let theirs = departure_for(&w, w.last());
-        assert_eq!(removal_of_in(&w, &theirs).await, None, "another member's kick read as ours");
+        assert_eq!(
+            removal_of_in(&w, &theirs).await,
+            None,
+            "another member's kick read as ours"
+        );
 
         // An old kick replayed after we were re-added and caught up.
         let w = World::new().await;
@@ -1636,16 +2067,37 @@ mod tests {
         let old_kick = departure_for(&w, w.last());
         w.by_owner(vec![w.add(&w.me)]).await;
         w.my_log.catch_up(&w.ch).await.unwrap();
-        w.author(&w.my_log, vec![act(Action::AcceptInvite(pb::AcceptInvite {}))]).await;
-        assert_eq!(removal_of_in(&w, &old_kick).await, None, "a replayed old kick verified");
+        w.author(
+            &w.my_log,
+            vec![act(Action::AcceptInvite(pb::AcceptInvite {}))],
+        )
+        .await;
+        assert_eq!(
+            removal_of_in(&w, &old_kick).await,
+            None,
+            "a replayed old kick verified"
+        );
         let own = own_row(&w);
         w.service.record_departure(&own, &old_kick).await.unwrap();
-        let newest = w.service.message_repo.list(&w.ch, &ConversationType::Channel, None, 1).unwrap();
-        assert_eq!(newest[0].content, MessageContent::System(SystemMessage::NoLongerMember));
+        let newest = w
+            .service
+            .message_repo
+            .list(&w.ch, &ConversationType::Channel, None, 1)
+            .unwrap();
+        assert_eq!(
+            newest[0].content,
+            MessageContent::System(SystemMessage::NoLongerMember)
+        );
     }
 
-    async fn removal_of_in(w: &World, d: &pb::Departure) -> Option<crate::services::channel::membership_log::OwnRemoval> {
-        w.my_log.verify_own_removal(&w.ch, d.change.as_ref().unwrap(), d.prev_state.as_ref()).await.unwrap()
+    async fn removal_of_in(
+        w: &World,
+        d: &pb::Departure,
+    ) -> Option<crate::services::channel::membership_log::OwnRemoval> {
+        w.my_log
+            .verify_own_removal(&w.ch, d.change.as_ref().unwrap(), d.prev_state.as_ref())
+            .await
+            .unwrap()
     }
 
     /// The old unsigned path is gone: a roster sync naming a user nobody in
@@ -1672,9 +2124,13 @@ mod tests {
         assert!(!v.contains(&ghost.to_string()));
         let mut surfaced = false;
         while let Ok(ev) = rx.try_recv() {
-            surfaced |= matches!(ev, DomainEvent::ChannelMembershipNotice {
-                notice: MembershipNotice::UnverifiedMember { .. }, ..
-            });
+            surfaced |= matches!(
+                ev,
+                DomainEvent::ChannelMembershipNotice {
+                    notice: MembershipNotice::UnverifiedMember { .. },
+                    ..
+                }
+            );
         }
         assert!(surfaced, "the unsigned add was not surfaced");
     }
@@ -1688,7 +2144,10 @@ mod tests {
         let me = UserId::from(uuid::Uuid::new_v4());
         service
             .settings_repo
-            .set_string(crate::storage::repositories::settings_repo::keys::CURRENT_USER_ID, &me.to_string())
+            .set_string(
+                crate::storage::repositories::settings_repo::keys::CURRENT_USER_ID,
+                &me.to_string(),
+            )
             .unwrap();
         let channel = crate::domain::channel::Channel::new(
             ChannelId::from(uuid::Uuid::new_v4()),
@@ -1701,12 +2160,22 @@ mod tests {
         service.record_own_leave(&channel.id);
 
         // Filed where the channel's history and sidebar preview read.
-        assert_eq!(service.message_repo.count(&channel.id, &ConversationType::Channel).unwrap(), 1);
+        assert_eq!(
+            service
+                .message_repo
+                .count(&channel.id, &ConversationType::Channel)
+                .unwrap(),
+            1
+        );
         match rx.try_recv() {
-            Ok(DomainEvent::ChannelMemberLeft { user_id, message, .. }) => {
+            Ok(DomainEvent::ChannelMemberLeft {
+                user_id, message, ..
+            }) => {
                 assert_eq!(user_id, me);
                 assert_eq!(message.sender_id, Some(me));
-                assert!(matches!(message.content, MessageContent::System(SystemMessage::UserLeft(u)) if u == me));
+                assert!(
+                    matches!(message.content, MessageContent::System(SystemMessage::UserLeft(u)) if u == me)
+                );
             }
             other => panic!("expected ChannelMemberLeft, got {other:?}"),
         }
@@ -1716,7 +2185,10 @@ mod tests {
         let me = UserId::from(uuid::Uuid::new_v4());
         service
             .settings_repo
-            .set_string(crate::storage::repositories::settings_repo::keys::CURRENT_USER_ID, &me.to_string())
+            .set_string(
+                crate::storage::repositories::settings_repo::keys::CURRENT_USER_ID,
+                &me.to_string(),
+            )
             .unwrap();
         me
     }
@@ -1740,11 +2212,21 @@ mod tests {
         let w = World::new().await;
         let mut rx = w.bus.domain_sender().subscribe();
         let base = w.count();
-        w.author(&w.my_log, vec![act(Action::RemoveMember(pb::RemoveMember { user_id: w.me.id.clone(), reason: RmReason::Left as i32 }))]).await;
+        w.author(
+            &w.my_log,
+            vec![act(Action::RemoveMember(pb::RemoveMember {
+                user_id: w.me.id.clone(),
+                reason: RmReason::Left as i32,
+            }))],
+        )
+        .await;
         w.relay_last().await; // the server's echo: a duplicate
         w.service.record_own_leave(&w.ch);
         assert_eq!(w.count(), base + 1, "our leave filed two notices");
-        assert!(matches!(rx.try_recv(), Ok(DomainEvent::ChannelMemberLeft { .. })));
+        assert!(matches!(
+            rx.try_recv(),
+            Ok(DomainEvent::ChannelMemberLeft { .. })
+        ));
         assert!(rx.try_recv().is_err(), "the duplicate reached the UI");
         assert_eq!(w.channel_repo.former_state(&w.ch).unwrap(), Some(false));
     }
@@ -1775,10 +2257,20 @@ mod tests {
 
         assert_eq!(channel_repo.former_state(&channel_id).unwrap(), Some(false));
         let listed = channel_repo.list_former_for_user(&me).unwrap();
-        assert_eq!(listed.iter().map(|c| c.id).collect::<Vec<_>>(), [channel_id], "the left channel vanished");
-        let notices = service.message_repo.list(&channel_id, &ConversationType::Channel, None, 10).unwrap();
+        assert_eq!(
+            listed.iter().map(|c| c.id).collect::<Vec<_>>(),
+            [channel_id],
+            "the left channel vanished"
+        );
+        let notices = service
+            .message_repo
+            .list(&channel_id, &ConversationType::Channel, None, 10)
+            .unwrap();
         assert_eq!(notices.len(), 1);
-        assert_eq!(notices[0].content, MessageContent::System(SystemMessage::UserLeft(me)));
+        assert_eq!(
+            notices[0].content,
+            MessageContent::System(SystemMessage::UserLeft(me))
+        );
         assert_eq!(
             crate::domain::channel::SendBlock::for_viewer(None, false, Some(false)),
             Some(crate::domain::channel::SendBlock::Removed),
@@ -1794,7 +2286,12 @@ mod tests {
         let mut rx = bus.domain_sender().subscribe();
         let _me = as_me(&service);
         let channel_id = private_channel(&channel_repo);
-        let count = || service.message_repo.count(&channel_id, &ConversationType::Channel).unwrap();
+        let count = || {
+            service
+                .message_repo
+                .count(&channel_id, &ConversationType::Channel)
+                .unwrap()
+        };
         let member = Membership {
             channel_id,
             user_id: UserId::from(uuid::Uuid::new_v4()),
@@ -1809,22 +2306,34 @@ mod tests {
         service.record_synced_join(&member);
         service.record_synced_join(&member);
         assert_eq!(count(), 1);
-        assert!(matches!(rx.try_recv(), Ok(DomainEvent::ChannelMemberJoined { .. })));
+        assert!(matches!(
+            rx.try_recv(),
+            Ok(DomainEvent::ChannelMemberJoined { .. })
+        ));
         assert!(rx.try_recv().is_err());
 
         service.record_synced_departure(&member);
         service.record_synced_departure(&member);
         assert_eq!(count(), 2);
         match rx.try_recv() {
-            Ok(DomainEvent::ChannelMemberLeft { user_id, message, .. }) => {
+            Ok(DomainEvent::ChannelMemberLeft {
+                user_id, message, ..
+            }) => {
                 assert_eq!(user_id, member.user_id);
                 // No signed change says why: never worded as a leave (F79).
-                assert!(matches!(message.content, MessageContent::System(SystemMessage::UserGone(u)) if u == member.user_id));
+                assert!(
+                    matches!(message.content, MessageContent::System(SystemMessage::UserGone(u)) if u == member.user_id)
+                );
             }
             other => panic!("expected ChannelMemberLeft, got {other:?}"),
         }
         assert!(rx.try_recv().is_err());
-        assert!(channel_repo.get_membership(&channel_id, &member.user_id).unwrap().is_none());
+        assert!(
+            channel_repo
+                .get_membership(&channel_id, &member.user_id)
+                .unwrap()
+                .is_none()
+        );
     }
 
     /// F79: our own removal found by a sync with no signed change to show
@@ -1833,7 +2342,7 @@ mod tests {
     /// deletion reads as one; "still a member" changes nothing.
     #[tokio::test]
     async fn synced_own_departure_without_a_signed_change_states_no_reason() {
-        use crate::proto::chat_v1::{departure::Reason as Dep, Departure};
+        use crate::proto::chat_v1::{Departure, departure::Reason as Dep};
         let (service, _bus, channel_repo) = setup();
         let me = as_me(&service);
         let own_in = |channel_id| {
@@ -1852,22 +2361,71 @@ mod tests {
         };
 
         let removed = own_in(private_channel(&channel_repo));
-        let departure = Departure { reason: Dep::Removed as i32, ..Default::default() };
-        service.record_departure(&removed, &departure).await.unwrap();
-        service.record_departure(&removed, &departure).await.unwrap();
-        assert!(channel_repo.get_membership(&removed.channel_id, &me).unwrap().is_none());
-        assert_eq!(channel_repo.former_state(&removed.channel_id).unwrap(), Some(false));
-        let notices = service.message_repo.list(&removed.channel_id, &ConversationType::Channel, None, 10).unwrap();
+        let departure = Departure {
+            reason: Dep::Removed as i32,
+            ..Default::default()
+        };
+        service
+            .record_departure(&removed, &departure)
+            .await
+            .unwrap();
+        service
+            .record_departure(&removed, &departure)
+            .await
+            .unwrap();
+        assert!(
+            channel_repo
+                .get_membership(&removed.channel_id, &me)
+                .unwrap()
+                .is_none()
+        );
+        assert_eq!(
+            channel_repo.former_state(&removed.channel_id).unwrap(),
+            Some(false)
+        );
+        let notices = service
+            .message_repo
+            .list(&removed.channel_id, &ConversationType::Channel, None, 10)
+            .unwrap();
         assert_eq!(notices.len(), 1, "filed once however many syncs see it");
-        assert_eq!(notices[0].content, MessageContent::System(SystemMessage::NoLongerMember));
+        assert_eq!(
+            notices[0].content,
+            MessageContent::System(SystemMessage::NoLongerMember)
+        );
 
         let deleted = own_in(private_channel(&channel_repo));
-        service.record_departure(&deleted, &Departure { reason: Dep::ChannelDeleted as i32, ..Default::default() }).await.unwrap();
-        assert_eq!(channel_repo.former_state(&deleted.channel_id).unwrap(), Some(true));
+        service
+            .record_departure(
+                &deleted,
+                &Departure {
+                    reason: Dep::ChannelDeleted as i32,
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            channel_repo.former_state(&deleted.channel_id).unwrap(),
+            Some(true)
+        );
 
         let still = own_in(private_channel(&channel_repo));
-        service.record_departure(&still, &Departure { reason: Dep::Member as i32, ..Default::default() }).await.unwrap();
-        assert!(channel_repo.get_membership(&still.channel_id, &me).unwrap().is_some());
+        service
+            .record_departure(
+                &still,
+                &Departure {
+                    reason: Dep::Member as i32,
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+        assert!(
+            channel_repo
+                .get_membership(&still.channel_id, &me)
+                .unwrap()
+                .is_some()
+        );
     }
 
     /// Mute is an unsigned server action (routing only): it is mirrored onto
@@ -1898,23 +2456,36 @@ mod tests {
                     user_id: me.to_string(),
                     moderator_id: uuid::Uuid::new_v4().to_string(),
                     action: crate::proto::chat_v1::channel_moderation::Action::Mute as i32,
-                    duration: Some(prost_types::Duration { seconds: 600, nanos: 0 }),
+                    duration: Some(prost_types::Duration {
+                        seconds: 600,
+                        nanos: 0,
+                    }),
                     reason: "spam".to_string(),
                 }),
                 &channel_id.to_string(),
             )
             .await;
 
-        let row = channel_repo.get_membership(&channel_id, &me).unwrap().expect("still a member");
+        let row = channel_repo
+            .get_membership(&channel_id, &me)
+            .unwrap()
+            .expect("still a member");
         assert!(row.is_muted);
         assert!(row.muted_until.is_some());
         let mut moderation = None;
         while let Ok(ev) = rx.try_recv() {
-            if let DomainEvent::ChannelModerationAction { action, is_self, reason, .. } = ev {
+            if let DomainEvent::ChannelModerationAction {
+                action,
+                is_self,
+                reason,
+                ..
+            } = ev
+            {
                 moderation = Some((action, is_self, reason));
             }
         }
-        let (action, is_self, reason) = moderation.expect("ModerationAction did not reach the domain bus");
+        let (action, is_self, reason) =
+            moderation.expect("ModerationAction did not reach the domain bus");
         assert_eq!(action, "MUTE");
         assert!(is_self);
         assert_eq!(reason.as_deref(), Some("spam"));

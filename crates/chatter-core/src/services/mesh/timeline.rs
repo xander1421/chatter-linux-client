@@ -34,19 +34,17 @@ use parking_lot::Mutex;
 use tokio::sync::broadcast;
 
 use crate::crypto::attachment_crypto::AttachmentCrypto;
-use crate::domain::attachment::{
-    Attachment, AttachmentStatus, ContentLocation, FileMetadata,
-};
+use crate::domain::UnifiedConversation;
+use crate::domain::attachment::{Attachment, AttachmentStatus, ContentLocation, FileMetadata};
 use crate::domain::ids::{AttachmentId, ChannelId, UserId};
 use crate::domain::message::{ConversationType, Message};
-use crate::domain::UnifiedConversation;
 use crate::error::StorageError;
 use crate::services::attachment::{attachment_file_path, attachments_dir, ensure_attachments_dir};
-use chatter_mesh::ids::PeerId;
 use crate::storage::repositories::{
     AttachmentRepository, MeshConversationRepository, MeshDeliveryRepository, MessageRepository,
     StoredMeshConversation,
 };
+use chatter_mesh::ids::PeerId;
 
 use super::error::MeshError;
 use super::events::{MeshDelivery, MeshEvent, MeshMessage};
@@ -88,7 +86,6 @@ struct Entry {
     /// every DM would end up named after ourselves.
     label: String,
 }
-
 
 /// Storage row -> service type. Unknown kinds are skipped rather than guessed:
 /// a row we cannot map is a row from a newer build, and inventing a conversation
@@ -400,13 +397,14 @@ impl MeshTimeline {
             source,
         })?;
         let path = attachment_file_path(&id);
-        let encrypted = AttachmentCrypto::encrypt_file_to_file(plaintext, &path).map_err(|error| {
-            // The output file is opened before the encryption can fail, so a
-            // failure leaves a partial ciphertext with no row and no key: an
-            // orphan nothing can open or name.
-            let _ = std::fs::remove_file(&path);
-            error
-        })?;
+        let encrypted =
+            AttachmentCrypto::encrypt_file_to_file(plaintext, &path).map_err(|error| {
+                // The output file is opened before the encryption can fail, so a
+                // failure leaves a partial ciphertext with no row and no key: an
+                // orphan nothing can open or name.
+                let _ = std::fs::remove_file(&path);
+                error
+            })?;
 
         let mut metadata = FileMetadata::new(
             display_name(file_name),
@@ -626,7 +624,9 @@ impl MeshTimeline {
                 }
             }
 
-            if let Err(error) = self.messages.delete_by_conversation_type(&conversation_type)
+            if let Err(error) = self
+                .messages
+                .delete_by_conversation_type(&conversation_type)
                 && first_error.is_none()
             {
                 first_error = Some(error);
@@ -754,8 +754,9 @@ fn label_for(conversation: &MeshConversation, nickname: Option<&str>) -> String 
         // The cell is public alongside every message sent into it, so the user
         // should never have to guess which one they are speaking into.
         MeshConversation::Geohash(cell) => format!("#{cell}"),
-        MeshConversation::Dm(peer) => dm_label(conversation, nickname)
-            .unwrap_or_else(|| peer.as_str().to_string()),
+        MeshConversation::Dm(peer) => {
+            dm_label(conversation, nickname).unwrap_or_else(|| peer.as_str().to_string())
+        }
     }
 }
 
@@ -883,7 +884,9 @@ pub(crate) fn temp_identity_store() -> Arc<crate::storage::mesh_identity_store::
     );
     db.run_migrations().expect("migrations");
     crate::test_tempdir::hold(dir);
-    Arc::new(crate::storage::mesh_identity_store::MeshIdentityStore::new(db))
+    Arc::new(crate::storage::mesh_identity_store::MeshIdentityStore::new(
+        db,
+    ))
 }
 
 /// Point attachment storage at a throwaway directory, once per test process.
@@ -1046,9 +1049,7 @@ mod tests {
             assert!(stored, "{wire_id} is a distinct message and must be stored");
         }
 
-        let history = timeline
-            .history(&conversation, None, 50)
-            .expect("history");
+        let history = timeline.history(&conversation, None, 50).expect("history");
         assert_eq!(
             history.len(),
             2,
@@ -1071,15 +1072,30 @@ mod tests {
         let deliveries = Arc::new(MeshDeliveryRepository::new(db.clone()));
         let attachments = Arc::new(AttachmentRepository::new(db.clone()));
         let sender = peer("4f74eb3eb7441921");
-        let event = inbound("w1", MeshConversation::Room, &sender, "anon7431", "hi", 1_000);
+        let event = inbound(
+            "w1",
+            MeshConversation::Room,
+            &sender,
+            "anon7431",
+            "hi",
+            1_000,
+        );
         let sender_id = event.message.sender_id.clone().expect("sender");
 
-        MeshTimeline::new(messages.clone(), directory.clone(), deliveries.clone(), attachments.clone())
-            .record(&event)
-            .expect("record");
+        MeshTimeline::new(
+            messages.clone(),
+            directory.clone(),
+            deliveries.clone(),
+            attachments.clone(),
+        )
+        .record(&event)
+        .expect("record");
 
         let restarted = MeshTimeline::new(messages, directory, deliveries, attachments);
-        assert_eq!(restarted.remembered_sender_name(&sender_id).as_deref(), Some("anon7431"));
+        assert_eq!(
+            restarted.remembered_sender_name(&sender_id).as_deref(),
+            Some("anon7431")
+        );
     }
 
     #[test]
@@ -1087,9 +1103,8 @@ mod tests {
         use crate::storage::Database;
 
         let dir = tempfile::tempdir().expect("temp dir");
-        let db = Arc::new(
-            Database::open(&dir.path().join("restart.db"), "testpass").expect("open"),
-        );
+        let db =
+            Arc::new(Database::open(&dir.path().join("restart.db"), "testpass").expect("open"));
         db.run_migrations().expect("migrations");
 
         let messages = Arc::new(MessageRepository::new(db.clone()));
@@ -1107,7 +1122,9 @@ mod tests {
             );
             timeline.register(&conversation, Some("alice"));
             assert!(
-                timeline.conversation_for(&conversation.conversation_id()).is_some(),
+                timeline
+                    .conversation_for(&conversation.conversation_id())
+                    .is_some(),
                 "the DM should be open in the session that created it"
             );
         }
@@ -1136,7 +1153,8 @@ mod tests {
         use crate::storage::Database;
 
         let dir = tempfile::tempdir().expect("temp dir");
-        let db = Arc::new(Database::open(&dir.path().join("delivery.db"), "testpass").expect("open"));
+        let db =
+            Arc::new(Database::open(&dir.path().join("delivery.db"), "testpass").expect("open"));
         db.run_migrations().expect("migrations");
 
         let messages = Arc::new(MessageRepository::new(db.clone()));
@@ -1215,7 +1233,10 @@ mod tests {
         timeline.wipe().expect("wipe");
 
         assert!(
-            timeline.history(&cell, None, 50).expect("history").is_empty(),
+            timeline
+                .history(&cell, None, 50)
+                .expect("history")
+                .is_empty(),
             "a panic wipe must reach history the sidebar can no longer see"
         );
     }
@@ -1233,7 +1254,11 @@ mod tests {
         let room = MeshConversation::Room;
 
         let attachment = timeline
-            .store_file(Some("secret.bin"), Some("application/octet-stream"), b"payload")
+            .store_file(
+                Some("secret.bin"),
+                Some("application/octet-stream"),
+                b"payload",
+            )
             .expect("stores");
         let path = crate::services::attachment::attachment_file_path(&attachment);
         assert!(path.exists(), "the fixture must really have written a file");
@@ -1263,7 +1288,10 @@ mod tests {
             "the file must be gone, not merely unreadable"
         );
         assert!(
-            timeline.history(&room, None, 10).expect("history").is_empty(),
+            timeline
+                .history(&room, None, 10)
+                .expect("history")
+                .is_empty(),
             "and the message with it"
         );
     }
@@ -1317,7 +1345,12 @@ mod tests {
 
         timeline.wipe().expect("wipe");
 
-        assert!(timeline.history(&room, None, 50).expect("history").is_empty());
+        assert!(
+            timeline
+                .history(&room, None, 50)
+                .expect("history")
+                .is_empty()
+        );
         assert!(timeline.history(&dm, None, 50).expect("history").is_empty());
         assert!(
             timeline.conversation_for(&dm.conversation_id()).is_none(),
@@ -1334,9 +1367,7 @@ mod tests {
         use crate::storage::Database;
 
         let dir = tempfile::tempdir().expect("temp dir");
-        let db = Arc::new(
-            Database::open(&dir.path().join("left.db"), "testpass").expect("open"),
-        );
+        let db = Arc::new(Database::open(&dir.path().join("left.db"), "testpass").expect("open"));
         db.run_migrations().expect("migrations");
 
         let messages = Arc::new(MessageRepository::new(db.clone()));
@@ -1358,7 +1389,9 @@ mod tests {
         let restarted = MeshTimeline::new(messages, directory, deliveries, attachments);
         let cell = MeshConversation::Geohash("dr5rsj7".to_string());
         assert!(
-            restarted.conversation_for(&cell.conversation_id()).is_none(),
+            restarted
+                .conversation_for(&cell.conversation_id())
+                .is_none(),
             "a cell that was left must not come back on restart"
         );
     }
@@ -1469,7 +1502,10 @@ mod tests {
         );
 
         assert!(timeline.record(&message).expect("first"));
-        assert!(!timeline.record(&message).expect("second"), "already stored");
+        assert!(
+            !timeline.record(&message).expect("second"),
+            "already stored"
+        );
         assert!(!timeline.record(&message).expect("third"), "still stored");
 
         let history = timeline
@@ -1559,9 +1595,7 @@ mod tests {
 
         // Every one of them answers the serverless predicate, so anything keyed
         // on "the server knows about this conversation" skips all three.
-        assert!(conversations
-            .iter()
-            .all(|c| c.conversation_type.is_mesh()));
+        assert!(conversations.iter().all(|c| c.conversation_type.is_mesh()));
     }
 
     #[test]
@@ -1616,7 +1650,11 @@ mod tests {
             .into_iter()
             .find(|c| c.conversation_type == ConversationType::MeshDm)
             .expect("the dm");
-        assert_eq!(dm.name, remote.as_str(), "the peer, until they name themselves");
+        assert_eq!(
+            dm.name,
+            remote.as_str(),
+            "the peer, until they name themselves"
+        );
 
         // Their reply names it.
         timeline
@@ -1806,17 +1844,21 @@ mod tests {
         let events = MeshEvents::new(8, Arc::clone(&timeline));
 
         events.send(MeshEvent::GeohashJoined("u4pruy".to_string()));
-        assert!(timeline
-            .conversations()
-            .expect("conversations")
-            .iter()
-            .any(|c| c.name == "#u4pruy"));
+        assert!(
+            timeline
+                .conversations()
+                .expect("conversations")
+                .iter()
+                .any(|c| c.name == "#u4pruy")
+        );
 
         events.send(MeshEvent::GeohashLeft("u4pruy".to_string()));
-        assert!(!timeline
-            .conversations()
-            .expect("conversations")
-            .iter()
-            .any(|c| c.name == "#u4pruy"));
+        assert!(
+            !timeline
+                .conversations()
+                .expect("conversations")
+                .iter()
+                .any(|c| c.name == "#u4pruy")
+        );
     }
 }

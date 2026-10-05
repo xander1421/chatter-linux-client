@@ -264,7 +264,11 @@ impl LocalAIActorHandle {
     }
 
     /// Generate text completion (non-streaming).
-    pub async fn complete(&self, prompt: String, params: SampleParams) -> Result<String, LocalAIError> {
+    pub async fn complete(
+        &self,
+        prompt: String,
+        params: SampleParams,
+    ) -> Result<String, LocalAIError> {
         self.send(|tx| LocalAICommand::Complete {
             prompt,
             params,
@@ -449,12 +453,17 @@ mod no_stub_answers_tests {
         // Ask without a model, and again after a load attempt: neither may
         // produce text. The old code returned Ok(stub) on the second path.
         for _ in 0..2 {
-            match handle.complete("what is 2 + 2?".to_string(), SampleParams::default()).await {
+            match handle
+                .complete("what is 2 + 2?".to_string(), SampleParams::default())
+                .await
+            {
                 Ok(text) => panic!("a build with no inference engine answered a prompt: {text:?}"),
                 Err(LocalAIError::FeatureDisabled) | Err(LocalAIError::NoModel) => {}
                 Err(e) => panic!("unexpected error {e:?}"),
             }
-            let _ = handle.load_model("qwen2.5-coder:7b".to_string(), None).await;
+            let _ = handle
+                .load_model("qwen2.5-coder:7b".to_string(), None)
+                .await;
         }
     }
 

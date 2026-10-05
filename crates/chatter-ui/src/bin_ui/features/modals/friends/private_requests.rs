@@ -52,8 +52,9 @@ pub(crate) fn wire_accept_private_request(window: &MainWindow, ui_ctx: &Arc<Chat
                 Ok(dm) => {
                     let peer_id = dm.peer_id;
                     // Use stored display name, not user_service (strangers aren't in the database)
-                    let peer_name = dm.peer_display_name.clone()
-                        .unwrap_or_else(|| chatter_core::services::user::friend_display_name_placeholder(&peer_id));
+                    let peer_name = dm.peer_display_name.clone().unwrap_or_else(|| {
+                        chatter_core::services::user::friend_display_name_placeholder(&peer_id)
+                    });
                     let dm_id = dm.id;
 
                     tracing::info!(
@@ -183,7 +184,9 @@ pub(crate) fn wire_block_private_request(window: &MainWindow, ui_ctx: &Arc<Chatt
             };
 
             // Get the conversation to find the peer ID for global block
-            let peer_id = ui_ctx.get_anon_dm_conversation(&conv_id).map(|dm| dm.peer_id);
+            let peer_id = ui_ctx
+                .get_anon_dm_conversation(&conv_id)
+                .map(|dm| dm.peer_id);
 
             // Block the conversation
             match ui_ctx.block_anon_dm_conversation(&conv_id) {
@@ -192,7 +195,9 @@ pub(crate) fn wire_block_private_request(window: &MainWindow, ui_ctx: &Arc<Chatt
 
                     // Also block the user globally if we have their ID
                     if let Some(user_id) = peer_id {
-                        if let Err(e) = ui_ctx.block_anon_dm_user(&user_id, Some("Blocked from request")) {
+                        if let Err(e) =
+                            ui_ctx.block_anon_dm_user(&user_id, Some("Blocked from request"))
+                        {
                             tracing::warn!("Failed to globally block user: {}", e);
                         } else {
                             tracing::info!("Globally blocked user {} from anonymous DMs", user_id);
@@ -233,8 +238,9 @@ async fn refresh_private_requests(
     let mut private_requests: Vec<FriendRequestSendData> = Vec::with_capacity(requests.len());
 
     for dm in requests {
-        let peer_name = dm.peer_display_name.clone()
-            .unwrap_or_else(|| chatter_core::services::user::friend_display_name_placeholder(&dm.peer_id));
+        let peer_name = dm.peer_display_name.clone().unwrap_or_else(|| {
+            chatter_core::services::user::friend_display_name_placeholder(&dm.peer_id)
+        });
         let conv_id_str = dm.id.to_string();
 
         private_requests.push(FriendRequestSendData {
@@ -243,7 +249,8 @@ async fn refresh_private_requests(
             username: "Private".to_string(),
             avatar_bytes: dm.peer_avatar.clone(),
             avatar_decoded: None,
-            sent_at: dm.created_at
+            sent_at: dm
+                .created_at
                 .with_timezone(&chrono::Local)
                 .format("%b %d, %H:%M")
                 .to_string(),
@@ -257,7 +264,8 @@ async fn refresh_private_requests(
     let request_count = private_requests.len() as i32;
     let _ = slint::invoke_from_event_loop(move || {
         if let Some(w) = weak_window.upgrade() {
-            let private_slint: Vec<FriendRequestData> = private_requests.into_iter().map(|r| r.to_slint()).collect();
+            let private_slint: Vec<FriendRequestData> =
+                private_requests.into_iter().map(|r| r.to_slint()).collect();
             w.set_friends_private_requests(ModelRc::new(VecModel::from(private_slint)));
             w.set_pending_message_requests(request_count);
         }

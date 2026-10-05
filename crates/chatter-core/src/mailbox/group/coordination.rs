@@ -133,7 +133,8 @@ impl GroupCoordinator {
                     Ok(resp) => break resp,
                     Err(e) => {
                         if e.is_retryable() && attempt < MAX_RETRIES {
-                            let backoff = std::time::Duration::from_millis(200 * u64::from(attempt));
+                            let backoff =
+                                std::time::Duration::from_millis(200 * u64::from(attempt));
                             tracing::warn!(
                                 channel_id = %channel_id,
                                 error = %e,
@@ -182,10 +183,9 @@ impl GroupCoordinator {
         announcement: &GroupMailboxAddress,
     ) -> Result<(), MailboxError> {
         // Parse channel_id
-        let channel_id: ChannelId = announcement
-            .channel_id
-            .parse()
-            .map_err(|_| MailboxError::InvalidServerKey("Invalid channel_id in announcement".into()))?;
+        let channel_id: ChannelId = announcement.channel_id.parse().map_err(|_| {
+            MailboxError::InvalidServerKey("Invalid channel_id in announcement".into())
+        })?;
 
         // Validate mailbox_pk length
         if announcement.mailbox_pk.len() != 32 {
@@ -321,7 +321,11 @@ impl GroupCoordinator {
     }
 
     /// Build GroupMailboxAddress announcement from our mailbox.
-    fn build_announcement(&self, channel_id: &ChannelId, mailbox: &GroupMailbox) -> GroupMailboxAddress {
+    fn build_announcement(
+        &self,
+        channel_id: &ChannelId,
+        mailbox: &GroupMailbox,
+    ) -> GroupMailboxAddress {
         tracing::info!(
             channel_id = %channel_id,
             mailbox_id = %mailbox.id,
@@ -435,7 +439,10 @@ mod tests {
         coordinator.process_announcement(member, &first).unwrap();
 
         let state = mgr.load_group_state(&channel_id).unwrap().unwrap();
-        assert_eq!(state.member_mailboxes.get(&member).unwrap().public_key, [1u8; 32]);
+        assert_eq!(
+            state.member_mailboxes.get(&member).unwrap().public_key,
+            [1u8; 32]
+        );
 
         // Rotated announcement: same member, new mailbox pk → must overwrite.
         let rotated = GroupMailboxAddress {
@@ -446,7 +453,11 @@ mod tests {
         coordinator.process_announcement(member, &rotated).unwrap();
 
         let state = mgr.load_group_state(&channel_id).unwrap().unwrap();
-        assert_eq!(state.member_mailboxes.len(), 1, "must overwrite, not duplicate");
+        assert_eq!(
+            state.member_mailboxes.len(),
+            1,
+            "must overwrite, not duplicate"
+        );
         assert_eq!(
             state.member_mailboxes.get(&member).unwrap().public_key,
             [2u8; 32],

@@ -174,9 +174,7 @@ pub async fn action(
             pool.notification_client().delete_notification(id).await?;
         }
         ("notifications", "Mark all read") => {
-            pool.notification_client()
-                .mark_all_as_read(vec![])
-                .await?;
+            pool.notification_client().mark_all_as_read(vec![]).await?;
         }
         ("integrations", "Install") => {
             pool.integration_client()

@@ -44,6 +44,7 @@ export component ThreadPanel inherits Rectangle {
     callback close-clicked;
     callback send-reply(string);
     callback load-more-replies;
+    callback open-message-link(string);
     callback message-clicked(string);
     callback react-clicked(string, string, length, length);  // (sender_id, timestamp_ns, x, y)
     callback reaction-toggled(string, string, string);  // (sender_id, timestamp_ns, emoji)
@@ -339,6 +340,7 @@ export component ThreadPanel inherits Rectangle {
                         is-thread-reply: false;
                         show-sender: item.show-sender;
 
+                        open-message-link(url) => { root.open-message-link(url); }
                         message-clicked(id) => {
                             root.message-clicked(id);
                         }

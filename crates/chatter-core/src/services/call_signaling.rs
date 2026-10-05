@@ -25,10 +25,10 @@ use crate::crypto::call_key_provider::EphemeralCallKey;
 use crate::domain::anon_dm::AnonDmId;
 use crate::domain::anon_group::AnonGroupId;
 #[cfg(feature = "media")]
-use crate::domain::call::{AnonCallAnswerOutcome, AnonCallSetupResult, CallSetupResult};
-#[cfg(feature = "media")]
 use crate::domain::call::CallType;
 use crate::domain::call::PendingDmCall;
+#[cfg(feature = "media")]
+use crate::domain::call::{AnonCallAnswerOutcome, AnonCallSetupResult, CallSetupResult};
 
 #[cfg(feature = "media")]
 use crate::domain::ids::CallId;
@@ -43,9 +43,8 @@ use crate::services::call_worker::{
 };
 use crate::services::channel::ChannelService;
 use crate::services::gateway::{
-    build_call_key_offer, build_call_key_answer,
-    build_call_hangup_content, build_group_call_signal_content,
-    CallHangupReason,
+    CallHangupReason, build_call_hangup_content, build_call_key_answer, build_call_key_offer,
+    build_group_call_signal_content,
 };
 use crate::services::message::MessageService;
 #[cfg(feature = "media")]
@@ -157,8 +156,16 @@ struct KeySent {
 }
 
 /// Whether `peer` was sent a rotation for `call_id` within `window` of `now`.
-fn sent_recently(last: Option<&KeySent>, call_id: &str, peer: &UserId, now: std::time::Instant, window: std::time::Duration) -> bool {
-    last.is_some_and(|k| k.call_id == call_id && now.saturating_duration_since(k.at) < window && k.to.contains(peer))
+fn sent_recently(
+    last: Option<&KeySent>,
+    call_id: &str,
+    peer: &UserId,
+    now: std::time::Instant,
+    window: std::time::Duration,
+) -> bool {
+    last.is_some_and(|k| {
+        k.call_id == call_id && now.saturating_duration_since(k.at) < window && k.to.contains(peer)
+    })
 }
 
 /// Held by the one task waiting for a group-call key in a call
@@ -199,8 +206,19 @@ impl CallSignalingService {
     /// Whether we sent `peer` a rotation for `call_id` within `window`: its
     /// key request crossed that key in flight, and a second rotation would
     /// only churn the call (it asks again if the key never lands).
-    pub fn recently_keyed(&self, call_id: &str, peer: &UserId, window: std::time::Duration) -> bool {
-        sent_recently(self.last_key_sent.lock().as_ref(), call_id, peer, std::time::Instant::now(), window)
+    pub fn recently_keyed(
+        &self,
+        call_id: &str,
+        peer: &UserId,
+        window: std::time::Duration,
+    ) -> bool {
+        sent_recently(
+            self.last_key_sent.lock().as_ref(),
+            call_id,
+            peer,
+            std::time::Instant::now(),
+            window,
+        )
     }
 
     /// Become the one task waiting for a group-call key in `call_id`; `None`
@@ -212,7 +230,10 @@ impl CallSignalingService {
             return None;
         }
         *slot = Some(call_id.to_string());
-        Some(GroupKeyWaitGuard { slot: Arc::clone(&self.group_key_wait), call_id: call_id.to_string() })
+        Some(GroupKeyWaitGuard {
+            slot: Arc::clone(&self.group_key_wait),
+            call_id: call_id.to_string(),
+        })
     }
 
     /// Store a pending outgoing DM call.
@@ -300,7 +321,8 @@ impl CallSignalingService {
         peer_id: &UserId,
         call_id: &str,
     ) -> Result<(), CallSignalingError> {
-        self.send_call_hangup_to(peer_id, call_id, CallHangupReason::Declined).await
+        self.send_call_hangup_to(peer_id, call_id, CallHangupReason::Declined)
+            .await
     }
 
     async fn send_call_hangup_to(
@@ -315,7 +337,9 @@ impl CallSignalingService {
             .send_friend_dm_content(peer_id, content)
             .await
         {
-            Ok(_) => tracing::info!(peer_id = %peer_id, call_id, reason = ?reason, "Call hangup sent"),
+            Ok(_) => {
+                tracing::info!(peer_id = %peer_id, call_id, reason = ?reason, "Call hangup sent")
+            }
             // Session still bootstrapping — the queued hangup will deliver, and the
             // peer sees the LiveKit disconnect regardless. Not fatal.
             Err(crate::services::message::MessageError::BootstrapInitiated) => {
@@ -333,10 +357,13 @@ impl CallSignalingService {
         if invites.contains_key(call_id) {
             return false;
         }
-        invites.insert(call_id.to_string(), GroupCallInvite {
-            accepted: false,
-            latest: HashMap::new(),
-        });
+        invites.insert(
+            call_id.to_string(),
+            GroupCallInvite {
+                accepted: false,
+                latest: HashMap::new(),
+            },
+        );
         true
     }
 
@@ -344,9 +371,17 @@ impl CallSignalingService {
     /// finished joining. True when such a call is held — the key is then
     /// kept if it is the newest from its sender, else dropped; false when it
     /// is not.
-    pub fn buffer_group_call_key(&self, call_id: &str, sender: UserId, key: [u8; 32], epoch: u32) -> bool {
+    pub fn buffer_group_call_key(
+        &self,
+        call_id: &str,
+        sender: UserId,
+        key: [u8; 32],
+        epoch: u32,
+    ) -> bool {
         let mut invites = self.group_call_invites.lock();
-        let Some(invite) = invites.get_mut(call_id) else { return false };
+        let Some(invite) = invites.get_mut(call_id) else {
+            return false;
+        };
         buffer_newest_per_sender(&mut invite.latest, sender, key, epoch);
         true
     }
@@ -355,33 +390,48 @@ impl CallSignalingService {
     /// [`Self::take_group_call_invite`], whatever the ring timer does. An
     /// unrung join (from the open channel) holds one from here.
     pub fn accept_group_call_invite(&self, call_id: &str) {
-        self.group_call_invites.lock()
+        self.group_call_invites
+            .lock()
             .entry(call_id.to_string())
-            .or_insert_with(|| GroupCallInvite { accepted: false, latest: HashMap::new() })
+            .or_insert_with(|| GroupCallInvite {
+                accepted: false,
+                latest: HashMap::new(),
+            })
             .accepted = true;
     }
 
     /// Forget a group call invite (joined, declined or failed), returning
     /// the newest key from each sender that arrived while we were joining.
     pub fn take_group_call_invite(&self, call_id: &str) -> Vec<PendingGroupCallKey> {
-        let Some(invite) = self.group_call_invites.lock().remove(call_id) else { return Vec::new() };
-        invite.latest.into_iter()
+        let Some(invite) = self.group_call_invites.lock().remove(call_id) else {
+            return Vec::new();
+        };
+        invite
+            .latest
+            .into_iter()
             .map(|(sender, (key, epoch))| PendingGroupCallKey { sender, key, epoch })
             .collect()
     }
 
     /// The ring ran out: forget the invite unless the user has answered.
     pub fn drop_ringing_group_call_invite(&self, call_id: &str) {
-        self.group_call_invites.lock().retain(|id, invite| id != call_id || invite.accepted);
+        self.group_call_invites
+            .lock()
+            .retain(|id, invite| id != call_id || invite.accepted);
     }
 
     /// Whether `user_id` is a member of `channel_id`, per the server's full
     /// (paginated) member list.
-    pub async fn is_channel_member(&self, channel_id: &ChannelId, user_id: &UserId) -> Result<bool, CallSignalingError> {
+    pub async fn is_channel_member(
+        &self,
+        channel_id: &ChannelId,
+        user_id: &UserId,
+    ) -> Result<bool, CallSignalingError> {
         let members = with_policy_deadline(
             "channel member list",
             self.channel_service.get_all_channel_members(channel_id),
-        ).await?;
+        )
+        .await?;
         Ok(members.iter().any(|m| &m.user_id == user_id))
     }
 
@@ -410,9 +460,20 @@ impl CallSignalingService {
         let membership = with_policy_deadline(
             "channel member list",
             self.channel_service.get_all_channel_members(channel_id),
-        ).await;
-        let stage = if membership.is_ok() { "rotation_membership_refresh_succeeded" } else { "rotation_membership_refresh_failed" };
-        tracing::info!(stage, call_id, epoch, elapsed_us = membership_started.elapsed().as_micros() as u64, "Call stage");
+        )
+        .await;
+        let stage = if membership.is_ok() {
+            "rotation_membership_refresh_succeeded"
+        } else {
+            "rotation_membership_refresh_failed"
+        };
+        tracing::info!(
+            stage,
+            call_id,
+            epoch,
+            elapsed_us = membership_started.elapsed().as_micros() as u64,
+            "Call stage"
+        );
         let members = membership?;
         let recipients = rotation_recipients(&members, room_identities, &current_user);
         let channel_id_str = channel_id.to_string();
@@ -420,43 +481,64 @@ impl CallSignalingService {
         // In parallel: one slow recipient (a first session, a KT fetch) must
         // not hold every later participant's key — a joiner hears nothing
         // until its copy lands.
-        let sends = recipients.iter().enumerate().map(|(recipient_index, peer_id)| {
-            let content = build_group_call_signal_content(
-                call_id, &channel_id_str, crate::domain::call::GroupCallSignal::Key { key, epoch },
-            );
-            async move {
-                let send_started = std::time::Instant::now();
-                let sent = with_policy_deadline(
-                    "group call key send",
-                    self.message_service.send_friend_dm_content(peer_id, content),
-                ).await;
-                // Whole per-recipient send includes own-device sync; this is
-                // not a deposit ACK or evidence of remote audio arrival.
-                let stage = if sent.is_ok() {
-                    "rotation_recipient_whole_send_including_own_device_sync_succeeded"
-                } else {
-                    "rotation_recipient_whole_send_including_own_device_sync_failed"
-                };
-                tracing::info!(stage, call_id, epoch, recipient_index, elapsed_us = send_started.elapsed().as_micros() as u64, "Call stage: whole send includes own-device sync, not deposit ACK");
-                if let Err(e) = &sent {
-                    tracing::warn!(
-                        call_id, epoch, peer_id = %peer_id, error = %e,
-                        "Failed to redistribute rotated group call key to participant"
+        let sends = recipients
+            .iter()
+            .enumerate()
+            .map(|(recipient_index, peer_id)| {
+                let content = build_group_call_signal_content(
+                    call_id,
+                    &channel_id_str,
+                    crate::domain::call::GroupCallSignal::Key { key, epoch },
+                );
+                async move {
+                    let send_started = std::time::Instant::now();
+                    let sent = with_policy_deadline(
+                        "group call key send",
+                        self.message_service
+                            .send_friend_dm_content(peer_id, content),
+                    )
+                    .await;
+                    // Whole per-recipient send includes own-device sync; this is
+                    // not a deposit ACK or evidence of remote audio arrival.
+                    let stage = if sent.is_ok() {
+                        "rotation_recipient_whole_send_including_own_device_sync_succeeded"
+                    } else {
+                        "rotation_recipient_whole_send_including_own_device_sync_failed"
+                    };
+                    tracing::info!(
+                        stage,
+                        call_id,
+                        epoch,
+                        recipient_index,
+                        elapsed_us = send_started.elapsed().as_micros() as u64,
+                        "Call stage: whole send includes own-device sync, not deposit ACK"
                     );
+                    if let Err(e) = &sent {
+                        tracing::warn!(
+                            call_id, epoch, peer_id = %peer_id, error = %e,
+                            "Failed to redistribute rotated group call key to participant"
+                        );
+                    }
+                    sent.is_ok()
                 }
-                sent.is_ok()
-            }
-        });
+            });
         let sent = futures::future::join_all(sends).await;
         let sent_count = sent.iter().filter(|ok| **ok).count();
         *self.last_key_sent.lock() = Some(KeySent {
             call_id: call_id.to_string(),
             at: std::time::Instant::now(),
-            to: recipients.iter().zip(&sent).filter(|(_, ok)| **ok).map(|(p, _)| *p).collect(),
+            to: recipients
+                .iter()
+                .zip(&sent)
+                .filter(|(_, ok)| **ok)
+                .map(|(p, _)| *p)
+                .collect(),
         });
 
         tracing::info!(
-            call_id, epoch, sent_count,
+            call_id,
+            epoch,
+            sent_count,
             roster = room_identities.len(),
             members = members.len(),
             "Completed rotated group call key redistribution"
@@ -475,17 +557,28 @@ impl CallSignalingService {
         let current_user = self.channel_service.current_user_id()?;
         // Full membership, paginated — a member past the server's page size
         // otherwise never rings (OPEN-ITEMS §16).
-        let members = self.channel_service.get_all_channel_members(channel_id).await?;
+        let members = self
+            .channel_service
+            .get_all_channel_members(channel_id)
+            .await?;
         let channel_id_str = channel_id.to_string();
 
         let mut sent_count = 0;
         for member in members.iter().filter(|m| m.user_id != current_user) {
             let content = build_group_call_signal_content(
-                call_id, &channel_id_str, crate::domain::call::GroupCallSignal::Ring,
+                call_id,
+                &channel_id_str,
+                crate::domain::call::GroupCallSignal::Ring,
             );
-            match self.message_service.send_friend_dm_content(&member.user_id, content).await {
+            match self
+                .message_service
+                .send_friend_dm_content(&member.user_id, content)
+                .await
+            {
                 Ok(_) => sent_count += 1,
-                Err(e) => tracing::warn!(call_id, peer_id = %member.user_id, error = %e, "Group call ring not sent"),
+                Err(e) => {
+                    tracing::warn!(call_id, peer_id = %member.user_id, error = %e, "Group call ring not sent")
+                }
             }
         }
 
@@ -502,12 +595,16 @@ impl CallSignalingService {
         authority: &UserId,
     ) -> Result<(), CallSignalingError> {
         let content = build_group_call_signal_content(
-            call_id, &channel_id.to_string(), crate::domain::call::GroupCallSignal::KeyRequest,
+            call_id,
+            &channel_id.to_string(),
+            crate::domain::call::GroupCallSignal::KeyRequest,
         );
         with_policy_deadline(
             "group call key request",
-            self.message_service.send_friend_dm_content(authority, content),
-        ).await?;
+            self.message_service
+                .send_friend_dm_content(authority, content),
+        )
+        .await?;
         tracing::info!(call_id, %authority, "Group call key requested");
         Ok(())
     }
@@ -548,11 +645,20 @@ impl CallSignalingService {
         // Create call on server with placeholder key (will update when answer arrives)
         let placeholder_key = [0u8; 32];
         let call = call_worker
-            .initiate_call(channel_id, call_type_str, call_type, &placeholder_key, user_id)
+            .initiate_call(
+                channel_id,
+                call_type_str,
+                call_type,
+                &placeholder_key,
+                user_id,
+            )
             .await
             .map_err(|e| CallSignalingError::CallWorker(e.to_string()))?;
 
-        tracing::info!("Created call on server: {:?}, waiting for peer's ephemeral key", call.id);
+        tracing::info!(
+            "Created call on server: {:?}, waiting for peer's ephemeral key",
+            call.id
+        );
 
         // Send offer via sealed sender DM. `initiate_call` already connected
         // the LiveKit room and set the worker's active_call; if the offer
@@ -563,7 +669,13 @@ impl CallSignalingService {
         let call_id_str = call.id.to_string();
         let channel_id_str = channel_id.to_string();
         if let Err(e) = self
-            .send_call_offer(peer_id, &call_id_str, ephemeral_public, call_type_str, &channel_id_str)
+            .send_call_offer(
+                peer_id,
+                &call_id_str,
+                ephemeral_public,
+                call_type_str,
+                &channel_id_str,
+            )
             .await
         {
             tracing::error!(error = %e, call_id = %call.id, "Call offer send failed — rolling back call");
@@ -614,7 +726,10 @@ impl CallSignalingService {
                 return;
             }
             tracing::info!(call_id = %call_id, "Outgoing call unanswered — ending it");
-            if let Err(e) = signaling.end_dm_call(&worker, CallEndReason::NoAnswer).await {
+            if let Err(e) = signaling
+                .end_dm_call(&worker, CallEndReason::NoAnswer)
+                .await
+            {
                 tracing::debug!(error = %e, "ring timeout: call already gone");
             }
         });
@@ -636,7 +751,8 @@ impl CallSignalingService {
         call_worker: &CallWorkerHandle,
     ) -> Result<CallSetupResult, CallSignalingError> {
         // Take pending call state
-        let pending = self.take_pending_dm_call()
+        let pending = self
+            .take_pending_dm_call()
             .ok_or(CallSignalingError::NoPendingCall)?;
 
         // Verify call ID matches
@@ -661,7 +777,8 @@ impl CallSignalingService {
 
         // Delegate all crypto to the Signal service (ECDH + identity lookup + HKDF)
         let priv_key = pending.ephemeral_key.private_key_bytes();
-        let call_key = signal_service.actor
+        let call_key = signal_service
+            .actor
             .complete_call_key_exchange(
                 priv_key,
                 peer_ephemeral_pk,
@@ -682,9 +799,7 @@ impl CallSignalingService {
         );
 
         // Update LiveKit encryption key
-        let key_installed = call_worker
-            .set_encryption_key(call_key.to_vec())
-            .await;
+        let key_installed = call_worker.set_encryption_key(call_key.to_vec()).await;
 
         // the DM caller's auto-publish was deferred at initiate time
         // (media would otherwise have leaked under the all-zero placeholder
@@ -718,7 +833,8 @@ impl CallSignalingService {
         let verification = CallVerification::derive_verification_emojis(&call_key, call_id);
         let (e1, e2, e3, e4) = CallVerification::to_slint_tuple(&verification);
 
-        let call_id_parsed = call_id.parse::<CallId>()
+        let call_id_parsed = call_id
+            .parse::<CallId>()
             .map_err(|_| CallSignalingError::KeyDerivationFailed("Invalid call ID".to_string()))?;
 
         Ok(CallSetupResult {
@@ -753,7 +869,8 @@ impl CallSignalingService {
 
         // Delegate all crypto to the Signal service (ECDH + identity lookup + HKDF)
         let priv_key = our_ephemeral.private_key_bytes();
-        let encryption_key = signal_service.actor
+        let encryption_key = signal_service
+            .actor
             .complete_call_key_exchange(
                 priv_key,
                 caller_ephemeral_pk,
@@ -771,14 +888,16 @@ impl CallSignalingService {
         );
 
         // Send answer with our ephemeral public key
-        self.send_call_answer(caller_id, call_id, our_ephemeral_pk).await?;
+        self.send_call_answer(caller_id, call_id, our_ephemeral_pk)
+            .await?;
 
         // Ephemeral key dropped here (zeroized)
         drop(our_ephemeral);
         tracing::debug!("Ephemeral private key zeroized");
 
         // Parse call ID
-        let call_id_parsed = call_id.parse::<CallId>()
+        let call_id_parsed = call_id
+            .parse::<CallId>()
             .map_err(|_| CallSignalingError::KeyDerivationFailed("Invalid call ID".to_string()))?;
 
         // Join the call with derived key
@@ -788,10 +907,8 @@ impl CallSignalingService {
             .map_err(|e| CallSignalingError::CallWorker(e.to_string()))?;
 
         // Derive verification emojis
-        let verification = CallVerification::derive_verification_emojis(
-            &encryption_key,
-            &call.id.to_string(),
-        );
+        let verification =
+            CallVerification::derive_verification_emojis(&encryption_key, &call.id.to_string());
         let (e1, e2, e3, e4) = CallVerification::to_slint_tuple(&verification);
 
         Ok(CallSetupResult {
@@ -818,9 +935,7 @@ impl CallSignalingService {
     /// (NDSS'21 §VI-F). An empty pool fails the call with `NoTokens`; the
     /// refill loop tops it up on its own schedule.
     #[cfg(feature = "media")]
-    fn acquire_call_room_token(
-        &self,
-    ) -> Result<crate::mailbox::CallRoomToken, CallSignalingError> {
+    fn acquire_call_room_token(&self) -> Result<crate::mailbox::CallRoomToken, CallSignalingError> {
         self.anon_dm_service
             .token_manager
             .claim_prefetched_call_room_token()
@@ -845,14 +960,18 @@ impl CallSignalingService {
     /// Whether `user_id` is the logged-in user — i.e. a message from one of our
     /// own devices.
     pub fn is_current_user(&self, user_id: &UserId) -> bool {
-        self.channel_service.current_user_id().is_ok_and(|me| me == *user_id)
+        self.channel_service
+            .current_user_id()
+            .is_ok_and(|me| me == *user_id)
     }
 
     /// Drop the pending state of the anon call `sender` is ringing us with in
     /// `room_name`, returning whether there was one — i.e. whether their
     /// hangup calls off a ring of ours.
     pub fn take_incoming_anon_call(&self, room_name: &str, sender: UserId) -> bool {
-        self.anon_dm_service.take_incoming_anon_call(room_name, sender).is_some()
+        self.anon_dm_service
+            .take_incoming_anon_call(room_name, sender)
+            .is_some()
     }
 
     /// Resolve the display name *we* locally know for an anon-DM peer, from the
@@ -885,7 +1004,8 @@ impl CallSignalingService {
         let token = self.acquire_call_room_token()?;
 
         // Send call offer via anon DM channel
-        let offer_result = self.anon_dm_service
+        let offer_result = self
+            .anon_dm_service
             .send_call_offer(anon_dm_id, &token, is_video, Some(display_name))
             .await
             .map_err(|e| CallSignalingError::AnonCall(format!("Failed to send offer: {}", e)))?;
@@ -911,7 +1031,12 @@ impl CallSignalingService {
                 started_at: None,
             },
         );
-        self.ring_anon_call(call_worker, &offer_result.room_name, OrchestratedCallKind::AnonDm, is_video);
+        self.ring_anon_call(
+            call_worker,
+            &offer_result.room_name,
+            OrchestratedCallKind::AnonDm,
+            is_video,
+        );
 
         Ok(offer_result)
     }
@@ -928,10 +1053,13 @@ impl CallSignalingService {
         let token = self.acquire_call_room_token()?;
 
         // Send call offer to all group members
-        let offer_result = self.anon_group_service
+        let offer_result = self
+            .anon_group_service
             .send_call_offer(group_id, &token, is_video, Some(display_name))
             .await
-            .map_err(|e| CallSignalingError::AnonCall(format!("Failed to send group offer: {}", e)))?;
+            .map_err(|e| {
+                CallSignalingError::AnonCall(format!("Failed to send group offer: {}", e))
+            })?;
 
         tracing::info!(
             room_name = %offer_result.room_name,
@@ -939,9 +1067,8 @@ impl CallSignalingService {
         );
 
         // Store pending call state (reuse anon DM pending call infrastructure)
-        let conversation_id = crate::domain::anon_dm::AnonDmId::try_from_slice(
-            group_id.as_bytes()
-        ).expect("AnonGroupId is 16 bytes like AnonDmId");
+        let conversation_id = crate::domain::anon_dm::AnonDmId::try_from_slice(group_id.as_bytes())
+            .expect("AnonGroupId is 16 bytes like AnonDmId");
 
         self.anon_dm_service.store_pending_anon_call(
             offer_result.room_name.clone(),
@@ -958,7 +1085,12 @@ impl CallSignalingService {
                 started_at: None,
             },
         );
-        self.ring_anon_call(call_worker, &offer_result.room_name, OrchestratedCallKind::AnonGroup, is_video);
+        self.ring_anon_call(
+            call_worker,
+            &offer_result.room_name,
+            OrchestratedCallKind::AnonGroup,
+            is_video,
+        );
 
         Ok(offer_result)
     }
@@ -991,11 +1123,22 @@ impl CallSignalingService {
         let room_name = room_name.to_string();
         tokio::spawn(async move {
             tokio::time::sleep(RING_TIMEOUT).await;
-            let Some(pending) = signaling.anon_dm_service.take_ringing_anon_call(Some(&room_name)) else {
+            let Some(pending) = signaling
+                .anon_dm_service
+                .take_ringing_anon_call(Some(&room_name))
+            else {
                 return;
             };
             tracing::info!(room_name = %room_name, "Outgoing anon call unanswered — ending it");
-            signaling.finish_anon_call(&worker, Some(pending), room_name, 0, CallEndReason::NoAnswer).await;
+            signaling
+                .finish_anon_call(
+                    &worker,
+                    Some(pending),
+                    room_name,
+                    0,
+                    CallEndReason::NoAnswer,
+                )
+                .await;
         });
     }
 
@@ -1009,39 +1152,52 @@ impl CallSignalingService {
         call_worker: &CallWorkerHandle,
     ) -> Result<AnonCallSetupResult, CallSignalingError> {
         // Take pending call state
-        let pending = self.anon_dm_service.take_pending_anon_call(room_name)
+        let pending = self
+            .anon_dm_service
+            .take_pending_anon_call(room_name)
             .ok_or(CallSignalingError::NoPendingCall)?;
 
         // Acquire a fresh token for joining
-        let token = self.acquire_call_room_token()
-            .map_err(|e| {
-                // Put pending call back so user can retry
-                self.anon_dm_service.store_pending_anon_call(room_name.to_string(), pending.clone());
-                e
-            })?;
+        let token = self.acquire_call_room_token().map_err(|e| {
+            // Put pending call back so user can retry
+            self.anon_dm_service
+                .store_pending_anon_call(room_name.to_string(), pending.clone());
+            e
+        })?;
 
         // Use our own display name
-        let my_display_name = self.anon_dm_service
+        let my_display_name = self
+            .anon_dm_service
             .get_my_display_name()
             .unwrap_or_else(|| "Anonymous".to_string());
 
         // Determine if this is a group call (no anon DM conversation for this ID)
-        let is_group_call = self.anon_dm_service
+        let is_group_call = self
+            .anon_dm_service
             .get_conversation(&pending.conversation_id)
-            .ok().flatten().is_none();
+            .ok()
+            .flatten()
+            .is_none();
 
         // Send accept answer. The returned ns timestamp is wired into the
         // peer's `AnonCallAnswer` envelope and becomes the shared call-start
         // anchor for the duration timer on both sides.
         let answer_timestamp_ns = if is_group_call {
-            let group_id = AnonGroupId::try_from_slice(
-                pending.conversation_id.as_bytes()
-            ).ok_or_else(|| CallSignalingError::AnonCall("Invalid group ID".into()))?;
+            let group_id = AnonGroupId::try_from_slice(pending.conversation_id.as_bytes())
+                .ok_or_else(|| CallSignalingError::AnonCall("Invalid group ID".into()))?;
 
             self.anon_group_service
-                .send_call_answer(&group_id, &pending.call_room_id, true, Some(&token), Some(&my_display_name))
+                .send_call_answer(
+                    &group_id,
+                    &pending.call_room_id,
+                    true,
+                    Some(&token),
+                    Some(&my_display_name),
+                )
                 .await
-                .map_err(|e| CallSignalingError::AnonCall(format!("Failed to send group accept: {}", e)))?
+                .map_err(|e| {
+                    CallSignalingError::AnonCall(format!("Failed to send group accept: {}", e))
+                })?
         } else {
             self.anon_dm_service
                 .send_call_answer(
@@ -1053,13 +1209,16 @@ impl CallSignalingService {
                     Some(&my_display_name),
                 )
                 .await
-                .map_err(|e| CallSignalingError::AnonCall(format!("Failed to send accept: {}", e)))?
+                .map_err(|e| {
+                    CallSignalingError::AnonCall(format!("Failed to send accept: {}", e))
+                })?
         };
 
         tracing::info!(room_name = %room_name, "Anonymous call accept sent, joining LiveKit room");
 
         // Join the anonymous call room to get LiveKit credentials
-        let room_info = self.anon_dm_service
+        let room_info = self
+            .anon_dm_service
             .join_anon_call_room(room_name, &token, &my_display_name, pending.is_video_call)
             .await
             .map_err(|e| CallSignalingError::AnonCall(format!("Failed to join room: {}", e)))?;
@@ -1083,7 +1242,8 @@ impl CallSignalingService {
 
         tracing::info!(room_name = %room_name, "Connected to LiveKit for anonymous call");
 
-        let verification_emojis = Self::anon_verification_emojis(&pending.encryption_key, room_name);
+        let verification_emojis =
+            Self::anon_verification_emojis(&pending.encryption_key, room_name);
 
         let peer_avatar = self
             .anon_dm_service
@@ -1106,7 +1266,8 @@ impl CallSignalingService {
         // Re-store pending call so end_anon_call can find it for hangup/history
         let mut active_pending = pending;
         active_pending.started_at = Some(chrono::Utc::now());
-        self.anon_dm_service.store_pending_anon_call(room_name.to_string(), active_pending);
+        self.anon_dm_service
+            .store_pending_anon_call(room_name.to_string(), active_pending);
 
         Ok(result)
     }
@@ -1145,7 +1306,9 @@ impl CallSignalingService {
         })?;
         let room_name = format!("anon-{}", uuid::Uuid::from_bytes(id_bytes));
 
-        let pending = self.anon_dm_service.take_pending_anon_call(&room_name)
+        let pending = self
+            .anon_dm_service
+            .take_pending_anon_call(&room_name)
             .ok_or(CallSignalingError::NoPendingCall)?;
 
         if !accepted {
@@ -1156,13 +1319,15 @@ impl CallSignalingService {
         tracing::info!(room_name = %room_name, "Anonymous call accepted, connecting to LiveKit");
 
         // Mark call as started for duration tracking
-        self.anon_dm_service.mark_anon_call_started(&pending.room_name);
+        self.anon_dm_service
+            .mark_anon_call_started(&pending.room_name);
 
         // Acquire a fresh token for joining the call room
         let join_token = self.acquire_call_room_token()?;
 
         // Join the anonymous call room to get LiveKit credentials
-        let room_info = self.anon_dm_service
+        let room_info = self
+            .anon_dm_service
             .join_anon_call_room(
                 &pending.room_name,
                 &join_token,
@@ -1191,7 +1356,8 @@ impl CallSignalingService {
 
         tracing::info!(room_name = %room_name, "Connected to LiveKit for anonymous call (caller side)");
 
-        let verification_emojis = Self::anon_verification_emojis(&pending.encryption_key, &pending.room_name);
+        let verification_emojis =
+            Self::anon_verification_emojis(&pending.encryption_key, &pending.room_name);
 
         let peer_avatar = self
             .anon_dm_service
@@ -1214,7 +1380,8 @@ impl CallSignalingService {
         // Re-store pending call so end_anon_call can find it for hangup/history
         let mut active_pending = pending;
         active_pending.started_at = Some(chrono::Utc::now());
-        self.anon_dm_service.store_pending_anon_call(room_name.clone(), active_pending);
+        self.anon_dm_service
+            .store_pending_anon_call(room_name.clone(), active_pending);
 
         Ok(AnonCallAnswerOutcome::Connected(result))
     }
@@ -1222,27 +1389,36 @@ impl CallSignalingService {
     /// Decline an incoming anonymous call: send the decline answer. The history
     /// row and bubble follow the orchestrator's `IncomingWithdrawn { Declined }`
     /// (`call_history_recorder`).
-    pub async fn decline_anon_call(
-        &self,
-        room_name: &str,
-    ) -> Result<(), CallSignalingError> {
-        let pending = self.anon_dm_service.take_pending_anon_call(room_name)
+    pub async fn decline_anon_call(&self, room_name: &str) -> Result<(), CallSignalingError> {
+        let pending = self
+            .anon_dm_service
+            .take_pending_anon_call(room_name)
             .ok_or(CallSignalingError::NoPendingCall)?;
 
         // Determine if this is a group call
-        let is_group_call = self.anon_dm_service
+        let is_group_call = self
+            .anon_dm_service
             .get_conversation(&pending.conversation_id)
-            .ok().flatten().is_none();
+            .ok()
+            .flatten()
+            .is_none();
 
         if is_group_call {
-            let group_id = AnonGroupId::try_from_slice(
-                pending.conversation_id.as_bytes()
-            ).ok_or_else(|| CallSignalingError::AnonCall("Invalid group ID".into()))?;
+            let group_id = AnonGroupId::try_from_slice(pending.conversation_id.as_bytes())
+                .ok_or_else(|| CallSignalingError::AnonCall("Invalid group ID".into()))?;
 
             self.anon_group_service
-                .send_call_answer(&group_id, &pending.call_room_id, false, None, Some(&pending.display_name))
+                .send_call_answer(
+                    &group_id,
+                    &pending.call_room_id,
+                    false,
+                    None,
+                    Some(&pending.display_name),
+                )
                 .await
-                .map_err(|e| CallSignalingError::AnonCall(format!("Failed to send group decline: {}", e)))?;
+                .map_err(|e| {
+                    CallSignalingError::AnonCall(format!("Failed to send group decline: {}", e))
+                })?;
         } else {
             self.anon_dm_service
                 .send_call_answer(
@@ -1254,7 +1430,9 @@ impl CallSignalingService {
                     Some(&pending.display_name),
                 )
                 .await
-                .map_err(|e| CallSignalingError::AnonCall(format!("Failed to send decline: {}", e)))?;
+                .map_err(|e| {
+                    CallSignalingError::AnonCall(format!("Failed to send decline: {}", e))
+                })?;
         }
 
         tracing::info!(room_name = %room_name, "Anonymous call declined");
@@ -1283,13 +1461,20 @@ impl CallSignalingService {
         // connected), nor may the ring timeout end it again.
         self.take_pending_dm_call();
 
-        let call = call_worker.active_call().await
+        let call = call_worker
+            .active_call()
+            .await
             .ok_or(CallSignalingError::NoPendingCall)?;
 
         // Send hangup notification to peer
-        if let Err(e) = self.send_call_hangup(
-            &call.channel_id, &call.id.to_string(), CallHangupReason::Normal,
-        ).await {
+        if let Err(e) = self
+            .send_call_hangup(
+                &call.channel_id,
+                &call.id.to_string(),
+                CallHangupReason::Normal,
+            )
+            .await
+        {
             tracing::error!(error = %e, "Failed to send hangup notification");
         }
 
@@ -1318,7 +1503,9 @@ impl CallSignalingService {
     ) -> Result<(), CallSignalingError> {
         use crate::services::message::ChannelCallPhase;
 
-        let call = call_worker.active_call().await
+        let call = call_worker
+            .active_call()
+            .await
             .ok_or(CallSignalingError::NoPendingCall)?;
         let last_out = call_worker.remote_participant_identities().await.is_empty();
         let call_id = call.id.to_string();
@@ -1332,7 +1519,13 @@ impl CallSignalingService {
             let channel = call.channel_id;
             tokio::spawn(async move {
                 if let Err(e) = messages
-                    .post_channel_call_event(&channel, &call_id, ChannelCallPhase::Ended, duration, is_video)
+                    .post_channel_call_event(
+                        &channel,
+                        &call_id,
+                        ChannelCallPhase::Ended,
+                        duration,
+                        is_video,
+                    )
                     .await
                 {
                     tracing::warn!(error = %e, "Channel call ENDED not posted");
@@ -1341,7 +1534,12 @@ impl CallSignalingService {
         } else if let Ok(me) = self.message_service.current_user_id() {
             let now = crate::util::time::TimestampNanos::now().as_u64();
             if let Err(e) = self.message_service.file_channel_call_event(
-                &call.channel_id, &me, &call_id, ChannelCallPhase::Ended, duration, now,
+                &call.channel_id,
+                &me,
+                &call_id,
+                ChannelCallPhase::Ended,
+                duration,
+                now,
             ) {
                 tracing::warn!(error = %e, "Failed to file group call row");
             }
@@ -1370,7 +1568,13 @@ impl CallSignalingService {
             // Take the pending call info (re-stored by accept/answer flow)
             let pending = self.anon_dm_service.take_pending_anon_call(&room_name);
             return Ok(self
-                .finish_anon_call(call_worker, pending, room_name, duration_secs, CallEndReason::LocalHangup)
+                .finish_anon_call(
+                    call_worker,
+                    pending,
+                    room_name,
+                    duration_secs,
+                    CallEndReason::LocalHangup,
+                )
                 .await);
         }
         // No room: our call is still ringing — the caller joins the room
@@ -1378,11 +1582,19 @@ impl CallSignalingService {
         if let Some(pending) = self.anon_dm_service.take_ringing_anon_call(None) {
             let room_name = pending.room_name.clone();
             return Ok(self
-                .finish_anon_call(call_worker, Some(pending), room_name, 0, CallEndReason::LocalHangup)
+                .finish_anon_call(
+                    call_worker,
+                    Some(pending),
+                    room_name,
+                    0,
+                    CallEndReason::LocalHangup,
+                )
                 .await);
         }
         tracing::warn!("end_anon_call: no active or ringing anon call, forcing disconnect");
-        call_worker.disconnect_local(CallEndReason::LocalHangup).await;
+        call_worker
+            .disconnect_local(CallEndReason::LocalHangup)
+            .await;
         Ok(None)
     }
 
@@ -1411,23 +1623,30 @@ impl CallSignalingService {
             let conversation_id = pending.conversation_id;
 
             // Determine if this is a group call
-            let is_group_call = self.anon_dm_service
+            let is_group_call = self
+                .anon_dm_service
                 .get_conversation(&conversation_id)
-                .ok().flatten().is_none();
+                .ok()
+                .flatten()
+                .is_none();
 
             // Send hangup to the correct channel (DM or group)
             if is_group_call {
                 if let Some(group_id) = AnonGroupId::try_from_slice(conversation_id.as_bytes()) {
-                    if let Err(e) = self.anon_group_service.send_call_hangup(
-                        &group_id, &pending.call_room_id, hangup_reason,
-                    ).await {
+                    if let Err(e) = self
+                        .anon_group_service
+                        .send_call_hangup(&group_id, &pending.call_room_id, hangup_reason)
+                        .await
+                    {
                         tracing::error!(error = %e, "Failed to send group call hangup");
                     }
                 }
             } else {
-                if let Err(e) = self.anon_dm_service.send_call_hangup(
-                    &conversation_id, &pending.call_room_id, hangup_reason,
-                ).await {
+                if let Err(e) = self
+                    .anon_dm_service
+                    .send_call_hangup(&conversation_id, &pending.call_room_id, hangup_reason)
+                    .await
+                {
                     tracing::error!(error = %e, "Failed to send anonymous call hangup");
                 }
             }
@@ -1444,13 +1663,24 @@ impl CallSignalingService {
                 } else {
                     "0:00".to_string()
                 };
-                let label = if pending.is_outgoing { "Outgoing call" } else { "Incoming call" };
+                let label = if pending.is_outgoing {
+                    "Outgoing call"
+                } else {
+                    "Incoming call"
+                };
                 let text = format!("\u{1F4DE} {} \u{00B7} {}", label, duration_str);
                 let sent_at = crate::util::time::TimestampNanos::now().as_u64();
-                let user_id = self.channel_service.current_user_id()
+                let user_id = self
+                    .channel_service
+                    .current_user_id()
                     .unwrap_or_else(|_| UserId::from_uuid(uuid::Uuid::nil()));
 
-                match self.anon_dm_service.store_text_message(&conversation_id, &user_id, &text, sent_at) {
+                match self.anon_dm_service.store_text_message(
+                    &conversation_id,
+                    &user_id,
+                    &text,
+                    sent_at,
+                ) {
                     Ok(msg_id) => {
                         // Tell the UI in real time so the call-history bubble
                         // shows without waiting for the user to re-enter the
@@ -1459,11 +1689,13 @@ impl CallSignalingService {
                         // message originates inside the signaling actor with
                         // no UI optimism, so we have to drive the model
                         // update ourselves.
-                        use crate::domain::message::{ConversationType, Message, MessageContent};
                         use crate::domain::ids::{ChannelId, MessageId};
+                        use crate::domain::message::{ConversationType, Message, MessageContent};
                         use crate::inbox::handlers::DomainEvent;
                         let channel_id: ChannelId = conversation_id.into();
-                        let msg_uuid = msg_id.as_str().parse::<uuid::Uuid>()
+                        let msg_uuid = msg_id
+                            .as_str()
+                            .parse::<uuid::Uuid>()
                             .map(MessageId::from_uuid)
                             .unwrap_or_else(|_| MessageId::new());
                         let now = chrono::Utc::now();
@@ -1497,9 +1729,11 @@ impl CallSignalingService {
                             delivery_status: String::new(),
                             failure_reason: None,
                         };
-                        self.message_service.event_bus.emit_domain(
-                            DomainEvent::MessageReceived { message: domain_msg },
-                        );
+                        self.message_service
+                            .event_bus
+                            .emit_domain(DomainEvent::MessageReceived {
+                                message: domain_msg,
+                            });
                     }
                     Err(e) => {
                         tracing::error!(error = %e, "Failed to store anon call history on hangup");
@@ -1554,10 +1788,11 @@ impl CallSignalingService {
             }
         }
 
-        call_worker.disconnect_local(CallEndReason::RemoteHangup).await;
+        call_worker
+            .disconnect_local(CallEndReason::RemoteHangup)
+            .await;
         Ok(())
     }
-
 }
 
 /// Recipients for a rotated group call key.
@@ -1611,10 +1846,32 @@ mod rotation_recipient_tests {
         let (b, c) = (UserId::new(), UserId::new());
         let t0 = std::time::Instant::now();
         let w = std::time::Duration::from_secs(2);
-        let k = KeySent { call_id: "call".into(), at: t0, to: vec![b] };
-        assert!(sent_recently(Some(&k), "call", &b, t0 + std::time::Duration::from_millis(900), w));
-        assert!(!sent_recently(Some(&k), "call", &b, t0 + std::time::Duration::from_secs(3), w), "too long ago");
-        assert!(!sent_recently(Some(&k), "call", &c, t0, w), "not a recipient");
+        let k = KeySent {
+            call_id: "call".into(),
+            at: t0,
+            to: vec![b],
+        };
+        assert!(sent_recently(
+            Some(&k),
+            "call",
+            &b,
+            t0 + std::time::Duration::from_millis(900),
+            w
+        ));
+        assert!(
+            !sent_recently(
+                Some(&k),
+                "call",
+                &b,
+                t0 + std::time::Duration::from_secs(3),
+                w
+            ),
+            "too long ago"
+        );
+        assert!(
+            !sent_recently(Some(&k), "call", &c, t0, w),
+            "not a recipient"
+        );
         assert!(!sent_recently(Some(&k), "other", &b, t0, w), "another call");
         assert!(!sent_recently(None, "call", &b, t0, w));
     }
@@ -1623,11 +1880,21 @@ mod rotation_recipient_tests {
         let peer = UserId::new();
         let other = UserId::new();
         let sent = std::time::Instant::now();
-        let key = KeySent { call_id: "call".into(), at: sent, to: vec![peer] };
+        let key = KeySent {
+            call_id: "call".into(),
+            at: sent,
+            to: vec![peer],
+        };
         let window = std::time::Duration::from_secs(10);
         let delayed = sent + std::time::Duration::from_millis(3131);
         assert!(sent_recently(Some(&key), "call", &peer, delayed, window));
-        assert!(!sent_recently(Some(&key), "call", &peer, sent + window, window));
+        assert!(!sent_recently(
+            Some(&key),
+            "call",
+            &peer,
+            sent + window,
+            window
+        ));
         assert!(!sent_recently(Some(&key), "call", &other, delayed, window));
         assert!(!sent_recently(Some(&key), "rejoin", &peer, delayed, window));
     }
@@ -1712,7 +1979,10 @@ mod rotation_recipient_tests {
         buffer_newest_per_sender(&mut held, rotator, [1u8; 32], 4);
         buffer_newest_per_sender(&mut held, mallory, [6u8; 32], u32::MAX);
         buffer_newest_per_sender(&mut held, rotator, [2u8; 32], 3);
-        assert_eq!(held[&rotator].1, 4, "an older key from the same sender is dropped");
+        assert_eq!(
+            held[&rotator].1, 4,
+            "an older key from the same sender is dropped"
+        );
         assert_eq!(*held[&rotator].0, [1u8; 32]);
         buffer_newest_per_sender(&mut held, rotator, [3u8; 32], 5);
         assert_eq!(*held[&rotator].0, [3u8; 32]);

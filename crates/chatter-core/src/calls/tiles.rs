@@ -33,7 +33,10 @@ mod tests {
     fn remotes_sort_by_id_and_local_stays_last() {
         let (remotes, local) = split_local(vec!["b", "a\u{1}screen", "a", "me"]);
         assert_eq!(local, Some("me"));
-        assert_eq!(order_tiles(remotes, local, |s| s), ["a", "a\u{1}screen", "b", "me"]);
+        assert_eq!(
+            order_tiles(remotes, local, |s| s),
+            ["a", "a\u{1}screen", "b", "me"]
+        );
         assert_eq!(split_local(Vec::<&str>::new()), (vec![], None));
     }
 

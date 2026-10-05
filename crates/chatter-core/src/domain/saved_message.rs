@@ -43,9 +43,7 @@ pub enum SavedContent {
     },
 }
 
-impl SavedContent {
-
-}
+impl SavedContent {}
 
 // ============================================================================
 // SavedMessage
@@ -79,7 +77,4 @@ pub struct SavedMessage {
     pub saved_at: DateTime<Utc>,
 }
 
-impl SavedMessage {
-
-}
-
+impl SavedMessage {}

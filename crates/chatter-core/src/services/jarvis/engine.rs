@@ -7,9 +7,9 @@
 
 use std::sync::{Arc, RwLock};
 
-use crate::local_ai::backend::{ChatMessage, ChatRole, GenerateParams, LocalAIBackend};
 use crate::ai_policy::policy::{AiAccess, Silo as AiSilo};
 use crate::cloud_ai::{AnyCloudBackend, CloudSettings};
+use crate::local_ai::backend::{ChatMessage, ChatRole, GenerateParams, LocalAIBackend};
 use crate::local_ai::providers::{AnyBackend, ProviderKind};
 use crate::local_ai::settings::LocalAISettings;
 use crate::services::ai::{LocalAIActorHandle, SampleParams};
@@ -22,10 +22,16 @@ pub enum JarvisEngine {
     InProcess(LocalAIActorHandle),
     /// Local HTTP provider with the model to use. The model is interior-mutable
     /// so a missing-model completion can self-heal to an installed model.
-    Http { backend: Arc<AnyBackend>, model: RwLock<String> },
+    Http {
+        backend: Arc<AnyBackend>,
+        model: RwLock<String>,
+    },
     /// Cloud provider. Constructed only from the cloud silo's own settings —
     /// `from_settings` cannot produce this variant.
-    Cloud { backend: Arc<AnyCloudBackend>, model: RwLock<String> },
+    Cloud {
+        backend: Arc<AnyCloudBackend>,
+        model: RwLock<String>,
+    },
 }
 
 impl JarvisEngine {
@@ -57,7 +63,10 @@ impl JarvisEngine {
     /// Wrap an already-built cloud backend (e.g. the metered broker, which
     /// needs a live authenticated client rather than settings).
     pub fn cloud(backend: AnyCloudBackend, model: String) -> Self {
-        Self::Cloud { backend: Arc::new(backend), model: RwLock::new(model) }
+        Self::Cloud {
+            backend: Arc::new(backend),
+            model: RwLock::new(model),
+        }
     }
 
     /// Which silo this engine belongs to.
@@ -104,13 +113,10 @@ impl JarvisEngine {
 
     /// First installed model that looks like a chat model (skip embedders).
     fn pick_chat_model(models: &[crate::local_ai::backend::AvailableModel]) -> Option<String> {
-        models
-            .iter()
-            .map(|m| m.name.clone())
-            .find(|name| {
-                let n = name.to_lowercase();
-                !n.contains("embed") && !n.contains("minilm") && !n.contains("bge")
-            })
+        models.iter().map(|m| m.name.clone()).find(|name| {
+            let n = name.to_lowercase();
+            !n.contains("embed") && !n.contains("minilm") && !n.contains("bge")
+        })
     }
 
     async fn complete(
@@ -133,7 +139,10 @@ impl JarvisEngine {
                     full.push_str("\n\n");
                 }
                 full.push_str("Assistant:");
-                actor.complete(full, params).await.map_err(JarvisError::from)
+                actor
+                    .complete(full, params)
+                    .await
+                    .map_err(JarvisError::from)
             }
             Self::Http { backend, model } => {
                 Self::complete_via(backend.as_ref(), model, messages, params).await
@@ -242,7 +251,10 @@ impl SharedJarvisEngine {
     ) -> Result<String, JarvisError> {
         self.complete_conversation_gated(
             access,
-            vec![ChatMessage { role: ChatRole::User, content: prompt }],
+            vec![ChatMessage {
+                role: ChatRole::User,
+                content: prompt,
+            }],
             params,
         )
         .await
@@ -354,7 +366,10 @@ mod tests {
             ProviderKind::Vllm,
             ProviderKind::MistralRs,
         ] {
-            let settings = LocalAISettings { active_provider: kind, ..LocalAISettings::default() };
+            let settings = LocalAISettings {
+                active_provider: kind,
+                ..LocalAISettings::default()
+            };
             let engine = JarvisEngine::from_settings(&settings, LocalAIActorHandle::spawn());
             assert!(!engine.is_cloud(), "{kind:?} produced a cloud engine");
             assert_eq!(engine.silo(), crate::ai_policy::policy::Silo::Local);
@@ -367,7 +382,10 @@ mod tests {
     }
 
     fn user(text: &str) -> Vec<ChatMessage> {
-        vec![ChatMessage { role: ChatRole::User, content: text.into() }]
+        vec![ChatMessage {
+            role: ChatRole::User,
+            content: text.into(),
+        }]
     }
 
     #[tokio::test]
@@ -435,11 +453,7 @@ mod tests {
         let shared = SharedJarvisEngine::new(engine);
 
         if let Err(err) = shared
-            .complete_conversation_gated(
-                AiAccess::LocalOnly,
-                user("hi"),
-                SampleParams::default(),
-            )
+            .complete_conversation_gated(AiAccess::LocalOnly, user("hi"), SampleParams::default())
             .await
         {
             assert!(!matches!(err, JarvisError::NotPermitted(_)), "{err:?}");
@@ -467,8 +481,14 @@ mod tests {
             "abc"
         );
         // Truncated generation: unterminated block dropped.
-        assert_eq!(JarvisEngine::strip_reasoning("ok<think>trailing junk".into()), "ok");
-        assert_eq!(JarvisEngine::strip_reasoning("no tags at all".into()), "no tags at all");
+        assert_eq!(
+            JarvisEngine::strip_reasoning("ok<think>trailing junk".into()),
+            "ok"
+        );
+        assert_eq!(
+            JarvisEngine::strip_reasoning("no tags at all".into()),
+            "no tags at all"
+        );
     }
 
     #[test]
@@ -485,7 +505,10 @@ mod tests {
             chat_model: "qwen2.5-7b".into(),
             ..LocalAISettings::default()
         };
-        shared.set(JarvisEngine::from_settings(&lm, LocalAIActorHandle::spawn()));
+        shared.set(JarvisEngine::from_settings(
+            &lm,
+            LocalAIActorHandle::spawn(),
+        ));
         assert_eq!(shared.describe(), "lm-studio (qwen2.5-7b)");
     }
 }
@@ -513,7 +536,10 @@ mod silo_selection_tests {
     }
 
     fn user(text: &str) -> Vec<ChatMessage> {
-        vec![ChatMessage { role: ChatRole::User, content: text.into() }]
+        vec![ChatMessage {
+            role: ChatRole::User,
+            content: text.into(),
+        }]
     }
 
     #[test]
@@ -611,7 +637,10 @@ mod silo_selection_tests {
                 )
                 .await
                 .expect_err("mesh must get no inference");
-            assert!(matches!(err, JarvisError::NotPermitted(_)), "{silo:?}: {err:?}");
+            assert!(
+                matches!(err, JarvisError::NotPermitted(_)),
+                "{silo:?}: {err:?}"
+            );
         }
     }
 }

@@ -13,9 +13,9 @@ use chrono::{DateTime, Utc};
 
 use crate::domain::{ChannelId, UserId};
 use crate::error::MailboxError;
+use crate::mailbox::TokenManager;
 use crate::mailbox::dm::{DmConversationManager, DmMailbox};
 use crate::mailbox::group::{GroupMailbox, GroupMailboxManager};
-use crate::mailbox::TokenManager;
 use crate::network::grpc::client_pool::GrpcClientPool;
 
 /// Default rotation check interval (30 minutes). Must be ≪ threshold so
@@ -279,7 +279,10 @@ impl KeyRollingService {
         let groups = match self.get_group_rotation_candidates() {
             Ok(ids) => ids,
             Err(e) => {
-                tracing::warn!("KeyRolling: failed to list group rotation candidates: {}", e);
+                tracing::warn!(
+                    "KeyRolling: failed to list group rotation candidates: {}",
+                    e
+                );
                 Vec::new()
             }
         };
@@ -386,17 +389,22 @@ pub fn group_rotation_recipients(
 
 /// Sealed-sender plaintext for a group mailbox rotation: a
 /// `GroupMailboxAddress` padded to a server bucket (256/512/1024/4096).
-pub fn group_mailbox_rotation_plaintext(group_id: &ChannelId, new_mailbox_pk: &[u8; 32]) -> Vec<u8> {
+pub fn group_mailbox_rotation_plaintext(
+    group_id: &ChannelId,
+    new_mailbox_pk: &[u8; 32],
+) -> Vec<u8> {
     use prost::Message;
     let now = crate::util::time::TimestampNanos::now().as_u64();
     let mut content = crate::proto::content_v1::Content {
-        content: Some(crate::proto::content_v1::content::Content::GroupMailboxAddress(
-            crate::proto::content_v1::GroupMailboxAddress {
-                channel_id: group_id.to_string(),
-                mailbox_pk: new_mailbox_pk.to_vec(),
-                timestamp: now,
-            },
-        )),
+        content: Some(
+            crate::proto::content_v1::content::Content::GroupMailboxAddress(
+                crate::proto::content_v1::GroupMailboxAddress {
+                    channel_id: group_id.to_string(),
+                    mailbox_pk: new_mailbox_pk.to_vec(),
+                    timestamp: now,
+                },
+            ),
+        ),
         ephemeral_reply_to: None,
         timestamp: now,
         padding: vec![],
@@ -481,7 +489,10 @@ mod tests {
         };
 
         let cloned = notification.clone();
-        assert_eq!(cloned.new_mailbox_public_key, notification.new_mailbox_public_key);
+        assert_eq!(
+            cloned.new_mailbox_public_key,
+            notification.new_mailbox_public_key
+        );
     }
 
     #[test]
@@ -539,12 +550,21 @@ mod tests {
         assert_eq!(
             got,
             vec![
-                GroupRotationRecipient { user_id: stayed, device_id: 1 },
-                GroupRotationRecipient { user_id: stayed, device_id: 3 },
+                GroupRotationRecipient {
+                    user_id: stayed,
+                    device_id: 1
+                },
+                GroupRotationRecipient {
+                    user_id: stayed,
+                    device_id: 3
+                },
             ],
             "only every device of members who stayed"
         );
-        assert!(got.iter().all(|r| r.user_id != departed && r.user_id != me && r.user_id != stranger));
+        assert!(
+            got.iter()
+                .all(|r| r.user_id != departed && r.user_id != me && r.user_id != stranger)
+        );
     }
 
     #[test]
@@ -613,7 +633,10 @@ mod tests {
             Arc::new(crate::mailbox::TokenManager::new(db.clone())),
             Arc::new(dm),
             Arc::new(groups),
-            Arc::new(crate::network::grpc::client_pool::GrpcClientPool::new("https://127.0.0.1:9").unwrap()),
+            Arc::new(
+                crate::network::grpc::client_pool::GrpcClientPool::new("https://127.0.0.1:9")
+                    .unwrap(),
+            ),
         );
 
         assert_eq!(

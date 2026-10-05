@@ -23,6 +23,7 @@ struct MarkdownSpan {
     italic: bool,
     strikethrough: bool,
     code: bool,
+    link: Option<String>,
 }
 
 /// One block of a message body as the bubble lays it out.
@@ -55,7 +56,11 @@ pub(crate) fn parse_blocks(input: &str) -> Vec<MarkdownBlock> {
 /// line break is split into one formatting range per line.
 fn paragraphs(spans: &[MarkdownSpan]) -> Vec<StyledTextParagraph> {
     let mut out = Vec::new();
-    let mut para = StyledTextParagraph { text: String::new(), formatting: Vec::new(), links: Vec::new() };
+    let mut para = StyledTextParagraph {
+        text: String::new(),
+        formatting: Vec::new(),
+        links: Vec::new(),
+    };
     for span in spans {
         let style = if span.bold {
             Some(Style::Strong)
@@ -72,15 +77,31 @@ fn paragraphs(spans: &[MarkdownSpan]) -> Vec<StyledTextParagraph> {
             if i > 0 {
                 out.push(std::mem::replace(
                     &mut para,
-                    StyledTextParagraph { text: String::new(), formatting: Vec::new(), links: Vec::new() },
+                    StyledTextParagraph {
+                        text: String::new(),
+                        formatting: Vec::new(),
+                        links: Vec::new(),
+                    },
                 ));
             }
             // Parley treats a lone CR as a line break of its own.
             let line = line.strip_suffix('\r').unwrap_or(line);
             let start = para.text.len();
             para.text.push_str(line);
+            if let Some(url) = &span.link {
+                if !line.is_empty() {
+                    para.links.push((start..para.text.len(), url.clone()));
+                    para.formatting.push(FormattedSpan {
+                        range: start..para.text.len(),
+                        style: Style::Link,
+                    });
+                }
+            }
             if let (Some(style), false) = (&style, line.is_empty()) {
-                para.formatting.push(FormattedSpan { range: start..para.text.len(), style: style.clone() });
+                para.formatting.push(FormattedSpan {
+                    range: start..para.text.len(),
+                    style: style.clone(),
+                });
             }
         }
     }
@@ -191,6 +212,28 @@ fn parse_inline(text: &str) -> Vec<MarkdownSpan> {
     let mut i = 0;
 
     while i < len {
+        // Only explicit, validated web links. Code spans are consumed whole
+        // below, so their contents never become live links.
+        if chars[i] == '[' && (i == 0 || chars[i - 1] != '!') {
+            if let Some(label_end) = (i + 1..len).find(|&j| chars[j] == ']') {
+                if label_end > i + 1 && chars.get(label_end + 1) == Some(&'(') {
+                    if let Some(end) = (label_end + 2..len).find(|&j| chars[j] == ')') {
+                        let target: String = chars[label_end + 2..end].iter().collect();
+                        if let Some(url) = safe_web_url(&target) {
+                            flush_normal(&mut current, &mut spans);
+                            let label: String = chars[i + 1..label_end].iter().collect();
+                            let mut label_spans = parse_inline(&label);
+                            for span in &mut label_spans {
+                                span.link = Some(url.clone());
+                            }
+                            spans.extend(label_spans);
+                            i = end + 1;
+                            continue;
+                        }
+                    }
+                }
+            }
+        }
         // ** bold **
         if i + 1 < len && chars[i] == '*' && chars[i + 1] == '*' {
             if let Some(end) = find_closing_pair(&chars, i + 2, '*', '*') {
@@ -311,8 +354,14 @@ mod tests {
         let [MarkdownBlock::Inline(paras)] = blocks.as_slice() else {
             panic!("{input:?}: expected one inline block, got {blocks:?}");
         };
-        let [p] = paras.as_slice() else { panic!("{input:?}: expected one line, got {paras:?}") };
-        let styled = p.formatting.iter().map(|f| (p.text[f.range.clone()].to_string(), f.style.clone())).collect();
+        let [p] = paras.as_slice() else {
+            panic!("{input:?}: expected one line, got {paras:?}")
+        };
+        let styled = p
+            .formatting
+            .iter()
+            .map(|f| (p.text[f.range.clone()].to_string(), f.style.clone()))
+            .collect();
         (p.text.clone(), styled)
     }
 
@@ -329,7 +378,11 @@ mod tests {
             ("~~hello world~~", Style::Strikethrough),
             ("`hello world`", Style::Code),
         ] {
-            assert_eq!(one_paragraph(input), ("hello world".into(), vec![("hello world".into(), style)]), "{input}");
+            assert_eq!(
+                one_paragraph(input),
+                ("hello world".into(), vec![("hello world".into(), style)]),
+                "{input}"
+            );
         }
     }
 
@@ -353,17 +406,37 @@ mod tests {
 
     #[test]
     fn ranges_are_bytes_not_chars() {
-        assert_eq!(one_paragraph("héllo **wörld** 🙂"), ("héllo wörld 🙂".into(), vec![("wörld".into(), Style::Strong)]));
+        assert_eq!(
+            one_paragraph("héllo **wörld** 🙂"),
+            (
+                "héllo wörld 🙂".into(),
+                vec![("wörld".into(), Style::Strong)]
+            )
+        );
     }
 
     #[test]
     fn lines_become_paragraphs_and_a_style_crossing_one_is_split() {
         let blocks = parse_blocks("a **b\r\nc** d");
-        let [MarkdownBlock::Inline(paras)] = blocks.as_slice() else { panic!("{blocks:?}") };
+        let [MarkdownBlock::Inline(paras)] = blocks.as_slice() else {
+            panic!("{blocks:?}")
+        };
         let lines: Vec<_> = paras.iter().map(|p| p.text.as_str()).collect();
         assert_eq!(lines, ["a b", "c d"]);
-        assert_eq!(paras[0].formatting, [FormattedSpan { range: 2..3, style: Style::Strong }]);
-        assert_eq!(paras[1].formatting, [FormattedSpan { range: 0..1, style: Style::Strong }]);
+        assert_eq!(
+            paras[0].formatting,
+            [FormattedSpan {
+                range: 2..3,
+                style: Style::Strong
+            }]
+        );
+        assert_eq!(
+            paras[1].formatting,
+            [FormattedSpan {
+                range: 0..1,
+                style: Style::Strong
+            }]
+        );
     }
 
     #[test]
@@ -372,7 +445,13 @@ mod tests {
         let texts: Vec<_> = blocks
             .iter()
             .map(|b| match b {
-                MarkdownBlock::Inline(p) => format!("inline:{}", p.iter().map(|p| p.text.as_str()).collect::<Vec<_>>().join("|")),
+                MarkdownBlock::Inline(p) => format!(
+                    "inline:{}",
+                    p.iter()
+                        .map(|p| p.text.as_str())
+                        .collect::<Vec<_>>()
+                        .join("|")
+                ),
                 MarkdownBlock::Code(c) => format!("code:{c}"),
             })
             .collect();
@@ -390,6 +469,82 @@ mod tests {
 
     #[test]
     fn unmatched_markers_pass_through() {
-        assert_eq!(one_paragraph("hello * world"), ("hello * world".into(), vec![]));
+        assert_eq!(
+            one_paragraph("hello * world"),
+            ("hello * world".into(), vec![])
+        );
+    }
+}
+
+/// Browser destinations only; reject credentials, ambiguous separators and
+/// whitespace before URL parsing can silently normalize them.
+pub(crate) fn safe_web_url(value: &str) -> Option<String> {
+    if value
+        .chars()
+        .any(|c| c.is_control() || c.is_whitespace() || c == '\\')
+    {
+        return None;
+    }
+    if !(value.starts_with("https://") || value.starts_with("http://")) {
+        return None;
+    }
+    let authority = value.split_once("://")?.1.split(['/', '?', '#']).next()?;
+    if authority.is_empty() || authority.contains('@') {
+        return None;
+    }
+    let url = url::Url::parse(value).ok()?;
+    if url.host_str().is_none() || !url.username().is_empty() || url.password().is_some() {
+        return None;
+    }
+    Some(url.to_string())
+}
+
+#[cfg(test)]
+mod link_tests {
+    use super::*;
+    #[test]
+    fn unicode_link_ranges_and_style_are_preserved() {
+        let paras = paragraphs(&parse_inline(
+            "Hi [**é猫**](https://example.org/path?q=1) end",
+        ));
+        assert_eq!(paras[0].text, "Hi é猫 end");
+        assert_eq!(
+            paras[0].links,
+            vec![(3..8, "https://example.org/path?q=1".into())]
+        );
+        assert!(
+            paras[0]
+                .formatting
+                .iter()
+                .any(|span| span.range == (3..8) && span.style == Style::Strong)
+        );
+    }
+    #[test]
+    fn unsafe_and_code_links_stay_inert() {
+        for value in [
+            "javascript:alert(1)",
+            "file:///etc/passwd",
+            "mailto:a@b",
+            "https://a:b@example.org",
+            "https://example.org\n/x",
+            "https:\\example.org",
+            "https:///example.org",
+        ] {
+            assert!(safe_web_url(value).is_none(), "{value}");
+        }
+        let paras = paragraphs(&parse_inline("`[x](https://example.org)` [bad](file:///x)"));
+        assert!(paras[0].links.is_empty());
+        assert!(paras[0].text.contains("[bad](file:///x)"));
+    }
+    #[test]
+    fn links_split_at_newlines_and_fences_stay_code() {
+        let paras = paragraphs(&parse_inline("[a\nb](http://example.org)"));
+        assert_eq!(paras.len(), 2);
+        assert_eq!(paras[0].links[0].0, 0..1);
+        assert_eq!(paras[1].links[0].0, 0..1);
+        assert!(matches!(
+            &parse_blocks("```\n[x](https://example.org)\n```")[0],
+            MarkdownBlock::Code(_)
+        ));
     }
 }

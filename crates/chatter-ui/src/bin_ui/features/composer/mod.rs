@@ -30,11 +30,7 @@ pub fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     gif::wire_gif_clicked(window, ui_ctx);
     gif::wire_gif_selected(window, ui_ctx);
     gif::wire_gif_search(window, ui_ctx);
-    mentions::wire_mention_triggered(
-        window,
-        ui_ctx.clone(),
-        ui_ctx.chat_state().clone(),
-    );
+    mentions::wire_mention_triggered(window, ui_ctx.clone(), ui_ctx.chat_state().clone());
     mentions::wire_mention_selected(window);
     voice::wire(window, ui_ctx);
     wire_text_format(window);
@@ -72,7 +68,9 @@ pub fn wire_text_format(window: &MainWindow) {
 /// it still holds the text typed in the conversation being left.
 fn wire_per_conversation_drafts(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     let key = |d: &chatter_core::state::ChatStateData| {
-        d.active_channel_id.map(|id| id.to_string()).unwrap_or_default()
+        d.active_channel_id
+            .map(|id| id.to_string())
+            .unwrap_or_default()
     };
     let mut current = key(&ui_ctx.chat_state().get());
     // The composer starts out holding `current`'s draft.
@@ -124,6 +122,7 @@ pub fn switch_composer_draft(w: &MainWindow, ctx: &ChatterClient, leaving: &str,
     crate::bin_ui::features::chat::edit::end_edit(w);
     let text = w.get_composer_text().to_string();
     w.set_composer_text(ctx.swap_composer_draft(leaving, text, entering).into());
+    render_attachments(w, &ctx.chat_state().get_pending_attachments());
     // A GIF send that failed while this conversation was not open.
     let empty = crate::bin_ui::features::chat::send_message::composer_is_empty(w);
     if let Some(send) = ctx.take_parked_send(empty) {

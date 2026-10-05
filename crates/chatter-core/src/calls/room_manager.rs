@@ -3,28 +3,31 @@
 // LiveKit types don't implement Send+Sync
 #![allow(clippy::arc_with_non_send_sync)]
 
-use livekit::prelude::*;
-use livekit::e2ee::{E2eeOptions, EncryptionType, key_provider::{KeyProvider, KeyProviderOptions}};
+use livekit::e2ee::{
+    E2eeOptions, EncryptionType,
+    key_provider::{KeyProvider, KeyProviderOptions},
+};
 use livekit::options::TrackPublishOptions;
+use livekit::prelude::*;
 // Screen-share only (desktop): the publish path is cfg-gated off on mobile.
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 use livekit::options::{DegradationPreference, VideoCodec, VideoEncoderBackend, VideoEncoding};
 use livekit::webrtc::audio_source::RtcAudioSource;
 use livekit::webrtc::video_source::RtcVideoSource;
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
-use livekit::webrtc::video_source::{native::NativeVideoSource, VideoResolution};
-use tokio::sync::mpsc;
-use std::sync::Arc;
+use livekit::webrtc::video_source::{VideoResolution, native::NativeVideoSource};
 use parking_lot::RwLock;
+use std::sync::Arc;
+use tokio::sync::mpsc;
 
-use crate::error::CallError;
 use super::audio_capture::{AudioCapture, AudioDevice};
 use super::audio_playback::AudioPlayback;
-use super::video_capture::{VideoCapture, VideoDevice, VideoCaptureConfig};
-use super::video_playback::VideoPlayback;
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
-use super::screen_capture::{ScreenCapture, ScreenSource, ScreenCaptureConfig};
+use super::screen_capture::{ScreenCapture, ScreenCaptureConfig, ScreenSource};
 use super::shared_frames::SharedVideoFrames;
+use super::video_capture::{VideoCapture, VideoCaptureConfig, VideoDevice};
+use super::video_playback::VideoPlayback;
+use crate::error::CallError;
 
 /// Current state of the room connection.
 #[derive(Clone, Debug, PartialEq)]
@@ -158,14 +161,19 @@ impl RoomManager {
     }
 
     /// Create a new RoomManager with shared video frame storage.
-    pub fn with_shared_frames(shared_frames: Option<SharedVideoFrames>) -> (Self, mpsc::Receiver<RoomEvent>) {
+    pub fn with_shared_frames(
+        shared_frames: Option<SharedVideoFrames>,
+    ) -> (Self, mpsc::Receiver<RoomEvent>) {
         let (event_tx, event_rx) = mpsc::channel(256);
 
         // Initialize audio playback (may fail if no output device)
         let audio_playback = match AudioPlayback::new() {
             Ok(playback) => Some(playback),
             Err(e) => {
-                tracing::warn!("Failed to initialize audio playback: {}. Remote audio will not be played.", e);
+                tracing::warn!(
+                    "Failed to initialize audio playback: {}. Remote audio will not be played.",
+                    e
+                );
                 None
             }
         };
@@ -190,7 +198,10 @@ impl RoomManager {
             screen_capture: Arc::new(RwLock::new(ScreenCapture::new())),
             #[cfg(not(any(target_os = "android", target_os = "ios")))]
             screen_share_track_sid: Arc::new(RwLock::new(None)),
-            e2ee: Arc::new(RwLock::new(E2eeState { provider: None, epoch: 0 })),
+            e2ee: Arc::new(RwLock::new(E2eeState {
+                provider: None,
+                epoch: 0,
+            })),
             event_task: Arc::new(RwLock::new(None)),
             shared_frames,
         };
@@ -228,7 +239,9 @@ impl RoomManager {
     pub async fn publish_microphone(&self, device_id: Option<&str>) -> Result<(), CallError> {
         let local_participant = {
             let room = self.room.read();
-            room.as_ref().ok_or(CallError::NotInCall)?.local_participant()
+            room.as_ref()
+                .ok_or(CallError::NotInCall)?
+                .local_participant()
         };
 
         // Start audio capture
@@ -238,10 +251,8 @@ impl RoomManager {
         };
 
         // Create and publish track
-        let audio_track = LocalAudioTrack::create_audio_track(
-            "microphone",
-            RtcAudioSource::Native(audio_source),
-        );
+        let audio_track =
+            LocalAudioTrack::create_audio_track("microphone", RtcAudioSource::Native(audio_source));
 
         let publish_options = TrackPublishOptions {
             source: TrackSource::Microphone,
@@ -277,18 +288,21 @@ impl RoomManager {
 
         let local_participant = {
             let room = self.room.read();
-            room.as_ref().ok_or(CallError::NotInCall)?.local_participant()
+            room.as_ref()
+                .ok_or(CallError::NotInCall)?
+                .local_participant()
         };
 
         // Tee the local camera to the self-preview ("You") tile, keyed by the
         // local participant identity (== the "You" tile's user_id).
-        let local_preview = self.shared_frames.as_ref().map(|shared| {
-            super::video_capture::LocalPreview {
-                shared: shared.clone(),
-                local_id: local_participant.identity().to_string(),
-                screen_share: false,
-            }
-        });
+        let local_preview =
+            self.shared_frames
+                .as_ref()
+                .map(|shared| super::video_capture::LocalPreview {
+                    shared: shared.clone(),
+                    local_id: local_participant.identity().to_string(),
+                    screen_share: false,
+                });
 
         // Start video capture
         let video_source = {
@@ -297,10 +311,8 @@ impl RoomManager {
         };
 
         // Create and publish track
-        let video_track = LocalVideoTrack::create_video_track(
-            "camera",
-            RtcVideoSource::Native(video_source),
-        );
+        let video_track =
+            LocalVideoTrack::create_video_track("camera", RtcVideoSource::Native(video_source));
 
         let publish_options = TrackPublishOptions {
             source: TrackSource::Camera,
@@ -331,7 +343,9 @@ impl RoomManager {
     ) -> Result<(), CallError> {
         let local_participant = {
             let room = self.room.read();
-            room.as_ref().ok_or(CallError::NotInCall)?.local_participant()
+            room.as_ref()
+                .ok_or(CallError::NotInCall)?
+                .local_participant()
         };
 
         // Two-phase startup so the `NativeVideoSource` is sized to the
@@ -352,13 +366,17 @@ impl RoomManager {
         // Tee the local screen feed to its OWN tile (throttled inside the
         // capture loop), keyed by `screen_share_frame_id` — NOT the bare local
         // id — so it doesn't overwrite the camera in the shared "You" slot.
-        let local_preview = self.shared_frames.as_ref().map(|shared| {
-            super::video_capture::LocalPreview {
-                shared: shared.clone(),
-                local_id: super::screen_share_frame_id(&local_participant.identity().to_string(), true),
-                screen_share: true,
-            }
-        });
+        let local_preview =
+            self.shared_frames
+                .as_ref()
+                .map(|shared| super::video_capture::LocalPreview {
+                    shared: shared.clone(),
+                    local_id: super::screen_share_frame_id(
+                        &local_participant.identity().to_string(),
+                        true,
+                    ),
+                    screen_share: true,
+                });
 
         let handshake = {
             let mut capture = self.screen_capture.write();
@@ -369,11 +387,8 @@ impl RoomManager {
         // real dims. Portal selection can take a while; the timeout is
         // generous but bounded so a cancelled portal doesn't hang the
         // call worker forever.
-        let dims_result = tokio::time::timeout(
-            std::time::Duration::from_secs(120),
-            handshake.dims_rx,
-        )
-        .await;
+        let dims_result =
+            tokio::time::timeout(std::time::Duration::from_secs(120), handshake.dims_rx).await;
 
         let (width, height) = match dims_result {
             Ok(Ok(d)) => d,
@@ -386,7 +401,8 @@ impl RoomManager {
             Err(_) => {
                 self.screen_capture.write().stop();
                 return Err(CallError::TrackPublishFailed(
-                    "Timed out waiting for screen capture probe frame (portal dialog cancelled?)".to_string(),
+                    "Timed out waiting for screen capture probe frame (portal dialog cancelled?)"
+                        .to_string(),
                 ));
             }
         };
@@ -408,10 +424,8 @@ impl RoomManager {
 
         self.screen_capture.read().complete();
 
-        let video_track = LocalVideoTrack::create_video_track(
-            "screen",
-            RtcVideoSource::Native(video_source),
-        );
+        let video_track =
+            LocalVideoTrack::create_video_track("screen", RtcVideoSource::Native(video_source));
 
         // Screen-share track tuned for high-res content (e.g. 5120×1440
         // ultrawides). Settings validated by a live end-to-end wire sweep
@@ -469,7 +483,11 @@ impl RoomManager {
 
         tracing::info!(
             "Published screen share track (H.265/NVENC, degradation=disabled, simulcast off, {} fps cap, {} Mbps, {}x{}, sid={})",
-            target_fps, max_bitrate / 1_000_000, width, height, sid
+            target_fps,
+            max_bitrate / 1_000_000,
+            width,
+            height,
+            sid
         );
         Ok(())
     }
@@ -542,7 +560,10 @@ impl RoomManager {
         // Drop the local screen frame (its own tile key) so the screen tile
         // clears. The camera tile (bare local id) is untouched.
         if let Some(ref shared) = self.shared_frames {
-            shared.remove_frame(&super::screen_share_frame_id(&local_participant.identity().to_string(), true));
+            shared.remove_frame(&super::screen_share_frame_id(
+                &local_participant.identity().to_string(),
+                true,
+            ));
         }
     }
 
@@ -566,9 +587,13 @@ impl RoomManager {
     /// Check if screen sharing is active.
     pub fn is_screen_sharing(&self) -> bool {
         #[cfg(not(any(target_os = "android", target_os = "ios")))]
-        { self.screen_capture.read().is_running() }
+        {
+            self.screen_capture.read().is_running()
+        }
         #[cfg(any(target_os = "android", target_os = "ios"))]
-        { false }
+        {
+            false
+        }
     }
 
     /// Set playback volume for remote audio (0.0 to 1.0).
@@ -583,7 +608,9 @@ impl RoomManager {
     pub fn set_audio_output(&self, device: &str) -> Result<(), CallError> {
         match self.audio_playback.read().as_ref() {
             Some(playback) => playback.set_output_device(device),
-            None => Err(CallError::DeviceError("Audio playback unavailable".to_string())),
+            None => Err(CallError::DeviceError(
+                "Audio playback unavailable".to_string(),
+            )),
         }
     }
 
@@ -618,7 +645,9 @@ impl RoomManager {
     /// LiveKit subscription stays up; frames decode but are dropped before
     /// storage. The UI tile falls back to the avatar while paused.
     pub fn set_peer_video_paused(&self, participant_id: &str, paused: bool) {
-        self.video_playback.read().set_peer_paused(participant_id, paused);
+        self.video_playback
+            .read()
+            .set_peer_paused(participant_id, paused);
     }
 
     /// Whether a remote participant's video is locally paused.
@@ -629,7 +658,10 @@ impl RoomManager {
     /// Get the latest video frame for a participant as raw data.
     ///
     /// Returns None if no frame is available for the participant.
-    pub fn get_video_frame(&self, participant_id: &str) -> Option<super::shared_frames::VideoFrameData> {
+    pub fn get_video_frame(
+        &self,
+        participant_id: &str,
+    ) -> Option<super::shared_frames::VideoFrameData> {
         self.video_playback.read().get_frame(participant_id)
     }
 
@@ -696,7 +728,11 @@ impl RoomManager {
 
         // Connect to room (timeout prevents indefinite hang on slow/dead servers)
         let connect_started = std::time::Instant::now();
-        tracing::info!(stage = "room_connect_begin", elapsed_us = 0u64, "Call stage");
+        tracing::info!(
+            stage = "room_connect_begin",
+            elapsed_us = 0u64,
+            "Call stage"
+        );
         let connected = tokio::time::timeout(
             tokio::time::Duration::from_secs(10),
             Room::connect(url, token, room_options),
@@ -707,9 +743,15 @@ impl RoomManager {
             Ok(Err(_)) => "room_connect_failed",
             Err(_) => "room_connect_timed_out",
         };
-        tracing::info!(stage, elapsed_us = connect_started.elapsed().as_micros() as u64, "Call stage");
+        tracing::info!(
+            stage,
+            elapsed_us = connect_started.elapsed().as_micros() as u64,
+            "Call stage"
+        );
         let (room, mut events) = connected
-            .map_err(|_| CallError::ConnectionFailed("LiveKit connection timed out (10s)".to_string()))?
+            .map_err(|_| {
+                CallError::ConnectionFailed("LiveKit connection timed out (10s)".to_string())
+            })?
             .map_err(|e| CallError::ConnectionFailed(e.to_string()))?;
 
         // Enable E2EE
@@ -726,10 +768,18 @@ impl RoomManager {
         for participant in &remote_participants {
             let identity = participant.identity().to_string();
             let name = participant.name();
-            tracing::info!("RoomManager: Existing participant in room - identity={}, name={}", identity, name);
+            tracing::info!(
+                "RoomManager: Existing participant in room - identity={}, name={}",
+                identity,
+                name
+            );
             let _ = self.event_tx.try_send(RoomEvent::ParticipantJoined {
                 identity: identity.clone(),
-                display_name: if name.is_empty() { None } else { Some(name.to_string()) },
+                display_name: if name.is_empty() {
+                    None
+                } else {
+                    Some(name.to_string())
+                },
             });
 
             // Process existing tracks from this participant
@@ -744,7 +794,9 @@ impl RoomManager {
                             );
                             if let Some(playback) = self.audio_playback.read().as_ref() {
                                 playback.add_track(identity.clone(), audio_track);
-                                tracing::info!("RoomManager: Added existing audio track to playback");
+                                tracing::info!(
+                                    "RoomManager: Added existing audio track to playback"
+                                );
                             }
                             let _ = self.event_tx.try_send(RoomEvent::TrackSubscribed {
                                 participant_identity: identity.clone(),
@@ -755,7 +807,10 @@ impl RoomManager {
                         }
                         RemoteTrack::Video(video_track) => {
                             let source = video_track.source();
-                            let is_screen_share = matches!(source, TrackSource::Screenshare | TrackSource::ScreenshareAudio);
+                            let is_screen_share = matches!(
+                                source,
+                                TrackSource::Screenshare | TrackSource::ScreenshareAudio
+                            );
                             tracing::info!(
                                 "RoomManager: Existing video track from {} (sid: {}, source: {:?})",
                                 identity,
@@ -806,7 +861,14 @@ impl RoomManager {
             tracing::info!("Room event handler started");
             while let Some(event) = events.recv().await {
                 tracing::info!("LiveKit room event received: {:?}", event);
-                Self::handle_room_event(event, &event_tx, &state, &room_arc, &audio_playback, &video_playback);
+                Self::handle_room_event(
+                    event,
+                    &event_tx,
+                    &state,
+                    &room_arc,
+                    &audio_playback,
+                    &video_playback,
+                );
                 // Yield to allow other tasks (like forwarder) to run
                 tokio::task::yield_now().await;
             }
@@ -876,10 +938,7 @@ impl RoomManager {
 
         // Close the LiveKit room with timeout
         if let Some(room) = room {
-            match tokio::time::timeout(
-                tokio::time::Duration::from_secs(3),
-                room.close()
-            ).await {
+            match tokio::time::timeout(tokio::time::Duration::from_secs(3), room.close()).await {
                 Ok(_) => tracing::info!("Room closed successfully"),
                 Err(_) => tracing::warn!("Room close timed out, forcing disconnect"),
             }
@@ -888,10 +947,7 @@ impl RoomManager {
         // Wait for event handler task to finish draining
         let event_handle = self.event_task.write().take();
         if let Some(handle) = event_handle {
-            match tokio::time::timeout(
-                tokio::time::Duration::from_secs(2),
-                handle,
-            ).await {
+            match tokio::time::timeout(tokio::time::Duration::from_secs(2), handle).await {
                 Ok(Ok(())) => tracing::debug!("Event handler task joined cleanly"),
                 Ok(Err(e)) => tracing::warn!("Event handler task panicked: {}", e),
                 Err(_) => tracing::warn!("Event handler join timed out (2s), proceeding"),
@@ -913,7 +969,10 @@ impl RoomManager {
 
     /// Get current participant count.
     pub fn participant_count(&self) -> usize {
-        if let RoomState::Connected { participant_count, .. } = self.state() {
+        if let RoomState::Connected {
+            participant_count, ..
+        } = self.state()
+        {
             participant_count
         } else {
             0
@@ -991,13 +1050,21 @@ impl RoomManager {
     pub fn installed_key_ring(&self) -> Option<(u32, Vec<Option<Vec<u8>>>)> {
         let e2ee = self.e2ee.read();
         let provider = e2ee.provider.as_ref()?;
-        Some((e2ee.epoch, (0..KEY_RING_SIZE).map(|i| provider.get_shared_key(i)).collect()))
+        Some((
+            e2ee.epoch,
+            (0..KEY_RING_SIZE)
+                .map(|i| provider.get_shared_key(i))
+                .collect(),
+        ))
     }
 
     /// Test-only: how many tracks we publish to the room. 0 when not connected.
     #[cfg(feature = "testing")]
     pub fn local_track_count(&self) -> usize {
-        self.room.read().as_ref().map_or(0, |r| r.local_participant().track_publications().len())
+        self.room
+            .read()
+            .as_ref()
+            .map_or(0, |r| r.local_participant().track_publications().len())
     }
 
     /// Install an externally-ratcheted shared key for `epoch`, pre-installing
@@ -1011,7 +1078,12 @@ impl RoomManager {
     /// pre-installed `epoch + 1`; a peer slightly *behind* by the 16-slot key
     /// ring still holding older epochs. `epoch` is installed LAST so it becomes
     /// the `latest_key_index` we encrypt with.
-    pub fn set_ratcheted_shared_key(&self, epoch: u32, key_cur: Vec<u8>, key_next: Vec<u8>) -> bool {
+    pub fn set_ratcheted_shared_key(
+        &self,
+        epoch: u32,
+        key_cur: Vec<u8>,
+        key_next: Vec<u8>,
+    ) -> bool {
         let mut e2ee = self.e2ee.write();
         let provider = match e2ee.provider.clone() {
             Some(p) => p,
@@ -1065,15 +1137,26 @@ impl RoomManager {
             livekit::RoomEvent::ParticipantConnected(participant) => {
                 let identity = participant.identity().to_string();
                 let name = participant.name();
-                tracing::info!("RoomManager: ParticipantConnected - identity={}, name={}", identity, name);
+                tracing::info!(
+                    "RoomManager: ParticipantConnected - identity={}, name={}",
+                    identity,
+                    name
+                );
                 let event = RoomEvent::ParticipantJoined {
                     identity: identity.clone(),
-                    display_name: if name.is_empty() { None } else { Some(name.to_string()) },
+                    display_name: if name.is_empty() {
+                        None
+                    } else {
+                        Some(name.to_string())
+                    },
                 };
                 tracing::info!("RoomManager: Sending event to channel: {:?}", event);
                 match event_tx.try_send(event) {
                     Ok(()) => tracing::info!("RoomManager: Event sent successfully"),
-                    Err(e) => tracing::error!("RoomManager: Failed to send ParticipantJoined event: {:?}", e),
+                    Err(e) => tracing::error!(
+                        "RoomManager: Failed to send ParticipantJoined event: {:?}",
+                        e
+                    ),
                 }
 
                 // Update participant count (avoid holding read lock while getting write lock)
@@ -1119,14 +1202,19 @@ impl RoomManager {
                     identity: participant_id,
                 });
             }
-            livekit::RoomEvent::TrackSubscribed { track, participant, .. } => {
+            livekit::RoomEvent::TrackSubscribed {
+                track, participant, ..
+            } => {
                 let participant_id = participant.identity().to_string();
                 let is_video = matches!(track, RemoteTrack::Video(_));
 
                 // Determine if this is a screen share track
                 let is_screen_share = match &track {
                     RemoteTrack::Video(video_track) => {
-                        matches!(video_track.source(), TrackSource::Screenshare | TrackSource::ScreenshareAudio)
+                        matches!(
+                            video_track.source(),
+                            TrackSource::Screenshare | TrackSource::ScreenshareAudio
+                        )
                     }
                     _ => false,
                 };
@@ -1143,7 +1231,9 @@ impl RoomManager {
                             playback.add_track(participant_id.clone(), audio_track.clone());
                             tracing::info!("RoomManager: Added audio track to playback");
                         } else {
-                            tracing::warn!("RoomManager: No audio playback available, cannot play remote audio");
+                            tracing::warn!(
+                                "RoomManager: No audio playback available, cannot play remote audio"
+                            );
                         }
                     }
                     RemoteTrack::Video(video_track) => {
@@ -1171,7 +1261,9 @@ impl RoomManager {
                     is_screen_share,
                 });
             }
-            livekit::RoomEvent::TrackUnsubscribed { track, participant, .. } => {
+            livekit::RoomEvent::TrackUnsubscribed {
+                track, participant, ..
+            } => {
                 let participant_id = participant.identity().to_string();
                 let is_video = matches!(track, RemoteTrack::Video(_));
                 let mut is_screen_share = false;
@@ -1179,8 +1271,11 @@ impl RoomManager {
                 // Remove audio playback if it's an audio track
                 if matches!(track, RemoteTrack::Audio(_)) {
                     if let Some(playback) = audio_playback.read().as_ref() {
-                        playback.remove_track(&participant_id);
-                        tracing::info!("RoomManager: Removed audio track from playback for {}", participant_id);
+                        playback.remove_track_if_sid(&participant_id, &track.sid().to_string());
+                        tracing::info!(
+                            "RoomManager: Removed audio track from playback for {}",
+                            participant_id
+                        );
                     }
                 }
 
@@ -1190,10 +1285,13 @@ impl RoomManager {
                         v.source(),
                         TrackSource::Screenshare | TrackSource::ScreenshareAudio
                     );
-                    video_playback.read().remove_track(&participant_id, is_screen_share);
+                    video_playback
+                        .read()
+                        .remove_track(&participant_id, is_screen_share);
                     tracing::info!(
                         "RoomManager: Removed video track from playback for {} (screen_share={})",
-                        participant_id, is_screen_share
+                        participant_id,
+                        is_screen_share
                     );
                 }
 
@@ -1204,32 +1302,39 @@ impl RoomManager {
                     is_screen_share,
                 });
             }
-            livekit::RoomEvent::ConnectionQualityChanged { participant, quality } => {
+            livekit::RoomEvent::ConnectionQualityChanged {
+                participant,
+                quality,
+            } => {
                 use livekit::participant::ConnectionQuality as CQ;
                 let score: u8 = match quality {
                     CQ::Excellent => 4,
-                    CQ::Good      => 3,
-                    CQ::Poor      => 1,
-                    _             => 0,
+                    CQ::Good => 3,
+                    CQ::Poor => 1,
+                    _ => 0,
                 };
                 let _ = event_tx.try_send(RoomEvent::ConnectionQualityChanged {
                     participant_identity: participant.identity().to_string(),
                     quality: score,
                 });
             }
-            livekit::RoomEvent::E2eeStateChanged { participant, state: enc_state } => {
+            livekit::RoomEvent::E2eeStateChanged {
+                participant,
+                state: enc_state,
+            } => {
                 use livekit::webrtc::native::frame_cryptor::EncryptionState;
-                let is_encrypted = matches!(enc_state, EncryptionState::Ok | EncryptionState::KeyRatcheted);
+                let is_encrypted = matches!(
+                    enc_state,
+                    EncryptionState::Ok | EncryptionState::KeyRatcheted
+                );
                 let _ = event_tx.try_send(RoomEvent::EncryptionStateChanged {
                     participant_identity: participant.identity().to_string(),
                     is_encrypted,
                 });
             }
             livekit::RoomEvent::ActiveSpeakersChanged { speakers } => {
-                let speaker_identities = speakers
-                    .iter()
-                    .map(|p| p.identity().to_string())
-                    .collect();
+                let speaker_identities =
+                    speakers.iter().map(|p| p.identity().to_string()).collect();
                 let _ = event_tx.try_send(RoomEvent::ActiveSpeakersChanged { speaker_identities });
             }
             _ => {}
@@ -1246,6 +1351,10 @@ mod key_ring_tests {
         assert_eq!(key_ring_index(0), 0);
         assert_eq!(key_ring_index(17), 1);
         assert_eq!(key_ring_index(u32::MAX), 15);
-        assert_eq!(key_ring_index(u32::MAX.wrapping_add(1)), 0, "next slot after the last epoch");
+        assert_eq!(
+            key_ring_index(u32::MAX.wrapping_add(1)),
+            0,
+            "next slot after the last epoch"
+        );
     }
 }

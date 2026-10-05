@@ -25,7 +25,7 @@ mod quic_enabled {
     use std::time::Duration;
 
     use http::{Request, Response};
-    use rustls::pki_types::{pem::PemObject, CertificateDer};
+    use rustls::pki_types::{CertificateDer, pem::PemObject};
     use rustls::{ClientConfig as RustlsClientConfig, RootCertStore};
     use tonic::body::Body;
 
@@ -54,8 +54,12 @@ mod quic_enabled {
 
         fn poll_ready(&mut self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
             match self {
-                GrpcTransport::Tcp(ch) => tower::Service::poll_ready(ch, cx).map_err(BoxError::from),
-                GrpcTransport::Quic(ch) => tower::Service::poll_ready(ch, cx).map_err(BoxError::from),
+                GrpcTransport::Tcp(ch) => {
+                    tower::Service::poll_ready(ch, cx).map_err(BoxError::from)
+                }
+                GrpcTransport::Quic(ch) => {
+                    tower::Service::poll_ready(ch, cx).map_err(BoxError::from)
+                }
             }
         }
 
@@ -133,7 +137,10 @@ mod quic_enabled {
     /// Resolve `uri`'s host:port to a socket address. IP-literal authorities
     /// parse directly; DNS names go through the resolver.
     async fn resolve(uri: &http::Uri) -> Result<std::net::SocketAddr, BoxError> {
-        let authority = uri.authority().ok_or("QUIC endpoint URI has no host")?.as_str();
+        let authority = uri
+            .authority()
+            .ok_or("QUIC endpoint URI has no host")?
+            .as_str();
         if let Ok(addr) = authority.parse() {
             return Ok(addr);
         }
@@ -146,7 +153,8 @@ mod quic_enabled {
     /// Bind a local QUIC client endpoint trusting only the pinned chatter CA.
     fn client_endpoint() -> Result<quinn::Endpoint, BoxError> {
         let client_config = quic_client_config()?;
-        let mut endpoint = quinn::Endpoint::client("[::]:0".parse().expect("valid unspecified addr"))?;
+        let mut endpoint =
+            quinn::Endpoint::client("[::]:0".parse().expect("valid unspecified addr"))?;
         endpoint.set_default_client_config(client_config);
         Ok(endpoint)
     }
@@ -158,7 +166,10 @@ mod quic_enabled {
     /// each resolved address). Always succeeds even when nothing answers on
     /// the other end; use [`probe_quic`] first to find that out.
     pub fn build_quic(uri: http::Uri) -> Result<GrpcTransport, BoxError> {
-        let host = uri.host().ok_or("QUIC endpoint URI has no host")?.to_string();
+        let host = uri
+            .host()
+            .ok_or("QUIC endpoint URI has no host")?
+            .to_string();
         let endpoint = client_endpoint()?;
         let connector = tonic_h3::quinn::H3QuinnConnector::new(uri.clone(), host, endpoint);
         Ok(GrpcTransport::Quic(tonic_h3::H3Channel::new(
@@ -173,7 +184,10 @@ mod quic_enabled {
     /// their own timeout: QUIC/UDP is blocked on some networks (hotel wifi,
     /// corporate firewalls) and a hung handshake must not block forever.
     pub async fn probe_quic(uri: &http::Uri) -> Result<(), BoxError> {
-        let host = uri.host().ok_or("QUIC endpoint URI has no host")?.to_string();
+        let host = uri
+            .host()
+            .ok_or("QUIC endpoint URI has no host")?
+            .to_string();
         let addr = resolve(uri).await?;
         let endpoint = client_endpoint()?;
         endpoint.connect(addr, &host)?.await?;

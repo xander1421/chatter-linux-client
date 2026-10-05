@@ -28,7 +28,9 @@ use std::time::Duration;
 
 use arti_client::{DataStream, TorClient};
 use chatter_mesh_nostr::NostrError;
-use chatter_mesh_nostr::relay::{BoxFuture, RelayConnection, RelayConnector, RelaySink, RelayStream};
+use chatter_mesh_nostr::relay::{
+    BoxFuture, RelayConnection, RelayConnector, RelaySink, RelayStream,
+};
 use tokio::sync::OnceCell;
 use tokio_rustls::TlsConnector;
 use tokio_rustls::rustls::pki_types::ServerName;
@@ -84,8 +86,8 @@ impl TorRelayConnector {
                     // Arti's rustls runtime needs a process-wide default
                     // provider. Idempotent: an error means someone installed one
                     // already.
-                    let _ = tokio_rustls::rustls::crypto::ring::default_provider()
-                        .install_default();
+                    let _ =
+                        tokio_rustls::rustls::crypto::ring::default_provider().install_default();
                     TorClient::create_bootstrapped(config).await
                 });
                 match tokio::time::timeout(BOOTSTRAP_TIMEOUT, started).await {
@@ -113,10 +115,12 @@ impl TorRelayConnector {
         // Dialled on the Tor runtime too, and bounded: Arti's `connect` has no
         // internal deadline, so a stuck rendezvous would otherwise hang a relay
         // slot forever.
-        let started =
-            tor_runtime().spawn(async move { client.connect((dial_host.as_str(), dial_port)).await });
+        let started = tor_runtime()
+            .spawn(async move { client.connect((dial_host.as_str(), dial_port)).await });
         match tokio::time::timeout(CONNECT_TIMEOUT, started).await {
-            Err(_) => Err(relay_error(format!("Tor connect to {host}:{port} timed out"))),
+            Err(_) => Err(relay_error(format!(
+                "Tor connect to {host}:{port} timed out"
+            ))),
             Ok(Err(join)) => Err(relay_error(format!("Tor connect panicked: {join}"))),
             Ok(Ok(Err(error))) => Err(relay_error(format!(
                 "Tor connect to {host}:{port} failed: {error}"
@@ -138,7 +142,8 @@ struct RelayTarget {
 }
 
 fn parse_relay_url(raw: &str) -> Result<RelayTarget, NostrError> {
-    let parsed = url::Url::parse(raw).map_err(|error| relay_error(format!("bad relay URL: {error}")))?;
+    let parsed =
+        url::Url::parse(raw).map_err(|error| relay_error(format!("bad relay URL: {error}")))?;
     let secure = match parsed.scheme() {
         "wss" => true,
         "ws" => false,
@@ -184,11 +189,7 @@ fn tls_config() -> Result<ClientConfig, NostrError> {
     ))
     .with_safe_default_protocol_versions()
     .map_err(|error| relay_error(format!("TLS provider rejected the defaults: {error}")))
-    .map(|builder| {
-        builder
-            .with_root_certificates(roots)
-            .with_no_client_auth()
-    })
+    .map(|builder| builder.with_root_certificates(roots).with_no_client_auth())
 }
 
 impl RelayConnector for TorRelayConnector {
@@ -208,13 +209,17 @@ impl RelayConnector for TorRelayConnector {
                 ));
             }
 
-            let server_name = ServerName::try_from(target.host.clone())
-                .map_err(|_| relay_error(format!("not a valid TLS server name: {}", target.host)))?;
+            let server_name = ServerName::try_from(target.host.clone()).map_err(|_| {
+                relay_error(format!("not a valid TLS server name: {}", target.host))
+            })?;
             let tls = TlsConnector::from(Arc::new(tls_config()?))
                 .connect(server_name, stream)
                 .await
                 .map_err(|error| {
-                    relay_error(format!("TLS handshake with {} failed: {error}", target.host))
+                    relay_error(format!(
+                        "TLS handshake with {} failed: {error}",
+                        target.host
+                    ))
                 })?;
 
             let (sink, source) = ws::handshake(tls, &target.authority, &target.path).await?;

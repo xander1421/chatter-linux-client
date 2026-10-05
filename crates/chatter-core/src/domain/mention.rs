@@ -241,7 +241,8 @@ impl MentionExtractor {
                 .unwrap_or(text.len());
 
             if chars[i] == '@' {
-                if let Some((mention, end_idx)) = Self::parse_at_mention(&chars, i, byte_offset, text)
+                if let Some((mention, end_idx)) =
+                    Self::parse_at_mention(&chars, i, byte_offset, text)
                 {
                     mentions.push(mention);
                     i = end_idx;
@@ -275,9 +276,7 @@ impl MentionExtractor {
 
         // Collect the identifier
         let mut end_idx = start_idx + 1;
-        while end_idx < chars.len()
-            && (chars[end_idx].is_alphanumeric() || chars[end_idx] == '_')
-        {
+        while end_idx < chars.len() && (chars[end_idx].is_alphanumeric() || chars[end_idx] == '_') {
             end_idx += 1;
         }
 
@@ -337,9 +336,7 @@ impl MentionExtractor {
         // Collect the identifier (alphanumeric, hyphen, underscore)
         let mut end_idx = start_idx + 1;
         while end_idx < chars.len()
-            && (chars[end_idx].is_alphanumeric()
-                || chars[end_idx] == '-'
-                || chars[end_idx] == '_')
+            && (chars[end_idx].is_alphanumeric() || chars[end_idx] == '-' || chars[end_idx] == '_')
         {
             end_idx += 1;
         }
@@ -439,8 +436,8 @@ mod tests {
     #[test]
     fn test_mention_suggestion_user() {
         let user_id = UserId::new();
-        let suggestion = MentionSuggestion::user(user_id, "alice".to_string())
-            .with_online_status(true);
+        let suggestion =
+            MentionSuggestion::user(user_id, "alice".to_string()).with_online_status(true);
 
         assert_eq!(suggestion.suggestion_type, MentionType::User);
         assert_eq!(suggestion.display_name, "alice");
@@ -538,6 +535,9 @@ mod tests {
         assert_eq!(mentions.len(), 1);
         assert_eq!(mentions[0].display_text, "@alice");
         // Verify byte offsets are correct for the actual text
-        assert_eq!(&text[mentions[0].start_offset..mentions[0].end_offset], "@alice");
+        assert_eq!(
+            &text[mentions[0].start_offset..mentions[0].end_offset],
+            "@alice"
+        );
     }
 }

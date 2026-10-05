@@ -4,11 +4,11 @@
 //! reactions, edits, deletes, pins, and other message actions.
 
 mod actions;
-pub mod emoji_loader;
 mod context_menu;
 mod delete;
 pub mod disappearing;
 pub(crate) mod edit;
+pub mod emoji_loader;
 mod helpers;
 pub mod identity_change;
 pub mod membership;

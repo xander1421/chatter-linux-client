@@ -15,10 +15,11 @@ use std::sync::Arc;
 
 use crate::domain::channel::{Channel, ChannelType, MemberRole};
 use crate::domain::ids::{ChannelId, UserId};
-use crate::services::channel::verified_state::{
-    ChannelRole, JoinMode, MemberStatus, MembershipState, VerificationStatus, VerifiedChannel, VerifiedMembership,
-};
 use crate::services::channel::ChannelError;
+use crate::services::channel::verified_state::{
+    ChannelRole, JoinMode, MemberStatus, MembershipState, VerificationStatus, VerifiedChannel,
+    VerifiedMembership,
+};
 
 use super::ChatterClient;
 
@@ -59,7 +60,10 @@ impl ChannelVerification {
 
     /// Whether the send gate refuses group sends for this status.
     pub fn blocks_sending(self) -> bool {
-        matches!(self, Self::NotYetVerified | Self::VerificationFailed | Self::Fork)
+        matches!(
+            self,
+            Self::NotYetVerified | Self::VerificationFailed | Self::Fork
+        )
     }
 }
 
@@ -133,13 +137,27 @@ pub(crate) fn has_membership_log(channel_type: ChannelType) -> bool {
 fn state_code(v: &VerifiedChannel) -> String {
     let hex = hex::encode(v.state_hash);
     // Grouped like a safety number so it can be read aloud.
-    hex[..16].as_bytes().chunks(4).map(|c| String::from_utf8_lossy(c).into_owned()).collect::<Vec<_>>().join(" ")
+    hex[..16]
+        .as_bytes()
+        .chunks(4)
+        .map(|c| String::from_utf8_lossy(c).into_owned())
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 /// The banner for a channel's verification status; `None` when sending is
 /// not blocked by membership.
-pub(crate) fn banner_for(verification: ChannelVerification, verified: Option<&VerifiedChannel>) -> Option<MembershipBanner> {
-    let at = |v: &VerifiedChannel| format!("Verified revision {}, state code {}.", v.state.revision, state_code(v));
+pub(crate) fn banner_for(
+    verification: ChannelVerification,
+    verified: Option<&VerifiedChannel>,
+) -> Option<MembershipBanner> {
+    let at = |v: &VerifiedChannel| {
+        format!(
+            "Verified revision {}, state code {}.",
+            v.state.revision,
+            state_code(v)
+        )
+    };
     match verification {
         ChannelVerification::NotApplicable | ChannelVerification::Ok => None,
         ChannelVerification::NotYetVerified => Some(MembershipBanner {
@@ -175,23 +193,38 @@ pub(crate) fn banner_for(verification: ChannelVerification, verified: Option<&Ve
 /// Whether the channel is open to anyone: the verified policy when there is
 /// one (a password channel is INVITE_ONLY even though it is public), else the
 /// channel type.
-pub(crate) fn public_badge(channel_type: ChannelType, verified: Option<&VerifiedChannel>) -> String {
+pub(crate) fn public_badge(
+    channel_type: ChannelType,
+    verified: Option<&VerifiedChannel>,
+) -> String {
     let open = match verified {
         Some(v) => v.state.policy.join == JoinMode::Open,
         None => channel_type == ChannelType::Public,
     };
-    if open { PUBLIC_BADGE.to_string() } else { String::new() }
+    if open {
+        PUBLIC_BADGE.to_string()
+    } else {
+        String::new()
+    }
 }
 
 /// Whether a roster row (from the server's member list) is outside the
 /// verified distribution set: listed, but nobody signed them in, or the
 /// server alone removed them. Always false for a channel with no log.
-pub(crate) fn is_unverified_member(applies: bool, verified: Option<&VerifiedChannel>, user_id: &UserId) -> bool {
+pub(crate) fn is_unverified_member(
+    applies: bool,
+    verified: Option<&VerifiedChannel>,
+    user_id: &UserId,
+) -> bool {
     applies && !verified.is_some_and(|v| v.contains(&user_id.to_string()))
 }
 
 fn my_role(state: &MembershipState, me: &str) -> Option<ChannelRole> {
-    state.members.get(me).filter(|m| m.status == MemberStatus::Active).map(|m| m.role)
+    state
+        .members
+        .get(me)
+        .filter(|m| m.status == MemberStatus::Active)
+        .map(|m| m.role)
 }
 
 fn allows(mine: Option<ChannelRole>, needed: ChannelRole) -> bool {
@@ -221,7 +254,10 @@ pub(crate) fn invite_rows(state: &MembershipState, now_nanos: u64) -> Vec<Invite
                 "no expiry".to_string()
             } else {
                 let at = chrono::DateTime::from_timestamp_nanos(i.expires_at as i64);
-                format!("expires {}", at.with_timezone(&chrono::Local).format("%b %d, %Y %H:%M"))
+                format!(
+                    "expires {}",
+                    at.with_timezone(&chrono::Local).format("%b %d, %Y %H:%M")
+                )
             });
             parts.push(if i.max_uses == 0 {
                 format!("{} used", i.uses)
@@ -231,7 +267,10 @@ pub(crate) fn invite_rows(state: &MembershipState, now_nanos: u64) -> Vec<Invite
             if i.needs_approval {
                 parts.push("needs approval".into());
             }
-            InviteLinkRow { id: hex::encode(key), summary: parts.join(" \u{b7} ") }
+            InviteLinkRow {
+                id: hex::encode(key),
+                summary: parts.join(" \u{b7} "),
+            }
         })
         .collect()
 }
@@ -248,9 +287,14 @@ pub(crate) fn requesting_users(state: &MembershipState) -> Vec<UserId> {
 
 /// The access-pane flags that come from the verified state alone.
 pub(crate) fn access_flags(state: Option<&MembershipState>, me: &str) -> (bool, bool) {
-    let Some(state) = state else { return (false, false) };
+    let Some(state) = state else {
+        return (false, false);
+    };
     let mine = my_role(state, me);
-    (allows(mine, state.policy.manage_invites), allows(mine, state.policy.add_member))
+    (
+        allows(mine, state.policy.manage_invites),
+        allows(mine, state.policy.add_member),
+    )
 }
 
 fn now_nanos() -> u64 {
@@ -266,13 +310,16 @@ impl ChatterClient {
         self.channels()
             .membership_log()
             .load(channel_id)
-            .inspect_err(|e| tracing::warn!(%channel_id, error = %e, "Could not load verified membership"))
+            .inspect_err(
+                |e| tracing::warn!(%channel_id, error = %e, "Could not load verified membership"),
+            )
             .ok()
             .flatten()
     }
 
     fn channel_with_log(&self, channel_id: &ChannelId) -> Option<Channel> {
-        self.get_channel_local(channel_id).filter(|c| has_membership_log(c.channel_type))
+        self.get_channel_local(channel_id)
+            .filter(|c| has_membership_log(c.channel_type))
     }
 
     /// The channel's membership verification status.
@@ -284,10 +331,15 @@ impl ChatterClient {
     /// The membership banner and public badge for the open channel. Local
     /// only (no network), so it can run on every conversation switch.
     pub fn channel_membership_header(&self, channel_id: &ChannelId) -> ChannelMembershipHeader {
-        let Some(channel) = self.channel_with_log(channel_id) else { return ChannelMembershipHeader::default() };
+        let Some(channel) = self.channel_with_log(channel_id) else {
+            return ChannelMembershipHeader::default();
+        };
         let verified = self.verified_channel(channel_id);
         ChannelMembershipHeader {
-            banner: banner_for(ChannelVerification::of(true, verified.as_ref()), verified.as_ref()),
+            banner: banner_for(
+                ChannelVerification::of(true, verified.as_ref()),
+                verified.as_ref(),
+            ),
             public_badge: public_badge(channel.channel_type, verified.as_ref()),
         }
     }
@@ -303,10 +355,15 @@ impl ChatterClient {
     /// badge and server-operated readers. One RPC (channel integrations);
     /// when it fails the list of server-operated readers is empty and logged.
     pub async fn channel_access_view(&self, channel_id: &ChannelId) -> ChannelAccessView {
-        let Some(channel) = self.channel_with_log(channel_id) else { return ChannelAccessView::default() };
+        let Some(channel) = self.channel_with_log(channel_id) else {
+            return ChannelAccessView::default();
+        };
         let verified = self.verified_channel(channel_id);
         let state = verified.as_ref().map(|v| &v.state);
-        let me = self.session_current_user_id().map(|u| u.to_string()).unwrap_or_default();
+        let me = self
+            .session_current_user_id()
+            .map(|u| u.to_string())
+            .unwrap_or_default();
         let (can_manage_invites, can_approve_joins) = access_flags(state, &me);
 
         // AI integrations are not channel members: the server attaches them
@@ -314,10 +371,18 @@ impl ChatterClient {
         // (`internal/services/integration/service/service.go`), so they never
         // appear in the signed log or the roster. List them here so nobody
         // mistakes a server-run reader for "no one else".
-        let server_operated = match self.ai().get_channel_integrations(&channel_id.to_string()).await {
+        let server_operated = match self
+            .ai()
+            .get_channel_integrations(&channel_id.to_string())
+            .await
+        {
             Ok(list) => list
                 .into_iter()
-                .map(|i| ServerOperatedMember { id: i.id, name: i.name, label: SERVER_OPERATED_LABEL })
+                .map(|i| ServerOperatedMember {
+                    id: i.id,
+                    name: i.name,
+                    label: SERVER_OPERATED_LABEL,
+                })
                 .collect(),
             Err(e) => {
                 tracing::debug!(%channel_id, error = %e, "Could not list channel integrations");
@@ -328,14 +393,23 @@ impl ChatterClient {
         ChannelAccessView {
             public_badge: public_badge(channel.channel_type, verified.as_ref()),
             can_manage_invites,
-            invite_links: if can_manage_invites { state.map(|s| invite_rows(s, now_nanos())).unwrap_or_default() } else { Vec::new() },
+            invite_links: if can_manage_invites {
+                state
+                    .map(|s| invite_rows(s, now_nanos()))
+                    .unwrap_or_default()
+            } else {
+                Vec::new()
+            },
             can_approve_joins,
             join_requests: if can_approve_joins {
                 state
                     .map(requesting_users)
                     .unwrap_or_default()
                     .into_iter()
-                    .map(|user_id| JoinRequestRow { display_name: self.display_name(&user_id), user_id })
+                    .map(|user_id| JoinRequestRow {
+                        display_name: self.display_name(&user_id),
+                        user_id,
+                    })
                     .collect()
             } else {
                 Vec::new()
@@ -359,7 +433,11 @@ impl ChatterClient {
     }
 
     /// Revoke a join link by its [`InviteLinkRow::id`].
-    pub async fn revoke_channel_invite_link(&self, channel_id: &ChannelId, link_id: &str) -> Result<(), ChannelError> {
+    pub async fn revoke_channel_invite_link(
+        &self,
+        channel_id: &ChannelId,
+        link_id: &str,
+    ) -> Result<(), ChannelError> {
         let key = parse_hex_key(link_id)?;
         self.channels().revoke_invite_link(channel_id, &key).await
     }
@@ -372,34 +450,57 @@ impl ChatterClient {
 
     /// Join through a pasted join link, then set up group encryption as
     /// [`Self::join_channel`] does.
-    pub async fn join_channel_via_link(self: &Arc<Self>, url: &str) -> Result<Channel, ChannelError> {
+    pub async fn join_channel_via_link(
+        self: &Arc<Self>,
+        url: &str,
+    ) -> Result<Channel, ChannelError> {
         let channel = self.channels().join_via_link(url).await?;
         self.resubscribe_channel_messages();
-        if let Err(e) = self.messages().request_skdms_from_channel_members(&channel.id).await {
+        if let Err(e) = self
+            .messages()
+            .request_skdms_from_channel_members(&channel.id)
+            .await
+        {
             tracing::warn!(channel_id = %channel.id, error = %e, "Failed to request SKDMs on join");
         }
         Ok(channel)
     }
 
     /// Join from the join box: a link, or a bare channel id.
-    pub async fn join_channel_from_input(self: &Arc<Self>, input: &str) -> Result<Channel, ChannelError> {
+    pub async fn join_channel_from_input(
+        self: &Arc<Self>,
+        input: &str,
+    ) -> Result<Channel, ChannelError> {
         let input = input.trim();
         if Self::is_channel_join_link(input) {
             return self.join_channel_via_link(input).await;
         }
-        let channel_id: ChannelId =
-            input.parse().map_err(|_| ChannelError::InvalidInput("not a channel id or invite link".into()))?;
+        let channel_id: ChannelId = input
+            .parse()
+            .map_err(|_| ChannelError::InvalidInput("not a channel id or invite link".into()))?;
         self.join_channel(&channel_id, None).await
     }
 
     /// Admit a REQUESTING joiner (signed `AddMember`).
-    pub async fn approve_channel_join_request(&self, channel_id: &ChannelId, user_id: &UserId) -> Result<(), ChannelError> {
-        self.channels().approve_join_request(channel_id, user_id).await
+    pub async fn approve_channel_join_request(
+        &self,
+        channel_id: &ChannelId,
+        user_id: &UserId,
+    ) -> Result<(), ChannelError> {
+        self.channels()
+            .approve_join_request(channel_id, user_id)
+            .await
     }
 
     /// Turn a REQUESTING joiner away (signed `RemoveMember`).
-    pub async fn reject_channel_join_request(&self, channel_id: &ChannelId, user_id: &UserId) -> Result<(), ChannelError> {
-        self.channels().remove_pending_member(channel_id, user_id).await
+    pub async fn reject_channel_join_request(
+        &self,
+        channel_id: &ChannelId,
+        user_id: &UserId,
+    ) -> Result<(), ChannelError> {
+        self.channels()
+            .remove_pending_member(channel_id, user_id)
+            .await
     }
 }
 
@@ -417,22 +518,77 @@ mod tests {
     const GONE: &str = "00000000-0000-4000-8000-000000000005";
 
     fn member(role: ChannelRole, status: MemberStatus) -> Member {
-        Member { role, status, identity_key: [5; 33] }
+        Member {
+            role,
+            status,
+            identity_key: [5; 33],
+        }
     }
 
     fn channel(status: VerificationStatus, public: bool) -> VerifiedChannel {
         let members = BTreeMap::from([
-            (OWNER.to_string(), member(ChannelRole::Owner, MemberStatus::Active)),
-            (ADMIN.to_string(), member(ChannelRole::Admin, MemberStatus::Active)),
-            (MEMBER.to_string(), member(ChannelRole::Member, MemberStatus::Active)),
-            (ASKING.to_string(), member(ChannelRole::Member, MemberStatus::Requesting)),
-            (GONE.to_string(), member(ChannelRole::Member, MemberStatus::Active)),
+            (
+                OWNER.to_string(),
+                member(ChannelRole::Owner, MemberStatus::Active),
+            ),
+            (
+                ADMIN.to_string(),
+                member(ChannelRole::Admin, MemberStatus::Active),
+            ),
+            (
+                MEMBER.to_string(),
+                member(ChannelRole::Member, MemberStatus::Active),
+            ),
+            (
+                ASKING.to_string(),
+                member(ChannelRole::Member, MemberStatus::Requesting),
+            ),
+            (
+                GONE.to_string(),
+                member(ChannelRole::Member, MemberStatus::Active),
+            ),
         ]);
         let invites = BTreeMap::from([
-            ([1u8; 33], Invite { role: ChannelRole::Member, expires_at: 0, max_uses: 0, uses: 2, needs_approval: true }),
-            ([2u8; 33], Invite { role: ChannelRole::Member, expires_at: 10, max_uses: 0, uses: 0, needs_approval: false }),
-            ([3u8; 33], Invite { role: ChannelRole::Member, expires_at: 0, max_uses: 3, uses: 3, needs_approval: false }),
-            ([4u8; 33], Invite { role: ChannelRole::Moderator, expires_at: 0, max_uses: 5, uses: 1, needs_approval: false }),
+            (
+                [1u8; 33],
+                Invite {
+                    role: ChannelRole::Member,
+                    expires_at: 0,
+                    max_uses: 0,
+                    uses: 2,
+                    needs_approval: true,
+                },
+            ),
+            (
+                [2u8; 33],
+                Invite {
+                    role: ChannelRole::Member,
+                    expires_at: 10,
+                    max_uses: 0,
+                    uses: 0,
+                    needs_approval: false,
+                },
+            ),
+            (
+                [3u8; 33],
+                Invite {
+                    role: ChannelRole::Member,
+                    expires_at: 0,
+                    max_uses: 3,
+                    uses: 3,
+                    needs_approval: false,
+                },
+            ),
+            (
+                [4u8; 33],
+                Invite {
+                    role: ChannelRole::Moderator,
+                    expires_at: 0,
+                    max_uses: 5,
+                    uses: 1,
+                    needs_approval: false,
+                },
+            ),
         ]);
         let state = MembershipState {
             channel_id: "00000000-0000-4000-8000-0000000000aa".into(),
@@ -442,25 +598,52 @@ mod tests {
             invites,
             disappearing_seconds: 0,
         };
-        VerifiedChannel { state_hash: [0xab; 32], state, excluded: BTreeSet::from([GONE.to_string()]), status }
+        VerifiedChannel {
+            state_hash: [0xab; 32],
+            state,
+            excluded: BTreeSet::from([GONE.to_string()]),
+            status,
+        }
     }
 
     #[test]
     fn verification_status_maps_and_blocks() {
-        assert_eq!(ChannelVerification::of(false, None), ChannelVerification::NotApplicable);
-        assert_eq!(ChannelVerification::of(true, None), ChannelVerification::NotYetVerified);
+        assert_eq!(
+            ChannelVerification::of(false, None),
+            ChannelVerification::NotApplicable
+        );
+        assert_eq!(
+            ChannelVerification::of(true, None),
+            ChannelVerification::NotYetVerified
+        );
         let ok = channel(VerificationStatus::Ok, false);
-        assert_eq!(ChannelVerification::of(true, Some(&ok)), ChannelVerification::Ok);
+        assert_eq!(
+            ChannelVerification::of(true, Some(&ok)),
+            ChannelVerification::Ok
+        );
         let failed = channel(VerificationStatus::VerificationFailed, false);
-        assert_eq!(ChannelVerification::of(true, Some(&failed)), ChannelVerification::VerificationFailed);
+        assert_eq!(
+            ChannelVerification::of(true, Some(&failed)),
+            ChannelVerification::VerificationFailed
+        );
         let fork = channel(VerificationStatus::Fork, false);
-        assert_eq!(ChannelVerification::of(true, Some(&fork)), ChannelVerification::Fork);
+        assert_eq!(
+            ChannelVerification::of(true, Some(&fork)),
+            ChannelVerification::Fork
+        );
         // A DM never shows a banner, even with a stray state row.
-        assert_eq!(ChannelVerification::of(false, Some(&fork)), ChannelVerification::NotApplicable);
+        assert_eq!(
+            ChannelVerification::of(false, Some(&fork)),
+            ChannelVerification::NotApplicable
+        );
 
         assert!(!ChannelVerification::Ok.blocks_sending());
         assert!(!ChannelVerification::NotApplicable.blocks_sending());
-        for s in [ChannelVerification::NotYetVerified, ChannelVerification::VerificationFailed, ChannelVerification::Fork] {
+        for s in [
+            ChannelVerification::NotYetVerified,
+            ChannelVerification::VerificationFailed,
+            ChannelVerification::Fork,
+        ] {
             assert!(s.blocks_sending());
         }
     }
@@ -473,7 +656,10 @@ mod tests {
         let failed = channel(VerificationStatus::VerificationFailed, false);
         let b = banner_for(ChannelVerification::VerificationFailed, Some(&failed)).unwrap();
         assert_eq!(b.severity, BannerSeverity::Warning);
-        assert_eq!(b.title, "Membership could not be verified \u{2014} sending is paused");
+        assert_eq!(
+            b.title,
+            "Membership could not be verified \u{2014} sending is paused"
+        );
         assert!(b.detail.contains("revision 7"), "{}", b.detail);
         assert!(b.detail.contains("abab abab abab abab"), "{}", b.detail);
 
@@ -489,9 +675,21 @@ mod tests {
     #[test]
     fn public_badge_follows_verified_policy() {
         // Verified OPEN policy: badge, whatever the type says.
-        assert_eq!(public_badge(ChannelType::Private, Some(&channel(VerificationStatus::Ok, true))), PUBLIC_BADGE);
+        assert_eq!(
+            public_badge(
+                ChannelType::Private,
+                Some(&channel(VerificationStatus::Ok, true))
+            ),
+            PUBLIC_BADGE
+        );
         // A public channel with a password is INVITE_ONLY: no badge.
-        assert_eq!(public_badge(ChannelType::Public, Some(&channel(VerificationStatus::Ok, false))), "");
+        assert_eq!(
+            public_badge(
+                ChannelType::Public,
+                Some(&channel(VerificationStatus::Ok, false))
+            ),
+            ""
+        );
         // No verified state yet: fall back to the type.
         assert_eq!(public_badge(ChannelType::Public, None), PUBLIC_BADGE);
         assert_eq!(public_badge(ChannelType::Private, None), "");
@@ -503,7 +701,11 @@ mod tests {
         let id = |s: &str| -> UserId { s.parse().unwrap() };
         assert!(!is_unverified_member(true, Some(&v), &id(MEMBER)));
         // Server-injected row nobody signed in.
-        assert!(is_unverified_member(true, Some(&v), &id("00000000-0000-4000-8000-0000000000ff")));
+        assert!(is_unverified_member(
+            true,
+            Some(&v),
+            &id("00000000-0000-4000-8000-0000000000ff")
+        ));
         // Not yet admitted.
         assert!(is_unverified_member(true, Some(&v), &id(ASKING)));
         // Removed by the server alone: out of distribution.
@@ -521,8 +723,14 @@ mod tests {
         let ids: Vec<_> = rows.iter().map(|r| r.id.clone()).collect();
         // [2;33] expired at 10 < now, [3;33] used up.
         assert_eq!(ids, vec![hex::encode([1u8; 33]), hex::encode([4u8; 33])]);
-        assert_eq!(rows[0].summary, "Member link \u{b7} no expiry \u{b7} 2 used \u{b7} needs approval");
-        assert_eq!(rows[1].summary, "Moderator link \u{b7} no expiry \u{b7} 1 of 5 uses");
+        assert_eq!(
+            rows[0].summary,
+            "Member link \u{b7} no expiry \u{b7} 2 used \u{b7} needs approval"
+        );
+        assert_eq!(
+            rows[1].summary,
+            "Moderator link \u{b7} no expiry \u{b7} 1 of 5 uses"
+        );
     }
 
     #[test]
@@ -534,7 +742,10 @@ mod tests {
         // A requester has no role yet.
         assert_eq!(access_flags(Some(&v.state), ASKING), (false, false));
         assert_eq!(access_flags(None, OWNER), (false, false));
-        assert_eq!(requesting_users(&v.state), vec![ASKING.parse::<UserId>().unwrap()]);
+        assert_eq!(
+            requesting_users(&v.state),
+            vec![ASKING.parse::<UserId>().unwrap()]
+        );
     }
 
     #[test]
@@ -543,7 +754,9 @@ mod tests {
         let url = crate::services::channel::membership_log::InviteLink::generate(id).to_url();
         assert!(ChatterClient::is_channel_join_link(&url));
         assert!(!ChatterClient::is_channel_join_link(&id.to_string()));
-        assert!(!ChatterClient::is_channel_join_link("chatter://join/nonsense"));
+        assert!(!ChatterClient::is_channel_join_link(
+            "chatter://join/nonsense"
+        ));
     }
 
     #[test]

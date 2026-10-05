@@ -11,7 +11,7 @@
 
 use std::sync::Arc;
 
-use rusqlite::{params, OptionalExtension};
+use rusqlite::{OptionalExtension, params};
 
 use crate::domain::UserId;
 use crate::error::StorageError;
@@ -122,13 +122,19 @@ impl SendLogRepository {
         if (expires_at as u64) <= now {
             return Ok(None);
         }
-        Ok(Some(SentPayload { content, message_ts: message_ts.map(|t| t as u64) }))
+        Ok(Some(SentPayload {
+            content,
+            message_ts: message_ts.map(|t| t as u64),
+        }))
     }
 
     /// Expired payloads, then everything past the newest [`MAX_PAYLOADS`].
     /// Recipient rows go with their payload (`ON DELETE CASCADE`).
     fn prune(conn: &rusqlite::Connection, now: u64) -> Result<(), StorageError> {
-        conn.execute("DELETE FROM send_log_payloads WHERE expires_at <= ?1", params![now as i64])?;
+        conn.execute(
+            "DELETE FROM send_log_payloads WHERE expires_at <= ?1",
+            params![now as i64],
+        )?;
         conn.execute(
             "DELETE FROM send_log_payloads WHERE id <=
                (SELECT id FROM send_log_payloads ORDER BY id DESC LIMIT 1 OFFSET ?1)",
@@ -154,14 +160,46 @@ mod tests {
         let (_dir, log) = repo();
         let (peer, other) = (UserId::new(), UserId::new());
         let now = 1_000_000_000_000;
-        log.record(&peer, b"bytes", Some(7), now, now + 10, &[(1, 5_000_000), (2, 6_000_000)]).unwrap();
+        log.record(
+            &peer,
+            b"bytes",
+            Some(7),
+            now,
+            now + 10,
+            &[(1, 5_000_000), (2, 6_000_000)],
+        )
+        .unwrap();
 
-        assert_eq!(log.take(&other, 1, 5, now).unwrap(), None, "another peer naming our deposit");
-        assert_eq!(log.take(&peer, 2, 5, now).unwrap(), None, "device 2's deposit has its own timestamp");
-        let got = log.take(&peer, 1, 5, now).unwrap().expect("device 1's deposit");
-        assert_eq!(got, SentPayload { content: b"bytes".to_vec(), message_ts: Some(7) });
-        assert_eq!(log.take(&peer, 1, 5, now).unwrap(), None, "one resend per deposit");
-        assert!(log.take(&peer, 2, 6, now).unwrap().is_some(), "the payload outlives its first taker");
+        assert_eq!(
+            log.take(&other, 1, 5, now).unwrap(),
+            None,
+            "another peer naming our deposit"
+        );
+        assert_eq!(
+            log.take(&peer, 2, 5, now).unwrap(),
+            None,
+            "device 2's deposit has its own timestamp"
+        );
+        let got = log
+            .take(&peer, 1, 5, now)
+            .unwrap()
+            .expect("device 1's deposit");
+        assert_eq!(
+            got,
+            SentPayload {
+                content: b"bytes".to_vec(),
+                message_ts: Some(7)
+            }
+        );
+        assert_eq!(
+            log.take(&peer, 1, 5, now).unwrap(),
+            None,
+            "one resend per deposit"
+        );
+        assert!(
+            log.take(&peer, 2, 6, now).unwrap().is_some(),
+            "the payload outlives its first taker"
+        );
     }
 
     #[test]
@@ -169,13 +207,30 @@ mod tests {
         let (_dir, log) = repo();
         let peer = UserId::new();
         let now = 1_000_000_000_000;
-        log.record(&peer, b"old", None, now, now + 5, &[(1, 1_000_000)]).unwrap();
-        assert_eq!(log.take(&peer, 1, 1, now + 5).unwrap(), None, "past its expiry");
+        log.record(&peer, b"old", None, now, now + 5, &[(1, 1_000_000)])
+            .unwrap();
+        assert_eq!(
+            log.take(&peer, 1, 1, now + 5).unwrap(),
+            None,
+            "past its expiry"
+        );
 
         for i in 0..=MAX_PAYLOADS as u64 {
-            log.record(&peer, b"m", None, now, now + 100, &[(1, (i + 10) * 1_000_000)]).unwrap();
+            log.record(
+                &peer,
+                b"m",
+                None,
+                now,
+                now + 100,
+                &[(1, (i + 10) * 1_000_000)],
+            )
+            .unwrap();
         }
-        assert_eq!(log.take(&peer, 1, 10, now).unwrap(), None, "the oldest went over the cap");
+        assert_eq!(
+            log.take(&peer, 1, 10, now).unwrap(),
+            None,
+            "the oldest went over the cap"
+        );
         assert!(log.take(&peer, 1, 11, now).unwrap().is_some());
     }
 }

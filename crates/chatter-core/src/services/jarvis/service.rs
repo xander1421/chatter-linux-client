@@ -5,20 +5,19 @@
 
 use std::sync::Arc;
 
-use crate::domain::jarvis::{
-    EntityKnowledge, JarvisContext, JarvisEntity, JarvisEntityId, JarvisEntityMention,
-    JarvisFact, JarvisRelationship,
-};
 use crate::domain::UserId;
+use crate::domain::jarvis::{
+    EntityKnowledge, JarvisContext, JarvisEntity, JarvisEntityId, JarvisEntityMention, JarvisFact,
+    JarvisRelationship,
+};
 use crate::services::ai::SampleParams;
 use crate::storage::repositories::{JarvisGraphRepository, JarvisMemoryRepository};
-
 
 use super::context_builder::ContextBuilder;
 use super::engine::SharedJarvisEngine;
 use super::entity_extractor::{EntityExtractor, ExtractedEntity};
-use super::fact_extractor::FactExtractor;
 use super::error::JarvisError;
+use super::fact_extractor::FactExtractor;
 use super::memory_manager::{CompressionConfig, MemoryManager, MemoryStats};
 
 /// Supplies live app state (channel names, friends) for the system prompt.
@@ -60,8 +59,10 @@ impl JarvisService {
     ) -> Self {
         let extractor = EntityExtractor::new(ai.clone());
         let fact_extractor = Arc::new(FactExtractor::new(ai.clone(), memory_repo.clone()));
-        let context_builder = ContextBuilder::new(memory_repo.clone(), graph_repo.clone(), semantic);
-        let memory_manager = MemoryManager::new(memory_repo.clone(), graph_repo.clone(), ai.clone());
+        let context_builder =
+            ContextBuilder::new(memory_repo.clone(), graph_repo.clone(), semantic);
+        let memory_manager =
+            MemoryManager::new(memory_repo.clone(), graph_repo.clone(), ai.clone());
 
         Self {
             memory_repo,
@@ -96,8 +97,13 @@ impl JarvisService {
         query: &str,
         author_id: Option<&UserId>,
     ) -> Result<String, JarvisError> {
-        self.ask_in(context, query, author_id, crate::ai_policy::policy::Silo::Local)
-            .await
+        self.ask_in(
+            context,
+            query,
+            author_id,
+            crate::ai_policy::policy::Silo::Local,
+        )
+        .await
     }
 
     /// Ask, running in an explicitly chosen silo.
@@ -121,7 +127,8 @@ impl JarvisService {
         // 2. Store the user's query + write-path fact harvest: regex fast-path
         //    synchronously (deterministic, free), LLM extraction+consolidation
         //    in the background so the reply is never delayed.
-        self.memory_manager.store_user_message(context, query, author_id)?;
+        self.memory_manager
+            .store_user_message(context, query, author_id)?;
         if let Some(user_id) = author_id {
             let _ = self.extract_user_facts(user_id, query, context);
             if let Ok(handle) = tokio::runtime::Handle::try_current() {
@@ -207,7 +214,8 @@ impl JarvisService {
         let response = response.trim().to_string();
 
         // 5. Store the response
-        self.memory_manager.store_assistant_message(context, &response)?;
+        self.memory_manager
+            .store_assistant_message(context, &response)?;
 
         // 6. Extract and store entities from the response (background)
         let _ = self.observe_message(context, &response, None, None).await;
@@ -410,11 +418,8 @@ Summary:"#,
             let entity_id = self.graph_repo.upsert_entity(&entity)?;
 
             // Record the mention
-            let mention = JarvisEntityMention::new(
-                entity_id.clone(),
-                context,
-                message_id.map(String::from),
-            );
+            let mention =
+                JarvisEntityMention::new(entity_id.clone(), context, message_id.map(String::from));
             self.graph_repo.insert_mention(&mention)?;
 
             entity_ids.push(entity_id);
@@ -473,7 +478,9 @@ Summary:"#,
         }
 
         if lowercase.contains("i'm interested in") || lowercase.contains("i like") {
-            if let Some(interest) = Self::extract_after_phrase(message, &["interested in", "i like"]) {
+            if let Some(interest) =
+                Self::extract_after_phrase(message, &["interested in", "i like"])
+            {
                 let fact = JarvisFact::about_user(user_id, "interested_in", &interest)
                     .with_source(&context.context_id);
                 self.memory_repo.upsert_fact(&fact)?;
@@ -482,8 +489,8 @@ Summary:"#,
 
         if lowercase.contains("i use") || lowercase.contains("i prefer") {
             if let Some(tool) = Self::extract_after_phrase(message, &["i use", "i prefer"]) {
-                let fact = JarvisFact::about_user(user_id, "uses", &tool)
-                    .with_source(&context.context_id);
+                let fact =
+                    JarvisFact::about_user(user_id, "uses", &tool).with_source(&context.context_id);
                 self.memory_repo.upsert_fact(&fact)?;
             }
         }
@@ -501,10 +508,7 @@ Summary:"#,
                 let rest = &text[start..];
 
                 // Extract until end of sentence or specific delimiter
-                let extracted = rest
-                    .split(['.', ',', '!', '?'])
-                    .next()?
-                    .trim();
+                let extracted = rest.split(['.', ',', '!', '?']).next()?.trim();
 
                 if !extracted.is_empty() && extracted.len() < 100 {
                     return Some(extracted.to_string());

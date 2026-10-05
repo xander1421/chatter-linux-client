@@ -10,7 +10,7 @@ use crate::{common, skip_if_no_server};
 
 use chatter_core::network::grpc::{ChannelClient, MessageClient};
 use chatter_core::proto::chat_v1::{
-    self, message::content::Type as ContentType, message::Content, ChannelType, EncryptedData,
+    self, ChannelType, EncryptedData, message::Content, message::content::Type as ContentType,
 };
 use tokio_stream::StreamExt;
 
@@ -217,7 +217,10 @@ fn test_prekey_requires_sender_context() {
 // ============================================================================
 
 /// Helper to create a test channel and return its ID.
-async fn create_test_channel(pool: &chatter_core::network::grpc::GrpcClientPool, user: &TestUser) -> String {
+async fn create_test_channel(
+    pool: &chatter_core::network::grpc::GrpcClientPool,
+    user: &TestUser,
+) -> String {
     let mut channel_client = ChannelClient::new(pool.channel(), pool.auth_clone());
     let channel_name = format!("content_test_{}", unique_username());
 
@@ -229,7 +232,8 @@ async fn create_test_channel(pool: &chatter_core::network::grpc::GrpcClientPool,
             Some("Test channel for content processing"),
             None,
             Some(membership::genesis(user, true).1),
-        ).await
+        )
+        .await
         .expect("Failed to create channel");
 
     tokio::pin!(stream);
@@ -269,12 +273,24 @@ async fn test_server_text_message_roundtrip() {
 
     // Send a text message
     let content = Content {
-        r#type: Some(ContentType::Text("Test message for content processing".to_string())),
+        r#type: Some(ContentType::Text(
+            "Test message for content processing".to_string(),
+        )),
     };
 
     let sent_message = assert_ok(
         msg_client
-            .send_message(&channel_id, content, None, false, None, vec![], false, vec![], Vec::new())
+            .send_message(
+                &channel_id,
+                content,
+                None,
+                false,
+                None,
+                vec![],
+                false,
+                vec![],
+                Vec::new(),
+            )
             .await,
     );
 

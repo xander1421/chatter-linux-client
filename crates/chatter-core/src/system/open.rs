@@ -180,7 +180,10 @@ impl ExternalOpener {
 
         // Get parent directory
         let parent = path.parent().ok_or_else(|| {
-            SystemError::OpenFile(format!("Cannot determine parent folder of: {}", path.display()))
+            SystemError::OpenFile(format!(
+                "Cannot determine parent folder of: {}",
+                path.display()
+            ))
         })?;
 
         // Try to use xdg-open with select if available (some file managers support it)

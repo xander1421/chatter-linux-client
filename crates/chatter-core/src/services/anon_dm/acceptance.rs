@@ -1,10 +1,10 @@
-use chrono::Utc;
+use crate::domain::UserId;
 use crate::domain::anon_dm::{AnonDm, AnonDmId, AnonDmStatus};
 use crate::domain::ids::{ChannelId, MessageId};
 use crate::domain::message::{ConversationType, Message, MessageContent};
-use crate::domain::UserId;
 use crate::proto::content_v1::{self, AnonDmAccept, Content};
 use crate::util::time::TimestampNanos;
+use chrono::Utc;
 
 use super::{AnonDmError, AnonDmService, DecryptedPeerProfile};
 
@@ -12,10 +12,7 @@ impl AnonDmService {
     /// Accept an incoming message request.
     ///
     /// Creates our mailbox and sends acceptance to initiator's anonymous mailbox.
-    pub async fn accept_request(
-        &self,
-        conversation_id: AnonDmId,
-    ) -> Result<AnonDm, AnonDmError> {
+    pub async fn accept_request(&self, conversation_id: AnonDmId) -> Result<AnonDm, AnonDmError> {
         let _current_user = self.current_user_id()?;
 
         // Get the conversation

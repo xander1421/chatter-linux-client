@@ -4,17 +4,16 @@
 
 use std::sync::Arc;
 
-use slint::{ComponentHandle, ModelRc, VecModel, Weak, Model};
+use slint::{ComponentHandle, Model, ModelRc, VecModel, Weak};
 
 use chatter_core::client::ChatterClient;
 use chatter_core::domain::ids::ChannelId;
 
-use chatter_core::ui::initials_from_name;
 use crate::bin_ui::converters::{
-    messages_to_display_batch, ChatRowExt, FriendDataExt,
-    FriendRequestExt, FriendRequestSendData,
+    ChatRowExt, FriendDataExt, FriendRequestExt, FriendRequestSendData, messages_to_display_batch,
 };
 use crate::{ChatRowData, FriendData, FriendRequestData, MainWindow};
+use chatter_core::ui::initials_from_name;
 
 /// Rebuild the FriendsModal "Friends" tab list and push it into the UI.
 ///
@@ -91,7 +90,9 @@ pub async fn load_initial_data(window_weak: Weak<MainWindow>, ui_ctx: &Arc<Chatt
             for ch in &synced_channels {
                 tracing::debug!(
                     "Synced channel: id={}, name={}, type={:?}",
-                    ch.id, ch.name, ch.channel_type
+                    ch.id,
+                    ch.name,
+                    ch.channel_type
                 );
             }
             tracing::info!("Synced {} channels from server", synced_channels.len());
@@ -111,7 +112,10 @@ pub async fn load_initial_data(window_weak: Weak<MainWindow>, ui_ctx: &Arc<Chatt
     // user can continue receiving messages across long offline gaps.
     match ui_ctx.refresh_expiring_group_mailboxes().await {
         Ok(refreshed) if !refreshed.is_empty() => {
-            tracing::info!(count = refreshed.len(), "Refreshed expiring anon group mailboxes");
+            tracing::info!(
+                count = refreshed.len(),
+                "Refreshed expiring anon group mailboxes"
+            );
         }
         Ok(_) => {}
         Err(e) => tracing::warn!("Failed to refresh anon group mailboxes: {}", e),
@@ -142,20 +146,19 @@ pub async fn load_initial_data(window_weak: Weak<MainWindow>, ui_ctx: &Arc<Chatt
 
     // Load user's own avatar from settings (stored during registration)
     // Pre-decode before entering UI thread to avoid blocking
-    let user_avatar_decoded: Option<(Vec<u8>, u32, u32)> =
-        ui_ctx.my_avatar().and_then(|bytes| {
-            image::load_from_memory(&bytes).ok().map(|img| {
-                let rgba = img.to_rgba8();
-                let (w, h) = rgba.dimensions();
-                tracing::info!(
-                    avatar_size = bytes.len(),
-                    width = w,
-                    height = h,
-                    "Loaded user's own avatar from settings"
-                );
-                (rgba.into_raw(), w, h)
-            })
-        });
+    let user_avatar_decoded: Option<(Vec<u8>, u32, u32)> = ui_ctx.my_avatar().and_then(|bytes| {
+        image::load_from_memory(&bytes).ok().map(|img| {
+            let rgba = img.to_rgba8();
+            let (w, h) = rgba.dimensions();
+            tracing::info!(
+                avatar_size = bytes.len(),
+                width = w,
+                height = h,
+                "Loaded user's own avatar from settings"
+            );
+            (rgba.into_raw(), w, h)
+        })
+    });
 
     // First channel to select (exclude DMs and SavedMessages) — rule in core.
     let first_channel_id = ui_ctx.first_selectable_channel_id();
@@ -178,7 +181,9 @@ pub async fn load_initial_data(window_weak: Weak<MainWindow>, ui_ctx: &Arc<Chatt
             for dm in requests {
                 // Get peer display name from conversation (revealed after ECIES decryption)
                 // Do NOT use user_service - these are strangers
-                let peer_name = dm.peer_display_name.clone()
+                let peer_name = dm
+                    .peer_display_name
+                    .clone()
                     .unwrap_or_else(|| ui_ctx.fallback_display_name(&dm.peer_id));
 
                 // Get intro message if any
@@ -232,7 +237,10 @@ pub async fn load_initial_data(window_weak: Weak<MainWindow>, ui_ctx: &Arc<Chatt
             crate::bin_ui::features::sidebar::refresh_selection(&w, &ui_ctx_for_refresh);
 
             // Compute initial total unread count for mobile bottom nav badge
-            crate::bin_ui::features::auth::inbox::domain_handler::recompute_total_unread(&w, &ui_ctx_for_refresh);
+            crate::bin_ui::features::auth::inbox::domain_handler::recompute_total_unread(
+                &w,
+                &ui_ctx_for_refresh,
+            );
 
             w.set_user_display_name(user_display_name.into());
             w.set_user_initials(user_initials.into());
@@ -249,14 +257,21 @@ pub async fn load_initial_data(window_weak: Weak<MainWindow>, ui_ctx: &Arc<Chatt
 
             // Set user's own avatar if available
             if let Some((pixels, width, height)) = user_avatar_decoded {
-                w.set_user_avatar_source(crate::bin_ui::slint_conversions::rgba_to_slint_image(&pixels, width, height,));
+                w.set_user_avatar_source(crate::bin_ui::slint_conversions::rgba_to_slint_image(
+                    &pixels, width, height,
+                ));
             }
 
             // Set friend requests (including private/anonymous DM requests)
             // Convert Send-safe data to Slint types inside event loop
-            let received_ui_slint: Vec<FriendRequestData> = received_ui.into_iter().map(|r| r.to_slint()).collect();
-            let sent_ui_slint: Vec<FriendRequestData> = sent_ui.into_iter().map(|r| r.to_slint()).collect();
-            let private_requests_ui_slint: Vec<FriendRequestData> = private_requests_ui.into_iter().map(|r| r.to_slint()).collect();
+            let received_ui_slint: Vec<FriendRequestData> =
+                received_ui.into_iter().map(|r| r.to_slint()).collect();
+            let sent_ui_slint: Vec<FriendRequestData> =
+                sent_ui.into_iter().map(|r| r.to_slint()).collect();
+            let private_requests_ui_slint: Vec<FriendRequestData> = private_requests_ui
+                .into_iter()
+                .map(|r| r.to_slint())
+                .collect();
             w.set_friends_received_requests(ModelRc::new(VecModel::from(received_ui_slint)));
             w.set_friends_sent_requests(ModelRc::new(VecModel::from(sent_ui_slint)));
             w.set_friends_private_requests(ModelRc::new(VecModel::from(private_requests_ui_slint)));
@@ -278,7 +293,8 @@ pub async fn load_initial_data(window_weak: Weak<MainWindow>, ui_ctx: &Arc<Chatt
     // phone the conversation list IS the home screen: selecting here opened
     // the first channel over it at every launch and, via mark_as_read, cleared
     // its unread badge before the user had seen it.
-    let first_channel_id = first_channel_id.filter(|_| !cfg!(any(target_os = "android", target_os = "ios")));
+    let first_channel_id =
+        first_channel_id.filter(|_| !cfg!(any(target_os = "android", target_os = "ios")));
     if let Some(channel_id) = first_channel_id {
         let channel_id_str = channel_id.to_string();
 
@@ -329,7 +345,12 @@ async fn load_channel_into_ui_from_services(
     let conversation_type = channel.conversation_type();
 
     // Fetch recent messages (limit 50)
-    let messages = match ui_ctx.get_messages_local_asc(channel_id, &conversation_type, None, chatter_core::config::MESSAGE_PAGE_SIZE as u32) {
+    let messages = match ui_ctx.get_messages_local_asc(
+        channel_id,
+        &conversation_type,
+        None,
+        chatter_core::config::MESSAGE_PAGE_SIZE as u32,
+    ) {
         Ok(msgs) => msgs,
         Err(e) => {
             tracing::error!("Failed to get messages for channel {}: {}", channel_id, e);
@@ -356,8 +377,15 @@ async fn load_channel_into_ui_from_services(
     let current_user_id_for_slint = current_user_id.clone().unwrap_or_default();
 
     // Update UI
-    let is_saved = matches!(channel.channel_type, chatter_core::domain::channel::ChannelType::SavedMessages);
-    let channel_name = if is_saved { "Saved Messages".to_string() } else { channel.name.clone() };
+    let is_saved = matches!(
+        channel.channel_type,
+        chatter_core::domain::channel::ChannelType::SavedMessages
+    );
+    let channel_name = if is_saved {
+        "Saved Messages".to_string()
+    } else {
+        channel.name.clone()
+    };
     let channel_id_str = channel_id.to_string();
 
     let ui_ctx_load = ui_ctx.clone();
@@ -439,7 +467,7 @@ pub fn show_incoming_call(
         encryption_key: String::new().into(),
         call_start_timestamp_ns: String::new().into(),
     };
-    
+
     // Set call data and show modal
     window.set_incoming_call_data(call_data);
     window.set_incoming_call_minimized(false);
@@ -459,11 +487,11 @@ pub fn update_friend_requests(
     sent: Vec<crate::FriendRequestData>,
 ) {
     use slint::{ModelRc, VecModel};
-    
+
     // Update received requests
     let received_model = VecModel::from(received);
     window.set_friends_received_requests(ModelRc::new(received_model));
-    
+
     // Update sent requests
     let sent_model = VecModel::from(sent);
     window.set_friends_sent_requests(ModelRc::new(sent_model));

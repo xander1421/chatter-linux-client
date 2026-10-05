@@ -77,9 +77,13 @@ pub fn wire_session_callbacks(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) 
         let ui_ctx = ui_ctx_view.clone();
         refresh_pending_links(weak_window.clone(), ui_ctx.clone());
 
-        spawn_async_action!(weak_window, set_sessions_loading,
+        spawn_async_action!(
+            weak_window,
+            set_sessions_loading,
             async { ui_ctx.list_sessions().await },
-            |w: &MainWindow, sessions| { update_sessions_ui(w.as_weak(), sessions); }
+            |w: &MainWindow, sessions| {
+                update_sessions_ui(w.as_weak(), sessions);
+            }
         );
     });
 
@@ -106,12 +110,16 @@ pub fn wire_session_callbacks(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) 
     window.on_revoke_session(move |device_id: i32| {
         let ui_ctx = ui_ctx_revoke.clone();
 
-        spawn_async_action!(weak_window, set_sessions_revoking,
+        spawn_async_action!(
+            weak_window,
+            set_sessions_revoking,
             async {
                 ui_ctx.revoke_session(device_id as u32).await?;
                 ui_ctx.list_sessions().await
             },
-            |w: &MainWindow, sessions| { update_sessions_ui(w.as_weak(), sessions); }
+            |w: &MainWindow, sessions| {
+                update_sessions_ui(w.as_weak(), sessions);
+            }
         );
     });
 
@@ -122,12 +130,16 @@ pub fn wire_session_callbacks(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) 
     window.on_revoke_all_sessions(move || {
         let ui_ctx = ui_ctx_all.clone();
 
-        spawn_async_action!(weak_window, set_sessions_revoking,
+        spawn_async_action!(
+            weak_window,
+            set_sessions_revoking,
             async {
                 ui_ctx.revoke_all_other_sessions().await?;
                 ui_ctx.list_sessions().await
             },
-            |w: &MainWindow, sessions| { update_sessions_ui(w.as_weak(), sessions); }
+            |w: &MainWindow, sessions| {
+                update_sessions_ui(w.as_weak(), sessions);
+            }
         );
     });
 }

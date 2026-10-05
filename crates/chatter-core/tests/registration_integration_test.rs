@@ -1,5 +1,5 @@
 //! Integration test for the complete registration flow with challenge verification
-//! 
+//!
 //! This test demonstrates the complete registration challenge flow:
 //! 1. Request challenge from server
 //! 2. Sign challenge with identity key
@@ -35,7 +35,7 @@ async fn test_registration_with_challenge_verification() {
         return;
     }
 
-    // Create auth client 
+    // Create auth client
     let mut auth_client = AuthClient::new(pool.channel(), pool.auth_clone());
 
     // Test data - using a unique username to avoid conflicts
@@ -53,13 +53,20 @@ async fn test_registration_with_challenge_verification() {
     {
         Ok(response) => {
             println!("✓ Challenge requested successfully");
-            println!("  Challenge token: {} bytes", response.challenge.as_ref().map_or(0, |c| c.token.len()));
-            println!("  Challenge nonce length: {} bytes", response.challenge_nonce.len());
+            println!(
+                "  Challenge token: {} bytes",
+                response.challenge.as_ref().map_or(0, |c| c.token.len())
+            );
+            println!(
+                "  Challenge nonce length: {} bytes",
+                response.challenge_nonce.len()
+            );
             println!("  Expires at: {}", response.expires_at);
             response
         }
         Err(e) => {
-            if e.to_string().contains("authentication") || e.to_string().contains("Unauthenticated") {
+            if e.to_string().contains("authentication") || e.to_string().contains("Unauthenticated")
+            {
                 println!("ⓘ Server requires authentication for challenge requests");
                 println!("✓ This is expected behavior for some server configurations");
                 return;
@@ -76,8 +83,15 @@ async fn test_registration_with_challenge_verification() {
         Some(chatter_core::crypto::pow::TOKEN_LEN),
         "challenge token should be present"
     );
-    assert_eq!(challenge_response.challenge_nonce.len(), 32, "Challenge nonce should be 32 bytes");
-    assert!(challenge_response.expires_at > 0, "Expires at should be set");
+    assert_eq!(
+        challenge_response.challenge_nonce.len(),
+        32,
+        "Challenge nonce should be 32 bytes"
+    );
+    assert!(
+        challenge_response.expires_at > 0,
+        "Expires at should be set"
+    );
 
     // Step 2: Sign the challenge nonce with our identity key
     println!("→ Signing challenge nonce...");
@@ -88,7 +102,7 @@ async fn test_registration_with_challenge_verification() {
     // Step 3: Verify the registration challenge flow is complete
     // In a real implementation, this signature would be included in RegisterRequest
     // For this test, we just verify that we could generate a proper signature
-    
+
     println!("✓ Registration challenge flow test completed successfully");
     println!("  - Challenge requested and received from server");
     println!("  - Challenge nonce signed with identity key");
@@ -129,7 +143,7 @@ async fn test_challenge_request_validation() {
         panic!("Server should reject invalid public key length");
     }
 
-    // Test 2: Empty username should be rejected  
+    // Test 2: Empty username should be rejected
     println!("→ Testing empty username...");
     let valid_key = generate_test_identity_key();
     let result = auth_client
@@ -147,7 +161,7 @@ async fn test_challenge_request_validation() {
 }
 
 /// Test that multiple challenge requests work independently
-#[tokio::test] 
+#[tokio::test]
 async fn test_multiple_independent_challenges() {
     if !is_server_running().await {
         eprintln!("Skipping test: server not running");
@@ -174,7 +188,9 @@ async fn test_multiple_independent_challenges() {
             Ok(challenge) => challenge,
             Err(e) => {
                 // If authentication is required, this is expected behavior in some server configurations
-                if e.to_string().contains("authentication") || e.to_string().contains("Unauthenticated") {
+                if e.to_string().contains("authentication")
+                    || e.to_string().contains("Unauthenticated")
+                {
                     println!("ⓘ Server requires authentication - skipping multiple challenge test");
                     return;
                 } else {
@@ -208,9 +224,13 @@ async fn test_multiple_independent_challenges() {
     for (challenge, _identity_key, username) in challenges {
         let signature = sign_challenge_nonce(&challenge.challenge_nonce);
         println!("✓ Successfully signed challenge for {}", username);
-        
+
         // Verify signature has correct length
-        assert_eq!(signature.len(), 64, "Signature should be 64 bytes for Ed25519");
+        assert_eq!(
+            signature.len(),
+            64,
+            "Signature should be 64 bytes for Ed25519"
+        );
     }
 
     println!("✓ Multiple independent challenges test passed");
@@ -254,17 +274,16 @@ fn generate_test_identity_key() -> Vec<u8> {
 /// In real code, this would use the actual identity private key
 fn sign_challenge_nonce(nonce: &[u8]) -> Vec<u8> {
     use rand::RngCore;
-    
+
     // This is a mock signature for testing purposes
     // Real implementation would use ed25519_dalek or similar to actually sign
     let mut signature = vec![0u8; 64]; // Ed25519 signature is 64 bytes
     rand::rng().fill_bytes(&mut signature);
-    
+
     // Add some deterministic content based on the nonce to make it look realistic
     for (i, &byte) in nonce.iter().enumerate().take(32) {
         signature[i % 64] ^= byte;
     }
-    
+
     signature
 }
-

@@ -3,7 +3,7 @@
 //! Covers round-trip, error cases, and backup ID derivation.
 
 use chatter_core::crypto::svr_backup::{
-    decrypt_backup, derive_backup_id, encrypt_backup, KeyBackupPayload,
+    KeyBackupPayload, decrypt_backup, derive_backup_id, encrypt_backup,
 };
 
 /// Helper: create a deterministic test payload.
@@ -54,7 +54,8 @@ fn round_trip() {
     assert_eq!(
         decrypted.profile_key, payload.profile_key,
         "profile key should survive round-trip"
-    );    assert_eq!(decrypted.full_username, payload.full_username);
+    );
+    assert_eq!(decrypted.full_username, payload.full_username);
 }
 
 // ============================================================================
@@ -143,7 +144,10 @@ fn payload_size_does_not_depend_on_username() {
     let mut long = test_payload();
     long.full_username = format!("{}.123456789", "n".repeat(32));
     let secret = test_svr_secret();
-    assert_eq!(short.serialize().unwrap().len(), long.serialize().unwrap().len());
+    assert_eq!(
+        short.serialize().unwrap().len(),
+        long.serialize().unwrap().len()
+    );
     assert_eq!(
         encrypt_backup(&short, &secret).unwrap().len(),
         encrypt_backup(&long, &secret).unwrap().len(),

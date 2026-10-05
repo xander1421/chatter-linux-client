@@ -676,25 +676,46 @@ pub enum SystemMessage {
     /// why: "{user} is no longer a member". Never worded as a leave.
     UserGone(UserId),
     ChannelCreated,
-    ChannelRenamed { old_name: String, new_name: String },
-    UserAdded { by: UserId, added: UserId },
+    ChannelRenamed {
+        old_name: String,
+        new_name: String,
+    },
+    UserAdded {
+        by: UserId,
+        added: UserId,
+    },
     /// Rendered with the moderator as sender: "{by} removed {removed_name}".
     /// The name is snapshotted when the event lands, while the member is still
     /// in the local stores; `None` (unknown) reads "removed a member".
-    UserRemoved { by: UserId, removed: UserId, removed_name: Option<String> },
+    UserRemoved {
+        by: UserId,
+        removed: UserId,
+        removed_name: Option<String>,
+    },
     /// Rendered with the moderator as sender: "{by} banned {banned_name}".
-    UserBanned { by: UserId, banned: UserId, banned_name: Option<String> },
+    UserBanned {
+        by: UserId,
+        banned: UserId,
+        banned_name: Option<String>,
+    },
     /// Rendered with the former owner as sender: "{from} made {to_name} the
     /// owner". Name snapshotted like [`Self::UserRemoved`]'s.
-    OwnershipTransferred { to: UserId, to_name: Option<String> },
+    OwnershipTransferred {
+        to: UserId,
+        to_name: Option<String>,
+    },
     /// WE were made the owner; rendered with the former owner as sender:
     /// "{from} made you the owner".
     MadeYouOwner,
     /// WE were kicked; rendered with the moderator as sender, so it reads
     /// "{by} removed you" (Signal's wording).
-    SelfRemoved { by: UserId },
+    SelfRemoved {
+        by: UserId,
+    },
     /// WE were banned; rendered with the moderator as sender: "{by} banned you".
-    SelfBanned { by: UserId },
+    SelfBanned {
+        by: UserId,
+    },
     /// We are no longer in this channel and the server kept no reason: a kick
     /// that a sync found after the fact (a kick leaves no record) or a leave
     /// from another of our devices. Rendered with us as sender: "You are no
@@ -726,16 +747,23 @@ pub enum SystemMessage {
     /// `attributed` mirrors [`crate::error::IdentityChangeSource::is_authenticated`]:
     /// false means the peer id came from server-supplied envelope metadata and
     /// nothing proved it, so the wording must not assert who this was.
-    IdentityChanged { attributed: bool },
+    IdentityChanged {
+        attributed: bool,
+    },
     /// One of OUR messages never reached this member (the system message's
     /// sender): its anonymous-mailbox send kept failing and was given up.
     /// `sent_at` is the undelivered message's timestamp; `preview` a short
     /// excerpt so the line says which message.
-    Undelivered { sent_at: u64, preview: String },
+    Undelivered {
+        sent_at: u64,
+        preview: String,
+    },
     /// The system message's sender changed this conversation's
     /// disappearing-messages timer (Signal's timer-update notice). `seconds`
     /// is the new value; `0` = turned off.
-    DisappearingTimerChanged { seconds: u32 },
+    DisappearingTimerChanged {
+        seconds: u32,
+    },
 }
 
 impl SystemMessage {
@@ -748,7 +776,10 @@ impl SystemMessage {
             Self::UserGone(_) => "is no longer a member".to_string(),
             Self::ChannelCreated => "created the channel".to_string(),
             Self::ChannelRenamed { old_name, new_name } => {
-                format!("renamed the channel from \"{}\" to \"{}\"", old_name, new_name)
+                format!(
+                    "renamed the channel from \"{}\" to \"{}\"",
+                    old_name, new_name
+                )
             }
             Self::UserAdded { .. } => "added a member".to_string(),
             Self::UserRemoved { removed_name, .. } => {
@@ -758,7 +789,10 @@ impl SystemMessage {
                 format!("banned {}", banned_name.as_deref().unwrap_or("a member"))
             }
             Self::OwnershipTransferred { to_name, .. } => {
-                format!("made {} the owner", to_name.as_deref().unwrap_or("a member"))
+                format!(
+                    "made {} the owner",
+                    to_name.as_deref().unwrap_or("a member")
+                )
             }
             Self::MadeYouOwner => "made you the owner".to_string(),
             Self::SelfRemoved { .. } => "removed you".to_string(),
@@ -1021,7 +1055,10 @@ pub fn ordered_insert_position(
     new_ts: u64,
     new_sender: &str,
 ) -> InsertPosition {
-    if existing.iter().any(|(ts, s)| *ts == new_ts && *s == new_sender) {
+    if existing
+        .iter()
+        .any(|(ts, s)| *ts == new_ts && *s == new_sender)
+    {
         return InsertPosition::Duplicate;
     }
     let pos = existing
@@ -1043,13 +1080,25 @@ mod tests {
     fn ordered_insert_position_dedup_and_ordering() {
         let existing = [(10u64, "b"), (20, "a"), (20, "c")];
         // Duplicate key.
-        assert_eq!(ordered_insert_position(&existing, 20, "a"), InsertPosition::Duplicate);
+        assert_eq!(
+            ordered_insert_position(&existing, 20, "a"),
+            InsertPosition::Duplicate
+        );
         // Earliest → front.
-        assert_eq!(ordered_insert_position(&existing, 5, "z"), InsertPosition::At(0));
+        assert_eq!(
+            ordered_insert_position(&existing, 5, "z"),
+            InsertPosition::At(0)
+        );
         // Latest → end.
-        assert_eq!(ordered_insert_position(&existing, 30, "a"), InsertPosition::At(3));
+        assert_eq!(
+            ordered_insert_position(&existing, 30, "a"),
+            InsertPosition::At(3)
+        );
         // Tie at ts=20: "b" sits between "a" and "c".
-        assert_eq!(ordered_insert_position(&existing, 20, "b"), InsertPosition::At(2));
+        assert_eq!(
+            ordered_insert_position(&existing, 20, "b"),
+            InsertPosition::At(2)
+        );
         // Empty list.
         assert_eq!(ordered_insert_position(&[], 1, "a"), InsertPosition::At(0));
     }
@@ -1079,7 +1128,10 @@ mod tests {
         // Whole page unread, and more above it → open at the top, divider
         // above row 0. Not None: "everything is new" is exactly when the
         // divider matters most.
-        assert_eq!(anchor(&[1, 2, 10, 20, 30, 40, 50]).divider_index(&page), Some(0));
+        assert_eq!(
+            anchor(&[1, 2, 10, 20, 30, 40, 50]).divider_index(&page),
+            Some(0)
+        );
 
         // Only the newest row is unread.
         assert_eq!(anchor(&[50]).divider_index(&page), Some(4));
@@ -1104,7 +1156,13 @@ mod tests {
     fn test_message_new_text() {
         let conversation_id = ChannelId::new();
         let sender_id = Some(UserId::new());
-        let msg = Message::new_text(conversation_id, ConversationType::Channel, sender_id, "Hello, world!".to_string(), 0);
+        let msg = Message::new_text(
+            conversation_id,
+            ConversationType::Channel,
+            sender_id,
+            "Hello, world!".to_string(),
+            0,
+        );
 
         assert_eq!(msg.conversation_id, conversation_id);
         assert_eq!(msg.sender_id, sender_id);
@@ -1119,16 +1177,35 @@ mod tests {
         let conversation_id = ChannelId::new();
 
         // Text content
-        let text_msg = Message::new_text(conversation_id, ConversationType::Channel, None, "Test".to_string(), 0);
+        let text_msg = Message::new_text(
+            conversation_id,
+            ConversationType::Channel,
+            None,
+            "Test".to_string(),
+            0,
+        );
         assert_eq!(text_msg.as_text(), Some("Test"));
 
         // Mixed content
-        let mut mixed_msg = Message::new_text(conversation_id, ConversationType::Channel, None, "".to_string(), 0);
-        mixed_msg.content = MessageContent::Mixed(MixedContent::text_only("Mixed text".to_string()));
+        let mut mixed_msg = Message::new_text(
+            conversation_id,
+            ConversationType::Channel,
+            None,
+            "".to_string(),
+            0,
+        );
+        mixed_msg.content =
+            MessageContent::Mixed(MixedContent::text_only("Mixed text".to_string()));
         assert_eq!(mixed_msg.as_text(), Some("Mixed text"));
 
         // Encrypted content (no text extraction)
-        let mut enc_msg = Message::new_text(conversation_id, ConversationType::Channel, None, "".to_string(), 0);
+        let mut enc_msg = Message::new_text(
+            conversation_id,
+            ConversationType::Channel,
+            None,
+            "".to_string(),
+            0,
+        );
         enc_msg.content = MessageContent::Encrypted(EncryptedContent::new(
             vec![1, 2, 3],
             EncryptedMessageType::Signal,
@@ -1181,7 +1258,10 @@ mod tests {
             removed: UserId::new(),
             removed_name: removed_name.map(str::to_string),
         };
-        assert_eq!(removed(Some("Bob Tester")).description(), "removed Bob Tester");
+        assert_eq!(
+            removed(Some("Bob Tester")).description(),
+            "removed Bob Tester"
+        );
         assert_eq!(removed(None).description(), "removed a member");
         let owner = |to_name: Option<&str>| SystemMessage::OwnershipTransferred {
             to: UserId::new(),
@@ -1189,17 +1269,17 @@ mod tests {
         };
         assert_eq!(owner(Some("Bob")).description(), "made Bob the owner");
         assert_eq!(owner(None).description(), "made a member the owner");
-        let banned = SystemMessage::UserBanned { by: user_id, banned: UserId::new(), banned_name: None };
+        let banned = SystemMessage::UserBanned {
+            by: user_id,
+            banned: UserId::new(),
+            banned_name: None,
+        };
         assert_eq!(banned.description(), "banned a member");
     }
 
     #[test]
     fn test_call_message_duration() {
-        let call = CallMessage::started(
-            "call-123".to_string(),
-            UserId::new(),
-            "Alice".to_string(),
-        );
+        let call = CallMessage::started("call-123".to_string(), UserId::new(), "Alice".to_string());
         assert_eq!(call.call_type, CallMessageType::Started);
         assert!(call.started_at.is_some());
         assert!(call.duration.is_none());
@@ -1208,9 +1288,17 @@ mod tests {
     #[test]
     fn test_reaction_count() {
         let conversation_id = ChannelId::new();
-        let mut msg = Message::new_text(conversation_id, ConversationType::Channel, None, "Test".to_string(), 0);
-        msg.reaction_counts.push(ReactionCount::new("👍".to_string(), 5));
-        msg.reaction_counts.push(ReactionCount::new("❤️".to_string(), 3));
+        let mut msg = Message::new_text(
+            conversation_id,
+            ConversationType::Channel,
+            None,
+            "Test".to_string(),
+            0,
+        );
+        msg.reaction_counts
+            .push(ReactionCount::new("👍".to_string(), 5));
+        msg.reaction_counts
+            .push(ReactionCount::new("❤️".to_string(), 3));
 
         assert_eq!(msg.total_reactions(), 8);
     }
@@ -1223,18 +1311,39 @@ mod tests {
         let me = UserId::new();
         let them = UserId::new();
         let call = |initiator: UserId, call_type: CallMessageType| {
-            let mut m = Message::new_text(ChannelId::from(them), ConversationType::ServerDm, Some(them), String::new(), 1);
+            let mut m = Message::new_text(
+                ChannelId::from(them),
+                ConversationType::ServerDm,
+                Some(them),
+                String::new(),
+                1,
+            );
             let mut c = CallMessage::started("c".into(), initiator, String::new());
             c.call_type = call_type;
             m.content = MessageContent::Call(c);
             m
         };
-        assert_eq!(call(them, CallMessageType::Missed).sidebar_preview(Some(&me), None), "\u{1F4DE} Missed call");
-        assert_eq!(call(them, CallMessageType::Ended).sidebar_preview(Some(&me), None), "\u{1F4DE} Incoming call");
-        assert_eq!(call(me, CallMessageType::Ended).sidebar_preview(Some(&me), None), "\u{1F4DE} Outgoing call");
-        assert_eq!(call(them, CallMessageType::Declined).sidebar_preview(Some(&me), None), "\u{1F4DE} Declined call");
+        assert_eq!(
+            call(them, CallMessageType::Missed).sidebar_preview(Some(&me), None),
+            "\u{1F4DE} Missed call"
+        );
+        assert_eq!(
+            call(them, CallMessageType::Ended).sidebar_preview(Some(&me), None),
+            "\u{1F4DE} Incoming call"
+        );
+        assert_eq!(
+            call(me, CallMessageType::Ended).sidebar_preview(Some(&me), None),
+            "\u{1F4DE} Outgoing call"
+        );
+        assert_eq!(
+            call(them, CallMessageType::Declined).sidebar_preview(Some(&me), None),
+            "\u{1F4DE} Declined call"
+        );
         // The caller's side of a declined call says so too, as its Calls tab does.
-        assert_eq!(call(me, CallMessageType::Declined).sidebar_preview(Some(&me), None), "\u{1F4DE} Declined call");
+        assert_eq!(
+            call(me, CallMessageType::Declined).sidebar_preview(Some(&me), None),
+            "\u{1F4DE} Declined call"
+        );
     }
 
     #[test]
@@ -1243,14 +1352,29 @@ mod tests {
         let me = UserId::new();
         let them = UserId::new();
         let text = |sender, body: &str| {
-            Message::new_text(conv, ConversationType::Channel, Some(sender), body.to_string(), 0)
+            Message::new_text(
+                conv,
+                ConversationType::Channel,
+                Some(sender),
+                body.to_string(),
+                0,
+            )
         };
 
         // Plain text, and the same text from us.
-        assert_eq!(text(them, "hello").sidebar_preview(Some(&me), None), "hello");
-        assert_eq!(text(me, "hello").sidebar_preview(Some(&me), None), "You: hello");
+        assert_eq!(
+            text(them, "hello").sidebar_preview(Some(&me), None),
+            "hello"
+        );
+        assert_eq!(
+            text(me, "hello").sidebar_preview(Some(&me), None),
+            "You: hello"
+        );
         // Emoji-only is just text — it must survive, not become "[Message]".
-        assert_eq!(text(them, "\u{1F389}").sidebar_preview(Some(&me), None), "\u{1F389}");
+        assert_eq!(
+            text(them, "\u{1F389}").sidebar_preview(Some(&me), None),
+            "\u{1F389}"
+        );
 
         // Attachment with no caption: typed label when resolved, count when not.
         let mut file = text(them, "");
@@ -1259,7 +1383,10 @@ mod tests {
             file.sidebar_preview(Some(&me), Some("\u{1F5BC}\u{FE0F} Photo +1")),
             "\u{1F5BC}\u{FE0F} Photo +1"
         );
-        assert_eq!(file.sidebar_preview(Some(&me), None), "\u{1F4CE} 2 attachments");
+        assert_eq!(
+            file.sidebar_preview(Some(&me), None),
+            "\u{1F4CE} 2 attachments"
+        );
         // Ours says so too — a voice note sent by us was a bare "You:".
         let mut voice = text(me, "");
         voice.attachments = vec![AttachmentId::new()];
@@ -1267,7 +1394,10 @@ mod tests {
             voice.sidebar_preview(Some(&me), Some("\u{1F3A4} Voice message")),
             "You: \u{1F3A4} Voice message"
         );
-        assert_eq!(voice.sidebar_preview(Some(&me), None), "You: \u{1F4CE} 1 attachment");
+        assert_eq!(
+            voice.sidebar_preview(Some(&me), None),
+            "You: \u{1F4CE} 1 attachment"
+        );
 
         // Nothing renderable at all still names the row.
         assert_eq!(text(them, "").sidebar_preview(Some(&me), None), "[Message]");
@@ -1280,10 +1410,7 @@ mod tests {
 
     #[test]
     fn test_mixed_content() {
-        let mixed = MixedContent::new(
-            "Caption".to_string(),
-            vec![AttachmentId::new()],
-        );
+        let mixed = MixedContent::new("Caption".to_string(), vec![AttachmentId::new()]);
         assert!(!mixed.is_empty());
         assert_eq!(mixed.text, Some("Caption".to_string()));
 
@@ -1308,7 +1435,10 @@ mod tests {
             message.content = if caption.is_empty() {
                 MessageContent::Mixed(MixedContent::attachments_only(message.attachments.clone()))
             } else {
-                MessageContent::Mixed(MixedContent::new(caption.to_string(), message.attachments.clone()))
+                MessageContent::Mixed(MixedContent::new(
+                    caption.to_string(),
+                    message.attachments.clone(),
+                ))
             };
         }
         message.delivery_status = status.into();
@@ -1366,13 +1496,20 @@ mod tests {
 
         let sending = bubble("sending", Some("hello"), false, young);
         let actions = sending.actions(true, NOW);
-        assert!(!actions.resend && !actions.react && !actions.reply && !actions.edit && !actions.pin);
+        assert!(
+            !actions.resend && !actions.react && !actions.reply && !actions.edit && !actions.pin
+        );
         assert!(!actions.delete_for_everyone && !actions.info);
         assert!(actions.forward && actions.delete_for_me);
 
         let mut deleted = bubble("failed", Some("hello"), false, young);
         deleted.is_deleted = true;
         let actions = deleted.actions(true, NOW);
-        assert!(!actions.resend && !actions.delete_for_me && !actions.forward && !deleted.can_retry_send());
+        assert!(
+            !actions.resend
+                && !actions.delete_for_me
+                && !actions.forward
+                && !deleted.can_retry_send()
+        );
     }
 }

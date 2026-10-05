@@ -3,19 +3,18 @@
 //! Client for AI integration service operations including CRUD operations,
 //! webhook management, channel integrations, and event streaming.
 
+use crate::network::grpc::transport::GrpcTransport;
 use tokio_stream::{Stream, StreamExt};
 use tonic::service::interceptor::InterceptedService;
-use crate::network::grpc::transport::GrpcTransport;
 
 use crate::error::NetworkError;
 use crate::network::grpc::interceptors::AuthInterceptor;
 use crate::proto::chat_v1::{
-    integration_service_client::IntegrationServiceClient, AddIntegrationToChannelRequest,
-    AddIntegrationToChannelResponse, CreateIntegrationRequest, CreateIntegrationResponse,
-    DeleteIntegrationRequest, DeleteIntegrationResponse, DisableIntegrationRequest,
-    DisableIntegrationResponse, EnableIntegrationRequest, EnableIntegrationResponse,
-    GetChannelIntegrationsRequest, GetChannelIntegrationsResponse, GetIntegrationRequest,
-    GetIntegrationResponse, GetModelLimitsRequest, GetModelLimitsResponse,
+    AddIntegrationToChannelRequest, AddIntegrationToChannelResponse, CreateIntegrationRequest,
+    CreateIntegrationResponse, DeleteIntegrationRequest, DeleteIntegrationResponse,
+    DisableIntegrationRequest, DisableIntegrationResponse, EnableIntegrationRequest,
+    EnableIntegrationResponse, GetChannelIntegrationsRequest, GetChannelIntegrationsResponse,
+    GetIntegrationRequest, GetIntegrationResponse, GetModelLimitsRequest, GetModelLimitsResponse,
     HandleWebhookCallbackRequest, HandleWebhookCallbackResponse, Integration, IntegrationConfig,
     IntegrationType, ListAvailableModelsRequest, ListAvailableModelsResponse,
     ListIntegrationsRequest, ListIntegrationsResponse, RegisterWebhookRequest,
@@ -23,7 +22,7 @@ use crate::proto::chat_v1::{
     RemoveIntegrationFromChannelResponse, StreamIntegrationEventsRequest,
     StreamIntegrationEventsResponse, TestIntegrationRequest, TestIntegrationResponse,
     UnregisterWebhookRequest, UnregisterWebhookResponse, UpdateIntegrationRequest,
-    UpdateIntegrationResponse, WebhookConfig,
+    UpdateIntegrationResponse, WebhookConfig, integration_service_client::IntegrationServiceClient,
 };
 
 /// Integration service client wrapper.
@@ -441,8 +440,10 @@ impl IntegrationClient {
     pub async fn stream_integration_events(
         &mut self,
         integration_ids: &[String],
-    ) -> Result<impl Stream<Item = Result<StreamIntegrationEventsResponse, NetworkError>>, NetworkError>
-    {
+    ) -> Result<
+        impl Stream<Item = Result<StreamIntegrationEventsResponse, NetworkError>>,
+        NetworkError,
+    > {
         if integration_ids.is_empty() {
             return Err(NetworkError::InvalidRequest(
                 "stream_integration_events requires at least one integration id; \

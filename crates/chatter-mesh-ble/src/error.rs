@@ -60,13 +60,19 @@ pub fn classify_peripheral(err: &bluer::Error) -> LinkError {
 /// caller's point of view "the adapter is gone" and "the peer refused" are the
 /// same event — no link came up, and the scheduler picks a different candidate.
 pub fn classify_connect(address: &str, err: &bluer::Error) -> LinkError {
-    LinkError::ConnectFailed { address: address.to_string(), reason: err.to_string() }
+    LinkError::ConnectFailed {
+        address: address.to_string(),
+        reason: err.to_string(),
+    }
 }
 
 /// A connect attempt that failed for a reason BlueZ did not report, e.g. a
 /// malformed address or a service that the peer does not actually expose.
 pub fn connect_failed(address: &str, reason: impl Into<String>) -> LinkError {
-    LinkError::ConnectFailed { address: address.to_string(), reason: reason.into() }
+    LinkError::ConnectFailed {
+        address: address.to_string(),
+        reason: reason.into(),
+    }
 }
 
 /// Classify a failure writing to a characteristic socket.
@@ -110,9 +116,17 @@ mod tests {
         // This is the single most important mapping in the file. BLE writes are
         // refused routinely; treating that as a dead link would tear down every
         // busy peer in the room.
-        for kind in [io::ErrorKind::WouldBlock, io::ErrorKind::Interrupted, io::ErrorKind::OutOfMemory] {
+        for kind in [
+            io::ErrorKind::WouldBlock,
+            io::ErrorKind::Interrupted,
+            io::ErrorKind::OutOfMemory,
+        ] {
             let err = classify_write(&link(), &io::Error::new(kind, "queue full"));
-            assert_eq!(err, LinkError::WriteRejected(link().to_string()), "{kind:?}");
+            assert_eq!(
+                err,
+                LinkError::WriteRejected(link().to_string()),
+                "{kind:?}"
+            );
             assert!(!is_terminal(&err));
         }
     }
@@ -140,7 +154,10 @@ mod tests {
 
     #[test]
     fn an_unrecognised_write_failure_is_neither_retried_nor_treated_as_a_dead_link() {
-        let err = classify_write(&link(), &io::Error::new(io::ErrorKind::InvalidInput, "nonsense"));
+        let err = classify_write(
+            &link(),
+            &io::Error::new(io::ErrorKind::InvalidInput, "nonsense"),
+        );
         assert!(matches!(err, LinkError::Backend(_)));
         assert!(!is_terminal(&err));
     }
@@ -154,14 +171,20 @@ mod tests {
             ErrorKind::DoesNotExist,
             ErrorKind::NotSupported,
         ] {
-            let err = classify_adapter(&bluer::Error { kind: kind.clone(), message: "no adapter".into() });
+            let err = classify_adapter(&bluer::Error {
+                kind: kind.clone(),
+                message: "no adapter".into(),
+            });
             assert!(matches!(err, LinkError::AdapterUnavailable(_)), "{kind:?}");
         }
     }
 
     #[test]
     fn other_bluez_faults_stay_unclassified_rather_than_blaming_the_adapter() {
-        let err = classify_adapter(&bluer::Error { kind: ErrorKind::InProgress, message: "busy".into() });
+        let err = classify_adapter(&bluer::Error {
+            kind: ErrorKind::InProgress,
+            message: "busy".into(),
+        });
         assert!(matches!(err, LinkError::Backend(_)));
     }
 
@@ -169,7 +192,10 @@ mod tests {
     fn connect_failures_carry_the_address_they_were_for() {
         let err = classify_connect(
             "AA:BB:CC:DD:EE:FF",
-            &bluer::Error { kind: ErrorKind::ConnectionAttemptFailed, message: "le-connection-abort".into() },
+            &bluer::Error {
+                kind: ErrorKind::ConnectionAttemptFailed,
+                message: "le-connection-abort".into(),
+            },
         );
         match err {
             LinkError::ConnectFailed { address, reason } => {
@@ -182,8 +208,10 @@ mod tests {
 
     #[test]
     fn peripheral_setup_failures_are_distinguishable_from_link_failures() {
-        let err =
-            classify_peripheral(&bluer::Error { kind: ErrorKind::AlreadyExists, message: "adv in use".into() });
+        let err = classify_peripheral(&bluer::Error {
+            kind: ErrorKind::AlreadyExists,
+            message: "adv in use".into(),
+        });
         assert!(matches!(err, LinkError::PeripheralSetup(_)));
     }
 }

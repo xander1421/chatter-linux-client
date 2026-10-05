@@ -5,7 +5,9 @@
 //! ```
 
 // Client
-pub use crate::client::{ChatterClient, ClientBuilder, ClientError, SendOptions, UploadedAttachments};
+pub use crate::client::{
+    ChatterClient, ClientBuilder, ClientError, SendOptions, UploadedAttachments,
+};
 pub use crate::services::auth_service::LoginResult;
 
 // Crypto-adjacent helpers commonly needed by callers (auth flows,
@@ -26,25 +28,25 @@ pub use crate::domain::jarvis::{ContextType as JarvisContextType, JarvisContext}
 pub use crate::services::link_device_service::PendingDeviceLink;
 
 // Domain types
+pub use crate::domain::anon_dm::{AnonDm, AnonDmId};
+pub use crate::domain::anon_group::{AnonGroup, AnonGroupId, AnonGroupRole};
+pub use crate::domain::channel::{ChannelConfig, MessagePersistence};
+pub use crate::domain::user::{Friendship, StatusMessage};
 pub use crate::domain::{
     Attachment, AttachmentId, Channel, ChannelId, ChannelType, Message, MessageContent, MessageId,
     Profile, User, UserId,
 };
-pub use crate::domain::channel::{ChannelConfig, MessagePersistence};
-pub use crate::domain::anon_dm::{AnonDm, AnonDmId};
-pub use crate::domain::anon_group::{AnonGroup, AnonGroupId, AnonGroupRole};
-pub use crate::domain::user::{Friendship, StatusMessage};
 
 // Events
 pub use crate::events::{DomainEvent, EventBus};
 
 // Conversation operations
-pub use crate::services::conversation::{ConversationHandle, ConversationError};
+pub use crate::services::conversation::{ConversationError, ConversationHandle};
 pub use crate::services::gateway::outgoing::{QuoteIntent, SendError, SendResult};
 
 // State
-pub use crate::state::{ActiveConversation, AuthState, ChatState, MessageState};
 pub use crate::state::chat_state::PendingAttachment;
+pub use crate::state::{ActiveConversation, AuthState, ChatState, MessageState};
 
 // Domain enums commonly needed at the public surface.
 pub use crate::domain::user::PresenceStatus;

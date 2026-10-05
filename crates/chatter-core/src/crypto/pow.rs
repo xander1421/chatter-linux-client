@@ -146,7 +146,8 @@ fn gate_ok(purpose: Purpose, token: &[u8], solution: u64, gate: u32) -> bool {
 /// high half) for `token`. Difficulty 0 accepts anything.
 pub fn verify(purpose: Purpose, token: &[u8], solution: u64, bits: u32, gate: u32) -> bool {
     bits == 0
-        || (gate_ok(purpose, token, solution, gate) && leading_zero_bits(&pow_hash(purpose, token, solution)) >= bits)
+        || (gate_ok(purpose, token, solution, gate)
+            && leading_zero_bits(&pow_hash(purpose, token, solution)) >= bits)
 }
 
 /// Run `test` over 0, 1, 2, ... on `threads` threads, each with its own
@@ -167,7 +168,8 @@ where
     let solved = AtomicBool::new(false);
     std::thread::scope(|scope| {
         for _ in 0..threads {
-            let (next, stop, found, solved, init, test) = (&next, &stop, &found, &solved, &init, &test);
+            let (next, stop, found, solved, init, test) =
+                (&next, &stop, &found, &solved, &init, &test);
             scope.spawn(move || {
                 let mut state = init();
                 loop {
@@ -191,7 +193,9 @@ where
             });
         }
     });
-    solved.load(Ordering::Acquire).then(|| found.load(Ordering::Acquire))
+    solved
+        .load(Ordering::Acquire)
+        .then(|| found.load(Ordering::Acquire))
 }
 
 /// Find a solution on up to [`MAX_SOLVER_THREADS`] cores. Blocking: call from
@@ -200,7 +204,13 @@ where
 /// Fails if the token is not a challenge token, the difficulty is above
 /// [`MAX_POW_BITS`], or no solution is found before `deadline` (the
 /// challenge's expiry: a later solution would be refused anyway).
-pub fn solve(purpose: Purpose, token: &[u8], bits: u32, gate: u32, deadline: Instant) -> Result<u64, CryptoError> {
+pub fn solve(
+    purpose: Purpose,
+    token: &[u8],
+    bits: u32,
+    gate: u32,
+    deadline: Instant,
+) -> Result<u64, CryptoError> {
     if token.len() != TOKEN_LEN {
         return Err(CryptoError::Protocol(format!(
             "proof-of-work token must be {TOKEN_LEN} bytes, got {}",
@@ -223,17 +233,24 @@ pub fn solve(purpose: Purpose, token: &[u8], bits: u32, gate: u32, deadline: Ins
     let threads = std::thread::available_parallelism()
         .map_or(1, |n| n.get())
         .min(MAX_SOLVER_THREADS);
-    let expired = || CryptoError::Protocol("proof of work not found before the challenge expired".into());
+    let expired =
+        || CryptoError::Protocol("proof of work not found before the challenge expired".into());
     // The gate, once: ~2^gate SHA-256 over the high half. The constant
     // prefix (domain || token) is hashed once and cloned per attempt.
     let mut prefix = Sha256::new();
     prefix.update(purpose.gate_domain());
     prefix.update(token);
-    let high = race(threads, 4096, deadline, || (), |_, h| {
-        let mut d = prefix.clone();
-        d.update((h as u32).to_be_bytes());
-        leading_zero_bits(&d.finalize()) >= gate
-    })
+    let high = race(
+        threads,
+        4096,
+        deadline,
+        || (),
+        |_, h| {
+            let mut d = prefix.clone();
+            d.update((h as u32).to_be_bytes());
+            leading_zero_bits(&d.finalize()) >= gate
+        },
+    )
     .ok_or_else(expired)?;
     // Then Argon2id over the low half, one attempt per value, each thread in
     // its own reused memory.
@@ -247,7 +264,9 @@ pub fn solve(purpose: Purpose, token: &[u8], bits: u32, gate: u32, deadline: Ins
             let memory = vec![Block::default(); a.params().block_count()];
             (a, memory)
         },
-        |(a, memory), low| leading_zero_bits(&hash_with(a, &salt, high << 32 | low, memory)) >= bits,
+        |(a, memory), low| {
+            leading_zero_bits(&hash_with(a, &salt, high << 32 | low, memory)) >= bits
+        },
     )
     .ok_or_else(expired)?;
     Ok(high << 32 | low)
@@ -282,8 +301,13 @@ mod tests {
     /// The reference search (server `Guard.Solve`): smallest gate-passing
     /// high half, then smallest low half.
     fn smallest(purpose: Purpose, token: &[u8], bits: u32, gate: u32) -> u64 {
-        let high = (0u64..).find(|&h| gate_ok(purpose, token, h << 32, gate)).unwrap();
-        (0u64..).map(|l| high << 32 | l).find(|&s| verify(purpose, token, s, bits, gate)).unwrap()
+        let high = (0u64..)
+            .find(|&h| gate_ok(purpose, token, h << 32, gate))
+            .unwrap();
+        (0u64..)
+            .map(|l| high << 32 | l)
+            .find(|&s| verify(purpose, token, s, bits, gate))
+            .unwrap()
     }
 
     /// Shared with the server: internal/antiabuse/antiabuse_test.go
@@ -314,13 +338,22 @@ mod tests {
             ),
         ] {
             assert_eq!(smallest(purpose, &token, 4, 18), s, "{purpose:?}");
-            assert_eq!(hex::encode(gate_hash(purpose, &token, (s >> 32) as u32)), gate);
+            assert_eq!(
+                hex::encode(gate_hash(purpose, &token, (s >> 32) as u32)),
+                gate
+            );
             assert_eq!(hex::encode(pow_hash(purpose, &token, s)), work);
         }
         // A low half alone (high 0) does not pass the gate.
         assert!(!verify(Purpose::Register, &token, 2, 4, 18));
         // A raised gate rejects a solution that only meets 18.
-        assert!(!verify(Purpose::Register, &token, 375_667_904_479_234, 4, 24));
+        assert!(!verify(
+            Purpose::Register,
+            &token,
+            375_667_904_479_234,
+            4,
+            24
+        ));
     }
 
     #[test]
@@ -330,7 +363,10 @@ mod tests {
         for purpose in [Purpose::Register, Purpose::Login] {
             for (bits, gate) in [(0, 18), (1, 18), (4, 18), (4, 20)] {
                 let s = solve(purpose, &token, bits, gate, far).unwrap();
-                assert!(verify(purpose, &token, s, bits, gate), "{purpose:?} {bits}/{gate} bits: {s} does not verify");
+                assert!(
+                    verify(purpose, &token, s, bits, gate),
+                    "{purpose:?} {bits}/{gate} bits: {s} does not verify"
+                );
             }
         }
     }
@@ -338,11 +374,30 @@ mod tests {
     #[test]
     fn refuses_bad_input_and_respects_deadline() {
         let far = Instant::now() + Duration::from_secs(60);
-        assert!(solve(Purpose::Login, &[0u8; 32], 4, 18, far).is_err(), "not a token");
-        assert!(solve(Purpose::Login, &[0u8; TOKEN_LEN], MAX_POW_BITS + 1, 18, far).is_err(), "over the cap");
-        assert!(solve(Purpose::Login, &[0u8; TOKEN_LEN], 4, MAX_GATE_BITS + 1, far).is_err(), "gate over the cap");
+        assert!(
+            solve(Purpose::Login, &[0u8; 32], 4, 18, far).is_err(),
+            "not a token"
+        );
+        assert!(
+            solve(Purpose::Login, &[0u8; TOKEN_LEN], MAX_POW_BITS + 1, 18, far).is_err(),
+            "over the cap"
+        );
+        assert!(
+            solve(Purpose::Login, &[0u8; TOKEN_LEN], 4, MAX_GATE_BITS + 1, far).is_err(),
+            "gate over the cap"
+        );
         // 16 bits cannot be found in 0 s.
-        assert!(solve(Purpose::Login, &[0u8; TOKEN_LEN], MAX_POW_BITS, 18, Instant::now()).is_err(), "past deadline");
+        assert!(
+            solve(
+                Purpose::Login,
+                &[0u8; TOKEN_LEN],
+                MAX_POW_BITS,
+                18,
+                Instant::now()
+            )
+            .is_err(),
+            "past deadline"
+        );
     }
 
     #[test]
@@ -371,7 +426,10 @@ mod tests {
             std::hint::black_box(hash_with(&a, &salt, s, &mut memory));
         }
         let per = t0.elapsed() / n as u32;
-        println!("one thread: {per:?} per Argon2id ({} MiB)", POW_MEMORY_KIB / 1024);
+        println!(
+            "one thread: {per:?} per Argon2id ({} MiB)",
+            POW_MEMORY_KIB / 1024
+        );
         let g0 = Instant::now();
         let n_sha = 1u32 << 20;
         for h in 0..n_sha {
@@ -391,13 +449,23 @@ mod tests {
                 .map(|r| {
                     let tok = [r as u8 ^ 0x5a; TOKEN_LEN];
                     let t = Instant::now();
-                    solve(Purpose::Login, &tok, 1, gate, Instant::now() + Duration::from_secs(600)).unwrap();
+                    solve(
+                        Purpose::Login,
+                        &tok,
+                        1,
+                        gate,
+                        Instant::now() + Duration::from_secs(600),
+                    )
+                    .unwrap();
                     t.elapsed()
                 })
                 .collect();
             times.sort();
             let mean = times.iter().sum::<Duration>() / runs;
-            println!("gate {gate} (+1 Argon2 bit), {threads} threads, {runs} runs: mean {mean:?} p90 {:?}", times[17]);
+            println!(
+                "gate {gate} (+1 Argon2 bit), {threads} threads, {runs} runs: mean {mean:?} p90 {:?}",
+                times[17]
+            );
         }
         let far = Instant::now() + Duration::from_secs(600);
         for (bits, runs) in [(4u32, 40), (6, 40), (8, 20)] {
@@ -414,7 +482,10 @@ mod tests {
             times.sort();
             let mean = times.iter().sum::<Duration>() / runs;
             let p90 = times[(runs as usize * 9) / 10 - 1];
-            println!("{bits} bits, {threads} threads, {runs} runs: mean {mean:?} p90 {p90:?} max {:?}", times[runs as usize - 1]);
+            println!(
+                "{bits} bits, {threads} threads, {runs} runs: mean {mean:?} p90 {p90:?} max {:?}",
+                times[runs as usize - 1]
+            );
         }
     }
 }

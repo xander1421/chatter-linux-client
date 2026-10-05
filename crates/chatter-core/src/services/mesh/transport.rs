@@ -61,7 +61,10 @@ pub enum BleCommand {
         content: String,
     },
     /// Hand a sealed envelope to a courier over a directed packet.
-    Courier { peer: PeerId, envelope: CourierEnvelope },
+    Courier {
+        peer: PeerId,
+        envelope: CourierEnvelope,
+    },
     /// Put a packet on every selected link.
     Broadcast { packet: BitchatPacket, sign: bool },
     /// Put a packet on the links bound to one peer.
@@ -362,10 +365,7 @@ pub struct NostrTransport {
 
 impl NostrTransport {
     #[must_use]
-    pub fn new(
-        state: Arc<NostrState>,
-        commands: Arc<super::CommandBus<NostrCommand>>,
-    ) -> Self {
+    pub fn new(state: Arc<NostrState>, commands: Arc<super::CommandBus<NostrCommand>>) -> Self {
         Self { state, commands }
     }
 }
@@ -520,7 +520,9 @@ mod tests {
         assert!(transport.send_private("hi", &remote, "m1"));
         match rx.try_recv() {
             Ok(BleCommand::PrivateMessage {
-                peer, message_id, content,
+                peer,
+                message_id,
+                content,
             }) => {
                 assert_eq!(peer, remote);
                 assert_eq!(message_id, "m1");
@@ -546,7 +548,10 @@ mod tests {
         );
         assert_eq!(accepted, vec![writable]);
         assert!(matches!(rx.try_recv(), Ok(BleCommand::Courier { .. })));
-        assert!(rx.try_recv().is_err(), "exactly one envelope was handed over");
+        assert!(
+            rx.try_recv().is_err(),
+            "exactly one envelope was handed over"
+        );
     }
 
     #[test]

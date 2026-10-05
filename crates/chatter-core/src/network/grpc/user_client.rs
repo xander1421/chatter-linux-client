@@ -3,26 +3,23 @@
 //! Client for user service operations including profile management,
 //! presence, friends, and blocking.
 
+use crate::network::grpc::transport::GrpcTransport;
 use tokio_stream::{Stream, StreamExt};
 use tonic::service::interceptor::InterceptedService;
-use crate::network::grpc::transport::GrpcTransport;
 
 use crate::error::NetworkError;
 use crate::network::grpc::interceptors::AuthInterceptor;
 use crate::proto::chat_v1::{
-    friend_requests_filter, user_service_client::UserServiceClient, BlockUserRequest,
-    FriendRequest, FriendRequestsFilter, FriendResponse, FriendStatus,
-    DeleteUsernameLinkRequest, GetUserProfileRequest, GetUsernameDiscoverabilityRequest,
-    GetUsernameDiscoverabilityResponse, GetUsernameLinkRequest,
-    GetUsernameLinkResponse, ListBlockedUsersRequest, ListBlockedUsersResponse,
-    ListFriendRequestsRequest, ListFriendRequestsResponse, ListFriendsRequest, ListFriendsResponse,
-    LookupUsernameRequest, LookupUsernameResponse,
-    RemoveFriendRequest, SetUsernameDiscoverabilityRequest,
-    SetUsernameDiscoverabilityResponse, SetUsernameLinkRequest,
-    SetUsernameLinkResponse,
-    UnblockUserRequest,
-    UpdatePresenceRequest, UpdateUserProfileRequest, UserEvent, UserEventRequest, UserPresence,
-    UserProfile,
+    BlockUserRequest, DeleteUsernameLinkRequest, FriendRequest, FriendRequestsFilter,
+    FriendResponse, FriendStatus, GetUserProfileRequest, GetUsernameDiscoverabilityRequest,
+    GetUsernameDiscoverabilityResponse, GetUsernameLinkRequest, GetUsernameLinkResponse,
+    ListBlockedUsersRequest, ListBlockedUsersResponse, ListFriendRequestsRequest,
+    ListFriendRequestsResponse, ListFriendsRequest, ListFriendsResponse, LookupUsernameRequest,
+    LookupUsernameResponse, RemoveFriendRequest, SetUsernameDiscoverabilityRequest,
+    SetUsernameDiscoverabilityResponse, SetUsernameLinkRequest, SetUsernameLinkResponse,
+    UnblockUserRequest, UpdatePresenceRequest, UpdateUserProfileRequest, UserEvent,
+    UserEventRequest, UserPresence, UserProfile, friend_requests_filter,
+    user_service_client::UserServiceClient,
 };
 
 /// User service client wrapper.
@@ -174,7 +171,10 @@ impl UserClient {
         };
         match self.inner.get_username_link(request).await {
             Ok(r) => {
-                let GetUsernameLinkResponse { encrypted_username, user_id } = r.into_inner();
+                let GetUsernameLinkResponse {
+                    encrypted_username,
+                    user_id,
+                } = r.into_inner();
                 Ok(Some((user_id, encrypted_username)))
             }
             Err(s) if s.code() == tonic::Code::NotFound => Ok(None),

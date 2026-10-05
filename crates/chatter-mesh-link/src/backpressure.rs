@@ -28,7 +28,6 @@
 //! Ported from `BLEOutboundWriteBuffer.swift`, `BLEInboundWriteBuffer.swift`, and
 //! the stall window from `NotificationStreamAssembler.swift`.
 
-
 use std::collections::BTreeMap;
 
 use chatter_mesh::BitchatPacket;
@@ -47,13 +46,11 @@ use crate::link::LinkId;
 /// peer can cost us, and links are already bounded by the connection budget.
 pub const PENDING_WRITE_BUFFER_CAP_BYTES: usize = 1_000_000;
 
-
 /// Hard ceiling on one link's partially assembled inbound frame.
 pub const NOTIFICATION_ASSEMBLER_HARD_CAP_BYTES: usize = 8 * 1024 * 1024;
 
 /// How long a partial frame may sit without progress before it is discarded.
 pub const ASSEMBLER_STALL_RESET_MS: u64 = 250;
-
 
 // ---------------------------------------------------------------------------
 // Which failures mean "buffer it"
@@ -305,7 +302,12 @@ impl OutboundWriteBuffer {
     pub fn discard_all(&mut self, link: &LinkId) -> Vec<u8> {
         self.writes
             .remove(link)
-            .map(|queue| queue.iter().filter_map(|write| write.bytes.get(1).copied()).collect())
+            .map(|queue| {
+                queue
+                    .iter()
+                    .filter_map(|write| write.bytes.get(1).copied())
+                    .collect()
+            })
             .unwrap_or_default()
     }
 
@@ -588,7 +590,6 @@ impl InboundAssembler {
     }
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -629,7 +630,10 @@ mod tests {
         let _ = buffer.enqueue(&l, vec![0x03; 4], WritePriority::fragment(2), 64);
 
         let taken = buffer.take_all(&l);
-        let firsts: Vec<u8> = taken.iter().filter_map(|w| w.bytes.first().copied()).collect();
+        let firsts: Vec<u8> = taken
+            .iter()
+            .filter_map(|w| w.bytes.first().copied())
+            .collect();
         assert_eq!(firsts, vec![0x02, 0x03, 0x01]);
         assert!(buffer.is_empty());
     }
@@ -642,7 +646,10 @@ mod tests {
             let _ = buffer.enqueue(&l, vec![tag; 2], WritePriority::fragment(8), 64);
         }
         let taken = buffer.take_all(&l);
-        let firsts: Vec<u8> = taken.iter().filter_map(|w| w.bytes.first().copied()).collect();
+        let firsts: Vec<u8> = taken
+            .iter()
+            .filter_map(|w| w.bytes.first().copied())
+            .collect();
         assert_eq!(firsts, vec![1, 2, 3, 4]);
     }
 
@@ -705,7 +712,10 @@ mod tests {
             }
         );
         let taken = buffer.take_all(&l);
-        let firsts: Vec<u8> = taken.iter().filter_map(|w| w.bytes.first().copied()).collect();
+        let firsts: Vec<u8> = taken
+            .iter()
+            .filter_map(|w| w.bytes.first().copied())
+            .collect();
         assert_eq!(firsts, vec![0x03, 0x02]);
     }
 
@@ -730,7 +740,10 @@ mod tests {
         );
 
         let taken = buffer.take_all(&l);
-        let firsts: Vec<u8> = taken.iter().filter_map(|w| w.bytes.first().copied()).collect();
+        let firsts: Vec<u8> = taken
+            .iter()
+            .filter_map(|w| w.bytes.first().copied())
+            .collect();
         assert_eq!(firsts, vec![0x01]);
     }
 
@@ -760,7 +773,10 @@ mod tests {
             buffer.enqueue_reporting_acceptance(&l, vec![0x02; 8], WritePriority::HIGH, 8);
         assert!(admission.accepted);
         let taken = buffer.take_all(&l);
-        let firsts: Vec<u8> = taken.iter().filter_map(|w| w.bytes.first().copied()).collect();
+        let firsts: Vec<u8> = taken
+            .iter()
+            .filter_map(|w| w.bytes.first().copied())
+            .collect();
         assert_eq!(firsts, vec![0x02]);
     }
 
@@ -775,7 +791,11 @@ mod tests {
         buffer.discard_all(&gone);
 
         assert!(buffer.take_all(&gone).is_empty());
-        let survivors: Vec<Vec<u8>> = buffer.take_all(&live).into_iter().map(|w| w.bytes).collect();
+        let survivors: Vec<Vec<u8>> = buffer
+            .take_all(&live)
+            .into_iter()
+            .map(|w| w.bytes)
+            .collect();
         assert_eq!(survivors, vec![vec![2u8]]);
     }
 
@@ -794,7 +814,10 @@ mod tests {
         );
 
         let taken = buffer.take_all(&l);
-        let firsts: Vec<u8> = taken.iter().filter_map(|w| w.bytes.first().copied()).collect();
+        let firsts: Vec<u8> = taken
+            .iter()
+            .filter_map(|w| w.bytes.first().copied())
+            .collect();
         assert_eq!(firsts, vec![0x01, 0x02]);
     }
 
@@ -1334,7 +1357,6 @@ mod tests {
         assert_eq!(assembler.total_buffered_bytes(), 0);
         assert!(assembler.is_empty());
     }
-
 
     // -- error classification -------------------------------------------------
 

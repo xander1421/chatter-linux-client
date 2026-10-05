@@ -40,7 +40,7 @@ use std::sync::Arc;
 use chacha20poly1305::aead::{Aead, KeyInit};
 use chacha20poly1305::{Key, XChaCha20Poly1305, XNonce};
 use chatter_mesh_store::outbox::Sealer;
-use chatter_mesh_store::{StoreError, Storage, StorageKey};
+use chatter_mesh_store::{Storage, StorageKey, StoreError};
 use chrono::Utc;
 use rusqlite::params;
 use zeroize::Zeroizing;
@@ -421,10 +421,12 @@ impl MeshSealer {
             .downcast_ref::<keyring::mock::MockCredential>()
             .is_some()
         {
-            return Err("this build has no OS keyring that outlives the process, so a \
+            return Err(
+                "this build has no OS keyring that outlives the process, so a \
                         mesh seal key could not be kept. Set CHATTER_MESH_SEAL_KEY or \
                         CHATTER_NO_KEYRING for a development run."
-                .to_string());
+                    .to_string(),
+            );
         }
 
         match entry.get_password() {
@@ -435,9 +437,10 @@ impl MeshSealer {
                     // throw away the key that the stored blobs were sealed with.
                     format!("the stored mesh seal key is not hex: {e}")
                 })?);
-                let key: [u8; KEY_SIZE] = raw.as_slice().try_into().map_err(|_| {
-                    format!("expected {KEY_SIZE} key bytes, found {}", raw.len())
-                })?;
+                let key: [u8; KEY_SIZE] = raw
+                    .as_slice()
+                    .try_into()
+                    .map_err(|_| format!("expected {KEY_SIZE} key bytes, found {}", raw.len()))?;
                 Ok(Self::from_key(&key))
             }
             Err(keyring::Error::NoEntry) => {
@@ -521,13 +524,17 @@ impl MeshSealer {
     ///
     /// A file the Keystore will not open is an error and the mesh stays off:
     /// regenerating would orphan every sealed blob while looking like it worked.
-    fn from_sealed_key_file(db_path: &Path, wrap: &dyn crate::system::sealed_secret::KeyWrap) -> Result<Self, String> {
+    fn from_sealed_key_file(
+        db_path: &Path,
+        wrap: &dyn crate::system::sealed_secret::KeyWrap,
+    ) -> Result<Self, String> {
         use crate::system::sealed_secret::{self, MESH_SEAL_ALIAS};
         let path = Self::local_key_path(db_path);
 
         if let Some(encoded) = sealed_secret::read(&path, MESH_SEAL_ALIAS, wrap)? {
             let raw = Zeroizing::new(
-                hex::decode(encoded.as_bytes()).map_err(|e| format!("{} is not hex: {e}", path.display()))?,
+                hex::decode(encoded.as_bytes())
+                    .map_err(|e| format!("{} is not hex: {e}", path.display()))?,
             );
             let key: [u8; KEY_SIZE] = raw
                 .as_slice()
@@ -537,7 +544,8 @@ impl MeshSealer {
             return Ok(Self::from_key(&key));
         }
 
-        let key = Zeroizing::new(random_key().map_err(|e| format!("no randomness for a new key: {e}"))?);
+        let key =
+            Zeroizing::new(random_key().map_err(|e| format!("no randomness for a new key: {e}"))?);
         let encoded = Zeroizing::new(hex::encode(key.as_slice()));
         // Persisted before use: a key sealed with but never stored reads back as
         // garbage after a restart.
@@ -651,11 +659,19 @@ mod tests {
         // `from_keyring` refuses to allow on the keyring path.
         let dir = tempfile::tempdir().expect("temp dir");
         let db_path = dir.path().join("chatter.db");
-        std::fs::write(dir.path().join(super::super::super::system::keyring::NO_KEYRING_MARKER), "x")
-            .expect("marker");
+        std::fs::write(
+            dir.path()
+                .join(super::super::super::system::keyring::NO_KEYRING_MARKER),
+            "x",
+        )
+        .expect("marker");
 
         let first = MeshSealer::from_keyring(&db_path);
-        assert!(first.is_ready(), "the key should be generated on first use: {:?}", first.unavailable_reason());
+        assert!(
+            first.is_ready(),
+            "the key should be generated on first use: {:?}",
+            first.unavailable_reason()
+        );
 
         let sealed = first.seal(b"outbox").expect("seal");
         let second = MeshSealer::from_keyring(&db_path);
@@ -695,12 +711,18 @@ mod tests {
         assert!(first.key_is_new());
         let sealed = first.seal(b"peer pins").expect("seal");
         drop(first);
-        let on_disk = std::fs::read_to_string(MeshSealer::local_key_path(&db_path)).expect("key file");
-        assert!(on_disk.starts_with("ks1:"), "the Android key file must hold only a sealed blob");
+        let on_disk =
+            std::fs::read_to_string(MeshSealer::local_key_path(&db_path)).expect("key file");
+        assert!(
+            on_disk.starts_with("ks1:"),
+            "the Android key file must hold only a sealed blob"
+        );
         let second = MeshSealer::acquire_with(&db_path, Some(&wrap)).expect("second run");
         assert!(!second.key_is_new());
         assert_eq!(
-            second.open(&sealed).expect("a seal this device wrote must open after restart"),
+            second
+                .open(&sealed)
+                .expect("a seal this device wrote must open after restart"),
             b"peer pins"
         );
     }
@@ -710,12 +732,17 @@ mod tests {
         use crate::system::sealed_secret::tests::FakeWrap;
         let dir = tempfile::tempdir().expect("temp dir");
         let db_path = dir.path().join("chatter.db");
-        MeshSealer::acquire_with(&db_path, Some(&FakeWrap { fail_unseal: false })).expect("first run");
+        MeshSealer::acquire_with(&db_path, Some(&FakeWrap { fail_unseal: false }))
+            .expect("first run");
         let key_file = MeshSealer::local_key_path(&db_path);
         let before = std::fs::read(&key_file).expect("key file");
 
         assert!(MeshSealer::acquire_with(&db_path, Some(&FakeWrap { fail_unseal: true })).is_err());
-        assert_eq!(std::fs::read(&key_file).expect("key file"), before, "the sealed key must survive");
+        assert_eq!(
+            std::fs::read(&key_file).expect("key file"),
+            before,
+            "the sealed key must survive"
+        );
     }
 
     #[test]
@@ -725,12 +752,18 @@ mod tests {
         let db_path = dir.path().join("chatter.db");
         let key = [0x33u8; KEY_SIZE];
         let sealed = MeshSealer::from_key(&key).seal(b"pins").expect("seal");
-        std::fs::write(MeshSealer::local_key_path(&db_path), hex::encode(key)).expect("legacy file");
+        std::fs::write(MeshSealer::local_key_path(&db_path), hex::encode(key))
+            .expect("legacy file");
 
-        let sealer = MeshSealer::acquire_with(&db_path, Some(&FakeWrap { fail_unseal: false })).expect("migrate");
-        assert!(!sealer.key_is_new(), "a migrated key is not new; mesh state must not be wiped");
+        let sealer = MeshSealer::acquire_with(&db_path, Some(&FakeWrap { fail_unseal: false }))
+            .expect("migrate");
+        assert!(
+            !sealer.key_is_new(),
+            "a migrated key is not new; mesh state must not be wiped"
+        );
         assert_eq!(sealer.open(&sealed).expect("open"), b"pins");
-        let on_disk = std::fs::read_to_string(MeshSealer::local_key_path(&db_path)).expect("key file");
+        let on_disk =
+            std::fs::read_to_string(MeshSealer::local_key_path(&db_path)).expect("key file");
         assert!(on_disk.starts_with("ks1:") && !on_disk.contains(&hex::encode(key)));
     }
 
@@ -760,14 +793,21 @@ mod tests {
         // rows were sealed under a key that is gone, so the first run with a
         // durable key must not trip over them forever.
         let dir = tempfile::tempdir().expect("temp dir");
-        std::fs::write(dir.path().join(crate::system::keyring::NO_KEYRING_MARKER), "")
-            .expect("marker");
+        std::fs::write(
+            dir.path().join(crate::system::keyring::NO_KEYRING_MARKER),
+            "",
+        )
+        .expect("marker");
         let db_path = dir.path().join("chatter.db");
         let db = Arc::new(Database::open(&db_path, "testpass").expect("open"));
         db.run_migrations().expect("migrations");
 
-        let orphan = MeshSealer::from_key(&[9u8; KEY_SIZE]).seal(b"lost").expect("seal");
-        MeshStorage::new(db.clone()).save(StorageKey::PeerPins, &orphan).expect("save");
+        let orphan = MeshSealer::from_key(&[9u8; KEY_SIZE])
+            .seal(b"lost")
+            .expect("seal");
+        MeshStorage::new(db.clone())
+            .save(StorageKey::PeerPins, &orphan)
+            .expect("save");
 
         let (storage, sealer) = sealed_store(db.clone(), &db_path);
         assert!(sealer.key_is_new());
@@ -777,7 +817,10 @@ mod tests {
         storage.save(StorageKey::PeerPins, &kept).expect("save");
         let (storage, sealer) = sealed_store(db, &db_path);
         assert!(!sealer.key_is_new());
-        let row = storage.load(StorageKey::PeerPins).expect("load").expect("row kept");
+        let row = storage
+            .load(StorageKey::PeerPins)
+            .expect("load")
+            .expect("row kept");
         assert_eq!(sealer.open(&row).expect("open"), b"pins");
     }
 
@@ -1026,7 +1069,9 @@ mod tests {
     fn wipe_removes_only_that_key() {
         let storage = MeshStorage::new(test_db());
         storage.save(StorageKey::Outbox, b"mail").expect("save");
-        storage.save(StorageKey::PublicArchive, b"history").expect("save");
+        storage
+            .save(StorageKey::PublicArchive, b"history")
+            .expect("save");
 
         storage.wipe(StorageKey::Outbox).expect("wipe");
 

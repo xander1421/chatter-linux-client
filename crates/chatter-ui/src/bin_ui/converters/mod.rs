@@ -5,18 +5,20 @@
 //! Note: Some Slint types contain `slint::Image` which is not `Send`,
 //! so we provide Send-safe intermediate types for use across thread boundaries.
 
-mod utils;
-mod channel;
 mod attachment;
-mod message;
+mod channel;
 mod kind;
 pub(crate) mod markdown;
+mod message;
 #[cfg(test)]
 mod open_bench;
+mod utils;
 
-pub use chatter_core::ui::sidebar_data::{ChatRowSendData, FriendDataSendData, FriendRequestSendData};
-pub use utils::*;
-pub use channel::*;
 pub use attachment::*;
-pub use message::*;
+pub use channel::*;
+pub use chatter_core::ui::sidebar_data::{
+    ChatRowSendData, FriendDataSendData, FriendRequestSendData,
+};
 pub use kind::*;
+pub use message::*;
+pub use utils::*;

@@ -2,14 +2,14 @@
 //!
 //! Client for GIF service operations including search and trending.
 
-use tonic::service::interceptor::InterceptedService;
 use crate::network::grpc::transport::GrpcTransport;
+use tonic::service::interceptor::InterceptedService;
 
 use crate::error::NetworkError;
 use crate::network::grpc::interceptors::AuthInterceptor;
 use crate::proto::chat_v1::{
-    gif_service_client::GifServiceClient, GetGifMediaRequest, GetTrendingGifsRequest,
-    GetTrendingGifsResponse, GifResult, SearchGifsRequest, SearchGifsResponse,
+    GetGifMediaRequest, GetTrendingGifsRequest, GetTrendingGifsResponse, GifResult,
+    SearchGifsRequest, SearchGifsResponse, gif_service_client::GifServiceClient,
 };
 
 /// GIF service client wrapper.
@@ -40,7 +40,9 @@ impl GifClient {
     /// sees this device's IP.
     pub async fn media(&mut self, url: &str) -> Result<Vec<u8>, NetworkError> {
         self.inner
-            .get_gif_media(GetGifMediaRequest { url: url.to_string() })
+            .get_gif_media(GetGifMediaRequest {
+                url: url.to_string(),
+            })
             .await
             .map(|r| r.into_inner().data)
             .map_err(|s| NetworkError::from_status(&s))
@@ -100,10 +102,7 @@ impl GifClient {
     }
 
     /// Get trending GIFs.
-    pub async fn trending(
-        &mut self,
-        limit: i32,
-    ) -> Result<Vec<GifResult>, NetworkError> {
+    pub async fn trending(&mut self, limit: i32) -> Result<Vec<GifResult>, NetworkError> {
         let request = GetTrendingGifsRequest {
             limit,
             pos: String::new(),

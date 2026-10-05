@@ -331,9 +331,7 @@ async fn test_harness_storage_operations() {
     let harness = TestHarness::unit().await;
 
     // Test storage directly
-    let msg = MessageBuilder::text("Test")
-        .in_channel("channel-1")
-        .build();
+    let msg = MessageBuilder::text("Test").in_channel("channel-1").build();
     let msg_id = msg.id.clone();
 
     harness.storage.save_message(msg);

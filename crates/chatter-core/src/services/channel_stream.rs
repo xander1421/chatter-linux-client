@@ -37,20 +37,19 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-
 use crate::domain::ids::{ChannelId, MessageId};
 use crate::events::EventBus;
 use crate::inbox::DomainEvent;
 use crate::network::grpc::client_pool::GrpcClientPool;
 use crate::network::streaming::heartbeat::{self, IsHeartbeat, Next};
 use crate::proto::chat_v1::{self, message_event::Event as MsgEventType};
-use crate::services::message::channel_inbound::ChannelInbound;
 use crate::services::message::MessageService;
+use crate::services::message::channel_inbound::{ChannelInbound, Ingested};
 use crate::services::sync_service::SyncService;
 use crate::storage::repositories::settings_repo::SettingsRepository;
 
-/// Settings key holding the last delivered `event_id` (a resume cursor).
-const CURSOR_KEY: &str = "stream:global_events:cursor";
+/// Settings key holding the last successfully applied global checkpoint.
+const CURSOR_KEY: &str = "stream:global_events:cursor:v1";
 
 const INITIAL_BACKOFF: Duration = Duration::from_secs(1);
 const MAX_BACKOFF: Duration = Duration::from_secs(30);
@@ -78,6 +77,60 @@ fn backoff_after_no_channels(current: Duration, nudged: bool) -> Duration {
 fn is_no_channels(e: &crate::error::NetworkError) -> bool {
     matches!(e, crate::error::NetworkError::InvalidRequest(msg)
         if msg.contains("no channels") || msg.contains("channel_ids must be provided"))
+}
+
+/// Parse strictly before applying or acknowledging a global checkpoint.
+fn validate_global_cursor(raw: &str) -> Result<(), crate::error::NetworkError> {
+    use serde::de::{Error, MapAccess, Visitor};
+    struct Positions;
+    impl<'de> Visitor<'de> for Positions {
+        type Value = std::collections::BTreeMap<String, String>;
+        fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+            f.write_str("bounded channel positions")
+        }
+        fn visit_map<M: MapAccess<'de>>(self, mut map: M) -> Result<Self::Value, M::Error> {
+            let mut positions = std::collections::BTreeMap::new();
+            while let Some((channel, id)) = map.next_entry::<String, String>()? {
+                let canonical = channel
+                    .parse::<uuid::Uuid>()
+                    .map_err(M::Error::custom)?
+                    .to_string();
+                let parts: Vec<_> = id.split('-').collect();
+                if canonical != channel
+                    || parts.len() != 2
+                    || parts.iter().any(|p| {
+                        p.parse::<u64>()
+                            .map(|n| n.to_string() != *p)
+                            .unwrap_or(true)
+                    })
+                    || positions.contains_key(&channel)
+                    || positions.len() >= 500
+                {
+                    return Err(M::Error::custom("invalid channel position"));
+                }
+                positions.insert(channel, id);
+            }
+            Ok(positions)
+        }
+    }
+    if raw.len() > 45003 || !raw.starts_with("v1:") {
+        return Err(crate::error::NetworkError::DataLoss(
+            "invalid global cursor version or size".into(),
+        ));
+    }
+    let mut decoder = serde_json::Deserializer::from_str(&raw[3..]);
+    serde::Deserializer::deserialize_map(&mut decoder, Positions)
+        .and_then(|_| decoder.end())
+        .map_err(|e| crate::error::NetworkError::DataLoss(e.to_string()))
+}
+
+fn require_ingested(outcome: Ingested) -> Result<(), crate::error::NetworkError> {
+    match outcome {
+        Ingested::Stored | Ingested::OwnMessage | Ingested::Dropped => Ok(()),
+        Ingested::RetryableFailure | Ingested::DeferredPendingSenderKey => Err(
+            crate::error::NetworkError::DataLoss("channel event not durably applied".into()),
+        ),
+    }
 }
 
 /// Live message-event stream for every server-managed channel the user is in.
@@ -143,7 +196,9 @@ impl ChannelStreamService {
                 // shortest backoff. Without this the ladder kept climbing across
                 // healthy streams, and every ~5 min server cut cost 30 s of
                 // silence (2026-10-03, "backoff_secs=30").
-                if connected_at.is_some_and(|t: std::time::Instant| t.elapsed() >= heartbeat::HEALTHY_STREAM_AFTER) {
+                if connected_at.is_some_and(|t: std::time::Instant| {
+                    t.elapsed() >= heartbeat::HEALTHY_STREAM_AFTER
+                }) {
                     backoff = INITIAL_BACKOFF;
                 }
                 match outcome {
@@ -201,8 +256,11 @@ impl ChannelStreamService {
 
     /// One connect → consume → disconnect cycle. `connected_at` is set once
     /// the subscription is established.
-    async fn run_once(&self, connected_at: &mut Option<std::time::Instant>) -> Result<(), crate::error::NetworkError> {
-        let cursor = self.cursor();
+    async fn run_once(
+        &self,
+        connected_at: &mut Option<std::time::Instant>,
+    ) -> Result<(), crate::error::NetworkError> {
+        let cursor = self.cursor()?;
         let mut client = self.grpc_pool.message_client();
         // Empty channel_ids => the server subscribes us to every non-archived
         // channel we are a member of, including ones joined in a previous
@@ -298,21 +356,22 @@ impl ChannelStreamService {
         }
     }
 
-    fn cursor(&self) -> Option<String> {
-        self.settings_repo
+    fn cursor(&self) -> Result<Option<String>, crate::error::NetworkError> {
+        let cursor = self
+            .settings_repo
             .get::<String>(CURSOR_KEY)
-            .ok()
-            .flatten()
-            .filter(|c| !c.is_empty())
+            .map_err(|e| crate::error::NetworkError::Unknown(e.to_string()))?;
+        if let Some(raw) = &cursor {
+            validate_global_cursor(raw)?;
+        }
+        Ok(cursor)
     }
 
-    fn store_cursor(&self, event_id: &str) {
-        if event_id.is_empty() {
-            return;
-        }
-        if let Err(e) = self.settings_repo.set(CURSOR_KEY, &event_id.to_string()) {
-            tracing::debug!(error = %e, "Failed to persist stream resume cursor");
-        }
+    fn store_cursor(&self, event_id: &str) -> Result<(), crate::error::NetworkError> {
+        validate_global_cursor(event_id)?;
+        self.settings_repo
+            .set(CURSOR_KEY, &event_id.to_string())
+            .map_err(|e| crate::error::NetworkError::Unknown(e.to_string()))
     }
 
     /// The server could not replay everything after our cursor: it was older
@@ -323,7 +382,17 @@ impl ChannelStreamService {
     ///
     /// Forced, not rate-limited, for the same reason as the connect-time
     /// catch-up: a throttle that skips this one leaves the gap open.
-    async fn handle_resync(&self, new_cursor: &str, resync: &chat_v1::ResyncRequired) -> Result<(), crate::error::NetworkError> {
+    async fn handle_resync(
+        &self,
+        new_cursor: &str,
+        resync: &chat_v1::ResyncRequired,
+    ) -> Result<(), crate::error::NetworkError> {
+        validate_global_cursor(new_cursor)?;
+        if resync.channel_ids.len() > 500 {
+            return Err(crate::error::NetworkError::DataLoss(
+                "too many resync channels".into(),
+            ));
+        }
         tracing::info!(
             channels = resync.channel_ids.len(),
             new_cursor,
@@ -333,40 +402,54 @@ impl ChannelStreamService {
         // the stream reconnects from the old cursor and requests resync again.
         self.catch_up_now().await;
         for channel in &resync.channel_ids {
-            let channel_id = channel.parse::<ChannelId>()
-                .map_err(|_| crate::error::NetworkError::InvalidRequest("invalid resync channel".into()))?;
-            let mut page_token: Option<String> = None;
-            loop {
-                let page = self.grpc_pool.message_client()
-                    .get_message_changes(channel, page_token.as_deref()).await?;
-                for message in &page.messages {
-                    if message.channel_id != *channel {
-                        return Err(crate::error::NetworkError::DataLoss("resync channel mismatch".into()));
-                    }
-                    if message.deleted_at != 0 {
-                        self.apply_delete(&message.id, channel_id)
-                            .map_err(|e| crate::error::NetworkError::Unknown(e.to_string()))?;
-                    } else {
-                        self.inbound.ingest_resynced(message, channel_id).await.map_err(|e| match e {
-                            crate::services::message::MessageError::InvalidContent(e) =>
-                                crate::error::NetworkError::DataLoss(e),
+            self.recover_channel_changes(channel).await?;
+        }
+        self.store_cursor(new_cursor)?;
+        Ok(())
+    }
+
+    /// Reconcile one channel from an authoritative retained mutation snapshot.
+    /// Used for explicit resync and a reaction whose old target is not cached;
+    /// new-message catch-up alone cannot recover an old edited/reaction target.
+    async fn recover_channel_changes(
+        &self,
+        channel: &str,
+    ) -> Result<(), crate::error::NetworkError> {
+        let channel_id = channel.parse::<ChannelId>().map_err(|_| {
+            crate::error::NetworkError::InvalidRequest("invalid resync channel".into())
+        })?;
+        let mut page_token: Option<String> = None;
+        loop {
+            let page = self
+                .grpc_pool
+                .message_client()
+                .get_message_changes(channel, page_token.as_deref())
+                .await?;
+            for message in &page.messages {
+                if message.channel_id != channel {
+                    return Err(crate::error::NetworkError::DataLoss(
+                        "resync channel mismatch".into(),
+                    ));
+                }
+                if message.deleted_at != 0 {
+                    self.apply_delete(&message.id, channel_id)
+                        .map_err(|e| crate::error::NetworkError::Unknown(e.to_string()))?;
+                } else {
+                    self.inbound
+                        .ingest_resynced(message, channel_id)
+                        .await
+                        .map_err(|e| match e {
+                            crate::services::message::MessageError::InvalidContent(e) => {
+                                crate::error::NetworkError::DataLoss(e)
+                            }
                             e => crate::error::NetworkError::Unknown(e.to_string()),
                         })?;
-                    }
                 }
-                if page.next_page_token.is_empty() { break; }
-                page_token = Some(page.next_page_token);
             }
-        }
-        if new_cursor.is_empty() {
-            // Nothing is buffered to resume against. Keeping the old cursor
-            // would present the same dead position on every reconnect and be
-            // told to resync every time.
-            if let Err(e) = self.settings_repo.delete(CURSOR_KEY) {
-                tracing::debug!(error = %e, "Failed to clear stream resume cursor");
+            if page.next_page_token.is_empty() {
+                break;
             }
-        } else {
-            self.store_cursor(new_cursor);
+            page_token = Some(page.next_page_token);
         }
         Ok(())
     }
@@ -377,7 +460,10 @@ impl ChannelStreamService {
     /// The old consumer matched `MessageSent` only, with no `else` and no log,
     /// so edits, deletions and reactions from other members were received and
     /// dropped on the floor. This match is exhaustive.
-    async fn handle_event(&self, event: chat_v1::MessageEvent) -> Result<(), crate::error::NetworkError> {
+    async fn handle_event(
+        &self,
+        event: chat_v1::MessageEvent,
+    ) -> Result<(), crate::error::NetworkError> {
         // The server's keepalive (also its first item, once subscribed). Not
         // data and never a cursor, so it goes before anything else.
         if event.is_heartbeat() {
@@ -390,7 +476,7 @@ impl ChannelStreamService {
             self.handle_resync(&event.event_id, resync).await?;
             return Ok(());
         }
-        self.store_cursor(&event.event_id);
+        validate_global_cursor(&event.event_id)?;
 
         let channel_id = match event.channel_id.parse::<uuid::Uuid>() {
             Ok(id) => ChannelId::from(id),
@@ -401,25 +487,40 @@ impl ChannelStreamService {
                     channel_id = %event.channel_id,
                     "Message event with unparseable channel_id; dropping"
                 );
-                return Ok(());
+                return Err(crate::error::NetworkError::DataLoss(
+                    "invalid event channel".into(),
+                ));
             }
         };
 
         match event.event {
             Some(MsgEventType::MessageSent(msg)) => {
-                self.inbound.ingest(&msg, channel_id, true).await;
+                if msg.channel_id != event.channel_id {
+                    return Err(crate::error::NetworkError::DataLoss(
+                        "message channel mismatch".into(),
+                    ));
+                }
+                require_ingested(self.inbound.ingest(&msg, channel_id, true).await)?;
             }
             Some(MsgEventType::MessageUpdated(msg)) => {
-                self.inbound.ingest_edit(&msg, channel_id).await;
+                if msg.channel_id != event.channel_id {
+                    return Err(crate::error::NetworkError::DataLoss(
+                        "edit channel mismatch".into(),
+                    ));
+                }
+                require_ingested(self.inbound.ingest_edit(&msg, channel_id).await)?;
             }
             Some(MsgEventType::MessageDeletedId(id)) => {
-                self.handle_delete(&id, channel_id);
+                self.apply_delete(&id, channel_id)
+                    .map_err(|e| crate::error::NetworkError::Unknown(e.to_string()))?;
             }
             Some(MsgEventType::ReactionAdded(update)) => {
-                self.handle_reaction(update, channel_id, false, event.timestamp);
+                self.handle_reaction(update, channel_id, false, event.timestamp)
+                    .await?;
             }
             Some(MsgEventType::ReactionRemoved(update)) => {
-                self.handle_reaction(update, channel_id, true, event.timestamp);
+                self.handle_reaction(update, channel_id, true, event.timestamp)
+                    .await?;
             }
             // Handled above, before the channel_id parse.
             Some(MsgEventType::ResyncRequired(_)) | Some(MsgEventType::Heartbeat(_)) => {}
@@ -429,28 +530,48 @@ impl ChannelStreamService {
                     event_id = %event.event_id,
                     "Message event with no payload arm"
                 );
+                return Err(crate::error::NetworkError::DataLoss(
+                    "missing event payload".into(),
+                ));
             }
         }
-        Ok(())
+        self.store_cursor(&event.event_id)
     }
 
-    fn handle_reaction(
+    async fn handle_reaction(
         &self,
         update: chat_v1::ReactionUpdate,
         channel_id: ChannelId,
         remove: bool,
         timestamp: u64,
-    ) {
+    ) -> Result<(), crate::error::NetworkError> {
         let (Ok(sender_id), Ok(reactor_id)) =
             (update.target_author_aci.parse(), update.reactor_id.parse())
         else {
             tracing::warn!(%channel_id, "Reaction event has invalid author or reactor identity");
-            return;
+            return Ok(());
         };
         // A stream must never mutate a target in another conversation.
-        match self.messages.get_by_sender_timestamp(&sender_id, update.target_sent_timestamp) {
+        match self
+            .messages
+            .get_by_sender_timestamp(&sender_id, update.target_sent_timestamp)
+        {
             Ok(Some(message)) if message.conversation_id == channel_id => {}
-            _ => return,
+            Ok(None) => {
+                // A recent reaction can refer to a message older than the
+                // normal message catch-up cursor. Reconnecting from the same
+                // event forever would block every channel without fetching it.
+                // Recovery includes the complete current reaction snapshot;
+                // do not reapply this older delta over that newer snapshot.
+                self.recover_channel_changes(&channel_id.to_string())
+                    .await?;
+                return Ok(());
+            }
+            Ok(Some(_)) => {
+                tracing::warn!(%channel_id, "Rejected reaction targeting a different channel");
+                return Ok(());
+            }
+            Err(e) => return Err(crate::error::NetworkError::Unknown(e.to_string())),
         }
         match self.messages.record_reaction(
             &sender_id,
@@ -480,41 +601,51 @@ impl ChannelStreamService {
                 self.event_bus.emit_domain(event);
             }
             Ok(false) => {}
-            Err(error) => tracing::warn!(%error, %channel_id, "Failed to persist server reaction"),
+            Err(error) => return Err(crate::error::NetworkError::Unknown(error.to_string())),
         }
+        Ok(())
     }
 
-    /// Apply a remote "delete for everyone" to local storage and tell the UI.
-    fn handle_delete(&self, message_id: &str, channel_id: ChannelId) {
-        if let Err(error) = self.apply_delete(message_id, channel_id) {
-            tracing::warn!(%error, %channel_id, "Failed to persist message deletion");
-        }
-    }
-
-    fn apply_delete(&self, message_id: &str, channel_id: ChannelId) -> Result<(), crate::services::message::MessageError> {
-        let id = message_id.parse::<MessageId>()
-            .map_err(|_| crate::services::message::MessageError::InvalidContent("invalid deleted message id".into()))?;
+    fn apply_delete(
+        &self,
+        message_id: &str,
+        channel_id: ChannelId,
+    ) -> Result<(), crate::services::message::MessageError> {
+        let id = message_id.parse::<MessageId>().map_err(|_| {
+            crate::services::message::MessageError::InvalidContent(
+                "invalid deleted message id".into(),
+            )
+        })?;
         let existing = self.messages.get_message_local(&id)?;
-        if existing.as_ref().is_some_and(|m| m.conversation_id != channel_id) {
-            return Err(crate::services::message::MessageError::InvalidContent("delete channel mismatch".into()));
+        if existing
+            .as_ref()
+            .is_some_and(|m| m.conversation_id != channel_id)
+        {
+            return Err(crate::services::message::MessageError::InvalidContent(
+                "delete channel mismatch".into(),
+            ));
         }
         // Record even unseen tombstones: a delayed/deferred message must not
         // reappear after recovery told us it had been deleted.
         match self.messages.delete_message_local(&id) {
-            Ok(()) | Err(crate::services::message::MessageError::Storage(crate::error::StorageError::NotFound(_))) => {}
+            Ok(())
+            | Err(crate::services::message::MessageError::Storage(
+                crate::error::StorageError::NotFound(_),
+            )) => {}
             Err(error) => return Err(error),
         }
         if let Some(existing) = existing {
             if let Some(author_id) = existing.sender_id {
                 self.event_bus.emit_domain(DomainEvent::MessageDeleted {
-                    message_id: id, author_id, channel_id: Some(channel_id),
+                    message_id: id,
+                    author_id,
+                    channel_id: Some(channel_id),
                     target_sent_timestamp: existing.sent_at,
                 });
             }
         }
         Ok(())
     }
-
 }
 
 #[cfg(test)]
@@ -582,7 +713,10 @@ mod subscribe_before_backfill {
             .split_once("async fn run_once")
             .expect("run_once still exists")
             .1;
-        let body = body.split_once("\n    fn cursor(").map(|(b, _)| b).unwrap_or(body);
+        let body = body
+            .split_once("\n    fn cursor(")
+            .map(|(b, _)| b)
+            .unwrap_or(body);
 
         let subscribe = body
             .find(".stream_global_events(")
@@ -607,7 +741,10 @@ mod subscribe_before_backfill {
             .split_once("async fn catch_up_now")
             .expect("catch_up_now still exists")
             .1;
-        let forced = forced.split_once("\n    fn ").map(|(b, _)| b).unwrap_or(forced);
+        let forced = forced
+            .split_once("\n    fn ")
+            .map(|(b, _)| b)
+            .unwrap_or(forced);
 
         assert!(
             !forced.contains("MIN_CATCHUP_INTERVAL"),
@@ -631,19 +768,31 @@ mod heartbeat_dispatch {
             .expect("handle_event still exists")
             .1;
         let body = body.split_once("\n    fn ").map(|(b, _)| b).unwrap_or(body);
-        let beat = body.find("event.is_heartbeat()").expect("handle_event must drop heartbeats");
-        let cursor = body.find("self.store_cursor(").expect("handle_event still stores cursors");
-        let parse = body.find("event.channel_id.parse").expect("handle_event still parses channel_id");
+        let beat = body
+            .find("event.is_heartbeat()")
+            .expect("handle_event must drop heartbeats");
+        let cursor = body
+            .find("self.store_cursor(")
+            .expect("handle_event still stores cursors");
+        let parse = body
+            .find("event.channel_id.parse")
+            .expect("handle_event still parses channel_id");
         assert!(beat < cursor && beat < parse);
     }
 
     #[test]
     fn a_heartbeat_is_never_mistaken_for_an_event() {
         use crate::network::streaming::heartbeat::IsHeartbeat;
-        use crate::proto::chat_v1::{message_event::Event, MessageEvent, StreamHeartbeat};
-        let beat = MessageEvent { event: Some(Event::Heartbeat(StreamHeartbeat {})), ..Default::default() };
+        use crate::proto::chat_v1::{MessageEvent, StreamHeartbeat, message_event::Event};
+        let beat = MessageEvent {
+            event: Some(Event::Heartbeat(StreamHeartbeat {})),
+            ..Default::default()
+        };
         assert!(beat.is_heartbeat());
-        assert!(beat.event_id.is_empty(), "the server sends no cursor on a heartbeat");
+        assert!(
+            beat.event_id.is_empty(),
+            "the server sends no cursor on a heartbeat"
+        );
     }
 }
 
@@ -684,12 +833,67 @@ mod resync_required {
             .split_once("async fn handle_resync")
             .expect("handle_resync still exists")
             .1;
-        let body = body.split_once("\n    /// Dispatch one").map(|(b, _)| b).unwrap_or(body);
+        let body = body
+            .split_once("\n    /// Dispatch one")
+            .map(|(b, _)| b)
+            .unwrap_or(body);
 
         assert!(
             body.contains("self.catch_up_now().await"),
             "a resync must run the forced catch-up: the skipped events are not coming on \
              the stream, and the rate-limited catch_up() can skip the sync that fetches them."
+        );
+    }
+}
+
+#[cfg(test)]
+mod global_checkpoints {
+    use super::*;
+
+    #[test]
+    fn checkpoint_validation_rejects_duplicate_and_unbounded_positions() {
+        let channel = "11111111-1111-1111-1111-111111111111";
+        assert!(validate_global_cursor(&format!("v1:{{\"{channel}\":\"12-0\"}}")).is_ok());
+        for invalid in [
+            "12-0".into(),
+            "v2:{}".into(),
+            "v1:[]".into(),
+            format!("v1:{{\"{channel}\":\"12-0\",\"{channel}\":\"13-0\"}}"),
+            format!("v1:{{\"{channel}\":\"18446744073709551616-0\"}}"),
+            "v1:{} false".into(),
+            "x".repeat(45004),
+        ] {
+            assert!(validate_global_cursor(&invalid).is_err());
+        }
+    }
+
+    #[test]
+    fn failures_and_memory_only_deferred_messages_are_not_acknowledged() {
+        assert!(require_ingested(Ingested::RetryableFailure).is_err());
+        assert!(require_ingested(Ingested::DeferredPendingSenderKey).is_err());
+        assert!(require_ingested(Ingested::Stored).is_ok());
+        assert!(
+            require_ingested(Ingested::Dropped).is_ok(),
+            "terminal rejection must not poison the stream"
+        );
+    }
+
+    #[test]
+    fn acknowledgement_follows_event_application() {
+        let source = include_str!("channel_stream.rs");
+        let body = source
+            .split_once("async fn handle_event")
+            .unwrap()
+            .1
+            .split_once("fn handle_reaction")
+            .unwrap()
+            .0;
+        assert!(body.find("self.store_cursor(").unwrap() > body.find("match event.event").unwrap());
+        assert!(body.contains("require_ingested(self.inbound.ingest"));
+        let compact: String = body.chars().filter(|c| !c.is_whitespace()).collect();
+        assert!(
+            compact
+                .contains("self.handle_reaction(update,channel_id,false,event.timestamp).await?")
         );
     }
 }

@@ -20,3 +20,5 @@ pub mod qr_scanner;
 pub mod system_settings;
 
 pub use notifications::AndroidNotifications;
+
+pub mod media;

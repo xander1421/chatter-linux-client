@@ -8,10 +8,10 @@ use std::sync::Arc;
 
 use slint::{ModelRc, VecModel};
 
-use chatter_core::client::{jarvis_channel_reply_text, ChatterClient, JarvisRow};
+use chatter_core::client::{ChatterClient, JarvisRow, jarvis_channel_reply_text};
 
 use super::local_messages::{push_rows, row_to_item};
-use crate::{run_ui, MainWindow, MessageItemData};
+use crate::{MainWindow, MessageItemData, run_ui};
 
 /// Whether a Slint-side channel-id string refers to the local AI channel.
 pub fn is_jarvis_channel_str(channel_id: &str) -> bool {
@@ -21,7 +21,10 @@ pub fn is_jarvis_channel_str(channel_id: &str) -> bool {
 }
 
 /// Load the AI channel (header + persisted history) into the message view.
-pub async fn load_jarvis_channel_into_ui(weak: slint::Weak<MainWindow>, ui_ctx: Arc<ChatterClient>) {
+pub async fn load_jarvis_channel_into_ui(
+    weak: slint::Weak<MainWindow>,
+    ui_ctx: Arc<ChatterClient>,
+) {
     let rows = ui_ctx.jarvis_channel_rows(200);
     // Where these messages go (local vs cloud) is core's call — both the
     // topic and the privacy line under the messages say so.
@@ -31,7 +34,9 @@ pub async fn load_jarvis_channel_into_ui(weak: slint::Weak<MainWindow>, ui_ctx: 
     run_ui!(weak, |w| {
         w.set_channel_name(chatter_core::client::JARVIS_CHANNEL_NAME.into());
         crate::bin_ui::converters::set_conversation_kind(
-            &w, &chatter_core::domain::message::ConversationType::Channel, true,
+            &w,
+            &chatter_core::domain::message::ConversationType::Channel,
+            true,
         );
         w.set_privacy_line_override(privacy_line.into());
         w.set_privacy_line_exposed(leaves_device);
@@ -73,7 +78,10 @@ pub async fn handle_jarvis_channel_send(
     // `general()` context == the AI channel identity; ask persists both sides.
     let context = JarvisContext::general();
     let result = if let Some(cmd) = super::parse_slash_command(&text) {
-        ui_ctx.jarvis_execute(cmd, &context, author_id.as_ref()).await.1
+        ui_ctx
+            .jarvis_execute(cmd, &context, author_id.as_ref())
+            .await
+            .1
     } else {
         ui_ctx.jarvis_ask(&context, &text, author_id.as_ref()).await
     };

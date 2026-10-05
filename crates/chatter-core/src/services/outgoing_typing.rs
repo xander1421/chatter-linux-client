@@ -66,7 +66,10 @@ struct SendQueue {
 impl SendQueue {
     fn new() -> Self {
         let (tx, rx) = mpsc::unbounded_channel();
-        Self { tx, rx: Arc::new(Mutex::new(Some(rx))) }
+        Self {
+            tx,
+            rx: Arc::new(Mutex::new(Some(rx))),
+        }
     }
 
     fn send(&self, handle: ConversationHandle, started: bool) {
@@ -96,7 +99,10 @@ impl Default for OutgoingTypingManager {
 
 impl OutgoingTypingManager {
     pub fn new() -> Self {
-        Self { state: Arc::new(Mutex::new(None)), queue: SendQueue::new() }
+        Self {
+            state: Arc::new(Mutex::new(None)),
+            queue: SendQueue::new(),
+        }
     }
 
     /// Keystroke arrived — ensure we're typing in `handle.conversation()`.
@@ -118,17 +124,24 @@ impl OutgoingTypingManager {
                 // Conversation switched — send STOPPED for the old one.
                 let old_conversation = old.conversation.clone();
                 drop(old); // aborts old tasks
-                self.queue.send(handle.for_conversation(old_conversation), false);
+                self.queue
+                    .send(handle.for_conversation(old_conversation), false);
             }
 
             // Send initial STARTED.
             self.queue.send(handle.clone(), true);
 
             let refresh_task = spawn_refresh(
-                handle.clone(), self.state.clone(), conversation.clone(), self.queue.clone(),
+                handle.clone(),
+                self.state.clone(),
+                conversation.clone(),
+                self.queue.clone(),
             );
             let pause_task = spawn_pause(
-                handle.clone(), self.state.clone(), conversation.clone(), self.queue.clone(),
+                handle.clone(),
+                self.state.clone(),
+                conversation.clone(),
+                self.queue.clone(),
             );
             *guard = Some(State {
                 conversation,
@@ -146,14 +159,20 @@ impl OutgoingTypingManager {
             state.last_bump = now;
             state.pause_task.abort();
             state.pause_task = spawn_pause(
-                handle.clone(), self.state.clone(), state.conversation.clone(), self.queue.clone(),
+                handle.clone(),
+                self.state.clone(),
+                state.conversation.clone(),
+                self.queue.clone(),
             );
         }
     }
 
     /// User explicitly stopped typing (e.g. compose cleared, message sent).
     /// Aborts timers and sends STOPPED. No-op if already idle.
-    pub fn clear(&self, handle_resolver: impl FnOnce(&ActiveConversation) -> Option<ConversationHandle>) {
+    pub fn clear(
+        &self,
+        handle_resolver: impl FnOnce(&ActiveConversation) -> Option<ConversationHandle>,
+    ) {
         let mut guard = self.state.lock();
         let Some(state) = guard.take() else { return };
         let conversation = state.conversation.clone();

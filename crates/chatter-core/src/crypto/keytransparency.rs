@@ -112,7 +112,10 @@ impl std::fmt::Display for KtError {
         match self {
             KtError::Malformed(w) => write!(f, "KT proof malformed: {w}"),
             KtError::WrongLeafKey => {
-                write!(f, "KT proof is for a different user's leaf (tree-key mismatch)")
+                write!(
+                    f,
+                    "KT proof is for a different user's leaf (tree-key mismatch)"
+                )
             }
             KtError::VrfInvalid => write!(
                 f,
@@ -123,16 +126,28 @@ impl std::fmt::Display for KtError {
                 "KT-committed identity key does not match the bundle's identity key (forged key)"
             ),
             KtError::InclusionInvalid => {
-                write!(f, "KT Merkle inclusion proof does not verify against the tree head")
+                write!(
+                    f,
+                    "KT Merkle inclusion proof does not verify against the tree head"
+                )
             }
             KtError::TreeHeadSignatureInvalid => {
-                write!(f, "KT signed tree head signature is invalid under the pinned key")
+                write!(
+                    f,
+                    "KT signed tree head signature is invalid under the pinned key"
+                )
             }
             KtError::ConsistencyEpochOrder => {
-                write!(f, "KT consistency proof epochs are out of order or mismatched")
+                write!(
+                    f,
+                    "KT consistency proof epochs are out of order or mismatched"
+                )
             }
             KtError::ConsistencyRootMismatch => {
-                write!(f, "KT consistency proof root does not match its signed tree head")
+                write!(
+                    f,
+                    "KT consistency proof root does not match its signed tree head"
+                )
             }
             KtError::ConsistencyLogNotAppendOnly => write!(
                 f,
@@ -238,12 +253,7 @@ fn recompute_root(key: &[u8; 32], value: &[u8], sibling_hashes: &[Vec<u8>]) -> O
 /// Port of `crypto.VerifyTreeHead` + `treeHeadPayload`: the signed message is
 /// `SHA-256("ChatterKT-v1" || epoch_le64 || root_hash || tree_size_le64)`, and
 /// the signature is plain RFC-8032 Ed25519 over that 32-byte digest.
-fn verify_tree_head(
-    epoch: u64,
-    root_hash: &[u8; 32],
-    tree_size: u64,
-    signature: &[u8],
-) -> bool {
+fn verify_tree_head(epoch: u64, root_hash: &[u8; 32], tree_size: u64, signature: &[u8]) -> bool {
     let sig_bytes: [u8; 64] = match signature.try_into() {
         Ok(s) => s,
         Err(_) => return false,
@@ -260,7 +270,8 @@ fn verify_tree_head(
     payload.extend_from_slice(&tree_size.to_le_bytes());
     let digest: [u8; 32] = Sha256::digest(&payload).into();
 
-    vk.verify(&digest, &Signature::from_bytes(&sig_bytes)).is_ok()
+    vk.verify(&digest, &Signature::from_bytes(&sig_bytes))
+        .is_ok()
 }
 
 /// One log-tree interior hash `SHA-256(0x03 || left || right)`.
@@ -411,8 +422,12 @@ pub fn verify_proof(
     // WITHOUT the client having to know (or the log leaking) a username->leaf map,
     // and a malicious server cannot answer with an arbitrary leaf — it cannot
     // forge a VRF proof for a different index under the pinned key.
-    let expected_key = vrf_verify(&KT_VRF_PUBLIC_KEY_BYTES, user_id.as_bytes(), &response.vrf_proof)
-        .ok_or(KtError::VrfInvalid)?;
+    let expected_key = vrf_verify(
+        &KT_VRF_PUBLIC_KEY_BYTES,
+        user_id.as_bytes(),
+        &response.vrf_proof,
+    )
+    .ok_or(KtError::VrfInvalid)?;
     let proof_key: &[u8; 32] = proof
         .key
         .as_slice()
@@ -501,7 +516,11 @@ fn verify_sth(sth: &SignedTreeHead) -> Result<[u8; 32], KtError> {
 /// Collect a repeated proto `bytes` field into 32-byte hashes.
 fn hashes32(raw: &[Vec<u8>], what: &'static str) -> Result<Vec<[u8; 32]>, KtError> {
     raw.iter()
-        .map(|h| h.as_slice().try_into().map_err(|_| KtError::Malformed(what)))
+        .map(|h| {
+            h.as_slice()
+                .try_into()
+                .map_err(|_| KtError::Malformed(what))
+        })
         .collect()
 }
 
@@ -643,7 +662,9 @@ mod tests {
     /// emits for a one-leaf tree.
     fn lone_leaf_proof() -> Vec<Vec<u8>> {
         let d = default_hashes();
-        (0..TREE_DEPTH).map(|i| d[TREE_DEPTH - 1 - i].to_vec()).collect()
+        (0..TREE_DEPTH)
+            .map(|i| d[TREE_DEPTH - 1 - i].to_vec())
+            .collect()
     }
 
     #[test]
@@ -683,8 +704,9 @@ mod tests {
 
         // The key's own bits reproduce the honest root, so the only thing that
         // changes below is the path.
-        let key_bits: Vec<u32> =
-            (0..TREE_DEPTH).map(|i| path_bit(&key, TREE_DEPTH - 1 - i) as u32).collect();
+        let key_bits: Vec<u32> = (0..TREE_DEPTH)
+            .map(|i| path_bit(&key, TREE_DEPTH - 1 - i) as u32)
+            .collect();
         assert_eq!(
             legacy_recompute_root(&key, &value, &siblings, &key_bits),
             Some(honest)
@@ -721,7 +743,10 @@ mod tests {
         let key = leaf_key("22222222-2222-2222-2222-222222222222");
         let siblings = lone_leaf_proof();
         let root = recompute_root(&key, &vec![0x05u8; 33], &siblings).unwrap();
-        assert_ne!(recompute_root(&key, &vec![0x42u8; 33], &siblings).unwrap(), root);
+        assert_ne!(
+            recompute_root(&key, &vec![0x42u8; 33], &siblings).unwrap(),
+            root
+        );
     }
 
     #[test]

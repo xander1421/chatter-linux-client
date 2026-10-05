@@ -61,12 +61,13 @@ impl MessageSync {
     ///
     /// Uses `reference_time` to fetch only messages newer than our last sync.
     /// Messages are inserted with `INSERT OR IGNORE` to avoid duplicates.
-    pub async fn sync_channel(&self, channel_id: &ChannelId) -> Result<MessageSyncResult, SyncError> {
+    pub async fn sync_channel(
+        &self,
+        channel_id: &ChannelId,
+    ) -> Result<MessageSyncResult, SyncError> {
         let channel_id_str = channel_id.to_string();
         let sync_key = format!("sync:messages:{}:last_at_ns", channel_id);
-        let last_sync = self.settings_repo.get::<u64>(&sync_key)
-            .ok()
-            .flatten();
+        let last_sync = self.settings_repo.get::<u64>(&sync_key).ok().flatten();
 
         let mut result = MessageSyncResult {
             channel_id: channel_id_str.clone(),
@@ -87,7 +88,7 @@ impl MessageSync {
                     None, // thread_root_id
                     page_token.as_deref(),
                     MessageSortDirection::SortOldestFirst,
-                    None, // reference_message_id
+                    None,      // reference_message_id
                     last_sync, // reference_time — only fetch messages after this
                 )
                 .await
@@ -191,6 +192,9 @@ mod timestamp_tests {
         let now = chrono::DateTime::from_timestamp(1_800_000_000, 123_456_789).unwrap();
         let reference = reference_time_ns(now).unwrap();
         assert_eq!(reference, 1_800_000_000_123_456_789);
-        assert_eq!(chrono::DateTime::from_timestamp_nanos(reference as i64), now);
+        assert_eq!(
+            chrono::DateTime::from_timestamp_nanos(reference as i64),
+            now
+        );
     }
 }

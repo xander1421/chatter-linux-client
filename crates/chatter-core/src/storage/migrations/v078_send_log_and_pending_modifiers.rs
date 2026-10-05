@@ -10,8 +10,12 @@
 use super::Migration;
 pub struct V078SendLogAndPendingModifiers;
 impl Migration for V078SendLogAndPendingModifiers {
-    fn version(&self) -> u32 { 78 }
-    fn description(&self) -> &'static str { "Message send log and pending edit/delete modifiers" }
+    fn version(&self) -> u32 {
+        78
+    }
+    fn description(&self) -> &'static str {
+        "Message send log and pending edit/delete modifiers"
+    }
     fn up(&self) -> &'static str {
         r#"
         CREATE TABLE send_log_payloads (

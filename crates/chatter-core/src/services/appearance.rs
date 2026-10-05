@@ -131,7 +131,12 @@ mod tests {
 
     #[test]
     fn text_size_round_trips_and_default_follows_the_os_within_bounds() {
-        for size in [TextSize::Small, TextSize::Default, TextSize::Large, TextSize::Largest] {
+        for size in [
+            TextSize::Small,
+            TextSize::Default,
+            TextSize::Large,
+            TextSize::Largest,
+        ] {
             assert_eq!(TextSize::from_str(size.as_str()), size);
         }
         assert_eq!(TextSize::from_str(""), TextSize::Default);
@@ -143,7 +148,10 @@ mod tests {
         assert_eq!(TextSize::Default.scale(f32::NAN), 1.0);
         // An explicit pick ignores the OS.
         assert_eq!(TextSize::Large.scale(2.0), TextSize::Large.scale(0.5));
-        assert!(TextSize::Small.scale(1.0) < 1.0 && TextSize::Largest.scale(1.0) > TextSize::Large.scale(1.0));
+        assert!(
+            TextSize::Small.scale(1.0) < 1.0
+                && TextSize::Largest.scale(1.0) > TextSize::Large.scale(1.0)
+        );
     }
 
     #[test]
@@ -151,6 +159,9 @@ mod tests {
         for d in [MessageDensity::Comfortable, MessageDensity::Compact] {
             assert_eq!(MessageDensity::from_str(d.as_str()), d);
         }
-        assert_eq!(MessageDensity::from_str("dense"), MessageDensity::Comfortable);
+        assert_eq!(
+            MessageDensity::from_str("dense"),
+            MessageDensity::Comfortable
+        );
     }
 }

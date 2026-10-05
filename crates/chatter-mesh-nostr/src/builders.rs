@@ -269,8 +269,8 @@ mod tests {
 
     #[test]
     fn geohash_message_tag_order_is_g_then_n_then_t() {
-        let event = geohash_message("u4pru", "hi", Some("alice"), true, &identity(), NOW)
-            .expect("builds");
+        let event =
+            geohash_message("u4pru", "hi", Some("alice"), true, &identity(), NOW).expect("builds");
         assert_eq!(
             base_tags(&event),
             vec![
@@ -285,15 +285,18 @@ mod tests {
     fn geohash_message_carries_proof_of_work_that_verifies() {
         // Without it every bitchat peer applies its strict per-sender rate
         // limit to us, and a NIP-13-enforcing relay refuses the event outright.
-        let event = geohash_message("u4pru", "hi", Some("alice"), false, &identity(), NOW)
-            .expect("builds");
+        let event =
+            geohash_message("u4pru", "hi", Some("alice"), false, &identity(), NOW).expect("builds");
         assert_eq!(
             pow::difficulty_of(&event).expect("score"),
             pow::TARGET_BITS,
             "the signed event's own ID must meet the difficulty it commits to"
         );
         assert!(pow::difficulty_of(&event).expect("score") >= pow::RATE_LIMIT_BYPASS_BITS);
-        assert!(verify_event(&event), "mining must not disturb the signature");
+        assert!(
+            verify_event(&event),
+            "mining must not disturb the signature"
+        );
     }
 
     #[test]
@@ -311,9 +314,8 @@ mod tests {
 
     #[test]
     fn geohash_message_trims_a_padded_nickname() {
-        let event =
-            geohash_message("u4pru", "hi", Some("  alice  "), false, &identity(), NOW)
-                .expect("builds");
+        let event = geohash_message("u4pru", "hi", Some("  alice  "), false, &identity(), NOW)
+            .expect("builds");
         assert_eq!(event.tag_value("n"), Some("alice"));
     }
 
@@ -327,8 +329,7 @@ mod tests {
 
     #[test]
     fn geohash_message_normalises_the_cell_and_rejects_junk() {
-        let event =
-            geohash_message("U4PRU", "hi", None, false, &identity(), NOW).expect("builds");
+        let event = geohash_message("U4PRU", "hi", None, false, &identity(), NOW).expect("builds");
         assert_eq!(event.tag_value("g"), Some("u4pru"));
 
         assert!(geohash_message("", "hi", None, false, &identity(), NOW).is_err());
@@ -442,10 +443,7 @@ mod tests {
                 vec!["expiration".to_string(), (NOW + 3600).to_string()],
             ]
         );
-        assert_eq!(
-            BASE64.decode(&event.content).expect("valid base64"),
-            sealed
-        );
+        assert_eq!(BASE64.decode(&event.content).expect("valid base64"), sealed);
         assert!(verify_event(&event));
     }
 
@@ -461,10 +459,14 @@ mod tests {
 
     #[test]
     fn location_note_is_a_kind_1_text_note_with_a_g_tag() {
-        let event = location_note("u4pruydq", "left a note here", &identity(), NOW).expect("builds");
+        let event =
+            location_note("u4pruydq", "left a note here", &identity(), NOW).expect("builds");
         assert_eq!(event.kind, EventKind::TextNote.as_u16());
         assert_eq!(event.kind, 1);
-        assert_eq!(event.tags, vec![vec!["g".to_string(), "u4pruydq".to_string()]]);
+        assert_eq!(
+            event.tags,
+            vec![vec!["g".to_string(), "u4pruydq".to_string()]]
+        );
         assert_eq!(event.content, "left a note here");
         assert!(verify_event(&event));
     }
@@ -519,10 +521,10 @@ mod tests {
     fn identical_inputs_give_identical_event_ids() {
         // Signatures carry random aux and so differ, but the ID is a hash of the
         // serialized event and must not.
-        let a = geohash_message("u4pru", "hi", Some("alice"), true, &identity(), NOW)
-            .expect("builds");
-        let b = geohash_message("u4pru", "hi", Some("alice"), true, &identity(), NOW)
-            .expect("builds");
+        let a =
+            geohash_message("u4pru", "hi", Some("alice"), true, &identity(), NOW).expect("builds");
+        let b =
+            geohash_message("u4pru", "hi", Some("alice"), true, &identity(), NOW).expect("builds");
         assert_eq!(a.id, b.id);
     }
 

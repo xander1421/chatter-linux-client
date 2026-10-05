@@ -104,7 +104,11 @@ pub fn handle_receipt(
         }
 
         // 1 = delivery, 2 = read
-        let new_status = if receipt_type == 2 { "read" } else { "delivered" };
+        let new_status = if receipt_type == 2 {
+            "read"
+        } else {
+            "delivered"
+        };
 
         let messages = window.get_messages();
         let timestamp_strs: Vec<String> =
@@ -112,12 +116,16 @@ pub fn handle_receipt(
 
         for i in 0..messages.row_count() {
             if let Some(msg) = messages.row_data(i) {
-                if timestamp_strs.iter().any(|ts| msg.timestamp_ns.as_str() == ts.as_str()) {
+                if timestamp_strs
+                    .iter()
+                    .any(|ts| msg.timestamp_ns.as_str() == ts.as_str())
+                {
                     let mut updated_msg = msg.clone();
                     updated_msg.delivery_status = new_status.into();
 
-                    if let Some(model) =
-                        messages.as_any().downcast_ref::<VecModel<MessageItemData>>()
+                    if let Some(model) = messages
+                        .as_any()
+                        .downcast_ref::<VecModel<MessageItemData>>()
                     {
                         model.set_row_data(i, updated_msg);
                     }
@@ -167,15 +175,18 @@ pub fn handle_pin(
                     let mut updated_msg = msg.clone();
                     updated_msg.is_pinned = is_pinned;
 
-                    if let Some(model) =
-                        messages.as_any().downcast_ref::<VecModel<MessageItemData>>()
+                    if let Some(model) = messages
+                        .as_any()
+                        .downcast_ref::<VecModel<MessageItemData>>()
                     {
                         model.set_row_data(i, updated_msg);
                     }
 
                     // Update pinned-bar substate
-                    if let Ok(msg_id) =
-                        msg.message_id.to_string().parse::<chatter_core::domain::ids::MessageId>()
+                    if let Ok(msg_id) = msg
+                        .message_id
+                        .to_string()
+                        .parse::<chatter_core::domain::ids::MessageId>()
                     {
                         if is_pinned {
                             chat_state.add_pinned_message(msg_id);

@@ -86,7 +86,12 @@ pub fn set_secure(secure: bool) {
     let result = (|| -> Result<(), String> {
         let act = activity()?;
         let mut env = jni_env()?;
-        let res = env.call_method(act, "setSecure", "(Z)V", &[jni::objects::JValue::Bool(secure.into())]);
+        let res = env.call_method(
+            act,
+            "setSecure",
+            "(Z)V",
+            &[jni::objects::JValue::Bool(secure.into())],
+        );
         if res.is_err() {
             clear_exception(&mut env);
         }
@@ -105,13 +110,20 @@ pub fn set_ui_moving(moving: bool) -> Option<f32> {
     let result = (|| -> Result<f32, String> {
         let act = activity()?;
         let mut env = jni_env()?;
-        let res = env.call_method(act, "setUiMoving", "(Z)F", &[jni::objects::JValue::Bool(moving.into())]);
+        let res = env.call_method(
+            act,
+            "setUiMoving",
+            "(Z)F",
+            &[jni::objects::JValue::Bool(moving.into())],
+        );
         if res.is_err() {
             clear_exception(&mut env);
         }
         res.and_then(|v| v.f()).map_err(|e| e.to_string())
     })();
-    result.inspect_err(|e| tracing::warn!("Android: setUiMoving({moving}) failed: {e}")).ok()
+    result
+        .inspect_err(|e| tracing::warn!("Android: setUiMoving({moving}) failed: {e}"))
+        .ok()
 }
 
 /// Mirror Settings › Appearance › Theme into `MainActivity`
@@ -203,7 +215,9 @@ pub extern "system" fn Java_com_chatter_client_MainActivity_nativeImeHiddenByBac
     _env: JNIEnv,
     _class: jni::objects::JClass,
 ) {
-    let Some(weak) = super::call_actions::main_window() else { return };
+    let Some(weak) = super::call_actions::main_window() else {
+        return;
+    };
     let _ = slint::invoke_from_event_loop(move || {
         if let Some(w) = weak.upgrade() {
             w.invoke_release_text_focus();
@@ -220,12 +234,18 @@ pub extern "system" fn Java_com_chatter_client_MainActivity_nativeImeEditorActio
     _env: JNIEnv,
     _class: jni::objects::JClass,
 ) {
-    let Some(weak) = super::call_actions::main_window() else { return };
+    let Some(weak) = super::call_actions::main_window() else {
+        return;
+    };
     let _ = slint::invoke_from_event_loop(move || {
         use slint::ComponentHandle;
         let Some(w) = weak.upgrade() else { return };
         let enter: slint::SharedString = slint::platform::Key::Return.into();
-        w.window().dispatch_event(slint::platform::WindowEvent::KeyPressed { text: enter.clone() });
-        w.window().dispatch_event(slint::platform::WindowEvent::KeyReleased { text: enter });
+        w.window()
+            .dispatch_event(slint::platform::WindowEvent::KeyPressed {
+                text: enter.clone(),
+            });
+        w.window()
+            .dispatch_event(slint::platform::WindowEvent::KeyReleased { text: enter });
     });
 }

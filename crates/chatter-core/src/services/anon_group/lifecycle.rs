@@ -7,10 +7,10 @@ use rand::RngCore;
 use tokio::time::sleep;
 use uuid::Uuid;
 
+use crate::domain::UserId;
 use crate::domain::anon_group::{
     AnonGroup, AnonGroupId, AnonGroupMailbox, AnonGroupMember, AnonGroupPending, AnonGroupRole,
 };
-use crate::domain::UserId;
 use crate::services::current_user::CurrentUserProvider;
 use crate::storage::repositories::settings_keys;
 
@@ -236,16 +236,14 @@ impl AnonGroupService {
         let token = self.claim_token()?;
 
         // Use the token's Ed25519 keypair for the mailbox
-        let public_key: [u8; 32] = token
-            .public_key
-            .clone()
-            .try_into()
-            .map_err(|_| AnonGroupError::InvalidData("Invalid public key length".to_string()))?;
-        let private_key: [u8; 64] = token
-            .private_key
-            .clone()
-            .try_into()
-            .map_err(|_| AnonGroupError::InvalidData("Invalid private key length".to_string()))?;
+        let public_key: [u8; 32] =
+            token.public_key.clone().try_into().map_err(|_| {
+                AnonGroupError::InvalidData("Invalid public key length".to_string())
+            })?;
+        let private_key: [u8; 64] =
+            token.private_key.clone().try_into().map_err(|_| {
+                AnonGroupError::InvalidData("Invalid private key length".to_string())
+            })?;
 
         // Register the mailbox with the server using the blind signature (ANONYMOUS - no auth headers)
         // Retry on transient transport errors with channel disconnect to avoid stale HTTP/2 connections
@@ -254,8 +252,12 @@ impl AnonGroupService {
         let mut response_result = None;
         for attempt in 0..3u32 {
             if attempt > 0 {
-                tokio::time::sleep(std::time::Duration::from_millis(200 * (attempt as u64 + 1))).await;
-                tracing::info!(attempt = attempt + 1, "Retrying create_ephemeral_mailbox for group");
+                tokio::time::sleep(std::time::Duration::from_millis(200 * (attempt as u64 + 1)))
+                    .await;
+                tracing::info!(
+                    attempt = attempt + 1,
+                    "Retrying create_ephemeral_mailbox for group"
+                );
             }
             let mut mailbox_client = self.grpc_pool.anonymous_mailbox_client();
             match mailbox_client
@@ -277,7 +279,10 @@ impl AnonGroupService {
                     last_err = Some(e);
                 }
                 Err(e) => {
-                    return Err(AnonGroupError::MessageError(format!("Failed to create mailbox on server: {}", e)));
+                    return Err(AnonGroupError::MessageError(format!(
+                        "Failed to create mailbox on server: {}",
+                        e
+                    )));
                 }
             }
         }
@@ -363,7 +368,11 @@ impl AnonGroupService {
             AnonGroupRole::Member,
             inviter_mailbox_pk,
         )
-        .with_profile(inviter_profile_key, inviter_display_name.clone(), inviter_avatar);
+        .with_profile(
+            inviter_profile_key,
+            inviter_display_name.clone(),
+            inviter_avatar,
+        );
         self.anon_group_repo.add_member(&inviter_member)?;
 
         tracing::debug!(
@@ -374,8 +383,13 @@ impl AnonGroupService {
         );
 
         // 5. Send JoinAck to inviter's anonymous mailbox
-        self.send_join_ack(&inviter_id, group_id, &inviter_mailbox_pk, &mailbox.public_key)
-            .await?;
+        self.send_join_ack(
+            &inviter_id,
+            group_id,
+            &inviter_mailbox_pk,
+            &mailbox.public_key,
+        )
+        .await?;
 
         tracing::info!(
             "Joined anonymous group {} from inviter {}",
@@ -539,7 +553,9 @@ impl AnonGroupService {
     /// Errors for individual groups are logged and swallowed so one failing
     /// group does not block refresh of the others. Returns the list of group
     /// IDs that were successfully refreshed.
-    pub async fn refresh_expiring_group_mailboxes(&self) -> Result<Vec<AnonGroupId>, AnonGroupError> {
+    pub async fn refresh_expiring_group_mailboxes(
+        &self,
+    ) -> Result<Vec<AnonGroupId>, AnonGroupError> {
         self.refresh_expiring_group_mailboxes_within(chrono::Duration::days(
             GROUP_MAILBOX_REFRESH_LEAD_DAYS,
         ))

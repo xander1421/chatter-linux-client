@@ -48,9 +48,11 @@ impl Migration for V033AnonDmReactionsReceipts {
     }
 
     fn down(&self) -> Option<&'static str> {
-        Some(r#"
+        Some(
+            r#"
         DROP TABLE IF EXISTS anon_dm_reactions;
         DROP TABLE IF EXISTS anon_group_reactions;
-        "#)
+        "#,
+        )
     }
 }

@@ -18,7 +18,11 @@ pub trait NotificationSink: Send + Sync {
     ) -> Result<(), SystemError>;
 
     fn show_domain(&self, notification: &Notification) -> Result<(), SystemError> {
-        self.show(&notification.title, &notification.body, NotificationPriority::Normal)
+        self.show(
+            &notification.title,
+            &notification.body,
+            NotificationPriority::Normal,
+        )
     }
 
     /// Show the notification for one conversation (Signal: one per thread).

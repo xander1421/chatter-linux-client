@@ -77,8 +77,10 @@ impl MessageReceiptRepository {
             .map_err(|_| StorageError::InvalidData("message timestamp out of range".into()))?;
         let mut conn = self.db.connection()?;
         let tx = conn.transaction()?;
-        tx.execute("DELETE FROM own_device_send_targets WHERE sent_at < ?1",
-            params![sent_at.saturating_sub(RETENTION_NS as i64)])?;
+        tx.execute(
+            "DELETE FROM own_device_send_targets WHERE sent_at < ?1",
+            params![sent_at.saturating_sub(RETENTION_NS as i64)],
+        )?;
         for device in devices {
             tx.execute("INSERT OR IGNORE INTO own_device_send_targets
                 (conversation_id, conversation_type, author_id, sent_at, device_id) VALUES (?1, ?2, ?3, ?4, ?5)",
@@ -102,7 +104,12 @@ impl MessageReceiptRepository {
             ORDER BY device_id",
         )?;
         let rows = stmt.query_map(
-            params![conversation.to_string(), kind.as_str(), author.to_string(), sent_at as i64],
+            params![
+                conversation.to_string(),
+                kind.as_str(),
+                author.to_string(),
+                sent_at as i64
+            ],
             |row| row.get::<_, u32>(0).map(DeviceId),
         )?;
         rows.map(|row| row.map_err(StorageError::from)).collect()

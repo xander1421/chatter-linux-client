@@ -17,9 +17,9 @@
 //! whole-file HMAC (via [`crate::crypto::streaming_decrypt::StreamingDecryptor::verify`])
 //! before constructing this — see `AttachmentService::open_range_decryptor`.
 
+use aes::Aes256;
 use aes::cipher::generic_array::GenericArray;
 use aes::cipher::{BlockDecrypt, KeyInit};
-use aes::Aes256;
 use memmap2::Mmap;
 
 const IV_LEN: usize = 16;
@@ -45,7 +45,9 @@ impl CbcRangeDecryptor {
         }
         let encrypted_len = total - IV_LEN - HMAC_LEN;
         if encrypted_len % AES_BLOCK != 0 {
-            return Err(format!("ciphertext not block-aligned: {encrypted_len} bytes"));
+            return Err(format!(
+                "ciphertext not block-aligned: {encrypted_len} bytes"
+            ));
         }
         if plaintext_size > encrypted_len {
             return Err(format!(
@@ -282,7 +284,9 @@ mod tests {
         assert_eq!(&b[..n], &plaintext[plaintext.len() - 20..]);
 
         // Seek past EOF -> read returns 0.
-        reader.seek(SeekFrom::Start(plaintext.len() as u64 + 999)).unwrap();
+        reader
+            .seek(SeekFrom::Start(plaintext.len() as u64 + 999))
+            .unwrap();
         assert_eq!(reader.read(&mut b).unwrap(), 0);
 
         // Offsets a hostile media file can steer a decoder into: errors or

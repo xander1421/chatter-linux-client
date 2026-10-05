@@ -7,8 +7,8 @@ use chatter_core::domain::message::{Message, MessageContent};
 
 use crate::{MessageItemData, RichTextBlock};
 
-use super::attachment::{attachment_to_display_data, AttachmentDisplayData};
-use super::markdown::{parse_blocks, strip_markdown, MarkdownBlock};
+use super::attachment::{AttachmentDisplayData, attachment_to_display_data};
+use super::markdown::{MarkdownBlock, parse_blocks, strip_markdown};
 use super::utils::{format_count, reaction_counts_to_entries};
 
 /// A message body as a row renders it: `rich_content` is the blocks the
@@ -26,7 +26,9 @@ pub fn body_fields(raw: &str) -> (slint::SharedString, ModelRc<RichTextBlock>) {
     let blocks = parse_blocks(trimmed);
     let plain = match blocks.as_slice() {
         [] => true,
-        [MarkdownBlock::Inline(paras)] => paras.iter().all(|p| p.formatting.is_empty()),
+        [MarkdownBlock::Inline(paras)] => paras
+            .iter()
+            .all(|p| p.formatting.is_empty() && p.links.is_empty()),
         _ => false,
     };
     let rows: Vec<RichTextBlock> = if plain {
@@ -36,7 +38,12 @@ pub fn body_fields(raw: &str) -> (slint::SharedString, ModelRc<RichTextBlock>) {
             .into_iter()
             .map(|b| match b {
                 MarkdownBlock::Inline(paras) => RichTextBlock {
-                    plain: paras.iter().map(|p| p.text.as_str()).collect::<Vec<_>>().join("\n").into(),
+                    plain: paras
+                        .iter()
+                        .map(|p| p.text.as_str())
+                        .collect::<Vec<_>>()
+                        .join("\n")
+                        .into(),
                     text: slint::StyledText::from_paragraphs(paras),
                     ..Default::default()
                 },
@@ -48,7 +55,10 @@ pub fn body_fields(raw: &str) -> (slint::SharedString, ModelRc<RichTextBlock>) {
             })
             .collect()
     };
-    (strip_markdown(trimmed).into(), ModelRc::new(VecModel::from(rows)))
+    (
+        strip_markdown(trimmed).into(),
+        ModelRc::new(VecModel::from(rows)),
+    )
 }
 
 /// Replace a displayed row's body with an edit. The bubble draws
@@ -69,7 +79,7 @@ pub struct MessageDisplayData {
     pub sender_initials: String,
     pub content: String,
     pub timestamp: String,
-    pub timestamp_ns: String,  // Nanosecond timestamp as string for event matching
+    pub timestamp_ns: String, // Nanosecond timestamp as string for event matching
     /// Core's day chip for this message (`ui::chat_data::day_label`).
     pub day_label: String,
     pub is_edited: bool,
@@ -128,9 +138,9 @@ pub struct MessageDisplayData {
     // Call message fields
     pub is_pinned: bool,
     pub is_call: bool,
-    pub call_message_type: String,  // "started", "ended", "missed", "declined" (raw from domain)
-    pub call_initiator_id: String,  // User ID of who initiated the call
-    pub call_duration: String,      // "1 min 30 s" or empty
+    pub call_message_type: String, // "started", "ended", "missed", "declined" (raw from domain)
+    pub call_initiator_id: String, // User ID of who initiated the call
+    pub call_duration: String,     // "1 min 30 s" or empty
 }
 
 impl MessageDisplayData {
@@ -162,11 +172,8 @@ impl MessageDisplayData {
     ///
     /// The `current_user_id` is used to determine call direction (outgoing vs incoming).
     pub fn to_slint_with_user(&self, current_user_id: &str) -> MessageItemData {
-        let slint_attachments: Vec<crate::MessageAttachmentData> = self
-            .attachments
-            .iter()
-            .map(|a| a.to_slint())
-            .collect();
+        let slint_attachments: Vec<crate::MessageAttachmentData> =
+            self.attachments.iter().map(|a| a.to_slint()).collect();
 
         // Determine call type based on who initiated
         let call_type = if self.is_call {
@@ -216,79 +223,92 @@ impl MessageDisplayData {
         let (reply_to_thumbnail, reply_to_has_thumbnail, reply_to_thumb_w, reply_to_thumb_h) =
             if let Some(pixels) = &self.reply_to_thumbnail_decoded {
                 let (w, h) = (pixels.width(), pixels.height());
-                (slint::Image::from_rgba8(pixels.clone()), true, w as i32, h as i32)
+                (
+                    slint::Image::from_rgba8(pixels.clone()),
+                    true,
+                    w as i32,
+                    h as i32,
+                )
             } else {
                 (slint::Image::default(), false, 0, 0)
             };
 
-    // A notice we caused reads "You set disappearing messages…", as in
-    // Signal, not our own name.
-    let own_notice = (self.is_system && is_own)
-        .then(|| self.content.strip_prefix(self.sender_name.as_str()))
-        .flatten()
-        .map(|rest| format!("You{rest}"));
-    let (content, rich_content) = body_fields(own_notice.as_deref().unwrap_or(&self.content));
+        // A notice we caused reads "You set disappearing messages…", as in
+        // Signal, not our own name.
+        let own_notice = (self.is_system && is_own)
+            .then(|| self.content.strip_prefix(self.sender_name.as_str()))
+            .flatten()
+            .map(|rest| format!("You{rest}"));
+        let (content, rich_content) = body_fields(own_notice.as_deref().unwrap_or(&self.content));
 
-    MessageItemData {
-        // Multi-select marking is applied by features::chat::selection after
-        // conversion; a freshly converted row is never pre-selected.
-        message_id: self.message_id.clone().into(),
-        sender_id: self.sender_id.clone().into(),
-        sender_name: self.sender_name.clone().into(),
-        sender_initials: self.sender_initials.clone().into(),
-        sender_avatar_source,
-        has_avatar,
-        content,
-        rich_content,
-        timestamp: self.timestamp.clone().into(),
-        timestamp_ns: self.timestamp_ns.clone().into(),
-        is_own,
-        is_edited: self.is_edited,
-        is_deleted: self.is_deleted,
-        is_system: self.is_system,
-        is_ai: self.is_ai,
-        has_attachments: !slint_attachments.is_empty() || self.has_attachments,
-        attachment_count: (slint_attachments.len() as i32).max(self.attachment_count),
-        attachments: ModelRc::new(VecModel::from(slint_attachments)),
-        has_reactions: self.has_reactions,
-        reaction_summary: chatter_core::domain::message::ReactionCount::summary_string(&self.reaction_counts).into(),
-        reactions: ModelRc::new(VecModel::from(reaction_counts_to_entries(&self.reaction_counts))),
-        reply_count: self.reply_count,
-        reply_count_text: self.reply_count_text.clone().into(),
-        is_thread_reply: self.is_thread_reply,
-        is_reply: self.is_reply,
-        reply_to_message_id: self.reply_to_message_id.clone().into(),
-        reply_to_not_found: self.reply_to_not_found,
-        reply_to_sender_name: self.reply_to_sender_name.clone().into(),
-        reply_to_preview: self.reply_to_preview.clone().into(),
-        reply_to_category: self.reply_to_category.clone().into(),
-        reply_to_attachment_id: self.reply_to_attachment_id.clone().into(),
-        reply_to_duration: self.reply_to_duration.clone().into(),
-        reply_to_filename: self.reply_to_filename.clone().into(),
-        reply_to_waveform: ModelRc::new(VecModel::from(
-            self.reply_to_waveform.iter().copied()
-                .map(super::attachment::waveform_bar).collect::<Vec<_>>(),
-        )),
-        reply_to_has_thumbnail,
-        reply_to_thumbnail,
-        reply_to_thumbnail_width: reply_to_thumb_w,
-        reply_to_thumbnail_height: reply_to_thumb_h,
-        show_sender: true,
-        // For own messages with empty status, default to "sent"
-        failure_reason: self.failure_reason.clone().into(),
-        delivery_status: if is_own && self.delivery_status.is_empty() {
-            "sent".into()
-        } else {
-            self.delivery_status.clone().into()
-        },
-        is_pinned: self.is_pinned,
-        is_call: self.is_call,
-        call_type: call_type.into(),
-        call_duration: self.call_duration.clone().into(),
-        date_separator_text: self.day_label.clone().into(),
-        ..Default::default()
+        MessageItemData {
+            // Multi-select marking is applied by features::chat::selection after
+            // conversion; a freshly converted row is never pre-selected.
+            message_id: self.message_id.clone().into(),
+            sender_id: self.sender_id.clone().into(),
+            sender_name: self.sender_name.clone().into(),
+            sender_initials: self.sender_initials.clone().into(),
+            sender_avatar_source,
+            has_avatar,
+            content,
+            rich_content,
+            timestamp: self.timestamp.clone().into(),
+            timestamp_ns: self.timestamp_ns.clone().into(),
+            is_own,
+            is_edited: self.is_edited,
+            is_deleted: self.is_deleted,
+            is_system: self.is_system,
+            is_ai: self.is_ai,
+            has_attachments: !slint_attachments.is_empty() || self.has_attachments,
+            attachment_count: (slint_attachments.len() as i32).max(self.attachment_count),
+            attachments: ModelRc::new(VecModel::from(slint_attachments)),
+            has_reactions: self.has_reactions,
+            reaction_summary: chatter_core::domain::message::ReactionCount::summary_string(
+                &self.reaction_counts,
+            )
+            .into(),
+            reactions: ModelRc::new(VecModel::from(reaction_counts_to_entries(
+                &self.reaction_counts,
+            ))),
+            reply_count: self.reply_count,
+            reply_count_text: self.reply_count_text.clone().into(),
+            is_thread_reply: self.is_thread_reply,
+            is_reply: self.is_reply,
+            reply_to_message_id: self.reply_to_message_id.clone().into(),
+            reply_to_not_found: self.reply_to_not_found,
+            reply_to_sender_name: self.reply_to_sender_name.clone().into(),
+            reply_to_preview: self.reply_to_preview.clone().into(),
+            reply_to_category: self.reply_to_category.clone().into(),
+            reply_to_attachment_id: self.reply_to_attachment_id.clone().into(),
+            reply_to_duration: self.reply_to_duration.clone().into(),
+            reply_to_filename: self.reply_to_filename.clone().into(),
+            reply_to_waveform: ModelRc::new(VecModel::from(
+                self.reply_to_waveform
+                    .iter()
+                    .copied()
+                    .map(super::attachment::waveform_bar)
+                    .collect::<Vec<_>>(),
+            )),
+            reply_to_has_thumbnail,
+            reply_to_thumbnail,
+            reply_to_thumbnail_width: reply_to_thumb_w,
+            reply_to_thumbnail_height: reply_to_thumb_h,
+            show_sender: true,
+            // For own messages with empty status, default to "sent"
+            failure_reason: self.failure_reason.clone().into(),
+            delivery_status: if is_own && self.delivery_status.is_empty() {
+                "sent".into()
+            } else {
+                self.delivery_status.clone().into()
+            },
+            is_pinned: self.is_pinned,
+            is_call: self.is_call,
+            call_type: call_type.into(),
+            call_duration: self.call_duration.clone().into(),
+            date_separator_text: self.day_label.clone().into(),
+            ..Default::default()
+        }
     }
-}
 }
 
 /// Convert a domain Message to thread-safe MessageDisplayData.
@@ -301,7 +321,13 @@ pub fn message_to_display_data(
     resolved_attachments: &[Attachment],
     sender_avatar: Option<Vec<u8>>,
 ) -> MessageDisplayData {
-    message_to_display_data_with_replies(msg, sender_name, resolved_attachments, None, sender_avatar)
+    message_to_display_data_with_replies(
+        msg,
+        sender_name,
+        resolved_attachments,
+        None,
+        sender_avatar,
+    )
 }
 
 /// Convert a domain Message to thread-safe MessageDisplayData with reply count.
@@ -343,9 +369,7 @@ pub fn message_to_display_data_with_replies(
 
     // Extract content and system flag
     let (content, is_system) = match &msg.content {
-        MessageContent::System(sys) => {
-            (format!("{} {}", sender_name, sys.description()), true)
-        }
+        MessageContent::System(sys) => (format!("{} {}", sender_name, sys.description()), true),
         _ => (msg.as_text().unwrap_or("").to_string(), false),
     };
 
@@ -358,7 +382,10 @@ pub fn message_to_display_data_with_replies(
         timestamp: {
             // Convert UTC to local time for display (consistent with sidebar)
             use chrono::Local;
-            msg.created_at.with_timezone(&Local).format("%H:%M").to_string()
+            msg.created_at
+                .with_timezone(&Local)
+                .format("%H:%M")
+                .to_string()
         },
         timestamp_ns: msg.sent_at.to_string(),
         day_label: chatter_core::ui::chat_data::day_label(msg.created_at),
@@ -378,14 +405,14 @@ pub fn message_to_display_data_with_replies(
         is_thread_reply: msg.is_thread_reply(),
         is_reply: msg.reply_to.is_some(),
         reply_to_message_id: msg.reply_to.map(|id| id.to_string()).unwrap_or_default(),
-        reply_to_not_found: false,  // Resolved by build sites via core (needs repo access)
-        reply_to_sender_name: String::new(),  // Resolved by UI handler after conversion
+        reply_to_not_found: false, // Resolved by build sites via core (needs repo access)
+        reply_to_sender_name: String::new(), // Resolved by UI handler after conversion
         reply_to_preview: msg.reply_to_text.clone().unwrap_or_default(),
-        reply_to_category: String::new(),          // Resolved by batch via parent lookup
-        reply_to_attachment_id: String::new(),     // Resolved by batch via parent lookup
-        reply_to_duration: String::new(),          // Resolved by batch via parent lookup
-        reply_to_filename: String::new(),          // Resolved by batch via parent lookup
-        reply_to_waveform: Vec::new(),             // Resolved by batch via parent lookup
+        reply_to_category: String::new(), // Resolved by batch via parent lookup
+        reply_to_attachment_id: String::new(), // Resolved by batch via parent lookup
+        reply_to_duration: String::new(), // Resolved by batch via parent lookup
+        reply_to_filename: String::new(), // Resolved by batch via parent lookup
+        reply_to_waveform: Vec::new(),    // Resolved by batch via parent lookup
         reply_to_thumbnail_bytes: msg.reply_to_thumbnail.clone(),
         reply_to_thumbnail_decoded: None,
         delivery_status: msg.delivery_status.clone(),
@@ -397,7 +424,6 @@ pub fn message_to_display_data_with_replies(
         call_duration,
     }
 }
-
 
 /// Convert a batch of domain Messages to display data, resolving sender names,
 /// attachments, reply-to context, and pre-decoding thumbnails.
@@ -463,7 +489,10 @@ pub fn apply_reply_counts(
         return;
     }
     for display in display_messages.iter_mut() {
-        let Ok(id) = display.message_id.parse::<chatter_core::domain::ids::MessageId>() else {
+        let Ok(id) = display
+            .message_id
+            .parse::<chatter_core::domain::ids::MessageId>()
+        else {
             continue;
         };
         if let Some(count) = counts.get(&id) {
@@ -499,7 +528,9 @@ pub fn messages_to_display_batch(
             .entry(msg.sender_id)
             .or_insert_with(|| {
                 let bytes = sender_avatar(msg);
-                let pixels = bytes.as_deref().and_then(crate::bin_ui::decode_cache::avatar);
+                let pixels = bytes
+                    .as_deref()
+                    .and_then(crate::bin_ui::decode_cache::avatar);
                 (bytes, pixels)
             })
             .clone();
@@ -531,8 +562,6 @@ pub fn messages_to_display_batch(
     display_messages
 }
 
-
-
 #[cfg(test)]
 mod tests {
     use slint::Model;
@@ -543,7 +572,11 @@ mod tests {
     fn apply_edit_replaces_the_blocks_the_bubble_draws() {
         let mut row = MessageItemData::default();
         (row.content, row.rich_content) = body_fields("hi again");
-        assert_eq!(row.rich_content.row_count(), 0, "plain text draws through the plain Text");
+        assert_eq!(
+            row.rich_content.row_count(),
+            0,
+            "plain text draws through the plain Text"
+        );
 
         apply_edit(&mut row, "hi **againX**");
 
@@ -554,6 +587,16 @@ mod tests {
         assert_eq!(blocks[0].plain, "hi againX", "the run's accessible label");
         assert_eq!(row.content, "hi againX");
         assert!(row.is_edited);
+    }
+
+    #[test]
+    fn unstyled_link_uses_the_rich_clickable_path_and_edit_removes_it() {
+        let mut row = MessageItemData::default();
+        (row.content, row.rich_content) = body_fields("[web](https://example.org)");
+        assert_eq!(row.content, "web");
+        assert_eq!(row.rich_content.row_count(), 1);
+        apply_edit(&mut row, "web");
+        assert_eq!(row.rich_content.row_count(), 0);
     }
 
     #[test]

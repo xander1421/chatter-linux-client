@@ -76,9 +76,9 @@ use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
 use tokio::task::JoinHandle;
 use uuid::Uuid;
 
+use crate::domain::UnifiedConversation;
 use crate::domain::ids::{ChannelId, UserId};
 use crate::domain::message::Message;
-use crate::domain::UnifiedConversation;
 use crate::storage::mesh_identity_store::MeshIdentityStore;
 use crate::storage::repositories::MessageRepository;
 
@@ -536,10 +536,7 @@ impl MeshService {
     ///
     /// Local only. Telling the peer costs airtime, so it is a separate act:
     /// [`mark_read`](Self::mark_read) puts a receipt on the wire.
-    pub fn mark_conversation_read(
-        &self,
-        conversation: &MeshConversation,
-    ) -> Result<(), MeshError> {
+    pub fn mark_conversation_read(&self, conversation: &MeshConversation) -> Result<(), MeshError> {
         Ok(self.timeline.mark_read(conversation)?)
     }
 
@@ -1038,11 +1035,11 @@ fn new_message_id() -> String {
 
 #[cfg(test)]
 mod tests {
+    use super::mock::{LoopbackConnector, MockLink, OfflineConnector};
     use super::*;
     use crate::domain::message::ConversationType;
     use chatter_mesh_store::MemoryStorage;
     use chatter_mesh_store::StoreError;
-    use super::mock::{LoopbackConnector, MockLink, OfflineConnector};
 
     struct NoopSealer;
 
@@ -1189,10 +1186,16 @@ mod tests {
         service
             .send_room("still here")
             .expect("a send after a restart is routed");
-        service.router.send_private(
-            "after restart".into(), PeerId::from_str("bbbbbbbbbbbbbbbb"),
-            "Bob".into(), "restart-router-test".into(),
-        ).await.expect("the private-message router also survives restart");
+        service
+            .router
+            .send_private(
+                "after restart".into(),
+                PeerId::from_str("bbbbbbbbbbbbbbbb"),
+                "Bob".into(),
+                "restart-router-test".into(),
+            )
+            .await
+            .expect("the private-message router also survives restart");
 
         service.shutdown().await;
         assert!(!service.is_running());
@@ -1236,10 +1239,7 @@ mod tests {
             service.send_room("hello"),
             Err(MeshError::NoRadio)
         ));
-        assert!(matches!(
-            service.announce_now(),
-            Err(MeshError::NoRadio)
-        ));
+        assert!(matches!(service.announce_now(), Err(MeshError::NoRadio)));
         // The Nostr half still works.
         assert!(service.join_geohash("u4pruy").is_ok());
         service.shutdown().await;
@@ -1266,8 +1266,14 @@ mod tests {
     async fn empty_messages_never_reach_the_wire() {
         let radio = MockLink::shared();
         let service = service(Some(Arc::clone(&radio) as Arc<dyn MeshLink>), None);
-        assert!(matches!(service.send_room("   "), Err(MeshError::EmptyContent)));
-        assert!(matches!(service.send_room(""), Err(MeshError::EmptyContent)));
+        assert!(matches!(
+            service.send_room("   "),
+            Err(MeshError::EmptyContent)
+        ));
+        assert!(matches!(
+            service.send_room(""),
+            Err(MeshError::EmptyContent)
+        ));
         let peer = PeerId::from_str("bbbbbbbbbbbbbbbb");
         assert!(matches!(
             service.send_dm(&peer, "\n\t ").await,

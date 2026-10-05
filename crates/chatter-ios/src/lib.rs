@@ -31,7 +31,10 @@ fn check_crypto() -> Result<String, String> {
     if opened != msg {
         return Err("round-trip mismatch".into());
     }
-    Ok(format!("X25519 + HPKE round-trip, {} byte envelope", sealed.len()))
+    Ok(format!(
+        "X25519 + HPKE round-trip, {} byte envelope",
+        sealed.len()
+    ))
 }
 
 /// SQLCipher open + write + read inside the app sandbox.
@@ -44,7 +47,10 @@ fn check_storage(dir: &PathBuf) -> Result<String, String> {
     let v: String = conn
         .query_row("SELECT sqlite_version()", [], |r| r.get(0))
         .map_err(|e| format!("{e:?}"))?;
-    Ok(format!("SQLCipher opened at {}, sqlite {v}", path.display()))
+    Ok(format!(
+        "SQLCipher opened at {}, sqlite {v}",
+        path.display()
+    ))
 }
 
 /// Keychain via keyring/apple-native — the one dep iOS resolves differently.
@@ -53,7 +59,8 @@ fn check_storage(dir: &PathBuf) -> Result<String, String> {
 fn check_keychain(dir: &PathBuf) -> Result<String, String> {
     use chatter_core::system::Keyring;
     let k = Keyring::new(dir.join("smoke.db"));
-    k.set_passphrase("hello-keychain").map_err(|e| format!("{e:?}"))?;
+    k.set_passphrase("hello-keychain")
+        .map_err(|e| format!("{e:?}"))?;
     let got = k.get_passphrase().map_err(|e| format!("{e:?}"))?;
     let _ = k.delete_passphrase();
     if got != "hello-keychain" {
@@ -94,13 +101,16 @@ pub unsafe extern "C" fn chatter_ios_smoke(docs_dir: *const c_char) -> *mut c_ch
 
     let _ = tracing_subscriber::fmt()
         .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "info".into()),
+            tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()),
         )
         .try_init();
 
     let lines = [
-        format!("chatter-core on {} / {}", std::env::consts::OS, std::env::consts::ARCH),
+        format!(
+            "chatter-core on {} / {}",
+            std::env::consts::OS,
+            std::env::consts::ARCH
+        ),
         String::new(),
         check("crypto", check_crypto()),
         check("storage", check_storage(&dir)),

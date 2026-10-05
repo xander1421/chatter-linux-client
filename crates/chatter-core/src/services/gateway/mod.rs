@@ -16,8 +16,8 @@ use std::sync::Arc;
 use crate::domain::ids::{ChannelId, MessageId, UserId};
 use crate::domain::message::{ConversationType, Message, MessageContent};
 use crate::proto::content_v1::DataMessage;
-use crate::services::current_user::CurrentUserProvider;
 use crate::services::SignalService;
+use crate::services::current_user::CurrentUserProvider;
 use crate::storage::repositories::MessageRepository;
 
 // The one refusal every non-DEM sealed-sender receive path shares. Lives with
@@ -26,49 +26,58 @@ use crate::storage::repositories::MessageRepository;
 pub(crate) use decryption::unratcheted_plaintext_rejected;
 
 // Re-export inbound types (moved from inline definitions)
-pub use inbound::{
-    content_type_name,
-    DmContent, DecryptResult, RouteResult, SealedSenderResult,
-};
 use crate::util::time::TimestampNanos;
+pub use inbound::{DecryptResult, DmContent, RouteResult, SealedSenderResult, content_type_name};
 
 // Re-export all content builders
 pub use builders::{
-    // Padding
-    generate_padding, PADDING_GROUP_CONTROL, PADDING_MESSAGE, PADDING_LARGE,
-    // DataMessage builders
-    build_text_content, build_data_message_content, build_reply_content,
-    build_data_message_content_with_quote,
-    // Control message builders
-    build_typing_content, build_typing_content_with_channel,
-    build_read_receipt_content, build_read_receipt_content_with_channel,
-    build_delivery_receipt_content, build_delivery_receipt_content_with_channel,
-    build_reaction_content, build_reaction_content_with_channel,
-    build_pin_content, build_pin_content_with_channel,
-    build_edit_content, build_edit_content_with_channel,
-    build_delete_for_me_content,
-    build_saved_message_sync_content,
-    build_delete_for_everyone_content, build_delete_for_everyone_content_with_channel,
-    // DM call key exchange (ephemeral keys for PFS)
-    build_call_key_offer, build_call_key_answer,
-    // Group call key distribution (pairwise sealed sender)
-    build_group_call_signal_content,
-    // Call hangup
-    build_call_hangup_content,
-    build_call_self_sync,
-    // Anonymous call signaling (anon DM + anon group)
-    generate_anon_call_room,
-    build_anon_call_token,
-    build_anon_call_offer_content,
+    PADDING_GROUP_CONTROL,
+    PADDING_LARGE,
+    PADDING_MESSAGE,
     build_anon_call_answer_content,
     build_anon_call_hangup_content,
+    build_anon_call_offer_content,
+    build_anon_call_token,
+    // Call hangup
+    build_call_hangup_content,
+    build_call_key_answer,
+    // DM call key exchange (ephemeral keys for PFS)
+    build_call_key_offer,
+    build_call_self_sync,
+    build_data_message_content,
+    build_data_message_content_with_quote,
+    build_delete_for_everyone_content,
+    build_delete_for_everyone_content_with_channel,
+    build_delete_for_me_content,
+    build_delivery_receipt_content,
+    build_delivery_receipt_content_with_channel,
+    build_edit_content,
+    build_edit_content_with_channel,
+    // Group call key distribution (pairwise sealed sender)
+    build_group_call_signal_content,
+    build_pin_content,
+    build_pin_content_with_channel,
+    build_reaction_content,
+    build_reaction_content_with_channel,
+    build_read_receipt_content,
+    build_read_receipt_content_with_channel,
+    build_reply_content,
+    build_saved_message_sync_content,
+    // DataMessage builders
+    build_text_content,
+    // Control message builders
+    build_typing_content,
+    build_typing_content_with_channel,
+    // Anonymous call signaling (anon DM + anon group)
+    generate_anon_call_room,
+    // Padding
+    generate_padding,
 };
 
 // Re-export outgoing router
 pub use outgoing::{
-    OutgoingIntent, QuoteIntent, SendResult, SendError,
-    OutgoingServices, route_outgoing,
-    OwnedOutgoingServices, route_outgoing_owned,
+    OutgoingIntent, OutgoingServices, OwnedOutgoingServices, QuoteIntent, SendError, SendResult,
+    route_outgoing, route_outgoing_owned,
 };
 
 // ============================================================================
@@ -190,89 +199,97 @@ impl MessageGateway {
         // pure handshake below does, so their real name replaces the fallback
         // without a restart.
         let mut profile_key_changed = false;
-        let (channel_id, conversation_type): (ChannelId, ConversationType) =
-            if data_message.channel_id.is_empty() {
-                let sid = sender_id.ok_or_else(|| {
-                    ServiceError::Validation(
-                        "DM DataMessage has no sender_id — cannot bucket a channel-free DM".into(),
-                    )
-                })?;
-                // Signal-style: the sender piggybacks their profile key on the
-                // DataMessage. Persist it so their encrypted display name +
-                // avatar can be decrypted (list_friends_with_profiles). Without
-                // this the peer only ever renders the "User <id>" fallback.
-                if let Some(key) = data_message.profile_key.as_ref() {
-                    if key.len() == 32 {
-                        if let Ok(current_user) = self.settings_repo.current_user_id() {
-                            let key_array: [u8; 32] = key.as_slice().try_into().expect("len checked == 32");
-                            match self.user_repo.set_friend_profile_key(&current_user, &sid, &key_array) {
-                                Ok(changed) => profile_key_changed = changed,
-                                Err(e) => {
-                                    tracing::debug!(sender_id = %sid, error = %e, "DM: failed to store sender profile key");
-                                }
+        let (channel_id, conversation_type): (ChannelId, ConversationType) = if data_message
+            .channel_id
+            .is_empty()
+        {
+            let sid = sender_id.ok_or_else(|| {
+                ServiceError::Validation(
+                    "DM DataMessage has no sender_id — cannot bucket a channel-free DM".into(),
+                )
+            })?;
+            // Signal-style: the sender piggybacks their profile key on the
+            // DataMessage. Persist it so their encrypted display name +
+            // avatar can be decrypted (list_friends_with_profiles). Without
+            // this the peer only ever renders the "User <id>" fallback.
+            if let Some(key) = data_message.profile_key.as_ref() {
+                if key.len() == 32 {
+                    if let Ok(current_user) = self.settings_repo.current_user_id() {
+                        let key_array: [u8; 32] =
+                            key.as_slice().try_into().expect("len checked == 32");
+                        match self
+                            .user_repo
+                            .set_friend_profile_key(&current_user, &sid, &key_array)
+                        {
+                            Ok(changed) => profile_key_changed = changed,
+                            Err(e) => {
+                                tracing::debug!(sender_id = %sid, error = %e, "DM: failed to store sender profile key");
                             }
                         }
                     }
                 }
+            }
 
-                // Disappearing-messages timer (Signal's expireTimer): a timer
-                // update announces it, and every visible message restates it
-                // with its version; adopt it by Signal's version rule
-                // (`services::disappearing`). An update message has
-                // nothing else to show: surface the notice in its place.
-                let timer_update = crate::services::disappearing::is_timer_update(&data_message);
-                let visible = !data_message.body.is_empty() || !data_message.attachments.is_empty();
-                if data_message.delete.is_none() && (timer_update || visible) {
-                    let notice = self.adopt_server_dm_timer(
-                        &sid,
-                        &sid,
-                        crate::services::disappearing::stated_timer(&data_message),
-                        data_message.timestamp,
-                    );
-                    if timer_update {
-                        return Ok(match notice {
-                            Some(notice) => SealedSenderResult::DataMessageReceived {
-                                sender_id: sid,
-                                channel_id: notice.conversation_id,
-                                message_id: notice.id,
-                                body: String::new(),
-                                timestamp: data_message.timestamp,
-                                attachments: vec![],
-                                profile_key_changed,
-                            },
-                            // Already our timer (a redelivery): nothing new.
-                            None => SealedSenderResult::MessageStored,
-                        });
-                    }
+            // Disappearing-messages timer (Signal's expireTimer): a timer
+            // update announces it, and every visible message restates it
+            // with its version; adopt it by Signal's version rule
+            // (`services::disappearing`). An update message has
+            // nothing else to show: surface the notice in its place.
+            let timer_update = crate::services::disappearing::is_timer_update(&data_message);
+            let visible = !data_message.body.is_empty() || !data_message.attachments.is_empty();
+            if data_message.delete.is_none() && (timer_update || visible) {
+                let notice = self.adopt_server_dm_timer(
+                    &sid,
+                    &sid,
+                    crate::services::disappearing::stated_timer(&data_message),
+                    data_message.timestamp,
+                );
+                if timer_update {
+                    return Ok(match notice {
+                        Some(notice) => SealedSenderResult::DataMessageReceived {
+                            sender_id: sid,
+                            channel_id: notice.conversation_id,
+                            message_id: notice.id,
+                            body: String::new(),
+                            timestamp: data_message.timestamp,
+                            attachments: vec![],
+                            profile_key_changed,
+                        },
+                        // Already our timer (a redelivery): nothing new.
+                        None => SealedSenderResult::MessageStored,
+                    });
                 }
+            }
 
-                // Pure profile-key handshake carrier (`send_profile_key_handshake`,
-                // fired at friend-accept time): no text, no attachments, and
-                // not a delete-for-everyone (which also rides an empty-body
-                // DataMessage — `data_message.delete` — on the ServerDm path).
-                // The profile key above was the whole point. Don't create a
-                // message row or surface a bubble; the caller refreshes the
-                // sender's profile instead.
-                if data_message.body.is_empty()
-                    && data_message.attachments.is_empty()
-                    && data_message.delete.is_none()
-                {
-                    return Ok(SealedSenderResult::ProfileKeyReceived { sender_id: sid });
-                }
+            // Pure profile-key handshake carrier (`send_profile_key_handshake`,
+            // fired at friend-accept time): no text, no attachments, and
+            // not a delete-for-everyone (which also rides an empty-body
+            // DataMessage — `data_message.delete` — on the ServerDm path).
+            // The profile key above was the whole point. Don't create a
+            // message row or surface a bubble; the caller refreshes the
+            // sender's profile instead.
+            if data_message.body.is_empty()
+                && data_message.attachments.is_empty()
+                && data_message.delete.is_none()
+            {
+                return Ok(SealedSenderResult::ProfileKeyReceived { sender_id: sid });
+            }
 
-                (ChannelId::from(sid), ConversationType::ServerDm)
-            } else {
-                let cid: ChannelId = data_message.channel_id.parse().map_err(|e| {
-                    ServiceError::Validation(format!("Invalid channel_id: {}", e))
-                })?;
-                // A server channel (sender-key or not) is filed as Channel;
-                // anon groups never arrive on this path (they use the mailbox).
-                let conversation_type = crate::services::message::conversion::conversation_type_for_channel(
+            (ChannelId::from(sid), ConversationType::ServerDm)
+        } else {
+            let cid: ChannelId = data_message
+                .channel_id
+                .parse()
+                .map_err(|e| ServiceError::Validation(format!("Invalid channel_id: {}", e)))?;
+            // A server channel (sender-key or not) is filed as Channel;
+            // anon groups never arrive on this path (they use the mailbox).
+            let conversation_type =
+                crate::services::message::conversion::conversation_type_for_channel(
                     &self.channel_repo,
                     &cid,
                 );
-                (cid, conversation_type)
-            };
+            (cid, conversation_type)
+        };
 
         // A sender-key resend (`rebuild_group_content`) carries the server id
         // the other members hold, so thread replies and later references by
@@ -366,7 +383,10 @@ impl MessageGateway {
         // (conversation, sender, sent_at) row exists, so the insert would fail
         // and surface as a delivery issue. Nothing new to show.
         if let Some(sid) = sender_id {
-            if let Ok(Some(existing)) = self.message_repo.get_by_sender_timestamp(&sid, message.sent_at) {
+            if let Ok(Some(existing)) = self
+                .message_repo
+                .get_by_sender_timestamp(&sid, message.sent_at)
+            {
                 if existing.conversation_id == message.conversation_id {
                     return Ok(SealedSenderResult::MessageStored);
                 }
@@ -467,19 +487,25 @@ impl MessageGateway {
             ServiceError::Validation(format!("SyncSent has invalid destination_user_id: {e}"))
         })?;
 
-        let targets = sync.receipt_targets.iter().map(|target| {
-            let user: UserId = target.user_id.parse().map_err(|_| {
-                ServiceError::Validation("SyncSent has invalid receipt recipient".into())
-            })?;
-            if user != destination || user == current_user || target.device_id == 0 {
-                return Err(ServiceError::Validation("SyncSent has invalid receipt target".into()));
-            }
-            Ok((user, crate::domain::ids::DeviceId(target.device_id)))
-        }).collect::<Result<Vec<_>, ServiceError>>()?;
+        let targets = sync
+            .receipt_targets
+            .iter()
+            .map(|target| {
+                let user: UserId = target.user_id.parse().map_err(|_| {
+                    ServiceError::Validation("SyncSent has invalid receipt recipient".into())
+                })?;
+                if user != destination || user == current_user || target.device_id == 0 {
+                    return Err(ServiceError::Validation(
+                        "SyncSent has invalid receipt target".into(),
+                    ));
+                }
+                Ok((user, crate::domain::ids::DeviceId(target.device_id)))
+            })
+            .collect::<Result<Vec<_>, ServiceError>>()?;
 
-        let data_message = sync.message.ok_or_else(|| {
-            ServiceError::Validation("SyncSent carried no inner message".into())
-        })?;
+        let data_message = sync
+            .message
+            .ok_or_else(|| ServiceError::Validation("SyncSent carried no inner message".into()))?;
 
         // Our own timer change (or a message restating our timer) made on
         // another device: adopt it for the conversation with the recipient,
@@ -580,7 +606,10 @@ impl MessageGateway {
         // Already held: a resend after our DecryptionErrorMessage, or a sync a
         // device-set retry queued twice. The unique (conversation, sender,
         // sent_at) row exists, so the insert would fail into a delivery issue.
-        if let Ok(Some(existing)) = self.message_repo.get_by_sender_timestamp(&current_user, message.sent_at) {
+        if let Ok(Some(existing)) = self
+            .message_repo
+            .get_by_sender_timestamp(&current_user, message.sent_at)
+        {
             if existing.conversation_id == message.conversation_id {
                 return Ok(SealedSenderResult::MessageStored);
             }
@@ -588,8 +617,14 @@ impl MessageGateway {
 
         crate::storage::repositories::message_receipt_repo::MessageReceiptRepository::new(
             self.settings_repo.database().clone(),
-        ).snapshot_for_send(channel_id, ConversationType::ServerDm, current_user,
-            data_message.timestamp, &targets)?;
+        )
+        .snapshot_for_send(
+            channel_id,
+            ConversationType::ServerDm,
+            current_user,
+            data_message.timestamp,
+            &targets,
+        )?;
 
         // As for an inbound message: announce what was stored.
         let Some(stored) = self.message_repo.insert_received(&message)? else {
@@ -664,7 +699,9 @@ impl MessageGateway {
     /// Track a received message's local copy for reaping `ttl_seconds` from
     /// now. Best-effort, like the other arming paths.
     pub(crate) fn arm_disappearing(&self, message_id: &MessageId, ttl_seconds: u32) {
-        let Some(ephemeral_repo) = self.ephemeral_repo.as_ref() else { return };
+        let Some(ephemeral_repo) = self.ephemeral_repo.as_ref() else {
+            return;
+        };
         if let Err(e) = ephemeral_repo.insert_armed(message_id, ttl_seconds) {
             tracing::warn!(
                 message_id = %message_id,
@@ -676,9 +713,15 @@ impl MessageGateway {
 
     /// Open an NDSS'21 initial contact message sealed to our identity key.
     /// The open runs inside the Signal actor; no identity secret crosses here.
-    pub async fn open_anon_dm_init(&self, ciphertext: &[u8]) -> Result<Vec<u8>, crate::error::ServiceError> {
+    pub async fn open_anon_dm_init(
+        &self,
+        ciphertext: &[u8],
+    ) -> Result<Vec<u8>, crate::error::ServiceError> {
         self.signal_service
-            .open_identity_hpke(crate::crypto::ecies::IdentityHpkeUse::AnonDmInit, ciphertext.to_vec())
+            .open_identity_hpke(
+                crate::crypto::ecies::IdentityHpkeUse::AnonDmInit,
+                ciphertext.to_vec(),
+            )
             .await
     }
 }
@@ -691,3 +734,5 @@ fn announced_body(stored: &crate::domain::message::Message, decoded: String) -> 
         _ => decoded,
     }
 }
+
+pub(crate) mod submission;

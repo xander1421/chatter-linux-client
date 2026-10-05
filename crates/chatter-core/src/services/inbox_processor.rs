@@ -36,7 +36,6 @@ pub struct InboxEventProcessor {
 }
 
 impl InboxEventProcessor {
-
     /// Create from a CoreServices (convenience constructor).
     pub fn from_client(client: &Arc<crate::client::ChatterClient>) -> Self {
         Self {
@@ -59,18 +58,27 @@ impl InboxEventProcessor {
             // =================================================================
             // Pure protocol events
             // =================================================================
-
-            InboxEvent::DmDecryptionFailed { peer_id, error, session_desync } => {
+            InboxEvent::DmDecryptionFailed {
+                peer_id,
+                error,
+                session_desync,
+            } => {
                 tracing::error!(
                     "DM decryption failed from {}: {} (session_desync={})",
-                    peer_id, error, session_desync
+                    peer_id,
+                    error,
+                    session_desync
                 );
                 if *session_desync {
                     self.dm_bootstrap_service.reset_peer_sessions(*peer_id);
                 }
             }
 
-            InboxEvent::DmDecryptionErrorNeedsReport { peer_id, peer_device_id, dem_serialized } => {
+            InboxEvent::DmDecryptionErrorNeedsReport {
+                peer_id,
+                peer_device_id,
+                dem_serialized,
+            } => {
                 tracing::warn!(
                     peer_id = %peer_id,
                     peer_device_id,
@@ -95,9 +103,14 @@ impl InboxEventProcessor {
                 });
             }
 
-            InboxEvent::GroupResendRequested { peer_id, peer_device_id, timestamp_ms } => {
+            InboxEvent::GroupResendRequested {
+                peer_id,
+                peer_device_id,
+                timestamp_ms,
+            } => {
                 let message_service = self.message_service.clone();
-                let (peer_id, peer_device_id, timestamp_ms) = (*peer_id, *peer_device_id, *timestamp_ms);
+                let (peer_id, peer_device_id, timestamp_ms) =
+                    (*peer_id, *peer_device_id, *timestamp_ms);
                 tokio::spawn(async move {
                     message_service
                         .resend_on_decryption_error(&peer_id, peer_device_id, timestamp_ms)
@@ -105,9 +118,14 @@ impl InboxEventProcessor {
                 });
             }
 
-            InboxEvent::DmResendRequested { peer_id, peer_device_id, timestamp_ms } => {
+            InboxEvent::DmResendRequested {
+                peer_id,
+                peer_device_id,
+                timestamp_ms,
+            } => {
                 let message_service = self.message_service.clone();
-                let (peer_id, peer_device_id, timestamp_ms) = (*peer_id, *peer_device_id, *timestamp_ms);
+                let (peer_id, peer_device_id, timestamp_ms) =
+                    (*peer_id, *peer_device_id, *timestamp_ms);
                 tokio::spawn(async move {
                     message_service
                         .resend_dm_on_decryption_error(&peer_id, peer_device_id, timestamp_ms)
@@ -155,12 +173,11 @@ impl InboxEventProcessor {
                 tracing::warn!("Inbox ack failed for {:?}: {}", message_ids, error);
             }
 
-            InboxEvent::GroupMailboxPollCompleted { total_groups, total_messages } => {
-                tracing::trace!(
-                    total_groups,
-                    total_messages,
-                    "Group mailbox poll completed"
-                );
+            InboxEvent::GroupMailboxPollCompleted {
+                total_groups,
+                total_messages,
+            } => {
+                tracing::trace!(total_groups, total_messages, "Group mailbox poll completed");
             }
 
             // The group-mailbox transport is retired for server-managed
@@ -178,11 +195,12 @@ impl InboxEventProcessor {
                     call_id = %call_id,
                     "Call key answer received - completing key exchange"
                 );
-                self.event_bus.emit_domain(DomainEvent::CallKeyAnswerReceived {
-                    call_id: call_id.clone(),
-                    peer_id: *peer_id,
-                    ephemeral_public_key: *ephemeral_public_key,
-                });
+                self.event_bus
+                    .emit_domain(DomainEvent::CallKeyAnswerReceived {
+                        call_id: call_id.clone(),
+                        peer_id: *peer_id,
+                        ephemeral_public_key: *ephemeral_public_key,
+                    });
             }
 
             InboxEvent::CallKeyOfferReceived {
@@ -209,19 +227,20 @@ impl InboxEventProcessor {
                     is_identity_verified,
                     "Call offer received - presenting incoming call"
                 );
-                self.event_bus.emit_domain(DomainEvent::CallKeyOfferReceived {
-                    call_id: call_id.clone(),
-                    peer_id: *peer_id,
-                    ephemeral_public_key: *ephemeral_public_key,
-                    call_type: call_type.clone(),
-                    channel_id: channel_id.clone(),
-                    is_identity_verified,
-                    // No existing producer emits a warning string; a mismatch/
-                    // change surfaces via the safety-number flow, not here.
-                    identity_warning: String::new(),
-                    caller_name,
-                    timestamp: *timestamp,
-                });
+                self.event_bus
+                    .emit_domain(DomainEvent::CallKeyOfferReceived {
+                        call_id: call_id.clone(),
+                        peer_id: *peer_id,
+                        ephemeral_public_key: *ephemeral_public_key,
+                        call_type: call_type.clone(),
+                        channel_id: channel_id.clone(),
+                        is_identity_verified,
+                        // No existing producer emits a warning string; a mismatch/
+                        // change surfaces via the safety-number flow, not here.
+                        identity_warning: String::new(),
+                        caller_name,
+                        timestamp: *timestamp,
+                    });
             }
 
             InboxEvent::GroupCallSignalReceived {
@@ -239,18 +258,25 @@ impl InboxEventProcessor {
                     timestamp = timestamp,
                     "Group call signal received"
                 );
-                self.event_bus.emit_domain(DomainEvent::GroupCallSignalReceived {
-                    call_id: call_id.clone(),
-                    sender_id: *sender_id,
-                    channel_id: *channel_id,
-                    signal: *signal,
-                });
+                self.event_bus
+                    .emit_domain(DomainEvent::GroupCallSignalReceived {
+                        call_id: call_id.clone(),
+                        sender_id: *sender_id,
+                        channel_id: *channel_id,
+                        signal: *signal,
+                    });
             }
 
-            InboxEvent::SenderKeyNeeded { channel_id, sender_id } => {
+            InboxEvent::SenderKeyNeeded {
+                channel_id,
+                sender_id,
+            } => {
                 // The inbox route does not carry the sender's device; gate it
                 // under device 0 so it shares one backoff per sender.
-                if !self.message_service.should_request_sender_key(*channel_id, *sender_id, 0) {
+                if !self
+                    .message_service
+                    .should_request_sender_key(*channel_id, *sender_id, 0)
+                {
                     return;
                 }
                 tracing::info!(
@@ -279,7 +305,11 @@ impl InboxEventProcessor {
                 });
             }
 
-            InboxEvent::RespondWithSkdm { channel_id, requester_id, skdm_bytes } => {
+            InboxEvent::RespondWithSkdm {
+                channel_id,
+                requester_id,
+                skdm_bytes,
+            } => {
                 tracing::info!(
                     channel_id = %channel_id,
                     requester_id = %requester_id,
@@ -291,7 +321,10 @@ impl InboxEventProcessor {
                 let req_id = *requester_id;
                 let skdm_bytes = skdm_bytes.clone();
                 tokio::spawn(async move {
-                    match msg_svc.answer_sender_key_request(&ch_id, &req_id, &skdm_bytes).await {
+                    match msg_svc
+                        .answer_sender_key_request(&ch_id, &req_id, &skdm_bytes)
+                        .await
+                    {
                         Ok(true) => tracing::info!(
                             channel_id = %ch_id,
                             requester_id = %req_id,
@@ -311,7 +344,6 @@ impl InboxEventProcessor {
             // =================================================================
             // Anonymous Group Events
             // =================================================================
-
             InboxEvent::AnonGroupInvite {
                 peer_id,
                 group_id,
@@ -323,8 +355,13 @@ impl InboxEventProcessor {
                 encrypted_avatar,
             } => {
                 self.handle_anon_group_invite(
-                    *peer_id, group_id, group_name, inviter_mailbox_pk,
-                    profile_key, encrypted_display_name, encrypted_avatar,
+                    *peer_id,
+                    group_id,
+                    group_name,
+                    inviter_mailbox_pk,
+                    profile_key,
+                    encrypted_display_name,
+                    encrypted_avatar,
                 );
                 // Return false - UI needs to add sidebar entry
             }
@@ -339,8 +376,12 @@ impl InboxEventProcessor {
                 encrypted_avatar,
             } => {
                 self.handle_anon_group_join_ack(
-                    *peer_id, group_id, joiner_mailbox_pk,
-                    profile_key, encrypted_display_name, encrypted_avatar,
+                    *peer_id,
+                    group_id,
+                    joiner_mailbox_pk,
+                    profile_key,
+                    encrypted_display_name,
+                    encrypted_avatar,
                 );
             }
 
@@ -358,19 +399,22 @@ impl InboxEventProcessor {
                     "Received anonymous group member list"
                 );
 
-                let anon_group_id = match crate::domain::anon_group::AnonGroupId::try_from_slice(group_id) {
-                    Some(id) => id,
-                    None => {
-                        tracing::warn!("Invalid group_id length for AnonGroupMemberList");
-                        return;
-                    }
-                };
+                let anon_group_id =
+                    match crate::domain::anon_group::AnonGroupId::try_from_slice(group_id) {
+                        Some(id) => id,
+                        None => {
+                            tracing::warn!("Invalid group_id length for AnonGroupMemberList");
+                            return;
+                        }
+                    };
 
                 let anon_service = self.anon_group_service.clone();
                 let members_clone = members.clone();
                 let sender_id = *peer_id;
                 let _ = tokio::task::spawn_blocking(move || {
-                    if let Err(e) = anon_service.handle_member_list(anon_group_id, sender_id, members_clone) {
+                    if let Err(e) =
+                        anon_service.handle_member_list(anon_group_id, sender_id, members_clone)
+                    {
                         tracing::error!(
                             group_id = ?anon_group_id,
                             error = %e,
@@ -392,13 +436,14 @@ impl InboxEventProcessor {
                     "Received anonymous group leave notification"
                 );
 
-                let anon_group_id = match crate::domain::anon_group::AnonGroupId::try_from_slice(group_id) {
-                    Some(id) => id,
-                    None => {
-                        tracing::warn!("Invalid group_id length for AnonGroupLeave");
-                        return;
-                    }
-                };
+                let anon_group_id =
+                    match crate::domain::anon_group::AnonGroupId::try_from_slice(group_id) {
+                        Some(id) => id,
+                        None => {
+                            tracing::warn!("Invalid group_id length for AnonGroupLeave");
+                            return;
+                        }
+                    };
 
                 let anon_service = self.anon_group_service.clone();
                 let peer_id_clone = *peer_id;
@@ -429,13 +474,14 @@ impl InboxEventProcessor {
                     "Received anonymous group kick notification"
                 );
 
-                let anon_group_id = match crate::domain::anon_group::AnonGroupId::try_from_slice(group_id) {
-                    Some(id) => id,
-                    None => {
-                        tracing::warn!("Invalid group_id length for AnonGroupKick");
-                        return;
-                    }
-                };
+                let anon_group_id =
+                    match crate::domain::anon_group::AnonGroupId::try_from_slice(group_id) {
+                        Some(id) => id,
+                        None => {
+                            tracing::warn!("Invalid group_id length for AnonGroupKick");
+                            return;
+                        }
+                    };
 
                 let kicked_user = match UserId::try_from_slice(kicked_user_id) {
                     Some(id) => id,
@@ -472,13 +518,14 @@ impl InboxEventProcessor {
                 update,
                 timestamp,
             } => {
-                let anon_group_id = match crate::domain::anon_group::AnonGroupId::try_from_slice(group_id) {
-                    Some(id) => id,
-                    None => {
-                        tracing::warn!("Invalid group_id length for AnonGroupUpdate");
-                        return;
-                    }
-                };
+                let anon_group_id =
+                    match crate::domain::anon_group::AnonGroupId::try_from_slice(group_id) {
+                        Some(id) => id,
+                        None => {
+                            tracing::warn!("Invalid group_id length for AnonGroupUpdate");
+                            return;
+                        }
+                    };
 
                 tracing::info!(
                     peer_id = %peer_id,
@@ -491,7 +538,9 @@ impl InboxEventProcessor {
                 let update_clone = update.clone();
                 let peer_id_clone = *peer_id;
                 let _ = tokio::task::spawn_blocking(move || {
-                    if let Err(e) = anon_service.handle_update(anon_group_id, peer_id_clone, &update_clone) {
+                    if let Err(e) =
+                        anon_service.handle_update(anon_group_id, peer_id_clone, &update_clone)
+                    {
                         tracing::error!(
                             group_id = %anon_group_id,
                             error = %e,
@@ -512,7 +561,6 @@ impl InboxEventProcessor {
             // =================================================================
             // Anonymous DM Events
             // =================================================================
-
             InboxEvent::AnonDmRequest {
                 peer_id,
                 conversation_id,
@@ -524,8 +572,13 @@ impl InboxEventProcessor {
                 timestamp: _,
             } => {
                 self.handle_anon_dm_request(
-                    *peer_id, conversation_id, initiator_mailbox_pk,
-                    intro_message, profile_key, encrypted_display_name, encrypted_avatar,
+                    *peer_id,
+                    conversation_id,
+                    initiator_mailbox_pk,
+                    intro_message,
+                    profile_key,
+                    encrypted_display_name,
+                    encrypted_avatar,
                 );
                 // Return false - UI needs to add sidebar entry
             }
@@ -540,8 +593,12 @@ impl InboxEventProcessor {
                 timestamp: _,
             } => {
                 self.handle_anon_dm_accept(
-                    *peer_id, conversation_id, responder_mailbox_pk,
-                    profile_key, encrypted_display_name, encrypted_avatar,
+                    *peer_id,
+                    conversation_id,
+                    responder_mailbox_pk,
+                    profile_key,
+                    encrypted_display_name,
+                    encrypted_avatar,
                 );
                 // Return false - UI needs to update sidebar entry
             }
@@ -557,7 +614,6 @@ impl InboxEventProcessor {
             // =================================================================
             // Mixed events (protocol part here, DomainEvent for the UI)
             // =================================================================
-
             InboxEvent::DmReceived {
                 peer_id,
                 timestamp,
@@ -567,7 +623,8 @@ impl InboxEventProcessor {
             } => {
                 // Create attachment records BEFORE UI handler reads from DB
                 if !attachments.is_empty() {
-                    let pointers: Vec<_> = attachments.iter()
+                    let pointers: Vec<_> = attachments
+                        .iter()
                         .filter(|p| !p.cdn_key.is_empty())
                         .cloned()
                         .collect();
@@ -598,7 +655,8 @@ impl InboxEventProcessor {
                 // Emit DomainEvent so domain_handler can display the message
                 if let Ok(mid) = message_id.parse::<crate::domain::ids::MessageId>() {
                     if let Ok(Some(message)) = self.message_service.get_message_local(&mid) {
-                        self.event_bus.emit_domain(DomainEvent::MessageReceived { message });
+                        self.event_bus
+                            .emit_domain(DomainEvent::MessageReceived { message });
                     }
                 }
             }
@@ -614,7 +672,8 @@ impl InboxEventProcessor {
                 // Create attachment records BEFORE UI handler reads from DB
                 // This prevents the "empty bubble" race condition
                 if !attachments.is_empty() {
-                    let pointers: Vec<_> = attachments.iter()
+                    let pointers: Vec<_> = attachments
+                        .iter()
                         .filter(|p| !p.cdn_key.is_empty())
                         .cloned()
                         .collect();
@@ -624,7 +683,13 @@ impl InboxEventProcessor {
                 }
 
                 // Protocol: pre-fetch sender profile + send delivery receipt
-                if self.user_service.get_user_local(sender_id).ok().flatten().is_none() {
+                if self
+                    .user_service
+                    .get_user_local(sender_id)
+                    .ok()
+                    .flatten()
+                    .is_none()
+                {
                     tracing::debug!(
                         sender_id = %sender_id,
                         "Fetching sender profile for channel message"
@@ -678,7 +743,9 @@ impl InboxEventProcessor {
                         Some(crate::domain::message::ConversationType::ServerDm)
                     );
                     let receipt_conversation = if is_dm {
-                        ActiveConversation::ServerDm { peer_id: *sender_id }
+                        ActiveConversation::ServerDm {
+                            peer_id: *sender_id,
+                        }
                     } else {
                         ActiveConversation::Channel(*channel_id)
                     };
@@ -694,7 +761,8 @@ impl InboxEventProcessor {
 
                 // Emit DomainEvent so domain_handler can display the message.
                 if let Some(message) = stored {
-                    self.event_bus.emit_domain(DomainEvent::MessageReceived { message });
+                    self.event_bus
+                        .emit_domain(DomainEvent::MessageReceived { message });
                 }
             }
 
@@ -724,14 +792,21 @@ impl InboxEventProcessor {
                 );
                 // The UI hears DmBootstrapCompleted (or MessageSendFailed)
                 // from the service once the queued messages have been sent.
-                self.dm_bootstrap_service.handle_bootstrap_completed(*peer_id, self.event_bus.clone());
+                self.dm_bootstrap_service
+                    .handle_bootstrap_completed(*peer_id, self.event_bus.clone());
             }
 
             // =================================================================
             // Ephemeral events — emit DomainEvent for DB persistence, UI also handles
             // =================================================================
-
-            InboxEvent::DmReaction { peer_id, emoji, remove, target_sent_timestamp, target_author_aci, timestamp } => {
+            InboxEvent::DmReaction {
+                peer_id,
+                emoji,
+                remove,
+                target_sent_timestamp,
+                target_author_aci,
+                timestamp,
+            } => {
                 let sender_id = target_author_aci.parse().unwrap_or(*peer_id);
                 // Persist first; the unified-reactions table has UNIQUE
                 // (sender_id, sent_at_ns, user_id, emoji) so this is idempotent.
@@ -740,14 +815,31 @@ impl InboxEventProcessor {
                 // shows count=2 for a single reaction. The target must be in
                 // this friend DM (`resolve_inbound_target`).
                 match self.message_service.record_inbound_reaction(
-                    &crate::domain::ChannelId::from(*peer_id), peer_id,
-                    &sender_id, *target_sent_timestamp, emoji, *remove, *timestamp,
+                    &crate::domain::ChannelId::from(*peer_id),
+                    peer_id,
+                    &sender_id,
+                    *target_sent_timestamp,
+                    emoji,
+                    *remove,
+                    *timestamp,
                 ) {
                     Ok(true) => {
                         let event = if *remove {
-                            DomainEvent::ReactionRemoved { sender_id, sent_at_ns: *target_sent_timestamp, reactor_id: *peer_id, emoji: emoji.clone(), timestamp: *target_sent_timestamp }
+                            DomainEvent::ReactionRemoved {
+                                sender_id,
+                                sent_at_ns: *target_sent_timestamp,
+                                reactor_id: *peer_id,
+                                emoji: emoji.clone(),
+                                timestamp: *target_sent_timestamp,
+                            }
                         } else {
-                            DomainEvent::ReactionAdded { sender_id, sent_at_ns: *target_sent_timestamp, reactor_id: *peer_id, emoji: emoji.clone(), timestamp: *target_sent_timestamp }
+                            DomainEvent::ReactionAdded {
+                                sender_id,
+                                sent_at_ns: *target_sent_timestamp,
+                                reactor_id: *peer_id,
+                                emoji: emoji.clone(),
+                                timestamp: *target_sent_timestamp,
+                            }
                         };
                         self.event_bus.emit_domain(event);
                     }
@@ -758,16 +850,42 @@ impl InboxEventProcessor {
                 }
             }
 
-            InboxEvent::ChannelReaction { channel_id, sender_id, emoji, remove, target_sent_timestamp, target_author_aci, timestamp } => {
+            InboxEvent::ChannelReaction {
+                channel_id,
+                sender_id,
+                emoji,
+                remove,
+                target_sent_timestamp,
+                target_author_aci,
+                timestamp,
+            } => {
                 let target_sender_id = target_author_aci.parse().unwrap_or(*sender_id);
                 match self.message_service.record_inbound_reaction(
-                    channel_id, sender_id, &target_sender_id, *target_sent_timestamp, emoji, *remove, *timestamp,
+                    channel_id,
+                    sender_id,
+                    &target_sender_id,
+                    *target_sent_timestamp,
+                    emoji,
+                    *remove,
+                    *timestamp,
                 ) {
                     Ok(true) => {
                         let event = if *remove {
-                            DomainEvent::ReactionRemoved { sender_id: target_sender_id, sent_at_ns: *target_sent_timestamp, reactor_id: *sender_id, emoji: emoji.clone(), timestamp: *target_sent_timestamp }
+                            DomainEvent::ReactionRemoved {
+                                sender_id: target_sender_id,
+                                sent_at_ns: *target_sent_timestamp,
+                                reactor_id: *sender_id,
+                                emoji: emoji.clone(),
+                                timestamp: *target_sent_timestamp,
+                            }
                         } else {
-                            DomainEvent::ReactionAdded { sender_id: target_sender_id, sent_at_ns: *target_sent_timestamp, reactor_id: *sender_id, emoji: emoji.clone(), timestamp: *target_sent_timestamp }
+                            DomainEvent::ReactionAdded {
+                                sender_id: target_sender_id,
+                                sent_at_ns: *target_sent_timestamp,
+                                reactor_id: *sender_id,
+                                emoji: emoji.clone(),
+                                timestamp: *target_sent_timestamp,
+                            }
                         };
                         self.event_bus.emit_domain(event);
                     }
@@ -778,9 +896,19 @@ impl InboxEventProcessor {
                 }
             }
 
-            InboxEvent::DmEdit { peer_id, target_sent_timestamp, new_body, edit_timestamp, server_timestamp } => {
+            InboxEvent::DmEdit {
+                peer_id,
+                target_sent_timestamp,
+                new_body,
+                edit_timestamp,
+                server_timestamp,
+            } => {
                 match self.message_service.apply_dm_edit(
-                    peer_id, *target_sent_timestamp, new_body, *edit_timestamp, *server_timestamp,
+                    peer_id,
+                    *target_sent_timestamp,
+                    new_body,
+                    *edit_timestamp,
+                    *server_timestamp,
                 ) {
                     Ok(Some(msg)) => {
                         self.event_bus.emit_domain(DomainEvent::MessageEdited {
@@ -798,10 +926,20 @@ impl InboxEventProcessor {
             }
 
             InboxEvent::ChannelEdit {
-                channel_id, target_sent_timestamp, new_body, sender_id, edit_timestamp, server_timestamp,
+                channel_id,
+                target_sent_timestamp,
+                new_body,
+                sender_id,
+                edit_timestamp,
+                server_timestamp,
             } => {
                 match self.message_service.apply_channel_edit(
-                    channel_id, sender_id, *target_sent_timestamp, new_body, *edit_timestamp, *server_timestamp,
+                    channel_id,
+                    sender_id,
+                    *target_sent_timestamp,
+                    new_body,
+                    *edit_timestamp,
+                    *server_timestamp,
                 ) {
                     Ok(Some(msg)) => {
                         self.event_bus.emit_domain(DomainEvent::MessageEdited {
@@ -814,12 +952,20 @@ impl InboxEventProcessor {
                         });
                     }
                     Ok(None) => {}
-                    Err(e) => tracing::warn!(%channel_id, error = %e, "Failed to apply a channel edit"),
+                    Err(e) => {
+                        tracing::warn!(%channel_id, error = %e, "Failed to apply a channel edit")
+                    }
                 }
             }
 
-            InboxEvent::DmDeleteForEveryone { peer_id, target_sent_timestamp } => {
-                match self.message_service.apply_dm_delete(peer_id, *target_sent_timestamp) {
+            InboxEvent::DmDeleteForEveryone {
+                peer_id,
+                target_sent_timestamp,
+            } => {
+                match self
+                    .message_service
+                    .apply_dm_delete(peer_id, *target_sent_timestamp)
+                {
                     Ok(Some(msg)) => {
                         self.event_bus.emit_domain(DomainEvent::MessageDeleted {
                             message_id: msg.id,
@@ -833,8 +979,17 @@ impl InboxEventProcessor {
                 }
             }
 
-            InboxEvent::ChannelDeleteForEveryone { channel_id, sender_id, target_sent_timestamp, .. } => {
-                match self.message_service.apply_channel_delete(channel_id, sender_id, *target_sent_timestamp) {
+            InboxEvent::ChannelDeleteForEveryone {
+                channel_id,
+                sender_id,
+                target_sent_timestamp,
+                ..
+            } => {
+                match self.message_service.apply_channel_delete(
+                    channel_id,
+                    sender_id,
+                    *target_sent_timestamp,
+                ) {
                     Ok(Some(msg)) => {
                         self.event_bus.emit_domain(DomainEvent::MessageDeleted {
                             message_id: msg.id,
@@ -844,63 +999,119 @@ impl InboxEventProcessor {
                         });
                     }
                     Ok(None) => {}
-                    Err(e) => tracing::warn!(%channel_id, error = %e, "Failed to apply a channel delete"),
+                    Err(e) => {
+                        tracing::warn!(%channel_id, error = %e, "Failed to apply a channel delete")
+                    }
                 }
             }
 
-            InboxEvent::DmPin { peer_id, target_sent_timestamp, unpin, target_author_aci, timestamp } => {
+            InboxEvent::DmPin {
+                peer_id,
+                target_sent_timestamp,
+                unpin,
+                target_author_aci,
+                timestamp,
+            } => {
                 let target = target_author_aci.parse().ok().and_then(|author| {
-                    self.message_service.resolve_inbound_pin(
-                        &crate::domain::ChannelId::from(*peer_id), peer_id, &author, *target_sent_timestamp,
-                        *unpin, *timestamp,
-                    ).ok().flatten()
+                    self.message_service
+                        .resolve_inbound_pin(
+                            &crate::domain::ChannelId::from(*peer_id),
+                            peer_id,
+                            &author,
+                            *target_sent_timestamp,
+                            *unpin,
+                            *timestamp,
+                        )
+                        .ok()
+                        .flatten()
                 });
                 if let Some(msg) = target {
                     if *unpin {
                         self.event_bus.emit_domain(DomainEvent::MessageUnpinned {
-                            message_id: msg.id, unpinner_id: *peer_id,
-                            channel_id: msg.conversation_id, target_sent_timestamp: *target_sent_timestamp,
+                            message_id: msg.id,
+                            unpinner_id: *peer_id,
+                            channel_id: msg.conversation_id,
+                            target_sent_timestamp: *target_sent_timestamp,
                         });
                     } else {
                         self.event_bus.emit_domain(DomainEvent::MessagePinned {
-                            message_id: msg.id, pinner_id: *peer_id,
-                            channel_id: msg.conversation_id, target_sent_timestamp: *target_sent_timestamp,
+                            message_id: msg.id,
+                            pinner_id: *peer_id,
+                            channel_id: msg.conversation_id,
+                            target_sent_timestamp: *target_sent_timestamp,
                         });
                     }
                 }
             }
 
-            InboxEvent::ChannelCallEvent { channel_id, sender_id, call_id, phase, duration_secs, timestamp } => {
+            InboxEvent::ChannelCallEvent {
+                channel_id,
+                sender_id,
+                call_id,
+                phase,
+                duration_secs,
+                timestamp,
+            } => {
                 // Files the row and tells the UI; a non-member's is dropped there.
                 if let Err(e) = self.message_service.file_channel_call_event(
-                    channel_id, sender_id, call_id, *phase, *duration_secs, *timestamp,
+                    channel_id,
+                    sender_id,
+                    call_id,
+                    *phase,
+                    *duration_secs,
+                    *timestamp,
                 ) {
                     tracing::warn!(error = %e, channel_id = %channel_id, "Channel call event not filed");
                 }
             }
 
-            InboxEvent::ChannelPin { channel_id, sender_id, target_sent_timestamp, unpin, target_author_aci, timestamp } => {
+            InboxEvent::ChannelPin {
+                channel_id,
+                sender_id,
+                target_sent_timestamp,
+                unpin,
+                target_author_aci,
+                timestamp,
+            } => {
                 let target = target_author_aci.parse().ok().and_then(|author| {
-                    self.message_service.resolve_inbound_pin(
-                        channel_id, sender_id, &author, *target_sent_timestamp, *unpin, *timestamp,
-                    ).ok().flatten()
+                    self.message_service
+                        .resolve_inbound_pin(
+                            channel_id,
+                            sender_id,
+                            &author,
+                            *target_sent_timestamp,
+                            *unpin,
+                            *timestamp,
+                        )
+                        .ok()
+                        .flatten()
                 });
                 if let Some(msg) = target {
                     if *unpin {
                         self.event_bus.emit_domain(DomainEvent::MessageUnpinned {
-                            message_id: msg.id, unpinner_id: *sender_id,
-                            channel_id: *channel_id, target_sent_timestamp: *target_sent_timestamp,
+                            message_id: msg.id,
+                            unpinner_id: *sender_id,
+                            channel_id: *channel_id,
+                            target_sent_timestamp: *target_sent_timestamp,
                         });
                     } else {
                         self.event_bus.emit_domain(DomainEvent::MessagePinned {
-                            message_id: msg.id, pinner_id: *sender_id,
-                            channel_id: *channel_id, target_sent_timestamp: *target_sent_timestamp,
+                            message_id: msg.id,
+                            pinner_id: *sender_id,
+                            channel_id: *channel_id,
+                            target_sent_timestamp: *target_sent_timestamp,
                         });
                     }
                 }
             }
 
-            InboxEvent::SavedMessageSync { sender_id, message_id, text, sent_at, attachment_ids } => {
+            InboxEvent::SavedMessageSync {
+                sender_id,
+                message_id,
+                text,
+                sent_at,
+                attachment_ids,
+            } => {
                 // A peer must never write into our Saved Messages.
                 if self.message_service.current_user_id().ok().as_ref() != Some(sender_id) {
                     tracing::warn!(sender_id = %sender_id, "SavedMessageSync from another user dropped");
@@ -908,10 +1119,14 @@ impl InboxEventProcessor {
                 }
                 // Saved message from another device — store locally
                 match self.message_service.store_synced_saved_message(
-                    message_id, text, *sent_at, attachment_ids.clone(),
+                    message_id,
+                    text,
+                    *sent_at,
+                    attachment_ids.clone(),
                 ) {
                     Ok(message) => {
-                        self.event_bus.emit_domain(DomainEvent::SavedMessageSynced { message });
+                        self.event_bus
+                            .emit_domain(DomainEvent::SavedMessageSynced { message });
                     }
                     Err(e) => {
                         tracing::warn!(
@@ -932,7 +1147,10 @@ impl InboxEventProcessor {
                 }
                 match self.message_service.apply_read_sync(sync) {
                     Ok(conversation_ids) if !conversation_ids.is_empty() => {
-                        self.event_bus.emit_domain(DomainEvent::ConversationsRead { conversation_ids, from_other_device: true });
+                        self.event_bus.emit_domain(DomainEvent::ConversationsRead {
+                            conversation_ids,
+                            from_other_device: true,
+                        });
                     }
                     Ok(_) => {}
                     Err(e) => tracing::warn!(error = %e, "ReadSync: marking messages read failed"),
@@ -946,7 +1164,10 @@ impl InboxEventProcessor {
                     tracing::warn!(sender_id = %sender_id, "ProfileKeySync from another user dropped");
                     return;
                 }
-                match crate::services::profile_visibility::apply_sync(&self.message_service.settings_repo, sync) {
+                match crate::services::profile_visibility::apply_sync(
+                    &self.message_service.settings_repo,
+                    sync,
+                ) {
                     Ok(changed) => tracing::info!(key_changed = changed, "ProfileKeySync applied"),
                     Err(e) => tracing::warn!(error = %e, "ProfileKeySync: storing the key failed"),
                 }
@@ -955,14 +1176,25 @@ impl InboxEventProcessor {
             InboxEvent::ConfigurationSync { sender_id, sync } => {
                 // `apply` drops one that is not from our own user: a peer
                 // must never change our privacy settings.
-                match crate::services::configuration_sync::apply(&self.message_service.settings_repo, sender_id, sync) {
+                match crate::services::configuration_sync::apply(
+                    &self.message_service.settings_repo,
+                    sender_id,
+                    sync,
+                ) {
                     Ok(true) => tracing::info!("ConfigurationSync applied"),
                     Ok(false) => {}
-                    Err(e) => tracing::warn!(error = %e, "ConfigurationSync: storing the settings failed"),
+                    Err(e) => {
+                        tracing::warn!(error = %e, "ConfigurationSync: storing the settings failed")
+                    }
                 }
             }
 
-            InboxEvent::ChannelDeleteForMe { sender_id, conversation_id, target_author_aci, target_sent_timestamp } => {
+            InboxEvent::ChannelDeleteForMe {
+                sender_id,
+                conversation_id,
+                target_author_aci,
+                target_sent_timestamp,
+            } => {
                 // A peer must never delete our messages: only our own
                 // devices send a delete-for-me.
                 if self.message_service.current_user_id().ok().as_ref() != Some(sender_id) {
@@ -973,7 +1205,9 @@ impl InboxEventProcessor {
                     if let Ok(channel_id) = conversation_id.parse() {
                         self.event_bus.emit_domain(DomainEvent::DeleteForMeSync {
                             conversation_id: channel_id,
-                            target_author_id: msg.sender_id.unwrap_or_else(crate::domain::ids::UserId::new),
+                            target_author_id: msg
+                                .sender_id
+                                .unwrap_or_else(crate::domain::ids::UserId::new),
                             target_message_id: msg.id,
                             timestamp: crate::util::time::TimestampNanos::now().as_u64(),
                         });
@@ -981,10 +1215,20 @@ impl InboxEventProcessor {
                 }
             }
 
-            InboxEvent::ChannelReceipt { channel_id, sender_id, sender_device_id, receipt_type, timestamps } => {
+            InboxEvent::ChannelReceipt {
+                channel_id,
+                sender_id,
+                sender_device_id,
+                receipt_type,
+                timestamps,
+            } => {
                 if let Err(error) = self.message_service.apply_peer_receipt(
-                    *channel_id, self.message_service.conversation_type(channel_id), *sender_id,
-                    crate::domain::ids::DeviceId(*sender_device_id), *receipt_type, timestamps,
+                    *channel_id,
+                    self.message_service.conversation_type(channel_id),
+                    *sender_id,
+                    crate::domain::ids::DeviceId(*sender_device_id),
+                    *receipt_type,
+                    timestamps,
                 ) {
                     tracing::warn!(%error, "Failed to persist channel receipt");
                 }
@@ -998,34 +1242,70 @@ impl InboxEventProcessor {
             // =================================================================
             // Our own typing, fanned to our other devices along with the
             // members': it is not "someone is typing" here.
-            InboxEvent::DmTyping { peer_id: user_id, .. }
-            | InboxEvent::ChannelTyping { sender_id: user_id, .. }
-                if self.message_service.current_user_id().ok().as_ref() == Some(user_id) => {}
+            InboxEvent::DmTyping {
+                peer_id: user_id, ..
+            }
+            | InboxEvent::ChannelTyping {
+                sender_id: user_id, ..
+            } if self.message_service.current_user_id().ok().as_ref() == Some(user_id) => {}
 
-            InboxEvent::DmTyping { peer_id, action, timestamp } => {
+            InboxEvent::DmTyping {
+                peer_id,
+                action,
+                timestamp,
+            } => {
                 let channel_id = crate::domain::ids::ChannelId::from(*peer_id);
                 let (user_id, timestamp) = (*peer_id, *timestamp);
                 self.event_bus.emit_domain(if *action == 1 {
-                    DomainEvent::TypingStarted { user_id, channel_id, timestamp }
+                    DomainEvent::TypingStarted {
+                        user_id,
+                        channel_id,
+                        timestamp,
+                    }
                 } else {
-                    DomainEvent::TypingStopped { user_id, channel_id, timestamp }
+                    DomainEvent::TypingStopped {
+                        user_id,
+                        channel_id,
+                        timestamp,
+                    }
                 });
             }
 
-            InboxEvent::ChannelTyping { channel_id, sender_id, action, timestamp } => {
+            InboxEvent::ChannelTyping {
+                channel_id,
+                sender_id,
+                action,
+                timestamp,
+            } => {
                 let (user_id, channel_id, timestamp) = (*sender_id, *channel_id, *timestamp);
                 self.event_bus.emit_domain(if *action == 1 {
-                    DomainEvent::TypingStarted { user_id, channel_id, timestamp }
+                    DomainEvent::TypingStarted {
+                        user_id,
+                        channel_id,
+                        timestamp,
+                    }
                 } else {
-                    DomainEvent::TypingStopped { user_id, channel_id, timestamp }
+                    DomainEvent::TypingStopped {
+                        user_id,
+                        channel_id,
+                        timestamp,
+                    }
                 });
             }
 
-            InboxEvent::DmReceipt { peer_id, sender_device_id, receipt_type, timestamps } => {
+            InboxEvent::DmReceipt {
+                peer_id,
+                sender_device_id,
+                receipt_type,
+                timestamps,
+            } => {
                 if let Err(error) = self.message_service.apply_peer_receipt(
                     crate::domain::ids::ChannelId::from(*peer_id),
-                    crate::domain::message::ConversationType::ServerDm, *peer_id,
-                    crate::domain::ids::DeviceId(*sender_device_id), *receipt_type, timestamps,
+                    crate::domain::message::ConversationType::ServerDm,
+                    *peer_id,
+                    crate::domain::ids::DeviceId(*sender_device_id),
+                    *receipt_type,
+                    timestamps,
                 ) {
                     tracing::warn!(%error, "Failed to persist DM receipt");
                 }
@@ -1039,10 +1319,11 @@ impl InboxEventProcessor {
             // pending-requests list.
             // =================================================================
             InboxEvent::FriendRequestsUpdated { received, sent } => {
-                self.event_bus.emit_domain(DomainEvent::FriendRequestsUpdated {
-                    received: received.clone(),
-                    sent: sent.clone(),
-                });
+                self.event_bus
+                    .emit_domain(DomainEvent::FriendRequestsUpdated {
+                        received: received.clone(),
+                        sent: sent.clone(),
+                    });
             }
 
             InboxEvent::FriendAccepted { friend_user_id } => {
@@ -1061,7 +1342,8 @@ impl InboxEventProcessor {
                                 "FriendAccepted: failed to persist friendship locally — DM will not appear"
                             );
                         }
-                        self.event_bus.emit_domain(DomainEvent::FriendAccepted { friend_id });
+                        self.event_bus
+                            .emit_domain(DomainEvent::FriendAccepted { friend_id });
 
                         // Establish the DM Signal session in the background now
                         // that we're friends, so the first call offer / message
@@ -1120,7 +1402,10 @@ impl InboxEventProcessor {
                             event_bus.emit_domain(DomainEvent::UserProfileUpdated {
                                 user_id: sender_id,
                                 display_name: profile.display_name,
-                                status_message: profile.status_message.as_ref().map(|s| s.text.clone()),
+                                status_message: profile
+                                    .status_message
+                                    .as_ref()
+                                    .map(|s| s.text.clone()),
                                 avatar_bytes: profile.avatar_bytes,
                                 timestamp: chrono::Utc::now().timestamp_millis() as u64,
                             });
@@ -1150,9 +1435,16 @@ impl InboxEventProcessor {
     // =====================================================================
 
     /// Look up a message by sender UUID string + sent_at timestamp.
-    fn lookup_message(&self, sender_id_str: &str, sent_timestamp: u64) -> Option<crate::domain::Message> {
+    fn lookup_message(
+        &self,
+        sender_id_str: &str,
+        sent_timestamp: u64,
+    ) -> Option<crate::domain::Message> {
         let sender_id: UserId = sender_id_str.parse().ok()?;
-        self.message_service.get_by_sender_timestamp(&sender_id, sent_timestamp).ok().flatten()
+        self.message_service
+            .get_by_sender_timestamp(&sender_id, sent_timestamp)
+            .ok()
+            .flatten()
     }
 
     fn handle_anon_group_invite(
@@ -1206,11 +1498,14 @@ impl InboxEventProcessor {
             }
         });
 
-        use crate::crypto::profile_crypto::{decrypt_display_name, decrypt_avatar};
+        use crate::crypto::profile_crypto::{decrypt_avatar, decrypt_display_name};
 
-        let inviter_display_name: Option<String> = match (&profile_key_arr, encrypted_display_name) {
+        let inviter_display_name: Option<String> = match (&profile_key_arr, encrypted_display_name)
+        {
             (Some(pk), Some(encrypted)) if !encrypted.is_empty() => {
-                decrypt_display_name(pk, encrypted).ok().filter(|n| !n.is_empty())
+                decrypt_display_name(pk, encrypted)
+                    .ok()
+                    .filter(|n| !n.is_empty())
             }
             _ => None,
         };
@@ -1229,15 +1524,16 @@ impl InboxEventProcessor {
         );
 
         // Emit domain event for UI to show invite dialog
-        self.event_bus.emit_domain(DomainEvent::AnonGroupInviteReceived {
-            group_id: anon_group_id,
-            group_name: group_name.to_string(),
-            inviter_id: peer_id,
-            inviter_mailbox_pk: mailbox_pk,
-            profile_key: profile_key_arr,
-            inviter_display_name,
-            inviter_avatar,
-        });
+        self.event_bus
+            .emit_domain(DomainEvent::AnonGroupInviteReceived {
+                group_id: anon_group_id,
+                group_name: group_name.to_string(),
+                inviter_id: peer_id,
+                inviter_mailbox_pk: mailbox_pk,
+                profile_key: profile_key_arr,
+                inviter_display_name,
+                inviter_avatar,
+            });
     }
 
     fn handle_anon_group_join_ack(
@@ -1283,11 +1579,13 @@ impl InboxEventProcessor {
             }
         });
 
-        use crate::crypto::profile_crypto::{decrypt_display_name, decrypt_avatar};
+        use crate::crypto::profile_crypto::{decrypt_avatar, decrypt_display_name};
 
         let display_name: Option<String> = match (&profile_key_arr, encrypted_display_name) {
             (Some(pk), Some(encrypted)) if !encrypted.is_empty() => {
-                decrypt_display_name(pk, encrypted).ok().filter(|n| !n.is_empty())
+                decrypt_display_name(pk, encrypted)
+                    .ok()
+                    .filter(|n| !n.is_empty())
             }
             _ => None,
         };
@@ -1310,14 +1608,17 @@ impl InboxEventProcessor {
         let event_bus = self.event_bus.clone();
 
         tokio::spawn(async move {
-            match anon_service.handle_join_ack(
-                anon_group_id,
-                peer_id_clone,
-                mailbox_pk,
-                profile_key_arr,
-                display_name,
-                avatar,
-            ).await {
+            match anon_service
+                .handle_join_ack(
+                    anon_group_id,
+                    peer_id_clone,
+                    mailbox_pk,
+                    profile_key_arr,
+                    display_name,
+                    avatar,
+                )
+                .await
+            {
                 // The joiner is in our roster now: their posts that beat
                 // this ack in are delivered.
                 Ok(()) => {
@@ -1361,7 +1662,11 @@ impl InboxEventProcessor {
         let inner_content_ref = inner_content.clone();
 
         let _ = tokio::task::spawn_blocking(move || {
-            match anon_group_service.process_incoming_content(&anon_group_id, &peer_id, &inner_content_ref) {
+            match anon_group_service.process_incoming_content(
+                &anon_group_id,
+                &peer_id,
+                &inner_content_ref,
+            ) {
                 Ok(events) => {
                     for event in events {
                         event_bus.emit_domain(event);
@@ -1435,7 +1740,8 @@ impl InboxEventProcessor {
                     encrypted_display_name,
                     encrypted_avatar,
                 )
-            }).await;
+            })
+            .await;
 
             match result {
                 Ok(Ok((_dm, profile))) => {
@@ -1525,7 +1831,8 @@ impl InboxEventProcessor {
                     encrypted_display_name,
                     encrypted_avatar,
                 )
-            }).await;
+            })
+            .await;
 
             match result {
                 Ok(Ok(profile)) => {
@@ -1599,12 +1906,17 @@ impl InboxEventProcessor {
         // Attachment records + message storage happen inside
         // `AnonDmService::process_incoming_content` below via the shared
         // dispatcher — no need to duplicate here.
-        if let Some(crate::proto::content_v1::content::Content::DataMessage(_)) = &inner_content.content {
+        if let Some(crate::proto::content_v1::content::Content::DataMessage(_)) =
+            &inner_content.content
+        {
             let dm_service = self.anon_dm_service.clone();
             let dm_id = anon_dm_id;
             let timestamp = inner_content.timestamp;
             tokio::spawn(async move {
-                if let Err(e) = dm_service.send_delivery_receipt(&dm_id, vec![timestamp]).await {
+                if let Err(e) = dm_service
+                    .send_delivery_receipt(&dm_id, vec![timestamp])
+                    .await
+                {
                     tracing::warn!(error = %e, "[ANON_DM] Failed to send delivery receipt");
                 }
             });
@@ -1616,7 +1928,11 @@ impl InboxEventProcessor {
         let inner_content_ref = inner_content.clone();
 
         let _ = tokio::task::spawn_blocking(move || {
-            match anon_dm_service.process_incoming_content(&anon_dm_id, &peer_id, &inner_content_ref) {
+            match anon_dm_service.process_incoming_content(
+                &anon_dm_id,
+                &peer_id,
+                &inner_content_ref,
+            ) {
                 Ok(events) => {
                     for event in events {
                         event_bus.emit_domain(event);

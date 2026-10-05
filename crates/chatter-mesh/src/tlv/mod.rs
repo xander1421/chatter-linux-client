@@ -132,12 +132,10 @@ impl<'a> Reader<'a> {
     /// Consumes exactly `N` bytes into a fixed-width array.
     pub fn array<const N: usize>(&mut self) -> Result<[u8; N], MeshError> {
         let pos = self.pos;
-        self.take(N)?
-            .try_into()
-            .map_err(|_| MeshError::Truncated {
-                offset: pos,
-                needed: N,
-            })
+        self.take(N)?.try_into().map_err(|_| MeshError::Truncated {
+            offset: pos,
+            needed: N,
+        })
     }
 }
 
@@ -243,11 +241,17 @@ mod tests {
         let mut r = Reader::new(&buf);
         assert!(matches!(
             r.u32_be(),
-            Err(MeshError::Truncated { offset: 0, needed: 3 })
+            Err(MeshError::Truncated {
+                offset: 0,
+                needed: 3
+            })
         ));
         assert_eq!(r.position(), 0);
         assert_eq!(r.u8().unwrap(), 0xAA);
-        assert!(matches!(r.u8(), Err(MeshError::Truncated { offset: 1, .. })));
+        assert!(matches!(
+            r.u8(),
+            Err(MeshError::Truncated { offset: 1, .. })
+        ));
     }
 
     #[test]

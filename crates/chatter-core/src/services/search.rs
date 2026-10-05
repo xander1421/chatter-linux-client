@@ -6,14 +6,17 @@
 //! so the UI layer stays a thin presenter. It also owns the shortcut-preference
 //! value type so parsing/serialization lives in one place.
 
-use crate::services::quick_switcher::{arrange_entries, QuickSwitcherEntry};
+use crate::services::quick_switcher::{QuickSwitcherEntry, arrange_entries};
 
 /// Filter conversation entries by a case-insensitive name substring, then apply
 /// the canonical quick-switcher ordering (unread-first, alphabetical, capped).
 ///
 /// An empty/whitespace query returns every entry, arranged (the palette's
 /// "recent conversations" empty state).
-pub fn filter_conversations(query: &str, entries: Vec<QuickSwitcherEntry>) -> Vec<QuickSwitcherEntry> {
+pub fn filter_conversations(
+    query: &str,
+    entries: Vec<QuickSwitcherEntry>,
+) -> Vec<QuickSwitcherEntry> {
     let needle = query.trim().to_lowercase();
     let filtered = if needle.is_empty() {
         entries

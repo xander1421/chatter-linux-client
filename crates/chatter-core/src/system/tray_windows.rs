@@ -2,8 +2,8 @@
 //!
 //! System tray integration using tray-icon and muda crates.
 
-use crate::error::SystemError;
 use super::platform::APP_DISPLAY_NAME;
+use crate::error::SystemError;
 use tokio::sync::mpsc;
 
 /// Messages emitted by the tray implementation (menu/activate events).
@@ -83,8 +83,8 @@ impl SystemTray {
 
     /// Windows tray message loop.
     fn run_tray_loop(event_tx: mpsc::Sender<TrayMessage>) {
-        use tray_icon::{TrayIconBuilder, Icon};
         use muda::{Menu, MenuItem, PredefinedMenuItem};
+        use tray_icon::{Icon, TrayIconBuilder};
 
         // Create menu
         let menu = Menu::new();
@@ -186,7 +186,7 @@ fn create_default_icon() -> Vec<u8> {
     let mut data = Vec::with_capacity(16 * 16 * 4);
     for _ in 0..(16 * 16) {
         // Chatter blue: #4A90D9
-        data.push(74);  // R
+        data.push(74); // R
         data.push(144); // G
         data.push(217); // B
         data.push(255); // A

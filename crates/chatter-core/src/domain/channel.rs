@@ -177,7 +177,10 @@ impl Channel {
     pub fn can_user_leave(&self, user_id: &UserId, still_member: bool) -> bool {
         still_member
             && !self.is_owner(user_id)
-            && !matches!(self.channel_type, ChannelType::DirectMessage | ChannelType::SavedMessages)
+            && !matches!(
+                self.channel_type,
+                ChannelType::DirectMessage | ChannelType::SavedMessages
+            )
     }
 }
 
@@ -285,8 +288,14 @@ pub struct MemberModeration {
 impl MemberModeration {
     /// `actor` is the viewer's role in the channel (`None` = not a member).
     #[must_use]
-    pub fn for_target(actor: Option<MemberRole>, actor_is_target: bool, target: MemberRole) -> Self {
-        let Some(actor) = actor else { return Self::default() };
+    pub fn for_target(
+        actor: Option<MemberRole>,
+        actor_is_target: bool,
+        target: MemberRole,
+    ) -> Self {
+        let Some(actor) = actor else {
+            return Self::default();
+        };
         if actor_is_target || target == MemberRole::Owner {
             return Self::default();
         }
@@ -318,9 +327,15 @@ impl SendBlock {
     /// "removed"; `former` the channel's former-channel state (`Some(deleted)`
     /// once we are out of it, see `ChannelRepository::mark_former`).
     #[must_use]
-    pub fn for_viewer(own: Option<&Membership>, roster_known: bool, former: Option<bool>) -> Option<Self> {
+    pub fn for_viewer(
+        own: Option<&Membership>,
+        roster_known: bool,
+        former: Option<bool>,
+    ) -> Option<Self> {
         match own {
-            Some(m) if m.is_muted => Some(Self::Muted { until: m.muted_until }),
+            Some(m) if m.is_muted => Some(Self::Muted {
+                until: m.muted_until,
+            }),
             Some(_) => None,
             None if former == Some(true) => Some(Self::Deleted),
             None if roster_known || former.is_some() => Some(Self::Removed),
@@ -500,14 +515,26 @@ mod send_block_tests {
         };
         assert_eq!(SendBlock::for_viewer(Some(&me), true, None), None);
         me.is_muted = true;
-        assert_eq!(SendBlock::for_viewer(Some(&me), true, None), Some(SendBlock::Muted { until: None }));
-        assert_eq!(SendBlock::for_viewer(None, true, None), Some(SendBlock::Removed));
+        assert_eq!(
+            SendBlock::for_viewer(Some(&me), true, None),
+            Some(SendBlock::Muted { until: None })
+        );
+        assert_eq!(
+            SendBlock::for_viewer(None, true, None),
+            Some(SendBlock::Removed)
+        );
         // Roster never synced: not evidence of removal.
         assert_eq!(SendBlock::for_viewer(None, false, None), None);
         // A former channel is read-only even with no roster stored; a rejoin
         // (our membership back) lifts it.
-        assert_eq!(SendBlock::for_viewer(None, false, Some(false)), Some(SendBlock::Removed));
-        assert_eq!(SendBlock::for_viewer(None, true, Some(true)), Some(SendBlock::Deleted));
+        assert_eq!(
+            SendBlock::for_viewer(None, false, Some(false)),
+            Some(SendBlock::Removed)
+        );
+        assert_eq!(
+            SendBlock::for_viewer(None, true, Some(true)),
+            Some(SendBlock::Deleted)
+        );
         me.is_muted = false;
         assert_eq!(SendBlock::for_viewer(Some(&me), true, Some(true)), None);
     }
@@ -515,11 +542,21 @@ mod send_block_tests {
     #[test]
     fn only_non_owner_members_may_leave() {
         let (owner, member) = (UserId::new(), UserId::new());
-        let ch = Channel::new(ChannelId::new(), "invtest".into(), ChannelType::Private, owner);
+        let ch = Channel::new(
+            ChannelId::new(),
+            "invtest".into(),
+            ChannelType::Private,
+            owner,
+        );
         assert!(ch.can_user_leave(&member, true));
         assert!(!ch.can_user_leave(&owner, true));
         assert!(!ch.can_user_leave(&member, false));
-        let dm = Channel::new(ChannelId::new(), String::new(), ChannelType::DirectMessage, owner);
+        let dm = Channel::new(
+            ChannelId::new(),
+            String::new(),
+            ChannelType::DirectMessage,
+            owner,
+        );
         assert!(!dm.can_user_leave(&member, true));
     }
 
@@ -527,7 +564,12 @@ mod send_block_tests {
     fn mute_notice_names_the_end_time() {
         use chrono::TimeZone;
         let now = Utc.with_ymd_and_hms(2026, 9, 25, 12, 0, 0).unwrap();
-        let at = |d, h, m| SendBlock::Muted { until: Some(Utc.with_ymd_and_hms(2026, 9, d, h, m, 0).unwrap()) }.notice_at(now);
+        let at = |d, h, m| {
+            SendBlock::Muted {
+                until: Some(Utc.with_ymd_and_hms(2026, 9, d, h, m, 0).unwrap()),
+            }
+            .notice_at(now)
+        };
         let base = "You can't send messages in this channel while muted";
         assert_eq!(SendBlock::Muted { until: None }.notice_at(now), base);
         assert_eq!(at(25, 15, 30), format!("{base} until 15:30"));
@@ -544,17 +586,48 @@ mod moderation_tests {
     fn moderation_mirrors_server_role_rules() {
         let m = |actor, is_self, target| MemberModeration::for_target(actor, is_self, target);
         // Owner acts on anyone but themselves; nobody acts on the owner.
-        assert_eq!(m(Some(Owner), false, Admin), MemberModeration { can_ban: true, can_mute: true, can_make_owner: true });
-        assert_eq!(m(Some(Owner), false, Member), MemberModeration { can_ban: true, can_mute: true, can_make_owner: true });
+        assert_eq!(
+            m(Some(Owner), false, Admin),
+            MemberModeration {
+                can_ban: true,
+                can_mute: true,
+                can_make_owner: true
+            }
+        );
+        assert_eq!(
+            m(Some(Owner), false, Member),
+            MemberModeration {
+                can_ban: true,
+                can_mute: true,
+                can_make_owner: true
+            }
+        );
         assert_eq!(m(Some(Owner), true, Owner), MemberModeration::default());
         assert_eq!(m(Some(Admin), false, Owner), MemberModeration::default());
         // Admin outranks moderator/member; peers do not act on each other.
         // Only the owner hands over ownership: an admin who may ban may not.
-        assert_eq!(m(Some(Admin), false, Moderator), MemberModeration { can_ban: true, can_mute: true, can_make_owner: false });
+        assert_eq!(
+            m(Some(Admin), false, Moderator),
+            MemberModeration {
+                can_ban: true,
+                can_mute: true,
+                can_make_owner: false
+            }
+        );
         assert_eq!(m(Some(Admin), false, Admin), MemberModeration::default());
         // Moderator may mute a member but never ban.
-        assert_eq!(m(Some(Moderator), false, Member), MemberModeration { can_ban: false, can_mute: true, can_make_owner: false });
-        assert_eq!(m(Some(Moderator), false, Moderator), MemberModeration::default());
+        assert_eq!(
+            m(Some(Moderator), false, Member),
+            MemberModeration {
+                can_ban: false,
+                can_mute: true,
+                can_make_owner: false
+            }
+        );
+        assert_eq!(
+            m(Some(Moderator), false, Moderator),
+            MemberModeration::default()
+        );
         // Members and non-members get nothing.
         assert_eq!(m(Some(Member), false, Member), MemberModeration::default());
         assert_eq!(m(None, false, Member), MemberModeration::default());

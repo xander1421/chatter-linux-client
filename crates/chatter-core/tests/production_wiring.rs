@@ -812,7 +812,10 @@ fn anon_kt_gate_is_anchored_to_the_device_pin() {
     const SESSION: &str = "chatter-core/src/services/signal/session.rs";
     // (caller, callee): each caller's production body must call the callee.
     const CHAIN: &[(&str, &str)] = &[
-        ("ensure_session_with_bundle", "verify_peer_key_transparency_anon"),
+        (
+            "ensure_session_with_bundle",
+            "verify_peer_key_transparency_anon",
+        ),
         ("verify_peer_key_transparency_anon", "lock_pin"),
         ("verify_peer_key_transparency_anon", "judge_kt_proof"),
         ("judge_kt_proof", "check_tree_head_consistency"),
@@ -893,7 +896,10 @@ mod tests {
 
     // A name in a comment is not a call.
     assert!(
-        !is_call_site(&strip_comments("// see evaluate_announce() for the policy"), "evaluate_announce"),
+        !is_call_site(
+            &strip_comments("// see evaluate_announce() for the policy"),
+            "evaluate_announce"
+        ),
         "a function named in a comment counted as a caller"
     );
     assert!(

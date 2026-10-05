@@ -7,8 +7,8 @@
 
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Instant;
 
 use parking_lot::Mutex;
@@ -40,9 +40,7 @@ pub enum ActiveConversation {
     /// `ChannelId::from(peer_id)`. ONE conversation whichever transport
     /// carries it: sealed-sender streaming normally, the NDSS'21 mailbox in
     /// Shield mode (`MessageService::send_friend_dm_content`).
-    ServerDm {
-        peer_id: UserId,
-    },
+    ServerDm { peer_id: UserId },
     /// An anonymous DM (NDSS'21 mailbox, pairwise, HPKE bootstrap).
     /// Server cannot link conversation to registered users.
     AnonDm(AnonDmId),
@@ -155,7 +153,10 @@ impl ActiveConversation {
         use crate::domain::message::ConversationType;
         match self {
             Self::Channel(id) => Some(
-                crate::services::message::conversion::conversation_type_for_channel(channel_repo, id),
+                crate::services::message::conversion::conversation_type_for_channel(
+                    channel_repo,
+                    id,
+                ),
             ),
             Self::ServerDm { .. } => Some(ConversationType::ServerDm),
             Self::AnonDm(_) => Some(ConversationType::AnonDm),
@@ -240,7 +241,13 @@ pub struct PendingAttachment {
 impl PendingAttachment {
     /// Create a new pending attachment (will be uploaded when sent).
     #[must_use]
-    pub fn new(id: AttachmentId, filename: String, path: PathBuf, size: u64, mime_type: String) -> Self {
+    pub fn new(
+        id: AttachmentId,
+        filename: String,
+        path: PathBuf,
+        size: u64,
+        mime_type: String,
+    ) -> Self {
         Self {
             id,
             filename,
@@ -283,7 +290,6 @@ impl ThreadPanel {
             reply_count: 0,
         }
     }
-
 }
 
 // ============================================================================
@@ -352,6 +358,10 @@ pub struct ChatStateData {
     pub active_thread_index: Option<usize>,
     /// Pending attachments for the current message being composed.
     pub pending_attachments: Vec<PendingAttachment>,
+    /// Inactive conversation trays; navigation swaps these atomically.
+    pub attachment_trays: HashMap<Option<ChannelId>, Vec<PendingAttachment>>,
+    /// Invalidates asynchronous file selections when the account session resets.
+    pub attachment_revision: u64,
     /// Pinned-bar navigation state for the active channel.
     pub pinned: PinnedSubstate,
     /// Real-time ephemera (typing indicators + recent reactions cache).
@@ -427,6 +437,7 @@ impl ChatState {
     /// Clears the active thread index when changing channels.
     pub fn set_active_channel(&self, channel_id: ChannelId) {
         self.store.update(|state| {
+            Self::switch_attachment_tray(state, Some(channel_id));
             state.active_channel_id = Some(channel_id);
             state.active_thread_index = None;
         });
@@ -437,9 +448,56 @@ impl ChatState {
     /// Also updates `active_channel_id` for backward compatibility.
     pub fn set_active_conversation(&self, conversation: ActiveConversation) {
         self.store.update(|state| {
+            Self::switch_attachment_tray(state, conversation.channel_id());
             state.active_channel_id = conversation.channel_id();
             state.active_conversation = conversation;
             state.active_thread_index = None;
+        });
+    }
+
+    fn switch_attachment_tray(state: &mut ChatStateData, entering: Option<ChannelId>) {
+        if state.active_channel_id == entering {
+            return;
+        }
+        let leaving = std::mem::take(&mut state.pending_attachments);
+        if !leaving.is_empty() {
+            state
+                .attachment_trays
+                .insert(state.active_channel_id, leaving);
+        }
+        state.pending_attachments = state.attachment_trays.remove(&entering).unwrap_or_default();
+    }
+
+    /// Clear every account-local tray during session reset.
+    pub fn clear_attachment_trays(&self) {
+        self.store.update(|state| {
+            state.pending_attachments.clear();
+            state.attachment_trays.clear();
+            state.attachment_revision = state.attachment_revision.wrapping_add(1);
+        });
+    }
+
+    /// Stage an asynchronous selection under the conversation that requested it.
+    pub fn add_pending_attachment_for(
+        &self,
+        conversation: ActiveConversation,
+        revision: u64,
+        attachment: PendingAttachment,
+    ) {
+        self.store.update(|state| {
+            if state.attachment_revision != revision {
+                return;
+            }
+            let key = conversation.channel_id();
+            if state.active_channel_id == key {
+                state.pending_attachments.push(attachment);
+            } else {
+                state
+                    .attachment_trays
+                    .entry(key)
+                    .or_default()
+                    .push(attachment);
+            }
         });
     }
 
@@ -471,7 +529,9 @@ impl ChatState {
             }
 
             // Add new thread
-            state.open_threads.push(ThreadPanel::new(channel_id, root_message_id));
+            state
+                .open_threads
+                .push(ThreadPanel::new(channel_id, root_message_id));
             state.active_thread_index = Some(state.open_threads.len() - 1);
         });
     }
@@ -543,9 +603,12 @@ impl ChatState {
 
     /// Take the staged attachments for a send to `conversation`, in one
     /// update: `None`, with nothing taken, when another conversation has
-    /// become active. The staging tray is shared across conversation switches;
-    /// this prevents a concurrent take from clearing files staged after it.
-    pub fn take_pending_attachments_for(&self, conversation: ActiveConversation) -> Option<Vec<PendingAttachment>> {
+    /// become active. Each conversation owns its tray; this prevents a concurrent
+    /// take from clearing files staged after it.
+    pub fn take_pending_attachments_for(
+        &self,
+        conversation: ActiveConversation,
+    ) -> Option<Vec<PendingAttachment>> {
         let mut taken = None;
         self.store.update(|state| {
             if state.active_conversation == conversation {
@@ -568,14 +631,6 @@ impl ChatState {
             state.pending_attachments.retain(|a| a.id != attachment_id);
         });
     }
-
-    
-    
-    
-    
-    
-    
-    
 
     // ========================================================================
     // Pinned messages bar (Telegram-style navigation)
@@ -843,7 +898,6 @@ impl ChatState {
             }
         });
     }
-
 }
 
 impl Default for ChatState {
@@ -884,12 +938,16 @@ mod tests {
     fn routing_key_round_trips_every_call_capable_conversation() {
         let cases = [
             ActiveConversation::Channel(ChannelId::new()),
-            ActiveConversation::ServerDm { peer_id: UserId::new() },
+            ActiveConversation::ServerDm {
+                peer_id: UserId::new(),
+            },
             ActiveConversation::AnonDm(AnonDmId::new()),
             ActiveConversation::AnonGroup(AnonGroupId::new()),
         ];
         for conv in cases {
-            let (ct, id) = conv.routing_key().expect("call-capable conversation has a key");
+            let (ct, id) = conv
+                .routing_key()
+                .expect("call-capable conversation has a key");
             assert_eq!(ActiveConversation::from_routing_key(&ct, &id), Some(conv));
         }
         assert!(ActiveConversation::None.routing_key().is_none());
@@ -1083,8 +1141,7 @@ mod tests {
         fn test_set_pinned_messages_resets_index() {
             let state = ChatState::new();
 
-            state.set_pinned_messages(vec![MessageId::new(), MessageId::new(), MessageId::new()],
-            );
+            state.set_pinned_messages(vec![MessageId::new(), MessageId::new(), MessageId::new()]);
             state.pinned_navigate_to(2);
             assert_eq!(state.get().pinned.current_index, 2);
 
@@ -1391,7 +1448,14 @@ mod tests {
             state.set_typing_users(channel_id.clone(), vec![]);
 
             // Should be removed from the map
-            assert!(state.get().streaming.typing_by_channel.get(&channel_id).is_none());
+            assert!(
+                state
+                    .get()
+                    .streaming
+                    .typing_by_channel
+                    .get(&channel_id)
+                    .is_none()
+            );
         }
 
         // ==================== Reaction Tests ====================
@@ -1435,7 +1499,11 @@ mod tests {
             state.set_typing_users(channel_id.clone(), vec![user1.clone()]);
 
             let received = rx.recv().await.unwrap();
-            let typers = received.streaming.typing_by_channel.get(&channel_id).unwrap();
+            let typers = received
+                .streaming
+                .typing_by_channel
+                .get(&channel_id)
+                .unwrap();
             assert_eq!(typers.len(), 1);
             assert!(typers.contains(&user1));
         }
@@ -1462,5 +1530,59 @@ mod tests {
             // Both should see the update
             assert_eq!(state2.get_typing_users(&channel_id), vec![user1]);
         }
+    }
+}
+
+#[cfg(test)]
+mod attachment_tray_tests {
+    use super::*;
+
+    fn file(name: &str) -> PendingAttachment {
+        PendingAttachment::new(
+            AttachmentId::new(),
+            name.into(),
+            Default::default(),
+            1,
+            "image/png".into(),
+        )
+    }
+
+    #[test]
+    fn delayed_selection_stays_with_its_requesting_conversation() {
+        let state = ChatState::new();
+        let a = ActiveConversation::Channel(ChannelId::new());
+        let b = ActiveConversation::ServerDm {
+            peer_id: UserId::new(),
+        };
+        state.set_active_conversation(a);
+        let revision = state.get().attachment_revision;
+        state.set_active_conversation(b);
+        state.add_pending_attachment(file("b.png"));
+        state.add_pending_attachment_for(a, revision, file("a.png"));
+        assert_eq!(state.get_pending_attachments()[0].filename, "b.png");
+        state.set_active_conversation(a);
+        assert_eq!(state.get_pending_attachments()[0].filename, "a.png");
+        assert!(state.take_pending_attachments_for(b).is_none());
+        assert_eq!(
+            state.take_pending_attachments_for(a).unwrap()[0].filename,
+            "a.png"
+        );
+        state.set_active_conversation(b);
+        assert_eq!(state.get_pending_attachments()[0].filename, "b.png");
+    }
+
+    #[test]
+    fn session_reset_clears_hidden_trays_and_rejects_late_selections() {
+        let state = ChatState::new();
+        let a = ActiveConversation::AnonDm(AnonDmId::new());
+        state.set_active_conversation(a);
+        let revision = state.get().attachment_revision;
+        state.add_pending_attachment(file("private.png"));
+        state.set_active_conversation(ActiveConversation::None);
+        state.clear_attachment_trays();
+        state.add_pending_attachment_for(a, revision, file("late.png"));
+        state.set_active_conversation(a);
+        assert!(state.get_pending_attachments().is_empty());
+        assert!(state.get().attachment_trays.is_empty());
     }
 }

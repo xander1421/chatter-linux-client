@@ -29,9 +29,7 @@ pub struct PaginationCursor {
     pub oldest_timestamp: Option<DateTime<Utc>>,
 }
 
-impl PaginationCursor {
-
-}
+impl PaginationCursor {}
 
 /// Message state data.
 ///
@@ -204,13 +202,17 @@ impl MessageState {
                     // Server receipt evidence arrives by MessageDeliveryChanged,
                     // keyed by ID. Timestamp-only anonymous events cannot touch it.
                     if matches!(new_status.as_str(), "read" | "delivered")
-                        && !matches!(msg.conversation_type,
-                            crate::domain::message::ConversationType::AnonDm |
-                            crate::domain::message::ConversationType::AnonGroup)
+                        && !matches!(
+                            msg.conversation_type,
+                            crate::domain::message::ConversationType::AnonDm
+                                | crate::domain::message::ConversationType::AnonGroup
+                        )
                     {
                         continue;
                     }
-                    if timestamps.contains(&msg.sent_at) && status_rank(&msg.delivery_status) < new_rank {
+                    if timestamps.contains(&msg.sent_at)
+                        && status_rank(&msg.delivery_status) < new_rank
+                    {
                         msg.delivery_status = new_status.clone();
                     }
                 }
@@ -267,7 +269,13 @@ mod tests {
     use crate::domain::message::ConversationType;
 
     fn create_test_message(channel_id: ChannelId) -> Message {
-        Message::new_text(channel_id, ConversationType::Channel, Some(UserId::new()), "Test message".to_string(), 0)
+        Message::new_text(
+            channel_id,
+            ConversationType::Channel,
+            Some(UserId::new()),
+            "Test message".to_string(),
+            0,
+        )
     }
 
     #[test]

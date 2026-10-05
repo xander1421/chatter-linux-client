@@ -4,8 +4,8 @@
 
 use slint::ComponentHandle;
 
-use crate::bin_ui::features::chat::emoji_loader;
 use crate::MainWindow;
+use crate::bin_ui::features::chat::emoji_loader;
 
 pub(crate) fn wire_emoji_clicked(window: &MainWindow) {
     let weak_window = window.as_weak();

@@ -18,11 +18,13 @@ use std::time::Duration;
 use ed25519_dalek::Signer;
 
 use chatter_core::domain::ids::ChannelId;
-use chatter_core::mailbox::group::{GroupCoordinator, GroupMailboxManager, MemberMailbox};
 use chatter_core::mailbox::TokenManager;
-use chatter_core::network::grpc::{AnonymousMailboxClient, ChannelClient, GrpcClientPool, MailboxClient, MessageClient};
+use chatter_core::mailbox::group::{GroupCoordinator, GroupMailboxManager, MemberMailbox};
+use chatter_core::network::grpc::{
+    AnonymousMailboxClient, ChannelClient, GrpcClientPool, MailboxClient, MessageClient,
+};
 use chatter_core::proto::chat_v1::{
-    message::content::Type as ContentType, message::Content, ChannelType,
+    ChannelType, message::Content, message::content::Type as ContentType,
 };
 use chatter_core::storage::Database;
 use tokio::time::sleep;
@@ -79,7 +81,14 @@ impl MailboxTestContext {
 /// Helper to create a channel and wait for completion.
 async fn create_test_channel(client: &mut ChannelClient, user: &TestUser, name: &str) -> String {
     let stream = client
-        .create_channel(name, ChannelType::ChannelPublic, None, None, None, Some(membership::genesis(user, true).1))
+        .create_channel(
+            name,
+            ChannelType::ChannelPublic,
+            None,
+            None,
+            None,
+            Some(membership::genesis(user, true).1),
+        )
         .await
         .expect("Failed to start channel creation");
 
@@ -140,7 +149,11 @@ async fn test_stale_mailbox_key_detection() {
 
     // Step 2: Request tokens and setup first mailbox
     let mut mailbox_client = ctx.mailbox_client();
-    let tokens_acquired = assert_ok(ctx.token_manager.request_tokens(&mut mailbox_client, &mut ctx.pool.anonymous_kt_client(), 3).await);
+    let tokens_acquired = assert_ok(
+        ctx.token_manager
+            .request_tokens(&mut mailbox_client, &mut ctx.pool.anonymous_kt_client(), 3)
+            .await,
+    );
     assert!(tokens_acquired > 0, "Should acquire at least one token");
 
     let mut anon_mailbox_client = ctx.anon_mailbox_client();
@@ -162,7 +175,10 @@ async fn test_stale_mailbox_key_detection() {
     ctx.mailbox_manager.delete_group_state(&channel_id).ok();
 
     // Get more tokens for second mailbox
-    let _ = ctx.token_manager.request_tokens(&mut mailbox_client, &mut ctx.pool.anonymous_kt_client(), 3).await;
+    let _ = ctx
+        .token_manager
+        .request_tokens(&mut mailbox_client, &mut ctx.pool.anonymous_kt_client(), 3)
+        .await;
 
     let second_setup = assert_ok(
         ctx.group_coordinator
@@ -270,11 +286,23 @@ async fn test_message_before_mailbox_exchange() {
     // This tests the race condition
     let mut msg_client1 = MessageClient::new(pool1.channel(), pool1.auth_clone());
     let content = Content {
-        r#type: Some(ContentType::Text("Quick message before mailbox exchange!".to_string())),
+        r#type: Some(ContentType::Text(
+            "Quick message before mailbox exchange!".to_string(),
+        )),
     };
 
     let send_result = msg_client1
-        .send_message(&channel_id, content, None, false, None, vec![], false, vec![], Vec::new())
+        .send_message(
+            &channel_id,
+            content,
+            None,
+            false,
+            None,
+            vec![],
+            false,
+            vec![],
+            Vec::new(),
+        )
         .await;
 
     // The message should either:
@@ -324,20 +352,30 @@ async fn test_send_with_partial_member_list() {
 
     let ctx = assert_ok(MailboxTestContext::new().await);
 
-    let channel_id: ChannelId = uuid::Uuid::new_v4().to_string().parse().expect("Valid UUID");
+    let channel_id: ChannelId = uuid::Uuid::new_v4()
+        .to_string()
+        .parse()
+        .expect("Valid UUID");
 
     // Simulate having only ONE member's mailbox (User A)
-    let user_a: chatter_core::domain::UserId =
-        uuid::Uuid::new_v4().to_string().parse().expect("Valid UUID");
-    let user_b: chatter_core::domain::UserId =
-        uuid::Uuid::new_v4().to_string().parse().expect("Valid UUID");
+    let user_a: chatter_core::domain::UserId = uuid::Uuid::new_v4()
+        .to_string()
+        .parse()
+        .expect("Valid UUID");
+    let user_b: chatter_core::domain::UserId = uuid::Uuid::new_v4()
+        .to_string()
+        .parse()
+        .expect("Valid UUID");
 
     let mut key_a = [0u8; 32];
     rand::fill(&mut key_a[..]);
     let mailbox_a = MemberMailbox::new(user_a, key_a, None);
 
     // Store only User A's mailbox
-    assert_ok(ctx.mailbox_manager.save_member_mailbox(&channel_id, &mailbox_a));
+    assert_ok(
+        ctx.mailbox_manager
+            .save_member_mailbox(&channel_id, &mailbox_a),
+    );
 
     // Check is_ready_to_send - will return TRUE even though User B is missing
     let state = ctx
@@ -369,7 +407,10 @@ async fn test_send_with_partial_member_list() {
     rand::fill(&mut key_b[..]);
     let mailbox_b = MemberMailbox::new(user_b, key_b, None);
 
-    assert_ok(ctx.mailbox_manager.save_member_mailbox(&channel_id, &mailbox_b));
+    assert_ok(
+        ctx.mailbox_manager
+            .save_member_mailbox(&channel_id, &mailbox_b),
+    );
 
     let state2 = ctx
         .mailbox_manager
@@ -416,16 +457,24 @@ async fn test_member_mailbox_key_update() {
 
     let ctx = assert_ok(MailboxTestContext::new().await);
 
-    let channel_id: ChannelId = uuid::Uuid::new_v4().to_string().parse().expect("Valid UUID");
-    let member_id: chatter_core::domain::UserId =
-        uuid::Uuid::new_v4().to_string().parse().expect("Valid UUID");
+    let channel_id: ChannelId = uuid::Uuid::new_v4()
+        .to_string()
+        .parse()
+        .expect("Valid UUID");
+    let member_id: chatter_core::domain::UserId = uuid::Uuid::new_v4()
+        .to_string()
+        .parse()
+        .expect("Valid UUID");
 
     // Step 1: Store first mailbox key for member
     let mut first_key = [0u8; 32];
     rand::fill(&mut first_key[..]);
 
     let first_mailbox = MemberMailbox::new(member_id, first_key, None);
-    assert_ok(ctx.mailbox_manager.save_member_mailbox(&channel_id, &first_mailbox));
+    assert_ok(
+        ctx.mailbox_manager
+            .save_member_mailbox(&channel_id, &first_mailbox),
+    );
 
     tracing::info!(
         channel_id = %channel_id,
@@ -441,7 +490,10 @@ async fn test_member_mailbox_key_update() {
         .expect("Should load state")
         .expect("State should exist");
 
-    let stored1 = state1.member_mailboxes.get(&member_id).expect("Member should exist");
+    let stored1 = state1
+        .member_mailboxes
+        .get(&member_id)
+        .expect("Member should exist");
     assert_eq!(stored1.public_key, first_key, "First key should be stored");
 
     // Step 3: Store second (different) mailbox key for same member
@@ -451,7 +503,10 @@ async fn test_member_mailbox_key_update() {
     assert_ne!(first_key, second_key, "Keys should be different");
 
     let second_mailbox = MemberMailbox::new(member_id, second_key, None);
-    assert_ok(ctx.mailbox_manager.save_member_mailbox(&channel_id, &second_mailbox));
+    assert_ok(
+        ctx.mailbox_manager
+            .save_member_mailbox(&channel_id, &second_mailbox),
+    );
 
     tracing::info!(
         channel_id = %channel_id,
@@ -467,7 +522,10 @@ async fn test_member_mailbox_key_update() {
         .expect("Should load state")
         .expect("State should exist");
 
-    let stored2 = state2.member_mailboxes.get(&member_id).expect("Member should exist");
+    let stored2 = state2
+        .member_mailboxes
+        .get(&member_id)
+        .expect("Member should exist");
     assert_eq!(
         stored2.public_key, second_key,
         "Second key should replace first (key rotation handling)"
@@ -507,7 +565,10 @@ async fn test_concurrent_mailbox_setup() {
 
     // Pre-request tokens
     let mut mailbox_client = ctx.mailbox_client();
-    let _ = ctx.token_manager.request_tokens(&mut mailbox_client, &mut ctx.pool.anonymous_kt_client(), 10).await;
+    let _ = ctx
+        .token_manager
+        .request_tokens(&mut mailbox_client, &mut ctx.pool.anonymous_kt_client(), 10)
+        .await;
 
     // Spawn multiple concurrent setup attempts
     let mut handles = Vec::new();
@@ -605,9 +666,15 @@ async fn test_server_rejects_wrong_credentials() {
     let mut mailbox_client = ctx.mailbox_client();
 
     // Request tokens and create a real mailbox
-    let _ = ctx.token_manager.request_tokens(&mut mailbox_client, &mut ctx.pool.anonymous_kt_client(), 3).await;
+    let _ = ctx
+        .token_manager
+        .request_tokens(&mut mailbox_client, &mut ctx.pool.anonymous_kt_client(), 3)
+        .await;
 
-    let channel_id: ChannelId = uuid::Uuid::new_v4().to_string().parse().expect("Valid UUID");
+    let channel_id: ChannelId = uuid::Uuid::new_v4()
+        .to_string()
+        .parse()
+        .expect("Valid UUID");
     let mut anon_mailbox_client = ctx.anon_mailbox_client();
     let setup = assert_ok(
         ctx.group_coordinator
@@ -627,14 +694,23 @@ async fn test_server_rejects_wrong_credentials() {
     let mut wrong_pk = [0u8; 32];
     rand::fill(&mut wrong_pk[..]);
 
-    let challenge_wrong_pk = mailbox_client.get_mailbox_challenge(wrong_pk.to_vec()).await;
+    let challenge_wrong_pk = mailbox_client
+        .get_mailbox_challenge(wrong_pk.to_vec())
+        .await;
     match &challenge_wrong_pk {
-        Ok(_) => tracing::warn!("[TEST 1] Server returned challenge for NON-EXISTENT mailbox - SECURITY CONCERN"),
-        Err(e) => tracing::info!("[TEST 1] Server REJECTED challenge for non-existent mailbox: {}", e),
+        Ok(_) => tracing::warn!(
+            "[TEST 1] Server returned challenge for NON-EXISTENT mailbox - SECURITY CONCERN"
+        ),
+        Err(e) => tracing::info!(
+            "[TEST 1] Server REJECTED challenge for non-existent mailbox: {}",
+            e
+        ),
     }
 
     // Test 2: Get real challenge, but sign with wrong key
-    let real_challenge = mailbox_client.get_mailbox_challenge(correct_pk.to_vec()).await;
+    let real_challenge = mailbox_client
+        .get_mailbox_challenge(correct_pk.to_vec())
+        .await;
     match real_challenge {
         Ok(challenge_resp) => {
             tracing::info!(
@@ -670,12 +746,14 @@ async fn test_server_rejects_wrong_credentials() {
     }
 
     // Test 3: Sign with correct key but use stale/wrong challenge bytes
-    let real_challenge2 = mailbox_client.get_mailbox_challenge(correct_pk.to_vec()).await;
+    let real_challenge2 = mailbox_client
+        .get_mailbox_challenge(correct_pk.to_vec())
+        .await;
     match real_challenge2 {
         Ok(challenge_resp) => {
             // Create signing key from stored private key
             let signing_key = ed25519_dalek::SigningKey::from_bytes(
-                &correct_private_key[..32].try_into().expect("32 bytes")
+                &correct_private_key[..32].try_into().expect("32 bytes"),
             );
 
             // Sign a DIFFERENT challenge (not the one server gave us)
@@ -707,11 +785,13 @@ async fn test_server_rejects_wrong_credentials() {
     }
 
     // Test 4: Correct credentials - should work
-    let real_challenge3 = mailbox_client.get_mailbox_challenge(correct_pk.to_vec()).await;
+    let real_challenge3 = mailbox_client
+        .get_mailbox_challenge(correct_pk.to_vec())
+        .await;
     match real_challenge3 {
         Ok(challenge_resp) => {
             let signing_key = ed25519_dalek::SigningKey::from_bytes(
-                &correct_private_key[..32].try_into().expect("32 bytes")
+                &correct_private_key[..32].try_into().expect("32 bytes"),
             );
             let correct_signature = signing_key.sign(&challenge_resp.challenge);
 
@@ -800,7 +880,17 @@ async fn test_e2e_message_with_mailbox_exchange() {
 
     let msg1 = assert_ok(
         msg_client1
-            .send_message(&channel_id, content1, None, false, None, vec![], false, vec![], Vec::new())
+            .send_message(
+                &channel_id,
+                content1,
+                None,
+                false,
+                None,
+                vec![],
+                false,
+                vec![],
+                Vec::new(),
+            )
             .await,
     );
 
@@ -814,7 +904,17 @@ async fn test_e2e_message_with_mailbox_exchange() {
 
     let msg2 = assert_ok(
         msg_client2
-            .send_message(&channel_id, content2, None, false, None, vec![], false, vec![], Vec::new())
+            .send_message(
+                &channel_id,
+                content2,
+                None,
+                false,
+                None,
+                vec![],
+                false,
+                vec![],
+                Vec::new(),
+            )
             .await,
     );
 

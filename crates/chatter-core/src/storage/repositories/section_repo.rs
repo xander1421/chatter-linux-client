@@ -173,11 +173,7 @@ impl SectionRepository {
     }
 
     /// Set how a section's conversations are ordered.
-    pub fn set_sort_mode(
-        &self,
-        id: &SectionId,
-        mode: SectionSortMode,
-    ) -> Result<(), StorageError> {
+    pub fn set_sort_mode(&self, id: &SectionId, mode: SectionSortMode) -> Result<(), StorageError> {
         let conn = self.db.connection()?;
         let now = Utc::now();
 
@@ -270,9 +266,8 @@ impl SectionRepository {
         conversation_id: &str,
     ) -> Result<Option<SectionId>, StorageError> {
         let conn = self.db.read_connection()?;
-        let mut stmt = conn.prepare(
-            "SELECT section_id FROM section_memberships WHERE conversation_id = ?1",
-        )?;
+        let mut stmt =
+            conn.prepare("SELECT section_id FROM section_memberships WHERE conversation_id = ?1")?;
 
         match stmt.query_row(params![conversation_id], |row| {
             let id_str: String = row.get(0)?;
@@ -292,9 +287,7 @@ impl SectionRepository {
     /// Return the set of all conversation IDs that belong to any section.
     pub fn all_conversation_ids(&self) -> Result<std::collections::HashSet<String>, StorageError> {
         let conn = self.db.read_connection()?;
-        let mut stmt = conn.prepare(
-            "SELECT DISTINCT conversation_id FROM section_memberships",
-        )?;
+        let mut stmt = conn.prepare("SELECT DISTINCT conversation_id FROM section_memberships")?;
         let rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
         let mut ids = std::collections::HashSet::new();
         for row in rows {

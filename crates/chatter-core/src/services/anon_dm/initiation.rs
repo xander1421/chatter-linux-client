@@ -1,6 +1,6 @@
+use crate::domain::UserId;
 use crate::domain::anon_dm::{AnonDm, AnonDmId, AnonDmStatus};
 use crate::domain::private_friend_code::PrivateFriendCode;
-use crate::domain::UserId;
 use crate::proto::chat_v1::SealedSenderMessage;
 use crate::proto::content_v1::{self, AnonDmRequest, Content};
 use crate::util::time::TimestampNanos;
@@ -213,14 +213,19 @@ impl AnonDmService {
         );
 
         // Serialize the init message
-        let plaintext = init_message.to_bytes()
+        let plaintext = init_message
+            .to_bytes()
             .map_err(|e| AnonDmError::CryptoError(e.to_string()))?;
 
         // HPKE to recipient's identity key (no prekey fetch!)
         let recipient_identity = libsignal_protocol::IdentityKey::decode(&friend_code.identity_key)
             .map_err(|e| AnonDmError::CryptoError(format!("friend code identity key: {e}")))?;
-        let sealed_body = ecies::seal_to_identity(&recipient_identity, ecies::IdentityHpkeUse::AnonDmInit, &plaintext)
-            .map_err(|e| AnonDmError::CryptoError(e.to_string()))?;
+        let sealed_body = ecies::seal_to_identity(
+            &recipient_identity,
+            ecies::IdentityHpkeUse::AnonDmInit,
+            &plaintext,
+        )
+        .map_err(|e| AnonDmError::CryptoError(e.to_string()))?;
 
         // Get blind signature token for anonymous delivery
         let token = self.claim_token()?;
@@ -256,7 +261,9 @@ impl AnonDmService {
                 token.randomizer.as_deref(),
             )
             .await
-            .map_err(|e| AnonDmError::MessageError(format!("Failed to send ECIES message: {}", e)))?;
+            .map_err(|e| {
+                AnonDmError::MessageError(format!("Failed to send ECIES message: {}", e))
+            })?;
 
         tracing::debug!(
             conversation_id = %conversation_id,

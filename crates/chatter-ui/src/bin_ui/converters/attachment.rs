@@ -68,9 +68,10 @@ impl AttachmentDisplayData {
         // invisible at 280px. Cheap first, original only as a fallback.
         if !self.thumbnail_bytes.is_empty() {
             let bytes = &self.thumbnail_bytes;
-            self.thumbnail_pixels = crate::bin_ui::decode_cache::thumbnail(&self.id, bytes.len(), || {
-                image::load_from_memory(bytes).ok()
-            });
+            self.thumbnail_pixels =
+                crate::bin_ui::decode_cache::thumbnail(&self.id, bytes.len(), || {
+                    image::load_from_memory(bytes).ok()
+                });
             if self.thumbnail_pixels.is_some() {
                 return;
             }
@@ -89,7 +90,9 @@ impl AttachmentDisplayData {
                 // cheap to hold in memory.
                 const DISPLAY_MAX: u32 = 1024;
                 self.thumbnail_pixels = crate::bin_ui::decode_cache::thumbnail(&self.id, 0, || {
-                    image::open(path).ok().map(|img| img.thumbnail(DISPLAY_MAX, DISPLAY_MAX))
+                    image::open(path)
+                        .ok()
+                        .map(|img| img.thumbnail(DISPLAY_MAX, DISPLAY_MAX))
                 });
             }
         }
@@ -100,7 +103,9 @@ impl AttachmentDisplayData {
         // Priority 0: Use pre-decoded pixels (fastest - no decoding on UI thread)
         // Priority 1: Try to load thumbnail from sender-provided bytes (instant preview)
         // Priority 2: Load from local path after download
-        let (has_thumbnail, thumbnail, img_width, img_height) = if let Some(pixels) = &self.thumbnail_pixels {
+        let (has_thumbnail, thumbnail, img_width, img_height) = if let Some(pixels) =
+            &self.thumbnail_pixels
+        {
             // Pre-decoded and shared: wrapping it is a reference count, no copy.
             let (w, h) = (pixels.width(), pixels.height());
             (true, Image::from_rgba8(pixels.clone()), w as i32, h as i32)
@@ -114,9 +119,8 @@ impl AttachmentDisplayData {
                 Ok(img) => {
                     let rgba = img.to_rgba8();
                     let (w, h) = rgba.dimensions();
-                    let slint_img = crate::bin_ui::slint_conversions::rgba_to_slint_image(rgba.as_raw(),
-                        w,
-                        h,);
+                    let slint_img =
+                        crate::bin_ui::slint_conversions::rgba_to_slint_image(rgba.as_raw(), w, h);
                     (true, slint_img, w as i32, h as i32)
                 }
                 Err(e) => {
@@ -140,7 +144,10 @@ impl AttachmentDisplayData {
                     // But Image::load_from_path only works for images.
                     // If it's a video and we are here, it means we don't have thumbnail_bytes.
                     if self.is_video {
-                        tracing::info!("Skipping local video thumbnail loading for {} (not implemented)", self.filename);
+                        tracing::info!(
+                            "Skipping local video thumbnail loading for {} (not implemented)",
+                            self.filename
+                        );
                         (false, Image::default(), self.width, self.height)
                     } else {
                         match Image::load_from_path(path_obj) {
@@ -158,7 +165,11 @@ impl AttachmentDisplayData {
                                 (true, img, w, h)
                             }
                             Err(e) => {
-                                tracing::warn!("Failed to load thumbnail for {}: {:?}", self.filename, e);
+                                tracing::warn!(
+                                    "Failed to load thumbnail for {}: {:?}",
+                                    self.filename,
+                                    e
+                                );
                                 (false, Image::default(), self.width, self.height)
                             }
                         }
@@ -228,19 +239,26 @@ pub fn attachment_to_display_data(attachment: &Attachment) -> AttachmentDisplayD
         .as_ref()
         .filter(|samples| !samples.is_empty())
         .map(|samples| {
-            let converted: Vec<i32> = samples.iter().map(|&s| waveform_bar(i32::from(s))).collect();
+            let converted: Vec<i32> = samples
+                .iter()
+                .map(|&s| waveform_bar(i32::from(s)))
+                .collect();
             if meta.is_audio() {
                 let max = converted.iter().max().copied().unwrap_or(0);
                 tracing::debug!(
                     "attachment_to_display_data: waveform has {} samples, max={}, first_5={:?}",
-                    converted.len(), max, &converted[..5.min(converted.len())]
+                    converted.len(),
+                    max,
+                    &converted[..5.min(converted.len())]
                 );
             }
             converted
         })
         .unwrap_or_else(|| {
             if meta.is_audio() {
-                tracing::warn!("attachment_to_display_data: no waveform_samples for audio, using flat default");
+                tracing::warn!(
+                    "attachment_to_display_data: no waveform_samples for audio, using flat default"
+                );
             }
             vec![10; 32]
         }); // Default flat waveform
@@ -308,7 +326,11 @@ pub fn pending_attachment_to_slint(attachment: &PendingAttachment) -> PendingAtt
         match Image::load_from_path(&attachment.path) {
             Ok(img) => (true, img),
             Err(e) => {
-                tracing::warn!("Failed to load thumbnail for {}: {:?}", attachment.filename, e);
+                tracing::warn!(
+                    "Failed to load thumbnail for {}: {:?}",
+                    attachment.filename,
+                    e
+                );
                 (false, Image::default())
             }
         }

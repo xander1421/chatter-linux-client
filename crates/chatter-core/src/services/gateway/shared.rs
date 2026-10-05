@@ -6,9 +6,9 @@
 //!
 //! Phase 3 of messaging consolidation.
 
+use crate::domain::AttachmentId;
 use crate::domain::attachment::{Attachment, FileCategory};
 use crate::domain::message::Message;
-use crate::domain::AttachmentId;
 use crate::proto::content_v1::{AttachmentPointer, Quote, QuotedAttachment, quote};
 
 // =============================================================================
@@ -26,7 +26,12 @@ const QUOTE_PREVIEW_TRUNCATE_AT: usize = 97;
 /// with "..." appended. This is the standard Signal-style quote preview.
 pub fn truncate_preview(text: &str) -> String {
     if text.chars().count() > QUOTE_PREVIEW_MAX_CHARS {
-        format!("{}...", text.chars().take(QUOTE_PREVIEW_TRUNCATE_AT).collect::<String>())
+        format!(
+            "{}...",
+            text.chars()
+                .take(QUOTE_PREVIEW_TRUNCATE_AT)
+                .collect::<String>()
+        )
     } else {
         text.to_string()
     }
@@ -226,15 +231,17 @@ pub fn handle_send_error(error: &super::outgoing::SendError, context: &str) -> S
 
     // Return user-facing message (don't expose internal error details)
     match error {
-        SendError::NotLoggedIn |
-        SendError::Message(crate::services::message::MessageError::NotLoggedIn) |
-        SendError::AnonDm(crate::services::anon_dm::AnonDmError::NotLoggedIn) |
-        SendError::AnonGroup(crate::services::anon_group::AnonGroupError::NotLoggedIn) => {
+        SendError::BeforeSubmission(original) => handle_send_error(original, context),
+        SendError::NotLoggedIn
+        | SendError::Message(crate::services::message::MessageError::NotLoggedIn)
+        | SendError::AnonDm(crate::services::anon_dm::AnonDmError::NotLoggedIn)
+        | SendError::AnonGroup(crate::services::anon_group::AnonGroupError::NotLoggedIn) => {
             "Not logged in".to_string()
         }
-        SendError::UnsupportedAction => {
-            "Action not supported for this channel type".to_string()
-        }
+        SendError::DeliveryUnconfirmed => SendError::DeliveryUnconfirmed.to_string(),
+        SendError::SendInProgress => SendError::SendInProgress.to_string(),
+        SendError::AttemptAlreadyConfirmed => SendError::AttemptAlreadyConfirmed.to_string(),
+        SendError::UnsupportedAction => "Action not supported for this channel type".to_string(),
         SendError::Message(crate::services::message::MessageError::EncryptionFailed(_)) => {
             "Encryption failed — try again".to_string()
         }
@@ -242,24 +249,21 @@ pub fn handle_send_error(error: &super::outgoing::SendError, context: &str) -> S
         // parked, so every retry fails identically; the only thing that clears
         // it is the user accepting the new safety number. The prompt to do that
         // is already open in this conversation, so point at it.
-        SendError::Message(
-            crate::services::message::MessageError::RecipientIdentityChanged { .. },
-        ) => {
-            "Their safety number changed — accept it above to send".to_string()
-        }
+        SendError::Message(crate::services::message::MessageError::RecipientIdentityChanged {
+            ..
+        }) => "Their safety number changed — accept it above to send".to_string(),
         // Not "try again" either: the server could not prove this contact's
         // key, and retrying asks it the same question.
-        SendError::Message(
-            crate::services::message::MessageError::RecipientKeyUnverified { .. },
-        ) => {
-            "Can't verify this contact's security key — not sent".to_string()
-        }
-        SendError::AnonDm(crate::services::anon_dm::AnonDmError::ConversationBlocked(_)) |
-        SendError::AnonGroup(crate::services::anon_group::AnonGroupError::GroupBlocked(_)) => {
+        SendError::Message(crate::services::message::MessageError::RecipientKeyUnverified {
+            ..
+        }) => "Can't verify this contact's security key — not sent".to_string(),
+        SendError::AnonDm(crate::services::anon_dm::AnonDmError::ConversationBlocked(_))
+        | SendError::AnonGroup(crate::services::anon_group::AnonGroupError::GroupBlocked(_)) => {
             "Conversation is blocked".to_string()
         }
-        SendError::AnonDm(crate::services::anon_dm::AnonDmError::RateLimitExceeded(n)) |
-        SendError::AnonGroup(crate::services::anon_group::AnonGroupError::RateLimitExceeded(n)) => {
+        SendError::AnonDm(crate::services::anon_dm::AnonDmError::RateLimitExceeded(n))
+        | SendError::AnonGroup(crate::services::anon_group::AnonGroupError::RateLimitExceeded(n)) =>
+        {
             format!("Slow down — {} messages per minute limit", n)
         }
         e if e.is_refused() => "You can't send messages here".to_string(),
@@ -287,8 +291,13 @@ mod tests {
         // A muted/banned member's send is refused by the server's
         // `send_message` check; say so instead of "Failed to send: ...".
         let err = super::super::outgoing::SendError::Message(
-            crate::services::message::MessageError::Network(crate::error::NetworkError::PermissionDenied),
+            crate::services::message::MessageError::Network(
+                crate::error::NetworkError::PermissionDenied,
+            ),
         );
-        assert_eq!(handle_send_error(&err, "send"), "You can't send messages here");
+        assert_eq!(
+            handle_send_error(&err, "send"),
+            "You can't send messages here"
+        );
     }
 }

@@ -91,10 +91,7 @@ impl PacketSpec {
             ttl: self.ttl,
             timestamp: self.timestamp,
             sender_id: unhex_n::<SENDER_ID_LEN>(&self.sender_id),
-            recipient_id: self
-                .recipient_id
-                .as_deref()
-                .map(unhex_n::<SENDER_ID_LEN>),
+            recipient_id: self.recipient_id.as_deref().map(unhex_n::<SENDER_ID_LEN>),
             payload: unhex(&self.payload_hex),
             signature: self.signature_hex.as_deref().map(unhex_n::<SIGNATURE_LEN>),
             route: self
@@ -158,9 +155,8 @@ fn check_frames(file: &str) {
         }
 
         if v.check_encode {
-            let got = codec::encode(&packet, v.padding).unwrap_or_else(|e| {
-                panic!("[{file}::{}] encode failed: {e}. {}", v.name, v.note)
-            });
+            let got = codec::encode(&packet, v.padding)
+                .unwrap_or_else(|e| panic!("[{file}::{}] encode failed: {e}. {}", v.name, v.note));
             assert_eq!(
                 hex::encode(&got),
                 v.encoded_hex,
@@ -171,14 +167,17 @@ fn check_frames(file: &str) {
         }
 
         if v.check_decode {
-            let got = codec::decode(&expected).unwrap_or_else(|e| {
-                panic!("[{file}::{}] decode failed: {e}. {}", v.name, v.note)
-            });
+            let got = codec::decode(&expected)
+                .unwrap_or_else(|e| panic!("[{file}::{}] decode failed: {e}. {}", v.name, v.note));
             let mut want = packet.clone();
             if let Some(payload) = &v.decoded_payload_hex {
                 want.payload = unhex(payload);
             }
-            assert_eq!(got, want, "[{file}::{}] decode mismatch. {}", v.name, v.note);
+            assert_eq!(
+                got, want,
+                "[{file}::{}] decode mismatch. {}",
+                v.name, v.note
+            );
         }
     }
 }
@@ -222,8 +221,8 @@ fn compressed_frames_round_trip_through_our_own_encoder() {
             v.name
         );
 
-        let decoded = codec::decode(&encoded)
-            .unwrap_or_else(|e| panic!("[{}] decode failed: {e}", v.name));
+        let decoded =
+            codec::decode(&encoded).unwrap_or_else(|e| panic!("[{}] decode failed: {e}", v.name));
         assert_eq!(decoded, packet, "[{}] round trip", v.name);
     }
 }
@@ -439,7 +438,12 @@ fn decompress_accepts_raw_deflate_streams() {
                 c.name, c.note
             )
         });
-        assert_eq!(hex::encode(&got), c.expected_hex, "[decompress::{}]", c.name);
+        assert_eq!(
+            hex::encode(&got),
+            c.expected_hex,
+            "[decompress::{}]",
+            c.name
+        );
     }
 }
 
@@ -971,7 +975,13 @@ fn peer_id_vectors() {
     for c in &file.from_public_key {
         let key = unhex(&c.public_key_hex);
         let derived = PeerId::from_noise_key(&key);
-        assert_eq!(derived.as_str(), c.short_id, "[peer_id::{}] {}", c.name, c.note);
+        assert_eq!(
+            derived.as_str(),
+            c.short_id,
+            "[peer_id::{}] {}",
+            c.name,
+            c.note
+        );
         assert_eq!(
             derived.to_routing_bytes().map(hex::encode),
             Some(c.routing_data_hex.clone()),

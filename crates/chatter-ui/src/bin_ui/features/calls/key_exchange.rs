@@ -6,9 +6,9 @@
 
 use std::sync::Arc;
 
+use crate::MainWindow;
 use chatter_core::client::ChatterClient;
 use chatter_core::domain::ids::UserId;
-use crate::MainWindow;
 
 use super::timers::{start_call_timer, start_video_frame_timer};
 
@@ -41,9 +41,7 @@ pub async fn handle_call_key_answer(
         let ctx = ui_ctx.clone();
         let cid = call_id.clone();
         let pid = peer_id;
-        tokio::spawn(async move {
-            ctx.complete_dm_call(peer_ephemeral_pk, &cid, &pid).await
-        }).await
+        tokio::spawn(async move { ctx.complete_dm_call(peer_ephemeral_pk, &cid, &pid).await }).await
     };
 
     let setup = match result {

@@ -119,7 +119,8 @@ impl DmConversation {
     /// secret they derive. `None` without our half.
     pub fn device_key(&self, device: &PeerMailbox) -> Option<ConversationKey> {
         let mut key = self.conversation_key.clone()?;
-        key.derive_shared_secret(device.their_ephemeral_public).ok()?;
+        key.derive_shared_secret(device.their_ephemeral_public)
+            .ok()?;
         Some(key)
     }
 
@@ -150,9 +151,7 @@ impl DmConversation {
     ///
     /// Requires our mailbox to be active.
     pub fn is_ready_to_receive(&self) -> bool {
-        self.our_mailbox
-            .as_ref()
-            .is_some_and(|m| !m.is_expired())
+        self.our_mailbox.as_ref().is_some_and(|m| !m.is_expired())
     }
 
     /// Check if this conversation needs initial bootstrap.
@@ -170,7 +169,6 @@ impl DmConversation {
             .as_ref()
             .is_some_and(|m| m.expires_soon(Duration::hours(24)))
     }
-
 }
 
 impl DmMailbox {
@@ -249,7 +247,12 @@ impl ConversationKey {
     pub fn new() -> Self {
         // Generate random X25519 keypair
         let mut secret_bytes = [0u8; 32];
-        {use rand::TryRngCore; rand::rngs::OsRng.try_fill_bytes(&mut secret_bytes).expect("OS CSPRNG must not fail");}
+        {
+            use rand::TryRngCore;
+            rand::rngs::OsRng
+                .try_fill_bytes(&mut secret_bytes)
+                .expect("OS CSPRNG must not fail");
+        }
         let secret = X25519Secret::from(secret_bytes);
         let public = X25519PublicKey::from(&secret);
 
@@ -276,10 +279,7 @@ impl ConversationKey {
     /// Uses X25519 ECDH followed by HKDF-SHA256 to derive the final
     /// encryption key. Signal spec requires HKDF on all DH outputs —
     /// raw ECDH output should never be used directly as a cipher key.
-    pub fn derive_shared_secret(
-        &mut self,
-        their_public: [u8; 32],
-    ) -> Result<(), MailboxError> {
+    pub fn derive_shared_secret(&mut self, their_public: [u8; 32]) -> Result<(), MailboxError> {
         // Store their public key
         self.their_ephemeral_public = Some(their_public);
 
@@ -304,8 +304,9 @@ impl ConversationKey {
         }
 
         // Derive encryption key via HKDF-SHA256 (never use raw DH output directly)
-        let derived_key: [u8; 32] = hkdf_sha256(raw_shared.as_bytes(), None, b"chatter-dm-conversation-v1")
-            .map_err(|e| MailboxError::KeyDerivationFailed(e.to_string()))?;
+        let derived_key: [u8; 32] =
+            hkdf_sha256(raw_shared.as_bytes(), None, b"chatter-dm-conversation-v1")
+                .map_err(|e| MailboxError::KeyDerivationFailed(e.to_string()))?;
 
         self.shared_secret = Some(derived_key);
         self.established_at = Some(Utc::now());
@@ -502,12 +503,11 @@ impl DmConversationManager {
                 let expires_at = DateTime::parse_from_rfc3339(&expires_at)
                     .map_err(|e| MailboxError::Storage(format!("Invalid expires_at: {}", e)))?
                     .with_timezone(&Utc);
-                let last_polled_at = last_polled_at
-                    .and_then(|s| {
-                        DateTime::parse_from_rfc3339(&s)
-                            .map(|dt| dt.with_timezone(&Utc))
-                            .ok()
-                    });
+                let last_polled_at = last_polled_at.and_then(|s| {
+                    DateTime::parse_from_rfc3339(&s)
+                        .map(|dt| dt.with_timezone(&Utc))
+                        .ok()
+                });
 
                 Ok(Some(DmMailbox {
                     id,
@@ -555,7 +555,8 @@ impl DmConversationManager {
 
         let mut mailboxes = Vec::new();
         for row in rows {
-            let (public_key, device_id, their_ephemeral, received_at, expires_at) = row.map_err(storage)?;
+            let (public_key, device_id, their_ephemeral, received_at, expires_at) =
+                row.map_err(storage)?;
             let parse = |s: &str| DateTime::parse_from_rfc3339(s).map(|dt| dt.with_timezone(&Utc));
             mailboxes.push(PeerMailbox {
                 public_key: public_key
@@ -583,7 +584,13 @@ impl DmConversationManager {
             "SELECT our_ephemeral_public, our_ephemeral_private, created_at
              FROM dm_conversation_keys WHERE conversation_id = ?1",
             rusqlite::params![peer_id_str],
-            |row| Ok((row.get::<_, Vec<u8>>(0)?, row.get::<_, Vec<u8>>(1)?, row.get::<_, String>(2)?)),
+            |row| {
+                Ok((
+                    row.get::<_, Vec<u8>>(0)?,
+                    row.get::<_, Vec<u8>>(1)?,
+                    row.get::<_, String>(2)?,
+                ))
+            },
         );
 
         match result {
@@ -692,8 +699,15 @@ impl DmConversationManager {
             .load_conversation(peer_id)?
             .ok_or(MailboxError::ConversationNotFound)?;
         // Expiry is not on the wire.
-        let mailbox = PeerMailbox::new(mailbox_public_key, peer_device_id, their_ephemeral_public, None);
-        let mut key = conversation.conversation_key.ok_or(MailboxError::ConversationNotEstablished)?;
+        let mailbox = PeerMailbox::new(
+            mailbox_public_key,
+            peer_device_id,
+            their_ephemeral_public,
+            None,
+        );
+        let mut key = conversation
+            .conversation_key
+            .ok_or(MailboxError::ConversationNotEstablished)?;
         key.derive_shared_secret(their_ephemeral_public)?;
         self.save_peer_mailbox(peer_id, &mailbox)?;
         self.clear_device_asked(peer_id, peer_device_id)?;
@@ -701,7 +715,11 @@ impl DmConversationManager {
     }
 
     /// The device answered (or is gone): the next ask is a new one.
-    fn clear_device_asked(&self, peer_id: &UserId, peer_device_id: u32) -> Result<(), MailboxError> {
+    fn clear_device_asked(
+        &self,
+        peer_id: &UserId,
+        peer_device_id: u32,
+    ) -> Result<(), MailboxError> {
         let conn = self
             .db
             .connection()
@@ -743,7 +761,11 @@ impl DmConversationManager {
 
     /// Drop a peer device from the conversation (the server refused it as
     /// unknown): its half and anything still owed to it.
-    pub fn forget_peer_device(&self, peer_id: &UserId, peer_device_id: u32) -> Result<(), MailboxError> {
+    pub fn forget_peer_device(
+        &self,
+        peer_id: &UserId,
+        peer_device_id: u32,
+    ) -> Result<(), MailboxError> {
         let conn = self
             .db
             .connection()
@@ -824,14 +846,23 @@ impl DmConversationManager {
         conn.execute(
             "INSERT INTO dm_device_pending (conversation_id, peer_device_id, content, queued_at)
              VALUES (?1, ?2, ?3, ?4)",
-            rusqlite::params![peer_id.to_string(), peer_device_id, content, Utc::now().to_rfc3339()],
+            rusqlite::params![
+                peer_id.to_string(),
+                peer_device_id,
+                content,
+                Utc::now().to_rfc3339()
+            ],
         )
         .map_err(|e| MailboxError::Storage(e.to_string()))?;
         Ok(())
     }
 
     /// Record that a bootstrap MESSAGE or REQUEST reached `peer_device_id`.
-    pub fn mark_device_asked(&self, peer_id: &UserId, peer_device_id: u32) -> Result<(), MailboxError> {
+    pub fn mark_device_asked(
+        &self,
+        peer_id: &UserId,
+        peer_device_id: u32,
+    ) -> Result<(), MailboxError> {
         let conn = self
             .db
             .connection()
@@ -847,7 +878,11 @@ impl DmConversationManager {
     /// Whether `peer_device_id` was asked to answer the bootstrap within the
     /// last mailbox lifetime and has not answered since. An ask older than
     /// that is repeated: the mailbox it announced may be gone.
-    pub fn was_device_asked(&self, peer_id: &UserId, peer_device_id: u32) -> Result<bool, MailboxError> {
+    pub fn was_device_asked(
+        &self,
+        peer_id: &UserId,
+        peer_device_id: u32,
+    ) -> Result<bool, MailboxError> {
         let conn = self
             .db
             .connection()
@@ -865,7 +900,11 @@ impl DmConversationManager {
     }
 
     /// Take everything owed to `peer_device_id`, oldest first.
-    pub fn drain_device_queue(&self, peer_id: &UserId, peer_device_id: u32) -> Result<Vec<Vec<u8>>, MailboxError> {
+    pub fn drain_device_queue(
+        &self,
+        peer_id: &UserId,
+        peer_device_id: u32,
+    ) -> Result<Vec<Vec<u8>>, MailboxError> {
         let conn = self
             .db
             .connection()
@@ -878,7 +917,9 @@ impl DmConversationManager {
                  WHERE conversation_id = ?1 AND peer_device_id = ?2 ORDER BY id",
             )
             .map_err(storage)?
-            .query_map(params, |row| Ok((row.get::<_, i64>(0)?, row.get::<_, Vec<u8>>(1)?)))
+            .query_map(params, |row| {
+                Ok((row.get::<_, i64>(0)?, row.get::<_, Vec<u8>>(1)?))
+            })
             .map_err(storage)?
             .collect::<Result<Vec<_>, _>>()
             .map_err(storage)?;
@@ -960,9 +1001,9 @@ impl DmConversationManager {
                 .get(3)
                 .map_err(|e| MailboxError::Storage(e.to_string()))?;
 
-            let peer_id: UserId = conversation_id
-                .parse()
-                .map_err(|e: uuid::Error| MailboxError::Storage(format!("Invalid peer_id: {}", e)))?;
+            let peer_id: UserId = conversation_id.parse().map_err(|e: uuid::Error| {
+                MailboxError::Storage(format!("Invalid peer_id: {}", e))
+            })?;
 
             let public_key_arr: [u8; 32] = public_key
                 .try_into()
@@ -1018,9 +1059,9 @@ impl DmConversationManager {
                 .get(0)
                 .map_err(|e| MailboxError::Storage(e.to_string()))?;
 
-            let peer_id: UserId = conversation_id
-                .parse()
-                .map_err(|e: uuid::Error| MailboxError::Storage(format!("Invalid peer_id: {}", e)))?;
+            let peer_id: UserId = conversation_id.parse().map_err(|e: uuid::Error| {
+                MailboxError::Storage(format!("Invalid peer_id: {}", e))
+            })?;
 
             results.push(peer_id);
         }
@@ -1264,7 +1305,12 @@ mod tests {
 
         // A peer device's half, but not ours yet: no secret to send under.
         let theirs = ConversationKey::new();
-        conv.peer_mailboxes.push(PeerMailbox::new([0u8; 32], 1, theirs.our_ephemeral_public, None));
+        conv.peer_mailboxes.push(PeerMailbox::new(
+            [0u8; 32],
+            1,
+            theirs.our_ephemeral_public,
+            None,
+        ));
         assert!(!conv.is_ready_to_send());
 
         // Our half: that device's secret derives, and it is ready.
@@ -1273,8 +1319,13 @@ mod tests {
         let (device, send_key) = conv.ready_devices()[0];
         assert_eq!(device.device_id, 1);
         let mut peer = theirs.clone();
-        peer.derive_shared_secret(conv.conversation_key.as_ref().unwrap().our_ephemeral_public).unwrap();
-        assert_eq!(Some(send_key), peer.recv_key(), "the device's recv key opens what we send it");
+        peer.derive_shared_secret(conv.conversation_key.as_ref().unwrap().our_ephemeral_public)
+            .unwrap();
+        assert_eq!(
+            Some(send_key),
+            peer.recv_key(),
+            "the device's recv key opens what we send it"
+        );
     }
 
     // ========================================================================
@@ -1408,7 +1459,11 @@ mod tests {
         mgr.save_our_mailbox(&peer, &expiring).unwrap();
 
         let candidates = mgr.get_expiring_mailboxes(24).unwrap();
-        assert_eq!(candidates, vec![peer], "expiring conversation must be a rotation candidate");
+        assert_eq!(
+            candidates,
+            vec![peer],
+            "expiring conversation must be a rotation candidate"
+        );
 
         // Rotation mints a fresh row alongside the old (loss-free overlap).
         let fresh = make_mailbox("b", now, now + Duration::hours(48));
@@ -1427,7 +1482,8 @@ mod tests {
     /// Our half with `peer`, saved, and a peer device's key to answer it with.
     fn seed_our_half(mgr: &DmConversationManager, peer: &UserId) -> ConversationKey {
         let now = Utc::now();
-        mgr.save_our_mailbox(peer, &make_mailbox("o", now, now + Duration::hours(40))).unwrap();
+        mgr.save_our_mailbox(peer, &make_mailbox("o", now, now + Duration::hours(40)))
+            .unwrap();
         let ours = ConversationKey::new();
         mgr.save_conversation_key(peer, &ours).unwrap();
         ours
@@ -1444,34 +1500,67 @@ mod tests {
         let ours = seed_our_half(&mgr, &peer);
         let (six, eight) = (ConversationKey::new(), ConversationKey::new());
 
-        mgr.record_peer_device(&peer, 6, [6u8; 32], six.our_ephemeral_public).unwrap();
-        mgr.record_peer_device(&peer, 8, [8u8; 32], eight.our_ephemeral_public).unwrap();
+        mgr.record_peer_device(&peer, 6, [6u8; 32], six.our_ephemeral_public)
+            .unwrap();
+        mgr.record_peer_device(&peer, 8, [8u8; 32], eight.our_ephemeral_public)
+            .unwrap();
         let conv = mgr.load_conversation(&peer).unwrap().unwrap();
-        let ready: Vec<_> = conv.ready_devices().iter().map(|(m, k)| (m.device_id, m.public_key, *k)).collect();
+        let ready: Vec<_> = conv
+            .ready_devices()
+            .iter()
+            .map(|(m, k)| (m.device_id, m.public_key, *k))
+            .collect();
         assert_eq!(ready.len(), 2);
-        assert_eq!((ready[0].0, ready[0].1), (6, [6u8; 32]), "device 6 keeps its mailbox");
+        assert_eq!(
+            (ready[0].0, ready[0].1),
+            (6, [6u8; 32]),
+            "device 6 keeps its mailbox"
+        );
         assert_eq!((ready[1].0, ready[1].1), (8, [8u8; 32]));
         assert_ne!(ready[0].2, ready[1].2, "one secret per device");
         let mut six_side = six.clone();
-        six_side.derive_shared_secret(ours.our_ephemeral_public).unwrap();
+        six_side
+            .derive_shared_secret(ours.our_ephemeral_public)
+            .unwrap();
         assert_eq!(Some(ready[0].2), six_side.recv_key());
 
         // Device 8 re-bootstraps: only its own row moves.
         let eight_again = ConversationKey::new();
-        mgr.record_peer_device(&peer, 8, [0x88u8; 32], eight_again.our_ephemeral_public).unwrap();
+        mgr.record_peer_device(&peer, 8, [0x88u8; 32], eight_again.our_ephemeral_public)
+            .unwrap();
         let conv = mgr.load_conversation(&peer).unwrap().unwrap();
-        let rows: Vec<_> = conv.peer_mailboxes.iter().map(|m| (m.device_id, m.public_key)).collect();
+        let rows: Vec<_> = conv
+            .peer_mailboxes
+            .iter()
+            .map(|m| (m.device_id, m.public_key))
+            .collect();
         assert_eq!(rows, vec![(6, [6u8; 32]), (8, [0x88u8; 32])]);
 
         // A low-order ephemeral is refused and leaves the row alone.
-        assert!(mgr.record_peer_device(&peer, 6, [9u8; 32], [0u8; 32]).is_err());
-        assert_eq!(mgr.load_conversation(&peer).unwrap().unwrap().peer_mailboxes[0].public_key, [6u8; 32]);
+        assert!(
+            mgr.record_peer_device(&peer, 6, [9u8; 32], [0u8; 32])
+                .is_err()
+        );
+        assert_eq!(
+            mgr.load_conversation(&peer)
+                .unwrap()
+                .unwrap()
+                .peer_mailboxes[0]
+                .public_key,
+            [6u8; 32]
+        );
 
         // A rotation announce moves only the rotating device's mailbox.
         assert!(mgr.rotate_peer_mailbox(&peer, 6, [0x66u8; 32]).unwrap());
         assert!(!mgr.rotate_peer_mailbox(&peer, 7, [0x77u8; 32]).unwrap());
-        let rows: Vec<_> = mgr.load_conversation(&peer).unwrap().unwrap()
-            .peer_mailboxes.iter().map(|m| (m.device_id, m.public_key)).collect();
+        let rows: Vec<_> = mgr
+            .load_conversation(&peer)
+            .unwrap()
+            .unwrap()
+            .peer_mailboxes
+            .iter()
+            .map(|m| (m.device_id, m.public_key))
+            .collect();
         assert_eq!(rows, vec![(6, [0x66u8; 32]), (8, [0x88u8; 32])]);
     }
 
@@ -1482,12 +1571,26 @@ mod tests {
         let mgr = DmConversationManager::new(setup_db());
         let peer = UserId::new();
         let ours = seed_our_half(&mgr, &peer);
-        mgr.record_peer_device(&peer, 6, [6u8; 32], ConversationKey::new().our_ephemeral_public).unwrap();
+        mgr.record_peer_device(
+            &peer,
+            6,
+            [6u8; 32],
+            ConversationKey::new().our_ephemeral_public,
+        )
+        .unwrap();
 
         mgr.save_conversation_key(&peer, &ours).unwrap();
-        assert_eq!(mgr.load_conversation(&peer).unwrap().unwrap().peer_mailboxes.len(), 1);
+        assert_eq!(
+            mgr.load_conversation(&peer)
+                .unwrap()
+                .unwrap()
+                .peer_mailboxes
+                .len(),
+            1
+        );
 
-        mgr.save_conversation_key(&peer, &ConversationKey::new()).unwrap();
+        mgr.save_conversation_key(&peer, &ConversationKey::new())
+            .unwrap();
         let conv = mgr.load_conversation(&peer).unwrap().unwrap();
         assert!(conv.peer_mailboxes.is_empty());
         assert!(!conv.is_ready_to_send());
@@ -1500,26 +1603,50 @@ mod tests {
         let mgr = DmConversationManager::new(setup_db());
         let peer = UserId::new();
         seed_our_half(&mgr, &peer);
-        mgr.record_peer_device(&peer, 2, [2u8; 32], ConversationKey::new().our_ephemeral_public).unwrap();
+        mgr.record_peer_device(
+            &peer,
+            2,
+            [2u8; 32],
+            ConversationKey::new().our_ephemeral_public,
+        )
+        .unwrap();
 
         mgr.queue_for_device(&peer, 8, b"one").unwrap();
         mgr.queue_for_device(&peer, 8, b"two").unwrap();
         mgr.queue_for_device(&peer, 2, b"other").unwrap();
 
-        assert_eq!(mgr.drain_device_queue(&peer, 8).unwrap(), vec![b"one".to_vec(), b"two".to_vec()]);
+        assert_eq!(
+            mgr.drain_device_queue(&peer, 8).unwrap(),
+            vec![b"one".to_vec(), b"two".to_vec()]
+        );
         assert!(mgr.drain_device_queue(&peer, 8).unwrap().is_empty());
 
         // An ask is remembered until the device answers.
         assert!(!mgr.was_device_asked(&peer, 8).unwrap());
         mgr.mark_device_asked(&peer, 8).unwrap();
         assert!(mgr.was_device_asked(&peer, 8).unwrap());
-        mgr.record_peer_device(&peer, 8, [8u8; 32], ConversationKey::new().our_ephemeral_public).unwrap();
-        assert!(!mgr.was_device_asked(&peer, 8).unwrap(), "answering clears the ask");
+        mgr.record_peer_device(
+            &peer,
+            8,
+            [8u8; 32],
+            ConversationKey::new().our_ephemeral_public,
+        )
+        .unwrap();
+        assert!(
+            !mgr.was_device_asked(&peer, 8).unwrap(),
+            "answering clears the ask"
+        );
 
         mgr.forget_peer_device(&peer, 2).unwrap();
         assert!(mgr.drain_device_queue(&peer, 2).unwrap().is_empty());
-        let left: Vec<u32> = mgr.load_conversation(&peer).unwrap().unwrap()
-            .peer_mailboxes.iter().map(|m| m.device_id).collect();
+        let left: Vec<u32> = mgr
+            .load_conversation(&peer)
+            .unwrap()
+            .unwrap()
+            .peer_mailboxes
+            .iter()
+            .map(|m| m.device_id)
+            .collect();
         assert_eq!(left, vec![8], "only the retired device is gone");
     }
 
@@ -1573,7 +1700,10 @@ mod tests {
                 key.derive_shared_secret(*peer).is_err(),
                 "low-order peer key #{i} was accepted"
             );
-            assert!(!key.is_established(), "a rejected DH still established a key");
+            assert!(
+                !key.is_established(),
+                "a rejected DH still established a key"
+            );
         }
 
         // An honest peer key still works.

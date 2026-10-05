@@ -70,6 +70,7 @@ dirs = "5"
 chrono = { version = "0.4", features = ["serde"] }
 uuid = { version = "1", features = ["v4", "v5", "serde"] }
 mime_guess = "2"
+url = "2"
 # once_cell + lazy_static removed — migrated to std::sync::LazyLock
 zeroize = { version = "1.8", features = ["derive"] }
 arboard = { version = "3", features = ["wayland-data-control"], optional = true }

@@ -12,10 +12,10 @@ use std::collections::BTreeMap;
 
 use libsignal_protocol::PublicKey;
 
-use super::canonical::{signed_message, INVITE_DOMAIN};
+use super::canonical::{INVITE_DOMAIN, signed_message};
 use super::{
-    is_canonical_uuid, malformed, ChannelRole, Invite, JoinMode, KeyBytes, Member, MemberStatus,
-    MembershipState, Policy, VerifyError,
+    ChannelRole, Invite, JoinMode, KeyBytes, Member, MemberStatus, MembershipState, Policy,
+    VerifyError, is_canonical_uuid, malformed,
 };
 use crate::proto::chat_v1 as pb;
 use pb::channel_action::Action;
@@ -38,7 +38,10 @@ pub struct ApplyContext<'a> {
 pub enum ProofCheck<'a> {
     /// Verification: the proof must verify over the exact signed `actions`
     /// bytes, and a proof on a change that needs none is malformed.
-    Verify { actions_bytes: &'a [u8], invite_proof: &'a [u8] },
+    Verify {
+        actions_bytes: &'a [u8],
+        invite_proof: &'a [u8],
+    },
     /// Authoring ([`preview`]): the change is not signed yet, so there is no
     /// proof to check. Never used on a received change.
     AuthorPreview,
@@ -94,11 +97,20 @@ pub fn apply(
             if index != 0 || ctx.revision != 1 || state.is_some() {
                 return Err(invalid("genesis must be the first action of revision 1"));
             }
-            let policy = g.policy.as_ref().map(Policy::from_proto).transpose()?.ok_or_else(|| malformed("genesis policy"))?;
+            let policy = g
+                .policy
+                .as_ref()
+                .map(Policy::from_proto)
+                .transpose()?
+                .ok_or_else(|| malformed("genesis policy"))?;
             let mut members = BTreeMap::new();
             members.insert(
                 ctx.author.to_string(),
-                Member { role: ChannelRole::Owner, status: MemberStatus::Active, identity_key: ctx.author_key },
+                Member {
+                    role: ChannelRole::Owner,
+                    status: MemberStatus::Active,
+                    identity_key: ctx.author_key,
+                },
             );
             state = Some(MembershipState {
                 channel_id: ctx.channel_id.to_string(),
@@ -122,7 +134,9 @@ pub fn apply(
             [pb::ChannelAction { action: Some(Action::JoinViaInvite(j)) }] if !j.invite_pub.is_empty()
         );
         if !invite_proof.is_empty() && !invite_join {
-            return Err(malformed("invite_proof on a change that is not an invite join"));
+            return Err(malformed(
+                "invite_proof on a change that is not an invite join",
+            ));
         }
     }
     let mut state = state.expect("non-empty actions leave a state");
@@ -141,7 +155,10 @@ fn apply_one(
 ) -> Result<(), VerifyError> {
     let author = st.members.get(ctx.author).cloned();
     // The author's role counts only while ACTIVE.
-    let role = author.as_ref().filter(|m| m.status == MemberStatus::Active).map(|m| m.role);
+    let role = author
+        .as_ref()
+        .filter(|m| m.status == MemberStatus::Active)
+        .map(|m| m.role);
     let need_active = || role.ok_or_else(|| deny("author is not an active member"));
 
     match action {
@@ -149,7 +166,9 @@ fn apply_one(
 
         Action::AddMember(a) => {
             let role = need_active()?;
-            let (Some(new_role), Some(identity_key)) = (valid_role(a.role), valid_key(&a.identity_key)) else {
+            let (Some(new_role), Some(identity_key)) =
+                (valid_role(a.role), valid_key(&a.identity_key))
+            else {
                 return Err(malformed("add_member fields"));
             };
             if !is_canonical_uuid(&a.user_id) {
@@ -160,8 +179,19 @@ fn apply_one(
             }
             match st.members.get_mut(&a.user_id) {
                 None => {
-                    let status = if a.pending { MemberStatus::Invited } else { MemberStatus::Active };
-                    st.members.insert(a.user_id.clone(), Member { role: new_role, status, identity_key });
+                    let status = if a.pending {
+                        MemberStatus::Invited
+                    } else {
+                        MemberStatus::Active
+                    };
+                    st.members.insert(
+                        a.user_id.clone(),
+                        Member {
+                            role: new_role,
+                            status,
+                            identity_key,
+                        },
+                    );
                 }
                 // Approving a join request: the joiner's own key (from their
                 // JoinViaInvite) is kept, not replaced by the approver's view.
@@ -205,7 +235,11 @@ fn apply_one(
             let Some(new_role) = valid_role(s.role) else {
                 return Err(malformed("set_role role"));
             };
-            if role < st.policy.set_role || target_role >= role || new_role > role || new_role == ChannelRole::Owner {
+            if role < st.policy.set_role
+                || target_role >= role
+                || new_role > role
+                || new_role == ChannelRole::Owner
+            {
                 return Err(deny("set_role at or above own role or below policy"));
             }
             if let Some(t) = st.members.get_mut(&s.user_id) {
@@ -216,11 +250,16 @@ fn apply_one(
         Action::CreateInvite(c) => {
             let role = need_active()?;
             let cap = c.capability.as_ref();
-            let parsed = cap.and_then(|c| Some((valid_key(&c.invite_pub)?, valid_role(c.role)?, c)));
-            let Some((invite_pub, invite_role, cap)) = parsed.filter(|(_, _, c)| c.uses == 0) else {
+            let parsed =
+                cap.and_then(|c| Some((valid_key(&c.invite_pub)?, valid_role(c.role)?, c)));
+            let Some((invite_pub, invite_role, cap)) = parsed.filter(|(_, _, c)| c.uses == 0)
+            else {
                 return Err(malformed("capability"));
             };
-            if role < st.policy.manage_invites || invite_role > role || invite_role == ChannelRole::Owner {
+            if role < st.policy.manage_invites
+                || invite_role > role
+                || invite_role == ChannelRole::Owner
+            {
                 return Err(deny("create_invite above own role or below policy"));
             }
             if st.invites.contains_key(&invite_pub) {
@@ -243,7 +282,10 @@ fn apply_one(
             if role < st.policy.manage_invites {
                 return Err(deny("revoke_invite below policy"));
             }
-            if lookup_key(&r.invite_pub).and_then(|k| st.invites.remove(&k)).is_none() {
+            if lookup_key(&r.invite_pub)
+                .and_then(|k| st.invites.remove(&k))
+                .is_none()
+            {
                 return Err(invalid("no such invite"));
             }
         }
@@ -255,8 +297,11 @@ fn apply_one(
             if author.is_some() {
                 return Err(invalid("joiner is already in the channel"));
             }
-            let mut joiner =
-                Member { role: ChannelRole::Member, status: MemberStatus::Active, identity_key: ctx.author_key };
+            let mut joiner = Member {
+                role: ChannelRole::Member,
+                status: MemberStatus::Active,
+                identity_key: ctx.author_key,
+            };
             if j.invite_pub.is_empty() {
                 if st.policy.join != JoinMode::Open {
                     return Err(deny("channel is not open"));
@@ -272,7 +317,11 @@ fn apply_one(
                 else {
                     return Err(unusable("no such invite"));
                 };
-                if let ProofCheck::Verify { actions_bytes, invite_proof } = ctx.proof {
+                if let ProofCheck::Verify {
+                    actions_bytes,
+                    invite_proof,
+                } = ctx.proof
+                {
                     verify_invite_proof(&invite_pub, actions_bytes, invite_proof)?;
                 }
                 if cap.expires_at != 0 && ctx.timestamp >= cap.expires_at {
@@ -299,7 +348,12 @@ fn apply_one(
             if need_active()? != ChannelRole::Owner {
                 return Err(deny("only the owner sets the policy"));
             }
-            st.policy = p.policy.as_ref().map(Policy::from_proto).transpose()?.ok_or_else(|| malformed("policy"))?;
+            st.policy = p
+                .policy
+                .as_ref()
+                .map(Policy::from_proto)
+                .transpose()?
+                .ok_or_else(|| malformed("policy"))?;
         }
 
         Action::SetDisappearing(d) => {
@@ -315,7 +369,9 @@ fn apply_one(
             }
             let to = &t.new_owner_user_id;
             match st.members.get_mut(to) {
-                Some(m) if m.status == MemberStatus::Active && *to != ctx.author => m.role = ChannelRole::Owner,
+                Some(m) if m.status == MemberStatus::Active && *to != ctx.author => {
+                    m.role = ChannelRole::Owner
+                }
                 _ => return Err(invalid("new owner must be another active member")),
             }
             if let Some(a) = st.members.get_mut(ctx.author) {
@@ -342,11 +398,22 @@ pub fn preview(
     apply(
         prev,
         actions,
-        &ApplyContext { channel_id, revision, author, author_key, timestamp, proof: ProofCheck::AuthorPreview },
+        &ApplyContext {
+            channel_id,
+            revision,
+            author,
+            author_key,
+            timestamp,
+            proof: ProofCheck::AuthorPreview,
+        },
     )
 }
 
-fn verify_invite_proof(invite_pub: &KeyBytes, actions: &[u8], proof: &[u8]) -> Result<(), VerifyError> {
+fn verify_invite_proof(
+    invite_pub: &KeyBytes,
+    actions: &[u8],
+    proof: &[u8],
+) -> Result<(), VerifyError> {
     let key = PublicKey::deserialize(invite_pub).map_err(|_| VerifyError::BadInviteProof)?;
     if proof.len() != 64 || !key.verify_signature(&signed_message(INVITE_DOMAIN, actions), proof) {
         return Err(VerifyError::BadInviteProof);

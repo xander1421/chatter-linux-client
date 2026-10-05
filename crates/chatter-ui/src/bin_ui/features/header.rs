@@ -10,8 +10,8 @@ use chatter_core::client::ChatterClient;
 use chatter_core::domain::ids::MessageId;
 use chatter_core::state::ActiveConversation;
 
-use crate::bin_ui::converters::messages_to_display_batch;
 use crate::MainWindow;
+use crate::bin_ui::converters::messages_to_display_batch;
 
 /// Wire header callbacks.
 pub fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
@@ -38,7 +38,12 @@ fn wire_pinned_navigation(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
 
     window.on_pinned_prev_clicked(move || {
         chat_state_prev_nav.pinned_navigate_prev();
-        update_pinned_ui_from_loaded_messages(weak_window.clone(), chat_state_prev_nav.clone(), ui_ctx_prev.clone(), chat_state.active_conversation());
+        update_pinned_ui_from_loaded_messages(
+            weak_window.clone(),
+            chat_state_prev_nav.clone(),
+            ui_ctx_prev.clone(),
+            chat_state.active_conversation(),
+        );
     });
 
     // Next pinned message
@@ -49,7 +54,12 @@ fn wire_pinned_navigation(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
 
     window.on_pinned_next_clicked(move || {
         chat_state_next_nav.pinned_navigate_next();
-        update_pinned_ui_from_loaded_messages(weak_window.clone(), chat_state_next_nav.clone(), ui_ctx_next.clone(), chat_state.active_conversation());
+        update_pinned_ui_from_loaded_messages(
+            weak_window.clone(),
+            chat_state_next_nav.clone(),
+            ui_ctx_next.clone(),
+            chat_state.active_conversation(),
+        );
     });
 
     // Dismiss pinned bar
@@ -91,9 +101,10 @@ fn wire_pinned_navigation(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     let ui_ctx_goto = ui_ctx.clone();
 
     window.on_pinned_go_to_message(move || {
-        if let (Some(message_id), Some(w)) =
-            (chat_state_goto.pinned_current_message_id(), weak_window.upgrade())
-        {
+        if let (Some(message_id), Some(w)) = (
+            chat_state_goto.pinned_current_message_id(),
+            weak_window.upgrade(),
+        ) {
             jump_to_message(&w, &ui_ctx_goto, &message_id.to_string());
         }
     });
@@ -174,7 +185,8 @@ fn wire_chat_settings_clicked(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) 
             std::thread::spawn(move || {
                 // Shared with the live refresh on membership events
                 // (`refresh_members_if_open`), so both read the same roster.
-                let Some(roster) = super::modals::load_private_group_roster(&ui_ctx, group_id) else {
+                let Some(roster) = super::modals::load_private_group_roster(&ui_ctx, group_id)
+                else {
                     return;
                 };
                 let _ = slint::invoke_from_event_loop(move || {
@@ -208,7 +220,11 @@ fn wire_chat_settings_clicked(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) 
             let _ = slint::invoke_from_event_loop(move || {
                 if let Some(w) = weak.upgrade() {
                     super::modals::open_user_profile(
-                        &w, &peer_id, &auth_state, &user_state, Some(&ui_ctx),
+                        &w,
+                        &peer_id,
+                        &auth_state,
+                        &user_state,
+                        Some(&ui_ctx),
                     );
                     crate::bin_ui::features::back::push(&w, "user-profile");
                 }
@@ -225,11 +241,7 @@ fn wire_chat_settings_clicked(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) 
             }
         };
 
-        super::modals::open_channel_settings(
-            weak_window.clone(),
-            ui_ctx.clone(),
-            channel_id,
-        );
+        super::modals::open_channel_settings(weak_window.clone(), ui_ctx.clone(), channel_id);
     });
 }
 
@@ -253,9 +265,7 @@ fn wire_invite_member(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                 });
             }
             ActiveConversation::Channel(channel_id) => {
-                crate::bin_ui::features::modals::open_invite_member_modal(
-                    weak, ui_ctx, channel_id,
-                );
+                crate::bin_ui::features::modals::open_invite_member_modal(weak, ui_ctx, channel_id);
             }
             _ => {
                 tracing::debug!("Invite not available for this conversation type");
@@ -278,8 +288,11 @@ fn wire_load_more(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
 /// Row of the open list holding `message_id`.
 fn row_of(w: &MainWindow, message_id: &str) -> Option<usize> {
     let messages = w.get_messages();
-    (0..messages.row_count())
-        .find(|&i| messages.row_data(i).is_some_and(|m| m.message_id.as_str() == message_id))
+    (0..messages.row_count()).find(|&i| {
+        messages
+            .row_data(i)
+            .is_some_and(|m| m.message_id.as_str() == message_id)
+    })
 }
 
 /// Scroll the open conversation to `message_id` and flash it: a quote's
@@ -378,7 +391,10 @@ fn load_older(w: &MainWindow, ui_ctx: &Arc<ChatterClient>, until: Option<Message
         );
 
         // Get current user ID for is_own calculation
-        let current_user_id = ui_ctx.session_current_user_id().map(|id| id.to_string()).unwrap_or_default();
+        let current_user_id = ui_ctx
+            .session_current_user_id()
+            .map(|id| id.to_string())
+            .unwrap_or_default();
 
         let _ = slint::invoke_from_event_loop(move || {
             let Some(w) = weak.upgrade() else { return };
@@ -387,10 +403,14 @@ fn load_older(w: &MainWindow, ui_ctx: &Arc<ChatterClient>, until: Option<Message
                 return;
             }
             // Convert display data to Slint types (must be done on UI thread)
-            let slint_messages: Vec<_> = display_messages.iter().map(|d| d.to_slint_with_user(&current_user_id)).collect();
+            let slint_messages: Vec<_> = display_messages
+                .iter()
+                .map(|d| d.to_slint_with_user(&current_user_id))
+                .collect();
 
             let current_model = w.get_messages();
-            let current_ids: std::collections::HashSet<String> = current_model.iter()
+            let current_ids: std::collections::HashSet<String> = current_model
+                .iter()
                 .map(|msg| msg.message_id.to_string())
                 .collect();
 

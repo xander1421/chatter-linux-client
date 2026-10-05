@@ -57,7 +57,10 @@ impl MeshConfig {
     #[must_use]
     pub fn relay_urls(&self) -> Vec<String> {
         if self.relays.is_empty() {
-            DEFAULT_RELAYS.iter().map(|url| (*url).to_string()).collect()
+            DEFAULT_RELAYS
+                .iter()
+                .map(|url| (*url).to_string())
+                .collect()
         } else {
             self.relays.clone()
         }
@@ -83,7 +86,12 @@ mod tests {
     fn an_empty_relay_list_falls_back_to_the_defaults() {
         let config = MeshConfig::default();
         assert_eq!(config.relay_urls().len(), DEFAULT_RELAYS.len());
-        assert!(config.relay_urls().iter().all(|url| url.starts_with("wss://")));
+        assert!(
+            config
+                .relay_urls()
+                .iter()
+                .all(|url| url.starts_with("wss://"))
+        );
     }
 
     #[test]

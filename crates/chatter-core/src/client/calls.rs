@@ -1,8 +1,8 @@
 //! Call orchestration (DM / group / anonymous) plus call history and lifecycle.
 
+use super::{ChatterClient, ClientError};
 #[cfg(feature = "media")]
 use crate::services::call_worker::CallWorkerHandle;
-use super::{ChatterClient, ClientError};
 
 /// One load of the Calls screen: the rows to render plus the unseen
 /// missed-call count for the tab badge. Both come from the same blocking read so the
@@ -56,7 +56,10 @@ pub fn room_roster_keeps_screen(
     local: Option<&str>,
 ) -> bool {
     tile_name == crate::calls::tiles::LOCAL_SCREEN_TILE_NAME
-        || remotes.iter().map(|(id, _)| id.as_str()).chain(local)
+        || remotes
+            .iter()
+            .map(|(id, _)| id.as_str())
+            .chain(local)
             .any(|id| crate::calls::screen_share_frame_id(id, true) == tile_id)
 }
 
@@ -92,7 +95,9 @@ impl ChatterClient {
         call_type: crate::domain::call::CallType,
         display_name: &str,
     ) -> Result<OutgoingCallStart, ClientError> {
-        let start = self.dispatch_start_call(conversation, call_type, display_name).await?;
+        let start = self
+            .dispatch_start_call(conversation, call_type, display_name)
+            .await?;
         self.open_outgoing_history_row(conversation, &start).await;
         Ok(start)
     }
@@ -163,7 +168,8 @@ impl ChatterClient {
         use crate::domain::call::CallType as CT;
         use crate::state::ActiveConversation as AC;
 
-        let user_id = self.session_current_user_id()
+        let user_id = self
+            .session_current_user_id()
             .ok_or_else(|| ClientError::Validation("not logged in".into()))?;
         let is_video = matches!(call_type, CT::Video);
 
@@ -292,7 +298,9 @@ impl ChatterClient {
         call_type: crate::domain::call::CallType,
         user_id: crate::domain::ids::UserId,
     ) -> Result<crate::domain::ids::CallId, ClientError> {
-        let call_worker = self.call_service().get()
+        let call_worker = self
+            .call_service()
+            .get()
             .ok_or_else(|| ClientError::Inbox("Call service not initialized".into()))?
             .clone();
         self.call_signaling()
@@ -317,7 +325,9 @@ impl ChatterClient {
         call_type: crate::domain::call::CallType,
         user_id: crate::domain::ids::UserId,
     ) -> Result<crate::domain::call::CallSetupResult, ClientError> {
-        let call_worker = self.call_service().get()
+        let call_worker = self
+            .call_service()
+            .get()
             .ok_or_else(|| ClientError::Inbox("Call service not initialized".into()))?
             .clone();
 
@@ -355,14 +365,36 @@ impl ChatterClient {
             // Rung for it too: the ring is answered now, and any key held for
             // the join belongs to this one (else it would sit in the invite).
             let call_id = call.id.to_string();
-            call_worker.orch_withdraw_incoming(CallHandle::from(call_id.as_str()), crate::services::call_worker::CallEndReason::AnsweredElsewhere);
-            let _ = self.services.notification_service.cancel_incoming_call(&call_id);
+            call_worker.orch_withdraw_incoming(
+                CallHandle::from(call_id.as_str()),
+                crate::services::call_worker::CallEndReason::AnsweredElsewhere,
+            );
+            let _ = self
+                .services
+                .notification_service
+                .cancel_incoming_call(&call_id);
             for pending in self.call_signaling().take_group_call_invite(&call_id) {
                 self.install_participant_group_key(
-                    &call_worker, call.id, &channel_id, pending.sender, *pending.key, pending.epoch, false,
-                ).await;
+                    &call_worker,
+                    call.id,
+                    &channel_id,
+                    pending.sender,
+                    *pending.key,
+                    pending.epoch,
+                    false,
+                )
+                .await;
             }
-            spawn_group_key_wait(self.device_inbox_provider().get().cloned(), call_worker.clone(), self.call_signaling().clone(), user_id, call.id, channel_id, 0, KEY_REQUEST_AFTER);
+            spawn_group_key_wait(
+                self.device_inbox_provider().get().cloned(),
+                call_worker.clone(),
+                self.call_signaling().clone(),
+                user_id,
+                call.id,
+                channel_id,
+                0,
+                KEY_REQUEST_AFTER,
+            );
         } else {
             // Publish microphone immediately: the key is ours, and we are alone.
             if let Err(e) = call_worker.publish_microphone(None).await {
@@ -385,7 +417,13 @@ impl ChatterClient {
             tokio::spawn(async move {
                 use crate::services::message::ChannelCallPhase;
                 if let Err(e) = messages
-                    .post_channel_call_event(&channel_id, &started_id, ChannelCallPhase::Started, 0, is_video)
+                    .post_channel_call_event(
+                        &channel_id,
+                        &started_id,
+                        ChannelCallPhase::Started,
+                        0,
+                        is_video,
+                    )
                     .await
                 {
                     tracing::warn!(error = %e, "Channel call STARTED not posted");
@@ -398,7 +436,8 @@ impl ChatterClient {
             channel_id,
             verification_emojis: Default::default(),
             is_video,
-            started_at_ns: call.started_at
+            started_at_ns: call
+                .started_at
                 .and_then(|d| d.timestamp_nanos_opt())
                 .filter(|n| *n > 0)
                 .map(|n| n as u64)
@@ -416,7 +455,9 @@ impl ChatterClient {
         call_id: &str,
         peer_id: &crate::domain::ids::UserId,
     ) -> Result<crate::domain::call::CallSetupResult, ClientError> {
-        let call_worker = self.call_service().get()
+        let call_worker = self
+            .call_service()
+            .get()
             .ok_or_else(|| ClientError::Inbox("Call service not initialized".into()))?
             .clone();
         self.call_signaling()
@@ -442,7 +483,9 @@ impl ChatterClient {
         caller_id: &crate::domain::ids::UserId,
         user_id: crate::domain::ids::UserId,
     ) -> Result<crate::domain::call::CallSetupResult, ClientError> {
-        let call_worker = self.call_service().get()
+        let call_worker = self
+            .call_service()
+            .get()
             .ok_or_else(|| ClientError::Inbox("Call service not initialized".into()))?
             .clone();
         self.call_signaling()
@@ -477,7 +520,9 @@ impl ChatterClient {
     ) -> Result<AcceptedIncomingCall, ClientError> {
         use crate::services::call_worker::{CallEndReason, CallHandle, OrchestratedCallKind};
 
-        let worker = self.call_service().get()
+        let worker = self
+            .call_service()
+            .get()
             .ok_or_else(|| ClientError::Inbox("Call service not initialized".into()))?
             .clone();
 
@@ -493,7 +538,10 @@ impl ChatterClient {
         // The call has left the ringing set, so its ring notification goes —
         // whether the answer came from the in-app modal or the notification's
         // own Accept, and whether or not the connect below succeeds.
-        let _ = self.services.notification_service.cancel_incoming_call(call_id);
+        let _ = self
+            .services
+            .notification_service
+            .cancel_incoming_call(call_id);
 
         if replaces_active {
             // Fire wire-level hangup on the current active call so the old
@@ -508,56 +556,58 @@ impl ChatterClient {
         let peer_id = snapshot.peer_id;
         let is_video = snapshot.is_video;
 
-        let accepted = async { Ok::<_, ClientError>(match kind {
-            OrchestratedCallKind::DmStandard => {
-                let ephemeral = snapshot.ephemeral_public_key.ok_or_else(|| {
-                    ClientError::Inbox(
-                        "DM accept missing ephemeral key in orchestrator snapshot".into(),
-                    )
-                })?;
-                let user_id = self.session_current_user_id().ok_or_else(|| {
-                    ClientError::Inbox("Not logged in".into())
-                })?;
-                let setup = self
-                    .accept_dm_call(ephemeral, call_id, &peer_id, user_id)
-                    .await?;
-                worker.orch_mark_connected(
-                    CallHandle::from(setup.call_id.to_string()),
-                    kind,
-                    peer_id,
-                    is_video,
-                );
-                AcceptedIncomingCall::Dm {
-                    setup,
-                    peer_id,
-                    peer_name: snapshot.peer_name,
-                    is_video,
+        let accepted = async {
+            Ok::<_, ClientError>(match kind {
+                OrchestratedCallKind::DmStandard => {
+                    let ephemeral = snapshot.ephemeral_public_key.ok_or_else(|| {
+                        ClientError::Inbox(
+                            "DM accept missing ephemeral key in orchestrator snapshot".into(),
+                        )
+                    })?;
+                    let user_id = self
+                        .session_current_user_id()
+                        .ok_or_else(|| ClientError::Inbox("Not logged in".into()))?;
+                    let setup = self
+                        .accept_dm_call(ephemeral, call_id, &peer_id, user_id)
+                        .await?;
+                    worker.orch_mark_connected(
+                        CallHandle::from(setup.call_id.to_string()),
+                        kind,
+                        peer_id,
+                        is_video,
+                    );
+                    AcceptedIncomingCall::Dm {
+                        setup,
+                        peer_id,
+                        peer_name: snapshot.peer_name,
+                        is_video,
+                    }
                 }
-            }
-            OrchestratedCallKind::AnonDm | OrchestratedCallKind::AnonGroup => {
-                let setup = self.accept_anon_call(call_id).await?;
-                worker.orch_mark_connected(
-                    CallHandle::from(setup.room_name.clone()),
-                    kind,
-                    peer_id,
-                    setup.is_video,
-                );
-                AcceptedIncomingCall::Anon { setup, peer_id }
-            }
-            OrchestratedCallKind::GroupChannel => {
-                let setup = self.join_group_call(&worker, call_id).await?;
-                worker.orch_mark_connected(
-                    CallHandle::from(call_id),
-                    kind,
-                    peer_id,
-                    setup.is_video,
-                );
-                AcceptedIncomingCall::Group {
-                    setup,
-                    title: snapshot.channel_context.unwrap_or_default(),
+                OrchestratedCallKind::AnonDm | OrchestratedCallKind::AnonGroup => {
+                    let setup = self.accept_anon_call(call_id).await?;
+                    worker.orch_mark_connected(
+                        CallHandle::from(setup.room_name.clone()),
+                        kind,
+                        peer_id,
+                        setup.is_video,
+                    );
+                    AcceptedIncomingCall::Anon { setup, peer_id }
                 }
-            }
-        }) }
+                OrchestratedCallKind::GroupChannel => {
+                    let setup = self.join_group_call(&worker, call_id).await?;
+                    worker.orch_mark_connected(
+                        CallHandle::from(call_id),
+                        kind,
+                        peer_id,
+                        setup.is_video,
+                    );
+                    AcceptedIncomingCall::Group {
+                        setup,
+                        title: snapshot.channel_context.unwrap_or_default(),
+                    }
+                }
+            })
+        }
         .await;
 
         // The call left the ringing set above, so nothing else will ever end
@@ -694,25 +744,37 @@ impl ChatterClient {
     pub async fn call_room_snapshot(&self) -> Option<CallRoomSnapshot> {
         let worker = self.call_service().get()?.clone();
         let call = worker.active_call().await?;
-        let connected = matches!(worker.room_state().await, crate::calls::RoomState::Connected { .. });
+        let connected = matches!(
+            worker.room_state().await,
+            crate::calls::RoomState::Connected { .. }
+        );
         let remotes = if connected && call.connected_at.is_some() {
             let mut identities = worker.remote_participant_identities().await;
             identities.sort();
             identities.dedup();
-            Some(identities.into_iter().map(|id| {
-                let info = self.resolve_call_participant(&id);
-                (id, info)
-            }).collect())
+            Some(
+                identities
+                    .into_iter()
+                    .map(|id| {
+                        let info = self.resolve_call_participant(&id);
+                        (id, info)
+                    })
+                    .collect(),
+            )
         } else {
             None
         };
         let current = worker.active_call().await?;
-        if current.id != call.id || current.channel_id != call.channel_id
+        if current.id != call.id
+            || current.channel_id != call.channel_id
             || current.connected_at != call.connected_at
         {
             return None;
         }
-        Some(CallRoomSnapshot { call: current, remotes })
+        Some(CallRoomSnapshot {
+            call: current,
+            remotes,
+        })
     }
 
     /// Locally mute/unmute a remote participant's audio. The LiveKit
@@ -766,11 +828,8 @@ impl ChatterClient {
     #[cfg(feature = "media")]
     pub fn subscribe_call_orchestrator_events(
         &self,
-    ) -> Option<
-        tokio::sync::broadcast::Receiver<
-            crate::services::call_worker::CallOrchestratorEvent,
-        >,
-    > {
+    ) -> Option<tokio::sync::broadcast::Receiver<crate::services::call_worker::CallOrchestratorEvent>>
+    {
         self.call_service().get().map(|w| w.subscribe_call_events())
     }
 
@@ -800,7 +859,9 @@ impl ChatterClient {
     #[cfg(feature = "media")]
     pub async fn call_leave_room(&self) -> Result<(), crate::error::CallError> {
         if let Some(worker) = self.call_service().get().cloned() {
-            worker.leave_call(crate::services::call_worker::CallEndReason::LocalHangup).await?;
+            worker
+                .leave_call(crate::services::call_worker::CallEndReason::LocalHangup)
+                .await?;
         }
         Ok(())
     }
@@ -820,13 +881,12 @@ impl ChatterClient {
     /// (which emits `IncomingWithdrawn { Declined }`) and then fires the
     /// wire-level decline on the appropriate transport.
     #[cfg(feature = "media")]
-    pub async fn decline_presented_incoming_call(
-        &self,
-        call_id: &str,
-    ) -> Result<(), ClientError> {
+    pub async fn decline_presented_incoming_call(&self, call_id: &str) -> Result<(), ClientError> {
         use crate::services::call_worker::{CallHandle, OrchestratedCallKind};
 
-        let worker = self.call_service().get()
+        let worker = self
+            .call_service()
+            .get()
             .ok_or_else(|| ClientError::Inbox("Call service not initialized".into()))?
             .clone();
 
@@ -839,15 +899,16 @@ impl ChatterClient {
             OrchestratedCallKind::DmStandard => {
                 // The caller hears the decline end-to-end; our other
                 // devices get its DECLINED_ELSEWHERE copy and stop ringing.
-                if let Err(e) = self.call_signaling()
+                if let Err(e) = self
+                    .call_signaling()
                     .send_call_decline(&snapshot.peer_id, call_id)
                     .await
                 {
                     tracing::warn!(error = %e, call_id, "Call decline not delivered");
                 }
-                self.decline_call(call_id).await.map_err(|e| {
-                    ClientError::Inbox(format!("decline_call: {e}"))
-                })?;
+                self.decline_call(call_id)
+                    .await
+                    .map_err(|e| ClientError::Inbox(format!("decline_call: {e}")))?;
             }
             // A group call goes on without us (Signal): declining only stops
             // our ringing. Nothing goes on the wire — we never joined the call
@@ -856,9 +917,9 @@ impl ChatterClient {
                 self.call_signaling().take_group_call_invite(call_id);
             }
             OrchestratedCallKind::AnonDm | OrchestratedCallKind::AnonGroup => {
-                self.decline_anon_call(call_id).await.map_err(|e| {
-                    ClientError::Inbox(format!("decline_anon_call: {e}"))
-                })?;
+                self.decline_anon_call(call_id)
+                    .await
+                    .map_err(|e| ClientError::Inbox(format!("decline_anon_call: {e}")))?;
             }
         }
         Ok(())
@@ -898,13 +959,21 @@ impl ChatterClient {
     ) -> bool {
         use crate::domain::call::GroupCallSignal;
 
-        let Some(worker) = self.call_service().get().cloned() else { return false };
+        let Some(worker) = self.call_service().get().cloned() else {
+            return false;
+        };
         let Ok(call) = call_id.parse::<crate::domain::ids::CallId>() else {
-            tracing::warn!(call_id, "Group call signal with a malformed call id; ignored");
+            tracing::warn!(
+                call_id,
+                "Group call signal with a malformed call id; ignored"
+            );
             return false;
         };
         let membership_started = std::time::Instant::now();
-        let membership = self.call_signaling().is_channel_member(&channel_id, &sender_id).await;
+        let membership = self
+            .call_signaling()
+            .is_channel_member(&channel_id, &sender_id)
+            .await;
         let stage = match &membership {
             Ok(true) => "group_signal_membership_validated",
             Ok(false) => "group_signal_membership_rejected",
@@ -928,33 +997,62 @@ impl ChatterClient {
                 if worker.active_call().await.is_some_and(|c| c.id == call) {
                     return false;
                 }
-                self.present_group_call_ring(&worker, call_id, sender_id, channel_id).await;
+                self.present_group_call_ring(&worker, call_id, sender_id, channel_id)
+                    .await;
                 false
             }
             GroupCallSignal::Key { key, epoch } => {
                 // Checked before the active call: a join takes the invite only
                 // after the call is active, so a key that misses the invite
                 // finds the call.
-                if self.call_signaling().buffer_group_call_key(&call_id, sender_id, key, epoch) {
+                if self
+                    .call_signaling()
+                    .buffer_group_call_key(&call_id, sender_id, key, epoch)
+                {
                     return false;
                 }
                 if worker.active_call().await.is_some_and(|c| c.id == call) {
-                    self.install_participant_group_key(&worker, call, &channel_id, sender_id, key, epoch, true).await;
+                    self.install_participant_group_key(
+                        &worker,
+                        call,
+                        &channel_id,
+                        sender_id,
+                        key,
+                        epoch,
+                        true,
+                    )
+                    .await;
                 } else {
-                    tracing::debug!(call_id, epoch, "Group call key for a call we are not in; ignored");
+                    tracing::debug!(
+                        call_id,
+                        epoch,
+                        "Group call key for a call we are not in; ignored"
+                    );
                 }
                 false
             }
             GroupCallSignal::KeyRequest => {
-                let Some(me) = self.sessions().current_user_id() else { return false };
+                let Some(me) = self.sessions().current_user_id() else {
+                    return false;
+                };
                 let active = worker.active_call().await;
                 let seniority = worker.room_seniority().await;
-                let due = key_request_is_due(&me, call, &channel_id, &sender_id, active.as_ref(), seniority.as_ref());
+                let due = key_request_is_due(
+                    &me,
+                    call,
+                    &channel_id,
+                    &sender_id,
+                    active.as_ref(),
+                    seniority.as_ref(),
+                );
                 if !due {
                     tracing::debug!(%sender_id, call_id, "Group call key request not ours to answer; ignored");
                     return false;
                 }
-                if self.call_signaling().recently_keyed(&call_id, &sender_id, KEY_IN_FLIGHT_WINDOW) {
+                if self
+                    .call_signaling()
+                    .recently_keyed(&call_id, &sender_id, KEY_IN_FLIGHT_WINDOW)
+                {
                     tracing::debug!(%sender_id, call_id, "Group call key request crossed its key in flight; not re-rotating");
                     return false;
                 }
@@ -969,8 +1067,12 @@ impl ChatterClient {
     /// asking until a newer key is installed ([`await_group_call_key`]).
     #[cfg(feature = "media")]
     pub(crate) fn resync_group_call_key(&self) {
-        let Some(worker) = self.call_service().get().cloned() else { return };
-        let Some(me) = self.sessions().current_user_id() else { return };
+        let Some(worker) = self.call_service().get().cloned() else {
+            return;
+        };
+        let Some(me) = self.sessions().current_user_id() else {
+            return;
+        };
         let signaling = self.call_signaling().clone();
         let inbox = self.device_inbox_provider().get().cloned();
         tokio::spawn(async move {
@@ -980,10 +1082,27 @@ impl ChatterClient {
             if worker.orch_active_kind().await != Some(OrchestratedCallKind::GroupChannel) {
                 return;
             }
-            let Some(status) = worker.group_key_status().await else { return };
-            let Some(call) = worker.active_call().await.filter(|c| c.id == status.call_id) else { return };
+            let Some(status) = worker.group_key_status().await else {
+                return;
+            };
+            let Some(call) = worker
+                .active_call()
+                .await
+                .filter(|c| c.id == status.call_id)
+            else {
+                return;
+            };
             tracing::info!(call_id = %call.id, "Group call signals may have been lost; requesting a fresh key");
-            spawn_group_key_wait(inbox, worker, signaling, me, call.id, call.channel_id, status.anchor, std::time::Duration::ZERO);
+            spawn_group_key_wait(
+                inbox,
+                worker,
+                signaling,
+                me,
+                call.id,
+                call.channel_id,
+                status.anchor,
+                std::time::Duration::ZERO,
+            );
         });
     }
 
@@ -1009,8 +1128,13 @@ impl ChatterClient {
         settle: bool,
     ) {
         let key = zeroize::Zeroizing::new(key);
-        let in_channel = worker.active_call().await.is_some_and(|c| c.id == call && c.channel_id == *channel_id);
-        let remote = |s: Option<crate::services::call_worker::RoomSeniority>| s.map(|s| s.remote).unwrap_or_default();
+        let in_channel = worker
+            .active_call()
+            .await
+            .is_some_and(|c| c.id == call && c.channel_id == *channel_id);
+        let remote = |s: Option<crate::services::call_worker::RoomSeniority>| {
+            s.map(|s| s.remote).unwrap_or_default()
+        };
         let mut roster = remote(worker.room_seniority().await);
         if settle {
             let events = tokio::sync::Mutex::new(worker.subscribe_room_events());
@@ -1020,9 +1144,13 @@ impl ChatterClient {
                 || async { remote(worker.room_seniority().await) },
                 // Woken by a room event (a departure) or, at the latest, a
                 // short re-read: an event lost to a lag must not stall it.
-                || async { let _ = tokio::time::timeout(KEY_AUTHORITY_RECHECK, events.lock().await.recv()).await; },
+                || async {
+                    let _ = tokio::time::timeout(KEY_AUTHORITY_RECHECK, events.lock().await.recv())
+                        .await;
+                },
                 KEY_AUTHORITY_SETTLE_MAX,
-            ).await;
+            )
+            .await;
         }
         if !in_channel || !is_key_authority(&sender_id, &roster) {
             tracing::warn!(%sender_id, %call, "Group call key from outside the call or not its key authority; ignored");
@@ -1047,16 +1175,24 @@ impl ChatterClient {
         channel_id: crate::domain::ids::ChannelId,
     ) {
         use crate::proto::chat_v1::CallType as ProtoCallType;
-        use crate::services::call_worker::{offer_is_stale_now, CallEndReason, CallHandle, OrchestratedCallKind, RING_TIMEOUT};
+        use crate::services::call_worker::{
+            CallEndReason, CallHandle, OrchestratedCallKind, RING_TIMEOUT, offer_is_stale_now,
+        };
 
         use crate::services::call_signaling::CALL_POLICY_RPC_TIMEOUT;
 
         let mut call_client = self.services.grpc_pool.call_client();
         let channel = channel_id.to_string();
-        let lookup = tokio::time::timeout(CALL_POLICY_RPC_TIMEOUT, call_client.get_active_call_in_channel(&channel));
+        let lookup = tokio::time::timeout(
+            CALL_POLICY_RPC_TIMEOUT,
+            call_client.get_active_call_in_channel(&channel),
+        );
         let info = match lookup.await {
             Err(_) => {
-                tracing::warn!(call_id, "Group call ring: active-call lookup timed out; ignored");
+                tracing::warn!(
+                    call_id,
+                    "Group call ring: active-call lookup timed out; ignored"
+                );
                 return;
             }
             Ok(Ok(Some(info))) => info,
@@ -1078,11 +1214,22 @@ impl ChatterClient {
             Ok(ProtoCallType::Video | ProtoCallType::ScreenShare)
         );
         let peer_name = self.display_name(&sender_id);
-        let channel_name = self.channels().get_channel_local(&channel_id).ok().flatten().map(|c| c.name);
+        let channel_name = self
+            .channels()
+            .get_channel_local(&channel_id)
+            .ok()
+            .flatten()
+            .map(|c| c.name);
         let handle = CallHandle::from(call_id.as_str());
 
         if offer_is_stale_now(info.created_at) {
-            worker.orch_missed_incoming(handle, OrchestratedCallKind::GroupChannel, peer_name, is_video, channel_id.to_string());
+            worker.orch_missed_incoming(
+                handle,
+                OrchestratedCallKind::GroupChannel,
+                peer_name,
+                is_video,
+                channel_id.to_string(),
+            );
             return;
         }
         if !self.call_signaling().store_group_call_invite(&call_id) {
@@ -1122,30 +1269,51 @@ impl ChatterClient {
         worker: &CallWorkerHandle,
         call_id: &str,
     ) -> Result<crate::domain::call::CallSetupResult, ClientError> {
-        let call = call_id.parse::<crate::domain::ids::CallId>()
+        let call = call_id
+            .parse::<crate::domain::ids::CallId>()
             .map_err(|_| ClientError::Inbox("malformed group call id".into()))?;
         tracing::info!(stage = "join_group_call_core_entry", call_id = %call, elapsed_us = 0u64, "Call stage");
-        let user_id = self.session_current_user_id()
+        let user_id = self
+            .session_current_user_id()
             .ok_or_else(|| ClientError::Inbox("Not logged in".into()))?;
         self.call_signaling().accept_group_call_invite(call_id);
 
-        let joined = worker.join_group_call(call, user_id).await
+        let joined = worker
+            .join_group_call(call, user_id)
+            .await
             .map_err(|e| ClientError::Inbox(e.to_string()))?;
 
         // Only the key authority's passes; the others are dropped there.
         for pending in self.call_signaling().take_group_call_invite(call_id) {
             self.install_participant_group_key(
-                worker, call, &joined.channel_id, pending.sender, *pending.key, pending.epoch, false,
-            ).await;
+                worker,
+                call,
+                &joined.channel_id,
+                pending.sender,
+                *pending.key,
+                pending.epoch,
+                false,
+            )
+            .await;
         }
-        spawn_group_key_wait(self.device_inbox_provider().get().cloned(), worker.clone(), self.call_signaling().clone(), user_id, call, joined.channel_id, 0, KEY_REQUEST_AFTER);
+        spawn_group_key_wait(
+            self.device_inbox_provider().get().cloned(),
+            worker.clone(),
+            self.call_signaling().clone(),
+            user_id,
+            call,
+            joined.channel_id,
+            0,
+            KEY_REQUEST_AFTER,
+        );
 
         Ok(crate::domain::call::CallSetupResult {
             call_id: call,
             channel_id: joined.channel_id,
             verification_emojis: Default::default(),
             is_video: matches!(joined.call_type, crate::domain::call::CallType::Video),
-            started_at_ns: joined.started_at
+            started_at_ns: joined
+                .started_at
                 .and_then(|d| d.timestamp_nanos_opt())
                 .filter(|n| *n > 0)
                 .map(|n| n as u64)
@@ -1163,7 +1331,9 @@ impl ChatterClient {
         is_video: bool,
         display_name: &str,
     ) -> Result<crate::services::anon_dm::AnonCallOfferResult, ClientError> {
-        let call_worker = self.call_service().get()
+        let call_worker = self
+            .call_service()
+            .get()
             .ok_or_else(|| ClientError::Inbox("Call service not initialized".into()))?;
         self.call_signaling()
             .start_anon_dm_call(anon_dm_id, is_video, display_name, call_worker)
@@ -1179,7 +1349,9 @@ impl ChatterClient {
         is_video: bool,
         display_name: &str,
     ) -> Result<crate::services::anon_dm::AnonCallOfferResult, ClientError> {
-        let call_worker = self.call_service().get()
+        let call_worker = self
+            .call_service()
+            .get()
             .ok_or_else(|| ClientError::Inbox("Call service not initialized".into()))?;
         self.call_signaling()
             .start_anon_group_call(group_id, is_video, display_name, call_worker)
@@ -1193,7 +1365,9 @@ impl ChatterClient {
         &self,
         room_name: &str,
     ) -> Result<crate::domain::call::AnonCallSetupResult, ClientError> {
-        let call_worker = self.call_service().get()
+        let call_worker = self
+            .call_service()
+            .get()
             .ok_or_else(|| ClientError::Inbox("Call service not initialized".into()))?
             .clone();
         self.call_signaling()
@@ -1207,10 +1381,7 @@ impl ChatterClient {
     // No client facade — UI reacts to orchestrator events instead.
 
     /// Decline an incoming anonymous call: send decline answer, store missed call history.
-    pub async fn decline_anon_call(
-        &self,
-        room_name: &str,
-    ) -> Result<(), ClientError> {
+    pub async fn decline_anon_call(&self, room_name: &str) -> Result<(), ClientError> {
         self.call_signaling()
             .decline_anon_call(room_name)
             .await
@@ -1253,7 +1424,10 @@ impl ChatterClient {
                 tracing::warn!(error = %e, "call history: mark missed seen failed");
             }
             Ok::<_, ClientError>(CallHistoryPage {
-                rows: entries.iter().map(crate::ui::CallHistoryRowData::from).collect(),
+                rows: entries
+                    .iter()
+                    .map(crate::ui::CallHistoryRowData::from)
+                    .collect(),
                 missed_count: repo.missed_count().unwrap_or(0) as u32,
             })
         })
@@ -1279,7 +1453,10 @@ impl ChatterClient {
             CT::ServerDm => Some(self.display_name(&conversation_id.parse().ok()?)),
             CT::AnonDm => {
                 let dm = self.get_anon_dm_conversation(&conversation_id.parse().ok()?)?;
-                Some(dm.peer_display_name.unwrap_or_else(|| self.fallback_display_name(&dm.peer_id)))
+                Some(
+                    dm.peer_display_name
+                        .unwrap_or_else(|| self.fallback_display_name(&dm.peer_id)),
+                )
             }
             _ => None,
         }
@@ -1292,7 +1469,10 @@ impl ChatterClient {
         use crate::domain::message::ConversationType as CT;
         match CT::from_str_value(conversation_type).ok()? {
             CT::ServerDm => self.user_avatar(&conversation_id.parse().ok()?),
-            CT::AnonDm => self.get_anon_dm_conversation(&conversation_id.parse().ok()?)?.peer_avatar,
+            CT::AnonDm => {
+                self.get_anon_dm_conversation(&conversation_id.parse().ok()?)?
+                    .peer_avatar
+            }
             _ => None,
         }
     }
@@ -1314,7 +1494,8 @@ impl ChatterClient {
         conversation_type: &str,
         conversation_id: &str,
     ) -> Option<crate::state::ActiveConversation> {
-        let ct = crate::domain::message::ConversationType::from_str_value(conversation_type).ok()?;
+        let ct =
+            crate::domain::message::ConversationType::from_str_value(conversation_type).ok()?;
         crate::state::ActiveConversation::from_routing_key(&ct, conversation_id)
     }
 
@@ -1331,12 +1512,8 @@ impl ChatterClient {
 
     /// Accessor used by the history helpers above and by the signaling
     /// service when it wants to record events from inside core.
-    fn call_history_repo(
-        &self,
-    ) -> crate::storage::repositories::CallHistoryRepository {
-        crate::storage::repositories::CallHistoryRepository::new(
-            self.services.database.clone(),
-        )
+    fn call_history_repo(&self) -> crate::storage::repositories::CallHistoryRepository {
+        crate::storage::repositories::CallHistoryRepository::new(self.services.database.clone())
     }
 
     // ── Call lifecycle ─────────────────────────────────────────────
@@ -1345,10 +1522,15 @@ impl ChatterClient {
     /// from the call ending (`call_history_recorder`).
     #[cfg(feature = "media")]
     pub async fn end_dm_call(&self) -> Result<(), ClientError> {
-        let call_worker = self.call_service().get()
+        let call_worker = self
+            .call_service()
+            .get()
             .ok_or_else(|| ClientError::Inbox("call service not initialized".into()))?;
         self.call_signaling()
-            .end_dm_call(call_worker, crate::services::call_worker::CallEndReason::LocalHangup)
+            .end_dm_call(
+                call_worker,
+                crate::services::call_worker::CallEndReason::LocalHangup,
+            )
             .await
             .map_err(|e| ClientError::Inbox(e.to_string()))
     }
@@ -1362,7 +1544,9 @@ impl ChatterClient {
     /// meaningless for a multi-member channel).
     #[cfg(feature = "media")]
     pub async fn end_group_call(&self, duration_secs: i64) -> Result<(), ClientError> {
-        let call_worker = self.call_service().get()
+        let call_worker = self
+            .call_service()
+            .get()
             .ok_or_else(|| ClientError::Inbox("call service not initialized".into()))?;
         self.call_signaling()
             .end_group_call(call_worker, duration_secs)
@@ -1374,8 +1558,13 @@ impl ChatterClient {
     ///
     /// Returns the conversation_id for UI bubble insertion.
     #[cfg(feature = "media")]
-    pub async fn end_anon_call(&self, duration_secs: i64) -> Result<Option<crate::domain::anon_dm::AnonDmId>, ClientError> {
-        let call_worker = self.call_service().get()
+    pub async fn end_anon_call(
+        &self,
+        duration_secs: i64,
+    ) -> Result<Option<crate::domain::anon_dm::AnonDmId>, ClientError> {
+        let call_worker = self
+            .call_service()
+            .get()
             .ok_or_else(|| ClientError::Inbox("call service not initialized".into()))?;
         self.call_signaling()
             .end_anon_call(call_worker, duration_secs)
@@ -1394,7 +1583,9 @@ impl ChatterClient {
     pub async fn end_active_call(&self) -> Result<(), ClientError> {
         use crate::services::call_worker::OrchestratedCallKind;
 
-        let worker = self.call_service().get()
+        let worker = self
+            .call_service()
+            .get()
             .ok_or_else(|| ClientError::Inbox("call service not initialized".into()))?;
         let kind = match worker.orch_active_kind().await {
             Some(k) => k,
@@ -1405,25 +1596,27 @@ impl ChatterClient {
         };
         // Core owns the connected-time baseline for both the live UI and
         // terminal metadata; never trust a separately accumulated UI timer.
-        let duration_secs = worker.active_call().await
-            .map(|call| call.duration_seconds()).unwrap_or(0);
+        let duration_secs = worker
+            .active_call()
+            .await
+            .map(|call| call.duration_seconds())
+            .unwrap_or(0);
         match kind {
             OrchestratedCallKind::AnonDm | OrchestratedCallKind::AnonGroup => {
                 self.end_anon_call(duration_secs).await.map(|_| ())
             }
-            OrchestratedCallKind::DmStandard => {
-                self.end_dm_call().await
-            }
-            OrchestratedCallKind::GroupChannel => {
-                self.end_group_call(duration_secs).await
-            }
+            OrchestratedCallKind::DmStandard => self.end_dm_call().await,
+            OrchestratedCallKind::GroupChannel => self.end_group_call(duration_secs).await,
         }
     }
 
     /// A participant left the call: rotate so `departed_identity` can't
     /// decrypt future frames ([`Self::rotate_group_call_key`]).
     #[cfg(feature = "media")]
-    pub async fn handle_participant_departed(&self, departed_identity: &str) -> Result<(), ClientError> {
+    pub async fn handle_participant_departed(
+        &self,
+        departed_identity: &str,
+    ) -> Result<(), ClientError> {
         self.rotate_group_call_key(Some(departed_identity)).await
     }
 
@@ -1452,7 +1645,9 @@ impl ChatterClient {
     /// and it is never a joiner, which holds no current key to rotate from.
     #[cfg(feature = "media")]
     async fn rotate_group_call_key(&self, departed: Option<&str>) -> Result<(), ClientError> {
-        let call_worker = self.call_service().get()
+        let call_worker = self
+            .call_service()
+            .get()
             .ok_or_else(|| ClientError::Inbox("call service not initialized".into()))?;
 
         let call = match call_worker.active_call().await {
@@ -1468,11 +1663,16 @@ impl ChatterClient {
         };
 
         use crate::domain::channel::ChannelType;
-        if matches!(channel.channel_type, ChannelType::DirectMessage | ChannelType::SavedMessages) {
+        if matches!(
+            channel.channel_type,
+            ChannelType::DirectMessage | ChannelType::SavedMessages
+        ) {
             return Ok(());
         }
 
-        let my_id = self.sessions().current_user_id()
+        let my_id = self
+            .sessions()
+            .current_user_id()
             .ok_or_else(|| ClientError::Inbox("not logged in".into()))?;
 
         // Sample the roster BEFORE rotating. Rotation is irreversible — it bumps
@@ -1485,8 +1685,11 @@ impl ChatterClient {
         // The departed identity is subtracted explicitly rather than trusting the
         // SDK to have evicted it before firing ParticipantLeft — not an ordering
         // assumption this path should depend on.
-        let Some(seniority) = call_worker.room_seniority().await else { return Ok(()) };
-        let others: Vec<(String, i64)> = seniority.remote
+        let Some(seniority) = call_worker.room_seniority().await else {
+            return Ok(());
+        };
+        let others: Vec<(String, i64)> = seniority
+            .remote
             .into_iter()
             .filter(|(id, _)| Some(id.as_str()) != departed)
             .collect();
@@ -1497,7 +1700,9 @@ impl ChatterClient {
 
         // Generate new random key and rotate locally
         let new_key = crate::crypto::generate_group_call_key();
-        let epoch = call_worker.rotate_key(new_key).await
+        let epoch = call_worker
+            .rotate_key(new_key)
+            .await
             .map_err(|e| ClientError::Inbox(format!("key rotation failed: {e}")))?;
 
         // No wait before sending: we already encrypt with the new key, so
@@ -1511,17 +1716,26 @@ impl ChatterClient {
         if roster.is_empty() {
             // Still rotated: an empty room is not a reason to leave the departed
             // peer holding a working key.
-            tracing::info!(epoch, "Rotated group call key; no other participants to redistribute to");
+            tracing::info!(
+                epoch,
+                "Rotated group call key; no other participants to redistribute to"
+            );
             return Ok(());
         }
 
         let call_id = call.id.to_string();
-        match self.call_signaling()
+        match self
+            .call_signaling()
             .redistribute_group_call_key(&call.channel_id, &call_id, new_key, epoch, &roster)
             .await
         {
             Ok(count) => {
-                tracing::info!(epoch, sent = count, joined = departed.is_none(), "Rotated group call key after a membership change");
+                tracing::info!(
+                    epoch,
+                    sent = count,
+                    joined = departed.is_none(),
+                    "Rotated group call key after a membership change"
+                );
             }
             Err(e) => {
                 tracing::error!(error = %e, "Failed to redistribute rotated group call key");
@@ -1530,7 +1744,6 @@ impl ChatterClient {
 
         Ok(())
     }
-
 }
 
 /// Summary returned by [`ChatterClient::start_call`] for the UI's
@@ -1599,16 +1812,23 @@ fn is_key_authority(sender: &crate::domain::ids::UserId, remote: &[(String, i64)
 /// Deterministic, so the participants agree on one rotator; when it leaves,
 /// the next most senior takes over.
 #[cfg(feature = "media")]
-fn is_designated_rotator(me: &crate::domain::ids::UserId, my_joined_at_ms: i64, others: &[(String, i64)]) -> bool {
+fn is_designated_rotator(
+    me: &crate::domain::ids::UserId,
+    my_joined_at_ms: i64,
+    others: &[(String, i64)],
+) -> bool {
     let me = me.to_string();
-    others.iter().all(|(id, at)| seniority(&me, my_joined_at_ms) < seniority(id, *at))
+    others
+        .iter()
+        .all(|(id, at)| seniority(&me, my_joined_at_ms) < seniority(id, *at))
 }
 
 /// The participant whose keys are installed, as `remote` (the others in
 /// the room) ranks it: the most senior. `None` in an empty room.
 #[cfg(feature = "media")]
 fn key_authority(remote: &[(String, i64)]) -> Option<&str> {
-    remote.iter()
+    remote
+        .iter()
         .min_by(|a, b| seniority(&a.0, a.1).cmp(&seniority(&b.0, b.1)))
         .map(|(id, _)| id.as_str())
 }
@@ -1626,7 +1846,9 @@ fn key_request_is_due(
     active: Option<&crate::domain::call::Call>,
     room: Option<&crate::services::call_worker::RoomSeniority>,
 ) -> bool {
-    let (Some(active), Some(room)) = (active, room) else { return false };
+    let (Some(active), Some(room)) = (active, room) else {
+        return false;
+    };
     let sender = sender.to_string();
     active.id == call
         && active.channel_id == *channel
@@ -1654,7 +1876,9 @@ fn key_wait_step(
     status: Option<crate::services::call_worker::GroupKeyStatus>,
     room: Option<&crate::services::call_worker::RoomSeniority>,
 ) -> KeyWait {
-    let (Some(status), Some(room)) = (status, room) else { return KeyWait::Done };
+    let (Some(status), Some(room)) = (status, room) else {
+        return KeyWait::Done;
+    };
     if status.call_id != call || status.anchor > min_anchor {
         return KeyWait::Done;
     }
@@ -1685,7 +1909,9 @@ fn spawn_group_key_wait(
     first_delay: std::time::Duration,
 ) {
     let call_id = call.to_string();
-    let Some(guard) = signaling.begin_group_key_wait(&call_id) else { return };
+    let Some(guard) = signaling.begin_group_key_wait(&call_id) else {
+        return;
+    };
     tokio::spawn(async move {
         let _guard = guard;
         let _poll_guard = inbox.as_ref().map(|provider| provider.responsive_polling());
@@ -1699,12 +1925,20 @@ fn spawn_group_key_wait(
                 KeyWait::Done => return,
                 KeyWait::Request(authority) => authority,
             };
-            let Ok(authority) = authority.parse::<crate::domain::ids::UserId>() else { return };
-            if let Err(e) = signaling.request_group_call_key(&channel, &call_id, &authority).await {
+            let Ok(authority) = authority.parse::<crate::domain::ids::UserId>() else {
+                return;
+            };
+            if let Err(e) = signaling
+                .request_group_call_key(&channel, &call_id, &authority)
+                .await
+            {
                 tracing::warn!(error = %e, call_id, "Group call key request not sent");
             }
         }
-        tracing::warn!(call_id, "Still no group call key after {KEY_REQUEST_ATTEMPTS} requests");
+        tracing::warn!(
+            call_id,
+            "Still no group call key after {KEY_REQUEST_ATTEMPTS} requests"
+        );
     });
 }
 
@@ -1810,7 +2044,11 @@ mod group_call_key_tests {
     use crate::domain::ids::UserId;
 
     fn user(n: u8) -> UserId {
-        UserId(format!("00000000-0000-4000-8000-0000000000{n:02}").parse().unwrap())
+        UserId(
+            format!("00000000-0000-4000-8000-0000000000{n:02}")
+                .parse()
+                .unwrap(),
+        )
     }
 
     #[test]
@@ -1818,14 +2056,18 @@ mod group_call_key_tests {
         // a joined first, then b, then c; c has the lowest id.
         let (a, b, c) = (user(5), user(7), user(1));
         let view = |skip: &UserId| -> Vec<(String, i64)> {
-            [(a, 100), (b, 200), (c, 300)].iter()
+            [(a, 100), (b, 200), (c, 300)]
+                .iter()
                 .filter(|(u, _)| u != skip)
                 .map(|(u, at)| (u.to_string(), *at))
                 .collect()
         };
         assert!(is_designated_rotator(&a, 100, &view(&a)));
         assert!(!is_designated_rotator(&b, 200, &view(&b)));
-        assert!(!is_designated_rotator(&c, 300, &view(&c)), "a joiner never rotates, lowest id or not");
+        assert!(
+            !is_designated_rotator(&c, 300, &view(&c)),
+            "a joiner never rotates, lowest id or not"
+        );
         // a leaves: b, next most senior, takes over.
         assert!(is_designated_rotator(&b, 200, &[(c.to_string(), 300)]));
         assert!(!is_designated_rotator(&c, 300, &[(b.to_string(), 200)]));
@@ -1840,7 +2082,10 @@ mod group_call_key_tests {
         // As the joiner sees the room: the rotator joined first.
         let room = vec![(mallory.to_string(), 200), (rotator.to_string(), 100)];
         assert!(is_key_authority(&rotator, &room));
-        assert!(!is_key_authority(&mallory, &room), "an in-room non-rotator is ignored");
+        assert!(
+            !is_key_authority(&mallory, &room),
+            "an in-room non-rotator is ignored"
+        );
         assert!(!is_key_authority(&joiner, &room), "not in the room");
         assert!(!is_key_authority(&rotator, &[]));
     }
@@ -1852,29 +2097,72 @@ mod group_call_key_tests {
         }
     }
 
-    fn status(call: crate::domain::ids::CallId, anchor: u32) -> crate::services::call_worker::GroupKeyStatus {
-        crate::services::call_worker::GroupKeyStatus { call_id: call, anchor, awaiting_key: anchor == 0 }
+    fn status(
+        call: crate::domain::ids::CallId,
+        anchor: u32,
+    ) -> crate::services::call_worker::GroupKeyStatus {
+        crate::services::call_worker::GroupKeyStatus {
+            call_id: call,
+            anchor,
+            awaiting_key: anchor == 0,
+        }
     }
 
     /// §124 1k item 5 / item 4: a participant holding no current key asks
     /// the most senior participant — and nobody when the rotation is its own.
     #[test]
     fn a_keyless_participant_asks_the_authority() {
-        let call: crate::domain::ids::CallId = "11111111-2222-4333-8444-555555555555".parse().unwrap();
-        let other: crate::domain::ids::CallId = "11111111-2222-4333-8444-666666666666".parse().unwrap();
+        let call: crate::domain::ids::CallId =
+            "11111111-2222-4333-8444-555555555555".parse().unwrap();
+        let other: crate::domain::ids::CallId =
+            "11111111-2222-4333-8444-666666666666".parse().unwrap();
         let (authority, middle, me) = (user(9), user(1), user(3));
         let r = room(300, &[(middle, 200), (authority, 100)]);
 
-        assert_eq!(key_wait_step(&me, call, 0, Some(status(call, 0)), Some(&r)), KeyWait::Request(authority.to_string()));
-        assert_eq!(key_wait_step(&me, call, 0, Some(status(call, 4)), Some(&r)), KeyWait::Done, "the key came");
+        assert_eq!(
+            key_wait_step(&me, call, 0, Some(status(call, 0)), Some(&r)),
+            KeyWait::Request(authority.to_string())
+        );
+        assert_eq!(
+            key_wait_step(&me, call, 0, Some(status(call, 4)), Some(&r)),
+            KeyWait::Done,
+            "the key came"
+        );
         // A resync waits for a key newer than the one it held.
-        assert_eq!(key_wait_step(&me, call, 4, Some(status(call, 4)), Some(&r)), KeyWait::Request(authority.to_string()));
-        assert_eq!(key_wait_step(&me, call, 4, Some(status(call, 5)), Some(&r)), KeyWait::Done);
-        assert_eq!(key_wait_step(&me, call, 0, Some(status(other, 0)), Some(&r)), KeyWait::Done, "another call");
-        assert_eq!(key_wait_step(&me, call, 0, None, Some(&r)), KeyWait::Done, "left the call");
+        assert_eq!(
+            key_wait_step(&me, call, 4, Some(status(call, 4)), Some(&r)),
+            KeyWait::Request(authority.to_string())
+        );
+        assert_eq!(
+            key_wait_step(&me, call, 4, Some(status(call, 5)), Some(&r)),
+            KeyWait::Done
+        );
+        assert_eq!(
+            key_wait_step(&me, call, 0, Some(status(other, 0)), Some(&r)),
+            KeyWait::Done,
+            "another call"
+        );
+        assert_eq!(
+            key_wait_step(&me, call, 0, None, Some(&r)),
+            KeyWait::Done,
+            "left the call"
+        );
         // The authority left: we are the most senior now, the rotation is ours.
-        assert_eq!(key_wait_step(&me, call, 0, Some(status(call, 0)), Some(&room(50, &[(middle, 200)]))), KeyWait::Done);
-        assert_eq!(key_wait_step(&me, call, 0, Some(status(call, 0)), Some(&room(300, &[]))), KeyWait::Done, "alone");
+        assert_eq!(
+            key_wait_step(
+                &me,
+                call,
+                0,
+                Some(status(call, 0)),
+                Some(&room(50, &[(middle, 200)]))
+            ),
+            KeyWait::Done
+        );
+        assert_eq!(
+            key_wait_step(&me, call, 0, Some(status(call, 0)), Some(&room(300, &[]))),
+            KeyWait::Done,
+            "alone"
+        );
     }
 
     /// A key request rotates only at the authority, only for a requester in
@@ -1890,14 +2178,50 @@ mod group_call_key_tests {
         let call = active.id;
         let r = room(100, &[(joiner, 300)]);
 
-        assert!(key_request_is_due(&me, call, &channel, &joiner, Some(&active), Some(&r)));
-        assert!(!key_request_is_due(&me, call, &channel, &stranger, Some(&active), Some(&r)), "not in the room");
-        assert!(!key_request_is_due(&me, call, &ChannelId::new(), &joiner, Some(&active), Some(&r)), "another channel");
+        assert!(key_request_is_due(
+            &me,
+            call,
+            &channel,
+            &joiner,
+            Some(&active),
+            Some(&r)
+        ));
+        assert!(
+            !key_request_is_due(&me, call, &channel, &stranger, Some(&active), Some(&r)),
+            "not in the room"
+        );
+        assert!(
+            !key_request_is_due(
+                &me,
+                call,
+                &ChannelId::new(),
+                &joiner,
+                Some(&active),
+                Some(&r)
+            ),
+            "another channel"
+        );
         let other_call = "11111111-2222-4333-8444-666666666666".parse().unwrap();
-        assert!(!key_request_is_due(&me, other_call, &channel, &joiner, Some(&active), Some(&r)), "another call");
-        assert!(!key_request_is_due(&me, call, &channel, &joiner, None, Some(&r)), "not in a call");
+        assert!(
+            !key_request_is_due(&me, other_call, &channel, &joiner, Some(&active), Some(&r)),
+            "another call"
+        );
+        assert!(
+            !key_request_is_due(&me, call, &channel, &joiner, None, Some(&r)),
+            "not in a call"
+        );
         let not_senior = room(100, &[(joiner, 300), (senior, 50)]);
-        assert!(!key_request_is_due(&me, call, &channel, &joiner, Some(&active), Some(&not_senior)), "not the authority");
+        assert!(
+            !key_request_is_due(
+                &me,
+                call,
+                &channel,
+                &joiner,
+                Some(&active),
+                Some(&not_senior)
+            ),
+            "not the authority"
+        );
     }
 
     /// §124 1k item 3: a departed senior still listed in our view past the
@@ -1916,23 +2240,38 @@ mod group_call_key_tests {
             stale.clone(),
             || {
                 let n = reads.fetch_add(1, Ordering::SeqCst) + 1;
-                let view = if n >= 12 { vec![(rotator.to_string(), 200)] } else { stale.clone() };
+                let view = if n >= 12 {
+                    vec![(rotator.to_string(), 200)]
+                } else {
+                    stale.clone()
+                };
                 async move { view }
             },
             || tokio::time::sleep(std::time::Duration::from_millis(500)),
             KEY_AUTHORITY_SETTLE_MAX,
-        ).await;
-        assert!(is_key_authority(&rotator, &roster), "the rotator's key was given up on");
-        assert!(started.elapsed() > std::time::Duration::from_secs(2), "the departure landed after the old fixed 2 s settle");
+        )
+        .await;
+        assert!(
+            is_key_authority(&rotator, &roster),
+            "the rotator's key was given up on"
+        );
+        assert!(
+            started.elapsed() > std::time::Duration::from_secs(2),
+            "the departure landed after the old fixed 2 s settle"
+        );
 
         // A sender who never becomes the authority is refused, after the cap.
         let roster = settle_key_authority(
             &rotator,
             stale.clone(),
-            || { let v = stale.clone(); async move { v } },
+            || {
+                let v = stale.clone();
+                async move { v }
+            },
             || tokio::time::sleep(std::time::Duration::from_millis(500)),
             KEY_AUTHORITY_SETTLE_MAX,
-        ).await;
+        )
+        .await;
         assert!(!is_key_authority(&rotator, &roster));
     }
 
@@ -1941,9 +2280,15 @@ mod group_call_key_tests {
     #[test]
     fn joins_rotate_at_once_and_coalesce_while_running() {
         let gate = JoinRotationGate::default();
-        assert!(gate.request(), "the first join starts the rotation immediately");
+        assert!(
+            gate.request(),
+            "the first join starts the rotation immediately"
+        );
         let piggyback = (0..5).filter(|_| gate.request()).count();
-        assert_eq!(piggyback, 0, "joins during a run start nothing of their own");
+        assert_eq!(
+            piggyback, 0,
+            "joins during a run start nothing of their own"
+        );
         assert!(gate.finish(), "…but the run goes once more for them");
         assert!(!gate.finish(), "then it idles");
         assert!(gate.request(), "a later join rotates again at once");

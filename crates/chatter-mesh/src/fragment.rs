@@ -436,7 +436,11 @@ mod tests {
         )
     }
 
-    fn fragment_of(header: &FragmentHeader, chunk: &[u8], sender: [u8; SENDER_ID_LEN]) -> BitchatPacket {
+    fn fragment_of(
+        header: &FragmentHeader,
+        chunk: &[u8],
+        sender: [u8; SENDER_ID_LEN],
+    ) -> BitchatPacket {
         let mut payload = Vec::new();
         payload.extend_from_slice(&header.fragment_id);
         payload.extend_from_slice(&header.index.to_be_bytes());
@@ -481,13 +485,13 @@ mod tests {
     #[test]
     fn every_fragment_carries_the_stream_id_index_total_and_original_type() {
         let packet = original(1200);
-        let fragments =
-            plan_fragments(&packet, 300, [0xAB; 8]).expect("packet fragments");
+        let fragments = plan_fragments(&packet, 300, [0xAB; 8]).expect("packet fragments");
         let total = fragments.len() as u16;
         assert!(total > 1);
 
         for (i, fragment) in fragments.iter().enumerate() {
-            let (header, chunk) = FragmentHeader::parse(fragment).expect("planner emits valid headers");
+            let (header, chunk) =
+                FragmentHeader::parse(fragment).expect("planner emits valid headers");
             assert_eq!(header.fragment_id, [0xAB; 8]);
             assert_eq!(header.index, i as u16);
             assert_eq!(header.total, total);
@@ -501,10 +505,12 @@ mod tests {
     fn chunk_size_is_raised_to_the_minimum() {
         let packet = original(600);
         let tiny = plan_fragments(&packet, 1, [0x01; 8]).expect("packet fragments");
-        let floored = plan_fragments(&packet, MIN_FRAGMENT_CHUNK, [0x01; 8]).expect("packet fragments");
+        let floored =
+            plan_fragments(&packet, MIN_FRAGMENT_CHUNK, [0x01; 8]).expect("packet fragments");
         assert_eq!(tiny.len(), floored.len());
 
-        let zero = plan_fragments(&packet, 0, [0x01; 8]).expect("a zero request is floored, not fatal");
+        let zero =
+            plan_fragments(&packet, 0, [0x01; 8]).expect("a zero request is floored, not fatal");
         assert_eq!(zero.len(), floored.len());
     }
 
@@ -728,14 +734,19 @@ mod tests {
         let packet = fragment_of(&header, &huge, [0xAA; SENDER_ID_LEN]);
 
         let mut assembler = FragmentAssembler::new();
-        assert_eq!(assembler.accept(&packet, 1).expect("first piece fits"), None);
+        assert_eq!(
+            assembler.accept(&packet, 1).expect("first piece fits"),
+            None
+        );
 
         let second = fragment_of(
             &FragmentHeader { index: 1, ..header },
             &huge,
             [0xAA; SENDER_ID_LEN],
         );
-        let err = assembler.accept(&second, 1).expect_err("second piece overflows");
+        let err = assembler
+            .accept(&second, 1)
+            .expect_err("second piece overflows");
         assert!(matches!(
             err,
             MeshError::LengthExceeded {
@@ -752,7 +763,10 @@ mod tests {
             assembly_limit(MessageType::FileTransfer.as_u8()),
             MAX_FRAMED_FILE_BYTES
         );
-        assert_eq!(assembly_limit(MessageType::Message.as_u8()), MAX_REASSEMBLED_BYTES);
+        assert_eq!(
+            assembly_limit(MessageType::Message.as_u8()),
+            MAX_REASSEMBLED_BYTES
+        );
         // The signature width is part of that headroom; keep the two in step.
         assert_eq!(
             MAX_FRAMED_FILE_BYTES,
@@ -832,7 +846,6 @@ mod tests {
         assembler.evict_expired(1_021 + FRAGMENT_LIFETIME_SECS);
         assert!(assembler.is_empty(), "a stream that stopped is dropped");
     }
-
 
     #[test]
     fn clear_drops_everything() {

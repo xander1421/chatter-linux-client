@@ -32,7 +32,6 @@ impl PresenceStatus {
             Self::Offline => "offline",
         }
     }
-
 }
 
 // ============================================================================
@@ -64,7 +63,6 @@ impl User {
             created_at: now,
         }
     }
-
 }
 
 // ============================================================================
@@ -89,7 +87,6 @@ impl StatusMessage {
             expires_at: None,
         }
     }
-
 }
 
 // ============================================================================
@@ -121,7 +118,6 @@ impl Profile {
             presence: PresenceStatus::default(),
         }
     }
-
 }
 
 // ============================================================================
@@ -140,9 +136,7 @@ pub struct Device {
     pub last_seen: DateTime<Utc>,
 }
 
-impl Device {
-
-}
+impl Device {}
 
 // ============================================================================
 // Friendship
@@ -200,6 +194,4 @@ impl Friendship {
     pub fn accept(&mut self) {
         self.status = FriendshipStatus::Accepted;
     }
-
 }
-

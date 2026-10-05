@@ -89,12 +89,7 @@ impl SemanticSearchService {
             .map_err(backend_to_service)?;
 
         self.vector_store
-            .search_global(
-                &query_embedding,
-                EmbeddingSourceType::Message,
-                limit,
-                0.3,
-            )
+            .search_global(&query_embedding, EmbeddingSourceType::Message, limit, 0.3)
             .map_err(ServiceError::Storage)
     }
 
@@ -184,7 +179,9 @@ impl SemanticSearchService {
             dimension: self.embedding_gen.dimension(),
         };
 
-        self.vector_store.store(stored).map_err(ServiceError::Storage)?;
+        self.vector_store
+            .store(stored)
+            .map_err(ServiceError::Storage)?;
         Ok(true)
     }
 
@@ -257,9 +254,15 @@ impl SemanticSearchService {
 
     /// Get indexing statistics.
     pub fn stats(&self, channel_id: Option<&str>) -> Result<IndexStats, ServiceError> {
-        let total = self.vector_store.count_total().map_err(ServiceError::Storage)?;
+        let total = self
+            .vector_store
+            .count_total()
+            .map_err(ServiceError::Storage)?;
         let channel_count = match channel_id {
-            Some(id) => self.vector_store.count_channel(id).map_err(ServiceError::Storage)?,
+            Some(id) => self
+                .vector_store
+                .count_channel(id)
+                .map_err(ServiceError::Storage)?,
             None => 0,
         };
 
@@ -298,7 +301,10 @@ fn rrf_merge(
     for list in [a, b] {
         for (rank, hit) in list.into_iter().enumerate() {
             let contribution = 1.0 / (K + rank as f32 + 1.0);
-            if let Some(entry) = merged.iter_mut().find(|(_, h)| h.source_id == hit.source_id) {
+            if let Some(entry) = merged
+                .iter_mut()
+                .find(|(_, h)| h.source_id == hit.source_id)
+            {
                 entry.0 += contribution;
             } else {
                 merged.push((contribution, hit));

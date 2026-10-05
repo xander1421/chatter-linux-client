@@ -21,7 +21,14 @@ async fn create_channel_and_wait(
 ) -> String {
     let (_, genesis) = membership::genesis(user, channel_type == ChannelType::ChannelPublic);
     let stream = channel_client
-        .create_channel(name, channel_type, None, Some("Test channel"), None, Some(genesis))
+        .create_channel(
+            name,
+            channel_type,
+            None,
+            Some("Test channel"),
+            None,
+            Some(genesis),
+        )
         .await
         .expect("Failed to start channel creation");
 
@@ -64,9 +71,13 @@ async fn test_create_and_get_channel() {
     let mut channel_client = ChannelClient::new(pool.channel(), pool.auth_clone());
     let channel_name = format!("test_ch_{}", unique_username());
 
-    let channel_id =
-        create_channel_and_wait(&mut channel_client, &user, &channel_name, ChannelType::ChannelPublic)
-            .await;
+    let channel_id = create_channel_and_wait(
+        &mut channel_client,
+        &user,
+        &channel_name,
+        ChannelType::ChannelPublic,
+    )
+    .await;
 
     // Get the channel
     let channel = assert_ok(channel_client.get_channel(&channel_id).await);
@@ -87,9 +98,13 @@ async fn test_list_channels() {
     let channel_name = format!("list_test_{}", unique_username());
 
     // Create a channel
-    let channel_id =
-        create_channel_and_wait(&mut channel_client, &user, &channel_name, ChannelType::ChannelPublic)
-            .await;
+    let channel_id = create_channel_and_wait(
+        &mut channel_client,
+        &user,
+        &channel_name,
+        ChannelType::ChannelPublic,
+    )
+    .await;
 
     // List channels
     let response = assert_ok(channel_client.list_channels(100, 0, None).await);
@@ -112,9 +127,13 @@ async fn test_search_channels() {
     let unique_part = format!("{}", rand::random::<u32>());
     let channel_name = format!("searchable_{}", unique_part);
 
-    let channel_id =
-        create_channel_and_wait(&mut channel_client, &user, &channel_name, ChannelType::ChannelPublic)
-            .await;
+    let channel_id = create_channel_and_wait(
+        &mut channel_client,
+        &user,
+        &channel_name,
+        ChannelType::ChannelPublic,
+    )
+    .await;
 
     // Search for it
     let response = assert_ok(
@@ -146,9 +165,13 @@ async fn test_join_leave_channel() {
 
     // Create a public channel
     let channel_name = format!("joinable_{}", unique_username());
-    let channel_id =
-        create_channel_and_wait(&mut channel_client, &user, &channel_name, ChannelType::ChannelPublic)
-            .await;
+    let channel_id = create_channel_and_wait(
+        &mut channel_client,
+        &user,
+        &channel_name,
+        ChannelType::ChannelPublic,
+    )
+    .await;
 
     // A second user joins the OPEN channel with a signed JoinViaInvite,
     // leaves with a signed RemoveMember, and joins again. (The creator is the
@@ -167,16 +190,29 @@ async fn test_join_leave_channel() {
     let join = membership::open_join(&user2, &mut client2, &channel_id).await;
     let stream = assert_ok(client2.join_channel(&channel_id, join, false).await);
     drain(stream).await;
-    let members = assert_ok(channel_client.get_channel_members(&channel_id, 100, 0).await);
-    assert!(members.members.iter().any(|m| m.user_id == user2.user_id), "rejoined user is a member");
+    let members = assert_ok(
+        channel_client
+            .get_channel_members(&channel_id, 100, 0)
+            .await,
+    );
+    assert!(
+        members.members.iter().any(|m| m.user_id == user2.user_id),
+        "rejoined user is a member"
+    );
 }
 
 /// Run a membership RPC's event stream to its end, failing on OperationFailed.
-async fn drain(stream: impl tokio_stream::Stream<Item = Result<chatter_core::proto::chat_v1::ChannelEvent, NetworkError>>) {
+async fn drain(
+    stream: impl tokio_stream::Stream<
+        Item = Result<chatter_core::proto::chat_v1::ChannelEvent, NetworkError>,
+    >,
+) {
     tokio::pin!(stream);
     while let Some(result) = stream.next().await {
         let event = result.expect("Stream error");
-        if let Some(chatter_core::proto::chat_v1::channel_event::Event::OperationFailed(e)) = event.event {
+        if let Some(chatter_core::proto::chat_v1::channel_event::Event::OperationFailed(e)) =
+            event.event
+        {
             panic!("operation failed: {:?}", e.error);
         }
     }
@@ -192,9 +228,13 @@ async fn test_get_channel_members() {
     let mut channel_client = ChannelClient::new(pool.channel(), pool.auth_clone());
     let channel_name = format!("members_{}", unique_username());
 
-    let channel_id =
-        create_channel_and_wait(&mut channel_client, &user, &channel_name, ChannelType::ChannelPublic)
-            .await;
+    let channel_id = create_channel_and_wait(
+        &mut channel_client,
+        &user,
+        &channel_name,
+        ChannelType::ChannelPublic,
+    )
+    .await;
 
     // Get members
     let response = assert_ok(
@@ -222,9 +262,13 @@ async fn test_archive_unarchive_channel() {
     let mut channel_client = ChannelClient::new(pool.channel(), pool.auth_clone());
     let channel_name = format!("archive_{}", unique_username());
 
-    let channel_id =
-        create_channel_and_wait(&mut channel_client, &user, &channel_name, ChannelType::ChannelPublic)
-            .await;
+    let channel_id = create_channel_and_wait(
+        &mut channel_client,
+        &user,
+        &channel_name,
+        ChannelType::ChannelPublic,
+    )
+    .await;
 
     // Archive it
     let archive_response = assert_ok(channel_client.archive_channel(&channel_id).await);
@@ -234,7 +278,10 @@ async fn test_archive_unarchive_channel() {
         .expect("Archive should return archived channel");
 
     // Archive is per-user, so the response shows archived=true for this user
-    assert!(archived_channel.archived, "Response should show channel as archived");
+    assert!(
+        archived_channel.archived,
+        "Response should show channel as archived"
+    );
 
     // Verify channel appears in archived list
     let archived_list = assert_ok(channel_client.list_archived_channels(100, 0).await);
@@ -277,9 +324,13 @@ async fn test_delete_channel() {
     let mut channel_client = ChannelClient::new(pool.channel(), pool.auth_clone());
     let channel_name = format!("delete_{}", unique_username());
 
-    let channel_id =
-        create_channel_and_wait(&mut channel_client, &user, &channel_name, ChannelType::ChannelPublic)
-            .await;
+    let channel_id = create_channel_and_wait(
+        &mut channel_client,
+        &user,
+        &channel_name,
+        ChannelType::ChannelPublic,
+    )
+    .await;
 
     // Delete it
     // Wrap in a block to ensure stream is dropped before next borrow
@@ -335,9 +386,13 @@ async fn test_stream_channel_events() {
     let mut channel_client = ChannelClient::new(pool.channel(), pool.auth_clone());
     let channel_name = format!("stream_{}", unique_username());
 
-    let channel_id =
-        create_channel_and_wait(&mut channel_client, &user, &channel_name, ChannelType::ChannelPublic)
-            .await;
+    let channel_id = create_channel_and_wait(
+        &mut channel_client,
+        &user,
+        &channel_name,
+        ChannelType::ChannelPublic,
+    )
+    .await;
 
     // Start streaming channel events
     let stream_result = channel_client

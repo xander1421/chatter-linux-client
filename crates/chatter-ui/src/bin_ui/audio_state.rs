@@ -108,8 +108,11 @@ pub fn playback_finished() -> bool {
     let player_arc = get_audio_player();
     let state_arc = get_audio_state();
     if let (Ok(player), Ok(state)) = (player_arc.lock(), state_arc.lock()) {
-        return state.current_id.is_some() && state.is_playing
-            && player.as_ref().is_some_and(|player| !player.is_playing() && !player.is_paused());
+        return state.current_id.is_some()
+            && state.is_playing
+            && player
+                .as_ref()
+                .is_some_and(|player| !player.is_playing() && !player.is_paused());
     }
     false
 }

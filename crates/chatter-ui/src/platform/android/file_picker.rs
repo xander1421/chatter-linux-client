@@ -13,9 +13,9 @@
 use std::path::PathBuf;
 use std::sync::Mutex;
 
+use jni::JNIEnv;
 use jni::objects::{JObject, JObjectArray, JString, JValue};
 use jni::sys::jsize;
-use jni::JNIEnv;
 use tokio::sync::oneshot;
 
 use super::activity;
@@ -48,7 +48,9 @@ fn launch(mime_types: &[&str]) -> Result<(), String> {
     let mut env = activity::jni_env()?;
     let act = activity::activity()?;
 
-    let string_class = env.find_class("java/lang/String").map_err(|e| e.to_string())?;
+    let string_class = env
+        .find_class("java/lang/String")
+        .map_err(|e| e.to_string())?;
     let arr = env
         .new_object_array(mime_types.len() as jsize, &string_class, JObject::null())
         .map_err(|e| e.to_string())?;
@@ -97,7 +99,9 @@ fn read_string_array(env: &mut JNIEnv, arr: &JObjectArray) -> Result<Vec<String>
     let len = env.get_array_length(arr).map_err(|e| e.to_string())?;
     let mut out = Vec::with_capacity(len as usize);
     for i in 0..len {
-        let elem = env.get_object_array_element(arr, i).map_err(|e| e.to_string())?;
+        let elem = env
+            .get_object_array_element(arr, i)
+            .map_err(|e| e.to_string())?;
         let s: String = env
             .get_string(&JString::from(elem))
             .map_err(|e| e.to_string())?

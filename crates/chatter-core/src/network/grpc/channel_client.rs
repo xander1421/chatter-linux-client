@@ -3,24 +3,24 @@
 //! Client for channel service operations including channel management,
 //! membership, moderation, and event streaming.
 
+use crate::network::grpc::transport::GrpcTransport;
 use tokio_stream::{Stream, StreamExt};
 use tonic::service::interceptor::InterceptedService;
-use crate::network::grpc::transport::GrpcTransport;
 
 use crate::error::NetworkError;
 use crate::network::grpc::interceptors::AuthInterceptor;
 use crate::proto::chat_v1::{
-    channel, channel_service_client::ChannelServiceClient, ArchiveChannelRequest,
-    ArchiveChannelResponse, BanUserRequest, Channel as ChannelProto, ChannelEvent,
-    ChannelEventRequest, ChannelJoinRequest, ChannelSearchRequest, ChannelSearchResponse,
-    ChannelType, CreateChannelRequest, DeleteChannelRequest, GetChannelMembersRequest,
-    GetChannelMembersResponse, GetChannelRequest, InviteResponse, InviteUserRequest,
-    BannedUser, KickUserRequest, LeaveChannelRequest, ListArchivedChannelsRequest,
-    ListBannedUsersRequest, MuteUserRequest, UnmuteUserRequest,
-    ListArchivedChannelsResponse, ListChannelsRequest, ListChannelsResponse, UnarchiveChannelRequest,
-    TransferOwnershipRequest, UnarchiveChannelResponse, UnbanUserRequest, UpdateChannelRequest, UpdateMemberRoleRequest,
-    ChannelChange, GetChannelChangesRequest, GetChannelChangesResponse, GetChannelStateRequest, MembershipState,
-    SubmitChannelChangeRequest,
+    ArchiveChannelRequest, ArchiveChannelResponse, BanUserRequest, BannedUser,
+    Channel as ChannelProto, ChannelChange, ChannelEvent, ChannelEventRequest, ChannelJoinRequest,
+    ChannelSearchRequest, ChannelSearchResponse, ChannelType, CreateChannelRequest,
+    DeleteChannelRequest, GetChannelChangesRequest, GetChannelChangesResponse,
+    GetChannelMembersRequest, GetChannelMembersResponse, GetChannelRequest, GetChannelStateRequest,
+    InviteResponse, InviteUserRequest, KickUserRequest, LeaveChannelRequest,
+    ListArchivedChannelsRequest, ListArchivedChannelsResponse, ListBannedUsersRequest,
+    ListChannelsRequest, ListChannelsResponse, MembershipState, MuteUserRequest,
+    SubmitChannelChangeRequest, TransferOwnershipRequest, UnarchiveChannelRequest,
+    UnarchiveChannelResponse, UnbanUserRequest, UnmuteUserRequest, UpdateChannelRequest,
+    UpdateMemberRoleRequest, channel, channel_service_client::ChannelServiceClient,
 };
 
 /// Whether a membership RPC was refused because its change is not chained to
@@ -433,7 +433,11 @@ impl ChannelClient {
 
     /// Hand the channel to the member `change` names; the caller (the owner)
     /// becomes an admin. Everyone learns it from the relayed `ChannelChange`.
-    pub async fn transfer_ownership(&mut self, channel_id: &str, change: ChannelChange) -> Result<(), NetworkError> {
+    pub async fn transfer_ownership(
+        &mut self,
+        channel_id: &str,
+        change: ChannelChange,
+    ) -> Result<(), NetworkError> {
         let request = TransferOwnershipRequest {
             channel_id: channel_id.to_string(),
             change: Some(change),
@@ -495,7 +499,11 @@ impl ChannelClient {
     }
 
     /// Lift a mute.
-    pub async fn unmute_user(&mut self, channel_id: &str, user_id: &str) -> Result<(), NetworkError> {
+    pub async fn unmute_user(
+        &mut self,
+        channel_id: &str,
+        user_id: &str,
+    ) -> Result<(), NetworkError> {
         let request = UnmuteUserRequest {
             channel_id: channel_id.to_string(),
             user_id: user_id.to_string(),
@@ -508,7 +516,10 @@ impl ChannelClient {
     }
 
     /// A channel's active bans (owner/admin only).
-    pub async fn list_banned_users(&mut self, channel_id: &str) -> Result<Vec<BannedUser>, NetworkError> {
+    pub async fn list_banned_users(
+        &mut self,
+        channel_id: &str,
+    ) -> Result<Vec<BannedUser>, NetworkError> {
         let request = ListBannedUsersRequest {
             channel_id: channel_id.to_string(),
         };
@@ -525,7 +536,9 @@ impl ChannelClient {
         &mut self,
         channel_id: &str,
     ) -> Result<crate::proto::chat_v1::Departure, NetworkError> {
-        let request = crate::proto::chat_v1::GetDepartureRequest { channel_id: channel_id.to_string() };
+        let request = crate::proto::chat_v1::GetDepartureRequest {
+            channel_id: channel_id.to_string(),
+        };
         self.inner
             .get_departure(request)
             .await
@@ -622,9 +635,14 @@ impl ChannelClient {
 
     /// Append a log-only change (invites, policy, timer) or any single-action
     /// change. Returns the accepted revision.
-    pub async fn submit_channel_change(&mut self, change: ChannelChange) -> Result<u64, NetworkError> {
+    pub async fn submit_channel_change(
+        &mut self,
+        change: ChannelChange,
+    ) -> Result<u64, NetworkError> {
         self.inner
-            .submit_channel_change(SubmitChannelChangeRequest { change: Some(change) })
+            .submit_channel_change(SubmitChannelChangeRequest {
+                change: Some(change),
+            })
             .await
             .map(|r| r.into_inner().revision)
             .map_err(|s| NetworkError::from_status(&s))
@@ -753,7 +771,6 @@ impl ChannelClient {
             .map(|r| r.into_inner())
             .map_err(|s| NetworkError::from_status(&s))
     }
-
 }
 
 /// Termination rule for [`ChannelClient::get_all_channel_members`], separated
@@ -875,7 +892,7 @@ mod tests {
     #[test]
     fn test_channel_config_construction() {
         // Verify Channel.Config struct can be constructed
-        use crate::proto::chat_v1::channel::{config::Persistence, Config};
+        use crate::proto::chat_v1::channel::{Config, config::Persistence};
 
         let config = Config {
             persistence: Persistence::Persistent as i32,
@@ -903,7 +920,7 @@ mod tests {
     #[test]
     fn test_channel_member_construction() {
         // Verify ChannelMember struct can be constructed
-        use crate::proto::chat_v1::channel::{channel_member::InvitationStatus, ChannelMember};
+        use crate::proto::chat_v1::channel::{ChannelMember, channel_member::InvitationStatus};
 
         let member = ChannelMember {
             user_id: "user-123".to_string(),

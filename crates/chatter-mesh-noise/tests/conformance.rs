@@ -20,9 +20,9 @@
 //! expected value with the same code path as the implementation proves only that
 //! the code is self-consistent; these prove it is *correct*.
 
-use chatter_mesh::packet::{MessageType, SENDER_ID_LEN};
 use chatter_mesh::BitchatPacket;
-use chatter_mesh_noise::identity::{fingerprint_of, MeshIdentity};
+use chatter_mesh::packet::{MessageType, SENDER_ID_LEN};
+use chatter_mesh_noise::identity::{MeshIdentity, fingerprint_of};
 use chatter_mesh_noise::seal::{
     open_courier, open_prekey, prekey_prologue, seal_courier, seal_prekey,
 };

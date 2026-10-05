@@ -5,12 +5,12 @@
 
 use std::str::FromStr;
 
-use crate::domain::anon_dm::{AnonDm, AnonDmId, AnonDmMailbox, AnonDmStatus};
 use crate::domain::UserId;
+use crate::domain::anon_dm::{AnonDm, AnonDmId, AnonDmMailbox, AnonDmStatus};
 use crate::error::StorageError;
 use crate::storage::Database;
 use chrono::{DateTime, Utc};
-use rusqlite::{params, OptionalExtension};
+use rusqlite::{OptionalExtension, params};
 use std::sync::Arc;
 
 /// Anonymous DM data repository.
@@ -72,7 +72,10 @@ impl AnonDmRepository {
     }
 
     /// Get an anonymous DM conversation by peer ID.
-    pub fn get_conversation_by_peer(&self, peer_id: &UserId) -> Result<Option<AnonDm>, StorageError> {
+    pub fn get_conversation_by_peer(
+        &self,
+        peer_id: &UserId,
+    ) -> Result<Option<AnonDm>, StorageError> {
         let conn = self.db.connection()?;
         let mut stmt = conn.prepare(
             "SELECT id, peer_id, initiated_by_us, status, peer_mailbox_pk, peer_profile_key, peer_display_name, peer_avatar, created_at, updated_at, \
@@ -272,7 +275,10 @@ impl AnonDmRepository {
     }
 
     /// Get mailbox for a conversation.
-    pub fn get_mailbox(&self, conversation_id: &AnonDmId) -> Result<Option<AnonDmMailbox>, StorageError> {
+    pub fn get_mailbox(
+        &self,
+        conversation_id: &AnonDmId,
+    ) -> Result<Option<AnonDmMailbox>, StorageError> {
         let conn = self.db.connection()?;
         let mut stmt = conn.prepare(
             "SELECT id, conversation_id, public_key, private_key, token_id, created_at, expires_at
@@ -328,7 +334,9 @@ impl AnonDmRepository {
     ///
     /// Returns (conversation_id, public_key, private_key) tuples.
     #[allow(clippy::type_complexity)]
-    pub fn get_active_mailbox_keys(&self) -> Result<Vec<(AnonDmId, [u8; 32], [u8; 64])>, StorageError> {
+    pub fn get_active_mailbox_keys(
+        &self,
+    ) -> Result<Vec<(AnonDmId, [u8; 32], [u8; 64])>, StorageError> {
         let mailboxes = self.get_active_mailboxes()?;
         Ok(mailboxes
             .into_iter()
@@ -351,12 +359,7 @@ impl AnonDmRepository {
         conn.execute(
             "INSERT OR REPLACE INTO anon_dm_blocked_users (id, user_id, blocked_at, reason)
              VALUES (?1, ?2, ?3, ?4)",
-            params![
-                id,
-                user_id.as_bytes().as_slice(),
-                now.to_rfc3339(),
-                reason,
-            ],
+            params![id, user_id.as_bytes().as_slice(), now.to_rfc3339(), reason,],
         )?;
         Ok(())
     }
@@ -384,7 +387,11 @@ impl AnonDmRepository {
 
     /// Remember a blocked peer's name on their block row, so it outlives the
     /// conversation row that normally holds it. No-op for an unblocked peer.
-    pub fn set_blocked_display_name(&self, user_id: &UserId, name: &str) -> Result<(), StorageError> {
+    pub fn set_blocked_display_name(
+        &self,
+        user_id: &UserId,
+        name: &str,
+    ) -> Result<(), StorageError> {
         let conn = self.db.connection()?;
         conn.execute(
             "UPDATE anon_dm_blocked_users SET display_name = ?2 WHERE user_id = ?1",
@@ -394,7 +401,10 @@ impl AnonDmRepository {
     }
 
     /// The name stored on a blocked peer's block row, if any.
-    pub fn get_blocked_display_name(&self, user_id: &UserId) -> Result<Option<String>, StorageError> {
+    pub fn get_blocked_display_name(
+        &self,
+        user_id: &UserId,
+    ) -> Result<Option<String>, StorageError> {
         let conn = self.db.read_connection()?;
         let name = conn
             .query_row(
@@ -443,7 +453,12 @@ impl AnonDmRepository {
         conversation_id: &AnonDmId,
         window_duration: chrono::Duration,
     ) -> Result<u32, StorageError> {
-        super::repo_utils::increment_rate_limit(&self.db, "dm", conversation_id.to_string().as_bytes(), window_duration)
+        super::repo_utils::increment_rate_limit(
+            &self.db,
+            "dm",
+            conversation_id.to_string().as_bytes(),
+            window_duration,
+        )
     }
 }
 
@@ -504,7 +519,9 @@ fn row_to_mailbox(row: &rusqlite::Row) -> Result<AnonDmMailbox, rusqlite::Error>
 
     Ok(AnonDmMailbox {
         id,
-        conversation_id: conversation_id_str.parse().map_err(|_| rusqlite::Error::InvalidQuery)?,
+        conversation_id: conversation_id_str
+            .parse()
+            .map_err(|_| rusqlite::Error::InvalidQuery)?,
         public_key,
         private_key,
         token_id,

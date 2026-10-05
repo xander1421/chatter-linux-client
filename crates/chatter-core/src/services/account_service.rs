@@ -10,8 +10,8 @@ use crate::network::grpc::auth_client::AuthClient;
 use crate::network::grpc::client_pool::GrpcClientPool;
 use crate::network::grpc::interceptors::AuthInterceptor;
 use crate::proto::chat_v1::account_deletion_event::Status as DeletionStatus;
-use crate::services::auth_service::{prove_password, AuthError};
-use crate::storage::repositories::settings_repo::{keys, SettingsRepository};
+use crate::services::auth_service::{AuthError, prove_password};
+use crate::storage::repositories::settings_repo::{SettingsRepository, keys};
 
 /// Account management errors.
 #[derive(Debug, thiserror::Error)]

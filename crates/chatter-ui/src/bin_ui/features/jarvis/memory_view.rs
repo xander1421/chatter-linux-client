@@ -11,7 +11,8 @@ use slint::{ComponentHandle, ModelRc, SharedString, VecModel};
 use chatter_core::client::ChatterClient;
 
 use crate::{
-    JarvisGlobal, MainWindow, MemoryEntityData, MemoryFactData, MemoryGraphEdgeData, MemoryGraphNodeData,
+    JarvisGlobal, MainWindow, MemoryEntityData, MemoryFactData, MemoryGraphEdgeData,
+    MemoryGraphNodeData,
 };
 
 const VW: f32 = 400.0;
@@ -63,7 +64,11 @@ pub fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     }
 }
 
-async fn refresh(ui_ctx: Arc<ChatterClient>, weak: slint::Weak<MainWindow>, selected: Option<String>) {
+async fn refresh(
+    ui_ctx: Arc<ChatterClient>,
+    weak: slint::Weak<MainWindow>,
+    selected: Option<String>,
+) {
     // Facts + entities come from SQLite via the Jarvis façade (fast, sync).
     let facts = ui_ctx.jarvis_memory_facts();
     let entities = ui_ctx.jarvis_top_entities(12);
@@ -125,7 +130,12 @@ async fn refresh(ui_ctx: Arc<ChatterClient>, weak: slint::Weak<MainWindow>, sele
             let angle = (i as f32) / n * std::f32::consts::TAU - std::f32::consts::FRAC_PI_2;
             let x = cx + radius * angle.cos();
             let y = cy + (radius * 0.75) * angle.sin();
-            edges.push(MemoryGraphEdgeData { x1: cx, y1: cy, x2: x, y2: y });
+            edges.push(MemoryGraphEdgeData {
+                x1: cx,
+                y1: cy,
+                x2: x,
+                y2: y,
+            });
             nodes.push(MemoryGraphNodeData {
                 name: entity.name.clone().into(),
                 kind: kind_str(entity.entity_type).into(),

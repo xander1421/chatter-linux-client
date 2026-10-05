@@ -3,7 +3,7 @@
 //! Cross-platform client for Chatter secure messaging.
 //! Supports Linux, Windows, macOS, and Android.
 
-use chatter_core::system::{init_antidebug, antidebug_check};
+use chatter_core::system::{antidebug_check, init_antidebug};
 use tokio_util::sync::CancellationToken;
 
 // Keep the public UI types at the crate root for app wiring and consumers.
@@ -23,7 +23,8 @@ pub mod platform;
 static RT_HANDLE: std::sync::OnceLock<tokio::runtime::Handle> = std::sync::OnceLock::new();
 
 static STARTUP_STARTED: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
-static FIRST_FRAME_RECORDED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+static FIRST_FRAME_RECORDED: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
 
 /// Called by existing rendering notifiers so timing never replaces video/JNI hooks.
 pub(crate) fn record_startup_frame(state: &slint::RenderingState) {
@@ -31,7 +32,10 @@ pub(crate) fn record_startup_frame(state: &slint::RenderingState) {
         && !FIRST_FRAME_RECORDED.swap(true, std::sync::atomic::Ordering::Relaxed)
     {
         if let Some(started) = STARTUP_STARTED.get() {
-            tracing::debug!(elapsed_ms = started.elapsed().as_millis(), "startup: first frame rendered");
+            tracing::debug!(
+                elapsed_ms = started.elapsed().as_millis(),
+                "startup: first frame rendered"
+            );
         }
     }
 }
@@ -84,22 +88,25 @@ fn android_main(app: i_slint_backend_android_activity::AndroidApp) {
     > = Default::default();
     let listener_client = visibility_client.clone();
     slint::platform::set_platform(Box::new(
-        i_slint_backend_android_activity::AndroidPlatform::new_with_event_listener(app, move |event| {
-            use i_slint_backend_android_activity::android_activity::{MainEvent, PollEvent};
-            let visible = match event {
-                PollEvent::Main(MainEvent::Resume { .. }) => true,
-                PollEvent::Main(MainEvent::Pause) => false,
-                _ => return,
-            };
-            if !visible {
-                // Screen locked or app backgrounded: drop every decoded image.
-                crate::bin_ui::decode_cache::on_lock();
-            }
-            if let Some(client) = listener_client.get() {
-                let _rt = rt_handle().enter();
-                client.set_app_visible(visible);
-            }
-        })
+        i_slint_backend_android_activity::AndroidPlatform::new_with_event_listener(
+            app,
+            move |event| {
+                use i_slint_backend_android_activity::android_activity::{MainEvent, PollEvent};
+                let visible = match event {
+                    PollEvent::Main(MainEvent::Resume { .. }) => true,
+                    PollEvent::Main(MainEvent::Pause) => false,
+                    _ => return,
+                };
+                if !visible {
+                    // Screen locked or app backgrounded: drop every decoded image.
+                    crate::bin_ui::decode_cache::on_lock();
+                }
+                if let Some(client) = listener_client.get() {
+                    let _rt = rt_handle().enter();
+                    client.set_app_visible(visible);
+                }
+            },
+        )
         .with_refresh_rate_vote(crate::platform::android::activity::set_ui_moving),
     ))
     .expect("Failed to set Android platform");
@@ -137,7 +144,9 @@ fn android_main(app: i_slint_backend_android_activity::AndroidApp) {
     // publish camera video (chatter-core drives capture, this feeds it frames).
     crate::platform::android::camera::init();
 
-    crate::platform::android::activity::clear_launch_cover_after_first_frame(slint::ComponentHandle::window(&app_state.window));
+    crate::platform::android::activity::clear_launch_cover_after_first_frame(
+        slint::ComponentHandle::window(&app_state.window),
+    );
 
     app_run(app_state);
 }
@@ -223,12 +232,17 @@ pub async fn app_init() -> AppState {
     }
 
     if !init_antidebug() {
-        tracing::warn!("Security: Continuing with debugger detected - sensitive data may be exposed");
+        tracing::warn!(
+            "Security: Continuing with debugger detected - sensitive data may be exposed"
+        );
     }
 
     #[cfg(feature = "desktop-gstreamer")]
     if let Err(e) = gstreamer::init() {
-        tracing::warn!("GStreamer initialization failed: {} (media features may not work)", e);
+        tracing::warn!(
+            "GStreamer initialization failed: {} (media features may not work)",
+            e
+        );
     } else {
         tracing::info!("GStreamer initialized: {}", gstreamer::version_string());
     }
@@ -244,7 +258,10 @@ pub async fn app_init() -> AppState {
         .require_opengl_es()
         .select()
     {
-        tracing::warn!("OpenGL ES backend not available: {} (falling back to default)", e);
+        tracing::warn!(
+            "OpenGL ES backend not available: {} (falling back to default)",
+            e
+        );
     } else {
         tracing::info!("Slint OpenGL ES backend selected for hardware-accelerated video");
     }
@@ -262,9 +279,8 @@ pub async fn app_init() -> AppState {
             .unwrap_or_else(|| "/data/data/com.chatter.client/files".to_string());
         builder = builder.data_dir(data_dir);
 
-        let android_sink = std::sync::Arc::new(
-            crate::platform::android::AndroidNotifications::new(),
-        );
+        let android_sink =
+            std::sync::Arc::new(crate::platform::android::AndroidNotifications::new());
         if let Err(e) = android_sink.init_channel() {
             // Non-fatal — notifications just won't fire.
             eprintln!("Failed to init Android notification channel: {}", e);
@@ -368,7 +384,9 @@ pub async fn app_init() -> AppState {
     // On desktop without a video notifier, install the timing-only notifier.
     // Android's launch-cover notifier owns the fallback and records the same event.
     #[cfg(not(target_os = "android"))]
-    let _ = window.window().set_rendering_notifier(|state, _| record_startup_frame(&state));
+    let _ = window
+        .window()
+        .set_rendering_notifier(|state, _| record_startup_frame(&state));
 
     // The mesh comes up regardless of login. It is serverless by design — no
     // RPC, no account, no internet required — and the situations it exists for
@@ -391,7 +409,9 @@ pub async fn app_init() -> AppState {
         } else {
             tracing::info!("mesh: off by preference; the radio was not started");
         }
-        window.global::<MeshGlobal>().set_mesh_on(client.mesh_enabled());
+        window
+            .global::<MeshGlobal>()
+            .set_mesh_on(client.mesh_enabled());
     }
 
     // Tor status indicator: mirror the process-global Tor status into the
@@ -427,17 +447,24 @@ pub async fn app_init() -> AppState {
     if ui_ctx.is_logged_in() {
         if let Some((user_id, device_id)) = ui_ctx.current_user() {
             let display_name = ui_ctx.display_name(&user_id);
-            ui_ctx.auth_state().set_logged_in(user_id, device_id, display_name);
+            ui_ctx
+                .auth_state()
+                .set_logged_in(user_id, device_id, display_name);
             tracing::info!("Restored auth state for user {}", user_id);
         }
 
         window.set_current_view("main".into());
 
         if !connected {
-            tracing::info!("Starting in offline mode — gRPC calls will retry when server becomes available");
+            tracing::info!(
+                "Starting in offline mode — gRPC calls will retry when server becomes available"
+            );
         }
         if let Err(e) = client.start().await {
-            tracing::warn!("Could not start services: {} (some features may not work)", e);
+            tracing::warn!(
+                "Could not start services: {} (some features may not work)",
+                e
+            );
         }
 
         let weak_window = window.as_weak();
@@ -454,8 +481,11 @@ pub async fn app_init() -> AppState {
                     match domain_rx.recv().await {
                         Ok(event) => {
                             bin_ui::features::auth::inbox::domain_handler::handle_domain_event(
-                                event, &weak_for_domain, &ui_ctx_for_domain,
-                            ).await;
+                                event,
+                                &weak_for_domain,
+                                &ui_ctx_for_domain,
+                            )
+                            .await;
                         }
                         Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
                             tracing::warn!(dropped_count = n, "Domain event receiver lagged");
@@ -577,7 +607,10 @@ pub async fn app_init() -> AppState {
         }
     });
 
-    tracing::debug!(elapsed_ms = startup_started.elapsed().as_millis(), "startup: UI initialized");
+    tracing::debug!(
+        elapsed_ms = startup_started.elapsed().as_millis(),
+        "startup: UI initialized"
+    );
     AppState {
         window,
         ui_ctx: client,
@@ -649,10 +682,18 @@ fn dev_auto_register(
     window.set_register_pin(pin.into());
     window.set_register_server_url(server_url.clone().into());
 
-    tracing::info!("DEV MODE: Auto-registering as {} ({}) against {}", username, display_name, server_url);
+    tracing::info!(
+        "DEV MODE: Auto-registering as {} ({}) against {}",
+        username,
+        display_name,
+        server_url
+    );
     window.invoke_register(
-        username.into(), password.into(), display_name.into(),
-        pin.into(), server_url.into(),
+        username.into(),
+        password.into(),
+        display_name.into(),
+        pin.into(),
+        server_url.into(),
     );
 }
 

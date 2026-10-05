@@ -11,10 +11,13 @@ use std::sync::{Arc, Mutex, OnceLock, Weak};
 type CachedClient = Result<reqwest::Client, String>;
 
 pub(crate) fn storage_client() -> CachedClient {
-    static CLIENTS: OnceLock<Mutex<HashMap<tokio::runtime::Id, Weak<CachedClient>>>> = OnceLock::new();
+    static CLIENTS: OnceLock<Mutex<HashMap<tokio::runtime::Id, Weak<CachedClient>>>> =
+        OnceLock::new();
     let runtime = tokio::runtime::Handle::try_current()
         .map_err(|_| "storage HTTP requires a running async runtime".to_string())?;
-    let mut clients = CLIENTS.get_or_init(Default::default).lock()
+    let mut clients = CLIENTS
+        .get_or_init(Default::default)
+        .lock()
         .map_err(|_| "storage HTTP client cache lock poisoned".to_string())?;
     clients.retain(|_, client| client.strong_count() > 0);
     if let Some(client) = clients.get(&runtime.id()).and_then(Weak::upgrade) {
@@ -37,8 +40,8 @@ pub(crate) fn storage_client() -> CachedClient {
 }
 
 fn build_client() -> CachedClient {
-    let pem = crate::config::TLS_ROOT_CA_PEM
-        .ok_or_else(|| "no pinned TLS CA for storage".to_string())?;
+    let pem =
+        crate::config::TLS_ROOT_CA_PEM.ok_or_else(|| "no pinned TLS CA for storage".to_string())?;
     let ca = reqwest::Certificate::from_pem(pem.as_bytes())
         .map_err(|e| format!("invalid storage TLS CA: {}", e.without_url()))?;
     reqwest::Client::builder()
@@ -67,14 +70,18 @@ mod tests {
                 .build()
                 .unwrap();
             runtime.block_on(async {
-                let response = super::storage_client().unwrap()
+                let response = super::storage_client()
+                    .unwrap()
                     .get(&url)
                     .send()
                     .await
-                    .unwrap_or_else(|error| panic!("storage request failed: {:?}", error.without_url()));
+                    .unwrap_or_else(|error| {
+                        panic!("storage request failed: {:?}", error.without_url())
+                    });
                 assert!(response.status().is_success());
-                response.bytes().await
-                    .unwrap_or_else(|error| panic!("storage body failed: {:?}", error.without_url()));
+                response.bytes().await.unwrap_or_else(|error| {
+                    panic!("storage body failed: {:?}", error.without_url())
+                });
             });
         }
     }
@@ -84,21 +91,31 @@ mod tests {
     fn storage_client_does_not_depend_on_another_runtime() {
         let url = std::env::var("CHATTER_TEST_STORAGE_HEALTH_URL")
             .expect("set CHATTER_TEST_STORAGE_HEALTH_URL to the storage HTTPS health endpoint");
-        let runtimes: Vec<_> = (0..2).map(|_| {
-            tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap()
-        }).collect();
+        let runtimes: Vec<_> = (0..2)
+            .map(|_| {
+                tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                    .unwrap()
+            })
+            .collect();
         // Keep the first reactor alive but idle while the second runs. A
         // process-global pool must not hand it a socket driven by the first.
         for runtime in &runtimes {
             runtime.block_on(async {
-                let response = super::storage_client().unwrap()
+                let response = super::storage_client()
+                    .unwrap()
                     .get(&url)
                     .timeout(std::time::Duration::from_secs(3))
-                    .send().await
-                    .unwrap_or_else(|error| panic!("storage request failed: {:?}", error.without_url()));
+                    .send()
+                    .await
+                    .unwrap_or_else(|error| {
+                        panic!("storage request failed: {:?}", error.without_url())
+                    });
                 assert!(response.status().is_success());
-                response.bytes().await
-                    .unwrap_or_else(|error| panic!("storage body failed: {:?}", error.without_url()));
+                response.bytes().await.unwrap_or_else(|error| {
+                    panic!("storage body failed: {:?}", error.without_url())
+                });
             });
         }
     }

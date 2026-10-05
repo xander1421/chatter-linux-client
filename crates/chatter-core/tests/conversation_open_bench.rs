@@ -13,13 +13,13 @@
 use std::sync::Arc;
 use std::time::Instant;
 
-use chatter_core::domain::attachment::{Attachment, AttachmentStatus, ContentLocation, FileMetadata};
+use chatter_core::domain::attachment::{
+    Attachment, AttachmentStatus, ContentLocation, FileMetadata,
+};
 use chatter_core::domain::ids::{AttachmentId, ChannelId, MessageId, UserId};
 use chatter_core::domain::message::{ConversationType, Message};
-use chatter_core::storage::{
-    AttachmentRepository, Database, MessageRepository, UserRepository,
-};
 use chatter_core::storage::repositories::{AnonDmRepository, AnonGroupRepository};
+use chatter_core::storage::{AttachmentRepository, Database, MessageRepository, UserRepository};
 use tempfile::TempDir;
 
 const PAGE: u32 = chatter_core::config::MESSAGE_PAGE_SIZE as u32;
@@ -61,7 +61,11 @@ fn build_corpus() -> Corpus {
     let mut previous: Vec<MessageId> = Vec::new();
 
     for convo in 0..=OTHER_CONVOS {
-        let cid = if convo == 0 { conversation } else { ChannelId::new() };
+        let cid = if convo == 0 {
+            conversation
+        } else {
+            ChannelId::new()
+        };
         for i in 0..HISTORY {
             ts += 1_000_000;
             let sender = if i % 2 == 0 { me } else { peer };
@@ -79,11 +83,8 @@ fn build_corpus() -> Corpus {
             }
             if convo == 0 && i % IMAGE_EVERY == 0 {
                 let att_id = AttachmentId::new();
-                let mut meta = FileMetadata::new(
-                    "photo.jpg".into(),
-                    "image/jpeg".into(),
-                    2_400_000,
-                );
+                let mut meta =
+                    FileMetadata::new("photo.jpg".into(), "image/jpeg".into(), 2_400_000);
                 meta.width = Some(3024);
                 meta.height = Some(4032);
                 // Sender-provided low-res placeholder, as the wire carries it.
@@ -114,7 +115,12 @@ fn build_corpus() -> Corpus {
     // Deliberately no profile row for either participant: `get_display_name`
     // then walks its whole 4-query fallback chain, which is the real state for
     // any sender whose profile has not been fetched yet.
-    Corpus { _tmp: tmp, db, conversation, conv_type }
+    Corpus {
+        _tmp: tmp,
+        db,
+        conversation,
+        conv_type,
+    }
 }
 
 fn write_photo(path: &std::path::Path, w: u32, h: u32) {
@@ -224,8 +230,14 @@ fn bench_conversation_open() {
             bytes += r.unwrap();
         }
         let p1a = t.elapsed();
-        println!("P1a raw fetch, no decode ({} payload bytes): {:?}", bytes, p1a);
-        println!("     → decode (serde_json + 4x bincode/row) ≈ {:?}", p1.saturating_sub(p1a));
+        println!(
+            "P1a raw fetch, no decode ({} payload bytes): {:?}",
+            bytes, p1a
+        );
+        println!(
+            "     → decode (serde_json + 4x bincode/row) ≈ {:?}",
+            p1.saturating_sub(p1a)
+        );
     }
 
     // ── P2: sender display name, per message ──────────────────────────────
@@ -250,7 +262,12 @@ fn bench_conversation_open() {
         q2 += 1;
         let _ = anon_group.find_display_name_for_user(&id).unwrap();
     }
-    println!("P2 sender display names ({} msgs): {:?}   [{} queries]", page.len(), t.elapsed(), q2);
+    println!(
+        "P2 sender display names ({} msgs): {:?}   [{} queries]",
+        page.len(),
+        t.elapsed(),
+        q2
+    );
 
     // ── P3: attachment metadata, per attachment ───────────────────────────
     let mut q3 = 0usize;
@@ -264,7 +281,11 @@ fn bench_conversation_open() {
             }
         }
     }
-    println!("P3 attachment lookups: {:?}   [{} queries]", t.elapsed(), q3);
+    println!(
+        "P3 attachment lookups: {:?}   [{} queries]",
+        t.elapsed(),
+        q3
+    );
 
     // ── P4: reply parents — resolved TWICE per reply ──────────────────────
     // reply_parent_missing_for → message_repo.get(parent)
@@ -273,7 +294,9 @@ fn bench_conversation_open() {
     let mut q4 = 0usize;
     let t = Instant::now();
     for m in &page {
-        let Some(parent_id) = m.reply_to else { continue };
+        let Some(parent_id) = m.reply_to else {
+            continue;
+        };
         q4 += 1;
         let _missing = match messages.get(&parent_id).unwrap() {
             Some(p) => p.is_deleted,
@@ -287,7 +310,12 @@ fn bench_conversation_open() {
             }
         }
     }
-    println!("P4 reply-parent resolution ({} replies): {:?}   [{} queries]", replies, t.elapsed(), q4);
+    println!(
+        "P4 reply-parent resolution ({} replies): {:?}   [{} queries]",
+        replies,
+        t.elapsed(),
+        q4
+    );
 
     // ── P5: thread reply counts (channel path only) ───────────────────────
     let t = Instant::now();
@@ -305,7 +333,9 @@ fn bench_conversation_open() {
     let mut t_fast = std::time::Duration::ZERO;
     let mut t_placeholder = std::time::Duration::ZERO;
     for att in &resolved {
-        let Some(path) = att.local_path.as_deref() else { continue };
+        let Some(path) = att.local_path.as_deref() else {
+            continue;
+        };
         if !std::path::Path::new(path).exists() {
             continue;
         }
@@ -354,9 +384,15 @@ fn bench_conversation_open() {
         t_lanczos,
         t_open + t_lanczos
     );
-    println!("     fallback when no stored thumbnail — thumbnail(): {:?}", t_open + t_fast);
+    println!(
+        "     fallback when no stored thumbnail — thumbnail(): {:?}",
+        t_open + t_fast
+    );
     println!("     (rejected: Triangle resize {:?})", t_triangle);
 
     let total_queries = 1 + q2 + q3 + q4 + 1;
-    println!("--- one conversation open issues {} SQLite queries ---\n", total_queries);
+    println!(
+        "--- one conversation open issues {} SQLite queries ---\n",
+        total_queries
+    );
 }

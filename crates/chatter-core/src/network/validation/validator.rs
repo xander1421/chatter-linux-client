@@ -57,10 +57,10 @@ pub struct ValidationLimits {
 impl Default for ValidationLimits {
     fn default() -> Self {
         Self {
-            max_content_size: 64 * 1024,                      // 64KB
-            max_timestamp_drift_secs: 5 * 60,                 // 5 minutes
-            min_timestamp: 1_577_836_800_000_000_000,         // 2020-01-01 00:00:00 UTC in nanos
-            max_id_length: 64,                                // ULIDs/UUIDs are ~26-36 chars
+            max_content_size: 64 * 1024,              // 64KB
+            max_timestamp_drift_secs: 5 * 60,         // 5 minutes
+            min_timestamp: 1_577_836_800_000_000_000, // 2020-01-01 00:00:00 UTC in nanos
+            max_id_length: 64,                        // ULIDs/UUIDs are ~26-36 chars
         }
     }
 }
@@ -138,7 +138,10 @@ impl ContentValidator {
 
         // Basic sanity check - IDs should be ASCII alphanumeric with hyphens
         // Allow some flexibility for different ID formats (ULID, UUID, etc.)
-        if !id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_') {
+        if !id
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+        {
             return match field_name {
                 "message_id" => Err(ValidationError::InvalidMessageId),
                 "channel_id" => Err(ValidationError::InvalidChannelId),
@@ -496,8 +499,8 @@ mod tests {
     #[test]
     fn test_custom_limits() {
         let limits = ValidationLimits {
-            max_content_size: 1024, // 1KB
-            max_timestamp_drift_secs: 60, // 1 minute
+            max_content_size: 1024,                   // 1KB
+            max_timestamp_drift_secs: 60,             // 1 minute
             min_timestamp: 1_609_459_200_000_000_000, // 2021-01-01 in nanos
             max_id_length: 32,
         };
@@ -573,7 +576,10 @@ mod tests {
 
         // Same message ID should be duplicate
         let msg1_dup = make_test_message("msg-1", "channel-1", now + 100);
-        assert!(matches!(pipeline.process(msg1_dup), PipelineResult::Duplicate));
+        assert!(matches!(
+            pipeline.process(msg1_dup),
+            PipelineResult::Duplicate
+        ));
     }
 
     #[test]

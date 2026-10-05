@@ -147,14 +147,23 @@ mod tests {
 
     #[test]
     fn distinct_identities_get_distinct_seeds() {
-        assert_ne!(nostr_device_seed(&identity()), nostr_device_seed(&identity()));
+        assert_ne!(
+            nostr_device_seed(&identity()),
+            nostr_device_seed(&identity())
+        );
     }
 
     #[test]
     fn geohash_identities_differ_between_cells() -> Result<(), NostrError> {
         let mut identities = NostrIdentities::from_mesh(&identity());
-        let a = identities.for_geohash("u4pruy")?.public_key_hex().to_string();
-        let b = identities.for_geohash("u4pruz")?.public_key_hex().to_string();
+        let a = identities
+            .for_geohash("u4pruy")?
+            .public_key_hex()
+            .to_string();
+        let b = identities
+            .for_geohash("u4pruz")?
+            .public_key_hex()
+            .to_string();
         assert_ne!(a, b, "two cells must not share a pubkey");
         // Cached, so the same cell keeps the same key.
         assert_eq!(a, identities.for_geohash("u4pruy")?.public_key_hex());
@@ -164,8 +173,14 @@ mod tests {
     #[test]
     fn the_bridge_identity_is_unlinkable_from_the_chat_identity() -> Result<(), NostrError> {
         let mut identities = NostrIdentities::from_mesh(&identity());
-        let chat = identities.for_geohash("u4pruy")?.public_key_hex().to_string();
-        let bridge = identities.for_bridge("u4pruy")?.public_key_hex().to_string();
+        let chat = identities
+            .for_geohash("u4pruy")?
+            .public_key_hex()
+            .to_string();
+        let bridge = identities
+            .for_bridge("u4pruy")?
+            .public_key_hex()
+            .to_string();
         assert_ne!(chat, bridge);
         Ok(())
     }

@@ -5,8 +5,8 @@
 
 use std::sync::Arc;
 
-use base64::engine::general_purpose::STANDARD as BASE64;
 use base64::Engine;
+use base64::engine::general_purpose::STANDARD as BASE64;
 use rand::RngCore;
 
 use chatter_core::error::NetworkError;
@@ -15,7 +15,9 @@ use chatter_core::proto::chat_v1::signal_pre_key_bundle::{
     KyberPreKeyRecord as ProtoKyberPreKey, PreKeyRecord, SignedPreKeyRecord,
 };
 use chatter_core::proto::chat_v1::{AuthResponse, SignalPreKeyBundle};
-use libsignal_protocol::{kem, IdentityKeyPair, KeyPair, KyberPreKeyId, KyberPreKeyRecord, GenericSignedPreKey};
+use libsignal_protocol::{
+    GenericSignedPreKey, IdentityKeyPair, KeyPair, KyberPreKeyId, KyberPreKeyRecord, kem,
+};
 
 /// Test user data returned after registration.
 #[derive(Debug, Clone)]
@@ -48,7 +50,6 @@ pub struct TestUser {
     /// Device ID returned from server.
     pub device_id: u32,
 }
-
 
 /// Generate a unique username for testing.
 ///
@@ -110,7 +111,14 @@ pub async fn opaque_login(
         Err(e) => return Err(NetworkError::Unknown(e.to_string())),
     };
     auth_client
-        .login_finish(&started.login_id, &done.ke3, device_info, svr_public_key, device_auth_token, device_id)
+        .login_finish(
+            &started.login_id,
+            &done.ke3,
+            device_info,
+            svr_public_key,
+            device_auth_token,
+            device_id,
+        )
         .await
 }
 
@@ -118,7 +126,9 @@ pub async fn opaque_login(
 pub fn random_svr_public_key() -> Vec<u8> {
     let mut secret = [0u8; 32];
     rand::rng().fill_bytes(&mut secret);
-    chatter_core::crypto::svr::SvrKeypair::from_secret(&secret).public_key_bytes().to_vec()
+    chatter_core::crypto::svr::SvrKeypair::from_secret(&secret)
+        .public_key_bytes()
+        .to_vec()
 }
 
 /// Generate a random 32-byte Ed25519-like public key.
@@ -262,11 +272,9 @@ pub async fn register_test_user(pool: &GrpcClientPool) -> Result<TestUser, Netwo
     let mut auth_client = AuthClient::new(pool.channel(), pool.auth_clone());
 
     // Encrypt display name with profile key (required for Phase 79 privacy)
-    let encrypted_display_name = chatter_core::crypto::profile_crypto::encrypt_display_name(
-        &profile_key,
-        &display_name,
-    )
-    .expect("Display name encryption should succeed");
+    let encrypted_display_name =
+        chatter_core::crypto::profile_crypto::encrypt_display_name(&profile_key, &display_name)
+            .expect("Display name encryption should succeed");
 
     // Generate unidentified access key (16 bytes) for sealed sender
     let uak = chatter_core::crypto::derive_uak(&profile_key);
@@ -330,7 +338,7 @@ pub async fn register_test_user(pool: &GrpcClientPool) -> Result<TestUser, Netwo
 
     let result = auth_client
         .register_and_wait(
-            &username_hash_hex,        // PRIVACY: Send hash, matches SDK (server stores hash, not plaintext)
+            &username_hash_hex, // PRIVACY: Send hash, matches SDK (server stores hash, not plaintext)
             &opaque_record,
             &encrypted_display_name,
             &svr_public_key,
@@ -342,9 +350,9 @@ pub async fn register_test_user(pool: &GrpcClientPool) -> Result<TestUser, Netwo
             &challenge.challenge.as_ref().expect("challenge token").token,
             &challenge_response,
             solve_registration_pow(&challenge),
-            &[0u8; 32],         // Empty registration lock for tests
-            &username_lookup,   // username_claim(full_username): discovery hash
-            &username_proof,    // ...and the proof the server verifies it against
+            &[0u8; 32],       // Empty registration lock for tests
+            &username_lookup, // username_claim(full_username): discovery hash
+            &username_proof,  // ...and the proof the server verifies it against
         )
         .await?;
 
@@ -365,9 +373,7 @@ pub async fn register_test_user(pool: &GrpcClientPool) -> Result<TestUser, Netwo
 /// Register a test user and configure the pool for authenticated requests.
 ///
 /// Sets up Basic auth in Signal style: `{user_id}.{device_id}:{token}`.
-pub async fn setup_authenticated_test(
-    pool: &GrpcClientPool,
-) -> Result<TestUser, NetworkError> {
+pub async fn setup_authenticated_test(pool: &GrpcClientPool) -> Result<TestUser, NetworkError> {
     let user = register_test_user(pool).await?;
 
     // Configure auth interceptor with Signal-style Basic auth
@@ -451,7 +457,9 @@ pub fn generate_prekey_bundle() -> (SignalPreKeyBundle, Vec<u8>) {
 
 /// Pays a registration challenge's proof of work (whatever the transport's
 /// difficulty; 0 on clearnet).
-pub fn solve_registration_pow(challenge: &chatter_core::proto::chat_v1::RequestRegistrationChallengeResponse) -> u64 {
+pub fn solve_registration_pow(
+    challenge: &chatter_core::proto::chat_v1::RequestRegistrationChallengeResponse,
+) -> u64 {
     let c = challenge.challenge.as_ref().expect("challenge token");
     chatter_core::crypto::pow::solve(
         chatter_core::crypto::pow::Purpose::Register,

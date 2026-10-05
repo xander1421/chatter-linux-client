@@ -62,12 +62,7 @@ pub fn is_d3d11_available() -> bool {
 
 /// Check if D3D11 context is connected (ready to play video).
 pub fn is_d3d11_connected() -> bool {
-    D3D11_VIDEO_STATE.with(|cell| {
-        cell.borrow()
-            .as_ref()
-            .map(|s| s.connected)
-            .unwrap_or(false)
-    })
+    D3D11_VIDEO_STATE.with(|cell| cell.borrow().as_ref().map(|s| s.connected).unwrap_or(false))
 }
 
 /// Initialize D3D11 video rendering for the window on Windows.
@@ -108,34 +103,37 @@ pub fn init_d3d11_video(window: &MainWindow) -> bool {
 
     // Set up rendering notifier for frame updates
     let weak = window.as_weak();
-    if let Err(e) = window.window().set_rendering_notifier(move |render_state, _graphics_api| {
-        crate::record_startup_frame(&render_state);
-        match render_state {
-            slint::RenderingState::BeforeRendering => {
-                D3D11_VIDEO_STATE.with(|cell| {
-                    if let Some(ref mut video_state) = *cell.borrow_mut() {
-                        if video_state.is_playing {
-                            if let Some(image) = fetch_next_frame_d3d11(video_state) {
-                                if let Some(w) = weak.upgrade() {
-                                    w.set_video_player_frame(image);
+    if let Err(e) = window
+        .window()
+        .set_rendering_notifier(move |render_state, _graphics_api| {
+            crate::record_startup_frame(&render_state);
+            match render_state {
+                slint::RenderingState::BeforeRendering => {
+                    D3D11_VIDEO_STATE.with(|cell| {
+                        if let Some(ref mut video_state) = *cell.borrow_mut() {
+                            if video_state.is_playing {
+                                if let Some(image) = fetch_next_frame_d3d11(video_state) {
+                                    if let Some(w) = weak.upgrade() {
+                                        w.set_video_player_frame(image);
+                                    }
                                 }
                             }
                         }
-                    }
-                });
-            }
-            slint::RenderingState::RenderingTeardown => {
-                D3D11_VIDEO_STATE.with(|cell| {
-                    if let Some(ref mut video_state) = *cell.borrow_mut() {
-                        if let Ok(mut next) = video_state.next_frame.lock() {
-                            *next = None;
+                    });
+                }
+                slint::RenderingState::RenderingTeardown => {
+                    D3D11_VIDEO_STATE.with(|cell| {
+                        if let Some(ref mut video_state) = *cell.borrow_mut() {
+                            if let Ok(mut next) = video_state.next_frame.lock() {
+                                *next = None;
+                            }
                         }
-                    }
-                });
+                    });
+                }
+                _ => {}
             }
-            _ => {}
-        }
-    }) {
+        })
+    {
         tracing::warn!("Failed to set rendering notifier on Windows: {:?}", e);
         return false;
     }

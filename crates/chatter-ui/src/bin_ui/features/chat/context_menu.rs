@@ -5,8 +5,8 @@ use std::sync::Arc;
 use slint::{ComponentHandle, Model, SharedString};
 
 use chatter_core::client::ChatterClient;
-use chatter_core::domain::message::MessageMenu;
 use chatter_core::domain::UserId;
+use chatter_core::domain::message::MessageMenu;
 use chatter_core::state::ActiveConversation;
 
 use crate::MainWindow;
@@ -123,7 +123,8 @@ fn wire_message_info(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     let client = ui_ctx.clone();
     window.global::<crate::MessageInfo>().on_open(move |id| {
         let Ok(message_id) = id.parse() else { return };
-        let details = client.message_receipt_info(message_id)
+        let details = client
+            .message_receipt_info(message_id)
             .unwrap_or_else(|error| format!("Could not load delivery details: {error}"));
         if let Some(window) = weak.upgrade() {
             let info = window.global::<crate::MessageInfo>();

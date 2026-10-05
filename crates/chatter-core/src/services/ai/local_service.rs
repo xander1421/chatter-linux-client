@@ -21,7 +21,8 @@ pub const DEFAULT_MODEL_ID: &str = "Qwen/Qwen2.5-7B-Instruct-GGUF";
 pub struct LocalAIService {
     actor: LocalAIActorHandle,
     settings_repo: Arc<SettingsRepository>,
-    http_service: parking_lot::Mutex<Option<Arc<crate::services::local_ai_service::HttpLocalAIService>>>,
+    http_service:
+        parking_lot::Mutex<Option<Arc<crate::services::local_ai_service::HttpLocalAIService>>>,
 }
 
 impl LocalAIService {
@@ -82,7 +83,11 @@ impl LocalAIService {
     }
 
     /// Load a specific model.
-    pub async fn load_model(&self, model_id: String, quantized_file: Option<String>) -> Result<ModelInfo, LocalAIError> {
+    pub async fn load_model(
+        &self,
+        model_id: String,
+        quantized_file: Option<String>,
+    ) -> Result<ModelInfo, LocalAIError> {
         self.actor.load_model(model_id, quantized_file).await
     }
 
@@ -97,7 +102,11 @@ impl LocalAIService {
     }
 
     /// Set the user's preferred model and persist to settings.
-    pub fn set_preferred_model(&self, model_id: &str, quantized_file: Option<&str>) -> Result<(), LocalAIError> {
+    pub fn set_preferred_model(
+        &self,
+        model_id: &str,
+        quantized_file: Option<&str>,
+    ) -> Result<(), LocalAIError> {
         self.settings_repo
             .set_local_ai_model(model_id, quantized_file)
             .map_err(|e| LocalAIError::LoadFailed(format!("Failed to save model settings: {}", e)))
@@ -114,7 +123,9 @@ impl LocalAIService {
     pub fn set_enabled(&self, enabled: bool) -> Result<(), LocalAIError> {
         self.settings_repo
             .set_local_ai_enabled(enabled)
-            .map_err(|e| LocalAIError::LoadFailed(format!("Failed to save enabled state: {}", e)))?;
+            .map_err(|e| {
+                LocalAIError::LoadFailed(format!("Failed to save enabled state: {}", e))
+            })?;
         if let Some(service) = self.http_service.lock().as_ref() {
             service.refresh_indexing();
         }

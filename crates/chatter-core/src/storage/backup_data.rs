@@ -47,10 +47,10 @@
 //! skip-if-exists is the whole conflict policy. Unknown tables/columns in the
 //! backup are skipped (forward compatibility across schema drift).
 
-use prost::bytes::Buf;
 use prost::Message;
-use rusqlite::types::{Value as SqlValue, ValueRef};
+use prost::bytes::Buf;
 use rusqlite::Connection;
+use rusqlite::types::{Value as SqlValue, ValueRef};
 
 use crate::error::StorageError;
 use crate::storage::repositories::settings_repo::keys;
@@ -261,7 +261,9 @@ pub fn dump_frames(conn: &Connection, user_id: &str) -> Result<(Vec<u8>, usize),
         } else {
             format!("SELECT {cols} FROM {table}")
         };
-        dump_table(conn, &mut out, table, &select, &[], &mut rows, &|_| Ok(true))?;
+        dump_table(conn, &mut out, table, &select, &[], &mut rows, &|_| {
+            Ok(true)
+        })?;
     }
 
     // Own-profile settings subset (never the whole settings table — see
@@ -379,8 +381,7 @@ pub fn import_frames(conn: &mut Connection, payload: &[u8]) -> Result<ImportSumm
                 saw_info = true;
             }
             Some(frame::Payload::Table(th)) => {
-                let allowed =
-                    BACKUP_TABLES.contains(&th.table.as_str()) || th.table == "settings";
+                let allowed = BACKUP_TABLES.contains(&th.table.as_str()) || th.table == "settings";
                 if !allowed {
                     // Unknown table from a future payload — skip its rows.
                     current = None;
@@ -399,8 +400,7 @@ pub fn import_frames(conn: &mut Connection, payload: &[u8]) -> Result<ImportSumm
                     current = None;
                     continue;
                 }
-                let placeholders =
-                    names.iter().map(|_| "?").collect::<Vec<_>>().join(",");
+                let placeholders = names.iter().map(|_| "?").collect::<Vec<_>>().join(",");
                 current = Some(TableState {
                     insert_sql: format!(
                         "INSERT OR IGNORE INTO {} ({}) VALUES ({})",
@@ -426,8 +426,7 @@ pub fn import_frames(conn: &mut Connection, payload: &[u8]) -> Result<ImportSumm
                             .unwrap_or(SqlValue::Null)
                     })
                     .collect();
-                let inserted =
-                    stmt.execute(rusqlite::params_from_iter(params.into_iter()))?;
+                let inserted = stmt.execute(rusqlite::params_from_iter(params.into_iter()))?;
                 summary.rows_inserted += inserted;
             }
             None => {}
@@ -509,15 +508,20 @@ mod tests {
         };
         assert!(rows >= 5, "expected at least 5 rows dumped, got {rows}");
         // Exclusion proof: the crypto.* settings row is not in the payload.
-        assert!(!payload
-            .windows(b"crypto.profile_key".len())
-            .any(|w| w == b"crypto.profile_key"));
+        assert!(
+            !payload
+                .windows(b"crypto.profile_key".len())
+                .any(|w| w == b"crypto.profile_key")
+        );
 
         let summary = {
             let mut conn = dst.connection().unwrap();
             import_frames(&mut conn, &payload).unwrap()
         };
-        assert_eq!(summary.rows_inserted, rows, "all rows must import into a fresh DB");
+        assert_eq!(
+            summary.rows_inserted, rows,
+            "all rows must import into a fresh DB"
+        );
 
         {
             let conn = dst.connection().unwrap();
@@ -567,7 +571,10 @@ mod tests {
             let mut conn = dst.connection().unwrap();
             import_frames(&mut conn, &payload).unwrap()
         };
-        assert_eq!(summary2.rows_inserted, 0, "re-import must skip every existing row");
+        assert_eq!(
+            summary2.rows_inserted, 0,
+            "re-import must skip every existing row"
+        );
         {
             let conn = dst.connection().unwrap();
             let text: String = conn
@@ -619,7 +626,10 @@ mod tests {
         gif.encryption_key = Some(vec![7; 64]);
         gif.encryption_iv = Some(vec![9; 32]);
         AttachmentRepository::new(src.clone())
-            .insert_with_file_path(&gif, std::path::Path::new("/src-device/attachments/gif.enc"))
+            .insert_with_file_path(
+                &gif,
+                std::path::Path::new("/src-device/attachments/gif.enc"),
+            )
             .unwrap();
         // An attachment only an anon DM references: excluded with the DM.
         let anon_id = AttachmentId::from_cdn_key("cdn/anon-1");
@@ -655,16 +665,30 @@ mod tests {
         import_frames(&mut dst.connection().unwrap(), &payload).unwrap();
 
         let repo = AttachmentRepository::new(dst.clone());
-        let restored = repo.get(&gif_id).unwrap().expect("GIF attachment row must ride the archive");
+        let restored = repo
+            .get(&gif_id)
+            .unwrap()
+            .expect("GIF attachment row must ride the archive");
         let label = restored.metadata.preview_label();
         assert_eq!(
             channel_msg.sidebar_preview(None, Some(&label)),
             "\u{1F39E}\u{FE0F} GIF",
             "a GIF must preview as GIF on the linked device, not as a bare attachment count"
         );
-        assert!(restored.is_downloadable(), "pointer (CDN key + key) must survive");
-        assert_eq!(restored.encryption_iv, Some(vec![9; 32]), "digest must survive");
-        assert_eq!(restored.status, AttachmentStatus::Pending, "download state must reset");
+        assert!(
+            restored.is_downloadable(),
+            "pointer (CDN key + key) must survive"
+        );
+        assert_eq!(
+            restored.encryption_iv,
+            Some(vec![9; 32]),
+            "digest must survive"
+        );
+        assert_eq!(
+            restored.status,
+            AttachmentStatus::Pending,
+            "download state must reset"
+        );
         assert_eq!(restored.content_location, ContentLocation::NotDownloaded);
         let file_path: Option<String> = dst
             .connection()
@@ -675,7 +699,10 @@ mod tests {
                 |r| r.get(0),
             )
             .unwrap();
-        assert_eq!(file_path, None, "the source device's file path must not ride");
+        assert_eq!(
+            file_path, None,
+            "the source device's file path must not ride"
+        );
         assert!(
             repo.get(&anon_id).unwrap().is_none(),
             "an attachment only an anon conversation references must stay out"

@@ -3,11 +3,11 @@
 //! Handles identity fingerprints and prekey refresh.
 //! All operations are delegated to the SignalActor for thread-safety.
 
-use crate::network::grpc::auth_client::AuthClient;
+use super::SignalService;
 use crate::domain::ids::UserId;
 use crate::error::{CryptoError, IdentityChangeSource, ServiceError};
+use crate::network::grpc::auth_client::AuthClient;
 use crate::storage::ChannelRepository;
-use super::SignalService;
 
 /// What a whole-account key republish did on the server.
 #[derive(Debug, Clone, Copy)]
@@ -55,7 +55,10 @@ impl SignalService {
     /// Check if we have a trusted identity key for a peer.
     ///
     /// Returns `Some(key_bytes)` if trusted, `None` if unknown peer.
-    pub fn get_peer_identity(&self, peer_id: &str) -> Result<Option<Vec<u8>>, crate::error::StorageError> {
+    pub fn get_peer_identity(
+        &self,
+        peer_id: &str,
+    ) -> Result<Option<Vec<u8>>, crate::error::StorageError> {
         self.key_store.get_identity_by_uuid(peer_id)
     }
 
@@ -79,7 +82,11 @@ impl SignalService {
             .await
             .map_err(ServiceError::Network)?;
 
-        tracing::info!(opk = uploaded_count, pq_opk = kyber_count, "Refreshed prekeys via Actor");
+        tracing::info!(
+            opk = uploaded_count,
+            pq_opk = kyber_count,
+            "Refreshed prekeys via Actor"
+        );
 
         Ok(uploaded_count)
     }
@@ -96,7 +103,12 @@ impl SignalService {
         let (spk_proto, kpk_proto) = self.actor.rotate_signed_prekey().await?;
 
         auth_client
-            .refresh_pre_keys_with_rotation(Vec::new(), Some(spk_proto), Some(kpk_proto), Vec::new())
+            .refresh_pre_keys_with_rotation(
+                Vec::new(),
+                Some(spk_proto),
+                Some(kpk_proto),
+                Vec::new(),
+            )
             .await
             .map_err(ServiceError::Network)?;
 
@@ -105,12 +117,14 @@ impl SignalService {
         // pruned together to avoid unbounded Kyber key-store growth.
         use crate::crypto::signal::PreKeyManager;
         let prekey_manager = PreKeyManager::new(self.key_store.clone());
-        let pruned_spk = prekey_manager.cleanup_expired_signed_prekeys(30)
+        let pruned_spk = prekey_manager
+            .cleanup_expired_signed_prekeys(30)
             .map_err(ServiceError::Crypto)?;
         if pruned_spk > 0 {
             tracing::info!(count = pruned_spk, "Pruned expired signed prekeys");
         }
-        let pruned_kpk = prekey_manager.cleanup_expired_kyber_prekeys(30)
+        let pruned_kpk = prekey_manager
+            .cleanup_expired_kyber_prekeys(30)
             .map_err(ServiceError::Crypto)?;
         if pruned_kpk > 0 {
             tracing::info!(count = pruned_kpk, "Pruned expired Kyber prekeys");
@@ -139,9 +153,10 @@ impl SignalService {
 
         let identity_key = self.actor.get_identity_public_key().await?;
 
-        let registration_id = crate::crypto::signal::IdentityKeyManager::new(self.key_store.clone())
-            .get_registration_id()
-            .map_err(ServiceError::Crypto)?;
+        let registration_id =
+            crate::crypto::signal::IdentityKeyManager::new(self.key_store.clone())
+                .get_registration_id()
+                .map_err(ServiceError::Crypto)?;
 
         // Fresh signed prekey + Kyber prekey, both signed by the identity key
         // that is going up in the same message.
@@ -389,9 +404,8 @@ impl SignalService {
         // it is pinned. A malformed key fails to parse in `is_trusted_identity`
         // and turns every later message from the peer into a decode error — a
         // worse wedge than the one being cleared.
-        libsignal_protocol::IdentityKey::decode(new_identity_key).map_err(|e| {
-            ServiceError::Validation(format!("not a Signal identity key: {e}"))
-        })?;
+        libsignal_protocol::IdentityKey::decode(new_identity_key)
+            .map_err(|e| ServiceError::Validation(format!("not a Signal identity key: {e}")))?;
 
         // The user may only accept the key they were actually shown. If a change
         // is parked, this must be it — otherwise a server that keeps injecting

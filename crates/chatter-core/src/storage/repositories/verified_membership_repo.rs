@@ -5,14 +5,14 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
-use rusqlite::{params, OptionalExtension};
+use rusqlite::{OptionalExtension, params};
 
 use crate::domain::ids::ChannelId;
 use crate::error::StorageError;
 use crate::proto::chat_v1 as pb;
 use crate::services::channel::verified_state::{
-    ChannelRole, Invite, JoinMode, KeyBytes, Member, MemberStatus, MembershipState, Policy, StateHash,
-    VerificationStatus, VerifiedChange, VerifiedChannel,
+    ChannelRole, Invite, JoinMode, KeyBytes, Member, MemberStatus, MembershipState, Policy,
+    StateHash, VerificationStatus, VerifiedChange, VerifiedChannel,
 };
 use crate::storage::Database;
 
@@ -25,7 +25,10 @@ fn bad(what: &str) -> StorageError {
 }
 
 fn role_of(v: i64) -> Result<ChannelRole, StorageError> {
-    match i32::try_from(v).ok().and_then(|v| ChannelRole::try_from(v).ok()) {
+    match i32::try_from(v)
+        .ok()
+        .and_then(|v| ChannelRole::try_from(v).ok())
+    {
         Some(ChannelRole::RoleUnspecified) | None => Err(bad("role")),
         Some(r) => Ok(r),
     }
@@ -66,7 +69,8 @@ impl VerifiedMembershipRepository {
                 |r| Ok((r.get(0)?, r.get(1)?)),
             )
             .optional()?;
-        let cleared_failure = matches!(stored, Some((_, s)) if s == VerificationStatus::VerificationFailed as u8);
+        let cleared_failure =
+            matches!(stored, Some((_, s)) if s == VerificationStatus::VerificationFailed as u8);
         let status = match stored {
             Some((rev, _)) if (rev as u64).wrapping_add(1) != st.revision => {
                 return Err(bad("commit out of order"));
@@ -98,7 +102,10 @@ impl VerifiedMembershipRepository {
                 status as u8,
             ],
         )?;
-        tx.execute("DELETE FROM verified_channel_members WHERE channel_id = ?1", params![cid])?;
+        tx.execute(
+            "DELETE FROM verified_channel_members WHERE channel_id = ?1",
+            params![cid],
+        )?;
         for (user_id, m) in &st.members {
             tx.execute(
                 "INSERT INTO verified_channel_members (channel_id, user_id, role, status, identity_key)
@@ -106,7 +113,10 @@ impl VerifiedMembershipRepository {
                 params![cid, user_id, m.role as i32, m.status as i32, m.identity_key.as_slice()],
             )?;
         }
-        tx.execute("DELETE FROM verified_channel_invites WHERE channel_id = ?1", params![cid])?;
+        tx.execute(
+            "DELETE FROM verified_channel_invites WHERE channel_id = ?1",
+            params![cid],
+        )?;
         for (invite_pub, i) in &st.invites {
             tx.execute(
                 "INSERT INTO verified_channel_invites
@@ -190,15 +200,29 @@ impl VerifiedMembershipRepository {
             "SELECT user_id, role, status, identity_key FROM verified_channel_members WHERE channel_id = ?1",
         )?;
         let rows = stmt.query_map(params![cid], |r| {
-            Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?, r.get::<_, i32>(2)?, r.get::<_, Vec<u8>>(3)?))
+            Ok((
+                r.get::<_, String>(0)?,
+                r.get::<_, i64>(1)?,
+                r.get::<_, i32>(2)?,
+                r.get::<_, Vec<u8>>(3)?,
+            ))
         })?;
         for row in rows {
             let (user_id, role, status, key) = row?;
             let status = match MemberStatus::try_from(status) {
-                Ok(s @ (MemberStatus::Active | MemberStatus::Invited | MemberStatus::Requesting)) => s,
+                Ok(
+                    s @ (MemberStatus::Active | MemberStatus::Invited | MemberStatus::Requesting),
+                ) => s,
                 _ => return Err(bad("member status")),
             };
-            members.insert(user_id, Member { role: role_of(role)?, status, identity_key: key_of(key)? });
+            members.insert(
+                user_id,
+                Member {
+                    role: role_of(role)?,
+                    status,
+                    identity_key: key_of(key)?,
+                },
+            );
         }
         drop(stmt);
 
@@ -221,14 +245,22 @@ impl VerifiedMembershipRepository {
             let (invite_pub, role, expires_at, max_uses, uses, needs_approval) = row?;
             invites.insert(
                 key_of(invite_pub)?,
-                Invite { role: role_of(role)?, expires_at: expires_at as u64, max_uses, uses, needs_approval },
+                Invite {
+                    role: role_of(role)?,
+                    expires_at: expires_at as u64,
+                    max_uses,
+                    uses,
+                    needs_approval,
+                },
             );
         }
         drop(stmt);
 
-        let mut stmt = conn.prepare("SELECT user_id FROM verified_channel_exclusions WHERE channel_id = ?1")?;
-        let excluded: BTreeSet<String> =
-            stmt.query_map(params![cid], |r| r.get::<_, String>(0))?.collect::<Result<_, _>>()?;
+        let mut stmt =
+            conn.prepare("SELECT user_id FROM verified_channel_exclusions WHERE channel_id = ?1")?;
+        let excluded: BTreeSet<String> = stmt
+            .query_map(params![cid], |r| r.get::<_, String>(0))?
+            .collect::<Result<_, _>>()?;
         drop(stmt);
 
         let state = MembershipState {
@@ -244,12 +276,21 @@ impl VerifiedMembershipRepository {
             return Err(bad("stored state does not match its hash"));
         }
         let status = VerificationStatus::from_u8(status).ok_or_else(|| bad("status"))?;
-        Ok(Some(VerifiedChannel { state, state_hash, excluded, status }))
+        Ok(Some(VerifiedChannel {
+            state,
+            state_hash,
+            excluded,
+            status,
+        }))
     }
 
     /// Cheap eligibility check for the key-gating hot path: ACTIVE in the
     /// verified state and not excluded. Equals `VerifiedMembership::contains`.
-    pub fn is_distribution_member(&self, channel_id: &ChannelId, user_id: &str) -> Result<bool, StorageError> {
+    pub fn is_distribution_member(
+        &self,
+        channel_id: &ChannelId,
+        user_id: &str,
+    ) -> Result<bool, StorageError> {
         let conn = self.db.connection()?;
         Ok(conn
             .query_row(
@@ -274,9 +315,12 @@ impl VerifiedMembershipRepository {
                AND NOT EXISTS (SELECT 1 FROM verified_channel_exclusions e
                                WHERE e.channel_id = m.channel_id AND e.user_id = m.user_id)",
         )?;
-        let ids: Vec<String> =
-            stmt.query_map(params![user_id, MemberStatus::Active as i32], |r| r.get(0))?.collect::<Result<_, _>>()?;
-        ids.iter().map(|id| id.parse().map_err(|_| bad("channel id"))).collect()
+        let ids: Vec<String> = stmt
+            .query_map(params![user_id, MemberStatus::Active as i32], |r| r.get(0))?
+            .collect::<Result<_, _>>()?;
+        ids.iter()
+            .map(|id| id.parse().map_err(|_| bad("channel id")))
+            .collect()
     }
 
     /// Apply an unsigned server removal (`UnsignedDisposition::ExcludeFromDistribution`).
@@ -293,7 +337,11 @@ impl VerifiedMembershipRepository {
 
     /// Set the local status (a failed verification, a detected fork, or the
     /// user acknowledging one). No-op for a channel with no verified state.
-    pub fn set_status(&self, channel_id: &ChannelId, status: VerificationStatus) -> Result<(), StorageError> {
+    pub fn set_status(
+        &self,
+        channel_id: &ChannelId,
+        status: VerificationStatus,
+    ) -> Result<(), StorageError> {
         let conn = self.db.connection()?;
         conn.execute(
             "UPDATE verified_channel_state SET status = ?2 WHERE channel_id = ?1",
@@ -304,7 +352,11 @@ impl VerifiedMembershipRepository {
 
     /// The state hash recorded for `revision`, if this device accepted that
     /// change (for `compare_peer_state` against a peer that is behind).
-    pub fn state_hash_at(&self, channel_id: &ChannelId, revision: u64) -> Result<Option<StateHash>, StorageError> {
+    pub fn state_hash_at(
+        &self,
+        channel_id: &ChannelId,
+        revision: u64,
+    ) -> Result<Option<StateHash>, StorageError> {
         let conn = self.db.connection()?;
         let h: Option<Vec<u8>> = conn
             .query_row(
@@ -313,18 +365,29 @@ impl VerifiedMembershipRepository {
                 |r| r.get(0),
             )
             .optional()?;
-        h.map(|h| h.try_into().map_err(|_| bad("hash length"))).transpose()
+        h.map(|h| h.try_into().map_err(|_| bad("hash length")))
+            .transpose()
     }
 
     /// The accepted change at `revision`, as received.
-    pub fn change_at(&self, channel_id: &ChannelId, revision: u64) -> Result<Option<pb::ChannelChange>, StorageError> {
+    pub fn change_at(
+        &self,
+        channel_id: &ChannelId,
+        revision: u64,
+    ) -> Result<Option<pb::ChannelChange>, StorageError> {
         let conn = self.db.connection()?;
         Ok(conn
             .query_row(
                 "SELECT actions, signature, invite_proof FROM channel_changes
                  WHERE channel_id = ?1 AND revision = ?2",
                 params![channel_id.to_string(), revision as i64],
-                |r| Ok(pb::ChannelChange { actions: r.get(0)?, signature: r.get(1)?, invite_proof: r.get(2)? }),
+                |r| {
+                    Ok(pb::ChannelChange {
+                        actions: r.get(0)?,
+                        signature: r.get(1)?,
+                        invite_proof: r.get(2)?,
+                    })
+                },
             )
             .optional()?)
     }
@@ -332,7 +395,10 @@ impl VerifiedMembershipRepository {
     /// Forget a channel entirely (we left it, or it was deleted).
     pub fn delete(&self, channel_id: &ChannelId) -> Result<(), StorageError> {
         let conn = self.db.connection()?;
-        conn.execute("DELETE FROM verified_channel_state WHERE channel_id = ?1", params![channel_id.to_string()])?;
+        conn.execute(
+            "DELETE FROM verified_channel_state WHERE channel_id = ?1",
+            params![channel_id.to_string()],
+        )?;
         Ok(())
     }
 }
@@ -341,8 +407,10 @@ impl VerifiedMembershipRepository {
 mod tests {
     use super::*;
     use crate::services::channel::verified_state::{
-        canonical::{signed_message, CHANGE_DOMAIN},
-        check_change, rules::preview, VerifiedMembership,
+        VerifiedMembership,
+        canonical::{CHANGE_DOMAIN, signed_message},
+        check_change,
+        rules::preview,
     };
     use libsignal_protocol::KeyPair;
     use pb::channel_action::Action;
@@ -367,7 +435,10 @@ mod tests {
         acts: Vec<Action>,
     ) -> (pb::ChannelChange, VerifiedChange) {
         let revision = prev.map_or(1, |p| p.revision + 1);
-        let actions: Vec<_> = acts.into_iter().map(|a| pb::ChannelAction { action: Some(a) }).collect();
+        let actions: Vec<_> = acts
+            .into_iter()
+            .map(|a| pb::ChannelAction { action: Some(a) })
+            .collect();
         let k: KeyBytes = key(by.1).try_into().unwrap();
         let new = preview(prev, &actions, cid, revision, by.0, k, 1).unwrap();
         let bytes = pb::channel_change::Actions {
@@ -381,8 +452,15 @@ mod tests {
             new_state_hash: new.hash().to_vec(),
         }
         .encode_to_vec();
-        let signature = by.1.private_key.calculate_signature(&signed_message(CHANGE_DOMAIN, &bytes), &mut rand::rng()).unwrap();
-        let c = pb::ChannelChange { actions: bytes, signature: signature.to_vec(), invite_proof: vec![] };
+        let signature =
+            by.1.private_key
+                .calculate_signature(&signed_message(CHANGE_DOMAIN, &bytes), &mut rand::rng())
+                .unwrap();
+        let c = pb::ChannelChange {
+            actions: bytes,
+            signature: signature.to_vec(),
+            invite_proof: vec![],
+        };
         let v = VerifiedChange(check_change(cid, prev, &c).unwrap());
         (c, v)
     }
@@ -392,8 +470,14 @@ mod tests {
         let (_dir, repo) = repo();
         let channel = ChannelId::new();
         let cid = channel.to_string();
-        let owner = (uuid::Uuid::new_v4().to_string(), KeyPair::generate(&mut rand::rng()));
-        let bob = (uuid::Uuid::new_v4().to_string(), KeyPair::generate(&mut rand::rng()));
+        let owner = (
+            uuid::Uuid::new_v4().to_string(),
+            KeyPair::generate(&mut rand::rng()),
+        );
+        let bob = (
+            uuid::Uuid::new_v4().to_string(),
+            KeyPair::generate(&mut rand::rng()),
+        );
         let link = KeyPair::generate(&mut rand::rng());
         assert!(repo.load(&channel).unwrap().is_none());
 
@@ -402,8 +486,16 @@ mod tests {
             None,
             (&owner.0, &owner.1),
             vec![
-                Action::Genesis(pb::Genesis { policy: Some(Policy::defaults(false).to_proto()), disappearing_seconds: 30 }),
-                Action::AddMember(pb::AddMember { user_id: bob.0.clone(), role: ChannelRole::Member as i32, identity_key: key(&bob.1), pending: false }),
+                Action::Genesis(pb::Genesis {
+                    policy: Some(Policy::defaults(false).to_proto()),
+                    disappearing_seconds: 30,
+                }),
+                Action::AddMember(pb::AddMember {
+                    user_id: bob.0.clone(),
+                    role: ChannelRole::Member as i32,
+                    identity_key: key(&bob.1),
+                    pending: false,
+                }),
                 Action::CreateInvite(pb::CreateInvite {
                     capability: Some(pb::InviteCapability {
                         invite_pub: key(&link),
@@ -421,7 +513,10 @@ mod tests {
         assert_eq!(loaded.state, v1.0.new_state);
         assert_eq!(loaded.state_hash, v1.0.new_state_hash);
         assert_eq!(loaded.status, VerificationStatus::Ok);
-        assert_eq!(repo.state_hash_at(&channel, 1).unwrap(), Some(v1.0.new_state_hash));
+        assert_eq!(
+            repo.state_hash_at(&channel, 1).unwrap(),
+            Some(v1.0.new_state_hash)
+        );
         assert_eq!(repo.change_at(&channel, 1).unwrap(), Some(c1.clone()));
         assert!(repo.is_distribution_member(&channel, &bob.0).unwrap());
 
@@ -431,11 +526,16 @@ mod tests {
         // Unsigned removal: excluded, still in state; status survives a commit
         // only when it is a fork.
         repo.exclude(&channel, &bob.0).unwrap();
-        repo.exclude(&channel, "00000000-0000-4000-8000-000000000000").unwrap();
+        repo.exclude(&channel, "00000000-0000-4000-8000-000000000000")
+            .unwrap();
         let view = repo.load(&channel).unwrap().unwrap();
         assert!(!view.contains(&bob.0));
         assert!(view.state.members.contains_key(&bob.0));
-        assert_eq!(view.excluded.len(), 1, "only verified members can be excluded");
+        assert_eq!(
+            view.excluded.len(),
+            1,
+            "only verified members can be excluded"
+        );
         assert!(!repo.is_distribution_member(&channel, &bob.0).unwrap());
 
         repo.set_status(&channel, VerificationStatus::Fork).unwrap();
@@ -449,20 +549,34 @@ mod tests {
         repo.commit(&channel, &c2, &v2).unwrap();
         let after = repo.load(&channel).unwrap().unwrap();
         assert_eq!(after.status, VerificationStatus::Fork);
-        assert!(after.excluded.contains(&bob.0), "exclusion lasts while the user is in state");
+        assert!(
+            after.excluded.contains(&bob.0),
+            "exclusion lasts while the user is in state"
+        );
 
         // A signed removal ends the exclusion.
-        repo.set_status(&channel, VerificationStatus::VerificationFailed).unwrap();
+        repo.set_status(&channel, VerificationStatus::VerificationFailed)
+            .unwrap();
         let (c3, v3) = change(
             &cid,
             Some(&after.state),
             (&owner.0, &owner.1),
-            vec![Action::RemoveMember(pb::RemoveMember { user_id: bob.0.clone(), reason: pb::remove_member::Reason::Kicked as i32 })],
+            vec![Action::RemoveMember(pb::RemoveMember {
+                user_id: bob.0.clone(),
+                reason: pb::remove_member::Reason::Kicked as i32,
+            })],
         );
-        assert!(repo.commit(&channel, &c3, &v3).unwrap(), "clearing a failure is reported");
+        assert!(
+            repo.commit(&channel, &c3, &v3).unwrap(),
+            "clearing a failure is reported"
+        );
         let removed = repo.load(&channel).unwrap().unwrap();
         assert!(removed.excluded.is_empty());
-        assert_eq!(removed.status, VerificationStatus::Ok, "a verified change clears a failure");
+        assert_eq!(
+            removed.status,
+            VerificationStatus::Ok,
+            "a verified change clears a failure"
+        );
         assert_eq!(removed.revision(), 3);
 
         repo.delete(&channel).unwrap();

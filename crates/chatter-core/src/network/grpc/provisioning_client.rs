@@ -3,20 +3,20 @@
 //! Client for device linking operations via QR code provisioning.
 //! Supports both new device (linking) and primary device (approving) flows.
 
-use tonic::service::interceptor::InterceptedService;
 use crate::network::grpc::transport::GrpcTransport;
+use tonic::service::interceptor::InterceptedService;
 
 use crate::error::NetworkError;
 use crate::network::grpc::interceptors::AuthInterceptor;
 use crate::proto::provisioning_v1::{
-    device_provisioning_service_client::DeviceProvisioningServiceClient,
-    get_provisioning_message_response, get_transfer_archive_response, CancelProvisioningRequest,
-    CompleteDeviceLinkingRequest, CompleteDeviceLinkingResponse, GetProvisioningMessageRequest,
-    GetProvisioningMessageResponse, GetTransferArchiveRequest, ListProvisioningSessionsRequest,
-    ListProvisioningSessionsResponse, ProvisionDeviceRequest, ProvisionEnvelope,
-    SetTransferArchiveRequest, StartProvisioningRequest, StartProvisioningResponse,
+    CancelProvisioningRequest, CompleteDeviceLinkingRequest, CompleteDeviceLinkingResponse,
+    GetProvisioningMessageRequest, GetProvisioningMessageResponse, GetTransferArchiveRequest,
+    ListProvisioningSessionsRequest, ListProvisioningSessionsResponse, ProvisionDeviceRequest,
+    ProvisionEnvelope, SetTransferArchiveRequest, StartProvisioningRequest,
+    StartProvisioningResponse, device_provisioning_service_client::DeviceProvisioningServiceClient,
+    get_provisioning_message_response, get_transfer_archive_response,
 };
-use crate::proto::{signal_pre_key_bundle::PreKeyRecord, SignalPreKeyBundle};
+use crate::proto::{SignalPreKeyBundle, signal_pre_key_bundle::PreKeyRecord};
 
 /// Result of polling for provisioning message.
 #[derive(Debug, Clone)]
@@ -327,7 +327,9 @@ mod tests {
             public_key: vec![0u8; 32],
             body: vec![0u8; 80],
         });
-        let _pending = ProvisioningPollResult::Pending { retry_after_ms: 2000 };
+        let _pending = ProvisioningPollResult::Pending {
+            retry_after_ms: 2000,
+        };
         let _expired = ProvisioningPollResult::Expired {
             message: "Session expired".to_string(),
         };

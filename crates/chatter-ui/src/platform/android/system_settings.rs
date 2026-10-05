@@ -19,10 +19,20 @@ pub fn font_scale() -> f32 {
         let context = unsafe { jni::objects::JObject::from_raw(ctx.context().cast()) };
         let res = (|| -> Result<f32, jni::errors::Error> {
             let resources = env
-                .call_method(&context, "getResources", "()Landroid/content/res/Resources;", &[])?
+                .call_method(
+                    &context,
+                    "getResources",
+                    "()Landroid/content/res/Resources;",
+                    &[],
+                )?
                 .l()?;
             let config = env
-                .call_method(&resources, "getConfiguration", "()Landroid/content/res/Configuration;", &[])?
+                .call_method(
+                    &resources,
+                    "getConfiguration",
+                    "()Landroid/content/res/Configuration;",
+                    &[],
+                )?
                 .l()?;
             env.get_field(&config, "fontScale", "F")?.f()
         })();
@@ -57,11 +67,26 @@ pub fn open_message_notification_settings() {
             let put = "(Ljava/lang/String;Ljava/lang/String;)Landroid/content/Intent;";
             // Settings.EXTRA_APP_PACKAGE / Settings.EXTRA_CHANNEL_ID.
             let k_pkg = env.new_string("android.provider.extra.APP_PACKAGE")?;
-            env.call_method(&intent, "putExtra", put, &[JValue::Object(&k_pkg), JValue::Object(&package)])?;
+            env.call_method(
+                &intent,
+                "putExtra",
+                put,
+                &[JValue::Object(&k_pkg), JValue::Object(&package)],
+            )?;
             let k_chan = env.new_string("android.provider.extra.CHANNEL_ID")?;
             let chan = env.new_string(super::notifications::CHANNEL_ID)?;
-            env.call_method(&intent, "putExtra", put, &[JValue::Object(&k_chan), JValue::Object(&chan)])?;
-            env.call_method(act, "startActivity", "(Landroid/content/Intent;)V", &[JValue::Object(&intent)])?;
+            env.call_method(
+                &intent,
+                "putExtra",
+                put,
+                &[JValue::Object(&k_chan), JValue::Object(&chan)],
+            )?;
+            env.call_method(
+                act,
+                "startActivity",
+                "(Landroid/content/Intent;)V",
+                &[JValue::Object(&intent)],
+            )?;
             Ok(())
         })();
         if res.is_err() {

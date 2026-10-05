@@ -26,7 +26,13 @@ pub fn canonical_state(s: &MembershipState) -> Vec<u8> {
     put_bin(&mut out, s.channel_id.as_bytes());
     out.extend_from_slice(&s.revision.to_be_bytes());
     let p = &s.policy;
-    for r in [p.add_member, p.remove_member, p.set_role, p.manage_invites, p.set_disappearing] {
+    for r in [
+        p.add_member,
+        p.remove_member,
+        p.set_role,
+        p.manage_invites,
+        p.set_disappearing,
+    ] {
         out.push(r as i32 as u8);
     }
     out.push(p.join as i32 as u8);

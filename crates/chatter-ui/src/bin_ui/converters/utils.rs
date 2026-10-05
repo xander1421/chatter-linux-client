@@ -1,6 +1,5 @@
 //! Utility functions for domain-to-Slint conversions.
 
-
 use crate::ReactionEntry;
 
 /// Convert typed reaction counts into Slint `ReactionEntry` pills for
@@ -24,11 +23,14 @@ pub fn reactions_model_to_counts(
     model: &slint::ModelRc<ReactionEntry>,
 ) -> Vec<chatter_core::domain::message::ReactionCount> {
     use slint::Model;
-    model.iter()
-        .map(|entry| chatter_core::domain::message::ReactionCount::new(
-            entry.emoji.to_string(),
-            entry.count.max(0) as u32,
-        ))
+    model
+        .iter()
+        .map(|entry| {
+            chatter_core::domain::message::ReactionCount::new(
+                entry.emoji.to_string(),
+                entry.count.max(0) as u32,
+            )
+        })
         .collect()
 }
 
@@ -43,9 +45,11 @@ pub fn avatar_bytes_to_image(bytes: &[u8]) -> Option<slint::Image> {
         Ok(img) => {
             let rgba = img.to_rgba8();
             let (w, h) = rgba.dimensions();
-            Some(crate::bin_ui::slint_conversions::rgba_to_slint_image(rgba.as_raw(),
+            Some(crate::bin_ui::slint_conversions::rgba_to_slint_image(
+                rgba.as_raw(),
                 w,
-                h,))
+                h,
+            ))
         }
         Err(e) => {
             tracing::warn!("Failed to decode avatar image: {:?}", e);
@@ -100,13 +104,13 @@ pub fn mime_to_category(mime_type: &str) -> &'static str {
 /// Map category to icon emoji and background color.
 pub(crate) fn category_to_icon_and_color(category: &str) -> (&'static str, slint::Color) {
     match category {
-        "document" => ("\u{1F4C4}", slint::Color::from_argb_u8(255, 96, 165, 250)),  // #60a5fa
-        "code" => ("\u{1F4DD}", slint::Color::from_argb_u8(255, 251, 191, 36)),       // #fbbf24
-        "archive" => ("\u{1F4E6}", slint::Color::from_argb_u8(255, 251, 146, 60)),    // #fb923c
-        "image" => ("\u{1F5BC}", slint::Color::from_argb_u8(255, 74, 222, 128)),      // #4ade80
-        "video" => ("\u{1F3AC}", slint::Color::from_argb_u8(255, 248, 113, 113)),     // #f87171
-        "audio" => ("\u{1F3B5}", slint::Color::from_argb_u8(255, 167, 139, 250)),     // #a78bfa
-        _ => ("\u{1F4CE}", slint::Color::from_argb_u8(255, 148, 163, 184)),           // #94a3b8
+        "document" => ("\u{1F4C4}", slint::Color::from_argb_u8(255, 96, 165, 250)), // #60a5fa
+        "code" => ("\u{1F4DD}", slint::Color::from_argb_u8(255, 251, 191, 36)),     // #fbbf24
+        "archive" => ("\u{1F4E6}", slint::Color::from_argb_u8(255, 251, 146, 60)),  // #fb923c
+        "image" => ("\u{1F5BC}", slint::Color::from_argb_u8(255, 74, 222, 128)),    // #4ade80
+        "video" => ("\u{1F3AC}", slint::Color::from_argb_u8(255, 248, 113, 113)),   // #f87171
+        "audio" => ("\u{1F3B5}", slint::Color::from_argb_u8(255, 167, 139, 250)),   // #a78bfa
+        _ => ("\u{1F4CE}", slint::Color::from_argb_u8(255, 148, 163, 184)),         // #94a3b8
     }
 }
 

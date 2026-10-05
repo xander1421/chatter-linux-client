@@ -100,12 +100,14 @@ dependencies {
     // native side compiled into libchatter_ui.so), so the jar always matches the
     // .so and nothing is copied into or committed to the source tree. The
     // cargo-ndk step in build-android.sh produces it before gradle runs.
-    implementation(
-        fileTree(
-            mapOf(
-                "dir" to (System.getenv("CARGO_TARGET_DIR") ?: "$projectDir/../../target"),
-                "include" to listOf("**/livekit_webrtc/**/android-arm64-release/libwebrtc.jar"),
-            ),
-        ),
-    )
+    // Exact same directory selected for the native build, including custom trees.
+    val customWebrtc = System.getenv("LK_CUSTOM_WEBRTC")
+    if (customWebrtc != null) {
+        implementation(files("$customWebrtc/libwebrtc.jar"))
+    } else {
+        implementation(fileTree(mapOf(
+            "dir" to (System.getenv("CARGO_TARGET_DIR") ?: "$projectDir/../../target"),
+            "include" to listOf("**/livekit_webrtc/**/android-arm64-release/libwebrtc.jar"),
+        )))
+    }
 }

@@ -4,8 +4,8 @@
 
 use std::sync::Arc;
 
-use crate::domain::{Attachment, ConversationType, FileCategory, Message};
 use crate::domain::ids::{ChannelId, MessageId};
+use crate::domain::{Attachment, ConversationType, FileCategory, Message};
 use crate::services::attachment::AttachmentService;
 use crate::services::message::MessageService;
 use crate::storage::Database;
@@ -16,7 +16,7 @@ pub enum PinError {
     /// Storage error.
     #[error("storage error: {0}")]
     Storage(#[from] crate::error::StorageError),
-    
+
     /// Message service error.
     #[error("message service error: {0}")]
     MessageService(#[from] crate::services::message::MessageError),
@@ -62,15 +62,17 @@ impl PinService {
         conversation_type: &ConversationType,
     ) -> PinResult<Vec<PinnedMessageData>> {
         // Get pinned messages from message service
-        let pinned_messages = self.message_service.get_pinned_messages_local(channel_id, conversation_type)?;
-        
+        let pinned_messages = self
+            .message_service
+            .get_pinned_messages_local(channel_id, conversation_type)?;
+
         if pinned_messages.is_empty() {
             return Ok(Vec::new());
         }
 
         // Build pinned message data with previews
         let mut pinned_data = Vec::with_capacity(pinned_messages.len());
-        
+
         for msg in &pinned_messages {
             // Resolve attachments for preview generation
             let attachments: Vec<Attachment> = msg
@@ -78,9 +80,9 @@ impl PinService {
                 .iter()
                 .filter_map(|att_id| self.attachment_service.get(att_id).ok().flatten())
                 .collect();
-            
+
             let preview = Self::generate_preview(&msg, &attachments);
-            
+
             pinned_data.push(PinnedMessageData {
                 message_id: msg.id,
                 preview,
@@ -92,7 +94,10 @@ impl PinService {
     }
 
     /// Get a specific pinned message with preview.
-    pub fn get_pinned_message(&self, message_id: &MessageId) -> PinResult<Option<PinnedMessageData>> {
+    pub fn get_pinned_message(
+        &self,
+        message_id: &MessageId,
+    ) -> PinResult<Option<PinnedMessageData>> {
         // Get the message
         let Some(message) = self.message_service.get_message_local(message_id)? else {
             return Ok(None);
@@ -115,7 +120,11 @@ impl PinService {
     }
 
     /// Pin a message.
-    pub async fn pin_message(&self, _channel_id: &ChannelId, message_id: &MessageId) -> PinResult<()> {
+    pub async fn pin_message(
+        &self,
+        _channel_id: &ChannelId,
+        message_id: &MessageId,
+    ) -> PinResult<()> {
         // Update message as pinned in database
         self.message_service.set_message_pinned(message_id, true)?;
         Ok(())

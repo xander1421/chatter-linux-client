@@ -9,32 +9,30 @@
 //! (`auth_crypto::login_identifier`), and passwords never are: every password
 //! check is an OPAQUE exchange (`crypto::opaque`).
 
+use crate::network::grpc::transport::GrpcTransport;
 use tokio_stream::{Stream, StreamExt};
 use tonic::service::interceptor::InterceptedService;
-use crate::network::grpc::transport::GrpcTransport;
 
 use crate::error::NetworkError;
 use crate::network::grpc::interceptors::AuthInterceptor;
 use crate::proto::chat_v1::{
-    auth_event, auth_service_client::AuthServiceClient,
-    key_transparency_service_client::KeyTransparencyServiceClient, signal_pre_key_bundle,
     AccountDeletionEvent, AuthEvent, AuthResponse, ChangePasswordFinishRequest,
     ChangePasswordStartRequest, ChangePasswordStartResponse, DeleteAccountRequest,
-    GetActiveSessionsRequest, GetActiveSessionsResponse, GetPreKeyBundleRequest,
-    GetConsistencyProofRequest, GetConsistencyProofResponse, GetPreKeyBundleResponse,
-    GetPreKeyStatsRequest, GetPreKeyStatsResponse, GetProofRequest,
-    GetProofResponse, GetSealedSenderPolicyRequest, GetSealedSenderPolicyResponse,
-    SetSealedSenderPolicyRequest, SetSealedSenderPolicyResponse, SetUnidentifiedAccessKeyRequest,
-    InvalidateAllSessionsRequest,
+    GetActiveSessionsRequest, GetActiveSessionsResponse, GetConsistencyProofRequest,
+    GetConsistencyProofResponse, GetPreKeyBundleRequest, GetPreKeyBundleResponse,
+    GetPreKeyStatsRequest, GetPreKeyStatsResponse, GetProofRequest, GetProofResponse,
+    GetSealedSenderPolicyRequest, GetSealedSenderPolicyResponse, InvalidateAllSessionsRequest,
     InvalidateSessionRequest, ListDevicesRequest, ListDevicesResponse, LoginFinishRequest,
     LoginStartRequest, LoginStartResponse, LogoutRequest, PasswordProof, PasswordProofStartRequest,
-    PasswordProofStartResponse,
-    RefreshPreKeysRequest, RegenerateRecoveryCodesRequest, RegisterRequest, RegistrationResult,
-    RenameDeviceRequest, RequestSenderCertificateRequest, RequestSenderCertificateResponse,
-    RepublishIdentityKeyRequest, RepublishIdentityKeyResponse,
-    RevokeDeviceRequest, SignalPreKeyBundle,
-    UploadPreKeyBundleRequest, UseRecoveryCodeFinishRequest, UseRecoveryCodeFinishResponse, UseRecoveryCodeStartRequest,
-    UseRecoveryCodeStartResponse,
+    PasswordProofStartResponse, RefreshPreKeysRequest, RegenerateRecoveryCodesRequest,
+    RegisterRequest, RegistrationResult, RenameDeviceRequest, RepublishIdentityKeyRequest,
+    RepublishIdentityKeyResponse, RequestSenderCertificateRequest,
+    RequestSenderCertificateResponse, RevokeDeviceRequest, SetSealedSenderPolicyRequest,
+    SetSealedSenderPolicyResponse, SetUnidentifiedAccessKeyRequest, SignalPreKeyBundle,
+    UploadPreKeyBundleRequest, UseRecoveryCodeFinishRequest, UseRecoveryCodeFinishResponse,
+    UseRecoveryCodeStartRequest, UseRecoveryCodeStartResponse, auth_event,
+    auth_service_client::AuthServiceClient,
+    key_transparency_service_client::KeyTransparencyServiceClient, signal_pre_key_bundle,
 };
 // NOTE: ServerTrustRootResponse removed - trust root is hardcoded in config.rs per Signal's security model
 
@@ -254,8 +252,13 @@ impl AuthClient {
 
     /// Replace our UAK after a profile-key rotation (the receiving policy
     /// flag is kept server-side).
-    pub async fn set_unidentified_access_key(&mut self, uak: &[u8; 16]) -> Result<(), NetworkError> {
-        let request = SetUnidentifiedAccessKeyRequest { unidentified_access_key: uak.to_vec() };
+    pub async fn set_unidentified_access_key(
+        &mut self,
+        uak: &[u8; 16],
+    ) -> Result<(), NetworkError> {
+        let request = SetUnidentifiedAccessKeyRequest {
+            unidentified_access_key: uak.to_vec(),
+        };
 
         self.inner
             .set_unidentified_access_key(request)
@@ -721,7 +724,8 @@ impl AuthClient {
             request_id: uuid::Uuid::new_v4().to_string(),
         };
 
-        let result = self.inner
+        let result = self
+            .inner
             .get_pre_key_bundle(request)
             .await
             .map(|r| r.into_inner())
@@ -766,7 +770,8 @@ impl AuthClient {
         &mut self,
         new_prekeys: Vec<signal_pre_key_bundle::PreKeyRecord>,
     ) -> Result<(), NetworkError> {
-        self.refresh_pre_keys_with_rotation(new_prekeys, None, None, Vec::new()).await
+        self.refresh_pre_keys_with_rotation(new_prekeys, None, None, Vec::new())
+            .await
     }
 
     /// Upload a batch of classical OPKs and PQOPKs in a single RPC. Per
@@ -777,7 +782,8 @@ impl AuthClient {
         new_prekeys: Vec<signal_pre_key_bundle::PreKeyRecord>,
         new_kyber_one_time_prekeys: Vec<signal_pre_key_bundle::KyberPreKeyRecord>,
     ) -> Result<(), NetworkError> {
-        self.refresh_pre_keys_with_rotation(new_prekeys, None, None, new_kyber_one_time_prekeys).await
+        self.refresh_pre_keys_with_rotation(new_prekeys, None, None, new_kyber_one_time_prekeys)
+            .await
     }
 
     /// Refresh prekeys with optional signed + Kyber prekey rotation.

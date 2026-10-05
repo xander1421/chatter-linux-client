@@ -21,10 +21,7 @@ use super::core_api::{self, MeshRow};
 
 /// Open the mesh conversation with this derived conversation id.
 pub fn open(window: &MainWindow, ui_ctx: &Arc<ChatterClient>, id: &str) {
-    let Some(row) = core_api::rows(ui_ctx)
-        .into_iter()
-        .find(|row| row.id == id)
-    else {
+    let Some(row) = core_api::rows(ui_ctx).into_iter().find(|row| row.id == id) else {
         tracing::warn!(conversation = %id, "mesh: no conversation with that id");
         return;
     };
@@ -48,9 +45,9 @@ pub fn open(window: &MainWindow, ui_ctx: &Arc<ChatterClient>, id: &str) {
     // button here. Anything staged in another conversation is dropped rather
     // than left armed to vanish on the next send.
     ui_ctx.chat_state().clear_pending_attachments();
-    window.set_pending_attachments(ModelRc::new(VecModel::<crate::PendingAttachmentData>::from(
-        Vec::new(),
-    )));
+    window.set_pending_attachments(ModelRc::new(
+        VecModel::<crate::PendingAttachmentData>::from(Vec::new()),
+    ));
 
     // Reveal the message pane the way every other conversation does; on a
     // phone this is the only thing that leaves the chat list.
@@ -82,7 +79,11 @@ pub fn open(window: &MainWindow, ui_ctx: &Arc<ChatterClient>, id: &str) {
         let display = messages_to_display_batch(
             &messages,
             // Mesh senders, not chatter accounts — see `core_api::sender_display_name`.
-            |ms| ms.iter().map(|m| core_api::sender_display_name(&ui_ctx, m)).collect(),
+            |ms| {
+                ms.iter()
+                    .map(|m| core_api::sender_display_name(&ui_ctx, m))
+                    .collect()
+            },
             // No chatter profile behind a mesh sender.
             |_| None,
             |att_id| ui_ctx.get_attachment(att_id),
@@ -179,15 +180,20 @@ pub(super) fn append_incoming(
     let id = message.message.id.to_string();
 
     let model = window.get_messages();
-    let mut items: Vec<MessageItemData> = model.iter()
-        .collect();
+    let mut items: Vec<MessageItemData> = model.iter().collect();
     // A courier resend maps onto the id it already had, so the same message
     // can legitimately arrive twice. Show it once.
-    if items.iter().any(|item| item.message_id.as_str() == id.as_str()) {
+    if items
+        .iter()
+        .any(|item| item.message_id.as_str() == id.as_str())
+    {
         return;
     }
 
-    let nickname = message.message.sender_id.as_ref()
+    let nickname = message
+        .message
+        .sender_id
+        .as_ref()
         .and_then(|sender| ui_ctx.mesh_sender_display_name(sender))
         .unwrap_or_else(|| message.nickname.clone());
     let display = messages_to_display_batch(
@@ -218,7 +224,8 @@ pub(super) fn append_incoming(
 pub(super) fn apply_delivery(window: &MainWindow, message_id: &str, label: &str) {
     let model = window.get_messages();
     let mut changed = false;
-    let items: Vec<MessageItemData> = model.iter()
+    let items: Vec<MessageItemData> = model
+        .iter()
         .map(|mut item| {
             if item.message_id.as_str() == message_id && item.delivery_status.as_str() != label {
                 item.delivery_status = label.into();

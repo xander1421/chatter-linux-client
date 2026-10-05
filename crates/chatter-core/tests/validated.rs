@@ -65,8 +65,7 @@ fn server_url() -> String {
 /// exists on one machine — everywhere else every DB-inspecting proof dies at
 /// spawn, which looks like 37 protocol failures and is actually one bad path.
 fn repo_dir() -> String {
-    std::env::var("CHATTER_REPO_DIR")
-        .unwrap_or_else(|_| "/home/alex/Documents/chatter".to_string())
+    std::env::var("CHATTER_REPO_DIR").unwrap_or_else(|_| "/home/alex/Documents/chatter".to_string())
 }
 const EVENT_TIMEOUT: Duration = Duration::from_secs(30);
 // Must clear crypto::svr::MIN_PIN_ENTROPY_BITS (30.0).
@@ -105,14 +104,29 @@ async fn pg_dump_locked(_guard: &tokio::sync::MutexGuard<'_, ()>) -> String {
     // Keep the current-thread runtime polling client connections during a dump.
     tokio::task::spawn_blocking(|| {
         let out = std::process::Command::new("docker")
-            .args(["compose", "exec", "-T", "postgres", "pg_dump", "-U", "chatter", "chatter_dev"])
+            .args([
+                "compose",
+                "exec",
+                "-T",
+                "postgres",
+                "pg_dump",
+                "-U",
+                "chatter",
+                "chatter_dev",
+            ])
             .current_dir(repo_dir())
             .output()
             .expect("pg_dump failed to spawn");
-        assert!(out.status.success(), "pg_dump failed ({}): {}",
-            out.status, String::from_utf8_lossy(&out.stderr));
+        assert!(
+            out.status.success(),
+            "pg_dump failed ({}): {}",
+            out.status,
+            String::from_utf8_lossy(&out.stderr)
+        );
         String::from_utf8(out.stdout).expect("pg_dump output was not UTF-8")
-    }).await.expect("pg_dump worker panicked")
+    })
+    .await
+    .expect("pg_dump worker panicked")
 }
 
 /// Type-aware dump of every value in Redis.
@@ -181,7 +195,9 @@ rm -f "$f""#;
         out.status.success() && !dump.contains("REDIS DUMP FAILED"),
         "redis dump failed ({}): {}{}",
         out.status,
-        dump.lines().find(|l| l.contains("REDIS DUMP FAILED")).unwrap_or(""),
+        dump.lines()
+            .find(|l| l.contains("REDIS DUMP FAILED"))
+            .unwrap_or(""),
         String::from_utf8_lossy(&out.stderr)
     );
     dump
@@ -454,8 +470,14 @@ async fn befriend(
     let a_addr = format!("{accepter_id}:1");
     let b_addr = format!("{requester_id}:1");
     while Instant::now() < settle {
-        let a_sess = matches!(requester.signal().key_store().load_session(&a_addr), Ok(Some(_)));
-        let b_sess = matches!(accepter.signal().key_store().load_session(&b_addr), Ok(Some(_)));
+        let a_sess = matches!(
+            requester.signal().key_store().load_session(&a_addr),
+            Ok(Some(_))
+        );
+        let b_sess = matches!(
+            accepter.signal().key_store().load_session(&b_addr),
+            Ok(Some(_))
+        );
         if a_sess && b_sess {
             break;
         }
@@ -465,24 +487,40 @@ async fn befriend(
     // A Signal session does not imply that both profile-key handshakes were
     // processed. Prove possession via authenticated profile decryption before
     // tests shut a recipient down or snapshot its envelope queue.
-    let requester_name = requester.get_user_profile(&requester_id).await
-        .expect("requester own profile unavailable").display_name;
-    let accepter_name = accepter.get_user_profile(&accepter_id).await
-        .expect("accepter own profile unavailable").display_name;
+    let requester_name = requester
+        .get_user_profile(&requester_id)
+        .await
+        .expect("requester own profile unavailable")
+        .display_name;
+    let accepter_name = accepter
+        .get_user_profile(&accepter_id)
+        .await
+        .expect("accepter own profile unavailable")
+        .display_name;
     assert!(!requester_name.is_empty() && !accepter_name.is_empty());
     let deadline = Instant::now() + CONDITION_TIMEOUT;
     let mut wait = POLL_INTERVAL;
     loop {
         let a_profile = requester.get_user_profile(&accepter_id).await;
         let b_profile = accepter.get_user_profile(&requester_id).await;
-        let a_ready = a_profile.as_ref().is_ok_and(|profile| profile.display_name == accepter_name);
-        let b_ready = b_profile.as_ref().is_ok_and(|profile| profile.display_name == requester_name);
-        if a_ready && b_ready { break; }
-        assert!(Instant::now() < deadline,
+        let a_ready = a_profile
+            .as_ref()
+            .is_ok_and(|profile| profile.display_name == accepter_name);
+        let b_ready = b_profile
+            .as_ref()
+            .is_ok_and(|profile| profile.display_name == requester_name);
+        if a_ready && b_ready {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
             "mutual profile-key exchange did not complete: requester {requester_id}={a_ready} {:?}, \
              accepter {accepter_id}={b_ready} {:?}; expected names {:?}/{:?}",
             a_profile.as_ref().map(|p| &p.display_name),
-            b_profile.as_ref().map(|p| &p.display_name), accepter_name, requester_name);
+            b_profile.as_ref().map(|p| &p.display_name),
+            accepter_name,
+            requester_name
+        );
         tokio::time::sleep(wait).await;
         wait = backoff(wait);
     }
@@ -645,11 +683,7 @@ async fn wait_for_device_envelope(
 /// unread for a minute while its client replays a whole inbox: comfortably more
 /// than 64 domain events. The stored row cannot be lost, so it is what the
 /// assertion should ultimately rest on.
-async fn wait_for_stored_text(
-    client: &Arc<ChatterClient>,
-    conv: &ChannelId,
-    want: &str,
-) -> bool {
+async fn wait_for_stored_text(client: &Arc<ChatterClient>, conv: &ChannelId, want: &str) -> bool {
     let deadline = Instant::now() + EVENT_TIMEOUT;
     loop {
         let stored = client
@@ -841,7 +875,10 @@ async fn link_secondary_device(
 async fn restore_and_start(
     path: &std::path::Path,
     label: &str,
-) -> (Arc<ChatterClient>, tokio::sync::broadcast::Receiver<DomainEvent>) {
+) -> (
+    Arc<ChatterClient>,
+    tokio::sync::broadcast::Receiver<DomainEvent>,
+) {
     let c = build_client(path);
     c.connect()
         .await
@@ -990,7 +1027,9 @@ async fn v0_detector_self_check() {
     // Hold their lock for the entire create -> dump -> drop transaction.
     let dump_guard = POSTGRES_DUMP_LOCK.lock().await;
     let probe_tbl = format!("validated_probe_{}", &marker[17..33]);
-    psql(&format!("CREATE TABLE IF NOT EXISTS {probe_tbl} (payload text)"));
+    psql(&format!(
+        "CREATE TABLE IF NOT EXISTS {probe_tbl} (payload text)"
+    ));
     psql(&format!(
         "INSERT INTO {probe_tbl} (payload) VALUES ('{marker}')"
     ));
@@ -1058,7 +1097,10 @@ async fn v1_server_never_holds_plaintext() {
     let envelope_keys = sh(
         "docker compose exec -T -e REDISCLI_AUTH=\"$(grep -m1 '^REDIS_PASSWORD=' .env | cut -d= -f2-)\" redis redis-cli --scan --pattern 'device_queue_envelopes:*' 2>/dev/null",
     );
-    let n_keys = envelope_keys.lines().filter(|l| !l.trim().is_empty()).count();
+    let n_keys = envelope_keys
+        .lines()
+        .filter(|l| !l.trim().is_empty())
+        .count();
     println!("  positive control: {n_keys} device_queue_envelopes key(s)");
     assert!(
         n_keys > 0,
@@ -1110,8 +1152,12 @@ async fn v1_server_never_holds_plaintext() {
         "E2EE VIOLATED: plaintext marker found in server logs {hits_log} time(s)"
     );
 
-    println!("  server stores audited: redis={} bytes, pg_dump={} bytes, logs={} bytes",
-             redis_all.len(), dump.len(), logs.len());
+    println!(
+        "  server stores audited: redis={} bytes, pg_dump={} bytes, logs={} bytes",
+        redis_all.len(),
+        dump.len(),
+        logs.len()
+    );
     println!("  plaintext occurrences: redis=0 postgres=0 logs=0");
 
     // ---- POSITIVE HALF: B, and only B, can recover the plaintext -----------
@@ -1126,7 +1172,10 @@ async fn v1_server_never_holds_plaintext() {
     // This matters for the proof: B decrypts with the identity that was live
     // when A encrypted, not a fresh one.
     let restored = client_b2.restore_session();
-    assert!(restored, "B failed to restore persisted session from data dir");
+    assert!(
+        restored,
+        "B failed to restore persisted session from data dir"
+    );
     println!("  B restored persisted session (same identity A encrypted to)");
     if let Err(e) = client_b2.start().await {
         if !matches!(e, chatter_core::client::ClientError::AlreadyStarted) {
@@ -1352,7 +1401,9 @@ async fn v2_corrupted_ciphertext_never_decrypts() {
         );
     }
     println!("  positive control: clean follow-up message DID arrive — receive path alive");
-    println!("V2 PASS — corrupted ciphertext yielded no plaintext; clean message on the same session did\n");
+    println!(
+        "V2 PASS — corrupted ciphertext yielded no plaintext; clean message on the same session did\n"
+    );
 
     client_a.shutdown().await;
     client_b2.shutdown().await;
@@ -1410,8 +1461,10 @@ async fn v3_ratchet_advances_every_message() {
             .key_store()
             .load_session(&addr)
             .expect("load_session errored")
-            .expect("POSITIVE CONTROL FAILED: no session record for B — a set of \
-                     missing records would compare 'distinct' vacuously")
+            .expect(
+                "POSITIVE CONTROL FAILED: no session record for B — a set of \
+                     missing records would compare 'distinct' vacuously",
+            )
     };
     // The session is created by the post-accept DM prewarm, which is a spawned
     // background task and a deliberate no-op on the higher-UUID side of the
@@ -1421,7 +1474,10 @@ async fn v3_ratchet_advances_every_message() {
     {
         let deadline = Instant::now() + CONDITION_TIMEOUT;
         while Instant::now() < deadline {
-            if matches!(client_a.signal().key_store().load_session(&addr), Ok(Some(_))) {
+            if matches!(
+                client_a.signal().key_store().load_session(&addr),
+                Ok(Some(_))
+            ) {
                 break;
             }
             tokio::time::sleep(POLL_INTERVAL).await;
@@ -1581,7 +1637,10 @@ async fn v4_sealed_sender_hides_sender_from_server() {
             "select distinct left(source_user_id::text, 8) from device_messages \
              where destination_user_id = '{uid_b}' and source_user_id is not null"
         ));
-        println!("  server recorded sender(s): {who}  (A is {})", &uid_a.to_string()[..8]);
+        println!(
+            "  server recorded sender(s): {who}  (A is {})",
+            &uid_a.to_string()[..8]
+        );
     }
 
     assert_eq!(
@@ -1703,7 +1762,9 @@ async fn v5_kyber_is_load_bearing_not_decorative() {
     let pqopk = count(format!(
         "select count(*) from signal_kyber_one_time_prekeys where user_id = '{uid_b}'"
     ));
-    println!("  control 2: B's server-side Kyber material — PQSPK rows={pqspk}, PQOPK rows={pqopk}");
+    println!(
+        "  control 2: B's server-side Kyber material — PQSPK rows={pqspk}, PQOPK rows={pqopk}"
+    );
     assert!(
         pqspk + pqopk > 0,
         "POSITIVE CONTROL 2 FAILED: B has NO Kyber prekey material on the server \
@@ -1722,7 +1783,12 @@ async fn v5_kyber_is_load_bearing_not_decorative() {
         "POSITIVE CONTROL 3 FAILED: there was no session record to delete"
     );
     assert!(
-        client_a.signal().key_store().load_session(&addr).unwrap().is_none(),
+        client_a
+            .signal()
+            .key_store()
+            .load_session(&addr)
+            .unwrap()
+            .is_none(),
         "POSITIVE CONTROL 3 FAILED: session record survived the delete, so the \
          next send would reuse it instead of re-running PQXDH"
     );
@@ -1751,10 +1817,17 @@ async fn v5_kyber_is_load_bearing_not_decorative() {
          delete rather than on the Kyber strip."
     );
     assert!(
-        client_a.signal().key_store().load_session(&addr).unwrap().is_some(),
+        client_a
+            .signal()
+            .key_store()
+            .load_session(&addr)
+            .unwrap()
+            .is_some(),
         "POSITIVE CONTROL 3 FAILED: no session record was rebuilt"
     );
-    println!("  control 3: session dropped -> re-handshake -> delivered — PQXDH path re-entered OK");
+    println!(
+        "  control 3: session dropped -> re-handshake -> delivered — PQXDH path re-entered OK"
+    );
 
     // ---- STRIP B's KYBER MATERIAL FROM THE REAL SERVER ---------------------
     // Both sources the server can serve from: the one-time Kyber prekey pool
@@ -1803,7 +1876,10 @@ async fn v5_kyber_is_load_bearing_not_decorative() {
     println!("  B's non-PQ material left intact: signed-prekey bundle rows={still_serves}");
 
     // ---- THE PROPERTY: no Kyber => no session => no message ----------------
-    assert!(drop_session(), "no session record to delete before the real test");
+    assert!(
+        drop_session(),
+        "no session record to delete before the real test"
+    );
 
     let m3 = unique_marker();
     let res3 = client_a
@@ -1814,10 +1890,13 @@ async fn v5_kyber_is_load_bearing_not_decorative() {
     // ServiceError from the bundle *conversion* means the server happily SERVED
     // a Kyber-less bundle and the client refused it. A transport/NotFound error
     // would instead mean the server declined to serve at all. See VALIDATED.md.
-    println!("  send with Kyber stripped -> {}", match &res3 {
-        Ok(result) => format!("send_error={:?}", result.send_error),
-        Err(e) => format!("Err({e:?})"),
-    });
+    println!(
+        "  send with Kyber stripped -> {}",
+        match &res3 {
+            Ok(result) => format!("send_error={:?}", result.send_error),
+            Err(e) => format!("Err({e:?})"),
+        }
+    );
 
     assert!(
         res3.is_err() || matches!(&res3, Ok(result) if result.send_error.is_some()),
@@ -1830,7 +1909,12 @@ async fn v5_kyber_is_load_bearing_not_decorative() {
     // No session record may exist either — a half-built session is still a
     // non-PQ session, and a later send could ride it.
     assert!(
-        client_a.signal().key_store().load_session(&addr).unwrap().is_none(),
+        client_a
+            .signal()
+            .key_store()
+            .load_session(&addr)
+            .unwrap()
+            .is_none(),
         "KYBER IS DECORATIVE: the send errored but a session record for B was \
          still written without any Kyber prekey. A non-PQ session now exists and \
          a subsequent send would silently reuse it."
@@ -1854,10 +1938,16 @@ async fn v5_kyber_is_load_bearing_not_decorative() {
     };
     let used_before = otpk_used();
 
-    let probe_pool = common::create_test_pool().await.expect("probe pool connect failed");
+    let probe_pool = common::create_test_pool()
+        .await
+        .expect("probe pool connect failed");
     let _probe_user = common::setup_authenticated_test(&probe_pool)
-        .await.expect("probe registration failed");
-    let probe = probe_pool.auth_client().get_pre_key_bundle(&uid_b.to_string(), "1").await;
+        .await
+        .expect("probe registration failed");
+    let probe = probe_pool
+        .auth_client()
+        .get_pre_key_bundle(&uid_b.to_string(), "1")
+        .await;
     tokio::time::sleep(Duration::from_secs(2)).await;
     let used_after = otpk_used();
 
@@ -2011,7 +2101,10 @@ async fn v6_delivered_message_key_is_destroyed() {
     let m_delivered = unique_marker();
     println!("\n  delivered marker:   {m_delivered}");
     client_a
-        .send_text(ActiveConversation::ServerDm { peer_id: uid_b }, &m_delivered)
+        .send_text(
+            ActiveConversation::ServerDm { peer_id: uid_b },
+            &m_delivered,
+        )
         .await
         .expect("send of delivered marker failed");
     wait_for_new_hash_field(&key, &base).await;
@@ -2022,7 +2115,10 @@ async fn v6_delivered_message_key_is_destroyed() {
     let m_undelivered = unique_marker();
     println!("  undelivered marker: {m_undelivered}");
     client_a
-        .send_text(ActiveConversation::ServerDm { peer_id: uid_b }, &m_undelivered)
+        .send_text(
+            ActiveConversation::ServerDm { peer_id: uid_b },
+            &m_undelivered,
+        )
         .await
         .expect("send of undelivered marker failed");
     wait_for_new_hash_field(&key, &before2).await;
@@ -2110,7 +2206,13 @@ async fn v6_delivered_message_key_is_destroyed() {
     //   (b) Signal's deliberate retention of keys for undelivered messages is
     //       intact — this test does NOT mistake correct out-of-order tolerance
     //       for a forward-secrecy break.
-    let res_undelivered = client_b2.signal().decrypt_message(&bytes_undelivered, chatter_core::util::time::TimestampNanos::now().as_u64()).await;
+    let res_undelivered = client_b2
+        .signal()
+        .decrypt_message(
+            &bytes_undelivered,
+            chatter_core::util::time::TimestampNanos::now().as_u64(),
+        )
+        .await;
     match &res_undelivered {
         Ok((_addr, plaintext, _)) => {
             let hay = String::from_utf8_lossy(plaintext);
@@ -2133,11 +2235,20 @@ async fn v6_delivered_message_key_is_destroyed() {
     // ---- THE PROPERTY: the delivered key is GONE ---------------------------
     // Identical API, identical byte source, identical session. The only thing
     // that differs from the call above is that B already processed this one.
-    let res_delivered = client_b2.signal().decrypt_message(&bytes_delivered, chatter_core::util::time::TimestampNanos::now().as_u64()).await;
-    println!("  delivered envelope  -> {}", match &res_delivered {
-        Ok(_) => "DECRYPTED AGAIN".to_string(),
-        Err(e) => format!("REJECTED: {e:?}"),
-    });
+    let res_delivered = client_b2
+        .signal()
+        .decrypt_message(
+            &bytes_delivered,
+            chatter_core::util::time::TimestampNanos::now().as_u64(),
+        )
+        .await;
+    println!(
+        "  delivered envelope  -> {}",
+        match &res_delivered {
+            Ok(_) => "DECRYPTED AGAIN".to_string(),
+            Err(e) => format!("REJECTED: {e:?}"),
+        }
+    );
 
     if let Ok((_addr, plaintext, _msg_type)) = &res_delivered {
         let hay = String::from_utf8_lossy(plaintext);
@@ -2268,12 +2379,21 @@ async fn v7_pqopk_pool_is_seeded_and_consumed() {
     };
     let used_before = pq_used();
 
-    let peer_pool = common::create_test_pool().await.expect("peer pool connect failed");
+    let peer_pool = common::create_test_pool()
+        .await
+        .expect("peer pool connect failed");
     let _peer = common::setup_authenticated_test(&peer_pool)
-        .await.expect("peer registration failed");
-    let response = peer_pool.auth_client().get_pre_key_bundle(&uid_b.to_string(), "1")
-        .await.expect("primary-device prekey handout failed");
-    assert!(response.result.is_some(), "primary-device handout returned no bundle");
+        .await
+        .expect("peer registration failed");
+    let response = peer_pool
+        .auth_client()
+        .get_pre_key_bundle(&uid_b.to_string(), "1")
+        .await
+        .expect("primary-device prekey handout failed");
+    assert!(
+        response.result.is_some(),
+        "primary-device handout returned no bundle"
+    );
     // The pop is committed by the server after the RPC returns. Poll for the
     // counter to move instead of sleeping a fixed 2s: `used_at` only ever goes
     // up, so a poll that gives up still reports the same value a sleep would
@@ -2285,7 +2405,9 @@ async fn v7_pqopk_pool_is_seeded_and_consumed() {
         used_after = pq_used();
     }
 
-    println!("  PQOPKs consumed by one single-device bundle handout: {used_before} -> {used_after}");
+    println!(
+        "  PQOPKs consumed by one single-device bundle handout: {used_before} -> {used_after}"
+    );
     assert!(
         used_after > used_before,
         "PQOPK POOL IS DECORATIVE: the pool holds {pqopk} keys, a single-device bundle handout \
@@ -2442,8 +2564,10 @@ async fn v8_linked_device_pqopk_pool_is_seeded_and_consumed() {
     let resp = peer_auth
         .get_pre_key_bundle(&uid.to_string(), &dev_s.to_string())
         .await
-        .expect("peer could not fetch the linked device's bundle — the server-side \
-                 handout never ran, so nothing below measures PQOPK consumption");
+        .expect(
+            "peer could not fetch the linked device's bundle — the server-side \
+                 handout never ran, so nothing below measures PQOPK consumption",
+        );
     assert!(
         resp.result.is_some(),
         "server returned an empty bundle for linked device {dev_s} — no handshake \
@@ -2451,7 +2575,9 @@ async fn v8_linked_device_pqopk_pool_is_seeded_and_consumed() {
     );
     let used_after = pq_used();
 
-    println!("  PQOPKs consumed by one real handshake to device {dev_s}: {used_before} -> {used_after}");
+    println!(
+        "  PQOPKs consumed by one real handshake to device {dev_s}: {used_before} -> {used_after}"
+    );
     assert!(
         used_after > used_before,
         "PQOPK POOL IS DECORATIVE for linked device {dev_s}: the pool holds \
@@ -2587,7 +2713,9 @@ async fn v9_linked_device_receives_and_decrypts_dm() {
          fetch reads exactly this table, so without two bundles here the fan-out \
          has nothing to fan out TO and the test would prove nothing."
     );
-    println!("  positive control: primary device=1, linked device={dev_s} — distinct, both have bundles");
+    println!(
+        "  positive control: primary device=1, linked device={dev_s} — distinct, both have bundles"
+    );
 
     // ---- A registers and befriends B ---------------------------------------
     let dir_a = tempfile::tempdir().unwrap();
@@ -2607,7 +2735,10 @@ async fn v9_linked_device_receives_and_decrypts_dm() {
     // ---- snapshot BEFORE the send, scoped to THIS user ----------------------
     // Quiesced, not a fixed sleep: waits out in-flight fan-out from the shutdown.
     let before = quiesced_row_ids(&uid_b).await;
-    println!("  device_messages rows for B before the send: {}", before.len());
+    println!(
+        "  device_messages rows for B before the send: {}",
+        before.len()
+    );
 
     let marker = unique_marker();
     println!("\n  marker plaintext: {marker}");
@@ -2625,7 +2756,10 @@ async fn v9_linked_device_receives_and_decrypts_dm() {
     // assertion below still fires.
     let new_rows = wait_for_new_envelopes(&uid_b, &before, 2).await;
 
-    println!("  NEW device_messages rows created by this one send: {}", new_rows.len());
+    println!(
+        "  NEW device_messages rows created by this one send: {}",
+        new_rows.len()
+    );
     for f in &new_rows {
         println!(
             "    device_id={} envelope_md5={} source_user_id={} envelope_bytes={}",
@@ -2656,7 +2790,10 @@ async fn v9_linked_device_receives_and_decrypts_dm() {
          this test cannot say anything about the linked device.",
         new_rows.len()
     );
-    println!("  positive control: primary device 1 queued {} envelope(s)", primary_rows.len());
+    println!(
+        "  positive control: primary device 1 queued {} envelope(s)",
+        primary_rows.len()
+    );
 
     // ---- THE PROPERTY: the LINKED device got it too -------------------------
     assert!(
@@ -2675,7 +2812,10 @@ async fn v9_linked_device_receives_and_decrypts_dm() {
          that list rather than failing — which is exactly this symptom.",
         primary_rows.len()
     );
-    println!("  THE PROPERTY: linked device {dev_s} queued {} envelope(s)", linked_rows.len());
+    println!(
+        "  THE PROPERTY: linked device {dev_s} queued {} envelope(s)",
+        linked_rows.len()
+    );
 
     // ---- NEGATIVE HALF (1): the two devices' ciphertexts are DISTINCT -------
     // Per-device Signal sessions mean per-device ciphertexts. Byte-identical
@@ -2719,7 +2859,10 @@ async fn v9_linked_device_receives_and_decrypts_dm() {
         new_rows.len(),
         &uid_a.to_string()[..8]
     );
-    println!("  negative half: source_user_id IS NULL on all {} rows — sealed sender holds per device", new_rows.len());
+    println!(
+        "  negative half: source_user_id IS NULL on all {} rows — sealed sender holds per device",
+        new_rows.len()
+    );
 
     // ---- NEGATIVE HALF (3): neither envelope contains the plaintext ---------
     let plain = psql(&format!(
@@ -2744,7 +2887,9 @@ async fn v9_linked_device_receives_and_decrypts_dm() {
 
     let bring_up = |path: std::path::PathBuf, label: &'static str| async move {
         let c = build_client(&path);
-        c.connect().await.unwrap_or_else(|e| panic!("{label} reconnect failed: {e:?}"));
+        c.connect()
+            .await
+            .unwrap_or_else(|e| panic!("{label} reconnect failed: {e:?}"));
         let rx = c.subscribe_events();
         assert!(
             c.restore_session(),
@@ -2953,7 +3098,10 @@ async fn v10_dm_fans_out_to_three_devices() {
     // ---- snapshot BEFORE the send, scoped to THIS user ----------------------
     // Quiesced, not a fixed sleep: waits out in-flight fan-out from the shutdown.
     let before = quiesced_row_ids(&uid_b).await;
-    println!("  device_messages rows for B before the send: {}", before.len());
+    println!(
+        "  device_messages rows for B before the send: {}",
+        before.len()
+    );
 
     let marker = unique_marker();
     println!("\n  marker plaintext: {marker}");
@@ -2970,7 +3118,10 @@ async fn v10_dm_fans_out_to_three_devices() {
     // second and third deposits.
     let new_rows = wait_for_new_envelopes(&uid_b, &before, 3).await;
 
-    println!("  NEW device_messages rows created by this one send: {}", new_rows.len());
+    println!(
+        "  NEW device_messages rows created by this one send: {}",
+        new_rows.len()
+    );
     for f in &new_rows {
         println!(
             "    device_id={} envelope_md5={} source_user_id={} envelope_bytes={}",
@@ -2999,13 +3150,13 @@ async fn v10_dm_fans_out_to_three_devices() {
          test cannot say anything about fan-out.",
         new_rows.len()
     );
-    println!("  positive control: primary device 1 queued {} envelope(s)", rows_1.len());
+    println!(
+        "  positive control: primary device 1 queued {} envelope(s)",
+        rows_1.len()
+    );
 
     // ---- THE PROPERTY: ALL THREE devices got it -----------------------------
-    for (dev, rows, label) in [
-        (dev_2, &rows_2, "linked #1"),
-        (dev_3, &rows_3, "linked #2"),
-    ] {
+    for (dev, rows, label) in [(dev_2, &rows_2, "linked #1"), (dev_3, &rows_3, "linked #2")] {
         assert!(
             !rows.is_empty(),
             "MULTI-DEVICE FAN-OUT BROKEN: A sent ONE DM to user {uid_b}, who has THREE \
@@ -3026,7 +3177,10 @@ async fn v10_dm_fans_out_to_three_devices() {
              — exactly this symptom, with no error anywhere.",
             rows_1.len()
         );
-        println!("  THE PROPERTY: {label} device {dev} queued {} envelope(s)", rows.len());
+        println!(
+            "  THE PROPERTY: {label} device {dev} queued {} envelope(s)",
+            rows.len()
+        );
     }
 
     // ---- NEGATIVE HALF (1): all three ciphertexts PAIRWISE DISTINCT ---------
@@ -3136,7 +3290,10 @@ async fn v10_dm_fans_out_to_three_devices() {
          primary is the control here — if it cannot decrypt, the linked devices' \
          results say nothing about multi-device."
     );
-    for (dev, body, ok, label) in [(dev_2, &b2, ok2, "linked #1"), (dev_3, &b3, ok3, "linked #2")] {
+    for (dev, body, ok, label) in [
+        (dev_2, &b2, ok2, "linked #1"),
+        (dev_3, &b3, ok3, "linked #2"),
+    ] {
         assert!(
             ok,
             "LINKED DEVICE CANNOT DECRYPT: B's {label} device {dev} was queued its own \
@@ -3306,7 +3463,9 @@ async fn v11_device_linked_mid_conversation_receives_next_message() {
          device list for B, so nothing below could possibly be testing whether a \
          STALE device list is refreshed. Fix the send path before reading this test."
     );
-    println!("  positive control: conversation ESTABLISHED — A has fetched B's device list and holds a live session");
+    println!(
+        "  positive control: conversation ESTABLISHED — A has fetched B's device list and holds a live session"
+    );
 
     // ---- B links a NEW device, MID-CONVERSATION -----------------------------
     // A is still live and still holds whatever it cached about B.
@@ -3343,7 +3502,9 @@ async fn v11_device_linked_mid_conversation_receives_next_message() {
          erroring, so a freshly-linked device transiently in that state would be \
          omitted with no error anywhere."
     );
-    println!("  positive control: new device {dev_s} linked mid-conversation, distinct from primary 1, both hold bundles");
+    println!(
+        "  positive control: new device {dev_s} linked mid-conversation, distinct from primary 1, both hold bundles"
+    );
 
     // ---- take BOTH of B's devices offline -----------------------------------
     // So the envelopes SIT in the queues and we can read the very bytes each
@@ -3355,7 +3516,10 @@ async fn v11_device_linked_mid_conversation_receives_next_message() {
     // ---- snapshot BEFORE the second send, scoped to THIS user ---------------
     // Quiesced, not a fixed sleep: waits out in-flight fan-out from the shutdown.
     let before = quiesced_row_ids(&uid_b).await;
-    println!("  device_messages rows for B before the second send: {}", before.len());
+    println!(
+        "  device_messages rows for B before the second send: {}",
+        before.len()
+    );
 
     let marker_2 = unique_marker();
     println!("\n  message #2 (sent AFTER the link) marker: {marker_2}");
@@ -3371,7 +3535,10 @@ async fn v11_device_linked_mid_conversation_receives_next_message() {
     // deposit.
     let new_rows = wait_for_new_envelopes(&uid_b, &before, 2).await;
 
-    println!("  NEW device_messages rows created by the second send: {}", new_rows.len());
+    println!(
+        "  NEW device_messages rows created by the second send: {}",
+        new_rows.len()
+    );
     for f in &new_rows {
         println!(
             "    device_id={} envelope_md5={} source_user_id={} envelope_bytes={}",
@@ -3399,7 +3566,10 @@ async fn v11_device_linked_mid_conversation_receives_next_message() {
          test cannot say anything about the mid-conversation device.",
         new_rows.len()
     );
-    println!("  positive control: primary device 1 queued {} envelope(s)", primary_rows.len());
+    println!(
+        "  positive control: primary device 1 queued {} envelope(s)",
+        primary_rows.len()
+    );
 
     // ---- THE PROPERTY: the MID-CONVERSATION device receives -----------------
     assert!(
@@ -3422,7 +3592,10 @@ async fn v11_device_linked_mid_conversation_receives_next_message() {
         primary_rows.len(),
         primary_rows.len()
     );
-    println!("  THE PROPERTY: mid-conversation device {dev_s} queued {} envelope(s)", new_dev_rows.len());
+    println!(
+        "  THE PROPERTY: mid-conversation device {dev_s} queued {} envelope(s)",
+        new_dev_rows.len()
+    );
 
     // ---- NEGATIVE HALF (1): the two ciphertexts are DISTINCT ----------------
     let md5s = |rows: &Vec<&Vec<String>>| -> std::collections::HashSet<String> {
@@ -3439,7 +3612,9 @@ async fn v11_device_linked_mid_conversation_receives_next_message() {
          a single blob was copied into both queues — in which case only one device can \
          actually decrypt it and 'the new device got a row' means nothing."
     );
-    println!("  negative half: envelope md5 device1={m_p:?} device{dev_s}={m_s:?} — DISTINCT ciphertexts");
+    println!(
+        "  negative half: envelope md5 device1={m_p:?} device{dev_s}={m_s:?} — DISTINCT ciphertexts"
+    );
 
     // ---- NEGATIVE HALF (2): sealed sender holds on both rows ----------------
     let leaked: Vec<&Vec<String>> = new_rows.iter().filter(|f| f[3] != "NULL").collect();
@@ -3453,7 +3628,10 @@ async fn v11_device_linked_mid_conversation_receives_next_message() {
         new_rows.len(),
         &uid_a.to_string()[..8]
     );
-    println!("  negative half: source_user_id IS NULL on all {} rows — sealed sender holds per device", new_rows.len());
+    println!(
+        "  negative half: source_user_id IS NULL on all {} rows — sealed sender holds per device",
+        new_rows.len()
+    );
 
     // ---- NEGATIVE HALF (3): no envelope contains the plaintext --------------
     let plain: i64 = psql(&format!(
@@ -3676,7 +3854,11 @@ async fn v12_dm_from_primary_syncs_to_senders_own_linked_device() {
     // ---- snapshot BEFORE the send, scoped to THIS run's users --------------
     let before_a = quiesced_row_ids(&uid_a).await;
     let before_b = quiesced_row_ids(&uid_b).await;
-    println!("  device_messages rows before the send: A={} B={}", before_a.len(), before_b.len());
+    println!(
+        "  device_messages rows before the send: A={} B={}",
+        before_a.len(),
+        before_b.len()
+    );
 
     let marker = unique_marker();
     println!("\n  marker plaintext: {marker}");
@@ -3698,11 +3880,17 @@ async fn v12_dm_from_primary_syncs_to_senders_own_linked_device() {
 
     println!("  NEW rows for B (the recipient): {}", new_b.len());
     for f in &new_b {
-        println!("    device_id={} envelope_md5={} source_user_id={} bytes={}", f[1], f[2], f[3], f[4]);
+        println!(
+            "    device_id={} envelope_md5={} source_user_id={} bytes={}",
+            f[1], f[2], f[3], f[4]
+        );
     }
     println!("  NEW rows for A (self-sync): {}", new_a.len());
     for f in &new_a {
-        println!("    device_id={} envelope_md5={} source_user_id={} bytes={}", f[1], f[2], f[3], f[4]);
+        println!(
+            "    device_id={} envelope_md5={} source_user_id={} bytes={}",
+            f[1], f[2], f[3], f[4]
+        );
     }
 
     // ---- POSITIVE CONTROL (c): B RECEIVED ----------------------------------
@@ -3714,11 +3902,13 @@ async fn v12_dm_from_primary_syncs_to_senders_own_linked_device() {
          the RECIPIENT B. The DM never happened at all, so any statement about A's \
          own devices below would be vacuous. Fix the send path before reading this test."
     );
-    println!("  positive control: B (the real recipient) queued {} envelope(s) — delivery works", new_b.len());
+    println!(
+        "  positive control: B (the real recipient) queued {} envelope(s) — delivery works",
+        new_b.len()
+    );
 
-    let a_for_dev = |d: u32| -> Vec<&Vec<String>> {
-        new_a.iter().filter(|f| f[1] == d.to_string()).collect()
-    };
+    let a_for_dev =
+        |d: u32| -> Vec<&Vec<String>> { new_a.iter().filter(|f| f[1] == d.to_string()).collect() };
     let a_primary_rows = a_for_dev(1);
     let a_linked_rows = a_for_dev(dev_s);
 
@@ -3742,7 +3932,10 @@ async fn v12_dm_from_primary_syncs_to_senders_own_linked_device() {
         new_b.len(),
         new_a.len()
     );
-    println!("  THE PROPERTY: A's linked device {dev_s} queued {} self-sync envelope(s)", a_linked_rows.len());
+    println!(
+        "  THE PROPERTY: A's linked device {dev_s} queued {} self-sync envelope(s)",
+        a_linked_rows.len()
+    );
 
     // ---- NEGATIVE HALF (1): the SENDING device did NOT echo to itself -------
     assert!(
@@ -3759,7 +3952,8 @@ async fn v12_dm_from_primary_syncs_to_senders_own_linked_device() {
 
     // ---- NEGATIVE HALF (2): self-sync ciphertext != B's ciphertext ---------
     let b_md5: std::collections::HashSet<&str> = new_b.iter().map(|f| f[2].as_str()).collect();
-    let a_md5: std::collections::HashSet<&str> = a_linked_rows.iter().map(|f| f[2].as_str()).collect();
+    let a_md5: std::collections::HashSet<&str> =
+        a_linked_rows.iter().map(|f| f[2].as_str()).collect();
     let shared: Vec<&&str> = b_md5.intersection(&a_md5).collect();
     assert!(
         shared.is_empty(),
@@ -3772,7 +3966,9 @@ async fn v12_dm_from_primary_syncs_to_senders_own_linked_device() {
          exactly that) — in which case only one of them can actually decrypt it and \
          'the sync row is there' means nothing."
     );
-    println!("  negative half: self-sync md5={a_md5:?} vs B's md5={b_md5:?} — DISTINCT ciphertexts");
+    println!(
+        "  negative half: self-sync md5={a_md5:?} vs B's md5={b_md5:?} — DISTINCT ciphertexts"
+    );
 
     // ---- NEGATIVE HALF (3): E2EE holds on the self-sync path ---------------
     let plain: i64 = psql(&format!(
@@ -3979,11 +4175,17 @@ async fn v13_self_synced_dm_files_as_outgoing_in_the_recipient_conversation() {
 
     println!("  NEW rows for B (recipient): {}", new_b.len());
     for f in &new_b {
-        println!("    device_id={} envelope_md5={} bytes={}", f[1], f[2], f[4]);
+        println!(
+            "    device_id={} envelope_md5={} bytes={}",
+            f[1], f[2], f[4]
+        );
     }
     println!("  NEW rows for A (self-sync): {}", new_a.len());
     for f in &new_a {
-        println!("    device_id={} envelope_md5={} bytes={}", f[1], f[2], f[4]);
+        println!(
+            "    device_id={} envelope_md5={} bytes={}",
+            f[1], f[2], f[4]
+        );
     }
 
     // ---- POSITIVE CONTROL (b): B RECEIVED (transport is alive) -------------
@@ -3992,7 +4194,10 @@ async fn v13_self_synced_dm_files_as_outgoing_in_the_recipient_conversation() {
         "POSITIVE CONTROL FAILED: A's send created ZERO new device_messages rows for \
          the RECIPIENT B. The DM never happened, so everything below is vacuous."
     );
-    println!("  positive control: B received {} envelope(s) — send path works", new_b.len());
+    println!(
+        "  positive control: B received {} envelope(s) — send path works",
+        new_b.len()
+    );
 
     // ---- POSITIVE CONTROL (c): the self-sync copy REACHED A's linked device -
     // This is the guard the task demands: assert the copy is actually in A's
@@ -4006,7 +4211,10 @@ async fn v13_self_synced_dm_files_as_outgoing_in_the_recipient_conversation() {
          self-sync envelopes. This is the F8-transport regression V12 guards, not the \
          attribution property V13 is for — fix self-sync delivery before reading below."
     );
-    println!("  positive control: A's linked device {dev_s} queued {} self-sync envelope(s)", a_linked_rows.len());
+    println!(
+        "  positive control: A's linked device {dev_s} queued {} self-sync envelope(s)",
+        a_linked_rows.len()
+    );
 
     // ---- bring A's linked device online and capture the surfaced message ----
     let (client_as2, mut ev_s) = restore_and_start(&path_as, "A linked").await;
@@ -4064,7 +4272,9 @@ async fn v13_self_synced_dm_files_as_outgoing_in_the_recipient_conversation() {
          message is OUR outgoing message and must be authored by us so the laptop \
          renders it as an outgoing bubble, not an inbound one."
     );
-    println!("  DECISIVE: self-sync filed in the A↔B conversation {conv_with_b:?}, authored by A — OUTGOING");
+    println!(
+        "  DECISIVE: self-sync filed in the A↔B conversation {conv_with_b:?}, authored by A — OUTGOING"
+    );
 
     // ---- NEGATIVE HALF: E2EE still holds on the self-sync path -------------
     let plain: i64 = psql(&format!(
@@ -4080,7 +4290,9 @@ async fn v13_self_synced_dm_files_as_outgoing_in_the_recipient_conversation() {
          of A's own queued envelope(s). The SyncSent wrapper is still E2E encrypted; a \
          message to yourself is still a message through the server."
     );
-    println!("  negative half: marker occurs in 0 of A's queued envelopes — SyncSent stays E2E encrypted");
+    println!(
+        "  negative half: marker occurs in 0 of A's queued envelopes — SyncSent stays E2E encrypted"
+    );
 
     println!(
         "V13 PASS — a DM sent from A's PRIMARY surfaced on A's LINKED device in the \
@@ -4136,8 +4348,8 @@ async fn v14_forged_identity_key_is_rejected_via_key_transparency() {
     use chatter_core::crypto::SessionManager;
     use chatter_core::network::grpc::AuthClient;
     use libsignal_protocol::{
-        DeviceId, IdentityKey, IdentityKeyPair, IdentityKeyStore, InMemSignalProtocolStore, KeyPair,
-        PreKeyBundle, ProtocolAddress, kem,
+        DeviceId, IdentityKey, IdentityKeyPair, IdentityKeyStore, InMemSignalProtocolStore,
+        KeyPair, PreKeyBundle, ProtocolAddress, kem,
     };
     use rand::rngs::StdRng;
     use rand::{Rng, SeedableRng};
@@ -4162,9 +4374,15 @@ async fn v14_forged_identity_key_is_rejected_via_key_transparency() {
         let kyber_pre_key_pair = kem::KeyPair::generate(kem::KeyType::Kyber1024, rng);
 
         let spk_pub = signed_pre_key_pair.public_key.serialize();
-        let spk_sig = signer.private_key().calculate_signature(&spk_pub, rng).unwrap();
+        let spk_sig = signer
+            .private_key()
+            .calculate_signature(&spk_pub, rng)
+            .unwrap();
         let kyber_pub = kyber_pre_key_pair.public_key.serialize();
-        let kyber_sig = signer.private_key().calculate_signature(&kyber_pub, rng).unwrap();
+        let kyber_sig = signer
+            .private_key()
+            .calculate_signature(&kyber_pub, rng)
+            .unwrap();
 
         PreKeyBundle::new(
             rng.random::<u32>() & 0x3fff,
@@ -4196,10 +4414,8 @@ async fn v14_forged_identity_key_is_rejected_via_key_transparency() {
             .await
             .map_err(|e| format!("KT proof fetch failed: {e}"))?
         {
-            Some(proof) => {
-                chatter_core::crypto::verify_kt_proof(peer_user_id, &ik, &proof)
-                    .map_err(|e| format!("{e}"))
-            }
+            Some(proof) => chatter_core::crypto::verify_kt_proof(peer_user_id, &ik, &proof)
+                .map_err(|e| format!("{e}")),
             None => Ok(()), // TOFU: not reached here — Bob has a leaf.
         }
     }
@@ -4233,7 +4449,10 @@ async fn v14_forged_identity_key_is_rejected_via_key_transparency() {
     // Mallory the malicious server: a distinct identity Alice must NOT trust.
     let mallory_kp = IdentityKeyPair::generate(&mut rng);
     let ik_mallory = *mallory_kp.identity_key();
-    assert_ne!(ik_bob, ik_mallory, "sanity: Bob and Mallory are distinct identities");
+    assert_ne!(
+        ik_bob, ik_mallory,
+        "sanity: Bob and Mallory are distinct identities"
+    );
 
     // The address Alice BELIEVES is Bob. KT binds the served key to Bob's leaf.
     let bob_addr = ProtocolAddress::new(bob.user_id.clone(), DeviceId::new(1).unwrap());
@@ -4250,12 +4469,24 @@ async fn v14_forged_identity_key_is_rejected_via_key_transparency() {
         bob.public_key.as_slice(),
         "KT log commits Bob's real identity key"
     );
-    let epoch = proof.signed_tree_head.as_ref().map(|s| s.epoch).unwrap_or(0);
-    let tree_size = proof.signed_tree_head.as_ref().map(|s| s.tree_size).unwrap_or(0);
+    let epoch = proof
+        .signed_tree_head
+        .as_ref()
+        .map(|s| s.epoch)
+        .unwrap_or(0);
+    let tree_size = proof
+        .signed_tree_head
+        .as_ref()
+        .map(|s| s.tree_size)
+        .unwrap_or(0);
     println!(
         "  fetched Bob's signed KT proof: epoch={epoch} tree_size={tree_size} \
          siblings={} committed_key={}",
-        proof.inclusion_proof.as_ref().map(|p| p.sibling_hashes.len()).unwrap_or(0),
+        proof
+            .inclusion_proof
+            .as_ref()
+            .map(|p| p.sibling_hashes.len())
+            .unwrap_or(0),
         hex::encode(&committed[..committed.len().min(8)]),
     );
 
@@ -4276,7 +4507,12 @@ async fn v14_forged_identity_key_is_rejected_via_key_transparency() {
         let mut alice_sess = make_store(&mut rng);
         let mut alice_id = alice_sess.clone();
         let r = SessionManager::establish_session(
-            &bob_addr, &v14_alice_addr(), &mut alice_sess, &mut alice_id, &honest, &mut rng,
+            &bob_addr,
+            &v14_alice_addr(),
+            &mut alice_sess,
+            &mut alice_id,
+            &honest,
+            &mut rng,
         )
         .await;
         assert!(
@@ -4284,7 +4520,11 @@ async fn v14_forged_identity_key_is_rejected_via_key_transparency() {
             "POSITIVE CONTROL FAILED: honest Bob bundle must establish a session: {r:?}"
         );
         let trusted = alice_id.get_identity(&bob_addr).await.unwrap();
-        assert_eq!(trusted, Some(ik_bob), "positive: Alice trusts Bob's real key");
+        assert_eq!(
+            trusted,
+            Some(ik_bob),
+            "positive: Alice trusts Bob's real key"
+        );
         println!("  positive control: honest Bob bundle KT-verified and established a session");
     }
 
@@ -4309,7 +4549,10 @@ async fn v14_forged_identity_key_is_rejected_via_key_transparency() {
          rejected the mismatch. A malicious server could MITM this conversation.",
         bob.user_id,
     );
-    println!("  attack: forged (Mallory) key REJECTED by KT: {}", verdict.unwrap_err());
+    println!(
+        "  attack: forged (Mallory) key REJECTED by KT: {}",
+        verdict.unwrap_err()
+    );
 
     // The forged key is never trusted: because KT rejected, we NEVER call
     // establish_session, so Alice's identity store holds nothing for Bob's
@@ -4320,20 +4563,30 @@ async fn v14_forged_identity_key_is_rejected_via_key_transparency() {
         kt_verify_bundle_key(&mut auth_client, &bob.user_id, &forged).await?;
         // Unreachable on a correct client: only runs if KT passed.
         SessionManager::establish_session(
-            &bob_addr, &v14_alice_addr(), &mut alice_sess, &mut alice_id, &forged, &mut rng,
+            &bob_addr,
+            &v14_alice_addr(),
+            &mut alice_sess,
+            &mut alice_id,
+            &forged,
+            &mut rng,
         )
         .await
         .map_err(|e| format!("{e:?}"))
     }
     .await;
-    assert!(gated.is_err(), "KT-gated establishment must refuse the forged bundle");
+    assert!(
+        gated.is_err(),
+        "KT-gated establishment must refuse the forged bundle"
+    );
     let trusted_after = alice_id.get_identity(&bob_addr).await.unwrap();
     assert_eq!(
         trusted_after, None,
         "forged key must NEVER be recorded as trusted for Bob's address"
     );
     assert!(
-        !SessionManager::has_session(&alice_sess, &bob_addr).await.unwrap(),
+        !SessionManager::has_session(&alice_sess, &bob_addr)
+            .await
+            .unwrap(),
         "no session may exist with the forged bundle"
     );
 
@@ -4497,7 +4750,12 @@ async fn v15_post_compromise_security_heals_after_dh_ratchet() {
     v15_deliver(&client_a, uid_a, uid_b, &mut events_b, &est1).await;
     // B's session for A must now exist — there is something to steal.
     assert!(
-        client_b.signal().key_store().load_session(&a_addr).unwrap().is_some(),
+        client_b
+            .signal()
+            .key_store()
+            .load_session(&a_addr)
+            .unwrap()
+            .is_some(),
         "POSITIVE CONTROL FAILED: B has no session record for A after the first \
          message — nothing to capture as 'stolen state'"
     );
@@ -4515,7 +4773,10 @@ async fn v15_post_compromise_security_heals_after_dh_ratchet() {
         .expect("load_session errored")
         .expect("POSITIVE CONTROL FAILED: no session record for A to steal");
     assert!(!stolen.is_empty(), "stolen session record is empty");
-    println!("\n  N: stolen B's session-for-A snapshot ({} bytes)", stolen.len());
+    println!(
+        "\n  N: stolen B's session-for-A snapshot ({} bytes)",
+        stolen.len()
+    );
     // Sanity: it is a real, loadable SessionRecord.
     libsignal_protocol::SessionRecord::deserialize(&stolen)
         .expect("stolen snapshot is not a valid SessionRecord");
@@ -4539,7 +4800,10 @@ async fn v15_post_compromise_security_heals_after_dh_ratchet() {
     wait_for_new_hash_field(&queue_key, &base_q).await;
     let (_pre_field, b64_pre) = capture_after(&m_pre, base_q).await;
     let bytes_pre = b64_to_bytes(&b64_pre);
-    println!("  captured PRE-step ciphertext ({} b64 chars)", b64_pre.len());
+    println!(
+        "  captured PRE-step ciphertext ({} b64 chars)",
+        b64_pre.len()
+    );
 
     // ========================================================================
     // PHASE 3 (B online): heal. Three FULL round trips (B->A then A->B), each of
@@ -4549,7 +4813,10 @@ async fn v15_post_compromise_security_heals_after_dh_ratchet() {
     let client_b1 = build_client(&path_b);
     client_b1.connect().await.expect("B reconnect failed");
     let mut events_b1 = client_b1.subscribe_events();
-    assert!(client_b1.restore_session(), "B failed to restore persisted session");
+    assert!(
+        client_b1.restore_session(),
+        "B failed to restore persisted session"
+    );
     if let Err(e) = client_b1.start().await {
         if !matches!(e, chatter_core::client::ClientError::AlreadyStarted) {
             panic!("B start failed: {e:?}");
@@ -4564,7 +4831,10 @@ async fn v15_post_compromise_security_heals_after_dh_ratchet() {
         v15_deliver(&client_b1, uid_b, uid_a, &mut events_a2, &reply).await;
         let fwd = unique_marker();
         v15_deliver(&client_a, uid_a, uid_b, &mut events_b1, &fwd).await;
-        println!("  healing round {} complete (B->A reply, A->B forward)", round + 1);
+        println!(
+            "  healing round {} complete (B->A reply, A->B forward)",
+            round + 1
+        );
     }
     tokio::time::sleep(Duration::from_millis(700)).await;
 
@@ -4580,7 +4850,11 @@ async fn v15_post_compromise_security_heals_after_dh_ratchet() {
         "session record is byte-identical after 3 round trips — the ratchet did \
          not advance, so there is no healing to test"
     );
-    println!("  live session healed: {} -> {} bytes, records differ", stolen.len(), healed.len());
+    println!(
+        "  live session healed: {} -> {} bytes, records differ",
+        stolen.len(),
+        healed.len()
+    );
 
     // ========================================================================
     // PHASE 4 (B offline): mint the POST-step ciphertext, capture it, and
@@ -4610,7 +4884,10 @@ async fn v15_post_compromise_security_heals_after_dh_ratchet() {
         !hkeys(&queue_key).contains(&post_field),
         "POSITIVE CONTROL FAILED: could not withhold the post-step envelope"
     );
-    println!("  captured POST-step ciphertext ({} b64 chars) and withheld it", b64_post.len());
+    println!(
+        "  captured POST-step ciphertext ({} b64 chars) and withheld it",
+        b64_post.len()
+    );
 
     // ========================================================================
     // PHASE 5 (B online): the three decrypts. One store, two captured
@@ -4619,7 +4896,10 @@ async fn v15_post_compromise_security_heals_after_dh_ratchet() {
     let client_b2 = build_client(&path_b);
     client_b2.connect().await.expect("B reconnect #2 failed");
     let _events_b2 = client_b2.subscribe_events();
-    assert!(client_b2.restore_session(), "B failed to restore persisted session #2");
+    assert!(
+        client_b2.restore_session(),
+        "B failed to restore persisted session #2"
+    );
     if let Err(e) = client_b2.start().await {
         if !matches!(e, chatter_core::client::ClientError::AlreadyStarted) {
             panic!("B start #2 failed: {e:?}");
@@ -4629,7 +4909,13 @@ async fn v15_post_compromise_security_heals_after_dh_ratchet() {
 
     // ---- POSITIVE CONTROL 1: the LIVE (healed) session decrypts POST-step ----
     // Run FIRST, against the pristine healed session, before any overwrite.
-    let live_post = client_b2.signal().decrypt_message(&bytes_post, chatter_core::util::time::TimestampNanos::now().as_u64()).await;
+    let live_post = client_b2
+        .signal()
+        .decrypt_message(
+            &bytes_post,
+            chatter_core::util::time::TimestampNanos::now().as_u64(),
+        )
+        .await;
     match &live_post {
         Ok((_addr, pt, _)) => {
             let hay = String::from_utf8_lossy(pt);
@@ -4638,7 +4924,9 @@ async fn v15_post_compromise_security_heals_after_dh_ratchet() {
                 "POSITIVE CONTROL FAILED: live session decrypted post-step bytes \
                  but not to the expected marker"
             );
-            println!("  live healed session -> POST-step DECRYPTED (message is well-formed, delivery works)");
+            println!(
+                "  live healed session -> POST-step DECRYPTED (message is well-formed, delivery works)"
+            );
         }
         Err(e) => panic!(
             "POSITIVE CONTROL FAILED: the LIVE, healed session could not decrypt \
@@ -4657,11 +4945,22 @@ async fn v15_post_compromise_security_heals_after_dh_ratchet() {
         .store_session(&a_addr, &stolen)
         .expect("store_session (stolen, for pre) failed");
     assert_eq!(
-        client_b2.signal().key_store().load_session(&a_addr).unwrap().as_deref(),
+        client_b2
+            .signal()
+            .key_store()
+            .load_session(&a_addr)
+            .unwrap()
+            .as_deref(),
         Some(stolen.as_slice()),
         "overwrite did not land — the store still holds a different session"
     );
-    let stolen_pre = client_b2.signal().decrypt_message(&bytes_pre, chatter_core::util::time::TimestampNanos::now().as_u64()).await;
+    let stolen_pre = client_b2
+        .signal()
+        .decrypt_message(
+            &bytes_pre,
+            chatter_core::util::time::TimestampNanos::now().as_u64(),
+        )
+        .await;
     match &stolen_pre {
         Ok((_addr, pt, _)) => {
             let hay = String::from_utf8_lossy(pt);
@@ -4670,7 +4969,9 @@ async fn v15_post_compromise_security_heals_after_dh_ratchet() {
                 "POSITIVE CONTROL FAILED: stolen record decrypted pre-step bytes \
                  but not to the expected marker"
             );
-            println!("  stolen record -> PRE-step DECRYPTED (record valid; pre-step traffic recoverable)");
+            println!(
+                "  stolen record -> PRE-step DECRYPTED (record valid; pre-step traffic recoverable)"
+            );
         }
         Err(e) => panic!(
             "POSITIVE CONTROL FAILED: the stolen record could not even decrypt a \
@@ -4688,11 +4989,20 @@ async fn v15_post_compromise_security_heals_after_dh_ratchet() {
         .key_store()
         .store_session(&a_addr, &stolen)
         .expect("store_session (stolen, for post) failed");
-    let stolen_post = client_b2.signal().decrypt_message(&bytes_post, chatter_core::util::time::TimestampNanos::now().as_u64()).await;
-    println!("  stolen record -> POST-step {}", match &stolen_post {
-        Ok(_) => "DECRYPTED (!!)".to_string(),
-        Err(e) => format!("REJECTED: {e:?}"),
-    });
+    let stolen_post = client_b2
+        .signal()
+        .decrypt_message(
+            &bytes_post,
+            chatter_core::util::time::TimestampNanos::now().as_u64(),
+        )
+        .await;
+    println!(
+        "  stolen record -> POST-step {}",
+        match &stolen_post {
+            Ok(_) => "DECRYPTED (!!)".to_string(),
+            Err(e) => format!("REJECTED: {e:?}"),
+        }
+    );
     if let Ok((_addr, pt, _msg_type)) = &stolen_post {
         let hay = String::from_utf8_lossy(pt);
         if hay.contains(&m_post) {
@@ -4823,8 +5133,12 @@ async fn v16_message_roundtrip_fidelity() {
             Err(e) => format!("Err({e})"),
         };
         assert!(
-            matches!(r, Err(chatter_core::services::gateway::SendError::Message(
-                chatter_core::services::message::MessageError::InvalidContent(_)))),
+            matches!(
+                r,
+                Err(chatter_core::services::gateway::SendError::Message(
+                    chatter_core::services::message::MessageError::InvalidContent(_)
+                ))
+            ),
             "[{name}] expected InvalidContent rejection at send, got {outcome}"
         );
         println!(
@@ -4850,7 +5164,11 @@ async fn v16_message_roundtrip_fidelity() {
         .send_text(ActiveConversation::ServerDm { peer_id: uid_b }, padded_in)
         .await
         .expect("padded send failed");
-    assert!(sent.send_error.is_none(), "padded delivery failed: {:?}", sent.send_error);
+    assert!(
+        sent.send_error.is_none(),
+        "padded delivery failed: {:?}",
+        sent.send_error
+    );
     let padded_out = next_body(&mut events_b, conv, EVENT_TIMEOUT)
         .await
         .expect("padded payload never arrived");
@@ -4873,7 +5191,11 @@ async fn v16_message_roundtrip_fidelity() {
         .send_text(ActiveConversation::ServerDm { peer_id: uid_b }, &sentinel)
         .await
         .expect("send sentinel failed");
-    assert!(sent.send_error.is_none(), "sentinel delivery failed: {:?}", sent.send_error);
+    assert!(
+        sent.send_error.is_none(),
+        "sentinel delivery failed: {:?}",
+        sent.send_error
+    );
     let first = next_body(&mut events_b, conv, EVENT_TIMEOUT)
         .await
         .expect("positive control: B received no sentinel — pipeline is dead");
@@ -4881,7 +5203,10 @@ async fn v16_message_roundtrip_fidelity() {
         first, sentinel,
         "positive control: sentinel did not round-trip byte-exact"
     );
-    println!("  [pos-control   ] sentinel round-tripped byte-exact ({}B)", sentinel.len());
+    println!(
+        "  [pos-control   ] sentinel round-tripped byte-exact ({}B)",
+        sentinel.len()
+    );
 
     // ---- BATTERY: every non-empty UTF-8 shape, byte-exact ------------------
     // All payloads are byte-distinct (so a burst-send + order-independent
@@ -4890,17 +5215,20 @@ async fn v16_message_roundtrip_fidelity() {
     // byte-exact must hold. Interior newlines/tabs/NUL/control chars ARE part of
     // the payloads and must survive verbatim.
     let battery: Vec<(&str, String)> = vec![
-        ("1-byte",         "x".to_string()),
-        ("sql-injection",  "'; DROP TABLE messages;--".to_string()),
+        ("1-byte", "x".to_string()),
+        ("sql-injection", "'; DROP TABLE messages;--".to_string()),
         ("tmpl-injection", "{{7*7}}".to_string()),
-        ("interior-nl",    "line1\nline2\r\n\ttabbed middle".to_string()),
-        ("cjk-multibyte",  "中文测试消息".to_string()),
-        ("emoji-zwj",      "👨‍👩‍👧‍👦".to_string()),
+        ("interior-nl", "line1\nline2\r\n\ttabbed middle".to_string()),
+        ("cjk-multibyte", "中文测试消息".to_string()),
+        ("emoji-zwj", "👨‍👩‍👧‍👦".to_string()),
         ("emoji-skintone", "👍🏽🔥".to_string()),
-        ("combining",      "e\u{0301}a\u{0300}o\u{0302}".to_string()),
-        ("rtl-mixed",      "مرحبا שלום world".to_string()),
-        ("nul-embedded",   "before\u{0}after".to_string()),
-        ("control-chars",  "tab\there\r\nnl\u{0007}bell\u{001b}esc".to_string()),
+        ("combining", "e\u{0301}a\u{0300}o\u{0302}".to_string()),
+        ("rtl-mixed", "مرحبا שלום world".to_string()),
+        ("nul-embedded", "before\u{0}after".to_string()),
+        (
+            "control-chars",
+            "tab\there\r\nnl\u{0007}bell\u{001b}esc".to_string(),
+        ),
         ("utf8-1234-byte", "A\u{00e9}\u{4e2d}\u{1f600}".to_string()),
     ];
 
@@ -4908,8 +5236,11 @@ async fn v16_message_roundtrip_fidelity() {
     for i in 0..battery.len() {
         for j in (i + 1)..battery.len() {
             assert_ne!(
-                battery[i].1.as_bytes(), battery[j].1.as_bytes(),
-                "test bug: payloads {} and {} are byte-identical", battery[i].0, battery[j].0
+                battery[i].1.as_bytes(),
+                battery[j].1.as_bytes(),
+                "test bug: payloads {} and {} are byte-identical",
+                battery[i].0,
+                battery[j].0
             );
         }
     }
@@ -4919,7 +5250,11 @@ async fn v16_message_roundtrip_fidelity() {
             .send_text(ActiveConversation::ServerDm { peer_id: uid_b }, payload)
             .await
             .unwrap_or_else(|e| panic!("send [{name}] failed: {e:?}"));
-        assert!(sent.send_error.is_none(), "delivery [{name}] failed: {:?}", sent.send_error);
+        assert!(
+            sent.send_error.is_none(),
+            "delivery [{name}] failed: {:?}",
+            sent.send_error
+        );
         tokio::time::sleep(Duration::from_millis(60)).await;
     }
 
@@ -4946,7 +5281,8 @@ async fn v16_message_roundtrip_fidelity() {
             .filter(|r| r.as_bytes() == payload.as_bytes())
             .count();
         assert_eq!(
-            matches, 1,
+            matches,
+            1,
             "SHAPE [{name}] did NOT round-trip byte-exact: expected exactly one \
              delivery equal to the {}-byte input, found {matches}. \
              (in bytes: {:?})",
@@ -4995,7 +5331,11 @@ async fn v16_message_roundtrip_fidelity() {
         .send_text(ActiveConversation::ServerDm { peer_id: uid_b }, &big_ok)
         .await
         .expect("just-under-cap 6000B send failed");
-    assert!(sent.send_error.is_none(), "just-under-cap 6000B delivery failed: {:?}", sent.send_error);
+    assert!(
+        sent.send_error.is_none(),
+        "just-under-cap 6000B delivery failed: {:?}",
+        sent.send_error
+    );
     let got_big = next_body(&mut events_b, conv, EVENT_TIMEOUT)
         .await
         .expect("just-under-cap payload never arrived at B");
@@ -5071,7 +5411,8 @@ async fn setup_a_linked_b(tag: &str) -> AbFixture {
     let dir_ap = tempfile::tempdir().unwrap();
     let path_ap = dir_ap.path().to_path_buf();
     let client_ap = build_client(&path_ap);
-    let uid_a = register_and_start(&client_ap, &unique_user(&format!("{tag}ap")), "A Primary").await;
+    let uid_a =
+        register_and_start(&client_ap, &unique_user(&format!("{tag}ap")), "A Primary").await;
 
     let dir_as = tempfile::tempdir().unwrap();
     let path_as = dir_as.path().to_path_buf();
@@ -5158,7 +5499,10 @@ async fn v17_self_synced_reaction_attaches_to_the_right_message_as_ours() {
     let mut ev_ap = fx.client_ap.subscribe_events();
     let mut ev_as = fx.client_as.subscribe_events();
     fx.client_b
-        .send_text(ActiveConversation::ServerDm { peer_id: uid_a }, "react to me")
+        .send_text(
+            ActiveConversation::ServerDm { peer_id: uid_a },
+            "react to me",
+        )
         .await
         .expect("B send_text failed");
 
@@ -5210,7 +5554,10 @@ async fn v17_self_synced_reaction_attaches_to_the_right_message_as_ours() {
          self-sync envelopes for the reaction. If the send-side dropped it, the decisive \
          assertion below would fail for a transport reason, not attribution."
     );
-    println!("  positive control: A's linked device {dev_s} queued {} reaction self-sync envelope(s)", a_linked_rows.len());
+    println!(
+        "  positive control: A's linked device {dev_s} queued {} reaction self-sync envelope(s)",
+        a_linked_rows.len()
+    );
 
     // Bring A's linked device online and capture how it files the reaction.
     let (client_as2, mut ev_s) = restore_and_start(&fx.path_as, "A linked").await;
@@ -5222,7 +5569,13 @@ async fn v17_self_synced_reaction_attaches_to_the_right_message_as_ours() {
     // THE DECISIVE ASSERTION: reactor = A (us), target = B's message. A reaction
     // mis-attributed to B, or attached to the wrong message, fails here.
     match &got {
-        Some(DomainEvent::ReactionAdded { sender_id, sent_at_ns, reactor_id, emoji, .. }) => {
+        Some(DomainEvent::ReactionAdded {
+            sender_id,
+            sent_at_ns,
+            reactor_id,
+            emoji,
+            ..
+        }) => {
             println!(
                 "  A linked filed reaction: target_author={sender_id} target_ts={sent_at_ns} reactor={reactor_id} emoji={emoji}"
             );
@@ -5235,7 +5588,10 @@ async fn v17_self_synced_reaction_attaches_to_the_right_message_as_ours() {
                 *sender_id, uid_b,
                 "SELF-SYNC REACTION MIS-TARGETED: target author is {sender_id}, not B ({uid_b})."
             );
-            assert_eq!(*sent_at_ns, ts_m, "reaction attached to the wrong message timestamp");
+            assert_eq!(
+                *sent_at_ns, ts_m,
+                "reaction attached to the wrong message timestamp"
+            );
             assert_eq!(emoji, "👍", "reaction emoji corrupted in transit");
         }
         _ => panic!(
@@ -5354,7 +5710,9 @@ async fn v18_self_synced_read_receipt_clears_unread_on_linked_device() {
     let mut is_read_now = false;
     let start = Instant::now();
     while start.elapsed() < Duration::from_secs(20) {
-        if let Ok(msgs) = client_as2.get_messages(&ActiveConversation::ServerDm { peer_id: uid_b }, 50) {
+        if let Ok(msgs) =
+            client_as2.get_messages(&ActiveConversation::ServerDm { peer_id: uid_b }, 50)
+        {
             if msgs.iter().any(|m| m.sent_at == ts_m && m.is_read) {
                 is_read_now = true;
                 break;
@@ -5444,7 +5802,10 @@ async fn v19_own_typing_is_not_self_synced() {
         "POSITIVE CONTROL FAILED: A's typing produced ZERO envelopes for B. The send \
          itself no-op'd, so asserting A didn't self-sync proves nothing."
     );
-    println!("  positive control: B received {} typing envelope(s) — the send path works", new_b.len());
+    println!(
+        "  positive control: B received {} typing envelope(s) — the send path works",
+        new_b.len()
+    );
 
     // THE DECISIVE ASSERTION: A's OWN devices got nothing. Specifically, the
     // linked device dev_s received zero.
@@ -5550,7 +5911,9 @@ async fn v20_delete_for_everyone_actually_deletes_on_the_recipient() {
     );
     let sent_at = stored.sent_at;
     assert!(
-        client_b.get_message_by_sender_timestamp(&uid_a, sent_at).is_some(),
+        client_b
+            .get_message_by_sender_timestamp(&uid_a, sent_at)
+            .is_some(),
         "POSITIVE CONTROL FAILED: B's message is not addressable by (sender={uid_a}, \
          sent_at={sent_at}) — the same key the delete handler uses to find it.",
     );
@@ -5570,7 +5933,10 @@ async fn v20_delete_for_everyone_actually_deletes_on_the_recipient() {
     // ---- NEGATIVE HALF: B's copy must be GONE -------------------------------
     let mut gone = false;
     for _ in 0..30 {
-        if client_b.get_message_by_sender_timestamp(&uid_a, sent_at).is_none() {
+        if client_b
+            .get_message_by_sender_timestamp(&uid_a, sent_at)
+            .is_none()
+        {
             gone = true;
             break;
         }
@@ -5705,7 +6071,11 @@ async fn v21_group_sender_key_fanout_and_plaintext_default() {
     // ========================================================================
     let name_pub = format!(
         "v21-public-{}",
-        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis() % 1_000_000
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis()
+            % 1_000_000
     );
     let group_pub = common::create_group_with_members(
         &client_a,
@@ -5716,12 +6086,18 @@ async fn v21_group_sender_key_fanout_and_plaintext_default() {
         &[(&client_b, &uid_b), (&client_c, &uid_c)],
     )
     .await;
-    println!("\n  [PART 0] A created a PUBLIC channel: {} ({})", group_pub.name, group_pub.id);
+    println!(
+        "\n  [PART 0] A created a PUBLIC channel: {} ({})",
+        group_pub.name, group_pub.id
+    );
 
     let marker_pub = unique_marker();
     println!("  marker_pub (public plaintext): {marker_pub}");
     client_a
-        .send_text(ActiveConversation::Channel(group_pub.id.clone()), &marker_pub)
+        .send_text(
+            ActiveConversation::Channel(group_pub.id.clone()),
+            &marker_pub,
+        )
         .await
         .expect("A send to public channel failed");
 
@@ -5753,7 +6129,9 @@ async fn v21_group_sender_key_fanout_and_plaintext_default() {
          (rows={leak_public}). Either public-channel plaintext regressed, or the sealing \
          detector is broken — in which case Part 1's '0 == sealed' assertion is meaningless."
     );
-    println!("  [PART 0] CONFIRMED: PUBLIC channels are legitimately plaintext, and the detector works.");
+    println!(
+        "  [PART 0] CONFIRMED: PUBLIC channels are legitimately plaintext, and the detector works."
+    );
 
     // ========================================================================
     // PART 1 — F14a RESOLVED: the DEFAULT PRIVATE group is now ENCRYPTED.
@@ -5766,7 +6144,11 @@ async fn v21_group_sender_key_fanout_and_plaintext_default() {
     // ========================================================================
     let name_e = format!(
         "v21-default-{}",
-        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis() % 1_000_000
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis()
+            % 1_000_000
     );
     let group_e = common::create_group_with_members(
         &client_a,
@@ -5777,10 +6159,15 @@ async fn v21_group_sender_key_fanout_and_plaintext_default() {
         &[(&client_b, &uid_b), (&client_c, &uid_c)],
     )
     .await;
-    println!("\n  [PART 1] A created a DEFAULT Private group (config=None): {} ({})", group_e.name, group_e.id);
+    println!(
+        "\n  [PART 1] A created a DEFAULT Private group (config=None): {} ({})",
+        group_e.name, group_e.id
+    );
 
     // THE F14a FIX, asserted: a default-created private group is encrypted.
-    let local_enc = client_a.get_channel_local(&group_e.id).map(|c| c.config.require_encryption);
+    let local_enc = client_a
+        .get_channel_local(&group_e.id)
+        .map(|c| c.config.require_encryption);
     println!(
         "  ChannelConfig::default().require_encryption = {} ; this DEFAULT (config=None) \
          private group's require_encryption = {:?}",
@@ -5843,7 +6230,10 @@ async fn v21_group_sender_key_fanout_and_plaintext_default() {
     // `wait_for_sender_key`.)
     let marker_warm = unique_marker();
     client_a
-        .send_text(ActiveConversation::Channel(group_e.id.clone()), &marker_warm)
+        .send_text(
+            ActiveConversation::Channel(group_e.id.clone()),
+            &marker_warm,
+        )
         .await
         .expect("A warm-up send failed");
     let skdm_b = wait_for_sender_key(&client_b, &uid_a, &group_e.id).await;
@@ -5917,20 +6307,36 @@ async fn v21_group_sender_key_fanout_and_plaintext_default() {
         Some(marker_e.as_str()),
         "C decoded a group message but the bytes differ from what A sent"
     );
-    println!("  B decrypted encrypted group message: {:?}", msg_b.as_text());
-    println!("  C decrypted encrypted group message: {:?}", msg_c.as_text());
+    println!(
+        "  B decrypted encrypted group message: {:?}",
+        msg_b.as_text()
+    );
+    println!(
+        "  C decrypted encrypted group message: {:?}",
+        msg_c.as_text()
+    );
 
     // Property 3 — sender attribution to A, in the group conversation.
     assert_eq!(
-        msg_b.sender_id.as_ref(), Some(&uid_a),
-        "SENDER ATTRIBUTION WRONG on B: attributed to {:?}, expected A ({uid_a})", msg_b.sender_id
+        msg_b.sender_id.as_ref(),
+        Some(&uid_a),
+        "SENDER ATTRIBUTION WRONG on B: attributed to {:?}, expected A ({uid_a})",
+        msg_b.sender_id
     );
     assert_eq!(
-        msg_c.sender_id.as_ref(), Some(&uid_a),
-        "SENDER ATTRIBUTION WRONG on C: attributed to {:?}, expected A ({uid_a})", msg_c.sender_id
+        msg_c.sender_id.as_ref(),
+        Some(&uid_a),
+        "SENDER ATTRIBUTION WRONG on C: attributed to {:?}, expected A ({uid_a})",
+        msg_c.sender_id
     );
-    assert_eq!(msg_b.conversation_id, group_e.id, "B filed the message in the wrong conversation");
-    assert_eq!(msg_c.conversation_id, group_e.id, "C filed the message in the wrong conversation");
+    assert_eq!(
+        msg_b.conversation_id, group_e.id,
+        "B filed the message in the wrong conversation"
+    );
+    assert_eq!(
+        msg_c.conversation_id, group_e.id,
+        "C filed the message in the wrong conversation"
+    );
     println!("  attribution: B and C both see the message authored by A in the group conversation");
 
     // NEGATIVE HALF (load-bearing): the server holds ciphertext it cannot read.
@@ -6065,10 +6471,7 @@ async fn ab_send_attachment(
     // source file by `filename` when it is a valid single path component;
     // otherwise (e.g. it contains a slash) we fall back to a uuid name.
     let unique = uuid::Uuid::new_v4();
-    let src_name = if !filename.is_empty()
-        && !filename.contains('/')
-        && !filename.contains('\\')
-    {
+    let src_name = if !filename.is_empty() && !filename.contains('/') && !filename.contains('\\') {
         format!("{unique}__{filename}")
     } else {
         format!("attsrc_{unique}")
@@ -6145,11 +6548,20 @@ async fn v22_attachment_binary_fidelity() {
     payload.extend_from_slice(&rnd);
     payload.extend_from_slice(marker.as_bytes());
     println!("\n  marker: {marker}");
-    println!("  main payload: {} bytes (incl. all 256 byte values, NUL, 0xFF)", payload.len());
+    println!(
+        "  main payload: {} bytes (incl. all 256 byte values, NUL, 0xFF)",
+        payload.len()
+    );
 
     let att_id = ab_send_attachment(
-        &client_a, &client_b, uid_a, uid_b, dir_a.path(),
-        "blob.bin", "application/octet-stream", &payload,
+        &client_a,
+        &client_b,
+        uid_a,
+        uid_b,
+        dir_a.path(),
+        "blob.bin",
+        "application/octet-stream",
+        &payload,
     )
     .await
     .expect("POSITIVE CONTROL FAILED: main binary attachment never reached B");
@@ -6165,11 +6577,16 @@ async fn v22_attachment_binary_fidelity() {
     // the plaintext marker.
     let cpath = chatter_core::services::attachment::attachment_file_path(&att_id);
     let ciphertext = std::fs::read(&cpath).expect("read ciphertext-at-rest");
-    println!("  ciphertext-at-rest: {} bytes at {}", ciphertext.len(), cpath.display());
+    println!(
+        "  ciphertext-at-rest: {} bytes at {}",
+        ciphertext.len(),
+        cpath.display()
+    );
     assert!(
         ciphertext.len() >= payload.len(),
         "ciphertext ({}) smaller than plaintext ({}) — not a real encrypted blob",
-        ciphertext.len(), payload.len()
+        ciphertext.len(),
+        payload.len()
     );
     assert!(
         !contains_bytes(&ciphertext, marker.as_bytes()),
@@ -6187,7 +6604,8 @@ async fn v22_attachment_binary_fidelity() {
         payload.as_slice(),
         "BINARY FIDELITY VIOLATED: decrypted attachment bytes differ from what A sent \
          (len in={} out={})",
-        payload.len(), plain.len()
+        payload.len(),
+        plain.len()
     );
     // The detector that found "marker absent" in ciphertext DOES find it in the
     // plaintext — proves the negative half above was not vacuous.
@@ -6195,38 +6613,83 @@ async fn v22_attachment_binary_fidelity() {
         contains_bytes(plain.as_slice(), marker.as_bytes()),
         "detector self-check failed: marker not found even in the decrypted plaintext"
     );
-    println!("  POSITIVE HALF: B decrypted {} bytes, byte-exact == A's original", plain.len());
+    println!(
+        "  POSITIVE HALF: B decrypted {} bytes, byte-exact == A's original",
+        plain.len()
+    );
 
     // Server-side stores never held the marker (the AttachmentPointer key/blob
     // ride inside the E2E-encrypted DataMessage; the blob is client-encrypted).
     let pg = pg_dump_all().await;
     assert!(pg.len() > 10_000, "pg_dump too small to be real");
-    assert_eq!(pg.matches(&marker).count(), 0, "E2EE VIOLATED: marker in Postgres");
+    assert_eq!(
+        pg.matches(&marker).count(),
+        0,
+        "E2EE VIOLATED: marker in Postgres"
+    );
     let rd = redis_dump_all();
-    assert_eq!(rd.matches(&marker).count(), 0, "E2EE VIOLATED: marker in Redis");
+    assert_eq!(
+        rd.matches(&marker).count(),
+        0,
+        "E2EE VIOLATED: marker in Redis"
+    );
     println!("  server stores audited: marker occurs 0x in Postgres, 0x in Redis");
 
     // ---- PART 2: edges ------------------------------------------------------
     // 1-byte
     let one = vec![0xEEu8];
     let one_id = ab_send_attachment(
-        &client_a, &client_b, uid_a, uid_b, dir_a.path(),
-        "one.bin", "application/octet-stream", &one,
-    ).await.expect("1-byte attachment never reached B");
-    client_b.download_attachment_to_filesystem(&one_id).await.expect("download 1-byte");
-    let one_plain = client_b.decrypt_attachment_auto(&one_id).expect("decrypt 1-byte");
-    assert_eq!(one_plain.as_slice(), one.as_slice(), "1-byte attachment not byte-exact");
+        &client_a,
+        &client_b,
+        uid_a,
+        uid_b,
+        dir_a.path(),
+        "one.bin",
+        "application/octet-stream",
+        &one,
+    )
+    .await
+    .expect("1-byte attachment never reached B");
+    client_b
+        .download_attachment_to_filesystem(&one_id)
+        .await
+        .expect("download 1-byte");
+    let one_plain = client_b
+        .decrypt_attachment_auto(&one_id)
+        .expect("decrypt 1-byte");
+    assert_eq!(
+        one_plain.as_slice(),
+        one.as_slice(),
+        "1-byte attachment not byte-exact"
+    );
     println!("  edge 1-byte: byte-exact OK");
 
     // empty (0-byte) — behavior probed, not assumed.
     let empty: Vec<u8> = Vec::new();
     let empty_id = ab_send_attachment(
-        &client_a, &client_b, uid_a, uid_b, dir_a.path(),
-        "empty.bin", "application/octet-stream", &empty,
-    ).await.expect("empty(0-byte) attachment never reached B");
-    client_b.download_attachment_to_filesystem(&empty_id).await.expect("download empty");
-    let empty_plain = client_b.decrypt_attachment_auto(&empty_id).expect("decrypt empty");
-    assert_eq!(empty_plain.len(), 0, "empty attachment did not decrypt to 0 bytes");
+        &client_a,
+        &client_b,
+        uid_a,
+        uid_b,
+        dir_a.path(),
+        "empty.bin",
+        "application/octet-stream",
+        &empty,
+    )
+    .await
+    .expect("empty(0-byte) attachment never reached B");
+    client_b
+        .download_attachment_to_filesystem(&empty_id)
+        .await
+        .expect("download empty");
+    let empty_plain = client_b
+        .decrypt_attachment_auto(&empty_id)
+        .expect("decrypt empty");
+    assert_eq!(
+        empty_plain.len(),
+        0,
+        "empty attachment did not decrypt to 0 bytes"
+    );
     println!("  edge empty(0-byte): delivered + decrypted to 0 bytes, byte-exact OK");
 
     // Traversal / unicode filename — the recipient-visible filename is opaque
@@ -6240,33 +6703,60 @@ async fn v22_attachment_binary_fidelity() {
     let trav_name = "..__..__etc__passwd__日本語__🔥.bin";
     let trav_bytes = b"traversal-opaque-payload-\x00\xff".to_vec();
     let trav_id = ab_send_attachment(
-        &client_a, &client_b, uid_a, uid_b, dir_a.path(),
-        trav_name, "application/octet-stream", &trav_bytes,
-    ).await.expect("tricky-named attachment never reached B");
-    client_b.download_attachment_to_filesystem(&trav_id).await.expect("download traversal");
-    let trav_plain = client_b.decrypt_attachment_auto(&trav_id).expect("decrypt traversal");
-    assert_eq!(trav_plain.as_slice(), trav_bytes.as_slice(), "tricky-named payload not byte-exact");
+        &client_a,
+        &client_b,
+        uid_a,
+        uid_b,
+        dir_a.path(),
+        trav_name,
+        "application/octet-stream",
+        &trav_bytes,
+    )
+    .await
+    .expect("tricky-named attachment never reached B");
+    client_b
+        .download_attachment_to_filesystem(&trav_id)
+        .await
+        .expect("download traversal");
+    let trav_plain = client_b
+        .decrypt_attachment_auto(&trav_id)
+        .expect("decrypt traversal");
+    assert_eq!(
+        trav_plain.as_slice(),
+        trav_bytes.as_slice(),
+        "tricky-named payload not byte-exact"
+    );
     // The recipient-visible name preserves the tricky string verbatim (opaque,
     // unicode intact — no sanitization), and is a single component (no escape).
-    let trav_meta = client_b.get_attachment_metadata(&trav_id).expect("traversal metadata");
+    let trav_meta = client_b
+        .get_attachment_metadata(&trav_id)
+        .expect("traversal metadata");
     assert!(
         trav_meta.metadata.name.ends_with(trav_name),
-        "filename was mangled server-side: got {:?}", trav_meta.metadata.name
+        "filename was mangled server-side: got {:?}",
+        trav_meta.metadata.name
     );
     assert!(
         !trav_meta.metadata.name.contains('/') && !trav_meta.metadata.name.contains('\\'),
-        "recipient filename contains a path separator: {:?}", trav_meta.metadata.name
+        "recipient filename contains a path separator: {:?}",
+        trav_meta.metadata.name
     );
     // The stored blob is named by the server CDN key (the attachment id), NOT by
     // the filename — the filename never touches any storage path.
     let trav_enc = chatter_core::services::attachment::attachment_file_path(&trav_id);
     assert!(
         trav_enc.to_string_lossy().contains("attachments")
-            && trav_enc.file_stem().map(|s| s == trav_id.0.to_string().as_str()).unwrap_or(false),
-        "attachment blob path is not id-named under attachments dir: {}", trav_enc.display()
+            && trav_enc
+                .file_stem()
+                .map(|s| s == trav_id.0.to_string().as_str())
+                .unwrap_or(false),
+        "attachment blob path is not id-named under attachments dir: {}",
+        trav_enc.display()
     );
-    println!("  edge tricky filename (dot-dot + unicode + emoji): opaque, unicode-preserved, \
-              blob id-named under attachments dir, payload byte-exact OK");
+    println!(
+        "  edge tricky filename (dot-dot + unicode + emoji): opaque, unicode-preserved, \
+              blob id-named under attachments dir, payload byte-exact OK"
+    );
 
     // ---- PART 3: EICAR / virus-scan probe -----------------------------------
     // The EICAR test string SHOULD be flagged/rejected if ClamAV/YARA scanning
@@ -6274,23 +6764,39 @@ async fn v22_attachment_binary_fidelity() {
     // observe whether it round-trips.
     let eicar = br"X5O!P%@AP[4\PZX54(P^)7CC)7}$EICAR-STANDARD-ANTIVIRUS-TEST-FILE!$H+H*".to_vec();
     match ab_send_attachment(
-        &client_a, &client_b, uid_a, uid_b, dir_a.path(),
-        "eicar.com", "application/octet-stream", &eicar,
-    ).await {
+        &client_a,
+        &client_b,
+        uid_a,
+        uid_b,
+        dir_a.path(),
+        "eicar.com",
+        "application/octet-stream",
+        &eicar,
+    )
+    .await
+    {
         Ok(eid) => {
             let dl = client_b.download_attachment_to_filesystem(&eid).await;
-            let dec = if dl.is_ok() { client_b.decrypt_attachment_auto(&eid).ok() } else { None };
+            let dec = if dl.is_ok() {
+                client_b.decrypt_attachment_auto(&eid).ok()
+            } else {
+                None
+            };
             match dec {
                 Some(p) if p.as_slice() == eicar.as_slice() => {
-                    println!("  EICAR PROBE: the EICAR test file was accepted, delivered, and \
+                    println!(
+                        "  EICAR PROBE: the EICAR test file was accepted, delivered, and \
                               round-tripped byte-exact — virus scanning is NOT effective on the \
-                              attachment path (F2-class; see report/VALIDATED).");
+                              attachment path (F2-class; see report/VALIDATED)."
+                    );
                 }
                 _ => println!("  EICAR PROBE: EICAR delivered but did not round-trip cleanly"),
             }
         }
-        Err(e) => println!("  EICAR PROBE: EICAR attachment was REJECTED at send/delivery ({e}) — \
-                            scanning appears active."),
+        Err(e) => println!(
+            "  EICAR PROBE: EICAR attachment was REJECTED at send/delivery ({e}) — \
+                            scanning appears active."
+        ),
     }
 
     // ---- PART 4: ONE large case — exercises the streaming decrypt path (>1MB) ­
@@ -6303,19 +6809,38 @@ async fn v22_attachment_binary_fidelity() {
     let off = big_len / 2;
     big[off..off + big_marker.len()].copy_from_slice(big_marker.as_bytes());
     let big_id = ab_send_attachment(
-        &client_a, &client_b, uid_a, uid_b, dir_a.path(),
-        "big.bin", "application/octet-stream", &big,
-    ).await.expect("3MB attachment never reached B");
-    client_b.download_attachment_to_filesystem(&big_id).await.expect("download 3MB");
-    let big_plain = client_b.decrypt_attachment_auto(&big_id).expect("decrypt 3MB (streaming path)");
+        &client_a,
+        &client_b,
+        uid_a,
+        uid_b,
+        dir_a.path(),
+        "big.bin",
+        "application/octet-stream",
+        &big,
+    )
+    .await
+    .expect("3MB attachment never reached B");
+    client_b
+        .download_attachment_to_filesystem(&big_id)
+        .await
+        .expect("download 3MB");
+    let big_plain = client_b
+        .decrypt_attachment_auto(&big_id)
+        .expect("decrypt 3MB (streaming path)");
     assert_eq!(big_plain.len(), big_len, "3MB attachment length mismatch");
-    assert_eq!(big_plain.as_slice(), big.as_slice(), "3MB attachment not byte-exact (streaming path)");
+    assert_eq!(
+        big_plain.as_slice(),
+        big.as_slice(),
+        "3MB attachment not byte-exact (streaming path)"
+    );
     println!("  large 3MB (streaming decrypt): byte-exact OK");
 
-    println!("V22 PASS — attachment path carries TRUE arbitrary binary byte-exact (all 256 \
+    println!(
+        "V22 PASS — attachment path carries TRUE arbitrary binary byte-exact (all 256 \
               values, NUL, 0xFF, 1-byte, 3MB), encrypted at rest (marker absent from ciphertext \
               blob, Postgres, Redis), path-traversal filename is opaque. EICAR probe result \
-              printed above.\n");
+              printed above.\n"
+    );
 
     client_a.shutdown().await;
     client_b.shutdown().await;
@@ -6378,7 +6903,10 @@ async fn v23_message_ordering_reorder_and_gap() {
         matches!(e, DomainEvent::MessageReceived { message }
                  if message.conversation_id == expected_conv && message.as_text() == Some(m0.as_str()))
     }).await;
-    assert!(got0.is_some(), "POSITIVE CONTROL FAILED: in-order warm-up never decrypted on B");
+    assert!(
+        got0.is_some(),
+        "POSITIVE CONTROL FAILED: in-order warm-up never decrypted on B"
+    );
     println!("\n  POSITIVE CONTROL: in-order warm-up decrypted on B (session established)");
 
     // ---- take B offline so msg1..3 SIT in the queue ------------------------
@@ -6398,7 +6926,8 @@ async fn v23_message_ordering_reorder_and_gap() {
             let after = hkeys(&key);
             let new_fields: Vec<String> = after.difference(&before).cloned().collect();
             assert_eq!(
-                new_fields.len(), 1,
+                new_fields.len(),
+                1,
                 "POSITIVE CONTROL FAILED: expected exactly 1 new envelope in {key} after \
                  sending {marker}, found {}. Zero means it never queued; >1 means we cannot \
                  tell which envelope is which.",
@@ -6422,28 +6951,46 @@ async fn v23_message_ordering_reorder_and_gap() {
     println!("  msg3 marker: {m3}");
 
     let before1 = hkeys(&key);
-    client_a.send_text(ActiveConversation::ServerDm { peer_id: uid_b }, &m1).await.expect("send msg1");
+    client_a
+        .send_text(ActiveConversation::ServerDm { peer_id: uid_b }, &m1)
+        .await
+        .expect("send msg1");
     wait_for_new_hash_field(&key, &before1).await;
     let (f1, b64_1) = send_and_capture(&m1, before1).await;
 
     let before2 = hkeys(&key);
-    client_a.send_text(ActiveConversation::ServerDm { peer_id: uid_b }, &m2).await.expect("send msg2");
+    client_a
+        .send_text(ActiveConversation::ServerDm { peer_id: uid_b }, &m2)
+        .await
+        .expect("send msg2");
     wait_for_new_hash_field(&key, &before2).await;
     let (f2, b64_2) = send_and_capture(&m2, before2).await;
 
     let before3 = hkeys(&key);
-    client_a.send_text(ActiveConversation::ServerDm { peer_id: uid_b }, &m3).await.expect("send msg3");
+    client_a
+        .send_text(ActiveConversation::ServerDm { peer_id: uid_b }, &m3)
+        .await
+        .expect("send msg3");
     wait_for_new_hash_field(&key, &before3).await;
     let (f3, b64_3) = send_and_capture(&m3, before3).await;
 
-    assert!(b64_1 != b64_2 && b64_2 != b64_3 && b64_1 != b64_3,
-        "captured duplicate envelopes — the three markers are not distinguishable");
-    println!("  captured 3 distinct envelopes ({}, {}, {} b64 chars)", b64_1.len(), b64_2.len(), b64_3.len());
+    assert!(
+        b64_1 != b64_2 && b64_2 != b64_3 && b64_1 != b64_3,
+        "captured duplicate envelopes — the three markers are not distinguishable"
+    );
+    println!(
+        "  captured 3 distinct envelopes ({}, {}, {} b64 chars)",
+        b64_1.len(),
+        b64_2.len(),
+        b64_3.len()
+    );
 
     // Withhold ALL THREE from B's queue: B's poller must never touch them, so
     // this test alone controls the order in which B's session processes them.
     for f in [&f1, &f2, &f3] {
-        sh(&format!("docker compose exec -T -e REDISCLI_AUTH=\"$(grep -m1 '^REDIS_PASSWORD=' .env | cut -d= -f2-)\" redis redis-cli HDEL '{key}' '{f}' >/dev/null 2>&1"));
+        sh(&format!(
+            "docker compose exec -T -e REDISCLI_AUTH=\"$(grep -m1 '^REDIS_PASSWORD=' .env | cut -d= -f2-)\" redis redis-cli HDEL '{key}' '{f}' >/dev/null 2>&1"
+        ));
     }
     let remaining = hkeys(&key);
     assert!(
@@ -6454,7 +7001,9 @@ async fn v23_message_ordering_reorder_and_gap() {
 
     let b64_to_bytes = |b64: &str| -> Vec<u8> {
         use base64::Engine;
-        base64::engine::general_purpose::STANDARD.decode(b64.trim()).expect("invalid base64")
+        base64::engine::general_purpose::STANDARD
+            .decode(b64.trim())
+            .expect("invalid base64")
     };
     let bytes1 = b64_to_bytes(&b64_1);
     let bytes2 = b64_to_bytes(&b64_2);
@@ -6464,7 +7013,10 @@ async fn v23_message_ordering_reorder_and_gap() {
     let client_b2 = build_client(&path_b);
     client_b2.connect().await.expect("B reconnect failed");
     let _rx = client_b2.subscribe_events();
-    assert!(client_b2.restore_session(), "B failed to restore persisted session");
+    assert!(
+        client_b2.restore_session(),
+        "B failed to restore persisted session"
+    );
     if let Err(e) = client_b2.start().await {
         if !matches!(e, chatter_core::client::ClientError::AlreadyStarted) {
             panic!("B start failed: {e:?}");
@@ -6479,7 +7031,14 @@ async fn v23_message_ordering_reorder_and_gap() {
     let decrypt_expect = |bytes: Vec<u8>, want: String, others: [String; 2]| {
         let c = client_b2.clone();
         async move {
-            match c.signal().decrypt_message(&bytes, chatter_core::util::time::TimestampNanos::now().as_u64()).await {
+            match c
+                .signal()
+                .decrypt_message(
+                    &bytes,
+                    chatter_core::util::time::TimestampNanos::now().as_u64(),
+                )
+                .await
+            {
                 Ok((_addr, plaintext, _)) => {
                     let hay = String::from_utf8_lossy(&plaintext);
                     assert!(
@@ -6507,12 +7066,16 @@ async fn v23_message_ordering_reorder_and_gap() {
     decrypt_expect(bytes1, m1.clone(), [m2.clone(), m3.clone()]).await;
     println!("    msg1 -> decrypted to its own marker");
     decrypt_expect(bytes3, m3.clone(), [m1.clone(), m2.clone()]).await;
-    println!("    msg3 -> decrypted to its own marker (msg2 still missing = gap tolerated, out-of-order OK)");
+    println!(
+        "    msg3 -> decrypted to its own marker (msg2 still missing = gap tolerated, out-of-order OK)"
+    );
     decrypt_expect(bytes2, m2.clone(), [m1.clone(), m3.clone()]).await;
     println!("    msg2 -> decrypted to its own marker AFTER msg3 (skipped message key retained)");
 
-    println!("V23 PASS — out-of-order + gapped delivery (1,3,2) all decrypt to the correct \
-              plaintext: the Double Ratchet retains skipped message keys and tolerates reordering.\n");
+    println!(
+        "V23 PASS — out-of-order + gapped delivery (1,3,2) all decrypt to the correct \
+              plaintext: the Double Ratchet retains skipped message keys and tolerates reordering.\n"
+    );
 
     client_a.shutdown().await;
     client_b2.shutdown().await;
@@ -6572,9 +7135,9 @@ async fn v23_message_ordering_reorder_and_gap() {
 #[tokio::test]
 async fn v24_anon_dm_forged_identity_key_is_rejected_via_key_transparency() {
     use chatter_core::services::SignalService;
-    use chatter_core::storage::{settings_keys, Database, KeyStore, SettingsRepository};
+    use chatter_core::storage::{Database, KeyStore, SettingsRepository, settings_keys};
     use libsignal_protocol::{
-        kem, DeviceId, IdentityKey, IdentityKeyPair, KeyPair, ProtocolAddress,
+        DeviceId, IdentityKey, IdentityKeyPair, KeyPair, ProtocolAddress, kem,
     };
     use rand::rngs::StdRng;
     use rand::{Rng, SeedableRng};
@@ -6601,10 +7164,18 @@ async fn v24_anon_dm_forged_identity_key_is_rejected_via_key_transparency() {
             .set_local_identity(local_reg_id, &local_id.serialize())
             .unwrap();
         settings_repo
-            .set(settings_keys::CURRENT_USER_ID, &"v24-local-uuid".to_string())
+            .set(
+                settings_keys::CURRENT_USER_ID,
+                &"v24-local-uuid".to_string(),
+            )
             .unwrap();
-        settings_repo.set(settings_keys::CURRENT_DEVICE_ID, &1u32).unwrap();
-        (SignalService::new(key_store.clone(), settings_repo.clone()), db_file)
+        settings_repo
+            .set(settings_keys::CURRENT_DEVICE_ID, &1u32)
+            .unwrap();
+        (
+            SignalService::new(key_store.clone(), settings_repo.clone()),
+            db_file,
+        )
     }
 
     // A fully self-consistent PQXDH proto bundle whose identity key is `signer`'s
@@ -6620,16 +7191,22 @@ async fn v24_anon_dm_forged_identity_key_is_rejected_via_key_transparency() {
             KyberPreKeyRecord, SignedPreKeyRecord,
         };
         use chatter_core::proto::chat_v1::{
-            get_pre_key_bundle_response, GetPreKeyBundleResponse, SignalPreKeyBundle,
+            GetPreKeyBundleResponse, SignalPreKeyBundle, get_pre_key_bundle_response,
         };
 
         let signed_pre_key_pair = KeyPair::generate(rng);
         let kyber_pre_key_pair = kem::KeyPair::generate(kem::KeyType::Kyber1024, rng);
 
         let spk_pub = signed_pre_key_pair.public_key.serialize();
-        let spk_sig = signer.private_key().calculate_signature(&spk_pub, rng).unwrap();
+        let spk_sig = signer
+            .private_key()
+            .calculate_signature(&spk_pub, rng)
+            .unwrap();
         let kyber_pub = kyber_pre_key_pair.public_key.serialize();
-        let kyber_sig = signer.private_key().calculate_signature(&kyber_pub, rng).unwrap();
+        let kyber_sig = signer
+            .private_key()
+            .calculate_signature(&kyber_pub, rng)
+            .unwrap();
 
         let bundle = SignalPreKeyBundle {
             identity_key: signer.identity_key().serialize().to_vec(),
@@ -6662,7 +7239,9 @@ async fn v24_anon_dm_forged_identity_key_is_rejected_via_key_transparency() {
     // ---- Register a REAL Bob so the Phase-1 producer appends his identity key
     // to the KT log. The pool is deliberately NOT authenticated: the anon KT
     // fetch below must work WITHOUT any identity. -----------------------------
-    let pool = common::create_test_pool().await.expect("pool connect failed");
+    let pool = common::create_test_pool()
+        .await
+        .expect("pool connect failed");
     let bob = common::register_test_user(&pool)
         .await
         .expect("Bob registration failed — no KT leaf to verify against");
@@ -6670,11 +7249,18 @@ async fn v24_anon_dm_forged_identity_key_is_rejected_via_key_transparency() {
     let ik_bob = IdentityKey::decode(&bob.public_key).expect("Bob identity key decodes");
     let bob_kp = IdentityKeyPair::try_from(bob.identity_key_pair_bytes.as_slice())
         .expect("Bob identity key pair round-trips");
-    assert_eq!(*bob_kp.identity_key(), ik_bob, "sanity: Bob's key pair matches his registered key");
+    assert_eq!(
+        *bob_kp.identity_key(),
+        ik_bob,
+        "sanity: Bob's key pair matches his registered key"
+    );
 
     let mallory_kp = IdentityKeyPair::generate(&mut rng);
     let ik_mallory = *mallory_kp.identity_key();
-    assert_ne!(ik_bob, ik_mallory, "sanity: Bob and Mallory are distinct identities");
+    assert_ne!(
+        ik_bob, ik_mallory,
+        "sanity: Bob and Mallory are distinct identities"
+    );
 
     let bob_addr = ProtocolAddress::new(bob.user_id.clone(), DeviceId::new(1).unwrap());
 
@@ -6693,12 +7279,24 @@ async fn v24_anon_dm_forged_identity_key_is_rejected_via_key_transparency() {
             bob.public_key.as_slice(),
             "anon KT proof commits Bob's real identity key"
         );
-        let epoch = proof.signed_tree_head.as_ref().map(|s| s.epoch).unwrap_or(0);
-        let tree_size = proof.signed_tree_head.as_ref().map(|s| s.tree_size).unwrap_or(0);
+        let epoch = proof
+            .signed_tree_head
+            .as_ref()
+            .map(|s| s.epoch)
+            .unwrap_or(0);
+        let tree_size = proof
+            .signed_tree_head
+            .as_ref()
+            .map(|s| s.tree_size)
+            .unwrap_or(0);
         println!(
             "  anon-fetched Bob's signed KT proof over the anonymous channel (no auth): \
              epoch={epoch} tree_size={tree_size} siblings={}",
-            proof.inclusion_proof.as_ref().map(|p| p.sibling_hashes.len()).unwrap_or(0),
+            proof
+                .inclusion_proof
+                .as_ref()
+                .map(|p| p.sibling_hashes.len())
+                .unwrap_or(0),
         );
     }
 
@@ -6718,7 +7316,9 @@ async fn v24_anon_dm_forged_identity_key_is_rejected_via_key_transparency() {
             svc.has_session(&bob.user_id, device_id).await.unwrap(),
             "positive: anon session with Bob must exist after honest establishment"
         );
-        println!("  positive control: honest anon bundle KT-verified and established an anon session");
+        println!(
+            "  positive control: honest anon bundle KT-verified and established an anon session"
+        );
     }
 
     // ---- THE ATTACK: a malicious server serves an internally-valid anon bundle
@@ -6743,7 +7343,10 @@ async fn v24_anon_dm_forged_identity_key_is_rejected_via_key_transparency() {
              anonymous conversation.",
             bob.user_id,
         );
-        println!("  attack: forged (Mallory) anon bundle REJECTED by anon KT gate: {}", verdict.unwrap_err());
+        println!(
+            "  attack: forged (Mallory) anon bundle REJECTED by anon KT gate: {}",
+            verdict.unwrap_err()
+        );
 
         // The forged key is never trusted: no session exists for Bob's address.
         assert!(
@@ -6826,7 +7429,11 @@ async fn v26_first_group_message_self_heals_across_skdm_race() {
     // Default private group (config=None) — encrypted (F14a fix), Sender-Key path.
     let name_e = format!(
         "v26-group-{}",
-        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis() % 1_000_000
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis()
+            % 1_000_000
     );
     let group = common::create_group_with_members(
         &client_a,
@@ -6837,7 +7444,10 @@ async fn v26_first_group_message_self_heals_across_skdm_race() {
         &[(&client_b, &uid_b), (&client_c, &uid_c)],
     )
     .await;
-    println!("\n  [V26] A created a DEFAULT Private (encrypted) group: {} ({})", group.name, group.id);
+    println!(
+        "\n  [V26] A created a DEFAULT Private (encrypted) group: {} ({})",
+        group.name, group.id
+    );
 
     // POSITIVE CONTROL (membership): the server records A, B, C as members —
     // otherwise a "B/C got nothing" is vacuous.
@@ -6924,16 +7534,28 @@ async fn v26_first_group_message_self_heals_across_skdm_race() {
     };
     // Byte-exact — the healed first message is the SAME plaintext A sent.
     assert_eq!(
-        msg_b.as_text(), Some(marker_first.as_str()),
+        msg_b.as_text(),
+        Some(marker_first.as_str()),
         "B surfaced A's first message but the bytes differ from what A sent"
     );
     assert_eq!(
-        msg_c.as_text(), Some(marker_first.as_str()),
+        msg_c.as_text(),
+        Some(marker_first.as_str()),
         "C surfaced A's first message but the bytes differ from what A sent"
     );
-    assert_eq!(msg_b.sender_id.as_ref(), Some(&uid_a), "B: first message attributed to the wrong sender");
-    assert_eq!(msg_c.sender_id.as_ref(), Some(&uid_a), "C: first message attributed to the wrong sender");
-    println!("  FIX: A's FIRST message self-healed — B and C both surfaced it byte-exact, attributed to A");
+    assert_eq!(
+        msg_b.sender_id.as_ref(),
+        Some(&uid_a),
+        "B: first message attributed to the wrong sender"
+    );
+    assert_eq!(
+        msg_c.sender_id.as_ref(),
+        Some(&uid_a),
+        "C: first message attributed to the wrong sender"
+    );
+    println!(
+        "  FIX: A's FIRST message self-healed — B and C both surfaced it byte-exact, attributed to A"
+    );
 
     // NEGATIVE HALF: the server holds only ciphertext for the first message.
     let sealed_first: i64 = psql(&format!(
@@ -6951,12 +7573,17 @@ async fn v26_first_group_message_self_heals_across_skdm_race() {
     .trim()
     .parse()
     .unwrap_or(0);
-    assert!(rows_here > 0, "POSITIVE CONTROL FAILED: 0 rows for this channel — 'sealed' check vacuous");
+    assert!(
+        rows_here > 0,
+        "POSITIVE CONTROL FAILED: 0 rows for this channel — 'sealed' check vacuous"
+    );
     assert_eq!(
         sealed_first, 0,
         "PLAINTEXT LEAK: A's first group message is readable in messages.content ({sealed_first} rows)"
     );
-    println!("  negative half: first message sealed in messages.content (0 of {rows_here} rows readable)");
+    println!(
+        "  negative half: first message sealed in messages.content (0 of {rows_here} rows readable)"
+    );
 
     // ---- POSITIVE CONTROL: a SECOND message on the ESTABLISHED key --------
     // The sender key is now installed on B and C, so this decrypts immediately —
@@ -6964,7 +7591,10 @@ async fn v26_first_group_message_self_heals_across_skdm_race() {
     let marker_second = unique_marker();
     println!("\n  marker_second (established-key message): {marker_second}");
     client_a
-        .send_text(ActiveConversation::Channel(group.id.clone()), &marker_second)
+        .send_text(
+            ActiveConversation::Channel(group.id.clone()),
+            &marker_second,
+        )
         .await
         .expect("A second send failed");
 
@@ -7048,7 +7678,9 @@ async fn v25_consistency_proof_rejects_a_forked_log() {
         return;
     }
 
-    let pool = common::create_test_pool().await.expect("pool connect failed");
+    let pool = common::create_test_pool()
+        .await
+        .expect("pool connect failed");
 
     // Two sequential registrations => two strictly increasing epochs (epoch =
     // total appends; count(*) only grows). old_epoch < new_epoch <= current.
@@ -7090,12 +7722,18 @@ async fn v25_consistency_proof_rejects_a_forked_log() {
         "  fetched consistency proof over the anonymous channel: old_epoch={old_epoch} \
          new_epoch={new_epoch} path_nodes={path_len}"
     );
-    assert!(path_len >= 1, "a consistency proof between two distinct epochs needs a path");
+    assert!(
+        path_len >= 1,
+        "a consistency proof between two distinct epochs needs a path"
+    );
 
     // ---- POSITIVE CONTROL: the honest proof verifies (log is append-only). ----
-    verify_kt_consistency_proof(&honest)
-        .expect("POSITIVE CONTROL FAILED: honest consistency proof between two real epochs must verify");
-    println!("  positive control: honest consistency proof VERIFIED (log is append-only across epochs)");
+    verify_kt_consistency_proof(&honest).expect(
+        "POSITIVE CONTROL FAILED: honest consistency proof between two real epochs must verify",
+    );
+    println!(
+        "  positive control: honest consistency proof VERIFIED (log is append-only across epochs)"
+    );
 
     // ---- ATTACK (A): tamper a path node. -------------------------------------
     {
@@ -7109,7 +7747,10 @@ async fn v25_consistency_proof_rejects_a_forked_log() {
             "CONSISTENCY MONITORING FAILED (tampered path accepted): the path no longer \
              reconstructs the signed roots and must be rejected."
         );
-        println!("  attack (A) tampered path REJECTED: {}", verdict.unwrap_err());
+        println!(
+            "  attack (A) tampered path REJECTED: {}",
+            verdict.unwrap_err()
+        );
     }
 
     // ---- ATTACK (B): UNDER-REPORT — drop a path node. ------------------------
@@ -7124,7 +7765,10 @@ async fn v25_consistency_proof_rejects_a_forked_log() {
             "CONSISTENCY MONITORING FAILED (under-report accepted): a short path must not \
              reconstruct the signed roots."
         );
-        println!("  attack (B) under-report REJECTED: {}", verdict.unwrap_err());
+        println!(
+            "  attack (B) under-report REJECTED: {}",
+            verdict.unwrap_err()
+        );
     }
 
     // ---- ATTACK (C): REWRITTEN HISTORY — an old root we never signed. --------
@@ -7143,7 +7787,10 @@ async fn v25_consistency_proof_rejects_a_forked_log() {
              signed old head does not carry must be rejected — this is how a rewritten log is \
              caught."
         );
-        println!("  attack (C) rewritten history REJECTED: {}", verdict.unwrap_err());
+        println!(
+            "  attack (C) rewritten history REJECTED: {}",
+            verdict.unwrap_err()
+        );
     }
 
     println!(
@@ -7244,15 +7891,20 @@ async fn v27_blocking_stops_message_delivery() {
     let blocked_marker = format!("V27-BLOCKED-{}", unique_marker());
     println!("  blocked-attempt marker: {blocked_marker}");
     let send_res = client_a
-        .send_text(ActiveConversation::ServerDm { peer_id: uid_b }, &blocked_marker)
+        .send_text(
+            ActiveConversation::ServerDm { peer_id: uid_b },
+            &blocked_marker,
+        )
         .await;
     // INFORMATIONAL ONLY (NOT load-bearing — the task requires the proof to rest
     // on B's store, not on A's send return): a blocked send fails because the
     // prekey/UAK fetch is denied, so zero devices are reached. (SendResult has no
     // Debug; format the error via Display, matching V16.)
     match &send_res {
-        Ok(_) => println!("  (info) A's blocked send returned: Ok — server accepted it; the \
-                           B-store assertion below is what decides pass/fail"),
+        Ok(_) => println!(
+            "  (info) A's blocked send returned: Ok — server accepted it; the \
+                           B-store assertion below is what decides pass/fail"
+        ),
         Err(e) => println!("  (info) A's blocked send returned: Err({e})"),
     }
 
@@ -7265,7 +7917,9 @@ async fn v27_blocking_stops_message_delivery() {
             .get_messages_local(&conv_on_b, &ConversationType::ServerDm, None, 100)
             .unwrap_or_default();
         assert!(
-            !msgs.iter().any(|m| m.as_text() == Some(blocked_marker.as_str())),
+            !msgs
+                .iter()
+                .any(|m| m.as_text() == Some(blocked_marker.as_str())),
             "BLOCK NOT ENFORCED: B stored a DM ({blocked_marker}) from a user it BLOCKED \
              (observed at poll {i}). The block gate on the sealed-DM path is dead."
         );
@@ -7392,13 +8046,20 @@ async fn v29_disappearing_messages_arm_the_ttl() {
     let dir_b = tempfile::tempdir().unwrap();
     let client_b = build_client(dir_b.path());
     let uid_b = register_and_start(&client_b, &unique_user("v29b"), "V29 Bob").await;
-    assert_ne!(uid_a, uid_b, "two registrations must yield two distinct users");
+    assert_ne!(
+        uid_a, uid_b,
+        "two registrations must yield two distinct users"
+    );
 
     // A private (encrypted) group — the exact surface the UI advertises the
     // disappearing timer for ("Auto-delete messages" in create-channel).
     let name = format!(
         "v29-disappearing-{}",
-        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis() % 1_000_000
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis()
+            % 1_000_000
     );
     let group = common::create_group_with_members(
         &client_a,
@@ -7409,7 +8070,10 @@ async fn v29_disappearing_messages_arm_the_ttl() {
         &[(&client_b, &uid_b)],
     )
     .await;
-    println!("\n  A created a Private channel: {} ({})", group.name, group.id);
+    println!(
+        "\n  A created a Private channel: {} ({})",
+        group.name, group.id
+    );
 
     // Poll the server `messages` row for `id` until it appears; return
     // "ephemeral|ttl" (e.g. "false|" or "true|00:00:03"), or "" if absent.
@@ -7435,13 +8099,21 @@ async fn v29_disappearing_messages_arm_the_ttl() {
     // POSITIVE CONTROL — NO timer set. The message must land UN-armed.
     // ========================================================================
     let ctrl = client_a
-        .send_text(ActiveConversation::Channel(group.id.clone()), "v29 control (no timer)")
+        .send_text(
+            ActiveConversation::Channel(group.id.clone()),
+            "v29 control (no timer)",
+        )
         .await
         .expect("control send failed");
     let ctrl_id = ctrl.message_id_string();
-    assert!(!ctrl_id.is_empty(), "control send returned no server message id");
+    assert!(
+        !ctrl_id.is_empty(),
+        "control send returned no server message id"
+    );
     let ctrl_state = poll_arm_state(&arm_state, &ctrl_id).await;
-    println!("  [CONTROL] message {ctrl_id} server arm-state = {ctrl_state:?}  (expect \"false|\")");
+    println!(
+        "  [CONTROL] message {ctrl_id} server arm-state = {ctrl_state:?}  (expect \"false|\")"
+    );
     assert_eq!(
         ctrl_state, "false|",
         "POSITIVE CONTROL FAILED: a message sent with NO disappearing timer should land \
@@ -7461,13 +8133,21 @@ async fn v29_disappearing_messages_arm_the_ttl() {
     println!("  set disappearing timer = 3s on the channel");
 
     let armed = client_a
-        .send_text(ActiveConversation::Channel(group.id.clone()), "v29 armed (3s timer)")
+        .send_text(
+            ActiveConversation::Channel(group.id.clone()),
+            "v29 armed (3s timer)",
+        )
         .await
         .expect("armed send failed");
     let armed_id = armed.message_id_string();
-    assert!(!armed_id.is_empty(), "armed send returned no server message id");
+    assert!(
+        !armed_id.is_empty(),
+        "armed send returned no server message id"
+    );
     let armed_state = poll_arm_state(&arm_state, &armed_id).await;
-    println!("  [ARMED]   message {armed_id} server arm-state = {armed_state:?}  (expect \"true|00:00:03\")");
+    println!(
+        "  [ARMED]   message {armed_id} server arm-state = {armed_state:?}  (expect \"true|00:00:03\")"
+    );
     assert_eq!(
         armed_state, "true|00:00:03",
         "ARMING FAILED (the load-bearing fix): a message sent WITH a 3s disappearing timer \
@@ -7485,9 +8165,11 @@ async fn v29_disappearing_messages_arm_the_ttl() {
     // window (Temporal cleanup keeps a scrubbed tombstone for resync), while the
     // un-armed control row must PERSIST. Real, and selective.
     // ========================================================================
-    let count_sql = format!("select count(*) from messages where id = '{armed_id}' \
+    let count_sql = format!(
+        "select count(*) from messages where id = '{armed_id}' \
         and deleted_at is not null and octet_length(content) = 0 \
-        and encrypted_data is null and mixed_content is null");
+        and encrypted_data is null and mixed_content is null"
+    );
     let mut gone = false;
     let mut last = String::new();
     for _ in 0..45 {
@@ -7506,9 +8188,12 @@ async fn v29_disappearing_messages_arm_the_ttl() {
     println!("  EXPIRY PROVEN — the armed message is tombstoned with all content scrubbed.");
 
     // The control (un-armed) message must NOT have vanished.
-    let ctrl_count = psql(&format!("select count(*) from messages where id = '{ctrl_id}' and deleted_at is null"));
+    let ctrl_count = psql(&format!(
+        "select count(*) from messages where id = '{ctrl_id}' and deleted_at is null"
+    ));
     assert_eq!(
-        ctrl_count.trim(), "1",
+        ctrl_count.trim(),
+        "1",
         "SELECTIVITY FAILED: the un-armed control message {ctrl_id} also vanished (count={ctrl_count:?}). \
          Expiry must fire ONLY for armed messages."
     );
@@ -7575,7 +8260,11 @@ async fn v30_group_management_changes_propagate() {
     // ---- A creates a private group with B and C -----------------------------
     let name0 = format!(
         "v30-orig-{}",
-        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis() % 1_000_000
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis()
+            % 1_000_000
     );
     let group = common::create_group_with_members(
         &client_a,
@@ -7745,7 +8434,9 @@ async fn v31_friends_user_search_resolves_exact_username() {
     let dir_a = tempfile::tempdir().unwrap();
     let client_a = build_client(dir_a.path());
     let uid_a = register_and_start(&client_a, &unique_user("v31a"), "V31 Alice").await;
-    let a_full = client_a.full_username().expect("A full_username after registration");
+    let a_full = client_a
+        .full_username()
+        .expect("A full_username after registration");
     println!("\n  A registered handle = {a_full}  (user {uid_a})");
 
     let dir_b = tempfile::tempdir().unwrap();
@@ -7754,19 +8445,35 @@ async fn v31_friends_user_search_resolves_exact_username() {
     assert_ne!(uid_a, uid_b);
 
     // POSITIVE CONTROL / THE FIX — B searches A's EXACT handle → exactly one hit = A.
-    let hits = client_b.search_users(&a_full).await.expect("search_users failed");
+    let hits = client_b
+        .search_users(&a_full)
+        .await
+        .expect("search_users failed");
     assert_eq!(
-        hits.len(), 1,
+        hits.len(),
+        1,
         "SEARCH DEAD/BROKEN: expected exactly one hit for exact username {a_full}, got {}",
         hits.len()
     );
-    assert_eq!(hits[0].user_id, uid_a, "search hit resolved to the wrong user id");
-    assert!(!hits[0].is_friend, "A and B are not friends yet; is_friend must be false");
-    println!("  search({a_full}) → user {} (is_friend={})", hits[0].user_id, hits[0].is_friend);
+    assert_eq!(
+        hits[0].user_id, uid_a,
+        "search hit resolved to the wrong user id"
+    );
+    assert!(
+        !hits[0].is_friend,
+        "A and B are not friends yet; is_friend must be false"
+    );
+    println!(
+        "  search({a_full}) → user {} (is_friend={})",
+        hits[0].user_id, hits[0].is_friend
+    );
 
     // NEGATIVE HALF — a syntactically valid but unregistered handle → zero hits.
     let missing = format!("{}.9137", unique_user("v31none"));
-    let none = client_b.search_users(&missing).await.expect("search_users(missing) failed");
+    let none = client_b
+        .search_users(&missing)
+        .await
+        .expect("search_users(missing) failed");
     assert!(
         none.is_empty(),
         "unregistered handle {missing} unexpectedly returned {} hits",
@@ -7774,7 +8481,10 @@ async fn v31_friends_user_search_resolves_exact_username() {
     );
 
     // A blank query resolves to empty (never an error the UI must render).
-    assert!(client_b.search_users("   ").await.unwrap().is_empty(), "blank query should be empty");
+    assert!(
+        client_b.search_users("   ").await.unwrap().is_empty(),
+        "blank query should be empty"
+    );
 
     // Self must never appear in one's own search results.
     assert!(
@@ -7782,7 +8492,9 @@ async fn v31_friends_user_search_resolves_exact_username() {
         "A's search for its OWN handle should be empty (never surface self)"
     );
 
-    println!("  V31 PASS — friends user-search resolves exact usernames, rejects unknowns, hides self.");
+    println!(
+        "  V31 PASS — friends user-search resolves exact usernames, rejects unknowns, hides self."
+    );
 }
 
 // ============================================================================
@@ -7834,7 +8546,9 @@ async fn v32_avatar_change_uploads_encrypted_avatar_server_side() {
         v.extend_from_slice(&r);
         v
     };
-    client.set_avatar_bytes(&avatar).expect("set_avatar_bytes failed");
+    client
+        .set_avatar_bytes(&avatar)
+        .expect("set_avatar_bytes failed");
     client
         .update_user_profile(Some("V32 Ava".into()), None)
         .await
@@ -7869,7 +8583,9 @@ async fn v32_avatar_change_uploads_encrypted_avatar_server_side() {
     // by design. The friend-fetch→decrypt→display hop is the separate concern proven
     // at the UI-bind layer in VALIDATED-UI (avatar_bytes → Image); a full
     // A-uploads / B-fetches-and-decrypts round-trip is scoped as follow-on.
-    println!("  V32 PASS — avatar change uploads the encrypted avatar server-side (no-op bug closed).");
+    println!(
+        "  V32 PASS — avatar change uploads the encrypted avatar server-side (no-op bug closed)."
+    );
 }
 
 // ============================================================================
@@ -7899,10 +8615,22 @@ async fn v33_channel_mute_persists_to_membership() {
 
     let name = format!(
         "v33-mute-{}",
-        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis() % 1_000_000
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis()
+            % 1_000_000
     );
     let ch = client
-        .create_channel(&name, ChannelType::Private, None, Some("V33 mute channel"), None, None, vec![])
+        .create_channel(
+            &name,
+            ChannelType::Private,
+            None,
+            Some("V33 mute channel"),
+            None,
+            None,
+            vec![],
+        )
         .await
         .expect("create channel failed");
     let conv = ActiveConversation::Channel(ch.id);
@@ -7916,7 +8644,9 @@ async fn v33_channel_mute_persists_to_membership() {
     );
 
     // THE ACTION (what the toggle now calls) — mute persists on the membership.
-    client.mute_conversation(conv, true).expect("mute_conversation(true) failed");
+    client
+        .mute_conversation(conv, true)
+        .expect("mute_conversation(true) failed");
     assert_eq!(
         client.is_conversation_muted(conv).unwrap(),
         true,
@@ -7926,14 +8656,18 @@ async fn v33_channel_mute_persists_to_membership() {
     println!("  mute persisted: is_conversation_muted = true");
 
     // REVERSIBLE — unmute clears it.
-    client.mute_conversation(conv, false).expect("mute_conversation(false) failed");
+    client
+        .mute_conversation(conv, false)
+        .expect("mute_conversation(false) failed");
     assert_eq!(
         client.is_conversation_muted(conv).unwrap(),
         false,
         "unmute did not clear membership.is_muted"
     );
 
-    println!("  V33 PASS — channel mute toggle persists to (and clears from) the local membership row.");
+    println!(
+        "  V33 PASS — channel mute toggle persists to (and clears from) the local membership row."
+    );
 }
 
 // ============================================================================
@@ -8012,7 +8746,8 @@ async fn v34_presence_reaches_friends_not_strangers() {
         matches!(e,
             DomainEvent::UserPresenceChanged { user_id, presence, .. }
                 if *user_id == uid_a && *presence == PresenceStatus::Online)
-    }).await;
+    })
+    .await;
     assert!(
         seen_by_b.is_some(),
         "PRESENCE NOT DELIVERED TO FRIEND: A came online but B (A's friend) never received a \
@@ -8029,7 +8764,8 @@ async fn v34_presence_reaches_friends_not_strangers() {
     let seen_by_c_for_b = wait_for_event(&mut events_c, EVENT_TIMEOUT, |e| {
         matches!(e,
             DomainEvent::UserPresenceChanged { user_id, .. } if *user_id == uid_b)
-    }).await;
+    })
+    .await;
     assert!(
         seen_by_c_for_b.is_some(),
         "POSITIVE CONTROL FAILED: C never received its friend B's presence, so C's stream is not \
@@ -8045,7 +8781,8 @@ async fn v34_presence_reaches_friends_not_strangers() {
     let leaked_to_c = wait_for_event(&mut events_c, Duration::from_secs(8), |e| {
         matches!(e,
             DomainEvent::UserPresenceChanged { user_id, .. } if *user_id == uid_a)
-    }).await;
+    })
+    .await;
     assert!(
         leaked_to_c.is_none(),
         "PRIVACY LEAK: the stranger C received A's presence ({:?}). Presence fan-out is not \
@@ -8064,7 +8801,8 @@ async fn v34_presence_reaches_friends_not_strangers() {
         matches!(e,
             DomainEvent::UserPresenceChanged { user_id, presence, .. }
                 if *user_id == uid_a && *presence == PresenceStatus::Offline)
-    }).await;
+    })
+    .await;
     assert!(
         offline_seen_by_b.is_some(),
         "OFFLINE NOT DELIVERED TO FRIEND: A went offline but B (A's friend) never received a \
@@ -8159,7 +8897,11 @@ async fn v35_blocking_stops_group_message_delivery() {
     // ---- A creates a DEFAULT Private (encrypted, Sender-Key) group ----------
     let name_e = format!(
         "v35-group-{}",
-        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis() % 1_000_000
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis()
+            % 1_000_000
     );
     let group_e = common::create_group_with_members(
         &client_a,
@@ -8167,10 +8909,17 @@ async fn v35_blocking_stops_group_message_delivery() {
         ChannelType::Private,
         None, // default -> encrypted (F14a), exactly what T6 / the codebase do
         Some("V35 blocking-on-group-messages"),
-        &[(&client_b, &uid_b), (&client_c, &uid_c), (&client_d, &uid_d)],
+        &[
+            (&client_b, &uid_b),
+            (&client_c, &uid_c),
+            (&client_d, &uid_d),
+        ],
     )
     .await;
-    println!("\n  A created encrypted group {} ({})", group_e.name, group_e.id);
+    println!(
+        "\n  A created encrypted group {} ({})",
+        group_e.name, group_e.id
+    );
 
     // POSITIVE CONTROL (membership): the server records A, B, C, D as members.
     let mut member_set = std::collections::HashSet::new();
@@ -8215,7 +8964,10 @@ async fn v35_blocking_stops_group_message_delivery() {
     // device inbox. Done BEFORE any block so B, C and D all hold A's key — the
     // block must be what withholds the CONTENT, not a missing key.
     client_a
-        .send_text(ActiveConversation::Channel(group_e.id.clone()), &unique_marker())
+        .send_text(
+            ActiveConversation::Channel(group_e.id.clone()),
+            &unique_marker(),
+        )
         .await
         .expect("A warm-up send failed");
     let skdm_b = wait_for_sender_key(&client_b, &uid_a, &group_e.id).await;
@@ -8232,9 +8984,15 @@ async fn v35_blocking_stops_group_message_delivery() {
 
     // ---- THE ACTIONS UNDER TEST: two block directions -----------------------
     // B blocks A  -> subscriber-blocked-author direction.
-    client_b.block_user(&uid_a).await.expect("B failed to block A");
+    client_b
+        .block_user(&uid_a)
+        .await
+        .expect("B failed to block A");
     // A blocks C  -> author-blocked-subscriber direction (bidirectional proof).
-    client_a.block_user(&uid_c).await.expect("A failed to block C");
+    client_a
+        .block_user(&uid_c)
+        .await
+        .expect("A failed to block C");
     tokio::time::sleep(Duration::from_secs(3)).await; // SpiceDB read-after-write slack
 
     // ---- A posts the PROOF message ------------------------------------------
@@ -8281,7 +9039,11 @@ async fn v35_blocking_stops_group_message_delivery() {
         Some(marker_e.as_str()),
         "D decoded a group message but the bytes differ from what A sent"
     );
-    assert_eq!(msg_d.sender_id.as_ref(), Some(&uid_a), "D attributed the message to the wrong sender");
+    assert_eq!(
+        msg_d.sender_id.as_ref(),
+        Some(&uid_a),
+        "D attributed the message to the wrong sender"
+    );
     println!("  positive control: D received + decrypted A's group message");
 
     // LOAD-BEARING (subscriber-blocked-author): B blocked A -> B got NOTHING.
@@ -8469,10 +9231,16 @@ async fn v36_disappearing_messages_expire_locally() {
     );
     // Incoming disappearing messages start their timer on read, not delivery.
     tokio::time::sleep(Duration::from_secs(u64::from(ttl_secs) + 2)).await;
-    assert!(b_has(&vanish), "unread disappearing message expired before being read");
+    assert!(
+        b_has(&vanish),
+        "unread disappearing message expired before being read"
+    );
     client_b.set_app_visible(true);
-    client_b.conversation(ActiveConversation::ServerDm { peer_id: uid_a })
-        .mark_as_read().await.expect("B mark_as_read failed");
+    client_b
+        .conversation(ActiveConversation::ServerDm { peer_id: uid_a })
+        .mark_as_read()
+        .await
+        .expect("B mark_as_read failed");
     println!("  unread copy survived its TTL; B read it — now waiting for the reaper");
 
     // LOAD-BEARING: the armed copy must vanish from the RECIPIENT's local store
@@ -8587,10 +9355,10 @@ async fn v36_disappearing_messages_expire_locally() {
 async fn v37_kt_query_privacy_vrf_verified_and_forgery_still_rejected() {
     use chatter_core::config::KT_VRF_PUBLIC_KEY_BYTES;
     use chatter_core::crypto::vrf::vrf_verify;
-    use chatter_core::crypto::{verify_kt_proof, KtError};
+    use chatter_core::crypto::{KtError, verify_kt_proof};
     use libsignal_protocol::{IdentityKey, IdentityKeyPair};
-    use rand::rngs::StdRng;
     use rand::SeedableRng;
+    use rand::rngs::StdRng;
     use sha2::{Digest, Sha256};
 
     if std::env::var("INTEGRATION_TESTS").is_err() {
@@ -8603,7 +9371,9 @@ async fn v37_kt_query_privacy_vrf_verified_and_forgery_still_rejected() {
     // ---- Register a REAL Bob (Phase-1 producer appends his identity key under
     // its VRF index). The pool is NOT authenticated: the anon channel must reach
     // the public GetProof, which now carries the VRF proof. --------------------
-    let pool = common::create_test_pool().await.expect("pool connect failed");
+    let pool = common::create_test_pool()
+        .await
+        .expect("pool connect failed");
     let bob = common::register_test_user(&pool)
         .await
         .expect("Bob registration failed — no KT leaf to verify against");
@@ -8612,7 +9382,10 @@ async fn v37_kt_query_privacy_vrf_verified_and_forgery_still_rejected() {
     let mallory_kp = IdentityKeyPair::generate(&mut rng);
     let ik_mallory = *mallory_kp.identity_key();
     let mallory_serialized = ik_mallory.serialize();
-    assert_ne!(ik_bob, ik_mallory, "sanity: Bob and Mallory are distinct identities");
+    assert_ne!(
+        ik_bob, ik_mallory,
+        "sanity: Bob and Mallory are distinct identities"
+    );
 
     // ---- Fetch Bob's proof over the ANONYMOUS channel (public method, no auth).
     let mut anon_kt = pool.anonymous_kt_client();
@@ -8622,12 +9395,25 @@ async fn v37_kt_query_privacy_vrf_verified_and_forgery_still_rejected() {
         .expect("anon GetProof transport ok (public method reachable without auth)")
         .expect("Bob must have a KT leaf (Phase-1 producer runs at registration)");
 
-    let incl = proof.inclusion_proof.as_ref().expect("inclusion proof present");
-    let leaf_key_on_wire: [u8; 32] =
-        incl.key.as_slice().try_into().expect("leaf key is 32 bytes");
+    let incl = proof
+        .inclusion_proof
+        .as_ref()
+        .expect("inclusion proof present");
+    let leaf_key_on_wire: [u8; 32] = incl
+        .key
+        .as_slice()
+        .try_into()
+        .expect("leaf key is 32 bytes");
 
-    assert!(!proof.vrf_proof.is_empty(), "server must serve a VRF proof (Phase 3b)");
-    assert_eq!(proof.vrf_proof.len(), 80, "ECVRF proof is 80 bytes (gamma||c||s)");
+    assert!(
+        !proof.vrf_proof.is_empty(),
+        "server must serve a VRF proof (Phase 3b)"
+    );
+    assert_eq!(
+        proof.vrf_proof.len(),
+        80,
+        "ECVRF proof is 80 bytes (gamma||c||s)"
+    );
     assert_eq!(
         proof.vrf_public_key.as_slice(),
         KT_VRF_PUBLIC_KEY_BYTES.as_slice(),
@@ -8636,8 +9422,12 @@ async fn v37_kt_query_privacy_vrf_verified_and_forgery_still_rejected() {
 
     // (1) INTEROP: the LIVE server VRF proof verifies byte-exact in the Rust
     // ECVRF verifier, and the recovered index IS the committed leaf key.
-    let index = vrf_verify(&KT_VRF_PUBLIC_KEY_BYTES, bob.user_id.as_bytes(), &proof.vrf_proof)
-        .expect("LIVE server VRF proof must verify in the byte-exact Rust ECVRF verifier");
+    let index = vrf_verify(
+        &KT_VRF_PUBLIC_KEY_BYTES,
+        bob.user_id.as_bytes(),
+        &proof.vrf_proof,
+    )
+    .expect("LIVE server VRF proof must verify in the byte-exact Rust ECVRF verifier");
     assert_eq!(
         index, leaf_key_on_wire,
         "VRF index recovered from the proof must EQUAL inclusion_proof.key (the tree is VRF-keyed)"
@@ -8678,7 +9468,10 @@ async fn v37_kt_query_privacy_vrf_verified_and_forgery_still_rejected() {
         "F9 REGRESSION under VRF: a forged identity key ({ik_mallory:?}) must be REJECTED with \
          IdentityKeyMismatch, got {forged_verdict:?}"
     );
-    println!("  (3) forgery still rejected under VRF: {}", forged_verdict.unwrap_err());
+    println!(
+        "  (3) forgery still rejected under VRF: {}",
+        forged_verdict.unwrap_err()
+    );
 
     // (4) TAMPER -> REJECT (verifier is not decorative): flip one byte of the VRF
     // proof; verify_kt_proof must reject with VrfInvalid.
@@ -8691,7 +9484,10 @@ async fn v37_kt_query_privacy_vrf_verified_and_forgery_still_rejected() {
             "DECORATIVE-VERIFIER TRAP: a tampered VRF proof must be REJECTED with VrfInvalid, \
              got {verdict:?}. A verifier that accepts a broken proof is worse than none."
         );
-        println!("  (4) tampered VRF proof REJECTED: {}", verdict.unwrap_err());
+        println!(
+            "  (4) tampered VRF proof REJECTED: {}",
+            verdict.unwrap_err()
+        );
     }
 
     // Bonus: the VRF proof does not verify under a DIFFERENT user_id (wrong alpha)
@@ -8702,7 +9498,10 @@ async fn v37_kt_query_privacy_vrf_verified_and_forgery_still_rejected() {
             b"00000000-0000-0000-0000-000000000000",
             &proof.vrf_proof,
         );
-        assert!(wrong.is_none(), "VRF proof must not verify under a different user_id (alpha)");
+        assert!(
+            wrong.is_none(),
+            "VRF proof must not verify under a different user_id (alpha)"
+        );
     }
 
     println!(
@@ -8774,7 +9573,9 @@ async fn v38_friend_fetches_and_decrypts_your_avatar_byte_exact() {
         v.extend_from_slice(&r);
         v
     };
-    client_a.set_avatar_bytes(&avatar).expect("set_avatar_bytes failed");
+    client_a
+        .set_avatar_bytes(&avatar)
+        .expect("set_avatar_bytes failed");
     client_a
         .update_user_profile(Some("V38 Alice".into()), None)
         .await
@@ -8801,7 +9602,9 @@ async fn v38_friend_fetches_and_decrypts_your_avatar_byte_exact() {
         "POSITIVE CONTROL FAILED: A's encrypted_avatar is still {server_bytes:?} server-side — \
          the upload never landed, so a friend-fetch would prove nothing."
     );
-    println!("\n  positive control: A's encrypted_avatar on server = {server_bytes} bytes (ciphertext present)");
+    println!(
+        "\n  positive control: A's encrypted_avatar on server = {server_bytes} bytes (ciphertext present)"
+    );
 
     // ---- NEGATIVE HALF: the plaintext avatar is NOT in the server blob -----
     // The random tail is unique enough to grep for. E2E means the server holds
@@ -8822,7 +9625,10 @@ async fn v38_friend_fetches_and_decrypts_your_avatar_byte_exact() {
     // ---- A sends B a DM so B definitely holds A's profile key --------------
     // Belt-and-suspenders on top of the friend-request envelope + handshake.
     client_a
-        .send_text(ActiveConversation::ServerDm { peer_id: uid_b }, "v38 profile-key carrier")
+        .send_text(
+            ActiveConversation::ServerDm { peer_id: uid_b },
+            "v38 profile-key carrier",
+        )
         .await
         .expect("send_text failed");
     tokio::time::sleep(Duration::from_secs(3)).await;
@@ -8851,7 +9657,8 @@ async fn v38_friend_fetches_and_decrypts_your_avatar_byte_exact() {
     // BYTE-EXACT — the whole point. B decrypted A's real avatar, not a stale or
     // truncated blob. (MUTATION: replace `avatar` with wrong bytes -> RED.)
     assert_eq!(
-        got, avatar,
+        got,
+        avatar,
         "AVATAR MISMATCH: B decrypted {} bytes but A uploaded {} bytes; they differ. \
          The friend-fetch round-trip is not byte-exact.",
         got.len(),
@@ -8879,7 +9686,9 @@ async fn v38_friend_fetches_and_decrypts_your_avatar_byte_exact() {
         "PRIVACY LEAK: stranger C (not A's friend, no profile key) got avatar_bytes=Some — \
          the encrypted avatar is on the server but C must NOT be able to decrypt it."
     );
-    println!("  privacy half: stranger C (no profile key) gets avatar_bytes=None despite ciphertext on server");
+    println!(
+        "  privacy half: stranger C (no profile key) gets avatar_bytes=None despite ciphertext on server"
+    );
 
     println!(
         "  V38 PASS — a friend actually SEES your new avatar: A changed avatar, B (friend) fetched \
@@ -9026,16 +9835,22 @@ async fn v39_read_receipt_toggle_gates_the_send() {
     };
 
     let read_ts = a_reads_bs_message(&client_a, uid_b, &conv_on_a, &marker1).await;
-    assert_eq!(read_ts, ts1, "A receipted a different timestamp than B stored");
+    assert_eq!(
+        read_ts, ts1,
+        "A receipted a different timestamp than B stored"
+    );
 
-    let status1 = poll_delivery_status(&client_b, &conv_on_b, ts1, "read", Duration::from_secs(20)).await;
+    let status1 =
+        poll_delivery_status(&client_b, &conv_on_b, ts1, "read", Duration::from_secs(20)).await;
     assert_eq!(
         status1, "read",
         "POSITIVE CONTROL FAILED (finding #8?): receipts are ENABLED and A read B's DM, \
          but B's message never flipped to 'read' (last='{status1}'). Either the read \
          receipt is not sent on the 1:1 ServerDm path, or the gate wrongly suppressed it."
     );
-    println!("  positive control: receipts ENABLED → B's message flipped to 'read' (DM receipt round-trips)");
+    println!(
+        "  positive control: receipts ENABLED → B's message flipped to 'read' (DM receipt round-trips)"
+    );
 
     // ======================================================================
     // THE FIX — receipts DISABLED. A reads B's next DM; the receipt must NOT
@@ -9044,7 +9859,10 @@ async fn v39_read_receipt_toggle_gates_the_send() {
     client_a
         .set_read_receipts_enabled(false)
         .expect("set_read_receipts_enabled(false) failed");
-    assert!(!client_a.read_receipts_enabled().unwrap(), "toggle did not persist OFF");
+    assert!(
+        !client_a.read_receipts_enabled().unwrap(),
+        "toggle did not persist OFF"
+    );
 
     let marker2 = unique_marker();
     client_b
@@ -9056,7 +9874,8 @@ async fn v39_read_receipt_toggle_gates_the_send() {
 
     // Give a generous window — the ENABLED case flipped within a few seconds,
     // so ~12s of staying un-read is strong evidence the receipt was suppressed.
-    let status2 = poll_delivery_status(&client_b, &conv_on_b, ts2, "read", Duration::from_secs(12)).await;
+    let status2 =
+        poll_delivery_status(&client_b, &conv_on_b, ts2, "read", Duration::from_secs(12)).await;
     assert_ne!(
         status2, "read",
         "PRIVACY TOGGLE LIES: read receipts are DISABLED, yet A reading B's DM still \
@@ -9119,9 +9938,11 @@ async fn v40_typing_toggle_gates_the_send() {
         .await
         .expect("A send_typing(true) failed");
 
-    let got = wait_for_event(&mut events_b, Duration::from_secs(20), |e| {
-        matches!(e, DomainEvent::TypingStarted { user_id, .. } if *user_id == uid_a)
-    })
+    let got = wait_for_event(
+        &mut events_b,
+        Duration::from_secs(20),
+        |e| matches!(e, DomainEvent::TypingStarted { user_id, .. } if *user_id == uid_a),
+    )
     .await;
     assert!(
         got.is_some(),
@@ -9137,7 +9958,10 @@ async fn v40_typing_toggle_gates_the_send() {
     client_a
         .set_typing_indicators_enabled(false)
         .expect("set_typing_indicators_enabled(false) failed");
-    assert!(!client_a.typing_indicators_enabled().unwrap(), "toggle did not persist OFF");
+    assert!(
+        !client_a.typing_indicators_enabled().unwrap(),
+        "toggle did not persist OFF"
+    );
 
     // Fresh subscription so no stale STARTED from the positive half is in the
     // buffer, then A "types" again.
@@ -9150,9 +9974,11 @@ async fn v40_typing_toggle_gates_the_send() {
 
     // The ENABLED case arrived within a couple seconds; 8s of silence is strong
     // evidence nothing was transmitted.
-    let leaked = wait_for_event(&mut events_b2, Duration::from_secs(8), |e| {
-        matches!(e, DomainEvent::TypingStarted { user_id, .. } if *user_id == uid_a)
-    })
+    let leaked = wait_for_event(
+        &mut events_b2,
+        Duration::from_secs(8),
+        |e| matches!(e, DomainEvent::TypingStarted { user_id, .. } if *user_id == uid_a),
+    )
     .await;
     assert!(
         leaked.is_none(),
@@ -9217,12 +10043,19 @@ async fn v41_group_reply_carries_quote_to_recipient() {
     let client_b = build_client(dir_b.path());
     let uid_b = register_and_start(&client_b, &unique_user("v41b"), "V41 Bob").await;
 
-    assert_ne!(uid_a, uid_b, "POSITIVE CONTROL FAILED: A and B are the same user");
+    assert_ne!(
+        uid_a, uid_b,
+        "POSITIVE CONTROL FAILED: A and B are the same user"
+    );
 
     // ---- A creates a DEFAULT Private (encrypted, Sender-Key) channel --------
     let name = format!(
         "v41-chan-{}",
-        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis() % 1_000_000
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis()
+            % 1_000_000
     );
     let chan = common::create_group_with_members(
         &client_a,
@@ -9233,7 +10066,10 @@ async fn v41_group_reply_carries_quote_to_recipient() {
         &[(&client_b, &uid_b)],
     )
     .await;
-    println!("\n  A created encrypted channel {} ({})", chan.name, chan.id);
+    println!(
+        "\n  A created encrypted channel {} ({})",
+        chan.name, chan.id
+    );
 
     // POSITIVE CONTROL (membership): server records A and B.
     let mut members = std::collections::HashSet::new();
@@ -9277,10 +10113,13 @@ async fn v41_group_reply_carries_quote_to_recipient() {
 
     let g = chan.id.clone();
     let t1 = original_text.clone();
-    let got_original = wait_for_event(&mut events_b, EVENT_TIMEOUT, move |e| matches!(
-        e, DomainEvent::MessageReceived { message }
-        if message.conversation_id == g && message.as_text() == Some(t1.as_str())
-    )).await;
+    let got_original = wait_for_event(&mut events_b, EVENT_TIMEOUT, move |e| {
+        matches!(
+            e, DomainEvent::MessageReceived { message }
+            if message.conversation_id == g && message.as_text() == Some(t1.as_str())
+        )
+    })
+    .await;
     assert!(
         got_original.is_some(),
         "POSITIVE CONTROL FAILED: B never received A's original message ({original_text}) within \
@@ -9316,10 +10155,13 @@ async fn v41_group_reply_carries_quote_to_recipient() {
         .expect("B plain send failed");
     let g = chan.id.clone();
     let tp = plain_text.clone();
-    let plain_recv = wait_for_event(&mut events_a, EVENT_TIMEOUT, move |e| matches!(
-        e, DomainEvent::MessageReceived { message }
-        if message.conversation_id == g && message.as_text() == Some(tp.as_str())
-    )).await;
+    let plain_recv = wait_for_event(&mut events_a, EVENT_TIMEOUT, move |e| {
+        matches!(
+            e, DomainEvent::MessageReceived { message }
+            if message.conversation_id == g && message.as_text() == Some(tp.as_str())
+        )
+    })
+    .await;
     let plain_msg = match plain_recv {
         Some(DomainEvent::MessageReceived { message }) => message,
         _ => panic!(
@@ -9332,7 +10174,8 @@ async fn v41_group_reply_carries_quote_to_recipient() {
         "NEGATIVE CONTROL FAILED: B's plain (non-reply) message arrived at A already carrying a \
          quote (reply_to_text={:?}, reply_to_author_id={:?}). A populated quote on the reply below \
          would then prove nothing.",
-        plain_msg.reply_to_text, plain_msg.reply_to_author_id
+        plain_msg.reply_to_text,
+        plain_msg.reply_to_author_id
     );
     println!("  negative control: B's plain message reached A with NO quote");
 
@@ -9355,10 +10198,13 @@ async fn v41_group_reply_carries_quote_to_recipient() {
 
     let g = chan.id.clone();
     let tr = reply_text.clone();
-    let reply_recv = wait_for_event(&mut events_a, EVENT_TIMEOUT, move |e| matches!(
-        e, DomainEvent::MessageReceived { message }
-        if message.conversation_id == g && message.as_text() == Some(tr.as_str())
-    )).await;
+    let reply_recv = wait_for_event(&mut events_a, EVENT_TIMEOUT, move |e| {
+        matches!(
+            e, DomainEvent::MessageReceived { message }
+            if message.conversation_id == g && message.as_text() == Some(tr.as_str())
+        )
+    })
+    .await;
 
     // POSITIVE CONTROL: A received B's reply at all.
     let reply_msg = match reply_recv {
@@ -9391,7 +10237,9 @@ async fn v41_group_reply_carries_quote_to_recipient() {
          original ({original_text:?}). The wire quote is missing or empty.",
         reply_msg.reply_to_text
     );
-    println!("  the fix: A received B's reply WITH the quote (author=A, text=original) from the wire");
+    println!(
+        "  the fix: A received B's reply WITH the quote (author=A, text=original) from the wire"
+    );
 
     println!(
         "\n  V41 PASS — a reply sent into an encrypted CHANNEL carries the quote to the RECIPIENT: \
@@ -9442,11 +10290,17 @@ async fn v42_dm_read_receipt_live_refreshes_sender() {
     println!("  positive control: B stored + read A's DM (ts={read_ts})");
 
     let conversation = ChannelId::from(uid_b);
-    let got = wait_for_event(&mut events_a, EVENT_TIMEOUT, move |event| matches!(
-        event, DomainEvent::MessageDeliveryChanged { channel_id, status, .. }
-            if *channel_id == conversation && status == "read"
-    )).await;
-    assert!(got.is_some(), "B read A's DM but no persisted read status reached A's live bus");
+    let got = wait_for_event(&mut events_a, EVENT_TIMEOUT, move |event| {
+        matches!(
+            event, DomainEvent::MessageDeliveryChanged { channel_id, status, .. }
+                if *channel_id == conversation && status == "read"
+        )
+    })
+    .await;
+    assert!(
+        got.is_some(),
+        "B read A's DM but no persisted read status reached A's live bus"
+    );
     println!("V42 PASS: persisted DM read status live-refreshes the sender");
 
     client_a.shutdown().await;
@@ -9521,10 +10375,13 @@ async fn v43_profile_name_change_live_pushes_to_friends() {
     // THE FIX: B receives a live UserProfileUpdated naming A with the NEW name.
     let target = uid_a;
     let want = new_name.clone();
-    let got = wait_for_event(&mut events_b, EVENT_TIMEOUT, move |e| matches!(
-        e, DomainEvent::UserProfileUpdated { user_id, display_name, .. }
-        if *user_id == target && display_name == &want
-    )).await;
+    let got = wait_for_event(&mut events_b, EVENT_TIMEOUT, move |e| {
+        matches!(
+            e, DomainEvent::UserProfileUpdated { user_id, display_name, .. }
+            if *user_id == target && display_name == &want
+        )
+    })
+    .await;
     assert!(
         got.is_some(),
         "PROFILE UPDATE DID NOT LIVE-PUSH: A changed its name to {new_name:?}, but B's event bus \
@@ -9533,7 +10390,9 @@ async fn v43_profile_name_change_live_pushes_to_friends() {
          (CONSUMER-NO-PRODUCER, #12) or the fan-out dropped the encrypted name so B couldn't \
          decrypt it."
     );
-    println!("  the fix: B received a live UserProfileUpdated naming A with the new name ({new_name})");
+    println!(
+        "  the fix: B received a live UserProfileUpdated naming A with the new name ({new_name})"
+    );
 
     println!(
         "\n  V43 PASS — a profile display-name change LIVE-PUSHES to friends: A renaming itself \
@@ -9587,7 +10446,11 @@ async fn v44_thread_reply_groups_under_root_on_both_sides() {
 
     let name = format!(
         "v44-chan-{}",
-        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis() % 1_000_000
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis()
+            % 1_000_000
     );
     let chan = common::create_group_with_members(
         &client_a,
@@ -9602,14 +10465,23 @@ async fn v44_thread_reply_groups_under_root_on_both_sides() {
     // membership
     let mut members = std::collections::HashSet::new();
     for _ in 0..15 {
-        members = psql(&format!("select user_id from channel_members where channel_id = '{}'", chan.id))
-            .lines().map(|l| l.trim().to_string()).filter(|l| !l.is_empty()).collect();
-        if members.contains(&uid_a.to_string()) && members.contains(&uid_b.to_string()) { break; }
+        members = psql(&format!(
+            "select user_id from channel_members where channel_id = '{}'",
+            chan.id
+        ))
+        .lines()
+        .map(|l| l.trim().to_string())
+        .filter(|l| !l.is_empty())
+        .collect();
+        if members.contains(&uid_a.to_string()) && members.contains(&uid_b.to_string()) {
+            break;
+        }
         tokio::time::sleep(Duration::from_secs(1)).await;
     }
     assert!(
         members.contains(&uid_a.to_string()) && members.contains(&uid_b.to_string()),
-        "POSITIVE CONTROL FAILED: A and B not both members of {}", chan.id
+        "POSITIVE CONTROL FAILED: A and B not both members of {}",
+        chan.id
     );
 
     client_a.resubscribe_channel_messages();
@@ -9620,17 +10492,29 @@ async fn v44_thread_reply_groups_under_root_on_both_sides() {
     // A posts the ROOT (also mints A's sender key + SKDM to B).
     let root_text = unique_marker();
     let root = client_a
-        .send_channel_message(None, &chan.id, &root_text, vec![], vec![], None, vec![], false)
+        .send_channel_message(
+            None,
+            &chan.id,
+            &root_text,
+            vec![],
+            vec![],
+            None,
+            vec![],
+            false,
+        )
         .await
         .expect("A root send failed");
     let root_id = root.id;
 
     let g = chan.id.clone();
     let rt = root_text.clone();
-    let got_root = wait_for_event(&mut events_b, EVENT_TIMEOUT, move |e| matches!(
-        e, DomainEvent::MessageReceived { message }
-        if message.conversation_id == g && message.as_text() == Some(rt.as_str())
-    )).await;
+    let got_root = wait_for_event(&mut events_b, EVENT_TIMEOUT, move |e| {
+        matches!(
+            e, DomainEvent::MessageReceived { message }
+            if message.conversation_id == g && message.as_text() == Some(rt.as_str())
+        )
+    })
+    .await;
     assert!(
         got_root.is_some(),
         "POSITIVE CONTROL FAILED: B never received A's root ({root_text}) within {EVENT_TIMEOUT:?}."
@@ -9640,7 +10524,16 @@ async fn v44_thread_reply_groups_under_root_on_both_sides() {
     // A posts a PLAIN sibling (negative control — same channel, NOT in the thread).
     let plain_text = unique_marker();
     client_a
-        .send_channel_message(None, &chan.id, &plain_text, vec![], vec![], None, vec![], false)
+        .send_channel_message(
+            None,
+            &chan.id,
+            &plain_text,
+            vec![],
+            vec![],
+            None,
+            vec![],
+            false,
+        )
         .await
         .expect("A plain send failed");
 
@@ -9648,17 +10541,29 @@ async fn v44_thread_reply_groups_under_root_on_both_sides() {
     // Reply-in-thread button drives.
     let reply_text = unique_marker();
     client_a
-        .send_channel_message(None, &chan.id, &reply_text, vec![], vec![], Some(&root_id), vec![], false)
+        .send_channel_message(
+            None,
+            &chan.id,
+            &reply_text,
+            vec![],
+            vec![],
+            Some(&root_id),
+            vec![],
+            false,
+        )
         .await
         .expect("A thread reply send failed");
 
     // B must receive the threaded reply.
     let g = chan.id.clone();
     let rt = reply_text.clone();
-    let got_reply = wait_for_event(&mut events_b, EVENT_TIMEOUT, move |e| matches!(
-        e, DomainEvent::MessageReceived { message }
-        if message.conversation_id == g && message.as_text() == Some(rt.as_str())
-    )).await;
+    let got_reply = wait_for_event(&mut events_b, EVENT_TIMEOUT, move |e| {
+        matches!(
+            e, DomainEvent::MessageReceived { message }
+            if message.conversation_id == g && message.as_text() == Some(rt.as_str())
+        )
+    })
+    .await;
     assert!(
         got_reply.is_some(),
         "POSITIVE CONTROL FAILED: B never received A's thread reply ({reply_text}) within {EVENT_TIMEOUT:?}."
@@ -9666,9 +10571,15 @@ async fn v44_thread_reply_groups_under_root_on_both_sides() {
     tokio::time::sleep(Duration::from_secs(2)).await; // let stores settle
 
     // THE FIX — thread grouping on the SENDER (A).
-    let a_thread = client_a.list_thread_replies(&root_id, None, 50).unwrap_or_default();
-    let a_has_reply = a_thread.iter().any(|m| m.as_text() == Some(reply_text.as_str()));
-    let a_has_plain = a_thread.iter().any(|m| m.as_text() == Some(plain_text.as_str()));
+    let a_thread = client_a
+        .list_thread_replies(&root_id, None, 50)
+        .unwrap_or_default();
+    let a_has_reply = a_thread
+        .iter()
+        .any(|m| m.as_text() == Some(reply_text.as_str()));
+    let a_has_plain = a_thread
+        .iter()
+        .any(|m| m.as_text() == Some(plain_text.as_str()));
     assert!(
         a_has_reply,
         "THREAD REPLY NOT GROUPED (sender): A's list_thread_replies(root) does not contain the \
@@ -9682,9 +10593,15 @@ async fn v44_thread_reply_groups_under_root_on_both_sides() {
     );
 
     // THE FIX — thread grouping on the RECIPIENT (B): parent_id rode the wire.
-    let b_thread = client_b.list_thread_replies(&root_id, None, 50).unwrap_or_default();
-    let b_has_reply = b_thread.iter().any(|m| m.as_text() == Some(reply_text.as_str()));
-    let b_has_plain = b_thread.iter().any(|m| m.as_text() == Some(plain_text.as_str()));
+    let b_thread = client_b
+        .list_thread_replies(&root_id, None, 50)
+        .unwrap_or_default();
+    let b_has_reply = b_thread
+        .iter()
+        .any(|m| m.as_text() == Some(reply_text.as_str()));
+    let b_has_plain = b_thread
+        .iter()
+        .any(|m| m.as_text() == Some(plain_text.as_str()));
     assert!(
         b_has_reply,
         "THREAD REPLY DID NOT FEDERATE: B's list_thread_replies(root) does not contain the reply \
@@ -9740,7 +10657,11 @@ async fn v45_reactions_edits_pins_roundtrip_in_channel() {
 
     let name = format!(
         "v45-chan-{}",
-        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis() % 1_000_000
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis()
+            % 1_000_000
     );
     let chan = common::create_group_with_members(
         &client_a,
@@ -9754,13 +10675,23 @@ async fn v45_reactions_edits_pins_roundtrip_in_channel() {
 
     let mut members = std::collections::HashSet::new();
     for _ in 0..15 {
-        members = psql(&format!("select user_id from channel_members where channel_id = '{}'", chan.id))
-            .lines().map(|l| l.trim().to_string()).filter(|l| !l.is_empty()).collect();
-        if members.contains(&uid_a.to_string()) && members.contains(&uid_b.to_string()) { break; }
+        members = psql(&format!(
+            "select user_id from channel_members where channel_id = '{}'",
+            chan.id
+        ))
+        .lines()
+        .map(|l| l.trim().to_string())
+        .filter(|l| !l.is_empty())
+        .collect();
+        if members.contains(&uid_a.to_string()) && members.contains(&uid_b.to_string()) {
+            break;
+        }
         tokio::time::sleep(Duration::from_secs(1)).await;
     }
-    assert!(members.contains(&uid_a.to_string()) && members.contains(&uid_b.to_string()),
-        "POSITIVE CONTROL FAILED: A and B not both members");
+    assert!(
+        members.contains(&uid_a.to_string()) && members.contains(&uid_b.to_string()),
+        "POSITIVE CONTROL FAILED: A and B not both members"
+    );
 
     client_a.resubscribe_channel_messages();
     client_b.resubscribe_channel_messages();
@@ -9776,7 +10707,8 @@ async fn v45_reactions_edits_pins_roundtrip_in_channel() {
         .expect("A msgR send failed");
     let r_id = msg_r.id;
     let r_ts = msg_r.sent_at;
-    let g = chan.id.clone(); let t = r_text.clone();
+    let g = chan.id.clone();
+    let t = r_text.clone();
     assert!(
         wait_for_event(&mut events_b, EVENT_TIMEOUT, move |e| matches!(
             e, DomainEvent::MessageReceived { message } if message.conversation_id == g && message.as_text() == Some(t.as_str())
@@ -9791,7 +10723,16 @@ async fn v45_reactions_edits_pins_roundtrip_in_channel() {
     // WARM-UP: establish B's sender key on A before msgE (B's first real send
     // races its own SKDM otherwise — the msgE positive control would flake).
     client_b
-        .send_channel_message(None, &chan.id, &unique_marker(), vec![], vec![], None, vec![], false)
+        .send_channel_message(
+            None,
+            &chan.id,
+            &unique_marker(),
+            vec![],
+            vec![],
+            None,
+            vec![],
+            false,
+        )
         .await
         .expect("B warm-up send failed");
     assert!(
@@ -9806,7 +10747,8 @@ async fn v45_reactions_edits_pins_roundtrip_in_channel() {
         .send_channel_message(None, &chan.id, &e_text, vec![], vec![], None, vec![], false)
         .await
         .expect("B msgE send failed");
-    let g = chan.id.clone(); let t = e_text.clone();
+    let g = chan.id.clone();
+    let t = e_text.clone();
     let a_msg_e = match wait_for_event(&mut events_a, EVENT_TIMEOUT, move |e| matches!(
         e, DomainEvent::MessageReceived { message } if message.conversation_id == g && message.as_text() == Some(t.as_str())
     )).await {
@@ -9815,10 +10757,18 @@ async fn v45_reactions_edits_pins_roundtrip_in_channel() {
     };
     let e_id = a_msg_e.id;
     let e_ts = a_msg_e.sent_at;
-    assert_eq!(e_ts, b_msg_e.sent_at, "encrypted channel peers must store the same E2E timestamp");
-    println!("  V45 channel clock: sender={} receiver={e_ts}; sender_id={:?}; stored={:?}",
-        b_msg_e.sent_at, b_msg_e.sender_id,
-        client_b.get_message_local(&b_msg_e.id).map(|m| (m.sent_at, m.sender_id)));
+    assert_eq!(
+        e_ts, b_msg_e.sent_at,
+        "encrypted channel peers must store the same E2E timestamp"
+    );
+    println!(
+        "  V45 channel clock: sender={} receiver={e_ts}; sender_id={:?}; stored={:?}",
+        b_msg_e.sent_at,
+        b_msg_e.sender_id,
+        client_b
+            .get_message_local(&b_msg_e.id)
+            .map(|m| (m.sent_at, m.sender_id))
+    );
     tokio::time::sleep(Duration::from_secs(3)).await; // A processes B's SKDM
 
     // ---- REACTION: B reacts to A's msgR; A's copy must show it -------------
@@ -9830,12 +10780,21 @@ async fn v45_reactions_edits_pins_roundtrip_in_channel() {
     let mut reacted = false;
     for _ in 0..40 {
         if let Some(m) = client_a.get_message_local(&r_id) {
-            if m.reaction_counts.iter().any(|rc| rc.emoji == "\u{1F44D}" && rc.count >= 1) { reacted = true; break; }
+            if m.reaction_counts
+                .iter()
+                .any(|rc| rc.emoji == "\u{1F44D}" && rc.count >= 1)
+            {
+                reacted = true;
+                break;
+            }
         }
         tokio::time::sleep(Duration::from_millis(500)).await;
     }
-    assert!(reacted, "REACTION NOT APPLIED (channel): A's copy of msgR never showed B's 👍 reaction — \
-        the channel control-reaction wire (device.rs → inbox_processor) is cut.");
+    assert!(
+        reacted,
+        "REACTION NOT APPLIED (channel): A's copy of msgR never showed B's 👍 reaction — \
+        the channel control-reaction wire (device.rs → inbox_processor) is cut."
+    );
 
     // ---- EDIT: B edits msgE; A's copy must show the new text ---------------
     let edited = format!("EDITED-{}", unique_marker());
@@ -9847,12 +10806,18 @@ async fn v45_reactions_edits_pins_roundtrip_in_channel() {
     let mut edit_ok = false;
     for _ in 0..40 {
         if let Some(m) = client_a.get_message_local(&e_id) {
-            if m.as_text() == Some(edited.as_str()) { edit_ok = true; break; }
+            if m.as_text() == Some(edited.as_str()) {
+                edit_ok = true;
+                break;
+            }
         }
         tokio::time::sleep(Duration::from_millis(500)).await;
     }
-    assert!(edit_ok, "EDIT NOT APPLIED (channel): A's copy of msgE never updated to the edited text — \
-        the channel edit wire is cut.");
+    assert!(
+        edit_ok,
+        "EDIT NOT APPLIED (channel): A's copy of msgE never updated to the edited text — \
+        the channel edit wire is cut."
+    );
 
     // ---- PIN: B pins msgE; A's copy must be pinned -------------------------
     client_b
@@ -9863,14 +10828,22 @@ async fn v45_reactions_edits_pins_roundtrip_in_channel() {
     let mut pinned = false;
     for _ in 0..40 {
         if let Some(m) = client_a.get_message_local(&e_id) {
-            if m.is_pinned { pinned = true; break; }
+            if m.is_pinned {
+                pinned = true;
+                break;
+            }
         }
         tokio::time::sleep(Duration::from_millis(500)).await;
     }
-    assert!(pinned, "PIN NOT APPLIED (channel): A's copy of msgE never became pinned — the channel pin wire is cut.");
+    assert!(
+        pinned,
+        "PIN NOT APPLIED (channel): A's copy of msgE never became pinned — the channel pin wire is cut."
+    );
 
-    println!("\n  V45 PASS — reactions, edits, pins all round-trip in a group channel: B's actions \
-        applied on A's local store (reaction 👍, edited text, pinned). Control-content path proven.\n");
+    println!(
+        "\n  V45 PASS — reactions, edits, pins all round-trip in a group channel: B's actions \
+        applied on A's local store (reaction 👍, edited text, pinned). Control-content path proven.\n"
+    );
 
     client_a.shutdown().await;
     client_b.shutdown().await;
@@ -9917,7 +10890,8 @@ async fn v46_reactions_edits_pins_roundtrip_in_dm() {
         .await
         .expect("B msgE DM failed");
     let e_ts = e_res.sent_at;
-    let g = conv_on_a.clone(); let t = e_text.clone();
+    let g = conv_on_a.clone();
+    let t = e_text.clone();
     let a_msg_e = match wait_for_event(&mut events_a, EVENT_TIMEOUT, move |ev| matches!(
         ev, DomainEvent::MessageReceived { message } if message.conversation_id == g && message.as_text() == Some(t.as_str())
     )).await {
@@ -9935,11 +10909,20 @@ async fn v46_reactions_edits_pins_roundtrip_in_dm() {
     let mut reacted = false;
     for _ in 0..40 {
         if let Some(m) = client_a.get_message_local(&r_id) {
-            if m.reaction_counts.iter().any(|rc| rc.emoji == "\u{1F44D}" && rc.count >= 1) { reacted = true; break; }
+            if m.reaction_counts
+                .iter()
+                .any(|rc| rc.emoji == "\u{1F44D}" && rc.count >= 1)
+            {
+                reacted = true;
+                break;
+            }
         }
         tokio::time::sleep(Duration::from_millis(500)).await;
     }
-    assert!(reacted, "REACTION NOT APPLIED (DM): A's msgR never showed B's 👍 — the ServerDm reaction wire (dm.rs) is cut.");
+    assert!(
+        reacted,
+        "REACTION NOT APPLIED (DM): A's msgR never showed B's 👍 — the ServerDm reaction wire (dm.rs) is cut."
+    );
 
     // ---- EDIT: B edits msgE ----------------------------------------------
     let edited = format!("EDITED-{}", unique_marker());
@@ -9951,11 +10934,17 @@ async fn v46_reactions_edits_pins_roundtrip_in_dm() {
     let mut edit_ok = false;
     for _ in 0..40 {
         if let Some(m) = client_a.get_message_local(&e_id) {
-            if m.as_text() == Some(edited.as_str()) { edit_ok = true; break; }
+            if m.as_text() == Some(edited.as_str()) {
+                edit_ok = true;
+                break;
+            }
         }
         tokio::time::sleep(Duration::from_millis(500)).await;
     }
-    assert!(edit_ok, "EDIT NOT APPLIED (DM): A's copy of msgE never updated to the edited text — the ServerDm edit wire is cut.");
+    assert!(
+        edit_ok,
+        "EDIT NOT APPLIED (DM): A's copy of msgE never updated to the edited text — the ServerDm edit wire is cut."
+    );
 
     // ---- PIN: B pins msgE ------------------------------------------------
     client_b
@@ -9966,14 +10955,22 @@ async fn v46_reactions_edits_pins_roundtrip_in_dm() {
     let mut pinned = false;
     for _ in 0..40 {
         if let Some(m) = client_a.get_message_local(&e_id) {
-            if m.is_pinned { pinned = true; break; }
+            if m.is_pinned {
+                pinned = true;
+                break;
+            }
         }
         tokio::time::sleep(Duration::from_millis(500)).await;
     }
-    assert!(pinned, "PIN NOT APPLIED (DM): A's copy of msgE never became pinned — the ServerDm pin wire is cut.");
+    assert!(
+        pinned,
+        "PIN NOT APPLIED (DM): A's copy of msgE never became pinned — the ServerDm pin wire is cut."
+    );
 
-    println!("\n  V46 PASS — reactions, edits, pins all round-trip on a 1:1 sealed DM: B's actions \
-        applied on A's local store. ServerDm control-content path proven.\n");
+    println!(
+        "\n  V46 PASS — reactions, edits, pins all round-trip on a 1:1 sealed DM: B's actions \
+        applied on A's local store. ServerDm control-content path proven.\n"
+    );
 
     client_a.shutdown().await;
     client_b.shutdown().await;
@@ -10097,22 +11094,37 @@ async fn v47_desynced_dm_session_self_heals_via_decryption_error_message() {
     // F1 now resends the original content after processing the DEM. Require
     // the failure marker first: eventual recovered text is not evidence that
     // the original ciphertext decrypted under the deleted session.
-    assert!(client_b.signal().key_store().load_session(&addr_a_on_b)
-        .expect("read sabotaged session").is_none(), "session survived sabotage");
+    assert!(
+        client_b
+            .signal()
+            .key_store()
+            .load_session(&addr_a_on_b)
+            .expect("read sabotaged session")
+            .is_none(),
+        "session survived sabotage"
+    );
     let m2 = unique_marker();
     let sent2 = client_a
         .send_text(ActiveConversation::ServerDm { peer_id: uid_b }, &m2)
-        .await.expect("m2 send failed");
-    assert!(sent2.send_error.is_none(), "m2 delivery failed: {:?}", sent2.send_error);
+        .await
+        .expect("m2 send failed");
+    assert!(
+        sent2.send_error.is_none(),
+        "m2 delivery failed: {:?}",
+        sent2.send_error
+    );
     let got_failure = wait_for_event(&mut events_b, Duration::from_secs(10), |e| {
         matches!(e, DomainEvent::MessageReceived { message }
             if message.conversation_id == conv_on_b
             && matches!(message.content,
                 chatter_core::domain::message::MessageContent::System(
                     chatter_core::domain::message::SystemMessage::DeliveryIssue)))
-    }).await;
-    assert!(got_failure.is_some(),
-        "POSITIVE CONTROL 2 FAILED: B never recorded rejection of the wedged envelope");
+    })
+    .await;
+    assert!(
+        got_failure.is_some(),
+        "POSITIVE CONTROL 2 FAILED: B never recorded rejection of the wedged envelope"
+    );
     println!("  control 2: deleted session stayed absent; B recorded DeliveryIssue for m2");
 
     // ---- THE FIX, sender half: B's DEM reaches A and archives the session --
@@ -10133,9 +11145,12 @@ async fn v47_desynced_dm_session_self_heals_via_decryption_error_message() {
     let recovered = wait_for_event(&mut events_b, EVENT_TIMEOUT, |e| {
         matches!(e, DomainEvent::MessageReceived { message }
             if message.conversation_id == conv_on_b && message.as_text() == Some(m2.as_str()))
-    }).await;
-    assert!(recovered.is_some(), "F1 failed to resend m2 after confirmed rejection and session repair");
-
+    })
+    .await;
+    assert!(
+        recovered.is_some(),
+        "F1 failed to resend m2 after confirmed rejection and session repair"
+    );
 
     // ---- THE FIX, round trip: the next message decrypts --------------------
     let m3 = unique_marker();
@@ -10248,7 +11263,11 @@ async fn v48_username_link_resolves_privately_end_to_end() {
         "POSITIVE CONTROL FAILED: no/short user_username_links row for A's link id \
          (got {blob_hex:?}) — every absence grep below would be vacuous"
     );
-    println!("  positive control: server stores {} ciphertext bytes under link id {}", blob_hex.len() / 2, link.link_id);
+    println!(
+        "  positive control: server stores {} ciphertext bytes under link id {}",
+        blob_hex.len() / 2,
+        link.link_id
+    );
 
     // NEGATIVE HALF 1: the stored blob does not contain the plaintext
     // username bytes (hex-on-hex substring check).
@@ -10299,7 +11318,9 @@ async fn v48_username_link_resolves_privately_end_to_end() {
         "resolve with WRONG entropy must fail — otherwise the fragment is decorative \
          and the server could decrypt the blob"
     );
-    println!("  negative half: wrong-entropy resolve failed (HMAC), blob is ciphertext-only server-side");
+    println!(
+        "  negative half: wrong-entropy resolve failed (HMAC), blob is ciphertext-only server-side"
+    );
 
     // ROTATION: creating a new link kills the old URL.
     let url2 = client_a
@@ -10319,7 +11340,10 @@ async fn v48_username_link_resolves_privately_end_to_end() {
     let n_rows = psql(&format!(
         "SELECT COUNT(*) FROM user_username_links WHERE user_id = '{uid_a}'"
     ));
-    assert_eq!(n_rows, "1", "one active link per user (found {n_rows} rows)");
+    assert_eq!(
+        n_rows, "1",
+        "one active link per user (found {n_rows} rows)"
+    );
     println!("  rotation: old URL dead, new URL live, exactly 1 row for A");
 
     // DELETE: the last URL stops resolving.
@@ -10386,7 +11410,11 @@ fn marker_message_row(db_path: &std::path::Path, marker: &str) -> Vec<String> {
         .expect("query")
         .collect::<Result<_, _>>()
         .expect("collect");
-    assert_eq!(rows.len(), 1, "expected exactly one marker message row in {db_path:?}");
+    assert_eq!(
+        rows.len(),
+        1,
+        "expected exactly one marker message row in {db_path:?}"
+    );
     rows.into_iter().next().unwrap()
 }
 
@@ -10417,7 +11445,10 @@ async fn v50_local_message_backup_round_trips_encrypted() {
         matches!(e, DomainEvent::MessageReceived { message } if message.conversation_id == expected_conv)
     })
     .await;
-    assert!(received.is_some(), "B never received the DM — nothing to back up");
+    assert!(
+        received.is_some(),
+        "B never received the DM — nothing to back up"
+    );
     println!("  data setup: B received marker DM over the wire");
 
     // ---- EXPORT ------------------------------------------------------------
@@ -10428,7 +11459,10 @@ async fn v50_local_message_backup_round_trips_encrypted() {
         .await
         .expect("export failed");
     println!("  exported {} rows, {} bytes", stats.rows, stats.bytes);
-    assert!(stats.rows > 0, "export serialized zero rows — vacuous backup");
+    assert!(
+        stats.rows > 0,
+        "export serialized zero rows — vacuous backup"
+    );
 
     // ---- NEGATIVE HALF 1: no plaintext in the file -------------------------
     // Detector control first: prove the grep CAN find the marker.
@@ -10436,17 +11470,28 @@ async fn v50_local_message_backup_round_trips_encrypted() {
     std::fs::write(&control, format!("xx{marker}yy")).unwrap();
     let control_bytes = std::fs::read(&control).unwrap();
     assert!(
-        control_bytes.windows(marker.len()).any(|w| w == marker.as_bytes()),
+        control_bytes
+            .windows(marker.len())
+            .any(|w| w == marker.as_bytes()),
         "DETECTOR BROKEN: planted marker not found in control file"
     );
 
     let file_bytes = std::fs::read(&backup_path).unwrap();
-    assert_eq!(&file_bytes[..8], b"CHTRBKP1", "backup file missing container magic");
+    assert_eq!(
+        &file_bytes[..8],
+        b"CHTRBKP1",
+        "backup file missing container magic"
+    );
     assert!(
-        !file_bytes.windows(marker.len()).any(|w| w == marker.as_bytes()),
+        !file_bytes
+            .windows(marker.len())
+            .any(|w| w == marker.as_bytes()),
         "PLAINTEXT LEAK: marker found inside the encrypted backup file"
     );
-    println!("  backup file: magic OK, {} bytes, zero plaintext marker hits", file_bytes.len());
+    println!(
+        "  backup file: magic OK, {} bytes, zero plaintext marker hits",
+        file_bytes.len()
+    );
 
     // ---- RESTORE into a truly fresh, OFFLINE client dir --------------------
     // Never connected, never logged in — local restore must not need a server.
@@ -10465,8 +11510,14 @@ async fn v50_local_message_backup_round_trips_encrypted() {
     // Byte-exact: the marker row is identical column-for-column.
     let src_row = marker_message_row(&dir_b.path().join("data/chatter.db"), &marker);
     let dst_row = marker_message_row(&dir_fresh.path().join("data/chatter.db"), &marker);
-    assert_eq!(src_row, dst_row, "restored message row differs from the original");
-    println!("  byte-exact: marker row identical across stores ({} columns)", src_row.len());
+    assert_eq!(
+        src_row, dst_row,
+        "restored message row differs from the original"
+    );
+    println!(
+        "  byte-exact: marker row identical across stores ({} columns)",
+        src_row.len()
+    );
 
     // ---- NEGATIVE HALF 2: wrong passphrase restores nothing ----------------
     let dir_wrong = tempfile::tempdir().unwrap();
@@ -10488,7 +11539,9 @@ async fn v50_local_message_backup_round_trips_encrypted() {
     assert_eq!(n, 0, "wrong-passphrase restore must import zero rows");
     println!("  wrong passphrase: restore rejected, 0 rows imported");
 
-    println!("\nV50 PASS — local encrypted backup round-trips byte-exact into a fresh offline client; file holds no plaintext; wrong passphrase gets nothing\n");
+    println!(
+        "\nV50 PASS — local encrypted backup round-trips byte-exact into a fresh offline client; file holds no plaintext; wrong passphrase gets nothing\n"
+    );
 
     client_a.shutdown().await;
     client_b.shutdown().await;
@@ -10542,7 +11595,10 @@ async fn v51_server_message_backup_restores_on_fresh_install_via_pin() {
         matches!(e, DomainEvent::MessageReceived { message } if message.conversation_id == expected_conv)
     })
     .await;
-    assert!(received.is_some(), "A never received the DM — nothing to back up");
+    assert!(
+        received.is_some(),
+        "A never received the DM — nothing to back up"
+    );
     let src_row = marker_message_row(&dir_a.path().join("data/chatter.db"), &marker);
     println!("  data setup: A received marker DM; source row captured");
 
@@ -10551,7 +11607,10 @@ async fn v51_server_message_backup_restores_on_fresh_install_via_pin() {
         .enable_server_message_backup(PIN)
         .await
         .expect("server backup upload failed");
-    println!("  uploaded server backup: {} rows, {} bytes", stats.rows, stats.bytes);
+    println!(
+        "  uploaded server backup: {} rows, {} bytes",
+        stats.rows, stats.bytes
+    );
 
     // ---- POSITIVE CONTROL: metadata row exists, object key known -----------
     let object_key = psql(&format!(
@@ -10590,12 +11649,19 @@ async fn v51_server_message_backup_restores_on_fresh_install_via_pin() {
         stats.bytes,
         "POSITIVE CONTROL FAILED: raw RustFS object size != uploaded container size"
     );
-    assert_eq!(&blob[..8], b"CHTRBKP1", "stored object is not the backup container");
+    assert_eq!(
+        &blob[..8],
+        b"CHTRBKP1",
+        "stored object is not the backup container"
+    );
     assert!(
         !blob.windows(marker.len()).any(|w| w == marker.as_bytes()),
         "PLAINTEXT LEAK: marker found in the raw RustFS object"
     );
-    println!("  raw RustFS object: {} bytes, magic OK, zero plaintext hits", blob.len());
+    println!(
+        "  raw RustFS object: {} bytes, magic OK, zero plaintext hits",
+        blob.len()
+    );
 
     let dump = pg_dump_all().await;
     assert!(dump.len() > 10_000, "pg_dump suspiciously small");
@@ -10626,7 +11692,9 @@ async fn v51_server_message_backup_restores_on_fresh_install_via_pin() {
     // NEGATIVE: wrong PIN first — it derives a different backup_id, the server
     // knows no such backup, nothing restores. (Strike counters don't apply:
     // the blob is useless without the PIN-derived KEK.)
-    let wrong = client_fresh.restore_server_message_backup("Wr0ngPin!x7").await;
+    let wrong = client_fresh
+        .restore_server_message_backup("Wr0ngPin!x7")
+        .await;
     assert!(wrong.is_err(), "restore with WRONG PIN must fail");
     println!("  wrong PIN: restore rejected ({})", wrong.err().unwrap());
 
@@ -10641,10 +11709,15 @@ async fn v51_server_message_backup_restores_on_fresh_install_via_pin() {
     assert!(summary.rows_inserted > 0, "server restore inserted nothing");
 
     let dst_row = marker_message_row(&dir_fresh.path().join("data/chatter.db"), &marker);
-    assert_eq!(src_row, dst_row, "restored message row differs from the original");
+    assert_eq!(
+        src_row, dst_row,
+        "restored message row differs from the original"
+    );
     println!("  byte-exact: marker row identical across installs");
 
-    println!("\nV51 PASS — server-side encrypted backup restores byte-exact on a fresh install via PIN; raw RustFS object + Postgres hold no plaintext; wrong PIN gets nothing\n");
+    println!(
+        "\nV51 PASS — server-side encrypted backup restores byte-exact on a fresh install via PIN; raw RustFS object + Postgres hold no plaintext; wrong PIN gets nothing\n"
+    );
 
     client_fresh.shutdown().await;
     client_b.shutdown().await;
@@ -10700,7 +11773,10 @@ async fn v52_reinstall_recovers_the_original_identity_key() {
         server_hex, original_hex,
         "POSITIVE CONTROL FAILED: server identity_key does not match the registering device"
     );
-    println!("  positive control: server identity_key == device key ({}…)", &original_hex[..16]);
+    println!(
+        "  positive control: server identity_key == device key ({}…)",
+        &original_hex[..16]
+    );
 
     client_a.shutdown().await;
     drop(client_a);
@@ -10742,7 +11818,9 @@ async fn v52_reinstall_recovers_the_original_identity_key() {
     );
     println!("  server still serves the same identity key");
 
-    println!("\nV52 PASS — a PIN reinstall recovers the original identity key; device and server agree\n");
+    println!(
+        "\nV52 PASS — a PIN reinstall recovers the original identity key; device and server agree\n"
+    );
     client_fresh.shutdown().await;
 }
 
@@ -10821,12 +11899,18 @@ async fn v53_identity_reset_publishes_a_key_the_server_serves() {
             refused.is_err(),
             "minting a new identity on a wrong PIN would destroy a recoverable account"
         );
-        println!("  wrong PIN: identity reset refused ({})", refused.err().unwrap());
+        println!(
+            "  wrong PIN: identity reset refused ({})",
+            refused.err().unwrap()
+        );
 
         let unchanged = psql(&format!(
             "SELECT encode(identity_key,'hex') FROM signal_prekey_bundles WHERE user_id = '{uid}'"
         ));
-        assert_eq!(unchanged, original_hex, "a failed login must not touch server key material");
+        assert_eq!(
+            unchanged, original_hex,
+            "a failed login must not touch server key material"
+        );
         println!("  wrong PIN: server identity_key untouched");
         c.shutdown().await;
     }
@@ -10867,7 +11951,9 @@ async fn v53_identity_reset_publishes_a_key_the_server_serves() {
         still_original, original_hex,
         "a failed login silently re-keyed the account — the exact defect being fixed"
     );
-    println!("  no backup: server identity_key still the original (nothing minted behind the user)");
+    println!(
+        "  no backup: server identity_key still the original (nothing minted behind the user)"
+    );
 
     // The explicit, user-driven decision.
     //
@@ -10883,7 +11969,11 @@ async fn v53_identity_reset_publishes_a_key_the_server_serves() {
         .await
         .expect("identity reset failed — there is still no way to publish a rotated key");
 
-    let new_key = client_fresh.signal().get_identity_public_key().await.unwrap();
+    let new_key = client_fresh
+        .signal()
+        .get_identity_public_key()
+        .await
+        .unwrap();
     let new_hex: String = new_key.iter().map(|b| format!("{b:02x}")).collect();
     assert_ne!(new_hex, original_hex, "reset produced the same key");
 
@@ -10910,14 +12000,22 @@ async fn v53_identity_reset_publishes_a_key_the_server_serves() {
         "SELECT encode(identity_key,'hex') FROM kt_log_entries WHERE user_id = '{uid}' \
          ORDER BY leaf_index DESC LIMIT 1"
     ));
-    assert_eq!(kt_latest, new_hex, "Key Transparency did not witness the rotation");
+    assert_eq!(
+        kt_latest, new_hex,
+        "Key Transparency did not witness the rotation"
+    );
     let kt_count = psql(&format!(
         "SELECT count(*) FROM kt_log_entries WHERE user_id = '{uid}'"
     ));
-    assert_eq!(kt_count, "2", "expected one leaf for registration and one for the rotation");
+    assert_eq!(
+        kt_count, "2",
+        "expected one leaf for registration and one for the rotation"
+    );
     println!("  reset: KT log witnessed the new key ({kt_count} leaves)");
 
-    println!("\nV53 PASS — no backup is reported, never silently re-keyed; an explicit reset publishes a rotated identity key atomically and KT records it\n");
+    println!(
+        "\nV53 PASS — no backup is reported, never silently re-keyed; an explicit reset publishes a rotated identity key atomically and KT records it\n"
+    );
     client_fresh.shutdown().await;
 }
 
@@ -10976,7 +12074,10 @@ async fn v54_channel_messages_survive_a_client_restart() {
         &[(&client_b, &uid_b)],
     )
     .await;
-    println!("\n  [V54] A created channel {} ({})", channel.name, channel.id);
+    println!(
+        "\n  [V54] A created channel {} ({})",
+        channel.name, channel.id
+    );
 
     // POSITIVE CONTROL: the SERVER records both as members, or every "B got
     // nothing" below is vacuous. Asked over the wire so the control does not
@@ -11013,7 +12114,10 @@ async fn v54_channel_messages_survive_a_client_restart() {
 
     let marker_live = unique_marker();
     client_a
-        .send_text(ActiveConversation::Channel(channel.id.clone()), &marker_live)
+        .send_text(
+            ActiveConversation::Channel(channel.id.clone()),
+            &marker_live,
+        )
         .await
         .expect("A live send failed");
 
@@ -11058,7 +12162,10 @@ async fn v54_channel_messages_survive_a_client_restart() {
             let stored = client_b2
                 .get_messages(&ActiveConversation::Channel(channel.id.clone()), 50)
                 .unwrap_or_default();
-            if stored.iter().any(|msg| msg.as_text() == Some(marker.as_str())) {
+            if stored
+                .iter()
+                .any(|msg| msg.as_text() == Some(marker.as_str()))
+            {
                 found = true;
                 break;
             }
@@ -11076,7 +12183,10 @@ async fn v54_channel_messages_survive_a_client_restart() {
     // ---- PART 3: live delivery RESUMES after the restart ------------------
     let marker_after = unique_marker();
     client_a
-        .send_text(ActiveConversation::Channel(channel.id.clone()), &marker_after)
+        .send_text(
+            ActiveConversation::Channel(channel.id.clone()),
+            &marker_after,
+        )
         .await
         .expect("A post-restart send failed");
 
@@ -11158,7 +12268,10 @@ async fn v55_accepting_an_invite_is_enough_to_get_the_channel() {
         )
         .await
         .expect("A failed to create the channel");
-    println!("\n  [V55] A created channel {} ({})", channel.name, channel.id);
+    println!(
+        "\n  [V55] A created channel {} ({})",
+        channel.name, channel.id
+    );
 
     // PRECONDITION: B knows nothing about this channel yet, so every local
     // assertion after the accept is about the accept and not about setup.
@@ -11313,10 +12426,17 @@ async fn v56_linked_device_restricts_profile_visibility_with_pin() {
     let uid = register_and_start(&client_p, &unique_user("v56p"), "V56 Primary").await;
     let avatar = b"V56-small-avatar-preserved-through-rotation".to_vec();
     let status = chatter_core::domain::user::StatusMessage::new("V56 retained status".into());
-    client_p.set_avatar_bytes(&avatar).expect("seed primary avatar");
-    client_p.update_user_profile(Some("V56 Primary".into()), Some(status.clone()))
-        .await.expect("seed primary profile fields");
-    let seeded = client_p.get_user_profile(&uid).await.expect("fetch seeded profile");
+    client_p
+        .set_avatar_bytes(&avatar)
+        .expect("seed primary avatar");
+    client_p
+        .update_user_profile(Some("V56 Primary".into()), Some(status.clone()))
+        .await
+        .expect("seed primary profile fields");
+    let seeded = client_p
+        .get_user_profile(&uid)
+        .await
+        .expect("fetch seeded profile");
     assert_eq!(seeded.display_name, "V56 Primary");
     assert_eq!(seeded.status_message, Some(status));
     assert_eq!(seeded.avatar_bytes, Some(avatar));
@@ -11331,23 +12451,42 @@ async fn v56_linked_device_restricts_profile_visibility_with_pin() {
         assert!(path.is_file(), "linked database must already exist");
         let passphrase = zeroize::Zeroizing::new(
             chatter_core::system::keyring::Keyring::new(path.clone())
-                .get_passphrase().expect("linked DB passphrase unavailable"));
+                .get_passphrase()
+                .expect("linked DB passphrase unavailable"),
+        );
         let db = chatter_core::storage::Database::open(&path, &passphrase)
             .expect("open linked cache fixture");
-        db.connection().expect("linked cache connection")
+        db.connection()
+            .expect("linked cache connection")
             .execute("DELETE FROM profiles WHERE user_id = ?1", [uid.to_string()])
             .expect("evict only linked own-profile cache");
     };
     evict_linked_profile();
-    assert!(client_s.users().get_profile_local(&uid).expect("linked profile lookup").is_none(),
-        "positive control: linked own-profile cache eviction failed");
+    assert!(
+        client_s
+            .users()
+            .get_profile_local(&uid)
+            .expect("linked profile lookup")
+            .is_none(),
+        "positive control: linked own-profile cache eviction failed"
+    );
 
-    let row = || psql(&format!("select version || '|' || md5(encrypted_backup) from svr_backups where user_id = '{uid}'"));
+    let row = || {
+        psql(&format!(
+            "select version || '|' || md5(encrypted_backup) from svr_backups where user_id = '{uid}'"
+        ))
+    };
     let before = row();
-    assert!(before.starts_with("1|"), "POSITIVE CONTROL FAILED: registration left no v1 backup: {before:?}");
+    assert!(
+        before.starts_with("1|"),
+        "POSITIVE CONTROL FAILED: registration left no v1 backup: {before:?}"
+    );
     // True only against a stored fingerprint (`LinkDeviceService::verify_pin`).
     let local_pin_ok = |c: &Arc<ChatterClient>| c.verify_pin_for_anon_mode(PIN);
-    assert!(!local_pin_ok(&client_s), "POSITIVE CONTROL FAILED: the linked device already has a fingerprint");
+    assert!(
+        !local_pin_ok(&client_s),
+        "POSITIVE CONTROL FAILED: the linked device already has a fingerprint"
+    );
 
     // 1. wrong PIN: refused, nothing written.
     let err = client_s
@@ -11359,18 +12498,39 @@ async fn v56_linked_device_restricts_profile_visibility_with_pin() {
     assert!(!local_pin_ok(&client_s), "a wrong PIN stored a fingerprint");
 
     // 2. right PIN: rotation goes through from the linked device.
-    let profile_before = client_p.get_user_profile(&uid).await.expect("primary profile unavailable");
+    let profile_before = client_p
+        .get_user_profile(&uid)
+        .await
+        .expect("primary profile unavailable");
     // The wrong-PIN preflight hydrates too; force a cache miss on success.
     evict_linked_profile();
-    assert!(client_s.users().get_profile_local(&uid).expect("linked profile lookup").is_none());
+    assert!(
+        client_s
+            .users()
+            .get_profile_local(&uid)
+            .expect("linked profile lookup")
+            .is_none()
+    );
     client_s
         .set_profile_visibility(ProfileVisibility::Contacts, Some(PIN))
         .await
         .expect("the right PIN must let the linked device restrict");
-    let profile_after = client_s.get_user_profile(&uid).await.expect("rotated linked profile unavailable");
-    assert_eq!(profile_after.display_name, profile_before.display_name, "rotation lost display name");
-    assert_eq!(profile_after.status_message, profile_before.status_message, "rotation lost status");
-    assert_eq!(profile_after.avatar_bytes, profile_before.avatar_bytes, "rotation lost avatar");
+    let profile_after = client_s
+        .get_user_profile(&uid)
+        .await
+        .expect("rotated linked profile unavailable");
+    assert_eq!(
+        profile_after.display_name, profile_before.display_name,
+        "rotation lost display name"
+    );
+    assert_eq!(
+        profile_after.status_message, profile_before.status_message,
+        "rotation lost status"
+    );
+    assert_eq!(
+        profile_after.avatar_bytes, profile_before.avatar_bytes,
+        "rotation lost avatar"
+    );
 
     // Bypass restore_own_profile's cached-value fallback: decrypt the actual
     // server ciphertexts with the linked device's newly committed profile key.
@@ -11378,39 +12538,75 @@ async fn v56_linked_device_restricts_profile_visibility_with_pin() {
     let db_path = dir_s.path().join("data/chatter.db");
     let passphrase = zeroize::Zeroizing::new(
         chatter_core::system::keyring::Keyring::new(db_path.clone())
-            .get_passphrase().expect("linked DB passphrase unavailable"));
-    let db = Arc::new(chatter_core::storage::Database::open(&db_path, &passphrase)
-        .expect("open linked profile-key store"));
+            .get_passphrase()
+            .expect("linked DB passphrase unavailable"),
+    );
+    let db = Arc::new(
+        chatter_core::storage::Database::open(&db_path, &passphrase)
+            .expect("open linked profile-key store"),
+    );
     let settings = chatter_core::storage::SettingsRepository::new(db);
-    let key: [u8; 32] = settings.get_bytes(chatter_core::storage::settings_keys::PROFILE_KEY)
-        .expect("read linked profile key").expect("linked profile key absent")
-        .try_into().ok().expect("linked profile key length");
+    let key: [u8; 32] = settings
+        .get_bytes(chatter_core::storage::settings_keys::PROFILE_KEY)
+        .expect("read linked profile key")
+        .expect("linked profile key absent")
+        .try_into()
+        .ok()
+        .expect("linked profile key length");
     let key = zeroize::Zeroizing::new(key);
-    let wire = psql(&format!("select display_name || '|' || coalesce(status_message, '') || '|' || \
-        encode(encrypted_avatar, 'hex') from user_profiles where user_id = '{uid}'"));
+    let wire = psql(&format!(
+        "select display_name || '|' || coalesce(status_message, '') || '|' || \
+        encode(encrypted_avatar, 'hex') from user_profiles where user_id = '{uid}'"
+    ));
     let fields: Vec<&str> = wire.split('|').collect();
-    assert_eq!(fields.len(), 3, "expected exactly one complete server profile");
+    assert_eq!(
+        fields.len(),
+        3,
+        "expected exactly one complete server profile"
+    );
     use base64::Engine as _;
-    let name_cipher = base64::engine::general_purpose::STANDARD.decode(fields[0]).expect("name base64");
-    let status_cipher = base64::engine::general_purpose::STANDARD.decode(fields[1]).expect("status base64");
+    let name_cipher = base64::engine::general_purpose::STANDARD
+        .decode(fields[0])
+        .expect("name base64");
+    let status_cipher = base64::engine::general_purpose::STANDARD
+        .decode(fields[1])
+        .expect("status base64");
     let avatar_cipher = hex::decode(fields[2]).expect("avatar hex");
-    assert_eq!(chatter_core::crypto::profile_crypto::decrypt_display_name(&key, &name_cipher)
-        .expect("server name must decrypt with rotated key"), "V56 Primary");
-    assert_eq!(chatter_core::crypto::profile_crypto::decrypt_status(&key, &status_cipher)
-        .expect("server status must decrypt with rotated key"), "V56 retained status");
-    assert_eq!(chatter_core::crypto::profile_crypto::decrypt_avatar(&key, &avatar_cipher)
-        .expect("server avatar must decrypt with rotated key"),
-        b"V56-small-avatar-preserved-through-rotation");
+    assert_eq!(
+        chatter_core::crypto::profile_crypto::decrypt_display_name(&key, &name_cipher)
+            .expect("server name must decrypt with rotated key"),
+        "V56 Primary"
+    );
+    assert_eq!(
+        chatter_core::crypto::profile_crypto::decrypt_status(&key, &status_cipher)
+            .expect("server status must decrypt with rotated key"),
+        "V56 retained status"
+    );
+    assert_eq!(
+        chatter_core::crypto::profile_crypto::decrypt_avatar(&key, &avatar_cipher)
+            .expect("server avatar must decrypt with rotated key"),
+        b"V56-small-avatar-preserved-through-rotation"
+    );
     let after = row();
-    assert!(after.starts_with("2|") && after != before, "backup not rewritten: {after:?}");
-    assert!(local_pin_ok(&client_s), "the verified PIN's fingerprint was not stored");
+    assert!(
+        after.starts_with("2|") && after != before,
+        "backup not rewritten: {after:?}"
+    );
+    assert!(
+        local_pin_ok(&client_s),
+        "the verified PIN's fingerprint was not stored"
+    );
 
     // 3. the primary's counter says 1; the server says 2.
     client_p
         .set_profile_visibility(ProfileVisibility::Nobody, Some(PIN))
         .await
         .expect("a stale version counter must be recovered, not fail the rotation");
-    assert!(row().starts_with("3|"), "primary's rotation did not land as version 3: {}", row());
+    assert!(
+        row().starts_with("3|"),
+        "primary's rotation did not land as version 3: {}",
+        row()
+    );
 
     client_s.shutdown().await;
     client_p.shutdown().await;
@@ -11424,7 +12620,12 @@ async fn wait_for_channel_text(client: &Arc<ChatterClient>, conv: &ChannelId, wa
     let deadline = Instant::now() + CONDITION_TIMEOUT;
     loop {
         let stored = client
-            .get_messages_local(conv, &chatter_core::domain::message::ConversationType::Channel, None, 50)
+            .get_messages_local(
+                conv,
+                &chatter_core::domain::message::ConversationType::Channel,
+                None,
+                50,
+            )
             .unwrap_or_default();
         if stored.iter().any(|m| m.as_text() == Some(want)) {
             return true;
@@ -11444,7 +12645,10 @@ async fn connect_without_inbox(path: &std::path::Path, label: &str) -> Arc<Chatt
     c.connect()
         .await
         .unwrap_or_else(|e| panic!("{label} reconnect failed: {e:?}"));
-    assert!(c.restore_session(), "{label} failed to restore its persisted session");
+    assert!(
+        c.restore_session(),
+        "{label} failed to restore its persisted session"
+    );
     c
 }
 
@@ -11502,7 +12706,11 @@ async fn v57_group_resend_reaches_only_original_recipients_still_in_the_channel(
     // C is NOT invited yet: she joins after m1.
     let name = format!(
         "v57-resend-{}",
-        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis() % 1_000_000
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis()
+            % 1_000_000
     );
     let group = common::create_group_with_members(
         &client_a,
@@ -11540,7 +12748,9 @@ async fn v57_group_resend_reaches_only_original_recipients_still_in_the_channel(
         matches!(b_keys.load_sender_key(&a_addr, &dist), Ok(Some(_))),
         "PRECONDITION FAILED: B holds no sender key from A after decrypting m0"
     );
-    b_keys.delete_sender_key(&a_addr, &dist).expect("delete B's copy of A's sender key");
+    b_keys
+        .delete_sender_key(&a_addr, &dist)
+        .expect("delete B's copy of A's sender key");
     assert!(
         matches!(b_keys.load_sender_key(&a_addr, &dist), Ok(None)),
         "PRECONDITION FAILED: A's sender key is still on B after deleting it"
@@ -11555,7 +12765,12 @@ async fn v57_group_resend_reaches_only_original_recipients_still_in_the_channel(
         .await
         .expect("A send of m1 failed");
     let m1_sent_at = client_a
-        .get_messages_local(&gid, &chatter_core::domain::message::ConversationType::Channel, None, 50)
+        .get_messages_local(
+            &gid,
+            &chatter_core::domain::message::ConversationType::Channel,
+            None,
+            50,
+        )
         .unwrap()
         .into_iter()
         .find(|m| m.as_text() == Some(m1.as_str()))
@@ -11583,7 +12798,10 @@ async fn v57_group_resend_reaches_only_original_recipients_still_in_the_channel(
         .await
         .expect("A failed to invite C");
     common::accept_channel_invite(&client_c, &uid_c, &gid).await;
-    client_d.leave_channel(&gid).await.expect("D failed to leave");
+    client_d
+        .leave_channel(&gid)
+        .await
+        .expect("D failed to leave");
 
     // The resend decision reads A's LOCAL member list, so C must be in it
     // (else C's refusal is the membership check, not the snapshot) and D must
@@ -11601,9 +12819,15 @@ async fn v57_group_resend_reaches_only_original_recipients_still_in_the_channel(
         }
         tokio::time::sleep(POLL_INTERVAL).await;
     };
-    assert!(c_in, "PRECONDITION FAILED: A's local member list never gained C, so a refusal \
-                   of C would not be about the send-time snapshot");
-    assert!(d_out, "PRECONDITION FAILED: A's local member list still has D after D left");
+    assert!(
+        c_in,
+        "PRECONDITION FAILED: A's local member list never gained C, so a refusal \
+                   of C would not be about the send-time snapshot"
+    );
+    assert!(
+        d_out,
+        "PRECONDITION FAILED: A's local member list still has D after D left"
+    );
     println!("  C joined after m1 and D left after m1 (A's local member list agrees)");
 
     // ---- take B, C, D offline: their queues only grow from here --------------
@@ -11618,8 +12842,9 @@ async fn v57_group_resend_reaches_only_original_recipients_still_in_the_channel(
     // The DEM each of them would send for m1: named by A's sent_at, A's device
     // 1. libsignal ignores the ciphertext for a SenderKey DEM (protocol.rs
     // `for_original`: SenderKey => no ratchet key).
-    let dem = chatter_core::services::signal::SignalService::group_decryption_error(&[], m1_sent_at, 1)
-        .expect("build the DecryptionErrorMessage");
+    let dem =
+        chatter_core::services::signal::SignalService::group_decryption_error(&[], m1_sent_at, 1)
+            .expect("build the DecryptionErrorMessage");
 
     // NEGATIVES first, so by the time the positive control's resend has landed
     // A has already handled both.
@@ -11650,12 +12875,21 @@ async fn v57_group_resend_reaches_only_original_recipients_still_in_the_channel(
          m1 and A queued nothing for B's device within {CONDITION_TIMEOUT:?}. Without this, \
          'C and D got nothing' proves nothing."
     );
-    println!("  HALF 2: B's DEM got a resend queued to B's device ({} new row(s))", rows_b.len());
+    println!(
+        "  HALF 2: B's DEM got a resend queued to B's device ({} new row(s))",
+        rows_b.len()
+    );
 
     // HALF 3: give A the same time again, then C's and D's queues must be unchanged.
     tokio::time::sleep(Duration::from_secs(5)).await;
-    let new_c: Vec<_> = envelope_rows(&uid_c).into_iter().filter(|f| !base_c.contains(&f[0])).collect();
-    let new_d: Vec<_> = envelope_rows(&uid_d).into_iter().filter(|f| !base_d.contains(&f[0])).collect();
+    let new_c: Vec<_> = envelope_rows(&uid_c)
+        .into_iter()
+        .filter(|f| !base_c.contains(&f[0]))
+        .collect();
+    let new_d: Vec<_> = envelope_rows(&uid_d)
+        .into_iter()
+        .filter(|f| !base_d.contains(&f[0]))
+        .collect();
     assert!(
         new_c.is_empty(),
         "RESEND SCOPE VIOLATED: C joined AFTER m1, asked for it, and A queued {} envelope(s) \
@@ -11672,23 +12906,35 @@ async fn v57_group_resend_reaches_only_original_recipients_still_in_the_channel(
 
     // And C's own store never held m1 (C was never sent its key or its content).
     let c_rows = off_c
-        .get_messages_local(&gid, &chatter_core::domain::message::ConversationType::Channel, None, 50)
+        .get_messages_local(
+            &gid,
+            &chatter_core::domain::message::ConversationType::Channel,
+            None,
+            50,
+        )
         .unwrap_or_default();
     assert!(
         !c_rows.iter().any(|m| m.as_text() == Some(m1.as_str())),
         "C holds m1's plaintext although it joined after m1 was sent"
     );
 
-    println!("\n  V57 PASS — resend reaches the original recipient still in the channel, and \
-              neither a later joiner nor a departed member.\n");
+    println!(
+        "\n  V57 PASS — resend reaches the original recipient still in the channel, and \
+              neither a later joiner nor a departed member.\n"
+    );
     client_a.shutdown().await;
 }
 
 /// `(epoch, current, next)` as LiveKit's `KeyProvider` on `client` holds them:
 /// the key at the epoch's ring slot and the pre-installed `epoch + 1` key.
 /// `None` when the client is not in a call.
-async fn call_key_view(client: &Arc<ChatterClient>) -> Option<(u32, Vec<u8>, Option<Vec<u8>>, Vec<Vec<u8>>)> {
-    let (epoch, ring) = client.call_service_handle_opt()?.installed_key_ring().await?;
+async fn call_key_view(
+    client: &Arc<ChatterClient>,
+) -> Option<(u32, Vec<u8>, Option<Vec<u8>>, Vec<Vec<u8>>)> {
+    let (epoch, ring) = client
+        .call_service_handle_opt()?
+        .installed_key_ring()
+        .await?;
     let slot = |e: u32| ring[(e % ring.len() as u32) as usize].clone();
     let current = slot(epoch)?;
     let next = slot(epoch.wrapping_add(1));
@@ -11762,7 +13008,9 @@ async fn local_tracks(client: &Arc<ChatterClient>) -> usize {
 /// Accept the ring for `call_id` on `client` once the orchestrator presents it.
 async fn accept_group_ring(
     client: &Arc<ChatterClient>,
-    events: &mut tokio::sync::broadcast::Receiver<chatter_core::services::call_worker::CallOrchestratorEvent>,
+    events: &mut tokio::sync::broadcast::Receiver<
+        chatter_core::services::call_worker::CallOrchestratorEvent,
+    >,
     call_id: &str,
     label: &str,
 ) {
@@ -11770,10 +13018,16 @@ async fn accept_group_ring(
     let deadline = Instant::now() + EVENT_TIMEOUT;
     loop {
         match tokio::time::timeout_at(deadline.into(), events.recv()).await {
-            Ok(Ok(CallOrchestratorEvent::IncomingPresented { call, .. })) if call.as_str() == call_id => break,
+            Ok(Ok(CallOrchestratorEvent::IncomingPresented { call, .. }))
+                if call.as_str() == call_id =>
+            {
+                break;
+            }
             Ok(Ok(_)) | Ok(Err(tokio::sync::broadcast::error::RecvError::Lagged(_))) => continue,
             Ok(Err(e)) => panic!("{label}: orchestrator event stream closed: {e:?}"),
-            Err(_) => panic!("{label} was never rung for group call {call_id} within {EVENT_TIMEOUT:?}"),
+            Err(_) => {
+                panic!("{label} was never rung for group call {call_id} within {EVENT_TIMEOUT:?}")
+            }
         }
     }
     client
@@ -11837,7 +13091,11 @@ async fn v58_group_call_key_rotates_on_join_and_leave() {
 
     let name = format!(
         "v58-call-{}",
-        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis() % 1_000_000
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis()
+            % 1_000_000
     );
     let group = common::create_group_with_members(
         &client_a,
@@ -11848,11 +13106,19 @@ async fn v58_group_call_key_rotates_on_join_and_leave() {
         &[(&client_b, &uid_b), (&client_c, &uid_c)],
     )
     .await;
-    let mut ev_b = client_b.subscribe_call_orchestrator_events().expect("B has no call service");
-    let ev_c = client_c.subscribe_call_orchestrator_events().expect("C has no call service");
+    let mut ev_b = client_b
+        .subscribe_call_orchestrator_events()
+        .expect("B has no call service");
+    let ev_c = client_c
+        .subscribe_call_orchestrator_events()
+        .expect("C has no call service");
 
     let setup = client_a
-        .start_group_call(group.id.clone(), chatter_core::domain::call::CallType::Voice, uid_a)
+        .start_group_call(
+            group.id.clone(),
+            chatter_core::domain::call::CallType::Voice,
+            uid_a,
+        )
         .await
         .expect("A failed to start the group call");
     let call_id = setup.call_id.to_string();
@@ -11861,7 +13127,9 @@ async fn v58_group_call_key_rotates_on_join_and_leave() {
     // A's starting key, before anyone joins: what the ring used to carry to
     // every member (§124 1k). Its whole chain, from the epoch-1 key A
     // pre-installs on.
-    let (e_a0, k_a0, next_a0, _) = call_key_view(&client_a).await.expect("A is not in the call");
+    let (e_a0, k_a0, next_a0, _) = call_key_view(&client_a)
+        .await
+        .expect("A is not in the call");
     let mut start_chain = vec![k_a0.clone()];
     if let Some(next) = &next_a0 {
         start_chain.extend(derivable_call_keys(&call_id, next, e_a0 + 1, 20));
@@ -11891,12 +13159,17 @@ async fn v58_group_call_key_rotates_on_join_and_leave() {
     let b_joined = Instant::now();
     let mut a_saw_b: Option<Instant> = None;
     let mut a_rotated: Option<Instant> = None;
-    let worker_a = client_a.call_service_handle_opt().expect("A has no call service");
+    let worker_a = client_a
+        .call_service_handle_opt()
+        .expect("A has no call service");
     let e_ab = {
         let deadline = Instant::now() + Duration::from_secs(60);
         loop {
             if a_saw_b.is_none()
-                && worker_a.room_seniority().await.is_some_and(|r| r.remote.iter().any(|(id, _)| *id == uid_b.to_string()))
+                && worker_a
+                    .room_seniority()
+                    .await
+                    .is_some_and(|r| r.remote.iter().any(|(id, _)| *id == uid_b.to_string()))
             {
                 a_saw_b = Some(Instant::now());
             }
@@ -11912,44 +13185,74 @@ async fn v58_group_call_key_rotates_on_join_and_leave() {
                 }
                 b_seen.extend(ring.iter().cloned());
             }
-            if matches!(&b, Some((e, k, _, _)) if *e == a.0 && *k == a.1) && !start_chain.contains(&a.1) {
+            if matches!(&b, Some((e, k, _, _)) if *e == a.0 && *k == a.1)
+                && !start_chain.contains(&a.1)
+            {
                 break a.0;
             }
-            assert!(Instant::now() < deadline, "JOIN ROTATION FAILED: A and B never agreed on a key \
-                off A's starting chain within 60s of B joining");
+            assert!(
+                Instant::now() < deadline,
+                "JOIN ROTATION FAILED: A and B never agreed on a key \
+                off A's starting chain within 60s of B joining"
+            );
             tokio::time::sleep(Duration::from_millis(50)).await;
         }
     };
     let b_keyed = Instant::now();
     let a_saw_b = a_saw_b.unwrap_or(b_keyed);
-    let a_rotated = a_rotated.expect("A agreed with B on a key off its starting chain, so it rotated");
+    let a_rotated =
+        a_rotated.expect("A agreed with B on a key off its starting chain, so it rotated");
     let react = a_rotated.saturating_duration_since(a_saw_b);
     let join_to_key = b_keyed.duration_since(b_joined);
-    println!("  timing: A saw B +{:?}, A rotated +{:?} (reaction {:?}), B keyed +{:?} after B's join",
-        a_saw_b.duration_since(b_joined), a_rotated.duration_since(b_joined), react, join_to_key);
+    println!(
+        "  timing: A saw B +{:?}, A rotated +{:?} (reaction {:?}), B keyed +{:?} after B's join",
+        a_saw_b.duration_since(b_joined),
+        a_rotated.duration_since(b_joined),
+        react,
+        join_to_key
+    );
     // The authority's own reaction is what this asserts: the joiner's
     // receipt adds the harness's inbox poll (~1.5 s; devices stream), and
     // LiveKit reports a joiner only once its transport is up (~2 s here).
-    assert!(react <= Duration::from_secs(1), "SLOW JOIN ROTATION: the authority rotated {react:?} \
-        after it saw the joiner (want <= 1 s: no settle wait)");
+    assert!(
+        react <= Duration::from_secs(1),
+        "SLOW JOIN ROTATION: the authority rotated {react:?} \
+        after it saw the joiner (want <= 1 s: no settle wait)"
+    );
     let leaked: Vec<_> = b_seen.iter().filter(|k| start_chain.contains(k)).collect();
-    assert!(leaked.is_empty(), "THE RING CARRIED A MEDIA KEY: B's KeyProvider held {} key(s) on \
-        A's starting chain — a member who was only rung could decrypt A's media", leaked.len());
-    assert_eq!(b_published_keyless, 0, "JOINER PUBLISHED WITHOUT THE CALL'S KEY: B published {} \
-        track(s) while it shared no key with A", b_published_keyless);
+    assert!(
+        leaked.is_empty(),
+        "THE RING CARRIED A MEDIA KEY: B's KeyProvider held {} key(s) on \
+        A's starting chain — a member who was only rung could decrypt A's media",
+        leaked.len()
+    );
+    assert_eq!(
+        b_published_keyless, 0,
+        "JOINER PUBLISHED WITHOUT THE CALL'S KEY: B published {} \
+        track(s) while it shared no key with A",
+        b_published_keyless
+    );
     if a_tracks > 0 {
         let deadline = Instant::now() + Duration::from_secs(10);
         while local_tracks(&client_b).await == 0 {
-            assert!(Instant::now() < deadline, "POSITIVE CONTROL FAILED: A publishes, but B never \
-                published after it was keyed — the gate never opens");
+            assert!(
+                Instant::now() < deadline,
+                "POSITIVE CONTROL FAILED: A publishes, but B never \
+                published after it was keyed — the gate never opens"
+            );
             tokio::time::sleep(POLL_INTERVAL).await;
         }
     } else {
-        println!("  (no capture device here: A publishes no track, so the publish gate is checked \
-                  only as \"nothing while keyless\")");
+        println!(
+            "  (no capture device here: A publishes no track, so the publish gate is checked \
+                  only as \"nothing while keyless\")"
+        );
     }
-    println!("  A and B agree at epoch {e_ab}; B never held A's starting chain ({} ring samples); \
-              B published nothing while keyless (A tracks: {a_tracks})", b_seen.len());
+    println!(
+        "  A and B agree at epoch {e_ab}; B never held A's starting chain ({} ring samples); \
+              B published nothing while keyless (A tracks: {a_tracks})",
+        b_seen.len()
+    );
 
     // Watch A for 8s past agreement: everything A keyed the call with from
     // here to C's join is "before C".
@@ -11982,10 +13285,18 @@ async fn v58_group_call_key_rotates_on_join_and_leave() {
     // `start_group_call` on a channel with a live call joins it (the server's
     // CreateCall hands it back): no ring is involved on C's side.
     let c_setup = client_c
-        .start_group_call(group.id.clone(), chatter_core::domain::call::CallType::Voice, uid_c)
+        .start_group_call(
+            group.id.clone(),
+            chatter_core::domain::call::CallType::Voice,
+            uid_c,
+        )
         .await
         .expect("C failed to join the channel's call");
-    assert_eq!(c_setup.call_id.to_string(), call_id, "C started a second call instead of joining");
+    assert_eq!(
+        c_setup.call_id.to_string(),
+        call_id,
+        "C started a second call instead of joining"
+    );
     drop(ev_c);
     // Sample C's ring while the join rotation lands, so a pre-join key that
     // C held even briefly is caught.
@@ -11997,23 +13308,32 @@ async fn v58_group_call_key_rotates_on_join_and_leave() {
             if let Some((_, _, _, ring)) = call_key_view(&client_c).await {
                 c_seen.extend(ring);
             }
-            let views = futures::future::join_all(all_three.iter().map(|(_, c)| call_key_view(c))).await;
+            let views =
+                futures::future::join_all(all_three.iter().map(|(_, c)| call_key_view(c))).await;
             if let Some(Some((e0, k0, _, _))) = views.first() {
-                if views.iter().all(|v| matches!(v, Some((e, k, _, _)) if e == e0 && k == k0))
+                if views
+                    .iter()
+                    .all(|v| matches!(v, Some((e, k, _, _)) if e == e0 && k == k0))
                     && !pre_chain.contains(k0)
                 {
                     break (*e0, k0.clone());
                 }
             }
-            assert!(Instant::now() < deadline, "JOIN ROTATION FAILED: A, B and C never agreed on a \
-                key off A's pre-join chain within 60s of C joining");
+            assert!(
+                Instant::now() < deadline,
+                "JOIN ROTATION FAILED: A, B and C never agreed on a \
+                key off A's pre-join chain within 60s of C joining"
+            );
             tokio::time::sleep(POLL_INTERVAL).await;
         }
     };
     if let Some((_, _, _, ring)) = call_key_view(&client_c).await {
         c_seen.extend(ring);
     }
-    assert!(e_join > e_pre, "the join rotation must move the call to a later epoch ({e_join} <= {e_pre})");
+    assert!(
+        e_join > e_pre,
+        "the join rotation must move the call to a later epoch ({e_join} <= {e_pre})"
+    );
     let leaked: Vec<_> = c_seen.iter().filter(|k| pre_chain.contains(k)).collect();
     assert!(
         leaked.is_empty(),
@@ -12021,20 +13341,32 @@ async fn v58_group_call_key_rotates_on_join_and_leave() {
          before C joined — C could decrypt what was said before it joined",
         leaked.len()
     );
-    println!("  JOIN (unrung, from the channel): A, B, C rotated to one fresh key at epoch {e_join}; \
-              C never held a pre-join key ({} ring samples)", c_seen.len());
+    println!(
+        "  JOIN (unrung, from the channel): A, B, C rotated to one fresh key at epoch {e_join}; \
+              C never held a pre-join key ({} ring samples)",
+        c_seen.len()
+    );
 
     // ---- 3. authority = most senior -----------------------------------------
-    for (label, c, me) in [("A", &client_a, &uid_a), ("B", &client_b, &uid_b), ("C", &client_c, &uid_c)] {
+    for (label, c, me) in [
+        ("A", &client_a, &uid_a),
+        ("B", &client_b, &uid_b),
+        ("C", &client_c, &uid_c),
+    ] {
         let s = c
             .call_service_handle_opt()
             .unwrap()
             .room_seniority()
             .await
             .unwrap_or_else(|| panic!("{label} has no room roster"));
-        let mut all: Vec<(i64, String)> = s.remote.iter().map(|(id, at)| (*at, id.clone())).collect();
+        let mut all: Vec<(i64, String)> =
+            s.remote.iter().map(|(id, at)| (*at, id.clone())).collect();
         all.push((s.local_joined_at_ms, me.to_string()));
-        assert_eq!(all.len(), 3, "{label} does not see all three participants: {all:?}");
+        assert_eq!(
+            all.len(),
+            3,
+            "{label} does not see all three participants: {all:?}"
+        );
         let senior = all.iter().min().unwrap();
         assert_eq!(
             senior.1,
@@ -12045,31 +13377,52 @@ async fn v58_group_call_key_rotates_on_join_and_leave() {
     println!("  AUTHORITY: every roster ranks A most senior");
 
     // ---- 4. B leaves --------------------------------------------------------
-    let (e_b, k_b, next_b, _) = call_key_view(&client_b).await.expect("B left the call early");
+    let (e_b, k_b, next_b, _) = call_key_view(&client_b)
+        .await
+        .expect("B left the call early");
     let b_chain = derivable_call_keys(&call_id, &k_b, e_b, 20);
-    assert_eq!(next_b.as_ref(), Some(&b_chain[1]), "POSITIVE CONTROL FAILED: B's pre-installed key \
-        is not the harness's chain step");
-    client_b.call_leave_room().await.expect("B failed to leave the call");
+    assert_eq!(
+        next_b.as_ref(),
+        Some(&b_chain[1]),
+        "POSITIVE CONTROL FAILED: B's pre-installed key \
+        is not the harness's chain step"
+    );
+    client_b
+        .call_leave_room()
+        .await
+        .expect("B failed to leave the call");
     let (e_leave, k_leave) = wait_for_call_key_agreement(
         &[("A", &client_a), ("C", &client_c)],
         |k| !b_chain.contains(&k.to_vec()),
         "LEAVE ROTATION FAILED: A+C after B left",
     )
     .await;
-    assert_ne!(k_leave, k_b, "the departed participant's last key is the call's key");
-    assert!(e_leave > e_b, "the leave rotation must move the call to a later epoch");
+    assert_ne!(
+        k_leave, k_b,
+        "the departed participant's last key is the call's key"
+    );
+    assert!(
+        e_leave > e_b,
+        "the leave rotation must move the call to a later epoch"
+    );
     for (label, c) in [("A", &client_a), ("C", &client_c)] {
-        let (_, cur, next, _) = call_key_view(c).await.unwrap_or_else(|| panic!("{label} left the call"));
+        let (_, cur, next, _) = call_key_view(c)
+            .await
+            .unwrap_or_else(|| panic!("{label} left the call"));
         assert!(
             !b_chain.contains(&cur) && next.as_ref().is_none_or(|n| !b_chain.contains(n)),
             "DEPARTED PARTICIPANT CAN DERIVE THE KEY: {label}'s current or next key is on B's chain"
         );
     }
-    println!("  LEAVE: A and C rotated to epoch {e_leave}; B's chain (20 ratchets) reaches neither key");
+    println!(
+        "  LEAVE: A and C rotated to epoch {e_leave}; B's chain (20 ratchets) reaches neither key"
+    );
 
-    println!("\n  V58 PASS — join and leave each rotate the call to a fresh key, set by the most \
+    println!(
+        "\n  V58 PASS — join and leave each rotate the call to a fresh key, set by the most \
               senior participant; the joiner never held a pre-join key, the leaver can't derive \
-              the new one.\n");
+              the new one.\n"
+    );
     let _ = client_a.call_leave_room().await;
     let _ = client_c.call_leave_room().await;
     for c in [&client_a, &client_b, &client_c] {
@@ -12101,7 +13454,10 @@ fn verified_of(client: &Arc<ChatterClient>, gid: &ChannelId) -> Option<VerifiedC
 }
 
 fn active_in(v: &VerifiedChannel, uid: &UserId) -> bool {
-    v.state.members.get(&uid.to_string()).is_some_and(|m| m.status == MemberStatus::Active)
+    v.state
+        .members
+        .get(&uid.to_string())
+        .is_some_and(|m| m.status == MemberStatus::Active)
 }
 
 /// Wait until `client`'s verified state for `gid` satisfies `pred`.
@@ -12160,11 +13516,19 @@ async fn wait_new_server_ciphertexts(
 
 /// Try `content` (a server-stored GroupEncrypted) against `client`'s own
 /// sender-key store, as sent by `sender`'s device 1.
-async fn try_group_decrypt(client: &Arc<ChatterClient>, sender: &UserId, content: &[u8]) -> Result<Vec<u8>, String> {
+async fn try_group_decrypt(
+    client: &Arc<ChatterClient>,
+    sender: &UserId,
+    content: &[u8],
+) -> Result<Vec<u8>, String> {
     use prost::Message as _;
     let ge = chatter_core::proto::content_v1::GroupEncrypted::decode(content)
         .map_err(|e| format!("not a GroupEncrypted: {e}"))?;
-    client.signal().decrypt_from_group(sender, 1, &ge).await.map_err(|e| format!("{e}"))
+    client
+        .signal()
+        .decrypt_from_group(sender, 1, &ge)
+        .await
+        .map_err(|e| format!("{e}"))
 }
 
 /// PUBLISH a protojson ChannelEvent on `user:{user}:channel_events`, the
@@ -12178,7 +13542,9 @@ fn redis_relay_channel_event(user: &UserId, event_json: &str) -> i64 {
         path.display()
     ));
     let _ = std::fs::remove_file(&path);
-    out.trim().parse().unwrap_or_else(|_| panic!("redis PUBLISH failed: {out}"))
+    out.trim()
+        .parse()
+        .unwrap_or_else(|_| panic!("redis PUBLISH failed: {out}"))
 }
 
 /// Send `text` into channel `gid` and require it to have LEFT this device: a
@@ -12191,15 +13557,22 @@ async fn send_delivered(client: &Arc<ChatterClient>, gid: &ChannelId, text: &str
         .await
         .unwrap_or_else(|e| panic!("{who}'s send errored: {e}"));
     if let Some(m) = r.message {
-        assert_ne!(m.delivery_status, "failed",
-            "{who}'s channel send was stored as FAILED ({:?}) — not delivered", m.failure_reason);
+        assert_ne!(
+            m.delivery_status, "failed",
+            "{who}'s channel send was stored as FAILED ({:?}) — not delivered",
+            m.failure_reason
+        );
     }
 }
 
 fn unique_channel_name(tag: &str) -> String {
     format!(
         "{tag}-{}",
-        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis() % 1_000_000
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis()
+            % 1_000_000
     )
 }
 
@@ -12257,20 +13630,38 @@ async fn v59_server_injected_member_gets_no_skdm() {
     client_b.resubscribe_channel_messages();
 
     // Both hold the same verified state (signed genesis + invite + accept).
-    let va = wait_verified(&client_a, &gid, |v| active_in(v, &uid_b)).await.expect("A has no verified state");
-    let vb = wait_verified(&client_b, &gid, |v| v.state.revision == va.state.revision).await
+    let va = wait_verified(&client_a, &gid, |v| active_in(v, &uid_b))
+        .await
+        .expect("A has no verified state");
+    let vb = wait_verified(&client_b, &gid, |v| v.state.revision == va.state.revision)
+        .await
         .expect("B has no verified state");
-    assert!(active_in(&va, &uid_b), "PRECONDITION FAILED: B is not ACTIVE in A's verified state");
-    assert_eq!(va.state_hash, vb.state_hash, "PRECONDITION FAILED: A and B verified different states");
-    println!("  A and B hold the same verified state (revision {})", va.state.revision);
+    assert!(
+        active_in(&va, &uid_b),
+        "PRECONDITION FAILED: B is not ACTIVE in A's verified state"
+    );
+    assert_eq!(
+        va.state_hash, vb.state_hash,
+        "PRECONDITION FAILED: A and B verified different states"
+    );
+    println!(
+        "  A and B hold the same verified state (revision {})",
+        va.state.revision
+    );
 
     // ---- positive control: both directions decrypt ---------------------------
     let m0 = unique_marker();
     send_delivered(&client_a, &gid, &m0, "A").await;
-    assert!(wait_for_channel_text(&client_b, &gid, &m0).await, "POSITIVE CONTROL FAILED: B never decrypted A's m0");
+    assert!(
+        wait_for_channel_text(&client_b, &gid, &m0).await,
+        "POSITIVE CONTROL FAILED: B never decrypted A's m0"
+    );
     let b0 = unique_marker();
     send_delivered(&client_b, &gid, &b0, "B").await;
-    assert!(wait_for_channel_text(&client_a, &gid, &b0).await, "POSITIVE CONTROL FAILED: A never decrypted B's b0");
+    assert!(
+        wait_for_channel_text(&client_a, &gid, &b0).await,
+        "POSITIVE CONTROL FAILED: A never decrypted B's b0"
+    );
     println!("  positive control: A->B and B->A both decrypt");
 
     // ---- M offline: its device queue only grows from here ------------------
@@ -12285,7 +13676,10 @@ async fn v59_server_injected_member_gets_no_skdm() {
         "insert into channel_members (channel_id, user_id, role, joined_at, invitation_status) \
          values ('{gid}', '{uid_m}', 'ADMIN', now(), 'ACCEPTED') returning user_id"
     ));
-    assert!(ins.contains(&uid_m.to_string()), "ghost INSERT failed: {ins}");
+    assert!(
+        ins.contains(&uid_m.to_string()),
+        "ghost INSERT failed: {ins}"
+    );
     // The server reads members through a Redis cache of the channel row
     // (`repository/redis` ListMembers -> GetChannel); a server-side add
     // refreshes it, so drop it as the server would.
@@ -12296,7 +13690,9 @@ async fn v59_server_injected_member_gets_no_skdm() {
     let signed_rows = psql(&format!(
         "select count(*) from channel_changes where channel_id = '{gid}'"
     ));
-    println!("  INSERTed M ({uid_m}) into channel_members as ADMIN; channel_changes rows unchanged ({signed_rows})");
+    println!(
+        "  INSERTed M ({uid_m}) into channel_members as ADMIN; channel_changes rows unchanged ({signed_rows})"
+    );
 
     // POSITIVE CONTROL: the server really does assert M now.
     let server_members: Vec<UserId> = client_a
@@ -12306,15 +13702,32 @@ async fn v59_server_injected_member_gets_no_skdm() {
         .into_iter()
         .map(|m| m.user_id)
         .collect();
-    assert!(server_members.contains(&uid_m),
-        "POSITIVE CONTROL FAILED: the server does not list the injected M — the test injected nothing");
+    assert!(
+        server_members.contains(&uid_m),
+        "POSITIVE CONTROL FAILED: the server does not list the injected M — the test injected nothing"
+    );
 
     // ---- 1. A surfaces M as unverified --------------------------------------
-    let rows = client_a.list_members_with_profiles(&gid, 100, 0).await.expect("A's member list");
-    let row_m = rows.iter().find(|r| r.membership.user_id == uid_m).expect("A's member list does not show M at all");
-    let row_b = rows.iter().find(|r| r.membership.user_id == uid_b).expect("A's member list does not show B");
-    assert!(row_m.unverified, "GHOST NOT FLAGGED: A's member list shows the server-injected M as a verified member");
-    assert!(!row_b.unverified, "B (signed in) is flagged unverified — the marker is not discriminating");
+    let rows = client_a
+        .list_members_with_profiles(&gid, 100, 0)
+        .await
+        .expect("A's member list");
+    let row_m = rows
+        .iter()
+        .find(|r| r.membership.user_id == uid_m)
+        .expect("A's member list does not show M at all");
+    let row_b = rows
+        .iter()
+        .find(|r| r.membership.user_id == uid_b)
+        .expect("A's member list does not show B");
+    assert!(
+        row_m.unverified,
+        "GHOST NOT FLAGGED: A's member list shows the server-injected M as a verified member"
+    );
+    assert!(
+        !row_b.unverified,
+        "B (signed in) is flagged unverified — the marker is not discriminating"
+    );
     let m_str = uid_m.to_string();
     let g = gid.clone();
     let notice = wait_for_event(&mut events_a, EVENT_TIMEOUT, move |e| {
@@ -12322,57 +13735,126 @@ async fn v59_server_injected_member_gets_no_skdm() {
             if *channel_id == g && *user_id == m_str)
     })
     .await;
-    assert!(notice.is_some(), "A never raised ChannelMembershipNotice::UnverifiedMember for M");
+    assert!(
+        notice.is_some(),
+        "A never raised ChannelMembershipNotice::UnverifiedMember for M"
+    );
     let va_now = verified_of(&client_a, &gid).unwrap();
-    assert!(!va_now.state.members.contains_key(&uid_m.to_string()), "M reached A's VERIFIED state");
-    assert!(!client_a.channel_verification(&gid).blocks_sending(), "the ghost blocked A's sending");
-    println!("  1: A lists M flagged unverified and raised UnverifiedMember; M is not in A's verified state");
+    assert!(
+        !va_now.state.members.contains_key(&uid_m.to_string()),
+        "M reached A's VERIFIED state"
+    );
+    assert!(
+        !client_a.channel_verification(&gid).blocks_sending(),
+        "the ghost blocked A's sending"
+    );
+    println!(
+        "  1: A lists M flagged unverified and raised UnverifiedMember; M is not in A's verified state"
+    );
 
     // ---- 2. A's next send distributes a fresh key: B yes, M no ---------------
-    client_a.signal().mark_channel_for_rotation(&gid).expect("mark rotation");
-    let before_ct: std::collections::HashSet<String> =
-        server_group_ciphertexts(&gid, &uid_a).into_iter().map(|(id, _)| id).collect();
+    client_a
+        .signal()
+        .mark_channel_for_rotation(&gid)
+        .expect("mark rotation");
+    let before_ct: std::collections::HashSet<String> = server_group_ciphertexts(&gid, &uid_a)
+        .into_iter()
+        .map(|(id, _)| id)
+        .collect();
     let m1 = unique_marker();
     send_delivered(&client_a, &gid, &m1, "A").await;
-    assert!(wait_for_channel_text(&client_b, &gid, &m1).await,
+    assert!(
+        wait_for_channel_text(&client_b, &gid, &m1).await,
         "POSITIVE CONTROL FAILED: B never decrypted m1, sent on a freshly rotated key — the SKDM this \
-         send distributes never reached B, so 'M got none' would prove nothing");
+         send distributes never reached B, so 'M got none' would prove nothing"
+    );
     let m1_ct = wait_new_server_ciphertexts(&gid, &uid_a, &before_ct).await;
-    assert!(!m1_ct.is_empty(), "m1 is not in the server's messages table");
+    assert!(
+        !m1_ct.is_empty(),
+        "m1 is not in the server's messages table"
+    );
     tokio::time::sleep(Duration::from_secs(5)).await;
-    let new_m: Vec<_> = envelope_rows(&uid_m).into_iter().filter(|f| !base_m.contains(&f[0])).collect();
-    assert!(new_m.is_empty(),
+    let new_m: Vec<_> = envelope_rows(&uid_m)
+        .into_iter()
+        .filter(|f| !base_m.contains(&f[0]))
+        .collect();
+    assert!(
+        new_m.is_empty(),
         "GHOST GOT KEY MATERIAL: A's rotated send queued {} envelope(s) for the server-injected M: {new_m:?}",
-        new_m.len());
+        new_m.len()
+    );
     let a_addr = format!("{uid_a}:1");
-    assert!(matches!(off_m.signal().key_store().load_sender_key(&a_addr, &gid.to_string()), Ok(None)),
-        "M holds a sender key from A");
+    assert!(
+        matches!(
+            off_m
+                .signal()
+                .key_store()
+                .load_sender_key(&a_addr, &gid.to_string()),
+            Ok(None)
+        ),
+        "M holds a sender key from A"
+    );
     for (id, ct) in &m1_ct {
         let r = try_group_decrypt(&off_m, &uid_a, ct).await;
-        assert!(r.is_err(), "M DECRYPTED A's message {id} from the server's store");
+        assert!(
+            r.is_err(),
+            "M DECRYPTED A's message {id} from the server's store"
+        );
     }
-    println!("  2: B decrypted m1 on A's rotated key; M's queue is unchanged, M has no key and cannot decrypt m1");
+    println!(
+        "  2: B decrypted m1 on A's rotated key; M's queue is unchanged, M has no key and cannot decrypt m1"
+    );
 
     // ---- 3. M's SenderKeyRequest goes unanswered; B's is answered ------------
-    off_m.messages().send_sender_key_request(&gid, &uid_a).await.expect("M's SenderKeyRequest was not delivered");
+    off_m
+        .messages()
+        .send_sender_key_request(&gid, &uid_a)
+        .await
+        .expect("M's SenderKeyRequest was not delivered");
     client_b.shutdown().await;
     drop(client_b);
     let off_b = connect_without_inbox(dir_b.path(), "B").await;
     let base_b = quiesced_row_ids(&uid_b).await;
-    off_b.messages().send_sender_key_request(&gid, &uid_a).await.expect("B's SenderKeyRequest was not delivered");
+    off_b
+        .messages()
+        .send_sender_key_request(&gid, &uid_a)
+        .await
+        .expect("B's SenderKeyRequest was not delivered");
     let rows_b = wait_for_device_envelope(&uid_b, &base_b, 1).await;
-    assert!(rows_b.iter().any(|f| f[1] == "1"),
+    assert!(
+        rows_b.iter().any(|f| f[1] == "1"),
         "POSITIVE CONTROL FAILED: A did not answer verified member B's SenderKeyRequest within \
-         {CONDITION_TIMEOUT:?} — 'M got no answer' would prove nothing");
+         {CONDITION_TIMEOUT:?} — 'M got no answer' would prove nothing"
+    );
     tokio::time::sleep(Duration::from_secs(5)).await;
-    let new_m: Vec<_> = envelope_rows(&uid_m).into_iter().filter(|f| !base_m.contains(&f[0])).collect();
-    assert!(new_m.is_empty(), "GHOST'S SENDER-KEY REQUEST ANSWERED: {} envelope(s) queued for M: {new_m:?}", new_m.len());
-    assert!(matches!(off_m.signal().key_store().load_sender_key(&a_addr, &gid.to_string()), Ok(None)),
-        "M holds a sender key from A after asking");
-    println!("  3: B's SenderKeyRequest got an SKDM queued ({} row(s)); M's got nothing", rows_b.len());
+    let new_m: Vec<_> = envelope_rows(&uid_m)
+        .into_iter()
+        .filter(|f| !base_m.contains(&f[0]))
+        .collect();
+    assert!(
+        new_m.is_empty(),
+        "GHOST'S SENDER-KEY REQUEST ANSWERED: {} envelope(s) queued for M: {new_m:?}",
+        new_m.len()
+    );
+    assert!(
+        matches!(
+            off_m
+                .signal()
+                .key_store()
+                .load_sender_key(&a_addr, &gid.to_string()),
+            Ok(None)
+        ),
+        "M holds a sender key from A after asking"
+    );
+    println!(
+        "  3: B's SenderKeyRequest got an SKDM queued ({} row(s)); M's got nothing",
+        rows_b.len()
+    );
 
-    println!("\n  V59 PASS — the server-injected member is shown unverified, gets no SKDM on a rotated send, \
-              and its sender-key request is ignored.\n");
+    println!(
+        "\n  V59 PASS — the server-injected member is shown unverified, gets no SKDM on a rotated send, \
+              and its sender-key request is ignored.\n"
+    );
     client_a.shutdown().await;
 }
 
@@ -12395,7 +13877,9 @@ async fn v60_signed_kick_rotates_the_sender_key() {
     use chatter_core::domain::channel::ChannelType;
     skip_if_no_server!();
     no_keyring_prompts();
-    println!("\n=== V60: invite -> accept -> kick; the kicked member cannot read the next message ===\n");
+    println!(
+        "\n=== V60: invite -> accept -> kick; the kicked member cannot read the next message ===\n"
+    );
 
     let (_dir_a, client_a, uid_a) = fresh_user("v60a", "V60 Alice").await;
     let (_dir_b, client_b, uid_b) = fresh_user("v60b", "V60 Bob").await;
@@ -12412,22 +13896,39 @@ async fn v60_signed_kick_rotates_the_sender_key() {
     .await;
     let gid = group.id.clone();
     client_b.resubscribe_channel_messages();
-    let va = wait_verified(&client_a, &gid, |v| active_in(v, &uid_b) && active_in(v, &uid_c)).await.unwrap();
-    assert!(active_in(&va, &uid_b) && active_in(&va, &uid_c),
-        "PRECONDITION FAILED: invite+accept did not make B and C verified members on A");
-    println!("  invite + accept: B and C are ACTIVE in A's verified state (revision {})", va.state.revision);
+    let va = wait_verified(&client_a, &gid, |v| {
+        active_in(v, &uid_b) && active_in(v, &uid_c)
+    })
+    .await
+    .unwrap();
+    assert!(
+        active_in(&va, &uid_b) && active_in(&va, &uid_c),
+        "PRECONDITION FAILED: invite+accept did not make B and C verified members on A"
+    );
+    println!(
+        "  invite + accept: B and C are ACTIVE in A's verified state (revision {})",
+        va.state.revision
+    );
 
-    assert!(wait_for_sender_key(&client_c, &uid_a, &gid).await, "PRECONDITION FAILED: C never got A's sender key");
+    assert!(
+        wait_for_sender_key(&client_c, &uid_a, &gid).await,
+        "PRECONDITION FAILED: C never got A's sender key"
+    );
     client_c.shutdown().await;
     drop(client_c);
     let off_c = connect_without_inbox(dir_c.path(), "C").await;
 
     // ---- positive control: C's key store reads a pre-kick ciphertext -------
-    let before: std::collections::HashSet<String> =
-        server_group_ciphertexts(&gid, &uid_a).into_iter().map(|(id, _)| id).collect();
+    let before: std::collections::HashSet<String> = server_group_ciphertexts(&gid, &uid_a)
+        .into_iter()
+        .map(|(id, _)| id)
+        .collect();
     let m0 = unique_marker();
     send_delivered(&client_a, &gid, &m0, "A").await;
-    assert!(wait_for_channel_text(&client_b, &gid, &m0).await, "POSITIVE CONTROL FAILED: B never decrypted m0");
+    assert!(
+        wait_for_channel_text(&client_b, &gid, &m0).await,
+        "POSITIVE CONTROL FAILED: B never decrypted m0"
+    );
     let m0_ct = wait_new_server_ciphertexts(&gid, &uid_a, &before).await;
     let mut c_read_m0 = false;
     for (_, ct) in &m0_ct {
@@ -12435,47 +13936,88 @@ async fn v60_signed_kick_rotates_the_sender_key() {
             c_read_m0 |= contains_bytes(&pt, m0.as_bytes());
         }
     }
-    assert!(c_read_m0,
+    assert!(
+        c_read_m0,
         "POSITIVE CONTROL FAILED: C's own key store could not decrypt the pre-kick m0 from the server's \
-         store — the post-kick 'C cannot decrypt' would prove nothing");
-    println!("  positive control: C's key store decrypts pre-kick m0 (server ciphertext) to the exact marker");
+         store — the post-kick 'C cannot decrypt' would prove nothing"
+    );
+    println!(
+        "  positive control: C's key store decrypts pre-kick m0 (server ciphertext) to the exact marker"
+    );
 
     // ---- the signed kick ----------------------------------------------------
     let base_c = quiesced_row_ids(&uid_c).await;
-    client_a.kick_user(&gid, &uid_c, None).await.expect("A failed to kick C");
-    let va = wait_verified(&client_a, &gid, |v| !active_in(v, &uid_c)).await.unwrap();
-    assert!(!active_in(&va, &uid_c), "C is still ACTIVE in A's verified state after the kick");
-    let vb = wait_verified(&client_b, &gid, |v| !active_in(v, &uid_c)).await.unwrap();
-    assert!(!active_in(&vb, &uid_c), "B never verified the kick (C still ACTIVE in B's verified state)");
-    assert_eq!(va.state_hash, vb.state_hash, "A and B verified different post-kick states");
-    println!("  kick verified on A and B (revision {}, same state hash)", va.state.revision);
+    client_a
+        .kick_user(&gid, &uid_c, None)
+        .await
+        .expect("A failed to kick C");
+    let va = wait_verified(&client_a, &gid, |v| !active_in(v, &uid_c))
+        .await
+        .unwrap();
+    assert!(
+        !active_in(&va, &uid_c),
+        "C is still ACTIVE in A's verified state after the kick"
+    );
+    let vb = wait_verified(&client_b, &gid, |v| !active_in(v, &uid_c))
+        .await
+        .unwrap();
+    assert!(
+        !active_in(&vb, &uid_c),
+        "B never verified the kick (C still ACTIVE in B's verified state)"
+    );
+    assert_eq!(
+        va.state_hash, vb.state_hash,
+        "A and B verified different post-kick states"
+    );
+    println!(
+        "  kick verified on A and B (revision {}, same state hash)",
+        va.state.revision
+    );
 
     // ---- m1: B reads it, C cannot -------------------------------------------
-    let before: std::collections::HashSet<String> =
-        server_group_ciphertexts(&gid, &uid_a).into_iter().map(|(id, _)| id).collect();
+    let before: std::collections::HashSet<String> = server_group_ciphertexts(&gid, &uid_a)
+        .into_iter()
+        .map(|(id, _)| id)
+        .collect();
     let m1 = unique_marker();
     send_delivered(&client_a, &gid, &m1, "A").await;
-    assert!(wait_for_channel_text(&client_b, &gid, &m1).await,
-        "REMAINING MEMBER LOCKED OUT: B never decrypted A's first post-kick message");
+    assert!(
+        wait_for_channel_text(&client_b, &gid, &m1).await,
+        "REMAINING MEMBER LOCKED OUT: B never decrypted A's first post-kick message"
+    );
     let m1_ct = wait_new_server_ciphertexts(&gid, &uid_a, &before).await;
-    assert!(!m1_ct.is_empty(), "m1 is not in the server's messages table");
+    assert!(
+        !m1_ct.is_empty(),
+        "m1 is not in the server's messages table"
+    );
     for (id, ct) in &m1_ct {
         match try_group_decrypt(&off_c, &uid_a, ct).await {
             Ok(pt) => panic!(
                 "KICKED MEMBER READS POST-KICK TRAFFIC: C's key store decrypted {id} ({} bytes, marker present: {})",
-                pt.len(), contains_bytes(&pt, m1.as_bytes())),
+                pt.len(),
+                contains_bytes(&pt, m1.as_bytes())
+            ),
             Err(e) => println!("  C on m1 ({id}): {e}"),
         }
     }
     // Absence proof: nothing may be queued for C within 3 s. No event signals
     // "nothing was queued", so this one stays a fixed wait.
     tokio::time::sleep(Duration::from_secs(3)).await;
-    let new_c: Vec<_> = envelope_rows(&uid_c).into_iter().filter(|f| !base_c.contains(&f[0])).collect();
-    assert!(new_c.is_empty(), "A queued {} envelope(s) for the kicked C after the kick: {new_c:?}", new_c.len());
+    let new_c: Vec<_> = envelope_rows(&uid_c)
+        .into_iter()
+        .filter(|f| !base_c.contains(&f[0]))
+        .collect();
+    assert!(
+        new_c.is_empty(),
+        "A queued {} envelope(s) for the kicked C after the kick: {new_c:?}",
+        new_c.len()
+    );
     println!("  m1: B decrypted it; C's key store cannot, and nothing was queued for C");
 
-    println!("\n  V60 PASS — after a verified kick the kicked member cannot decrypt the next message; the \
-              remaining member can.\n");
+    println!(
+        "\n  V60 PASS — after a verified kick the kicked member cannot decrypt the next message; the \
+              remaining member can.\n"
+    );
     client_a.shutdown().await;
     client_b.shutdown().await;
 }
@@ -12511,17 +14053,35 @@ async fn v61_invite_link_join_and_revocation() {
     .await;
     let gid = group.id.clone();
 
-    let url = client_a.create_channel_invite_link(&gid, false).await.expect("A failed to create a link");
-    assert!(url.starts_with("chatter://join/") && url.contains('#'), "unexpected link shape: {url}");
-    assert!(ChatterClient::is_channel_join_link(&url), "the client does not recognise its own link");
+    let url = client_a
+        .create_channel_invite_link(&gid, false)
+        .await
+        .expect("A failed to create a link");
+    assert!(
+        url.starts_with("chatter://join/") && url.contains('#'),
+        "unexpected link shape: {url}"
+    );
+    assert!(
+        ChatterClient::is_channel_join_link(&url),
+        "the client does not recognise its own link"
+    );
     println!("  A created a link (chatter://join/<channel>#<key>)");
 
-    let joined = client_n.join_channel_via_link(&url).await.expect("N failed to join through the link");
+    let joined = client_n
+        .join_channel_via_link(&url)
+        .await
+        .expect("N failed to join through the link");
     assert_eq!(joined.id, gid, "N joined some other channel");
     let vn = wait_verified(&client_n, &gid, |v| active_in(v, &uid_n)).await;
-    assert!(vn.as_ref().is_some_and(|v| active_in(v, &uid_n)), "N is not ACTIVE in its own verified state");
+    assert!(
+        vn.as_ref().is_some_and(|v| active_in(v, &uid_n)),
+        "N is not ACTIVE in its own verified state"
+    );
     let va = wait_verified(&client_a, &gid, |v| active_in(v, &uid_n)).await;
-    assert!(va.as_ref().is_some_and(|v| active_in(v, &uid_n)), "A never verified N's link join");
+    assert!(
+        va.as_ref().is_some_and(|v| active_in(v, &uid_n)),
+        "A never verified N's link join"
+    );
     println!("  N joined with the URL alone (needs_approval=false): ACTIVE on both sides");
     // Precondition, as `create_group_with_members` waits for it: the join's
     // SenderKeyRequest has been answered, so A's first send does not also
@@ -12534,42 +14094,81 @@ async fn v61_invite_link_join_and_revocation() {
 
     let m0 = unique_marker();
     send_delivered(&client_a, &gid, &m0, "A").await;
-    assert!(wait_for_channel_text(&client_n, &gid, &m0).await, "N never decrypted A's message after joining by link");
+    assert!(
+        wait_for_channel_text(&client_n, &gid, &m0).await,
+        "N never decrypted A's message after joining by link"
+    );
     let n0 = unique_marker();
     send_delivered(&client_n, &gid, &n0, "N").await;
-    assert!(wait_for_channel_text(&client_a, &gid, &n0).await, "A never decrypted N's message");
+    assert!(
+        wait_for_channel_text(&client_a, &gid, &n0).await,
+        "A never decrypted N's message"
+    );
     println!("  messages flow A->N and N->A");
 
     // ---- revoke --------------------------------------------------------------
     let view = client_a.channel_access_view(&gid).await;
     assert!(view.can_manage_invites, "the owner may not manage invites?");
-    assert_eq!(view.invite_links.len(), 1, "expected exactly the one link, got {:?}", view.invite_links);
+    assert_eq!(
+        view.invite_links.len(),
+        1,
+        "expected exactly the one link, got {:?}",
+        view.invite_links
+    );
     let link_id = view.invite_links[0].id.clone();
-    client_a.revoke_channel_invite_link(&gid, &link_id).await.expect("A failed to revoke the link");
+    client_a
+        .revoke_channel_invite_link(&gid, &link_id)
+        .await
+        .expect("A failed to revoke the link");
     let view = client_a.channel_access_view(&gid).await;
-    assert!(view.invite_links.iter().all(|l| l.id != link_id), "the revoked link is still listed");
+    assert!(
+        view.invite_links.iter().all(|l| l.id != link_id),
+        "the revoked link is still listed"
+    );
     println!("  A revoked the link");
 
     let refused = client_p.join_channel_via_link(&url).await;
-    assert!(refused.is_err(), "REVOKED LINK ADMITTED P: {:?}", refused.map(|c| c.id));
-    println!("  P with the revoked URL: refused ({})", refused.unwrap_err());
+    assert!(
+        refused.is_err(),
+        "REVOKED LINK ADMITTED P: {:?}",
+        refused.map(|c| c.id)
+    );
+    println!(
+        "  P with the revoked URL: refused ({})",
+        refused.unwrap_err()
+    );
     let p_rows = psql(&format!(
         "select count(*) from channel_members where channel_id = '{gid}' and user_id = '{uid_p}'"
     ));
-    assert_eq!(p_rows.trim(), "0", "the server has a channel_members row for P after a refused join");
+    assert_eq!(
+        p_rows.trim(),
+        "0",
+        "the server has a channel_members row for P after a refused join"
+    );
     let va = verified_of(&client_a, &gid).unwrap();
-    assert!(!va.state.members.contains_key(&uid_p.to_string()), "P is in A's verified state");
+    assert!(
+        !va.state.members.contains_key(&uid_p.to_string()),
+        "P is in A's verified state"
+    );
 
     // POSITIVE CONTROL: the same P joins with a live link.
-    let url2 = client_a.create_channel_invite_link(&gid, false).await.expect("A failed to create a second link");
+    let url2 = client_a
+        .create_channel_invite_link(&gid, false)
+        .await
+        .expect("A failed to create a second link");
     client_p.join_channel_via_link(&url2).await.expect(
         "POSITIVE CONTROL FAILED: P cannot join with a LIVE link either — the refusal above is not about revocation");
     let va = wait_verified(&client_a, &gid, |v| active_in(v, &uid_p)).await;
-    assert!(va.as_ref().is_some_and(|v| active_in(v, &uid_p)), "A never verified P's join through the live link");
+    assert!(
+        va.as_ref().is_some_and(|v| active_in(v, &uid_p)),
+        "A never verified P's join through the live link"
+    );
     println!("  positive control: P joins at once with a second, live link");
 
-    println!("\n  V61 PASS — a link admits a new member without approval and messages flow; a revoked link \
-              is refused.\n");
+    println!(
+        "\n  V61 PASS — a link admits a new member without approval and messages flow; a revoked link \
+              is refused.\n"
+    );
     let _ = uid_a;
     for c in [&client_a, &client_n, &client_p] {
         c.shutdown().await;
@@ -12602,15 +14201,26 @@ async fn v62_unverifiable_change_send_blocks_until_a_genuine_one() {
     no_keyring_prompts();
     println!("\n=== V62: an unverifiable change send-blocks; a genuine one clears it ===\n");
 
-    let disappearing = |s| pb::ChannelAction { action: Some(Action::SetDisappearing(pb::SetDisappearing { seconds: s })) };
+    let disappearing = |s| pb::ChannelAction {
+        action: Some(Action::SetDisappearing(pb::SetDisappearing { seconds: s })),
+    };
 
     // ---- server half: raw SubmitChannelChange ------------------------------
     let pool = common::create_test_pool().await.expect("pool");
-    let owner = common::setup_authenticated_test(&pool).await.expect("raw owner");
+    let owner = common::setup_authenticated_test(&pool)
+        .await
+        .expect("raw owner");
     let mut cc = chatter_core::network::grpc::ChannelClient::new(pool.channel(), pool.auth_clone());
     let (_, genesis) = common::membership::genesis(&owner, false);
     let stream = cc
-        .create_channel(&unique_channel_name("v62-raw"), pb::ChannelType::ChannelPrivate, None, Some("V62 raw"), None, Some(genesis))
+        .create_channel(
+            &unique_channel_name("v62-raw"),
+            pb::ChannelType::ChannelPrivate,
+            None,
+            Some("V62 raw"),
+            None,
+            Some(genesis),
+        )
         .await
         .expect("raw create_channel");
     tokio::pin!(stream);
@@ -12618,7 +14228,9 @@ async fn v62_unverifiable_change_send_blocks_until_a_genuine_one() {
     while let Some(ev) = stream.next().await {
         match ev.expect("create stream").event {
             Some(pb::channel_event::Event::ChannelCreated(c)) => raw_id = c.id,
-            Some(pb::channel_event::Event::OperationFailed(f)) => panic!("raw create failed: {:?}", f.error),
+            Some(pb::channel_event::Event::OperationFailed(f)) => {
+                panic!("raw create failed: {:?}", f.error)
+            }
             _ => {}
         }
     }
@@ -12628,11 +14240,22 @@ async fn v62_unverifiable_change_send_blocks_until_a_genuine_one() {
     let mut bad = good.clone();
     bad.signature[10] ^= 0x01;
     let refused = cc.submit_channel_change(bad).await;
-    assert!(refused.is_err(), "SERVER ACCEPTED A FORGED SIGNATURE: revision {:?}", refused.ok());
-    println!("  server refused a one-bit-forged signature: {}", refused.unwrap_err());
+    assert!(
+        refused.is_err(),
+        "SERVER ACCEPTED A FORGED SIGNATURE: revision {:?}",
+        refused.ok()
+    );
+    println!(
+        "  server refused a one-bit-forged signature: {}",
+        refused.unwrap_err()
+    );
     let rev = cc.submit_channel_change(good).await.expect(
         "POSITIVE CONTROL FAILED: the server refused the genuine change too — the refusal is not about the signature");
-    assert_eq!(rev, state.revision + 1, "genuine change landed at an unexpected revision");
+    assert_eq!(
+        rev,
+        state.revision + 1,
+        "genuine change landed at an unexpected revision"
+    );
     println!("  positive control: the same change, correctly signed, accepted at revision {rev}");
 
     // ---- client half: relay a forged change to B ------------------------------
@@ -12650,17 +14273,30 @@ async fn v62_unverifiable_change_send_blocks_until_a_genuine_one() {
     .await;
     let gid = group.id.clone();
     client_b.resubscribe_channel_messages();
-    let vb = wait_verified(&client_b, &gid, |v| active_in(v, &uid_b)).await.expect("B has no verified state");
-    assert_eq!(client_b.channel_verification(&gid), chatter_core::client::membership::ChannelVerification::Ok,
-        "PRECONDITION FAILED: B's channel is not verified before the forgery");
+    let vb = wait_verified(&client_b, &gid, |v| active_in(v, &uid_b))
+        .await
+        .expect("B has no verified state");
+    assert_eq!(
+        client_b.channel_verification(&gid),
+        chatter_core::client::membership::ChannelVerification::Ok,
+        "PRECONDITION FAILED: B's channel is not verified before the forgery"
+    );
     let rev_before = vb.state.revision;
 
     // A change B would accept in every respect but the signature.
     let key = vb.state.members[&uid_a.to_string()].identity_key;
     let ts = chrono::Utc::now().timestamp_nanos_opt().unwrap() as u64;
     let actions = vec![disappearing(3600)];
-    let new = rules::preview(Some(&vb.state), &actions, &gid.to_string(), rev_before + 1, &uid_a.to_string(), key, ts)
-        .expect("the forged action is one A may take");
+    let new = rules::preview(
+        Some(&vb.state),
+        &actions,
+        &gid.to_string(),
+        rev_before + 1,
+        &uid_a.to_string(),
+        key,
+        ts,
+    )
+    .expect("the forged action is one A may take");
     let signed_bytes = prost::Message::encode_to_vec(&pb::channel_change::Actions {
         channel_id: gid.to_string(),
         revision: rev_before + 1,
@@ -12683,7 +14319,10 @@ async fn v62_unverifiable_change_send_blocks_until_a_genuine_one() {
 
     let mut events_b = client_b.subscribe_events();
     let receivers = redis_relay_channel_event(&uid_b, &event);
-    assert!(receivers >= 1, "nobody is subscribed to user:{uid_b}:channel_events — B's stream is not up");
+    assert!(
+        receivers >= 1,
+        "nobody is subscribed to user:{uid_b}:channel_events — B's stream is not up"
+    );
     let g = gid.clone();
     let failed = wait_for_event(&mut events_b, EVENT_TIMEOUT, move |e| {
         matches!(e, DomainEvent::ChannelMembershipNotice { channel_id, notice: MembershipNotice::VerificationFailed { .. } }
@@ -12691,14 +14330,26 @@ async fn v62_unverifiable_change_send_blocks_until_a_genuine_one() {
     })
     .await;
     let reason = match failed {
-        Some(DomainEvent::ChannelMembershipNotice { notice: MembershipNotice::VerificationFailed { reason }, .. }) => reason,
+        Some(DomainEvent::ChannelMembershipNotice {
+            notice: MembershipNotice::VerificationFailed { reason },
+            ..
+        }) => reason,
         _ => panic!("B never raised VerificationFailed for the relayed forged change"),
     };
-    assert!(reason.contains("signature"), "B failed the change for another reason: {reason}");
-    assert_eq!(client_b.channel_verification(&gid), chatter_core::client::membership::ChannelVerification::VerificationFailed);
+    assert!(
+        reason.contains("signature"),
+        "B failed the change for another reason: {reason}"
+    );
+    assert_eq!(
+        client_b.channel_verification(&gid),
+        chatter_core::client::membership::ChannelVerification::VerificationFailed
+    );
     let vb = verified_of(&client_b, &gid).unwrap();
     assert_eq!(vb.state.revision, rev_before, "B APPLIED the forged change");
-    assert_eq!(vb.state.disappearing_seconds, 0, "B applied the forged timer");
+    assert_eq!(
+        vb.state.disappearing_seconds, 0,
+        "B applied the forged timer"
+    );
     // A refused channel send is stored as a FAILED bubble and returned Ok
     // (`MessageService::send`, core.rs), so assert on the stored outcome and
     // on the server: nothing reached `messages`.
@@ -12708,36 +14359,74 @@ async fn v62_unverifiable_change_send_blocks_until_a_genuine_one() {
         .expect("send_text errored before the gate")
         .message
         .expect("no stored message for the refused send");
-    assert_eq!(blocked.delivery_status, "failed", "B SENT while its membership failed verification");
-    assert_eq!(blocked.failure_reason.as_deref(), Some("Membership not verified"),
-        "B's send failed for another reason: {:?}", blocked.failure_reason);
+    assert_eq!(
+        blocked.delivery_status, "failed",
+        "B SENT while its membership failed verification"
+    );
+    assert_eq!(
+        blocked.failure_reason.as_deref(),
+        Some("Membership not verified"),
+        "B's send failed for another reason: {:?}",
+        blocked.failure_reason
+    );
     // Absence proof: nothing may reach the server within 2 s. No event signals
     // "nothing was sent", so this one stays a fixed wait.
     tokio::time::sleep(Duration::from_secs(2)).await;
-    assert!(server_group_ciphertexts(&gid, &uid_b).is_empty(), "the server stored a message from send-blocked B");
-    println!("  forged change relayed to B: VerificationFailed ({reason}); not applied; B's send stored as \
-              failed (\"{}\"), nothing reached the server", blocked.failure_reason.as_deref().unwrap_or(""));
+    assert!(
+        server_group_ciphertexts(&gid, &uid_b).is_empty(),
+        "the server stored a message from send-blocked B"
+    );
+    println!(
+        "  forged change relayed to B: VerificationFailed ({reason}); not applied; B's send stored as \
+              failed (\"{}\"), nothing reached the server",
+        blocked.failure_reason.as_deref().unwrap_or("")
+    );
 
     // ---- a genuine change clears it ------------------------------------------
-    client_a.invite_user_to_channel(&gid, &uid_c, None).await.expect("A failed to invite C");
+    client_a
+        .invite_user_to_channel(&gid, &uid_c, None)
+        .await
+        .expect("A failed to invite C");
     let g = gid.clone();
     let cleared = wait_for_event(&mut events_b, Duration::from_secs(60), move |e| {
         matches!(e, DomainEvent::ChannelMembershipNotice { channel_id, notice: MembershipNotice::Verified } if *channel_id == g)
     })
     .await;
-    assert!(cleared.is_some(), "B never raised Verified after A's genuine signed invite");
-    assert_eq!(client_b.channel_verification(&gid), chatter_core::client::membership::ChannelVerification::Ok);
+    assert!(
+        cleared.is_some(),
+        "B never raised Verified after A's genuine signed invite"
+    );
+    assert_eq!(
+        client_b.channel_verification(&gid),
+        chatter_core::client::membership::ChannelVerification::Ok
+    );
     let vb = verified_of(&client_b, &gid).unwrap();
-    assert_eq!(vb.state.revision, rev_before + 1, "B is not at the genuine change's revision");
-    assert!(vb.state.members.get(&uid_c.to_string()).is_some_and(|m| m.status == MemberStatus::Invited),
-        "B's state does not carry the genuine invite of C");
+    assert_eq!(
+        vb.state.revision,
+        rev_before + 1,
+        "B is not at the genuine change's revision"
+    );
+    assert!(
+        vb.state
+            .members
+            .get(&uid_c.to_string())
+            .is_some_and(|m| m.status == MemberStatus::Invited),
+        "B's state does not carry the genuine invite of C"
+    );
     let b1 = unique_marker();
     send_delivered(&client_b, &gid, &b1, "B").await;
-    assert!(wait_for_channel_text(&client_a, &gid, &b1).await, "A never decrypted B's post-recovery message");
-    println!("  genuine invite of C verified on B: Verified notice, status Ok, B's next message decrypts on A");
+    assert!(
+        wait_for_channel_text(&client_a, &gid, &b1).await,
+        "A never decrypted B's post-recovery message"
+    );
+    println!(
+        "  genuine invite of C verified on B: Verified notice, status Ok, B's next message decrypts on A"
+    );
 
-    println!("\n  V62 PASS — the server refuses a forged signature; a relayed unverifiable change send-blocks \
-              the client until a genuine change verifies.\n");
+    println!(
+        "\n  V62 PASS — the server refuses a forged signature; a relayed unverifiable change send-blocks \
+              the client until a genuine change verifies.\n"
+    );
     for c in [&client_a, &client_b, &client_c] {
         c.shutdown().await;
     }

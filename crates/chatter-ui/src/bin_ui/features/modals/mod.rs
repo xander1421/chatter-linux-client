@@ -20,9 +20,9 @@ mod sessions;
 // callbacks against a real offline ChatterClient, without invoking the full
 // `wire_all` (which spawns a call-orchestrator subscriber that needs a live
 // Slint event loop). Registration-only; no behavioural change to the app.
-pub mod settings;
 #[cfg(feature = "jarvis")]
 pub mod local_ai;
+pub mod settings;
 
 use std::sync::Arc;
 
@@ -31,14 +31,16 @@ use chatter_core::client::ChatterClient;
 use crate::MainWindow;
 
 pub use anon_dm_request::spawn_anon_dm_request_handler;
-pub use anon_group_invite::{spawn_anon_group_invite_handler, wire_group_invite_callbacks, pending_group_invite_count};
+pub use anon_group_invite::{
+    pending_group_invite_count, spawn_anon_group_invite_handler, wire_group_invite_callbacks,
+};
 pub use channel_invites::load_channel_invites;
 pub use channel_settings::{
-    apply_private_group_roster, load_private_group_roster, open_channel_settings, open_invite_member_modal,
-    refresh_members_if_open, wire_channel_settings,
+    apply_private_group_roster, load_private_group_roster, open_channel_settings,
+    open_invite_member_modal, refresh_members_if_open, wire_channel_settings,
 };
-pub use friends::wire_friends_modal;
 pub use forward::wire_forward_message;
+pub use friends::wire_friends_modal;
 pub use profile::open_user_profile;
 pub(crate) use sessions::session_to_slint;
 

@@ -749,6 +749,10 @@ component StyledTextItem inherits Empty {
     in property <TextVerticalAlignment> vertical-alignment;
     /// A callback that's invoked when a link in the text is clicked. The parameter contains the clicked link as a string.
     callback link-clicked(link: string);
+    // Chatter: the link-owned pointer stream feeds the message hold gesture.
+    callback pointer-event(event: PointerEvent);
+    out property <length> mouse-x;
+    out property <length> mouse-y;
     //-default_size_binding:implicit_size
 }
 

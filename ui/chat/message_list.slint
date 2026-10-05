@@ -189,6 +189,7 @@ export component MessageList inherits Rectangle {
     // left-button hold does not open the message menu.
     in property <bool> mobile: false;
     callback selection-toggled(string);
+    callback open-message-link(string);
     callback message-clicked(string);
     callback reply-clicked(string, string);  // (sender_id, timestamp_ns)
     callback react-clicked(string, string, length, length);  // (sender_id, timestamp_ns, x, y)
@@ -757,6 +758,7 @@ export component MessageList inherits Rectangle {
                         root.selection-toggled(id);
                     }
 
+                    open-message-link(url) => { root.open-message-link(url); }
                     message-clicked(id) => {
                         root.message-clicked(id);
                     }

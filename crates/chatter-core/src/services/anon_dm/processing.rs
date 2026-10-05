@@ -1,11 +1,11 @@
+use crate::domain::UserId;
 use crate::domain::anon_dm::{AnonDmId, AnonDmMessageId};
 use crate::domain::ids::{AttachmentId, ChannelId, MessageId};
 use crate::domain::message::ConversationType;
-use crate::domain::UserId;
+use crate::inbox::handlers::DomainEvent;
 use crate::inbox::handlers::base_anon::{
     AnonInboxBackend, CommonDispatchOutcome, QuoteContext, dispatch_common_content,
 };
-use crate::inbox::handlers::DomainEvent;
 use crate::proto::content_v1::{AttachmentPointer, Content};
 use crate::services::AttachmentService;
 
@@ -14,8 +14,12 @@ use super::{AnonDmError, AnonDmService};
 impl AnonInboxBackend for AnonDmService {
     type Id = AnonDmId;
 
-    fn conversation_type(&self) -> ConversationType { ConversationType::AnonDm }
-    fn label(&self) -> &'static str { "anon DM" }
+    fn conversation_type(&self) -> ConversationType {
+        ConversationType::AnonDm
+    }
+    fn label(&self) -> &'static str {
+        "anon DM"
+    }
 
     fn is_sender_blocked(&self, sender_id: &UserId) -> bool {
         self.is_user_blocked(sender_id).unwrap_or(false)
@@ -45,37 +49,68 @@ impl AnonInboxBackend for AnonDmService {
     }
 
     fn delete_message(&self, id: &Self::Id, sender: &UserId, ts: u64) -> Result<bool, String> {
-        self.delete_message_by_timestamp(id, sender, ts).map_err(|e| e.to_string())
-    }
-
-    fn apply_edit(&self, id: &Self::Id, sender: &UserId, target_ts: u64, text: &str, edit_ts: u64) -> Result<Option<crate::domain::message::Message>, String> {
-        crate::storage::repositories::message_modifier_repo::MessageModifierRepository::new(self.settings_repo.database().clone())
-            .apply_received_edit(&self.message_repo, sender, Some((*id).into()), target_ts, text, edit_ts, 0)
+        self.delete_message_by_timestamp(id, sender, ts)
             .map_err(|e| e.to_string())
     }
 
+    fn apply_edit(
+        &self,
+        id: &Self::Id,
+        sender: &UserId,
+        target_ts: u64,
+        text: &str,
+        edit_ts: u64,
+    ) -> Result<Option<crate::domain::message::Message>, String> {
+        crate::storage::repositories::message_modifier_repo::MessageModifierRepository::new(
+            self.settings_repo.database().clone(),
+        )
+        .apply_received_edit(
+            &self.message_repo,
+            sender,
+            Some((*id).into()),
+            target_ts,
+            text,
+            edit_ts,
+            0,
+        )
+        .map_err(|e| e.to_string())
+    }
+
     fn add_reaction(
-        &self, id: &Self::Id, target_sender: &UserId, target_ts_ns: u64,
-        reactor: &UserId, emoji: &str,
+        &self,
+        id: &Self::Id,
+        target_sender: &UserId,
+        target_ts_ns: u64,
+        reactor: &UserId,
+        emoji: &str,
     ) -> Result<bool, String> {
         AnonDmService::add_reaction(self, id, target_sender, target_ts_ns, reactor, emoji)
             .map_err(|e| e.to_string())
     }
 
     fn remove_reaction(
-        &self, id: &Self::Id, target_sender: &UserId, target_ts_ns: u64,
-        reactor: &UserId, emoji: &str,
+        &self,
+        id: &Self::Id,
+        target_sender: &UserId,
+        target_ts_ns: u64,
+        reactor: &UserId,
+        emoji: &str,
     ) -> Result<bool, String> {
         AnonDmService::remove_reaction(self, id, target_sender, target_ts_ns, reactor, emoji)
             .map_err(|e| e.to_string())
     }
 
     fn set_pinned(&self, id: &Self::Id, ts: u64, pinned: bool) -> Result<(), String> {
-        self.set_message_pinned(id, ts, pinned).map(|_| ()).map_err(|e| e.to_string())
+        self.set_message_pinned(id, ts, pinned)
+            .map(|_| ())
+            .map_err(|e| e.to_string())
     }
 
     fn get_message_id_by_timestamp(&self, id: &Self::Id, ts: u64) -> Option<MessageId> {
-        self.get_message_by_timestamp(id, ts).ok().flatten().map(|m| m.id)
+        self.get_message_by_timestamp(id, ts)
+            .ok()
+            .flatten()
+            .map(|m| m.id)
     }
 
     fn persist_delivery_status(&self, id: &Self::Id, timestamps: &[u64], status: &str) {
@@ -146,11 +181,20 @@ impl AnonDmService {
             Some(ContentType::AnonDmPresence(presence)) => {
                 use crate::proto::content_v1::anon_dm_presence;
 
-                let domain_presence = match anon_dm_presence::Status::try_from(presence.status).ok() {
-                    Some(anon_dm_presence::Status::Online) => crate::domain::user::PresenceStatus::Online,
-                    Some(anon_dm_presence::Status::Away) => crate::domain::user::PresenceStatus::Away,
-                    Some(anon_dm_presence::Status::DoNotDisturb) => crate::domain::user::PresenceStatus::DoNotDisturb,
-                    Some(anon_dm_presence::Status::Offline) | _ => crate::domain::user::PresenceStatus::Offline,
+                let domain_presence = match anon_dm_presence::Status::try_from(presence.status).ok()
+                {
+                    Some(anon_dm_presence::Status::Online) => {
+                        crate::domain::user::PresenceStatus::Online
+                    }
+                    Some(anon_dm_presence::Status::Away) => {
+                        crate::domain::user::PresenceStatus::Away
+                    }
+                    Some(anon_dm_presence::Status::DoNotDisturb) => {
+                        crate::domain::user::PresenceStatus::DoNotDisturb
+                    }
+                    Some(anon_dm_presence::Status::Offline) | _ => {
+                        crate::domain::user::PresenceStatus::Offline
+                    }
                 };
 
                 events.push(DomainEvent::UserPresenceChanged {
@@ -165,9 +209,14 @@ impl AnonDmService {
                 // Validate sender is part of the conversation (double-check already done above but keep for consistency)
                 if let Ok(Some(mut conv)) = self.anon_dm_repo.get_conversation(conversation_id) {
                     let mut decrypted_avatar = None;
-                    let profile_key: Option<[u8; 32]> = profile_update.profile_key.as_ref().and_then(|pk| {
-                        if pk.len() == 32 { Some(pk.as_slice().try_into().unwrap()) } else { None }
-                    });
+                    let profile_key: Option<[u8; 32]> =
+                        profile_update.profile_key.as_ref().and_then(|pk| {
+                            if pk.len() == 32 {
+                                Some(pk.as_slice().try_into().unwrap())
+                            } else {
+                                None
+                            }
+                        });
 
                     // The name only ever arrives under the peer's profile key.
                     let display_name = profile_key
@@ -178,7 +227,9 @@ impl AnonDmService {
                         conv.peer_display_name = Some(name.clone());
                     }
 
-                    if let (Some(pk), Some(encrypted)) = (&profile_key, &profile_update.encrypted_avatar) {
+                    if let (Some(pk), Some(encrypted)) =
+                        (&profile_key, &profile_update.encrypted_avatar)
+                    {
                         if !encrypted.is_empty() {
                             match profile_crypto::decrypt_avatar(pk, encrypted) {
                                 Ok(avatar) => {
@@ -190,7 +241,10 @@ impl AnonDmService {
                                     conv.peer_avatar = Some(avatar);
                                 }
                                 Err(e) => {
-                                    tracing::debug!("Failed to decrypt avatar in profile update: {}", e);
+                                    tracing::debug!(
+                                        "Failed to decrypt avatar in profile update: {}",
+                                        e
+                                    );
                                 }
                             }
                         }
@@ -198,7 +252,10 @@ impl AnonDmService {
 
                     // Store the updated conversation
                     if let Err(e) = self.anon_dm_repo.update_conversation(&conv) {
-                        tracing::warn!("Failed to update anon DM conversation with new profile: {}", e);
+                        tracing::warn!(
+                            "Failed to update anon DM conversation with new profile: {}",
+                            e
+                        );
                     }
 
                     // Emit event for UI update
@@ -216,8 +273,9 @@ impl AnonDmService {
             Some(ContentType::AnonGroupInvite(invite)) => {
                 use crate::crypto::profile_crypto;
 
-                let group_id = crate::domain::anon_group::AnonGroupId::try_from_slice(&invite.group_id)
-                    .unwrap_or_default();
+                let group_id =
+                    crate::domain::anon_group::AnonGroupId::try_from_slice(&invite.group_id)
+                        .unwrap_or_default();
                 let mut pk = [0u8; 32];
                 if invite.inviter_mailbox_pk.len() == 32 {
                     pk.copy_from_slice(&invite.inviter_mailbox_pk);
@@ -227,7 +285,11 @@ impl AnonDmService {
                 let mut display_name = None;
                 let mut avatar = None;
                 let profile_key: Option<[u8; 32]> = invite.profile_key.as_ref().and_then(|pk| {
-                    if pk.len() == 32 { Some(pk.as_slice().try_into().unwrap()) } else { None }
+                    if pk.len() == 32 {
+                        Some(pk.as_slice().try_into().unwrap())
+                    } else {
+                        None
+                    }
                 });
 
                 if let Some(pk) = &profile_key {
@@ -259,14 +321,19 @@ impl AnonDmService {
             Some(ContentType::AnonGroupJoinAck(ack)) => {
                 use crate::crypto::profile_crypto;
 
-                let group_id = crate::domain::anon_group::AnonGroupId::try_from_slice(&ack.group_id)
-                    .unwrap_or_default();
-                
+                let group_id =
+                    crate::domain::anon_group::AnonGroupId::try_from_slice(&ack.group_id)
+                        .unwrap_or_default();
+
                 // Decrypt profile if key is present
                 let mut display_name = None;
                 let mut avatar = None;
                 let profile_key: Option<[u8; 32]> = ack.profile_key.as_ref().and_then(|pk| {
-                    if pk.len() == 32 { Some(pk.as_slice().try_into().unwrap()) } else { None }
+                    if pk.len() == 32 {
+                        Some(pk.as_slice().try_into().unwrap())
+                    } else {
+                        None
+                    }
                 });
 
                 if let Some(pk) = &profile_key {
@@ -294,8 +361,9 @@ impl AnonDmService {
                 });
             }
             Some(ContentType::AnonGroupMemberList(list)) => {
-                let group_id = crate::domain::anon_group::AnonGroupId::try_from_slice(&list.group_id)
-                    .unwrap_or_default();
+                let group_id =
+                    crate::domain::anon_group::AnonGroupId::try_from_slice(&list.group_id)
+                        .unwrap_or_default();
 
                 tracing::info!(
                     sender_id = %sender_id,
@@ -425,10 +493,8 @@ impl AnonDmService {
         sent_at: u64,
     ) -> Result<AnonDmMessageId, AnonDmError> {
         let channel_id: ChannelId = (*conversation_id).into();
-        let content = crate::services::anon_shared::message_content_from_text_and_attachments(
-            text,
-            &[],
-        );
+        let content =
+            crate::services::anon_shared::message_content_from_text_and_attachments(text, &[]);
         let message = crate::services::anon_shared::build_anon_message(
             channel_id,
             ConversationType::AnonDm,
@@ -500,6 +566,11 @@ impl AnonDmService {
         status: &str,
     ) -> Result<usize, AnonDmError> {
         let channel_id: ChannelId = (*conversation_id).into();
-        Ok(self.message_repo.update_delivery_status_by_timestamps(&channel_id, &ConversationType::AnonDm, timestamps, status)?)
+        Ok(self.message_repo.update_delivery_status_by_timestamps(
+            &channel_id,
+            &ConversationType::AnonDm,
+            timestamps,
+            status,
+        )?)
     }
 }

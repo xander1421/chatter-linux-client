@@ -2,9 +2,9 @@
 
 use std::sync::Arc;
 
+use super::ChatterClient;
 use crate::domain::message::ConversationType;
 use crate::state::ActiveConversation;
-use super::ChatterClient;
 
 /// One Friends › Blocked row (`blocked_users`). `anon` marks an anon-DM peer
 /// block; `anon_chat` that its conversation is still stored locally, which is
@@ -60,8 +60,11 @@ impl ChatterClient {
         let mut users = self.chat_state().get_typing_users(&channel_id);
         users.retain(|id| Some(*id) != me);
         users.sort_by_key(|id| id.0);
-        let names: Vec<_> = users.iter().take(3)
-            .map(|id| self.display_name_in(&kind, &channel_id, id)).collect();
+        let names: Vec<_> = users
+            .iter()
+            .take(3)
+            .map(|id| self.display_name_in(&kind, &channel_id, id))
+            .collect();
         typing_text(&names)
     }
 
@@ -98,8 +101,7 @@ impl ChatterClient {
         user_id: &crate::domain::ids::UserId,
     ) -> String {
         if *conv_type == crate::domain::message::ConversationType::AnonGroup {
-            let group_id =
-                crate::domain::anon_group::AnonGroupId::from_uuid(*conv_id.as_uuid());
+            let group_id = crate::domain::anon_group::AnonGroupId::from_uuid(*conv_id.as_uuid());
             if let Some(name) = self
                 .get_anon_group_member_display_name(&group_id, user_id)
                 .filter(|n| !n.is_empty())
@@ -157,7 +159,7 @@ impl ChatterClient {
         &self,
         identity: &str,
     ) -> crate::ui::chat_data::CallParticipantInfo {
-        use crate::ui::chat_data::{initials_from_name, CallParticipantInfo};
+        use crate::ui::chat_data::{CallParticipantInfo, initials_from_name};
         match identity.parse::<crate::domain::ids::UserId>() {
             Ok(uid) => {
                 let display_name = self.display_name(&uid);
@@ -197,7 +199,10 @@ impl ChatterClient {
         self.users().generate_friend_qr(size)
     }
 
-    pub fn generate_private_friend_qr(&self, size: u32) -> Result<Vec<u8>, crate::services::UserError> {
+    pub fn generate_private_friend_qr(
+        &self,
+        size: u32,
+    ) -> Result<Vec<u8>, crate::services::UserError> {
         if !self.anon_mode_enabled() {
             return Err(crate::services::UserError::RequiresAnonMode);
         }
@@ -228,18 +233,18 @@ impl ChatterClient {
         limit: u32,
         offset: u32,
     ) -> Result<Vec<crate::domain::user::Friendship>, crate::services::UserError> {
-        self.users().list_friend_requests(filter, limit, offset).await
+        self.users()
+            .list_friend_requests(filter, limit, offset)
+            .await
     }
 
     /// Convenience: incoming-only friend requests.
     pub async fn list_pending_friend_requests(
         &self,
     ) -> Result<Vec<crate::domain::user::Friendship>, crate::services::UserError> {
-        self.users().list_friend_requests(
-            crate::services::user::FriendRequestFilter::Received,
-            100,
-            0,
-        ).await
+        self.users()
+            .list_friend_requests(crate::services::user::FriendRequestFilter::Received, 100, 0)
+            .await
     }
 
     /// Update the current user's profile and push it to every peer who can't
@@ -251,17 +256,27 @@ impl ChatterClient {
         display_name: Option<String>,
         status_message: Option<crate::domain::user::StatusMessage>,
     ) -> Result<crate::domain::user::Profile, crate::services::UserError> {
-        let profile = self.users().update_user_profile(display_name, status_message).await?;
+        let profile = self
+            .users()
+            .update_user_profile(display_name, status_message)
+            .await?;
 
         let display_name = Some(profile.display_name.clone());
         let bio = profile.status_message.as_ref().map(|m| m.text.clone());
-        for conv in self.list_anon_dm_conversations().into_iter().filter(|c| c.is_ready()) {
+        for conv in self
+            .list_anon_dm_conversations()
+            .into_iter()
+            .filter(|c| c.is_ready())
+        {
             let client = self.clone();
             let (display_name, bio) = (display_name.clone(), bio.clone());
             tokio::spawn(async move {
                 // The avatar rides inside the update as encrypted bytes; there
                 // is no plaintext avatar URL to send.
-                if let Err(e) = client.send_anon_dm_profile_update(&conv.id, display_name, None, bio).await {
+                if let Err(e) = client
+                    .send_anon_dm_profile_update(&conv.id, display_name, None, bio)
+                    .await
+                {
                     tracing::warn!(conversation = %conv.id, error = %e, "profile update to anon DM failed");
                 }
             });
@@ -292,11 +307,15 @@ impl ChatterClient {
         if !self.anon_mode_enabled() {
             return Err(crate::services::anon_dm::AnonDmError::RequiresAnonMode);
         }
-        self.anon_dms().start_conversation_private(friend_code, intro_message, sender_display_name).await
+        self.anon_dms()
+            .start_conversation_private(friend_code, intro_message, sender_display_name)
+            .await
     }
 
     pub fn list_anon_dm_ready_conversations(&self) -> Vec<crate::domain::anon_dm::AnonDm> {
-        self.anon_dms().list_ready_conversations().unwrap_or_default()
+        self.anon_dms()
+            .list_ready_conversations()
+            .unwrap_or_default()
     }
 
     pub fn list_anon_dm_message_requests(&self) -> Vec<crate::domain::anon_dm::AnonDm> {
@@ -311,7 +330,10 @@ impl ChatterClient {
         &self,
         conversation_id: &crate::domain::anon_dm::AnonDmId,
     ) -> Option<crate::domain::message::Message> {
-        self.anon_dms().get_latest_message(conversation_id).ok().flatten()
+        self.anon_dms()
+            .get_latest_message(conversation_id)
+            .ok()
+            .flatten()
     }
 
     /// Everyone this user blocked: anon-DM peers and server-side blocks, in
@@ -331,16 +353,29 @@ impl ChatterClient {
         // A chat can be blocked without its peer (a block whose second half,
         // the peer row, failed). Still blocked, so still listed — otherwise
         // nothing on screen could lift it.
-        for dm in self.anon_dms().anon_dm_repo().list_conversations().unwrap_or_default() {
+        for dm in self
+            .anon_dms()
+            .anon_dm_repo()
+            .list_conversations()
+            .unwrap_or_default()
+        {
             if self.is_anon_dm_conversation_blocked(&dm.id) == Some(true)
                 && !out.iter().any(|c| c.id == dm.peer_id)
             {
-                out.push(BlockedContact { id: dm.peer_id, anon: true, anon_chat: true });
+                out.push(BlockedContact {
+                    id: dm.peer_id,
+                    anon: true,
+                    anon_chat: true,
+                });
             }
         }
         for id in self.users().blocked_local() {
             if !out.iter().any(|c| c.id == id) {
-                out.push(BlockedContact { id, anon: false, anon_chat: false });
+                out.push(BlockedContact {
+                    id,
+                    anon: false,
+                    anon_chat: false,
+                });
             }
         }
         out
@@ -355,7 +390,11 @@ impl ChatterClient {
     ) -> Vec<crate::inbox::events::FriendRequestInfo> {
         received
             .into_iter()
-            .filter(|r| !r.user_id.parse().is_ok_and(|id| self.is_profile_user_blocked(&id)))
+            .filter(|r| {
+                !r.user_id
+                    .parse()
+                    .is_ok_and(|id| self.is_profile_user_blocked(&id))
+            })
             .collect()
     }
 
@@ -390,10 +429,7 @@ impl ChatterClient {
     /// Decrypted avatar bytes for an anonymous DM peer (the user directory has
     /// no profile for anon peers — their avatar lives on the anon DM row, same
     /// source the sidebar uses).
-    pub fn anon_dm_peer_avatar(
-        &self,
-        user_id: &crate::domain::ids::UserId,
-    ) -> Option<Vec<u8>> {
+    pub fn anon_dm_peer_avatar(&self, user_id: &crate::domain::ids::UserId) -> Option<Vec<u8>> {
         self.anon_dms()
             .get_conversation_by_peer(user_id)
             .ok()
@@ -435,23 +471,29 @@ impl ChatterClient {
     ) -> Result<(), super::ClientError> {
         // 1. Check if id is a peer in an anon DM
         if let Some(conv_id) = self.find_anon_dm_by_peer(id) {
-            self.anon_dms().block_conversation(&conv_id)
+            self.anon_dms()
+                .block_conversation(&conv_id)
                 .map_err(|e| super::ClientError::Inbox(e.to_string()))?;
-            self.anon_dms().block_user(id, Some("Blocked from profile"))
+            self.anon_dms()
+                .block_user(id, Some("Blocked from profile"))
                 .map_err(|e| super::ClientError::Inbox(e.to_string()))?;
             return Ok(());
         }
         // 2. Check if id is actually a conversation ID (Friends tab uses dm.id)
         let conv_id = crate::domain::anon_dm::AnonDmId::from_uuid(id.0);
         if let Ok(Some(dm)) = self.anon_dms().get_conversation(&conv_id) {
-            self.anon_dms().block_conversation(&conv_id)
+            self.anon_dms()
+                .block_conversation(&conv_id)
                 .map_err(|e| super::ClientError::Inbox(e.to_string()))?;
-            self.anon_dms().block_user(&dm.peer_id, Some("Blocked from profile"))
+            self.anon_dms()
+                .block_user(&dm.peer_id, Some("Blocked from profile"))
                 .map_err(|e| super::ClientError::Inbox(e.to_string()))?;
             return Ok(());
         }
         // 3. Server-side friendship block
-        self.users().block_user(id).await
+        self.users()
+            .block_user(id)
+            .await
             .map_err(|e| super::ClientError::Inbox(e.to_string()))
     }
 
@@ -479,7 +521,8 @@ impl ChatterClient {
         if conv_id.is_none() && self.anon_dms().is_user_blocked(id).unwrap_or(false) {
             // An anon peer whose chat was deleted (Friends › Blocked › Delete
             // chat): only the peer block is left to lift.
-            return self.unblock_anon_dm_user(id)
+            return self
+                .unblock_anon_dm_user(id)
                 .map_err(|e| super::ClientError::Inbox(e.to_string()));
         }
 
@@ -494,7 +537,9 @@ impl ChatterClient {
             return Ok(());
         }
 
-        self.users().unblock_user(id).await
+        self.users()
+            .unblock_user(id)
+            .await
             .map_err(|e| super::ClientError::Inbox(e.to_string()))
     }
 
@@ -542,7 +587,9 @@ impl ChatterClient {
     /// (`blocked_users`) is the only list that still shows them.
     pub fn listed_friends(&self) -> Vec<crate::domain::ids::UserId> {
         use crate::domain::user::FriendshipStatus;
-        let Some(me) = self.auth_state().get().current_user_id else { return Vec::new() };
+        let Some(me) = self.auth_state().get().current_user_id else {
+            return Vec::new();
+        };
         let mut out = Vec::new();
         for f in self.users().get_friends_local().unwrap_or_default() {
             if f.status != FriendshipStatus::Accepted {
@@ -550,7 +597,11 @@ impl ChatterClient {
             }
             // The row may be stored in either direction; the peer is whichever
             // party isn't us.
-            let peer = if f.requester_id == me { f.addressee_id } else { f.requester_id };
+            let peer = if f.requester_id == me {
+                f.addressee_id
+            } else {
+                f.requester_id
+            };
             if !out.contains(&peer) && !self.is_profile_user_blocked(&peer) {
                 out.push(peer);
             }
@@ -568,7 +619,9 @@ impl ChatterClient {
     /// open there (`resolve_dm_conversation`).
     pub fn dm_peers(&self) -> Vec<crate::domain::ids::UserId> {
         let mut out = self.listed_friends();
-        let Some(me) = self.auth_state().get().current_user_id else { return out };
+        let Some(me) = self.auth_state().get().current_user_id else {
+            return out;
+        };
         if self.anon_mode_enabled() {
             return out;
         }
@@ -577,7 +630,10 @@ impl ChatterClient {
             .conversation_repo
             .dm_conversations_sent_in(&me.to_string())
             .unwrap_or_default();
-        for peer in accepted.iter().filter_map(|id| id.parse::<crate::domain::ids::UserId>().ok()) {
+        for peer in accepted
+            .iter()
+            .filter_map(|id| id.parse::<crate::domain::ids::UserId>().ok())
+        {
             if peer != me && !out.contains(&peer) && !self.is_profile_user_blocked(&peer) {
                 out.push(peer);
             }
@@ -594,7 +650,9 @@ impl ChatterClient {
         id: &str,
     ) -> bool {
         *kind == crate::domain::message::ConversationType::ServerDm
-            && id.parse().is_ok_and(|peer| self.is_profile_user_blocked(&peer))
+            && id
+                .parse()
+                .is_ok_and(|peer| self.is_profile_user_blocked(&peer))
     }
 
     /// Check if a profile identifier is blocked (anon or server-side).
@@ -605,7 +663,11 @@ impl ChatterClient {
         }
         // Anon: check by conversation ID
         let conv_id = crate::domain::anon_dm::AnonDmId::from_uuid(id.0);
-        if self.anon_dms().is_conversation_blocked(&conv_id).unwrap_or(false) {
+        if self
+            .anon_dms()
+            .is_conversation_blocked(&conv_id)
+            .unwrap_or(false)
+        {
             return true;
         }
         // Server-side: the durable table. `user_state`'s in-memory set is never
@@ -616,8 +678,14 @@ impl ChatterClient {
     /// A peer's presence as this device shows it: the stored presence, or
     /// [`Self::peer_display_presence`] of it. Every dot and "online" line for
     /// another user reads this, never `Profile::presence` directly.
-    pub fn peer_presence(&self, id: &crate::domain::ids::UserId) -> crate::domain::user::PresenceStatus {
-        let stored = self.get_profile_local(id).map(|p| p.presence).unwrap_or_default();
+    pub fn peer_presence(
+        &self,
+        id: &crate::domain::ids::UserId,
+    ) -> crate::domain::user::PresenceStatus {
+        let stored = self
+            .get_profile_local(id)
+            .map(|p| p.presence)
+            .unwrap_or_default();
         self.peer_display_presence(id, stored)
     }
 
@@ -641,7 +709,9 @@ impl ChatterClient {
         conversation_id: &crate::domain::anon_dm::AnonDmId,
         presence: crate::domain::user::PresenceStatus,
     ) -> Result<(), crate::services::anon_dm::AnonDmError> {
-        self.anon_dms().send_presence_update(conversation_id, presence).await
+        self.anon_dms()
+            .send_presence_update(conversation_id, presence)
+            .await
     }
 
     pub async fn send_anon_dm_profile_update(
@@ -662,14 +732,17 @@ impl ChatterClient {
         before_sent_at: Option<u64>,
         limit: i32,
     ) -> Result<Vec<crate::domain::message::Message>, crate::services::anon_dm::AnonDmError> {
-        self.anon_dms().get_messages_asc(conversation_id, before_sent_at, limit)
+        self.anon_dms()
+            .get_messages_asc(conversation_id, before_sent_at, limit)
     }
 
     pub fn list_anon_dm_pinned(
         &self,
         conversation_id: &crate::domain::anon_dm::AnonDmId,
     ) -> Vec<crate::domain::message::Message> {
-        self.anon_dms().list_pinned(conversation_id).unwrap_or_default()
+        self.anon_dms()
+            .list_pinned(conversation_id)
+            .unwrap_or_default()
     }
 
     /// Look up a single member of an anonymous group.
@@ -678,7 +751,10 @@ impl ChatterClient {
         group_id: &crate::domain::anon_group::AnonGroupId,
         user_id: &crate::domain::ids::UserId,
     ) -> Option<crate::domain::anon_group::AnonGroupMember> {
-        self.anon_groups().get_member(group_id, user_id).ok().flatten()
+        self.anon_groups()
+            .get_member(group_id, user_id)
+            .ok()
+            .flatten()
     }
 
     /// Get an attachment record by id (local storage).
@@ -693,13 +769,19 @@ impl ChatterClient {
         &self,
         attachment_id: &crate::domain::ids::AttachmentId,
     ) -> Option<crate::domain::attachment::Attachment> {
-        self.attachments().get_metadata(attachment_id).ok().flatten()
+        self.attachments()
+            .get_metadata(attachment_id)
+            .ok()
+            .flatten()
     }
 
     pub fn decrypt_attachment_auto(
         &self,
         attachment_id: &crate::domain::ids::AttachmentId,
-    ) -> Result<crate::crypto::secure_buffer::SecureBuffer, crate::services::attachment::AttachmentError> {
+    ) -> Result<
+        crate::crypto::secure_buffer::SecureBuffer,
+        crate::services::attachment::AttachmentError,
+    > {
         self.attachments().decrypt_auto(attachment_id)
     }
 
@@ -711,7 +793,10 @@ impl ChatterClient {
     pub fn open_attachment_range(
         &self,
         attachment_id: &crate::domain::ids::AttachmentId,
-    ) -> Result<crate::services::attachment::CbcRangeDecryptor, crate::services::attachment::AttachmentError> {
+    ) -> Result<
+        crate::services::attachment::CbcRangeDecryptor,
+        crate::services::attachment::AttachmentError,
+    > {
         self.attachments().open_range_decryptor(attachment_id)
     }
 
@@ -719,20 +804,29 @@ impl ChatterClient {
         &self,
         attachment_id: &crate::domain::ids::AttachmentId,
     ) -> Result<(), crate::services::attachment::AttachmentError> {
-        self.attachments().download_to_filesystem(attachment_id).await
+        self.attachments()
+            .download_to_filesystem(attachment_id)
+            .await
     }
 
     pub fn decrypt_and_decode_gif_first_frame(
         &self,
         attachment_id: &crate::domain::ids::AttachmentId,
-    ) -> Result<Option<crate::services::attachment::GifDecodeResult>, crate::services::attachment::AttachmentError> {
-        self.attachments().decrypt_and_decode_gif_first_frame(attachment_id)
+    ) -> Result<
+        Option<crate::services::attachment::GifDecodeResult>,
+        crate::services::attachment::AttachmentError,
+    > {
+        self.attachments()
+            .decrypt_and_decode_gif_first_frame(attachment_id)
     }
 
     pub fn decrypt_and_get_image_info(
         &self,
         attachment_id: &crate::domain::ids::AttachmentId,
-    ) -> Result<crate::services::attachment::ImageDecodeResult, crate::services::attachment::AttachmentError> {
+    ) -> Result<
+        crate::services::attachment::ImageDecodeResult,
+        crate::services::attachment::AttachmentError,
+    > {
         self.attachments().decrypt_and_get_image_info(attachment_id)
     }
 
@@ -743,8 +837,12 @@ impl ChatterClient {
     pub fn decrypt_and_extract_video_thumbnail(
         &self,
         attachment_id: &crate::domain::ids::AttachmentId,
-    ) -> Result<crate::services::attachment::ImageDecodeResult, crate::services::attachment::AttachmentError> {
-        self.attachments().decrypt_and_extract_video_thumbnail(attachment_id)
+    ) -> Result<
+        crate::services::attachment::ImageDecodeResult,
+        crate::services::attachment::AttachmentError,
+    > {
+        self.attachments()
+            .decrypt_and_extract_video_thumbnail(attachment_id)
     }
 
     /// Decode every frame of a GIF from already-decrypted bytes.
@@ -755,7 +853,10 @@ impl ChatterClient {
     pub fn decode_gif_all_frames(
         &self,
         gif_bytes: &[u8],
-    ) -> Result<crate::services::attachment::GifFullDecodeResult, crate::services::attachment::AttachmentError> {
+    ) -> Result<
+        crate::services::attachment::GifFullDecodeResult,
+        crate::services::attachment::AttachmentError,
+    > {
         crate::services::attachment::AttachmentService::decode_gif_all_frames(gif_bytes)
     }
 
@@ -785,7 +886,10 @@ impl ChatterClient {
     pub async fn upload_attachment_to_cdn_encrypted(
         &self,
         path: &std::path::Path,
-    ) -> Result<crate::services::attachment::CdnUploadResult, crate::services::attachment::AttachmentError> {
+    ) -> Result<
+        crate::services::attachment::CdnUploadResult,
+        crate::services::attachment::AttachmentError,
+    > {
         self.attachments().upload_to_cdn_encrypted(path).await
     }
 
@@ -799,7 +903,9 @@ impl ChatterClient {
         if !recording_context_is_current(self.chat_state(), note.conversation) {
             return Err("Conversation changed; recording discarded".into());
         }
-        let upload = self.upload_attachment_to_cdn_encrypted(note.file.path()).await
+        let upload = self
+            .upload_attachment_to_cdn_encrypted(note.file.path())
+            .await
             .map_err(|e| e.to_string())?;
         if !recording_context_is_current(self.chat_state(), note.conversation) {
             return Err("Conversation changed; recording discarded".into());
@@ -811,17 +917,25 @@ impl ChatterClient {
         pointer.file_name = "Voice message.wav".into();
         // The sender renders from the already-uploaded local attachment row;
         // receivers render from the pointer. Keep the same metadata on both.
-        let mut attachment = self.attachments().get(&upload.attachment_id)
+        let mut attachment = self
+            .attachments()
+            .get(&upload.attachment_id)
             .map_err(|e| e.to_string())?
             .ok_or_else(|| "Uploaded voice attachment is missing from local storage".to_string())?;
         attachment.metadata.name = pointer.file_name.clone();
         attachment.metadata.waveform_samples = Some(pointer.waveform.clone());
         attachment.metadata.duration_seconds = Some(pointer.duration_ms as f64 / 1000.0);
-        self.attachments().update(&attachment).map_err(|e| e.to_string())?;
+        self.attachments()
+            .update(&attachment)
+            .map_err(|e| e.to_string())?;
 
         Ok(crate::state::chat_state::PendingAttachment::with_pointer(
-            upload.attachment_id, std::path::PathBuf::new(), pointer.file_name.clone(),
-            upload.plaintext_size, "audio/wav".into(), pointer,
+            upload.attachment_id,
+            std::path::PathBuf::new(),
+            pointer.file_name.clone(),
+            upload.plaintext_size,
+            "audio/wav".into(),
+            pointer,
         ))
     }
 
@@ -837,17 +951,22 @@ impl ChatterClient {
         &self,
         url: &str,
         gif_id: &str,
-    ) -> Result<crate::services::attachment::CdnUploadResult, crate::services::attachment::AttachmentError> {
-        self.attachments().download_and_upload_gif(url, gif_id).await
+    ) -> Result<
+        crate::services::attachment::CdnUploadResult,
+        crate::services::attachment::AttachmentError,
+    > {
+        self.attachments()
+            .download_and_upload_gif(url, gif_id)
+            .await
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::message::Message;
     use crate::domain::anon_dm::AnonDm;
     use crate::domain::ids::{ChannelId, UserId};
+    use crate::domain::message::Message;
 
     fn test_client() -> (Arc<ChatterClient>, tempfile::TempDir) {
         static MOCK_KEYRING: std::sync::Once = std::sync::Once::new();
@@ -871,14 +990,26 @@ mod tests {
         let bob = UserId::from_uuid(uuid::Uuid::from_u128(2));
         assert!(client.update_typing_indicator(channel, alice, 100, true));
         assert!(client.update_typing_indicator(channel, bob, 100, true));
-        assert_eq!(client.typing_indicator_text(channel), format!(
-            "{} and {} are typing…", client.display_name(&alice), client.display_name(&bob)));
+        assert_eq!(
+            client.typing_indicator_text(channel),
+            format!(
+                "{} and {} are typing…",
+                client.display_name(&alice),
+                client.display_name(&bob)
+            )
+        );
         assert!(client.update_typing_indicator(channel, alice, 200, false));
-        assert_eq!(client.typing_indicator_text(channel), format!("{} is typing…", client.display_name(&bob)));
+        assert_eq!(
+            client.typing_indicator_text(channel),
+            format!("{} is typing…", client.display_name(&bob))
+        );
         assert!(!client.update_typing_indicator(channel, alice, 150, true));
         assert!(client.update_typing_indicator(channel, alice, 300, true));
         assert!(client.update_typing_indicator(channel, UserId::new(), 300, true));
-        assert_eq!(client.typing_indicator_text(channel), "Several people are typing…");
+        assert_eq!(
+            client.typing_indicator_text(channel),
+            "Several people are typing…"
+        );
         client.chat_state().clear_typing(&channel);
         assert_eq!(client.typing_indicator_text(channel), "");
     }
@@ -891,10 +1022,22 @@ mod tests {
         use crate::storage::repositories::settings_repo::keys;
         let (client, _dir) = test_client();
         let me = UserId::new();
-        client.messages().settings_repo.set(keys::CURRENT_USER_ID, &me.to_string()).unwrap();
+        client
+            .messages()
+            .settings_repo
+            .set(keys::CURRENT_USER_ID, &me.to_string())
+            .unwrap();
         client.messages().user_repo.ensure_user_exists(&me).unwrap();
-        client.messages().user_repo.upsert_profile(&crate::domain::user::Profile::new(me, "me".into())).unwrap();
-        let profile = client.users().update_user_profile(None, None).await.expect("no RPC");
+        client
+            .messages()
+            .user_repo
+            .upsert_profile(&crate::domain::user::Profile::new(me, "me".into()))
+            .unwrap();
+        let profile = client
+            .users()
+            .update_user_profile(None, None)
+            .await
+            .expect("no RPC");
         assert_eq!(profile.user_id, me);
     }
 
@@ -907,7 +1050,10 @@ mod tests {
         let (client, _dir) = test_client();
         let (me, peer, friend) = (UserId::new(), UserId::new(), UserId::new());
         let repos = client.messages();
-        repos.settings_repo.set_string(keys::CURRENT_USER_ID, &me.to_string()).unwrap();
+        repos
+            .settings_repo
+            .set_string(keys::CURRENT_USER_ID, &me.to_string())
+            .unwrap();
         for u in [me, peer, friend] {
             repos.user_repo.ensure_user_exists(&u).unwrap();
             let mut p = Profile::new(u, "x".into());
@@ -916,12 +1062,20 @@ mod tests {
         }
         assert_eq!(client.peer_presence(&peer), PresenceStatus::Online);
 
-        repos.user_repo.insert_friendship(&Friendship {
-            requester_id: me, addressee_id: peer,
-            status: FriendshipStatus::Blocked, created_at: chrono::Utc::now(),
-        }).unwrap();
+        repos
+            .user_repo
+            .insert_friendship(&Friendship {
+                requester_id: me,
+                addressee_id: peer,
+                status: FriendshipStatus::Blocked,
+                created_at: chrono::Utc::now(),
+            })
+            .unwrap();
         assert_eq!(client.peer_presence(&peer), PresenceStatus::Offline);
-        assert_eq!(client.peer_display_presence(&peer, PresenceStatus::Away), PresenceStatus::Offline);
+        assert_eq!(
+            client.peer_display_presence(&peer, PresenceStatus::Away),
+            PresenceStatus::Offline
+        );
         assert!(!client.peer_last_seen_label(&peer).contains("online"));
         assert_eq!(client.peer_presence(&friend), PresenceStatus::Online);
         assert_eq!(client.peer_last_seen_label(&friend), "online");
@@ -938,18 +1092,34 @@ mod tests {
         let (client, _dir) = test_client();
         let peer = UserId::from_uuid(uuid::Uuid::from_u128(7));
         let dm = AnonDm::new_initiated(peer);
-        client.anon_dms().anon_dm_repo().insert_conversation(&dm).unwrap();
+        client
+            .anon_dms()
+            .anon_dm_repo()
+            .insert_conversation(&dm)
+            .unwrap();
         let conv: ChannelId = dm.id.into();
         let msg = Message::new_text(conv, ConversationType::AnonDm, Some(peer), "hi".into(), 1);
         client.messages().message_repo.insert(&msg).unwrap();
         client.block_profile_user(&peer).await.unwrap();
 
-        let row = |c: &ChatterClient| c.blocked_users().into_iter().find(|b| b.id == peer).unwrap();
+        let row = |c: &ChatterClient| {
+            c.blocked_users()
+                .into_iter()
+                .find(|b| b.id == peer)
+                .unwrap()
+        };
         assert!(row(&client).anon && row(&client).anon_chat);
 
         client.remove_blocked_contact(&peer).await.unwrap();
         assert!(client.find_anon_dm_by_peer(&peer).is_none());
-        assert!(client.messages().message_repo.get(&msg.id).unwrap().is_none());
+        assert!(
+            client
+                .messages()
+                .message_repo
+                .get(&msg.id)
+                .unwrap()
+                .is_none()
+        );
         assert!(client.is_profile_user_blocked(&peer));
         assert!(row(&client).anon && !row(&client).anon_chat);
 
@@ -975,10 +1145,18 @@ mod tests {
         let (client, _dir) = test_client();
         let peer = UserId::from_uuid(uuid::Uuid::from_u128(9));
         let dm = AnonDm::new_initiated(peer);
-        client.anon_dms().anon_dm_repo().insert_conversation(&dm).unwrap();
+        client
+            .anon_dms()
+            .anon_dm_repo()
+            .insert_conversation(&dm)
+            .unwrap();
         client.block_anon_dm_conversation(&dm.id).unwrap();
 
-        let row = client.blocked_users().into_iter().find(|b| b.id == peer).unwrap();
+        let row = client
+            .blocked_users()
+            .into_iter()
+            .find(|b| b.id == peer)
+            .unwrap();
         assert!(row.anon && row.anon_chat);
 
         client.unblock_profile_user(&peer).await.unwrap();

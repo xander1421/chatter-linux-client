@@ -21,7 +21,10 @@
 //! on one machine and remains an open gap.
 
 #![forbid(unsafe_code)]
-#![cfg_attr(not(test), deny(clippy::unwrap_used, clippy::expect_used, clippy::panic))]
+#![cfg_attr(
+    not(test),
+    deny(clippy::unwrap_used, clippy::expect_used, clippy::panic)
+)]
 
 #[cfg(target_os = "linux")]
 pub mod adapter;

@@ -5,11 +5,11 @@
 //! - Windows: WinRT toast notifications
 //! - macOS: macOS notification center
 
-use crate::domain::notification::{Notification, NotificationPriority};
+use super::platform::APP_DISPLAY_NAME;
 #[cfg(target_os = "linux")]
 use crate::domain::notification::NotificationType;
+use crate::domain::notification::{Notification, NotificationPriority};
 use crate::error::SystemError;
-use super::platform::APP_DISPLAY_NAME;
 use notify_rust::Notification as DesktopNotif;
 
 #[cfg(target_os = "linux")]
@@ -26,7 +26,8 @@ pub struct DesktopNotifications {
     /// `NotificationSink::set_sound`; on until the persisted value arrives.
     sound: std::sync::atomic::AtomicBool,
     #[cfg(target_os = "linux")]
-    conversations: std::sync::Mutex<std::collections::HashMap<String, notify_rust::NotificationHandle>>,
+    conversations:
+        std::sync::Mutex<std::collections::HashMap<String, notify_rust::NotificationHandle>>,
 }
 
 impl DesktopNotifications {
@@ -94,10 +95,7 @@ impl DesktopNotifications {
         priority: NotificationPriority,
     ) -> Result<(), SystemError> {
         let mut notif = DesktopNotif::new();
-        notif
-            .appname(APP_DISPLAY_NAME)
-            .summary(title)
-            .body(body);
+        notif.appname(APP_DISPLAY_NAME).summary(title).body(body);
 
         #[cfg(target_os = "linux")]
         {
@@ -207,7 +205,8 @@ impl super::notification_sink::NotificationSink for DesktopNotifications {
     }
 
     fn set_sound(&self, enabled: bool) {
-        self.sound.store(enabled, std::sync::atomic::Ordering::Relaxed);
+        self.sound
+            .store(enabled, std::sync::atomic::Ordering::Relaxed);
     }
 
     #[cfg(target_os = "linux")]
@@ -240,7 +239,11 @@ impl super::notification_sink::NotificationSink for DesktopNotifications {
 
     #[cfg(target_os = "linux")]
     fn cancel_conversation(&self, conversation: &str) -> Result<(), SystemError> {
-        let handle = self.conversations.lock().unwrap_or_else(|e| e.into_inner()).remove(conversation);
+        let handle = self
+            .conversations
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .remove(conversation);
         if let Some(handle) = handle {
             handle.close();
         }

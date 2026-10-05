@@ -5,8 +5,8 @@
 use std::fmt;
 use std::sync::Arc;
 
-use base64::engine::general_purpose::STANDARD as BASE64;
 use base64::Engine;
+use base64::engine::general_purpose::STANDARD as BASE64;
 use parking_lot::RwLock;
 use tonic::service::Interceptor;
 use tonic::{Request, Status};
@@ -56,7 +56,6 @@ impl Drop for AuthMode {
         }
     }
 }
-
 
 /// Thread-safe authentication interceptor for gRPC requests.
 ///
@@ -203,9 +202,9 @@ impl Interceptor for AuthInterceptor {
                 let value = format!("Bearer {}", token);
                 request.metadata_mut().insert(
                     "authorization",
-                    value.parse().map_err(|_| {
-                        Status::internal("invalid authorization header value")
-                    })?,
+                    value
+                        .parse()
+                        .map_err(|_| Status::internal("invalid authorization header value"))?,
                 );
             }
             AuthMode::Basic { username, password } => {
@@ -214,18 +213,18 @@ impl Interceptor for AuthInterceptor {
                 let value = format!("Basic {}", encoded);
                 request.metadata_mut().insert(
                     "authorization",
-                    value.parse().map_err(|_| {
-                        Status::internal("invalid authorization header value")
-                    })?,
+                    value
+                        .parse()
+                        .map_err(|_| Status::internal("invalid authorization header value"))?,
                 );
             }
             AuthMode::SealedSender { access_key } => {
                 let encoded = BASE64.encode(access_key);
                 request.metadata_mut().insert(
                     "unidentified-access-key",
-                    encoded.parse().map_err(|_| {
-                        Status::internal("invalid UAK header value")
-                    })?,
+                    encoded
+                        .parse()
+                        .map_err(|_| Status::internal("invalid UAK header value"))?,
                 );
             }
             AuthMode::Anonymous(token) => {
@@ -265,7 +264,10 @@ mod tests {
         };
         let dbg = format!("{:?}", info);
         assert!(dbg.contains("REDACTED"), "debug output: {dbg}");
-        assert!(dbg.contains("alice"), "user_id should still be visible: {dbg}");
+        assert!(
+            dbg.contains("alice"),
+            "user_id should still be visible: {dbg}"
+        );
         assert!(!dbg.contains("super-secret-token"), "token leaked: {dbg}");
     }
 

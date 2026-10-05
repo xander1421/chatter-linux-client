@@ -2,16 +2,15 @@
 //!
 //! Client for SVR backup service operations including store, fetch, and delete.
 
-use tonic::service::interceptor::InterceptedService;
 use crate::network::grpc::transport::GrpcTransport;
+use tonic::service::interceptor::InterceptedService;
 
 use crate::error::NetworkError;
 use crate::network::grpc::interceptors::AuthInterceptor;
 use crate::proto::chat_v1::{
-    svr_service_client::SvrServiceClient, ChangePinBackupRequest, DeleteBackupRequest,
-    DeleteMessageBackupRequest, FetchBackupRequest, GetMessageBackupRequest,
-    HasKeyBackupRequest,
-    SetMessageBackupRequest, StoreBackupRequest,
+    ChangePinBackupRequest, DeleteBackupRequest, DeleteMessageBackupRequest, FetchBackupRequest,
+    GetMessageBackupRequest, HasKeyBackupRequest, SetMessageBackupRequest, StoreBackupRequest,
+    svr_service_client::SvrServiceClient,
 };
 
 /// Result of a successful message-backup registration.

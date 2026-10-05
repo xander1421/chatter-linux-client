@@ -10,6 +10,6 @@ pub mod recent_emoji;
 pub mod shared_content_data;
 pub mod sidebar_data;
 
-pub use call_history_data::{format_call_duration, CallHistoryRowData};
+pub use call_history_data::{CallHistoryRowData, format_call_duration};
 pub use chat_data::{format_timestamp, initials_from_name};
-pub use shared_content_data::{shared_tabs, SharedContentItemData, SharedTabData};
+pub use shared_content_data::{SharedContentItemData, SharedTabData, shared_tabs};

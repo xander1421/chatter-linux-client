@@ -138,6 +138,7 @@ export component MessageItem inherits Rectangle {
     callback thread-clicked(string);
     callback more-clicked(string, string, length, length);  // (sender_id, timestamp_ns, x, y)
     callback selection-toggled(string);
+    callback open-message-link(string);
     callback message-clicked(string);
     callback attachment-clicked(string);
     callback audio-seek(string, float);
@@ -177,6 +178,30 @@ export component MessageItem inherits Rectangle {
     function cancel-hold() {
         root.holding = false;
         tier1-timer.running = false;
+    }
+
+    // Both the bubble TouchArea and link-owned StyledText stream use absolute
+    // coordinates, so movement and anchoring are identical across inline runs.
+    function begin-message-press(x: length, y: length, menu-x: length, menu-y: length) {
+        root.cancel-hold();
+        root.press-x = x;
+        root.press-y = y;
+        root.anchor-x = menu-x;
+        root.anchor-y = menu-y;
+        root.hold-tier = 0;
+        if (root.mobile && !root.selection-mode
+            && !root.is-system && !root.is-deleted && !root.is-call) {
+            root.holding = true;
+            tier1-timer.running = true;
+        }
+    }
+
+    function move-message-press(x: length, y: length) {
+        if (root.holding
+            && (abs(x - root.press-x) > root.hold-slop
+                || abs(y - root.press-y) > root.hold-slop)) {
+            root.cancel-hold();
+        }
     }
 
     function open-menu() {
@@ -464,22 +489,11 @@ export component MessageItem inherits Rectangle {
                             }
 
                             if (event.kind == PointerEventKind.down && event.button == PointerEventButton.left) {
-                                root.press-x = self.mouse-x;
-                                root.press-y = self.mouse-y;
-                                // Anchor under the bubble, not under the finger,
-                                // so the menu does not open beneath the thumb
-                                // that opened it.
-                                root.anchor-x = self.absolute-position.x;
-                                root.anchor-y = self.absolute-position.y + self.height;
-                                root.hold-tier = 0;
-                                // No hold while already selecting: there, a tap
-                                // is the toggle and a hold would re-open a menu
-                                // over the selection bar.
-                                if (root.mobile && !root.selection-mode
-                                    && !root.is-system && !root.is-deleted && !root.is-call) {
-                                    root.holding = true;
-                                    tier1-timer.running = true;
-                                }
+                                root.begin-message-press(
+                                    self.absolute-position.x + self.mouse-x,
+                                    self.absolute-position.y + self.mouse-y,
+                                    self.absolute-position.x,
+                                    self.absolute-position.y + self.height);
                             }
 
                             // Release, or a grab stolen by the scrolling
@@ -491,11 +505,8 @@ export component MessageItem inherits Rectangle {
                         }
 
                         moved => {
-                            if (root.holding
-                                && (abs(self.mouse-x - root.press-x) > root.hold-slop
-                                    || abs(self.mouse-y - root.press-y) > root.hold-slop)) {
-                                root.cancel-hold();
-                            }
+                            root.move-message-press(self.absolute-position.x + self.mouse-x,
+                                self.absolute-position.y + self.mouse-y);
                         }
 
                         clicked => {
@@ -733,9 +744,9 @@ export component MessageItem inherits Rectangle {
                         // blocks: each inline run is ONE StyledText, so mixed
                         // bold/italic/strike/code flow and word-wrap in one
                         // paragraph; fenced code blocks are boxes of their own.
-                        // StyledText passes presses through to bubble-touch
-                        // (vendor/i-slint-core/items/text.rs patch), so hold,
-                        // right-click and tap work on it as on a plain Text.
+                        // Non-link text and right-click pass through to bubble-touch.
+                        // Link taps own their stream and feed the same hold timer
+                        // through pointer-event (vendored core/compiler patch).
                         if root.content != "" && root.rich-content.length > 0: VerticalLayout {
                             spacing: Spacing.xs;
                             max-width: root.text-max-width;
@@ -761,6 +772,28 @@ export component MessageItem inherits Rectangle {
 
                                 if !block.is-code-block: StyledText {
                                     text: block.text;
+                                    link-color: Colors.primary;
+                                    pointer-event(event) => {
+                                        if (event.kind == PointerEventKind.down) {
+                                            root.begin-message-press(
+                                                self.absolute-position.x + self.mouse-x,
+                                                self.absolute-position.y + self.mouse-y,
+                                                bubble-touch.absolute-position.x,
+                                                bubble-touch.absolute-position.y + bubble-touch.height);
+                                        }
+                                        if (event.kind == PointerEventKind.move) {
+                                            root.move-message-press(self.absolute-position.x + self.mouse-x,
+                                                self.absolute-position.y + self.mouse-y);
+                                        }
+                                        if (event.kind == PointerEventKind.up || event.kind == PointerEventKind.cancel) {
+                                            root.cancel-hold();
+                                        }
+                                    }
+                                    link-clicked(url) => {
+                                        if (root.hold-tier != 0) { return; }
+                                        if root.selection-mode { root.selection-toggled(root.message-id); }
+                                        else { root.open-message-link(url); }
+                                    }
                                     // Text gets these implicitly; StyledText does not.
                                     accessible-role: text;
                                     accessible-label: block.plain;

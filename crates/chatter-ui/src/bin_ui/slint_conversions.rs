@@ -4,12 +4,13 @@
 //! These functions were extracted from core to keep it Slint-free.
 
 use chatter_core::error::MediaError;
-use chatter_core::media::gif::GifFrame;
 use chatter_core::media::ImageProcessor;
+use chatter_core::media::gif::GifFrame;
 
 /// Convert RGBA8 pixel data to a Slint Image.
 pub fn rgba_to_slint_image(data: &[u8], width: u32, height: u32) -> slint::Image {
-    let buffer = slint::SharedPixelBuffer::<slint::Rgba8Pixel>::clone_from_slice(data, width, height);
+    let buffer =
+        slint::SharedPixelBuffer::<slint::Rgba8Pixel>::clone_from_slice(data, width, height);
     slint::Image::from_rgba8(buffer)
 }
 

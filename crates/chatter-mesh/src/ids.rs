@@ -210,7 +210,9 @@ impl PeerId {
         if let Some(eight) = hex_decode(self.bare()).as_deref().and_then(to_eight) {
             return Some(eight);
         }
-        hex_decode(self.to_short().as_str()).as_deref().and_then(to_eight)
+        hex_decode(self.to_short().as_str())
+            .as_deref()
+            .and_then(to_eight)
     }
 
     /// Whether the bare part is entirely hex digits.
@@ -274,7 +276,9 @@ impl PeerId {
         // Internal format: alphanumerics plus dash and underscore, under 64.
         !id.is_empty()
             && len < MAX_ID_LEN
-            && id.chars().all(|c| c.is_alphanumeric() || c == '-' || c == '_')
+            && id
+                .chars()
+                .all(|c| c.is_alphanumeric() || c == '-' || c == '_')
     }
 }
 
@@ -380,7 +384,10 @@ mod tests {
     fn construction_lowercases() {
         assert_eq!(PeerId::from_str("AAA"), PeerId::from_str("aaa"));
         assert_eq!(PeerId::from_str("nostr_AABB").bare(), "aabb");
-        assert_eq!(PeerId::from_str("AABBCCDDEEFF0011").as_str(), "aabbccddeeff0011");
+        assert_eq!(
+            PeerId::from_str("AABBCCDDEEFF0011").as_str(),
+            "aabbccddeeff0011"
+        );
     }
 
     #[test]
@@ -399,24 +406,39 @@ mod tests {
     fn from_bytes_hex_encodes() {
         let peer = PeerId::from_bytes(&[0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77]);
         assert_eq!(peer.as_str(), HEX16);
-        assert_eq!(peer.to_routing_bytes(), Some([0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77]));
+        assert_eq!(
+            peer.to_routing_bytes(),
+            Some([0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77])
+        );
     }
 
     #[test]
     fn from_noise_key_is_sha256_not_truncation() {
         // Expected values are SHA-256 of the key, first 8 bytes as hex — the same
         // derivation `PeerIDTests.fileTransfer_*` asserts.
-        assert_eq!(PeerId::from_noise_key(&[0xAB; 32]).as_str(), "9a2db2e23f1504cd");
-        assert_eq!(PeerId::from_noise_key(&[0xCD; 32]).as_str(), "7969ec0fcb8b648d");
+        assert_eq!(
+            PeerId::from_noise_key(&[0xAB; 32]).as_str(),
+            "9a2db2e23f1504cd"
+        );
+        assert_eq!(
+            PeerId::from_noise_key(&[0xCD; 32]).as_str(),
+            "7969ec0fcb8b648d"
+        );
         // The old bug: truncating the raw key instead of hashing it.
-        assert_ne!(PeerId::from_noise_key(&[0xEF; 32]), PeerId::from_bytes(&[0xEF; 8]));
+        assert_ne!(
+            PeerId::from_noise_key(&[0xEF; 32]),
+            PeerId::from_bytes(&[0xEF; 8])
+        );
     }
 
     #[test]
     fn from_noise_key_accepts_arbitrary_length_input() {
         // `PeerIDTests.publicKey_derivesFingerprint` hashes the *UTF-8 of* a
         // 64-character hex string, i.e. 64 bytes, not the 32 bytes it encodes.
-        assert_eq!(PeerId::from_noise_key(HEX64.as_bytes()).as_str(), "2a8abfa8cb990629");
+        assert_eq!(
+            PeerId::from_noise_key(HEX64.as_bytes()).as_str(),
+            "2a8abfa8cb990629"
+        );
     }
 
     #[test]
@@ -501,7 +523,10 @@ mod tests {
         let hex8 = "a".repeat(8);
         for body in [&hex64, &hex63, &hex16, &hex8] {
             for prefix in [PREFIX_NOISE, PREFIX_GEO_CHAT, PREFIX_GEO_DM] {
-                assert!(PeerId::from_str(&format!("{prefix}{body}")).is_valid(), "{prefix}{body}");
+                assert!(
+                    PeerId::from_str(&format!("{prefix}{body}")).is_valid(),
+                    "{prefix}{body}"
+                );
             }
         }
 

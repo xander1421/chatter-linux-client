@@ -6,7 +6,7 @@ use crate::{common, skip_if_no_server};
 
 use base64::Engine;
 use chatter_core::network::grpc::UserClient;
-use chatter_core::proto::chat_v1::{friend_requests_filter, FriendStatus};
+use chatter_core::proto::chat_v1::{FriendStatus, friend_requests_filter};
 use tokio_stream::StreamExt;
 
 use common::*;
@@ -62,10 +62,7 @@ async fn test_friend_request_send_and_list() {
     );
 
     // Should have request from user1 (Contact has user_id field)
-    let has_request = requests
-        .requests
-        .iter()
-        .any(|r| r.user_id == user1.user_id);
+    let has_request = requests.requests.iter().any(|r| r.user_id == user1.user_id);
     assert!(has_request, "User2 should have pending request from User1");
 }
 
@@ -87,11 +84,7 @@ async fn test_friend_request_accept() {
     );
 
     let mut user1_client = UserClient::new(pool.channel(), pool.auth_clone());
-    let stream = assert_ok(
-        user1_client
-            .send_friend_request(&user2.user_id, None)
-            .await,
-    );
+    let stream = assert_ok(user1_client.send_friend_request(&user2.user_id, None).await);
     tokio::pin!(stream);
     while let Some(_) = stream.next().await {}
 
@@ -137,11 +130,7 @@ async fn test_friend_request_decline() {
     );
 
     let mut user1_client = UserClient::new(pool.channel(), pool.auth_clone());
-    let stream = assert_ok(
-        user1_client
-            .send_friend_request(&user2.user_id, None)
-            .await,
-    );
+    let stream = assert_ok(user1_client.send_friend_request(&user2.user_id, None).await);
     tokio::pin!(stream);
     while let Some(_) = stream.next().await {}
 
@@ -167,7 +156,10 @@ async fn test_friend_request_decline() {
     let mut user2_client = UserClient::new(pool.channel(), pool.auth_clone());
     let friends = assert_ok(user2_client.list_friends(50, 0).await);
     let is_friend = friends.friends.iter().any(|f| f.user_id == user1.user_id);
-    assert!(!is_friend, "User1 should NOT be in User2's friend list after decline");
+    assert!(
+        !is_friend,
+        "User1 should NOT be in User2's friend list after decline"
+    );
 }
 
 // ============================================================================
@@ -195,11 +187,7 @@ async fn test_remove_friend() {
     );
 
     let mut user1_client = UserClient::new(pool.channel(), pool.auth_clone());
-    let stream = assert_ok(
-        user1_client
-            .send_friend_request(&user2.user_id, None)
-            .await,
-    );
+    let stream = assert_ok(user1_client.send_friend_request(&user2.user_id, None).await);
     tokio::pin!(stream);
     while let Some(_) = stream.next().await {}
 
@@ -230,7 +218,10 @@ async fn test_remove_friend() {
     // Verify no longer friends
     let friends = assert_ok(user1_client.list_friends(50, 0).await);
     let still_friends = friends.friends.iter().any(|f| f.user_id == user2.user_id);
-    assert!(!still_friends, "User2 should not be in friend list after removal");
+    assert!(
+        !still_friends,
+        "User2 should not be in friend list after removal"
+    );
 }
 
 // ============================================================================

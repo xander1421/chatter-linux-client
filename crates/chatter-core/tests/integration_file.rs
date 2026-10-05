@@ -8,8 +8,8 @@ use std::sync::Arc;
 
 use chatter_core::network::grpc::FileClient;
 use chatter_core::proto::chat_v1::CompletedPart;
-use chatter_core::services::attachment::set_attachments_base_dir;
 use chatter_core::services::AttachmentService;
+use chatter_core::services::attachment::set_attachments_base_dir;
 use chatter_core::storage::{AttachmentRepository, Database};
 
 use common::*;
@@ -133,7 +133,11 @@ async fn test_rustfs_presigned_multipart_minimal() {
     let mut file_client = FileClient::new(pool.channel(), pool.auth_clone());
 
     let size = 5 * 1024 * 1024 + 1; // one part (< 16 MiB)
-    let create = assert_ok(file_client.create_attachment_multipart_upload(size as u64).await);
+    let create = assert_ok(
+        file_client
+            .create_attachment_multipart_upload(size as u64)
+            .await,
+    );
     eprintln!(
         "CREATE ok: cdn_key={} upload_id={} part_urls={} part_size={}",
         create.cdn_key,
@@ -141,7 +145,10 @@ async fn test_rustfs_presigned_multipart_minimal() {
         create.part_urls.len(),
         create.part_size
     );
-    assert!(!create.part_urls.is_empty(), "server returned zero part URLs");
+    assert!(
+        !create.part_urls.is_empty(),
+        "server returned zero part URLs"
+    );
 
     let http = storage_http_client();
     let resp = http
@@ -153,7 +160,11 @@ async fn test_rustfs_presigned_multipart_minimal() {
         .map_err(reqwest::Error::without_url)
         .expect("presigned part PUT should reach RustFS");
 
-    eprintln!("PART PUT status={} etag={:?}", resp.status(), resp.headers().get(reqwest::header::ETAG));
+    eprintln!(
+        "PART PUT status={} etag={:?}",
+        resp.status(),
+        resp.headers().get(reqwest::header::ETAG)
+    );
     assert!(
         resp.status().is_success(),
         "CRITICAL: RustFS rejected presigned UploadPart with status {}",
@@ -212,7 +223,11 @@ async fn test_multipart_upload_round_trip_over_100mb() {
     let source_path = temp_dir.path().join("source_150mb.bin");
     assert_ok(tokio::fs::write(&source_path, &original).await);
 
-    let upload_result = assert_ok(attachment_service.upload_to_cdn_encrypted(&source_path).await);
+    let upload_result = assert_ok(
+        attachment_service
+            .upload_to_cdn_encrypted(&source_path)
+            .await,
+    );
     assert_eq!(
         upload_result.plaintext_size, size as u64,
         "uploaded plaintext size should match the source file"

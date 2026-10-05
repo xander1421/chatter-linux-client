@@ -59,7 +59,9 @@ pub(super) fn wire_shield_before_login(window: &MainWindow, ui_ctx: &Arc<Chatter
 /// nothing went direct — the pool has no direct path while Shield is on.
 pub(super) fn connect_error(shield: bool, error: &impl std::fmt::Display) -> String {
     if shield {
-        format!("Couldn't reach the server over Tor: {error}. Shield is still on; nothing was sent outside Tor.")
+        format!(
+            "Couldn't reach the server over Tor: {error}. Shield is still on; nothing was sent outside Tor."
+        )
     } else {
         format!("Failed to connect to server: {error}")
     }

@@ -9,12 +9,12 @@ use tonic::service::interceptor::InterceptedService;
 use crate::error::NetworkError;
 use crate::network::grpc::interceptors::AuthInterceptor;
 use crate::proto::mailbox_v1::{
-    ephemeral_mailbox_service_client::EphemeralMailboxServiceClient, AcknowledgeMessagesRequest,
-    AcknowledgeMessagesResponse, CreateEphemeralMailboxRequest, CreateEphemeralMailboxResponse,
-    GetBlindSignaturePublicKeyRequest, GetBlindSignaturePublicKeyResponse,
-    GetMailboxChallengeRequest, GetMailboxChallengeResponse, GetMailboxTokensRequest,
-    GetMailboxTokensResponse, PollEphemeralMailboxRequest, PollEphemeralMailboxResponse,
-    SendToEphemeralMailboxRequest, SendToEphemeralMailboxResponse,
+    AcknowledgeMessagesRequest, AcknowledgeMessagesResponse, CreateEphemeralMailboxRequest,
+    CreateEphemeralMailboxResponse, GetBlindSignaturePublicKeyRequest,
+    GetBlindSignaturePublicKeyResponse, GetMailboxChallengeRequest, GetMailboxChallengeResponse,
+    GetMailboxTokensRequest, GetMailboxTokensResponse, PollEphemeralMailboxRequest,
+    PollEphemeralMailboxResponse, SendToEphemeralMailboxRequest, SendToEphemeralMailboxResponse,
+    ephemeral_mailbox_service_client::EphemeralMailboxServiceClient,
 };
 
 /// Mailbox service client wrapper.

@@ -14,7 +14,7 @@ use crate::domain::ids::UserId;
 use crate::domain::user::FriendshipStatus;
 use crate::error::StorageError;
 use crate::services::current_user::CurrentUserProvider;
-use crate::storage::repositories::settings_repo::{keys, SettingsRepository};
+use crate::storage::repositories::settings_repo::{SettingsRepository, keys};
 use crate::storage::repositories::user_repo::UserRepository;
 
 /// Ordered least to most restrictive, so `new > old` means "restricting".
@@ -106,7 +106,10 @@ pub fn shareable_profile_key(
     recipient: &UserId,
 ) -> Option<[u8; 32]> {
     let us = settings.current_user_id().ok()?;
-    if *recipient == us || rotation_pending(settings) || users.is_blocked(&us, recipient).unwrap_or(true) {
+    if *recipient == us
+        || rotation_pending(settings)
+        || users.is_blocked(&us, recipient).unwrap_or(true)
+    {
         return None;
     }
     let allowed = match ProfileVisibility::load(settings) {
@@ -117,7 +120,11 @@ pub fn shareable_profile_key(
         ),
         ProfileVisibility::Nobody => false,
     };
-    if allowed { own_profile_key(settings) } else { None }
+    if allowed {
+        own_profile_key(settings)
+    } else {
+        None
+    }
 }
 
 /// Our profile key for an anon DM / anon group peer. Those peers are
@@ -125,7 +132,9 @@ pub fn shareable_profile_key(
 pub fn anon_shareable_profile_key(settings: &SettingsRepository) -> Option<[u8; 32]> {
     // no per-peer friend check — an anon peer is not addressed as a
     // contact; add one if anon conversations with friends must see the profile.
-    if rotation_pending(settings) || ProfileVisibility::load(settings) != ProfileVisibility::Everyone {
+    if rotation_pending(settings)
+        || ProfileVisibility::load(settings) != ProfileVisibility::Everyone
+    {
         return None;
     }
     own_profile_key(settings)
@@ -150,7 +159,10 @@ pub fn next_profile_key(settings: &SettingsRepository) -> Result<[u8; 32], Stora
 /// down FIRST, so a crash anywhere after it is finished by
 /// [`finish_interrupted_commit`] rather than leaving a switched key nobody
 /// was told about.
-pub fn commit_rotation(settings: &SettingsRepository, visibility: ProfileVisibility) -> Result<(), StorageError> {
+pub fn commit_rotation(
+    settings: &SettingsRepository,
+    visibility: ProfileVisibility,
+) -> Result<(), StorageError> {
     settings.set(keys::PROFILE_KEY_ROTATION_PENDING, &true)?;
     visibility.store(settings)?;
     finish_interrupted_commit(settings)
@@ -167,7 +179,9 @@ pub fn finish_interrupted_commit(settings: &SettingsRepository) -> Result<(), St
 }
 
 pub fn clear_rotation_pending(settings: &SettingsRepository) -> Result<(), StorageError> {
-    settings.delete(keys::PROFILE_KEY_ROTATION_PENDING).map(|_| ())
+    settings
+        .delete(keys::PROFILE_KEY_ROTATION_PENDING)
+        .map(|_| ())
 }
 
 /// Adopt a `ProfileKeySync` from another of our devices (the caller has
@@ -177,7 +191,10 @@ pub fn apply_sync(
     sync: &crate::proto::content_v1::ProfileKeySync,
 ) -> Result<bool, StorageError> {
     let Ok(key) = <[u8; 32]>::try_from(sync.profile_key.as_slice()) else {
-        tracing::warn!(len = sync.profile_key.len(), "ProfileKeySync with a malformed key dropped");
+        tracing::warn!(
+            len = sync.profile_key.len(),
+            "ProfileKeySync with a malformed key dropped"
+        );
         return Ok(false);
     };
     if let Some(v) = ProfileVisibility::from_proto(sync.visibility()) {
@@ -209,8 +226,14 @@ mod tests {
         let db = Arc::new(Database::open(&dir.path().join("pv.db"), "testpass").unwrap());
         db.run_migrations().unwrap();
         crate::test_tempdir::hold(dir);
-        let t = T { settings: SettingsRepository::new(db.clone()), users: UserRepository::new(db), me: UserId::new() };
-        t.settings.set(keys::CURRENT_USER_ID, &t.me.to_string()).unwrap();
+        let t = T {
+            settings: SettingsRepository::new(db.clone()),
+            users: UserRepository::new(db),
+            me: UserId::new(),
+        };
+        t.settings
+            .set(keys::CURRENT_USER_ID, &t.me.to_string())
+            .unwrap();
         t.settings.set_bytes(keys::PROFILE_KEY, &[7; 32]).unwrap();
         t.users.ensure_user_exists(&t.me).unwrap();
         t
@@ -221,7 +244,12 @@ mod tests {
         t.users.ensure_user_exists(&id).unwrap();
         if let Some(status) = status {
             t.users
-                .insert_friendship(&Friendship { requester_id: t.me, addressee_id: id, status, created_at: chrono::Utc::now() })
+                .insert_friendship(&Friendship {
+                    requester_id: t.me,
+                    addressee_id: id,
+                    status,
+                    created_at: chrono::Utc::now(),
+                })
                 .unwrap();
         }
         id
@@ -235,7 +263,11 @@ mod tests {
         let blocked = peer(&t, Some(FriendshipStatus::Blocked));
         let share = |to: &UserId| shareable_profile_key(&t.settings, &t.users, to).is_some();
 
-        assert_eq!(ProfileVisibility::load(&t.settings), ProfileVisibility::Everyone, "default");
+        assert_eq!(
+            ProfileVisibility::load(&t.settings),
+            ProfileVisibility::Everyone,
+            "default"
+        );
         assert!(share(&friend) && share(&stranger));
         assert!(!share(&blocked), "a blocked user never gets it");
         assert!(!share(&t.me), "our own devices get it by ProfileKeySync");
@@ -259,17 +291,34 @@ mod tests {
         let next = next_profile_key(&t.settings).unwrap();
         assert_eq!(next_profile_key(&t.settings).unwrap(), next);
         assert_ne!(next, [7; 32]);
-        assert_eq!(own_profile_key(&t.settings), Some([7; 32]), "not current before commit");
+        assert_eq!(
+            own_profile_key(&t.settings),
+            Some([7; 32]),
+            "not current before commit"
+        );
 
         commit_rotation(&t.settings, ProfileVisibility::Contacts).unwrap();
         assert_eq!(own_profile_key(&t.settings), Some(next));
-        assert_eq!(ProfileVisibility::load(&t.settings), ProfileVisibility::Contacts);
+        assert_eq!(
+            ProfileVisibility::load(&t.settings),
+            ProfileVisibility::Contacts
+        );
         assert!(rotation_pending(&t.settings));
-        assert!(shareable_profile_key(&t.settings, &t.users, &friend).is_none(), "nothing mid-rotation");
+        assert!(
+            shareable_profile_key(&t.settings, &t.users, &friend).is_none(),
+            "nothing mid-rotation"
+        );
 
         clear_rotation_pending(&t.settings).unwrap();
-        assert_eq!(shareable_profile_key(&t.settings, &t.users, &friend), Some(next));
-        assert_ne!(next_profile_key(&t.settings).unwrap(), next, "the next rotation gets a fresh key");
+        assert_eq!(
+            shareable_profile_key(&t.settings, &t.users, &friend),
+            Some(next)
+        );
+        assert_ne!(
+            next_profile_key(&t.settings).unwrap(),
+            next,
+            "the next rotation gets a fresh key"
+        );
     }
 
     #[test]
@@ -277,25 +326,48 @@ mod tests {
         let t = setup();
         let next = next_profile_key(&t.settings).unwrap();
         // Crash right after the flag went up, before the key switched.
-        t.settings.set(keys::PROFILE_KEY_ROTATION_PENDING, &true).unwrap();
+        t.settings
+            .set(keys::PROFILE_KEY_ROTATION_PENDING, &true)
+            .unwrap();
         finish_interrupted_commit(&t.settings).unwrap();
         assert_eq!(own_profile_key(&t.settings), Some(next));
-        assert!(t.settings.get_bytes(keys::PROFILE_KEY_NEXT).unwrap().is_none());
+        assert!(
+            t.settings
+                .get_bytes(keys::PROFILE_KEY_NEXT)
+                .unwrap()
+                .is_none()
+        );
     }
 
     #[test]
     fn own_device_sync_adopts_key_and_setting() {
         use crate::proto::content_v1::ProfileKeySync;
         let t = setup();
-        let mut sync = ProfileKeySync { profile_key: vec![8; 32], ..Default::default() };
+        let mut sync = ProfileKeySync {
+            profile_key: vec![8; 32],
+            ..Default::default()
+        };
         sync.set_visibility(ProfileVisibility::Nobody.to_proto());
         assert!(apply_sync(&t.settings, &sync).unwrap());
-        assert!(!apply_sync(&t.settings, &sync).unwrap(), "same key is no change");
+        assert!(
+            !apply_sync(&t.settings, &sync).unwrap(),
+            "same key is no change"
+        );
         assert_eq!(own_profile_key(&t.settings), Some([8; 32]));
-        assert_eq!(ProfileVisibility::load(&t.settings), ProfileVisibility::Nobody);
+        assert_eq!(
+            ProfileVisibility::load(&t.settings),
+            ProfileVisibility::Nobody
+        );
 
-        let bad = ProfileKeySync { profile_key: vec![1; 5], ..Default::default() };
+        let bad = ProfileKeySync {
+            profile_key: vec![1; 5],
+            ..Default::default()
+        };
         assert!(!apply_sync(&t.settings, &bad).unwrap());
-        assert_eq!(own_profile_key(&t.settings), Some([8; 32]), "a malformed key is ignored");
+        assert_eq!(
+            own_profile_key(&t.settings),
+            Some([8; 32]),
+            "a malformed key is ignored"
+        );
     }
 }

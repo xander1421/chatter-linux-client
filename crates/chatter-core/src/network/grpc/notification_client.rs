@@ -3,14 +3,13 @@
 //! Client for notification service operations including notification management,
 //! preferences, and real-time notification streaming.
 
+use crate::network::grpc::transport::GrpcTransport;
 use tokio_stream::{Stream, StreamExt};
 use tonic::service::interceptor::InterceptedService;
-use crate::network::grpc::transport::GrpcTransport;
 
 use crate::error::NetworkError;
 use crate::network::grpc::interceptors::AuthInterceptor;
 use crate::proto::chat_v1::{
-    notification_service_client::NotificationServiceClient as ProtoNotificationServiceClient,
     CreateBatchNotificationsRequest, CreateBatchNotificationsResponse, CreateNotificationRequest,
     CreateNotificationResponse, DeleteNotificationRequest, DeleteNotificationResponse,
     GetNotificationRequest, GetNotificationResponse, GetPreferencesRequest, GetPreferencesResponse,
@@ -19,6 +18,7 @@ use crate::proto::chat_v1::{
     MarkAsReadResponse, NotificationPreferences, NotificationPriority, NotificationType,
     StreamNotificationsRequest, StreamNotificationsResponse, UpdatePreferencesRequest,
     UpdatePreferencesResponse,
+    notification_service_client::NotificationServiceClient as ProtoNotificationServiceClient,
 };
 
 /// Notification service client wrapper.
@@ -242,9 +242,7 @@ impl NotificationClient {
     // ==================== Preferences RPCs ====================
 
     /// Get notification preferences for the authenticated user.
-    pub async fn get_preferences(
-        &mut self,
-    ) -> Result<GetPreferencesResponse, NetworkError> {
+    pub async fn get_preferences(&mut self) -> Result<GetPreferencesResponse, NetworkError> {
         let request = GetPreferencesRequest {};
 
         self.inner
@@ -347,7 +345,10 @@ mod tests {
         // Verify ListNotificationsRequest can be constructed with filters
         let request = ListNotificationsRequest {
             unread_only: true,
-            types: vec![NotificationType::Message as i32, NotificationType::Mention as i32],
+            types: vec![
+                NotificationType::Message as i32,
+                NotificationType::Mention as i32,
+            ],
             limit: 20,
             offset: 0,
         };
@@ -361,7 +362,11 @@ mod tests {
     fn test_mark_as_read_request_construction() {
         // Verify MarkAsReadRequest can be constructed with notification_ids
         let request = MarkAsReadRequest {
-            notification_ids: vec!["notif-1".to_string(), "notif-2".to_string(), "notif-3".to_string()],
+            notification_ids: vec![
+                "notif-1".to_string(),
+                "notif-2".to_string(),
+                "notif-3".to_string(),
+            ],
         };
 
         assert_eq!(request.notification_ids.len(), 3);

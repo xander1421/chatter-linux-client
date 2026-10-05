@@ -148,8 +148,8 @@ fn hmac_candidate(
     msg: &[u8],
     iteration: u32,
 ) -> Result<[u8; 32], NostrError> {
-    let mut mac = Hmac::<Sha256>::new_from_slice(device_seed)
-        .map_err(|_| NostrError::InvalidPrivateKey)?;
+    let mut mac =
+        Hmac::<Sha256>::new_from_slice(device_seed).map_err(|_| NostrError::InvalidPrivateKey)?;
     mac.update(msg);
     mac.update(&iteration.to_be_bytes());
     Ok(mac.finalize().into_bytes().into())
@@ -183,8 +183,7 @@ fn encode_bech32(hrp: &str, data: &[u8]) -> Result<String, NostrError> {
 }
 
 fn decode_bech32(expected_hrp: &str, encoded: &str) -> Result<Vec<u8>, NostrError> {
-    let (hrp, data) =
-        bech32::decode(encoded).map_err(|e| NostrError::Bech32(e.to_string()))?;
+    let (hrp, data) = bech32::decode(encoded).map_err(|e| NostrError::Bech32(e.to_string()))?;
     if !hrp.to_string().eq_ignore_ascii_case(expected_hrp) {
         return Err(NostrError::Bech32(format!(
             "expected a {expected_hrp} but got a {hrp}"
@@ -231,7 +230,12 @@ mod tests {
     fn identity_exposes_a_32_byte_x_only_pubkey() {
         let identity = NostrIdentity::from_secret(seckey(NIP19_SECKEY_HEX)).expect("valid secret");
         assert_eq!(identity.public_key_hex().len(), 64);
-        assert!(identity.public_key_hex().chars().all(|c| c.is_ascii_hexdigit()));
+        assert!(
+            identity
+                .public_key_hex()
+                .chars()
+                .all(|c| c.is_ascii_hexdigit())
+        );
         assert_eq!(identity.secret(), &seckey(NIP19_SECKEY_HEX));
     }
 
@@ -270,7 +274,10 @@ mod tests {
 
         let npub = identity.npub().expect("npub");
         assert!(npub.starts_with("npub1"));
-        assert_eq!(npub_decode(&npub).expect("decodes"), identity.public_key_hex());
+        assert_eq!(
+            npub_decode(&npub).expect("decodes"),
+            identity.public_key_hex()
+        );
 
         let nsec = identity.nsec().expect("nsec");
         assert!(nsec.starts_with("nsec1"));
@@ -324,8 +331,8 @@ mod tests {
         assert_ne!(chat.public_key_hex(), bridge.public_key_hex());
 
         // And it is exactly the labelled derivation, not a separate scheme.
-        let labelled =
-            derive_for_geohash(&SEED_A, &format!("{BRIDGE_IDENTITY_LABEL}u4pruy")).expect("derives");
+        let labelled = derive_for_geohash(&SEED_A, &format!("{BRIDGE_IDENTITY_LABEL}u4pruy"))
+            .expect("derives");
         assert_eq!(bridge.public_key_hex(), labelled.public_key_hex());
     }
 

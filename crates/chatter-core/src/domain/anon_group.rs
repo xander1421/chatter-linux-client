@@ -300,7 +300,12 @@ impl AnonGroupMember {
     }
 
     /// Set the member's profile information.
-    pub fn with_profile(mut self, profile_key: Option<[u8; 32]>, display_name: Option<String>, avatar: Option<Vec<u8>>) -> Self {
+    pub fn with_profile(
+        mut self,
+        profile_key: Option<[u8; 32]>,
+        display_name: Option<String>,
+        avatar: Option<Vec<u8>>,
+    ) -> Self {
         self.profile_key = profile_key;
         self.display_name = display_name;
         self.avatar = avatar;
@@ -473,12 +478,7 @@ impl AnonGroupMessage {
     ///
     /// The `sent_at` parameter is the sender's timestamp (nanoseconds since epoch),
     /// used for consistent ordering across devices.
-    pub fn new_text(
-        group_id: AnonGroupId,
-        sender_id: UserId,
-        text: &str,
-        sent_at: u64,
-    ) -> Self {
+    pub fn new_text(group_id: AnonGroupId, sender_id: UserId, text: &str, sent_at: u64) -> Self {
         Self {
             id: AnonGroupMessageId::new(),
             group_id,
@@ -515,7 +515,8 @@ impl AnonGroupMessage {
     pub fn attachment_ids(&self) -> Vec<crate::domain::AttachmentId> {
         use crate::storage::serialization::db_deserialize;
 
-        if self.attachments_blob.is_empty() || self.attachments_blob == vec![8, 0, 0, 0, 0, 0, 0, 0] {
+        if self.attachments_blob.is_empty() || self.attachments_blob == vec![8, 0, 0, 0, 0, 0, 0, 0]
+        {
             return Vec::new();
         }
 
@@ -635,11 +636,7 @@ mod tests {
 
     #[test]
     fn test_anon_group_member_pending() {
-        let member = AnonGroupMember::new(
-            AnonGroupId::new(),
-            UserId::new(),
-            AnonGroupRole::Member,
-        );
+        let member = AnonGroupMember::new(AnonGroupId::new(), UserId::new(), AnonGroupRole::Member);
         assert!(member.is_pending());
         assert!(!member.is_confirmed());
     }
@@ -662,8 +659,14 @@ mod tests {
     fn test_pending_action_type() {
         assert_eq!(PendingActionType::Invite.as_str(), "invite");
         assert_eq!(PendingActionType::Kick.as_str(), "kick");
-        assert_eq!(PendingActionType::parse("invite"), Some(PendingActionType::Invite));
-        assert_eq!(PendingActionType::parse("kick"), Some(PendingActionType::Kick));
+        assert_eq!(
+            PendingActionType::parse("invite"),
+            Some(PendingActionType::Invite)
+        );
+        assert_eq!(
+            PendingActionType::parse("kick"),
+            Some(PendingActionType::Kick)
+        );
         assert_eq!(PendingActionType::parse("unknown"), None);
     }
 
@@ -733,11 +736,8 @@ mod tests {
 
     #[test]
     fn test_anon_group_blocked_user() {
-        let blocked = AnonGroupBlockedUser::new(
-            AnonGroupId::new(),
-            UserId::new(),
-            Some("spam".to_string()),
-        );
+        let blocked =
+            AnonGroupBlockedUser::new(AnonGroupId::new(), UserId::new(), Some("spam".to_string()));
         assert!(blocked.reason.is_some());
         assert_eq!(blocked.reason.unwrap(), "spam");
     }

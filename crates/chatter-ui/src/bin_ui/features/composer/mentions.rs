@@ -36,11 +36,8 @@ pub(crate) fn wire_mention_triggered(
         // Spawn async task to fetch channel members
         tokio::spawn(async move {
             // Fetch raw suggestion data (Send-safe)
-            let raw_suggestions = fetch_mention_suggestions_raw(
-                &query_str,
-                &ui_ctx,
-                &chat_state,
-            ).await;
+            let raw_suggestions =
+                fetch_mention_suggestions_raw(&query_str, &ui_ctx, &chat_state).await;
 
             let _ = slint::invoke_from_event_loop(move || {
                 if let Some(w) = weak.upgrade() {
@@ -58,7 +55,9 @@ pub(crate) fn wire_mention_triggered(
                             })
                             .collect();
 
-                        w.set_mention_suggestions(slint::ModelRc::new(slint::VecModel::from(suggestions)));
+                        w.set_mention_suggestions(slint::ModelRc::new(slint::VecModel::from(
+                            suggestions,
+                        )));
                         w.set_mention_selected_index(0);
                         w.set_mention_autocomplete_visible(true);
                         w.set_composer_emoji_picker_visible(false);

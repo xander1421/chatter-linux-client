@@ -8,8 +8,7 @@
 
 // Re-export builders
 pub use crate::framework::builders::{
-    UserBuilder, MessageBuilder, ChannelBuilder, AttachmentBuilder,
-    CryptoBuilder, SessionBuilder,
+    AttachmentBuilder, ChannelBuilder, CryptoBuilder, MessageBuilder, SessionBuilder, UserBuilder,
 };
 
 // Re-export harness
@@ -17,9 +16,8 @@ pub use crate::framework::harness::TestHarness;
 
 // Re-export fixtures
 pub use crate::framework::fixtures::{
-    unique_username, random_password,
-    random_public_key, random_identity_key, random_uak, generate_prekey_bundle,
-    unique_channel_name, random_bytes, fake_cdn_url,
+    fake_cdn_url, generate_prekey_bundle, random_bytes, random_identity_key, random_password,
+    random_public_key, random_uak, unique_channel_name, unique_username,
 };
 
 // Re-export common external crates used in tests

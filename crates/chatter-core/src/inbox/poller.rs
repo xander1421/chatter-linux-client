@@ -6,7 +6,7 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use parking_lot::RwLock;
-use tokio::sync::{broadcast, watch, Mutex};
+use tokio::sync::{Mutex, broadcast, watch};
 
 use crate::network::grpc::MessageClient;
 use crate::proto::chat_v1::DeviceMessage;
@@ -80,10 +80,7 @@ impl InboxPoller {
     /// re-dials over the pool's current transport (used when anon mode toggles
     /// the transport between direct and onion; the captured client is otherwise
     /// pinned to the transport that was active at construction).
-    pub async fn refresh_message_client(
-        &self,
-        pool: &crate::network::grpc::GrpcClientPool,
-    ) {
+    pub async fn refresh_message_client(&self, pool: &crate::network::grpc::GrpcClientPool) {
         *self.message_client.lock().await = pool.message_client();
     }
 
@@ -142,7 +139,9 @@ impl InboxPoller {
                 }
 
                 // Emit poll completed event
-                let _ = self.event_tx.send(InboxEvent::PollCompleted { count, has_more });
+                let _ = self
+                    .event_tx
+                    .send(InboxEvent::PollCompleted { count, has_more });
 
                 // Update last activity if we got messages
                 if count > 0 {
@@ -203,17 +202,14 @@ impl InboxPoller {
             };
             let outcome = tokio::time::timeout(
                 rpc_timeout,
-                client.get_device_messages(
-                    after_id,
-                    self.config.max_batch_size as i32,
-                ),
+                client.get_device_messages(after_id, self.config.max_batch_size as i32),
             )
             .await;
             // Drive the Tor indicator off the real onion RPC outcome (Circuit+RPC
             // signal): a completed round-trip = Connected, a timeout = Error. Only
             // touch it on onion — direct mode owns its own connection state.
             if on_onion {
-                use crate::network::connection::{set_tor_status, TorStatus};
+                use crate::network::connection::{TorStatus, set_tor_status};
                 match &outcome {
                     Ok(Ok(_)) => set_tor_status(TorStatus::Connected),
                     Err(_) => set_tor_status(TorStatus::Error),
@@ -221,7 +217,12 @@ impl InboxPoller {
                 }
             }
             let result = outcome
-                .map_err(|_| InboxError::PollFailed(format!("GetDeviceMessages RPC timed out after {}s", rpc_timeout.as_secs())))?
+                .map_err(|_| {
+                    InboxError::PollFailed(format!(
+                        "GetDeviceMessages RPC timed out after {}s",
+                        rpc_timeout.as_secs()
+                    ))
+                })?
                 .map_err(|e| InboxError::PollFailed(e.to_string()))?;
             tracing::info!(
                 after_id,
@@ -277,9 +278,7 @@ impl InboxPoller {
 
             let result = {
                 let mut client = self.message_client.lock().await;
-                client
-                    .acknowledge_messages(chunk_ids.clone())
-                    .await
+                client.acknowledge_messages(chunk_ids.clone()).await
             };
 
             if let Err(e) = result {
@@ -298,7 +297,6 @@ impl InboxPoller {
     pub fn poll_interval(&self) -> std::time::Duration {
         self.current_interval()
     }
-
 }
 
 #[cfg(test)]

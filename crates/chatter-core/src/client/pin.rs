@@ -9,8 +9,10 @@ impl ChatterClient {
         &self,
         channel_id: &crate::domain::ids::ChannelId,
         conversation_type: &crate::domain::message::ConversationType,
-    ) -> Result<Vec<crate::services::pin_service::PinnedMessageData>, crate::services::pin_service::PinError>
-    {
+    ) -> Result<
+        Vec<crate::services::pin_service::PinnedMessageData>,
+        crate::services::pin_service::PinError,
+    > {
         self.pins()
             .load_pinned_for_channel(channel_id, conversation_type)
             .await

@@ -155,7 +155,11 @@ impl UserSync {
                     &friend_profile.status_message,
                 )
                 .map(StatusMessage::new)
-                .or_else(|| existing_profile.as_ref().and_then(|p| p.status_message.clone()));
+                .or_else(|| {
+                    existing_profile
+                        .as_ref()
+                        .and_then(|p| p.status_message.clone())
+                });
 
                 let presence = presence_from_proto(friend_profile.presence);
 
@@ -349,8 +353,12 @@ impl UserSync {
             offset += PAGE_SIZE;
         }
 
-        let before: HashSet<UserId> =
-            self.user_repo.list_blocked_by(&current_user).unwrap_or_default().into_iter().collect();
+        let before: HashSet<UserId> = self
+            .user_repo
+            .list_blocked_by(&current_user)
+            .unwrap_or_default()
+            .into_iter()
+            .collect();
 
         for user_id in &server_blocked {
             // FK on users(id) — the blocked user may never have been seen on
@@ -384,7 +392,11 @@ impl UserSync {
         }
 
         let changed = before != server_blocked;
-        tracing::info!(blocked = server_blocked.len(), changed, "Blocked-user sync complete");
+        tracing::info!(
+            blocked = server_blocked.len(),
+            changed,
+            "Blocked-user sync complete"
+        );
         Ok((server_blocked.len(), changed))
     }
 

@@ -106,9 +106,7 @@ pub fn shared_secret(
 /// An empty salt is identical to a salt of 32 zero bytes here: HKDF-Extract keys an
 /// HMAC-SHA256 with the salt, and HMAC zero-pads any key shorter than its 64-byte
 /// block.
-pub fn derive_conversation_key(
-    shared: &[u8; SHARED_SECRET_LEN],
-) -> [u8; CONVERSATION_KEY_LEN] {
+pub fn derive_conversation_key(shared: &[u8; SHARED_SECRET_LEN]) -> [u8; CONVERSATION_KEY_LEN] {
     let mut key = [0u8; CONVERSATION_KEY_LEN];
     // `expand` rejects only outputs longer than 255 * 32 bytes; this one is 32, so
     // the error arm is unreachable. It is matched rather than unwrapped because the
@@ -336,20 +334,16 @@ mod tests {
     // Cross-checked against an independent pure-Python secp256k1 implementation.
     const EVEN_A_SEC: [u8; 32] =
         hexlit("42f142b892e3bab20ad49b3602d0be46d1dd512b48e9090a0f19f353ad2139ff");
-    const EVEN_A_XONLY: &str =
-        "31a6199901ca9461883c53cfc4a1a2212ce428f124c097364dcef87308645d5d";
+    const EVEN_A_XONLY: &str = "31a6199901ca9461883c53cfc4a1a2212ce428f124c097364dcef87308645d5d";
     const EVEN_B_SEC: [u8; 32] =
         hexlit("691e4c43b325c95617a29b95580932fa861ed9df734188418645fa8232afcafc");
-    const EVEN_B_XONLY: &str =
-        "05cee4252077b34f3e8cbb52f95ec0830e9b84e8900a363ef29408405a79e297";
+    const EVEN_B_XONLY: &str = "05cee4252077b34f3e8cbb52f95ec0830e9b84e8900a363ef29408405a79e297";
     const ODD_A_SEC: [u8; 32] =
         hexlit("4b3303aeb195c023f5882b4bf9b70a58b5fdb02bd1c1ff297004c169882dae1e");
-    const ODD_A_XONLY: &str =
-        "ed7ba4019f63abc292aedc4f2a3860679d03dcc097f82fae05bb497622f8387b";
+    const ODD_A_XONLY: &str = "ed7ba4019f63abc292aedc4f2a3860679d03dcc097f82fae05bb497622f8387b";
     const ODD_B_SEC: [u8; 32] =
         hexlit("caf9cccc1d0d94f033378b84808d830f3372d3a9102ac185ca0fead77454bcc1");
-    const ODD_B_XONLY: &str =
-        "86b3903656f3438059c6359ba6a795d341b571889d5be7779777620a6677d0fb";
+    const ODD_B_XONLY: &str = "86b3903656f3438059c6359ba6a795d341b571889d5be7779777620a6677d0fb";
 
     /// `const`-evaluable hex decode, so key material can live in `const` items.
     const fn hexlit(s: &str) -> [u8; 32] {
@@ -546,9 +540,9 @@ only one tip for the future, sunscreen would be it.";
         for bad in [
             "",
             "zz",
-            "abc",                                // odd length
-            "31a6199901ca9461883c53cfc4a1a221",   // 16 bytes
-            &"ff".repeat(32),                     // 32 bytes, not on the curve
+            "abc",                              // odd length
+            "31a6199901ca9461883c53cfc4a1a221", // 16 bytes
+            &"ff".repeat(32),                   // 32 bytes, not on the curve
         ] {
             assert_eq!(
                 shared_secret(&EVEN_A_SEC, bad),
@@ -642,8 +636,8 @@ only one tip for the future, sunscreen would be it.";
         assert_eq!(first, second);
 
         // A different nonce must change the ciphertext, not just the nonce prefix.
-        let other = encrypt_with_nonce(b"same input, same output", &key, &[0x25u8; NONCE_LEN])
-            .unwrap();
+        let other =
+            encrypt_with_nonce(b"same input, same output", &key, &[0x25u8; NONCE_LEN]).unwrap();
         assert_ne!(first, other);
         assert_ne!(first[3..40], other[3..40]);
     }
@@ -670,7 +664,8 @@ only one tip for the future, sunscreen would be it.";
         let key = [0x42u8; CONVERSATION_KEY_LEN];
         // 18 bytes of plaintext -> 58 raw bytes, which is not a multiple of 3, so
         // the padded encoding really does carry '='.
-        let unpadded = encrypt_with_nonce(b"padding tolerance!", &key, &[0x24u8; NONCE_LEN]).unwrap();
+        let unpadded =
+            encrypt_with_nonce(b"padding tolerance!", &key, &[0x24u8; NONCE_LEN]).unwrap();
 
         let raw = decode_base64url(&unpadded[3..]).unwrap();
         let padded = format!(
@@ -679,7 +674,10 @@ only one tip for the future, sunscreen would be it.";
         );
         assert!(padded.contains('='), "fixture should actually be padded");
 
-        assert_eq!(decode_payload(&padded).unwrap(), decode_payload(&unpadded).unwrap());
+        assert_eq!(
+            decode_payload(&padded).unwrap(),
+            decode_payload(&unpadded).unwrap()
+        );
     }
 
     // -----------------------------------------------------------------
@@ -796,7 +794,10 @@ only one tip for the future, sunscreen would be it.";
                 &mut nonce_rng(sequential_nonce(9)),
             )
             .unwrap();
-            assert_eq!(decrypt(&payload, sender_pub, &recipient_sec).unwrap(), "no retry");
+            assert_eq!(
+                decrypt(&payload, sender_pub, &recipient_sec).unwrap(),
+                "no retry"
+            );
 
             // The 0x02 point is the one that works, so the first attempt hits.
             assert_eq!(
@@ -841,7 +842,10 @@ only one tip for the future, sunscreen would be it.";
             &mut nonce_rng(sequential_nonce(31)),
         )
         .unwrap();
-        assert_eq!(decrypt(&payload, EVEN_A_XONLY, &EVEN_B_SEC).unwrap(), message);
+        assert_eq!(
+            decrypt(&payload, EVEN_A_XONLY, &EVEN_B_SEC).unwrap(),
+            message
+        );
     }
 
     #[test]
@@ -856,7 +860,10 @@ only one tip for the future, sunscreen would be it.";
             &mut nonce_rng(sequential_nonce(64)),
         )
         .unwrap();
-        assert_eq!(decrypt(&payload, EVEN_A_XONLY, &EVEN_B_SEC).unwrap(), message);
+        assert_eq!(
+            decrypt(&payload, EVEN_A_XONLY, &EVEN_B_SEC).unwrap(),
+            message
+        );
 
         // No padding: the payload is exactly base64url(24 + len + 16) plus "v2:".
         let expected_body = (NONCE_LEN + message.len() + TAG_LEN).div_ceil(3) * 4
@@ -869,9 +876,12 @@ only one tip for the future, sunscreen would be it.";
 
         // Fixed-nonce vector for the same plaintext, cross-checked against the
         // independent reference implementation.
-        let pinned =
-            encrypt_with_nonce(message.as_bytes(), &[0x42u8; CONVERSATION_KEY_LEN], &[0x24u8; NONCE_LEN])
-                .unwrap();
+        let pinned = encrypt_with_nonce(
+            message.as_bytes(),
+            &[0x42u8; CONVERSATION_KEY_LEN],
+            &[0x24u8; NONCE_LEN],
+        )
+        .unwrap();
         assert_eq!(pinned.len(), 6057);
         assert_eq!(
             hex::encode(Sha256::digest(pinned.as_bytes())),
@@ -993,17 +1003,17 @@ only one tip for the future, sunscreen would be it.";
         let body = valid[3..].to_string();
 
         let cases: Vec<String> = vec![
-            String::new(),                        // empty
-            body.clone(),                         // no "v2:" prefix
-            format!("v1:{body}"),                 // wrong version
-            format!("V2:{body}"),                 // prefix is case sensitive
-            format!(" v2:{body}"),                // no leading-whitespace tolerance
-            "v2:".to_string(),                    // prefix only
-            "v2:!!!not base64!!!".to_string(),    // non-base64url characters
-            format!("v2:{}", "+".repeat(60)),     // standard alphabet, not base64url
-            format!("v2:{}", "A".repeat(52)),     // decodes to 39 bytes: one short
-            format!("v2:{}", "A".repeat(54)),     // decodes to 40 bytes: the strict guard
-            format!("v2:{}", "A".repeat(53)),     // 53 base64 chars is not decodable at all
+            String::new(),                     // empty
+            body.clone(),                      // no "v2:" prefix
+            format!("v1:{body}"),              // wrong version
+            format!("V2:{body}"),              // prefix is case sensitive
+            format!(" v2:{body}"),             // no leading-whitespace tolerance
+            "v2:".to_string(),                 // prefix only
+            "v2:!!!not base64!!!".to_string(), // non-base64url characters
+            format!("v2:{}", "+".repeat(60)),  // standard alphabet, not base64url
+            format!("v2:{}", "A".repeat(52)),  // decodes to 39 bytes: one short
+            format!("v2:{}", "A".repeat(54)),  // decodes to 40 bytes: the strict guard
+            format!("v2:{}", "A".repeat(53)),  // 53 base64 chars is not decodable at all
             format!("v2:{}", URL_SAFE_NO_PAD.encode([0u8; 8])),
         ];
 

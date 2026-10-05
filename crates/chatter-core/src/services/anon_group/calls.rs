@@ -9,8 +9,8 @@ use uuid::Uuid;
 use crate::domain::anon_group::AnonGroupId;
 use crate::mailbox::CallRoomToken;
 use crate::proto::content_v1::{
-    self, anon_call_offer::CallType, AnonCallAnswer, AnonCallHangup, AnonCallOffer,
-    AnonCallToken, Content,
+    self, AnonCallAnswer, AnonCallHangup, AnonCallOffer, AnonCallToken, Content,
+    anon_call_offer::CallType,
 };
 use crate::services::anon_dm::{AnonCallOfferResult, AnonCallRoomCredentials};
 use crate::util::time::TimestampNanos;
@@ -51,7 +51,10 @@ impl AnonGroupService {
         // once-seeded userspace PRG (ThreadRng). Matches call_key_provider.
         {
             use rand::TryRngCore;
-            rand::RngCore::fill_bytes(&mut rand::rngs::OsRng.unwrap_err(), &mut call_encryption_key);
+            rand::RngCore::fill_bytes(
+                &mut rand::rngs::OsRng.unwrap_err(),
+                &mut call_encryption_key,
+            );
         }
 
         // Create the call offer
@@ -225,9 +228,7 @@ impl AnonGroupService {
                 call_type,
             )
             .await
-            .map_err(|e| {
-                AnonGroupError::CryptoError(format!("Failed to join call room: {}", e))
-            })?;
+            .map_err(|e| AnonGroupError::CryptoError(format!("Failed to join call room: {}", e)))?;
 
         if !response.success {
             return Err(AnonGroupError::CryptoError(format!(

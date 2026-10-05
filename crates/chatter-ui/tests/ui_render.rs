@@ -68,9 +68,10 @@ fn pump(w: &MainWindow) {
     for _ in 0..(SETTLE_MS / FRAME_MS) {
         let scale = w.window().scale_factor();
         let size = w.window().size().to_logical(scale);
-        w.window().dispatch_event(slint::platform::WindowEvent::Resized {
-            size: slint::LogicalSize::new(size.width, size.height),
-        });
+        w.window()
+            .dispatch_event(slint::platform::WindowEvent::Resized {
+                size: slint::LogicalSize::new(size.width, size.height),
+            });
         slint::Timer::single_shot(std::time::Duration::from_millis(1), || {
             slint::quit_event_loop().unwrap();
         });
@@ -91,7 +92,12 @@ fn find(w: &MainWindow, ty: &str) -> Option<Box_> {
     let e = testing::ElementHandle::find_by_element_type_name(w, ty).next()?;
     let p = e.absolute_position();
     let s = e.size();
-    Some(Box_ { x: p.x, y: p.y, w: s.width, h: s.height })
+    Some(Box_ {
+        x: p.x,
+        y: p.y,
+        w: s.width,
+        h: s.height,
+    })
 }
 
 fn count(w: &MainWindow, ty: &str) -> usize {

@@ -33,16 +33,16 @@
 //! - libsignal-protocol crate: `group_cipher` and `sender_keys` modules
 
 use libsignal_protocol::{
+    ProtocolAddress, SenderKeyDistributionMessage, SenderKeyMessage, SenderKeyStore,
     create_sender_key_distribution_message, group_decrypt, group_encrypt,
-    process_sender_key_distribution_message, ProtocolAddress, SenderKeyDistributionMessage,
-    SenderKeyMessage, SenderKeyStore,
+    process_sender_key_distribution_message,
 };
 // SECURITY: each sender-key draw must hit the OS directly so a process
 // memory disclosure cannot rewind the RNG. See the long comment in
 // `sealed_sender.rs` for why we use `OsRng.unwrap_err()` rather than
 // `StdRng::from_os_rng()`.
-use rand::rngs::OsRng;
 use rand::TryRngCore;
+use rand::rngs::OsRng;
 use uuid::Uuid;
 
 use crate::error::CryptoError;
@@ -117,17 +117,22 @@ impl SenderKeyManager {
             "[SENDER_KEY] Creating distribution message"
         );
         let mut rng = OsRng.unwrap_err();
-        let result = create_sender_key_distribution_message(sender, distribution_id, sender_key_store, &mut rng)
-            .await
-            .map_err(|e| {
-                tracing::error!(
-                    sender = %sender,
-                    distribution_id = %distribution_id,
-                    error = %e,
-                    "[SENDER_KEY] Failed to create distribution message"
-                );
-                CryptoError::Protocol(e.to_string())
-            })?;
+        let result = create_sender_key_distribution_message(
+            sender,
+            distribution_id,
+            sender_key_store,
+            &mut rng,
+        )
+        .await
+        .map_err(|e| {
+            tracing::error!(
+                sender = %sender,
+                distribution_id = %distribution_id,
+                error = %e,
+                "[SENDER_KEY] Failed to create distribution message"
+            );
+            CryptoError::Protocol(e.to_string())
+        })?;
         tracing::info!(
             sender = %sender,
             distribution_id = %distribution_id,
@@ -245,17 +250,23 @@ impl SenderKeyManager {
             "[SENDER_KEY] Encrypting message for group"
         );
         let mut rng = OsRng.unwrap_err();
-        let result = group_encrypt(sender_key_store, sender, distribution_id, plaintext, &mut rng)
-            .await
-            .map_err(|e| {
-                tracing::error!(
-                    sender = %sender,
-                    distribution_id = %distribution_id,
-                    error = %e,
-                    "[SENDER_KEY] Group encryption failed"
-                );
-                CryptoError::EncryptionFailed(e.to_string())
-            })?;
+        let result = group_encrypt(
+            sender_key_store,
+            sender,
+            distribution_id,
+            plaintext,
+            &mut rng,
+        )
+        .await
+        .map_err(|e| {
+            tracing::error!(
+                sender = %sender,
+                distribution_id = %distribution_id,
+                error = %e,
+                "[SENDER_KEY] Group encryption failed"
+            );
+            CryptoError::EncryptionFailed(e.to_string())
+        })?;
         tracing::debug!(
             sender = %sender,
             distribution_id = %distribution_id,

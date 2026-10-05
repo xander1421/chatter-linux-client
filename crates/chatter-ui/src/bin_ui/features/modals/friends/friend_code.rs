@@ -135,7 +135,9 @@ fn wire_paste_friend_code(window: &MainWindow, _ui_ctx: &Arc<ChatterClient>) {
                 .or_else(|| {
                     #[cfg(feature = "desktop")]
                     {
-                        arboard::Clipboard::new().ok().and_then(|mut c| c.get_text().ok())
+                        arboard::Clipboard::new()
+                            .ok()
+                            .and_then(|mut c| c.get_text().ok())
                     }
                     #[cfg(not(feature = "desktop"))]
                     {
@@ -199,20 +201,21 @@ fn wire_generate_qr_code(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
         match result {
             Ok(png_bytes) => {
                 // Decode PNG outside UI thread - this is image processing work
-                let decoded = image::load_from_memory(&png_bytes)
-                    .map(|img| {
-                        let rgba = img.to_rgba8();
-                        let (width, height) = rgba.dimensions();
-                        let pixels = rgba.into_raw();
-                        (pixels, width, height)
-                    });
+                let decoded = image::load_from_memory(&png_bytes).map(|img| {
+                    let rgba = img.to_rgba8();
+                    let (width, height) = rgba.dimensions();
+                    let pixels = rgba.into_raw();
+                    (pixels, width, height)
+                });
 
                 match decoded {
                     Ok((pixels, width, height)) => {
                         let _ = slint::invoke_from_event_loop(move || {
                             if let Some(w) = weak.upgrade() {
                                 // UI thread only: create Slint buffer from pre-decoded pixels
-                                let mut buffer = slint::SharedPixelBuffer::<slint::Rgba8Pixel>::new(width, height);
+                                let mut buffer = slint::SharedPixelBuffer::<slint::Rgba8Pixel>::new(
+                                    width, height,
+                                );
                                 buffer.make_mut_bytes().copy_from_slice(&pixels);
 
                                 let image = slint::Image::from_rgba8(buffer);
@@ -246,45 +249,48 @@ fn wire_copy_friend_code(window: &MainWindow, _ui_ctx: &Arc<ChatterClient>) {
                 // and `arboard` isn't a dependency there.
                 #[cfg(not(any(target_os = "android", target_os = "ios")))]
                 {
-                let code_clone = code.clone();
-                std::thread::spawn(move || {
-                    // Try wl-copy first (Wayland), fall back to xclip (X11),
-                    // then arboard (macOS/Windows, or Linux without either tool).
-                    let result = std::process::Command::new("wl-copy")
-                        .arg(&code_clone)
-                        .status()
-                        .or_else(|_| {
-                            std::process::Command::new("xclip")
-                                .args(["-selection", "clipboard"])
-                                .stdin(std::process::Stdio::piped())
-                                .spawn()
-                                .and_then(|mut child| {
-                                    use std::io::Write;
-                                    if let Some(stdin) = child.stdin.as_mut() {
-                                        stdin.write_all(code_clone.as_bytes())?;
-                                    }
-                                    child.wait()
-                                })
-                        });
+                    let code_clone = code.clone();
+                    std::thread::spawn(move || {
+                        // Try wl-copy first (Wayland), fall back to xclip (X11),
+                        // then arboard (macOS/Windows, or Linux without either tool).
+                        let result = std::process::Command::new("wl-copy")
+                            .arg(&code_clone)
+                            .status()
+                            .or_else(|_| {
+                                std::process::Command::new("xclip")
+                                    .args(["-selection", "clipboard"])
+                                    .stdin(std::process::Stdio::piped())
+                                    .spawn()
+                                    .and_then(|mut child| {
+                                        use std::io::Write;
+                                        if let Some(stdin) = child.stdin.as_mut() {
+                                            stdin.write_all(code_clone.as_bytes())?;
+                                        }
+                                        child.wait()
+                                    })
+                            });
 
-                    match result {
-                        Ok(status) if status.success() => {
-                            tracing::info!("Copied friend code to clipboard: {}", code_clone);
-                        }
-                        _ => {
-                            match arboard::Clipboard::new()
-                                .and_then(|mut c| c.set_text(code_clone.clone()))
-                            {
-                                Ok(()) => {
-                                    tracing::info!("Copied friend code to clipboard: {}", code_clone);
-                                }
-                                Err(e) => {
-                                    tracing::error!("Failed to copy to clipboard: {}", e);
+                        match result {
+                            Ok(status) if status.success() => {
+                                tracing::info!("Copied friend code to clipboard: {}", code_clone);
+                            }
+                            _ => {
+                                match arboard::Clipboard::new()
+                                    .and_then(|mut c| c.set_text(code_clone.clone()))
+                                {
+                                    Ok(()) => {
+                                        tracing::info!(
+                                            "Copied friend code to clipboard: {}",
+                                            code_clone
+                                        );
+                                    }
+                                    Err(e) => {
+                                        tracing::error!("Failed to copy to clipboard: {}", e);
+                                    }
                                 }
                             }
                         }
-                    }
-                });
+                    });
                 }
                 #[cfg(target_os = "android")]
                 match crate::platform::android::clipboard::set_text("Friend code", &code) {
@@ -351,7 +357,11 @@ pub(crate) fn wire_connect_via_friend_code(window: &MainWindow, ui_ctx: &Arc<Cha
             });
 
             let note_trimmed = note.trim();
-            let note_arg = if note_trimmed.is_empty() { None } else { Some(note_trimmed) };
+            let note_arg = if note_trimmed.is_empty() {
+                None
+            } else {
+                Some(note_trimmed)
+            };
             match ui_ctx.connect_via_friend_code(&code_str, note_arg).await {
                 Ok(friendship) => {
                     let friend_id = friendship.addressee_id.to_string();

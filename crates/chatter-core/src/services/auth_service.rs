@@ -13,23 +13,23 @@ use rand::TryRngCore;
 use std::sync::Arc;
 use zeroize::Zeroize;
 
+use crate::crypto::DeviceCredentials;
 use crate::crypto::auth_crypto::{
     generate_profile_key, login_identifier, username_candidates, username_claim,
 };
 use crate::crypto::opaque::{self, OpaqueError};
 use crate::crypto::signal::identity::IdentityKeyManager;
 use crate::crypto::signal::prekey::PreKeyManager;
-use crate::crypto::DeviceCredentials;
 use crate::domain::ids::UserId;
-use crate::services::key_recovery::KeyRecoveryNeed;
 use crate::domain::user::{PresenceStatus, Profile, User};
 use crate::error::{CryptoError, NetworkError, StorageError};
 use crate::network::grpc::auth_client::AuthClient;
 use crate::network::grpc::client_pool::GrpcClientPool;
 use crate::network::grpc::interceptors::AuthInterceptor;
-use crate::storage::repositories::settings_repo::{keys, SettingsRepository};
-use crate::storage::repositories::user_repo::UserRepository;
+use crate::services::key_recovery::KeyRecoveryNeed;
 use crate::storage::KeyStore;
+use crate::storage::repositories::settings_repo::{SettingsRepository, keys};
+use crate::storage::repositories::user_repo::UserRepository;
 
 /// Authentication errors.
 #[derive(Debug, thiserror::Error)]
@@ -94,7 +94,9 @@ const POW_BUSY_BACKOFF: std::time::Duration = std::time::Duration::from_millis(1
 
 fn login_start_error(e: NetworkError) -> AuthError {
     match &e {
-        NetworkError::InvalidRequest(m) if m.contains(LOGIN_GUESS_LIMIT_TOKEN) => AuthError::LoginGuessLimit,
+        NetworkError::InvalidRequest(m) if m.contains(LOGIN_GUESS_LIMIT_TOKEN) => {
+            AuthError::LoginGuessLimit
+        }
         _ => AuthError::Network(e),
     }
 }
@@ -121,7 +123,10 @@ pub(crate) async fn prove_password(
     let start = opaque::login_start(password)?;
     let opened = auth_client.password_proof_start(&start.ke1).await?;
     let done = opaque::login_finish_async(start, password, opened.ke2).await?;
-    Ok(crate::proto::chat_v1::PasswordProof { proof_id: opened.proof_id, ke3: done.ke3 })
+    Ok(crate::proto::chat_v1::PasswordProof {
+        proof_id: opened.proof_id,
+        ke3: done.ke3,
+    })
 }
 
 /// How long a login proof of work may run. The server keeps the challenge
@@ -153,7 +158,7 @@ const LOGIN_POW_ROUNDS: usize = 3;
 ///
 /// `device_token` is this device's trusted-device token for `identifier`
 /// (from its last login or registration): with it the server meters this
-/// device on its own budget instead of the account's shared price and
+/// account's trusted reserve instead of the account's untrusted price and
 /// ceiling, so a stranger burning the ceiling cannot keep it out. A token the
 /// server no longer honours (password changed or recovered, expired) is set
 /// to `None` here — the caller deletes its stored copy — and the login goes
@@ -168,7 +173,10 @@ pub async fn login_start_paying_pow(
 ) -> Result<crate::proto::chat_v1::LoginStartResponse, AuthError> {
     use crate::crypto::pow;
     if let Some(grant) = login_grant {
-        match auth_client.login_start(identifier, ke1, None, grant, &[]).await {
+        match auth_client
+            .login_start(identifier, ke1, None, grant, &[])
+            .await
+        {
             Ok(r) => return Ok(r),
             Err(NetworkError::PermissionDenied) => {
                 tracing::warn!("recovery login grant refused; logging in without it");
@@ -202,10 +210,21 @@ pub async fn login_start_paying_pow(
         );
         let mut busy = 0;
         response = loop {
-            match login_start_once(auth_client, identifier, ke1, Some((&challenge.token, solution)), device_token).await {
+            match login_start_once(
+                auth_client,
+                identifier,
+                ke1,
+                Some((&challenge.token, solution)),
+                device_token,
+            )
+            .await
+            {
                 Err(AuthError::Network(NetworkError::RateLimited)) if busy < POW_BUSY_RETRIES => {
                     busy += 1;
-                    tracing::info!(attempt = busy, "server busy verifying proof of work; resending");
+                    tracing::info!(
+                        attempt = busy,
+                        "server busy verifying proof of work; resending"
+                    );
                     tokio::time::sleep(POW_BUSY_BACKOFF).await;
                 }
                 other => break other?,
@@ -222,7 +241,9 @@ pub async fn login_start_paying_pow(
 
 /// One LoginStart presenting `device_token` if there is one. A token the
 /// server refuses as `device_token_invalid:` is dropped (set to `None`) and
-/// the same request sent again without it.
+/// login starts again without a solution: the server may already have spent
+/// the paid challenge before checking that token. Reusing it would turn a
+/// recoverable stale token into a rejected replay under load.
 async fn login_start_once(
     auth_client: &mut AuthClient,
     identifier: &str,
@@ -231,15 +252,25 @@ async fn login_start_once(
     device_token: &mut Option<Vec<u8>>,
 ) -> Result<crate::proto::chat_v1::LoginStartResponse, AuthError> {
     if let Some(tok) = device_token.as_deref() {
-        match auth_client.login_start(identifier, ke1, pow, &[], tok).await {
+        match auth_client
+            .login_start(identifier, ke1, pow, &[], tok)
+            .await
+        {
             Err(NetworkError::InvalidRequest(m)) if m.contains(DEVICE_TOKEN_INVALID_TOKEN) => {
                 tracing::warn!("trusted device token no longer valid; logging in without it");
                 *device_token = None;
+                return auth_client
+                    .login_start(identifier, ke1, None, &[], &[])
+                    .await
+                    .map_err(login_start_error);
             }
             other => return other.map_err(login_start_error),
         }
     }
-    auth_client.login_start(identifier, ke1, pow, &[], &[]).await.map_err(login_start_error)
+    auth_client
+        .login_start(identifier, ke1, pow, &[], &[])
+        .await
+        .map_err(login_start_error)
 }
 
 impl AuthError {
@@ -362,9 +393,9 @@ impl AuthService {
     /// Create an auth client for making gRPC calls.
     /// Returns None if not connected to server.
     pub fn try_auth_client(&self) -> Option<AuthClient> {
-        self.grpc_pool.try_channel().map(|channel| {
-            AuthClient::new(channel, self.grpc_pool.auth_clone())
-        })
+        self.grpc_pool
+            .try_channel()
+            .map(|channel| AuthClient::new(channel, self.grpc_pool.auth_clone()))
     }
 
     /// Check if a user is currently logged in.
@@ -390,7 +421,10 @@ impl AuthService {
 
     /// Get the current user ID and device ID if logged in.
     pub fn current_user(&self) -> Option<(UserId, u32)> {
-        let user_id_str = self.settings_repo.get_string(keys::CURRENT_USER_ID).ok()??;
+        let user_id_str = self
+            .settings_repo
+            .get_string(keys::CURRENT_USER_ID)
+            .ok()??;
         let device_id: u32 = self.settings_repo.get(keys::CURRENT_DEVICE_ID).ok()??;
 
         let user_id = user_id_str.parse().ok()?;
@@ -490,7 +524,9 @@ impl AuthService {
     /// 5. Local state persistence
     /// 6. Auth interceptor configuration
     /// Get current identity from the server.
-    pub async fn get_my_identity(&self) -> Result<crate::proto::chat_v1::GetMyIdentityResponse, AuthError> {
+    pub async fn get_my_identity(
+        &self,
+    ) -> Result<crate::proto::chat_v1::GetMyIdentityResponse, AuthError> {
         let mut client = self.try_auth_client().ok_or(AuthError::NotLoggedIn)?;
         client.get_my_identity().await.map_err(AuthError::Network)
     }
@@ -508,7 +544,10 @@ impl AuthService {
     /// Set the sealed-sender RECEIVING policy on the server. Returns the value
     /// the server persisted (echoed back).
     /// Point the server's UAK at `profile_key` after a rotation.
-    pub async fn set_unidentified_access_key(&self, profile_key: &[u8; 32]) -> Result<(), AuthError> {
+    pub async fn set_unidentified_access_key(
+        &self,
+        profile_key: &[u8; 32],
+    ) -> Result<(), AuthError> {
         let mut client = self.try_auth_client().ok_or(AuthError::NotLoggedIn)?;
         client
             .set_unidentified_access_key(&crate::crypto::derive_uak(profile_key))
@@ -516,7 +555,10 @@ impl AuthService {
             .map_err(AuthError::Network)
     }
 
-    pub async fn set_sealed_sender_policy(&self, allow_from_anyone: bool) -> Result<bool, AuthError> {
+    pub async fn set_sealed_sender_policy(
+        &self,
+        allow_from_anyone: bool,
+    ) -> Result<bool, AuthError> {
         let mut client = self.try_auth_client().ok_or(AuthError::NotLoggedIn)?;
         client
             .set_sealed_sender_policy(allow_from_anyone)
@@ -569,15 +611,16 @@ impl AuthService {
             // ratchet-forward violation the validate_pin/validate_pin_shape
             // split exists to prevent (§10). A weak legacy PIN's cost is
             // already paid; refusing the login only denies the owner.
-            crate::crypto::svr::validate_pin_shape(p).map_err(|e| {
-                AuthError::LoginFailed(format!("invalid PIN: {e}"))
-            })?;
+            crate::crypto::svr::validate_pin_shape(p)
+                .map_err(|e| AuthError::LoginFailed(format!("invalid PIN: {e}")))?;
             let secret = crate::crypto::svr::derive_svr_secret_async(p, username).await?;
             let keypair = crate::crypto::svr::SvrKeypair::from_secret(&secret);
             svr_secret = secret;
             keypair.public_key_bytes().to_vec()
         } else {
-            return Err(AuthError::LoginFailed("PIN is required for account recovery".to_string()));
+            return Err(AuthError::LoginFailed(
+                "PIN is required for account recovery".to_string(),
+            ));
         };
 
         // Load the local identity key pair — and DO NOT create one if it is
@@ -600,7 +643,11 @@ impl AuthService {
         let identity_key_pair = self.identity_manager.get_identity()?.map(|(_, kp)| kp);
 
         // For login, device_id might come from settings (re-auth) or be assigned by server
-        let stored_device_id: Option<u32> = self.settings_repo.get(keys::CURRENT_DEVICE_ID).ok().flatten();
+        let stored_device_id: Option<u32> = self
+            .settings_repo
+            .get(keys::CURRENT_DEVICE_ID)
+            .ok()
+            .flatten();
         let device_id_for_creds = stored_device_id.unwrap_or(1);
 
         // Generate device credentials. Login never sends a UAK: the server's
@@ -670,25 +717,29 @@ impl AuthService {
                 _ => AuthError::Network(e),
             })?;
 
-        let identity_public_key = identity_key_pair.as_ref().map(|kp| kp.identity_key().serialize());
+        let identity_public_key = identity_key_pair
+            .as_ref()
+            .map(|kp| kp.identity_key().serialize());
 
         // The fresh trusted-device token for this device's next login. In
         // the encrypted settings database, like the device auth token.
         if !response.trusted_device_token.is_empty() {
-            self.settings_repo.set_bytes(&token_key, &response.trusted_device_token)?;
+            self.settings_repo
+                .set_bytes(&token_key, &response.trusted_device_token)?;
         }
 
         // Extract session and user profile
-        let session = response.session.ok_or_else(|| {
-            AuthError::LoginFailed("no session returned".to_string())
-        })?;
-        let user_profile = response.user_profile.ok_or_else(|| {
-            AuthError::LoginFailed("no user_profile returned".to_string())
-        })?;
+        let session = response
+            .session
+            .ok_or_else(|| AuthError::LoginFailed("no session returned".to_string()))?;
+        let user_profile = response
+            .user_profile
+            .ok_or_else(|| AuthError::LoginFailed("no user_profile returned".to_string()))?;
 
-        let user_id: UserId = user_profile.user_id.parse().map_err(|_| {
-            AuthError::LoginFailed("invalid user_id format".to_string())
-        })?;
+        let user_id: UserId = user_profile
+            .user_id
+            .parse()
+            .map_err(|_| AuthError::LoginFailed("invalid user_id format".to_string()))?;
         let device_id = session.device_id;
 
         // LATENT BUG FIX (surfaced by validated.rs V51's fresh-install flow):
@@ -735,20 +786,26 @@ impl AuthService {
         };
 
         // Persist auth state in settings
-        self.settings_repo.set_string(keys::CURRENT_USER_ID, &user_id.to_string())?;
-        self.settings_repo.set(keys::CURRENT_DEVICE_ID, &device_id)?;
-        self.settings_repo.set_string(keys::DISPLAY_NAME, &display_name)?;
+        self.settings_repo
+            .set_string(keys::CURRENT_USER_ID, &user_id.to_string())?;
+        self.settings_repo
+            .set(keys::CURRENT_DEVICE_ID, &device_id)?;
+        self.settings_repo
+            .set_string(keys::DISPLAY_NAME, &display_name)?;
         // Salt for later PIN-derived flows (server message-backup from settings).
-        self.settings_repo.set_string(keys::SVR_SALT_USERNAME, username)?;
+        self.settings_repo
+            .set_string(keys::SVR_SALT_USERNAME, username)?;
         // Server-issued opaque push topic (empty when push is disabled).
         // configure_push subscribes to this instead of deriving it locally.
-        self.settings_repo.set_string(keys::PUSH_TOPIC, &response.push_topic)?;
+        self.settings_repo
+            .set_string(keys::PUSH_TOPIC, &response.push_topic)?;
 
         // SECURITY: store auth token. profile_key is NOT touched on login -
         // it is set at registration (random) and on a fresh device is loaded
         // by SVR restore. Overwriting from login would either be a no-op or
         // corrupt state.
-        self.settings_repo.set_bytes(keys::DEVICE_AUTH_TOKEN, credentials.auth_token().as_bytes())?;
+        self.settings_repo
+            .set_bytes(keys::DEVICE_AUTH_TOKEN, credentials.auth_token().as_bytes())?;
 
         // Refresh local PIN fingerprint (re-auth gate for linked-device approval).
         // Reuses the SVR secret already derived above.
@@ -767,7 +824,8 @@ impl AuthService {
         // reset) supplies one — writing a placeholder would hand out friend
         // codes for a key that does not exist.
         if let Some(pk) = identity_public_key.as_ref() {
-            self.settings_repo.set_bytes(keys::IDENTITY_KEY_PUBLIC, pk.as_ref())?;
+            self.settings_repo
+                .set_bytes(keys::IDENTITY_KEY_PUBLIC, pk.as_ref())?;
         }
 
         // Configure auth interceptor for Basic auth
@@ -908,9 +966,8 @@ impl AuthService {
         // `derive_svr_secret_async` for that failure mode.
         let mut svr_secret: [u8; 32];
         let (svr_public_key, mut registration_lock) = if let Some(p) = pin {
-            crate::crypto::svr::validate_pin(p).map_err(|e| {
-                AuthError::RegistrationFailed(format!("invalid PIN: {e}"))
-            })?;
+            crate::crypto::svr::validate_pin(p)
+                .map_err(|e| AuthError::RegistrationFailed(format!("invalid PIN: {e}")))?;
             let secret = crate::crypto::svr::derive_svr_secret_async(p, username).await?;
             let keypair = crate::crypto::svr::SvrKeypair::from_secret(&secret);
             // SECURITY: Registration lock prevents account takeover without PIN
@@ -918,17 +975,22 @@ impl AuthService {
             svr_secret = secret;
             (keypair.public_key_bytes().to_vec(), reg_lock)
         } else {
-            return Err(AuthError::RegistrationFailed("PIN is required for account recovery".to_string()));
+            return Err(AuthError::RegistrationFailed(
+                "PIN is required for account recovery".to_string(),
+            ));
         };
 
         // Generate new identity (always fresh for registration)
-        let (registration_id, identity_key_pair) =
-            self.identity_manager.generate_identity(&mut rand::rngs::OsRng.unwrap_err())?;
+        let (registration_id, identity_key_pair) = self
+            .identity_manager
+            .generate_identity(&mut rand::rngs::OsRng.unwrap_err())?;
 
         // Generate signed prekey
-        let signed_prekey = self
-            .prekey_manager
-            .generate_signed_prekey(&mut rand::rngs::OsRng.unwrap_err(), 1, &identity_key_pair)?;
+        let signed_prekey = self.prekey_manager.generate_signed_prekey(
+            &mut rand::rngs::OsRng.unwrap_err(),
+            1,
+            &identity_key_pair,
+        )?;
 
         // Generate Kyber prekey for post-quantum resistance. This is the
         // medium-term LAST-RESORT PQSPK — it is reused across handshakes until
@@ -938,7 +1000,9 @@ impl AuthService {
             .generate_kyber_prekey(1, &identity_key_pair)?;
 
         // Generate one-time prekeys (100 for initial batch)
-        let one_time_prekeys = self.prekey_manager.generate_prekeys(&mut rand::rngs::OsRng.unwrap_err(), 1, 100)?;
+        let one_time_prekeys =
+            self.prekey_manager
+                .generate_prekeys(&mut rand::rngs::OsRng.unwrap_err(), 1, 100)?;
 
         // Generate the one-time Kyber prekey pool (PQOPK), same batch size as
         // the classical OPKs above. Per PQXDH §3.2 the server pops one PQOPK
@@ -959,13 +1023,16 @@ impl AuthService {
         let mut kyber_one_time_prekeys = Vec::with_capacity(100);
         for _ in 0..100 {
             let id = self.prekey_manager.get_next_kyber_prekey_id()?;
-            kyber_one_time_prekeys
-                .push(self.prekey_manager.generate_kyber_prekey(id, &identity_key_pair)?);
+            kyber_one_time_prekeys.push(
+                self.prekey_manager
+                    .generate_kyber_prekey(id, &identity_key_pair)?,
+            );
         }
 
         // Store profile key locally (needed for profile encryption)
         // Stored in SQLCipher encrypted database
-        self.settings_repo.set_bytes(keys::PROFILE_KEY, &profile_key)?;
+        self.settings_repo
+            .set_bytes(keys::PROFILE_KEY, &profile_key)?;
         // Persist the chosen nickname.discriminator so discovery / lookup
         // flows can reproduce the Ristretto255 hash without prompting.
         self.settings_repo
@@ -1004,7 +1071,7 @@ impl AuthService {
         let device_id = 1u32;
         let credentials = DeviceCredentials::generate(device_id, &profile_key);
 
-        // SECURITY: Request registration challenge from server  
+        // SECURITY: Request registration challenge from server
         // This prevents spoofing identity keys during registration
         let identity_public_key_full = identity_key_pair.identity_key().serialize();
         // Skip the first byte (type prefix) to get the raw 32-byte Curve25519 key
@@ -1019,7 +1086,11 @@ impl AuthService {
         // bound to this challenge, and Register uploads the record.
         let opaque_reg = opaque::registration_start(password)?;
         let challenge = auth_client
-            .request_registration_challenge(&username_hash, identity_public_key, &opaque_reg.request)
+            .request_registration_challenge(
+                &username_hash,
+                identity_public_key,
+                &opaque_reg.request,
+            )
             .await
             .map_err(|e| {
                 tracing::error!("Challenge request failed: {}", e);
@@ -1068,25 +1139,45 @@ impl AuthService {
         );
 
         // Build Signal Protocol prekey bundle for server
+        use crate::proto::chat_v1::SignalPreKeyBundle;
         use crate::proto::chat_v1::signal_pre_key_bundle::{
             KyberPreKeyRecord as ProtoKyberPreKey, PreKeyRecord as ProtoPreKey,
             SignedPreKeyRecord as ProtoSignedPreKey,
         };
-        use crate::proto::chat_v1::SignalPreKeyBundle;
         use libsignal_protocol::GenericSignedPreKey;
 
         // Extract values from signed prekey (these are infallible for freshly generated keys)
-        let signed_prekey_id: u32 = signed_prekey.id().map_err(|e| CryptoError::Protocol(e.to_string()))?.into();
-        let signed_prekey_public = signed_prekey.public_key().map_err(|e| CryptoError::Protocol(e.to_string()))?.serialize();
-        let signed_prekey_sig = signed_prekey.signature().map_err(|e| CryptoError::Protocol(e.to_string()))?;
+        let signed_prekey_id: u32 = signed_prekey
+            .id()
+            .map_err(|e| CryptoError::Protocol(e.to_string()))?
+            .into();
+        let signed_prekey_public = signed_prekey
+            .public_key()
+            .map_err(|e| CryptoError::Protocol(e.to_string()))?
+            .serialize();
+        let signed_prekey_sig = signed_prekey
+            .signature()
+            .map_err(|e| CryptoError::Protocol(e.to_string()))?;
         // Chatter-owned wire field is nanoseconds; libsignal-native Timestamp
         // stores milliseconds. Convert via ×1_000_000 on the wire.
-        let signed_prekey_ts = signed_prekey.timestamp().map_err(|e| CryptoError::Protocol(e.to_string()))?.epoch_millis() * 1_000_000;
+        let signed_prekey_ts = signed_prekey
+            .timestamp()
+            .map_err(|e| CryptoError::Protocol(e.to_string()))?
+            .epoch_millis()
+            * 1_000_000;
 
         // Extract Kyber prekey values
-        let kyber_id: u32 = kyber_prekey.id().map_err(|e| CryptoError::Protocol(e.to_string()))?.into();
-        let kyber_public = kyber_prekey.public_key().map_err(|e| CryptoError::Protocol(e.to_string()))?.serialize();
-        let kyber_sig = kyber_prekey.signature().map_err(|e| CryptoError::Protocol(e.to_string()))?;
+        let kyber_id: u32 = kyber_prekey
+            .id()
+            .map_err(|e| CryptoError::Protocol(e.to_string()))?
+            .into();
+        let kyber_public = kyber_prekey
+            .public_key()
+            .map_err(|e| CryptoError::Protocol(e.to_string()))?
+            .serialize();
+        let kyber_sig = kyber_prekey
+            .signature()
+            .map_err(|e| CryptoError::Protocol(e.to_string()))?;
 
         let prekey_bundle = SignalPreKeyBundle {
             identity_key: identity_public_key_full.to_vec(),
@@ -1099,8 +1190,14 @@ impl AuthService {
                 timestamp: signed_prekey_ts,
             }),
             one_time_prekey: if let Some(pk) = one_time_prekeys.first() {
-                let pk_id: u32 = pk.id().map_err(|e| CryptoError::Protocol(e.to_string()))?.into();
-                let pk_public = pk.public_key().map_err(|e| CryptoError::Protocol(e.to_string()))?.serialize();
+                let pk_id: u32 = pk
+                    .id()
+                    .map_err(|e| CryptoError::Protocol(e.to_string()))?
+                    .into();
+                let pk_public = pk
+                    .public_key()
+                    .map_err(|e| CryptoError::Protocol(e.to_string()))?
+                    .serialize();
                 Some(ProtoPreKey {
                     id: pk_id,
                     public_key: pk_public.to_vec(),
@@ -1126,8 +1223,14 @@ impl AuthService {
         // Build initial one-time prekeys for server (skip first, it's in bundle)
         let mut initial_prekeys: Vec<ProtoPreKey> = Vec::new();
         for pk in one_time_prekeys.iter().skip(1) {
-            let pk_id: u32 = pk.id().map_err(|e| CryptoError::Protocol(e.to_string()))?.into();
-            let pk_public = pk.public_key().map_err(|e| CryptoError::Protocol(e.to_string()))?.serialize();
+            let pk_id: u32 = pk
+                .id()
+                .map_err(|e| CryptoError::Protocol(e.to_string()))?
+                .into();
+            let pk_public = pk
+                .public_key()
+                .map_err(|e| CryptoError::Protocol(e.to_string()))?
+                .serialize();
             initial_prekeys.push(ProtoPreKey {
                 id: pk_id,
                 public_key: pk_public.to_vec(),
@@ -1142,11 +1245,22 @@ impl AuthService {
         // the server picks a PQOPK from this pool at handout time.
         let mut initial_kyber_prekeys: Vec<ProtoKyberPreKey> = Vec::new();
         for kpk in &kyber_one_time_prekeys {
-            let id: u32 = kpk.id().map_err(|e| CryptoError::Protocol(e.to_string()))?.into();
-            let public = kpk.public_key().map_err(|e| CryptoError::Protocol(e.to_string()))?.serialize();
-            let sig = kpk.signature().map_err(|e| CryptoError::Protocol(e.to_string()))?;
+            let id: u32 = kpk
+                .id()
+                .map_err(|e| CryptoError::Protocol(e.to_string()))?
+                .into();
+            let public = kpk
+                .public_key()
+                .map_err(|e| CryptoError::Protocol(e.to_string()))?
+                .serialize();
+            let sig = kpk
+                .signature()
+                .map_err(|e| CryptoError::Protocol(e.to_string()))?;
             // Chatter-owned wire field is nanoseconds; libsignal stores millis.
-            let ts = kpk.timestamp().map_err(|e| CryptoError::Protocol(e.to_string()))?.epoch_millis()
+            let ts = kpk
+                .timestamp()
+                .map_err(|e| CryptoError::Protocol(e.to_string()))?
+                .epoch_millis()
                 * 1_000_000;
             initial_kyber_prekeys.push(ProtoKyberPreKey {
                 id,
@@ -1194,30 +1308,39 @@ impl AuthService {
         let result = result.map_err(|e| AuthError::RegistrationFailed(e.to_string()))?;
 
         // Extract user_id from registration result (server-assigned)
-        let user_id: UserId = result.user_id.parse().map_err(|_| {
-            AuthError::RegistrationFailed("invalid user_id format".to_string())
-        })?;
+        let user_id: UserId = result
+            .user_id
+            .parse()
+            .map_err(|_| AuthError::RegistrationFailed("invalid user_id format".to_string()))?;
 
         // Persist auth state (device_id is server-assigned)
-        self.settings_repo.set_string(keys::CURRENT_USER_ID, &user_id.to_string())?;
-        self.settings_repo.set(keys::CURRENT_DEVICE_ID, &result.device_id)?;
-        self.settings_repo.set_string(keys::DISPLAY_NAME, display_name)?;
+        self.settings_repo
+            .set_string(keys::CURRENT_USER_ID, &user_id.to_string())?;
+        self.settings_repo
+            .set(keys::CURRENT_DEVICE_ID, &result.device_id)?;
+        self.settings_repo
+            .set_string(keys::DISPLAY_NAME, display_name)?;
         // Salt for later PIN-derived flows (server message-backup from settings).
-        self.settings_repo.set_string(keys::SVR_SALT_USERNAME, username)?;
-        
+        self.settings_repo
+            .set_string(keys::SVR_SALT_USERNAME, username)?;
+
         // SECURITY: Store auth token in encrypted settings
-        self.settings_repo.set_bytes(keys::DEVICE_AUTH_TOKEN, credentials.auth_token().as_bytes())?;
+        self.settings_repo
+            .set_bytes(keys::DEVICE_AUTH_TOKEN, credentials.auth_token().as_bytes())?;
         // This device created the password: it is trusted for its next login
         // (server OPEN-ITEMS §134). Encrypted settings, like the auth token.
         if !result.trusted_device_token.is_empty() {
-            self.settings_repo
-                .set_bytes(&keys::trusted_device_token_key(&username_hash), &result.trusted_device_token)?;
+            self.settings_repo.set_bytes(
+                &keys::trusted_device_token_key(&username_hash),
+                &result.trusted_device_token,
+            )?;
         }
 
         // Store identity public key for NDSS'21 private friend codes
         // This allows generating friend codes without accessing the SignalStore
         // Store the full serialized key (33 bytes) as it's used for Signal Protocol
-        self.settings_repo.set_bytes(keys::IDENTITY_KEY_PUBLIC, identity_public_key_full.as_ref())?;
+        self.settings_repo
+            .set_bytes(keys::IDENTITY_KEY_PUBLIC, identity_public_key_full.as_ref())?;
 
         // Configure auth interceptor for Basic auth
         // Client already has device_auth_token and UAK (generated locally)
@@ -1350,10 +1473,20 @@ impl AuthService {
         pin: Option<&str>,
         on_verifying: &(dyn Fn() + Send + Sync),
     ) -> Result<LoginResult, AuthError> {
-        let mut auth_client = self.try_auth_client()
-            .ok_or_else(|| AuthError::Network(NetworkError::ConnectionFailed("Not connected to server".to_string())))?;
-        self.login(&mut auth_client, username, password, device_name, pin, on_verifying)
-            .await
+        let mut auth_client = self.try_auth_client().ok_or_else(|| {
+            AuthError::Network(NetworkError::ConnectionFailed(
+                "Not connected to server".to_string(),
+            ))
+        })?;
+        self.login(
+            &mut auth_client,
+            username,
+            password,
+            device_name,
+            pin,
+            on_verifying,
+        )
+        .await
     }
 
     /// Simplified wrapper for register that creates the client internally.
@@ -1370,16 +1503,28 @@ impl AuthService {
         avatar: Option<&[u8]>,
         pin: Option<&str>,
     ) -> Result<LoginResult, AuthError> {
-        let mut auth_client = self.try_auth_client()
+        let mut auth_client = self
+            .try_auth_client()
             .ok_or_else(|| AuthError::RegistrationFailed("Not connected to server".to_string()))?;
-        self.register(&mut auth_client, username, password, display_name, device_name, avatar, pin)
-            .await
+        self.register(
+            &mut auth_client,
+            username,
+            password,
+            display_name,
+            device_name,
+            avatar,
+            pin,
+        )
+        .await
     }
 
     /// Simplified wrapper for logout that creates the client internally.
     pub async fn do_logout(&self) -> Result<(), AuthError> {
-        let mut auth_client = self.try_auth_client()
-            .ok_or_else(|| AuthError::Network(NetworkError::ConnectionFailed("Not connected to server".to_string())))?;
+        let mut auth_client = self.try_auth_client().ok_or_else(|| {
+            AuthError::Network(NetworkError::ConnectionFailed(
+                "Not connected to server".to_string(),
+            ))
+        })?;
         self.logout(&mut auth_client).await
     }
 
@@ -1397,8 +1542,11 @@ impl AuthService {
         if !self.is_logged_in() {
             return Err(AuthError::NotLoggedIn);
         }
-        let mut auth_client = self.try_auth_client()
-            .ok_or_else(|| AuthError::Network(NetworkError::ConnectionFailed("Not connected to server".to_string())))?;
+        let mut auth_client = self.try_auth_client().ok_or_else(|| {
+            AuthError::Network(NetworkError::ConnectionFailed(
+                "Not connected to server".to_string(),
+            ))
+        })?;
         change_password_with(&mut auth_client, current_password, new_password).await
     }
 
@@ -1425,8 +1573,12 @@ impl AuthService {
 
         // Remove sender certificate if any
         let _ = self.settings_repo.delete(keys::SENDER_CERTIFICATE);
-        let _ = self.settings_repo.delete(keys::SENDER_CERTIFICATE_REFRESH_AFTER);
-        let _ = self.settings_repo.delete(keys::SENDER_CERTIFICATE_SERVER_KEY_ID);
+        let _ = self
+            .settings_repo
+            .delete(keys::SENDER_CERTIFICATE_REFRESH_AFTER);
+        let _ = self
+            .settings_repo
+            .delete(keys::SENDER_CERTIFICATE_SERVER_KEY_ID);
 
         // Clear auth interceptor
         self.auth_interceptor.clear();
@@ -1463,7 +1615,8 @@ impl AuthService {
         let keypair = crate::crypto::svr::SvrKeypair::new_from_pin(new_pin, username)?;
         let svr_public_key = keypair.public_key_bytes();
 
-        let mut registration_lock = crate::crypto::svr::derive_registration_lock(new_pin, username)?;
+        let mut registration_lock =
+            crate::crypto::svr::derive_registration_lock(new_pin, username)?;
 
         // The server finds the account by the code itself. The new password is
         // a fresh OPAQUE registration; the login identifier stays as it was.
@@ -1472,11 +1625,19 @@ impl AuthService {
             let started = auth_client
                 .use_recovery_code_start(&recovery_code, &opaque_reg.request)
                 .await?;
-            let record =
-                opaque::registration_finish_async(opaque_reg, new_password, started.registration_response)
-                    .await?;
+            let record = opaque::registration_finish_async(
+                opaque_reg,
+                new_password,
+                started.registration_response,
+            )
+            .await?;
             auth_client
-                .use_recovery_code_finish(&started.recovery_id, &record, &svr_public_key, &registration_lock)
+                .use_recovery_code_finish(
+                    &started.recovery_id,
+                    &record,
+                    &svr_public_key,
+                    &registration_lock,
+                )
                 .await
                 .map_err(AuthError::Network)
         }
@@ -1523,7 +1684,9 @@ pub(crate) async fn change_password_with(
 ) -> Result<(), AuthError> {
     let proof = opaque::login_start(current_password)?;
     let reg = opaque::registration_start(new_password)?;
-    let started = auth_client.change_password_start(&proof.ke1, &reg.request).await?;
+    let started = auth_client
+        .change_password_start(&proof.ke1, &reg.request)
+        .await?;
     let done = opaque::login_finish_async(proof, current_password, started.ke2).await?;
     let record =
         opaque::registration_finish_async(reg, new_password, started.registration_response).await?;
@@ -1562,7 +1725,10 @@ mod recovery_code_tests {
     #[test]
     fn normalize_accepts_grouped_lowercase_and_spaced_input() {
         let canonical = "ABCDEFGHJKMNPQRSTUVWXYZ234";
-        assert_eq!(normalize_recovery_code(canonical).as_deref(), Some(canonical));
+        assert_eq!(
+            normalize_recovery_code(canonical).as_deref(),
+            Some(canonical)
+        );
         assert_eq!(
             normalize_recovery_code(" abcde-fghjk-mnpqr-stuvw-xyz234 ").as_deref(),
             Some(canonical)

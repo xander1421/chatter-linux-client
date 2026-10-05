@@ -86,7 +86,8 @@ pub fn wire_create_channel(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                                 if let Some(w) = weak.upgrade() {
                                     w.set_create_channel_icon_url(path_string.into());
                                 }
-                                match crate::bin_ui::slint_conversions::memory_to_slint_image(&data) {
+                                match crate::bin_ui::slint_conversions::memory_to_slint_image(&data)
+                                {
                                     Ok(slint_img) => {
                                         if let Some(w) = weak.upgrade() {
                                             w.set_create_channel_icon_preview(slint_img);
@@ -94,11 +95,16 @@ pub fn wire_create_channel(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                                             tracing::info!("[CHANNEL_ICON] preview set on modal");
                                         }
                                     }
-                                    Err(e) => tracing::error!("[CHANNEL_ICON] Failed to decode preview: {}", e),
+                                    Err(e) => tracing::error!(
+                                        "[CHANNEL_ICON] Failed to decode preview: {}",
+                                        e
+                                    ),
                                 }
                             });
                         }
-                        Err(e) => tracing::error!("[CHANNEL_ICON] Failed to read picked file: {}", e),
+                        Err(e) => {
+                            tracing::error!("[CHANNEL_ICON] Failed to read picked file: {}", e)
+                        }
                     }
                 }
                 None => tracing::info!("[CHANNEL_ICON] file pick cancelled"),
@@ -323,64 +329,75 @@ pub fn wire_create_channel(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
 
     let weak_window = window.as_weak();
     let ui_ctx_group = ui_ctx.clone();
-    window.on_create_private_group(move |name: SharedString, friends: ModelRc<PrivateGroupFriend>| {
-        let weak = weak_window.clone();
-        let ui_ctx = ui_ctx_group.clone();
-        let name = name.to_string();
+    window.on_create_private_group(
+        move |name: SharedString, friends: ModelRc<PrivateGroupFriend>| {
+            let weak = weak_window.clone();
+            let ui_ctx = ui_ctx_group.clone();
+            let name = name.to_string();
 
-        // Extract selected friends with their roles
-        let selected_friends: Vec<(UserId, chatter_core::domain::anon_group::AnonGroupRole)> = friends.iter()
-            .filter(|f| f.selected)
-            .filter_map(|f| {
-                let user_id = f.user_id.to_string().parse::<UserId>().ok()?;
-                let role = if f.role == "admin" {
-                    chatter_core::domain::anon_group::AnonGroupRole::Admin
-                } else {
-                    chatter_core::domain::anon_group::AnonGroupRole::Member
-                };
-                Some((user_id, role))
-            })
-            .collect();
+            // Extract selected friends with their roles
+            let selected_friends: Vec<(UserId, chatter_core::domain::anon_group::AnonGroupRole)> =
+                friends
+                    .iter()
+                    .filter(|f| f.selected)
+                    .filter_map(|f| {
+                        let user_id = f.user_id.to_string().parse::<UserId>().ok()?;
+                        let role = if f.role == "admin" {
+                            chatter_core::domain::anon_group::AnonGroupRole::Admin
+                        } else {
+                            chatter_core::domain::anon_group::AnonGroupRole::Member
+                        };
+                        Some((user_id, role))
+                    })
+                    .collect();
 
-        if selected_friends.is_empty() { return; }
-
-        let weak_loading = weak.clone();
-        let _ = slint::invoke_from_event_loop(move || {
-            if let Some(w) = weak_loading.upgrade() {
-                w.set_create_channel_loading(true);
-                w.set_create_channel_error("".into());
+            if selected_friends.is_empty() {
+                return;
             }
-        });
 
-        tokio::spawn(async move {
-            match ui_ctx.create_anon_group(name.clone(), selected_friends).await {
-                Ok(_group) => {
-                    crate::bin_ui::features::sidebar::rebuild_chat_list(&weak, &ui_ctx);
-                    let weak_success = weak.clone();
-                    let _ = slint::invoke_from_event_loop(move || {
-                        if let Some(w) = weak_success.upgrade() {
-                            w.set_create_channel_loading(false);
-                            crate::bin_ui::features::back::close(&w, "create-channel");
-                        }
-                    });
+            let weak_loading = weak.clone();
+            let _ = slint::invoke_from_event_loop(move || {
+                if let Some(w) = weak_loading.upgrade() {
+                    w.set_create_channel_loading(true);
+                    w.set_create_channel_error("".into());
                 }
-                Err(e) => {
-                    let error_msg = e.to_string();
-                    let _ = slint::invoke_from_event_loop(move || {
-                        if let Some(w) = weak.upgrade() {
-                            w.set_create_channel_loading(false);
-                            w.set_create_channel_error(error_msg.into());
-                        }
-                    });
+            });
+
+            tokio::spawn(async move {
+                match ui_ctx
+                    .create_anon_group(name.clone(), selected_friends)
+                    .await
+                {
+                    Ok(_group) => {
+                        crate::bin_ui::features::sidebar::rebuild_chat_list(&weak, &ui_ctx);
+                        let weak_success = weak.clone();
+                        let _ = slint::invoke_from_event_loop(move || {
+                            if let Some(w) = weak_success.upgrade() {
+                                w.set_create_channel_loading(false);
+                                crate::bin_ui::features::back::close(&w, "create-channel");
+                            }
+                        });
+                    }
+                    Err(e) => {
+                        let error_msg = e.to_string();
+                        let _ = slint::invoke_from_event_loop(move || {
+                            if let Some(w) = weak.upgrade() {
+                                w.set_create_channel_loading(false);
+                                w.set_create_channel_error(error_msg.into());
+                            }
+                        });
+                    }
                 }
-            }
-        });
-    });
+            });
+        },
+    );
 
     let weak_window = window.as_weak();
     let ui_ctx_tpl = ui_ctx.clone();
     window.on_create_channel_template_selected(move |template: SharedString| {
-        if template.as_str() != "private-group" { return; }
+        if template.as_str() != "private-group" {
+            return;
+        }
         let weak = weak_window.clone();
         let ui_ctx = ui_ctx_tpl.clone();
         tokio::spawn(async move {
@@ -390,14 +407,22 @@ pub fn wire_create_channel(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                 .map(|c| PrivateGroupFriend {
                     user_id: c.user_id.to_string().into(),
                     display_name: c.display_name.into(),
-                    username: if c.is_anonymous { "(anonymous)".into() } else { "".into() },
+                    username: if c.is_anonymous {
+                        "(anonymous)".into()
+                    } else {
+                        "".into()
+                    },
                     selected: false,
                     role: "member".into(),
                 })
                 .collect();
 
             let _ = slint::invoke_from_event_loop(move || {
-                if let Some(w) = weak.upgrade() { w.set_create_channel_available_friends(ModelRc::new(VecModel::from(friend_data))); }
+                if let Some(w) = weak.upgrade() {
+                    w.set_create_channel_available_friends(ModelRc::new(VecModel::from(
+                        friend_data,
+                    )));
+                }
             });
         });
     });
@@ -443,18 +468,20 @@ pub fn wire_invite_to_private_group(window: &MainWindow, ui_ctx: &Arc<ChatterCli
             .unwrap_or_default();
 
         // Extract selected friends with their roles
-        let selected_friends: Vec<(UserId, chatter_core::domain::anon_group::AnonGroupRole)> = friends.iter()
-            .filter(|f| f.selected)
-            .filter_map(|f| {
-                let user_id = f.user_id.to_string().parse::<UserId>().ok()?;
-                let role = if f.role == "admin" {
-                    chatter_core::domain::anon_group::AnonGroupRole::Admin
-                } else {
-                    chatter_core::domain::anon_group::AnonGroupRole::Member
-                };
-                Some((user_id, role))
-            })
-            .collect();
+        let selected_friends: Vec<(UserId, chatter_core::domain::anon_group::AnonGroupRole)> =
+            friends
+                .iter()
+                .filter(|f| f.selected)
+                .filter_map(|f| {
+                    let user_id = f.user_id.to_string().parse::<UserId>().ok()?;
+                    let role = if f.role == "admin" {
+                        chatter_core::domain::anon_group::AnonGroupRole::Admin
+                    } else {
+                        chatter_core::domain::anon_group::AnonGroupRole::Member
+                    };
+                    Some((user_id, role))
+                })
+                .collect();
 
         if selected_friends.is_empty() || group_id_str.is_empty() {
             return;
@@ -469,7 +496,8 @@ pub fn wire_invite_to_private_group(window: &MainWindow, ui_ctx: &Arc<ChatterCli
         });
 
         tokio::spawn(async move {
-            let group_id: chatter_core::domain::anon_group::AnonGroupId = match group_id_str.parse() {
+            let group_id: chatter_core::domain::anon_group::AnonGroupId = match group_id_str.parse()
+            {
                 Ok(id) => id,
                 Err(e) => {
                     tracing::error!("Invalid group ID for invite: {}", e);
@@ -482,7 +510,10 @@ pub fn wire_invite_to_private_group(window: &MainWindow, ui_ctx: &Arc<ChatterCli
                 }
             };
 
-            match ui_ctx.invite_to_anon_group(&group_id, selected_friends).await {
+            match ui_ctx
+                .invite_to_anon_group(&group_id, selected_friends)
+                .await
+            {
                 Ok(_) => {
                     tracing::info!("Successfully invited members to group {}", group_id);
                     let _ = slint::invoke_from_event_loop(move || {

@@ -176,7 +176,9 @@ impl SectionService {
         conversation_id: &str,
         conversation_type: &ConversationType,
     ) -> Result<Option<crate::domain::UnifiedConversation>, SectionError> {
-        Ok(self.conversation_repo.get_conversation(conversation_id, conversation_type)?)
+        Ok(self
+            .conversation_repo
+            .get_conversation(conversation_id, conversation_type)?)
     }
 
     /// Move a conversation into a section.
@@ -189,7 +191,10 @@ impl SectionService {
         section_id: &SectionId,
     ) -> Result<(), SectionError> {
         // Remove from any existing section first
-        if let Some(old_section_id) = self.section_repo.get_conversation_section(conversation_id)? {
+        if let Some(old_section_id) = self
+            .section_repo
+            .get_conversation_section(conversation_id)?
+        {
             self.section_repo
                 .remove_from_section(&old_section_id, conversation_id)?;
         }
@@ -206,7 +211,9 @@ impl SectionService {
     pub fn reorder_sections(&self, ids: &[SectionId]) -> Result<(), SectionError> {
         let existing = self.section_repo.list_sections()?;
         for (idx, id) in ids.iter().enumerate() {
-            let Some(section) = existing.iter().find(|s| s.id == *id) else { continue };
+            let Some(section) = existing.iter().find(|s| s.id == *id) else {
+                continue;
+            };
             self.section_repo
                 .update_section(id, &section.name, &section.icon_emoji, idx as i32)
                 .map_err(|e| match e {
@@ -243,10 +250,12 @@ impl SectionService {
 
     /// Set how a section orders the conversations inside it.
     pub fn set_sort_mode(&self, id: &SectionId, mode: SectionSortMode) -> Result<(), SectionError> {
-        self.section_repo.set_sort_mode(id, mode).map_err(|e| match e {
-            StorageError::NotFound(_) => SectionError::NotFound,
-            other => SectionError::Storage(other),
-        })
+        self.section_repo
+            .set_sort_mode(id, mode)
+            .map_err(|e| match e {
+                StorageError::NotFound(_) => SectionError::NotFound,
+                other => SectionError::Storage(other),
+            })
     }
 
     /// Toggle the expanded/collapsed state of a section.
@@ -268,7 +277,9 @@ impl SectionService {
     }
 
     /// Return the set of all conversation IDs that belong to any section.
-    pub fn all_sectioned_conversation_ids(&self) -> Result<std::collections::HashSet<String>, SectionError> {
+    pub fn all_sectioned_conversation_ids(
+        &self,
+    ) -> Result<std::collections::HashSet<String>, SectionError> {
         Ok(self.section_repo.all_conversation_ids()?)
     }
 
@@ -277,7 +288,10 @@ impl SectionService {
         &self,
         conversation_id: &str,
     ) -> Result<(), SectionError> {
-        if let Some(section_id) = self.section_repo.get_conversation_section(conversation_id)? {
+        if let Some(section_id) = self
+            .section_repo
+            .get_conversation_section(conversation_id)?
+        {
             self.section_repo
                 .remove_from_section(&section_id, conversation_id)?;
         }
@@ -311,7 +325,13 @@ fn sort_conversations(conversations: &mut [SectionConversation], mode: SectionSo
 mod tests {
     use super::*;
 
-    fn conv(id: &str, name: &str, unread: u32, at: Option<i64>, pinned: bool) -> SectionConversation {
+    fn conv(
+        id: &str,
+        name: &str,
+        unread: u32,
+        at: Option<i64>,
+        pinned: bool,
+    ) -> SectionConversation {
         SectionConversation {
             conversation_id: id.to_string(),
             conversation_type: ConversationType::Channel,

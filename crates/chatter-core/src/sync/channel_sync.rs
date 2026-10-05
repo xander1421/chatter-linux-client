@@ -10,9 +10,9 @@ use chrono::{DateTime, Utc};
 use crate::domain::channel::Channel;
 use crate::domain::ids::ChannelId;
 use crate::network::grpc::client_pool::GrpcClientPool;
+use crate::services::channel::converters::{proto_to_domain_channel, proto_to_domain_membership};
 use crate::services::channel_event_service::ChannelEventService;
 use crate::services::current_user::CurrentUserProvider;
-use crate::services::channel::converters::{proto_to_domain_channel, proto_to_domain_membership};
 use crate::storage::repositories::channel_repo::ChannelRepository;
 use crate::storage::repositories::settings_repo::SettingsRepository;
 
@@ -74,7 +74,9 @@ impl ChannelSync {
         // work that failed here and local state would stay drifted.
         let mut had_failure = false;
         // Joins after this happened while we weren't looking.
-        let last_sync = self.last_synced_at().and_then(DateTime::from_timestamp_millis);
+        let last_sync = self
+            .last_synced_at()
+            .and_then(DateTime::from_timestamp_millis);
 
         loop {
             let mut client = self.grpc_pool.channel_client();
@@ -88,12 +90,10 @@ impl ChannelSync {
             for proto in &response.channels {
                 match proto_to_domain_channel(proto) {
                     Ok(channel) => {
-                        let is_new = self.channel_repo.get(&channel.id)
-                            .ok()
-                            .flatten()
-                            .is_none();
+                        let is_new = self.channel_repo.get(&channel.id).ok().flatten().is_none();
 
-                        self.channel_repo.upsert(&channel)
+                        self.channel_repo
+                            .upsert(&channel)
                             .map_err(|e| SyncError::Storage(e.to_string()))?;
 
                         if is_new {
@@ -182,14 +182,17 @@ impl ChannelSync {
     async fn reconcile_lost_channels(&self, listed: &HashSet<ChannelId>) -> Result<(), SyncError> {
         use crate::domain::channel::ChannelType;
 
-        let Ok(me) = self.settings_repo.current_user_id() else { return Ok(()) };
+        let Ok(me) = self.settings_repo.current_user_id() else {
+            return Ok(());
+        };
         let local = self
             .channel_repo
             .list_for_user(&me)
             .map_err(|e| SyncError::Storage(e.to_string()))?;
         let lost = local.into_iter().filter(|c| {
             // DMs and Saved Messages have no removal.
-            matches!(c.channel_type, ChannelType::Public | ChannelType::Private) && !listed.contains(&c.id)
+            matches!(c.channel_type, ChannelType::Public | ChannelType::Private)
+                && !listed.contains(&c.id)
         });
         for channel in lost {
             let Some(own) = self

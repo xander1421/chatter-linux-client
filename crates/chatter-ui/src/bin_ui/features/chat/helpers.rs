@@ -1,8 +1,8 @@
 //! Helper functions for chat UI operations.
 
-use slint::Model;
-use chatter_core::domain::UserId;
 use crate::MainWindow;
+use chatter_core::domain::UserId;
+use slint::Model;
 
 /// Parsed reply context from UI strings.
 pub struct ReplyContext {
@@ -28,7 +28,10 @@ pub fn parse_reply_context(sender_str: &str, timestamp_str: &str) -> Option<Repl
             return None;
         }
     };
-    Some(ReplyContext { sender_id, timestamp })
+    Some(ReplyContext {
+        sender_id,
+        timestamp,
+    })
 }
 
 /// Build a `MessageItemData` for a sent (own) message.
@@ -85,8 +88,12 @@ pub fn build_own_message_item(
         reply_to_duration: reply_media.duration.clone().into(),
         reply_to_filename: reply_media.filename.clone().into(),
         reply_to_waveform: ModelRc::new(VecModel::from(
-            reply_media.waveform.iter().copied()
-                .map(crate::bin_ui::converters::waveform_bar).collect::<Vec<_>>(),
+            reply_media
+                .waveform
+                .iter()
+                .copied()
+                .map(crate::bin_ui::converters::waveform_bar)
+                .collect::<Vec<_>>(),
         )),
         reply_to_has_thumbnail,
         reply_to_thumbnail,
@@ -121,7 +128,10 @@ pub(crate) fn edit_messages(
     f: impl FnOnce(&slint::VecModel<crate::MessageItemData>),
 ) {
     let model = window.get_messages();
-    match model.as_any().downcast_ref::<slint::VecModel<crate::MessageItemData>>() {
+    match model
+        .as_any()
+        .downcast_ref::<slint::VecModel<crate::MessageItemData>>()
+    {
         Some(vec) => f(vec),
         None => tracing::warn!("message list model is not a VecModel; edit dropped"),
     }
@@ -142,12 +152,14 @@ pub(crate) fn update_reaction_in_ui(
     emoji: &str,
     remove: bool,
 ) {
-    use chatter_core::domain::message::ReactionCount;
     use crate::bin_ui::converters::{reaction_counts_to_entries, reactions_model_to_counts};
+    use chatter_core::domain::message::ReactionCount;
 
     edit_messages(window, |model| {
         for i in 0..model.row_count() {
-            let Some(mut m) = model.row_data(i) else { continue };
+            let Some(mut m) = model.row_data(i) else {
+                continue;
+            };
             if m.sender_id.as_str() != sender_id || m.timestamp_ns.as_str() != timestamp_ns {
                 continue;
             }
@@ -155,7 +167,8 @@ pub(crate) fn update_reaction_in_ui(
             ReactionCount::apply(&mut counts, emoji, remove);
             m.has_reactions = !counts.is_empty();
             m.reaction_summary = ReactionCount::summary_string(&counts).into();
-            m.reactions = slint::ModelRc::new(slint::VecModel::from(reaction_counts_to_entries(&counts)));
+            m.reactions =
+                slint::ModelRc::new(slint::VecModel::from(reaction_counts_to_entries(&counts)));
             model.set_row_data(i, m);
         }
     });
@@ -206,13 +219,32 @@ mod own_echo_tests {
     #[test]
     fn own_echo_renders_markdown_like_every_other_row() {
         let row = super::build_own_message_item(
-            "m1", "me", "Me", "**bold** *italic* ~~strike~~ and normal text",
-            "12:00", 1, Vec::new(), false, "", "",
-            slint::Image::default(), false, 0, 0,
-            &chatter_core::client::ReplyParentMedia::default(), "sent",
+            "m1",
+            "me",
+            "Me",
+            "**bold** *italic* ~~strike~~ and normal text",
+            "12:00",
+            1,
+            Vec::new(),
+            false,
+            "",
+            "",
+            slint::Image::default(),
+            false,
+            0,
+            0,
+            &chatter_core::client::ReplyParentMedia::default(),
+            "sent",
         );
         assert_eq!(row.content, "bold italic strike and normal text");
-        assert_eq!(row.rich_content.row_count(), 1, "one inline run, drawn as one StyledText");
-        assert_eq!(row.rich_content.row_data(0).unwrap().plain, "bold italic strike and normal text");
+        assert_eq!(
+            row.rich_content.row_count(),
+            1,
+            "one inline run, drawn as one StyledText"
+        );
+        assert_eq!(
+            row.rich_content.row_data(0).unwrap().plain,
+            "bold italic strike and normal text"
+        );
     }
 }

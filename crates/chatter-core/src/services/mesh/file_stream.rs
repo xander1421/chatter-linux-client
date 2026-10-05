@@ -443,7 +443,8 @@ impl FileStreamSpool {
             match self.load_state(&path, now_secs) {
                 Some(transfer) => {
                     loaded += 1;
-                    self.transfers.insert(transfer.manifest.transfer_id, transfer);
+                    self.transfers
+                        .insert(transfer.manifest.transfer_id, transfer);
                 }
                 None => {
                     tracing::warn!(
@@ -537,10 +538,11 @@ impl FileStreamSpool {
                 path: part.display().to_string(),
                 source,
             })?;
-        file.set_len(total_size).map_err(|source| MeshError::FileIo {
-            path: part.display().to_string(),
-            source,
-        })?;
+        file.set_len(total_size)
+            .map_err(|source| MeshError::FileIo {
+                path: part.display().to_string(),
+                source,
+            })?;
 
         self.write_state(&transfer)?;
         self.transfers.insert(id, transfer);
@@ -576,7 +578,9 @@ impl FileStreamSpool {
         }
 
         let Some((offset, expected_len)) = transfer.manifest.chunk_span(index) else {
-            return Ok(ChunkOutcome::Refused("a chunk index the manifest does not have"));
+            return Ok(ChunkOutcome::Refused(
+                "a chunk index the manifest does not have",
+            ));
         };
         // The last chunk is short and every other one is exactly `chunk_size`. A
         // chunk of any other length would either leave a gap inside the span or
@@ -714,15 +718,17 @@ impl FileStreamSpool {
                 if transfer.received.present() > transfer.present_at_last_request {
                     transfer.request_backoff_secs = CHUNK_REQUEST_MIN_QUIET_SECS;
                 } else {
-                    transfer.request_backoff_secs = transfer
-                        .request_backoff_secs
-                        .saturating_mul(2)
-                        .clamp(CHUNK_REQUEST_MIN_QUIET_SECS, quiet_secs.max(CHUNK_REQUEST_MIN_QUIET_SECS));
+                    transfer.request_backoff_secs =
+                        transfer.request_backoff_secs.saturating_mul(2).clamp(
+                            CHUNK_REQUEST_MIN_QUIET_SECS,
+                            quiet_secs.max(CHUNK_REQUEST_MIN_QUIET_SECS),
+                        );
                 }
             }
-            let wait = transfer
-                .request_backoff_secs
-                .clamp(CHUNK_REQUEST_MIN_QUIET_SECS, quiet_secs.max(CHUNK_REQUEST_MIN_QUIET_SECS));
+            let wait = transfer.request_backoff_secs.clamp(
+                CHUNK_REQUEST_MIN_QUIET_SECS,
+                quiet_secs.max(CHUNK_REQUEST_MIN_QUIET_SECS),
+            );
 
             // Quiet on both clocks: nothing has arrived *and* nothing has been
             // asked for recently. The first stops a transfer interrupting a stream
@@ -988,7 +994,6 @@ impl OutboundTransfer {
         queued
     }
 
-
     /// The next chunk to put on the air, retransmissions first.
     ///
     /// Requests come first because a receiver that asked is *blocked* on that
@@ -1029,9 +1034,10 @@ impl OutboundTransfer {
     /// may move or replace — the failure then is a read error on one chunk rather
     /// than a stale descriptor serving stale bytes.
     pub fn read_chunk(&self, index: u32) -> Result<Vec<u8>, MeshError> {
-        let (offset, len) = self.manifest.chunk_span(index).ok_or(MeshError::OutOfRange(
-            "a chunk index outside the manifest",
-        ))?;
+        let (offset, len) = self
+            .manifest
+            .chunk_span(index)
+            .ok_or(MeshError::OutOfRange("a chunk index outside the manifest"))?;
         let io = |source: std::io::Error| MeshError::FileIo {
             path: self.path.display().to_string(),
             source,
@@ -1206,7 +1212,9 @@ mod tests {
         feed(&mut spool, &manifest, &bytes, [0], &sender);
         let after_progress = now + CHUNK_REQUEST_MIN_QUIET_SECS + 1;
         assert_eq!(
-            spool.stalled(after_progress, CHUNK_REQUEST_QUIET_SECS, 8).len(),
+            spool
+                .stalled(after_progress, CHUNK_REQUEST_QUIET_SECS, 8)
+                .len(),
             1,
             "progress resets the gap to the floor — this is the several minutes saved"
         );
@@ -1235,7 +1243,13 @@ mod tests {
         let manifest = manifest_for(&bytes, 1_024);
         let sender = peer("cccccccccccccccc");
         recent
-            .begin(manifest.clone(), sender.clone(), "WIRE-R".into(), 5, now - 60)
+            .begin(
+                manifest.clone(),
+                sender.clone(),
+                "WIRE-R".into(),
+                5,
+                now - 60,
+            )
             .unwrap();
         feed_at(&mut recent, &manifest, &bytes, [0, 1, 2], &sender, now - 60);
         drop(recent);
@@ -1246,7 +1260,11 @@ mod tests {
         let transfer = restarted
             .get(&ID)
             .expect("a minute without progress is not an hour");
-        assert_eq!(transfer.received.present(), 3, "and its chunks are still there");
+        assert_eq!(
+            transfer.received.present(),
+            3,
+            "and its chunks are still there"
+        );
 
         // Long-dead progress: abandoned on resume, however many restarts it took
         // to get here.
@@ -1315,7 +1333,11 @@ mod tests {
             CHUNK_REQUEST_QUIET_SECS,
             8,
         );
-        assert_eq!(later.len(), 1, "the quiet period bounds the rate, not the retries");
+        assert_eq!(
+            later.len(),
+            1,
+            "the quiet period bounds the rate, not the retries"
+        );
     }
 
     #[test]
@@ -1356,7 +1378,10 @@ mod tests {
         // Otherwise `present` counts a chunk that cannot exist and the transfer
         // reads as complete with a hole in it.
         assert_eq!(ChunkBitmap::from_bytes(&[0xFF], 4), None);
-        assert_eq!(ChunkBitmap::from_bytes(&[0x0F], 4).map(|m| m.present()), Some(4));
+        assert_eq!(
+            ChunkBitmap::from_bytes(&[0x0F], 4).map(|m| m.present()),
+            Some(4)
+        );
     }
 
     // -- receive -----------------------------------------------------------
@@ -1380,8 +1405,14 @@ mod tests {
         assert_eq!(
             outcomes,
             vec![
-                ChunkOutcome::Stored { present: 1, total: 3 },
-                ChunkOutcome::Stored { present: 2, total: 3 },
+                ChunkOutcome::Stored {
+                    present: 1,
+                    total: 3
+                },
+                ChunkOutcome::Stored {
+                    present: 2,
+                    total: 3
+                },
                 ChunkOutcome::Complete,
             ]
         );
@@ -1438,9 +1469,7 @@ mod tests {
 
         feed(&mut spool, &manifest, &bytes, [2], &sender);
         assert!(
-            spool
-                .stalled(1_000, CHUNK_REQUEST_QUIET_SECS, 8)
-                .is_empty(),
+            spool.stalled(1_000, CHUNK_REQUEST_QUIET_SECS, 8).is_empty(),
             "a complete transfer has nothing to ask for"
         );
     }
@@ -1495,7 +1524,13 @@ mod tests {
         spool
             .begin(manifest.clone(), sender.clone(), "WIRE-9".into(), 77, 10)
             .unwrap();
-        feed(&mut spool, &manifest, &bytes, [0, 1, 2, 3, 4, 5, 6], &sender);
+        feed(
+            &mut spool,
+            &manifest,
+            &bytes,
+            [0, 1, 2, 3, 4, 5, 6],
+            &sender,
+        );
         drop(spool);
 
         // A fresh process over the same directory.
@@ -1535,7 +1570,10 @@ mod tests {
             spool
                 .begin(manifest.clone(), sender.clone(), "W2".into(), 2, 20)
                 .unwrap(),
-            ManifestOutcome::Unchanged { present: 2, total: 4 }
+            ManifestOutcome::Unchanged {
+                present: 2,
+                total: 4
+            }
         );
         assert_eq!(spool.get(&ID).unwrap().received.present(), 2);
         assert_eq!(
@@ -1596,17 +1634,23 @@ mod tests {
         // Short: would leave a gap inside its own span, which no later chunk
         // fills and which the digest would then catch far too late.
         assert!(matches!(
-            spool.accept_chunk(&ID, 0, &bytes[..100], &sender, 20).unwrap(),
+            spool
+                .accept_chunk(&ID, 0, &bytes[..100], &sender, 20)
+                .unwrap(),
             ChunkOutcome::Refused(_)
         ));
         // Long: would overwrite the head of the next chunk.
         assert!(matches!(
-            spool.accept_chunk(&ID, 0, &bytes[..2000], &sender, 20).unwrap(),
+            spool
+                .accept_chunk(&ID, 0, &bytes[..2000], &sender, 20)
+                .unwrap(),
             ChunkOutcome::Refused(_)
         ));
         // Past the end: nothing to write at.
         assert!(matches!(
-            spool.accept_chunk(&ID, 99, &bytes[..1024], &sender, 20).unwrap(),
+            spool
+                .accept_chunk(&ID, 99, &bytes[..1024], &sender, 20)
+                .unwrap(),
             ChunkOutcome::Refused(_)
         ));
         // The last chunk *is* short, and that one is fine.
@@ -1614,7 +1658,10 @@ mod tests {
             spool
                 .accept_chunk(&ID, 2, &bytes[2048..3000], &sender, 20)
                 .unwrap(),
-            ChunkOutcome::Stored { present: 1, total: 3 }
+            ChunkOutcome::Stored {
+                present: 1,
+                total: 3
+            }
         );
     }
 
@@ -1667,7 +1714,10 @@ mod tests {
         assert!(spool.get(&ID).is_some(), "still fresh");
         spool.abandon_stale(100 + TRANSFER_ABANDON_SECS + 1, TRANSFER_ABANDON_SECS);
         assert!(spool.is_empty());
-        assert!(!part.exists(), "an abandoned transfer leaves nothing behind");
+        assert!(
+            !part.exists(),
+            "an abandoned transfer leaves nothing behind"
+        );
     }
 
     #[test]
@@ -1698,7 +1748,10 @@ mod tests {
 
         let mut restarted = FileStreamSpool::new(dir);
         assert_eq!(restarted.restore(200), 0);
-        assert!(!state.exists(), "and it does not linger to be retried forever");
+        assert!(
+            !state.exists(),
+            "and it does not linger to be retried forever"
+        );
     }
 
     // -- send --------------------------------------------------------------
@@ -1770,7 +1823,10 @@ mod tests {
     #[test]
     fn the_request_cap_bounds_what_one_round_asks_for() {
         let mut map = ChunkBitmap::new(500);
-        assert_eq!(map.missing(MAX_REQUESTED_CHUNKS).len(), MAX_REQUESTED_CHUNKS);
+        assert_eq!(
+            map.missing(MAX_REQUESTED_CHUNKS).len(),
+            MAX_REQUESTED_CHUNKS
+        );
         for index in 0..500 {
             map.insert(index);
         }

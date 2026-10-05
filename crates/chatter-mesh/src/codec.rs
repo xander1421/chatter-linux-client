@@ -479,7 +479,9 @@ fn decode_core(raw: &[u8]) -> Result<BitchatPacket, MeshError> {
         // buffer, which is sized from `original_size`.
         let ratio = original_size as f64 / compressed_size as f64;
         if ratio > MAX_COMPRESSION_RATIO {
-            return Err(MeshError::CompressionRatio { ratio: ratio as u64 });
+            return Err(MeshError::CompressionRatio {
+                ratio: ratio as u64,
+            });
         }
 
         let decompressed =
@@ -605,7 +607,11 @@ mod tests {
         assert_eq!(decode(&unpadded).expect("decode"), packet);
 
         let padded = encode(&packet, true).expect("encode");
-        assert_eq!(padded.len(), 256, "small frames round up to the first block");
+        assert_eq!(
+            padded.len(),
+            256,
+            "small frames round up to the first block"
+        );
         assert_eq!(decode(&padded).expect("decode"), packet);
     }
 
@@ -636,7 +642,8 @@ mod tests {
         };
         let absent = sample_packet();
 
-        let decoded_broadcast = decode(&encode(&broadcast, false).expect("encode")).expect("decode");
+        let decoded_broadcast =
+            decode(&encode(&broadcast, false).expect("encode")).expect("decode");
         let decoded_absent = decode(&encode(&absent, false).expect("encode")).expect("decode");
 
         assert_eq!(decoded_broadcast.recipient_id, Some(BROADCAST_RECIPIENT));
@@ -811,7 +818,8 @@ mod tests {
     /// size field when IS_COMPRESSED is set.
     #[test]
     fn trap_payload_length_includes_original_size_field_when_compressed() {
-        for (version, header_len, field_len) in [(1u8, V1_HEADER_SIZE, 2usize), (2, V2_HEADER_SIZE, 4)]
+        for (version, header_len, field_len) in
+            [(1u8, V1_HEADER_SIZE, 2usize), (2, V2_HEADER_SIZE, 4)]
         {
             let payload = compressible(2000);
             let packet = BitchatPacket {
@@ -977,10 +985,7 @@ mod tests {
         // since stripping only shortens. Assert the fallback runs and still errs,
         // rather than panicking or looping.
         let frame = FrameBuilder::v1(0, 4).push(&[0xAA, 0xBB, 0x01]).build();
-        assert!(matches!(
-            decode(&frame),
-            Err(MeshError::Truncated { .. })
-        ));
+        assert!(matches!(decode(&frame), Err(MeshError::Truncated { .. })));
     }
 
     // --- compression ---------------------------------------------------------
@@ -1091,7 +1096,9 @@ mod tests {
         );
 
         // Under the cap but unbacked by bytes: truncation, not a huge allocation.
-        let frame = FrameBuilder::v1(0, u16::MAX).push(&[0x01, 0x02, 0x03]).build();
+        let frame = FrameBuilder::v1(0, u16::MAX)
+            .push(&[0x01, 0x02, 0x03])
+            .build();
         assert!(matches!(decode(&frame), Err(MeshError::Truncated { .. })));
     }
 
@@ -1138,7 +1145,9 @@ mod tests {
     #[test]
     fn decoder_rejects_compressed_frames_with_no_room_for_the_original_size() {
         // payloadLength 1 < the 2-byte v1 original-size field.
-        let frame = FrameBuilder::v1(flags::IS_COMPRESSED, 1).push(&[0x99]).build();
+        let frame = FrameBuilder::v1(flags::IS_COMPRESSED, 1)
+            .push(&[0x99])
+            .build();
         assert_eq!(
             decode(&frame),
             Err(MeshError::OutOfRange(
@@ -1172,7 +1181,10 @@ mod tests {
             ..sample_packet()
         };
         let mut encoded = encode(&packet, false).expect("encode");
-        assert_eq!(encoded[FLAGS_OFFSET] & flags::IS_COMPRESSED, flags::IS_COMPRESSED);
+        assert_eq!(
+            encoded[FLAGS_OFFSET] & flags::IS_COMPRESSED,
+            flags::IS_COMPRESSED
+        );
 
         // Overstate the original size by one byte, keeping the ratio plausible.
         //

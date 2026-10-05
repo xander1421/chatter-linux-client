@@ -2,8 +2,8 @@
 
 use std::sync::Arc;
 
-use crate::domain::channel::{Channel, ChannelType};
 use super::ChatterClient;
+use crate::domain::channel::{Channel, ChannelType};
 
 impl ChatterClient {
     // ── Conversation listing ────────────────────────────────────────
@@ -38,8 +38,17 @@ impl ChatterClient {
         password: Option<&str>,
         initial_members: Vec<crate::domain::ids::UserId>,
     ) -> Result<Channel, crate::services::channel::ChannelError> {
-        let (channel, _mailbox_setup) = self.channels()
-            .create_channel(name, channel_type, config, description, icon, password, initial_members)
+        let (channel, _mailbox_setup) = self
+            .channels()
+            .create_channel(
+                name,
+                channel_type,
+                config,
+                description,
+                icon,
+                password,
+                initial_members,
+            )
             .await?;
         // The global message stream subscribes from the server's membership
         // list; nudge it so the channel we just created is picked up now
@@ -69,10 +78,9 @@ impl ChatterClient {
             Some(path) => match tokio::fs::read(path).await {
                 Ok(bytes) => Some(Self::fit_icon_bytes(&bytes)?),
                 Err(e) => {
-                    return Err(crate::services::channel::ChannelError::InvalidInput(format!(
-                        "icon read failed: {}",
-                        e
-                    )));
+                    return Err(crate::services::channel::ChannelError::InvalidInput(
+                        format!("icon read failed: {}", e),
+                    ));
                 }
             },
             None => None,
@@ -99,14 +107,16 @@ impl ChatterClient {
         channel_id: &crate::domain::ids::ChannelId,
         password: Option<&str>,
     ) -> Result<Channel, crate::services::channel::ChannelError> {
-        let (channel, _mailbox_setup) = self.channels()
-            .join_channel(channel_id, password)
-            .await?;
+        let (channel, _mailbox_setup) = self.channels().join_channel(channel_id, password).await?;
         self.resubscribe_channel_messages();
 
         // Pull SKDMs from existing members so we can decrypt their next
         // messages without the no-sender-key defer/retry round-trip.
-        if let Err(e) = self.messages().request_skdms_from_channel_members(channel_id).await {
+        if let Err(e) = self
+            .messages()
+            .request_skdms_from_channel_members(channel_id)
+            .await
+        {
             tracing::warn!(
                 channel_id = %channel_id,
                 error = %e,
@@ -128,7 +138,9 @@ impl ChatterClient {
         user_id: &crate::domain::ids::UserId,
         reason: Option<&str>,
     ) -> Result<(), crate::services::channel::ChannelError> {
-        self.channels().kick_user_complete(channel_id, user_id, reason).await
+        self.channels()
+            .kick_user_complete(channel_id, user_id, reason)
+            .await
     }
 
     /// Ban a user from a channel (server-side) and re-distribute sender keys.
@@ -141,7 +153,9 @@ impl ChatterClient {
         user_id: &crate::domain::ids::UserId,
         reason: Option<&str>,
     ) -> Result<(), crate::services::channel::ChannelError> {
-        self.channels().ban_user_complete(channel_id, user_id, reason).await
+        self.channels()
+            .ban_user_complete(channel_id, user_id, reason)
+            .await
     }
 
     /// Unban a user — clears the server-side ban. The user can rejoin via
@@ -161,7 +175,9 @@ impl ChatterClient {
         channel_id: &crate::domain::ids::ChannelId,
         new_owner: &crate::domain::ids::UserId,
     ) -> Result<(), crate::services::channel::ChannelError> {
-        self.channels().transfer_ownership(channel_id, new_owner).await
+        self.channels()
+            .transfer_ownership(channel_id, new_owner)
+            .await
     }
 
     /// Mute a member for `duration`, or until unmuted when `None`.
@@ -172,7 +188,9 @@ impl ChatterClient {
         user_id: &crate::domain::ids::UserId,
         duration: Option<std::time::Duration>,
     ) -> Result<(), crate::services::channel::ChannelError> {
-        self.channels().mute_user(channel_id, user_id, duration).await
+        self.channels()
+            .mute_user(channel_id, user_id, duration)
+            .await
     }
 
     /// Lift a mute.
@@ -191,18 +209,28 @@ impl ChatterClient {
         if !self.is_moderated_channel(channel_id) {
             return String::new();
         }
-        let Some(me) = self.session_current_user_id() else { return String::new() };
+        let Some(me) = self.session_current_user_id() else {
+            return String::new();
+        };
         let members = self.list_channel_members_local(channel_id);
         let own = members.iter().find(|m| m.user_id == me);
-        crate::domain::channel::SendBlock::for_viewer(own, !members.is_empty(), self.former_channel_state(channel_id))
-            .map(|b| b.notice())
-            .unwrap_or_default()
+        crate::domain::channel::SendBlock::for_viewer(
+            own,
+            !members.is_empty(),
+            self.former_channel_state(channel_id),
+        )
+        .map(|b| b.notice())
+        .unwrap_or_default()
     }
 
     /// `Some(deleted)` for a channel we are no longer in (left, removed,
     /// banned, deleted), which stays listed read-only; `None` otherwise.
     fn former_channel_state(&self, channel_id: &crate::domain::ids::ChannelId) -> Option<bool> {
-        self.channels().channel_repo.former_state(channel_id).ok().flatten()
+        self.channels()
+            .channel_repo
+            .former_state(channel_id)
+            .ok()
+            .flatten()
     }
 
     /// A channel we are no longer in, listed read-only: its row offers
@@ -210,23 +238,41 @@ impl ChatterClient {
     /// outlives a local delete, the next sync brings it back) and it is no
     /// forward destination.
     pub fn is_former_channel(&self, channel_id: &crate::domain::ids::ChannelId) -> bool {
-        let Some(me) = self.session_current_user_id() else { return false };
+        let Some(me) = self.session_current_user_id() else {
+            return false;
+        };
         self.former_channel_state(channel_id).is_some()
-            && self.channels().channel_repo.get_membership(channel_id, &me).ok().flatten().is_none()
+            && self
+                .channels()
+                .channel_repo
+                .get_membership(channel_id, &me)
+                .ok()
+                .flatten()
+                .is_none()
     }
 
     /// Whether to offer "Leave channel": we are still a member and not the
     /// owner (see [`crate::domain::channel::Channel::can_user_leave`]). An
     /// unsynced roster counts as membership, as in [`Self::channel_send_notice`].
     pub fn can_leave_channel(&self, channel_id: &crate::domain::ids::ChannelId) -> bool {
-        let (Some(channel), Some(me)) = (self.get_channel_local(channel_id), self.session_current_user_id()) else {
+        let (Some(channel), Some(me)) = (
+            self.get_channel_local(channel_id),
+            self.session_current_user_id(),
+        ) else {
             return false;
         };
         let members = self.list_channel_members_local(channel_id);
         let own = members.iter().find(|m| m.user_id == me);
         let still_member = !matches!(
-            crate::domain::channel::SendBlock::for_viewer(own, !members.is_empty(), self.former_channel_state(channel_id)),
-            Some(crate::domain::channel::SendBlock::Removed | crate::domain::channel::SendBlock::Deleted)
+            crate::domain::channel::SendBlock::for_viewer(
+                own,
+                !members.is_empty(),
+                self.former_channel_state(channel_id)
+            ),
+            Some(
+                crate::domain::channel::SendBlock::Removed
+                    | crate::domain::channel::SendBlock::Deleted
+            )
         );
         channel.can_user_leave(&me, still_member)
     }
@@ -237,7 +283,10 @@ impl ChatterClient {
     /// answer.
     // refetches the full roster; a "my membership" RPC if that
     // shows up in large channels.
-    pub async fn refresh_channel_send_notice(&self, channel_id: &crate::domain::ids::ChannelId) -> String {
+    pub async fn refresh_channel_send_notice(
+        &self,
+        channel_id: &crate::domain::ids::ChannelId,
+    ) -> String {
         if !self.is_moderated_channel(channel_id) {
             return String::new();
         }
@@ -249,9 +298,8 @@ impl ChatterClient {
 
     /// DMs and Saved Messages have no moderation (the server refuses it).
     fn is_moderated_channel(&self, channel_id: &crate::domain::ids::ChannelId) -> bool {
-        self.get_channel_local(channel_id).is_some_and(|c| {
-            !c.is_dm() && !matches!(c.channel_type, ChannelType::SavedMessages)
-        })
+        self.get_channel_local(channel_id)
+            .is_some_and(|c| !c.is_dm() && !matches!(c.channel_type, ChannelType::SavedMessages))
     }
 
     /// A channel's active bans shaped for display, or `None` when our role
@@ -260,7 +308,10 @@ impl ChatterClient {
     pub async fn list_banned_members(
         &self,
         channel_id: &crate::domain::ids::ChannelId,
-    ) -> Result<Option<Vec<crate::domain::channel::BannedMember>>, crate::services::channel::ChannelError> {
+    ) -> Result<
+        Option<Vec<crate::domain::channel::BannedMember>>,
+        crate::services::channel::ChannelError,
+    > {
         let Some(bans) = self.channels().list_banned_users(channel_id).await? else {
             return Ok(None);
         };
@@ -268,7 +319,9 @@ impl ChatterClient {
             bans.into_iter()
                 .map(|b| crate::domain::channel::BannedMember {
                     display_name: self.display_name(&b.user_id),
-                    avatar_bytes: self.get_profile_local(&b.user_id).and_then(|p| p.avatar_bytes),
+                    avatar_bytes: self
+                        .get_profile_local(&b.user_id)
+                        .and_then(|p| p.avatar_bytes),
                     ..b
                 })
                 .collect(),
@@ -316,7 +369,9 @@ impl ChatterClient {
         channel_id: &crate::domain::ids::ChannelId,
     ) -> Result<(), crate::services::channel::ChannelError> {
         self.channels().leave_channel_complete(channel_id).await?;
-        self.services.channel_event_service.record_own_leave(channel_id);
+        self.services
+            .channel_event_service
+            .record_own_leave(channel_id);
         Ok(())
     }
 
@@ -326,7 +381,9 @@ impl ChatterClient {
         query: &str,
         limit: u32,
     ) -> Result<Vec<Channel>, crate::services::channel::ChannelError> {
-        self.channels().search_channels(query, limit, 0, vec![ChannelType::Public]).await
+        self.channels()
+            .search_channels(query, limit, 0, vec![ChannelType::Public])
+            .await
     }
 
     const MAX_ICON_BYTES: usize = 65_536;
@@ -337,9 +394,7 @@ impl ChatterClient {
         }
 
         let img = image::load_from_memory(raw).map_err(|e| {
-            crate::services::channel::ChannelError::InvalidInput(format!(
-                "icon decode failed: {e}"
-            ))
+            crate::services::channel::ChannelError::InvalidInput(format!("icon decode failed: {e}"))
         })?;
 
         let mut img = img;
@@ -348,11 +403,12 @@ impl ChatterClient {
                 img = img.resize(max_dim, max_dim, image::imageops::FilterType::Lanczos3);
             }
             let mut buf = std::io::Cursor::new(Vec::new());
-            img.write_to(&mut buf, image::ImageFormat::WebP).map_err(|e| {
-                crate::services::channel::ChannelError::InvalidInput(format!(
-                    "icon encode failed: {e}"
-                ))
-            })?;
+            img.write_to(&mut buf, image::ImageFormat::WebP)
+                .map_err(|e| {
+                    crate::services::channel::ChannelError::InvalidInput(format!(
+                        "icon encode failed: {e}"
+                    ))
+                })?;
             let encoded = buf.into_inner();
             if encoded.len() <= Self::MAX_ICON_BYTES {
                 tracing::info!(
@@ -370,4 +426,3 @@ impl ChatterClient {
         ))
     }
 }
-

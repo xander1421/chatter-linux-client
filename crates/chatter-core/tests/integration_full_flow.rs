@@ -9,9 +9,9 @@
 //! All tests are gated by skip_if_no_server!() and require INTEGRATION_TESTS=1.
 
 use crate::{common, skip_if_no_server};
-use common::*;
 use chatter_core::network::grpc::*;
 use chatter_core::proto::chat_v1::*;
+use common::*;
 use tokio_stream::StreamExt;
 
 // ---------------------------------------------------------------------------
@@ -57,8 +57,14 @@ async fn test_register_produces_unique_user_ids() {
     let user_a = assert_ok(register_test_user(&pool).await);
     let user_b = assert_ok(register_test_user(&pool).await);
 
-    assert_ne!(user_a.user_id, user_b.user_id, "Each registration should produce unique user_id");
-    assert_ne!(user_a.username, user_b.username, "Each registration should have unique username");
+    assert_ne!(
+        user_a.user_id, user_b.user_id,
+        "Each registration should produce unique user_id"
+    );
+    assert_ne!(
+        user_a.username, user_b.username,
+        "Each registration should have unique username"
+    );
 }
 
 /// Test that unauthenticated pool cannot access protected endpoints.
@@ -102,11 +108,12 @@ async fn test_channel_create() {
         .create_channel(
             &channel_name,
             ChannelType::ChannelPublic,
-            None,       // password
-            None,       // description
-            None,       // icon
+            None, // password
+            None, // description
+            None, // icon
             Some(membership::genesis(&user, true).1),
-        ).await;
+        )
+        .await;
 
     let Ok(stream) = stream else {
         eprintln!("Failed to create channel stream");
@@ -223,7 +230,10 @@ async fn test_unauthenticated_request_rejected() {
     // Try to list channels without auth
     let result = channel_client.list_channels(10, 0, None).await;
 
-    assert!(result.is_err(), "Unauthenticated request should be rejected");
+    assert!(
+        result.is_err(),
+        "Unauthenticated request should be rejected"
+    );
     assert_auth_error(result);
 }
 

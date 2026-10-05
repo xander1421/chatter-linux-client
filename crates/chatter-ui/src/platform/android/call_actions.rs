@@ -13,9 +13,9 @@
 use std::sync::{Arc, OnceLock};
 
 use chatter_core::client::ChatterClient;
+use jni::JNIEnv;
 use jni::objects::{JClass, JString};
 use jni::sys::jboolean;
-use jni::JNIEnv;
 
 /// Set once at startup so notification-action callbacks can reach the client.
 static CALL_CLIENT: OnceLock<Arc<ChatterClient>> = OnceLock::new();
@@ -86,10 +86,14 @@ pub extern "system" fn Java_com_chatter_client_MainActivity_nativeShowIncomingCa
             return;
         }
     };
-    let Some(weak) = MAIN_WINDOW.get().cloned() else { return };
+    let Some(weak) = MAIN_WINDOW.get().cloned() else {
+        return;
+    };
     let _ = slint::invoke_from_event_loop(move || {
         if let Some(w) = weak.upgrade() {
-            if w.get_incoming_call_visible() && w.get_incoming_call_data().call_id == call_id.as_str() {
+            if w.get_incoming_call_visible()
+                && w.get_incoming_call_data().call_id == call_id.as_str()
+            {
                 w.set_incoming_call_minimized(false);
             }
         }

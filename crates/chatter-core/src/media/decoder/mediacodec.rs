@@ -13,8 +13,8 @@
 
 use std::path::Path;
 
-use crate::error::MediaError;
 use super::{DecodedAudio, DecodedFrame, VideoDecoder, VideoInfo};
+use crate::error::MediaError;
 
 const NOT_IMPLEMENTED: &str = "Android video playback is not implemented: no MediaCodec decoder";
 

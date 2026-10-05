@@ -144,11 +144,15 @@ impl MessageRouter {
     /// transport's secure session after the first one's link turned out to have no
     /// session would be a different decision than the tree describes.
     fn first_connected(&self, peer: &PeerId) -> Option<usize> {
-        self.transports.iter().position(|t| t.is_peer_connected(peer))
+        self.transports
+            .iter()
+            .position(|t| t.is_peer_connected(peer))
     }
 
     fn first_reachable(&self, peer: &PeerId) -> Option<usize> {
-        self.transports.iter().position(|t| t.is_peer_reachable(peer))
+        self.transports
+            .iter()
+            .position(|t| t.is_peer_reachable(peer))
     }
 
     /// How good the route to this peer is, and which transport carries it.
@@ -232,7 +236,9 @@ impl MessageRouter {
             // copy to connected couriers rather than waiting on internet that may
             // never come. Double delivery is harmless: receivers dedup by message
             // ID, and delivered/read acks never downgrade each other.
-            LinkState::Reachable => index.is_some_and(|i| !self.transports[i].can_deliver_promptly(to)),
+            LinkState::Reachable => {
+                index.is_some_and(|i| !self.transports[i].can_deliver_promptly(to))
+            }
             // Branch 4. Nothing can carry it; couriers are the only hope.
             LinkState::Unreachable => true,
             // Handled by the early return above.
@@ -302,8 +308,12 @@ impl MessageRouter {
                 continue;
             }
             let via: Vec<PeerId> = couriers.iter().map(|c| c.peer.clone()).collect();
-            let accepted =
-                self.transports[index].send_courier(&entry.content, message_id, &recipient_key, &via);
+            let accepted = self.transports[index].send_courier(
+                &entry.content,
+                message_id,
+                &recipient_key,
+                &via,
+            );
             // Credit only the couriers that actually took it. Crediting every
             // candidate would burn the message's remaining slots against carriers
             // that never received it, and no further deposit would be attempted —
@@ -396,8 +406,11 @@ impl MessageRouter {
                     if !accepted.contains(peer) {
                         continue;
                     }
-                    self.outbox
-                        .record_courier_deposit(&recipient, &message.message_id, &[courier_key]);
+                    self.outbox.record_courier_deposit(
+                        &recipient,
+                        &message.message_id,
+                        &[courier_key],
+                    );
                     events.push(RouterEvent::Carried {
                         message_id: message.message_id.clone(),
                         peer: recipient.clone(),
@@ -572,11 +585,8 @@ impl MessageRouter {
             }
         }
 
-        let mut events: Vec<RouterEvent> = plan
-            .dropped
-            .into_iter()
-            .map(RouterEvent::Dropped)
-            .collect();
+        let mut events: Vec<RouterEvent> =
+            plan.dropped.into_iter().map(RouterEvent::Dropped).collect();
         self.persist_into(&mut events);
         events
     }
@@ -609,10 +619,7 @@ impl MessageRouter {
     /// Retain a copy, surfacing whatever the per-peer FIFO cap evicted to make room.
     fn retain(&mut self, peer: &PeerId, message: QueuedMessage) -> Vec<RouterEvent> {
         let evicted = self.outbox.enqueue(peer, message);
-        let mut events: Vec<RouterEvent> = evicted
-            .map(RouterEvent::Dropped)
-            .into_iter()
-            .collect();
+        let mut events: Vec<RouterEvent> = evicted.map(RouterEvent::Dropped).into_iter().collect();
         self.persist_into(&mut events);
         events
     }
@@ -839,7 +846,10 @@ mod tests {
         }
     }
 
-    fn router(transports: Vec<Box<dyn RouterTransport>>, directory: TestDirectory) -> MessageRouter {
+    fn router(
+        transports: Vec<Box<dyn RouterTransport>>,
+        directory: TestDirectory,
+    ) -> MessageRouter {
         let mut outbox = OutboxStore::new(Arc::new(MemoryStorage::new()), Arc::new(PlainSealer));
         // Load so the persistence path is genuinely exercised rather than deferred.
         let dropped = outbox.load().expect("cold load of an empty store");
@@ -891,8 +901,7 @@ mod tests {
             .connected_secure(&recipient)
             .with_snapshots(vec![snapshot(&courier, Some(key(2)), true)])
             .accepting_couriers();
-        let directory = TestDirectory::default()
-            .with_key(&recipient, key(1));
+        let directory = TestDirectory::default().with_key(&recipient, key(1));
         let mut router = router(vec![transport.boxed()], directory);
         let bridge_log = Rc::new(RefCell::new(Vec::new()));
         router.set_bridge_deposit(recording_bridge(bridge_log.clone(), true));
@@ -917,8 +926,7 @@ mod tests {
             .connected_insecure(&recipient)
             .with_snapshots(vec![snapshot(&courier, Some(key(2)), true)])
             .accepting_couriers();
-        let directory = TestDirectory::default()
-            .with_key(&recipient, key(1));
+        let directory = TestDirectory::default().with_key(&recipient, key(1));
         let mut router = router(vec![transport.boxed()], directory);
 
         let outcome = router.send_private("hi", &recipient, "bob", "m1", 1_000);
@@ -950,8 +958,7 @@ mod tests {
             .reachable_prompt(&recipient)
             .with_snapshots(vec![snapshot(&courier, Some(key(2)), true)])
             .accepting_couriers();
-        let directory = TestDirectory::default()
-            .with_key(&recipient, key(1));
+        let directory = TestDirectory::default().with_key(&recipient, key(1));
         let mut router = router(vec![transport.boxed()], directory);
 
         let outcome = router.send_private("hi", &recipient, "bob", "m1", 1_000);
@@ -972,8 +979,7 @@ mod tests {
             .reachable_slow(&recipient)
             .with_snapshots(vec![snapshot(&courier, Some(key(2)), true)])
             .accepting_couriers();
-        let directory = TestDirectory::default()
-            .with_key(&recipient, key(1));
+        let directory = TestDirectory::default().with_key(&recipient, key(1));
         let mut router = router(vec![transport.boxed()], directory);
 
         let outcome = router.send_private("hi", &recipient, "bob", "m1", 1_000);
@@ -994,8 +1000,7 @@ mod tests {
         let transport = MockTransport::new()
             .with_snapshots(vec![snapshot(&courier, Some(key(2)), true)])
             .accepting_couriers();
-        let directory = TestDirectory::default()
-            .with_key(&recipient, key(1));
+        let directory = TestDirectory::default().with_key(&recipient, key(1));
         let mut router = router(vec![transport.boxed()], directory);
 
         let outcome = router.send_private("hi", &recipient, "bob", "m1", 1_000);
@@ -1039,8 +1044,7 @@ mod tests {
         // Snapshots offer a courier, but the transport cannot courier at all.
         let transport =
             MockTransport::new().with_snapshots(vec![snapshot(&courier, Some(key(2)), true)]);
-        let directory = TestDirectory::default()
-            .with_key(&recipient, key(1));
+        let directory = TestDirectory::default().with_key(&recipient, key(1));
         let mut router = router(vec![transport.boxed()], directory);
 
         let outcome = router.send_private("hi", &recipient, "bob", "m1", 1_000);
@@ -1069,8 +1073,7 @@ mod tests {
                 snapshot(&v4, Some(key(14)), true),
             ])
             .accepting_couriers();
-        let directory = TestDirectory::default()
-            .with_key(&recipient, key(1));
+        let directory = TestDirectory::default().with_key(&recipient, key(1));
         let mut router = router(vec![transport.boxed()], directory);
 
         router.send_private("hi", &recipient, "bob", "m1", 1_000);
@@ -1100,8 +1103,7 @@ mod tests {
                 snapshot(&verified, Some(key(11)), true),
             ])
             .accepting_couriers();
-        let directory = TestDirectory::default()
-            .with_key(&recipient, key(1));
+        let directory = TestDirectory::default().with_key(&recipient, key(1));
         let mut router = router(vec![transport.boxed()], directory);
 
         router.send_private("hi", &recipient, "bob", "m1", 1_000);
@@ -1137,8 +1139,7 @@ mod tests {
         let transport = MockTransport::new()
             .with_snapshots(vec![snapshot(&first, Some(key(10)), true)])
             .accepting_couriers();
-        let directory = TestDirectory::default()
-            .with_key(&recipient, key(1));
+        let directory = TestDirectory::default().with_key(&recipient, key(1));
         let mut router = router(vec![transport.boxed()], directory);
 
         router.send_private("hi", &recipient, "bob", "m1", 1_000);
@@ -1201,8 +1202,7 @@ mod tests {
     fn a_courier_is_never_handed_mail_addressed_to_itself() {
         let courier = peer(2);
         let transport = MockTransport::new().accepting_couriers();
-        let directory = TestDirectory::default()
-            .with_key(&courier, key(2));
+        let directory = TestDirectory::default().with_key(&courier, key(2));
         let mut router = router(vec![transport.boxed()], directory);
 
         // Mail *for* the courier. It flushes directly on connect instead.
@@ -1419,7 +1419,10 @@ mod tests {
 
         let events = router.flush_outbox(&recipient, 1_000 + MESSAGE_TTL_SECS + 1);
 
-        assert_eq!(drops(&events), vec![("m1".to_string(), DropReason::Expired)]);
+        assert_eq!(
+            drops(&events),
+            vec![("m1".to_string(), DropReason::Expired)]
+        );
         assert!(transport.private_sends().is_empty());
         assert!(router.outbox().queue(&recipient).is_empty());
     }
@@ -1456,7 +1459,10 @@ mod tests {
 
         let events = router.cleanup_expired(1_000 + MESSAGE_TTL_SECS + 1);
 
-        assert_eq!(drops(&events), vec![("m1".to_string(), DropReason::Expired)]);
+        assert_eq!(
+            drops(&events),
+            vec![("m1".to_string(), DropReason::Expired)]
+        );
         assert_eq!(router.outbox().queue(&recipient).len(), 1);
     }
 
@@ -1641,8 +1647,7 @@ mod tests {
         let accepts = MockTransport::new()
             .with_snapshots(vec![snapshot(&courier, Some(key(2)), true)])
             .accepting_couriers();
-        let directory = TestDirectory::default()
-            .with_key(&recipient, key(1));
+        let directory = TestDirectory::default().with_key(&recipient, key(1));
         let mut router = router(vec![refuses.boxed(), accepts.boxed()], directory);
 
         let outcome = router.send_private("hi", &recipient, "bob", "m1", 1_000);

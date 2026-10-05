@@ -2,11 +2,11 @@
 //!
 //! Uses ChannelService for all channel operations - no direct network calls.
 
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use slint::{ComponentHandle, ModelRc, SharedString, VecModel};
-use tokio::time::{sleep, Duration};
+use tokio::time::{Duration, sleep};
 
 use chatter_core::client::ChatterClient;
 use chatter_core::domain::channel::ChannelType;
@@ -37,9 +37,12 @@ pub fn wire_join_channel(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
         // Core decides what a link is. This callback runs on the UI thread.
         let is_link = ChatterClient::is_channel_join_link(&query);
         if let Some(w) = weak.upgrade() {
-            w.global::<MembershipGlobal>().set_join_input_is_link(is_link);
+            w.global::<MembershipGlobal>()
+                .set_join_input_is_link(is_link);
             if is_link {
-                w.set_join_channel_results(ModelRc::new(VecModel::from(Vec::<SearchResultChannel>::new())));
+                w.set_join_channel_results(ModelRc::new(VecModel::from(
+                    Vec::<SearchResultChannel>::new(),
+                )));
                 w.set_join_channel_searching(false);
                 w.set_join_channel_error("".into());
                 w.set_join_channel_selected_id(query.as_str().into());
@@ -60,9 +63,10 @@ pub fn wire_join_channel(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             if query.trim().is_empty() {
                 let _ = slint::invoke_from_event_loop(move || {
                     if let Some(w) = weak.upgrade() {
-                        w.set_join_channel_results(ModelRc::new(VecModel::from(
-                            Vec::<SearchResultChannel>::new(),
-                        )));
+                        w.set_join_channel_results(ModelRc::new(VecModel::from(Vec::<
+                            SearchResultChannel,
+                        >::new(
+                        ))));
                         w.set_join_channel_searching(false);
                         w.set_join_channel_error("".into());
                     }
@@ -104,12 +108,14 @@ pub fn wire_join_channel(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                     // so build SearchResultChannel inside the event-loop closure.
                     let raw: Vec<(String, String, String, Option<Vec<u8>>)> = channels
                         .into_iter()
-                        .map(|ch| (
-                            ch.id.to_string(),
-                            ch.name,
-                            ch.description.unwrap_or_default(),
-                            ch.icon,
-                        ))
+                        .map(|ch| {
+                            (
+                                ch.id.to_string(),
+                                ch.name,
+                                ch.description.unwrap_or_default(),
+                                ch.icon,
+                            )
+                        })
                         .collect();
 
                     let _ = slint::invoke_from_event_loop(move || {
@@ -117,9 +123,8 @@ pub fn wire_join_channel(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                             let results: Vec<SearchResultChannel> = raw
                                 .into_iter()
                                 .map(|(id, name, description, icon_bytes)| {
-                                    let icon_img = icon_bytes
-                                        .as_deref()
-                                        .and_then(avatar_bytes_to_image);
+                                    let icon_img =
+                                        icon_bytes.as_deref().and_then(avatar_bytes_to_image);
                                     SearchResultChannel {
                                         id: id.into(),
                                         name: name.into(),
@@ -195,9 +200,10 @@ pub fn wire_join_channel(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                             w.set_join_channel_search_query("".into());
                             w.set_join_channel_selected_id("".into());
                             w.global::<MembershipGlobal>().set_join_input_is_link(false);
-                            w.set_join_channel_results(ModelRc::new(VecModel::from(
-                                Vec::<SearchResultChannel>::new(),
-                            )));
+                            w.set_join_channel_results(ModelRc::new(VecModel::from(Vec::<
+                                SearchResultChannel,
+                            >::new(
+                            ))));
                             crate::bin_ui::features::back::close(&w, "create-channel");
 
                             // Set loading state for channel switch
@@ -207,14 +213,7 @@ pub fn wire_join_channel(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                     });
 
                     // Load the joined channel properly (loads messages, sets header)
-                    load_channel_into_ui(
-                        weak,
-                        channel_id,
-                        ui_ctx,
-                        Default::default(),
-                        None,
-                    ).await;
-
+                    load_channel_into_ui(weak, channel_id, ui_ctx, Default::default(), None).await;
 
                     tracing::info!("Joined channel: {}", channel_id);
                 }
@@ -223,7 +222,8 @@ pub fn wire_join_channel(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                     use chatter_core::services::channel::ChannelError;
                     let error_msg = if matches!(
                         e,
-                        ChannelError::ChannelNotFound(_) | ChannelError::Network(NetworkError::NotFound(_))
+                        ChannelError::ChannelNotFound(_)
+                            | ChannelError::Network(NetworkError::NotFound(_))
                     ) {
                         "Channel not found or is private".to_string()
                     } else {

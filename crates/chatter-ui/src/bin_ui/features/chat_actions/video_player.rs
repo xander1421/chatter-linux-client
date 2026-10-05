@@ -4,8 +4,8 @@
 
 use slint::ComponentHandle;
 
-use crate::bin_ui::video_state;
 use crate::MainWindow;
+use crate::bin_ui::video_state;
 
 use super::timers::stop_video_progress_timer;
 

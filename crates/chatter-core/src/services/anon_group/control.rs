@@ -1,7 +1,7 @@
 //! Blocking, muting, and rate limiting for anonymous groups.
 
-use crate::domain::anon_group::{AnonGroupId, AnonGroupStatus};
 use crate::domain::UserId;
+use crate::domain::anon_group::{AnonGroupId, AnonGroupStatus};
 
 use super::{AnonGroupError, AnonGroupService};
 

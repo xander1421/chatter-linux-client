@@ -4,11 +4,11 @@ use std::sync::Arc;
 
 use slint::{ComponentHandle, Model, ModelRc, VecModel, Weak};
 
+use crate::MainWindow;
+use crate::MessageItemData;
 use chatter_core::client::ChatterClient;
 use chatter_core::domain::ids::{ChannelId, UserId};
 use chatter_core::domain::message::Message;
-use crate::MainWindow;
-use crate::MessageItemData;
 
 /// Handle an incoming message (DM, channel, or anonymous).
 ///
@@ -32,14 +32,19 @@ pub(super) fn handle_message_received(
     let sender_avatar = ui_ctx.message_sender_avatar(&message);
 
     // Resolve attachments from attachment service
-    let resolved_attachments: Vec<_> = message.attachments.iter()
+    let resolved_attachments: Vec<_> = message
+        .attachments
+        .iter()
         .filter_map(|att_id| ui_ctx.get_attachment(att_id))
         .collect();
 
     // Build display data on this thread (before moving to UI thread)
     // Uses unified converter that handles optional avatars
     let mut display_data = crate::bin_ui::converters::message_to_display_data(
-        &message, &sender_name, &resolved_attachments, sender_avatar,
+        &message,
+        &sender_name,
+        &resolved_attachments,
+        sender_avatar,
     );
 
     // Reply metadata — mirror the reload batch so a LIVE-received reply shows the
@@ -55,16 +60,25 @@ pub(super) fn handle_message_received(
     }
     display_data.decode_attachment_thumbnails();
 
-    let current_user_id = ui_ctx.auth_state().get().current_user_id
+    let current_user_id = ui_ctx
+        .auth_state()
+        .get()
+        .current_user_id
         .map(|id| id.to_string())
-        .unwrap_or_else(|| ui_ctx.session_current_user_id().map(|id| id.to_string()).unwrap_or_default());
+        .unwrap_or_else(|| {
+            ui_ctx
+                .session_current_user_id()
+                .map(|id| id.to_string())
+                .unwrap_or_default()
+        });
 
     // Build sidebar preview + time via the shared core helpers, from the
     // conversation's NEWEST message rather than this one: a late-delivered
     // older message (a resend, an offline backlog) flipped the row's preview
     // and time backwards until the next rebuild put them right again.
     let latest = ui_ctx.latest_message(&conversation_id, &conv_type);
-    let (preview, timestamp_str) = ui_ctx.sidebar_activity(Some(latest.as_ref().unwrap_or(&message)));
+    let (preview, timestamp_str) =
+        ui_ctx.sidebar_activity(Some(latest.as_ref().unwrap_or(&message)));
 
     // Core's one "is this message on screen" rule (mailbox DMs included).
     let is_active = ui_ctx.is_showing(&message);
@@ -85,13 +99,15 @@ pub(super) fn handle_message_received(
     }
 
     // Classify into the typed ActiveConversation via the core helper.
-    let sidebar_conversation = ui_ctx.classify_active_conversation(&conversation_id, &conv_type, sender_id);
+    let sidebar_conversation =
+        ui_ctx.classify_active_conversation(&conversation_id, &conv_type, sender_id);
     // Absolute badge values, read here on the runtime (after the mark-read
     // above), never counted up on the UI thread.
     let badges = ui_ctx.unread_badges(&sidebar_conversation);
 
     // Trigger attachment auto-download in background (fetchable = has CDN url + key).
-    let downloadable: Vec<_> = resolved_attachments.iter()
+    let downloadable: Vec<_> = resolved_attachments
+        .iter()
         .filter(|a| a.is_downloadable())
         .cloned()
         .collect();
@@ -106,7 +122,8 @@ pub(super) fn handle_message_received(
                 ui_ctx_dl,
                 weak_dl,
                 conv_id,
-            ).await;
+            )
+            .await;
         });
     }
 
@@ -136,10 +153,18 @@ pub(super) fn handle_message_received(
         // channel the indicator outlived the message it announced.
         let typing_text = ui_ctx_ui.typing_indicator_text(conversation_id);
         if typing_text.is_empty() {
-            super::super::typing::clear_typing_for_peer(&w, &conversation_id.to_string(), is_active);
+            super::super::typing::clear_typing_for_peer(
+                &w,
+                &conversation_id.to_string(),
+                is_active,
+            );
         } else {
             super::super::typing::set_typing_with_timer(
-                &w, &conversation_id.to_string(), ui_ctx_ui.chat_state(), conversation_id, &typing_text,
+                &w,
+                &conversation_id.to_string(),
+                ui_ctx_ui.chat_state(),
+                conversation_id,
+                &typing_text,
             );
         }
 
@@ -147,11 +172,19 @@ pub(super) fn handle_message_received(
             if is_active {
                 let reply = display_data.to_slint_with_user(&current_user_id);
                 crate::bin_ui::features::thread::apply_live_thread_reply(
-                    &w, &root_id, reply, panel_shows_this_thread,
+                    &w,
+                    &root_id,
+                    reply,
+                    panel_shows_this_thread,
                 );
             }
             crate::bin_ui::features::sidebar::apply_received_to_sidebar(
-                &w, &ui_ctx_ui, sidebar_conversation, &preview, &timestamp_str, badges,
+                &w,
+                &ui_ctx_ui,
+                sidebar_conversation,
+                &preview,
+                &timestamp_str,
+                badges,
             );
             return;
         }
@@ -161,7 +194,7 @@ pub(super) fn handle_message_received(
 
             // Build Slint message item
             let mut new_msg = display_data.to_slint_with_user(&current_user_id);
-            
+
             // Only non-anon messages get auto-delivered status (anon has its own delivery logic)
             if !conv_type.is_anon() {
                 new_msg.delivery_status = "delivered".into();
@@ -174,22 +207,37 @@ pub(super) fn handle_message_received(
             let new_ts = new_msg.timestamp_ns.to_string().parse::<u64>().unwrap_or(0);
             let new_sender = new_msg.sender_id.to_string();
 
-            let keys: Vec<(u64, String)> = current_model.iter()
-                .map(|m| (m.timestamp_ns.to_string().parse::<u64>().unwrap_or(0), m.sender_id.to_string()))
+            let keys: Vec<(u64, String)> = current_model
+                .iter()
+                .map(|m| {
+                    (
+                        m.timestamp_ns.to_string().parse::<u64>().unwrap_or(0),
+                        m.sender_id.to_string(),
+                    )
+                })
                 .collect();
             let key_refs: Vec<(u64, &str)> = keys.iter().map(|(t, s)| (*t, s.as_str())).collect();
 
-            match chatter_core::domain::message::ordered_insert_position(&key_refs, new_ts, &new_sender) {
+            match chatter_core::domain::message::ordered_insert_position(
+                &key_refs,
+                new_ts,
+                &new_sender,
+            ) {
                 chatter_core::domain::message::InsertPosition::Duplicate => {
-                    tracing::info!(existing = current_model.row_count(), "[UI_RECV] duplicate, skipped");
+                    tracing::info!(
+                        existing = current_model.row_count(),
+                        "[UI_RECV] duplicate, skipped"
+                    );
                 }
                 chatter_core::domain::message::InsertPosition::At(insert_pos) => {
-                    if let Some(vec_model) = current_model.as_any().downcast_ref::<VecModel<MessageItemData>>() {
+                    if let Some(vec_model) = current_model
+                        .as_any()
+                        .downcast_ref::<VecModel<MessageItemData>>()
+                    {
                         vec_model.insert(insert_pos, new_msg);
                         tracing::info!(insert_pos, "[UI_RECV] inserted via VecModel.insert");
                     } else {
-                        let mut messages: Vec<MessageItemData> = current_model.iter()
-                            .collect();
+                        let mut messages: Vec<MessageItemData> = current_model.iter().collect();
                         messages.insert(insert_pos, new_msg);
                         w.set_messages(ModelRc::new(VecModel::from(messages)));
                         tracing::warn!(insert_pos, "[UI_RECV] downcast failed; replaced model");
@@ -209,9 +257,13 @@ pub(super) fn handle_message_received(
 
         // Always update sidebar preview
         crate::bin_ui::features::sidebar::apply_received_to_sidebar(
-            &w, &ui_ctx_ui, sidebar_conversation, &preview, &timestamp_str, badges,
+            &w,
+            &ui_ctx_ui,
+            sidebar_conversation,
+            &preview,
+            &timestamp_str,
+            badges,
         );
-
     });
 }
 
@@ -240,11 +292,27 @@ pub(super) fn handle_dm_bootstrap_completed(
 /// the open message list. Core has already stored the same status.
 pub(crate) fn set_own_status_at(w: &MainWindow, timestamps: &[u64], status: &str) {
     let messages = w.get_messages();
-    let Some(model) = messages.as_any().downcast_ref::<VecModel<MessageItemData>>() else { return };
+    let Some(model) = messages
+        .as_any()
+        .downcast_ref::<VecModel<MessageItemData>>()
+    else {
+        return;
+    };
     for i in 0..model.row_count() {
-        let Some(mut msg) = model.row_data(i) else { continue };
-        if msg.is_own && msg.timestamp_ns.parse::<u64>().is_ok_and(|ts| timestamps.contains(&ts)) {
-            msg.delivery_status = chatter_core::services::message::advance_delivery_status(msg.delivery_status.as_str(), status).into();
+        let Some(mut msg) = model.row_data(i) else {
+            continue;
+        };
+        if msg.is_own
+            && msg
+                .timestamp_ns
+                .parse::<u64>()
+                .is_ok_and(|ts| timestamps.contains(&ts))
+        {
+            msg.delivery_status = chatter_core::services::message::advance_delivery_status(
+                msg.delivery_status.as_str(),
+                status,
+            )
+            .into();
             model.set_row_data(i, msg);
         }
     }
@@ -263,14 +331,27 @@ pub(super) fn handle_delivery_status_update(
         let Some(w) = weak.upgrade() else { return };
 
         let messages = w.get_messages();
-        let timestamp_strs: Vec<String> = message_timestamps.iter().map(|ts| ts.to_string()).collect();
+        let timestamp_strs: Vec<String> =
+            message_timestamps.iter().map(|ts| ts.to_string()).collect();
 
         for i in 0..messages.row_count() {
             if let Some(msg) = messages.row_data(i) {
-                if msg.is_own && timestamp_strs.iter().any(|ts| msg.timestamp_ns.as_str() == ts.as_str()) {
+                if msg.is_own
+                    && timestamp_strs
+                        .iter()
+                        .any(|ts| msg.timestamp_ns.as_str() == ts.as_str())
+                {
                     let mut updated = msg.clone();
-                    updated.delivery_status = chatter_core::services::message::advance_delivery_status(msg.delivery_status.as_str(), new_status).into();
-                    if let Some(model) = messages.as_any().downcast_ref::<VecModel<MessageItemData>>() {
+                    updated.delivery_status =
+                        chatter_core::services::message::advance_delivery_status(
+                            msg.delivery_status.as_str(),
+                            new_status,
+                        )
+                        .into();
+                    if let Some(model) = messages
+                        .as_any()
+                        .downcast_ref::<VecModel<MessageItemData>>()
+                    {
                         model.set_row_data(i, updated);
                     }
                 }
@@ -298,7 +379,11 @@ pub(super) fn handle_reaction_update(
     let _ = slint::invoke_from_event_loop(move || {
         let Some(w) = weak.upgrade() else { return };
         crate::bin_ui::features::chat::update_reaction_in_ui(
-            &w, &sender_id, &sent_at_ns_str, &emoji, remove,
+            &w,
+            &sender_id,
+            &sent_at_ns_str,
+            &emoji,
+            remove,
         );
     });
 }
@@ -327,7 +412,11 @@ pub(super) fn refresh_sidebar_for_reaction(
         let preview = format!("Reacted {}", emoji);
         let now = ui_ctx_for_sidebar.sidebar_time(chrono::Utc::now());
         crate::bin_ui::features::sidebar::update_sidebar_preview(
-            &w, &ui_ctx_for_sidebar, conversation, &preview, &now,
+            &w,
+            &ui_ctx_for_sidebar,
+            conversation,
+            &preview,
+            &now,
         );
     });
 }
@@ -357,14 +446,23 @@ pub(super) fn handle_message_edit(
     let new_text = new_text.to_string();
 
     crate::run_ui!(window, |w| {
-        crate::bin_ui::features::thread::apply_thread_edit(&w, &message_id, &author, target_sent_timestamp, &new_text);
+        crate::bin_ui::features::thread::apply_thread_edit(
+            &w,
+            &message_id,
+            &author,
+            target_sent_timestamp,
+            &new_text,
+        );
         let messages = w.get_messages();
         for i in 0..messages.row_count() {
             if let Some(msg) = messages.row_data(i) {
                 if msg.sender_id.as_str() == author && msg.timestamp_ns.as_str() == ts_str {
                     let mut updated = msg.clone();
                     crate::bin_ui::converters::apply_edit(&mut updated, &new_text);
-                    if let Some(model) = messages.as_any().downcast_ref::<VecModel<MessageItemData>>() {
+                    if let Some(model) = messages
+                        .as_any()
+                        .downcast_ref::<VecModel<MessageItemData>>()
+                    {
                         model.set_row_data(i, updated);
                     }
                     return;
@@ -461,7 +559,10 @@ pub(super) fn update_active_channel_member_count(
         channel_id,
     );
 
-    let is_active = ui_ctx.chat_state().get().active_channel_id
+    let is_active = ui_ctx
+        .chat_state()
+        .get()
+        .active_channel_id
         .map(|id| id == channel_id)
         .unwrap_or(false);
 
@@ -481,22 +582,43 @@ pub(super) fn update_active_channel_member_count(
 
 /// Render only the persisted aggregate, keyed by message ID (not timestamp).
 pub(super) fn handle_persisted_delivery_status(
-    window: &Weak<MainWindow>, client: &Arc<ChatterClient>, message_id: String, status: String,
+    window: &Weak<MainWindow>,
+    client: &Arc<ChatterClient>,
+    message_id: String,
+    status: String,
 ) {
-    let details = message_id.parse().ok().and_then(|id| client.message_receipt_info(id).ok());
+    let details = message_id
+        .parse()
+        .ok()
+        .and_then(|id| client.message_receipt_info(id).ok());
     let weak = window.clone();
     let _ = slint::invoke_from_event_loop(move || {
         let Some(w) = weak.upgrade() else { return };
         let info = w.global::<crate::MessageInfo>();
-        if w.get_active_modal().as_str() == "message-info" && info.get_message_id().as_str() == message_id {
-            if let Some(details) = details { info.set_details(details.into()); }
+        if w.get_active_modal().as_str() == "message-info"
+            && info.get_message_id().as_str() == message_id
+        {
+            if let Some(details) = details {
+                info.set_details(details.into());
+            }
         }
         let messages = w.get_messages();
-        let Some(model) = messages.as_any().downcast_ref::<VecModel<MessageItemData>>() else { return };
+        let Some(model) = messages
+            .as_any()
+            .downcast_ref::<VecModel<MessageItemData>>()
+        else {
+            return;
+        };
         for i in 0..model.row_count() {
-            let Some(mut message) = model.row_data(i) else { continue };
+            let Some(mut message) = model.row_data(i) else {
+                continue;
+            };
             if message.message_id.as_str() == message_id {
-                message.delivery_status = chatter_core::services::message::advance_delivery_status(message.delivery_status.as_str(), &status).into();
+                message.delivery_status = chatter_core::services::message::advance_delivery_status(
+                    message.delivery_status.as_str(),
+                    &status,
+                )
+                .into();
                 model.set_row_data(i, message);
             }
         }

@@ -3,23 +3,20 @@
 //! Encapsulates all non-Send/Sync libsignal operations into a single-threaded
 //! actor, providing an async handle for the rest of the application.
 
+use libsignal_protocol::{
+    CiphertextMessageType, DeviceId, PreKeyBundle, ProtocolAddress, PublicKey, SenderCertificate,
+    SessionRecord,
+};
+use rand::TryRngCore;
 use std::sync::Arc;
 use tokio::sync::{mpsc, oneshot};
-use libsignal_protocol::{
-    ProtocolAddress, DeviceId,
-    PublicKey, PreKeyBundle,
-    CiphertextMessageType,
-    SenderCertificate, SessionRecord,
-};
 use uuid::Uuid;
-use rand::TryRngCore;
 
-use crate::domain::ids::{ChannelId, UserId};
-use crate::error::{ServiceError, CryptoError};
 use crate::crypto::{
-    SignalStore, SessionManager, SealedSenderManager,
-    signal::sender_key::SenderKeyManager,
+    SealedSenderManager, SessionManager, SignalStore, signal::sender_key::SenderKeyManager,
 };
+use crate::domain::ids::{ChannelId, UserId};
+use crate::error::{CryptoError, ServiceError};
 use crate::storage::KeyStore;
 use crate::storage::repositories::settings_repo::SettingsRepository;
 
@@ -45,11 +42,17 @@ fn map_identified_decrypt_err(
 
 /// Commands sent to the Signal Actor.
 pub enum SignalCommand {
-    GetIdentityFingerprint { response: oneshot::Sender<Result<String, ServiceError>> },
-    GetIdentityPublicKey { response: oneshot::Sender<Result<[u8; 33], ServiceError>> },
+    GetIdentityFingerprint {
+        response: oneshot::Sender<Result<String, ServiceError>>,
+    },
+    GetIdentityPublicKey {
+        response: oneshot::Sender<Result<[u8; 33], ServiceError>>,
+    },
     /// Get the identity private key (32 bytes X25519 scalar) for the key
     /// backups. HPKE opens use `OpenIdentityHpke` instead.
-    GetIdentityPrivateKey { response: oneshot::Sender<Result<[u8; 32], ServiceError>> },
+    GetIdentityPrivateKey {
+        response: oneshot::Sender<Result<[u8; 32], ServiceError>>,
+    },
     /// Open an HPKE message sealed to our identity key (`crypto::ecies`)
     /// here, so the identity secret never leaves the actor for it.
     OpenIdentityHpke {
@@ -65,16 +68,29 @@ pub enum SignalCommand {
         actions: crate::proto::chat_v1::channel_change::Actions,
         response: oneshot::Sender<Result<(Vec<u8>, Vec<u8>), ServiceError>>,
     },
-    RefreshPrekeys { count: u32, response: oneshot::Sender<Result<Vec<crate::proto::chat_v1::signal_pre_key_bundle::PreKeyRecord>, ServiceError>> },
+    RefreshPrekeys {
+        count: u32,
+        response: oneshot::Sender<
+            Result<Vec<crate::proto::chat_v1::signal_pre_key_bundle::PreKeyRecord>, ServiceError>,
+        >,
+    },
     /// Generate `count` one-time Kyber prekeys (PQOPK) signed by the IK and
     /// return their proto-encoded form for upload via RefreshPreKeys. PQOPKs
     /// are spec-mandated alongside classical OPKs (PQXDH §3.2) and consumed
     /// 1:1 with them, so the client refills both in lockstep.
-    RefreshKyberPrekeys { count: u32, response: oneshot::Sender<Result<Vec<crate::proto::chat_v1::signal_pre_key_bundle::KyberPreKeyRecord>, ServiceError>> },
-    EstablishSession { 
-        address: ProtocolAddress, 
-        bundle: PreKeyBundle, 
-        response: oneshot::Sender<Result<(), ServiceError>> 
+    RefreshKyberPrekeys {
+        count: u32,
+        response: oneshot::Sender<
+            Result<
+                Vec<crate::proto::chat_v1::signal_pre_key_bundle::KyberPreKeyRecord>,
+                ServiceError,
+            >,
+        >,
+    },
+    EstablishSession {
+        address: ProtocolAddress,
+        bundle: PreKeyBundle,
+        response: oneshot::Sender<Result<(), ServiceError>>,
     },
     EncryptSealed {
         plaintext: Vec<u8>,
@@ -110,10 +126,29 @@ pub enum SignalCommand {
         sender_address: ProtocolAddress,
         response: oneshot::Sender<Result<Vec<u8>, ServiceError>>,
     },
-    CreateSenderKey { channel_id: ChannelId, our_address: ProtocolAddress, response: oneshot::Sender<Result<Vec<u8>, ServiceError>> },
-    ProcessSenderKey { channel_id: ChannelId, sender_address: ProtocolAddress, skdm_bytes: Vec<u8>, response: oneshot::Sender<Result<(), ServiceError>> },
-    EncryptForGroup { channel_id: ChannelId, our_address: ProtocolAddress, plaintext: Vec<u8>, response: oneshot::Sender<Result<Vec<u8>, ServiceError>> },
-    DecryptFromGroup { channel_id: ChannelId, sender_address: ProtocolAddress, ciphertext: Vec<u8>, response: oneshot::Sender<Result<Vec<u8>, ServiceError>> },
+    CreateSenderKey {
+        channel_id: ChannelId,
+        our_address: ProtocolAddress,
+        response: oneshot::Sender<Result<Vec<u8>, ServiceError>>,
+    },
+    ProcessSenderKey {
+        channel_id: ChannelId,
+        sender_address: ProtocolAddress,
+        skdm_bytes: Vec<u8>,
+        response: oneshot::Sender<Result<(), ServiceError>>,
+    },
+    EncryptForGroup {
+        channel_id: ChannelId,
+        our_address: ProtocolAddress,
+        plaintext: Vec<u8>,
+        response: oneshot::Sender<Result<Vec<u8>, ServiceError>>,
+    },
+    DecryptFromGroup {
+        channel_id: ChannelId,
+        sender_address: ProtocolAddress,
+        ciphertext: Vec<u8>,
+        response: oneshot::Sender<Result<Vec<u8>, ServiceError>>,
+    },
     /// Derive an ephemeral call key with identity binding (for DM calls with PFS).
     ///
     /// Completes ephemeral call key exchange: ECDH + identity lookup + HKDF.
@@ -126,13 +161,23 @@ pub enum SignalCommand {
         we_are_caller: bool,
         response: oneshot::Sender<Result<[u8; 32], ServiceError>>,
     },
-    HasSenderKey { channel_id: ChannelId, our_address: ProtocolAddress, response: oneshot::Sender<Result<bool, ServiceError>> },
-    HasSession { address: ProtocolAddress, response: oneshot::Sender<Result<bool, ServiceError>> },
+    HasSenderKey {
+        channel_id: ChannelId,
+        our_address: ProtocolAddress,
+        response: oneshot::Sender<Result<bool, ServiceError>>,
+    },
+    HasSession {
+        address: ProtocolAddress,
+        response: oneshot::Sender<Result<bool, ServiceError>>,
+    },
     /// Delete every Signal session row whose address matches `{peer_user_id}:*`.
     /// Used by the PEER_DEVICES_CHANGED handler so a peer's device change
     /// forces fresh prekey fetch + session rebuild on the next send to them.
     /// Returns the number of session rows deleted.
-    InvalidatePeerSessions { peer_user_id: String, response: oneshot::Sender<Result<u32, ServiceError>> },
+    InvalidatePeerSessions {
+        peer_user_id: String,
+        response: oneshot::Sender<Result<u32, ServiceError>>,
+    },
     /// Archive (not delete) the session for `(peer_user_id, device_id)` in
     /// response to a peer's DecryptionErrorMessage, so the next send
     /// re-establishes via a fresh PreKeySignalMessage while in-flight
@@ -159,8 +204,14 @@ pub enum SignalCommand {
         recipient_address: ProtocolAddress,
         response: oneshot::Sender<Result<Vec<u8>, ServiceError>>,
     },
-    ClearChannelSenderKeys { channel_id: ChannelId, response: oneshot::Sender<Result<(), ServiceError>> },
-    MarkChannelForRotation { channel_id: ChannelId, response: oneshot::Sender<Result<(), ServiceError>> },
+    ClearChannelSenderKeys {
+        channel_id: ChannelId,
+        response: oneshot::Sender<Result<(), ServiceError>>,
+    },
+    MarkChannelForRotation {
+        channel_id: ChannelId,
+        response: oneshot::Sender<Result<(), ServiceError>>,
+    },
     /// Generate a Signal safety number for a peer (60-digit fingerprint).
     GenerateSafetyNumber {
         local_user_id: String,
@@ -176,10 +227,15 @@ pub enum SignalCommand {
     /// Rotate signed prekey + Kyber prekey (PQXDH pairing).
     /// Returns (signed_prekey_proto, kyber_prekey_proto) for upload.
     RotateSignedPreKey {
-        response: oneshot::Sender<Result<(
-            crate::proto::chat_v1::signal_pre_key_bundle::SignedPreKeyRecord,
-            crate::proto::chat_v1::signal_pre_key_bundle::KyberPreKeyRecord,
-        ), ServiceError>>,
+        response: oneshot::Sender<
+            Result<
+                (
+                    crate::proto::chat_v1::signal_pre_key_bundle::SignedPreKeyRecord,
+                    crate::proto::chat_v1::signal_pre_key_bundle::KyberPreKeyRecord,
+                ),
+                ServiceError,
+            >,
+        >,
     },
 }
 
@@ -190,9 +246,7 @@ pub enum SignalCommand {
 /// caller has to say which identity of ours is involved. Guessing is not an
 /// option here — a wrong local address silently addresses a different session —
 /// so this fails loudly when the device is not logged in.
-fn local_protocol_address(
-    settings: &SettingsRepository,
-) -> Result<ProtocolAddress, ServiceError> {
+fn local_protocol_address(settings: &SettingsRepository) -> Result<ProtocolAddress, ServiceError> {
     let uuid = settings
         .get_string(crate::storage::settings_keys::CURRENT_USER_ID)
         .map_err(ServiceError::Storage)?
@@ -208,9 +262,7 @@ fn local_protocol_address(
     let device_id: u32 = settings
         .get(crate::storage::settings_keys::CURRENT_DEVICE_ID)
         .map_err(ServiceError::Storage)?
-        .ok_or_else(|| {
-            ServiceError::Crypto(CryptoError::Protocol("no local device id".into()))
-        })?;
+        .ok_or_else(|| ServiceError::Crypto(CryptoError::Protocol("no local device id".into())))?;
     let device_id = u8::try_from(device_id).map_err(|_| {
         ServiceError::Crypto(CryptoError::Protocol(format!(
             "local device id {device_id} does not fit libsignal's u8 DeviceId"
@@ -232,7 +284,10 @@ impl SignalActorHandle {
     pub fn spawn(key_store: Arc<KeyStore>, settings_repo: Arc<SettingsRepository>) -> Self {
         let (sender, mut receiver) = mpsc::channel(100);
         std::thread::spawn(move || {
-            let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .unwrap();
             let mut store = SignalStore::new(key_store);
             runtime.block_on(async {
                 while let Some(cmd) = receiver.recv().await {
@@ -427,7 +482,7 @@ impl SignalActorHandle {
                             let mut store3 = store.clone();
                             let mut store4 = store.clone();
                             let store6 = store.clone();
-                            
+
                             let res = if let Ok(prekey_msg) = libsignal_protocol::PreKeySignalMessage::try_from(ciphertext.as_slice()) {
                                 let new_key = prekey_msg.identity_key().serialize().to_vec();
                                 libsignal_protocol::message_decrypt_prekey(&prekey_msg, &sender_address, &local_address, &mut store, &mut store2, &mut store3, &store6, &mut store4, &mut rng).await
@@ -786,24 +841,34 @@ impl SignalActorHandle {
         Self { sender }
     }
 
-    async fn send<T>(&self, cmd_fn: impl FnOnce(oneshot::Sender<T>) -> SignalCommand) -> Result<T, ServiceError> {
+    async fn send<T>(
+        &self,
+        cmd_fn: impl FnOnce(oneshot::Sender<T>) -> SignalCommand,
+    ) -> Result<T, ServiceError> {
         let (tx, rx) = oneshot::channel();
-        self.sender.send(cmd_fn(tx)).await.map_err(|_| ServiceError::Internal("Actor dropped".into()))?;
-        rx.await.map_err(|_| ServiceError::Internal("Response dropped".into()))
+        self.sender
+            .send(cmd_fn(tx))
+            .await
+            .map_err(|_| ServiceError::Internal("Actor dropped".into()))?;
+        rx.await
+            .map_err(|_| ServiceError::Internal("Response dropped".into()))
     }
 
     pub async fn get_identity_fingerprint(&self) -> Result<String, ServiceError> {
-        self.send(|tx| SignalCommand::GetIdentityFingerprint { response: tx }).await?
+        self.send(|tx| SignalCommand::GetIdentityFingerprint { response: tx })
+            .await?
     }
 
     pub async fn get_identity_public_key(&self) -> Result<[u8; 33], ServiceError> {
-        self.send(|tx| SignalCommand::GetIdentityPublicKey { response: tx }).await?
+        self.send(|tx| SignalCommand::GetIdentityPublicKey { response: tx })
+            .await?
     }
 
     /// Get the identity private key (32 bytes X25519 scalar) for the key
     /// backups. HPKE opens use [`Self::open_identity_hpke`] instead.
     pub async fn get_identity_private_key(&self) -> Result<[u8; 32], ServiceError> {
-        self.send(|tx| SignalCommand::GetIdentityPrivateKey { response: tx }).await?
+        self.send(|tx| SignalCommand::GetIdentityPrivateKey { response: tx })
+            .await?
     }
 
     /// Sign a channel membership change with the identity key, inside the
@@ -812,7 +877,11 @@ impl SignalActorHandle {
         &self,
         actions: crate::proto::chat_v1::channel_change::Actions,
     ) -> Result<(Vec<u8>, Vec<u8>), ServiceError> {
-        self.send(|tx| SignalCommand::SignChannelChange { actions, response: tx }).await?
+        self.send(|tx| SignalCommand::SignChannelChange {
+            actions,
+            response: tx,
+        })
+        .await?
     }
 
     /// Open an HPKE message sealed to our identity key, inside the actor.
@@ -821,52 +890,167 @@ impl SignalActorHandle {
         purpose: crate::crypto::ecies::IdentityHpkeUse,
         ciphertext: Vec<u8>,
     ) -> Result<Vec<u8>, ServiceError> {
-        self.send(|tx| SignalCommand::OpenIdentityHpke { purpose, ciphertext, response: tx }).await?
+        self.send(|tx| SignalCommand::OpenIdentityHpke {
+            purpose,
+            ciphertext,
+            response: tx,
+        })
+        .await?
     }
 
-    pub async fn refresh_prekeys(&self, count: u32) -> Result<Vec<crate::proto::chat_v1::signal_pre_key_bundle::PreKeyRecord>, ServiceError> {
-        self.send(|tx| SignalCommand::RefreshPrekeys { count, response: tx }).await?
+    pub async fn refresh_prekeys(
+        &self,
+        count: u32,
+    ) -> Result<Vec<crate::proto::chat_v1::signal_pre_key_bundle::PreKeyRecord>, ServiceError> {
+        self.send(|tx| SignalCommand::RefreshPrekeys {
+            count,
+            response: tx,
+        })
+        .await?
     }
 
     /// Generate a batch of one-time Kyber prekeys (PQOPK) for upload.
-    pub async fn refresh_kyber_prekeys(&self, count: u32) -> Result<Vec<crate::proto::chat_v1::signal_pre_key_bundle::KyberPreKeyRecord>, ServiceError> {
-        self.send(|tx| SignalCommand::RefreshKyberPrekeys { count, response: tx }).await?
+    pub async fn refresh_kyber_prekeys(
+        &self,
+        count: u32,
+    ) -> Result<Vec<crate::proto::chat_v1::signal_pre_key_bundle::KyberPreKeyRecord>, ServiceError>
+    {
+        self.send(|tx| SignalCommand::RefreshKyberPrekeys {
+            count,
+            response: tx,
+        })
+        .await?
     }
 
-    pub async fn establish_session(&self, address: ProtocolAddress, bundle: libsignal_protocol::PreKeyBundle) -> Result<(), ServiceError> {
-        self.send(|tx| SignalCommand::EstablishSession { address, bundle, response: tx }).await?
+    pub async fn establish_session(
+        &self,
+        address: ProtocolAddress,
+        bundle: libsignal_protocol::PreKeyBundle,
+    ) -> Result<(), ServiceError> {
+        self.send(|tx| SignalCommand::EstablishSession {
+            address,
+            bundle,
+            response: tx,
+        })
+        .await?
     }
 
-    pub async fn encrypt_sealed(&self, plaintext: Vec<u8>, sender_cert: SenderCertificate, recipient_address: ProtocolAddress) -> Result<Vec<u8>, ServiceError> {
-        self.send(|tx| SignalCommand::EncryptSealed { plaintext, sender_cert, recipient_address, response: tx }).await?
+    pub async fn encrypt_sealed(
+        &self,
+        plaintext: Vec<u8>,
+        sender_cert: SenderCertificate,
+        recipient_address: ProtocolAddress,
+    ) -> Result<Vec<u8>, ServiceError> {
+        self.send(|tx| SignalCommand::EncryptSealed {
+            plaintext,
+            sender_cert,
+            recipient_address,
+            response: tx,
+        })
+        .await?
     }
 
-    pub async fn encrypt_identified(&self, plaintext: Vec<u8>, recipient_address: ProtocolAddress) -> Result<(Vec<u8>, u8), ServiceError> {
-        self.send(|tx| SignalCommand::EncryptIdentified { plaintext, recipient_address, response: tx }).await?
+    pub async fn encrypt_identified(
+        &self,
+        plaintext: Vec<u8>,
+        recipient_address: ProtocolAddress,
+    ) -> Result<(Vec<u8>, u8), ServiceError> {
+        self.send(|tx| SignalCommand::EncryptIdentified {
+            plaintext,
+            recipient_address,
+            response: tx,
+        })
+        .await?
     }
 
-    pub async fn decrypt_sealed(&self, ciphertext: Vec<u8>, trust_root: libsignal_protocol::PublicKey, validation_time: libsignal_protocol::Timestamp, local_uuid: String, local_device_id: DeviceId) -> Result<(ProtocolAddress, Vec<u8>, CiphertextMessageType), ServiceError> {
-        self.send(|tx| SignalCommand::DecryptSealed { ciphertext, trust_root, validation_time, local_uuid, local_device_id, response: tx }).await?
+    pub async fn decrypt_sealed(
+        &self,
+        ciphertext: Vec<u8>,
+        trust_root: libsignal_protocol::PublicKey,
+        validation_time: libsignal_protocol::Timestamp,
+        local_uuid: String,
+        local_device_id: DeviceId,
+    ) -> Result<(ProtocolAddress, Vec<u8>, CiphertextMessageType), ServiceError> {
+        self.send(|tx| SignalCommand::DecryptSealed {
+            ciphertext,
+            trust_root,
+            validation_time,
+            local_uuid,
+            local_device_id,
+            response: tx,
+        })
+        .await?
     }
 
-    pub async fn decrypt_identified(&self, ciphertext: Vec<u8>, sender_address: ProtocolAddress) -> Result<Vec<u8>, ServiceError> {
-        self.send(|tx| SignalCommand::DecryptIdentified { ciphertext, sender_address, response: tx }).await?
+    pub async fn decrypt_identified(
+        &self,
+        ciphertext: Vec<u8>,
+        sender_address: ProtocolAddress,
+    ) -> Result<Vec<u8>, ServiceError> {
+        self.send(|tx| SignalCommand::DecryptIdentified {
+            ciphertext,
+            sender_address,
+            response: tx,
+        })
+        .await?
     }
 
-    pub async fn create_sender_key(&self, channel_id: ChannelId, our_address: ProtocolAddress) -> Result<Vec<u8>, ServiceError> {
-        self.send(|tx| SignalCommand::CreateSenderKey { channel_id, our_address, response: tx }).await?
+    pub async fn create_sender_key(
+        &self,
+        channel_id: ChannelId,
+        our_address: ProtocolAddress,
+    ) -> Result<Vec<u8>, ServiceError> {
+        self.send(|tx| SignalCommand::CreateSenderKey {
+            channel_id,
+            our_address,
+            response: tx,
+        })
+        .await?
     }
 
-    pub async fn process_sender_key(&self, channel_id: ChannelId, sender_address: ProtocolAddress, skdm_bytes: Vec<u8>) -> Result<(), ServiceError> {
-        self.send(|tx| SignalCommand::ProcessSenderKey { channel_id, sender_address, skdm_bytes, response: tx }).await?
+    pub async fn process_sender_key(
+        &self,
+        channel_id: ChannelId,
+        sender_address: ProtocolAddress,
+        skdm_bytes: Vec<u8>,
+    ) -> Result<(), ServiceError> {
+        self.send(|tx| SignalCommand::ProcessSenderKey {
+            channel_id,
+            sender_address,
+            skdm_bytes,
+            response: tx,
+        })
+        .await?
     }
 
-    pub async fn encrypt_for_group(&self, channel_id: ChannelId, our_address: ProtocolAddress, plaintext: Vec<u8>) -> Result<Vec<u8>, ServiceError> {
-        self.send(|tx| SignalCommand::EncryptForGroup { channel_id, our_address, plaintext, response: tx }).await?
+    pub async fn encrypt_for_group(
+        &self,
+        channel_id: ChannelId,
+        our_address: ProtocolAddress,
+        plaintext: Vec<u8>,
+    ) -> Result<Vec<u8>, ServiceError> {
+        self.send(|tx| SignalCommand::EncryptForGroup {
+            channel_id,
+            our_address,
+            plaintext,
+            response: tx,
+        })
+        .await?
     }
 
-    pub async fn decrypt_from_group(&self, channel_id: ChannelId, sender_address: ProtocolAddress, ciphertext: Vec<u8>) -> Result<Vec<u8>, ServiceError> {
-        self.send(|tx| SignalCommand::DecryptFromGroup { channel_id, sender_address, ciphertext, response: tx }).await?
+    pub async fn decrypt_from_group(
+        &self,
+        channel_id: ChannelId,
+        sender_address: ProtocolAddress,
+        ciphertext: Vec<u8>,
+    ) -> Result<Vec<u8>, ServiceError> {
+        self.send(|tx| SignalCommand::DecryptFromGroup {
+            channel_id,
+            sender_address,
+            ciphertext,
+            response: tx,
+        })
+        .await?
     }
 
     /// Derive an ephemeral call key with identity binding (for DM calls with PFS).
@@ -891,31 +1075,66 @@ impl SignalActorHandle {
             call_id,
             we_are_caller,
             response: tx,
-        }).await?
+        })
+        .await?
     }
 
-    pub async fn has_sender_key(&self, channel_id: ChannelId, our_address: ProtocolAddress) -> Result<bool, ServiceError> {
-        self.send(|tx| SignalCommand::HasSenderKey { channel_id, our_address, response: tx }).await?
+    pub async fn has_sender_key(
+        &self,
+        channel_id: ChannelId,
+        our_address: ProtocolAddress,
+    ) -> Result<bool, ServiceError> {
+        self.send(|tx| SignalCommand::HasSenderKey {
+            channel_id,
+            our_address,
+            response: tx,
+        })
+        .await?
     }
 
-    pub async fn clear_channel_sender_keys(&self, channel_id: ChannelId) -> Result<(), ServiceError> {
-        self.send(|tx| SignalCommand::ClearChannelSenderKeys { channel_id, response: tx }).await?
+    pub async fn clear_channel_sender_keys(
+        &self,
+        channel_id: ChannelId,
+    ) -> Result<(), ServiceError> {
+        self.send(|tx| SignalCommand::ClearChannelSenderKeys {
+            channel_id,
+            response: tx,
+        })
+        .await?
     }
 
-    pub async fn mark_channel_for_rotation(&self, channel_id: ChannelId) -> Result<(), ServiceError> {
-        self.send(|tx| SignalCommand::MarkChannelForRotation { channel_id, response: tx }).await?
+    pub async fn mark_channel_for_rotation(
+        &self,
+        channel_id: ChannelId,
+    ) -> Result<(), ServiceError> {
+        self.send(|tx| SignalCommand::MarkChannelForRotation {
+            channel_id,
+            response: tx,
+        })
+        .await?
     }
 
     pub async fn has_session(&self, address: ProtocolAddress) -> Result<bool, ServiceError> {
-        self.send(|tx| SignalCommand::HasSession { address, response: tx }).await?
+        self.send(|tx| SignalCommand::HasSession {
+            address,
+            response: tx,
+        })
+        .await?
     }
 
     /// Delete every Signal session for `peer_user_id` across all devices.
     /// Returns the number of sessions dropped. Caller must separately mark
     /// affected group channels for sender-key rotation (see
     /// `mark_channel_for_rotation`) when the peer is a group member.
-    pub async fn invalidate_peer_sessions(&self, peer_user_id: String) -> Result<u32, ServiceError> {
-        self.send(|tx| SignalCommand::InvalidatePeerSessions { peer_user_id, response: tx }).await?
+    pub async fn invalidate_peer_sessions(
+        &self,
+        peer_user_id: String,
+    ) -> Result<u32, ServiceError> {
+        self.send(|tx| SignalCommand::InvalidatePeerSessions {
+            peer_user_id,
+            response: tx,
+        })
+        .await?
     }
 
     /// Archive the session for `(peer_user_id, device_id)` after receiving the
@@ -926,7 +1145,13 @@ impl SignalActorHandle {
         device_id: u32,
         dem_ratchet_key: Option<Vec<u8>>,
     ) -> Result<bool, ServiceError> {
-        self.send(|tx| SignalCommand::ArchiveSessionForResend { peer_user_id, device_id, dem_ratchet_key, response: tx }).await?
+        self.send(|tx| SignalCommand::ArchiveSessionForResend {
+            peer_user_id,
+            device_id,
+            dem_ratchet_key,
+            response: tx,
+        })
+        .await?
     }
 
     /// Seal a serialized DecryptionErrorMessage (as `PlaintextContent`) for a
@@ -937,25 +1162,55 @@ impl SignalActorHandle {
         sender_cert: SenderCertificate,
         recipient_address: ProtocolAddress,
     ) -> Result<Vec<u8>, ServiceError> {
-        self.send(|tx| SignalCommand::EncryptDecryptionErrorSealed { dem_serialized, sender_cert, recipient_address, response: tx }).await?
+        self.send(|tx| SignalCommand::EncryptDecryptionErrorSealed {
+            dem_serialized,
+            sender_cert,
+            recipient_address,
+            response: tx,
+        })
+        .await?
     }
 
     /// Rotate signed prekey + Kyber prekey (PQXDH pairing).
     /// Returns proto types ready for upload via RefreshPreKeysRequest.
-    pub async fn rotate_signed_prekey(&self) -> Result<(
-        crate::proto::chat_v1::signal_pre_key_bundle::SignedPreKeyRecord,
-        crate::proto::chat_v1::signal_pre_key_bundle::KyberPreKeyRecord,
-    ), ServiceError> {
-        self.send(|tx| SignalCommand::RotateSignedPreKey { response: tx }).await?
+    pub async fn rotate_signed_prekey(
+        &self,
+    ) -> Result<
+        (
+            crate::proto::chat_v1::signal_pre_key_bundle::SignedPreKeyRecord,
+            crate::proto::chat_v1::signal_pre_key_bundle::KyberPreKeyRecord,
+        ),
+        ServiceError,
+    > {
+        self.send(|tx| SignalCommand::RotateSignedPreKey { response: tx })
+            .await?
     }
 
     /// Generate a 60-digit safety number for verifying a peer's identity.
-    pub async fn generate_safety_number(&self, local_user_id: String, peer_user_id: String) -> Result<String, ServiceError> {
-        self.send(|tx| SignalCommand::GenerateSafetyNumber { local_user_id, peer_user_id, response: tx }).await?
+    pub async fn generate_safety_number(
+        &self,
+        local_user_id: String,
+        peer_user_id: String,
+    ) -> Result<String, ServiceError> {
+        self.send(|tx| SignalCommand::GenerateSafetyNumber {
+            local_user_id,
+            peer_user_id,
+            response: tx,
+        })
+        .await?
     }
 
     /// Generate scannable fingerprint bytes for QR code verification.
-    pub async fn generate_scannable_fingerprint(&self, local_user_id: String, peer_user_id: String) -> Result<Vec<u8>, ServiceError> {
-        self.send(|tx| SignalCommand::GenerateScannableFingerprint { local_user_id, peer_user_id, response: tx }).await?
+    pub async fn generate_scannable_fingerprint(
+        &self,
+        local_user_id: String,
+        peer_user_id: String,
+    ) -> Result<Vec<u8>, ServiceError> {
+        self.send(|tx| SignalCommand::GenerateScannableFingerprint {
+            local_user_id,
+            peer_user_id,
+            response: tx,
+        })
+        .await?
     }
 }

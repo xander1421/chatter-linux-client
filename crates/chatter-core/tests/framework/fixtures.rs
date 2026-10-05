@@ -26,9 +26,7 @@ pub struct TestChannel {
     pub created_at: i64,
 }
 
-impl TestChannel {
-
-}
+impl TestChannel {}
 
 /// Test message fixture.
 #[derive(Debug, Clone)]
@@ -99,7 +97,6 @@ impl TestAttachment {
             cdn_url: None,
         }
     }
-
 }
 
 /// Test Signal session fixture.
@@ -115,9 +112,7 @@ pub struct TestSession {
     pub established: bool,
 }
 
-impl TestSession {
-
-}
+impl TestSession {}
 
 /// Generate a unique channel name.
 pub fn unique_channel_name() -> String {

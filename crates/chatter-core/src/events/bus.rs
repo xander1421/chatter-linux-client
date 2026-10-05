@@ -232,7 +232,13 @@ mod tests {
 
         let channel_id = ChannelId::new();
         let user_id = UserId::new();
-        let message = Message::new_text(channel_id, ConversationType::Channel, Some(user_id), "Hello!".to_string(), 0);
+        let message = Message::new_text(
+            channel_id,
+            ConversationType::Channel,
+            Some(user_id),
+            "Hello!".to_string(),
+            0,
+        );
         let msg_id = message.id;
 
         bus.emit_domain(DomainEvent::MessageReceived {
@@ -298,7 +304,10 @@ mod tests {
                 assert_eq!(sid, sender_id);
                 assert_eq!(intro_message, "Hello!");
             }
-            _ => panic!("Wrong event type received: {:?}", std::mem::discriminant(&received_event)),
+            _ => panic!(
+                "Wrong event type received: {:?}",
+                std::mem::discriminant(&received_event)
+            ),
         }
     }
 
@@ -323,11 +332,13 @@ mod tests {
         let user_id = UserId::new();
 
         // Send from the sender
-        let receivers = tx.send(DomainEvent::TypingStarted {
-            user_id,
-            channel_id,
-            timestamp: 0,
-        }).expect("send should succeed");
+        let receivers = tx
+            .send(DomainEvent::TypingStarted {
+                user_id,
+                channel_id,
+                timestamp: 0,
+            })
+            .expect("send should succeed");
 
         assert_eq!(receivers, 1, "Should have one receiver");
 

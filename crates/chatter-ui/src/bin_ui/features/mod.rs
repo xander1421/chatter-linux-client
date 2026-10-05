@@ -17,9 +17,9 @@ pub mod back;
 #[cfg(feature = "call-ui")]
 pub mod calls;
 pub mod chat;
-pub mod connection;
 pub mod chat_actions;
 pub mod composer;
+pub mod connection;
 pub mod header;
 #[cfg(feature = "jarvis")]
 pub mod jarvis;
@@ -39,8 +39,8 @@ use std::sync::Arc;
 
 use slint::ComponentHandle;
 
-use chatter_core::client::ChatterClient;
 use crate::MainWindow;
+use chatter_core::client::ChatterClient;
 
 /// Wire all UI callbacks to their handlers.
 pub fn wire_all(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {

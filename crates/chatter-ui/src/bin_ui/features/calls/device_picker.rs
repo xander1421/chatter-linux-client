@@ -6,14 +6,14 @@ use std::sync::Arc;
 
 use slint::{ComponentHandle, ModelRc, VecModel};
 
-use chatter_core::client::ChatterClient;
+use crate::AudioDeviceData;
+use crate::MainWindow;
+#[cfg(not(target_os = "android"))]
+use crate::ScreenSourceData;
 use chatter_core::calls::AudioCapture;
 #[cfg(not(target_os = "android"))]
 use chatter_core::calls::{ScreenCapture, ScreenSourceType};
-use crate::AudioDeviceData;
-#[cfg(not(target_os = "android"))]
-use crate::ScreenSourceData;
-use crate::MainWindow;
+use chatter_core::client::ChatterClient;
 
 /// Wire device picker callbacks for audio device and screen source selection.
 pub fn wire_device_picker(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
@@ -85,7 +85,11 @@ pub fn wire_device_picker(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
         let ui_ctx = ui_ctx.clone();
         move || {
             #[cfg(target_os = "android")]
-            { let _ = (&weak, &ui_ctx); tracing::warn!("Screen source picker not available on Android"); return; }
+            {
+                let _ = (&weak, &ui_ctx);
+                tracing::warn!("Screen source picker not available on Android");
+                return;
+            }
             #[cfg(not(target_os = "android"))]
             {
                 let weak = weak.clone();
@@ -114,14 +118,18 @@ pub fn wire_device_picker(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                                     width: 0, // Not available from libwebrtc
                                     height: 0,
                                     is_monitor: s.source_type == ScreenSourceType::Monitor,
-                                    is_primary: idx == 0 && s.source_type == ScreenSourceType::Monitor,
+                                    is_primary: idx == 0
+                                        && s.source_type == ScreenSourceType::Monitor,
                                 })
                                 .collect();
 
                             w.set_screen_sources(ModelRc::new(VecModel::from(ui_sources)));
                             w.set_device_picker_type("screen".into());
                             w.set_device_picker_visible(true);
-                            tracing::info!("Showing screen source picker with {} sources", source_count);
+                            tracing::info!(
+                                "Showing screen source picker with {} sources",
+                                source_count
+                            );
                         }
                         Err(e) => {
                             tracing::error!("Failed to enumerate screen sources: {}", e);
@@ -174,7 +182,11 @@ pub fn wire_device_picker(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                     Err(e) => {
                         // Slint set the id optimistically; don't leave a tick
                         // on a device the audio isn't actually going to.
-                        tracing::error!("Failed to switch audio output to {}: {}", device_id_str, e);
+                        tracing::error!(
+                            "Failed to switch audio output to {}: {}",
+                            device_id_str,
+                            e
+                        );
                         w.set_selected_audio_output_id("".into());
                     }
                 }
@@ -189,7 +201,11 @@ pub fn wire_device_picker(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
         let weak = weak.clone();
         move |source_id| {
             #[cfg(target_os = "android")]
-            { let _ = (source_id, &ui_ctx, &weak); tracing::warn!("Screen source selection not available on Android"); return; }
+            {
+                let _ = (source_id, &ui_ctx, &weak);
+                tracing::warn!("Screen source selection not available on Android");
+                return;
+            }
             #[cfg(not(target_os = "android"))]
             {
                 let source_id_str = source_id.to_string();
@@ -209,18 +225,26 @@ pub fn wire_device_picker(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                 slint::spawn_local(async move {
                     match ScreenCapture::list_sources() {
                         Ok(sources) => {
-                            if let Some(source) = sources.into_iter().find(|s| s.id == source_id_u64) {
+                            if let Some(source) =
+                                sources.into_iter().find(|s| s.id == source_id_u64)
+                            {
                                 if let Err(e) = ui_ctx.call_publish_screen_share(source).await {
                                     tracing::error!("Failed to start screen share: {}", e);
                                 } else {
-                                    tracing::info!("Screen share started with source: {}", source_id_display);
+                                    tracing::info!(
+                                        "Screen share started with source: {}",
+                                        source_id_display
+                                    );
                                     if let Some(w) = weak.upgrade() {
                                         w.set_call_is_screen_sharing(true);
                                         w.set_selected_screen_source_id(source_id_display.into());
                                     }
                                 }
                             } else {
-                                tracing::error!("Selected screen source not found: {}", source_id_display);
+                                tracing::error!(
+                                    "Selected screen source not found: {}",
+                                    source_id_display
+                                );
                             }
                         }
                         Err(e) => {
@@ -233,4 +257,3 @@ pub fn wire_device_picker(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
         }
     });
 }
-

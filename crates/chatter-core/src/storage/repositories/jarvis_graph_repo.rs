@@ -9,8 +9,8 @@ use chrono::{DateTime, Utc};
 use rusqlite::params;
 
 use crate::domain::jarvis::{
-    EntityKnowledge, EntityType, JarvisEntity, JarvisEntityId,
-    JarvisEntityMention, JarvisRelationship, JarvisRelationshipId, SubjectType,
+    EntityKnowledge, EntityType, JarvisEntity, JarvisEntityId, JarvisEntityMention,
+    JarvisRelationship, JarvisRelationshipId, SubjectType,
 };
 use crate::error::StorageError;
 use crate::storage::Database;
@@ -33,9 +33,8 @@ impl JarvisGraphRepository {
     /// Get the total number of entities in the knowledge graph.
     pub fn count_entities(&self) -> Result<u32, StorageError> {
         let conn = self.db.read_connection()?;
-        let count: i64 = conn.query_row("SELECT COUNT(*) FROM jarvis_entities", [], |row| {
-            row.get(0)
-        })?;
+        let count: i64 =
+            conn.query_row("SELECT COUNT(*) FROM jarvis_entities", [], |row| row.get(0))?;
         Ok(count as u32)
     }
 
@@ -434,7 +433,10 @@ fn row_to_entity(row: &rusqlite::Row) -> Result<JarvisEntity, rusqlite::Error> {
     row_to_entity_offset(row, 0)
 }
 
-fn row_to_entity_offset(row: &rusqlite::Row, offset: usize) -> Result<JarvisEntity, rusqlite::Error> {
+fn row_to_entity_offset(
+    row: &rusqlite::Row,
+    offset: usize,
+) -> Result<JarvisEntity, rusqlite::Error> {
     let id: String = row.get(offset)?;
     let entity_type: i32 = row.get(offset + 1)?;
     let name: String = row.get(offset + 2)?;

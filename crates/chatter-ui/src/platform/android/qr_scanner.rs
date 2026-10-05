@@ -8,8 +8,8 @@
 
 use std::sync::Mutex;
 
-use jni::objects::{JObject, JString};
 use jni::JNIEnv;
+use jni::objects::{JObject, JString};
 use tokio::sync::oneshot;
 
 use super::{activity, permissions};

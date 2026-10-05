@@ -13,8 +13,8 @@ use crate::domain::message::{
 };
 use crate::domain::reaction::{Emoji, Reaction};
 use crate::error::StorageError;
-use crate::storage::serialization::{db_deserialize, db_serialize};
 use crate::storage::Database;
+use crate::storage::serialization::{db_deserialize, db_serialize};
 use chrono::{DateTime, Utc};
 use rusqlite::params;
 use std::collections::HashMap;
@@ -59,7 +59,10 @@ impl UnifiedMessageRepository {
     fn stored_is_read(&self, message: &Message) -> bool {
         use crate::services::current_user::CurrentUserProvider;
         message.is_read
-            || matches!(message.content, MessageContent::System(_) | MessageContent::Call(_))
+            || matches!(
+                message.content,
+                MessageContent::System(_) | MessageContent::Call(_)
+            )
             || message.sender_id.is_some_and(|sender| {
                 super::settings_repo::SettingsRepository::new(self.db.clone())
                     .current_user_id()
@@ -116,7 +119,10 @@ impl UnifiedMessageRepository {
 
     /// [`insert_or_ignore`](Self::insert_or_ignore), returning the message as
     /// stored when it was inserted (see [`insert_received`](Self::insert_received)).
-    pub fn insert_or_ignore_received(&self, message: &Message) -> Result<Option<Message>, StorageError> {
+    pub fn insert_or_ignore_received(
+        &self,
+        message: &Message,
+    ) -> Result<Option<Message>, StorageError> {
         if !self.store(message, true)? {
             return Ok(None);
         }
@@ -128,14 +134,20 @@ impl UnifiedMessageRepository {
         let is_read = self.stored_is_read(message);
         let conn = self.db.connection()?;
         let tx = conn.unchecked_transaction()?;
-        let (message, reactions) = match super::message_modifier_repo::take_on_arrival(&tx, message)? {
-            super::message_modifier_repo::Arrival::Store { message, reactions } => (message, reactions),
-            super::message_modifier_repo::Arrival::Deleted => {
-                tx.execute("INSERT OR IGNORE INTO deleted_messages (id) VALUES (?1)", params![message.id.to_string()])?;
-                tx.commit()?;
-                return Ok(false);
-            }
-        };
+        let (message, reactions) =
+            match super::message_modifier_repo::take_on_arrival(&tx, message)? {
+                super::message_modifier_repo::Arrival::Store { message, reactions } => {
+                    (message, reactions)
+                }
+                super::message_modifier_repo::Arrival::Deleted => {
+                    tx.execute(
+                        "INSERT OR IGNORE INTO deleted_messages (id) VALUES (?1)",
+                        params![message.id.to_string()],
+                    )?;
+                    tx.commit()?;
+                    return Ok(false);
+                }
+            };
         let message = &*message;
         let content_json = serde_json::to_string(&message.content)
             .map_err(|e| StorageError::InvalidData(format!("serialize content: {}", e)))?;
@@ -145,7 +157,8 @@ impl UnifiedMessageRepository {
         let mentioned_integrations_blob = db_serialize(&message.mentioned_integrations)?;
 
         let rows = tx.execute(
-            &format!("INSERT {} INTO messages (
+            &format!(
+                "INSERT {} INTO messages (
                 id, conversation_id, conversation_type, sender_id, device_id,
                 content_type, content_json, encrypted_content,
                 thread_id, reply_to, attachments_blob,
@@ -159,7 +172,9 @@ impl UnifiedMessageRepository {
                 ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10,
                 ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19,
                 ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29
-            )", if or_ignore { "OR IGNORE" } else { "" }),
+            )",
+                if or_ignore { "OR IGNORE" } else { "" }
+            ),
             params![
                 message.id.to_string(),
                 message.conversation_id.to_string(),
@@ -211,7 +226,9 @@ impl UnifiedMessageRepository {
         let (Some(author), false) = (message.sender_id, reactions.is_empty()) else {
             return Ok(());
         };
-        let Ok(me) = super::settings_repo::SettingsRepository::new(self.db.clone()).current_user_id() else {
+        let Ok(me) =
+            super::settings_repo::SettingsRepository::new(self.db.clone()).current_user_id()
+        else {
             return Ok(());
         };
         for r in reactions {
@@ -241,10 +258,7 @@ impl UnifiedMessageRepository {
     /// Get a message by ID.
     pub fn get(&self, id: &MessageId) -> Result<Option<Message>, StorageError> {
         let conn = self.db.read_connection()?;
-        let mut stmt = conn.prepare(&format!(
-            "SELECT {} FROM messages WHERE id = ?1",
-            MSG_COLS
-        ))?;
+        let mut stmt = conn.prepare(&format!("SELECT {} FROM messages WHERE id = ?1", MSG_COLS))?;
         match stmt.query_row(params![id.to_string()], row_to_message) {
             Ok(msg) => Ok(Some(msg?)),
             Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
@@ -279,7 +293,11 @@ impl UnifiedMessageRepository {
         Ok(token.and_then(|t| <[u8; 32]>::try_from(t.as_slice()).ok()))
     }
 
-    pub fn update_reply_parent(&self, id: &MessageId, parent: &MessageId) -> Result<(), StorageError> {
+    pub fn update_reply_parent(
+        &self,
+        id: &MessageId,
+        parent: &MessageId,
+    ) -> Result<(), StorageError> {
         self.db.connection()?.execute(
             "UPDATE messages SET reply_to = ?1 WHERE id = ?2",
             params![parent.to_string(), id.to_string()],
@@ -289,7 +307,10 @@ impl UnifiedMessageRepository {
 
     /// Resolve a stored quote reference, including a timestamp-derived reference
     /// written before its parent arrived. Scope the lookup to author and conversation.
-    pub fn resolve_reply_parent(&self, message: &Message) -> Result<Option<MessageId>, StorageError> {
+    pub fn resolve_reply_parent(
+        &self,
+        message: &Message,
+    ) -> Result<Option<MessageId>, StorageError> {
         let (Some(parent), Some(author)) = (message.reply_to, message.reply_to_author_id) else {
             return Ok(message.reply_to);
         };
@@ -297,7 +318,13 @@ impl UnifiedMessageRepository {
             return Ok(Some(parent));
         }
         let conn = self.db.read_connection()?;
-        resolve_timestamp_quote(&conn, &parent, &author, &message.conversation_id, &message.conversation_type)
+        resolve_timestamp_quote(
+            &conn,
+            &parent,
+            &author,
+            &message.conversation_id,
+            &message.conversation_type,
+        )
     }
 
     /// Get a message by (sender_id, sent_at) — Signal-style dedup key.
@@ -311,7 +338,10 @@ impl UnifiedMessageRepository {
             "SELECT {} FROM messages WHERE sender_id = ?1 AND sent_at = ?2",
             MSG_COLS
         ))?;
-        match stmt.query_row(params![sender_id.to_string(), sent_at as i64], row_to_message) {
+        match stmt.query_row(
+            params![sender_id.to_string(), sent_at as i64],
+            row_to_message,
+        ) {
             Ok(msg) => Ok(Some(msg?)),
             Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
             Err(e) => Err(StorageError::Database(e)),
@@ -510,8 +540,14 @@ impl UnifiedMessageRepository {
     /// ahead of the message itself must still win.
     pub fn delete(&self, id: &MessageId) -> Result<(), StorageError> {
         let conn = self.db.connection()?;
-        conn.execute("INSERT OR IGNORE INTO deleted_messages (id) VALUES (?1)", params![id.to_string()])?;
-        let rows = conn.execute("DELETE FROM messages WHERE id = ?1", params![id.to_string()])?;
+        conn.execute(
+            "INSERT OR IGNORE INTO deleted_messages (id) VALUES (?1)",
+            params![id.to_string()],
+        )?;
+        let rows = conn.execute(
+            "DELETE FROM messages WHERE id = ?1",
+            params![id.to_string()],
+        )?;
         if rows == 0 {
             return Err(StorageError::NotFound(format!("Message {}", id)));
         }
@@ -533,7 +569,10 @@ impl UnifiedMessageRepository {
         }
         let conn = self.db.connection()?;
         for id in ids {
-            conn.execute("INSERT OR IGNORE INTO deleted_messages (id) VALUES (?1)", params![id.to_string()])?;
+            conn.execute(
+                "INSERT OR IGNORE INTO deleted_messages (id) VALUES (?1)",
+                params![id.to_string()],
+            )?;
         }
         let placeholders: Vec<String> = (1..=ids.len()).map(|i| format!("?{}", i)).collect();
         let query = format!(
@@ -541,10 +580,7 @@ impl UnifiedMessageRepository {
             placeholders.join(", ")
         );
         let params_vec: Vec<String> = ids.iter().map(|id| id.to_string()).collect();
-        let rows = conn.execute(
-            &query,
-            rusqlite::params_from_iter(params_vec.iter()),
-        )?;
+        let rows = conn.execute(&query, rusqlite::params_from_iter(params_vec.iter()))?;
         Ok(rows)
     }
 
@@ -673,7 +709,9 @@ impl UnifiedMessageRepository {
         conversation_id: &ChannelId,
         conversation_type: &ConversationType,
     ) -> Result<UnreadAnchor, StorageError> {
-        Ok(self.mark_conversation_read_returning(conversation_id, conversation_type)?.0)
+        Ok(self
+            .mark_conversation_read_returning(conversation_id, conversation_type)?
+            .0)
     }
 
     /// [`Self::mark_conversation_read`], also returning the `(sender, sent_at)`
@@ -721,11 +759,15 @@ impl UnifiedMessageRepository {
                    AND is_read = 0 AND is_deleted = 0 \
                  ORDER BY sent_at",
             )?
-            .query_map(params![conversation_id.to_string(), conversation_type.as_str()], |row| {
-                row.get::<_, i64>(0).map(|v| v as u64)
-            })?
+            .query_map(
+                params![conversation_id.to_string(), conversation_type.as_str()],
+                |row| row.get::<_, i64>(0).map(|v| v as u64),
+            )?
             .collect::<Result<Vec<_>, _>>()?;
-        Ok(UnreadAnchor { unread_count: unread_sent_at.len() as u32, unread_sent_at })
+        Ok(UnreadAnchor {
+            unread_count: unread_sent_at.len() as u32,
+            unread_sent_at,
+        })
     }
 
     /// Get the count of unread messages in a conversation.
@@ -805,7 +847,12 @@ impl UnifiedMessageRepository {
         let deleted = conn.execute(
             "DELETE FROM unified_reactions
              WHERE sender_id = ?1 AND sent_at_ns = ?2 AND user_id = ?3 AND emoji = ?4",
-            params![sender_id.to_string(), sent_at_ns as i64, reactor_id.to_string(), emoji],
+            params![
+                sender_id.to_string(),
+                sent_at_ns as i64,
+                reactor_id.to_string(),
+                emoji
+            ],
         )?;
 
         if deleted == 0 {
@@ -901,7 +948,10 @@ impl UnifiedMessageRepository {
              GROUP BY r.sent_at_ns, r.emoji
              ORDER BY r.sent_at_ns, cnt DESC",
         )?;
-        let mut rows = stmt.query(params![conversation_id.to_string(), conversation_type.as_str()])?;
+        let mut rows = stmt.query(params![
+            conversation_id.to_string(),
+            conversation_type.as_str()
+        ])?;
         let mut map: std::collections::HashMap<u64, Vec<(String, u32)>> =
             std::collections::HashMap::new();
         while let Some(row) = rows.next()? {
@@ -1191,7 +1241,12 @@ impl UnifiedMessageRepository {
                  LIMIT ?4",
                 aliased,
             ))?;
-            let mut rows = stmt.query(params![channel_id.to_string(), conversation_type.as_str(), before_id.to_string(), limit])?;
+            let mut rows = stmt.query(params![
+                channel_id.to_string(),
+                conversation_type.as_str(),
+                before_id.to_string(),
+                limit
+            ])?;
             collect_messages(&mut rows)
         } else {
             let mut stmt = conn.prepare(&format!(
@@ -1202,7 +1257,11 @@ impl UnifiedMessageRepository {
                  LIMIT ?3",
                 MSG_COLS,
             ))?;
-            let mut rows = stmt.query(params![channel_id.to_string(), conversation_type.as_str(), limit])?;
+            let mut rows = stmt.query(params![
+                channel_id.to_string(),
+                conversation_type.as_str(),
+                limit
+            ])?;
             collect_messages(&mut rows)
         }
     }
@@ -1374,7 +1433,11 @@ impl UnifiedMessageRepository {
             MSG_COLS,
         ))?;
         match stmt.query_row(
-            params![channel_id.to_string(), sender_id.to_string(), timestamp_ns as i64],
+            params![
+                channel_id.to_string(),
+                sender_id.to_string(),
+                timestamp_ns as i64
+            ],
             row_to_message,
         ) {
             Ok(msg) => Ok(Some(msg?)),
@@ -1439,7 +1502,12 @@ impl UnifiedMessageRepository {
                  WHERE conversation_id = ?2 AND sender_id = ?3 AND sent_at = ?4
                    AND is_read = 0
                    AND conversation_type IN ('server_dm', 'channel')",
-                params![now, conversation_id.to_string(), sender_id.to_string(), *sent_at as i64],
+                params![
+                    now,
+                    conversation_id.to_string(),
+                    sender_id.to_string(),
+                    *sent_at as i64
+                ],
             )?;
             if rows > 0 && !changed.contains(conversation_id) {
                 changed.push(*conversation_id);
@@ -1487,6 +1555,8 @@ impl UnifiedMessageRepository {
     }
 
     /// Update delivery status by conversation + timestamps (batch).
+    /// Remote receipts are authoritative: delayed local completion/failure
+    /// cannot lower sent/delivered/read, and receipt updates remain monotonic.
     pub fn update_delivery_status_by_timestamps(
         &self,
         channel_id: &ChannelId,
@@ -1503,8 +1573,20 @@ impl UnifiedMessageRepository {
         for &ts in timestamps {
             let rows = conn.execute(
                 "UPDATE messages SET delivery_status = ?1, updated_at = ?2
-                 WHERE conversation_id = ?3 AND conversation_type = ?4 AND sent_at = ?5",
-                params![status, now, channel_id.to_string(), conversation_type.as_str(), ts as i64],
+                 WHERE conversation_id = ?3 AND conversation_type = ?4 AND sent_at = ?5
+                   AND CASE delivery_status
+                         WHEN 'read' THEN 4 WHEN 'delivered' THEN 3
+                         WHEN 'sent' THEN 2 ELSE 0 END
+                       <= CASE ?1
+                         WHEN 'read' THEN 4 WHEN 'delivered' THEN 3
+                         WHEN 'sent' THEN 2 ELSE 0 END",
+                params![
+                    status,
+                    now,
+                    channel_id.to_string(),
+                    conversation_type.as_str(),
+                    ts as i64
+                ],
             )?;
             total += rows;
         }
@@ -1629,7 +1711,11 @@ fn resolve_timestamp_quote(
     let mut stmt = conn.prepare(
         "SELECT id, sent_at FROM messages WHERE sender_id = ?1 AND conversation_id = ?2 AND conversation_type = ?3",
     )?;
-    let mut rows = stmt.query(params![author.to_string(), conversation.to_string(), kind.as_str()])?;
+    let mut rows = stmt.query(params![
+        author.to_string(),
+        conversation.to_string(),
+        kind.as_str()
+    ])?;
     while let Some(row) = rows.next()? {
         let sent_at = row.get::<_, i64>(1)? as u64;
         if MessageId::from_timestamp(sent_at) == *parent {
@@ -1641,8 +1727,7 @@ fn resolve_timestamp_quote(
 }
 
 /// SELECT column list for unified messages — must match `row_to_message` column indices.
-const MSG_COLS: &str =
-    "id, conversation_id, conversation_type, sender_id, device_id, \
+const MSG_COLS: &str = "id, conversation_id, conversation_type, sender_id, device_id, \
      content_json, encrypted_content, \
      thread_id, reply_to, attachments_blob, \
      is_pinned, is_edited, is_deleted, is_read, \
@@ -1702,7 +1787,7 @@ fn row_to_message(row: &rusqlite::Row<'_>) -> rusqlite::Result<Result<Message, S
             return Ok(Err(StorageError::InvalidData(format!(
                 "Invalid content JSON: {}",
                 e
-            ))))
+            ))));
         }
     };
 
@@ -1853,17 +1938,46 @@ mod tests {
         let parent = MessageId::new();
         let reference = MessageId::from_timestamp(123456789);
         let kind = ConversationType::Channel;
-        let resolve = || resolve_timestamp_quote(&conn, &reference, &author, &conversation, &kind).unwrap();
+        let resolve =
+            || resolve_timestamp_quote(&conn, &reference, &author, &conversation, &kind).unwrap();
         assert_eq!(resolve(), None);
         for (sender, channel) in [(other_author, conversation), (author, other_conversation)] {
-            conn.execute("INSERT INTO messages VALUES (?1, ?2, ?3, ?4, ?5)",
-                params![MessageId::new().to_string(), sender.to_string(), channel.to_string(), kind.as_str(), 123456789i64]).unwrap();
+            conn.execute(
+                "INSERT INTO messages VALUES (?1, ?2, ?3, ?4, ?5)",
+                params![
+                    MessageId::new().to_string(),
+                    sender.to_string(),
+                    channel.to_string(),
+                    kind.as_str(),
+                    123456789i64
+                ],
+            )
+            .unwrap();
         }
         assert_eq!(resolve(), None);
-        conn.execute("INSERT INTO messages VALUES (?1, ?2, ?3, ?4, ?5)",
-            params![parent.to_string(), author.to_string(), conversation.to_string(), kind.as_str(), 123456789i64]).unwrap();
+        conn.execute(
+            "INSERT INTO messages VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![
+                parent.to_string(),
+                author.to_string(),
+                conversation.to_string(),
+                kind.as_str(),
+                123456789i64
+            ],
+        )
+        .unwrap();
         assert_eq!(resolve(), Some(parent));
-        assert_eq!(resolve_timestamp_quote(&conn, &MessageId::from_timestamp(99), &author, &conversation, &kind).unwrap(), None);
+        assert_eq!(
+            resolve_timestamp_quote(
+                &conn,
+                &MessageId::from_timestamp(99),
+                &author,
+                &conversation,
+                &kind
+            )
+            .unwrap(),
+            None
+        );
     }
 
     #[test]
@@ -1886,17 +2000,29 @@ mod tests {
         let db = Arc::new(Database::open(&dir.path().join("m.db"), "testpass").expect("open"));
         db.run_migrations().expect("migrations");
         let repo = UnifiedMessageRepository::new(db);
-        let msg = Message::new_text(ChannelId::new(), ConversationType::ServerDm,
-            Some(UserId::new()), "hi".into(), 1);
+        let msg = Message::new_text(
+            ChannelId::new(),
+            ConversationType::ServerDm,
+            Some(UserId::new()),
+            "hi".into(),
+            1,
+        );
         repo.insert(&msg).unwrap();
 
-        assert_eq!(repo.deletion_token(&msg.id).unwrap(), None, "no token until one is set");
+        assert_eq!(
+            repo.deletion_token(&msg.id).unwrap(),
+            None,
+            "no token until one is set"
+        );
         repo.set_deletion_token(&msg.id, &[3u8; 32]).unwrap();
         assert_eq!(repo.deletion_token(&msg.id).unwrap(), Some([3u8; 32]));
         // A full-row update must not clobber it.
         repo.update(&msg).unwrap();
         assert_eq!(repo.deletion_token(&msg.id).unwrap(), Some([3u8; 32]));
-        assert!(repo.set_deletion_token(&MessageId::new(), &[1u8; 32]).is_err());
+        assert!(
+            repo.set_deletion_token(&MessageId::new(), &[1u8; 32])
+                .is_err()
+        );
         assert_eq!(repo.deletion_token(&MessageId::new()).unwrap(), None);
     }
 
@@ -1904,10 +2030,7 @@ mod tests {
     fn test_like_pattern_escaping() {
         // LIKE special chars are escaped so they match literally
         let query = "100% done_now";
-        let pattern = format!(
-            "%{}%",
-            query.replace('%', "\\%").replace('_', "\\_")
-        );
+        let pattern = format!("%{}%", query.replace('%', "\\%").replace('_', "\\_"));
         assert_eq!(pattern, "%100\\% done\\_now%");
     }
 }

@@ -92,9 +92,7 @@ fn test_crypto_builder() {
 
 #[test]
 fn test_session_builder() {
-    let session = SessionBuilder::new("user-1", 1)
-        .established()
-        .build();
+    let session = SessionBuilder::new("user-1", 1).established().build();
 
     assert_eq!(session.user_id, "user-1");
     assert_eq!(session.device_id, 1);
@@ -113,9 +111,7 @@ fn test_in_memory_storage() {
     let storage = InMemoryStorage::new();
 
     // Test message storage
-    let msg = MessageBuilder::text("Test")
-        .in_channel("channel-1")
-        .build();
+    let msg = MessageBuilder::text("Test").in_channel("channel-1").build();
     let msg_id = msg.id.clone();
 
     storage.save_message(msg);

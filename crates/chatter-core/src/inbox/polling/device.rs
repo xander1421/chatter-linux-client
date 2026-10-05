@@ -12,18 +12,18 @@ use prost::Message as ProstMessage;
 use sha2::Digest;
 use tokio::sync::broadcast;
 
+use crate::domain::UserId;
 use crate::domain::ids::{AttachmentId, ChannelId, MessageId};
 use crate::domain::message::Message;
-use crate::domain::UserId;
 use crate::error::{CryptoError, ServiceError};
 use crate::inbox::events::InboxEvent;
+use crate::inbox::handlers::DomainEvent;
 use crate::inbox::state::InboxStats;
 use crate::mailbox::group::GroupCoordinator;
 use crate::network::validation::{MessageValidationPipeline, PipelineResult};
 use crate::proto::chat_v1::{DeviceMessage, EncryptedData, SealedSenderMessage};
-use crate::proto::content_v1::{content, Content, DataMessage};
+use crate::proto::content_v1::{Content, DataMessage, content};
 use crate::proto::mailbox_v1::EnvelopeType;
-use crate::inbox::handlers::DomainEvent;
 use crate::services::gateway::{MessageGateway, RouteResult, SealedSenderResult};
 use crate::storage::repositories::ephemeral_repo::EphemeralRepository;
 use crate::storage::{ChannelRepository, MessageRepository};
@@ -70,11 +70,7 @@ pub fn delivery_issue_message(peer_id: UserId, envelope_ts_ns: u64) -> Message {
 /// `attributed` is [`crate::error::IdentityChangeSource::is_authenticated`] —
 /// it decides whether the entry may state who this was, not how it is styled.
 #[must_use]
-pub fn identity_changed_message(
-    peer_id: UserId,
-    envelope_ts_ns: u64,
-    attributed: bool,
-) -> Message {
+pub fn identity_changed_message(peer_id: UserId, envelope_ts_ns: u64, attributed: bool) -> Message {
     system_dm_marker(
         peer_id,
         envelope_ts_ns,
@@ -150,8 +146,10 @@ fn channel_marker_target(
     peer_id: Option<UserId>,
     envelope_ts_ns: u64,
 ) -> crate::inbox::ack_policy::MarkerTarget {
-    let conversation_type =
-        crate::services::message::conversion::conversation_type_for_channel(channel_repo, &channel_id);
+    let conversation_type = crate::services::message::conversion::conversation_type_for_channel(
+        channel_repo,
+        &channel_id,
+    );
     crate::inbox::ack_policy::MarkerTarget {
         conversation_id: channel_id,
         conversation_type,
@@ -263,7 +261,7 @@ pub(crate) enum EciesInitFailure<'a> {
 pub(crate) fn ecies_init_decision(
     failure: &EciesInitFailure<'_>,
 ) -> crate::inbox::ack_policy::AckDecision {
-    use crate::inbox::ack_policy::{classify_service, AckDecision, Durability};
+    use crate::inbox::ack_policy::{AckDecision, Durability, classify_service};
     match failure {
         // OUR identity key. A storage error or a registration that has not
         // finished writing it are both answered by a later poll; the stranger's
@@ -604,7 +602,10 @@ async fn process_sender_key_message(
             });
             stats.write().messages_processed += 1;
         }
-        Ok(RouteResult::NeedsSenderKey { channel_id, sender_id }) => {
+        Ok(RouteResult::NeedsSenderKey {
+            channel_id,
+            sender_id,
+        }) => {
             tracing::warn!(
                 message_guid = %msg.message_guid,
                 channel_id = %channel_id,
@@ -633,7 +634,10 @@ async fn process_sender_key_message(
                 retry_budget,
             );
         }
-        Ok(RouteResult::MailboxAnnouncement { channel_id, announcement }) => {
+        Ok(RouteResult::MailboxAnnouncement {
+            channel_id,
+            announcement,
+        }) => {
             // Gateway detected GroupMailboxAddress - process via coordinator
             if let Err(e) = group_coordinator.process_announcement(*sender_id, &announcement) {
                 tracing::error!(
@@ -744,12 +748,20 @@ fn process_decrypted_data_message(
             // ride the mailbox, never this path), so its bucket is the channel
             // row's type — `Channel`, even when the row isn't synced yet.
             let conversation_type =
-                crate::services::message::conversion::conversation_type_for_channel(channel_repo, &channel_id);
+                crate::services::message::conversion::conversation_type_for_channel(
+                    channel_repo,
+                    &channel_id,
+                );
 
             // Create domain message with sender's timestamp for Signal-style dedup
             // created_at is derived from sent_at in Message::new_text()
-            let mut message =
-                Message::new_text(channel_id, conversation_type, Some(*sender_id), data_message.body.clone(), data_message.timestamp);
+            let mut message = Message::new_text(
+                channel_id,
+                conversation_type,
+                Some(*sender_id),
+                data_message.body.clone(),
+                data_message.timestamp,
+            );
             message.id = message_id;
 
             // Add attachment IDs to message (attachments are stored separately in attachment_repo)
@@ -788,8 +800,8 @@ fn process_decrypted_data_message(
                     // the E2E ttl marker (V29), track our local copy so the
                     // reaper removes it once the timer elapses. Best-effort.
                     if data_message.ephemeral && data_message.ephemeral_ttl_seconds > 0 {
-                        if let Err(e) =
-                            ephemeral_repo.insert_armed(&message.id, data_message.ephemeral_ttl_seconds)
+                        if let Err(e) = ephemeral_repo
+                            .insert_armed(&message.id, data_message.ephemeral_ttl_seconds)
                         {
                             tracing::warn!(
                                 message_id = %message.id,
@@ -948,9 +960,8 @@ async fn process_identified_sender_message(
         }) => {
             // Emit DomainEvent for KeyExchange so DM bootstrap handler can process it
             if let Some(tx) = domain_tx {
-                let conv_id: crate::domain::ChannelId = conversation_id
-                    .parse()
-                    .unwrap_or_else(|_| {
+                let conv_id: crate::domain::ChannelId =
+                    conversation_id.parse().unwrap_or_else(|_| {
                         let hash = sha2::Sha256::digest(conversation_id.as_bytes());
                         let mut uuid_bytes = [0u8; 16];
                         uuid_bytes.copy_from_slice(&hash[..16]);
@@ -1012,7 +1023,9 @@ async fn process_identified_sender_message(
             if profile_key_changed {
                 // Same refresh the pure handshake gets: fetch + decrypt the
                 // sender's profile with the key this message just delivered.
-                let _ = event_tx.send(InboxEvent::ProfileKeyReceived { sender_id: msg_sender });
+                let _ = event_tx.send(InboxEvent::ProfileKeyReceived {
+                    sender_id: msg_sender,
+                });
             }
             tracing::info!(
                 message_id = %msg.message_guid,
@@ -1050,7 +1063,10 @@ async fn process_identified_sender_message(
             });
             stats.write().messages_processed += 1;
         }
-        Ok(SealedSenderResult::SenderKeyRequested { requester_id, channel_id }) => {
+        Ok(SealedSenderResult::SenderKeyRequested {
+            requester_id,
+            channel_id,
+        }) => {
             // SenderKeyRequest via identified sender (unusual but handled)
             tracing::info!(
                 message_id = %msg.message_guid,
@@ -1102,7 +1118,11 @@ async fn process_identified_sender_message(
             });
             stats.write().messages_processed += 1;
         }
-        Ok(SealedSenderResult::MailboxAnnouncement { sender_id, channel_id, announcement }) => {
+        Ok(SealedSenderResult::MailboxAnnouncement {
+            sender_id,
+            channel_id,
+            announcement,
+        }) => {
             // MailboxAnnouncement via identified sender (unusual - should use sealed sender)
             tracing::info!(
                 message_id = %msg.message_guid,
@@ -1137,7 +1157,11 @@ async fn process_identified_sender_message(
             );
             stats.write().messages_failed += 1;
         }
-        Ok(SealedSenderResult::ControlContent { sender_id: actual_sender, sender_device_id, content }) => {
+        Ok(SealedSenderResult::ControlContent {
+            sender_id: actual_sender,
+            sender_device_id,
+            content,
+        }) => {
             if let Some(inner) = content.content {
                 dispatch_control_content(
                     inner,
@@ -1222,9 +1246,9 @@ async fn process_ecies_init_message(
     message_gateway: &Arc<MessageGateway>,
     domain_tx: Option<&broadcast::Sender<DomainEvent>>,
 ) -> crate::inbox::ack_policy::AckDecision {
-    use crate::inbox::ack_policy::AckDecision;
     use crate::domain::anon_dm_init::AnonDmInitMessage;
     use crate::error::{CryptoError, ServiceError};
+    use crate::inbox::ack_policy::AckDecision;
 
     // HPKE open against our identity key, inside the Signal actor. A failed
     // open is a property of the bytes; any other error is reading our key.
@@ -1241,7 +1265,9 @@ async fn process_ecies_init_message(
                 error: format!("ECIES decryption failed: {}", e),
             });
             stats.write().messages_failed += 1;
-            return ecies_init_decision(&EciesInitFailure::Malformed("HPKE open failed against our identity key"));
+            return ecies_init_decision(&EciesInitFailure::Malformed(
+                "HPKE open failed against our identity key",
+            ));
         }
         Err(e) => {
             tracing::error!(
@@ -1272,7 +1298,9 @@ async fn process_ecies_init_message(
                 error: format!("Invalid init message: {}", e),
             });
             stats.write().messages_failed += 1;
-            return ecies_init_decision(&EciesInitFailure::Malformed("AnonDmInitMessage would not parse"));
+            return ecies_init_decision(&EciesInitFailure::Malformed(
+                "AnonDmInitMessage would not parse",
+            ));
         }
     };
 
@@ -1369,9 +1397,8 @@ async fn process_sealed_sender_message(
             // Emit DomainEvent for KeyExchange so DM bootstrap handler can process it
             if let Some(tx) = domain_tx {
                 // Parse conversation_id as ChannelId
-                let conv_id: crate::domain::ChannelId = conversation_id
-                    .parse()
-                    .unwrap_or_else(|_| {
+                let conv_id: crate::domain::ChannelId =
+                    conversation_id.parse().unwrap_or_else(|_| {
                         // Fallback: generate deterministic ID from string
                         let hash = sha2::Sha256::digest(conversation_id.as_bytes());
                         let mut uuid_bytes = [0u8; 16];
@@ -1405,7 +1432,10 @@ async fn process_sealed_sender_message(
             });
             stats.write().messages_processed += 1;
         }
-        Ok(SealedSenderResult::SenderKeyRequested { requester_id, channel_id }) => {
+        Ok(SealedSenderResult::SenderKeyRequested {
+            requester_id,
+            channel_id,
+        }) => {
             tracing::info!(
                 message_id = %msg.message_guid,
                 requester_id = %requester_id,
@@ -1423,7 +1453,11 @@ async fn process_sealed_sender_message(
             });
             stats.write().messages_processed += 1;
         }
-        Ok(SealedSenderResult::MailboxAnnouncement { sender_id, channel_id, announcement }) => {
+        Ok(SealedSenderResult::MailboxAnnouncement {
+            sender_id,
+            channel_id,
+            announcement,
+        }) => {
             tracing::info!(
                 message_id = %msg.message_guid,
                 sender_id = %sender_id,
@@ -1502,7 +1536,11 @@ async fn process_sealed_sender_message(
             );
             stats.write().messages_failed += 1;
         }
-        Ok(SealedSenderResult::ControlContent { sender_id: actual_sender, sender_device_id, content }) => {
+        Ok(SealedSenderResult::ControlContent {
+            sender_id: actual_sender,
+            sender_device_id,
+            content,
+        }) => {
             if let Some(inner) = content.content {
                 dispatch_control_content(
                     inner,
@@ -1620,7 +1658,9 @@ async fn process_sealed_sender_message(
             if profile_key_changed {
                 // Same refresh the pure handshake gets: fetch + decrypt the
                 // sender's profile with the key this message just delivered.
-                let _ = event_tx.send(InboxEvent::ProfileKeyReceived { sender_id: msg_sender });
+                let _ = event_tx.send(InboxEvent::ProfileKeyReceived {
+                    sender_id: msg_sender,
+                });
             }
             tracing::info!(
                 message_id = %msg.message_guid,
@@ -1683,11 +1723,9 @@ async fn process_sealed_sender_message(
                 author_id: msg.source_user_id.clone(),
                 timestamp: msg.server_timestamp,
                 content: Some(crate::proto::chat_v1::message::Content {
-                    r#type: Some(
-                        crate::proto::chat_v1::message::content::Type::SealedSender(
-                            sealed_sender_msg,
-                        ),
-                    ),
+                    r#type: Some(crate::proto::chat_v1::message::content::Type::SealedSender(
+                        sealed_sender_msg,
+                    )),
                 }),
                 ..Default::default()
             };
@@ -1893,7 +1931,11 @@ pub fn dispatch_control_content(
                 target_ts = reaction.target_sent_timestamp,
                 "Channel reaction received"
             );
-            let reaction_ts = if reaction.timestamp > 0 { reaction.timestamp } else { server_timestamp };
+            let reaction_ts = if reaction.timestamp > 0 {
+                reaction.timestamp
+            } else {
+                server_timestamp
+            };
             // Parse channel_id from encoded target_author_aci if present
             if let Some((channel_id_str, actual_author)) =
                 parse_channel_reaction_author(&reaction.target_author_aci)
@@ -1929,7 +1971,11 @@ pub fn dispatch_control_content(
             stats.write().messages_processed += 1;
         }
         content::Content::Pin(pin) => {
-            let pin_ts = if pin.timestamp > 0 { pin.timestamp } else { server_timestamp };
+            let pin_ts = if pin.timestamp > 0 {
+                pin.timestamp
+            } else {
+                server_timestamp
+            };
             if pin.channel_id.is_empty() {
                 // Empty channel_id => channel-free DM (ServerDm) pin.
                 let _ = event_tx.send(InboxEvent::DmPin {
@@ -2052,15 +2098,24 @@ pub fn dispatch_control_content(
             }
         }
         content::Content::ReadSync(sync) => {
-            let _ = event_tx.send(InboxEvent::ReadSync { sender_id: *sender_id, sync });
+            let _ = event_tx.send(InboxEvent::ReadSync {
+                sender_id: *sender_id,
+                sync,
+            });
             stats.write().messages_processed += 1;
         }
         content::Content::ProfileKeySync(sync) => {
-            let _ = event_tx.send(InboxEvent::ProfileKeySync { sender_id: *sender_id, sync });
+            let _ = event_tx.send(InboxEvent::ProfileKeySync {
+                sender_id: *sender_id,
+                sync,
+            });
             stats.write().messages_processed += 1;
         }
         content::Content::ConfigurationSync(sync) => {
-            let _ = event_tx.send(InboxEvent::ConfigurationSync { sender_id: *sender_id, sync });
+            let _ = event_tx.send(InboxEvent::ConfigurationSync {
+                sender_id: *sender_id,
+                sync,
+            });
             stats.write().messages_processed += 1;
         }
         content::Content::SavedMessageSync(msg) => {
@@ -2137,7 +2192,11 @@ pub fn dispatch_control_content(
                         call_id: ev.call_id,
                         phase,
                         duration_secs: ev.duration_secs,
-                        timestamp: if ev.timestamp > 0 { ev.timestamp } else { server_timestamp },
+                        timestamp: if ev.timestamp > 0 {
+                            ev.timestamp
+                        } else {
+                            server_timestamp
+                        },
                     });
                     stats.write().messages_processed += 1;
                 }
@@ -2159,26 +2218,58 @@ pub fn dispatch_control_content(
                 ..Default::default()
             });
             let event = match parsed {
-                Ok(DmContent::CallKeyOffer { call_id, ephemeral_public_key, timestamp, call_type, channel_id }) => {
-                    InboxEvent::CallKeyOfferReceived {
-                        peer_id: *sender_id,
-                        call_id,
-                        ephemeral_public_key,
-                        call_type: if call_type.is_empty() { "Voice Call".to_string() } else { call_type },
-                        channel_id: if channel_id.is_empty() { sender_id.to_string() } else { channel_id },
-                        timestamp: if server_timestamp > 0 { server_timestamp } else { timestamp },
-                    }
-                }
-                Ok(DmContent::CallKeyAnswer { call_id, ephemeral_public_key, timestamp }) => {
-                    InboxEvent::CallKeyAnswerReceived { peer_id: *sender_id, call_id, ephemeral_public_key, timestamp }
-                }
-                Ok(DmContent::CallHangup { call_id, reason, timestamp }) => InboxEvent::CallHangup {
+                Ok(DmContent::CallKeyOffer {
+                    call_id,
+                    ephemeral_public_key,
+                    timestamp,
+                    call_type,
+                    channel_id,
+                }) => InboxEvent::CallKeyOfferReceived {
+                    peer_id: *sender_id,
+                    call_id,
+                    ephemeral_public_key,
+                    call_type: if call_type.is_empty() {
+                        "Voice Call".to_string()
+                    } else {
+                        call_type
+                    },
+                    channel_id: if channel_id.is_empty() {
+                        sender_id.to_string()
+                    } else {
+                        channel_id
+                    },
+                    timestamp: if server_timestamp > 0 {
+                        server_timestamp
+                    } else {
+                        timestamp
+                    },
+                },
+                Ok(DmContent::CallKeyAnswer {
+                    call_id,
+                    ephemeral_public_key,
+                    timestamp,
+                }) => InboxEvent::CallKeyAnswerReceived {
+                    peer_id: *sender_id,
+                    call_id,
+                    ephemeral_public_key,
+                    timestamp,
+                },
+                Ok(DmContent::CallHangup {
+                    call_id,
+                    reason,
+                    timestamp,
+                }) => InboxEvent::CallHangup {
                     peer_id: *sender_id,
                     call_id,
                     reason,
                     timestamp,
                 },
-                Ok(DmContent::GroupCallSignal { call_id, channel_id, signal, timestamp }) => {
+                Ok(DmContent::GroupCallSignal {
+                    call_id,
+                    channel_id,
+                    signal,
+                    timestamp,
+                }) => {
                     let Ok(channel_id) = channel_id.parse::<ChannelId>() else {
                         tracing::warn!(sender_id = %sender_id, "Group call signal with invalid channel_id");
                         stats.write().messages_failed += 1;
@@ -2241,10 +2332,25 @@ mod call_control_tests {
         let caller = UserId::new();
         let offer = crate::services::build_call_key_offer("call-1", [7u8; 32], "", "");
 
-        dispatch_control_content(offer.content.unwrap(), &caller, 1, "guid", 42, &event_tx, &stats);
+        dispatch_control_content(
+            offer.content.unwrap(),
+            &caller,
+            1,
+            "guid",
+            42,
+            &event_tx,
+            &stats,
+        );
 
         match event_rx.try_recv().expect("an event") {
-            InboxEvent::CallKeyOfferReceived { peer_id, call_id, ephemeral_public_key, call_type, channel_id, timestamp } => {
+            InboxEvent::CallKeyOfferReceived {
+                peer_id,
+                call_id,
+                ephemeral_public_key,
+                call_type,
+                channel_id,
+                timestamp,
+            } => {
                 // Aged by the server's receive stamp, not the caller's clock.
                 assert_eq!(timestamp, 42);
                 assert_eq!(peer_id, caller);
@@ -2267,35 +2373,74 @@ mod call_control_tests {
         let peer = UserId::new();
         let channel = ChannelId::new();
 
-        let edit = |channel_id: String| content::Content::Edit(EditMessage {
-            target_sent_timestamp: 100,
-            data_message: Some(DataMessage { body: "new".into(), timestamp: 150, channel_id, ..Default::default() }),
-        });
+        let edit = |channel_id: String| {
+            content::Content::Edit(EditMessage {
+                target_sent_timestamp: 100,
+                data_message: Some(DataMessage {
+                    body: "new".into(),
+                    timestamp: 150,
+                    channel_id,
+                    ..Default::default()
+                }),
+            })
+        };
         dispatch_control_content(edit(String::new()), &peer, 1, "g", 42, &event_tx, &stats);
         match event_rx.try_recv().expect("an event") {
-            InboxEvent::DmEdit { edit_timestamp, server_timestamp, target_sent_timestamp, .. } => {
-                assert_eq!((edit_timestamp, server_timestamp, target_sent_timestamp), (150, 42, 100));
+            InboxEvent::DmEdit {
+                edit_timestamp,
+                server_timestamp,
+                target_sent_timestamp,
+                ..
+            } => {
+                assert_eq!(
+                    (edit_timestamp, server_timestamp, target_sent_timestamp),
+                    (150, 42, 100)
+                );
             }
             other => panic!("expected DmEdit, got {other:?}"),
         }
-        dispatch_control_content(edit(channel.to_string()), &peer, 1, "g", 42, &event_tx, &stats);
+        dispatch_control_content(
+            edit(channel.to_string()),
+            &peer,
+            1,
+            "g",
+            42,
+            &event_tx,
+            &stats,
+        );
         match event_rx.try_recv().expect("an event") {
-            InboxEvent::ChannelEdit { edit_timestamp, server_timestamp, channel_id, .. } => {
-                assert_eq!((edit_timestamp, server_timestamp, channel_id), (150, 42, channel));
+            InboxEvent::ChannelEdit {
+                edit_timestamp,
+                server_timestamp,
+                channel_id,
+                ..
+            } => {
+                assert_eq!(
+                    (edit_timestamp, server_timestamp, channel_id),
+                    (150, 42, channel)
+                );
             }
             other => panic!("expected ChannelEdit, got {other:?}"),
         }
 
         let reaction = content::Content::Reaction(Reaction {
-            emoji: "x".into(), target_author_aci: peer.to_string(), target_sent_timestamp: 100, ..Default::default()
+            emoji: "x".into(),
+            target_author_aci: peer.to_string(),
+            target_sent_timestamp: 100,
+            ..Default::default()
         });
         dispatch_control_content(reaction, &peer, 1, "g", 42, &event_tx, &stats);
         match event_rx.try_recv().expect("an event") {
-            InboxEvent::DmReaction { timestamp, .. } => assert_eq!(timestamp, 42, "unstamped: the server's"),
+            InboxEvent::DmReaction { timestamp, .. } => {
+                assert_eq!(timestamp, 42, "unstamped: the server's")
+            }
             other => panic!("expected DmReaction, got {other:?}"),
         }
         let pin = content::Content::Pin(PinMessage {
-            target_author_aci: peer.to_string(), target_sent_timestamp: 100, timestamp: 77, ..Default::default()
+            target_author_aci: peer.to_string(),
+            target_sent_timestamp: 100,
+            timestamp: 77,
+            ..Default::default()
         });
         dispatch_control_content(pin, &peer, 1, "g", 42, &event_tx, &stats);
         match event_rx.try_recv().expect("an event") {

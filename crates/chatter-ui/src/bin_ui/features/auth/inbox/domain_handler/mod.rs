@@ -24,9 +24,9 @@ use std::sync::Arc;
 
 use slint::Weak;
 
-use chatter_core::events::DomainEvent;
-use chatter_core::client::ChatterClient;
 use crate::MainWindow;
+use chatter_core::client::ChatterClient;
+use chatter_core::events::DomainEvent;
 
 /// Handle a domain event for UI updates only.
 ///
@@ -41,7 +41,10 @@ pub async fn handle_domain_event(
         // =========================================================================
         // DM Bootstrap Completed
         // =========================================================================
-        DomainEvent::DmBootstrapCompleted { peer_id, sent_timestamps } => {
+        DomainEvent::DmBootstrapCompleted {
+            peer_id,
+            sent_timestamps,
+        } => {
             messaging::handle_dm_bootstrap_completed(window, ui_ctx, peer_id, sent_timestamps);
         }
 
@@ -80,9 +83,17 @@ pub async fn handle_domain_event(
             timestamp,
         } => {
             calls::handle_call_key_offer(
-                window, ui_ctx, call_id, peer_id, ephemeral_public_key,
-                call_type, channel_id, is_identity_verified, identity_warning,
-                caller_name, timestamp,
+                window,
+                ui_ctx,
+                call_id,
+                peer_id,
+                ephemeral_public_key,
+                call_type,
+                channel_id,
+                is_identity_verified,
+                identity_warning,
+                caller_name,
+                timestamp,
             );
         }
         #[cfg(not(feature = "call-ui"))]
@@ -95,14 +106,18 @@ pub async fn handle_domain_event(
         // Handled by calls/event_handlers.rs (wire_call_key_answer_handler)
         // which delegates to key_exchange for ECDH and call_service for group keys.
         // =========================================================================
-        DomainEvent::CallKeyAnswerReceived { .. }
-        | DomainEvent::GroupCallSignalReceived { .. } => {}
+        DomainEvent::CallKeyAnswerReceived { .. } | DomainEvent::GroupCallSignalReceived { .. } => {
+        }
 
         // =========================================================================
         // Call Hangup
         // =========================================================================
         #[cfg(feature = "call-ui")]
-        DomainEvent::CallHangupReceived { call_id, peer_id, reason } => {
+        DomainEvent::CallHangupReceived {
+            call_id,
+            peer_id,
+            reason,
+        } => {
             calls::handle_call_hangup(window, call_id, peer_id, reason);
         }
         #[cfg(not(feature = "call-ui"))]
@@ -113,7 +128,11 @@ pub async fn handle_domain_event(
         // =========================================================================
         // Typing Indicators (pass-through / no-op)
         // =========================================================================
-        DomainEvent::TypingStarted { user_id, channel_id, timestamp } => {
+        DomainEvent::TypingStarted {
+            user_id,
+            channel_id,
+            timestamp,
+        } => {
             super::unified_actions::handle_typing(
                 window,
                 ui_ctx,
@@ -124,7 +143,11 @@ pub async fn handle_domain_event(
             );
         }
 
-        DomainEvent::TypingStopped { user_id, channel_id, timestamp } => {
+        DomainEvent::TypingStopped {
+            user_id,
+            channel_id,
+            timestamp,
+        } => {
             super::unified_actions::handle_typing(
                 window,
                 ui_ctx,
@@ -160,41 +183,83 @@ pub async fn handle_domain_event(
             }
         }
 
-        DomainEvent::MessageDeliveryChanged { message_id, status, .. } => {
-            messaging::handle_persisted_delivery_status(window, ui_ctx, message_id.to_string(), status);
+        DomainEvent::MessageDeliveryChanged {
+            message_id, status, ..
+        } => {
+            messaging::handle_persisted_delivery_status(
+                window,
+                ui_ctx,
+                message_id.to_string(),
+                status,
+            );
         }
 
         // Receipt events: update checkmarks (✓✓) in the Slint message model.
-        DomainEvent::MessagesDelivered { message_timestamps, .. } => {
-            if matches!(ui_ctx.chat_state().active_conversation(),
-                chatter_core::state::ActiveConversation::AnonDm(_) |
-                chatter_core::state::ActiveConversation::AnonGroup(_)) {
+        DomainEvent::MessagesDelivered {
+            message_timestamps, ..
+        } => {
+            if matches!(
+                ui_ctx.chat_state().active_conversation(),
+                chatter_core::state::ActiveConversation::AnonDm(_)
+                    | chatter_core::state::ActiveConversation::AnonGroup(_)
+            ) {
                 messaging::handle_delivery_status_update(window, message_timestamps, "delivered");
             }
         }
 
-        DomainEvent::MessagesRead { message_timestamps, .. } => {
-            if matches!(ui_ctx.chat_state().active_conversation(),
-                chatter_core::state::ActiveConversation::AnonDm(_) |
-                chatter_core::state::ActiveConversation::AnonGroup(_)) {
+        DomainEvent::MessagesRead {
+            message_timestamps, ..
+        } => {
+            if matches!(
+                ui_ctx.chat_state().active_conversation(),
+                chatter_core::state::ActiveConversation::AnonDm(_)
+                    | chatter_core::state::ActiveConversation::AnonGroup(_)
+            ) {
                 messaging::handle_delivery_status_update(window, message_timestamps, "read");
             }
         }
 
         // Reaction UI updates: update emoji summary on the message bubble + sidebar
         // Uses Signal-style (sender_id, sent_at_ns) composite key for matching.
-        DomainEvent::ReactionAdded { sender_id, sent_at_ns, emoji, .. } => {
-            messaging::handle_reaction_update(window, &sender_id.to_string(), sent_at_ns, &emoji, false);
+        DomainEvent::ReactionAdded {
+            sender_id,
+            sent_at_ns,
+            emoji,
+            ..
+        } => {
+            messaging::handle_reaction_update(
+                window,
+                &sender_id.to_string(),
+                sent_at_ns,
+                &emoji,
+                false,
+            );
             messaging::refresh_sidebar_for_reaction(window, ui_ctx, &emoji, false);
         }
-        DomainEvent::ReactionRemoved { sender_id, sent_at_ns, emoji, .. } => {
-            messaging::handle_reaction_update(window, &sender_id.to_string(), sent_at_ns, &emoji, true);
+        DomainEvent::ReactionRemoved {
+            sender_id,
+            sent_at_ns,
+            emoji,
+            ..
+        } => {
+            messaging::handle_reaction_update(
+                window,
+                &sender_id.to_string(),
+                sent_at_ns,
+                &emoji,
+                true,
+            );
             messaging::refresh_sidebar_for_reaction(window, ui_ctx, &emoji, true);
         }
 
         // Edit UI update: replace message content in-place
         DomainEvent::MessageEdited {
-            message_id, new_content, channel_id, author_id, target_sent_timestamp, ..
+            message_id,
+            new_content,
+            channel_id,
+            author_id,
+            target_sent_timestamp,
+            ..
         } => {
             use chatter_core::domain::message::MessageContent;
             let new_text = match &new_content {
@@ -204,25 +269,42 @@ pub async fn handle_domain_event(
                 _ => String::new(),
             };
             messaging::handle_message_edit(
-                window, ui_ctx, channel_id, &message_id.to_string(), author_id,
-                target_sent_timestamp, &new_text,
+                window,
+                ui_ctx,
+                channel_id,
+                &message_id.to_string(),
+                author_id,
+                target_sent_timestamp,
+                &new_text,
             );
         }
 
         // Delete for everyone: remove the (author, timestamp) bubble from the
         // open view. A DM delete may name no channel; the DM is the author's.
-        DomainEvent::MessageDeleted { author_id, channel_id, target_sent_timestamp, .. } => {
+        DomainEvent::MessageDeleted {
+            author_id,
+            channel_id,
+            target_sent_timestamp,
+            ..
+        } => {
             messaging::handle_message_delete(
                 window,
                 ui_ctx,
                 channel_id.unwrap_or_else(|| author_id.into()),
-                messaging::DeleteTarget::AuthorTimestamp { author: author_id, sent_at: target_sent_timestamp },
+                messaging::DeleteTarget::AuthorTimestamp {
+                    author: author_id,
+                    sent_at: target_sent_timestamp,
+                },
             );
         }
 
         // A delete-for-me made on a sibling device. Core's state store drops
         // it from storage; the open chat has to drop the bubble too.
-        DomainEvent::DeleteForMeSync { conversation_id, target_message_id, .. } => {
+        DomainEvent::DeleteForMeSync {
+            conversation_id,
+            target_message_id,
+            ..
+        } => {
             messaging::handle_message_delete(
                 window,
                 ui_ctx,
@@ -235,7 +317,10 @@ pub async fn handle_domain_event(
         // foreground catch-up (`set_app_visible`), which has no UI caller to
         // clear the badge, so without this the row kept a stale count until
         // the next rebuild.
-        DomainEvent::ConversationsRead { conversation_ids, from_other_device: false } => {
+        DomainEvent::ConversationsRead {
+            conversation_ids,
+            from_other_device: false,
+        } => {
             let ui_ctx = ui_ctx.clone();
             crate::run_ui!(window, |w| {
                 for id in &conversation_ids {
@@ -246,7 +331,10 @@ pub async fn handle_domain_event(
         }
         // Read on another of our devices: core marked the messages read;
         // rows and badges are rebuilt from storage (a sync can read only some).
-        DomainEvent::ConversationsRead { from_other_device: true, .. } => {
+        DomainEvent::ConversationsRead {
+            from_other_device: true,
+            ..
+        } => {
             crate::bin_ui::features::sidebar::rebuild_chat_list(window, ui_ctx);
             let ui_ctx = ui_ctx.clone();
             crate::run_ui!(window, |w| {
@@ -258,11 +346,19 @@ pub async fn handle_domain_event(
         // No Slint model update needed
         DomainEvent::ViewedReceipt { .. } => {}
 
-        DomainEvent::MessagePinned { channel_id, target_sent_timestamp, .. } => {
+        DomainEvent::MessagePinned {
+            channel_id,
+            target_sent_timestamp,
+            ..
+        } => {
             helpers::handle_pin_ui_update(window, ui_ctx, channel_id, target_sent_timestamp, false);
         }
 
-        DomainEvent::MessageUnpinned { channel_id, target_sent_timestamp, .. } => {
+        DomainEvent::MessageUnpinned {
+            channel_id,
+            target_sent_timestamp,
+            ..
+        } => {
             helpers::handle_pin_ui_update(window, ui_ctx, channel_id, target_sent_timestamp, true);
         }
 
@@ -279,12 +375,17 @@ pub async fn handle_domain_event(
         // When the receiver gets a message with attachments, the attachment metadata
         // may not be available yet during MessageReceived handling. AttachmentReady
         // fires after the attachment pointer is processed and stored.
-        DomainEvent::AttachmentReady { attachment, channel_id, .. } => {
-            let downloadable = if attachment.remote_url.is_some() && attachment.encryption_key.is_some() {
-                vec![attachment]
-            } else {
-                vec![]
-            };
+        DomainEvent::AttachmentReady {
+            attachment,
+            channel_id,
+            ..
+        } => {
+            let downloadable =
+                if attachment.remote_url.is_some() && attachment.encryption_key.is_some() {
+                    vec![attachment]
+                } else {
+                    vec![]
+                };
             if !downloadable.is_empty() {
                 let ui_ctx_dl = ui_ctx.clone();
                 let weak = window.clone();
@@ -295,7 +396,8 @@ pub async fn handle_domain_event(
                         ui_ctx_dl,
                         weak,
                         conv_id,
-                    ).await;
+                    )
+                    .await;
                 });
             }
         }
@@ -303,7 +405,12 @@ pub async fn handle_domain_event(
         // =========================================================================
         // Anonymous Group Events
         // =========================================================================
-        DomainEvent::AnonGroupInviteReceived { group_id, group_name, inviter_id, .. } => {
+        DomainEvent::AnonGroupInviteReceived {
+            group_id,
+            group_name,
+            inviter_id,
+            ..
+        } => {
             anon::handle_group_invite_received(window, ui_ctx, group_id, group_name, inviter_id);
         }
 
@@ -311,7 +418,9 @@ pub async fn handle_domain_event(
             anon::handle_group_joined(window, ui_ctx, group_id);
         }
 
-        DomainEvent::AnonGroupMemberJoined { group_id, user_id, .. } => {
+        DomainEvent::AnonGroupMemberJoined {
+            group_id, user_id, ..
+        } => {
             anon::handle_group_member_joined(window, ui_ctx, group_id, user_id);
         }
 
@@ -319,7 +428,11 @@ pub async fn handle_domain_event(
             anon::handle_group_member_left(window, ui_ctx, group_id, user_id);
         }
 
-        DomainEvent::AnonGroupMemberKicked { group_id, user_id, kicked_by } => {
+        DomainEvent::AnonGroupMemberKicked {
+            group_id,
+            user_id,
+            kicked_by,
+        } => {
             anon::handle_group_member_kicked(window, ui_ctx, group_id, user_id, kicked_by);
         }
 
@@ -327,11 +440,18 @@ pub async fn handle_domain_event(
             anon::handle_group_bootstrap_complete(group_id);
         }
 
-        DomainEvent::AnonGroupMemberListReceived { group_id, ref members } => {
+        DomainEvent::AnonGroupMemberListReceived {
+            group_id,
+            ref members,
+        } => {
             anon::handle_group_member_list_received(window, ui_ctx, group_id, members.len());
         }
 
-        DomainEvent::AnonGroupUpdated { group_id, updated_by, .. } => {
+        DomainEvent::AnonGroupUpdated {
+            group_id,
+            updated_by,
+            ..
+        } => {
             anon::handle_group_updated(window, ui_ctx, group_id, updated_by);
         }
 
@@ -342,7 +462,11 @@ pub async fn handle_domain_event(
             anon::handle_dm_request_received(window, ui_ctx);
         }
 
-        DomainEvent::AnonDmRequestAccepted { conversation_id, peer_id, .. } => {
+        DomainEvent::AnonDmRequestAccepted {
+            conversation_id,
+            peer_id,
+            ..
+        } => {
             anon::handle_dm_request_accepted(window, ui_ctx, conversation_id, peer_id);
             // Accepted → anon peer becomes a Friends-tab contact.
             crate::bin_ui::features::auth::initial_data::refresh_friends_list(
@@ -370,8 +494,15 @@ pub async fn handle_domain_event(
             ..
         } => {
             anon_calls::handle_anon_call_offer(
-                window, ui_ctx, conversation_id, sender_id, call_room_id,
-                room_name, call_type, caller_display_name, call_encryption_key,
+                window,
+                ui_ctx,
+                conversation_id,
+                sender_id,
+                call_room_id,
+                room_name,
+                call_type,
+                caller_display_name,
+                call_encryption_key,
             );
         }
         #[cfg(not(feature = "call-ui"))]
@@ -407,8 +538,15 @@ pub async fn handle_domain_event(
             ..
         } => {
             anon_calls::handle_anon_group_call_offer(
-                window, ui_ctx, group_id, sender_id, call_room_id,
-                room_name, call_type, caller_display_name, call_encryption_key,
+                window,
+                ui_ctx,
+                group_id,
+                sender_id,
+                call_room_id,
+                room_name,
+                call_type,
+                caller_display_name,
+                call_encryption_key,
             );
         }
         #[cfg(not(feature = "call-ui"))]
@@ -424,19 +562,33 @@ pub async fn handle_domain_event(
         // =========================================================================
         // Message Send Events
         // =========================================================================
-        DomainEvent::MessageSendFailed { channel_id, error, message_timestamps } => {
+        DomainEvent::MessageSendFailed {
+            channel_id,
+            error,
+            message_timestamps,
+        } => {
             messaging::handle_message_send_failed(window, channel_id, error, message_timestamps);
         }
 
         // =========================================================================
         // Channel Member Events
         // =========================================================================
-        DomainEvent::ChannelMemberJoined { channel_id, user_id: _, display_name: _, message } => {
+        DomainEvent::ChannelMemberJoined {
+            channel_id,
+            user_id: _,
+            display_name: _,
+            message,
+        } => {
             messaging::handle_message_received(window, ui_ctx, message);
             messaging::update_active_channel_member_count(window, ui_ctx, channel_id);
         }
 
-        DomainEvent::ChannelMemberLeft { channel_id, user_id, display_name: _, message } => {
+        DomainEvent::ChannelMemberLeft {
+            channel_id,
+            user_id,
+            display_name: _,
+            message,
+        } => {
             // We left, or were kicked or banned: core dropped our membership,
             // so the composer gives way to the notice and the sidebar row is
             // rebuilt from core (its preview, and no "Leave channel" in its menu).
@@ -453,8 +605,15 @@ pub async fn handle_domain_event(
         // Channel metadata (name/icon) was changed by an admin. Core already
         // persisted the new values to the channel repo; live-refresh the header
         // title if this is the active conversation.
-        DomainEvent::ChannelUpdated { channel_id, name, icon: _ } => {
-            let is_active = ui_ctx.chat_state().get().active_channel_id
+        DomainEvent::ChannelUpdated {
+            channel_id,
+            name,
+            icon: _,
+        } => {
+            let is_active = ui_ctx
+                .chat_state()
+                .get()
+                .active_channel_id
                 .map(|id| id == channel_id)
                 .unwrap_or(false);
             if is_active {
@@ -471,7 +630,11 @@ pub async fn handle_domain_event(
         // A member's role or moderator mute changed (server `MemberUpdated`).
         // Core persisted it to the membership repo; refresh the member view and,
         // in case it was our own mute, the composer notice.
-        DomainEvent::ChannelMemberUpdated { channel_id, user_id: _, role: _ } => {
+        DomainEvent::ChannelMemberUpdated {
+            channel_id,
+            user_id: _,
+            role: _,
+        } => {
             messaging::update_active_channel_member_count(window, ui_ctx, channel_id);
             crate::bin_ui::features::chat::show_send_notice(window, ui_ctx, channel_id);
         }
@@ -500,7 +663,15 @@ pub async fn handle_domain_event(
             timestamp,
         } => {
             social::handle_anon_dm_profile_updated(
-                window, ui_ctx, conversation_id, user_id, display_name, avatar, avatar_url, bio, timestamp,
+                window,
+                ui_ctx,
+                conversation_id,
+                user_id,
+                display_name,
+                avatar,
+                avatar_url,
+                bio,
+                timestamp,
             );
             // Name/avatar changed — refresh Friends-tab row too.
             crate::bin_ui::features::auth::initial_data::refresh_friends_list(
@@ -520,16 +691,24 @@ pub async fn handle_domain_event(
         // missed while the stream was down — app backgrounded — reached the
         // conversation but never its row. Rebuild the rows from storage, the
         // way every DM receive already does (`refresh_chat_list`).
-        DomainEvent::SyncComplete { messages_synced, blocks_changed, .. } => {
+        DomainEvent::SyncComplete {
+            messages_synced,
+            blocks_changed,
+            ..
+        } => {
             // Friends were painted from storage at startup. This cycle is
             // the reconcile: membership and live presence, or the same
             // stored rows if the server is still down. A block change also
             // rebuilds the Blocked tab (that list is already local).
             crate::bin_ui::features::auth::initial_data::refresh_friends_list(
-                window.clone(), ui_ctx.clone(),
+                window.clone(),
+                ui_ctx.clone(),
             );
             if blocks_changed {
-                crate::bin_ui::features::modals::friends::refresh_blocked_users(window.clone(), ui_ctx);
+                crate::bin_ui::features::modals::friends::refresh_blocked_users(
+                    window.clone(),
+                    ui_ctx,
+                );
             }
             if messages_synced > 0 || blocks_changed {
                 crate::bin_ui::features::sidebar::rebuild_chat_list(window, ui_ctx);
@@ -545,7 +724,11 @@ pub async fn handle_domain_event(
         // Log it (OS toast already fired from core via NotificationService)
         // and refresh the sessions/devices modal if it's currently open so
         // the new entry appears without manual re-fetch.
-        DomainEvent::DeviceLinked { device_name, approved_by_self, .. } => {
+        DomainEvent::DeviceLinked {
+            device_name,
+            approved_by_self,
+            ..
+        } => {
             sessions::handle_device_linked(window, ui_ctx, device_name, approved_by_self);
         }
         // Events with no UI render — core handles the work, UI doesn't
@@ -567,10 +750,14 @@ pub async fn handle_domain_event(
             let ui_ctx = ui_ctx.clone();
             let _ = window.upgrade_in_event_loop(move |w| {
                 if ui_ctx.chat_state().active_conversation()
-                    == (chatter_core::state::ActiveConversation::ServerDm { peer_id: peer_user_id })
+                    == (chatter_core::state::ActiveConversation::ServerDm {
+                        peer_id: peer_user_id,
+                    })
                 {
                     crate::bin_ui::features::chat::identity_change::refresh(
-                        &w, &ui_ctx, &peer_user_id,
+                        &w,
+                        &ui_ctx,
+                        &peer_user_id,
                     );
                 }
             });
@@ -586,7 +773,13 @@ pub async fn handle_domain_event(
             timestamp,
         } => {
             social::handle_user_profile_updated(
-                window, ui_ctx, user_id, display_name, status_message, avatar_bytes, timestamp,
+                window,
+                ui_ctx,
+                user_id,
+                display_name,
+                status_message,
+                avatar_bytes,
+                timestamp,
             );
             crate::bin_ui::features::auth::initial_data::refresh_friends_list(
                 window.clone(),
@@ -608,12 +801,17 @@ pub async fn handle_domain_event(
         // =========================================================================
         // Core has already written the authoritative local state for each of
         // these; the UI's job is to stop showing what is no longer true.
-
         DomainEvent::ChannelCreated { .. } | DomainEvent::ChannelArchivedChanged { .. } => {
             crate::bin_ui::features::auth::load_initial_data(window.clone(), ui_ctx).await;
         }
 
-        DomainEvent::ChannelModerationAction { channel_id, action, reason, is_self, .. } => {
+        DomainEvent::ChannelModerationAction {
+            channel_id,
+            action,
+            reason,
+            is_self,
+            ..
+        } => {
             if is_self {
                 // An open chat stays open: it is read-only now, its composer
                 // replaced by the notice (ChannelMemberLeft refreshes both).
@@ -661,7 +859,11 @@ pub async fn handle_domain_event(
             // The banner (and the send block it explains) may have changed.
             crate::bin_ui::features::chat::show_send_notice(window, ui_ctx, channel_id);
             let text = notice.user_text();
-            let variant = if notice.is_problem() { "error" } else { "success" };
+            let variant = if notice.is_problem() {
+                "error"
+            } else {
+                "success"
+            };
             let weak = window.clone();
             let _ = slint::invoke_from_event_loop(move || {
                 if let Some(w) = weak.upgrade() {

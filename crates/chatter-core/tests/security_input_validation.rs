@@ -7,17 +7,15 @@
 //!   - Padding oracle resistance
 //!   - Content padding for traffic analysis resistance (NDSS'21)
 
-use chatter_core::crypto::ecies::{open_with_identity, seal_to_identity, IdentityHpkeUse, OVERHEAD};
-use chatter_core::crypto::{
-    encrypt_dm_bytes, decrypt_dm_bytes,
-    AttachmentCrypto, KEY_SET_LENGTH,
+use chatter_core::crypto::derive_uak;
+use chatter_core::crypto::ecies::{
+    IdentityHpkeUse, OVERHEAD, open_with_identity, seal_to_identity,
 };
 use chatter_core::crypto::profile_crypto;
-use chatter_core::crypto::derive_uak;
+use chatter_core::crypto::{AttachmentCrypto, KEY_SET_LENGTH, decrypt_dm_bytes, encrypt_dm_bytes};
 use chatter_core::services::{
-    build_text_content, build_typing_content,
-    build_data_message_content,
-    generate_padding, PADDING_MESSAGE,
+    PADDING_MESSAGE, build_data_message_content, build_text_content, build_typing_content,
+    generate_padding,
 };
 
 // ===========================================================================
@@ -45,7 +43,10 @@ fn test_ecies_zero_public_key() {
 fn test_ecies_truncated_message() {
     let ours = identity();
     for len in [0, 1, 32, OVERHEAD - 1, OVERHEAD] {
-        assert!(open_with_identity(&ours, IdentityHpkeUse::AnonDmInit, &vec![0u8; len]).is_err(), "len {len}");
+        assert!(
+            open_with_identity(&ours, IdentityHpkeUse::AnonDmInit, &vec![0u8; len]).is_err(),
+            "len {len}"
+        );
     }
 }
 
@@ -77,7 +78,11 @@ fn test_dm_minimum_ciphertext_length() {
     for len in [1, 10, 24, 39] {
         let short = vec![0u8; len];
         let result = decrypt_dm_bytes(&short, &key);
-        assert!(result.is_err(), "Ciphertext of length {} must be rejected (min is 40+)", len);
+        assert!(
+            result.is_err(),
+            "Ciphertext of length {} must be rejected (min is 40+)",
+            len
+        );
     }
 }
 
@@ -117,8 +122,11 @@ fn test_dm_error_no_plaintext_leak() {
     let err_msg = format!("{}", err);
 
     // Error message must NOT contain the plaintext
-    assert!(!err_msg.contains("SUPER_SECRET"),
-        "Error message must not leak plaintext: {}", err_msg);
+    assert!(
+        !err_msg.contains("SUPER_SECRET"),
+        "Error message must not leak plaintext: {}",
+        err_msg
+    );
 }
 
 /// DM: error messages from wrong key don't reveal which key is correct.
@@ -147,8 +155,14 @@ fn test_dm_error_indistinguishable() {
 
     // Both should be some form of decryption/authentication error
     // (exact matching depends on implementation, but neither should say "wrong key" specifically)
-    assert!(!msg1.contains("wrong key"), "Error should not specifically say 'wrong key'");
-    assert!(!msg2.contains("correct key"), "Error should not reference correct key");
+    assert!(
+        !msg1.contains("wrong key"),
+        "Error should not specifically say 'wrong key'"
+    );
+    assert!(
+        !msg2.contains("correct key"),
+        "Error should not reference correct key"
+    );
 }
 
 // ===========================================================================
@@ -179,8 +193,12 @@ fn test_attachment_wrong_key_rejected() {
     let mut wrong_key = enc.key;
     wrong_key[32] ^= 0xFF; // Flip one byte in the HMAC key (bytes 32-63)
 
-    let result = AttachmentCrypto::decrypt(&enc.ciphertext, &wrong_key, &enc.digest, plaintext.len());
-    assert!(result.is_err(), "Wrong HMAC key must be rejected at verification stage");
+    let result =
+        AttachmentCrypto::decrypt(&enc.ciphertext, &wrong_key, &enc.digest, plaintext.len());
+    assert!(
+        result.is_err(),
+        "Wrong HMAC key must be rejected at verification stage"
+    );
 }
 
 /// Attachment: wrong digest rejected.
@@ -217,7 +235,10 @@ fn test_attachment_digest_collision_resistance() {
 /// Attachment: key length is correct (64 bytes = AES-256 + HMAC-256).
 #[test]
 fn test_attachment_key_length() {
-    assert_eq!(KEY_SET_LENGTH, 64, "Key set must be 64 bytes (32 AES + 32 HMAC)");
+    assert_eq!(
+        KEY_SET_LENGTH, 64,
+        "Key set must be 64 bytes (32 AES + 32 HMAC)"
+    );
 
     let enc = AttachmentCrypto::encrypt(b"test").unwrap();
     assert_eq!(enc.key.len(), KEY_SET_LENGTH);
@@ -229,8 +250,12 @@ fn test_attachment_ciphertext_always_larger() {
     for size in [0, 1, 15, 16, 17, 100, 1000] {
         let plaintext = vec![0u8; size];
         let enc = AttachmentCrypto::encrypt(&plaintext).unwrap();
-        assert!(enc.ciphertext.len() > size,
-            "Ciphertext ({}) must be larger than plaintext ({})", enc.ciphertext.len(), size);
+        assert!(
+            enc.ciphertext.len() > size,
+            "Ciphertext ({}) must be larger than plaintext ({})",
+            enc.ciphertext.len(),
+            size
+        );
     }
 }
 
@@ -253,7 +278,10 @@ fn test_profile_truncated_ciphertext_rejected() {
     let key = [42u8; 32];
     let short = vec![0u8; 5]; // Too short for nonce + tag
     let result = profile_crypto::decrypt_display_name(&key, &short);
-    assert!(result.is_err(), "Truncated profile ciphertext must be rejected");
+    assert!(
+        result.is_err(),
+        "Truncated profile ciphertext must be rejected"
+    );
 }
 
 /// Profile: tampered ciphertext rejected (AES-GCM tag).
@@ -268,7 +296,10 @@ fn test_profile_tampered_ciphertext_rejected() {
     }
 
     let result = profile_crypto::decrypt_display_name(&key, &enc);
-    assert!(result.is_err(), "Tampered profile ciphertext must be rejected");
+    assert!(
+        result.is_err(),
+        "Tampered profile ciphertext must be rejected"
+    );
 }
 
 /// Profile: avatar size validation.
@@ -345,8 +376,10 @@ fn test_content_type_padding_profiles() {
     let with_attachment = build_data_message_content("Photo", vec![attachment], 5678);
     let attachment_size = with_attachment.encode_to_vec().len();
 
-    println!("Serialized sizes: typing={}, text={}, attachment={}",
-        typing_size, text_size, attachment_size);
+    println!(
+        "Serialized sizes: typing={}, text={}, attachment={}",
+        typing_size, text_size, attachment_size
+    );
 
     // All serialized messages should be distinguishable by size before padding
     // After padding, they should be bucketed to resist traffic analysis
@@ -367,13 +400,19 @@ fn test_padding_is_random() {
     assert_ne!(pad1, pad2, "Padding must be random, not deterministic");
 
     // Check it's not all zeros
-    assert!(pad1.iter().any(|&b| b != 0), "Padding should not be all zeros");
+    assert!(
+        pad1.iter().any(|&b| b != 0),
+        "Padding should not be all zeros"
+    );
 
     // Check entropy: at least 100 unique byte values in 256 bytes of padding
     let unique: std::collections::HashSet<u8> = pad1.iter().copied().collect();
-    assert!(unique.len() > 50,
+    assert!(
+        unique.len() > 50,
         "Padding should have good entropy, got {} unique values in {} bytes",
-        unique.len(), pad1.len());
+        unique.len(),
+        pad1.len()
+    );
 }
 
 // ===========================================================================
@@ -396,7 +435,10 @@ fn test_cross_algorithm_rejection() {
     let digest = AttachmentCrypto::compute_digest(&dm_encrypted);
     let result = AttachmentCrypto::decrypt(&dm_encrypted, &key_64, &digest, 10);
     // Should fail (different format: no IV + padding + HMAC structure)
-    assert!(result.is_err(), "DM ciphertext should not decrypt as attachment");
+    assert!(
+        result.is_err(),
+        "DM ciphertext should not decrypt as attachment"
+    );
 
     // Encrypt with attachment crypto
     let att_encrypted = AttachmentCrypto::encrypt(b"Attachment data").unwrap();
@@ -404,7 +446,10 @@ fn test_cross_algorithm_rejection() {
     // Try to decrypt attachment ciphertext as DM
     let result = decrypt_dm_bytes(&att_encrypted.ciphertext, &key_32);
     // Should fail (different format: no 24-byte nonce prefix)
-    assert!(result.is_err(), "Attachment ciphertext should not decrypt as DM");
+    assert!(
+        result.is_err(),
+        "Attachment ciphertext should not decrypt as DM"
+    );
 }
 
 // ===========================================================================
@@ -425,10 +470,17 @@ fn test_dm_no_ciphertext_reuse() {
     let ct2 = encrypt_dm_bytes(msg, &key).unwrap();
 
     // Ciphertexts must differ (unique nonce)
-    assert_ne!(ct1, ct2, "Same plaintext must produce different ciphertext each time");
+    assert_ne!(
+        ct1, ct2,
+        "Same plaintext must produce different ciphertext each time"
+    );
 
     // Nonces (first 24 bytes) must differ
-    assert_ne!(&ct1[..24], &ct2[..24], "Nonces must be unique per encryption");
+    assert_ne!(
+        &ct1[..24],
+        &ct2[..24],
+        "Nonces must be unique per encryption"
+    );
 }
 
 /// Attachment encryption produces unique ciphertext per call.
@@ -441,6 +493,12 @@ fn test_attachment_no_ciphertext_reuse() {
 
     // Different keys → different ciphertext
     assert_ne!(enc1.key, enc2.key, "Each encryption must use a unique key");
-    assert_ne!(enc1.ciphertext, enc2.ciphertext, "Same plaintext must produce different ciphertext");
-    assert_ne!(enc1.digest, enc2.digest, "Different ciphertext → different digest");
+    assert_ne!(
+        enc1.ciphertext, enc2.ciphertext,
+        "Same plaintext must produce different ciphertext"
+    );
+    assert_ne!(
+        enc1.digest, enc2.digest,
+        "Different ciphertext → different digest"
+    );
 }

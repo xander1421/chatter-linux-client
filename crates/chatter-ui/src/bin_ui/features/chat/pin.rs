@@ -20,21 +20,43 @@ fn generate_pinned_preview(message: &Message, attachments: &[Attachment]) -> Str
     if !attachments.is_empty() {
         if attachments.len() == 1 {
             let cat = attachments[0].metadata.category();
-            let emoji = match cat { FileCategory::Image => "📷", FileCategory::Video => "🎬", FileCategory::Audio => "🎵", FileCategory::Document => "📄", FileCategory::Code => "📝", FileCategory::Archive => "📦", FileCategory::Other => "📎" };
-            let name = match cat { FileCategory::Image => "Photo", FileCategory::Video => "Video", FileCategory::Audio => "Voice message", FileCategory::Document => "Document", FileCategory::Code => "Code", FileCategory::Archive => "Archive", FileCategory::Other => "File" };
+            let emoji = match cat {
+                FileCategory::Image => "📷",
+                FileCategory::Video => "🎬",
+                FileCategory::Audio => "🎵",
+                FileCategory::Document => "📄",
+                FileCategory::Code => "📝",
+                FileCategory::Archive => "📦",
+                FileCategory::Other => "📎",
+            };
+            let name = match cat {
+                FileCategory::Image => "Photo",
+                FileCategory::Video => "Video",
+                FileCategory::Audio => "Voice message",
+                FileCategory::Document => "Document",
+                FileCategory::Code => "Code",
+                FileCategory::Archive => "Archive",
+                FileCategory::Other => "File",
+            };
             return format!("{} {}", emoji, name);
         }
         return format!("📎 {} attachments", attachments.len());
     }
     if !message.attachments.is_empty() {
-        if message.attachments.len() == 1 { return "📎 Attachment".to_string(); }
+        if message.attachments.len() == 1 {
+            return "📎 Attachment".to_string();
+        }
         return format!("📎 {} attachments", message.attachments.len());
     }
     String::new()
 }
 
 fn resolve_attachments(message: &Message, ui_ctx: &ChatterClient) -> Vec<Attachment> {
-    message.attachments.iter().filter_map(|id| ui_ctx.get_attachment(id)).collect()
+    message
+        .attachments
+        .iter()
+        .filter_map(|id| ui_ctx.get_attachment(id))
+        .collect()
 }
 
 /// Generate preview from Slint UI message model (used for anon DM/group sender-side).
@@ -61,20 +83,23 @@ pub fn wire_pin_message(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
         }
 
         // Get pin state and preview on UI thread BEFORE spawning
-        let (is_currently_pinned, preview_text, msg_id_str) = weak_window.upgrade().map(|w| {
-            let model = w.get_messages();
-            for i in 0..model.row_count() {
-                if let Some(m) = model.row_data(i) {
-                    if m.sender_id.as_str() == sender_id_str.as_str()
-                        && m.timestamp_ns.as_str() == timestamp_ns_str.as_str()
-                    {
-                        let preview = generate_pinned_preview_from_ui(&m);
-                        return (m.is_pinned, preview, m.message_id.to_string());
+        let (is_currently_pinned, preview_text, msg_id_str) = weak_window
+            .upgrade()
+            .map(|w| {
+                let model = w.get_messages();
+                for i in 0..model.row_count() {
+                    if let Some(m) = model.row_data(i) {
+                        if m.sender_id.as_str() == sender_id_str.as_str()
+                            && m.timestamp_ns.as_str() == timestamp_ns_str.as_str()
+                        {
+                            let preview = generate_pinned_preview_from_ui(&m);
+                            return (m.is_pinned, preview, m.message_id.to_string());
+                        }
                     }
                 }
-            }
-            (false, String::new(), String::new())
-        }).unwrap_or((false, String::new(), String::new()));
+                (false, String::new(), String::new())
+            })
+            .unwrap_or((false, String::new(), String::new()));
 
         let unpin = is_currently_pinned;
         let handle = ui_ctx.conversation(conversation);
@@ -90,9 +115,10 @@ pub fn wire_pin_message(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                 }
             };
             // Send pin/unpin via ConversationHandle (dispatches to correct service)
-            if let Err(e) = handle.send_pin(
-                &target_author, target_sent_timestamp, unpin,
-            ).await {
+            if let Err(e) = handle
+                .send_pin(&target_author, target_sent_timestamp, unpin)
+                .await
+            {
                 tracing::error!(error = %e, "Failed to send pin");
                 return;
             }
@@ -115,7 +141,9 @@ pub fn wire_pin_message(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             let preview_text = match handle.conversation() {
                 ActiveConversation::ServerDm { .. } | ActiveConversation::Channel(_) => {
                     if let Ok(sender_id) = sender_id_str.parse::<chatter_core::domain::UserId>() {
-                        if let Some(message) = ui_ctx.get_message_by_sender_timestamp(&sender_id, target_sent_timestamp) {
+                        if let Some(message) = ui_ctx
+                            .get_message_by_sender_timestamp(&sender_id, target_sent_timestamp)
+                        {
                             let attachments = resolve_attachments(&message, &ui_ctx);
                             generate_pinned_preview(&message, &attachments)
                         } else {
@@ -133,7 +161,9 @@ pub fn wire_pin_message(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                 if let Some(w) = weak.upgrade() {
                     super::edit_messages(&w, |model| {
                         for i in 0..model.row_count() {
-                            let Some(mut m) = model.row_data(i) else { continue };
+                            let Some(mut m) = model.row_data(i) else {
+                                continue;
+                            };
                             if m.sender_id.as_str() == sender_id_str.as_str()
                                 && m.timestamp_ns.as_str() == timestamp_ns_str.as_str()
                             {

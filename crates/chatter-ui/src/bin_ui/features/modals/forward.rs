@@ -22,7 +22,8 @@ pub fn wire_forward_message(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
         let Some(w) = weak.upgrade() else { return };
         let target_type = {
             let targets = w.get_forward_targets();
-            targets.iter()
+            targets
+                .iter()
                 .find(|t| t.id.as_str() == target_id_str)
                 .map(|t| t.target_type.to_string())
         };
@@ -79,9 +80,7 @@ pub fn wire_forward_message(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                         // stayed invisible until the next load (§112k).
                         // Reopen it through the sidebar path to reload.
                         if ui_ctx.chat_state().active_conversation() == target {
-                            crate::bin_ui::features::sidebar::select_conversation(
-                                &w, target,
-                            );
+                            crate::bin_ui::features::sidebar::select_conversation(&w, target);
                         }
                     }
                     if failed > 0 {

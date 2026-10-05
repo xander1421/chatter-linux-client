@@ -226,7 +226,10 @@ mod tests {
 
     #[test]
     fn test_store_clone() {
-        let store1 = Store::new(TestState { value: 1, name: "one".to_string() });
+        let store1 = Store::new(TestState {
+            value: 1,
+            name: "one".to_string(),
+        });
         let store2 = store1.clone();
 
         // Both stores share the same state

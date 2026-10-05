@@ -56,6 +56,8 @@ impl Migration for V074MessageReceipts {
         "#
     }
     fn down(&self) -> Option<&'static str> {
-        Some("DROP TRIGGER messages_attach_receipts; DROP TRIGGER messages_delivery_monotonic; DROP TABLE message_receipt_targets; DROP TABLE pending_message_receipts;")
+        Some(
+            "DROP TRIGGER messages_attach_receipts; DROP TRIGGER messages_delivery_monotonic; DROP TABLE message_receipt_targets; DROP TABLE pending_message_receipts;",
+        )
     }
 }

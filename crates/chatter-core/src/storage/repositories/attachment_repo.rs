@@ -2,11 +2,13 @@
 //!
 //! Data access for attachment entities.
 
-use crate::domain::attachment::{Attachment, AttachmentStatus, ContentLocation, FileMetadata, Thumbnail};
+use crate::domain::attachment::{
+    Attachment, AttachmentStatus, ContentLocation, FileMetadata, Thumbnail,
+};
 use crate::domain::ids::AttachmentId;
 use crate::error::StorageError;
-use crate::storage::serialization::{db_deserialize, db_serialize};
 use crate::storage::Database;
+use crate::storage::serialization::{db_deserialize, db_serialize};
 use chrono::{DateTime, Utc};
 use rusqlite::params;
 use std::sync::Arc;
@@ -17,11 +19,9 @@ use std::sync::Arc;
 /// Best-effort — losing a tile in a media drawer must not fail the insert that
 /// makes the attachment itself usable.
 fn resolve_shared_content(conn: &rusqlite::Connection, attachment: &Attachment) {
-    if let Err(e) = super::shared_content_repo::resolve_attachment(
-        conn,
-        &attachment.id,
-        &attachment.metadata,
-    ) {
+    if let Err(e) =
+        super::shared_content_repo::resolve_attachment(conn, &attachment.id, &attachment.metadata)
+    {
         tracing::warn!(attachment_id = %attachment.id, error = %e, "shared-content resolve failed");
     }
 }
@@ -135,7 +135,10 @@ impl AttachmentRepository {
     ///
     /// Returns the encrypted ciphertext blob for decryption in memory.
     /// Returns None if content is not stored in database (needs CDN download).
-    pub fn get_encrypted_content(&self, id: &AttachmentId) -> Result<Option<Vec<u8>>, StorageError> {
+    pub fn get_encrypted_content(
+        &self,
+        id: &AttachmentId,
+    ) -> Result<Option<Vec<u8>>, StorageError> {
         let conn = self.db.read_connection()?;
         let mut stmt = conn.prepare(
             "SELECT encrypted_content FROM attachments WHERE id = ?1 AND content_location = 1",
@@ -201,9 +204,8 @@ impl AttachmentRepository {
     /// Returns None if the attachment doesn't exist or isn't stored on filesystem.
     pub fn get_file_path(&self, id: &AttachmentId) -> Result<Option<String>, StorageError> {
         let conn = self.db.read_connection()?;
-        let mut stmt = conn.prepare(
-            "SELECT file_path FROM attachments WHERE id = ?1 AND content_location = 2",
-        )?;
+        let mut stmt = conn
+            .prepare("SELECT file_path FROM attachments WHERE id = ?1 AND content_location = 2")?;
 
         let result = stmt.query_row(params![id.to_string()], |row| {
             let path: Option<String> = row.get(0)?;
@@ -356,7 +358,10 @@ impl AttachmentRepository {
     // ========================================================================
 
     /// Get thumbnail for an attachment.
-    pub fn get_thumbnail(&self, attachment_id: &AttachmentId) -> Result<Option<Thumbnail>, StorageError> {
+    pub fn get_thumbnail(
+        &self,
+        attachment_id: &AttachmentId,
+    ) -> Result<Option<Thumbnail>, StorageError> {
         let conn = self.db.read_connection()?;
         let mut stmt = conn.prepare(
             "SELECT attachment_id, local_path, width, height, created_at
@@ -465,7 +470,9 @@ fn parse_datetime(s: &str) -> DateTime<Utc> {
 }
 
 /// Convert a database row to Attachment.
-fn row_to_attachment(row: &rusqlite::Row<'_>) -> rusqlite::Result<Result<Attachment, StorageError>> {
+fn row_to_attachment(
+    row: &rusqlite::Row<'_>,
+) -> rusqlite::Result<Result<Attachment, StorageError>> {
     let id_str: String = row.get(0)?;
     // Read from BLOB column (bincode serialized)
     let metadata_blob: Vec<u8> = row.get(1)?;
@@ -480,7 +487,12 @@ fn row_to_attachment(row: &rusqlite::Row<'_>) -> rusqlite::Result<Result<Attachm
 
     let id: AttachmentId = match id_str.parse() {
         Ok(id) => id,
-        Err(e) => return Ok(Err(StorageError::InvalidData(format!("Invalid attachment ID: {}", e)))),
+        Err(e) => {
+            return Ok(Err(StorageError::InvalidData(format!(
+                "Invalid attachment ID: {}",
+                e
+            ))));
+        }
     };
 
     // Deserialize BLOB field from bincode
@@ -515,7 +527,12 @@ fn row_to_thumbnail(row: &rusqlite::Row<'_>) -> rusqlite::Result<Result<Thumbnai
 
     let attachment_id: AttachmentId = match attachment_id_str.parse() {
         Ok(id) => id,
-        Err(e) => return Ok(Err(StorageError::InvalidData(format!("Invalid attachment ID: {}", e)))),
+        Err(e) => {
+            return Ok(Err(StorageError::InvalidData(format!(
+                "Invalid attachment ID: {}",
+                e
+            ))));
+        }
     };
 
     Ok(Ok(Thumbnail {
@@ -680,7 +697,10 @@ mod tests {
         let bincode_size = db_serialize(&metadata).unwrap().len();
         let json_size = serde_json::to_vec(&metadata).unwrap().len();
 
-        assert!(bincode_size < json_size, "Bincode should be smaller than JSON");
+        assert!(
+            bincode_size < json_size,
+            "Bincode should be smaller than JSON"
+        );
     }
 
     // ========================================================================

@@ -246,7 +246,12 @@ impl SessionManager {
         self.encrypt_at(peer, plaintext, Instant::now())
     }
 
-    fn encrypt_at(&mut self, peer: &PeerId, plaintext: &[u8], now: Instant) -> Result<Vec<u8>, NoiseError> {
+    fn encrypt_at(
+        &mut self,
+        peer: &PeerId,
+        plaintext: &[u8],
+        now: Instant,
+    ) -> Result<Vec<u8>, NoiseError> {
         let sealed = self
             .sessions
             .get_mut(peer)
@@ -279,12 +284,9 @@ impl SessionManager {
     #[must_use]
     pub fn needs_rekey(&self, peer: &PeerId) -> bool {
         !self.is_handshaking(peer)
-            && self
-                .sessions
-                .get(peer)
-                .is_some_and(|session| {
-                    session.needs_rekey() || self.activity.get(peer).is_some_and(|(_, idle)| *idle)
-                })
+            && self.sessions.get(peer).is_some_and(|session| {
+                session.needs_rekey() || self.activity.get(peer).is_some_and(|(_, idle)| *idle)
+            })
     }
 
     /// Set a session's sent-message count, so tests can reach the rekey
@@ -363,8 +365,14 @@ mod tests {
         assert!(alice.has_session(&bob_peer));
         assert!(bob.has_session(&alice_peer));
         assert_eq!(alice.remote_static(&bob_peer), Some(bob_id.static_public()));
-        assert_eq!(bob.remote_static(&alice_peer), Some(alice_id.static_public()));
-        assert_eq!(alice.fingerprint(&bob_peer).as_deref(), Some(bob_id.fingerprint().as_str()));
+        assert_eq!(
+            bob.remote_static(&alice_peer),
+            Some(alice_id.static_public())
+        );
+        assert_eq!(
+            alice.fingerprint(&bob_peer).as_deref(),
+            Some(bob_id.fingerprint().as_str())
+        );
     }
 
     #[test]
@@ -409,7 +417,11 @@ mod tests {
         let step = low
             .on_handshake(&high_peer, &low_peer, low_id, &high_open)
             .expect("low handles the collision");
-        assert_eq!(step, HandshakeStep::default(), "low keeps its initiator role");
+        assert_eq!(
+            step,
+            HandshakeStep::default(),
+            "low keeps its initiator role"
+        );
 
         // The high side yields and answers as responder.
         let step = high
@@ -563,7 +575,10 @@ mod tests {
         let m1 = alice.initiate(&bob_peer, &alice_id).expect("m1");
         assert!(!alice.needs_rekey(&bob_peer));
         let sealed = alice.encrypt(&bob_peer, b"mid-rekey").expect("old session");
-        assert_eq!(bob.decrypt(&alice_peer, &sealed).expect("opens"), b"mid-rekey");
+        assert_eq!(
+            bob.decrypt(&alice_peer, &sealed).expect("opens"),
+            b"mid-rekey"
+        );
 
         let m2 = bob
             .on_handshake(&alice_peer, &bob_peer, &bob_id, &m1)
@@ -581,7 +596,10 @@ mod tests {
         // A fresh session: the count is back to zero, and both sides agree.
         assert!(!alice.needs_rekey(&bob_peer));
         let sealed = alice.encrypt(&bob_peer, b"rekeyed").expect("new session");
-        assert_eq!(bob.decrypt(&alice_peer, &sealed).expect("opens"), b"rekeyed");
+        assert_eq!(
+            bob.decrypt(&alice_peer, &sealed).expect("opens"),
+            b"rekeyed"
+        );
     }
 
     /// bitchat's idle half: a session first used again after more than
@@ -594,20 +612,42 @@ mod tests {
         let (alice_peer, bob_peer) = complete(&mut alice, &alice_id, &mut bob, &bob_id);
         let start = alice.activity[&bob_peer].0;
 
-        alice.encrypt_at(&bob_peer, b"soon", start + IDLE_REKEY_AFTER).expect("in window");
-        assert!(!alice.needs_rekey(&bob_peer), "exactly 24 h is not idle past it");
+        alice
+            .encrypt_at(&bob_peer, b"soon", start + IDLE_REKEY_AFTER)
+            .expect("in window");
+        assert!(
+            !alice.needs_rekey(&bob_peer),
+            "exactly 24 h is not idle past it"
+        );
 
         let later = start + IDLE_REKEY_AFTER * 2 + Duration::from_secs(1);
-        let sealed = alice.encrypt_at(&bob_peer, b"after a day", later).expect("still usable");
-        assert_eq!(bob.decrypt(&alice_peer, &sealed).expect("opens"), b"after a day");
+        let sealed = alice
+            .encrypt_at(&bob_peer, b"after a day", later)
+            .expect("still usable");
+        assert_eq!(
+            bob.decrypt(&alice_peer, &sealed).expect("opens"),
+            b"after a day"
+        );
         assert!(alice.needs_rekey(&bob_peer));
 
         let m1 = alice.initiate(&bob_peer, &alice_id).expect("m1");
         assert!(!alice.needs_rekey(&bob_peer), "one renegotiation at a time");
-        let m2 = bob.on_handshake(&alice_peer, &bob_peer, &bob_id, &m1).expect("m1").reply.expect("m2");
-        let m3 = alice.on_handshake(&bob_peer, &alice_peer, &alice_id, &m2).expect("m2").reply.expect("m3");
-        bob.on_handshake(&alice_peer, &bob_peer, &bob_id, &m3).expect("bob completes");
-        assert!(!alice.needs_rekey(&bob_peer), "the new session starts fresh");
+        let m2 = bob
+            .on_handshake(&alice_peer, &bob_peer, &bob_id, &m1)
+            .expect("m1")
+            .reply
+            .expect("m2");
+        let m3 = alice
+            .on_handshake(&bob_peer, &alice_peer, &alice_id, &m2)
+            .expect("m2")
+            .reply
+            .expect("m3");
+        bob.on_handshake(&alice_peer, &bob_peer, &bob_id, &m3)
+            .expect("bob completes");
+        assert!(
+            !alice.needs_rekey(&bob_peer),
+            "the new session starts fresh"
+        );
     }
 
     #[test]

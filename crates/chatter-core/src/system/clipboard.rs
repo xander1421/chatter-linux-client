@@ -69,8 +69,8 @@ impl Clipboard {
     /// Returns `SystemError::ClipboardInit` if clipboard initialization fails.
     /// This can happen if no display server (Wayland or X11) is available.
     pub fn new() -> Result<Self, SystemError> {
-        let inner = arboard::Clipboard::new()
-            .map_err(|e| SystemError::ClipboardInit(e.to_string()))?;
+        let inner =
+            arboard::Clipboard::new().map_err(|e| SystemError::ClipboardInit(e.to_string()))?;
         Ok(Self { inner })
     }
 

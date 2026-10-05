@@ -18,7 +18,7 @@ use std::sync::Arc;
 use zeroize::Zeroize;
 
 use crate::crypto::svr_backup::{
-    decrypt_backup, derive_backup_id, encrypt_backup, KeyBackupPayload,
+    KeyBackupPayload, decrypt_backup, derive_backup_id, encrypt_backup,
 };
 use crate::error::{CryptoError, NetworkError, StorageError};
 use crate::network::grpc::client_pool::GrpcClientPool;
@@ -139,15 +139,15 @@ impl SvrBackupService {
     /// and uploads an encrypted backup. All sensitive intermediates are
     /// zeroized. Failure is non-fatal to the caller — the most common cause
     /// is a transient network error at registration time.
-    pub async fn backup_from_pin(
-        &self,
-        pin: &str,
-        username: &str,
-    ) -> Result<u32, SvrBackupError> {
+    pub async fn backup_from_pin(&self, pin: &str, username: &str) -> Result<u32, SvrBackupError> {
         use crate::storage::repositories::settings_repo::keys;
         use zeroize::Zeroize;
 
-        let mut profile_key = match self.signal_service.settings_repo.get_bytes(keys::PROFILE_KEY) {
+        let mut profile_key = match self
+            .signal_service
+            .settings_repo
+            .get_bytes(keys::PROFILE_KEY)
+        {
             Ok(Some(bytes)) if bytes.len() == 32 => {
                 let mut pk = [0u8; 32];
                 pk.copy_from_slice(&bytes);
@@ -164,7 +164,9 @@ impl SvrBackupService {
                 )));
             }
         };
-        let result = self.backup_with_profile_key(pin, username, &profile_key).await;
+        let result = self
+            .backup_with_profile_key(pin, username, &profile_key)
+            .await;
         profile_key.zeroize();
         result
     }
@@ -191,12 +193,20 @@ impl SvrBackupService {
             .await
             .map_err(|e| SvrBackupError::Crypto(e))?;
 
-        let mut private_bytes = self.signal_service.actor.get_identity_private_key().await
+        let mut private_bytes = self
+            .signal_service
+            .actor
+            .get_identity_private_key()
+            .await
             .map_err(|e| {
                 svr_secret.zeroize();
                 SvrBackupError::Generic(format!("failed to get identity private key: {e}"))
             })?;
-        let public_bytes_33 = self.signal_service.actor.get_identity_public_key().await
+        let public_bytes_33 = self
+            .signal_service
+            .actor
+            .get_identity_public_key()
+            .await
             .map_err(|e| {
                 svr_secret.zeroize();
                 private_bytes.zeroize();
@@ -210,7 +220,14 @@ impl SvrBackupService {
         let result = match self.local_full_username() {
             Ok(full_username) => {
                 store_retrying_version_conflict(
-                    || self.create_and_upload_backup(&svr_secret, &identity_keypair, profile_key, &full_username),
+                    || {
+                        self.create_and_upload_backup(
+                            &svr_secret,
+                            &identity_keypair,
+                            profile_key,
+                            &full_username,
+                        )
+                    },
                     || self.refresh_backup_version(&svr_secret),
                 )
                 .await
@@ -282,17 +299,27 @@ impl SvrBackupService {
             .map_err(|e| SvrBackupError::Generic(format!("settings read failed: {e}")))?
             .ok_or_else(|| SvrBackupError::Generic("no local profile_key to back up".into()))?;
         if stored.len() != 32 {
-            return Err(SvrBackupError::Generic("local profile_key has wrong length".into()));
+            return Err(SvrBackupError::Generic(
+                "local profile_key has wrong length".into(),
+            ));
         }
         let mut profile_key = [0u8; 32];
         profile_key.copy_from_slice(&stored);
 
-        let mut private_bytes = self.signal_service.actor.get_identity_private_key().await
+        let mut private_bytes = self
+            .signal_service
+            .actor
+            .get_identity_private_key()
+            .await
             .map_err(|e| {
                 profile_key.zeroize();
                 SvrBackupError::Generic(format!("failed to get identity private key: {e}"))
             })?;
-        let public_bytes_33 = self.signal_service.actor.get_identity_public_key().await
+        let public_bytes_33 = self
+            .signal_service
+            .actor
+            .get_identity_public_key()
+            .await
             .map_err(|e| {
                 profile_key.zeroize();
                 private_bytes.zeroize();
@@ -311,8 +338,13 @@ impl SvrBackupService {
 
         let result = match self.local_full_username() {
             Ok(full_username) => {
-                self.create_and_upload_backup(&svr_secret, &identity_keypair, &profile_key, &full_username)
-                    .await
+                self.create_and_upload_backup(
+                    &svr_secret,
+                    &identity_keypair,
+                    &profile_key,
+                    &full_username,
+                )
+                .await
             }
             Err(e) => Err(e),
         };
@@ -410,7 +442,10 @@ impl SvrBackupService {
     /// would destroy a live key.
     pub async fn has_key_backup(&self) -> Result<bool, SvrBackupError> {
         let mut client = self.grpc_pool.svr_client();
-        client.has_key_backup().await.map_err(SvrBackupError::Network)
+        client
+            .has_key_backup()
+            .await
+            .map_err(SvrBackupError::Network)
     }
 
     pub async fn fetch_and_restore_backup(
@@ -422,17 +457,20 @@ impl SvrBackupService {
 
         // 2. Fetch from server
         let mut client = self.grpc_pool.svr_client();
-        let result = client.fetch_backup(backup_id_hash.to_vec()).await.map_err(|e| {
-            match &e {
+        let result = client
+            .fetch_backup(backup_id_hash.to_vec())
+            .await
+            .map_err(|e| match &e {
                 NetworkError::NotFound(_) => SvrBackupError::BackupNotFound,
                 NetworkError::RateLimited => SvrBackupError::RateLimited,
                 NetworkError::DataLoss(_) => {
-                    tracing::error!("SVR backup destroyed by server (too many failed PIN attempts)");
+                    tracing::error!(
+                        "SVR backup destroyed by server (too many failed PIN attempts)"
+                    );
                     SvrBackupError::BackupDestroyed
                 }
                 _ => SvrBackupError::Network(e),
-            }
-        })?;
+            })?;
 
         // 3. Check remaining attempts
         if result.remaining_attempts <= 0 {
@@ -447,8 +485,7 @@ impl SvrBackupService {
         let payload = decrypt_backup(&result.encrypted_backup, svr_secret)?;
 
         // 5. Store server version locally for future increments
-        self.settings
-            .set(SVR_BACKUP_VERSION_KEY, &result.version)?;
+        self.settings.set(SVR_BACKUP_VERSION_KEY, &result.version)?;
 
         tracing::info!(
             version = result.version,
@@ -591,7 +628,10 @@ impl SvrBackupService {
 /// behind. On that conflict, `refresh` re-reads the server's version and the
 /// store runs once more. The caller must have verified the PIN: `refresh`
 /// fetches under it, a metered attempt.
-async fn store_retrying_version_conflict<S, SF, R, RF>(mut store: S, refresh: R) -> Result<u32, SvrBackupError>
+async fn store_retrying_version_conflict<S, SF, R, RF>(
+    mut store: S,
+    refresh: R,
+) -> Result<u32, SvrBackupError>
 where
     S: FnMut() -> SF,
     SF: std::future::Future<Output = Result<u32, SvrBackupError>>,
@@ -621,7 +661,9 @@ mod conflict_tests {
     use std::cell::Cell;
 
     fn conflict() -> SvrBackupError {
-        SvrBackupError::Network(NetworkError::InvalidRequest("precondition failed: backup version conflict".into()))
+        SvrBackupError::Network(NetworkError::InvalidRequest(
+            "precondition failed: backup version conflict".into(),
+        ))
     }
 
     #[tokio::test]
@@ -727,7 +769,11 @@ mod recovery_tests {
 
         SvrBackupService::clear_local_backup_version(&settings).unwrap();
 
-        let next = settings.get::<u32>(SVR_BACKUP_VERSION_KEY).unwrap().unwrap_or(0) + 1;
+        let next = settings
+            .get::<u32>(SVR_BACKUP_VERSION_KEY)
+            .unwrap()
+            .unwrap_or(0)
+            + 1;
         assert_eq!(
             next, 1,
             "the server deleted the row, so its stored version is 0 and only 1 is \

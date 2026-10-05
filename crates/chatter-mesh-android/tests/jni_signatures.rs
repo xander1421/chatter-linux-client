@@ -90,7 +90,13 @@ fn compiled_kotlin_matches_the_jni_contract() {
         .arg("-p")
         .arg(&class_file)
         .output()
-        .unwrap_or_else(|e| panic!("failed to run {} on {}: {e}", javap.display(), class_file.display()));
+        .unwrap_or_else(|e| {
+            panic!(
+                "failed to run {} on {}: {e}",
+                javap.display(),
+                class_file.display()
+            )
+        });
 
     assert!(
         output.status.success(),
@@ -248,7 +254,9 @@ fn walk(dir: &Path, counter: &mut usize, visit: &mut impl FnMut(&Path)) {
     };
     *counter += 1;
     for entry in entries.flatten() {
-        let Ok(kind) = entry.file_type() else { continue };
+        let Ok(kind) = entry.file_type() else {
+            continue;
+        };
         let path = entry.path();
         if kind.is_dir() {
             walk(&path, counter, visit);
@@ -302,7 +310,12 @@ impl Member {
     }
 
     fn render(&self) -> String {
-        format!("{}{}  [{}]", self.name, self.descriptor, self.modifiers.join(" "))
+        format!(
+            "{}{}  [{}]",
+            self.name,
+            self.descriptor,
+            self.modifiers.join(" ")
+        )
     }
 }
 
@@ -711,9 +724,16 @@ fn synthetic_and_overloaded_members_do_not_confuse_lookup() {
         .iter()
         .map(|m| m.descriptor.as_str())
         .collect();
-    assert_eq!(sends, vec!["(Ljava/lang/String;[B)Z", "(Ljava/lang/String;)Z"]);
+    assert_eq!(
+        sends,
+        vec!["(Ljava/lang/String;[B)Z", "(Ljava/lang/String;)Z"]
+    );
     assert_eq!(parsed.by_name("send$lambda$3").len(), 1);
-    assert_eq!(parsed.by_name("setScanning").len(), 1, "`$default` is a distinct name");
+    assert_eq!(
+        parsed.by_name("setScanning").len(),
+        1,
+        "`$default` is a distinct name"
+    );
     // Generics are erased in the descriptor and must be read from there, not the
     // pretty-printed signature.
     assert_eq!(
@@ -729,8 +749,14 @@ fn the_native_modifier_survives_kotlinc_formatting() {
     assert!(kotlin.by_name("nativeInitWebrtc")[0].is_native());
     assert!(kotlin.by_name("nativeOnCameraFrame")[0].is_native());
     assert!(!kotlin.by_name("hasPermission")[0].is_native());
-    assert_eq!(kotlin.by_name("nativeOnCameraFrame")[0].descriptor, "([BIIIJ)V");
-    assert_eq!(kotlin.by_name("yuv420ToI420")[0].descriptor, "(Landroidx/camera/core/ImageProxy;)[B");
+    assert_eq!(
+        kotlin.by_name("nativeOnCameraFrame")[0].descriptor,
+        "([BIIIJ)V"
+    );
+    assert_eq!(
+        kotlin.by_name("yuv420ToI420")[0].descriptor,
+        "(Landroidx/camera/core/ImageProxy;)[B"
+    );
 
     let java = parse_javap(FIXTURE_MATCHING);
     assert!(java.by_name("nativeOnData")[0].is_native());
@@ -740,7 +766,11 @@ fn the_native_modifier_survives_kotlinc_formatting() {
 #[test]
 fn a_matching_class_produces_no_problems() {
     let problems = check(&parse_javap(FIXTURE_MATCHING));
-    assert!(problems.is_empty(), "expected a clean bill of health, got:\n{}", problems.join("\n"));
+    assert!(
+        problems.is_empty(),
+        "expected a clean bill of health, got:\n{}",
+        problems.join("\n")
+    );
 }
 
 #[test]
@@ -748,16 +778,25 @@ fn every_kind_of_drift_is_reported() {
     let problems = check(&parse_javap(FIXTURE_DRIFTED)).join("\n");
 
     // Wrong return type: Kotlin `fun setScanning(on: Boolean)` vs contract `(Z)Z`.
-    assert!(problems.contains("`setScanning` — expected (Z)Z"), "{problems}");
+    assert!(
+        problems.contains("`setScanning` — expected (Z)Z"),
+        "{problems}"
+    );
     assert!(problems.contains("(Z)V"), "{problems}");
     // Deleted / renamed methods.
     assert!(problems.contains("`connect` — expected"), "{problems}");
     assert!(problems.contains("`maxWrite` — expected"), "{problems}");
     assert!(problems.contains("NOT DECLARED"), "{problems}");
     // Int where the contract says Boolean — the classic silent mismatch.
-    assert!(problems.contains("`nativeOnAdapterPowerChanged` — expected (Z)V"), "{problems}");
+    assert!(
+        problems.contains("`nativeOnAdapterPowerChanged` — expected (Z)V"),
+        "{problems}"
+    );
     // An `external fun` nobody registered.
-    assert!(problems.contains("UNREGISTERED NATIVE: `nativeOnRssi(Ljava/lang/String;I)V`"), "{problems}");
+    assert!(
+        problems.contains("UNREGISTERED NATIVE: `nativeOnRssi(Ljava/lang/String;I)V`"),
+        "{problems}"
+    );
     // Methods that are fine must not be reported.
     assert!(!problems.contains("`start`"), "{problems}");
     assert!(!problems.contains("`stop`"), "{problems}");
@@ -766,10 +805,16 @@ fn every_kind_of_drift_is_reported() {
 
 #[test]
 fn a_renamed_or_moved_class_is_reported() {
-    let moved = FIXTURE_MATCHING.replace("com.chatter.client.MeshBleBridge", "com.chatter.mesh.BleBridge");
+    let moved = FIXTURE_MATCHING.replace(
+        "com.chatter.client.MeshBleBridge",
+        "com.chatter.mesh.BleBridge",
+    );
     let problems = check(&parse_javap(&moved)).join("\n");
     assert!(problems.contains("class name:"), "{problems}");
-    assert!(problems.contains("com.chatter.mesh.BleBridge"), "{problems}");
+    assert!(
+        problems.contains("com.chatter.mesh.BleBridge"),
+        "{problems}"
+    );
 }
 
 #[test]

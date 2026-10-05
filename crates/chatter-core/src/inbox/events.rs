@@ -3,8 +3,8 @@
 //! Events emitted by the inbox system for monitoring message flow
 //! and coordinating UI updates.
 
-use crate::domain::ids::ChannelId;
 use crate::domain::UserId;
+use crate::domain::ids::ChannelId;
 use crate::proto::content_v1::AttachmentPointer;
 use crate::proto::mailbox_v1::EnvelopeType;
 
@@ -645,7 +645,8 @@ impl InboxEvent {
     pub(crate) fn server_stamp_call_offer(mut self, server_timestamp_ns: u64) -> Self {
         use crate::proto::content_v1::content::Content;
         if let (
-            InboxEvent::AnonDmMessage { inner_content, .. } | InboxEvent::AnonGroupMessage { inner_content, .. },
+            InboxEvent::AnonDmMessage { inner_content, .. }
+            | InboxEvent::AnonGroupMessage { inner_content, .. },
             true,
         ) = (&mut self, server_timestamp_ns > 0)
         {
@@ -709,12 +710,15 @@ mod tests {
 
     #[test]
     fn anon_call_offer_ages_by_the_server_stamp() {
-        use crate::proto::content_v1::{content::Content as C, AnonCallOffer, Content};
+        use crate::proto::content_v1::{AnonCallOffer, Content, content::Content as C};
         let offer = |ts| InboxEvent::AnonGroupMessage {
             peer_id: UserId::new(),
             group_id: vec![],
             inner_content: Box::new(Content {
-                content: Some(C::AnonCallOffer(AnonCallOffer { timestamp: ts, ..Default::default() })),
+                content: Some(C::AnonCallOffer(AnonCallOffer {
+                    timestamp: ts,
+                    ..Default::default()
+                })),
                 ..Default::default()
             }),
         };

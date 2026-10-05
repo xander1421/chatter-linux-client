@@ -1,7 +1,7 @@
+use crate::domain::UserId;
 use crate::domain::anon_dm::{AnonDmId, AnonDmStatus};
 use crate::domain::ids::{AttachmentId, ChannelId, MessageId};
 use crate::domain::message::ConversationType;
-use crate::domain::UserId;
 
 use super::{AnonDmError, AnonDmService};
 
@@ -64,7 +64,9 @@ impl AnonDmService {
 
     /// Check if sending a message would exceed rate limits.
     pub fn check_rate_limit(&self, conversation_id: &AnonDmId) -> Result<(), AnonDmError> {
-        let count = self.anon_dm_repo.increment_rate_limit(conversation_id, Self::RATE_LIMIT_WINDOW)?;
+        let count = self
+            .anon_dm_repo
+            .increment_rate_limit(conversation_id, Self::RATE_LIMIT_WINDOW)?;
 
         if count > Self::RATE_LIMIT_MESSAGES {
             tracing::warn!(
@@ -79,7 +81,10 @@ impl AnonDmService {
     }
 
     /// Check if the conversation is blocked (cannot send).
-    pub fn check_conversation_not_blocked(&self, conversation_id: &AnonDmId) -> Result<(), AnonDmError> {
+    pub fn check_conversation_not_blocked(
+        &self,
+        conversation_id: &AnonDmId,
+    ) -> Result<(), AnonDmError> {
         let dm = self
             .anon_dm_repo
             .get_conversation(conversation_id)?
@@ -104,15 +109,18 @@ impl AnonDmService {
             .get_conversation(conversation_id)?
             .ok_or(AnonDmError::ConversationNotFound(*conversation_id))?;
         if let Some(name) = dm.peer_display_name.as_deref().filter(|n| !n.is_empty()) {
-            self.anon_dm_repo.set_blocked_display_name(&dm.peer_id, name)?;
+            self.anon_dm_repo
+                .set_blocked_display_name(&dm.peer_id, name)?;
         }
 
         let channel_id: ChannelId = (*conversation_id).into();
         let messages =
             self.message_repo
                 .list(&channel_id, &ConversationType::AnonDm, None, u32::MAX)?;
-        let attachments: std::collections::HashSet<AttachmentId> =
-            messages.iter().flat_map(|m| m.attachments.iter().copied()).collect();
+        let attachments: std::collections::HashSet<AttachmentId> = messages
+            .iter()
+            .flat_map(|m| m.attachments.iter().copied())
+            .collect();
         let ids: Vec<MessageId> = messages.into_iter().map(|m| m.id).collect();
         self.message_repo.delete_batch(&ids)?;
 

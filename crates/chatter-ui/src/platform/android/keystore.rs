@@ -11,8 +11,8 @@
 //! registered itself.
 
 use chatter_core::system::sealed_secret::{self, KeyWrap};
-use jni::objects::{JByteArray, JClass, JObject, JValue};
 use jni::JNIEnv;
+use jni::objects::{JByteArray, JClass, JObject, JValue};
 
 use super::activity::{clear_exception, jni_env};
 
@@ -46,7 +46,12 @@ fn call(method: &str, alias: &str, input: &[u8]) -> Result<Vec<u8>, String> {
 
 /// One JNI round trip inside its own local frame, so the attached native
 /// thread does not accumulate local references.
-fn invoke(env: &mut JNIEnv<'static>, method: &str, alias: &str, input: &[u8]) -> jni::errors::Result<Vec<u8>> {
+fn invoke(
+    env: &mut JNIEnv<'static>,
+    method: &str,
+    alias: &str,
+    input: &[u8],
+) -> jni::errors::Result<Vec<u8>> {
     env.with_local_frame(16, |env| -> jni::errors::Result<Vec<u8>> {
         let ctx = ndk_context::android_context().context();
         // SAFETY: ndk_context holds a global ref to the Application for the
@@ -57,7 +62,12 @@ fn invoke(env: &mut JNIEnv<'static>, method: &str, alias: &str, input: &[u8]) ->
             .and_then(|v| v.l())?;
         let name = env.new_string(HELPER_CLASS)?;
         let class: JClass = env
-            .call_method(&loader, "loadClass", "(Ljava/lang/String;)Ljava/lang/Class;", &[JValue::Object(&name)])
+            .call_method(
+                &loader,
+                "loadClass",
+                "(Ljava/lang/String;)Ljava/lang/Class;",
+                &[JValue::Object(&name)],
+            )
             .and_then(|v| v.l())?
             .into();
         let j_alias = env.new_string(alias)?;

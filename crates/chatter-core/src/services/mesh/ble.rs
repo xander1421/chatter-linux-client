@@ -22,8 +22,8 @@ use chatter_mesh::dedup::MessageDeduplicator;
 use chatter_mesh::fragment;
 use chatter_mesh::ids::PeerId;
 use chatter_mesh::packet::{
-    BitchatPacket, MessageType, NoisePayloadType, SENDER_ID_LEN,
-    decode_noise_payload, encode_noise_payload,
+    BitchatPacket, MessageType, NoisePayloadType, SENDER_ID_LEN, decode_noise_payload,
+    encode_noise_payload,
 };
 use chatter_mesh::relay::{self, RelayInput};
 use chatter_mesh::tlv::announce::AnnouncementPacket;
@@ -42,7 +42,7 @@ use chatter_mesh_link::announce::{
 };
 use chatter_mesh_link::backpressure::{
     InboundAppend, InboundAppendMetadata, InboundChunk, InboundLimits,
-    PENDING_WRITE_BUFFER_CAP_BYTES, should_buffer, WriteEnqueue,
+    PENDING_WRITE_BUFFER_CAP_BYTES, WriteEnqueue, should_buffer,
 };
 use chatter_mesh_link::duty::{self, ScanCommand};
 use chatter_mesh_link::guard::{IngressGuard, IngressInput, IngressRejection};
@@ -56,11 +56,11 @@ use chatter_mesh_link::{LinkEvent, LinkId, LinkRole, MeshLink};
 use chatter_mesh_noise::prekey::PrekeyBundle;
 use chatter_mesh_noise::sign::{sign_packet, verify_packet};
 use chatter_mesh_noise::{MeshIdentity, NoiseError};
-use chatter_mesh_store::storage::{Storage, StorageKey};
-use chatter_mesh_store::outbox::Sealer;
 use chatter_mesh_store::archive::GossipMessageArchive;
 use chatter_mesh_store::courier::{AnnounceIngress, CourierStore};
 use chatter_mesh_store::outbox::AckKind;
+use chatter_mesh_store::outbox::Sealer;
+use chatter_mesh_store::storage::{Storage, StorageKey};
 use chatter_mesh_store::sync::{GossipSyncManager, SyncConfig};
 use tokio::sync::mpsc::UnboundedReceiver;
 
@@ -72,7 +72,9 @@ use super::file_stream::{
 };
 use super::mapping::{self, InboundMessage, MeshConversation, outbound_message};
 use super::router::{RouterCommand, RouterHandle};
-use super::state::{LinkStateInner, MeshState, NostrState, link_candidates_locked, now_millis, now_secs};
+use super::state::{
+    LinkStateInner, MeshState, NostrState, link_candidates_locked, now_millis, now_secs,
+};
 use super::timeline::MeshEvents;
 use super::transport::BleCommand;
 
@@ -218,21 +220,30 @@ impl BleRuntime {
     }
 
     fn restore_pins(&self) -> Result<(), String> {
-        if let Some(sealed) = self.storage.load(StorageKey::PeerPins).map_err(|e| e.to_string())? {
+        if let Some(sealed) = self
+            .storage
+            .load(StorageKey::PeerPins)
+            .map_err(|e| e.to_string())?
+        {
             let bytes = self.sealer.open(&sealed).map_err(|e| e.to_string())?;
-            self.state.with(|state| state.peers.restore_pins(&bytes))
+            self.state
+                .with(|state| state.peers.restore_pins(&bytes))
                 .map_err(|_| "malformed peer pins".to_string())?;
         }
         Ok(())
     }
 
     fn restore_prekeys(&self) -> Result<super::prekeys::LocalPrekeys, String> {
-        let Some(sealed) = self.storage.load(StorageKey::LocalPrekeys).map_err(|e| e.to_string())?
+        let Some(sealed) = self
+            .storage
+            .load(StorageKey::LocalPrekeys)
+            .map_err(|e| e.to_string())?
         else {
             return Ok(super::prekeys::LocalPrekeys::default());
         };
         let bytes = zeroize::Zeroizing::new(self.sealer.open(&sealed).map_err(|e| e.to_string())?);
-        super::prekeys::LocalPrekeys::from_bytes(&bytes).ok_or_else(|| "malformed prekey store".to_string())
+        super::prekeys::LocalPrekeys::from_bytes(&bytes)
+            .ok_or_else(|| "malformed prekey store".to_string())
     }
 
     /// Keep our prekey batch topped up, and publish its bundle whenever it
@@ -252,10 +263,13 @@ impl BleRuntime {
         if !changed {
             return;
         }
-        let Some(bytes) = self
-            .state
-            .with(|state| state.prekeys.local.as_ref().map(super::prekeys::LocalPrekeys::to_bytes))
-        else {
+        let Some(bytes) = self.state.with(|state| {
+            state
+                .prekeys
+                .local
+                .as_ref()
+                .map(super::prekeys::LocalPrekeys::to_bytes)
+        }) else {
             return;
         };
         let saved = self
@@ -321,7 +335,9 @@ impl BleRuntime {
     fn save_pins(&self) -> Result<(), String> {
         let bytes = self.state.with(|state| state.peers.pins_to_bytes());
         let sealed = self.sealer.seal(&bytes).map_err(|e| e.to_string())?;
-        self.storage.save(StorageKey::PeerPins, &sealed).map_err(|e| e.to_string())
+        self.storage
+            .save(StorageKey::PeerPins, &sealed)
+            .map_err(|e| e.to_string())
     }
 
     /// Start the radio and run until the command channel or the radio closes.
@@ -409,9 +425,11 @@ impl BleRuntime {
 
     async fn on_link_event(&mut self, event: LinkEvent) {
         match event {
-            LinkEvent::Discovered { address, rssi, peer } => {
-                self.on_discovered(&address, rssi, peer).await
-            }
+            LinkEvent::Discovered {
+                address,
+                rssi,
+                peer,
+            } => self.on_discovered(&address, rssi, peer).await,
             LinkEvent::Connected {
                 link,
                 role,
@@ -559,7 +577,8 @@ impl BleRuntime {
                 });
             }
             Err(error) => {
-                let timed_out = matches!(error, chatter_mesh_link::LinkError::ConnectTimedOut { .. });
+                let timed_out =
+                    matches!(error, chatter_mesh_link::LinkError::ConnectTimedOut { .. });
                 self.state.with(|state| {
                     state.connecting.remove(address);
                     // A timeout earns the long ignore window; an outright failure
@@ -791,7 +810,9 @@ impl BleRuntime {
         let retainable = self.dispatch(link, &packet, &claimed, now_s).await;
 
         // Refused identity-control packets must not be propagated to peers.
-        if !retainable { return; }
+        if !retainable {
+            return;
+        }
         if packet.is_broadcast() {
             self.gossip.on_public_packet_seen(&packet, now_s);
         }
@@ -920,11 +941,17 @@ impl BleRuntime {
             Some(MessageType::Message) => self.on_public_message(packet, claimed),
             Some(MessageType::Leave) => {
                 let verified = self.state.with(|state| {
-                    state.peers.pinned(claimed)
-                        .and_then(|pin| <[u8; 32]>::try_from(pin.signing_public_key.as_slice()).ok())
+                    state
+                        .peers
+                        .pinned(claimed)
+                        .and_then(|pin| {
+                            <[u8; 32]>::try_from(pin.signing_public_key.as_slice()).ok()
+                        })
                         .is_some_and(|key| verify_packet(packet, &key))
                 });
-                if !verified { return false; }
+                if !verified {
+                    return false;
+                }
                 self.state.with(|state| {
                     state.peers.remove(claimed);
                     state.sessions.forget(claimed);
@@ -978,8 +1005,10 @@ impl BleRuntime {
                         .links
                         .peer_for(link)
                         .is_some_and(|bound| bound != claimed),
-                    pin.map(|p| p.noise_public_key.clone()).or_else(|| record.and_then(|r| r.noise_public_key.clone())),
-                    pin.map(|p| p.signing_public_key.clone()).or_else(|| record.and_then(|r| r.signing_public_key.clone())),
+                    pin.map(|p| p.noise_public_key.clone())
+                        .or_else(|| record.and_then(|r| r.noise_public_key.clone())),
+                    pin.map(|p| p.signing_public_key.clone())
+                        .or_else(|| record.and_then(|r| r.signing_public_key.clone())),
                 )
             });
 
@@ -1042,8 +1071,13 @@ impl BleRuntime {
         // an attacker-chosen noise key and nickname, so accepting it is exactly the
         // identity-poisoning their handler exists to prevent.
         if !accepted.should_upsert_peer() {
-            if matches!(accepted.trust.distrust(), Some(AnnounceDistrust::KeyMismatch | AnnounceDistrust::SigningKeyMismatch)) {
-                self.events.send(MeshEvent::IdentityKeyChanged { peer: claimed.clone() });
+            if matches!(
+                accepted.trust.distrust(),
+                Some(AnnounceDistrust::KeyMismatch | AnnounceDistrust::SigningKeyMismatch)
+            ) {
+                self.events.send(MeshEvent::IdentityKeyChanged {
+                    peer: claimed.clone(),
+                });
             }
             tracing::info!(
                 target: "mesh::ble",
@@ -1062,11 +1096,18 @@ impl BleRuntime {
         // Commit the pin before exposing the peer as trusted. A failed write
         // leaves no accepted identity that would silently lose its pin on restart.
         let persisted = self.state.with(|state| -> Result<(), String> {
-            if state.peers.pinned(claimed).is_some() { return Ok(()); }
+            if state.peers.pinned(claimed).is_some() {
+                return Ok(());
+            }
             let mut candidate = state.peers.clone();
             candidate.upsert_verified_announce(claimed, &announcement, false, now_ms);
-            let sealed = self.sealer.seal(&candidate.pins_to_bytes()).map_err(|e| e.to_string())?;
-            self.storage.save(StorageKey::PeerPins, &sealed).map_err(|e| e.to_string())
+            let sealed = self
+                .sealer
+                .seal(&candidate.pins_to_bytes())
+                .map_err(|e| e.to_string())?;
+            self.storage
+                .save(StorageKey::PeerPins, &sealed)
+                .map_err(|e| e.to_string())
         });
         if let Err(error) = persisted {
             self.degraded(format!("Peer identity pin could not be saved: {error}"));
@@ -1081,62 +1122,63 @@ impl BleRuntime {
 
         let (is_new, link_authenticated, first_sighting, reconnected, bound_peer) =
             self.state.with(|state| {
-            // Whether this announce means the peer is *reachable on a link of
-            // its own*, which is not the same as "we heard from it".
-            //
-            // Passing `true` unconditionally, as this did, marks a peer that only
-            // reached us by relay as connected — and `reconcile_connectivity` then
-            // demotes it after PEER_INACTIVITY_TIMEOUT_MS because no live link is
-            // bound to it, so every subsequent announce arrives as a reconnect.
-            // With three devices in the room that is visible immediately: the
-            // second phone's announces come in over the first phone's link and
-            // flap `reconnected=true` forever.
-            //
-            // bitchat computes it as `hasPeripheralConnection ||
-            // hasCentralSubscription || (isDirectAnnounce && !linkBoundToOtherPeer)`
-            // (`BLEAnnounceHandler.swift:178`), and notes why the last clause is
-            // guarded: the TTL is unsigned, so a replayed announce can look direct
-            // on the replayer's link, and that must not shortcut an absent peer
-            // into "connected".
-            let connected = accepted.connected_flag().unwrap_or(false);
+                // Whether this announce means the peer is *reachable on a link of
+                // its own*, which is not the same as "we heard from it".
+                //
+                // Passing `true` unconditionally, as this did, marks a peer that only
+                // reached us by relay as connected — and `reconcile_connectivity` then
+                // demotes it after PEER_INACTIVITY_TIMEOUT_MS because no live link is
+                // bound to it, so every subsequent announce arrives as a reconnect.
+                // With three devices in the room that is visible immediately: the
+                // second phone's announces come in over the first phone's link and
+                // flap `reconnected=true` forever.
+                //
+                // bitchat computes it as `hasPeripheralConnection ||
+                // hasCentralSubscription || (isDirectAnnounce && !linkBoundToOtherPeer)`
+                // (`BLEAnnounceHandler.swift:178`), and notes why the last clause is
+                // guarded: the TTL is unsigned, so a replayed announce can look direct
+                // on the replayer's link, and that must not shortcut an absent peer
+                // into "connected".
+                let connected = accepted.connected_flag().unwrap_or(false);
 
-            let update = state
-                .peers
-                .upsert_verified_announce(claimed, &announcement, connected, now_ms);
-            // Bind first, always. `rebind_after_verified_direct` refuses an
-            // *unbound* link by design — it exists for the contested case, where a
-            // link already belongs to someone else and a verified direct announce
-            // is the only evidence strong enough to move it. Calling only rebind
-            // for a direct announce therefore never bound a fresh inbound link at
-            // all, which is the normal first-contact case: the peer registered,
-            // no link was bound to it, so `reconcile_connectivity` saw no live
-            // presence and demoted it 8s later — and the next announce arrived as
-            // a reconnect. bitchat binds a peripheral link to the claimed sender
-            // on a direct announce before any signature check
-            // (`BLEService.swift:2516`), so binding is not the guarded part.
-            //
-            // Rebinding still runs afterwards, and is still fully guarded: on a
-            // link we just bound it refuses as `SamePeer`, and on a contested one
-            // `bind_if_unbound` was the no-op instead.
-            state.links.bind_if_unbound(link, claimed);
-            if let Some(direct) = direct.as_ref() {
-                state
-                    .links
-                    .rebind_after_verified_direct(link, direct, now_ms);
-            }
-            // Per-link proof only: a Noise handshake completed, or traffic
-            // decrypted, on *this* link from this peer. A peer-level session is
-            // not enough — it outlives its link, and a replayed announce can
-            // rebind an attacker's link to the victim's ID.
-            let authenticated = state.links.is_noise_authenticated(link, claimed);
-            (
-                update.is_new_peer || update.was_disconnected,
-                authenticated,
-                update.is_new_peer,
-                update.was_disconnected,
-                state.links.peer_for(link).cloned(),
-            )
-        });
+                let update =
+                    state
+                        .peers
+                        .upsert_verified_announce(claimed, &announcement, connected, now_ms);
+                // Bind first, always. `rebind_after_verified_direct` refuses an
+                // *unbound* link by design — it exists for the contested case, where a
+                // link already belongs to someone else and a verified direct announce
+                // is the only evidence strong enough to move it. Calling only rebind
+                // for a direct announce therefore never bound a fresh inbound link at
+                // all, which is the normal first-contact case: the peer registered,
+                // no link was bound to it, so `reconcile_connectivity` saw no live
+                // presence and demoted it 8s later — and the next announce arrived as
+                // a reconnect. bitchat binds a peripheral link to the claimed sender
+                // on a direct announce before any signature check
+                // (`BLEService.swift:2516`), so binding is not the guarded part.
+                //
+                // Rebinding still runs afterwards, and is still fully guarded: on a
+                // link we just bound it refuses as `SamePeer`, and on a contested one
+                // `bind_if_unbound` was the no-op instead.
+                state.links.bind_if_unbound(link, claimed);
+                if let Some(direct) = direct.as_ref() {
+                    state
+                        .links
+                        .rebind_after_verified_direct(link, direct, now_ms);
+                }
+                // Per-link proof only: a Noise handshake completed, or traffic
+                // decrypted, on *this* link from this peer. A peer-level session is
+                // not enough — it outlives its link, and a replayed announce can
+                // rebind an attacker's link to the victim's ID.
+                let authenticated = state.links.is_noise_authenticated(link, claimed);
+                (
+                    update.is_new_peer || update.was_disconnected,
+                    authenticated,
+                    update.is_new_peer,
+                    update.was_disconnected,
+                    state.links.peer_for(link).cloned(),
+                )
+            });
 
         // Hang up any duplicate ACL to this peer. The announce is the only thing
         // that reveals identity — the address rotated out from under us — so this
@@ -1193,10 +1235,13 @@ impl BleRuntime {
         let ingress = AnnounceIngress::new(direct.is_some(), link_authenticated);
         if let Ok(key) = <[u8; 32]>::try_from(announcement.noise_public_key.as_slice()) {
             if ingress.releases_mail() {
-                self.hand_over_courier_mail(claimed, &key, now_s, ingress).await;
+                self.hand_over_courier_mail(claimed, &key, now_s, ingress)
+                    .await;
             } else if direct.is_some()
                 && self.couriers.carries_for(&key, now_s)
-                && !self.state.with(|state| state.sessions.is_handshaking(claimed))
+                && !self
+                    .state
+                    .with(|state| state.sessions.is_handshaking(claimed))
             {
                 // We carry mail for a peer that is here, direct, but has not
                 // proved its key on this link. A handshake is that proof; once
@@ -1230,7 +1275,9 @@ impl BleRuntime {
     /// same lost message of ours added another copy to the screen.
     fn is_own_echo(&self, packet: &BitchatPacket) -> bool {
         self.gossip.holds(packet)
-            || self.state.with(|state| state.self_broadcasts.contains(packet))
+            || self
+                .state
+                .with(|state| state.self_broadcasts.contains(packet))
     }
 
     fn on_public_message(&mut self, packet: &BitchatPacket, claimed: &PeerId) {
@@ -1511,7 +1558,9 @@ impl BleRuntime {
                     bytes = file.content.len(),
                     "an inbound mesh file could not be stored; it is lost"
                 );
-                self.degraded(format!("a file from {nickname} could not be saved: {error}"));
+                self.degraded(format!(
+                    "a file from {nickname} could not be saved: {error}"
+                ));
                 return;
             }
         };
@@ -1613,8 +1662,7 @@ impl BleRuntime {
         let Ok(manifest) = FileManifest::decode(&packet.payload) else {
             return;
         };
-        let Some((sender, nickname, _verified)) =
-            self.authenticate_stream_packet(packet, claimed)
+        let Some((sender, nickname, _verified)) = self.authenticate_stream_packet(packet, claimed)
         else {
             return;
         };
@@ -1692,8 +1740,7 @@ impl BleRuntime {
             );
             return;
         };
-        let Some((sender, nickname, _verified)) =
-            self.authenticate_stream_packet(packet, claimed)
+        let Some((sender, nickname, _verified)) = self.authenticate_stream_packet(packet, claimed)
         else {
             tracing::warn!(
                 target: "mesh::ble",
@@ -1858,9 +1905,12 @@ impl BleRuntime {
             "a chunked file transfer completed"
         );
 
-        let verified = self
-            .state
-            .with(|state| state.peers.info(&transfer.sender).is_some_and(|p| p.verified_nickname));
+        let verified = self.state.with(|state| {
+            state
+                .peers
+                .info(&transfer.sender)
+                .is_some_and(|p| p.verified_nickname)
+        });
         self.events.send(MeshEvent::Message(Box::new(MeshMessage {
             message: mapping::inbound_file_message(
                 &MeshConversation::Room,
@@ -1889,8 +1939,7 @@ impl BleRuntime {
         let Ok(request) = FileChunkRequest::decode(&packet.payload) else {
             return;
         };
-        let Some((sender, _nickname, _verified)) =
-            self.authenticate_stream_packet(packet, claimed)
+        let Some((sender, _nickname, _verified)) = self.authenticate_stream_packet(packet, claimed)
         else {
             return;
         };
@@ -1999,7 +2048,12 @@ impl BleRuntime {
                 let Ok(message) = PrivateMessagePacket::decode(body) else {
                     return;
                 };
-                self.emit_dm(claimed, &message.message_id, &message.content, packet.timestamp);
+                self.emit_dm(
+                    claimed,
+                    &message.message_id,
+                    &message.content,
+                    packet.timestamp,
+                );
                 self.send_ack(claimed, &message.message_id, NoisePayloadType::Delivered)
                     .await;
             }
@@ -2037,7 +2091,12 @@ impl BleRuntime {
                 && let Ok(message) = PrivateMessagePacket::decode(body)
             {
                 let sender = PeerId::from_noise_key(&sender_key);
-                self.emit_dm(&sender, &message.message_id, &message.content, packet.timestamp);
+                self.emit_dm(
+                    &sender,
+                    &message.message_id,
+                    &message.content,
+                    packet.timestamp,
+                );
             }
             return;
         }
@@ -2065,11 +2124,7 @@ impl BleRuntime {
             );
             return;
         }
-        if let Err(error) = self.couriers.deposit(
-            &envelope,
-            &depositor_key,
-            now_secs(),
-        ) {
+        if let Err(error) = self.couriers.deposit(&envelope, &depositor_key, now_secs()) {
             // Warn: the depositor believes we are carrying this for them, and we
             // are not. Nothing tells them otherwise.
             tracing::warn!(target: "mesh::ble", %error, "courier deposit refused");
@@ -2170,7 +2225,8 @@ impl BleRuntime {
     }
 
     async fn send_private(&mut self, peer: &PeerId, message_id: &str, content: &str) {
-        let Ok(tlv) = PrivateMessagePacket::new(message_id.to_string(), content.to_string()).encode()
+        let Ok(tlv) =
+            PrivateMessagePacket::new(message_id.to_string(), content.to_string()).encode()
         else {
             return;
         };
@@ -2195,15 +2251,13 @@ impl BleRuntime {
                 // router has already retained a copy, so nothing is lost if the
                 // handshake never completes.
                 self.state.with(|state| {
-                    state
-                        .pending_dms
-                        .entry(peer.clone())
-                        .or_default()
-                        .push(super::state::PendingDm {
+                    state.pending_dms.entry(peer.clone()).or_default().push(
+                        super::state::PendingDm {
                             message_id: message_id.to_string(),
                             content: content.to_string(),
                             queued_at_ms: now_millis(),
-                        });
+                        },
+                    );
                 });
                 self.start_handshake(peer).await;
             }
@@ -2250,12 +2304,7 @@ impl BleRuntime {
         }
     }
 
-    async fn send_ack(
-        &mut self,
-        peer: &PeerId,
-        message_id: &str,
-        payload_type: NoisePayloadType,
-    ) {
+    async fn send_ack(&mut self, peer: &PeerId, message_id: &str, payload_type: NoisePayloadType) {
         let payload = encode_noise_payload(payload_type, message_id.as_bytes());
         let sealed = self
             .state
@@ -2301,13 +2350,8 @@ impl BleRuntime {
         self.originate_broadcast(&packet).await;
 
         let local = self.identity.peer_id();
-        let message = outbound_message(
-            &MeshConversation::Room,
-            message_id,
-            &local,
-            content,
-            now_ms,
-        );
+        let message =
+            outbound_message(&MeshConversation::Room, message_id, &local, content, now_ms);
         self.events.send(MeshEvent::Message(Box::new(MeshMessage {
             message,
             conversation: MeshConversation::Room,
@@ -2454,8 +2498,11 @@ impl BleRuntime {
         };
         // Remembered so the echo is recognised as ours. The chunks are recorded
         // the same way as they go out — see `pump_streamed_files`.
-        self.state
-            .with(|state| state.self_broadcasts.record(message_id, &manifest_packet, now_ms));
+        self.state.with(|state| {
+            state
+                .self_broadcasts
+                .record(message_id, &manifest_packet, now_ms)
+        });
         self.originate_broadcast(&manifest_packet).await;
 
         tracing::info!(
@@ -2542,10 +2589,9 @@ impl BleRuntime {
             // A manifest again, whether or not the queue is busy: it is a few
             // hundred bytes, and a peer that arrived mid-transfer cannot use a
             // single chunk without one.
-            let due = self
-                .files_out
-                .get(&id)
-                .is_some_and(|t| now_s.saturating_sub(t.last_manifest_secs) >= MANIFEST_REPEAT_SECS);
+            let due = self.files_out.get(&id).is_some_and(|t| {
+                now_s.saturating_sub(t.last_manifest_secs) >= MANIFEST_REPEAT_SECS
+            });
             if due {
                 let manifest = {
                     let Some(transfer) = self.files_out.get_mut(&id) else {
@@ -2575,7 +2621,6 @@ impl BleRuntime {
                 );
                 continue;
             }
-
 
             for _ in 0..CHUNKS_PER_TICK {
                 let Some(transfer) = self.files_out.get_mut(&id) else {
@@ -2660,9 +2705,9 @@ impl BleRuntime {
     /// earliest now and the rest next round rather than emitting a request that
     /// would have to be fragmented to fit.
     async fn request_missing_chunks(&mut self, now_s: u64) {
-        let stalled =
-            self.files_in
-                .stalled(now_s, CHUNK_REQUEST_QUIET_SECS, MAX_REQUESTED_CHUNKS);
+        let stalled = self
+            .files_in
+            .stalled(now_s, CHUNK_REQUEST_QUIET_SECS, MAX_REQUESTED_CHUNKS);
         for (transfer_id, missing) in stalled {
             let Ok(request) = FileChunkRequest::new(transfer_id, missing) else {
                 continue;
@@ -2764,8 +2809,7 @@ impl BleRuntime {
     /// Send the announce that was requested inside the floor, once it expires.
     async fn flush_deferred_announce(&mut self, now_ms: u64) {
         let due = self.state.with(|state| {
-            state.announce_deferred
-                && duty::announce_floor_passed(state.last_announce_ms, now_ms)
+            state.announce_deferred && duty::announce_floor_passed(state.last_announce_ms, now_ms)
         });
         if due {
             self.announce().await;
@@ -2776,7 +2820,8 @@ impl BleRuntime {
         let Some(ingress) = ingress_link else {
             return Vec::new();
         };
-        self.state.with(|state| sibling_links_locked(state, ingress))
+        self.state
+            .with(|state| sibling_links_locked(state, ingress))
     }
 
     /// Sign a packet over its own preimage, when the caller asked for it.
@@ -2880,7 +2925,9 @@ impl BleRuntime {
                     match fragment::plan_fragments(packet, chunk, id) {
                         Ok(fragments) => fragments
                             .iter()
-                            .filter_map(|f| codec::encode(f, fragment::pads_ble_frame(f.msg_type)).ok())
+                            .filter_map(|f| {
+                                codec::encode(f, fragment::pads_ble_frame(f.msg_type)).ok()
+                            })
                             .collect(),
                         Err(_) => Vec::new(),
                     }
@@ -3035,8 +3082,8 @@ impl BleRuntime {
         let configured_duty = self.config.scan_duty_cycle;
         let scan = self.state.with(|state| {
             let connected = state.peers.connected_count();
-            let recent_traffic = now_ms.saturating_sub(state.last_traffic_ms)
-                < duty::RECENT_TRAFFIC_FORCE_SCAN_MS;
+            let recent_traffic =
+                now_ms.saturating_sub(state.last_traffic_ms) < duty::RECENT_TRAFFIC_FORCE_SCAN_MS;
             let duty_enabled = state.duty_enabled && configured_duty;
             let command = state.duty.update(
                 duty_enabled,
@@ -3156,9 +3203,7 @@ impl BleRuntime {
         self.maintain_prekeys(now_ms).await;
 
         // Gossip sync, which nothing else can schedule.
-        let connected: Vec<PeerId> = self
-            .state
-            .with(|state| state.peers.connected_peer_ids());
+        let connected: Vec<PeerId> = self.state.with(|state| state.peers.connected_peer_ids());
         match self.gossip.maintenance(&connected, now_s) {
             Ok(sends) => {
                 for send in sends {
@@ -3181,9 +3226,11 @@ impl BleRuntime {
     /// writing — would pin its partial until disconnect. This is the sweep that
     /// reclaims it.
     fn reap_stalled_partials(&mut self, now_ms: u64) {
-        let reaped = self
-            .state
-            .with(|state| state.assembler.reap_stalled(InboundLimits::default(), now_ms));
+        let reaped = self.state.with(|state| {
+            state
+                .assembler
+                .reap_stalled(InboundLimits::default(), now_ms)
+        });
         for stalled in reaped {
             tracing::warn!(
                 target: "mesh::ble",
@@ -3210,16 +3257,15 @@ impl BleRuntime {
                      finished arriving"
                 );
             }
-            state
-                .ingress
-                .prune(now_ms, chatter_mesh_link::registry::INGRESS_RECORD_LIFETIME_MS);
+            state.ingress.prune(
+                now_ms,
+                chatter_mesh_link::registry::INGRESS_RECORD_LIFETIME_MS,
+            );
             state.self_broadcasts.prune(
                 now_ms.saturating_sub(chatter_mesh_link::guard::SELF_BROADCAST_RETENTION_MILLIS),
             );
             state.scheduler.prune_backoff(now_ms);
-            state
-                .spool
-                .prune_expired(now_s, DIRECTED_SPOOL_WINDOW_SECS);
+            state.spool.prune_expired(now_s, DIRECTED_SPOOL_WINDOW_SECS);
         });
         if let Err(error) = self.couriers.prune_expired(now_s) {
             tracing::debug!(target: "mesh::ble", %error, "courier pool prune failed");
@@ -3234,8 +3280,12 @@ impl BleRuntime {
                 .files_in
                 .get(&id)
                 .and_then(|transfer| {
-                    self.state
-                        .with(|state| state.peers.nickname(&transfer.sender, false).map(str::to_string))
+                    self.state.with(|state| {
+                        state
+                            .peers
+                            .nickname(&transfer.sender, false)
+                            .map(str::to_string)
+                    })
                 })
                 .unwrap_or_else(|| "a peer".to_string());
             self.complete_transfer(&id, &nickname);
@@ -3498,9 +3548,7 @@ impl BleRuntime {
     }
 
     fn emit_status(&self) {
-        let status = self
-            .state
-            .status(self.nostr_state.connected_relay_count());
+        let status = self.state.status(self.nostr_state.connected_relay_count());
         self.events.send(MeshEvent::Status(status));
     }
 
@@ -3627,7 +3675,11 @@ fn redundant_central_links_locked(state: &LinkStateInner, peer: &PeerId) -> Vec<
         return Vec::new();
     }
     central.sort_by_key(|(id, link_state)| (!link_state.writable, Reverse(link_seq(id))));
-    central.into_iter().skip(1).map(|(id, _)| id.clone()).collect()
+    central
+        .into_iter()
+        .skip(1)
+        .map(|(id, _)| id.clone())
+        .collect()
 }
 
 /// The `#N` a [`LinkId`] ends with — its creation order on this radio.
@@ -3646,11 +3698,7 @@ fn link_seq(link: &LinkId) -> u64 {
 /// A free function so the relay path can be spawned: it needs the shared state and
 /// nothing else from the runtime. It no longer needs the radio — everything goes
 /// through the paced queue now, the same as `transmit`.
-async fn transmit_forwarded(
-    state: &Arc<MeshState>,
-    packet: &BitchatPacket,
-    ingress: &LinkId,
-) {
+async fn transmit_forwarded(state: &Arc<MeshState>, packet: &BitchatPacket, ingress: &LinkId) {
     let padding = fragment::pads_ble_frame(packet.msg_type);
     let Ok(encoded) = codec::encode(packet, padding) else {
         return;
@@ -3777,11 +3825,7 @@ mod tests {
 
     /// A peer in the registry with a known signing key, as a verified announce
     /// would have left it. Returns the identity that has to sign for it.
-    fn register_verified_peer(
-        state: &MeshState,
-        peer: &PeerId,
-        nickname: &str,
-    ) -> MeshIdentity {
+    fn register_verified_peer(state: &MeshState, peer: &PeerId, nickname: &str) -> MeshIdentity {
         let identity = MeshIdentity::generate(&mut OsRng);
         let announcement = AnnouncementPacket::new(
             nickname.to_string(),
@@ -3807,8 +3851,12 @@ mod tests {
         let attacker = MeshIdentity::generate(&mut OsRng);
         let link = LinkId::new("/mock/leave");
         let mut packet = BitchatPacket::new(
-            MessageType::Leave, peer.to_routing_bytes().unwrap(), None,
-            now_millis(), Vec::new(), chatter_mesh::relay::MESSAGE_TTL_DEFAULT,
+            MessageType::Leave,
+            peer.to_routing_bytes().unwrap(),
+            None,
+            now_millis(),
+            Vec::new(),
+            chatter_mesh::relay::MESSAGE_TTL_DEFAULT,
         );
         assert!(!runtime.handle_typed(&link, &packet, &peer).await);
         packet.signature = Some(sign_packet(&attacker, &packet).unwrap());
@@ -3904,9 +3952,8 @@ mod tests {
             announcement.encode().expect("encodes"),
             chatter_mesh::relay::MESSAGE_TTL_DEFAULT,
         );
-        packet.signature = Some(
-            chatter_mesh_noise::sign::sign_packet(&identity, &packet).expect("signs"),
-        );
+        packet.signature =
+            Some(chatter_mesh_noise::sign::sign_packet(&identity, &packet).expect("signs"));
 
         runtime.on_announce(&link, &packet, &distant).await;
 
@@ -3957,7 +4004,8 @@ mod tests {
             honest.encode().expect("encodes"),
             chatter_mesh::relay::MESSAGE_TTL_DEFAULT,
         );
-        honest_packet.signature = Some(sign_packet(&victim_identity, &honest_packet).expect("signs"));
+        honest_packet.signature =
+            Some(sign_packet(&victim_identity, &honest_packet).expect("signs"));
 
         let victim_link = LinkId::new("/mock/victim");
         state.with(|inner| {
@@ -3966,11 +4014,18 @@ mod tests {
             inner.max_write.insert(victim_link.clone(), 512);
         });
         assert!(
-            runtime.on_announce(&victim_link, &honest_packet, &victim).await,
+            runtime
+                .on_announce(&victim_link, &honest_packet, &victim)
+                .await,
             "the honest announce establishes the pin"
         );
         let pinned_signing_key = state
-            .with(|inner| inner.peers.info(&victim).and_then(|r| r.signing_public_key.clone()))
+            .with(|inner| {
+                inner
+                    .peers
+                    .info(&victim)
+                    .and_then(|r| r.signing_public_key.clone())
+            })
             .expect("the registry records the signing key on first contact");
 
         // The attacker replays the victim's Noise key — so the peer ID still
@@ -4003,7 +4058,9 @@ mod tests {
 
         let attacker_link = LinkId::new("/mock/attacker");
         state.with(|inner| {
-            inner.links.link_up(attacker_link.clone(), LinkRole::Central);
+            inner
+                .links
+                .link_up(attacker_link.clone(), LinkRole::Central);
             inner.links.set_writable(&attacker_link, true);
             inner.max_write.insert(attacker_link.clone(), 512);
         });
@@ -4016,12 +4073,19 @@ mod tests {
         runtime.restore_pins().expect("restore pins");
         assert!(state.with(|inner| inner.peers.info(&victim).is_none()));
         let mut events = runtime.events.subscribe();
-        let accepted = runtime.on_announce(&attacker_link, &forged_packet, &victim).await;
-        assert!(matches!(events.try_recv(), Ok(MeshEvent::IdentityKeyChanged { peer }) if peer == victim));
+        let accepted = runtime
+            .on_announce(&attacker_link, &forged_packet, &victim)
+            .await;
+        assert!(
+            matches!(events.try_recv(), Ok(MeshEvent::IdentityKeyChanged { peer }) if peer == victim)
+        );
 
         assert!(!accepted, "the forged announce must be refused");
         assert_eq!(
-            state.with(|inner| inner.peers.pinned(&victim).map(|r| r.signing_public_key.clone())),
+            state.with(|inner| inner
+                .peers
+                .pinned(&victim)
+                .map(|r| r.signing_public_key.clone())),
             Some(pinned_signing_key),
             "the victim's pinned signing key must survive the attempt"
         );
@@ -4072,8 +4136,8 @@ mod tests {
 
         // The forgery is *signature valid*. That is the point: the signature is
         // the attacker's own, over their own key, and it verifies.
-        let signing_key = <[u8; 32]>::try_from(announcement.signing_public_key.as_slice())
-            .expect("32 bytes");
+        let signing_key =
+            <[u8; 32]>::try_from(announcement.signing_public_key.as_slice()).expect("32 bytes");
         assert!(
             verify_packet(&packet, &signing_key),
             "the fixture must be a self-signature that really verifies"
@@ -4558,7 +4622,10 @@ mod tests {
 
         let echoed: Vec<_> = answers
             .iter()
-            .filter(|send| sent.iter().any(|p| p.packet_id() == send.packet.packet_id()))
+            .filter(|send| {
+                sent.iter()
+                    .any(|p| p.packet_id() == send.packet.packet_id())
+            })
             .collect();
         assert!(
             echoed.is_empty(),
@@ -4664,7 +4731,11 @@ mod tests {
         let link = writable_link(state, "/mock/android", 512);
         runtime.on_packet(&link, announce).await;
         runtime.drain_writes().await;
-        assert!(runtime.gossip.awaits_answer_from(&peer.peer_id(), now_secs()));
+        assert!(
+            runtime
+                .gossip
+                .awaits_answer_from(&peer.peer_id(), now_secs())
+        );
         (peer, link)
     }
 
@@ -4717,7 +4788,10 @@ mod tests {
         let stale = android_sync_answer(&android, b"from ten minutes ago", now_millis() - 600_000);
         runtime.on_packet(&link, stale.clone()).await;
         assert_eq!(messages_shown(&mut events), 1, "accepted");
-        assert!(runtime.gossip.holds(&stale), "filed, so our filter has it next round");
+        assert!(
+            runtime.gossip.holds(&stale),
+            "filed, so our filter has it next round"
+        );
 
         // Replays: the dedup cache, and past it the store.
         runtime.on_packet(&link, stale.clone()).await;
@@ -4733,7 +4807,10 @@ mod tests {
         live.ttl = chatter_mesh::relay::MESSAGE_TTL_DEFAULT;
         live.signature = Some(sign_packet(&android, &live).expect("signs"));
         runtime.on_packet(&link, live.clone()).await;
-        assert!(put_on_air(&runtime, &radio, &live).await, "the control relays");
+        assert!(
+            put_on_air(&runtime, &radio, &live).await,
+            "the control relays"
+        );
     }
 
     #[tokio::test]
@@ -4743,7 +4820,8 @@ mod tests {
         let mut events = runtime.events.subscribe();
 
         let retention_ms = SyncConfig::default().public_message_max_age_secs * 1000;
-        let ancient = android_sync_answer(&android, b"too old", now_millis() - retention_ms - 60_000);
+        let ancient =
+            android_sync_answer(&android, b"too old", now_millis() - retention_ms - 60_000);
         runtime.on_packet(&link, ancient.clone()).await;
 
         assert_eq!(messages_shown(&mut events), 0);
@@ -4766,7 +4844,10 @@ mod tests {
         let unpinned = MeshIdentity::generate(&mut OsRng).peer_id();
         let bound = writable_link(&state, "/mock/unpinned", 512);
         state.with(|inner| inner.links.bind_if_unbound(&bound, &unpinned));
-        runtime.gossip.initial_sync_to(&unpinned, now_secs()).expect("request");
+        runtime
+            .gossip
+            .initial_sync_to(&unpinned, now_secs())
+            .expect("request");
         runtime.on_packet(&bound, stale.clone()).await;
 
         assert_eq!(messages_shown(&mut events), 0);
@@ -4785,7 +4866,10 @@ mod tests {
         runtime.on_packet(&link, forged.clone()).await;
 
         assert_eq!(messages_shown(&mut events), 0);
-        assert!(!runtime.gossip.holds(&forged), "not filed, so not served onward");
+        assert!(
+            !runtime.gossip.holds(&forged),
+            "not filed, so not served onward"
+        );
     }
 
     #[tokio::test]
@@ -4820,8 +4904,8 @@ mod tests {
         );
 
         assert!(packet.signature.is_some(), "announces are signed");
-        let signing_key = <[u8; 32]>::try_from(announcement.signing_public_key.as_slice())
-            .expect("32 bytes");
+        let signing_key =
+            <[u8; 32]>::try_from(announcement.signing_public_key.as_slice()).expect("32 bytes");
         assert!(
             verify_packet(&packet, &signing_key),
             "the signature must verify against the advertised key, over the \
@@ -4849,7 +4933,11 @@ mod tests {
         runtime.announce().await;
         runtime.announce().await;
         runtime.drain_writes().await;
-        assert_eq!(radio.writes().len(), 1, "announces inside the floor are held");
+        assert_eq!(
+            radio.writes().len(),
+            1,
+            "announces inside the floor are held"
+        );
 
         // Still inside the floor: the deferred one waits.
         runtime.flush_deferred_announce(now_millis()).await;
@@ -4932,7 +5020,10 @@ mod tests {
         // The echo of our own broadcast must be recognisable.
         assert!(state.with(|inner| inner.self_broadcasts.contains(&packet)));
         assert_eq!(
-            state.with(|inner| inner.self_broadcasts.message_id(&packet).map(str::to_string)),
+            state.with(|inner| inner
+                .self_broadcasts
+                .message_id(&packet)
+                .map(str::to_string)),
             Some("MSG-1".to_string())
         );
 
@@ -4990,7 +5081,10 @@ mod tests {
             })
             .await;
         assert!(state.with(|inner| inner.links.is_writable(&link)));
-        assert_eq!(state.with(|inner| inner.max_write.get(&link).copied()), Some(244));
+        assert_eq!(
+            state.with(|inner| inner.max_write.get(&link).copied()),
+            Some(244)
+        );
     }
 
     #[tokio::test]
@@ -5082,7 +5176,11 @@ mod tests {
         let m1 = remote.initiate(&local_peer, &peer_identity).expect("m1");
         let identity = Arc::clone(&runtime.identity);
         let m2 = state
-            .with(|inner| inner.sessions.on_handshake(&peer, &local_peer, &identity, &m1))
+            .with(|inner| {
+                inner
+                    .sessions
+                    .on_handshake(&peer, &local_peer, &identity, &m1)
+            })
             .expect("we read m1")
             .reply
             .expect("m2");
@@ -5092,7 +5190,11 @@ mod tests {
             .reply
             .expect("m3");
         state
-            .with(|inner| inner.sessions.on_handshake(&peer, &local_peer, &identity, &m3))
+            .with(|inner| {
+                inner
+                    .sessions
+                    .on_handshake(&peer, &local_peer, &identity, &m3)
+            })
             .expect("we complete");
         assert!(state.has_session(&peer));
 
@@ -5127,7 +5229,10 @@ mod tests {
                 Some(MessageType::NoiseEncrypted),
             ]
         );
-        assert!(state.has_session(&peer), "the old session stays until replaced");
+        assert!(
+            state.has_session(&peer),
+            "the old session stays until replaced"
+        );
         assert!(state.with(|inner| inner.sessions.is_handshaking(&peer)));
     }
 
@@ -5169,7 +5274,11 @@ mod tests {
         let identity = Arc::clone(&runtime.identity);
         let m1 = remote.initiate(&local_peer, &peer_identity).expect("m1");
         let m2 = state
-            .with(|inner| inner.sessions.on_handshake(&peer, &local_peer, &identity, &m1))
+            .with(|inner| {
+                inner
+                    .sessions
+                    .on_handshake(&peer, &local_peer, &identity, &m1)
+            })
             .expect("m1 read")
             .reply
             .expect("m2");
@@ -5179,7 +5288,11 @@ mod tests {
             .reply
             .expect("m3");
         state
-            .with(|inner| inner.sessions.on_handshake(&peer, &local_peer, &identity, &m3))
+            .with(|inner| {
+                inner
+                    .sessions
+                    .on_handshake(&peer, &local_peer, &identity, &m3)
+            })
             .expect("established");
 
         let announce = |timestamp: u64| {
@@ -5212,7 +5325,11 @@ mod tests {
         };
 
         // A direct, verified announce: no mail yet, but a handshake to prove it.
-        assert!(runtime.on_announce(&link, &announce(now_millis()), &peer).await);
+        assert!(
+            runtime
+                .on_announce(&link, &announce(now_millis()), &peer)
+                .await
+        );
         runtime.drain_writes().await;
         assert!(sent(&radio, MessageType::CourierEnvelope).is_empty());
         assert!(runtime.couriers.carries_for(&recipient, now_s));
@@ -5238,7 +5355,11 @@ mod tests {
         assert!(state.with(|inner| inner.links.is_noise_authenticated(&link, &peer)));
 
         // The next announce on the proved link releases the mail.
-        assert!(runtime.on_announce(&link, &announce(now_millis() + 1), &peer).await);
+        assert!(
+            runtime
+                .on_announce(&link, &announce(now_millis() + 1), &peer)
+                .await
+        );
         runtime.drain_writes().await;
         assert_eq!(sent(&radio, MessageType::CourierEnvelope).len(), 1);
         assert!(!runtime.couriers.carries_for(&recipient, now_s));
@@ -5256,13 +5377,25 @@ mod tests {
 
         // Not restored: nothing is generated, nothing published.
         runtime.maintain_prekeys(now_millis()).await;
-        assert!(runtime.storage.load(StorageKey::LocalPrekeys).unwrap().is_none());
+        assert!(
+            runtime
+                .storage
+                .load(StorageKey::LocalPrekeys)
+                .unwrap()
+                .is_none()
+        );
 
-        state.with(|inner| inner.prekeys.local = Some(super::super::prekeys::LocalPrekeys::default()));
+        state.with(|inner| {
+            inner.prekeys.local = Some(super::super::prekeys::LocalPrekeys::default())
+        });
         runtime.maintain_prekeys(now_millis()).await;
         runtime.drain_writes().await;
 
-        let saved = runtime.storage.load(StorageKey::LocalPrekeys).unwrap().expect("saved");
+        let saved = runtime
+            .storage
+            .load(StorageKey::LocalPrekeys)
+            .unwrap()
+            .expect("saved");
         assert!(super::super::prekeys::LocalPrekeys::from_bytes(&saved).is_some());
         let published: Vec<BitchatPacket> = radio
             .writes()
@@ -5274,7 +5407,11 @@ mod tests {
         let bundle = PrekeyBundle::decode(&published[0].payload).expect("bundle");
         assert_eq!(bundle.owner_static, runtime.identity.static_public());
         assert!(bundle.verify(&runtime.identity.signing_public()));
-        assert!(runtime.gossip.has_prekey_bundle(&runtime.identity.peer_id()));
+        assert!(
+            runtime
+                .gossip
+                .has_prekey_bundle(&runtime.identity.peer_id())
+        );
 
         // Unchanged on the next tick: no second publish.
         runtime.maintain_prekeys(now_millis()).await;
@@ -5295,9 +5432,12 @@ mod tests {
             None,
         );
         state.with(|inner| {
-            inner
-                .peers
-                .upsert_verified_announce(&owner.peer_id(), &announcement, true, now_millis());
+            inner.peers.upsert_verified_announce(
+                &owner.peer_id(),
+                &announcement,
+                true,
+                now_millis(),
+            );
         });
 
         let mut theirs = super::super::prekeys::LocalPrekeys::default();
@@ -5325,7 +5465,10 @@ mod tests {
         assert!(!runtime.on_prekey_bundle(&bundle_packet(&forged)));
         assert!(
             state
-                .with(|inner| inner.prekeys.peers.take(&owner.static_public(), now_millis()))
+                .with(|inner| inner
+                    .prekeys
+                    .peers
+                    .take(&owner.static_public(), now_millis()))
                 .is_none()
         );
 
@@ -5352,7 +5495,14 @@ mod tests {
             inner.prekeys.local = Some(local);
         });
         let bundle = state
-            .with(|inner| inner.prekeys.local.as_ref().unwrap().bundle(&runtime.identity))
+            .with(|inner| {
+                inner
+                    .prekeys
+                    .local
+                    .as_ref()
+                    .unwrap()
+                    .bundle(&runtime.identity)
+            })
             .expect("bundle");
 
         let sender = MeshIdentity::generate(&mut OsRng);
@@ -5402,10 +5552,22 @@ mod tests {
         // Consumed: the next refresh changes the set (so it is saved and
         // republished under a newer stamp) and the bundle no longer offers it.
         assert!(state.with(|inner| {
-            inner.prekeys.local.as_mut().unwrap().refresh(now_millis() + 1, &mut OsRng)
+            inner
+                .prekeys
+                .local
+                .as_mut()
+                .unwrap()
+                .refresh(now_millis() + 1, &mut OsRng)
         }));
         let refreshed = state
-            .with(|inner| inner.prekeys.local.as_ref().unwrap().bundle(&runtime.identity))
+            .with(|inner| {
+                inner
+                    .prekeys
+                    .local
+                    .as_ref()
+                    .unwrap()
+                    .bundle(&runtime.identity)
+            })
             .expect("bundle");
         assert!(refreshed.prekeys.iter().all(|p| Some(p.id) != prekey_id));
         assert!(refreshed.generated_at > bundle.generated_at);
@@ -5854,7 +6016,10 @@ mod tests {
         let _ = state.with(|s| {
             s.assembler.append(
                 &link,
-                &[InboundChunk { offset: 0, bytes: vec![0x01, 0x02] }],
+                &[InboundChunk {
+                    offset: 0,
+                    bytes: vec![0x01, 0x02],
+                }],
                 InboundLimits::default(),
                 now_millis() + 60_000,
             )
@@ -5963,9 +6128,16 @@ mod tests {
         // `LinkId`, which is the D-Bus object path, and a rotated address sorts
         // wherever its hex happens to fall — arrival order is not recoverable from
         // it and the test should not pretend otherwise.
-        assert_eq!(doomed.len(), 2, "expected exactly one central link to survive");
+        assert_eq!(
+            doomed.len(),
+            2,
+            "expected exactly one central link to survive"
+        );
         assert!(doomed.contains(&stale), "kept a link whose socket is gone");
-        assert!(!doomed.contains(&inbound), "hung up a link the peer dialled to us");
+        assert!(
+            !doomed.contains(&inbound),
+            "hung up a link the peer dialled to us"
+        );
         let keeper = [&second, &third]
             .into_iter()
             .find(|link| !doomed.contains(link))
@@ -6011,7 +6183,10 @@ mod tests {
         let manifest = test_manifest([0x10; 8], &bytes);
         assert_eq!(manifest.chunk_count, 3);
 
-        runtime.on_file_manifest(&manifest_packet(&sender, &identity, &manifest, true), &sender);
+        runtime.on_file_manifest(
+            &manifest_packet(&sender, &identity, &manifest, true),
+            &sender,
+        );
         assert!(
             events.try_recv().is_err(),
             "a manifest is not a message; nothing may surface until the bytes are \
@@ -6076,7 +6251,10 @@ mod tests {
 
         let bytes = body(3_000);
         let manifest = test_manifest([0x11; 8], &bytes);
-        runtime.on_file_manifest(&manifest_packet(&sender, &identity, &manifest, true), &sender);
+        runtime.on_file_manifest(
+            &manifest_packet(&sender, &identity, &manifest, true),
+            &sender,
+        );
         for index in [0u32, 2] {
             runtime.on_file_chunk(
                 &chunk_packet(&sender, &identity, &manifest, &bytes, index, true),
@@ -6139,7 +6317,10 @@ mod tests {
 
         let bytes = body(2_048);
         let manifest = test_manifest([0x12; 8], &bytes);
-        runtime.on_file_manifest(&manifest_packet(&sender, &identity, &manifest, true), &sender);
+        runtime.on_file_manifest(
+            &manifest_packet(&sender, &identity, &manifest, true),
+            &sender,
+        );
 
         // Chunk 0 unsigned, chunk 1 properly signed.
         runtime.on_file_chunk(
@@ -6195,14 +6376,20 @@ mod tests {
 
         let bytes = body(2_048);
         let manifest = test_manifest([0x13; 8], &bytes);
-        runtime.on_file_manifest(&manifest_packet(&sender, &identity, &manifest, false), &sender);
+        runtime.on_file_manifest(
+            &manifest_packet(&sender, &identity, &manifest, false),
+            &sender,
+        );
         assert!(runtime.files_in.is_empty());
 
         // Nor does a validly signed manifest from a peer that never announced:
         // there is no key to check it against, so it authenticates itself.
         let stranger = PeerId::from_str("cccccccccccccccc");
         let own = MeshIdentity::generate(&mut OsRng);
-        runtime.on_file_manifest(&manifest_packet(&stranger, &own, &manifest, true), &stranger);
+        runtime.on_file_manifest(
+            &manifest_packet(&stranger, &own, &manifest, true),
+            &stranger,
+        );
         assert!(runtime.files_in.is_empty());
     }
 
@@ -6220,7 +6407,10 @@ mod tests {
 
         let bytes = body(2_048);
         let manifest = test_manifest([0x14; 8], &bytes);
-        runtime.on_file_manifest(&manifest_packet(&sender, &identity, &manifest, true), &sender);
+        runtime.on_file_manifest(
+            &manifest_packet(&sender, &identity, &manifest, true),
+            &sender,
+        );
         runtime.on_file_chunk(
             &chunk_packet(&other, &other_identity, &manifest, &bytes, 0, true),
             &other,
@@ -6255,7 +6445,10 @@ mod tests {
         // manifest is still correctly signed, so nothing before the digest check
         // can catch this.
         manifest.sha256 = [0xAB; 32];
-        runtime.on_file_manifest(&manifest_packet(&sender, &identity, &manifest, true), &sender);
+        runtime.on_file_manifest(
+            &manifest_packet(&sender, &identity, &manifest, true),
+            &sender,
+        );
         for index in 0..3 {
             runtime.on_file_chunk(
                 &chunk_packet(&sender, &identity, &manifest, &bytes, index, true),
@@ -6309,7 +6502,10 @@ mod tests {
         let bytes = body(5_000);
         let manifest = test_manifest([0x16; 8], &bytes);
         assert_eq!(manifest.chunk_count, 5);
-        first.on_file_manifest(&manifest_packet(&sender, &identity, &manifest, true), &sender);
+        first.on_file_manifest(
+            &manifest_packet(&sender, &identity, &manifest, true),
+            &sender,
+        );
         for index in [0u32, 1, 2] {
             first.on_file_chunk(
                 &chunk_packet(&sender, &identity, &manifest, &bytes, index, true),
@@ -6321,7 +6517,11 @@ mod tests {
         // A new process over the same spool directory.
         let (mut restarted, _radio2, state2, timeline2) = runtime_parts();
         restarted.files_in = FileStreamSpool::new(spool);
-        assert_eq!(restarted.files_in.restore(now_secs()), 1, "the partial transfer is back");
+        assert_eq!(
+            restarted.files_in.restore(now_secs()),
+            1,
+            "the partial transfer is back"
+        );
         let identity = register_verified_peer(&state2, &sender, "wanderer");
         assert_eq!(
             restarted
@@ -6378,7 +6578,10 @@ mod tests {
 
         let bytes = body(2_048);
         let manifest = test_manifest([0x1C; 8], &bytes);
-        first.on_file_manifest(&manifest_packet(&sender, &identity, &manifest, true), &sender);
+        first.on_file_manifest(
+            &manifest_packet(&sender, &identity, &manifest, true),
+            &sender,
+        );
         // Only the first chunk goes through the runtime; the second is written
         // straight into the spool so the completion handler never runs, which is
         // what a kill between the two looks like on disk.
@@ -6389,7 +6592,13 @@ mod tests {
         assert_eq!(
             first
                 .files_in
-                .accept_chunk(&manifest.transfer_id, 1, &bytes[1024..], &sender, now_secs())
+                .accept_chunk(
+                    &manifest.transfer_id,
+                    1,
+                    &bytes[1024..],
+                    &sender,
+                    now_secs()
+                )
                 .expect("accepted"),
             ChunkOutcome::Complete
         );
@@ -6431,9 +6640,7 @@ mod tests {
                 reason.to_lowercase().contains("connect"),
                 "the reason has to name what stopped working, got {reason:?}"
             ),
-            other => panic!(
-                "losing inbound links must be reported, not swallowed; got {other:?}"
-            ),
+            other => panic!("losing inbound links must be reported, not swallowed; got {other:?}"),
         }
     }
 
@@ -6495,7 +6702,10 @@ mod tests {
         assert!(
             matches!(
                 radio.send(&link, &[0u8; 65]).await,
-                Err(chatter_mesh_link::LinkError::PayloadTooLarge { actual: 65, max: 64 })
+                Err(chatter_mesh_link::LinkError::PayloadTooLarge {
+                    actual: 65,
+                    max: 64
+                })
             ),
             "one byte over the ceiling is refused"
         );
@@ -6574,7 +6784,9 @@ mod tests {
             b"worth relaying".to_vec(),
             true,
         );
-        runtime.relay(&inbound, &packet, &runtime.identity.peer_id()).await;
+        runtime
+            .relay(&inbound, &packet, &runtime.identity.peer_id())
+            .await;
         // `relay` spawns the write behind a collision-avoidance delay, so the
         // frames are not queued the instant it returns.
         tokio::time::sleep(std::time::Duration::from_millis(80)).await;
@@ -6765,9 +6977,7 @@ mod tests {
         // held back by the first chunk's pacing interval.
         runtime.pump_streamed_files(now_secs()).await;
         runtime.drain_writes().await;
-        runtime
-            .pump_streamed_files(now_secs())
-            .await;
+        runtime.pump_streamed_files(now_secs()).await;
 
         // A signed request for chunk 0, which has already been sent once.
         let request = FileChunkRequest::new(manifest.transfer_id, vec![0]).expect("valid");
@@ -6802,10 +7012,8 @@ mod tests {
         let served = writes
             .get(before)
             .unwrap_or_else(|| panic!("the re-requested chunk should have been written"));
-        let sent = FileChunk::decode(
-            &codec::decode(&served.1).expect("decodable").payload,
-        )
-        .expect("decodes");
+        let sent = FileChunk::decode(&codec::decode(&served.1).expect("decodable").payload)
+            .expect("decodes");
         assert_eq!(
             sent.index, 0,
             "the re-request jumps the queue ahead of the unfinished first pass"
@@ -6839,10 +7047,8 @@ mod tests {
         let served = writes
             .get(before)
             .unwrap_or_else(|| panic!("the re-requested chunk should have been written"));
-        let sent = FileChunk::decode(
-            &codec::decode(&served.1).expect("decodable").payload,
-        )
-        .expect("decodes");
+        let sent = FileChunk::decode(&codec::decode(&served.1).expect("decodable").payload)
+            .expect("decodes");
         assert_eq!(
             sent.index, 2,
             "the pass carried on; the unsigned request bought nothing"
@@ -6881,7 +7087,14 @@ mod tests {
             "our own manifest must not open a receive spool for a file we are sending"
         );
 
-        let own_chunk = chunk_packet(&local, &runtime.identity.clone(), &manifest, &bytes, 0, true);
+        let own_chunk = chunk_packet(
+            &local,
+            &runtime.identity.clone(),
+            &manifest,
+            &bytes,
+            0,
+            true,
+        );
         runtime.on_file_chunk(&own_chunk, &local);
         assert!(runtime.files_in.is_empty());
         assert_eq!(
@@ -6934,7 +7147,9 @@ mod tests {
         runtime.drain_writes().await;
         let writes = radio.writes();
         assert_eq!(
-            codec::decode(&writes[0].1).expect("decodable").message_type(),
+            codec::decode(&writes[0].1)
+                .expect("decodable")
+                .message_type(),
             Some(MessageType::FileTransfer),
             "a small file is still a single bitchat file packet"
         );

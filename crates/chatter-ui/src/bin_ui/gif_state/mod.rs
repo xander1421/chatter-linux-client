@@ -8,13 +8,13 @@
 //! - Viewer: MAX_VIEWER_FRAMES (100) per animation
 //! - Inline: MAX_INLINE_GIFS (20) with LRU eviction
 
+mod inline;
 mod picker;
 mod viewer;
-mod inline;
 
+pub use inline::*;
 pub use picker::*;
 pub use viewer::*;
-pub use inline::*;
 
 /// Maximum frames to store per GIF animation (viewer).
 pub(crate) const MAX_VIEWER_FRAMES: usize = 100;

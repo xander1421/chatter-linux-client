@@ -8,10 +8,10 @@
 
 use std::sync::Arc;
 
+use crate::domain::UserId;
 use crate::domain::jarvis::{
     EntityKnowledge, JarvisContext, JarvisConversation, JarvisFact, JarvisSummary, SubjectType,
 };
-use crate::domain::UserId;
 use crate::local_ai::vector_store::VectorSearchResult;
 use crate::services::semantic_search::SemanticSearchService;
 use crate::storage::repositories::{JarvisGraphRepository, JarvisMemoryRepository};
@@ -82,7 +82,10 @@ impl BuiltContext {
             parts.push("\n## Relevant Knowledge".to_string());
             for fact in &self.query_facts {
                 if fact.decayed_confidence() > 0.3 {
-                    parts.push(format!("- {} {} {}", fact.subject_id, fact.predicate, fact.object));
+                    parts.push(format!(
+                        "- {} {} {}",
+                        fact.subject_id, fact.predicate, fact.object
+                    ));
                 }
             }
         }
@@ -170,7 +173,9 @@ impl ContextBuilder {
         //    turn count: fetch generously, then trim oldest-first to ~8K tokens
         //    (~4 chars/token) so long chats never blow the model context.
         const HISTORY_CHAR_BUDGET: usize = 32_000;
-        let mut history = self.memory_repo.get_recent_conversations(context, HISTORY_TURN_LIMIT)?;
+        let mut history = self
+            .memory_repo
+            .get_recent_conversations(context, HISTORY_TURN_LIMIT)?;
         let mut total: usize = history.iter().map(|c| c.content.len()).sum();
         while total > HISTORY_CHAR_BUDGET && history.len() > 2 {
             total -= history.remove(0).content.len();
@@ -276,24 +281,25 @@ mod tests {
         // History goes to the model as real chat turns (JarvisService::ask),
         // never as system-prompt text.
         let context = BuiltContext {
-            history: vec![
-                JarvisConversation {
-                    id: crate::domain::JarvisConversationId::new(),
-                    context_type: crate::domain::ContextType::Channel,
-                    context_id: "test".to_string(),
-                    role: Role::User,
-                    content: "Hello".to_string(),
-                    timestamp: 0,
-                    metadata_json: None,
-                    created_at: chrono::Utc::now(),
-                },
-            ],
+            history: vec![JarvisConversation {
+                id: crate::domain::JarvisConversationId::new(),
+                context_type: crate::domain::ContextType::Channel,
+                context_id: "test".to_string(),
+                role: Role::User,
+                content: "Hello".to_string(),
+                timestamp: 0,
+                metadata_json: None,
+                created_at: chrono::Utc::now(),
+            }],
             ..Default::default()
         };
 
         assert!(!context.is_empty(), "history still counts as context");
         let prompt = context.to_system_prompt();
-        assert!(!prompt.contains("Hello"), "history leaked into the system prompt");
+        assert!(
+            !prompt.contains("Hello"),
+            "history leaked into the system prompt"
+        );
     }
 
     #[test]

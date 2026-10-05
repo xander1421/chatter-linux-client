@@ -6,20 +6,27 @@ use std::time::Duration;
 
 use slint::SharedString;
 
-use crate::bin_ui::audio_state;
 use crate::MainWindow;
+use crate::bin_ui::audio_state;
 
 /// Wire audio seek callback.
 pub fn wire_audio_seek(window: &MainWindow) {
     window.on_audio_seek(move |attachment_id: SharedString, position: f32| {
         let attachment_id_str = attachment_id.to_string();
 
-        tracing::debug!("Audio seek: {} to position {:.2}", attachment_id_str, position);
+        tracing::debug!(
+            "Audio seek: {} to position {:.2}",
+            attachment_id_str,
+            position
+        );
 
         // Check if this attachment is currently playing
         let current_playing = audio_state::get_current_playing_id();
         if current_playing.as_deref() != Some(attachment_id.as_str()) {
-            tracing::debug!("Seek ignored: {} is not currently playing", attachment_id_str);
+            tracing::debug!(
+                "Seek ignored: {} is not currently playing",
+                attachment_id_str
+            );
             return;
         }
 

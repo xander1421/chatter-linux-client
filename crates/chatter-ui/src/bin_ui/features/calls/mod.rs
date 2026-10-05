@@ -15,8 +15,8 @@
 
 use std::sync::Arc;
 
-use chatter_core::client::ChatterClient;
 use crate::MainWindow;
+use chatter_core::client::ChatterClient;
 
 mod active;
 mod device_picker;

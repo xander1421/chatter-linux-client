@@ -9,7 +9,7 @@ use crate::crypto::streaming_decrypt::StreamingDecryptor;
 use crate::domain::attachment::ContentLocation;
 use crate::domain::ids::AttachmentId;
 
-use super::{attachment_file_path, AttachmentError, AttachmentService};
+use super::{AttachmentError, AttachmentService, attachment_file_path};
 
 impl AttachmentService {
     /// Decrypt attachment content to memory.
@@ -29,7 +29,10 @@ impl AttachmentService {
             .get(attachment_id)
             .map_err(|e| AttachmentError::StorageError(e.to_string()))?
             .ok_or_else(|| {
-                AttachmentError::InvalidAttachment(format!("Attachment {} not found", attachment_id))
+                AttachmentError::InvalidAttachment(format!(
+                    "Attachment {} not found",
+                    attachment_id
+                ))
             })?;
 
         // Must be on filesystem
@@ -40,9 +43,10 @@ impl AttachmentService {
         }
 
         // Get encryption keys
-        let encryption_key = attachment.encryption_key.as_ref().ok_or_else(|| {
-            AttachmentError::DecryptionError("No encryption key".to_string())
-        })?;
+        let encryption_key = attachment
+            .encryption_key
+            .as_ref()
+            .ok_or_else(|| AttachmentError::DecryptionError("No encryption key".to_string()))?;
         let digest = attachment.encryption_iv.as_ref().ok_or_else(|| {
             AttachmentError::DecryptionError("No digest for verification".to_string())
         })?;
@@ -148,7 +152,10 @@ impl AttachmentService {
             .get(attachment_id)
             .map_err(|e| AttachmentError::StorageError(e.to_string()))?
             .ok_or_else(|| {
-                AttachmentError::InvalidAttachment(format!("Attachment {} not found", attachment_id))
+                AttachmentError::InvalidAttachment(format!(
+                    "Attachment {} not found",
+                    attachment_id
+                ))
             })?;
 
         // Must be on filesystem
@@ -159,9 +166,10 @@ impl AttachmentService {
         }
 
         // Get encryption keys
-        let encryption_key = attachment.encryption_key.as_ref().ok_or_else(|| {
-            AttachmentError::DecryptionError("No encryption key".to_string())
-        })?;
+        let encryption_key = attachment
+            .encryption_key
+            .as_ref()
+            .ok_or_else(|| AttachmentError::DecryptionError("No encryption key".to_string()))?;
         let digest = attachment.encryption_iv.as_ref().ok_or_else(|| {
             AttachmentError::DecryptionError("No digest for verification".to_string())
         })?;
@@ -254,7 +262,10 @@ impl AttachmentService {
             .get(attachment_id)
             .map_err(|e| AttachmentError::StorageError(e.to_string()))?
             .ok_or_else(|| {
-                AttachmentError::InvalidAttachment(format!("Attachment {} not found", attachment_id))
+                AttachmentError::InvalidAttachment(format!(
+                    "Attachment {} not found",
+                    attachment_id
+                ))
             })?;
 
         if attachment.content_location != ContentLocation::OnFilesystem {
@@ -263,9 +274,10 @@ impl AttachmentService {
             ));
         }
 
-        let encryption_key = attachment.encryption_key.as_ref().ok_or_else(|| {
-            AttachmentError::DecryptionError("No encryption key".to_string())
-        })?;
+        let encryption_key = attachment
+            .encryption_key
+            .as_ref()
+            .ok_or_else(|| AttachmentError::DecryptionError("No encryption key".to_string()))?;
         let digest = attachment.encryption_iv.as_ref().ok_or_else(|| {
             AttachmentError::DecryptionError("No digest for verification".to_string())
         })?;
@@ -339,9 +351,7 @@ impl AttachmentService {
     ) -> Result<SecureBuffer, AttachmentError> {
         // Check file size to pick strategy
         let file_path = attachment_file_path(attachment_id);
-        let file_size = std::fs::metadata(&file_path)
-            .map(|m| m.len())
-            .unwrap_or(0);
+        let file_size = std::fs::metadata(&file_path).map(|m| m.len()).unwrap_or(0);
 
         const STREAMING_THRESHOLD: u64 = 1024 * 1024; // 1MB
 

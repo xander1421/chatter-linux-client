@@ -10,8 +10,8 @@ use chatter_core::domain::ids::ChannelId;
 use chatter_core::state::ChatState;
 use slint::{ComponentHandle, Timer, TimerMode};
 
-use crate::MainWindow;
 use super::super::initial_data::update_sidebar_typing;
+use crate::MainWindow;
 
 /// Typing timer state per peer.
 /// Signal uses 15-second auto-clear timers that reset on each STARTED message.
@@ -66,9 +66,8 @@ pub fn set_typing_with_timer(
     let key_owned = key.to_string();
     let chat_state = chat_state.clone();
     let on_fire = move || {
-        let was_cancelled = CANCELLED_TIMERS.with(|cancelled| {
-            cancelled.borrow_mut().remove(&key_owned)
-        });
+        let was_cancelled =
+            CANCELLED_TIMERS.with(|cancelled| cancelled.borrow_mut().remove(&key_owned));
         if was_cancelled {
             tracing::debug!(key = %key_owned, "TYPING_TIMER: fired but was cancelled - skipping clear");
         } else if let Some(w) = weak_window.upgrade() {
@@ -91,7 +90,9 @@ pub fn set_typing_with_timer(
         let mut map = timers.borrow_mut();
         let entry = map
             .entry(key.to_string())
-            .or_insert_with(|| TypingTimerEntry { timer: Timer::default() });
+            .or_insert_with(|| TypingTimerEntry {
+                timer: Timer::default(),
+            });
         entry.timer.start(
             TimerMode::SingleShot,
             std::time::Duration::from_millis(TYPING_TIMEOUT_MS),
@@ -107,9 +108,7 @@ pub fn set_typing_with_timer(
 /// Instead, we mark it as cancelled - the timer will fire and check the cancelled set.
 pub fn clear_typing_timer(peer_id: &str) {
     // Check if there's an active timer for this peer
-    let has_timer = DM_TYPING_TIMERS.with(|timers| {
-        timers.borrow().contains_key(peer_id)
-    });
+    let has_timer = DM_TYPING_TIMERS.with(|timers| timers.borrow().contains_key(peer_id));
 
     if has_timer {
         // Mark as cancelled - the timer will fire and clean itself up
@@ -140,4 +139,3 @@ pub fn clear_typing_for_peer(window: &MainWindow, peer_id: &str, is_active: bool
     // Also clear sidebar typing state
     update_sidebar_typing(window, peer_id, false);
 }
-

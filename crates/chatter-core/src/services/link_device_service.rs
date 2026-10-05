@@ -25,29 +25,27 @@ use tokio::sync::mpsc;
 use url::Url;
 use zeroize::{Zeroize, Zeroizing};
 
-use crate::network::grpc::auth_client::AuthClient;
-use crate::services::auth_service::{prove_password, AuthError};
-use crate::crypto::provisioning::{
-    decrypt_envelope, encrypt_envelope, ProvisioningKeypair,
-};
-use crate::crypto::message_backup::derive_link_sync_kek;
-use crate::crypto::signal::identity::IdentityKeyManager;
-use crate::crypto::signal::prekey::PreKeyManager;
 use crate::crypto::DeviceCredentials;
 use crate::crypto::SecretString;
-use crate::error::{CryptoError, NetworkError, StorageError};
+use crate::crypto::message_backup::derive_link_sync_kek;
+use crate::crypto::provisioning::{ProvisioningKeypair, decrypt_envelope, encrypt_envelope};
+use crate::crypto::signal::identity::IdentityKeyManager;
+use crate::crypto::signal::prekey::PreKeyManager;
 use crate::domain::notification::NotificationPriority;
+use crate::error::{CryptoError, NetworkError, StorageError};
 use crate::events::EventBus;
 use crate::inbox::handlers::DomainEvent;
-use crate::services::message_backup_service::{BackupStats, MessageBackupService};
-use crate::services::notification_service::NotificationService;
+use crate::network::grpc::auth_client::AuthClient;
 use crate::network::grpc::client_pool::GrpcClientPool;
 use crate::network::grpc::provisioning_client::{
     ProvisioningClient, ProvisioningPollResult, TransferArchivePoll,
 };
 use crate::proto::provisioning_v1::{ProvisionEnvelope, ProvisionMessage, ProvisioningSession};
+use crate::services::auth_service::{AuthError, prove_password};
+use crate::services::message_backup_service::{BackupStats, MessageBackupService};
+use crate::services::notification_service::NotificationService;
 use crate::storage::backup_data::ImportSummary;
-use crate::storage::repositories::settings_repo::{keys, SettingsRepository};
+use crate::storage::repositories::settings_repo::{SettingsRepository, keys};
 use crate::storage::{Database, KeyStore};
 
 /// URL scheme prefix for QR payloads.
@@ -280,7 +278,11 @@ impl LinkDeviceService {
     /// Name this install reports to the server (shown in Active Sessions),
     /// e.g. "Android (0.1.0)". Link, login and register should all send it.
     pub fn current_device_name() -> String {
-        format!("{} ({})", Self::current_device_info(), env!("CARGO_PKG_VERSION"))
+        format!(
+            "{} ({})",
+            Self::current_device_info(),
+            env!("CARGO_PKG_VERSION")
+        )
     }
 
     /// True if a new-device flow is currently running.
@@ -406,9 +408,12 @@ impl LinkDeviceService {
     /// OPEN-ITEMS §133). `Ok(false)` for a wrong password; network
     /// failures are errors, never a silent "no".
     pub async fn verify_password(&self, password: &str) -> Result<bool, LinkDeviceError> {
-        let channel = self.grpc_pool.try_channel().ok_or(LinkDeviceError::Network(
-            NetworkError::ConnectionFailed("Not connected to server".into()),
-        ))?;
+        let channel = self
+            .grpc_pool
+            .try_channel()
+            .ok_or(LinkDeviceError::Network(NetworkError::ConnectionFailed(
+                "Not connected to server".into(),
+            )))?;
         let mut auth = AuthClient::new(channel, self.grpc_pool.auth_clone());
         match prove_password(&mut auth, password).await {
             Ok(proof) => match auth.verify_password(proof).await {
@@ -451,9 +456,7 @@ impl LinkDeviceService {
         let pub_b64 = base64_url(&ephemeral.public_bytes());
 
         let mut client = self.provisioning_client()?;
-        let response = client
-            .start_provisioning(device_info)
-            .await?;
+        let response = client.start_provisioning(device_info).await?;
 
         let server_url = self.grpc_pool.endpoint();
         let qr_url = build_link_url(
@@ -582,8 +585,7 @@ impl LinkDeviceService {
         > {
             let mut rng = rand::rng();
             let reg_id = (rand::Rng::random::<u32>(&mut rng) % 0x3FFF) + 1;
-            let signed =
-                prekey_manager.generate_signed_prekey(&mut rng, 1, identity_pair)?;
+            let signed = prekey_manager.generate_signed_prekey(&mut rng, 1, identity_pair)?;
             // The medium-term LAST-RESORT PQSPK (id 1) — reused across
             // handshakes until rotated, so it is a floor, not the primary PQ
             // key material.
@@ -648,11 +650,11 @@ impl LinkDeviceService {
         let credentials = DeviceCredentials::generate(/* placeholder */ 1, &profile_key);
         let device_auth_token = credentials.auth_token().as_bytes();
 
+        use crate::proto::chat_v1::SignalPreKeyBundle;
         use crate::proto::chat_v1::signal_pre_key_bundle::{
             KyberPreKeyRecord as ProtoKyberPreKey, PreKeyRecord as ProtoPreKey,
             SignedPreKeyRecord as ProtoSignedPreKey,
         };
-        use crate::proto::chat_v1::SignalPreKeyBundle;
         use libsignal_protocol::GenericSignedPreKey;
 
         let signed_id: u32 = signed
@@ -827,7 +829,8 @@ impl LinkDeviceService {
         // Persist auth state.
         self.settings_repo
             .set_string(keys::CURRENT_USER_ID, &user_id.to_string())?;
-        self.settings_repo.set(keys::CURRENT_DEVICE_ID, &device_id)?;
+        self.settings_repo
+            .set(keys::CURRENT_DEVICE_ID, &device_id)?;
         self.settings_repo
             .set_bytes(keys::PROFILE_KEY, &profile_key)?;
         self.settings_repo
@@ -1012,10 +1015,7 @@ impl LinkDeviceService {
     /// Poll `GetTransferArchive` until Ready (returns the download URL), Failed
     /// (returns None — link without history), or a bounded deadline elapses
     /// (also None). Mirrors `poll_until_envelope`'s cadence.
-    async fn poll_transfer_archive(
-        &self,
-        uuid: &str,
-    ) -> Result<Option<String>, LinkDeviceError> {
+    async fn poll_transfer_archive(&self, uuid: &str) -> Result<Option<String>, LinkDeviceError> {
         // A primary export of up to 1 GiB plus the upload can take a while;
         // 3 minutes is generous without hanging a linked device indefinitely.
         let deadline = tokio::time::Instant::now() + Duration::from_secs(180);
@@ -1050,8 +1050,7 @@ impl LinkDeviceService {
     /// `pub(crate)` — external callers use [`Self::prepare_link_from_url`]
     /// which wraps this in a [`PendingDeviceLink`] gated by `approve_link`.
     pub(crate) fn parse_link(url: &str) -> Result<LinkRequest, LinkDeviceError> {
-        let parsed =
-            Url::parse(url).map_err(|e| LinkDeviceError::InvalidLinkUrl(e.to_string()))?;
+        let parsed = Url::parse(url).map_err(|e| LinkDeviceError::InvalidLinkUrl(e.to_string()))?;
         if parsed.scheme() != LINK_URL_SCHEME {
             return Err(LinkDeviceError::InvalidLinkUrl(format!(
                 "expected scheme {LINK_URL_SCHEME}, got {}",
@@ -1113,10 +1112,7 @@ impl LinkDeviceService {
     /// and registration ID; encrypts it for the new device's pubkey;
     /// uploads via `provision_device`. The new device picks it up via its
     /// poll loop.
-    pub(crate) async fn install_envelope(
-        &self,
-        req: &LinkRequest,
-    ) -> Result<(), LinkDeviceError> {
+    pub(crate) async fn install_envelope(&self, req: &LinkRequest) -> Result<(), LinkDeviceError> {
         let user_id_str = self
             .settings_repo
             .get_string(keys::CURRENT_USER_ID)?
@@ -1150,7 +1146,11 @@ impl LinkDeviceService {
             self.settings_repo
                 .get_string(key)?
                 .filter(|s| !s.is_empty())
-                .ok_or_else(|| LinkDeviceError::Invalid(format!("{key} missing — log out and in once, then link")))
+                .ok_or_else(|| {
+                    LinkDeviceError::Invalid(format!(
+                        "{key} missing — log out and in once, then link"
+                    ))
+                })
         };
         let svr_salt_username = required(keys::SVR_SALT_USERNAME)?;
         let full_username = required(keys::FULL_USERNAME)?;
@@ -1185,10 +1185,7 @@ impl LinkDeviceService {
             typing_indicators: settings.typing_indicators,
             // Chatter has no link-preview setting (see `configuration_sync`):
             // left at the proto3 default, which is not encoded, and never read.
-            provisioning_user_agent: format!(
-                "chatter-linux/{}",
-                env!("CARGO_PKG_VERSION"),
-            ),
+            provisioning_user_agent: format!("chatter-linux/{}", env!("CARGO_PKG_VERSION"),),
             primary_device_registration_id: registration_id,
             ephemeral_backup_key: Some(ephemeral_backup_key.to_vec()),
             svr_salt_username,
@@ -1294,7 +1291,10 @@ impl LinkDeviceService {
     pub async fn list_pending(&self) -> Result<Vec<PendingLink>, LinkDeviceError> {
         let mut client = self.provisioning_client()?;
         let response = client.list_provisioning_sessions().await?;
-        Ok(pending_links(response.sessions, crate::util::time::TimestampNanos::now().as_u64()))
+        Ok(pending_links(
+            response.sessions,
+            crate::util::time::TimestampNanos::now().as_u64(),
+        ))
     }
 
     /// Step 1 of the primary-side device-link flow. Pure parse + preview —
@@ -1318,10 +1318,7 @@ impl LinkDeviceService {
     /// This is the in-SDK enforcement of the user-approval gate — a UI
     /// bug or alt-UI cannot complete a link by calling some other
     /// "install" entrypoint without going through this function.
-    pub fn prepare_link_from_url(
-        &self,
-        url: &str,
-    ) -> Result<PendingDeviceLink, LinkDeviceError> {
+    pub fn prepare_link_from_url(&self, url: &str) -> Result<PendingDeviceLink, LinkDeviceError> {
         let req = Self::parse_link(url)?;
         let verification_code = verification_code_for_pub(&req.peer_pub);
         Ok(PendingDeviceLink {
@@ -1516,12 +1513,8 @@ pub fn qr_png_for_link_url(url: &str, size_px: u32) -> Result<Vec<u8>, LinkDevic
     let qr = QrCode::new(url.as_bytes())
         .map_err(|e| LinkDeviceError::Invalid(format!("QR generate: {e}")))?;
     let qr_image = qr.render::<Luma<u8>>().quiet_zone(true).build();
-    let scaled = image::imageops::resize(
-        &qr_image,
-        size,
-        size,
-        image::imageops::FilterType::Nearest,
-    );
+    let scaled =
+        image::imageops::resize(&qr_image, size, size, image::imageops::FilterType::Nearest);
     let mut png = Vec::new();
     image::codecs::png::PngEncoder::new(&mut png)
         .write_image(scaled.as_raw(), size, size, image::ExtendedColorType::L8)
@@ -1534,14 +1527,14 @@ pub fn qr_png_for_link_url(url: &str, size_px: u32) -> Result<Vec<u8>, LinkDevic
 // ============================================================================
 
 fn base64_url(bytes: &[u8]) -> String {
-    use base64::engine::general_purpose::URL_SAFE_NO_PAD;
     use base64::Engine;
+    use base64::engine::general_purpose::URL_SAFE_NO_PAD;
     URL_SAFE_NO_PAD.encode(bytes)
 }
 
 fn base64_url_decode(s: &str) -> Result<Vec<u8>, base64::DecodeError> {
-    use base64::engine::general_purpose::URL_SAFE_NO_PAD;
     use base64::Engine;
+    use base64::engine::general_purpose::URL_SAFE_NO_PAD;
     URL_SAFE_NO_PAD.decode(s)
 }
 
@@ -1551,8 +1544,7 @@ fn build_link_url(
     server_url: Option<&str>,
     device_name: Option<&str>,
 ) -> String {
-    let mut query =
-        url::form_urlencoded::Serializer::new(String::new());
+    let mut query = url::form_urlencoded::Serializer::new(String::new());
     query.append_pair("uuid", uuid);
     query.append_pair("pub_key", pub_key_b64);
     if let Some(server) = server_url {
@@ -1561,10 +1553,7 @@ fn build_link_url(
     if let Some(name) = device_name {
         query.append_pair("name", name);
     }
-    format!(
-        "{LINK_URL_SCHEME}://{LINK_URL_HOST}?{}",
-        query.finish()
-    )
+    format!("{LINK_URL_SCHEME}://{LINK_URL_HOST}?{}", query.finish())
 }
 
 fn random_provisioning_code() -> String {
@@ -1649,8 +1638,8 @@ mod tests {
 
     #[test]
     fn rejects_wrong_host() {
-        let err = LinkDeviceService::parse_link("chatter://join?uuid=x&pub_key=y")
-            .expect_err("bad");
+        let err =
+            LinkDeviceService::parse_link("chatter://join?uuid=x&pub_key=y").expect_err("bad");
         assert!(matches!(err, LinkDeviceError::InvalidLinkUrl(_)));
     }
 
@@ -1678,8 +1667,12 @@ mod tests {
     fn new_device_and_approver_show_the_same_code() {
         let eph = ProvisioningKeypair::generate();
         let url = build_link_url("uuid-1", &base64_url(&eph.public_bytes()), None, None);
-        let approver_sees = verification_code_for_pub(&LinkDeviceService::parse_link(&url).unwrap().peer_pub);
-        assert_eq!(approver_sees, verification_code_for_pub(&eph.public_bytes()));
+        let approver_sees =
+            verification_code_for_pub(&LinkDeviceService::parse_link(&url).unwrap().peer_pub);
+        assert_eq!(
+            approver_sees,
+            verification_code_for_pub(&eph.public_bytes())
+        );
     }
 
     #[test]
@@ -1697,7 +1690,11 @@ mod tests {
         assert_ne!(code_a, code_c);
         // 6 hex chars, uppercase only.
         assert_eq!(code_a.len(), 6);
-        assert!(code_a.chars().all(|c| c.is_ascii_uppercase() || c.is_ascii_digit()));
+        assert!(
+            code_a
+                .chars()
+                .all(|c| c.is_ascii_uppercase() || c.is_ascii_digit())
+        );
     }
 
     #[test]
@@ -1733,10 +1730,7 @@ mod tests {
     /// PIN. Returns the service plus a kept-alive tempfile so the
     /// SQLite-backed DB survives. The gRPC pool is never connected: the
     /// password path (a server OPAQUE proof) has nothing to talk to.
-    fn setup_service(
-        username: &str,
-        pin: Option<&str>,
-    ) -> (Arc<LinkDeviceService>, NamedTempFile) {
+    fn setup_service(username: &str, pin: Option<&str>) -> (Arc<LinkDeviceService>, NamedTempFile) {
         let db_file = NamedTempFile::new().unwrap();
         let db = Arc::new(Database::open(db_file.path(), "test_passphrase").unwrap());
         db.run_migrations().unwrap();
@@ -1766,16 +1760,12 @@ mod tests {
             .unwrap();
         if let Some(p) = pin {
             let fp = derive_pin_fingerprint(p, username).unwrap();
-            settings_repo
-                .set_bytes(keys::PIN_FINGERPRINT, &fp)
-                .unwrap();
+            settings_repo.set_bytes(keys::PIN_FINGERPRINT, &fp).unwrap();
         }
 
         // Network/event/notification deps aren't exercised by verify_*; build
         // smallest possible instances.
-        let grpc_pool = Arc::new(
-            GrpcClientPool::new("https://127.0.0.1:0").expect("grpc pool"),
-        );
+        let grpc_pool = Arc::new(GrpcClientPool::new("https://127.0.0.1:0").expect("grpc pool"));
         let event_bus = EventBus::new();
         let notifications = Arc::new(NotificationService::noop());
 
@@ -1851,7 +1841,11 @@ mod tests {
         let (svc, _db) = setup_service("alice", Some("devpin123"));
         // PIN mismatch => the password path, which needs the server: an
         // error here, never an accidental match.
-        assert!(svc.verify_password_or_pin("anything-long-wrong").await.is_err());
+        assert!(
+            svc.verify_password_or_pin("anything-long-wrong")
+                .await
+                .is_err()
+        );
     }
 
     /// The new device takes the primary's read-receipt and typing settings
@@ -1876,8 +1870,13 @@ mod tests {
         };
 
         let (_n, linked) = open();
-        assert!(current(&linked).read_receipts, "defaults on before the link");
-        linked.set_string(keys::CURRENT_USER_ID, &me.to_string()).unwrap();
+        assert!(
+            current(&linked).read_receipts,
+            "defaults on before the link"
+        );
+        linked
+            .set_string(keys::CURRENT_USER_ID, &me.to_string())
+            .unwrap();
         adopt_provisioned_settings(&linked, &me, &provision).unwrap();
         assert_eq!(current(&linked), sent);
         assert!(!current(&linked).read_receipts && current(&linked).typing_indicators);

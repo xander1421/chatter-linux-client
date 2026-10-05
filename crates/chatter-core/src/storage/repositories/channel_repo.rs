@@ -10,7 +10,7 @@ use crate::domain::ids::{ChannelId, MessageId, UserId};
 use crate::error::StorageError;
 use crate::storage::Database;
 use chrono::{DateTime, Utc};
-use rusqlite::{params, OptionalExtension};
+use rusqlite::{OptionalExtension, params};
 use std::collections::HashSet;
 use std::sync::Arc;
 
@@ -224,7 +224,10 @@ impl ChannelRepository {
     /// Delete a channel by ID.
     pub fn delete(&self, id: &ChannelId) -> Result<(), StorageError> {
         let conn = self.db.connection()?;
-        let rows = conn.execute("DELETE FROM channels WHERE id = ?1", params![id.to_string()])?;
+        let rows = conn.execute(
+            "DELETE FROM channels WHERE id = ?1",
+            params![id.to_string()],
+        )?;
         if rows == 0 {
             return Err(StorageError::NotFound(format!("Channel {}", id)));
         }
@@ -447,7 +450,10 @@ impl ChannelRepository {
     /// Insert a membership if it doesn't already exist.
     ///
     /// Returns Ok(true) if inserted, Ok(false) if already existed.
-    pub fn insert_or_ignore_membership(&self, membership: &Membership) -> Result<bool, StorageError> {
+    pub fn insert_or_ignore_membership(
+        &self,
+        membership: &Membership,
+    ) -> Result<bool, StorageError> {
         let conn = self.db.connection()?;
         let rows = conn.execute(
             "INSERT OR IGNORE INTO memberships (
@@ -654,9 +660,7 @@ impl ChannelRepository {
     /// only needs the set for per-channel rotation-flag writes.
     pub fn list_channels_for_user(&self, user_id: &UserId) -> Result<Vec<ChannelId>, StorageError> {
         let conn = self.db.connection()?;
-        let mut stmt = conn.prepare(
-            "SELECT channel_id FROM memberships WHERE user_id = ?1",
-        )?;
+        let mut stmt = conn.prepare("SELECT channel_id FROM memberships WHERE user_id = ?1")?;
 
         let mut rows = stmt.query(params![user_id.to_string()])?;
         let mut channel_ids = Vec::new();
@@ -882,8 +886,7 @@ mod tests {
     fn create_test_repo() -> (ChannelRepository, tempfile::TempDir) {
         let temp_dir = tempdir().expect("Failed to create temp directory");
         let db_path = temp_dir.path().join("test.db");
-        let db = Database::open(&db_path, "test-passphrase")
-            .expect("Failed to open test database");
+        let db = Database::open(&db_path, "test-passphrase").expect("Failed to open test database");
 
         {
             let conn = db.connection().expect("Failed to get connection");
@@ -936,7 +939,12 @@ mod tests {
     }
 
     fn make_channel(id: ChannelId) -> Channel {
-        Channel::new(id, "test-channel".into(), ChannelType::Public, UserId::new())
+        Channel::new(
+            id,
+            "test-channel".into(),
+            ChannelType::Public,
+            UserId::new(),
+        )
     }
 
     #[test]
@@ -946,7 +954,8 @@ mod tests {
         let (repo, _dir) = create_test_repo();
         let channel = ChannelId::new();
         let user = UserId::new();
-        repo.insert_membership(&make_membership(channel, user)).unwrap();
+        repo.insert_membership(&make_membership(channel, user))
+            .unwrap();
         let mut again = make_membership(channel, user);
         again.role = MemberRole::Moderator;
         repo.insert_membership(&again).unwrap();
@@ -961,21 +970,31 @@ mod tests {
         let (repo, _dir) = create_test_repo();
         let channel = ChannelId::new();
         repo.insert(&make_channel(channel)).unwrap();
-        let (alice, bob, carol, dave) = (UserId::new(), UserId::new(), UserId::new(), UserId::new());
+        let (alice, bob, carol, dave) =
+            (UserId::new(), UserId::new(), UserId::new(), UserId::new());
         let mut alice_row = make_membership(channel, alice);
         alice_row.notification_preference = NotificationPreference::Mentions;
         repo.insert_membership(&alice_row).unwrap();
         let read = MessageId::new();
         repo.update_last_read(&channel, &alice, &read).unwrap();
-        repo.insert_membership(&make_membership(channel, bob)).unwrap();
-        repo.insert_membership(&make_membership(channel, carol)).unwrap();
+        repo.insert_membership(&make_membership(channel, bob))
+            .unwrap();
+        repo.insert_membership(&make_membership(channel, carol))
+            .unwrap();
 
         let mut alice_now = make_membership(channel, alice);
         alice_now.role = MemberRole::Admin;
         alice_now.notification_preference = NotificationPreference::None;
         alice_now.last_read_message_id = None;
         let refresh = repo
-            .replace_memberships(&channel, &[alice_now, make_membership(channel, bob), make_membership(channel, dave)])
+            .replace_memberships(
+                &channel,
+                &[
+                    alice_now,
+                    make_membership(channel, bob),
+                    make_membership(channel, dave),
+                ],
+            )
             .unwrap();
         let ids = |rows: &[Membership]| {
             let mut ids: Vec<_> = rows.iter().map(|m| m.user_id).collect();
@@ -994,12 +1013,19 @@ mod tests {
         let stored = repo.get_membership(&channel, &alice).unwrap().unwrap();
         assert_eq!(stored.role, MemberRole::Admin);
         assert_eq!(stored.last_read_message_id, Some(read));
-        assert_eq!(stored.notification_preference, NotificationPreference::Mentions);
+        assert_eq!(
+            stored.notification_preference,
+            NotificationPreference::Mentions
+        );
         assert!(repo.get_membership(&channel, &carol).unwrap().is_none());
 
         let untouched = repo.replace_memberships(&channel, &[]).unwrap();
         assert!(untouched.removed.is_empty());
-        assert_eq!(repo.list_members(&channel).unwrap().len(), 3, "an empty refresh must not wipe the roster");
+        assert_eq!(
+            repo.list_members(&channel).unwrap().len(),
+            3,
+            "an empty refresh must not wipe the roster"
+        );
     }
 
     fn make_membership(channel_id: ChannelId, user_id: UserId) -> Membership {
@@ -1058,14 +1084,22 @@ mod tests {
 
         // Verify exists
         assert!(repo.get(&channel_id).unwrap().is_some());
-        assert!(repo.get_membership(&channel_id, &user_id).unwrap().is_some());
+        assert!(
+            repo.get_membership(&channel_id, &user_id)
+                .unwrap()
+                .is_some()
+        );
 
         // Cascade delete
         repo.delete_channel_cascade(&channel_id).unwrap();
 
         // Both should be gone
         assert!(repo.get(&channel_id).unwrap().is_none());
-        assert!(repo.get_membership(&channel_id, &user_id).unwrap().is_none());
+        assert!(
+            repo.get_membership(&channel_id, &user_id)
+                .unwrap()
+                .is_none()
+        );
     }
 
     #[test]

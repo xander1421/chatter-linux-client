@@ -1,8 +1,8 @@
 //! User builder for creating test users.
 
 use crate::framework::fixtures::{
-    TestUser, unique_username, random_password, random_public_key,
-    random_device_auth_token, random_profile_key,
+    TestUser, random_device_auth_token, random_password, random_profile_key, random_public_key,
+    unique_username,
 };
 
 /// Builder for creating test users.
@@ -67,17 +67,15 @@ impl UserBuilder {
             identity_key_pair_bytes: Vec::new(),
             device_auth_token: random_device_auth_token(),
             profile_key,
-            user_id: self.user_id.unwrap_or_else(|| uuid::Uuid::new_v4().to_string()),
+            user_id: self
+                .user_id
+                .unwrap_or_else(|| uuid::Uuid::new_v4().to_string()),
             device_id: self.device_id.unwrap_or(1),
         }
     }
 
     /// Build Alice and Bob pair (common test pattern).
     pub fn build_pair() -> (TestUser, TestUser) {
-        (
-            Self::named("Alice").build(),
-            Self::named("Bob").build(),
-        )
+        (Self::named("Alice").build(), Self::named("Bob").build())
     }
-
 }

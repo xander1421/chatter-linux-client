@@ -23,7 +23,7 @@ use crate::error::MailboxError;
 use crate::mailbox::dm::{ConversationKey, DmConversationManager, DmMailbox};
 use crate::mailbox::{MailboxToken, TokenManager};
 use crate::network::grpc::AnonymousMailboxClient;
-use crate::proto::content_v1::{content, Content, KeyExchange};
+use crate::proto::content_v1::{Content, KeyExchange, content};
 use crate::storage::Database;
 use crate::util::time::TimestampNanos;
 
@@ -277,9 +277,11 @@ impl DmBootstrap {
             // the SAME mailbox and key again. No token, no new mailbox, and a
             // peer that already holds this key takes it as an idempotent
             // re-delivery, so repeating it is safe while a RESPONSE is due.
-            if let (false, Some(mailbox), Some(key)) =
-                (conv.needs_bootstrap(), &conv.our_mailbox, &conv.conversation_key)
-            {
+            if let (false, Some(mailbox), Some(key)) = (
+                conv.needs_bootstrap(),
+                &conv.our_mailbox,
+                &conv.conversation_key,
+            ) {
                 tracing::info!(peer_id = %peer_id, "DM bootstrap: re-announcing our live mailbox");
                 return Ok(BootstrapResult {
                     our_mailbox: mailbox.clone(),
@@ -313,14 +315,15 @@ impl DmBootstrap {
                         token.public_key.clone(),
                         token.signature.clone(),
                         DEFAULT_MAILBOX_TTL_SECONDS,
-                        vec![],  // Empty randomizer for compatibility
+                        vec![], // Empty randomizer for compatibility
                     )
                     .await
                 {
                     Ok(resp) => break resp,
                     Err(e) => {
                         if e.is_retryable() && attempt < MAX_RETRIES {
-                            let backoff = std::time::Duration::from_millis(200 * u64::from(attempt));
+                            let backoff =
+                                std::time::Duration::from_millis(200 * u64::from(attempt));
                             tracing::warn!(
                                 peer_id = %peer_id,
                                 error = %e,
@@ -476,7 +479,12 @@ impl DmBootstrap {
 
         // Use inner function for cleanup
         let result = self
-            .handle_incoming_bootstrap_inner(sender_id, sender_device_id, &announcement, anon_mailbox_client)
+            .handle_incoming_bootstrap_inner(
+                sender_id,
+                sender_device_id,
+                &announcement,
+                anon_mailbox_client,
+            )
             .await;
 
         // Release lock
@@ -534,14 +542,15 @@ impl DmBootstrap {
                             token.public_key.clone(),
                             token.signature.clone(),
                             DEFAULT_MAILBOX_TTL_SECONDS,
-                            vec![],  // Empty randomizer for legacy tokens
+                            vec![], // Empty randomizer for legacy tokens
                         )
                         .await
                     {
                         Ok(resp) => break resp,
                         Err(e) => {
                             if e.is_retryable() && attempt < MAX_RETRIES {
-                                let backoff = std::time::Duration::from_millis(200 * u64::from(attempt));
+                                let backoff =
+                                    std::time::Duration::from_millis(200 * u64::from(attempt));
                                 tracing::warn!(
                                     peer_id = %sender_id,
                                     error = %e,
@@ -570,7 +579,8 @@ impl DmBootstrap {
             Some(key) => key,
             None => {
                 let key = ConversationKey::new();
-                self.conversation_manager.save_conversation_key(&sender_id, &key)?;
+                self.conversation_manager
+                    .save_conversation_key(&sender_id, &key)?;
                 key
             }
         };
@@ -667,12 +677,17 @@ mod tests {
     fn announcement_roundtrips_through_key_exchange() {
         let peer_id = UserId::new();
         let bytes = encode_announcement(&announcement(), peer_id.to_string()).unwrap();
-        let Some(content::Content::KeyExchange(ke)) = Content::decode(bytes.as_slice()).unwrap().content else {
+        let Some(content::Content::KeyExchange(ke)) =
+            Content::decode(bytes.as_slice()).unwrap().content
+        else {
             panic!("Expected KeyExchange content");
         };
         assert_eq!(ke.ephemeral_pk.len(), MailboxAnnouncement::LEN);
         assert!(DmBootstrap::is_bootstrap_message(&ke.ephemeral_pk));
-        assert_eq!(MailboxAnnouncement::parse(&ke.ephemeral_pk), Some(announcement()));
+        assert_eq!(
+            MailboxAnnouncement::parse(&ke.ephemeral_pk),
+            Some(announcement())
+        );
         assert_eq!(ke.conversation_id, peer_id.to_string());
     }
 
@@ -681,8 +696,14 @@ mod tests {
     #[test]
     fn only_full_announcements_parse() {
         for len in [0usize, 32, 64, 95, 97, 128] {
-            assert!(MailboxAnnouncement::parse(&vec![0u8; len]).is_none(), "len {len}");
-            assert!(!DmBootstrap::is_bootstrap_message(&vec![0u8; len]), "len {len}");
+            assert!(
+                MailboxAnnouncement::parse(&vec![0u8; len]).is_none(),
+                "len {len}"
+            );
+            assert!(
+                !DmBootstrap::is_bootstrap_message(&vec![0u8; len]),
+                "len {len}"
+            );
         }
     }
 
@@ -699,10 +720,15 @@ mod tests {
         };
 
         let message_bytes = response.build_response_message().unwrap();
-        let Some(content::Content::KeyExchange(ke)) = Content::decode(message_bytes.as_slice()).unwrap().content else {
+        let Some(content::Content::KeyExchange(ke)) =
+            Content::decode(message_bytes.as_slice()).unwrap().content
+        else {
             panic!("Expected KeyExchange content");
         };
-        assert_eq!(MailboxAnnouncement::parse(&ke.ephemeral_pk), Some(announcement()));
+        assert_eq!(
+            MailboxAnnouncement::parse(&ke.ephemeral_pk),
+            Some(announcement())
+        );
         assert_eq!(ke.conversation_id, peer_id.to_string());
     }
 }

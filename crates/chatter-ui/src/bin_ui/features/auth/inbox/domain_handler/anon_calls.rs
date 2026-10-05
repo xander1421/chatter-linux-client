@@ -4,11 +4,11 @@ use std::sync::Arc;
 
 use slint::Weak;
 
+use crate::MainWindow;
 use chatter_core::client::ChatterClient;
 use chatter_core::domain::anon_dm::AnonDmId;
 use chatter_core::domain::anon_group::AnonGroupId;
 use chatter_core::domain::ids::UserId;
-use crate::MainWindow;
 
 /// Handle anonymous call offer received.
 ///

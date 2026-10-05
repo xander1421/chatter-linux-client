@@ -23,14 +23,16 @@ use tokio::sync::broadcast::error::RecvError;
 
 use crate::domain::call::{CallDirection, CallHistoryEntry, CallResult};
 use crate::domain::ids::{ChannelId, MessageId, UserId};
-use crate::domain::message::{CallMessage, CallMessageType, ConversationType, Message, MessageContent};
+use crate::domain::message::{
+    CallMessage, CallMessageType, ConversationType, Message, MessageContent,
+};
 use crate::events::DomainEvent;
 use crate::services::call_worker::{
     CallEndReason, CallHandle, CallOrchestratorEvent, CallWorkerHandle,
 };
-use crate::storage::repositories::{CallHistoryRepository, UnifiedConversationRepository};
 use crate::services::message::MessageService;
 use crate::storage::Database;
+use crate::storage::repositories::{CallHistoryRepository, UnifiedConversationRepository};
 
 /// Spawn the call-history recorder. Exits when the orchestrator's broadcast
 /// channel closes.
@@ -77,7 +79,8 @@ pub fn spawn_call_history_recorder(
                 };
                 // A too-late offer is over as it arrives: nothing else will
                 // close it, so its bubble is filed with the row.
-                let missed_on_arrival = matches!(event, CallOrchestratorEvent::IncomingMissed { .. });
+                let missed_on_arrival =
+                    matches!(event, CallOrchestratorEvent::IncomingMissed { .. });
                 match event {
                     // A too-late offer never rings but writes the same row:
                     // missed, which is what a presented call starts as too.
@@ -191,10 +194,18 @@ fn finish(
 /// Tell the UI the Calls badge moved, when `call`'s row — already written, so
 /// the badge read that follows sees it — is a missed incoming call. A ringing
 /// row is not announced: it only counts once the call is over.
-fn announce_if_missed(history: &CallHistoryRepository, messages: &MessageService, call: &CallHandle) {
-    let Ok(Some(entry)) = history.get(call.as_str()) else { return };
+fn announce_if_missed(
+    history: &CallHistoryRepository,
+    messages: &MessageService,
+    call: &CallHandle,
+) {
+    let Ok(Some(entry)) = history.get(call.as_str()) else {
+        return;
+    };
     if entry.direction == CallDirection::Incoming && entry.result == CallResult::Missed {
-        messages.event_bus.emit_domain(DomainEvent::MissedCallsChanged);
+        messages
+            .event_bus
+            .emit_domain(DomainEvent::MissedCallsChanged);
     }
 }
 
@@ -210,13 +221,19 @@ fn file_dm_bubble(history: &CallHistoryRepository, messages: &MessageService, ca
             return;
         }
     };
-    let Ok(me) = messages.current_user_id() else { return };
-    let Some(bubble) = dm_call_bubble(&entry, me) else { return };
+    let Ok(me) = messages.current_user_id() else {
+        return;
+    };
+    let Some(bubble) = dm_call_bubble(&entry, me) else {
+        return;
+    };
     // The id is the call's, so a second terminal event for the same call
     // files nothing and says nothing.
     match messages.store_message_local_once(&bubble) {
         Ok(true) => {
-            messages.event_bus.emit_domain(DomainEvent::MessageReceived { message: bubble });
+            messages
+                .event_bus
+                .emit_domain(DomainEvent::MessageReceived { message: bubble });
         }
         Ok(false) => {}
         Err(e) => tracing::warn!(error = %e, call = %call.as_str(), "call bubble not filed"),
@@ -273,7 +290,11 @@ fn dm_call_bubble(entry: &CallHistoryEntry, me: UserId) -> Option<Message> {
         call_id: entry.id.clone(),
         call_type,
         initiator_id: if incoming { peer } else { me },
-        initiator_name: if incoming { entry.peer_name.clone() } else { String::new() },
+        initiator_name: if incoming {
+            entry.peer_name.clone()
+        } else {
+            String::new()
+        },
         started_at: Some(entry.started_at),
         ended_at: Some(entry.ended_at.unwrap_or(now)),
         duration: entry
@@ -289,7 +310,12 @@ fn dm_call_bubble(entry: &CallHistoryEntry, me: UserId) -> Option<Message> {
 mod dm_call_bubble_tests {
     use super::*;
 
-    fn row(peer: UserId, direction: CallDirection, result: CallResult, duration: Option<i64>) -> CallHistoryEntry {
+    fn row(
+        peer: UserId,
+        direction: CallDirection,
+        result: CallResult,
+        duration: Option<i64>,
+    ) -> CallHistoryEntry {
         CallHistoryEntry {
             id: uuid::Uuid::new_v4().to_string(),
             conversation_id: peer.to_string(),
@@ -316,8 +342,18 @@ mod dm_call_bubble_tests {
         let (caller, callee) = (UserId::new(), UserId::new());
 
         // The caller's row names the callee; the callee's names the caller.
-        let caller_row = row(callee, CallDirection::Outgoing, CallResult::Completed, Some(10));
-        let mut callee_row = row(caller, CallDirection::Incoming, CallResult::Completed, Some(10));
+        let caller_row = row(
+            callee,
+            CallDirection::Outgoing,
+            CallResult::Completed,
+            Some(10),
+        );
+        let mut callee_row = row(
+            caller,
+            CallDirection::Incoming,
+            CallResult::Completed,
+            Some(10),
+        );
         callee_row.id = caller_row.id.clone();
 
         let out = dm_call_bubble(&caller_row, caller).expect("caller bubble");
@@ -333,20 +369,44 @@ mod dm_call_bubble_tests {
             assert_eq!(call(b).call_type, CallMessageType::Ended);
             assert_eq!(call(b).duration, Some(chrono::Duration::seconds(10)));
         }
-        assert_eq!(call(&out).initiator_id, caller, "outgoing on the caller's side");
-        assert_eq!(call(&inc).initiator_id, caller, "incoming on the callee's side");
+        assert_eq!(
+            call(&out).initiator_id,
+            caller,
+            "outgoing on the caller's side"
+        );
+        assert_eq!(
+            call(&inc).initiator_id,
+            caller,
+            "incoming on the callee's side"
+        );
     }
 
     #[test]
     fn only_an_incoming_call_reads_as_missed_but_both_sides_read_declined() {
         let (me, peer) = (UserId::new(), UserId::new());
-        let kind = |d, r| call(&dm_call_bubble(&row(peer, d, r, None), me).unwrap()).call_type.clone();
-        assert_eq!(kind(CallDirection::Incoming, CallResult::Missed), CallMessageType::Missed);
-        assert_eq!(kind(CallDirection::Incoming, CallResult::Declined), CallMessageType::Declined);
+        let kind = |d, r| {
+            call(&dm_call_bubble(&row(peer, d, r, None), me).unwrap())
+                .call_type
+                .clone()
+        };
+        assert_eq!(
+            kind(CallDirection::Incoming, CallResult::Missed),
+            CallMessageType::Missed
+        );
+        assert_eq!(
+            kind(CallDirection::Incoming, CallResult::Declined),
+            CallMessageType::Declined
+        );
         // Our call nobody picked up is still an outgoing call.
-        assert_eq!(kind(CallDirection::Outgoing, CallResult::Missed), CallMessageType::Ended);
+        assert_eq!(
+            kind(CallDirection::Outgoing, CallResult::Missed),
+            CallMessageType::Ended
+        );
         // The peer said no: the bubble agrees with the Calls screen's "Declined".
-        assert_eq!(kind(CallDirection::Outgoing, CallResult::Declined), CallMessageType::Declined);
+        assert_eq!(
+            kind(CallDirection::Outgoing, CallResult::Declined),
+            CallMessageType::Declined
+        );
     }
 
     #[test]
@@ -374,7 +434,12 @@ mod dm_call_bubble_tests {
     fn group_calls_are_not_dm_bubbles() {
         let (me, peer) = (UserId::new(), UserId::new());
         for ct in [ConversationType::Channel, ConversationType::AnonGroup] {
-            let mut r = row(peer, CallDirection::Incoming, CallResult::Completed, Some(3));
+            let mut r = row(
+                peer,
+                CallDirection::Incoming,
+                CallResult::Completed,
+                Some(3),
+            );
             r.conversation_type = ct;
             assert!(dm_call_bubble(&r, me).is_none());
         }

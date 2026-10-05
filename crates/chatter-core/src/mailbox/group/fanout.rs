@@ -185,7 +185,13 @@ impl GroupFanout {
                     let member = member.clone();
                     let client = Arc::clone(&self.mailbox_client);
                     async move {
-                        Self::send_to_member_internal(client, &member, &ciphertext, envelope_type_i32).await
+                        Self::send_to_member_internal(
+                            client,
+                            &member,
+                            &ciphertext,
+                            envelope_type_i32,
+                        )
+                        .await
                     }
                 })
             })

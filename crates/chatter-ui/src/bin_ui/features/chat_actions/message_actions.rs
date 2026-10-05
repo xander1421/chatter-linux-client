@@ -6,10 +6,10 @@ use std::sync::Arc;
 
 use slint::{ComponentHandle, Model, SharedString};
 
+use crate::MainWindow;
+use crate::bin_ui::features::chat::emoji_loader;
 use chatter_core::client::ChatterClient;
 use chatter_core::domain::ids::MessageId;
-use crate::bin_ui::features::chat::emoji_loader;
-use crate::MainWindow;
 
 /// Wire message click callback: the only click a bubble reports is a tap on
 /// its "not sent" label, which retries the send (Signal's "tap to retry").
@@ -19,18 +19,47 @@ pub fn wire_message_clicked(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     let ui_ctx = ui_ctx.clone();
 
     window.on_message_clicked(move |message_id: SharedString| {
-        let Some(w) = weak_window.upgrade() else { return };
-        let Some(sent_at) = own_failed_timestamp(&w, &message_id) else { return };
+        let Some(w) = weak_window.upgrade() else {
+            return;
+        };
+        let Some(sent_at) = own_failed_timestamp(&w, &message_id) else {
+            return;
+        };
 
-        crate::bin_ui::features::auth::inbox::domain_handler::set_own_status_at(&w, &[sent_at], "sending");
+        crate::bin_ui::features::auth::inbox::domain_handler::set_own_status_at(
+            &w,
+            &[sent_at],
+            "sending",
+        );
         let weak = weak_window.clone();
         let ui_ctx = ui_ctx.clone();
         let message_id = message_id.to_string();
         tokio::spawn(async move {
-            let (message, notice) = match ui_ctx.retry_failed_message(&message_id).await {
+            let slow_window = weak.clone();
+            let retry = chatter_core::client::await_send_with_notice(
+                ui_ctx.retry_failed_message(&message_id),
+                std::time::Duration::from_secs(30),
+                move || {
+                    let _ = slint::invoke_from_event_loop(move || {
+                        let Some(w) = slow_window.upgrade() else {
+                            return;
+                        };
+                        w.set_toast_message(
+                            "Delivery is taking longer. The original retry is still running."
+                                .into(),
+                        );
+                        w.set_toast_variant("info".into());
+                        w.set_toast_visible(true);
+                    });
+                },
+            )
+            .await;
+            let (message, notice) = match retry {
                 Ok(message) => (Some(message), None),
                 Err(e) => {
-                    let message = message_id.parse::<MessageId>().ok()
+                    let message = message_id
+                        .parse::<MessageId>()
+                        .ok()
                         .and_then(|id| ui_ctx.get_message_local(&id));
                     (message, Some(ui_ctx.format_send_error(&e, "send")))
                 }
@@ -39,14 +68,22 @@ pub fn wire_message_clicked(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                 let Some(w) = weak.upgrade() else { return };
                 let model = w.get_messages();
                 for i in 0..model.row_count() {
-                    let Some(mut row) = model.row_data(i) else { continue };
-                    if row.message_id.as_str() != message_id { continue; }
+                    let Some(mut row) = model.row_data(i) else {
+                        continue;
+                    };
+                    if row.message_id.as_str() != message_id {
+                        continue;
+                    }
                     if let Some(message) = &message {
                         row.message_id = message.id.to_string().into();
                         row.timestamp_ns = message.sent_at.to_string().into();
-                        row.delivery_status = if message.delivery_status.is_empty() { "sent".into() }
-                            else { message.delivery_status.clone().into() };
-                        row.failure_reason = message.failure_reason.clone().unwrap_or_default().into();
+                        row.delivery_status = if message.delivery_status.is_empty() {
+                            "sent".into()
+                        } else {
+                            message.delivery_status.clone().into()
+                        };
+                        row.failure_reason =
+                            message.failure_reason.clone().unwrap_or_default().into();
                     } else {
                         row.delivery_status = "failed".into();
                     }
@@ -67,7 +104,8 @@ pub fn wire_message_clicked(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
 /// `sent_at` of our own bubble `message_id` when it says "not sent".
 fn own_failed_timestamp(w: &MainWindow, message_id: &str) -> Option<u64> {
     let messages = w.get_messages();
-    messages.iter()
+    messages
+        .iter()
         .find(|m| m.message_id.as_str() == message_id)
         .filter(|m| m.is_own && m.delivery_status == "failed")
         .and_then(|m| m.timestamp_ns.parse().ok())
@@ -105,7 +143,9 @@ pub fn wire_reply_clicked(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             return;
         }
 
-        let Some(w) = weak_window.upgrade() else { return };
+        let Some(w) = weak_window.upgrade() else {
+            return;
+        };
 
         // Get reply info directly from the UI message model (works for all message types)
         let messages = w.get_messages();
@@ -116,8 +156,7 @@ pub fn wire_reply_clicked(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
 
         for i in 0..messages.row_count() {
             if let Some(m) = messages.row_data(i) {
-                if m.sender_id.as_str() == sender_id_str
-                    && m.timestamp_ns.as_str() == timestamp_str
+                if m.sender_id.as_str() == sender_id_str && m.timestamp_ns.as_str() == timestamp_str
                 {
                     sender_name = m.sender_name.to_string();
                     let content = m.content.to_string();
@@ -230,7 +269,7 @@ pub fn wire_react_clicked(window: &MainWindow) {
         let _ = slint::invoke_from_event_loop(move || {
             if let Some(w) = weak.upgrade() {
                 tracing::info!(sender = %sender_id_str, timestamp = %timestamp_str, "Emoji picker requested");
-                
+
                 // Populate initial emojis (Smileys)
                 emoji_loader::show_reaction_picker_start(&w);
             }
@@ -297,12 +336,7 @@ pub fn wire_thread_clicked(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
         chat_state.open_thread(channel_id, msg_id);
 
         // Load thread data and update UI
-        crate::bin_ui::features::thread::load_thread_data(
-            weak,
-            chat_state,
-            ui_ctx,
-            msg_id,
-        );
+        crate::bin_ui::features::thread::load_thread_data(weak, chat_state, ui_ctx, msg_id);
     });
 }
 

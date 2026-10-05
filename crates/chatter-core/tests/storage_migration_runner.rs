@@ -9,7 +9,7 @@
 //! which turns any read failure into "nothing applied" and replays from v001
 //! over a populated database.
 
-use chatter_core::storage::migrations::{default_migrations, Migration, MigrationRunner};
+use chatter_core::storage::migrations::{Migration, MigrationRunner, default_migrations};
 use rusqlite::Connection;
 
 struct Fake(u32, &'static str, &'static str);
@@ -79,9 +79,8 @@ fn already_applied_migrations_are_not_re_run() {
     let conn = Connection::open_in_memory().unwrap();
     // Not idempotent on purpose: a second application must fail loudly if it
     // happens at all.
-    let build = || {
-        MigrationRunner::new().register(Fake(1, "one", "CREATE TABLE one (id INTEGER);"))
-    };
+    let build =
+        || MigrationRunner::new().register(Fake(1, "one", "CREATE TABLE one (id INTEGER);"));
     build().run(&conn).unwrap();
     build().run(&conn).expect("second run must be a no-op");
     assert_eq!(applied(&conn), vec![1]);

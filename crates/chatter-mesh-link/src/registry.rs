@@ -283,9 +283,7 @@ impl core::fmt::Display for RebindRefusal {
             Self::UnknownLink => f.write_str("no such live link"),
             Self::LinkUnbound => f.write_str("link has no previous owner"),
             Self::SamePeer => f.write_str("link already bound to this identity"),
-            Self::IdentityOwnsAnotherLink => {
-                f.write_str("identity already owns another live link")
-            }
+            Self::IdentityOwnsAnotherLink => f.write_str("identity already owns another live link"),
             Self::CooldownActive { remaining_ms } => {
                 write!(f, "rebind cooldown active for {remaining_ms} ms")
             }
@@ -354,7 +352,9 @@ impl LinkStateStore {
     /// and Noise proof, since a duplicate `Connected` event is not evidence that
     /// anything about the link changed.
     pub fn link_up(&mut self, link: LinkId, role: LinkRole) {
-        self.links.entry(link).or_insert_with(|| LinkState::new(role));
+        self.links
+            .entry(link)
+            .or_insert_with(|| LinkState::new(role));
     }
 
     /// Drops a link the radio reported gone. Returns the identity that owned it.
@@ -373,7 +373,6 @@ impl LinkStateStore {
     pub fn state(&self, link: &LinkId) -> Option<&LinkState> {
         self.links.get(link)
     }
-
 
     /// Every live link, in a stable order.
     pub fn links(&self) -> impl Iterator<Item = (&LinkId, &LinkState)> {
@@ -461,7 +460,6 @@ impl LinkStateStore {
         out
     }
 
-
     /// The whole preferred map, for the fanout selector.
     pub fn preferred_links(&self) -> &BTreeMap<PeerId, LinkId> {
         &self.preferred
@@ -495,7 +493,6 @@ impl LinkStateStore {
             }
         }
     }
-
 
     /// Moves a bound link to a new identity, applying every containment check.
     ///
@@ -806,7 +803,6 @@ impl PeerRegistry {
         self.peers.is_empty()
     }
 
-
     pub fn records(&self) -> impl Iterator<Item = &PeerRecord> {
         self.peers.values()
     }
@@ -829,7 +825,6 @@ impl PeerRegistry {
             .collect()
     }
 
-
     /// Lookups that a caller may reach with a full Noise key go through
     /// [`PeerId::to_short`], matching Swift's `peers[peerID.toShort()]`.
     pub fn is_connected(&self, peer: &PeerId) -> bool {
@@ -837,7 +832,6 @@ impl PeerRegistry {
             .get(&peer.to_short())
             .is_some_and(|p| p.connected)
     }
-
 
     /// Whether we can still plausibly route to this peer.
     ///
@@ -972,7 +966,6 @@ impl PeerRegistry {
         Ok(())
     }
 
-
     pub fn update_last_seen(&mut self, peer: &PeerId, now_unix_millis: u64) {
         if let Some(record) = self.peers.get_mut(peer) {
             record.last_seen_ms = now_unix_millis;
@@ -992,8 +985,7 @@ impl PeerRegistry {
         connected: bool,
         now_unix_millis: u64,
     ) -> AnnounceUpdate {
-        let pinned_now =
-            !self.pins.contains_key(peer) && self.pins.len() < MAX_PINNED_IDENTITIES;
+        let pinned_now = !self.pins.contains_key(peer) && self.pins.len() < MAX_PINNED_IDENTITIES;
         if pinned_now {
             self.pins.insert(
                 peer.clone(),
@@ -1103,7 +1095,6 @@ pub struct IngressRecord {
     pub peer: PeerId,
     pub recorded_at_ms: u64,
 }
-
 
 /// Which link each recently seen packet arrived on. Ported from
 /// `BLEIngressLinkRegistry`.
@@ -1349,9 +1340,15 @@ mod tests {
         store.link_up(link("in"), LinkRole::Peripheral);
 
         store.bind_if_unbound(&link("out1"), &peer(0xAA));
-        assert_eq!(store.preferred_links().get(&peer(0xAA)), Some(&link("out1")));
+        assert_eq!(
+            store.preferred_links().get(&peer(0xAA)),
+            Some(&link("out1"))
+        );
         store.bind_if_unbound(&link("out2"), &peer(0xAA));
-        assert_eq!(store.preferred_links().get(&peer(0xAA)), Some(&link("out2")));
+        assert_eq!(
+            store.preferred_links().get(&peer(0xAA)),
+            Some(&link("out2"))
+        );
 
         // Inbound links are the peer's to consolidate; they never become the
         // preferred outbound target.
@@ -1367,7 +1364,10 @@ mod tests {
             store.bind_if_unbound(&link(id), &peer(0xAA));
         }
         store.set_writable(&link("s2"), true);
-        assert_eq!(store.preferred_links().get(&peer(0xAA)), Some(&link("preferred")));
+        assert_eq!(
+            store.preferred_links().get(&peer(0xAA)),
+            Some(&link("preferred"))
+        );
 
         assert_eq!(store.link_down(&link("preferred")), Some(peer(0xAA)));
         // s2 is writable, s1 is not: repairing onto s1 would strand directed
@@ -1382,10 +1382,16 @@ mod tests {
         store.bind_if_unbound(&link("dup"), &peer(0xAA));
         store.link_up(link("main"), LinkRole::Central);
         store.bind_if_unbound(&link("main"), &peer(0xAA));
-        assert_eq!(store.preferred_links().get(&peer(0xAA)), Some(&link("main")));
+        assert_eq!(
+            store.preferred_links().get(&peer(0xAA)),
+            Some(&link("main"))
+        );
 
         let _ = store.link_down(&link("dup"));
-        assert_eq!(store.preferred_links().get(&peer(0xAA)), Some(&link("main")));
+        assert_eq!(
+            store.preferred_links().get(&peer(0xAA)),
+            Some(&link("main"))
+        );
     }
 
     #[test]
@@ -1421,7 +1427,6 @@ mod tests {
         assert_eq!(store.preferred_links().get(&peer(0xAA)), None);
     }
 
-
     // -- LinkStateStore: the rebind guards --------------------------------
 
     #[test]
@@ -1441,7 +1446,9 @@ mod tests {
         relayed.ttl = DIRECT_TTL - 1;
         let not_announce = packet(MessageType::Message, 0xBB, DIRECT_TTL, b"hi");
 
-        assert!(VerifiedDirectAnnounce::from_packet(peer(0xBB), &direct, true, DIRECT_TTL).is_some());
+        assert!(
+            VerifiedDirectAnnounce::from_packet(peer(0xBB), &direct, true, DIRECT_TTL).is_some()
+        );
         assert!(
             VerifiedDirectAnnounce::from_packet(peer(0xBB), &relayed, true, DIRECT_TTL).is_none()
         );
@@ -1492,7 +1499,10 @@ mod tests {
         // Nothing moved, and no cooldown was spent on the refusal.
         assert_eq!(store.peer_for(&link("attacker")), Some(&peer(0xAA)));
         assert_eq!(store.peer_for(&link("victim")), Some(&peer(0xBB)));
-        assert_eq!(store.links_to(&peer(0xBB)), BTreeSet::from([link("victim")]));
+        assert_eq!(
+            store.links_to(&peer(0xBB)),
+            BTreeSet::from([link("victim")])
+        );
     }
 
     #[test]
@@ -1520,14 +1530,21 @@ mod tests {
 
         // One millisecond before the window closes: still refused.
         assert_eq!(
-            store.rebind_after_verified_direct(&link("l1"), &second, 1_000 + LINK_REBIND_COOLDOWN_MS - 1),
+            store.rebind_after_verified_direct(
+                &link("l1"),
+                &second,
+                1_000 + LINK_REBIND_COOLDOWN_MS - 1
+            ),
             RebindOutcome::Refused(RebindRefusal::CooldownActive { remaining_ms: 1 })
         );
 
         // Exactly at the window: the entry is forgotten, so the rebind is allowed.
         // (bitchat keeps entries with age strictly < the window.)
-        let outcome =
-            store.rebind_after_verified_direct(&link("l1"), &second, 1_000 + LINK_REBIND_COOLDOWN_MS);
+        let outcome = store.rebind_after_verified_direct(
+            &link("l1"),
+            &second,
+            1_000 + LINK_REBIND_COOLDOWN_MS,
+        );
         assert!(outcome.rebound().is_some());
         assert_eq!(store.peer_for(&link("l1")), Some(&peer(0xCC)));
     }
@@ -1649,7 +1666,10 @@ mod tests {
         let rebind = outcome.rebound().expect("rebind allowed");
         assert!(rebind.retired_links.is_empty());
         assert!(!rebind.retire_previous_peer);
-        assert_eq!(store.links_to(&peer(0xAA)), BTreeSet::from([link("theirs")]));
+        assert_eq!(
+            store.links_to(&peer(0xAA)),
+            BTreeSet::from([link("theirs")])
+        );
     }
 
     #[test]
@@ -1707,8 +1727,12 @@ mod tests {
 
     // -- PeerRegistry -----------------------------------------------------
 
-    fn registry_with(peer_id: PeerId, verified: bool, connected: bool, last_seen: u64)
-    -> PeerRegistry {
+    fn registry_with(
+        peer_id: PeerId,
+        verified: bool,
+        connected: bool,
+        last_seen: u64,
+    ) -> PeerRegistry {
         let mut registry = PeerRegistry::new();
         registry.upsert(PeerRecord {
             peer: peer_id,
@@ -1727,7 +1751,8 @@ mod tests {
     #[test]
     fn a_verified_announce_records_the_peer_and_reports_what_changed() {
         let mut registry = PeerRegistry::new();
-        let first = registry.upsert_verified_announce(&peer(0xAA), &announcement("alice"), false, 10);
+        let first =
+            registry.upsert_verified_announce(&peer(0xAA), &announcement("alice"), false, 10);
         assert!(first.is_new_peer);
         assert!(!first.was_disconnected);
         assert_eq!(first.previous_nickname, None);
@@ -1745,7 +1770,6 @@ mod tests {
         assert_eq!(record.noise_public_key.as_deref(), Some(&[0xAB; 32][..]));
         assert_eq!(registry.connected_count(), 1);
     }
-
 
     #[test]
     fn a_connected_peer_is_reachable_regardless_of_age() {
@@ -1927,7 +1951,11 @@ mod tests {
         let mut registry = PeerRegistry::new();
         let (alice, first) = derived(1, 2, "alice");
 
-        assert!(registry.upsert_verified_announce(&alice, &first, true, 10).pinned_now);
+        assert!(
+            registry
+                .upsert_verified_announce(&alice, &first, true, 10)
+                .pinned_now
+        );
 
         let (_, renamed) = derived(1, 9, "alice-renamed");
         let update = registry.upsert_verified_announce(&alice, &renamed, true, 20);
@@ -1947,17 +1975,17 @@ mod tests {
 
         // Aged out as a disconnected peer, then removed outright, then the
         // whole registry cleared: every way a record can go.
-        let removed = registry.reconcile_connectivity(
-            REACHABILITY_RETENTION_VERIFIED_MS + 1,
-            &BTreeMap::new(),
-        );
+        let removed = registry
+            .reconcile_connectivity(REACHABILITY_RETENTION_VERIFIED_MS + 1, &BTreeMap::new());
         assert_eq!(removed.removed.len(), 1);
         registry.remove(&alice);
         registry.remove_all();
 
         assert!(registry.info(&alice).is_none());
         assert_eq!(
-            registry.pinned(&alice).map(|pin| pin.signing_public_key.clone()),
+            registry
+                .pinned(&alice)
+                .map(|pin| pin.signing_public_key.clone()),
             Some(vec![2; 32])
         );
     }
@@ -1989,7 +2017,9 @@ mod tests {
         let mut registry = PeerRegistry::new();
         let (_, live) = derived(1, 7, "alice");
         registry.upsert_verified_announce(&alice, &live, true, 99);
-        registry.restore_pins(&old.pins_to_bytes()).expect("restore");
+        registry
+            .restore_pins(&old.pins_to_bytes())
+            .expect("restore");
 
         assert_eq!(
             registry.pinned(&alice).map(|pin| pin.pinned_at_ms),
@@ -2015,7 +2045,12 @@ mod tests {
         let key_start = 1 + 1 + alice.as_str().len().max(bob.as_str().len()) + 1;
         swapped_key[key_start] ^= 0xFF;
 
-        for blob in [&good[..good.len() - 1], &[][..], &wrong_version, &swapped_key] {
+        for blob in [
+            &good[..good.len() - 1],
+            &[][..],
+            &wrong_version,
+            &swapped_key,
+        ] {
             let mut target = PeerRegistry::new();
             assert_eq!(target.restore_pins(blob), Err(MalformedPins));
             assert!(target.pinned(&alice).is_none() && target.pinned(&bob).is_none());
@@ -2045,7 +2080,10 @@ mod tests {
 
         assert!(!update.pinned_now);
         assert!(registry.pinned(&late).is_none());
-        assert!(registry.info(&late).is_some(), "still a peer for this session");
+        assert!(
+            registry.info(&late).is_some(),
+            "still a peer for this session"
+        );
         assert!(registry.pinned(&alice).is_some());
     }
 
@@ -2058,7 +2096,6 @@ mod tests {
         assert_eq!(connected.nickname(&peer(0xAA), true), Some("nick"));
         assert_eq!(registry.nickname(&peer(0xBB), false), None);
     }
-
 
     #[test]
     fn update_last_seen_and_remove() {
@@ -2118,7 +2155,13 @@ mod tests {
     fn a_record_expires_after_its_lifetime_and_is_replaced() {
         let mut ingress = IngressRegistry::new();
         let pkt = packet(MessageType::Message, 0xAA, 5, b"hello");
-        ingress.record_if_new(&pkt, link("l1"), peer(0xAA), 1_000, INGRESS_RECORD_LIFETIME_MS);
+        ingress.record_if_new(
+            &pkt,
+            link("l1"),
+            peer(0xAA),
+            1_000,
+            INGRESS_RECORD_LIFETIME_MS,
+        );
         assert!(ingress.record_if_new(
             &pkt,
             link("l2"),
@@ -2135,7 +2178,13 @@ mod tests {
         let old = packet(MessageType::Message, 0xAA, 5, b"old");
         let fresh = packet(MessageType::Message, 0xAA, 5, b"fresh");
         ingress.record_if_new(&old, link("l1"), peer(0xAA), 0, INGRESS_RECORD_LIFETIME_MS);
-        ingress.record_if_new(&fresh, link("l1"), peer(0xAA), 2_000, INGRESS_RECORD_LIFETIME_MS);
+        ingress.record_if_new(
+            &fresh,
+            link("l1"),
+            peer(0xAA),
+            2_000,
+            INGRESS_RECORD_LIFETIME_MS,
+        );
 
         ingress.prune(INGRESS_RECORD_LIFETIME_MS, INGRESS_RECORD_LIFETIME_MS);
         assert_eq!(ingress.len(), 2); // the older one is exactly at the boundary
@@ -2166,7 +2215,6 @@ mod tests {
         assert_eq!(ingress.link_for(&relayed), Some(&link("l1")));
     }
 
-
     #[test]
     fn clear_empties_the_ingress_memory() {
         let mut ingress = IngressRegistry::new();
@@ -2176,7 +2224,6 @@ mod tests {
         assert!(ingress.is_empty());
         assert!(ingress.record(&pkt).is_none());
     }
-
 
     #[test]
     fn refusal_and_rejection_render_for_logs() {

@@ -8,9 +8,9 @@
 use std::fmt;
 use std::str::FromStr;
 
+use crate::domain::UserId;
 use crate::domain::ids::{AttachmentId, ChannelId, MessageId};
 use crate::domain::message::{ConversationType, Message, MessageContent};
-use crate::domain::UserId;
 use crate::proto::content_v1::{self, AttachmentPointer, Content, receipt_message, typing_message};
 
 use super::DomainEvent;
@@ -109,11 +109,13 @@ pub fn build_message_from_content(
         .and_then(|dm| dm.quote.as_ref())
         .map(|q| MessageId::from_timestamp(q.id));
 
-    let reply_to_author_id = data_msg
-        .and_then(|dm| dm.quote.as_ref())
-        .and_then(|q| {
-            if q.author_aci.is_empty() { None } else { UserId::from_str(&q.author_aci).ok() }
-        });
+    let reply_to_author_id = data_msg.and_then(|dm| dm.quote.as_ref()).and_then(|q| {
+        if q.author_aci.is_empty() {
+            None
+        } else {
+            UserId::from_str(&q.author_aci).ok()
+        }
+    });
 
     let reply_to_text = data_msg
         .and_then(|dm| dm.quote.as_ref())
@@ -132,7 +134,8 @@ pub fn build_message_from_content(
 
     let attachments: Vec<AttachmentId> = data_msg
         .map(|dm| {
-            dm.attachments.iter()
+            dm.attachments
+                .iter()
                 .filter(|ptr| !ptr.cdn_key.is_empty())
                 .map(|ptr| AttachmentId::from_cdn_key(&ptr.cdn_key))
                 .collect()
@@ -213,10 +216,14 @@ pub trait AnonInboxBackend {
     fn label(&self) -> &'static str;
 
     /// Default: false. DM overrides to check its block list.
-    fn is_sender_blocked(&self, _sender_id: &UserId) -> bool { false }
+    fn is_sender_blocked(&self, _sender_id: &UserId) -> bool {
+        false
+    }
 
     /// Default: false. DM overrides to check per-conversation blocking.
-    fn is_conversation_blocked(&self, _id: &Self::Id) -> bool { false }
+    fn is_conversation_blocked(&self, _id: &Self::Id) -> bool {
+        false
+    }
 
     fn create_attachment_records(&self, pointers: &[AttachmentPointer]) -> Vec<AttachmentId>;
 
@@ -238,7 +245,14 @@ pub trait AnonInboxBackend {
     /// author only, ordered and dated by `edit_ts`, Signal's 48h, held until
     /// the message arrives. `sender` is the one the mailbox authenticated.
     /// Returns the edited message when it changed.
-    fn apply_edit(&self, id: &Self::Id, sender: &UserId, target_ts: u64, text: &str, edit_ts: u64) -> Result<Option<Message>, String>;
+    fn apply_edit(
+        &self,
+        id: &Self::Id,
+        sender: &UserId,
+        target_ts: u64,
+        text: &str,
+        edit_ts: u64,
+    ) -> Result<Option<Message>, String>;
 
     /// Returns `true` if the reaction was newly inserted, `false` if it
     /// was already present (per the unified-reactions UNIQUE constraint).
@@ -246,14 +260,22 @@ pub trait AnonInboxBackend {
     /// UI doesn't double-count when the same reaction arrives twice (e.g.
     /// snapshot + delta from the same poll cycle).
     fn add_reaction(
-        &self, id: &Self::Id, target_sender: &UserId, target_ts_ns: u64,
-        reactor: &UserId, emoji: &str,
+        &self,
+        id: &Self::Id,
+        target_sender: &UserId,
+        target_ts_ns: u64,
+        reactor: &UserId,
+        emoji: &str,
     ) -> Result<bool, String>;
 
     /// Returns `true` if a reaction was actually removed.
     fn remove_reaction(
-        &self, id: &Self::Id, target_sender: &UserId, target_ts_ns: u64,
-        reactor: &UserId, emoji: &str,
+        &self,
+        id: &Self::Id,
+        target_sender: &UserId,
+        target_ts_ns: u64,
+        reactor: &UserId,
+        emoji: &str,
     ) -> Result<bool, String>;
 
     fn set_pinned(&self, id: &Self::Id, ts: u64, pinned: bool) -> Result<(), String>;
@@ -265,7 +287,9 @@ pub trait AnonInboxBackend {
 
     /// Whether receipts should emit `MessagesRead` / `MessagesDelivered` events.
     /// Default: true. Group overrides to suppress (receipts are debug-only there).
-    fn emit_receipts(&self) -> bool { true }
+    fn emit_receipts(&self) -> bool {
+        true
+    }
 }
 
 // ============================================================================
@@ -365,7 +389,12 @@ pub fn dispatch_common_content<B: AnonInboxBackend>(
             let quote = QuoteContext::from_content(inner_content);
 
             match backend.store_data_message(
-                id, sender_id, &data_msg.body, &attachment_ids, sent_at, quote,
+                id,
+                sender_id,
+                &data_msg.body,
+                &attachment_ids,
+                sent_at,
+                quote,
             ) {
                 Ok(message_id_str) => {
                     tracing::info!(
@@ -409,9 +438,17 @@ pub fn dispatch_common_content<B: AnonInboxBackend>(
             let started = typing.action == typing_message::Action::Started as i32;
             let (user_id, timestamp) = (*sender_id, typing.timestamp);
             let event = if started {
-                DomainEvent::TypingStarted { channel_id, user_id, timestamp }
+                DomainEvent::TypingStarted {
+                    channel_id,
+                    user_id,
+                    timestamp,
+                }
             } else {
-                DomainEvent::TypingStopped { channel_id, user_id, timestamp }
+                DomainEvent::TypingStopped {
+                    channel_id,
+                    user_id,
+                    timestamp,
+                }
             };
             events.push(event);
             CommonDispatchOutcome::Handled(events)
@@ -426,7 +463,13 @@ pub fn dispatch_common_content<B: AnonInboxBackend>(
             // same reaction (snapshot + delta, or replay across polls)
             // become no-ops here instead of double-counting in the UI.
             let changed = if reaction.remove {
-                match backend.remove_reaction(id, &target_sender, sent_at_ns, sender_id, &reaction.emoji) {
+                match backend.remove_reaction(
+                    id,
+                    &target_sender,
+                    sent_at_ns,
+                    sender_id,
+                    &reaction.emoji,
+                ) {
                     Ok(v) => v,
                     Err(e) => {
                         tracing::warn!(id = %id, error = %e, "Failed to remove reaction");
@@ -434,7 +477,13 @@ pub fn dispatch_common_content<B: AnonInboxBackend>(
                     }
                 }
             } else {
-                match backend.add_reaction(id, &target_sender, sent_at_ns, sender_id, &reaction.emoji) {
+                match backend.add_reaction(
+                    id,
+                    &target_sender,
+                    sent_at_ns,
+                    sender_id,
+                    &reaction.emoji,
+                ) {
                     Ok(v) => v,
                     Err(e) => {
                         tracing::warn!(id = %id, error = %e, "Failed to add reaction");
@@ -518,8 +567,11 @@ pub fn dispatch_common_content<B: AnonInboxBackend>(
 
         Some(ContentKind::Edit(edit)) => {
             let target_timestamp = edit.target_sent_timestamp;
-            let (new_text, edit_ts) =
-                edit.data_message.as_ref().map(|dm| (dm.body.as_str(), dm.timestamp)).unwrap_or_default();
+            let (new_text, edit_ts) = edit
+                .data_message
+                .as_ref()
+                .map(|dm| (dm.body.as_str(), dm.timestamp))
+                .unwrap_or_default();
             // A mailbox carries no server receive time: the edit's own
             // timestamp measures the 48h window.
             match backend.apply_edit(id, sender_id, target_timestamp, new_text, edit_ts) {
@@ -559,31 +611,85 @@ mod tests {
 
     impl AnonInboxBackend for DeleteOnly {
         type Id = AnonGroupId;
-        fn conversation_type(&self) -> ConversationType { ConversationType::AnonGroup }
-        fn label(&self) -> &'static str { "test" }
-        fn create_attachment_records(&self, _: &[AttachmentPointer]) -> Vec<AttachmentId> { vec![] }
+        fn conversation_type(&self) -> ConversationType {
+            ConversationType::AnonGroup
+        }
+        fn label(&self) -> &'static str {
+            "test"
+        }
+        fn create_attachment_records(&self, _: &[AttachmentPointer]) -> Vec<AttachmentId> {
+            vec![]
+        }
         fn store_data_message(
-            &self, _: &AnonGroupId, _: &UserId, _: &str, _: &[AttachmentId], _: u64, _: Option<QuoteContext>,
-        ) -> Result<String, String> { unreachable!() }
+            &self,
+            _: &AnonGroupId,
+            _: &UserId,
+            _: &str,
+            _: &[AttachmentId],
+            _: u64,
+            _: Option<QuoteContext>,
+        ) -> Result<String, String> {
+            unreachable!()
+        }
         fn delete_message(&self, _: &AnonGroupId, _: &UserId, _: u64) -> Result<bool, String> {
             Ok(self.row_matched)
         }
-        fn apply_edit(&self, _: &AnonGroupId, _: &UserId, _: u64, _: &str, _: u64) -> Result<Option<Message>, String> { unreachable!() }
-        fn add_reaction(&self, _: &AnonGroupId, _: &UserId, _: u64, _: &UserId, _: &str) -> Result<bool, String> { unreachable!() }
-        fn remove_reaction(&self, _: &AnonGroupId, _: &UserId, _: u64, _: &UserId, _: &str) -> Result<bool, String> { unreachable!() }
-        fn set_pinned(&self, _: &AnonGroupId, _: u64, _: bool) -> Result<(), String> { unreachable!() }
-        fn get_message_id_by_timestamp(&self, _: &AnonGroupId, _: u64) -> Option<MessageId> { None }
+        fn apply_edit(
+            &self,
+            _: &AnonGroupId,
+            _: &UserId,
+            _: u64,
+            _: &str,
+            _: u64,
+        ) -> Result<Option<Message>, String> {
+            unreachable!()
+        }
+        fn add_reaction(
+            &self,
+            _: &AnonGroupId,
+            _: &UserId,
+            _: u64,
+            _: &UserId,
+            _: &str,
+        ) -> Result<bool, String> {
+            unreachable!()
+        }
+        fn remove_reaction(
+            &self,
+            _: &AnonGroupId,
+            _: &UserId,
+            _: u64,
+            _: &UserId,
+            _: &str,
+        ) -> Result<bool, String> {
+            unreachable!()
+        }
+        fn set_pinned(&self, _: &AnonGroupId, _: u64, _: bool) -> Result<(), String> {
+            unreachable!()
+        }
+        fn get_message_id_by_timestamp(&self, _: &AnonGroupId, _: u64) -> Option<MessageId> {
+            None
+        }
     }
 
     fn delete_events(row_matched: bool) -> usize {
         let content = Content {
-            content: Some(content_v1::content::Content::DataMessage(content_v1::DataMessage {
-                delete: Some(content_v1::Delete { target_sent_timestamp: 42 }),
-                ..Default::default()
-            })),
+            content: Some(content_v1::content::Content::DataMessage(
+                content_v1::DataMessage {
+                    delete: Some(content_v1::Delete {
+                        target_sent_timestamp: 42,
+                    }),
+                    ..Default::default()
+                },
+            )),
             ..Default::default()
         };
-        match dispatch_common_content(&AnonGroupId::new(), &UserId::new(), &content, &DeleteOnly { row_matched }) {
+        match dispatch_common_content(
+            &AnonGroupId::new(),
+            &UserId::new(),
+            &content,
+            &DeleteOnly { row_matched },
+        ) {
             CommonDispatchOutcome::Handled(events) => events
                 .iter()
                 .filter(|e| matches!(e, DomainEvent::MessageDeleted { .. }))
@@ -620,32 +726,55 @@ mod tests {
         let window = crate::services::message::MessageService::EDIT_MAX_AGE_NS;
         let edit = |by: &UserId, body: &str, edit_ts: u64| {
             let content = Content {
-                content: Some(content_v1::content::Content::Edit(content_v1::EditMessage {
-                    target_sent_timestamp: sent,
-                    data_message: Some(content_v1::DataMessage { body: body.into(), timestamp: edit_ts, ..Default::default() }),
-                })),
+                content: Some(content_v1::content::Content::Edit(
+                    content_v1::EditMessage {
+                        target_sent_timestamp: sent,
+                        data_message: Some(content_v1::DataMessage {
+                            body: body.into(),
+                            timestamp: edit_ts,
+                            ..Default::default()
+                        }),
+                    },
+                )),
                 ..Default::default()
             };
             match dispatch_common_content(&group, by, &content, groups.as_ref()) {
-                CommonDispatchOutcome::Handled(events) => {
-                    events.iter().filter(|e| matches!(e, DomainEvent::MessageEdited { .. })).count()
-                }
+                CommonDispatchOutcome::Handled(events) => events
+                    .iter()
+                    .filter(|e| matches!(e, DomainEvent::MessageEdited { .. }))
+                    .count(),
                 _ => panic!("an edit is handled"),
             }
         };
-        let stored = || client.messages().message_repo.get_by_sender_timestamp(&author, sent).unwrap().unwrap();
+        let stored = || {
+            client
+                .messages()
+                .message_repo
+                .get_by_sender_timestamp(&author, sent)
+                .unwrap()
+                .unwrap()
+        };
 
         assert_eq!(edit(&author, "early", sent + 10), 0, "held for its message");
-        groups.store_data_message(&group, &author, "original", &[], sent, None).unwrap();
+        groups
+            .store_data_message(&group, &author, "original", &[], sent, None)
+            .unwrap();
         assert_eq!(stored().content, MessageContent::Text("early".into()));
 
         assert_eq!(edit(&author, "newer", sent + 30), 1);
-        assert_eq!(edit(&author, "older", sent + 20), 0, "older than the edit shown");
+        assert_eq!(
+            edit(&author, "older", sent + 20),
+            0,
+            "older than the edit shown"
+        );
         assert_eq!(edit(&author, "newer", sent + 30), 0, "re-delivered");
         assert_eq!(edit(&stranger, "hijack", sent + 40), 0, "not the author");
         assert_eq!(edit(&author, "late", sent + window + 1), 0, "past 48h");
         let m = stored();
         assert_eq!(m.content, MessageContent::Text("newer".into()));
-        assert_eq!(m.edited_at, Some(chrono::DateTime::from_timestamp_nanos((sent + 30) as i64)));
+        assert_eq!(
+            m.edited_at,
+            Some(chrono::DateTime::from_timestamp_nanos((sent + 30) as i64))
+        );
     }
 }

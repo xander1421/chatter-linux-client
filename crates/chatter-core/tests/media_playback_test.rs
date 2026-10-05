@@ -47,8 +47,13 @@ fn test_video_from_memory_mp4() {
             // Try to decode a frame
             match decoder.decode_video_frame() {
                 Ok(Some(frame)) => {
-                    println!("Decoded frame: {}x{}, {} bytes, ts={}ms",
-                        frame.width, frame.height, frame.data.len(), frame.timestamp_ms);
+                    println!(
+                        "Decoded frame: {}x{}, {} bytes, ts={}ms",
+                        frame.width,
+                        frame.height,
+                        frame.data.len(),
+                        frame.timestamp_ms
+                    );
                     assert!(frame.width > 0, "Frame width should be > 0");
                     assert!(frame.height > 0, "Frame height should be > 0");
                     assert!(!frame.data.is_empty(), "Frame data should not be empty");
@@ -125,7 +130,11 @@ fn test_gstreamer_appsrc_pipeline() {
     // Check magic bytes
     if video_data.len() >= 8 {
         let magic = &video_data[4..8];
-        println!("Magic bytes at offset 4: {:?} ({})", magic, String::from_utf8_lossy(magic));
+        println!(
+            "Magic bytes at offset 4: {:?} ({})",
+            magic,
+            String::from_utf8_lossy(magic)
+        );
         if magic == b"ftyp" {
             println!("Confirmed: MP4/QuickTime format");
         }
@@ -183,7 +192,11 @@ fn test_gstreamer_appsrc_pipeline() {
                     buffer_ref.set_offset_end(data.len() as u64);
                 }
 
-                println!("need_data: pushing {} bytes from offset {}", slice.len(), offset);
+                println!(
+                    "need_data: pushing {} bytes from offset {}",
+                    slice.len(),
+                    offset
+                );
 
                 if let Err(e) = appsrc.push_buffer(buffer) {
                     eprintln!("Failed to push buffer: {:?}", e);
@@ -200,11 +213,19 @@ fn test_gstreamer_appsrc_pipeline() {
                 let data = data_for_seek.as_ref();
 
                 if offset_usize > data.len() {
-                    println!("seek_data: offset {} beyond data length {}", offset, data.len());
+                    println!(
+                        "seek_data: offset {} beyond data length {}",
+                        offset,
+                        data.len()
+                    );
                     return false;
                 }
 
-                println!("seek_data: seeking to offset {} (data len {})", offset, data.len());
+                println!(
+                    "seek_data: seeking to offset {} (data len {})",
+                    offset,
+                    data.len()
+                );
 
                 let mut pos = read_pos_seek.lock().unwrap();
                 let mut eos = eos_sent_seek.lock().unwrap();
@@ -213,7 +234,7 @@ fn test_gstreamer_appsrc_pipeline() {
 
                 true
             })
-            .build()
+            .build(),
     );
 
     // Create decodebin
@@ -227,11 +248,14 @@ fn test_gstreamer_appsrc_pipeline() {
         .expect("Failed to create fakesink");
 
     // Add elements
-    pipeline.add_many([appsrc.upcast_ref(), &decodebin, &fakesink])
+    pipeline
+        .add_many([appsrc.upcast_ref(), &decodebin, &fakesink])
         .expect("Failed to add elements");
 
     // Link appsrc to decodebin
-    appsrc.link(&decodebin).expect("Failed to link appsrc to decodebin");
+    appsrc
+        .link(&decodebin)
+        .expect("Failed to link appsrc to decodebin");
 
     // Connect pad-added for dynamic linking
     let fakesink_weak = fakesink.downgrade();
@@ -258,11 +282,16 @@ fn test_gstreamer_appsrc_pipeline() {
 
     // Set to PAUSED
     println!("Setting pipeline to PAUSED...");
-    pipeline.set_state(gst::State::Paused).expect("Failed to set state");
+    pipeline
+        .set_state(gst::State::Paused)
+        .expect("Failed to set state");
 
     // Wait for state change
     let (result, current, pending) = pipeline.state(gst::ClockTime::from_seconds(10));
-    println!("State change: result={:?}, current={:?}, pending={:?}", result, current, pending);
+    println!(
+        "State change: result={:?}, current={:?}, pending={:?}",
+        result, current, pending
+    );
 
     // Check for errors
     if let Some(bus) = pipeline.bus() {
@@ -272,11 +301,23 @@ fn test_gstreamer_appsrc_pipeline() {
                     eprintln!("Pipeline error: {} (debug: {:?})", err.error(), err.debug());
                 }
                 gst::MessageView::Warning(warn) => {
-                    eprintln!("Pipeline warning: {} (debug: {:?})", warn.error(), warn.debug());
+                    eprintln!(
+                        "Pipeline warning: {} (debug: {:?})",
+                        warn.error(),
+                        warn.debug()
+                    );
                 }
                 gst::MessageView::StateChanged(sc) => {
-                    if sc.src().map(|s| s == pipeline.upcast_ref::<gst::Object>()).unwrap_or(false) {
-                        println!("Pipeline state changed: {:?} -> {:?}", sc.old(), sc.current());
+                    if sc
+                        .src()
+                        .map(|s| s == pipeline.upcast_ref::<gst::Object>())
+                        .unwrap_or(false)
+                    {
+                        println!(
+                            "Pipeline state changed: {:?} -> {:?}",
+                            sc.old(),
+                            sc.current()
+                        );
                     }
                 }
                 _ => {}
@@ -301,17 +342,33 @@ fn test_gstreamer_appsrc_pipeline() {
 #[test]
 fn test_video_format_detection() {
     // MP4 magic bytes
-    let mp4_data: &[u8] = &[0x00, 0x00, 0x00, 0x20, b'f', b't', b'y', b'p', b'm', b'p', b'4', b'2'];
-    assert_eq!(&mp4_data[4..8], b"ftyp", "MP4 should have 'ftyp' at offset 4");
+    let mp4_data: &[u8] = &[
+        0x00, 0x00, 0x00, 0x20, b'f', b't', b'y', b'p', b'm', b'p', b'4', b'2',
+    ];
+    assert_eq!(
+        &mp4_data[4..8],
+        b"ftyp",
+        "MP4 should have 'ftyp' at offset 4"
+    );
 
     // MKV/WebM magic bytes
     let mkv_data: &[u8] = &[0x1A, 0x45, 0xDF, 0xA3];
-    assert_eq!(&mkv_data[0..4], &[0x1A, 0x45, 0xDF, 0xA3], "MKV should have EBML header");
+    assert_eq!(
+        &mkv_data[0..4],
+        &[0x1A, 0x45, 0xDF, 0xA3],
+        "MKV should have EBML header"
+    );
 
     // AVI magic bytes
-    let avi_data: &[u8] = &[b'R', b'I', b'F', b'F', 0x00, 0x00, 0x00, 0x00, b'A', b'V', b'I', b' '];
+    let avi_data: &[u8] = &[
+        b'R', b'I', b'F', b'F', 0x00, 0x00, 0x00, 0x00, b'A', b'V', b'I', b' ',
+    ];
     assert_eq!(&avi_data[0..4], b"RIFF", "AVI should start with RIFF");
-    assert_eq!(&avi_data[8..12], b"AVI ", "AVI should have 'AVI ' at offset 8");
+    assert_eq!(
+        &avi_data[8..12],
+        b"AVI ",
+        "AVI should have 'AVI ' at offset 8"
+    );
 
     println!("Format detection logic verified");
 }

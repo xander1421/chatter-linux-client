@@ -26,8 +26,8 @@
 #[allow(dead_code, unused_imports)]
 mod common;
 
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 
 use chatter_core::client::ChatterClient;
@@ -41,7 +41,10 @@ const ONION_TIMEOUT: Duration = Duration::from_secs(180);
 /// A local "direct server" that only counts who dials it.
 async fn direct_listener() -> (String, Arc<AtomicUsize>) {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let url = format!("https://127.0.0.1:{}", listener.local_addr().unwrap().port());
+    let url = format!(
+        "https://127.0.0.1:{}",
+        listener.local_addr().unwrap().port()
+    );
     let accepts = Arc::new(AtomicUsize::new(0));
     let counter = accepts.clone();
     tokio::spawn(async move {
@@ -65,9 +68,17 @@ async fn shielded_client(direct_url: &str) -> (Arc<ChatterClient>, tempfile::Tem
         .data_dir(dir.path().to_str().unwrap())
         .build()
         .expect("build client");
-    assert!(!client.startup_connect(Duration::from_secs(5)).await, "signed-out start must not connect");
-    assert!(client.shield_available(), "build with --features onion and CHATTER_ONION_ADDR");
-    client.set_shield_before_login(true).expect("Shield before sign-in");
+    assert!(
+        !client.startup_connect(Duration::from_secs(5)).await,
+        "signed-out start must not connect"
+    );
+    assert!(
+        client.shield_available(),
+        "build with --features onion and CHATTER_ONION_ADDR"
+    );
+    client
+        .set_shield_before_login(true)
+        .expect("Shield before sign-in");
     (client, dir)
 }
 
@@ -89,9 +100,20 @@ async fn connect_over_onion(client: &ChatterClient) {
 }
 
 fn assert_in_shield(client: &ChatterClient, accepts: &AtomicUsize, step: &str) {
-    assert!(client.anon_mode_enabled(), "{step}: the session left Shield");
-    assert!(client.endpoint().contains(".onion"), "{step}: transport left onion: {}", client.endpoint());
-    assert_eq!(accepts.load(Ordering::SeqCst), 0, "{step}: the server was dialled directly");
+    assert!(
+        client.anon_mode_enabled(),
+        "{step}: the session left Shield"
+    );
+    assert!(
+        client.endpoint().contains(".onion"),
+        "{step}: transport left onion: {}",
+        client.endpoint()
+    );
+    assert_eq!(
+        accepts.load(Ordering::SeqCst),
+        0,
+        "{step}: the server was dialled directly"
+    );
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -114,7 +136,14 @@ async fn shield_onboarding_never_dials_direct() {
     let t = Instant::now();
     let registered = tokio::time::timeout(
         ONION_TIMEOUT,
-        alice.register(&nick, PASSWORD, "Shield", "shield-onboarding", Some(&avatar), Some(PIN)),
+        alice.register(
+            &nick,
+            PASSWORD,
+            "Shield",
+            "shield-onboarding",
+            Some(&avatar),
+            Some(PIN),
+        ),
     )
     .await
     .expect("register over onion timed out")
@@ -158,7 +187,11 @@ async fn shield_onboarding_never_dials_direct() {
     // Teardown: let the logged-in clients stop; still nothing direct.
     alice.shutdown().await;
     bob_device.shutdown().await;
-    assert_eq!(accepts.load(Ordering::SeqCst), 0, "a direct connection was made");
+    assert_eq!(
+        accepts.load(Ordering::SeqCst),
+        0,
+        "a direct connection was made"
+    );
 }
 
 /// A tiny valid PNG, so registration exercises the avatar path.

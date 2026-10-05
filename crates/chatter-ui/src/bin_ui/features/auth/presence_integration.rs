@@ -5,9 +5,9 @@
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use tokio::sync::RwLock;
 use chatter_core::client::ChatterClient;
 use chatter_core::domain::user::PresenceStatus;
+use tokio::sync::RwLock;
 
 /// Current presence state for this session
 static CURRENT_PRESENCE: std::sync::LazyLock<RwLock<PresenceStatus>> =
@@ -83,7 +83,10 @@ pub async fn notify_chat_opened(
     }
 
     // Send current presence to this specific conversation
-    if let Err(e) = ui_ctx.send_anon_dm_presence_update(conversation_id, current).await {
+    if let Err(e) = ui_ctx
+        .send_anon_dm_presence_update(conversation_id, current)
+        .await
+    {
         tracing::debug!("Failed to send presence on chat open: {}", e);
     }
 }

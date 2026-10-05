@@ -8,13 +8,13 @@
 use std::sync::Arc;
 use tempfile::NamedTempFile;
 
-use chatter_core::storage::{Database, KeyStore, SettingsRepository, settings_keys};
 use chatter_core::services::SignalService;
+use chatter_core::storage::{Database, KeyStore, SettingsRepository, settings_keys};
 use libsignal_protocol::{
-    kem, process_prekey_bundle, DeviceId, GenericSignedPreKey, IdentityKeyPair,
-    InMemSignalProtocolStore, KeyPair, KyberPreKeyRecord, KyberPreKeyStore, PreKeyBundle, PreKeyId,
-    PreKeyRecord, PreKeyStore, ProtocolAddress, SessionStore, SignedPreKeyId, SignedPreKeyRecord,
-    SignedPreKeyStore, Timestamp,
+    DeviceId, GenericSignedPreKey, IdentityKeyPair, InMemSignalProtocolStore, KeyPair,
+    KyberPreKeyRecord, KyberPreKeyStore, PreKeyBundle, PreKeyId, PreKeyRecord, PreKeyStore,
+    ProtocolAddress, SessionStore, SignedPreKeyId, SignedPreKeyRecord, SignedPreKeyStore,
+    Timestamp, kem, process_prekey_bundle,
 };
 
 /// Alice is the local party in these fixtures; libsignal >= 0.99 wants her
@@ -26,7 +26,7 @@ fn alice_addr() -> libsignal_protocol::ProtocolAddress {
     )
 }
 
-use rand::{rngs::StdRng, SeedableRng};
+use rand::{SeedableRng, rngs::StdRng};
 use std::time::SystemTime;
 
 /// A serialized `SessionRecord` that can actually send.
@@ -131,7 +131,8 @@ async fn handshake(peer: &ProtocolAddress) -> (InMemSignalProtocolStore, InMemSi
         .expect("save kyber prekey");
 
     let alice_identity = IdentityKeyPair::generate(&mut alice_rng);
-    let mut alice_store = InMemSignalProtocolStore::new(alice_identity, ALICE_REGISTRATION_ID).expect("alice store");
+    let mut alice_store =
+        InMemSignalProtocolStore::new(alice_identity, ALICE_REGISTRATION_ID).expect("alice store");
     process_prekey_bundle(
         peer,
         &alice_addr(),
@@ -147,7 +148,12 @@ async fn handshake(peer: &ProtocolAddress) -> (InMemSignalProtocolStore, InMemSi
 }
 
 /// Helper to set up a test database and SignalService.
-async fn setup_test_service() -> (SignalService, Arc<KeyStore>, Arc<SettingsRepository>, NamedTempFile) {
+async fn setup_test_service() -> (
+    SignalService,
+    Arc<KeyStore>,
+    Arc<SettingsRepository>,
+    NamedTempFile,
+) {
     let db_file = NamedTempFile::new().unwrap();
     let db = Arc::new(Database::open(db_file.path(), "test_passphrase").unwrap());
     db.run_migrations().unwrap();
@@ -156,8 +162,15 @@ async fn setup_test_service() -> (SignalService, Arc<KeyStore>, Arc<SettingsRepo
     let settings_repo = Arc::new(SettingsRepository::new(db.clone()));
 
     // Initialize required settings
-    settings_repo.set(settings_keys::CURRENT_USER_ID, &"test-user-uuid".to_string()).unwrap();
-    settings_repo.set(settings_keys::CURRENT_DEVICE_ID, &1u32).unwrap();
+    settings_repo
+        .set(
+            settings_keys::CURRENT_USER_ID,
+            &"test-user-uuid".to_string(),
+        )
+        .unwrap();
+    settings_repo
+        .set(settings_keys::CURRENT_DEVICE_ID, &1u32)
+        .unwrap();
 
     let service = SignalService::new(key_store.clone(), settings_repo.clone());
     (service, key_store, settings_repo, db_file)
@@ -192,7 +205,9 @@ async fn test_has_session_returns_true_after_session_created() {
     );
     // A session that can actually send — see `usable_session_bytes`.
     let session_bytes = usable_session_bytes(&address).await;
-    key_store.store_session(&session_key, &session_bytes).unwrap();
+    key_store
+        .store_session(&session_key, &session_bytes)
+        .unwrap();
 
     let has_session = service.actor.has_session(address).await.unwrap();
     assert!(has_session, "Should have session after storing one");
@@ -208,22 +223,35 @@ async fn archive_peer_sessions_leaves_no_reusable_session_for_that_peer_only() {
     for (peer, device) in [("peer-uuid", 1u32), ("peer-uuid", 2), ("other-uuid", 1)] {
         let address = ProtocolAddress::new(peer.to_string(), DeviceId::try_from(device).unwrap());
         key_store
-            .store_session(&format!("{peer}:{device}"), &usable_session_bytes(&address).await)
+            .store_session(
+                &format!("{peer}:{device}"),
+                &usable_session_bytes(&address).await,
+            )
             .unwrap();
     }
-    assert_eq!(service.session_devices("peer-uuid").await.unwrap(), vec![1, 2]);
+    assert_eq!(
+        service.session_devices("peer-uuid").await.unwrap(),
+        vec![1, 2]
+    );
 
     assert_eq!(service.archive_peer_sessions("peer-uuid").await.unwrap(), 2);
 
     assert!(
-        service.session_devices("peer-uuid").await.unwrap().is_empty(),
+        service
+            .session_devices("peer-uuid")
+            .await
+            .unwrap()
+            .is_empty(),
         "an archived session still reads as usable, so the rebuild would skip it"
     );
     assert!(
         key_store.load_session("peer-uuid:1").unwrap().is_some(),
         "archived, not deleted: in-flight messages under the old state still decrypt"
     );
-    assert_eq!(service.session_devices("other-uuid").await.unwrap(), vec![1]);
+    assert_eq!(
+        service.session_devices("other-uuid").await.unwrap(),
+        vec![1]
+    );
 }
 
 /// OPEN-ITEMS §125: the registration id a sealed send names for a device is
@@ -235,7 +263,10 @@ async fn archive_peer_sessions_leaves_no_reusable_session_for_that_peer_only() {
 #[tokio::test]
 async fn responder_session_records_the_initiators_registration_id() {
     let (service, key_store, _settings, _db_file) = setup_test_service().await;
-    let bob = ProtocolAddress::new("bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb".to_string(), DeviceId::new(2).unwrap());
+    let bob = ProtocolAddress::new(
+        "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb".to_string(),
+        DeviceId::new(2).unwrap(),
+    );
     let (mut alice_store, mut bob_store) = handshake(&bob).await;
     let mut rng = StdRng::seed_from_u64(7);
 
@@ -250,7 +281,10 @@ async fn responder_session_records_the_initiators_registration_id() {
     )
     .await
     .expect("alice encrypts");
-    assert!(matches!(ciphertext, libsignal_protocol::CiphertextMessage::PreKeySignalMessage(_)));
+    assert!(matches!(
+        ciphertext,
+        libsignal_protocol::CiphertextMessage::PreKeySignalMessage(_)
+    ));
     let plaintext = libsignal_protocol::message_decrypt(
         &ciphertext,
         &alice_addr(),
@@ -276,7 +310,10 @@ async fn responder_session_records_the_initiators_registration_id() {
         .expect("serialize");
     let alice = alice_addr();
     key_store
-        .store_session(&format!("{}:{}", alice.name(), u32::from(alice.device_id())), &bob_session)
+        .store_session(
+            &format!("{}:{}", alice.name(), u32::from(alice.device_id())),
+            &bob_session,
+        )
         .unwrap();
 
     assert_eq!(
@@ -296,29 +333,37 @@ async fn responder_session_records_the_initiators_registration_id() {
 async fn held_sessions_are_used_without_a_bundle_fetch() {
     let (service, key_store, _settings, _db_file) = setup_test_service().await;
     for device in [1u32, 2] {
-        let address = ProtocolAddress::new("peer-uuid".to_string(), DeviceId::try_from(device).unwrap());
+        let address =
+            ProtocolAddress::new("peer-uuid".to_string(), DeviceId::try_from(device).unwrap());
         key_store
-            .store_session(&format!("peer-uuid:{device}"), &usable_session_bytes(&address).await)
+            .store_session(
+                &format!("peer-uuid:{device}"),
+                &usable_session_bytes(&address).await,
+            )
             .unwrap();
     }
     let mut auth_client = unreachable_auth_client();
 
     assert_eq!(
-        service.ensure_sessions_all_devices(&mut auth_client, "peer-uuid").await.unwrap(),
+        service
+            .ensure_sessions_all_devices(&mut auth_client, "peer-uuid")
+            .await
+            .unwrap(),
         vec![1, 2]
     );
 
     // Only a caller that needs the recipient's sealed-sender access policy,
     // not read yet this run, fetches (and so fails here).
-    assert!(service
-        .ensure_sessions_and_access_policy_all_devices(&mut auth_client, "peer-uuid", true)
-        .await
-        .is_err());
+    assert!(
+        service
+            .ensure_sessions_and_access_policy_all_devices(&mut auth_client, "peer-uuid", true)
+            .await
+            .is_err()
+    );
 }
 
 fn unreachable_auth_client() -> chatter_core::network::grpc::AuthClient {
-    let channel = tonic::transport::Endpoint::from_static("http://127.0.0.1:9")
-        .connect_lazy();
+    let channel = tonic::transport::Endpoint::from_static("http://127.0.0.1:9").connect_lazy();
     chatter_core::network::grpc::AuthClient::new(
         channel.into(),
         chatter_core::network::grpc::interceptors::AuthInterceptor::default(),
@@ -370,13 +415,19 @@ async fn test_actor_runs_on_dedicated_thread() {
     match result {
         Ok(fingerprint) => {
             // Fingerprint should be hex-formatted
-            assert!(fingerprint.chars().all(|c| c.is_ascii_hexdigit() || c == ' '));
+            assert!(
+                fingerprint
+                    .chars()
+                    .all(|c| c.is_ascii_hexdigit() || c == ' ')
+            );
         }
         Err(e) => {
             // Expected if no identity key is generated yet
             let error_str = e.to_string();
             assert!(
-                error_str.contains("identity") || error_str.contains("not found") || error_str.contains("Protocol"),
+                error_str.contains("identity")
+                    || error_str.contains("not found")
+                    || error_str.contains("Protocol"),
                 "Unexpected error: {}",
                 error_str
             );
@@ -396,9 +447,15 @@ async fn test_sender_key_operations_use_actor() {
     );
 
     // Check has_sender_key through actor
-    let has_key = service.actor.has_sender_key(channel_id, our_address.clone()).await;
+    let has_key = service
+        .actor
+        .has_sender_key(channel_id, our_address.clone())
+        .await;
     assert!(has_key.is_ok(), "has_sender_key should succeed");
-    assert!(!has_key.unwrap(), "Should not have sender key for new channel");
+    assert!(
+        !has_key.unwrap(),
+        "Should not have sender key for new channel"
+    );
 }
 
 /// Integration test simulating the bootstrap flow session reuse.
@@ -422,10 +479,15 @@ async fn test_session_reuse_after_message_decrypt() {
         libsignal_protocol::DeviceId::try_from(device_id).unwrap(),
     );
     let session_bytes = usable_session_bytes(&address).await;
-    key_store.store_session(&session_key, &session_bytes).unwrap();
+    key_store
+        .store_session(&session_key, &session_bytes)
+        .unwrap();
 
     let has_session = service.actor.has_session(address).await.unwrap();
-    assert!(has_session, "Session should exist after message decryption simulation");
+    assert!(
+        has_session,
+        "Session should exist after message decryption simulation"
+    );
 
     // The session data should be preserved (not overwritten)
     let loaded_session = key_store.load_session(&session_key).unwrap();
@@ -470,7 +532,9 @@ async fn ensure_session_refuses_a_stale_session_when_an_identity_change_is_parke
     // A session that can genuinely send — this is what makes ensure_session
     // short-circuit, and the whole point of the test.
     let session_bytes = usable_session_bytes(&address).await;
-    key_store.store_session(&format!("{peer_id}:1"), &session_bytes).unwrap();
+    key_store
+        .store_session(&format!("{peer_id}:1"), &session_bytes)
+        .unwrap();
     assert!(
         service.has_session(peer_id, 1).await.unwrap(),
         "precondition: without a usable session there is no short-circuit to defeat"
@@ -495,7 +559,9 @@ async fn ensure_session_refuses_a_stale_session_when_an_identity_change_is_parke
 
     match service.ensure_session(&mut auth_client, peer_id, 1).await {
         Err(ServiceError::Crypto(CryptoError::UntrustedIdentity {
-            peer_id: got, attribution, ..
+            peer_id: got,
+            attribution,
+            ..
         })) => {
             assert_eq!(got, peer_id);
             assert!(
@@ -520,7 +586,8 @@ async fn ensure_session_refuses_a_stale_session_when_an_identity_change_is_parke
 /// carrying an untrusted identity key never reaches them.
 async fn prekey_message_from(sender_identity: IdentityKeyPair, seed: u64) -> Vec<u8> {
     let mut rng = StdRng::seed_from_u64(seed);
-    let recipient = ProtocolAddress::new("recipient".to_string(), DeviceId::try_from(1u32).unwrap());
+    let recipient =
+        ProtocolAddress::new("recipient".to_string(), DeviceId::try_from(1u32).unwrap());
 
     let rcpt_identity = IdentityKeyPair::generate(&mut rng);
     let pre_key_pair = KeyPair::generate(&mut rng);
@@ -598,7 +665,9 @@ async fn identified_decrypt_surfaces_a_changed_identity_instead_of_a_generic_fai
     let reinstalled_pair = IdentityKeyPair::generate(&mut rng);
 
     // Bob pinned Alice's OLD key; Alice reinstalled and sends under a new one.
-    key_store.save_identity("alice_uuid", &old.serialize()).unwrap();
+    key_store
+        .save_identity("alice_uuid", &old.serialize())
+        .unwrap();
     let envelope = prekey_message_from(reinstalled_pair, 0xBEEF).await;
 
     match service

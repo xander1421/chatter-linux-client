@@ -11,7 +11,7 @@
 use crate::domain::ids::{ChannelId, MessageId, UserId};
 use crate::domain::message::{CallMessage, CallMessageType, Message, MessageContent};
 use crate::events::DomainEvent;
-use crate::proto::content_v1::{call_event, content, CallEvent, Content};
+use crate::proto::content_v1::{CallEvent, Content, call_event, content};
 
 use super::{MessageError, MessageService};
 
@@ -99,15 +99,17 @@ impl MessageService {
             initiator_name: String::new(),
             started_at: (phase == ChannelCallPhase::Started).then_some(at),
             ended_at: (phase == ChannelCallPhase::Ended).then_some(at),
-            duration: (duration_secs > 0).then(|| chrono::Duration::seconds(i64::from(duration_secs))),
+            duration: (duration_secs > 0)
+                .then(|| chrono::Duration::seconds(i64::from(duration_secs))),
             participant_count: 0,
         });
 
         if !self.store_message_local_once(&row)? {
             return Ok(None);
         }
-        self.event_bus
-            .emit_domain(DomainEvent::MessageReceived { message: row.clone() });
+        self.event_bus.emit_domain(DomainEvent::MessageReceived {
+            message: row.clone(),
+        });
         Ok(Some(row))
     }
 
@@ -124,8 +126,12 @@ impl MessageService {
         let me = self.current_user_id()?;
         let now = crate::util::time::TimestampNanos::now().as_u64();
         self.file_channel_call_event(channel, &me, call_id, phase, duration_secs, now)?;
-        self.send_control(channel, call_event_content(channel, call_id, phase, duration_secs, is_video, now), None)
-            .await
+        self.send_control(
+            channel,
+            call_event_content(channel, call_id, phase, duration_secs, is_video, now),
+            None,
+        )
+        .await
     }
 }
 
@@ -147,7 +153,11 @@ pub(crate) fn call_event_content(
                 ChannelCallPhase::Started => call_event::Type::Started,
                 ChannelCallPhase::Ended => call_event::Type::Ended,
             } as i32,
-            duration_secs: if phase == ChannelCallPhase::Ended { duration_secs } else { 0 },
+            duration_secs: if phase == ChannelCallPhase::Ended {
+                duration_secs
+            } else {
+                0
+            },
             is_video,
             timestamp,
         })),
@@ -158,7 +168,9 @@ pub(crate) fn call_event_content(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::channel::{Channel, ChannelType, MemberRole, Membership, NotificationPreference};
+    use crate::domain::channel::{
+        Channel, ChannelType, MemberRole, Membership, NotificationPreference,
+    };
     use crate::inbox::InboxEvent;
     use crate::storage::repositories::settings_repo::keys;
     use std::sync::Arc;
@@ -185,21 +197,33 @@ mod tests {
             .expect("build client");
         let (me, carol, channel) = (UserId::new(), UserId::new(), ChannelId::new());
         let svc = client.messages();
-        svc.settings_repo.set(keys::CURRENT_USER_ID, &me.to_string()).unwrap();
-        svc.channel_repo.insert(&Channel::new(channel, "g".into(), ChannelType::Private, me)).unwrap();
+        svc.settings_repo
+            .set(keys::CURRENT_USER_ID, &me.to_string())
+            .unwrap();
+        svc.channel_repo
+            .insert(&Channel::new(channel, "g".into(), ChannelType::Private, me))
+            .unwrap();
         for user_id in [me, carol] {
-            svc.channel_repo.insert_membership(&Membership {
-                channel_id: channel,
-                user_id,
-                role: MemberRole::Member,
-                joined_at: chrono::Utc::now(),
-                last_read_message_id: None,
-                is_muted: false,
-                muted_until: None,
-                notification_preference: NotificationPreference::default(),
-            }).unwrap();
+            svc.channel_repo
+                .insert_membership(&Membership {
+                    channel_id: channel,
+                    user_id,
+                    role: MemberRole::Member,
+                    joined_at: chrono::Utc::now(),
+                    last_read_message_id: None,
+                    is_muted: false,
+                    muted_until: None,
+                    notification_preference: NotificationPreference::default(),
+                })
+                .unwrap();
         }
-        Fixture { client, _dir: dir, me, carol, channel }
+        Fixture {
+            client,
+            _dir: dir,
+            me,
+            carol,
+            channel,
+        }
     }
 
     fn call_of(m: &Message) -> &CallMessage {
@@ -216,7 +240,14 @@ mod tests {
         let call = uuid::Uuid::new_v4().to_string();
 
         let started = svc
-            .file_channel_call_event(&f.channel, &f.carol, &call, ChannelCallPhase::Started, 0, 10)
+            .file_channel_call_event(
+                &f.channel,
+                &f.carol,
+                &call,
+                ChannelCallPhase::Started,
+                0,
+                10,
+            )
             .unwrap()
             .expect("first STARTED files a row");
         assert_eq!(started.conversation_id, f.channel);
@@ -224,10 +255,18 @@ mod tests {
         assert_eq!(call_of(&started).initiator_id, f.carol);
         assert!(started.is_read, "a call record never badges");
         // A resend, or the same event via another path, files nothing.
-        assert!(svc
-            .file_channel_call_event(&f.channel, &f.carol, &call, ChannelCallPhase::Started, 0, 11)
+        assert!(
+            svc.file_channel_call_event(
+                &f.channel,
+                &f.carol,
+                &call,
+                ChannelCallPhase::Started,
+                0,
+                11
+            )
             .unwrap()
-            .is_none());
+            .is_none()
+        );
 
         // We were the last out: our ENDED keeps Carol as the caller.
         let ended = svc
@@ -236,13 +275,24 @@ mod tests {
             .expect("ENDED files its own row");
         assert_eq!(call_of(&ended).call_type, CallMessageType::Ended);
         assert_eq!(call_of(&ended).initiator_id, f.carol);
-        assert_eq!(call_of(&ended).duration, Some(chrono::Duration::seconds(95)));
+        assert_eq!(
+            call_of(&ended).duration,
+            Some(chrono::Duration::seconds(95))
+        );
         assert_ne!(ended.id, started.id);
         // Carol's ENDED for the same call, arriving later, is the same row.
-        assert!(svc
-            .file_channel_call_event(&f.channel, &f.carol, &call, ChannelCallPhase::Ended, 90, 21)
+        assert!(
+            svc.file_channel_call_event(
+                &f.channel,
+                &f.carol,
+                &call,
+                ChannelCallPhase::Ended,
+                90,
+                21
+            )
             .unwrap()
-            .is_none());
+            .is_none()
+        );
     }
 
     #[tokio::test]
@@ -252,16 +302,34 @@ mod tests {
         let outsider = UserId::new();
         let call = uuid::Uuid::new_v4().to_string();
         for phase in [ChannelCallPhase::Started, ChannelCallPhase::Ended] {
-            assert!(svc
-                .file_channel_call_event(&f.channel, &outsider, &call, phase, 5, 10)
-                .unwrap()
-                .is_none());
+            assert!(
+                svc.file_channel_call_event(&f.channel, &outsider, &call, phase, 5, 10)
+                    .unwrap()
+                    .is_none()
+            );
         }
-        assert!(svc.message_repo.get(&row_id(&f.channel, call.parse().unwrap(), ChannelCallPhase::Started)).unwrap().is_none());
+        assert!(
+            svc.message_repo
+                .get(&row_id(
+                    &f.channel,
+                    call.parse().unwrap(),
+                    ChannelCallPhase::Started
+                ))
+                .unwrap()
+                .is_none()
+        );
         // Not a UUID: refused, not filed under some other id.
-        assert!(svc
-            .file_channel_call_event(&f.channel, &f.carol, "not-a-uuid", ChannelCallPhase::Started, 0, 10)
-            .is_err());
+        assert!(
+            svc.file_channel_call_event(
+                &f.channel,
+                &f.carol,
+                "not-a-uuid",
+                ChannelCallPhase::Started,
+                0,
+                10
+            )
+            .is_err()
+        );
     }
 
     /// The wire form survives the control dispatch as the event the
@@ -275,10 +343,23 @@ mod tests {
         let (tx, mut rx) = tokio::sync::broadcast::channel(4);
         let stats = Arc::new(parking_lot::RwLock::new(Default::default()));
         crate::inbox::polling::device::dispatch_control_content(
-            content.content.unwrap(), &sender, 2, "guid", 99, &tx, &stats,
+            content.content.unwrap(),
+            &sender,
+            2,
+            "guid",
+            99,
+            &tx,
+            &stats,
         );
         match rx.try_recv().expect("an event") {
-            InboxEvent::ChannelCallEvent { channel_id, sender_id, call_id, phase, duration_secs, timestamp } => {
+            InboxEvent::ChannelCallEvent {
+                channel_id,
+                sender_id,
+                call_id,
+                phase,
+                duration_secs,
+                timestamp,
+            } => {
                 assert_eq!((channel_id, sender_id), (channel, sender));
                 assert_eq!(call_id, call);
                 assert_eq!(phase, ChannelCallPhase::Ended);

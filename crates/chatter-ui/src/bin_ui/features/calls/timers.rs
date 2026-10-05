@@ -12,9 +12,9 @@ use slint::{ComponentHandle, Timer};
 #[cfg(not(target_os = "linux"))]
 use slint::{Model, ModelRc, VecModel};
 
+use crate::MainWindow;
 use chatter_core::calls::SharedVideoFrames;
 use chatter_core::client::ChatterClient;
-use crate::MainWindow;
 
 thread_local! {
     /// Cancels an in-flight core snapshot when this call ends or is replaced.
@@ -60,7 +60,13 @@ where
 {
     start_call_presentation_with(window, move || {
         let read = snapshot();
-        async move { read.await.map(|call| chatter_core::client::calls::CallRoomSnapshot { call, remotes: None }) }
+        async move {
+            read.await
+                .map(|call| chatter_core::client::calls::CallRoomSnapshot {
+                    call,
+                    remotes: None,
+                })
+        }
     });
 }
 
@@ -423,20 +429,33 @@ pub(super) mod tests {
         let window = MainWindow::new().unwrap();
         let mut call = Call::new(ChannelId::new(), UserId::new(), CallType::Group);
         call.start();
-        let roster = |ids: &[&str]| ids.iter().map(|id| (id.to_string(), CallParticipantInfo {
-            display_name: id.to_string(), ..Default::default()
-        })).collect();
+        let roster = |ids: &[&str]| {
+            ids.iter()
+                .map(|id| {
+                    (
+                        id.to_string(),
+                        CallParticipantInfo {
+                            display_name: id.to_string(),
+                            ..Default::default()
+                        },
+                    )
+                })
+                .collect()
+        };
         // Room joins already happened; mounting the outgoing view overwrites
         // them with its local-only placeholder. No more join events arrive.
         let mut data = window.get_active_call_data();
         data.call_id = call.id.to_string().into();
         data.channel_id = call.channel_id.to_string().into();
         data.participants = ModelRc::new(VecModel::from(vec![crate::CallParticipantData {
-            user_id: "me".into(), is_muted: true, ..Default::default()
+            user_id: "me".into(),
+            is_muted: true,
+            ..Default::default()
         }]));
         window.set_active_call_data(data.clone());
         let source = Arc::new(Mutex::new(Some(CallRoomSnapshot {
-            call: call.clone(), remotes: Some(roster(&["b", "a"])),
+            call: call.clone(),
+            remotes: Some(roster(&["b", "a"])),
         })));
         let read = source.clone();
         start_call_presentation_with(&window, move || {
@@ -455,9 +474,17 @@ pub(super) mod tests {
         a.is_video_enabled = true;
         a.is_audio_muted_locally = true;
         let mut with_media = mounted;
-        with_media.participants = ModelRc::new(VecModel::from(vec![a,
-            crate::CallParticipantData { user_id: "b".into(), ..Default::default() },
-            crate::CallParticipantData { user_id: "b\u{1}screen".into(), is_screen_sharing: true, ..Default::default() },
+        with_media.participants = ModelRc::new(VecModel::from(vec![
+            a,
+            crate::CallParticipantData {
+                user_id: "b".into(),
+                ..Default::default()
+            },
+            crate::CallParticipantData {
+                user_id: "b\u{1}screen".into(),
+                is_screen_sharing: true,
+                ..Default::default()
+            },
             with_media.participants.row_data(2).unwrap(),
         ]));
         window.set_active_call_data(with_media);
@@ -467,7 +494,13 @@ pub(super) mod tests {
         assert_eq!(departed.participant_count, 2);
         assert_eq!(departed.participants.row_count(), 2);
         assert!(departed.participants.row_data(0).unwrap().is_video_enabled);
-        assert!(departed.participants.row_data(0).unwrap().is_audio_muted_locally);
+        assert!(
+            departed
+                .participants
+                .row_data(0)
+                .unwrap()
+                .is_audio_muted_locally
+        );
         // Re-mount/rejoin repeats the overwrite; the immediate read repairs it.
         window.set_active_call_data(data);
         let read = source.clone();
@@ -480,37 +513,67 @@ pub(super) mod tests {
         let mut other = call.clone();
         other.id = chatter_core::domain::ids::CallId::new();
         *source.lock().unwrap() = Some(CallRoomSnapshot {
-            call: other, remotes: Some(roster(&["wrong-room"])),
+            call: other,
+            remotes: Some(roster(&["wrong-room"])),
         });
         pump(&window, 1100);
-        assert_eq!(window.get_active_call_data().participants.row_data(0).unwrap().user_id, "a");
+        assert_eq!(
+            window
+                .get_active_call_data()
+                .participants
+                .row_data(0)
+                .unwrap()
+                .user_id,
+            "a"
+        );
         stop_call_timer();
         // Anonymous pre-rendered names/avatars remain conversation-owned even
         // when the live identity adopts the empty remote slot.
         let mut anonymous = window.get_active_call_data();
         anonymous.is_anonymous_call = true;
         anonymous.participants = ModelRc::new(VecModel::from(vec![
-            crate::CallParticipantData { display_name: "Private peer".into(), ..Default::default() },
+            crate::CallParticipantData {
+                display_name: "Private peer".into(),
+                ..Default::default()
+            },
             crate::CallParticipantData {
                 user_id: "real-local-id\u{1}screen".into(),
                 display_name: chatter_core::calls::tiles::LOCAL_SCREEN_TILE_NAME.into(),
-                is_screen_sharing: true, is_video_enabled: true, ..Default::default()
+                is_screen_sharing: true,
+                is_video_enabled: true,
+                ..Default::default()
             },
-            crate::CallParticipantData { user_id: "You".into(), ..Default::default() },
+            crate::CallParticipantData {
+                user_id: "You".into(),
+                ..Default::default()
+            },
         ]));
         super::super::room_events::reconcile_roster(&mut anonymous, roster(&["ephemeral"]));
-        assert_eq!(anonymous.participants.row_data(0).unwrap().display_name, "Private peer");
-        assert_eq!(anonymous.participants.row_data(0).unwrap().user_id, "ephemeral");
+        assert_eq!(
+            anonymous.participants.row_data(0).unwrap().display_name,
+            "Private peer"
+        );
+        assert_eq!(
+            anonymous.participants.row_data(0).unwrap().user_id,
+            "ephemeral"
+        );
         assert_eq!(anonymous.participant_count, 2);
         assert_eq!(anonymous.participants.row_count(), 3);
-        assert_eq!(anonymous.participants.row_data(1).unwrap().user_id, "real-local-id\u{1}screen");
+        assert_eq!(
+            anonymous.participants.row_data(1).unwrap().user_id,
+            "real-local-id\u{1}screen"
+        );
         assert_eq!(anonymous.participants.row_data(2).unwrap().user_id, "You");
         super::super::room_events::reconcile_roster(&mut anonymous, roster(&["ephemeral"]));
-        assert_eq!(anonymous.participants.row_data(0).unwrap().display_name, "Private peer");
+        assert_eq!(
+            anonymous.participants.row_data(0).unwrap().display_name,
+            "Private peer"
+        );
     }
 
     #[test]
-    fn call_presentation_restores_roster_and_refreshes_timer_with_identity_and_cancellation_guards() {
+    fn call_presentation_restores_roster_and_refreshes_timer_with_identity_and_cancellation_guards()
+    {
         i_slint_backend_testing::init_integration_test_with_system_time();
         let _runtime = runtime();
         room_roster_restores_mount_overwrite_and_tracks_departures_and_rejoin();

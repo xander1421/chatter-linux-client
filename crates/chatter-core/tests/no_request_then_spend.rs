@@ -28,7 +28,10 @@ fn request_tokens_is_only_called_by_the_refill() {
     let mut files = Vec::new();
     rust_files(&src, &mut files);
 
-    let allowed = [src.join("app/core_services.rs"), src.join("mailbox/token_manager.rs")];
+    let allowed = [
+        src.join("app/core_services.rs"),
+        src.join("mailbox/token_manager.rs"),
+    ];
     let offenders: Vec<_> = files
         .iter()
         .filter(|f| !allowed.contains(f))
@@ -38,5 +41,8 @@ fn request_tokens_is_only_called_by_the_refill() {
         })
         .collect();
 
-    assert!(offenders.is_empty(), "request-then-spend reintroduced in: {offenders:?}");
+    assert!(
+        offenders.is_empty(),
+        "request-then-spend reintroduced in: {offenders:?}"
+    );
 }

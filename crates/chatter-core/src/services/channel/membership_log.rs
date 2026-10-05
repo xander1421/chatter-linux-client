@@ -17,10 +17,11 @@ use std::time::Duration;
 use async_trait::async_trait;
 use libsignal_protocol::{KeyPair, PrivateKey};
 
-use super::verified_state::canonical::{signed_message, INVITE_DOMAIN};
+use super::verified_state::canonical::{INVITE_DOMAIN, signed_message};
 use super::verified_state::{
-    self as vs, rules, CachedKtVerifier, IdentityKeyVerifier, KeyBytes, MemberStatus, MembershipState,
-    UnsignedDisposition, UnsignedEvent, VerificationStatus, VerifiedChange, VerifiedChannel, VerifyError,
+    self as vs, CachedKtVerifier, IdentityKeyVerifier, KeyBytes, MemberStatus, MembershipState,
+    UnsignedDisposition, UnsignedEvent, VerificationStatus, VerifiedChange, VerifiedChannel,
+    VerifyError, rules,
 };
 use crate::domain::ids::ChannelId;
 use crate::error::{NetworkError, ServiceError, StorageError};
@@ -144,14 +145,22 @@ pub trait LogBackend: Send + Sync {
     /// Our user id (lowercase UUID) and identity public key.
     async fn me(&self) -> Result<(String, KeyBytes), LogError>;
     /// Sign `actions` with our identity key: `(actions_bytes, signature)`.
-    async fn sign(&self, actions: pb::channel_change::Actions) -> Result<(Vec<u8>, Vec<u8>), LogError>;
+    async fn sign(
+        &self,
+        actions: pb::channel_change::Actions,
+    ) -> Result<(Vec<u8>, Vec<u8>), LogError>;
     async fn changes(
         &self,
         channel_id: &str,
         from_revision: u64,
         invite_pub: &[u8],
     ) -> Result<pb::GetChannelChangesResponse, NetworkError>;
-    async fn state(&self, channel_id: &str, revision: u64, invite_pub: &[u8]) -> Result<pb::MembershipState, NetworkError>;
+    async fn state(
+        &self,
+        channel_id: &str,
+        revision: u64,
+        invite_pub: &[u8],
+    ) -> Result<pb::MembershipState, NetworkError>;
     /// A verified change took someone out of the distribution set.
     async fn mark_for_rotation(&self, channel_id: &ChannelId);
     /// The identity key the server claims for `user_id` (KT-checked by the
@@ -234,8 +243,18 @@ fn names_me(actions: &pb::channel_change::Actions, me: &str) -> bool {
 }
 
 impl MembershipLog {
-    pub fn new(backend: Arc<dyn LogBackend>, kt: Arc<dyn IdentityKeyVerifier>, repo: VerifiedMembershipRepository) -> Self {
-        Self { backend, kt, repo, observer: parking_lot::RwLock::new(None), locks: Default::default() }
+    pub fn new(
+        backend: Arc<dyn LogBackend>,
+        kt: Arc<dyn IdentityKeyVerifier>,
+        repo: VerifiedMembershipRepository,
+    ) -> Self {
+        Self {
+            backend,
+            kt,
+            repo,
+            observer: parking_lot::RwLock::new(None),
+            locks: Default::default(),
+        }
     }
 
     pub fn set_observer(&self, observer: Weak<dyn LogObserver>) {
@@ -264,7 +283,11 @@ impl MembershipLog {
     /// A relayed change (`ChannelEvent.channel_change`, or one from a
     /// membership RPC's stream): verify and commit it, catching up first
     /// when revisions are missing. A duplicate is a no-op.
-    pub async fn ingest(&self, channel_id: &ChannelId, change: &pb::ChannelChange) -> Result<(), LogError> {
+    pub async fn ingest(
+        &self,
+        channel_id: &ChannelId,
+        change: &pb::ChannelChange,
+    ) -> Result<(), LogError> {
         let lock = self.lock_for(channel_id);
         let _guard = lock.lock().await;
         if let Step::Gap = self.step(channel_id, change, &[], false).await? {
@@ -282,7 +305,11 @@ impl MembershipLog {
         self.catch_up_locked(channel_id, &[]).await
     }
 
-    async fn catch_up_locked(&self, channel_id: &ChannelId, invite_pub: &[u8]) -> Result<(), LogError> {
+    async fn catch_up_locked(
+        &self,
+        channel_id: &ChannelId,
+        invite_pub: &[u8],
+    ) -> Result<(), LogError> {
         let cid = channel_id.to_string();
         let backfill = self.repo.load(channel_id)?.is_none();
         for _ in 0..MAX_PAGES {
@@ -313,10 +340,18 @@ impl MembershipLog {
     /// Mark a verification failure and surface it.
     fn fail(&self, channel_id: &ChannelId, e: VerifyError) -> LogError {
         tracing::error!(%channel_id, error = %e, code = e.code(), "Channel membership change failed verification");
-        if let Err(se) = self.repo.set_status(channel_id, VerificationStatus::VerificationFailed) {
+        if let Err(se) = self
+            .repo
+            .set_status(channel_id, VerificationStatus::VerificationFailed)
+        {
             tracing::warn!(%channel_id, error = %se, "Could not record verification failure");
         }
-        self.notify(channel_id, MembershipNotice::VerificationFailed { reason: e.to_string() });
+        self.notify(
+            channel_id,
+            MembershipNotice::VerificationFailed {
+                reason: e.to_string(),
+            },
+        );
         LogError::Verify(e)
     }
 
@@ -331,7 +366,10 @@ impl MembershipLog {
         let cid = channel_id.to_string();
         let actions = decode_actions(change).map_err(|e| self.fail(channel_id, e))?;
         if actions.timestamp > now_nanos().saturating_add(MAX_FUTURE_SKEW.as_nanos() as u64) {
-            return Err(self.fail(channel_id, VerifyError::Malformed("timestamp too far in the future".into())));
+            return Err(self.fail(
+                channel_id,
+                VerifyError::Malformed("timestamp too far in the future".into()),
+            ));
         }
         let local = self.repo.load(channel_id)?;
 
@@ -343,7 +381,10 @@ impl MembershipLog {
                 if !names_me(&actions, &me) {
                     return Ok(Step::Gap);
                 }
-                let base = self.backend.state(&cid, actions.revision - 1, invite_pub).await?;
+                let base = self
+                    .backend
+                    .state(&cid, actions.revision - 1, invite_pub)
+                    .await?;
                 match vs::bootstrap(&cid, Some(&base), change, self.kt.as_ref()).await {
                     Ok(ok) => ok,
                     Err(VerifyError::KtUnavailable(m)) => return Err(LogError::KtUnavailable(m)),
@@ -357,7 +398,10 @@ impl MembershipLog {
                     Err(VerifyError::Gap { .. }) => return Ok(Step::Gap),
                     Err(VerifyError::Stale { got, .. }) => {
                         return match self.repo.change_at(channel_id, got)? {
-                            Some(held) if held.actions == change.actions && held.signature == change.signature => {
+                            Some(held)
+                                if held.actions == change.actions
+                                    && held.signature == change.signature =>
+                            {
                                 Ok(Step::Duplicate)
                             }
                             // Never stored (accepted before a bootstrap): nothing to compare.
@@ -375,7 +419,8 @@ impl MembershipLog {
                 }
             }
         };
-        self.commit(channel_id, change, prev, verified, actions, backfill).await?;
+        self.commit(channel_id, change, prev, verified, actions, backfill)
+            .await?;
         Ok(Step::Applied)
     }
 
@@ -392,8 +437,17 @@ impl MembershipLog {
             self.notify(channel_id, MembershipNotice::Verified);
         }
         let (me, _) = self.backend.me().await?;
-        let left: Vec<String> = verified.left_active(prev.as_ref()).into_iter().filter(|u| *u != me).collect();
-        let still_in = verified.0.new_state.members.get(&me).is_some_and(|m| m.status == MemberStatus::Active);
+        let left: Vec<String> = verified
+            .left_active(prev.as_ref())
+            .into_iter()
+            .filter(|u| *u != me)
+            .collect();
+        let still_in = verified
+            .0
+            .new_state
+            .members
+            .get(&me)
+            .is_some_and(|m| m.status == MemberStatus::Active);
         if !left.is_empty() && still_in {
             tracing::info!(%channel_id, revision = verified.revision(), ?left, "Verified removal: sender key rotation required");
             self.backend.mark_for_rotation(channel_id).await;
@@ -456,7 +510,9 @@ impl MembershipLog {
                     }
                     let state = self.repo.load(channel_id)?.map(|v| v.state);
                     if state.is_none() {
-                        return Err(LogError::Other(format!("no membership log for channel {channel_id}")));
+                        return Err(LogError::Other(format!(
+                            "no membership log for channel {channel_id}"
+                        )));
                     }
                     state
                 }
@@ -465,17 +521,31 @@ impl MembershipLog {
                     Some(MembershipState::from_proto(&p).map_err(LogError::Verify)?)
                 }
             };
-            let actions = intent(&IntentContext { me: &me, state: state.as_ref() })?;
+            let actions = intent(&IntentContext {
+                me: &me,
+                state: state.as_ref(),
+            })?;
             let revision = state.as_ref().map_or(1, |s| s.revision + 1);
             let timestamp = now_nanos();
-            let new = rules::preview(state.as_ref(), &actions, &cid, revision, &me, my_key, timestamp)
-                .map_err(LogError::Intent)?;
+            let new = rules::preview(
+                state.as_ref(),
+                &actions,
+                &cid,
+                revision,
+                &me,
+                my_key,
+                timestamp,
+            )
+            .map_err(LogError::Intent)?;
             let (bytes, signature) = self
                 .backend
                 .sign(pb::channel_change::Actions {
                     channel_id: cid.clone(),
                     revision,
-                    prev_state_hash: state.as_ref().map(|s| s.hash().to_vec()).unwrap_or_default(),
+                    prev_state_hash: state
+                        .as_ref()
+                        .map(|s| s.hash().to_vec())
+                        .unwrap_or_default(),
                     author_user_id: me.clone(),
                     author_identity_key: my_key.to_vec(),
                     timestamp,
@@ -490,7 +560,11 @@ impl MembershipLog {
                     .to_vec(),
                 None => Vec::new(),
             };
-            let change = pb::ChannelChange { actions: bytes, signature, invite_proof };
+            let change = pb::ChannelChange {
+                actions: bytes,
+                signature,
+                invite_proof,
+            };
 
             match submit(change.clone()).await {
                 Ok(out) => {
@@ -533,7 +607,11 @@ impl MembershipLog {
     /// The asymmetric rule for a membership fact only the server vouches for
     /// (roster sync): an add is ignored for keys and surfaced; a removal of a
     /// verified member excludes them from the distribution set.
-    pub fn apply_unsigned(&self, channel_id: &ChannelId, event: UnsignedEvent) -> Result<UnsignedDisposition, StorageError> {
+    pub fn apply_unsigned(
+        &self,
+        channel_id: &ChannelId,
+        event: UnsignedEvent,
+    ) -> Result<UnsignedDisposition, StorageError> {
         let Some(v) = self.repo.load(channel_id)? else {
             // Nothing verified to protect yet; the first change bootstraps.
             return Ok(UnsignedDisposition::NoOp);
@@ -576,7 +654,9 @@ impl MembershipLog {
     ) -> Result<Option<OwnRemoval>, LogError> {
         let cid = channel_id.to_string();
         let (me, _) = self.backend.me().await?;
-        let Ok(actions) = decode_actions(change) else { return Ok(None) };
+        let Ok(actions) = decode_actions(change) else {
+            return Ok(None);
+        };
         if actions.timestamp > now_nanos().saturating_add(MAX_FUTURE_SKEW.as_nanos() as u64) {
             return Ok(None);
         }
@@ -611,10 +691,16 @@ impl MembershipLog {
             return Ok(None);
         }
         let reason = actions.actions.iter().find_map(|a| match &a.action {
-            Some(Action::RemoveMember(r)) if r.user_id == me => pb::remove_member::Reason::try_from(r.reason).ok(),
+            Some(Action::RemoveMember(r)) if r.user_id == me => {
+                pb::remove_member::Reason::try_from(r.reason).ok()
+            }
             _ => None,
         });
-        Ok(reason.map(|reason| OwnRemoval { author: verified.0.author_user_id, reason, timestamp: actions.timestamp }))
+        Ok(reason.map(|reason| OwnRemoval {
+            author: verified.0.author_user_id,
+            reason,
+            timestamp: actions.timestamp,
+        }))
     }
 
     /// Forget a channel's verified state (it was deleted).
@@ -628,8 +714,12 @@ impl MembershipLog {
 impl crate::services::message::ChannelStateSync for MembershipLog {
     async fn fetch_channel_changes(&self, channel_id: ChannelId, peer_revision: u64) {
         match self.catch_up(&channel_id).await {
-            Ok(()) => tracing::debug!(%channel_id, peer_revision, "Caught up after a peer showed a newer revision"),
-            Err(e) => tracing::warn!(%channel_id, peer_revision, error = %e, "Catch-up after a peer's newer revision failed"),
+            Ok(()) => {
+                tracing::debug!(%channel_id, peer_revision, "Caught up after a peer showed a newer revision")
+            }
+            Err(e) => {
+                tracing::warn!(%channel_id, peer_revision, error = %e, "Catch-up after a peer's newer revision failed")
+            }
         }
     }
 }
@@ -646,7 +736,9 @@ pub struct InviteLink {
 
 impl std::fmt::Debug for InviteLink {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("InviteLink").field("channel_id", &self.channel_id).finish_non_exhaustive()
+        f.debug_struct("InviteLink")
+            .field("channel_id", &self.channel_id)
+            .finish_non_exhaustive()
     }
 }
 
@@ -655,7 +747,10 @@ impl InviteLink {
 
     /// A fresh capability key for a new link.
     pub fn generate(channel_id: ChannelId) -> Self {
-        Self { channel_id, invite_key: KeyPair::generate(&mut rand::rng()).private_key }
+        Self {
+            channel_id,
+            invite_key: KeyPair::generate(&mut rand::rng()).private_key,
+        }
     }
 
     pub fn invite_pub(&self) -> KeyBytes {
@@ -666,7 +761,8 @@ impl InviteLink {
     /// key sits in the fragment so a link opened in a browser never sends it.
     pub fn to_url(&self) -> String {
         use base64::Engine;
-        let key = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(self.invite_key.serialize());
+        let key =
+            base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(self.invite_key.serialize());
         format!("{}{}#{}", Self::URL_PREFIX, self.channel_id, key)
     }
 
@@ -675,9 +771,14 @@ impl InviteLink {
         let rest = url.trim().strip_prefix(Self::URL_PREFIX)?;
         let (id, key) = rest.split_once('#')?;
         let channel_id = ChannelId::from(uuid::Uuid::parse_str(id).ok()?);
-        let key = base64::engine::general_purpose::URL_SAFE_NO_PAD.decode(key).ok()?;
+        let key = base64::engine::general_purpose::URL_SAFE_NO_PAD
+            .decode(key)
+            .ok()?;
         let key: [u8; 32] = key.try_into().ok()?;
-        Some(Self { channel_id, invite_key: PrivateKey::deserialize(&key).ok()? })
+        Some(Self {
+            channel_id,
+            invite_key: PrivateKey::deserialize(&key).ok()?,
+        })
     }
 }
 
@@ -696,7 +797,8 @@ pub fn invite_pub_of(key: &PrivateKey) -> KeyBytes {
 /// know; offline brute force against that hash remains the residual.
 /// Changing these parameters breaks every password channel.
 pub fn password_invite_key(channel_id: &ChannelId, password: &str) -> Result<PrivateKey, LogError> {
-    let params = argon2::Params::new(65536, 3, 1, Some(32)).map_err(|e| LogError::Other(e.to_string()))?;
+    let params =
+        argon2::Params::new(65536, 3, 1, Some(32)).map_err(|e| LogError::Other(e.to_string()))?;
     let argon = argon2::Argon2::new(argon2::Algorithm::Argon2id, argon2::Version::V0x13, params);
     let mut seed = zeroize::Zeroizing::new([0u8; 32]);
     argon
@@ -715,28 +817,61 @@ pub struct SignalLogBackend {
 }
 
 impl SignalLogBackend {
-    pub fn new(grpc_pool: Arc<GrpcClientPool>, signal_service: Arc<SignalService>, settings_repo: Arc<SettingsRepository>) -> Self {
-        Self { grpc_pool, signal_service, settings_repo }
+    pub fn new(
+        grpc_pool: Arc<GrpcClientPool>,
+        signal_service: Arc<SignalService>,
+        settings_repo: Arc<SettingsRepository>,
+    ) -> Self {
+        Self {
+            grpc_pool,
+            signal_service,
+            settings_repo,
+        }
     }
 }
 
 #[async_trait]
 impl LogBackend for SignalLogBackend {
     async fn me(&self) -> Result<(String, KeyBytes), LogError> {
-        let me = self.settings_repo.current_user_id().map_err(|e| LogError::Other(e.to_string()))?;
-        Ok((me.to_string(), self.signal_service.get_identity_public_key().await?))
+        let me = self
+            .settings_repo
+            .current_user_id()
+            .map_err(|e| LogError::Other(e.to_string()))?;
+        Ok((
+            me.to_string(),
+            self.signal_service.get_identity_public_key().await?,
+        ))
     }
 
-    async fn sign(&self, actions: pb::channel_change::Actions) -> Result<(Vec<u8>, Vec<u8>), LogError> {
+    async fn sign(
+        &self,
+        actions: pb::channel_change::Actions,
+    ) -> Result<(Vec<u8>, Vec<u8>), LogError> {
         Ok(self.signal_service.sign_channel_change(actions).await?)
     }
 
-    async fn changes(&self, channel_id: &str, from_revision: u64, invite_pub: &[u8]) -> Result<pb::GetChannelChangesResponse, NetworkError> {
-        self.grpc_pool.channel_client().get_channel_changes(channel_id, from_revision, PAGE, invite_pub).await
+    async fn changes(
+        &self,
+        channel_id: &str,
+        from_revision: u64,
+        invite_pub: &[u8],
+    ) -> Result<pb::GetChannelChangesResponse, NetworkError> {
+        self.grpc_pool
+            .channel_client()
+            .get_channel_changes(channel_id, from_revision, PAGE, invite_pub)
+            .await
     }
 
-    async fn state(&self, channel_id: &str, revision: u64, invite_pub: &[u8]) -> Result<pb::MembershipState, NetworkError> {
-        self.grpc_pool.channel_client().get_channel_state(channel_id, revision, invite_pub).await
+    async fn state(
+        &self,
+        channel_id: &str,
+        revision: u64,
+        invite_pub: &[u8],
+    ) -> Result<pb::MembershipState, NetworkError> {
+        self.grpc_pool
+            .channel_client()
+            .get_channel_state(channel_id, revision, invite_pub)
+            .await
     }
 
     async fn mark_for_rotation(&self, channel_id: &ChannelId) {
@@ -751,7 +886,11 @@ impl LogBackend for SignalLogBackend {
             .auth_client()
             .get_key_transparency_proof(user_id)
             .await?
-            .ok_or_else(|| LogError::Other(format!("{user_id} has no identity key in the transparency log")))?;
+            .ok_or_else(|| {
+                LogError::Other(format!(
+                    "{user_id} has no identity key in the transparency log"
+                ))
+            })?;
         vs::key33(&proof.identity_key).map_err(LogError::Verify)
     }
 }
@@ -771,14 +910,29 @@ impl SignalKtVerifier {
         signal_service: Arc<SignalService>,
         settings_repo: Arc<SettingsRepository>,
     ) -> CachedKtVerifier<Self> {
-        CachedKtVerifier::new(Self { grpc_pool, signal_service, settings_repo }, KT_CACHE_TTL)
+        CachedKtVerifier::new(
+            Self {
+                grpc_pool,
+                signal_service,
+                settings_repo,
+            },
+            KT_CACHE_TTL,
+        )
     }
 }
 
 #[async_trait]
 impl IdentityKeyVerifier for SignalKtVerifier {
-    async fn is_current_identity_key(&self, user_id: &str, identity_key: &KeyBytes) -> Result<bool, VerifyError> {
-        if self.settings_repo.current_user_id().is_ok_and(|me| me.to_string() == user_id) {
+    async fn is_current_identity_key(
+        &self,
+        user_id: &str,
+        identity_key: &KeyBytes,
+    ) -> Result<bool, VerifyError> {
+        if self
+            .settings_repo
+            .current_user_id()
+            .is_ok_and(|me| me.to_string() == user_id)
+        {
             let own = self
                 .signal_service
                 .get_identity_public_key()
@@ -787,7 +941,11 @@ impl IdentityKeyVerifier for SignalKtVerifier {
             return Ok(own == *identity_key);
         }
         let mut auth = self.grpc_pool.auth_client();
-        match self.signal_service.verify_identity_key_transparency(&mut auth, user_id, identity_key).await {
+        match self
+            .signal_service
+            .verify_identity_key_transparency(&mut auth, user_id, identity_key)
+            .await
+        {
             Ok(()) => Ok(true),
             Err(ServiceError::Network(e)) => Err(VerifyError::KtUnavailable(e.to_string())),
             Err(e) => {

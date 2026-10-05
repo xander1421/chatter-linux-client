@@ -181,7 +181,10 @@ impl FilePicker {
             .pick_file()
             .await
             .map(|f| f.path().to_path_buf());
-        tracing::info!(picked = result.is_some(), "[file_picker] pick_file returned");
+        tracing::info!(
+            picked = result.is_some(),
+            "[file_picker] pick_file returned"
+        );
         result
     }
 
@@ -307,9 +310,21 @@ mod headless_tests {
 
     #[tokio::test]
     async fn pickers_resolve_to_cancelled_when_headless() {
-        assert!(FilePicker::pick_file(FilePickerConfig::new()).await.is_none());
-        assert!(FilePicker::pick_files(FilePickerConfig::new()).await.is_empty());
+        assert!(
+            FilePicker::pick_file(FilePickerConfig::new())
+                .await
+                .is_none()
+        );
+        assert!(
+            FilePicker::pick_files(FilePickerConfig::new())
+                .await
+                .is_empty()
+        );
         assert!(FilePicker::pick_folder(None).await.is_none());
-        assert!(FilePicker::save_file(FilePickerConfig::new()).await.is_none());
+        assert!(
+            FilePicker::save_file(FilePickerConfig::new())
+                .await
+                .is_none()
+        );
     }
 }

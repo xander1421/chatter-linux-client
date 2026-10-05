@@ -20,11 +20,10 @@
 use std::time::{Duration, SystemTime};
 
 use libsignal_protocol::{
-    message_decrypt_prekey, message_decrypt_signal, sealed_sender_decrypt_to_usmc,
-    sealed_sender_encrypt, sealed_sender_encrypt_from_usmc,
     CiphertextMessageType, DeviceId, IdentityKeyStore, KyberPreKeyStore, PreKeySignalMessage,
-    PreKeyStore, ProtocolAddress, PublicKey, SessionStore, SignalMessage,
-    SignalProtocolError, SignedPreKeyStore, Timestamp,
+    PreKeyStore, ProtocolAddress, PublicKey, SessionStore, SignalMessage, SignalProtocolError,
+    SignedPreKeyStore, Timestamp, message_decrypt_prekey, message_decrypt_signal,
+    sealed_sender_decrypt_to_usmc, sealed_sender_encrypt, sealed_sender_encrypt_from_usmc,
 };
 // SECURITY: each ephemeral-key draw must hit the OS directly so a process
 // memory disclosure cannot rewind the RNG.
@@ -40,8 +39,8 @@ use libsignal_protocol::{
 // userspace ChaCha PRG once and then every draw within the call comes from
 // that single seed - a process memory disclosure recovers the seed and
 // reproduces every ephemeral key.
-use rand::rngs::OsRng;
 use rand::TryRngCore;
+use rand::rngs::OsRng;
 
 use crate::config::TRUST_ROOT_PUBLIC_KEY;
 use crate::error::{CryptoError, IdentityChangeSource};
@@ -236,9 +235,7 @@ impl SealedSenderManager {
             );
             // Match on typed enum variants instead of fragile string matching
             match e {
-                SignalProtocolError::SealedSenderSelfSend => {
-                    CryptoError::SealedSenderSelfSend
-                }
+                SignalProtocolError::SealedSenderSelfSend => CryptoError::SealedSenderSelfSend,
                 SignalProtocolError::UnknownSealedSenderServerCertificateId(id) => {
                     CryptoError::UnknownServerCertificate(id)
                 }
@@ -258,22 +255,25 @@ impl SealedSenderManager {
             .await
             .map_err(map_envelope_err)?;
 
-        let sender_ok = (|| -> Result<(bool, String, Option<String>, DeviceId), SignalProtocolError> {
-            let sender = usmc.sender()?;
-            Ok((
-                sender.validate(trust_root, timestamp)?,
-                sender.sender_uuid()?.to_string(),
-                sender.sender_e164()?.map(|s| s.to_string()),
-                sender.sender_device_id()?,
-            ))
-        })()
-        .map_err(map_envelope_err)?;
+        let sender_ok =
+            (|| -> Result<(bool, String, Option<String>, DeviceId), SignalProtocolError> {
+                let sender = usmc.sender()?;
+                Ok((
+                    sender.validate(trust_root, timestamp)?,
+                    sender.sender_uuid()?.to_string(),
+                    sender.sender_e164()?.map(|s| s.to_string()),
+                    sender.sender_device_id()?,
+                ))
+            })()
+            .map_err(map_envelope_err)?;
         let (cert_valid, sender_uuid, sender_e164, sender_device_id) = sender_ok;
 
         if !cert_valid {
-            return Err(map_envelope_err(SignalProtocolError::InvalidSealedSenderMessage(
-                "trust root validation failed".to_string(),
-            )));
+            return Err(map_envelope_err(
+                SignalProtocolError::InvalidSealedSenderMessage(
+                    "trust root validation failed".to_string(),
+                ),
+            ));
         }
 
         let is_local_uuid = local_uuid == sender_uuid;
@@ -387,8 +387,14 @@ impl SealedSenderManager {
         content_hint: ContentHint,
         group_id: Option<Vec<u8>>,
     ) -> Result<UnidentifiedSenderMessageContent, CryptoError> {
-        UnidentifiedSenderMessageContent::new(msg_type, sender_cert, contents, content_hint, group_id)
-            .map_err(|e| CryptoError::Protocol(e.to_string()))
+        UnidentifiedSenderMessageContent::new(
+            msg_type,
+            sender_cert,
+            contents,
+            content_hint,
+            group_id,
+        )
+        .map_err(|e| CryptoError::Protocol(e.to_string()))
     }
 
     /// Encrypt a pre-built USMC to sealed sender format.
@@ -595,7 +601,10 @@ impl CachedSenderCertificate {
 
     /// Get the expiration timestamp in milliseconds since epoch.
     pub fn expiration_ms(&self) -> Option<u64> {
-        self.certificate.expiration().ok().map(|ts| ts.epoch_millis())
+        self.certificate
+            .expiration()
+            .ok()
+            .map(|ts| ts.epoch_millis())
     }
 
     /// Get how long until expiration.
@@ -673,8 +682,11 @@ pub struct MultiDeviceSealedMessage {
 /// duplicate is alarming and misleading: `creating new chains` and `Bad Mac!` are
 /// libsignal trying states, not the conclusion.
 fn classify_inner_failure(
-    error: SignalProtocolError, sender_uuid: &str, sender_device_id: DeviceId,
-    msg_type: CiphertextMessageType, contents: &[u8],
+    error: SignalProtocolError,
+    sender_uuid: &str,
+    sender_device_id: DeviceId,
+    msg_type: CiphertextMessageType,
+    contents: &[u8],
 ) -> CryptoError {
     // The peer's identity key changed (reinstall, device wipe — or a MITM).
     // NOT a desync: no session-layer action changes which key is pinned, so a
@@ -793,14 +805,21 @@ mod tests {
         // A genuine wedge still reports, or the 1:1 self-heal stops working. The
         // ciphertext has to survive into the error — the report is built from it.
         let wedged = classify_inner_failure(
-            SignalProtocolError::InvalidMessage(CiphertextMessageType::Whisper, "bad mac".to_string()),
+            SignalProtocolError::InvalidMessage(
+                CiphertextMessageType::Whisper,
+                "bad mac".to_string(),
+            ),
             "caa49e97-690f-407d-ab9a-74bf772dbd3d",
             device,
             CiphertextMessageType::Whisper,
             &ciphertext,
         );
         match wedged {
-            CryptoError::SessionDesync { ciphertext: carried, msg_type, .. } => {
+            CryptoError::SessionDesync {
+                ciphertext: carried,
+                msg_type,
+                ..
+            } => {
                 assert_eq!(carried, ciphertext, "the report would name no ciphertext");
                 assert_eq!(msg_type, CiphertextMessageType::Whisper as u8);
             }
@@ -834,7 +853,12 @@ mod tests {
         );
 
         match changed {
-            CryptoError::UntrustedIdentity { peer_id, device_id, attribution, .. } => {
+            CryptoError::UntrustedIdentity {
+                peer_id,
+                device_id,
+                attribution,
+                ..
+            } => {
                 assert_eq!(peer_id, sender);
                 assert_eq!(device_id, 1);
                 assert!(
@@ -862,7 +886,7 @@ mod tests {
     /// on the DM and anon-DM paths.
     #[tokio::test]
     async fn sealed_sender_decrypt_labels_unratcheted_plaintext() {
-        use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
+        use base64::{Engine, engine::general_purpose::STANDARD as BASE64};
         use libsignal_protocol::{
             IdentityKeyPair, InMemSignalProtocolStore, KeyPair, PrivateKey,
             sealed_sender_encrypt_from_usmc,
@@ -927,11 +951,10 @@ mod tests {
 
         let recipient_uuid = "22222222-2222-4222-8222-222222222222";
         let recipient_device = DeviceId::new(1).expect("device id");
-        let recipient_address =
-            ProtocolAddress::new(recipient_uuid.to_string(), recipient_device);
+        let recipient_address = ProtocolAddress::new(recipient_uuid.to_string(), recipient_device);
         let recipient_identity = IdentityKeyPair::generate(&mut rng);
-        let mut recipient_store = InMemSignalProtocolStore::new(recipient_identity, 1234)
-            .expect("recipient store");
+        let mut recipient_store =
+            InMemSignalProtocolStore::new(recipient_identity, 1234).expect("recipient store");
 
         // Sender-side store, just to hand the recipient's identity to encrypt.
         let mut sender_store =
@@ -941,14 +964,10 @@ mod tests {
             .await
             .expect("save recipient identity");
 
-        let sealed = sealed_sender_encrypt_from_usmc(
-            &recipient_address,
-            &usmc,
-            &sender_store,
-            &mut rng,
-        )
-        .await
-        .expect("seal");
+        let sealed =
+            sealed_sender_encrypt_from_usmc(&recipient_address, &usmc, &sender_store, &mut rng)
+                .await
+                .expect("seal");
 
         let mut s2 = recipient_store.clone();
         let mut s3 = recipient_store.clone();
@@ -993,8 +1012,10 @@ mod tests {
         };
 
         let mut rng = OsRng.unwrap_err();
-        let now_ms =
-            SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).unwrap().as_millis() as u64;
+        let now_ms = SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as u64;
         let hour = 3_600_000;
 
         let root = KeyPair::generate(&mut rng);
@@ -1039,9 +1060,10 @@ mod tests {
             .save_identity(&recipient_address, recipient_identity.identity_key())
             .await
             .expect("save recipient identity");
-        let sealed = sealed_sender_encrypt_from_usmc(&recipient_address, &usmc, &sender_store, &mut rng)
-            .await
-            .expect("seal");
+        let sealed =
+            sealed_sender_encrypt_from_usmc(&recipient_address, &usmc, &sender_store, &mut rng)
+                .await
+                .expect("seal");
 
         let open_at = |at_ms: u64| {
             let mut s1 = recipient_store.clone();
@@ -1088,12 +1110,15 @@ mod tests {
     /// recipient would reject it and drop the message.
     #[test]
     fn validate_trust_root_refuses_a_foreign_root() {
-        use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
+        use base64::{Engine, engine::general_purpose::STANDARD as BASE64};
         use libsignal_protocol::{IdentityKeyPair, KeyPair, PrivateKey};
 
         let mut rng = OsRng.unwrap_err();
         let expiration = Timestamp::from_epoch_millis(
-            SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).unwrap().as_millis() as u64
+            SystemTime::now()
+                .duration_since(SystemTime::UNIX_EPOCH)
+                .unwrap()
+                .as_millis() as u64
                 + 3_600_000,
         );
         let cert_under = |root: &PrivateKey, rng: &mut _| {
@@ -1114,7 +1139,9 @@ mod tests {
         };
 
         let pinned = PrivateKey::deserialize(
-            &BASE64.decode("ELMk0o1RlhsHCk8vQ/bWbtRDeQvcC4PuN8+U1Xg90Ek=").expect("base64"),
+            &BASE64
+                .decode("ELMk0o1RlhsHCk8vQ/bWbtRDeQvcC4PuN8+U1Xg90Ek=")
+                .expect("base64"),
         )
         .expect("dev trust root private key");
         let foreign = KeyPair::generate(&mut rng).private_key;

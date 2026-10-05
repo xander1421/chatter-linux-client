@@ -19,8 +19,8 @@ use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
 use chatter_core::domain::notification::NotificationPriority;
 use chatter_core::error::SystemError;
 use chatter_core::system::notification_sink::NotificationSink;
-use jni::objects::{JObject, JString, JValue};
 use jni::JNIEnv;
+use jni::objects::{JObject, JString, JValue};
 
 pub(crate) const CHANNEL_ID: &str = "chatter_messages";
 const CHANNEL_NAME: &str = "Messages";
@@ -82,20 +82,24 @@ impl AndroidNotifications {
         let mut env = get_jni_env()?;
         let context = get_app_context(&mut env)?;
 
-        let channel_id = env.new_string(CHANNEL_ID)
+        let channel_id = env
+            .new_string(CHANNEL_ID)
             .map_err(|e| SystemError::NotificationInit(format!("channel_id string: {}", e)))?;
-        let channel_name = env.new_string(CHANNEL_NAME)
+        let channel_name = env
+            .new_string(CHANNEL_NAME)
             .map_err(|e| SystemError::NotificationInit(format!("channel_name string: {}", e)))?;
 
-        let channel = env.new_object(
-            "android/app/NotificationChannel",
-            "(Ljava/lang/String;Ljava/lang/CharSequence;I)V",
-            &[
-                JValue::Object(&channel_id),
-                JValue::Object(&channel_name),
-                JValue::Int(IMPORTANCE_HIGH),
-            ],
-        ).map_err(|e| SystemError::NotificationInit(format!("NotificationChannel: {}", e)))?;
+        let channel = env
+            .new_object(
+                "android/app/NotificationChannel",
+                "(Ljava/lang/String;Ljava/lang/CharSequence;I)V",
+                &[
+                    JValue::Object(&channel_id),
+                    JValue::Object(&channel_name),
+                    JValue::Int(IMPORTANCE_HIGH),
+                ],
+            )
+            .map_err(|e| SystemError::NotificationInit(format!("NotificationChannel: {}", e)))?;
 
         let manager = get_notification_manager(&mut env, &context)?;
 
@@ -104,7 +108,8 @@ impl AndroidNotifications {
             "createNotificationChannel",
             "(Landroid/app/NotificationChannel;)V",
             &[JValue::Object(&channel)],
-        ).map_err(|e| SystemError::NotificationInit(format!("createNotificationChannel: {}", e)))?;
+        )
+        .map_err(|e| SystemError::NotificationInit(format!("createNotificationChannel: {}", e)))?;
 
         self.channel_initialized.store(true, Ordering::Relaxed);
         tracing::info!("Android notification channel initialized");
@@ -158,12 +163,22 @@ impl AndroidNotifications {
             .new_object("android/media/AudioAttributes$Builder", "()V", &[])
             .map_err(nerr)?;
         let ab = env
-            .call_method(&ab, "setUsage", "(I)Landroid/media/AudioAttributes$Builder;", &[JValue::Int(6)])
+            .call_method(
+                &ab,
+                "setUsage",
+                "(I)Landroid/media/AudioAttributes$Builder;",
+                &[JValue::Int(6)],
+            )
             .map_err(nerr)?
             .l()
             .map_err(nerr)?;
         let ab = env
-            .call_method(&ab, "setContentType", "(I)Landroid/media/AudioAttributes$Builder;", &[JValue::Int(4)])
+            .call_method(
+                &ab,
+                "setContentType",
+                "(I)Landroid/media/AudioAttributes$Builder;",
+                &[JValue::Int(4)],
+            )
             .map_err(nerr)?
             .l()
             .map_err(nerr)?;
@@ -189,7 +204,8 @@ impl AndroidNotifications {
         )
         .map_err(nerr)?;
 
-        self.calls_channel_initialized.store(true, Ordering::Relaxed);
+        self.calls_channel_initialized
+            .store(true, Ordering::Relaxed);
         tracing::info!("Android calls notification channel initialized");
         Ok(())
     }
@@ -199,7 +215,12 @@ impl AndroidNotifications {
     /// `CallActionReceiver`, which calls back into Rust to accept/decline
     /// `call_id` without opening the app. The body/full-screen intent opens the
     /// in-app call screen.
-    fn show_incoming_call_raw(&self, call_id: &str, title: &str, body: &str) -> Result<(), SystemError> {
+    fn show_incoming_call_raw(
+        &self,
+        call_id: &str,
+        title: &str,
+        body: &str,
+    ) -> Result<(), SystemError> {
         self.init_calls_channel()?;
 
         let id = call_notification_id(call_id);
@@ -218,23 +239,85 @@ impl AndroidNotifications {
             )
             .map_err(nerr)?;
 
-        env.call_method(&builder, "setSmallIcon", "(I)Landroid/app/Notification$Builder;", &[JValue::Int(IC_CALL)]).map_err(nerr)?;
-        env.call_method(&builder, "setContentTitle", "(Ljava/lang/CharSequence;)Landroid/app/Notification$Builder;", &[JValue::Object(&j_title)]).map_err(nerr)?;
-        env.call_method(&builder, "setContentText", "(Ljava/lang/CharSequence;)Landroid/app/Notification$Builder;", &[JValue::Object(&j_body)]).map_err(nerr)?;
+        env.call_method(
+            &builder,
+            "setSmallIcon",
+            "(I)Landroid/app/Notification$Builder;",
+            &[JValue::Int(IC_CALL)],
+        )
+        .map_err(nerr)?;
+        env.call_method(
+            &builder,
+            "setContentTitle",
+            "(Ljava/lang/CharSequence;)Landroid/app/Notification$Builder;",
+            &[JValue::Object(&j_title)],
+        )
+        .map_err(nerr)?;
+        env.call_method(
+            &builder,
+            "setContentText",
+            "(Ljava/lang/CharSequence;)Landroid/app/Notification$Builder;",
+            &[JValue::Object(&j_body)],
+        )
+        .map_err(nerr)?;
         // PRIORITY_MAX (2) for heads-up on pre-26; category=call; ongoing so it
         // can't be swiped away while ringing; auto-timeout if unanswered,
         // when core stops ringing it too (setTimeoutAfter: API 26 = minSdk).
-        env.call_method(&builder, "setPriority", "(I)Landroid/app/Notification$Builder;", &[JValue::Int(2)]).map_err(nerr)?;
+        env.call_method(
+            &builder,
+            "setPriority",
+            "(I)Landroid/app/Notification$Builder;",
+            &[JValue::Int(2)],
+        )
+        .map_err(nerr)?;
         let j_cat = env.new_string("call").map_err(nerr)?;
-        env.call_method(&builder, "setCategory", "(Ljava/lang/String;)Landroid/app/Notification$Builder;", &[JValue::Object(&j_cat)]).map_err(nerr)?;
-        env.call_method(&builder, "setOngoing", "(Z)Landroid/app/Notification$Builder;", &[JValue::Bool(1)]).map_err(nerr)?;
-        env.call_method(&builder, "setAutoCancel", "(Z)Landroid/app/Notification$Builder;", &[JValue::Bool(1)]).map_err(nerr)?;
-        env.call_method(&builder, "setTimeoutAfter", "(J)Landroid/app/Notification$Builder;", &[JValue::Long(chatter_core::services::call_worker::RING_TIMEOUT.as_millis() as i64)]).map_err(nerr)?;
+        env.call_method(
+            &builder,
+            "setCategory",
+            "(Ljava/lang/String;)Landroid/app/Notification$Builder;",
+            &[JValue::Object(&j_cat)],
+        )
+        .map_err(nerr)?;
+        env.call_method(
+            &builder,
+            "setOngoing",
+            "(Z)Landroid/app/Notification$Builder;",
+            &[JValue::Bool(1)],
+        )
+        .map_err(nerr)?;
+        env.call_method(
+            &builder,
+            "setAutoCancel",
+            "(Z)Landroid/app/Notification$Builder;",
+            &[JValue::Bool(1)],
+        )
+        .map_err(nerr)?;
+        env.call_method(
+            &builder,
+            "setTimeoutAfter",
+            "(J)Landroid/app/Notification$Builder;",
+            &[JValue::Long(
+                chatter_core::services::call_worker::RING_TIMEOUT.as_millis() as i64,
+            )],
+        )
+        .map_err(nerr)?;
 
         // Full-screen + content intent → open the in-app ring screen (no auto-accept).
         let fs_pi = build_activity_intent(&mut env, &context, call_id, id, false)?;
-        env.call_method(&builder, "setFullScreenIntent", "(Landroid/app/PendingIntent;Z)Landroid/app/Notification$Builder;", &[JValue::Object(&fs_pi), JValue::Bool(1)]).map_err(nerr)?;
-        env.call_method(&builder, "setContentIntent", "(Landroid/app/PendingIntent;)Landroid/app/Notification$Builder;", &[JValue::Object(&fs_pi)]).map_err(nerr)?;
+        env.call_method(
+            &builder,
+            "setFullScreenIntent",
+            "(Landroid/app/PendingIntent;Z)Landroid/app/Notification$Builder;",
+            &[JValue::Object(&fs_pi), JValue::Bool(1)],
+        )
+        .map_err(nerr)?;
+        env.call_method(
+            &builder,
+            "setContentIntent",
+            "(Landroid/app/PendingIntent;)Landroid/app/Notification$Builder;",
+            &[JValue::Object(&fs_pi)],
+        )
+        .map_err(nerr)?;
 
         // Accept = activity intent: foregrounds the app (a broadcast receiver
         // can't reliably start an activity on Android 14+) and auto-accepts.
@@ -243,15 +326,46 @@ impl AndroidNotifications {
         // from the content intent's; `id` is any positive i32, so `id * 2`
         // overflowed (a panic that killed the notification bridge for every
         // later call). Wrapping keeps them distinct without overflow.
-        let accept_pi = build_activity_intent(&mut env, &context, call_id, id.wrapping_mul(2), true)?;
+        let accept_pi =
+            build_activity_intent(&mut env, &context, call_id, id.wrapping_mul(2), true)?;
         let accept = make_action(&mut env, IC_CALL, "Accept", &accept_pi)?;
-        let decline = build_action(&mut env, &context, "com.chatter.client.CALL_DECLINE", "Decline", call_id, IC_CLOSE, id.wrapping_mul(2).wrapping_add(1))?;
-        env.call_method(&builder, "addAction", "(Landroid/app/Notification$Action;)Landroid/app/Notification$Builder;", &[JValue::Object(&accept)]).map_err(nerr)?;
-        env.call_method(&builder, "addAction", "(Landroid/app/Notification$Action;)Landroid/app/Notification$Builder;", &[JValue::Object(&decline)]).map_err(nerr)?;
+        let decline = build_action(
+            &mut env,
+            &context,
+            "com.chatter.client.CALL_DECLINE",
+            "Decline",
+            call_id,
+            IC_CLOSE,
+            id.wrapping_mul(2).wrapping_add(1),
+        )?;
+        env.call_method(
+            &builder,
+            "addAction",
+            "(Landroid/app/Notification$Action;)Landroid/app/Notification$Builder;",
+            &[JValue::Object(&accept)],
+        )
+        .map_err(nerr)?;
+        env.call_method(
+            &builder,
+            "addAction",
+            "(Landroid/app/Notification$Action;)Landroid/app/Notification$Builder;",
+            &[JValue::Object(&decline)],
+        )
+        .map_err(nerr)?;
 
-        let notification = env.call_method(&builder, "build", "()Landroid/app/Notification;", &[]).map_err(nerr)?.l().map_err(nerr)?;
+        let notification = env
+            .call_method(&builder, "build", "()Landroid/app/Notification;", &[])
+            .map_err(nerr)?
+            .l()
+            .map_err(nerr)?;
         let manager = get_notification_manager(&mut env, &context)?;
-        env.call_method(&manager, "notify", "(ILandroid/app/Notification;)V", &[JValue::Int(id), JValue::Object(&notification)]).map_err(nerr)?;
+        env.call_method(
+            &manager,
+            "notify",
+            "(ILandroid/app/Notification;)V",
+            &[JValue::Int(id), JValue::Object(&notification)],
+        )
+        .map_err(nerr)?;
 
         tracing::info!(call_id, id, "Posted ringing incoming-call notification");
         Ok(())
@@ -262,7 +376,8 @@ impl AndroidNotifications {
         let mut env = get_jni_env()?;
         let context = get_app_context(&mut env)?;
         let manager = get_notification_manager(&mut env, &context)?;
-        env.call_method(&manager, "cancel", "(I)V", &[JValue::Int(id)]).map_err(nerr)?;
+        env.call_method(&manager, "cancel", "(I)V", &[JValue::Int(id)])
+            .map_err(nerr)?;
         Ok(())
     }
 
@@ -270,7 +385,13 @@ impl AndroidNotifications {
     /// (tag, `CONVERSATION_NOTIFICATION_ID`), so the conversation's next one
     /// replaces it and `cancel_conversation_raw` dismisses it; untagged ones
     /// get a fresh id each.
-    fn show_raw(&self, conversation: Option<&str>, title: &str, body: &str, priority: u8) -> Result<(), SystemError> {
+    fn show_raw(
+        &self,
+        conversation: Option<&str>,
+        title: &str,
+        body: &str,
+        priority: u8,
+    ) -> Result<(), SystemError> {
         if !self.channel_initialized.load(Ordering::Relaxed) {
             self.init_channel()?;
         }
@@ -283,21 +404,23 @@ impl AndroidNotifications {
         let mut env = get_jni_env()?;
         let context = get_app_context(&mut env)?;
 
-        let j_title = env.new_string(title)
+        let j_title = env
+            .new_string(title)
             .map_err(|e| SystemError::NotificationSend(format!("title string: {}", e)))?;
-        let j_body = env.new_string(body)
+        let j_body = env
+            .new_string(body)
             .map_err(|e| SystemError::NotificationSend(format!("body string: {}", e)))?;
-        let j_channel_id = env.new_string(CHANNEL_ID)
+        let j_channel_id = env
+            .new_string(CHANNEL_ID)
             .map_err(|e| SystemError::NotificationSend(format!("channel_id string: {}", e)))?;
 
-        let builder = env.new_object(
-            "android/app/Notification$Builder",
-            "(Landroid/content/Context;Ljava/lang/String;)V",
-            &[
-                JValue::Object(&context),
-                JValue::Object(&j_channel_id),
-            ],
-        ).map_err(|e| SystemError::NotificationSend(format!("Notification.Builder: {}", e)))?;
+        let builder = env
+            .new_object(
+                "android/app/Notification$Builder",
+                "(Landroid/content/Context;Ljava/lang/String;)V",
+                &[JValue::Object(&context), JValue::Object(&j_channel_id)],
+            )
+            .map_err(|e| SystemError::NotificationSend(format!("Notification.Builder: {}", e)))?;
 
         // android.R.drawable.ic_dialog_info
         const IC_DIALOG_INFO: i32 = 17301659;
@@ -307,28 +430,32 @@ impl AndroidNotifications {
             "setSmallIcon",
             "(I)Landroid/app/Notification$Builder;",
             &[JValue::Int(IC_DIALOG_INFO)],
-        ).map_err(|e| SystemError::NotificationSend(format!("setSmallIcon: {}", e)))?;
+        )
+        .map_err(|e| SystemError::NotificationSend(format!("setSmallIcon: {}", e)))?;
 
         env.call_method(
             &builder,
             "setContentTitle",
             "(Ljava/lang/CharSequence;)Landroid/app/Notification$Builder;",
             &[JValue::Object(&j_title)],
-        ).map_err(|e| SystemError::NotificationSend(format!("setContentTitle: {}", e)))?;
+        )
+        .map_err(|e| SystemError::NotificationSend(format!("setContentTitle: {}", e)))?;
 
         env.call_method(
             &builder,
             "setContentText",
             "(Ljava/lang/CharSequence;)Landroid/app/Notification$Builder;",
             &[JValue::Object(&j_body)],
-        ).map_err(|e| SystemError::NotificationSend(format!("setContentText: {}", e)))?;
+        )
+        .map_err(|e| SystemError::NotificationSend(format!("setContentText: {}", e)))?;
 
         env.call_method(
             &builder,
             "setAutoCancel",
             "(Z)Landroid/app/Notification$Builder;",
             &[JValue::Bool(1)],
-        ).map_err(|e| SystemError::NotificationSend(format!("setAutoCancel: {}", e)))?;
+        )
+        .map_err(|e| SystemError::NotificationSend(format!("setAutoCancel: {}", e)))?;
 
         // pre-API 26 compat priority
         let android_priority = match priority {
@@ -343,16 +470,14 @@ impl AndroidNotifications {
             "setPriority",
             "(I)Landroid/app/Notification$Builder;",
             &[JValue::Int(android_priority)],
-        ).map_err(|e| SystemError::NotificationSend(format!("setPriority: {}", e)))?;
+        )
+        .map_err(|e| SystemError::NotificationSend(format!("setPriority: {}", e)))?;
 
-        let notification = env.call_method(
-            &builder,
-            "build",
-            "()Landroid/app/Notification;",
-            &[],
-        ).map_err(|e| SystemError::NotificationSend(format!("build: {}", e)))?
-        .l()
-        .map_err(|e| SystemError::NotificationSend(format!("build result: {}", e)))?;
+        let notification = env
+            .call_method(&builder, "build", "()Landroid/app/Notification;", &[])
+            .map_err(|e| SystemError::NotificationSend(format!("build: {}", e)))?
+            .l()
+            .map_err(|e| SystemError::NotificationSend(format!("build result: {}", e)))?;
 
         let manager = get_notification_manager(&mut env, &context)?;
 
@@ -374,10 +499,7 @@ impl AndroidNotifications {
                 &manager,
                 "notify",
                 "(ILandroid/app/Notification;)V",
-                &[
-                    JValue::Int(notification_id),
-                    JValue::Object(&notification),
-                ],
+                &[JValue::Int(notification_id), JValue::Object(&notification)],
             ),
         }
         .map_err(|e| SystemError::NotificationSend(format!("notify: {}", e)))?;
@@ -395,7 +517,10 @@ impl AndroidNotifications {
             &manager,
             "cancel",
             "(Ljava/lang/String;I)V",
-            &[JValue::Object(&j_tag), JValue::Int(CONVERSATION_NOTIFICATION_ID)],
+            &[
+                JValue::Object(&j_tag),
+                JValue::Int(CONVERSATION_NOTIFICATION_ID),
+            ],
         )
         .map_err(nerr)?;
         Ok(())
@@ -425,14 +550,24 @@ impl NotificationSink for AndroidNotifications {
         body: &str,
         priority: NotificationPriority,
     ) -> Result<(), SystemError> {
-        self.show_raw(Some(conversation), title, body, android_priority_level(priority))
+        self.show_raw(
+            Some(conversation),
+            title,
+            body,
+            android_priority_level(priority),
+        )
     }
 
     fn cancel_conversation(&self, conversation: &str) -> Result<(), SystemError> {
         self.cancel_conversation_raw(conversation)
     }
 
-    fn show_incoming_call(&self, call_id: &str, title: &str, body: &str) -> Result<(), SystemError> {
+    fn show_incoming_call(
+        &self,
+        call_id: &str,
+        title: &str,
+        body: &str,
+    ) -> Result<(), SystemError> {
         self.show_incoming_call_raw(call_id, title, body)
     }
 
@@ -491,7 +626,9 @@ fn build_action<'a>(
     let intent = env
         .new_object("android/content/Intent", "()V", &[])
         .map_err(nerr)?;
-    let cls_name = env.new_string("com.chatter.client.CallActionReceiver").map_err(nerr)?;
+    let cls_name = env
+        .new_string("com.chatter.client.CallActionReceiver")
+        .map_err(nerr)?;
     env.call_method(
         &intent,
         "setClassName",
@@ -500,10 +637,22 @@ fn build_action<'a>(
     )
     .map_err(nerr)?;
     let j_action = env.new_string(action).map_err(nerr)?;
-    env.call_method(&intent, "setAction", "(Ljava/lang/String;)Landroid/content/Intent;", &[JValue::Object(&j_action)]).map_err(nerr)?;
+    env.call_method(
+        &intent,
+        "setAction",
+        "(Ljava/lang/String;)Landroid/content/Intent;",
+        &[JValue::Object(&j_action)],
+    )
+    .map_err(nerr)?;
     let k = env.new_string("call_id").map_err(nerr)?;
     let v = env.new_string(call_id).map_err(nerr)?;
-    env.call_method(&intent, "putExtra", "(Ljava/lang/String;Ljava/lang/String;)Landroid/content/Intent;", &[JValue::Object(&k), JValue::Object(&v)]).map_err(nerr)?;
+    env.call_method(
+        &intent,
+        "putExtra",
+        "(Ljava/lang/String;Ljava/lang/String;)Landroid/content/Intent;",
+        &[JValue::Object(&k), JValue::Object(&v)],
+    )
+    .map_err(nerr)?;
 
     let pi = env
         .call_static_method(
@@ -536,13 +685,22 @@ fn make_action<'a>(
         .new_object(
             "android/app/Notification$Action$Builder",
             "(ILjava/lang/CharSequence;Landroid/app/PendingIntent;)V",
-            &[JValue::Int(icon), JValue::Object(&j_label), JValue::Object(pi)],
+            &[
+                JValue::Int(icon),
+                JValue::Object(&j_label),
+                JValue::Object(pi),
+            ],
         )
         .map_err(nerr)?;
-    env.call_method(&action_builder, "build", "()Landroid/app/Notification$Action;", &[])
-        .map_err(nerr)?
-        .l()
-        .map_err(nerr)
+    env.call_method(
+        &action_builder,
+        "build",
+        "()Landroid/app/Notification$Action;",
+        &[],
+    )
+    .map_err(nerr)?
+    .l()
+    .map_err(nerr)
 }
 
 /// Build a PendingIntent that launches `MainActivity` (the in-app call screen),
@@ -562,7 +720,9 @@ fn build_activity_intent<'a>(
     let intent = env
         .new_object("android/content/Intent", "()V", &[])
         .map_err(nerr)?;
-    let cls_name = env.new_string("com.chatter.client.MainActivity").map_err(nerr)?;
+    let cls_name = env
+        .new_string("com.chatter.client.MainActivity")
+        .map_err(nerr)?;
     env.call_method(
         &intent,
         "setClassName",
@@ -571,13 +731,31 @@ fn build_activity_intent<'a>(
     )
     .map_err(nerr)?;
     // FLAG_ACTIVITY_NEW_TASK | FLAG_ACTIVITY_SINGLE_TOP
-    env.call_method(&intent, "addFlags", "(I)Landroid/content/Intent;", &[JValue::Int(0x1000_0000 | 0x2000_0000)]).map_err(nerr)?;
+    env.call_method(
+        &intent,
+        "addFlags",
+        "(I)Landroid/content/Intent;",
+        &[JValue::Int(0x1000_0000 | 0x2000_0000)],
+    )
+    .map_err(nerr)?;
     let k = env.new_string("incoming_call_id").map_err(nerr)?;
     let v = env.new_string(call_id).map_err(nerr)?;
-    env.call_method(&intent, "putExtra", "(Ljava/lang/String;Ljava/lang/String;)Landroid/content/Intent;", &[JValue::Object(&k), JValue::Object(&v)]).map_err(nerr)?;
+    env.call_method(
+        &intent,
+        "putExtra",
+        "(Ljava/lang/String;Ljava/lang/String;)Landroid/content/Intent;",
+        &[JValue::Object(&k), JValue::Object(&v)],
+    )
+    .map_err(nerr)?;
     if auto_accept {
         let ak = env.new_string("auto_accept").map_err(nerr)?;
-        env.call_method(&intent, "putExtra", "(Ljava/lang/String;Z)Landroid/content/Intent;", &[JValue::Object(&ak), JValue::Bool(1)]).map_err(nerr)?;
+        env.call_method(
+            &intent,
+            "putExtra",
+            "(Ljava/lang/String;Z)Landroid/content/Intent;",
+            &[JValue::Object(&ak), JValue::Bool(1)],
+        )
+        .map_err(nerr)?;
     }
 
     let pi = env
@@ -614,14 +792,16 @@ fn get_app_context<'a>(env: &mut JNIEnv<'a>) -> Result<JObject<'a>, SystemError>
     let ctx = ndk_context::android_context();
     let activity = unsafe { JObject::from_raw(ctx.context().cast()) };
 
-    let context = env.call_method(
-        &activity,
-        "getApplicationContext",
-        "()Landroid/content/Context;",
-        &[],
-    ).map_err(|e| SystemError::NotificationInit(format!("getApplicationContext: {}", e)))?
-    .l()
-    .map_err(|e| SystemError::NotificationInit(format!("context cast: {}", e)))?;
+    let context = env
+        .call_method(
+            &activity,
+            "getApplicationContext",
+            "()Landroid/content/Context;",
+            &[],
+        )
+        .map_err(|e| SystemError::NotificationInit(format!("getApplicationContext: {}", e)))?
+        .l()
+        .map_err(|e| SystemError::NotificationInit(format!("context cast: {}", e)))?;
 
     Ok(context)
 }
@@ -630,17 +810,20 @@ fn get_notification_manager<'a>(
     env: &mut JNIEnv<'a>,
     context: &JObject<'a>,
 ) -> Result<JObject<'a>, SystemError> {
-    let service_name: JString<'a> = env.new_string("notification")
+    let service_name: JString<'a> = env
+        .new_string("notification")
         .map_err(|e| SystemError::NotificationInit(format!("service name: {}", e)))?;
 
-    let manager = env.call_method(
-        context,
-        "getSystemService",
-        "(Ljava/lang/String;)Ljava/lang/Object;",
-        &[JValue::Object(&service_name)],
-    ).map_err(|e| SystemError::NotificationInit(format!("getSystemService: {}", e)))?
-    .l()
-    .map_err(|e| SystemError::NotificationInit(format!("manager cast: {}", e)))?;
+    let manager = env
+        .call_method(
+            context,
+            "getSystemService",
+            "(Ljava/lang/String;)Ljava/lang/Object;",
+            &[JValue::Object(&service_name)],
+        )
+        .map_err(|e| SystemError::NotificationInit(format!("getSystemService: {}", e)))?
+        .l()
+        .map_err(|e| SystemError::NotificationInit(format!("manager cast: {}", e)))?;
 
     Ok(manager)
 }

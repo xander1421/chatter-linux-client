@@ -107,7 +107,9 @@ impl CourierEnvelope {
 
     pub fn encode(&self) -> Result<Vec<u8>, MeshError> {
         if self.ciphertext.is_empty() {
-            return Err(MeshError::OutOfRange("courier envelope ciphertext is empty"));
+            return Err(MeshError::OutOfRange(
+                "courier envelope ciphertext is empty",
+            ));
         }
         if self.ciphertext.len() > MAX_CIPHERTEXT_BYTES {
             return Err(MeshError::LengthExceeded {
@@ -256,7 +258,13 @@ mod tests {
     use super::*;
 
     fn sample() -> CourierEnvelope {
-        CourierEnvelope::new([0xAB; TAG_LEN], 1_700_000_000_000, vec![1, 2, 3, 4], 1, None)
+        CourierEnvelope::new(
+            [0xAB; TAG_LEN],
+            1_700_000_000_000,
+            vec![1, 2, 3, 4],
+            1,
+            None,
+        )
     }
 
     #[test]
@@ -293,8 +301,7 @@ mod tests {
 
     #[test]
     fn round_trips_a_v2_envelope_with_copies_and_prekey() {
-        let envelope =
-            CourierEnvelope::new([7; TAG_LEN], 42, vec![9; 100], 4, Some(0xDEAD_BEEF));
+        let envelope = CourierEnvelope::new([7; TAG_LEN], 42, vec![9; 100], 4, Some(0xDEAD_BEEF));
         let encoded = envelope.encode().unwrap();
         let decoded = CourierEnvelope::decode(&encoded).unwrap();
         assert_eq!(decoded, envelope);
@@ -315,7 +322,10 @@ mod tests {
         if let Some(slot) = encoded.get_mut(last) {
             *slot = 200;
         }
-        assert_eq!(CourierEnvelope::decode(&encoded).unwrap().copies, MAX_COPIES);
+        assert_eq!(
+            CourierEnvelope::decode(&encoded).unwrap().copies,
+            MAX_COPIES
+        );
 
         // And zero becomes one.
         if let Some(slot) = encoded.get_mut(last) {

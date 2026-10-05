@@ -29,7 +29,9 @@ fn wire_accept_new_identity(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
         let ui_ctx = ui_ctx.clone();
         let weak = weak_window.clone();
 
-        let Some(need) = weak.upgrade().and_then(|_| PENDING_RECOVERY.lock().ok().and_then(|g| *g))
+        let Some(need) = weak
+            .upgrade()
+            .and_then(|_| PENDING_RECOVERY.lock().ok().and_then(|g| *g))
         else {
             return;
         };
@@ -69,8 +71,7 @@ fn wire_accept_new_identity(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
 /// state: it is the token `accept_new_identity` checks before doing anything
 /// destructive, and it must survive the round trip through the Slint callback
 /// without being reconstructible from a string the UI happens to be showing.
-static PENDING_RECOVERY: std::sync::Mutex<Option<KeyRecoveryNeed>> =
-    std::sync::Mutex::new(None);
+static PENDING_RECOVERY: std::sync::Mutex<Option<KeyRecoveryNeed>> = std::sync::Mutex::new(None);
 
 /// Mirror chatter-core's `AuthStateData::login_verifying` (the login is
 /// solving the server's proof of work) onto the login screen while a login
@@ -249,4 +250,3 @@ fn wire_password_login(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
         });
     });
 }
-

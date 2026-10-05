@@ -26,8 +26,8 @@
 //! }
 //! ```
 
-pub mod prelude;
-pub mod mocks;
 pub mod builders;
-pub mod harness;
 pub mod fixtures;
+pub mod harness;
+pub mod mocks;
+pub mod prelude;

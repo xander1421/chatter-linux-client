@@ -60,12 +60,8 @@ pub fn is_gl_available() -> bool {
 
 /// Check if GL context is connected (ready to play video).
 pub fn is_gl_connected() -> bool {
-    let connected = GL_VIDEO_STATE.with(|cell| {
-        cell.borrow()
-            .as_ref()
-            .map(|s| s.connected)
-            .unwrap_or(false)
-    });
+    let connected =
+        GL_VIDEO_STATE.with(|cell| cell.borrow().as_ref().map(|s| s.connected).unwrap_or(false));
     tracing::debug!("is_gl_connected() = {}", connected);
     connected
 }
@@ -138,79 +134,91 @@ pub fn init_gl_video(window: &MainWindow) -> bool {
 
     // Set up rendering notifier
     let weak = window.as_weak();
-    if let Err(e) = window.window().set_rendering_notifier(move |state, graphics_api| {
-        crate::record_startup_frame(&state);
-        match state {
-            slint::RenderingState::RenderingSetup => {
-                tracing::info!("RenderingSetup callback fired - connecting GL context");
-                // Connect GL context when rendering is set up
-                GL_VIDEO_STATE.with(|cell| {
-                    if let Some(ref mut video_state) = *cell.borrow_mut() {
-                        if let Err(e) = connect_gl_context(video_state, graphics_api) {
-                            tracing::warn!("Failed to connect GL context: {}", e);
+    if let Err(e) = window
+        .window()
+        .set_rendering_notifier(move |state, graphics_api| {
+            crate::record_startup_frame(&state);
+            match state {
+                slint::RenderingState::RenderingSetup => {
+                    tracing::info!("RenderingSetup callback fired - connecting GL context");
+                    // Connect GL context when rendering is set up
+                    GL_VIDEO_STATE.with(|cell| {
+                        if let Some(ref mut video_state) = *cell.borrow_mut() {
+                            if let Err(e) = connect_gl_context(video_state, graphics_api) {
+                                tracing::warn!("Failed to connect GL context: {}", e);
+                            }
+                        } else {
+                            tracing::warn!("GL_VIDEO_STATE is None in RenderingSetup");
                         }
-                    } else {
-                        tracing::warn!("GL_VIDEO_STATE is None in RenderingSetup");
-                    }
-                });
-                // Multiplex the single rendering notifier: also load the
-                // call-video GL texture uploader's function table.
-                super::gl_call::on_rendering_setup(graphics_api);
-            }
-            slint::RenderingState::BeforeRendering => {
-                // Fetch next frame and update video player
-                GL_VIDEO_STATE.with(|cell| {
-                    if let Some(ref mut video_state) = *cell.borrow_mut() {
-                        if video_state.is_playing {
-                            match fetch_next_frame(video_state) {
-                                Some(image) => {
-                                    if let Some(w) = weak.upgrade() {
-                                        w.set_video_player_frame(image);
+                    });
+                    // Multiplex the single rendering notifier: also load the
+                    // call-video GL texture uploader's function table.
+                    super::gl_call::on_rendering_setup(graphics_api);
+                }
+                slint::RenderingState::BeforeRendering => {
+                    // Fetch next frame and update video player
+                    GL_VIDEO_STATE.with(|cell| {
+                        if let Some(ref mut video_state) = *cell.borrow_mut() {
+                            if video_state.is_playing {
+                                match fetch_next_frame(video_state) {
+                                    Some(image) => {
+                                        if let Some(w) = weak.upgrade() {
+                                            w.set_video_player_frame(image);
+                                        }
                                     }
-                                }
-                                None => {
-                                    // Check if there's a frame waiting
-                                    let has_pending = video_state.next_frame.lock()
-                                        .map(|g| g.is_some())
-                                        .unwrap_or(false);
-                                    if has_pending {
-                                        tracing::trace!("GL video: frame pending but couldn't be converted");
+                                    None => {
+                                        // Check if there's a frame waiting
+                                        let has_pending = video_state
+                                            .next_frame
+                                            .lock()
+                                            .map(|g| g.is_some())
+                                            .unwrap_or(false);
+                                        if has_pending {
+                                            tracing::trace!(
+                                                "GL video: frame pending but couldn't be converted"
+                                            );
+                                        }
                                     }
                                 }
                             }
                         }
+                    });
+                    // Multiplex the notifier: drain the call-video frame inbox and
+                    // upload remote participant frames into persistent GL textures
+                    // (in-place glTexSubImage2D, no 30 MB Skia copy per frame).
+                    if let Some(w) = weak.upgrade() {
+                        super::gl_call::on_before_rendering(&w);
                     }
-                });
-                // Multiplex the notifier: drain the call-video frame inbox and
-                // upload remote participant frames into persistent GL textures
-                // (in-place glTexSubImage2D, no 30 MB Skia copy per frame).
-                if let Some(w) = weak.upgrade() {
-                    super::gl_call::on_before_rendering(&w);
                 }
-            }
-            slint::RenderingState::RenderingTeardown => {
-                // Clean up GL resources
-                GL_VIDEO_STATE.with(|cell| {
-                    if let Some(ref mut video_state) = *cell.borrow_mut() {
-                        if let Ok(mut next) = video_state.next_frame.lock() {
-                            *next = None;
+                slint::RenderingState::RenderingTeardown => {
+                    // Clean up GL resources
+                    GL_VIDEO_STATE.with(|cell| {
+                        if let Some(ref mut video_state) = *cell.borrow_mut() {
+                            if let Ok(mut next) = video_state.next_frame.lock() {
+                                *next = None;
+                            }
+                            if let Some(ref ctx) = video_state.gst_gl_context {
+                                let _ = ctx.activate(false);
+                            }
                         }
-                        if let Some(ref ctx) = video_state.gst_gl_context {
-                            let _ = ctx.activate(false);
-                        }
-                    }
-                });
-                // Multiplex the notifier: delete all call-video textures.
-                super::gl_call::on_teardown();
+                    });
+                    // Multiplex the notifier: delete all call-video textures.
+                    super::gl_call::on_teardown();
+                }
+                _ => {}
             }
-            _ => {}
-        }
-    }) {
-        tracing::error!("Failed to set rendering notifier: {:?} - this prevents hardware video", e);
+        })
+    {
+        tracing::error!(
+            "Failed to set rendering notifier: {:?} - this prevents hardware video",
+            e
+        );
         return false;
     }
 
-    tracing::info!("GL video rendering initialized - waiting for first render to connect GL context");
+    tracing::info!(
+        "GL video rendering initialized - waiting for first render to connect GL context"
+    );
     true
 }
 
@@ -219,7 +227,10 @@ fn connect_gl_context(
     state: &mut GLVideoState,
     graphics_api: &slint::GraphicsAPI<'_>,
 ) -> Result<(), String> {
-    tracing::info!("connect_gl_context called, already connected: {}", state.connected);
+    tracing::info!(
+        "connect_gl_context called, already connected: {}",
+        state.connected
+    );
     if state.connected {
         return Ok(());
     }
@@ -263,13 +274,11 @@ fn connect_gl_context(
         let gl_api = gst_gl::GLContext::current_gl_api(platform);
         tracing::info!("Current GL API: {:?}", gl_api);
 
-        let context = gst_gl::GLContext::new_wrapped(
-            &display,
-            native_context as _,
-            platform,
-            gl_api.0,
-        )
-        .ok_or_else(|| "Failed to wrap GL context - GLContext::new_wrapped returned None".to_string())?;
+        let context =
+            gst_gl::GLContext::new_wrapped(&display, native_context as _, platform, gl_api.0)
+                .ok_or_else(|| {
+                    "Failed to wrap GL context - GLContext::new_wrapped returned None".to_string()
+                })?;
 
         (context, display)
     };
@@ -294,7 +303,9 @@ fn connect_gl_context(
     state.appsink.set_callbacks(
         gst_app::AppSinkCallbacks::builder()
             .new_sample(move |appsink| {
-                let sample = appsink.pull_sample().map_err(|_| gst::FlowError::Flushing)?;
+                let sample = appsink
+                    .pull_sample()
+                    .map_err(|_| gst::FlowError::Flushing)?;
                 let buffer = sample.buffer_owned().unwrap();
 
                 // Increment frame count and log occasionally
@@ -878,7 +889,10 @@ pub fn stop_gl_video() {
 
                 // CRITICAL: Explicitly clean up audio elements to prevent multiple PipeWire streams
                 if let Ok(mut audio_elements) = state.audio_elements.lock() {
-                    tracing::info!("GL video stop: cleaning up {} audio elements", audio_elements.len());
+                    tracing::info!(
+                        "GL video stop: cleaning up {} audio elements",
+                        audio_elements.len()
+                    );
                     for element in audio_elements.drain(..) {
                         let name = element.name().to_string();
                         let _ = pipeline.remove(&element);
@@ -950,10 +964,9 @@ pub fn seek_gl_video(position: f64) {
                 // FLUSH: Flush pipeline before seeking (required for responsive seek)
                 // KEY_UNIT: Seek to nearest keyframe (faster, works with most formats)
                 // NOTE: TRICKMODE removed - causes issues with some MP4 files
-                if let Err(e) = pipeline.seek_simple(
-                    gst::SeekFlags::FLUSH | gst::SeekFlags::KEY_UNIT,
-                    seek_pos,
-                ) {
+                if let Err(e) =
+                    pipeline.seek_simple(gst::SeekFlags::FLUSH | gst::SeekFlags::KEY_UNIT, seek_pos)
+                {
                     tracing::error!("GL video seek failed: {:?}", e);
                     return;
                 }
@@ -991,7 +1004,10 @@ pub fn set_gl_video_volume(volume: f64) {
                     state.pending_volume = None; // Volume applied, clear pending
                 } else {
                     // Audio pipeline not ready yet - store for later
-                    tracing::debug!("GL video: volume element not found, storing pending volume {:.2}", clamped);
+                    tracing::debug!(
+                        "GL video: volume element not found, storing pending volume {:.2}",
+                        clamped
+                    );
                     state.pending_volume = Some(clamped);
                 }
             } else {

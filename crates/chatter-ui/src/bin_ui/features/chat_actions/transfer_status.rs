@@ -33,7 +33,10 @@ pub fn update_attachment_transfer_status(
                         updated_att.progress = progress;
 
                         // Update in the attachments model
-                        if let Some(att_model) = attachments.as_any().downcast_ref::<slint::VecModel<MessageAttachmentData>>() {
+                        if let Some(att_model) = attachments
+                            .as_any()
+                            .downcast_ref::<slint::VecModel<MessageAttachmentData>>()
+                        {
                             att_model.set_row_data(att_idx, updated_att);
                         }
                         break;

@@ -120,11 +120,7 @@ impl AnonDm {
     }
 
     /// Create a conversation from an incoming message request.
-    pub fn from_request(
-        id: AnonDmId,
-        peer_id: UserId,
-        peer_mailbox_pk: [u8; 32],
-    ) -> Self {
+    pub fn from_request(id: AnonDmId, peer_id: UserId, peer_mailbox_pk: [u8; 32]) -> Self {
         let now = Utc::now();
         Self {
             id,
@@ -151,7 +147,11 @@ impl AnonDm {
 
     /// Set the peer's avatar.
     pub fn with_avatar(mut self, avatar: Vec<u8>) -> Self {
-        self.peer_avatar = if avatar.is_empty() { None } else { Some(avatar) };
+        self.peer_avatar = if avatar.is_empty() {
+            None
+        } else {
+            Some(avatar)
+        };
         self
     }
 
@@ -288,7 +288,8 @@ impl AnonDmMessage {
     pub fn attachment_ids(&self) -> Vec<crate::domain::AttachmentId> {
         use crate::storage::serialization::db_deserialize;
 
-        if self.attachments_blob.is_empty() || self.attachments_blob == vec![8, 0, 0, 0, 0, 0, 0, 0] {
+        if self.attachments_blob.is_empty() || self.attachments_blob == vec![8, 0, 0, 0, 0, 0, 0, 0]
+        {
             return Vec::new();
         }
 
@@ -373,12 +374,7 @@ mod tests {
     #[test]
     fn test_anon_dm_message_text() {
         let sent_at = 1704067200_000_000_000u64; // 2024-01-01 00:00:00 UTC
-        let msg = AnonDmMessage::new_text(
-            AnonDmId::new(),
-            UserId::new(),
-            "Hello",
-            sent_at,
-        );
+        let msg = AnonDmMessage::new_text(AnonDmId::new(), UserId::new(), "Hello", sent_at);
         assert_eq!(msg.content_type, 1);
         assert_eq!(msg.as_text(), Some("Hello".to_string()));
         assert_eq!(msg.sent_at, sent_at);

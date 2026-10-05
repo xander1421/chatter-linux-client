@@ -41,7 +41,11 @@ pub fn spawn_call_notification_bridge(
                 }) => {
                     // Title carries the media flag so the user knows whether
                     // to expect video.
-                    let title = if is_video { "Incoming video call" } else { "Incoming call" };
+                    let title = if is_video {
+                        "Incoming video call"
+                    } else {
+                        "Incoming call"
+                    };
                     let body = match channel_context.as_deref() {
                         Some(ch) if !ch.is_empty() => format!("{} is calling in {}", peer_name, ch),
                         _ => format!("{} is calling", peer_name),
@@ -121,7 +125,8 @@ mod tests {
     async fn withdrawn_call_cancels_its_ring_notification() {
         let log = Arc::new(Log::default());
         let (tx, rx) = broadcast::channel(8);
-        let task = spawn_call_notification_bridge(rx, Arc::new(NotificationService::new(log.clone())));
+        let task =
+            spawn_call_notification_bridge(rx, Arc::new(NotificationService::new(log.clone())));
         tx.send(presented("c1")).unwrap();
         tx.send(CallOrchestratorEvent::IncomingWithdrawn {
             call: CallHandle::from("c1"),

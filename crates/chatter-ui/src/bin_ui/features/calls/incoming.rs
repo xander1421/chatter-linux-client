@@ -13,16 +13,18 @@ use std::sync::Arc;
 
 use slint::{ComponentHandle, Model, ModelRc, VecModel};
 
+use crate::bin_ui::converters::avatar_bytes_to_image;
+use crate::{ActiveCallData, CallParticipantData, MainWindow};
 use chatter_core::client::ChatterClient;
 use chatter_core::client::calls::AcceptedIncomingCall;
 use chatter_core::services::call_worker::{
     CallEndReason, CallOrchestratorEvent, OrchestratedCallKind,
 };
-use crate::{ActiveCallData, CallParticipantData, MainWindow};
 use chatter_core::ui::initials_from_name;
-use crate::bin_ui::converters::avatar_bytes_to_image;
 
-use super::timers::{start_call_timer, start_video_frame_timer, stop_call_timer, stop_video_frame_timer};
+use super::timers::{
+    start_call_timer, start_video_frame_timer, stop_call_timer, stop_video_frame_timer,
+};
 
 /// Wire incoming call accept/decline callbacks.
 pub fn wire_incoming_call(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
@@ -94,10 +96,7 @@ pub fn wire_incoming_call(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             }
 
             tokio::spawn(async move {
-                if let Err(e) = ui_ctx
-                    .decline_presented_incoming_call(&call_id_str)
-                    .await
-                {
+                if let Err(e) = ui_ctx.decline_presented_incoming_call(&call_id_str).await {
                     tracing::debug!(error = %e, "Decline call notification failed");
                 }
             });
@@ -111,7 +110,10 @@ async fn accept(
     call_id: String,
     replaces_active: bool,
 ) {
-    match ui_ctx.accept_presented_incoming_call(&call_id, replaces_active).await {
+    match ui_ctx
+        .accept_presented_incoming_call(&call_id, replaces_active)
+        .await
+    {
         Ok(accepted) => render_accepted_call(&weak, &ui_ctx, accepted),
         Err(e) => {
             tracing::error!(error = %e, "Failed to accept incoming call");
@@ -241,8 +243,7 @@ fn render_accepted_call(
                 // already in the room that landed before this repaint. Each
                 // later joiner adds its own tile (room_events.rs).
                 let existing = w.get_active_call_data().participants;
-                let mut participants: Vec<CallParticipantData> = existing.iter()
-                    .collect();
+                let mut participants: Vec<CallParticipantData> = existing.iter().collect();
                 participants.pop(); // the local tile, pinned last; rebuilt below
                 participants.push(CallParticipantData {
                     user_id: current_user_id.clone().into(),
@@ -335,7 +336,11 @@ fn show_answering(w: &MainWindow) {
     };
     // An anon peer's room identity is unknown until it joins; an empty id is
     // the slot `ParticipantJoined` adopts (see `render_active_anon_call`).
-    let remote_id = if incoming.is_anonymous_call { "".into() } else { incoming.caller_id.clone() };
+    let remote_id = if incoming.is_anonymous_call {
+        "".into()
+    } else {
+        incoming.caller_id.clone()
+    };
     let remote = participant(
         remote_id,
         incoming.caller_name.clone(),
@@ -434,7 +439,8 @@ fn render_active_anon_call(
         // no identity, so a join after this render added a second remote
         // tile and the peer's frames never reached this one.
         let existing = w.get_active_call_data().participants;
-        let preserved_remote_user_id: Option<slint::SharedString> = existing.iter()
+        let preserved_remote_user_id: Option<slint::SharedString> = existing
+            .iter()
             .find(|p| {
                 let uid = p.user_id.as_str();
                 !uid.is_empty() && uid != "You"
@@ -484,10 +490,7 @@ fn render_active_anon_call(
             participant_count: 2,
             duration_seconds: 0,
             is_connected: true,
-            participants: ModelRc::new(VecModel::from(vec![
-                remote_participant,
-                local_participant,
-            ])),
+            participants: ModelRc::new(VecModel::from(vec![remote_participant, local_participant])),
             verification_emoji_1: verification_emojis[0].clone().into(),
             verification_emoji_2: verification_emojis[1].clone().into(),
             verification_emoji_3: verification_emojis[2].clone().into(),

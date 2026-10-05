@@ -101,9 +101,7 @@ impl IdentityKeyManager {
     ///
     /// Returns an error if no identity has been generated.
     pub fn get_public_key(&self) -> Result<IdentityKey, CryptoError> {
-        let (_, key_pair) = self
-            .get_identity()?
-            .ok_or(CryptoError::NoIdentity)?;
+        let (_, key_pair) = self.get_identity()?.ok_or(CryptoError::NoIdentity)?;
 
         Ok(*key_pair.identity_key())
     }
@@ -112,9 +110,7 @@ impl IdentityKeyManager {
     ///
     /// Returns an error if no identity has been generated.
     pub fn get_registration_id(&self) -> Result<u32, CryptoError> {
-        let (registration_id, _) = self
-            .get_identity()?
-            .ok_or(CryptoError::NoIdentity)?;
+        let (registration_id, _) = self.get_identity()?.ok_or(CryptoError::NoIdentity)?;
 
         Ok(registration_id)
     }
@@ -132,9 +128,7 @@ impl IdentityKeyManager {
     /// the rest.
     pub fn sign_registration_challenge(&self, nonce: &[u8]) -> Result<Vec<u8>, CryptoError> {
         let message = registration_challenge_message(nonce)?;
-        let (_, key_pair) = self
-            .get_identity()?
-            .ok_or(CryptoError::NoIdentity)?;
+        let (_, key_pair) = self.get_identity()?.ok_or(CryptoError::NoIdentity)?;
 
         // SECURITY: XEdDSA signing nonce must come from the OS, not a
         // userspace ChaCha PRG seeded once via ThreadRng. Memory disclosure
@@ -142,7 +136,9 @@ impl IdentityKeyManager {
         // recover the identity private key from the signature.
         use rand::TryRngCore;
         let mut rng = rand::rngs::OsRng.unwrap_err();
-        key_pair.private_key().calculate_signature(&message, &mut rng)
+        key_pair
+            .private_key()
+            .calculate_signature(&message, &mut rng)
             .map(|sig| sig.into_vec())
             .map_err(|e| CryptoError::Protocol(e.to_string()))
     }

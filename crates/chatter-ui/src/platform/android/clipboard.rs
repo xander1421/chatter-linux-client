@@ -44,12 +44,8 @@ pub fn set_text(label: &str, text: &str) -> Result<(), String> {
         .l()
         .map_err(|e| format!("manager cast: {e}"))?;
 
-    let jlabel: JString = env
-        .new_string(label)
-        .map_err(|e| format!("label: {e}"))?;
-    let jtext: JString = env
-        .new_string(text)
-        .map_err(|e| format!("text: {e}"))?;
+    let jlabel: JString = env.new_string(label).map_err(|e| format!("label: {e}"))?;
+    let jtext: JString = env.new_string(text).map_err(|e| format!("text: {e}"))?;
 
     let clip = env
         .call_static_method(

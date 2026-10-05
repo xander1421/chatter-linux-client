@@ -11,10 +11,10 @@
 
 pub mod base_anon;
 
-use crate::domain::{Attachment, ChannelId, Message, MessageContent, MessageId, UserId};
-use crate::domain::message::ConversationType;
 use crate::domain::anon_dm::AnonDmId;
 use crate::domain::anon_group::AnonGroupId;
+use crate::domain::message::ConversationType;
+use crate::domain::{Attachment, ChannelId, Message, MessageContent, MessageId, UserId};
 use crate::inbox::events::FriendRequestInfo;
 
 // ============================================================================
@@ -201,7 +201,6 @@ pub enum DomainEvent {
     // ========================================================================
     // Multi-Device Lifecycle Events
     // ========================================================================
-
     /// A new linked device has joined this account.
     ///
     /// Fired on the *approving* primary device immediately after a successful
@@ -286,7 +285,6 @@ pub enum DomainEvent {
     // ========================================================================
     // Anonymous Group Events (NDSS'21 Style)
     // ========================================================================
-
     AnonGroupInviteReceived {
         group_id: AnonGroupId,
         group_name: String,
@@ -333,7 +331,6 @@ pub enum DomainEvent {
     // ========================================================================
     // Anonymous DM Events (Client-Side Managed)
     // ========================================================================
-
     AnonDmRequestReceived {
         conversation_id: AnonDmId,
         sender_id: UserId,
@@ -460,7 +457,6 @@ pub enum DomainEvent {
     // ========================================================================
     // UI-Specific Events
     // ========================================================================
-
     /// Call key offer received (incoming call with ephemeral key for PFS).
     CallKeyOfferReceived {
         call_id: String,
@@ -508,7 +504,6 @@ pub enum DomainEvent {
     // ========================================================================
     // Local Send Events
     // ========================================================================
-
     /// A send that finished in the background (the post-bootstrap flush)
     /// failed; the user has no other way to learn the message did not go.
     MessageSendFailed {
@@ -558,7 +553,6 @@ pub enum DomainEvent {
     // so a deleted channel never disappeared, a ban never surfaced, and — the
     // serious one — `OperationFailed`, the saga-compensation signal, was
     // discarded, leaving optimistic client state wrong forever.
-
     /// A channel appeared for this user (created by them elsewhere, or an
     /// admin added them). Core has upserted the local row.
     ChannelCreated {
@@ -630,7 +624,6 @@ pub enum DomainEvent {
     // ========================================================================
     // Sync Events
     // ========================================================================
-
     /// Background sync cycle completed.
     SyncComplete {
         channels_synced: usize,
@@ -696,10 +689,14 @@ impl DomainEvent {
             DomainEvent::ReactionRemoved { .. } => None,
             DomainEvent::MessagePinned { channel_id, .. } => Some(*channel_id),
             DomainEvent::MessageUnpinned { channel_id, .. } => Some(*channel_id),
-            DomainEvent::KeyExchangeReceived { conversation_id, .. } => Some(*conversation_id),
+            DomainEvent::KeyExchangeReceived {
+                conversation_id, ..
+            } => Some(*conversation_id),
             DomainEvent::SenderKeyReceived { channel_id, .. } => Some(*channel_id),
             DomainEvent::GroupMailboxReceived { channel_id, .. } => Some(*channel_id),
-            DomainEvent::DeleteForMeSync { conversation_id, .. } => Some(*conversation_id),
+            DomainEvent::DeleteForMeSync {
+                conversation_id, ..
+            } => Some(*conversation_id),
             DomainEvent::SavedMessageSynced { message } => Some(message.conversation_id),
             DomainEvent::ConversationsRead { .. } => None,
             DomainEvent::DeviceLinked { .. } => None,
@@ -780,11 +777,21 @@ mod tests {
         let channel_id = ChannelId::new();
         let user_id = UserId::new();
 
-        let typing = DomainEvent::TypingStarted { user_id, channel_id, timestamp: 0 };
+        let typing = DomainEvent::TypingStarted {
+            user_id,
+            channel_id,
+            timestamp: 0,
+        };
         assert!(typing.is_transient());
 
         let msg = DomainEvent::MessageReceived {
-            message: Message::new_text(channel_id, ConversationType::Channel, Some(user_id), "test".to_string(), 0),
+            message: Message::new_text(
+                channel_id,
+                ConversationType::Channel,
+                Some(user_id),
+                "test".to_string(),
+                0,
+            ),
         };
         assert!(!msg.is_transient());
     }
@@ -795,7 +802,13 @@ mod tests {
         let user_id = UserId::new();
 
         let msg = DomainEvent::MessageReceived {
-            message: Message::new_text(channel_id, ConversationType::Channel, Some(user_id), "test".to_string(), 0),
+            message: Message::new_text(
+                channel_id,
+                ConversationType::Channel,
+                Some(user_id),
+                "test".to_string(),
+                0,
+            ),
         };
         assert_eq!(msg.channel_id(), Some(channel_id));
 

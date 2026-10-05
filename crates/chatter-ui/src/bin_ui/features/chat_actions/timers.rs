@@ -7,9 +7,9 @@ use std::time::Duration;
 
 use slint::{ComponentHandle, Timer, TimerMode};
 
+use crate::MainWindow;
 use crate::bin_ui::audio_state;
 use crate::bin_ui::video_state;
-use crate::MainWindow;
 
 thread_local! {
     /// Thread-local audio progress timer (must be on UI thread).
@@ -31,32 +31,28 @@ pub fn start_audio_progress_timer(window: &MainWindow) {
 
         // Create new timer
         let timer = Timer::default();
-        timer.start(
-            TimerMode::Repeated,
-            Duration::from_millis(100),
-            move || {
-                if let Some(w) = weak_window.upgrade() {
-                    // Get current progress from audio state
-                    let progress = audio_state::get_progress();
-                    let position = audio_state::get_position();
-                    let elapsed = audio_state::format_duration(position);
+        timer.start(TimerMode::Repeated, Duration::from_millis(100), move || {
+            if let Some(w) = weak_window.upgrade() {
+                // Get current progress from audio state
+                let progress = audio_state::get_progress();
+                let position = audio_state::get_position();
+                let elapsed = audio_state::format_duration(position);
 
-                    w.set_audio_progress(progress);
-                    w.set_audio_elapsed(elapsed.into());
+                w.set_audio_progress(progress);
+                w.set_audio_elapsed(elapsed.into());
 
-                    // Completion comes from the player, including unknown durations.
-                    if audio_state::playback_finished() {
-                        // Stop timer and clear state
-                        stop_audio_progress_timer();
-                        audio_state::clear_state();
-                        w.set_current_playing_attachment_id("".into());
-                        w.set_is_media_playing(false);
-                        w.set_audio_progress(0.0);
-                        w.set_audio_elapsed("0:00".into());
-                    }
+                // Completion comes from the player, including unknown durations.
+                if audio_state::playback_finished() {
+                    // Stop timer and clear state
+                    stop_audio_progress_timer();
+                    audio_state::clear_state();
+                    w.set_current_playing_attachment_id("".into());
+                    w.set_is_media_playing(false);
+                    w.set_audio_progress(0.0);
+                    w.set_audio_elapsed("0:00".into());
                 }
-            },
-        );
+            }
+        });
 
         *timer_cell.borrow_mut() = Some(timer);
     });
@@ -103,10 +99,16 @@ pub fn start_video_progress_timer(window: &MainWindow) {
                     }
 
                     // Get current state from video player
-                    if let Some((position, duration, is_playing)) = video_state::get_playback_state() {
+                    if let Some((position, duration, is_playing)) =
+                        video_state::get_playback_state()
+                    {
                         // Clamp position to duration (some videos report timestamps beyond duration)
                         let clamped_position = position.min(duration);
-                        let progress = if duration > 0.0 { (clamped_position / duration).clamp(0.0, 1.0) } else { 0.0 };
+                        let progress = if duration > 0.0 {
+                            (clamped_position / duration).clamp(0.0, 1.0)
+                        } else {
+                            0.0
+                        };
                         let elapsed = chatter_core::media::format_duration(clamped_position);
 
                         w.set_video_player_progress(progress as f32);

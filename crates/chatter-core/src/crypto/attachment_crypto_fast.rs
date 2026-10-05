@@ -42,13 +42,13 @@ fn verify_sequential(
     iv_end: usize,
     hmac_start: usize,
 ) -> ([u8; 32], [u8; 32]) {
-    let mut digest_hasher = Sha256Stream::new()
-        .expect("SHA256 init failed");
-    let mut hmac = crate::crypto::hmac_compat::hmac_init(mac_key)
-        .expect("HMAC init");
+    let mut digest_hasher = Sha256Stream::new().expect("SHA256 init failed");
+    let mut hmac = crate::crypto::hmac_compat::hmac_init(mac_key).expect("HMAC init");
 
     // Process IV
-    digest_hasher.update(&ciphertext[..iv_end]).expect("SHA256 update");
+    digest_hasher
+        .update(&ciphertext[..iv_end])
+        .expect("SHA256 update");
     hmac.update(&ciphertext[..iv_end]).expect("HMAC update");
 
     // Process encrypted data in cache-friendly chunks
@@ -59,7 +59,9 @@ fn verify_sequential(
     }
 
     // HMAC bytes only for digest
-    digest_hasher.update(&ciphertext[hmac_start..]).expect("SHA256 update");
+    digest_hasher
+        .update(&ciphertext[hmac_start..])
+        .expect("SHA256 update");
 
     let digest_result = digest_hasher.finish().expect("SHA256 finalize");
     let hmac_result = hmac.finalize().expect("HMAC finalize");
@@ -176,7 +178,8 @@ mod tests {
             &encrypted.key,
             &encrypted.digest,
             encrypted.plaintext_size,
-        ).unwrap();
+        )
+        .unwrap();
 
         assert_eq!(decrypted.as_slice(), plaintext);
     }
@@ -193,7 +196,8 @@ mod tests {
             &encrypted.key,
             &encrypted.digest,
             encrypted.plaintext_size,
-        ).unwrap();
+        )
+        .unwrap();
 
         assert_eq!(decrypted, plaintext);
     }
@@ -229,7 +233,8 @@ mod tests {
             &encrypted.key,
             &encrypted.digest,
             encrypted.plaintext_size,
-        ).unwrap();
+        )
+        .unwrap();
 
         assert_eq!(decrypted, plaintext);
     }
@@ -246,7 +251,8 @@ mod tests {
             &encrypted.key,
             &encrypted.digest,
             encrypted.plaintext_size,
-        ).unwrap();
+        )
+        .unwrap();
 
         assert_eq!(decrypted, plaintext);
     }
@@ -263,8 +269,16 @@ mod tests {
         tampered.insert(IV_LENGTH, 0);
         assert!(tampered.len() - IV_LENGTH - HMAC_LENGTH >= PARALLEL_THRESHOLD);
 
-        let result = decrypt_zero_copy(tampered, &encrypted.key, &encrypted.digest, encrypted.plaintext_size);
-        assert!(matches!(result, Err(CryptoError::AttachmentDigestMismatch)), "{result:?}");
+        let result = decrypt_zero_copy(
+            tampered,
+            &encrypted.key,
+            &encrypted.digest,
+            encrypted.plaintext_size,
+        );
+        assert!(
+            matches!(result, Err(CryptoError::AttachmentDigestMismatch)),
+            "{result:?}"
+        );
     }
 
     #[test]
@@ -278,8 +292,12 @@ mod tests {
             // Digest recomputed over the tampered bytes so the digest check
             // passes and the HMAC check is the one under test.
             let digest = AttachmentCrypto::compute_digest(&tampered);
-            let result = decrypt_zero_copy(tampered, &encrypted.key, &digest, encrypted.plaintext_size);
-            assert!(matches!(result, Err(CryptoError::AttachmentMacMismatch)), "{result:?}");
+            let result =
+                decrypt_zero_copy(tampered, &encrypted.key, &digest, encrypted.plaintext_size);
+            assert!(
+                matches!(result, Err(CryptoError::AttachmentMacMismatch)),
+                "{result:?}"
+            );
         }
     }
 }

@@ -9,20 +9,20 @@
 //! - `sender_key` - Group sender key operations
 //! - `identity` - Identity and key management
 
-pub mod kt_anchor;
-mod session;
-mod sender_key;
-mod identity;
 pub mod actor;
+mod identity;
+pub mod kt_anchor;
+mod sender_key;
+mod session;
 
+use libsignal_protocol::PublicKey;
 use std::collections::HashMap;
 use std::sync::Arc;
-use libsignal_protocol::PublicKey;
 use tokio::sync::Mutex;
 
+use self::actor::SignalActorHandle;
 use crate::storage::KeyStore;
 use crate::storage::repositories::settings_repo::SettingsRepository;
-use self::actor::SignalActorHandle;
 
 /// Signal Service for end-to-end encryption.
 pub struct SignalService {
@@ -68,10 +68,7 @@ impl SignalService {
     }
 
     /// Create a new SignalService.
-    pub fn new(
-        key_store: Arc<KeyStore>,
-        settings_repo: Arc<SettingsRepository>,
-    ) -> Self {
+    pub fn new(key_store: Arc<KeyStore>, settings_repo: Arc<SettingsRepository>) -> Self {
         let trust_root = *crate::config::TRUST_ROOT_PUBLIC_KEY;
         let actor = SignalActorHandle::spawn(key_store.clone(), settings_repo.clone());
 
@@ -90,14 +87,16 @@ impl SignalService {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tempfile::NamedTempFile;
-    use crate::storage::Database;
     use crate::crypto::SignalStore;
-    use crate::storage::repositories::settings_keys;
     use crate::error::ServiceError;
+    use crate::storage::Database;
+    use crate::storage::repositories::settings_keys;
     use libsignal_protocol::SessionRecord;
+    use tempfile::NamedTempFile;
 
-    async fn setup_service(path: &std::path::Path) -> (SignalService, Arc<KeyStore>, Arc<SettingsRepository>) {
+    async fn setup_service(
+        path: &std::path::Path,
+    ) -> (SignalService, Arc<KeyStore>, Arc<SettingsRepository>) {
         let db = Arc::new(Database::open(path, "test_passphrase").unwrap());
         db.run_migrations().unwrap();
 
@@ -105,8 +104,12 @@ mod tests {
         let settings_repo = Arc::new(SettingsRepository::new(db.clone()));
 
         // Initialize settings
-        settings_repo.set(settings_keys::CURRENT_USER_ID, &"bob_uuid".to_string()).unwrap();
-        settings_repo.set(settings_keys::CURRENT_DEVICE_ID, &1u32).unwrap();
+        settings_repo
+            .set(settings_keys::CURRENT_USER_ID, &"bob_uuid".to_string())
+            .unwrap();
+        settings_repo
+            .set(settings_keys::CURRENT_DEVICE_ID, &1u32)
+            .unwrap();
 
         let service = SignalService::new(key_store.clone(), settings_repo.clone());
         (service, key_store, settings_repo)
@@ -118,8 +121,10 @@ mod tests {
         let (service, _key_store, _settings) = setup_service(db_file.path()).await;
 
         // Basic test that service can be created
-        assert!(service.key_store.get_local_identity().is_err() ||
-                service.key_store.get_local_identity().unwrap().is_none());
+        assert!(
+            service.key_store.get_local_identity().is_err()
+                || service.key_store.get_local_identity().unwrap().is_none()
+        );
     }
 
     #[tokio::test]
@@ -155,24 +160,30 @@ mod tests {
         let dev3 = ProtocolAddress::new("alice_uuid".to_string(), DeviceId::new(3).unwrap());
 
         // First contact TOFU-pins the account identity (device 1, real key).
-        assert!(store
-            .is_trusted_identity(&dev1, &real, Direction::Receiving)
-            .await
-            .unwrap());
+        assert!(
+            store
+                .is_trusted_identity(&dev1, &real, Direction::Receiving)
+                .await
+                .unwrap()
+        );
         store.save_identity(&dev1, &real).await.unwrap();
 
         // A second legitimate device shares the SAME identity key -> trusted,
         // even though its (user:device) address was never seen before.
-        assert!(store
-            .is_trusted_identity(&dev2, &real, Direction::Sending)
-            .await
-            .unwrap());
+        assert!(
+            store
+                .is_trusted_identity(&dev2, &real, Direction::Sending)
+                .await
+                .unwrap()
+        );
 
         // A server-injected ghost device presents a DIFFERENT key -> rejected.
-        assert!(!store
-            .is_trusted_identity(&dev3, &attacker, Direction::Sending)
-            .await
-            .unwrap());
+        assert!(
+            !store
+                .is_trusted_identity(&dev3, &attacker, Direction::Sending)
+                .await
+                .unwrap()
+        );
     }
 
     /// A peer reinstall wedges the conversation, and accepting the new key must
@@ -208,7 +219,9 @@ mod tests {
         settings_repo
             .set(settings_keys::CURRENT_USER_ID, &"bob_uuid".to_string())
             .unwrap();
-        settings_repo.set(settings_keys::CURRENT_DEVICE_ID, &1u32).unwrap();
+        settings_repo
+            .set(settings_keys::CURRENT_DEVICE_ID, &1u32)
+            .unwrap();
         let service = SignalService::new(key_store.clone(), settings_repo.clone());
         let channel_repo = ChannelRepository::new(db.clone());
         let mut store = SignalStore::new(key_store.clone());
@@ -229,8 +242,12 @@ mod tests {
             .set_peer_verified(&alice_str, "12345 67890 12345 67890", true)
             .unwrap();
         let fresh = SessionRecord::new_fresh().serialize().unwrap();
-        key_store.store_session(&format!("{alice_str}:1"), &fresh).unwrap();
-        key_store.store_session(&format!("{alice_str}:2"), &fresh).unwrap();
+        key_store
+            .store_session(&format!("{alice_str}:1"), &fresh)
+            .unwrap();
+        key_store
+            .store_session(&format!("{alice_str}:2"), &fresh)
+            .unwrap();
 
         let shared_channel = ChannelId::new();
         channel_repo
@@ -263,16 +280,20 @@ mod tests {
                 .unwrap(),
             "the reinstalled key must be untrusted, or the pin means nothing"
         );
-        assert!(!store
-            .is_trusted_identity(&dev1, &reinstalled, Direction::Sending)
-            .await
-            .unwrap());
+        assert!(
+            !store
+                .is_trusted_identity(&dev1, &reinstalled, Direction::Sending)
+                .await
+                .unwrap()
+        );
 
         // A malformed key must never reach the pin — it would fail to parse on
         // every later trust check and wedge the peer worse than the reinstall.
-        assert!(service
-            .accept_peer_identity_change(&alice, &[0u8; 7], &channel_repo)
-            .is_err());
+        assert!(
+            service
+                .accept_peer_identity_change(&alice, &[0u8; 7], &channel_repo)
+                .is_err()
+        );
         assert_eq!(
             key_store.get_identity(&alice_str).unwrap().as_deref(),
             Some(old.serialize().as_ref()),
@@ -295,24 +316,38 @@ mod tests {
         );
         // The old key is now the untrusted one, so this was a re-pin and not a
         // widening of trust.
-        assert!(!store
-            .is_trusted_identity(&dev1, &old, Direction::Receiving)
-            .await
-            .unwrap());
+        assert!(
+            !store
+                .is_trusted_identity(&dev1, &old, Direction::Receiving)
+                .await
+                .unwrap()
+        );
 
         // Verification is stale and must be cleared, or the UI keeps claiming a
         // safety number the user never checked against this key.
         assert!(!key_store.is_peer_verified(&alice_str).unwrap());
 
         // No session survives: the next send re-runs PQXDH.
-        assert!(key_store.load_session(&format!("{alice_str}:1")).unwrap().is_none());
-        assert!(key_store.load_session(&format!("{alice_str}:2")).unwrap().is_none());
+        assert!(
+            key_store
+                .load_session(&format!("{alice_str}:1"))
+                .unwrap()
+                .is_none()
+        );
+        assert!(
+            key_store
+                .load_session(&format!("{alice_str}:2"))
+                .unwrap()
+                .is_none()
+        );
 
         // PHASE 2: the shared channel is marked for sender-key rotation.
         // Without this, group messages keep flowing under a sender key the
         // peer who just changed identity still holds.
         assert!(
-            service.check_and_clear_rotation_needed(&shared_channel).unwrap(),
+            service
+                .check_and_clear_rotation_needed(&shared_channel)
+                .unwrap(),
             "accepting an identity change left the shared channel's sender key in place"
         );
     }
@@ -339,7 +374,9 @@ mod tests {
         let old = *IdentityKeyPair::generate(&mut rng).identity_key();
         let reinstalled = *IdentityKeyPair::generate(&mut rng).identity_key();
 
-        key_store.save_identity("alice_uuid", &old.serialize()).unwrap();
+        key_store
+            .save_identity("alice_uuid", &old.serialize())
+            .unwrap();
         key_store
             .set_peer_verified("alice_uuid", "12345 67890 12345 67890", true)
             .unwrap();
@@ -393,7 +430,10 @@ mod tests {
         let reinstalled = *IdentityKeyPair::generate(&mut rng).identity_key();
 
         assert!(
-            service.pending_identity_change("alice_uuid").unwrap().is_none(),
+            service
+                .pending_identity_change("alice_uuid")
+                .unwrap()
+                .is_none(),
             "precondition: nothing parked yet"
         );
 
@@ -431,8 +471,10 @@ mod tests {
                 attribution: crate::error::IdentityChangeSource::ServerClaimed,
             },
         ));
-        let (key_after, attribution_after) =
-            service.pending_identity_change("alice_uuid").unwrap().unwrap();
+        let (key_after, attribution_after) = service
+            .pending_identity_change("alice_uuid")
+            .unwrap()
+            .unwrap();
         assert_eq!(key_after, reinstalled.serialize().to_vec());
         assert!(attribution_after.is_authenticated());
     }

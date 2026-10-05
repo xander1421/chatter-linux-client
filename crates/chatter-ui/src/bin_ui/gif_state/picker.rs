@@ -18,10 +18,7 @@ thread_local! {
 }
 
 /// Register a GIF for the picker animation.
-pub fn register_picker_gif(
-    gif_id: String,
-    raw_frames: Vec<(Vec<u8>, u32, u32, u64)>,
-) {
+pub fn register_picker_gif(gif_id: String, raw_frames: Vec<(Vec<u8>, u32, u32, u64)>) {
     if raw_frames.len() <= 1 {
         return;
     }
@@ -30,9 +27,7 @@ pub fn register_picker_gif(
     let frames: Vec<Image> = raw_frames
         .iter()
         .map(|(data, width, height, _)| {
-            crate::bin_ui::slint_conversions::rgba_to_slint_image(data,
-                *width,
-                *height,)
+            crate::bin_ui::slint_conversions::rgba_to_slint_image(data, *width, *height)
         })
         .collect();
 
@@ -119,7 +114,10 @@ fn update_picker_thumbnails(window: &crate::MainWindow, updates: &[(String, Imag
         for idx in 0..count {
             if let Some(mut gif) = results.row_data(idx) {
                 if gif.id.as_str() == update_id {
-                    if let Some(model) = results.as_any().downcast_ref::<slint::VecModel<crate::GifData>>() {
+                    if let Some(model) = results
+                        .as_any()
+                        .downcast_ref::<slint::VecModel<crate::GifData>>()
+                    {
                         gif.preview = new_image.clone();
                         model.set_row_data(idx, gif);
                     }

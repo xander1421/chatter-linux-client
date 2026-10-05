@@ -122,7 +122,11 @@ pub(crate) fn refresh_selection(window: &MainWindow, ui_ctx: &Arc<ChatterClient>
         let model = window.get_chat_rows();
         for i in 0..model.row_count() {
             if let Some(mut item) = model.row_data(i) {
-                let selected = row_is_active(&active, item.conversation_type, item.conversation_id.as_str());
+                let selected = row_is_active(
+                    &active,
+                    item.conversation_type,
+                    item.conversation_id.as_str(),
+                );
                 if item.is_selected != selected {
                     item.is_selected = selected;
                     model.set_row_data(i, item);
@@ -146,7 +150,8 @@ pub(crate) fn refresh_section_selection(window: &MainWindow, ui_ctx: &Arc<Chatte
 
     let active = ui_ctx.active_conversation();
     let sections = window.get_custom_sections();
-    let updated: Vec<_> = sections.iter()
+    let updated: Vec<_> = sections
+        .iter()
         .map(|mut section| {
             let rows = section.conversations.clone();
             let marked: Vec<_> = (0..rows.row_count())
@@ -184,8 +189,14 @@ fn row_is_active(
         K::ServerDm | K::AnonDm => {
             // Rows may carry an anon_dm_id, a channel_id, or a peer_id in
             // `conversation_id`. Match against all shapes.
-            let anon = conv_id.parse().map(|id| active.matches_anon_dm(&id)).unwrap_or(false);
-            let peer = conv_id.parse().map(|p| active.matches_dm_peer(&p)).unwrap_or(false);
+            let anon = conv_id
+                .parse()
+                .map(|id| active.matches_anon_dm(&id))
+                .unwrap_or(false);
+            let peer = conv_id
+                .parse()
+                .map(|p| active.matches_dm_peer(&p))
+                .unwrap_or(false);
             let chan = match (conv_id.parse(), conv_id.parse()) {
                 (Ok(cid), Ok(pid)) => active.matches_dm(&cid, &pid),
                 _ => false,
@@ -283,7 +294,14 @@ pub fn apply_received_to_sidebar(
     timestamp: &str,
     badges: chatter_core::client::UnreadBadges,
 ) {
-    if !update_sidebar_row(window, ui_ctx, conversation, preview, timestamp, Some(badges.row as i32)) {
+    if !update_sidebar_row(
+        window,
+        ui_ctx,
+        conversation,
+        preview,
+        timestamp,
+        Some(badges.row as i32),
+    ) {
         let (weak, ui_ctx) = (slint::ComponentHandle::as_weak(window), ui_ctx.clone());
         tokio::spawn(async move { rebuild_chat_list(&weak, &ui_ctx) });
     }
@@ -378,8 +396,12 @@ pub(crate) fn conversation_removed(
     let ui_ctx_ui = ui_ctx.clone();
     run_ui!(weak, |w| {
         if ui_ctx_ui.active_conversation() == conv {
-            ui_ctx_ui.chat_state().set_active_conversation(chatter_core::state::ActiveConversation::None);
-            w.set_messages(slint::ModelRc::new(slint::VecModel::<crate::MessageItemData>::default()));
+            ui_ctx_ui
+                .chat_state()
+                .set_active_conversation(chatter_core::state::ActiveConversation::None);
+            w.set_messages(slint::ModelRc::new(
+                slint::VecModel::<crate::MessageItemData>::default(),
+            ));
             // No name = nothing open: the pane shows "Select a conversation".
             w.set_channel_name("".into());
         }

@@ -12,10 +12,16 @@ use std::path::Path;
 
 use crate::error::MediaError;
 
-#[cfg(all(feature = "desktop-gstreamer", any(target_os = "linux", target_os = "windows", target_os = "macos")))]
+#[cfg(all(
+    feature = "desktop-gstreamer",
+    any(target_os = "linux", target_os = "windows", target_os = "macos")
+))]
 mod gstreamer;
 
-#[cfg(all(feature = "desktop-gstreamer", any(target_os = "linux", target_os = "windows", target_os = "macos")))]
+#[cfg(all(
+    feature = "desktop-gstreamer",
+    any(target_os = "linux", target_os = "windows", target_os = "macos")
+))]
 pub use self::gstreamer::GStreamerDecoder as PlatformDecoder;
 
 // Future platform implementations
@@ -23,7 +29,6 @@ pub use self::gstreamer::GStreamerDecoder as PlatformDecoder;
 mod mediacodec;
 #[cfg(target_os = "android")]
 pub use self::mediacodec::MediaCodecDecoder as PlatformDecoder;
-
 
 /// Information about an opened video.
 #[derive(Debug, Clone)]
@@ -136,14 +141,22 @@ pub trait VideoDecoder: Send {
 
 /// Create a new platform-specific decoder.
 pub fn create_decoder() -> Result<Box<dyn VideoDecoder>, MediaError> {
-    #[cfg(all(feature = "desktop-gstreamer", any(target_os = "linux", target_os = "windows")))]
+    #[cfg(all(
+        feature = "desktop-gstreamer",
+        any(target_os = "linux", target_os = "windows")
+    ))]
     {
         Ok(Box::new(PlatformDecoder::new()?))
     }
 
-    #[cfg(not(all(feature = "desktop-gstreamer", any(target_os = "linux", target_os = "windows"))))]
+    #[cfg(not(all(
+        feature = "desktop-gstreamer",
+        any(target_os = "linux", target_os = "windows")
+    )))]
     {
-        Err(MediaError::InvalidFormat("Video decoding not implemented for this platform".to_string()))
+        Err(MediaError::InvalidFormat(
+            "Video decoding not implemented for this platform".to_string(),
+        ))
     }
 }
 
@@ -156,13 +169,16 @@ pub fn extract_thumbnail(path: &Path, time_ms: u64) -> Result<DecodedFrame, Medi
         decoder.seek(time_ms)?;
     }
 
-    decoder.decode_video_frame()?.ok_or_else(|| {
-        MediaError::InvalidFormat("No frames in video".to_string())
-    })
+    decoder
+        .decode_video_frame()?
+        .ok_or_else(|| MediaError::InvalidFormat("No frames in video".to_string()))
 }
 
 /// Extract a single frame (thumbnail) from video in memory.
-pub fn extract_thumbnail_from_memory(data: Vec<u8>, time_ms: u64) -> Result<DecodedFrame, MediaError> {
+pub fn extract_thumbnail_from_memory(
+    data: Vec<u8>,
+    time_ms: u64,
+) -> Result<DecodedFrame, MediaError> {
     let mut decoder = create_decoder()?;
     let _info = decoder.open_memory(data)?;
 
@@ -170,9 +186,9 @@ pub fn extract_thumbnail_from_memory(data: Vec<u8>, time_ms: u64) -> Result<Deco
         decoder.seek(time_ms)?;
     }
 
-    decoder.decode_video_frame()?.ok_or_else(|| {
-        MediaError::InvalidFormat("No frames in video".to_string())
-    })
+    decoder
+        .decode_video_frame()?
+        .ok_or_else(|| MediaError::InvalidFormat("No frames in video".to_string()))
 }
 
 /// Get video info without decoding frames.

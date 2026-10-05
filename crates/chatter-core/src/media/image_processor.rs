@@ -190,9 +190,9 @@ impl ImageProcessor {
         limits.max_image_height = Some(16384);
         reader.limits(limits);
 
-        reader
-            .decode()
-            .map_err(|e| MediaError::InvalidFormat(format!("cannot decode image from memory: {}", e)))
+        reader.decode().map_err(|e| {
+            MediaError::InvalidFormat(format!("cannot decode image from memory: {}", e))
+        })
     }
 
     /// Get image dimensions from memory bytes.
@@ -368,9 +368,7 @@ impl ImageProcessor {
         const LARGE_FILE_THRESHOLD: u64 = 10 * 1024 * 1024; // 10MB
 
         // Check file size to decide approach
-        let file_size = std::fs::metadata(source)
-            .map(|m| m.len())
-            .unwrap_or(0);
+        let file_size = std::fs::metadata(source).map(|m| m.len()).unwrap_or(0);
 
         if file_size > LARGE_FILE_THRESHOLD {
             // Large file: use ffmpeg for streaming decode (memory efficient)
@@ -421,7 +419,10 @@ impl ImageProcessor {
     ///
     /// Uses ffmpeg to scale the image during decode, avoiding full image load.
     /// Output is PNG which we then convert to WebP for consistency.
-    fn generate_thumbnail_ffmpeg(source: &Path, max_size: u32) -> Result<(Vec<u8>, u32, u32), MediaError> {
+    fn generate_thumbnail_ffmpeg(
+        source: &Path,
+        max_size: u32,
+    ) -> Result<(Vec<u8>, u32, u32), MediaError> {
         use std::process::Command;
 
         // ffmpeg scale filter: scale to fit within max_size while preserving aspect ratio
@@ -432,16 +433,23 @@ impl ImageProcessor {
 
         let output = Command::new("ffmpeg")
             .args([
-                "-i", source.to_str().unwrap_or(""),
-                "-vf", &scale_filter,
-                "-frames:v", "1",
-                "-f", "image2pipe",
-                "-vcodec", "png",
+                "-i",
+                source.to_str().unwrap_or(""),
+                "-vf",
+                &scale_filter,
+                "-frames:v",
+                "1",
+                "-f",
+                "image2pipe",
+                "-vcodec",
+                "png",
                 "-y",
-                "-"  // Output to stdout
+                "-", // Output to stdout
             ])
             .output()
-            .map_err(|e| MediaError::ThumbnailGeneration(format!("ffmpeg failed to start: {}", e)))?;
+            .map_err(|e| {
+                MediaError::ThumbnailGeneration(format!("ffmpeg failed to start: {}", e))
+            })?;
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
@@ -453,12 +461,15 @@ impl ImageProcessor {
 
         let png_bytes = output.stdout;
         if png_bytes.is_empty() {
-            return Err(MediaError::ThumbnailGeneration("ffmpeg produced no output".into()));
+            return Err(MediaError::ThumbnailGeneration(
+                "ffmpeg produced no output".into(),
+            ));
         }
 
         // Decode PNG to get dimensions and convert to WebP
-        let image = image::load_from_memory(&png_bytes)
-            .map_err(|e| MediaError::ThumbnailGeneration(format!("failed to decode ffmpeg output: {}", e)))?;
+        let image = image::load_from_memory(&png_bytes).map_err(|e| {
+            MediaError::ThumbnailGeneration(format!("failed to decode ffmpeg output: {}", e))
+        })?;
 
         let width = image.width();
         let height = image.height();
@@ -500,7 +511,9 @@ mod tests {
         assert!(ImageProcessor::is_supported_image(Path::new("photo.gif")));
         assert!(ImageProcessor::is_supported_image(Path::new("photo.webp")));
         assert!(!ImageProcessor::is_supported_image(Path::new("video.mp4")));
-        assert!(!ImageProcessor::is_supported_image(Path::new("document.pdf")));
+        assert!(!ImageProcessor::is_supported_image(Path::new(
+            "document.pdf"
+        )));
     }
 
     #[test]

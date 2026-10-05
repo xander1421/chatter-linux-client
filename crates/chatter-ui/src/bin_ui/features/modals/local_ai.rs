@@ -6,7 +6,7 @@ use std::sync::Arc;
 use slint::{ComponentHandle, Model, ModelRc, SharedString, VecModel};
 
 use chatter_core::client::ChatterClient;
-use chatter_core::local_ai::catalog::{ModelKind, CATALOG};
+use chatter_core::local_ai::catalog::{CATALOG, ModelKind};
 use chatter_core::local_ai::hardware::ModelFit;
 use chatter_core::local_ai::providers::ProviderKind;
 
@@ -128,9 +128,9 @@ pub async fn refresh_all(ui_ctx: Arc<ChatterClient>, weak: slint::Weak<MainWindo
     let catalog_rows: Vec<CatalogModelData> = CATALOG
         .iter()
         .map(|m| {
-            let installed = ollama_models
-                .iter()
-                .any(|name| name == m.ollama_tag || name.starts_with(&format!("{}:", m.ollama_tag)));
+            let installed = ollama_models.iter().any(|name| {
+                name == m.ollama_tag || name.starts_with(&format!("{}:", m.ollama_tag))
+            });
             let fit = m.fit(&profile);
             let (fit_key, fit_label) = match fit {
                 ModelFit::Gpu => ("gpu", "Fits GPU"),
@@ -144,7 +144,8 @@ pub async fn refresh_all(ui_ctx: Arc<ChatterClient>, weak: slint::Weak<MainWindo
             CatalogModelData {
                 name: m.name.into(),
                 tag: m.ollama_tag.into(),
-                detail: format!("{}B params · {:.1} GB{}", m.params_b, m.size_gb, kind_label).into(),
+                detail: format!("{}B params · {:.1} GB{}", m.params_b, m.size_gb, kind_label)
+                    .into(),
                 fit: fit_key.into(),
                 fit_label: fit_label.into(),
                 installed,
@@ -162,7 +163,10 @@ pub async fn refresh_all(ui_ctx: Arc<ChatterClient>, weak: slint::Weak<MainWindo
             w.set_settings_local_ai_providers(ModelRc::new(VecModel::from(provider_rows)));
             w.set_settings_local_ai_active_provider(active_provider.into());
             w.set_settings_local_ai_models(ModelRc::new(VecModel::from(
-                active_models.into_iter().map(SharedString::from).collect::<Vec<_>>(),
+                active_models
+                    .into_iter()
+                    .map(SharedString::from)
+                    .collect::<Vec<_>>(),
             )));
             w.set_settings_local_ai_active_model(active_model.into());
             w.set_settings_local_ai_catalog(ModelRc::new(VecModel::from(catalog_rows)));
@@ -207,7 +211,9 @@ async fn download_model(ui_ctx: Arc<ChatterClient>, tag: String, weak: slint::We
     let tag_progress = tag.clone();
     let result = ui_ctx
         .local_ai_pull_model(&tag, move |p| {
-            let (Some(total), Some(completed)) = (p.total, p.completed) else { return; };
+            let (Some(total), Some(completed)) = (p.total, p.completed) else {
+                return;
+            };
             if total == 0 {
                 return;
             }

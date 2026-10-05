@@ -52,7 +52,11 @@ pub struct ChatRowSendData {
 impl ChatRowSendData {
     /// A row of `kind` with everything else empty; builders fill what they know.
     #[must_use]
-    pub fn new(kind: ConversationType, id: impl Into<String>, display_name: impl Into<String>) -> Self {
+    pub fn new(
+        kind: ConversationType,
+        id: impl Into<String>,
+        display_name: impl Into<String>,
+    ) -> Self {
         Self {
             kind,
             id: id.into(),
@@ -144,7 +148,6 @@ impl FriendRequestSendData {
     }
 }
 
-
 /// Send-safe intermediate struct for FriendData (Friends-tab rows).
 /// Unifies server-side friendships and accepted anon-DM peers so both
 /// appear in the same list — `is_anon` is the discriminator, `user_id`
@@ -197,7 +200,16 @@ mod tests {
         ];
         order_chat_rows(&mut rows);
         let ids: Vec<_> = rows.iter().map(|r| r.id.as_str()).collect();
-        assert_eq!(ids, ["pinned-old", "new-channel", "group", "old-dm", "silent-channel"]);
+        assert_eq!(
+            ids,
+            [
+                "pinned-old",
+                "new-channel",
+                "group",
+                "old-dm",
+                "silent-channel"
+            ]
+        );
     }
 
     #[test]

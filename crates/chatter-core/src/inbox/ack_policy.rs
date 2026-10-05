@@ -69,9 +69,9 @@ use std::sync::Arc;
 
 use tokio::sync::broadcast;
 
+use crate::domain::UserId;
 use crate::domain::ids::{ChannelId, MessageId};
 use crate::domain::message::{ConversationType, Message, MessageContent, SystemMessage};
-use crate::domain::UserId;
 use crate::error::{CryptoError, ServiceError, StorageError};
 use crate::inbox::handlers::DomainEvent;
 use crate::storage::MessageRepository;
@@ -278,7 +278,9 @@ fn marker_id(target: &MarkerTarget, marker: FailureMarker) -> MessageId {
         "inbox_marker:{}:{}:{}:{}:{}",
         target.conversation_type.as_str(),
         target.conversation_id,
-        target.peer_id.map_or_else(|| "-".to_string(), |p| p.to_string()),
+        target
+            .peer_id
+            .map_or_else(|| "-".to_string(), |p| p.to_string()),
         target.envelope_ts_ns / MARKER_BUCKET_NS,
         kind,
     );
@@ -560,8 +562,12 @@ pub fn retain_within_budget(
          re-decrypted long enough that 'a later attempt can succeed' is no longer \
          a description of it. Recording a marker, then draining."
     );
-    let decision =
-        record_marker_then_ack(message_repo, domain_tx, target, FailureMarker::DeliveryIssue);
+    let decision = record_marker_then_ack(
+        message_repo,
+        domain_tx,
+        target,
+        FailureMarker::DeliveryIssue,
+    );
     if decision == AckDecision::Ack {
         budget.forget(envelope_id);
     }

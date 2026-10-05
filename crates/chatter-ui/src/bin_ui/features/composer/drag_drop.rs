@@ -59,13 +59,11 @@ pub(crate) fn wire_drag_drop(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
 }
 
 /// Handle a file dropped onto the window.
-fn handle_dropped_file(
-    path: PathBuf,
-    chat_state: &ChatState,
-    weak: &slint::Weak<MainWindow>,
-) {
+fn handle_dropped_file(path: PathBuf, chat_state: &ChatState, weak: &slint::Weak<MainWindow>) {
     tracing::info!("File dropped: {:?}", path);
 
+    let conversation = chat_state.active_conversation();
+    let revision = chat_state.get().attachment_revision;
     // Check if we have an active conversation
     if matches!(chat_state.active_conversation(), ActiveConversation::None) {
         tracing::warn!("File dropped but no active conversation - ignoring");
@@ -77,7 +75,8 @@ fn handle_dropped_file(
     let weak = weak.clone();
 
     tokio::spawn(async move {
-        if let Err(e) = process_and_add_file(path, &chat_state, &weak).await {
+        if let Err(e) = process_and_add_file(path, &chat_state, conversation, revision, &weak).await
+        {
             tracing::error!("Failed to process dropped file: {}", e);
         }
     });

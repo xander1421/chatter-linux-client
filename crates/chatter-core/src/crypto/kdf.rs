@@ -28,7 +28,8 @@ pub fn hkdf_sha256<const N: usize>(
 ) -> Result<[u8; N], CryptoError> {
     let hk = Hkdf::<Sha256>::new(salt, ikm);
     let mut out = [0u8; N];
-    hk.expand(info, &mut out)
-        .map_err(|_| CryptoError::KeyDerivationFailed(format!("HKDF expand failed ({} bytes)", N)))?;
+    hk.expand(info, &mut out).map_err(|_| {
+        CryptoError::KeyDerivationFailed(format!("HKDF expand failed ({} bytes)", N))
+    })?;
     Ok(out)
 }

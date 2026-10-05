@@ -34,7 +34,9 @@ async fn main() {
         .and_then(|a| a.parse().ok())
         .unwrap_or(30);
 
-    let service: Uuid = SERVICE_UUID.parse().expect("the mesh service UUID is a UUID");
+    let service: Uuid = SERVICE_UUID
+        .parse()
+        .expect("the mesh service UUID is a UUID");
     println!("mesh service UUID: {service}");
 
     let session = bluer::Session::new().await.expect("bluez session");
@@ -123,7 +125,10 @@ async fn main() {
         }
     }
 
-    println!("\ndone. devices seen={} mesh peers kept={matched}", seen.len());
+    println!(
+        "\ndone. devices seen={} mesh peers kept={matched}",
+        seen.len()
+    );
     if matched == 0 {
         println!(
             "no mesh peer was kept. If a device above says DROPPED with our service UUID, the \

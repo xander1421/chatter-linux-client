@@ -1,15 +1,16 @@
 //! Download operations for attachments.
 
 use crate::domain::ids::AttachmentId;
+use tokio::io::AsyncWriteExt;
 
-use super::{attachment_file_path, ensure_attachments_dir, AttachmentError, AttachmentService};
+use super::{AttachmentError, AttachmentService, attachment_file_path, ensure_attachments_dir};
 
 impl AttachmentService {
     /// Download encrypted content from CDN and store on filesystem.
     ///
     /// Downloads the ciphertext and stores it on the filesystem
-    /// without writing plaintext to disk. Missing or degenerate audio waveforms are extracted
-    /// from decrypted memory before the download completes.
+    /// without writing plaintext to disk. Missing or degenerate waveforms are repaired
+    /// in memory only for small voice notes, using the actual ciphertext size.
     ///
     /// This is the secure flow: encrypted content stored on filesystem,
     /// decrypted only to memory for metadata/playback, then zeroized.
@@ -19,7 +20,7 @@ impl AttachmentService {
     /// Files are stored at: `~/.local/share/chatter/attachments/{attachment_id}.enc`
     pub async fn download_to_filesystem(
         &self,
-                attachment_id: &AttachmentId,
+        attachment_id: &AttachmentId,
     ) -> Result<(), AttachmentError> {
         // Get attachment with CDN key
         let attachment = self
@@ -27,7 +28,10 @@ impl AttachmentService {
             .get(attachment_id)
             .map_err(|e| AttachmentError::StorageError(e.to_string()))?
             .ok_or_else(|| {
-                AttachmentError::InvalidAttachment(format!("Attachment {} not found", attachment_id))
+                AttachmentError::InvalidAttachment(format!(
+                    "Attachment {} not found",
+                    attachment_id
+                ))
             })?;
 
         let cdn_key = attachment.remote_url.as_ref().ok_or_else(|| {
@@ -36,7 +40,6 @@ impl AttachmentService {
 
         tracing::debug!(
             attachment_id = %attachment_id,
-            cdn_key = %cdn_key,
             "Downloading encrypted content to filesystem"
         );
 
@@ -45,28 +48,47 @@ impl AttachmentService {
         let download_response = file_client
             .get_attachment_download_url(cdn_key)
             .await
-            .map_err(|e| AttachmentError::NetworkError(format!("Failed to get download URL: {}", e)))?;
-
-        // Download encrypted ciphertext via HTTP GET (over Tor in anon mode).
-        let ciphertext = self.cdn_http_get(&download_response.download_url).await?;
-
-        let ciphertext_size = ciphertext.len();
-
-        tracing::debug!(
-            attachment_id = %attachment_id,
-            ciphertext_size = ciphertext_size,
-            "Downloaded ciphertext, storing on filesystem"
-        );
+            .map_err(|e| {
+                AttachmentError::NetworkError(format!("Failed to get download URL: {}", e))
+            })?;
 
         // Ensure attachments directory exists
-        ensure_attachments_dir()
-            .map_err(|e| AttachmentError::FileError(format!("Failed to create attachments dir: {}", e)))?;
+        ensure_attachments_dir().map_err(|e| {
+            AttachmentError::FileError(format!("Failed to create attachments dir: {}", e))
+        })?;
 
-        // Write encrypted content to filesystem
+        // A private temporary ciphertext file is removed on error/cancellation.
+        // Publish only a complete, flushed download; never truncate a previous
+        // cached object and never keep a multi-GiB response in memory.
         let file_path = attachment_file_path(attachment_id);
-        tokio::fs::write(&file_path, &ciphertext)
-            .await
-            .map_err(|e| AttachmentError::FileError(format!("Failed to write attachment file: {}", e)))?;
+        let staging =
+            tempfile::NamedTempFile::new_in(file_path.parent().ok_or_else(|| {
+                AttachmentError::FileError("attachment directory missing".into())
+            })?)
+            .map_err(|_| {
+                AttachmentError::FileError("cannot create encrypted staging file".into())
+            })?;
+        let mut file = tokio::fs::File::from_std(staging.reopen().map_err(|_| {
+            AttachmentError::FileError("cannot open encrypted staging file".into())
+        })?);
+        let ciphertext_size = tokio::time::timeout(
+            std::time::Duration::from_secs(20 * 60),
+            self.cdn_http_get_to_file(&download_response.download_url, &mut file),
+        )
+        .await
+        .map_err(|_| AttachmentError::NetworkError("storage download timed out".into()))??;
+        // Tokio File may buffer the final write; flush must surface its I/O
+        // error before sync_all (which only waits for the in-flight task).
+        file.flush().await.map_err(|_| {
+            AttachmentError::FileError("cannot write encrypted staging file".into())
+        })?;
+        file.sync_all().await.map_err(|_| {
+            AttachmentError::FileError("cannot flush encrypted staging file".into())
+        })?;
+        drop(file);
+        staging.persist(&file_path).map_err(|_| {
+            AttachmentError::FileError("cannot publish encrypted attachment".into())
+        })?;
 
         // Store file path in database (NOT the content)
         // This atomically sets status=Ready and content_location=OnFilesystem
@@ -75,7 +97,12 @@ impl AttachmentService {
             .map_err(|e| AttachmentError::StorageError(e.to_string()))?;
 
         if attachment.metadata.is_audio()
-            && crate::media::waveform::needs_waveform_repair(attachment.metadata.waveform_samples.as_deref())
+            // This is optional voice-note presentation, never an excuse to
+            // allocate a large/incorrectly advertised audio object in RAM.
+            && ciphertext_size <= 8 * 1024 * 1024
+            && crate::media::waveform::needs_waveform_repair(
+                attachment.metadata.waveform_samples.as_deref(),
+            )
         {
             // inline, voice notes are small (seconds of audio); move
             // to spawn_blocking with an owned service if long audio shows up here.
@@ -104,7 +131,9 @@ impl AttachmentService {
         let mut attachment = self.get(id)?.ok_or_else(|| {
             AttachmentError::InvalidAttachment(format!("Attachment {} not found", id))
         })?;
-        if crate::media::waveform::needs_waveform_repair(attachment.metadata.waveform_samples.as_deref()) {
+        if crate::media::waveform::needs_waveform_repair(
+            attachment.metadata.waveform_samples.as_deref(),
+        ) {
             attachment.metadata.waveform_samples = Some(waveform);
             self.update(&attachment)?;
         }
@@ -120,11 +149,17 @@ mod tests {
     #[test]
     fn recovered_waveform_is_persisted_without_overwriting_wire_metadata() {
         let dir = tempfile::tempdir().unwrap();
-        let db = Arc::new(crate::storage::database::Database::open(
-            &dir.path().join("waveform-repair.db"), "testpass").unwrap());
+        let db = Arc::new(
+            crate::storage::database::Database::open(
+                &dir.path().join("waveform-repair.db"),
+                "testpass",
+            )
+            .unwrap(),
+        );
         db.run_migrations().unwrap();
         let service = AttachmentService::new_local(Arc::new(
-            crate::storage::repositories::AttachmentRepository::new(db)));
+            crate::storage::repositories::AttachmentRepository::new(db),
+        ));
         let ids = service.create_from_pointers(&[crate::proto::content_v1::AttachmentPointer {
             cdn_key: "missing-waveform".into(),
             content_type: "audio/wav".into(),
@@ -132,11 +167,19 @@ mod tests {
         }]);
         let mut audio = std::io::Cursor::new(Vec::new());
         {
-            let mut writer = hound::WavWriter::new(&mut audio, hound::WavSpec {
-                channels: 1, sample_rate: 8000, bits_per_sample: 16,
-                sample_format: hound::SampleFormat::Int,
-            }).unwrap();
-            for sample in 0..64_i16 { writer.write_sample(sample).unwrap(); }
+            let mut writer = hound::WavWriter::new(
+                &mut audio,
+                hound::WavSpec {
+                    channels: 1,
+                    sample_rate: 8000,
+                    bits_per_sample: 16,
+                    sample_format: hound::SampleFormat::Int,
+                },
+            )
+            .unwrap();
+            for sample in 0..64_i16 {
+                writer.write_sample(sample).unwrap();
+            }
             writer.finalize().unwrap();
         }
         service.repair_waveform(&ids[0], audio.get_ref()).unwrap();
@@ -145,7 +188,10 @@ mod tests {
         assert_eq!(bars.len(), 32);
         assert_eq!(bars[31], 255);
         assert!(bars[0] < bars[16]);
-        assert_eq!(stored.content_location, crate::domain::attachment::ContentLocation::NotDownloaded);
+        assert_eq!(
+            stored.content_location,
+            crate::domain::attachment::ContentLocation::NotDownloaded
+        );
         for old in [vec![0; 32], vec![80; 32], vec![0, 1, 3, 13]] {
             stored.metadata.waveform_samples = Some(old);
             service.update(&stored).unwrap();
@@ -159,7 +205,14 @@ mod tests {
         stored.metadata.waveform_samples = Some(vec![13, 255]);
         service.update(&stored).unwrap();
         service.repair_waveform(&ids[0], audio.get_ref()).unwrap();
-        assert_eq!(service.get(&ids[0]).unwrap().unwrap().metadata.waveform_samples,
-            Some(vec![13, 255]));
+        assert_eq!(
+            service
+                .get(&ids[0])
+                .unwrap()
+                .unwrap()
+                .metadata
+                .waveform_samples,
+            Some(vec![13, 255])
+        );
     }
 }

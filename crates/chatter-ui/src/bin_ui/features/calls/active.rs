@@ -6,11 +6,11 @@ use std::sync::Arc;
 
 use slint::ComponentHandle;
 
-use chatter_core::client::ChatterClient;
+use crate::{CallParticipantData, MainWindow};
 #[cfg(not(target_os = "android"))]
 use chatter_core::calls::ScreenCapture;
+use chatter_core::client::ChatterClient;
 use slint::{Model, ModelRc, SharedString, VecModel};
-use crate::{CallParticipantData, MainWindow};
 
 use super::timers::{stop_call_timer, stop_video_frame_timer};
 
@@ -28,24 +28,26 @@ fn set_local_participant_screen_sharing(window: &MainWindow, local_user_id: &str
     // keyed the same way picks them up via the by-user_id texture lookup.
     let screen_id = chatter_core::calls::screen_share_frame_id(local_user_id, true);
     let mut data = window.get_active_call_data();
-    let mut participants: Vec<CallParticipantData> = data.participants.iter()
-        .collect();
+    let mut participants: Vec<CallParticipantData> = data.participants.iter().collect();
     // Always drop any existing local screen tile first (idempotent).
     participants.retain(|p| p.user_id.as_str() != screen_id);
     if sharing {
         let slot = chatter_core::calls::tiles::local_screen_slot(participants.len());
-        participants.insert(slot, CallParticipantData {
-            user_id: screen_id.into(),
-            display_name: chatter_core::calls::tiles::LOCAL_SCREEN_TILE_NAME.into(),
-            initials: "".into(),
-            avatar_source: slint::Image::default(),
-            is_muted: false,
-            is_video_enabled: true,
-            is_screen_sharing: true,
-            is_speaking: false,
-            is_audio_muted_locally: false,
-            is_video_paused_locally: false,
-        });
+        participants.insert(
+            slot,
+            CallParticipantData {
+                user_id: screen_id.into(),
+                display_name: chatter_core::calls::tiles::LOCAL_SCREEN_TILE_NAME.into(),
+                initials: "".into(),
+                avatar_source: slint::Image::default(),
+                is_muted: false,
+                is_video_enabled: true,
+                is_screen_sharing: true,
+                is_speaking: false,
+                is_audio_muted_locally: false,
+                is_video_paused_locally: false,
+            },
+        );
     }
     data.participant_count = participants.len() as i32;
     data.participants = ModelRc::new(VecModel::from(participants));
@@ -178,7 +180,8 @@ pub fn wire_active_call(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                                 tracing::error!("Failed to start screen share: {}", e);
                             } else {
                                 tracing::info!("Screen share started");
-                                let local_id = _ui_ctx.session_current_user_id().map(|u| u.to_string());
+                                let local_id =
+                                    _ui_ctx.session_current_user_id().map(|u| u.to_string());
                                 if let Some(w) = _weak.upgrade() {
                                     w.set_call_is_screen_sharing(true);
                                     if let Some(id) = local_id {
@@ -286,7 +289,8 @@ pub fn wire_active_call(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                         tracing::error!(error = %e, "Failed to end active call");
                     }
                 });
-            }).unwrap();
+            })
+            .unwrap();
         }
     });
 }
@@ -306,12 +310,19 @@ pub fn wire_call_hangup_handler(window: &MainWindow, ui_ctx: &Arc<ChatterClient>
             let hangup = match event_rx.recv().await {
                 Ok(hangup) => hangup,
                 Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
-                    tracing::warn!(dropped_count = n, "Remote call hangup receiver lagged, continuing");
+                    tracing::warn!(
+                        dropped_count = n,
+                        "Remote call hangup receiver lagged, continuing"
+                    );
                     continue;
                 }
                 Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
             };
-            let chatter_core::client::events::RemoteCallHangup { call_id, peer_id, reason } = hangup;
+            let chatter_core::client::events::RemoteCallHangup {
+                call_id,
+                peer_id,
+                reason,
+            } = hangup;
             tracing::info!(
                 call_id = %call_id,
                 peer_id = %peer_id,
@@ -332,12 +343,16 @@ pub fn wire_call_hangup_handler(window: &MainWindow, ui_ctx: &Arc<ChatterClient>
             // another call (or "answered elsewhere" for one still ringing,
             // which the orchestrator withdraws) must not touch the call shown.
             if let Some(w) = weak.upgrade() {
-                if w.get_active_call_visible() && w.get_active_call_data().call_id == call_id.as_str() {
+                if w.get_active_call_visible()
+                    && w.get_active_call_data().call_id == call_id.as_str()
+                {
                     stop_call_timer();
                     stop_video_frame_timer();
                     w.set_active_call_visible(false);
                 }
-                if w.get_incoming_call_visible() && w.get_incoming_call_data().call_id == call_id.as_str() {
+                if w.get_incoming_call_visible()
+                    && w.get_incoming_call_data().call_id == call_id.as_str()
+                {
                     w.set_incoming_call_visible(false);
                 }
             }

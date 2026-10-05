@@ -36,8 +36,10 @@ fuzz_target!(|data: &[u8]| {
             let _ = std::hint::black_box(&plaintext);
             // Don't panic in release-mode fuzzing (panic=abort is fine), but
             // make sure libFuzzer notices via an assertion.
-            assert!(plaintext.is_empty() || !plaintext.is_empty(),
-                "decrypt_envelope returned Ok on random bytes — investigate");
+            assert!(
+                plaintext.is_empty() || !plaintext.is_empty(),
+                "decrypt_envelope returned Ok on random bytes — investigate"
+            );
         }
         Err(_) => {
             // Expected path: malformed / wrong-key / AEAD-tag-mismatch.

@@ -3,12 +3,12 @@
 //! Provides a consolidated view of all conversation types (Channel, DM, Anon DM, Anon Group).
 //! Computes last message timestamps and unread counts dynamically from the messages table.
 
-use crate::domain::message::ConversationType;
 use crate::domain::UnifiedConversation;
+use crate::domain::message::ConversationType;
 use crate::error::StorageError;
 use crate::storage::Database;
 use chrono::{DateTime, Utc};
-use rusqlite::{params, Row};
+use rusqlite::{Row, params};
 use std::sync::Arc;
 
 /// Repository for unified conversation access.
@@ -28,7 +28,7 @@ impl UnifiedConversationRepository {
     /// Sorts by last_message_at DESC, then created_at DESC.
     pub fn list_all(&self) -> Result<Vec<UnifiedConversation>, StorageError> {
         let conn = self.db.read_connection()?;
-        
+
         let sql = r#"
             WITH conv_stats AS (
                 SELECT 
@@ -123,9 +123,11 @@ impl UnifiedConversationRepository {
         conv_type: &ConversationType,
     ) -> Result<Option<UnifiedConversation>, StorageError> {
         let conn = self.db.read_connection()?;
-        
+
         let sql = match conv_type {
-            ConversationType::Channel | ConversationType::ServerDm | ConversationType::SavedMessages => {
+            ConversationType::Channel
+            | ConversationType::ServerDm
+            | ConversationType::SavedMessages => {
                 r#"
                 SELECT 
                     c.id, 
@@ -146,7 +148,7 @@ impl UnifiedConversationRepository {
                     c.updated_at
                 FROM channels c WHERE c.id = ?1
                 "#
-            },
+            }
             ConversationType::AnonDm => {
                 r#"
                 SELECT 
@@ -164,7 +166,7 @@ impl UnifiedConversationRepository {
                     a.updated_at
                 FROM anon_dm_conversations a WHERE a.id = ?1
                 "#
-            },
+            }
             ConversationType::AnonGroup => {
                 r#"
                 SELECT 
@@ -187,7 +189,7 @@ impl UnifiedConversationRepository {
                     g.updated_at
                 FROM anon_groups g WHERE g.id = ?1
                 "#
-            },
+            }
             _ => return Ok(None),
         };
 
@@ -231,8 +233,10 @@ impl UnifiedConversationRepository {
     /// DM shows no badge and sorts as if it had never received a message.
     pub fn conversation_stats(
         &self,
-    ) -> Result<std::collections::HashMap<(String, ConversationType), ConversationStats>, StorageError>
-    {
+    ) -> Result<
+        std::collections::HashMap<(String, ConversationType), ConversationStats>,
+        StorageError,
+    > {
         let conn = self.db.read_connection()?;
         let mut stmt = conn.prepare(
             r#"
@@ -292,7 +296,8 @@ fn row_to_unified(row: &Row) -> rusqlite::Result<UnifiedConversation> {
         conversation_type: conv_type,
         name: row.get(2)?,
         description: row.get(3)?,
-        owner_id: row.get::<_, Option<String>>(4)?
+        owner_id: row
+            .get::<_, Option<String>>(4)?
             .and_then(|s| s.parse().ok()),
         my_role: row.get(5)?,
         status: row.get(6)?,

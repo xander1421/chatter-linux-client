@@ -27,7 +27,11 @@ pub(crate) fn wire_view_profile(window: &MainWindow, ui_ctx: &Arc<ChatterClient>
                 match user_id_str.parse::<chatter_core::domain::ids::UserId>() {
                     Ok(uid) => {
                         crate::bin_ui::features::modals::open_user_profile(
-                            &w, &uid, &auth_state, &user_state, Some(&ui_ctx),
+                            &w,
+                            &uid,
+                            &auth_state,
+                            &user_state,
+                            Some(&ui_ctx),
                         );
                         crate::bin_ui::features::back::push(&w, "user-profile");
                     }
@@ -65,7 +69,12 @@ pub(crate) fn wire_unblock_user(window: &MainWindow, ui_ctx: &Arc<ChatterClient>
     let weak_window = window.as_weak();
     let ui_ctx = ui_ctx.clone();
     window.on_friends_unblock_user(move |user_id: SharedString| {
-        run_blocked_action(weak_window.clone(), ui_ctx.clone(), user_id.to_string(), false);
+        run_blocked_action(
+            weak_window.clone(),
+            ui_ctx.clone(),
+            user_id.to_string(),
+            false,
+        );
     });
 }
 
@@ -73,7 +82,12 @@ pub(crate) fn wire_remove_blocked_user(window: &MainWindow, ui_ctx: &Arc<Chatter
     let weak_window = window.as_weak();
     let ui_ctx = ui_ctx.clone();
     window.on_friends_remove_blocked_user(move |user_id: SharedString| {
-        run_blocked_action(weak_window.clone(), ui_ctx.clone(), user_id.to_string(), true);
+        run_blocked_action(
+            weak_window.clone(),
+            ui_ctx.clone(),
+            user_id.to_string(),
+            true,
+        );
     });
 }
 
@@ -100,7 +114,8 @@ fn run_blocked_action(
                 match result {
                     Ok(()) => {
                         crate::bin_ui::features::auth::initial_data::refresh_friends_list(
-                            weak.clone(), ui_ctx.clone(),
+                            weak.clone(),
+                            ui_ctx.clone(),
                         );
                         super::refresh_blocked_users(weak.clone(), &ui_ctx);
                     }

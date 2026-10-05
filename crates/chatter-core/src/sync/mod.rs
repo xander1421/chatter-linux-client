@@ -6,7 +6,7 @@
 //! - User sync: sync friends list and profiles
 //! - Key sync: encryption key health (delegated to SignalService)
 
-pub mod sync_engine;
-pub mod message_sync;
 pub mod channel_sync;
+pub mod message_sync;
+pub mod sync_engine;
 pub mod user_sync;

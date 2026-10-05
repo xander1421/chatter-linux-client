@@ -62,10 +62,7 @@ impl DmBootstrapService {
         let grpc_pool = self.grpc_pool.clone();
 
         tokio::spawn(async move {
-            let mut auth_client = AuthClient::new(
-                grpc_pool.channel(),
-                grpc_pool.auth_clone(),
-            );
+            let mut auth_client = AuthClient::new(grpc_pool.channel(), grpc_pool.auth_clone());
 
             // Reset sessions and establish fresh ones for ALL peer devices
             match message_service
@@ -105,10 +102,7 @@ impl DmBootstrapService {
         );
 
         tokio::spawn(async move {
-            let mut auth_client = AuthClient::new(
-                grpc_pool.channel(),
-                grpc_pool.auth_clone(),
-            );
+            let mut auth_client = AuthClient::new(grpc_pool.channel(), grpc_pool.auth_clone());
 
             // Initiate bootstrap - this will create a new mailbox and tell the peer.
             // The content only triggers the bootstrap flow; it is queued and
@@ -167,10 +161,7 @@ impl DmBootstrapService {
                 "BOOTSTRAP[4/4] Creating auth client for pending message send"
             );
 
-            let mut auth_client = AuthClient::new(
-                grpc_pool.channel(),
-                grpc_pool.auth_clone(),
-            );
+            let mut auth_client = AuthClient::new(grpc_pool.channel(), grpc_pool.auth_clone());
 
             tracing::info!(
                 peer_id = %peer_id,
@@ -190,5 +181,4 @@ impl DmBootstrapService {
             flush.emit(peer_id, &event_bus);
         });
     }
-
 }

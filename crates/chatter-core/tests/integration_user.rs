@@ -5,7 +5,7 @@
 use crate::{common, skip_if_no_server};
 
 use chatter_core::network::grpc::UserClient;
-use chatter_core::proto::chat_v1::{friend_requests_filter, UserPresence};
+use chatter_core::proto::chat_v1::{UserPresence, friend_requests_filter};
 use tokio_stream::StreamExt;
 
 use common::*;
@@ -161,11 +161,7 @@ async fn test_send_friend_request() {
     let mut user_client = UserClient::new(pool.channel(), pool.auth_clone());
 
     // Send friend request to user2
-    let stream = assert_ok(
-        user_client
-            .send_friend_request(&user2.user_id, None)
-            .await,
-    );
+    let stream = assert_ok(user_client.send_friend_request(&user2.user_id, None).await);
 
     tokio::pin!(stream);
 
@@ -282,11 +278,7 @@ async fn test_stream_user_events() {
     // Consume the initial "stream ready" event
     let mut stream = stream_result.unwrap();
     use tokio_stream::StreamExt;
-    let first_event = tokio::time::timeout(
-        std::time::Duration::from_secs(2),
-        stream.next(),
-    )
-    .await;
+    let first_event = tokio::time::timeout(std::time::Duration::from_secs(2), stream.next()).await;
 
     assert!(first_event.is_ok(), "Should receive initial stream event");
 }

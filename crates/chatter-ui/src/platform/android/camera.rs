@@ -7,9 +7,9 @@
 //! I420 bytes CameraX produced into `chatter_core::calls::android_camera`.
 
 use chatter_core::calls::android_camera::{self, PlatformCamera};
+use jni::JNIEnv;
 use jni::objects::{JByteArray, JObject, JValue};
 use jni::sys::{jint, jlong};
-use jni::JNIEnv;
 
 use super::activity;
 

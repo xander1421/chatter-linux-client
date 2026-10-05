@@ -31,20 +31,22 @@ fn pump(w: &MainWindow) {
 fn lay_out(w: &MainWindow) {
     thread_local!(static X: Cell<f32> = const { Cell::new(1.0) });
     let x = X.with(|x| x.replace(3.0 - x.get()));
-    w.window().dispatch_event(slint::platform::WindowEvent::PointerMoved {
-        position: slint::LogicalPosition::new(x, 1.0),
-    });
+    w.window()
+        .dispatch_event(slint::platform::WindowEvent::PointerMoved {
+            position: slint::LogicalPosition::new(x, 1.0),
+        });
     pump(w);
 }
 
 /// A scroll by the user, `dy` > 0 towards older messages. Laid out once it
 /// has come to rest, as the frames of a real scroll would have.
 fn wheel(w: &MainWindow, dy: f32) {
-    w.window().dispatch_event(slint::platform::WindowEvent::PointerScrolled {
-        position: slint::LogicalPosition::new(400.0, 300.0),
-        delta_x: 0.0,
-        delta_y: dy,
-    });
+    w.window()
+        .dispatch_event(slint::platform::WindowEvent::PointerScrolled {
+            position: slint::LogicalPosition::new(400.0, 300.0),
+            delta_x: 0.0,
+            delta_y: dy,
+        });
     pump(w);
     lay_out(w);
 }
@@ -63,7 +65,10 @@ fn row(i: usize) -> MessageItemData {
 
 fn edit(w: &MainWindow, f: impl FnOnce(&VecModel<MessageItemData>)) {
     let model = w.get_messages();
-    f(model.as_any().downcast_ref::<VecModel<MessageItemData>>().expect("VecModel"));
+    f(model
+        .as_any()
+        .downcast_ref::<VecModel<MessageItemData>>()
+        .expect("VecModel"));
 }
 
 /// Open a conversation the way `sidebar::channel` does: loading raised, then
@@ -75,7 +80,9 @@ fn open(w: &MainWindow, rows: std::ops::Range<usize>, unread_index: i32) {
     w.set_unread_index(unread_index);
     w.set_unread_count(if unread_index < 0 { 0 } else { 1 });
     w.set_is_at_bottom(unread_index < 0);
-    w.set_messages(ModelRc::new(VecModel::from(rows.map(row).collect::<Vec<_>>())));
+    w.set_messages(ModelRc::new(VecModel::from(
+        rows.map(row).collect::<Vec<_>>(),
+    )));
     w.set_loading_messages(false);
     lay_out(w);
 }
@@ -158,7 +165,10 @@ fn scrolling_does_not_read_row_zero(w: &MainWindow) {
     w.set_messages(ModelRc::from(model.clone()));
     w.set_loading_messages(false);
     lay_out(w);
-    assert!(model.reads.get() > 0, "the open never recorded row 0: the counter is not wired");
+    assert!(
+        model.reads.get() > 0,
+        "the open never recorded row 0: the counter is not wired"
+    );
 
     // Far from the top throughout: row 0 is never live, nor the row under it
     // (whose date separator compares against row 0).
@@ -167,7 +177,11 @@ fn scrolling_does_not_read_row_zero(w: &MainWindow) {
     for _ in 0..5 {
         wheel(w, 300.0);
     }
-    assert!(start - pos(w) > 500.0, "the wheel did not scroll: {start} → {}", pos(w));
+    assert!(
+        start - pos(w) > 500.0,
+        "the wheel did not scroll: {start} → {}",
+        pos(w)
+    );
     assert_eq!(
         model.reads.get(),
         reads,
@@ -189,7 +203,11 @@ fn pill_only_when_unread_is_below_the_viewport(w: &MainWindow) {
          scrolled away from the bottom — the \"1 new message\" pill floats over \
          the message it points at"
     );
-    assert_eq!(w.get_unread_count(), 0, "caught up, so the pill has no count");
+    assert_eq!(
+        w.get_unread_count(),
+        0,
+        "caught up, so the pill has no count"
+    );
 
     // Control: a long conversation opened on an early boundary really does
     // have unread messages below the viewport.
@@ -207,7 +225,10 @@ fn pill_only_when_unread_is_below_the_viewport(w: &MainWindow) {
 /// existed was never seen by it.
 fn jumps_land_on_their_row(w: &MainWindow) -> f32 {
     open(w, 0..200, -1);
-    assert!(w.get_is_at_bottom(), "a conversation with nothing unread opens on the newest message");
+    assert!(
+        w.get_is_at_bottom(),
+        "a conversation with nothing unread opens on the newest message"
+    );
     let end = pos(w);
 
     jump(w, 100);
@@ -219,9 +240,16 @@ fn jumps_land_on_their_row(w: &MainWindow) -> f32 {
         "jumps from the newest message did not leave it: end {end}, row 100 at \
          {at_100}, row 50 at {at_50}"
     );
-    assert!(!w.get_is_at_bottom(), "a jump into history is not the bottom");
+    assert!(
+        !w.get_is_at_bottom(),
+        "a jump into history is not the bottom"
+    );
     let row_height = (at_100 - at_50) / 50.0;
-    assert!((top_row(w, row_height) - 50.0).abs() <= 1.0, "row 50 is {} rows off", top_row(w, row_height) - 50.0);
+    assert!(
+        (top_row(w, row_height) - 50.0).abs() <= 1.0,
+        "row 50 is {} rows off",
+        top_row(w, row_height) - 50.0
+    );
 
     // A neighbour: the runtime walks there instead of seeking.
     jump(w, 47);
@@ -233,7 +261,10 @@ fn jumps_land_on_their_row(w: &MainWindow) -> f32 {
 
     // The same row again, after scrolling away from it.
     wheel(w, -600.0);
-    assert!((top_row(w, row_height) - 47.0).abs() > 2.0, "the wheel did not scroll");
+    assert!(
+        (top_row(w, row_height) - 47.0).abs() > 2.0,
+        "the wheel did not scroll"
+    );
     jump(w, 47);
     assert!(
         (top_row(w, row_height) - 47.0).abs() <= 1.0,
@@ -247,7 +278,9 @@ fn jumps_land_on_their_row(w: &MainWindow) -> f32 {
     pump(w);
     w.set_unread_index(-1);
     w.set_is_at_bottom(true);
-    w.set_messages(ModelRc::new(VecModel::from((0..200).map(row).collect::<Vec<_>>())));
+    w.set_messages(ModelRc::new(VecModel::from(
+        (0..200).map(row).collect::<Vec<_>>(),
+    )));
     w.set_loading_messages(false);
     w.set_scroll_to_message_index(120);
     lay_out(w);
@@ -268,7 +301,10 @@ fn new_messages_are_followed_only_from_the_bottom(w: &MainWindow) {
     let before = pos(w);
     edit(w, |m| m.push(row(200)));
     lay_out(w);
-    assert!(w.get_is_at_bottom(), "a message arriving at the bottom took the list off it");
+    assert!(
+        w.get_is_at_bottom(),
+        "a message arriving at the bottom took the list off it"
+    );
     assert!(
         pos(w) > before + 20.0,
         "the list did not move down for the new message: {before} → {}",
@@ -279,16 +315,25 @@ fn new_messages_are_followed_only_from_the_bottom(w: &MainWindow) {
     let before = pos(w);
     edit(w, |m| (201..216).for_each(|i| m.push(row(i))));
     lay_out(w);
-    assert!(w.get_is_at_bottom() && pos(w) > before + 300.0, "a burst was not followed");
+    assert!(
+        w.get_is_at_bottom() && pos(w) > before + 300.0,
+        "a burst was not followed"
+    );
 
     // Scrolled up, the reader is left where they are.
     wheel(w, 600.0);
     wheel(w, 600.0);
-    assert!(!w.get_is_at_bottom(), "scrolled two screens up and still \"at the bottom\"");
+    assert!(
+        !w.get_is_at_bottom(),
+        "scrolled two screens up and still \"at the bottom\""
+    );
     let before = pos(w);
     edit(w, |m| m.push(row(216)));
     lay_out(w);
-    assert!(!w.get_is_at_bottom(), "a message arriving claimed the bottom for a reader in history");
+    assert!(
+        !w.get_is_at_bottom(),
+        "a message arriving claimed the bottom for a reader in history"
+    );
     assert!(
         (pos(w) - before).abs() < 2.0,
         "a reader in history was moved by an arriving message: {before} → {}",
@@ -299,7 +344,10 @@ fn new_messages_are_followed_only_from_the_bottom(w: &MainWindow) {
     w.set_is_at_bottom(true);
     edit(w, |m| m.push(row(217)));
     lay_out(w);
-    assert!(w.get_is_at_bottom() && pos(w) > before + 600.0, "own send did not scroll to the newest message");
+    assert!(
+        w.get_is_at_bottom() && pos(w) > before + 600.0,
+        "own send did not scroll to the newest message"
+    );
 }
 
 /// Regression (device sweep RC25): after a cold start nothing older than the
@@ -319,7 +367,9 @@ fn older_history_loads_to_the_beginning(w: &MainWindow, row_height: f32) {
         let delay = std::time::Duration::from_millis(20 * (counted.get() % 2));
         slint::Timer::single_shot(delay, move || {
             let w = weak.unwrap();
-            let oldest: usize = w.get_messages().row_data(0).unwrap().message_id[1..].parse().unwrap();
+            let oldest: usize = w.get_messages().row_data(0).unwrap().message_id[1..]
+                .parse()
+                .unwrap();
             edit(&w, |m| {
                 for (at, i) in (oldest.saturating_sub(50)..oldest).enumerate() {
                     m.insert(at, row(i));
@@ -329,7 +379,11 @@ fn older_history_loads_to_the_beginning(w: &MainWindow, row_height: f32) {
     });
 
     open(w, 150..200, -1);
-    assert_eq!(requests.get(), 0, "opening on the newest message asked for history");
+    assert_eq!(
+        requests.get(),
+        0,
+        "opening on the newest message asked for history"
+    );
 
     for _ in 0..300 {
         let (rows, before) = (w.get_messages().row_count(), pos(w));
@@ -363,7 +417,11 @@ fn older_history_loads_to_the_beginning(w: &MainWindow, row_height: f32) {
         "history stopped loading after {} requests",
         requests.get()
     );
-    assert!(pos(w) < 1.0, "the beginning of history is not reachable: stopped at {}", pos(w));
+    assert!(
+        pos(w) < 1.0,
+        "the beginning of history is not reachable: stopped at {}",
+        pos(w)
+    );
     assert_eq!(w.get_messages().row_data(0).unwrap().message_id, "m0");
     assert!(
         requests.get() <= 5,

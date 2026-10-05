@@ -191,7 +191,9 @@ impl VideoPlayer {
                 state_clone.set_playing(false);
                 state_clone.set_loading(false);
             })
-            .map_err(|e| MediaError::PlaybackError(format!("Failed to start playback thread: {}", e)))?;
+            .map_err(|e| {
+                MediaError::PlaybackError(format!("Failed to start playback thread: {}", e))
+            })?;
 
         Ok(Self {
             state,
@@ -219,14 +221,17 @@ impl VideoPlayer {
         let playback_thread = std::thread::Builder::new()
             .name("video-playback".into())
             .spawn(move || {
-                if let Err(e) = run_playback_from_memory(data, state_clone.clone(), frame_callback) {
+                if let Err(e) = run_playback_from_memory(data, state_clone.clone(), frame_callback)
+                {
                     tracing::error!("Video playback error: {}", e);
                     state_clone.set_error(Some(e.to_string()));
                 }
                 state_clone.set_playing(false);
                 state_clone.set_loading(false);
             })
-            .map_err(|e| MediaError::PlaybackError(format!("Failed to start playback thread: {}", e)))?;
+            .map_err(|e| {
+                MediaError::PlaybackError(format!("Failed to start playback thread: {}", e))
+            })?;
 
         Ok(Self {
             state,
@@ -328,7 +333,11 @@ where
 
     tracing::debug!(
         "Video: {}x{}, {:.2} fps, duration {:.2}s, has_audio: {}",
-        width, height, fps, duration_secs, info.has_audio
+        width,
+        height,
+        fps,
+        duration_secs,
+        info.has_audio
     );
 
     state.set_duration(duration_secs);
@@ -415,7 +424,11 @@ where
             while !state.is_playing() && !state.should_stop() {
                 if let Some(seek_pos) = state.take_seek_request() {
                     let seek_ms = (seek_pos * 1000.0) as u64;
-                    tracing::debug!("Seeking while paused to {} seconds ({}ms)", seek_pos, seek_ms);
+                    tracing::debug!(
+                        "Seeking while paused to {} seconds ({}ms)",
+                        seek_pos,
+                        seek_ms
+                    );
 
                     if let Err(e) = dec.seek(seek_ms) {
                         tracing::warn!("Seek failed: {}", e);

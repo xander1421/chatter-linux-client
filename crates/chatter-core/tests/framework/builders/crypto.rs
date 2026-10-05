@@ -73,7 +73,6 @@ impl CryptoBuilder {
     pub fn distribution_id() -> Vec<u8> {
         uuid::Uuid::new_v4().as_bytes().to_vec()
     }
-
 }
 
 /// Builder for Signal sessions.
