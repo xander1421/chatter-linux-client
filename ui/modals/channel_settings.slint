@@ -207,7 +207,7 @@ export component ChannelSettingsModal inherits Rectangle {
             // icons there.
             Rectangle {
                 width: root.narrow ? 44px : 160px;
-                background: Colors.neo-inset-bg;
+                background: Colors.inset;
                 border-radius: Spacing.radius-md;
 
                 VerticalLayout {
@@ -463,7 +463,7 @@ export component ChannelSettingsModal inherits Rectangle {
                             // Divider — Neo
                             Rectangle {
                                 height: 1px;
-                                background: Colors.neo-inset-shadow;
+                                background: Colors.divider;
                             }
 
                             // Channel name (editable if permitted)
@@ -632,7 +632,7 @@ export component ChannelSettingsModal inherits Rectangle {
 
                             Rectangle {
                                 height: 1px;
-                                background: Colors.surface-hover;
+                                background: Colors.divider;
                             }
 
                             Text {
@@ -645,7 +645,7 @@ export component ChannelSettingsModal inherits Rectangle {
                             // All messages — Neo selection card
                             Rectangle {
                                 min-height: 44px;
-                                background: root.notification-preference == "all" ? Colors.neo-inset-bg : transparent;
+                                background: root.notification-preference == "all" ? Colors.inset : transparent;
                                 border-radius: Spacing.radius-sm;
 
                                 HorizontalLayout {
@@ -688,7 +688,7 @@ export component ChannelSettingsModal inherits Rectangle {
                             // Mentions only — Neo selection card
                             Rectangle {
                                 min-height: 44px;
-                                background: root.notification-preference == "mentions" ? Colors.neo-inset-bg : transparent;
+                                background: root.notification-preference == "mentions" ? Colors.inset : transparent;
                                 border-radius: Spacing.radius-sm;
 
                                 HorizontalLayout {
@@ -731,7 +731,7 @@ export component ChannelSettingsModal inherits Rectangle {
                             // None — Neo selection card
                             Rectangle {
                                 min-height: 44px;
-                                background: root.notification-preference == "none" ? Colors.neo-inset-bg : transparent;
+                                background: root.notification-preference == "none" ? Colors.inset : transparent;
                                 border-radius: Spacing.radius-sm;
 
                                 HorizontalLayout {
@@ -877,7 +877,7 @@ export component ChannelSettingsModal inherits Rectangle {
 
                                 if MembershipGlobal.new-link != "": Rectangle {
                                     height: new-link-col.preferred-height + Spacing.sm * 2;
-                                    background: Colors.neo-inset-bg;
+                                    background: Colors.inset;
                                     border-radius: Spacing.radius-sm;
                                     new-link-col := VerticalLayout {
                                         padding: Spacing.sm;
@@ -1414,7 +1414,7 @@ export component ChannelSettingsModal inherits Rectangle {
                                 Rectangle {
                                     y: parent.height - 1px;
                                     height: 1px;
-                                    background: Colors.surface-hover.with-alpha(0.5);
+                                    background: Colors.divider;
                                 }
                             }
 

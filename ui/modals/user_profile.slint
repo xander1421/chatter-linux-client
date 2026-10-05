@@ -335,7 +335,7 @@ export component UserProfileModal inherits Rectangle {
                         Rectangle {
                             width: status-pill-text.width + Spacing.md * 2;
                             height: 28px;
-                            background: Colors.neo-inset-bg;
+                            background: Colors.inset;
                             border-radius: Spacing.radius-full;
 
                             status-pill-text := Text {
@@ -373,7 +373,7 @@ export component UserProfileModal inherits Rectangle {
                             horizontal-stretch: 1;
                             height: 62px;
                             border-radius: Spacing.radius-md;
-                            background: act-touch.has-hover ? Colors.surface-hover : Colors.neo-inset-bg;
+                            background: act-touch.has-hover ? Colors.surface-hover : Colors.inset;
                             accessible-role: button;
                             accessible-label: act.label;
 
@@ -428,7 +428,7 @@ export component UserProfileModal inherits Rectangle {
 
                         Rectangle {
                             height: timer-card.preferred-height;
-                            background: Colors.neo-inset-bg;
+                            background: Colors.inset;
                             border-radius: Spacing.radius-lg;
 
                             timer-card := VerticalLayout {
@@ -577,7 +577,7 @@ export component UserProfileModal inherits Rectangle {
 
                         Rectangle {
                             height: info-card.preferred-height;
-                            background: Colors.neo-inset-bg;
+                            background: Colors.inset;
                             border-radius: Spacing.radius-lg;
 
                             info-card := VerticalLayout {
@@ -852,7 +852,7 @@ export component UserProfileModal inherits Rectangle {
                             // box was sized from the unwrapped text height, so the
                             // wrapped number ran out of it over the buttons below.
                             Rectangle {
-                                background: Colors.neo-inset-bg;
+                                background: Colors.inset;
                                 border-radius: Spacing.radius-md;
 
                                 VerticalLayout {
@@ -951,7 +951,7 @@ export component UserProfileModal inherits Rectangle {
                         Rectangle {
                             height: Spacing.touch-target-min;
                             border-radius: Spacing.radius-full;
-                            background: Colors.neo-inset-bg;
+                            background: Colors.inset;
 
                             HorizontalLayout {
                                 padding: Spacing.xxs;
@@ -1001,7 +1001,7 @@ export component UserProfileModal inherits Rectangle {
                             y: Math.floor(index / 3) * (grid-box.tile + grid-box.gutter);
                             width: grid-box.tile;
                             height: grid-box.tile;
-                            background: Colors.neo-inset-bg;
+                            background: Colors.inset;
                             clip: true;
                             accessible-role: button;
                             accessible-label: item.title;
@@ -1074,7 +1074,7 @@ export component UserProfileModal inherits Rectangle {
                                         width: root.mobile-mode ? Spacing.row-avatar-touch : 40px;
                                         height: self.width;
                                         border-radius: Spacing.radius-md;
-                                        background: Colors.neo-inset-bg;
+                                        background: Colors.inset;
                                         clip: true;
 
                                         if item.has-thumbnail: Image {

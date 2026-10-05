@@ -20,7 +20,7 @@ export component NeoActionToggle inherits Rectangle {
     callback toggled(bool);
 
     // Resolved glow colors based on mode
-    property <color> glow-color: glow-mode == "violet" ? Colors.glow-violet : Colors.glow-cyan;
+    property <color> glow-color: glow-mode == "violet" ? Colors.accent-purple : Colors.primary;
 
     // Track color: when checked, glow color replaces primary
     property <color> track-color: {

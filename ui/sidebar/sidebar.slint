@@ -563,7 +563,7 @@ export component Sidebar inherits Rectangle {
         }
         if !root.collapsed: GlassSurface {
             material-level: 2;
-            elevation: 1;
+            elevation: 3;
 
             // Pinned to the top: without x/y a sized element is centred.
             x: 0;
@@ -635,7 +635,7 @@ export component Sidebar inherits Rectangle {
             width: root.width;
             y: root.height - self.height;
             material-level: 2;
-            elevation: 1;
+            elevation: 3;
 
             // Derived, not a magic number: this was hardcoded at 140px, which
             // fit the three 32px buttons the rail used to have and silently
@@ -765,7 +765,7 @@ export component Sidebar inherits Rectangle {
                     HorizontalLayout { alignment: center; Rectangle { width: root.rail-slot-size; height: root.rail-slot-size; border-radius: root.rail-slot-radius; background: root.rail-slot-bg;
                         Image { source: Icons.radio; width: 18px; height: 18px; x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2;
                             colorize: !MeshGlobal.radio-running ? Colors.warning
-                                : MeshGlobal.peer-count > 0 ? Colors.glow-cyan
+                                : MeshGlobal.peer-count > 0 ? Colors.primary
                                 : Colors.text-secondary; }
                         // First entry is the public room — the mesh list is
                         // built with it at the head.
@@ -786,7 +786,7 @@ export component Sidebar inherits Rectangle {
                         width: root.rail-slot-size * 0.6;
                         x: (parent.width - self.width) / 2;
                         height: 1px;
-                        background: Colors.border;
+                        background: Colors.divider;
                     }
                 }
 

@@ -20,7 +20,7 @@ export global Materials {
     // to stay distinct from the scrim while retaining the blurred content.
     out property <color> thick: Appearance.glass-effects
         ? (Appearance.dark ? #1c2837ee : #fffffff2)
-        : (Appearance.dark ? #1a2532 : #fdfeff);
+        : (Appearance.dark ? #1f2b39 : #ffffff);
     out property <color> opaque: Appearance.dark ? #18232f : #fbfdff;
     // The single optical edge is local to GlassSurface, never a row/card stroke.
     // Dark: a lit top-left arc that fades out. Light: white chrome on a light
@@ -37,9 +37,6 @@ export global Materials {
     out property <brush> inner-shade: Appearance.dark
         ? @linear-gradient(180deg, #00000000 0%, #00000000 80%, #0000001a 100%)
         : @linear-gradient(180deg, #00000000 0%, #00000000 84%, #1a2c3e08 100%);
-    out property <color> shadow-contact: Appearance.dark ? #00000040 : #11233914;
-    out property <color> shadow-float: Appearance.dark ? #0000006b : #11233924;
-    out property <color> shadow-modal: Appearance.dark ? #00000080 : #11233930;
     out property <color> scrim: Appearance.dark ? #02050999 : #08111c40;
     out property <color> hover: Appearance.dark ? #ffffff0c : #15202b0a;
     out property <color> pressed: Appearance.dark ? #ffffff18 : #15202b14;

@@ -19,6 +19,7 @@
 // — delivery is the context bar's subject, not this one's.
 
 import { Colors } from "../theme/colors.slint";
+import { Elevation } from "../theme/elevation.slint";
 import { Icons } from "../theme/icons.slint";
 import { Spacing } from "../theme/spacing.slint";
 import { Typography } from "../theme/typography.slint";
@@ -143,9 +144,9 @@ export component ConnectionBanner inherits Rectangle {
     background: root.banner-color.with-alpha(0.15);
     // Neo 2.0: glow bloom on connecting/reconnecting states
     drop-shadow-blur: connection-state == "connecting" || connection-state == "reconnecting"
-        ? Spacing.neo-blur-md : 0px;
+        ? Elevation.halo-blur-strong : 0px;
     drop-shadow-color: connection-state == "connecting" || connection-state == "reconnecting"
-        ? Colors.glow-cyan-soft : transparent;
+        ? Colors.primary.with-alpha(0.2) : transparent;
     drop-shadow-offset-y: connection-state == "connecting" || connection-state == "reconnecting"
         ? 2px : 0px;
 

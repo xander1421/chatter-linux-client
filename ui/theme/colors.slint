@@ -78,7 +78,6 @@ export global Colors {
     // chips) uses text-primary, so the light overlays are light too.
     out property <color> overlay: Appearance.dark ? #04080c80 : #ffffffa6;
     out property <color> overlay-heavy: Appearance.dark ? #04080ccc : #ffffffd9;
-    out property <color> shadow: Appearance.dark ? #00000060 : #00000026;
 
     // Hover variants for status colors
     out property <color> error-hover: Appearance.dark ? #dc2626 : #b91c1c;
@@ -90,12 +89,35 @@ export global Colors {
     // Group accent (purple for private groups)
     out property <color> group-accent: Appearance.dark ? #9333ea : #7e22ce;
 
-    // Message bubbles. Own = deep teal, peer = raised slate; both clear the page
-    // and hold muted timestamps >= 4.5:1 and primary ticks/play >= 3:1.
-    out property <color> bubble-own: Appearance.dark ? #0e3f3a : #c8eee5;
-    out property <color> bubble-other: Appearance.dark ? #1a2430 : #ffffff;
-    out property <color> bubble-own-hover: Appearance.dark ? #124b45 : #b6e6db;
-    out property <color> bubble-other-hover: Appearance.dark ? #222e3b : #f0f3f6;
+    // Message bubbles — one matched pair on elevation level 2
+    // (theme/elevation.slint): same radii, rim, shadow and text treatment;
+    // only the tint differs. Peer is the neutral slate one step above the
+    // page; own is the brand teal pulled toward the slate hue (OKLCH h 212,
+    // C ~0.045 dark / ~0.024 light) and a little lighter than peer, so it
+    // reads as "you" without a second accent colour. Both fills are a 2-3%
+    // lightness fall from top to bottom (light from above). Contrast for
+    // body, timestamp and tick on the bottom (worst) stop is in
+    // ~/.cache/chatter-colors-2/contrast.py.
+    out property <brush> bubble-own: Appearance.dark
+        ? @linear-gradient(180deg, #133c43 0%, #11353b 100%)
+        : @linear-gradient(180deg, #dff3f8 0%, #d6eef3 100%);
+    out property <brush> bubble-other: Appearance.dark
+        ? @linear-gradient(180deg, #202832 0%, #1c242e 100%)
+        : @linear-gradient(180deg, #ffffff 0%, #fbfcfd 100%);
+    out property <brush> bubble-own-hover: Appearance.dark
+        ? @linear-gradient(180deg, #174149 0%, #143a41 100%)
+        : @linear-gradient(180deg, #d8eef3 0%, #d0e9ef 100%);
+    out property <brush> bubble-other-hover: Appearance.dark
+        ? @linear-gradient(180deg, #252d37 0%, #212933 100%)
+        : @linear-gradient(180deg, #f6f8fb 0%, #f2f5f9 100%);
+    // Solid stand-ins for things drawn ON or BESIDE a bubble that must match
+    // it (reaction chips, the hover toolbar, call rows' icon well).
+    out property <color> surface-raised: Appearance.dark ? #232c36 : #ffffff;
+    // A well inside either bubble (quote, code, file/media placeholder):
+    // the same darkening on own and peer, so insets match across the pair.
+    out property <color> bubble-inset: Appearance.dark ? #0000003d : #1a2c3e0a;
+    // Read receipts / play glyphs inside a bubble: >= 3:1 on both fills.
+    out property <color> bubble-accent: Appearance.dark ? #64ddcc : #0f766e;
 
     // File category colors
     out property <color> cat-image: Appearance.dark ? #4ade80 : #16a34a;
@@ -105,21 +127,9 @@ export global Colors {
     out property <color> cat-code: Appearance.dark ? #fbbf24 : #b45309;
     out property <color> cat-archive: Appearance.dark ? #fb923c : #c2410c;
 
-    // === Neomorphism 2.0 tokens (OLED) ===
-
-    // Neo shadow pair — 145° angle: top-left highlight, bottom-right shadow
-    // On OLED black, highlights are very subtle; shadows use pure black
-    out property <color> neo-highlight: Appearance.dark ? #ffffff0d : #0000001a;       // ~5% white highlight (subtler on OLED)
-    out property <color> neo-highlight-strong: Appearance.dark ? #ffffff1a : #00000029; // ~10% for interactive elements
-    // Shadow: pure black (OLED can't go darker — shadow creates edge definition)
-    out property <color> neo-shadow: Appearance.dark ? #00000080 : #0000001f;          // Pure black at 50%
-
-    // Glow colors — "Ink & Neon" active states (pop even more on OLED)
-    out property <color> glow-cyan: Appearance.dark ? #06b6d4 : #0891b2;
-    out property <color> glow-cyan-soft: Appearance.dark ? #06b6d433 : #0891b233;      // 20% for bloom effect
-    out property <color> glow-violet: Appearance.dark ? #8b5cf6 : #7c3aed;
-
-    // Inset surface — for concave (pressed-in) elements
-    out property <color> neo-inset-bg: Appearance.dark ? #060a0f : #e6ebf0;          // Near-pure black for pressed-in
-    out property <color> neo-inset-shadow: Appearance.dark ? #0000004d : #0000001a;    // Inner shadow (pure black at 30%)
+    // A well pressed into whatever it sits on: text fields, QR plates,
+    // selected list rows and options (one step BELOW the page).
+    out property <color> inset: Appearance.dark ? #060a0f : #e6ebf0;
+    // Every 1px rule between rows, sections and header groups.
+    out property <color> divider: Appearance.dark ? #97a8ba2b : #5566772b;
 }

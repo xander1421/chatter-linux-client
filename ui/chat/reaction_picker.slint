@@ -60,7 +60,7 @@ export component ReactionPicker inherits Rectangle {
         shown: root.show;
 
         material-level: 3;
-        elevation: 2;
+        elevation: 4;
 
         x: max(Spacing.sm, min(root.position-x, parent.width - self.width - Spacing.sm));
         y: max(Spacing.sm, min(root.position-y, parent.height - self.height - Spacing.sm)) + self.entrance-offset;
@@ -122,7 +122,7 @@ export component ReactionPicker inherits Rectangle {
             // Divider — neo edge
             Rectangle {
                 height: Spacing.stroke;
-                background: Colors.neo-highlight;
+                background: Colors.divider;
             }
 
             // EmojiPicker

@@ -41,7 +41,7 @@ export component MeshListItem inherits Rectangle {
 
     height: 48px * Appearance.text-grow;
     border-radius: Spacing.radius-sm;
-    background: root.selected ? Colors.neo-inset-bg
+    background: root.selected ? Colors.inset
               : touch.has-hover ? Colors.surface-hover
               : transparent;
 
@@ -70,7 +70,7 @@ export component MeshListItem inherits Rectangle {
                 height: 16px;
                 x: (parent.width - self.width) / 2;
                 y: (parent.height - self.height) / 2;
-                colorize: root.selected ? Colors.glow-cyan : Colors.text-secondary;
+                colorize: root.selected ? Colors.primary : Colors.text-secondary;
             }
         }
 
@@ -182,7 +182,7 @@ export component MeshListItem inherits Rectangle {
             height: 20px;
             x: (parent.width - self.width) / 2;
             y: (parent.height - self.height) / 2;
-            colorize: root.selected ? Colors.glow-cyan : Colors.text-secondary;
+            colorize: root.selected ? Colors.primary : Colors.text-secondary;
         }
 
         if root.unread-count > 0: Rectangle {

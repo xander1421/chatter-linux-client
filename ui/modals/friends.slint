@@ -3,6 +3,7 @@ import { GlassSurface } from "../components/glass_surface.slint";
 // Tabs: Add Friend, Friends, Requests, Blocked
 
 import { Colors } from "../theme/colors.slint";
+import { Elevation } from "../theme/elevation.slint";
 import { Appearance } from "../theme/appearance.slint";
 import { Spacing } from "../theme/spacing.slint";
 import { Typography } from "../theme/typography.slint";
@@ -206,7 +207,7 @@ export component FriendsModal inherits Rectangle {
 
                             Rectangle {
                                 height: 2px;
-                                background: root.active-tab == tab.id ? Colors.glow-cyan : transparent;
+                                background: root.active-tab == tab.id ? Colors.primary : transparent;
                             }
                         }
 
@@ -226,7 +227,7 @@ export component FriendsModal inherits Rectangle {
 
             Rectangle {
                 height: 1px;
-                background: Colors.text-muted.with-alpha(0.2);
+                background: Colors.divider;
             }
 
             // Content area
@@ -443,10 +444,11 @@ export component FriendsModal inherits Rectangle {
                     Rectangle {
                         background: Colors.surface;
                         border-radius: Spacing.radius-md;
-                        drop-shadow-blur: Spacing.neo-blur-sm;
-                        drop-shadow-offset-x: Spacing.neo-offset-sm;
-                        drop-shadow-offset-y: Spacing.neo-offset-sm;
-                        drop-shadow-color: Colors.neo-shadow;
+                        drop-shadow-blur: Elevation.card-blur;
+                        drop-shadow-offset-y: Elevation.card-offset;
+                        drop-shadow-color: Elevation.card-shadow;
+                        border-width: Elevation.rim-width;
+                        border-color: Elevation.card-rim;
 
                         VerticalLayout {
                             padding: Spacing.md;
@@ -471,7 +473,7 @@ export component FriendsModal inherits Rectangle {
 
                                 Rectangle {
                                     height: 36px;
-                                    background: Colors.neo-inset-bg;
+                                    background: Colors.inset;
                                     border-radius: Spacing.radius-sm;
 
                                     HorizontalLayout {
@@ -533,7 +535,7 @@ export component FriendsModal inherits Rectangle {
                             // white quiet-zone around the QR itself so camera
                             // scanners still get the required light background.
                             if root.show-qr && root.my-code != "": Rectangle {
-                                background: Colors.neo-inset-bg;
+                                background: Colors.inset;
                                 border-radius: Spacing.radius-md;
 
                                 VerticalLayout {
@@ -724,7 +726,7 @@ export component FriendsModal inherits Rectangle {
                                 Rectangle {
                                     height: 1px;
                                     width: 80%;
-                                    background: Colors.text-muted.with-alpha(0.2);
+                                    background: Colors.divider;
                                 }
                             }
 
@@ -919,7 +921,7 @@ export component FriendsModal inherits Rectangle {
 
                     Rectangle {
                         height: 1px;
-                        background: Colors.text-muted.with-alpha(0.15);
+                        background: Colors.divider;
                     }
 
                     // Received requests

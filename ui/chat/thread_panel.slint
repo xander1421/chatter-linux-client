@@ -94,7 +94,7 @@ export component ThreadPanel inherits Rectangle {
         // the two panes share one top row instead of stepping.
         GlassSurface {
             material-level: 2;
-            elevation: 1;
+            elevation: 3;
 
             height: root.mobile ? Spacing.header-height-touch : Spacing.header-height;
 
@@ -168,7 +168,7 @@ export component ThreadPanel inherits Rectangle {
             Rectangle {
                 height: 1px;
                 y: parent.height - 1px;
-                background: Colors.text-muted.with-alpha(0.15);
+                background: Colors.divider;
             }
         }
 
@@ -212,7 +212,7 @@ export component ThreadPanel inherits Rectangle {
         // Divider
         Rectangle {
             height: 1px;
-            background: Colors.text-muted.with-alpha(0.15);
+            background: Colors.divider;
         }
 
         // Reply list area
@@ -363,7 +363,7 @@ export component ThreadPanel inherits Rectangle {
             // Top border
             Rectangle {
                 height: 1px;
-                background: Colors.text-muted.with-alpha(0.15);
+                background: Colors.divider;
             }
 
             HorizontalLayout {

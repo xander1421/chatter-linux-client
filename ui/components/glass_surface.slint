@@ -3,6 +3,7 @@
 import { Materials } from "../theme/materials.slint";
 import { Appearance } from "../theme/appearance.slint";
 import { Spacing } from "../theme/spacing.slint";
+import { Elevation } from "../theme/elevation.slint";
 
 // Callers supply @children, so Slint must inline GlassSurface at each use.
 // Keep the material in a childless component instance: its conditional layer
@@ -22,20 +23,29 @@ component GlassMaterial inherits Rectangle {
         easing: ease-out;
     }
 
-    if root.material-enabled && Appearance.glass-effects && root.elevation >= 2: Rectangle {
+    // Elevation shadows (theme/elevation.slint): a wide ambient shadow and a
+    // tight contact shadow, both falling downwards. Levels 0-2 cast none here
+    // (flat in-content glass); 3 chrome, 4 popover, 5 modal. Elevation's blur
+    // tokens are 0 with glass effects off, and these layers are then skipped.
+    if root.material-enabled && root.elevation >= 3 && Elevation.chrome-blur > 0: Rectangle {
         border-radius: root.border-radius;
         background: transparent;
-        drop-shadow-blur: root.elevation == 3 ? 28px : root.elevation == 2 ? 18px : 0px;
-        drop-shadow-offset-y: root.elevation == 3 ? 10px : root.elevation == 2 ? 6px : 0px;
-        drop-shadow-color: root.elevation == 3 ? Materials.shadow-modal
-            : root.elevation == 2 ? Materials.shadow-float : transparent;
+        drop-shadow-blur: root.elevation >= 5 ? Elevation.modal-blur
+            : root.elevation == 4 ? Elevation.popover-blur : Elevation.chrome-blur;
+        drop-shadow-offset-y: root.elevation >= 5 ? Elevation.modal-offset
+            : root.elevation == 4 ? Elevation.popover-offset : Elevation.chrome-offset;
+        drop-shadow-color: root.elevation >= 5 ? Elevation.modal-shadow
+            : root.elevation == 4 ? Elevation.popover-shadow : Elevation.chrome-shadow;
     }
-    if root.material-enabled && Appearance.glass-effects && root.elevation >= 2: Rectangle {
+    if root.material-enabled && root.elevation >= 3 && Elevation.chrome-blur > 0: Rectangle {
         border-radius: root.border-radius;
         background: transparent;
-        drop-shadow-blur: root.elevation > 0 ? 6px : 0px;
-        drop-shadow-offset-y: root.elevation > 0 ? 2px : 0px;
-        drop-shadow-color: root.elevation > 0 ? Materials.shadow-contact : transparent;
+        drop-shadow-blur: root.elevation >= 5 ? Elevation.modal-contact-blur
+            : root.elevation == 4 ? Elevation.popover-contact-blur : Elevation.chrome-contact-blur;
+        drop-shadow-offset-y: root.elevation >= 5 ? Elevation.modal-contact-offset
+            : root.elevation == 4 ? Elevation.popover-contact-offset : Elevation.chrome-contact-offset;
+        drop-shadow-color: root.elevation >= 5 ? Elevation.modal-contact
+            : root.elevation == 4 ? Elevation.popover-contact : Elevation.chrome-contact;
     }
     // SLINT1 builtin integration is intentionally confined to this one element.
     if root.material-enabled: Backdrop {
@@ -68,6 +78,13 @@ component GlassMaterial inherits Rectangle {
             border-width: Materials.glass-edge-width;
             border-color: Materials.glass-edge;
         }
+        // Glass effects off: no blur, no shadow — the level still reads by its
+        // flat tint step and this one hairline.
+        if !Appearance.glass-effects && root.elevation >= 3: Rectangle {
+            border-radius: root.border-radius;
+            border-width: Elevation.rim-width;
+            border-color: Elevation.flat-rim;
+        }
     }
 }
 
@@ -75,8 +92,9 @@ export component GlassSurface inherits Rectangle {
     in property <bool> material-enabled: true;
     // 0 ultra-thin / 1 thin: controlled ambient backgrounds only; 2 regular / 3 thick.
     in property <int> material-level: 2;
-    // 0 flat pill, 1 attached chrome, 2 floating chrome, 3 dialog.
-    in property <int> elevation: 1;
+    // Level on the theme/elevation.slint scale: 0 flat in-content glass (no
+    // shadow), 3 floating chrome, 4 popover/menu, 5 modal/sheet.
+    in property <int> elevation: 3;
     // Set while content under this surface is scrolling (the chat chrome
     // binds MessageList.scrolling): the tint stays, the per-frame backdrop
     // blur + refraction of moving pixels stops, and fades back in at rest.

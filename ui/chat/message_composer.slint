@@ -6,6 +6,7 @@ import { HeaderButton } from "../components/header_button.slint";
 // Enhanced message input with attachment, emoji, GIF buttons, and @ mention detection.
 
 import { Colors } from "../theme/colors.slint";
+import { Elevation } from "../theme/elevation.slint";
 import { Appearance } from "../theme/appearance.slint";
 import { Spacing } from "../theme/spacing.slint";
 import { Typography } from "../theme/typography.slint";
@@ -32,7 +33,7 @@ export struct PendingAttachmentData {
 
 export component MessageComposer inherits GlassSurface {
     material-level: 2;
-    elevation: 1;
+    elevation: 3;
     border-radius: Spacing.radius-chrome;
 
     property <bool> voice-held: false;
@@ -527,7 +528,7 @@ export component MessageComposer inherits GlassSurface {
                     Rectangle {
                         width: 1px;
                         height: 20px;
-                        background: Colors.text-muted.with-alpha(0.2);
+                        background: Colors.divider;
                     }
                 }
 
@@ -606,10 +607,11 @@ export component MessageComposer inherits GlassSurface {
                         height: (Spacing.button-height + Spacing.sm * 2) * Appearance.text-grow;
                         background: Colors.surface;
                         border-radius: Spacing.radius-md;
-                        drop-shadow-blur: Spacing.neo-blur-sm;
-                        drop-shadow-offset-x: Spacing.neo-offset-sm;
-                        drop-shadow-offset-y: Spacing.neo-offset-sm;
-                        drop-shadow-color: Colors.neo-shadow;
+                        drop-shadow-blur: Elevation.card-blur;
+                        drop-shadow-offset-y: Elevation.card-offset;
+                        drop-shadow-color: Elevation.card-shadow;
+                        border-width: Elevation.rim-width;
+                        border-color: Elevation.card-rim;
                         opacity: attachment.is-ready ? 1.0 : 0.7;
 
                         property <color> category-bg: attachment.category == "image" ? Colors.cat-image :
@@ -726,7 +728,7 @@ export component MessageComposer inherits GlassSurface {
                     Rectangle {
                         width: 56px;
                         height: 56px;
-                        background: add-more-touch.has-hover ? Colors.surface-hover : Colors.neo-inset-bg;
+                        background: add-more-touch.has-hover ? Colors.surface-hover : Colors.inset;
                         border-radius: Spacing.radius-md;
                         accessible-role: button;
                         accessible-label: "Add attachment";
@@ -775,7 +777,7 @@ export component MessageComposer inherits GlassSurface {
                 horizontal-stretch: 1;
                 min-width: 0px;
                 height: root.content-height;
-                background: Colors.neo-inset-bg;
+                background: Colors.inset;
                 border-radius: Spacing.radius-lg;
                 // The glass shell supplies the resting silhouette. Keep a
                 // physical-pixel focus cue without a second permanent rim.

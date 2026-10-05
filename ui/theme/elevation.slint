@@ -1,0 +1,79 @@
+// The Z axis. Six levels; every surface sits on exactly one of them.
+//
+//   0 page       Colors.background / Materials.ambient. Flat, no rim, no shadow.
+//   1 card       Colors.surface — settings cards, list cards, call rows' host.
+//                Weak lit rim + a 1px contact shadow.
+//   2 raised     Message bubbles, reaction chips, hover toolbars
+//                (Colors.bubble-*, Colors.surface-raised). Lit rim + a tight
+//                contact shadow, so a bubble reads as a lifted card on the list.
+//   3 chrome     Floating chrome that content scrolls UNDER: chat header,
+//                composer, tab bar, FAB, selection/pinned bars (GlassSurface
+//                elevation 3). Glass + an ambient shadow + a contact shadow.
+//   4 popover    Menus, pickers, toasts, tooltips (GlassSurface elevation 4).
+//   5 modal      Dialogs, sheets, incoming call (GlassSurface elevation 5),
+//                over Materials.scrim.
+//
+// Light comes from above: rims are brightest along the top edge and shadows
+// fall downwards (offset-y only). Each level's shadow is larger, softer and
+// further away than the one below it, which is what makes the stacking
+// legible. Shadows exist only with Appearance.glass-effects on: with it off
+// the blur collapses to 0 (nothing is rendered) and the levels are told apart
+// by tint steps and rims alone. Shadow images are cached per item by the
+// renderer, so a static bubble's shadow costs a blit while scrolling.
+import { Appearance } from "appearance.slint";
+
+export global Elevation {
+    property <bool> shadows: Appearance.glass-effects;
+
+    // Level 1 — cards.
+    out property <length> card-blur: shadows ? 3px : 0px;
+    out property <length> card-offset: shadows ? 1px : 0px;
+    out property <color> card-shadow: Appearance.dark ? #00000073 : #1a2c3e1f;
+    out property <brush> card-rim: Appearance.dark
+        ? @linear-gradient(180deg, #ffffff12 0%, #ffffff00 35%)
+        : @linear-gradient(180deg, #ffffff00 0%, #ffffff00 70%, #1a2c3e0d 100%);
+
+    // Level 2 — bubbles and raised chips.
+    out property <length> raised-blur: shadows ? 4px : 0px;
+    out property <length> raised-offset: shadows ? 1.5px : 0px;
+    out property <color> raised-shadow: Appearance.dark ? #000000a6 : #1a2c3e2e;
+    out property <brush> raised-rim: Appearance.dark
+        ? @linear-gradient(180deg, #ffffff1f 0%, #ffffff08 30%, #ffffff00 60%)
+        : @linear-gradient(180deg, #ffffffd9 0%, #ffffff00 35%, #1a2c3e00 65%, #1a2c3e14 100%);
+    out property <length> rim-width: 1px;
+
+    // Level 3 — floating chrome: ambient + contact pair.
+    out property <length> chrome-blur: shadows ? 22px : 0px;
+    out property <length> chrome-offset: shadows ? 8px : 0px;
+    out property <color> chrome-shadow: Appearance.dark ? #000000b3 : #1a2c3e33;
+    out property <length> chrome-contact-blur: shadows ? 4px : 0px;
+    out property <length> chrome-contact-offset: shadows ? 1px : 0px;
+    out property <color> chrome-contact: Appearance.dark ? #00000099 : #1a2c3e24;
+
+    // Level 4 — popovers and menus.
+    out property <length> popover-blur: shadows ? 30px : 0px;
+    out property <length> popover-offset: shadows ? 12px : 0px;
+    out property <color> popover-shadow: Appearance.dark ? #000000bf : #1a2c3e38;
+    out property <length> popover-contact-blur: shadows ? 6px : 0px;
+    out property <length> popover-contact-offset: shadows ? 2px : 0px;
+    out property <color> popover-contact: Appearance.dark ? #000000a6 : #1a2c3e29;
+
+    // Level 5 — modals and sheets.
+    out property <length> modal-blur: shadows ? 44px : 0px;
+    out property <length> modal-offset: shadows ? 18px : 0px;
+    out property <color> modal-shadow: Appearance.dark ? #000000cc : #1a2c3e47;
+    out property <length> modal-contact-blur: shadows ? 8px : 0px;
+    out property <length> modal-contact-offset: shadows ? 3px : 0px;
+    out property <color> modal-contact: Appearance.dark ? #000000b3 : #1a2c3e2e;
+
+    // Status-coloured halo under a round call button / the ringing avatar
+    // (the colour is the button's own, at 40%): at rest and on hover.
+    out property <length> halo-blur: shadows ? 6px : 0px;
+    out property <length> halo-blur-strong: shadows ? 10px : 0px;
+
+    // The flat-glass rim (glass effects off): one lit top hairline in dark,
+    // one ink lower hairline in light, so chrome keeps its silhouette.
+    out property <brush> flat-rim: Appearance.dark
+        ? @linear-gradient(180deg, #ffffff1a 0%, #ffffff00 40%, #00000000 80%, #0000004d 100%)
+        : @linear-gradient(180deg, #ffffff00 0%, #ffffff00 60%, #1a2c3e1a 85%, #1a2c3e33 100%);
+}

@@ -46,7 +46,7 @@ export struct MemoryGraphEdgeData {
 
 export component JarvisMemoryModal inherits GlassSurface {
     material-level: 3;
-    elevation: 3;
+    elevation: 5;
     border-radius: Spacing.radius-sheet;
 
     in property <[MemoryFactData]> facts: [];
@@ -234,7 +234,7 @@ export component JarvisMemoryModal inherits GlassSurface {
                             height: 100%;
                             viewbox-width: 400;
                             viewbox-height: 300;
-                            stroke: Colors.neo-highlight;
+                            stroke: Colors.divider;
                             stroke-width: 1px;
                             MoveTo { x: edge.x1; y: edge.y1; }
                             LineTo { x: edge.x2; y: edge.y2; }

@@ -260,7 +260,7 @@ export component CreateChannelModal inherits Rectangle {
                         width: 64px;
                         height: 64px;
                         border-radius: Spacing.radius-md;
-                        background: Colors.neo-inset-bg;
+                        background: Colors.inset;
                         clip: true;
 
                         if root.has-icon-preview: Image {
@@ -352,7 +352,7 @@ export component CreateChannelModal inherits Rectangle {
                         border-radius: Spacing.radius-md;
                         border-width: root.is-open ? Spacing.stroke : 0px;
                         border-color: Colors.primary;
-                        background: root.is-open ? Colors.neo-inset-bg : (open-touch.has-hover ? Colors.surface-hover : Colors.surface);
+                        background: root.is-open ? Colors.inset : (open-touch.has-hover ? Colors.surface-hover : Colors.surface);
 
                         VerticalLayout {
                             padding: Spacing.sm;
@@ -395,7 +395,7 @@ export component CreateChannelModal inherits Rectangle {
                         border-radius: Spacing.radius-md;
                         border-width: root.is-invite ? Spacing.stroke : 0px;
                         border-color: Colors.primary;
-                        background: root.is-invite ? Colors.neo-inset-bg : (invite-touch.has-hover ? Colors.surface-hover : Colors.surface);
+                        background: root.is-invite ? Colors.inset : (invite-touch.has-hover ? Colors.surface-hover : Colors.surface);
 
                         VerticalLayout {
                             padding: Spacing.sm;
@@ -438,7 +438,7 @@ export component CreateChannelModal inherits Rectangle {
                         border-radius: Spacing.radius-md;
                         border-width: root.is-private-group ? Spacing.stroke : 0px;
                         border-color: Colors.primary;
-                        background: root.is-private-group ? Colors.neo-inset-bg : (pg-touch.has-hover ? Colors.surface-hover : Colors.surface);
+                        background: root.is-private-group ? Colors.inset : (pg-touch.has-hover ? Colors.surface-hover : Colors.surface);
 
                         VerticalLayout {
                             padding: Spacing.sm;
@@ -542,7 +542,7 @@ export component CreateChannelModal inherits Rectangle {
                     min-height: 160px;
                     max-height: 260px;
                     vertical-stretch: 1;
-                    background: Colors.neo-inset-bg;
+                    background: Colors.inset;
                     border-radius: Spacing.radius-md;
                     clip: true;
 
@@ -572,7 +572,7 @@ export component CreateChannelModal inherits Rectangle {
                             for friend[idx] in root.available-friends: Rectangle {
                                 height: 48px * Appearance.text-grow;
                                 border-radius: Spacing.radius-sm;
-                                background: friend.selected ? Colors.neo-inset-bg :
+                                background: friend.selected ? Colors.inset :
                                             (friend-touch.has-hover ? Colors.surface-hover : transparent);
 
                                 friend-touch := TouchArea {
@@ -827,7 +827,7 @@ export component CreateChannelModal inherits Rectangle {
                                     border-radius: Spacing.radius-md;
                                     border-width: root.ai-provider == provider.id ? Spacing.stroke : 0px;
                                     border-color: Colors.primary;
-                                    background: root.ai-provider == provider.id ? Colors.neo-inset-bg : (provider-touch.has-hover ? Colors.surface-hover : Colors.surface);
+                                    background: root.ai-provider == provider.id ? Colors.inset : (provider-touch.has-hover ? Colors.surface-hover : Colors.surface);
 
                                     Text {
                                         text: provider.name;
@@ -887,7 +887,7 @@ export component CreateChannelModal inherits Rectangle {
                                             border-radius: Spacing.radius-sm;
                                             border-width: root.ai-model == model.id ? Spacing.stroke : 0px;
                                             border-color: Colors.primary;
-                                            background: root.ai-model == model.id ? Colors.neo-inset-bg : (model-touch.has-hover ? Colors.surface-hover : Colors.surface);
+                                            background: root.ai-model == model.id ? Colors.inset : (model-touch.has-hover ? Colors.surface-hover : Colors.surface);
 
                                             HorizontalLayout {
                                                 padding-left: Spacing.sm;

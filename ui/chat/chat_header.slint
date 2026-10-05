@@ -18,7 +18,7 @@ import { MembershipGlobal } from "membership_global.slint";
 
 export component ChatHeader inherits GlassSurface {
     material-level: 2;
-    elevation: 1;
+    elevation: 3;
     border-radius: self.height / 2;
 
     // Properties from ChatHeaderData
@@ -374,7 +374,7 @@ export component ChatHeader inherits GlassSurface {
                 Rectangle {
                     width: 1px;
                     height: 16px;
-                    background: Colors.text-muted;
+                    background: Colors.divider;
                     y: (parent.height - self.height) / 2;
                 }
                 if !root.mesh-tight: Text {
@@ -476,7 +476,7 @@ export component ChatHeader inherits GlassSurface {
                 if !root.tight: Rectangle {
                     width: 1px;
                     height: 20px;
-                    background: Colors.border;
+                    background: Colors.divider;
                     y: (parent.height - self.height) / 2;
                 }
             }
@@ -522,7 +522,7 @@ export component ChatHeader inherits GlassSurface {
                 if root.has-utility-actions: Rectangle {
                     width: 1px;
                     height: 20px;
-                    background: Colors.border;
+                    background: Colors.divider;
                     y: (parent.height - self.height) / 2;
                 }
             }

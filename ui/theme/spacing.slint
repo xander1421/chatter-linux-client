@@ -23,6 +23,10 @@ export global Spacing {
     out property <length> radius-lg: 16px;
     out property <length> radius-xl: 20px;            // Neo bubble radius (18-24px range)
     out property <length> radius-full: 9999px;
+    // Message bubbles (text, media, call): round corners, and the outer-side
+    // tail / same-sender joint corner (message_item.slint).
+    out property <length> radius-bubble: 18px;
+    out property <length> radius-bubble-joint: 6px;
 
     // Shared control geometry
     out property <length> button-height: 44px;
@@ -109,9 +113,4 @@ export global Spacing {
     out property <length> message-padding: Appearance.compact ? xxs : xs;
     out property <length> message-padding-continuation: Appearance.compact ? 0px : xxs;
     out property <length> message-gap: Appearance.compact ? 0px : 2px;
-
-    // Neo 2.0 shadow offsets — 145° light angle
-    out property <length> neo-offset-sm: 3px;          // Small elements (toggles, chips)
-    out property <length> neo-blur-sm: 6px;            // Subtle depth
-    out property <length> neo-blur-md: 10px;           // Standard depth
 }

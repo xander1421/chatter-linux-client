@@ -39,7 +39,7 @@ export component TooltipArea inherits Rectangle {
     // Render tooltip inline when hovered and enabled
     if root.hovered && root.tooltip-enabled && root.tooltip-text != "": GlassSurface {
         material-level: 3;
-        elevation: 1;
+        elevation: 4;
 
         // Position based on placement
         x: root.placement == "right" ? parent.width + 8px :

@@ -116,7 +116,7 @@ export component MeshList inherits Rectangle {
                         height: 11px;
                         colorize: !MeshGlobal.mesh-on ? Colors.text-muted
                             : !MeshGlobal.radio-running ? Colors.warning
-                            : MeshGlobal.peer-count > 0 ? Colors.glow-cyan
+                            : MeshGlobal.peer-count > 0 ? Colors.primary
                             : Colors.text-muted;
                     }
                 }
@@ -162,7 +162,7 @@ export component MeshList inherits Rectangle {
 
                 Rectangle {
                     height: 28px;
-                    background: Colors.neo-inset-bg;
+                    background: Colors.inset;
                     border-radius: Spacing.radius-sm;
                     border-width: Spacing.stroke;
                     border-color: cell-input.has-focus ? Colors.primary : Colors.border;

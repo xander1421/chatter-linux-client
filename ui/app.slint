@@ -2726,7 +2726,7 @@ export component MainWindow inherits Window {
 
             GlassSurface {
                 material-level: 3;
-                elevation: 3;
+                elevation: 5;
 
                 width: min(420px, parent.width - 32px);
                 x: (parent.width - self.width) / 2;
@@ -3520,7 +3520,7 @@ export component MainWindow inherits Window {
         // dock (-1), under every modal and overlay (0) — the incoming-call screen
         // and toasts are not covered by fab-visible, so they must stay on top.
         if root.fab-visible: GlassSurface {
-            elevation: 2;
+            elevation: 3;
 
             z: -0.5;
             width: Spacing.fab-size;

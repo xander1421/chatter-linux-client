@@ -48,7 +48,7 @@ component ConvRow inherits Rectangle {
     // them the whole trip — and at 40px this was the shortest target on screen.
     height: Spacing.touch-target-min * Appearance.text-grow;
     border-radius: Spacing.radius-sm;
-    background: root.selected ? Colors.neo-inset-bg : touch.has-hover ? Colors.surface-hover : transparent;
+    background: root.selected ? Colors.inset : touch.has-hover ? Colors.surface-hover : transparent;
 
     touch := TouchArea {
         mouse-cursor: pointer;
@@ -120,7 +120,7 @@ component MsgRow inherits Rectangle {
 
     height: 56px * Appearance.text-grow;
     border-radius: Spacing.radius-sm;
-    background: root.selected ? Colors.neo-inset-bg : touch.has-hover ? Colors.surface-hover : transparent;
+    background: root.selected ? Colors.inset : touch.has-hover ? Colors.surface-hover : transparent;
 
     touch := TouchArea {
         mouse-cursor: pointer;
@@ -263,7 +263,7 @@ export component UnifiedSearch inherits Rectangle {
         shown: root.show;
 
         material-level: 3;
-        elevation: 2;
+        elevation: 4;
 
         x: (parent.width - self.width) / 2;
         y: (min(72px, parent.height * 0.1)) + self.entrance-offset;
@@ -286,7 +286,7 @@ export component UnifiedSearch inherits Rectangle {
                 // user taps it to correct a query.
                 height: Spacing.touch-target-min;
                 border-radius: Spacing.radius-md;
-                background: Colors.neo-inset-bg;
+                background: Colors.inset;
                 border-width: Spacing.stroke;
                 border-color: search-input.has-focus ? Colors.primary : Colors.border;
 

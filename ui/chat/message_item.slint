@@ -8,6 +8,7 @@ import { IconAction } from "../components/icon_action.slint";
 
 import { Colors } from "../theme/colors.slint";
 import { Spacing } from "../theme/spacing.slint";
+import { Elevation } from "../theme/elevation.slint";
 import { Typography } from "../theme/typography.slint";
 import { Avatar } from "../components/avatar.slint";
 import { Haptics } from "../components/haptics.slint";
@@ -200,6 +201,14 @@ export component MessageItem inherits Rectangle {
         }
     }
 
+    // Bubble corners (one rule for text, media and call bubbles): round
+    // everywhere except the outer side — its bottom corner is the tail, and
+    // its top corner tightens where the bubble continues a same-sender run,
+    // so a run reads as one stacked group.
+    property <length> r-round: Spacing.radius-bubble;
+    property <length> r-outer-top: root.is-continuation ? Spacing.radius-bubble-joint : Spacing.radius-bubble;
+    property <length> r-outer-bottom: Spacing.radius-bubble-joint;
+
     // Styling
     min-height: main-layout.preferred-height;
     // Selected rows tint rather than outline the flat bubbles.
@@ -266,8 +275,16 @@ export component MessageItem inherits Rectangle {
                 // slack that the fixed-size icon did not share.
                 width: call-content.preferred-width;
                 height: call-content.preferred-height;
-                background: is-missed ? Colors.error.transparentize(0.9) : Colors.surface;
-                border-radius: Spacing.radius-lg;
+                background: root.is-own ? Colors.bubble-own : Colors.bubble-other;
+                border-top-left-radius: root.is-own ? root.r-round : root.r-outer-top;
+                border-top-right-radius: root.is-own ? root.r-outer-top : root.r-round;
+                border-bottom-left-radius: root.is-own ? root.r-round : root.r-outer-bottom;
+                border-bottom-right-radius: root.is-own ? root.r-outer-bottom : root.r-round;
+                border-width: Elevation.rim-width;
+                border-color: Elevation.raised-rim;
+                drop-shadow-blur: Elevation.raised-blur;
+                drop-shadow-offset-y: Elevation.raised-offset;
+                drop-shadow-color: Elevation.raised-shadow;
 
                 call-content := HorizontalLayout {
                     padding: Spacing.md;
@@ -383,13 +400,21 @@ export component MessageItem inherits Rectangle {
                     accessible-role: text;
                     accessible-label: root.is-own ? "Your message: " + root.content : root.sender-name + " says: " + root.content;
 
-                    // Flat bubbles use tone to distinguish sender and AI messages.
-                    background: root.is-ai
-                        ? (bubble-hovered ? Colors.primary.with-alpha(0.12) : Colors.primary.with-alpha(0.08))
-                        : (bubble-hovered
-                            ? (root.is-own ? Colors.bubble-own-hover : Colors.bubble-other-hover)
-                            : (root.is-own ? Colors.bubble-own : Colors.bubble-other));
-                    border-radius: Spacing.radius-md;
+                    // Elevation level 2: the matched own/peer pair, a lit top
+                    // rim and a tight contact shadow lift it off the list. AI
+                    // replies are peer bubbles marked by the accent bar.
+                    background: bubble-hovered
+                        ? (root.is-own ? Colors.bubble-own-hover : Colors.bubble-other-hover)
+                        : (root.is-own ? Colors.bubble-own : Colors.bubble-other);
+                    border-top-left-radius: root.is-own ? root.r-round : root.r-outer-top;
+                    border-top-right-radius: root.is-own ? root.r-outer-top : root.r-round;
+                    border-bottom-left-radius: root.is-own ? root.r-round : root.r-outer-bottom;
+                    border-bottom-right-radius: root.is-own ? root.r-outer-bottom : root.r-round;
+                    border-width: Elevation.rim-width;
+                    border-color: Elevation.raised-rim;
+                    drop-shadow-blur: Elevation.raised-blur;
+                    drop-shadow-offset-y: Elevation.raised-offset;
+                    drop-shadow-color: Elevation.raised-shadow;
 
                     // Calculate height based on content
                     height: bubble-content.preferred-height;
@@ -528,7 +553,7 @@ export component MessageItem inherits Rectangle {
 
                         // Quote / reply-to bubble
                         if root.is-reply: Rectangle {
-                            background: root.is-own ? Colors.background.with-alpha(0.08) : Colors.background.with-alpha(0.06);
+                            background: Colors.bubble-inset;
                             border-radius: 6px;
                             max-width: root.text-max-width;
                             height: quote-row.preferred-height + Spacing.xs;
@@ -692,7 +717,7 @@ export component MessageItem inherits Rectangle {
                             for span in root.rich-content: VerticalLayout {
                                 // Code block: monospace + dark background
                                 if span.code-block: Rectangle {
-                                    background: root.is-own ? Colors.background.with-alpha(0.12) : Colors.code-bg;
+                                    background: Colors.bubble-inset;
                                     border-radius: 4px;
 
                                     VerticalLayout {
@@ -714,7 +739,7 @@ export component MessageItem inherits Rectangle {
                                     alignment: start;
 
                                     Rectangle {
-                                        background: root.is-own ? Colors.background.with-alpha(0.08) : Colors.surface-hover;
+                                        background: Colors.bubble-inset;
                                         border-radius: 3px;
                                         width: code-text.preferred-width + 8px;
                                         height: code-text.preferred-height + 4px;
@@ -792,7 +817,7 @@ export component MessageItem inherits Rectangle {
 
                                     width: attachment.has-thumbnail && attachment.width > 0 ? max(100px, min(max-w, calc-w)) : 180px;
                                     height: attachment.has-thumbnail && attachment.height > 0 ? max(60px, min(max-h, calc-h)) : 140px;
-                                    background: Colors.surface;
+                                    background: Colors.bubble-inset;
                                     border-radius: Spacing.radius-sm;
                                     clip: true;
 
@@ -908,7 +933,7 @@ export component MessageItem inherits Rectangle {
 
                                     width: attachment.has-thumbnail && attachment.width > 0 ? max(160px, min(max-w, calc-w)) : 260px;
                                     height: attachment.has-thumbnail && attachment.height > 0 ? max(100px, min(max-h, calc-h)) : 160px;
-                                    background: attachment.has-thumbnail ? Colors.surface-hover : Colors.surface;
+                                    background: Colors.bubble-inset;
                                     border-radius: Spacing.radius-sm;
                                     clip: true;
 
@@ -1005,7 +1030,7 @@ export component MessageItem inherits Rectangle {
                                 if !attachment.is-image && attachment.category != "audio" && attachment.category != "video": Rectangle {
                                     width: min(240px, root.width * 0.7 - Spacing.md);
                                     height: 52px;
-                                    background: Colors.surface;
+                                    background: Colors.bubble-inset;
                                     border-radius: Spacing.radius-md;
 
                                     HorizontalLayout {
@@ -1196,7 +1221,7 @@ export component MessageItem inherits Rectangle {
 
                             if root.is-own && !root.mesh-delivery && root.delivery-status != "sending" && root.delivery-status != "failed": ticks := Rectangle {
                                 property <bool> double-tick: root.delivery-status != "sent";
-                                property <color> tick-color: root.delivery-status == "read" ? Colors.primary : Colors.text-muted;
+                                property <color> tick-color: root.delivery-status == "read" ? Colors.bubble-accent : Colors.text-muted;
                                 width: self.double-tick ? 17px : 12px;
                                 height: 12px;
                                 accessible-role: text;
@@ -1234,7 +1259,10 @@ export component MessageItem inherits Rectangle {
                     if root.highlight-progress > 0: Rectangle {
                         width: 100%;
                         height: 100%;
-                        border-radius: bubble.border-radius;
+                        border-top-left-radius: bubble.border-top-left-radius;
+                        border-top-right-radius: bubble.border-top-right-radius;
+                        border-bottom-left-radius: bubble.border-bottom-left-radius;
+                        border-bottom-right-radius: bubble.border-bottom-right-radius;
                         background: Colors.primary.with-alpha(root.highlight-progress * 0.22);
                         border-width: root.highlight-progress * Spacing.stroke;
                         border-color: Colors.primary;
@@ -1246,8 +1274,13 @@ export component MessageItem inherits Rectangle {
                 if root.has-reactions: reactions-pill := Rectangle {
                     height: 22px;
                     width: reactions-row.preferred-width + 8px;
-                    background: Colors.surface;
+                    background: Colors.surface-raised;
                     border-radius: self.height / 2;
+                    border-width: Elevation.rim-width;
+                    border-color: Elevation.raised-rim;
+                    drop-shadow-blur: Elevation.raised-blur;
+                    drop-shadow-offset-y: Elevation.raised-offset;
+                    drop-shadow-color: Elevation.raised-shadow;
 
                     x: root.is-own ? -self.width + 8px : bubble.width - 8px;
                     y: bubble.height - 4px;
@@ -1308,8 +1341,13 @@ export component MessageItem inherits Rectangle {
                     action-btns := Rectangle {
                         height: Spacing.button-height + Spacing.xxs * 2;
                         width: (root.can-thread ? 4 : 3) * Spacing.button-height + (root.can-thread ? 5 : 4) * Spacing.xxs;
-                        background: Colors.surface;
+                        background: Colors.surface-raised;
                         border-radius: Spacing.radius-md;
+                        border-width: Elevation.rim-width;
+                        border-color: Elevation.raised-rim;
+                        drop-shadow-blur: Elevation.raised-blur;
+                        drop-shadow-offset-y: Elevation.raised-offset;
+                        drop-shadow-color: Elevation.raised-shadow;
 
                         HorizontalLayout {
                             padding: Spacing.xxs;
