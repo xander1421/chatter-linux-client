@@ -12,7 +12,8 @@ use chatter_core::mailbox::blind_signature::{blind_key, unblind, ServerPublicKey
 use chatter_core::network::grpc::{AuthClient, MailboxClient, MessageClient};
 use chatter_core::proto::mailbox_v1::EnvelopeType;
 use chatter_core::proto::{
-    signal_pre_key_bundle::PreKeyRecord, GetPreKeyBundleResponse, SealedSenderMessage,
+    signal_pre_key_bundle::PreKeyRecord, GetPreKeyBundleResponse, SealedDelivery, SealedDeviceMessage,
+    SealedSenderMessage,
 };
 use common::*;
 use ed25519_dalek::{Signer, SigningKey};
@@ -37,14 +38,11 @@ async fn test_send_sealed_message_to_user() {
 
     // Signal model: the sender derives the recipient's UAK from the profile
     // key the recipient shared; the server never serves it.
-    let uak = chatter_core::crypto::derive_uak(&recipient.profile_key).to_vec();
+    let uak = chatter_core::crypto::derive_uak(&recipient.profile_key);
 
-    // Sealed sender is mutually exclusive with Basic auth — server now
-    // returns "provide exactly one auth method (anonymous credential, UAK,
-    // or Basic auth)" when both are present. Clear the pool's Basic auth
-    // before sending so only the UAK header survives.
-    pool.auth().clear();
-    let mut msg_client = MessageClient::new(pool.channel(), pool.auth_clone());
+    // Sealed sender is mutually exclusive with Basic auth: the anonymous
+    // client carries only the UAK header.
+    let mut msg_client = pool.anonymous_message_client();
 
     // Create a sealed sender message with realistic envelope size
     // Signal sealed sender envelopes are typically 200+ bytes
@@ -66,7 +64,13 @@ async fn test_send_sealed_message_to_user() {
 
     // Send sealed message with UAK for anonymous delivery
     let result = msg_client
-        .send_sealed_message_anonymous(&recipient.user_id, 1, sealed_message, &uak)
+        .send_sealed_messages_with_uak(
+            &recipient.user_id,
+            vec![SealedDeviceMessage { device_id: 1, registration_id: 0, sealed_message: Some(sealed_message.clone()) }],
+            SealedDelivery::NamedDevices,
+            &uuid::Uuid::new_v4().to_string(),
+            &uak,
+        )
         .await;
 
     assert!(
@@ -77,6 +81,43 @@ async fn test_send_sealed_message_to_user() {
 
     let response = result.unwrap();
     assert!(response.success, "Sealed message should be accepted");
+    assert_eq!(response.delivered_to_devices, vec![1]);
+
+    // A send to all devices that names none is answered with the devices
+    // the recipient has, and queues nothing (OPEN-ITEMS §124 F2).
+    let result = msg_client
+        .send_sealed_messages_with_uak(
+            &recipient.user_id,
+            Vec::new(),
+            SealedDelivery::AllDevices,
+            &uuid::Uuid::new_v4().to_string(),
+            &uak,
+        )
+        .await;
+    match result {
+        Err(chatter_core::error::NetworkError::MismatchedDevices { missing, extra, stale }) => {
+            assert_eq!(missing, vec![1]);
+            assert!(extra.is_empty() && stale.is_empty());
+        }
+        other => panic!("expected MismatchedDevices, got {other:?}"),
+    }
+
+    // A wrong registration id is stale: nothing queued for any device.
+    let result = msg_client
+        .send_sealed_messages_with_uak(
+            &recipient.user_id,
+            vec![SealedDeviceMessage { device_id: 1, registration_id: 1, sealed_message: Some(sealed_message) }],
+            SealedDelivery::AllDevices,
+            &uuid::Uuid::new_v4().to_string(),
+            &uak,
+        )
+        .await;
+    if let Err(chatter_core::error::NetworkError::MismatchedDevices { stale, .. }) = &result {
+        assert_eq!(stale, &vec![1]);
+    } else {
+        // Registration id 1 is the device's own only by a 1-in-16k chance.
+        assert!(result.is_ok(), "unexpected answer: {result:?}");
+    }
 }
 
 /// Tests that SendSealedMessage correctly rejects requests without UAK header.
@@ -100,7 +141,12 @@ async fn test_send_sealed_message_without_uak_rejected() {
 
     // Without UAK header, server should reject (Unauthenticated)
     let result = msg_client
-        .send_sealed_message(&recipient.user_id, 1, sealed_message)
+        .send_sealed_messages(
+            &recipient.user_id,
+            vec![SealedDeviceMessage { device_id: 1, registration_id: 0, sealed_message: Some(sealed_message) }],
+            SealedDelivery::NamedDevices,
+            &uuid::Uuid::new_v4().to_string(),
+        )
         .await;
 
     // Should fail with Unauthenticated - requires UAK header
@@ -123,7 +169,12 @@ async fn test_send_sealed_message_to_nonexistent_user() {
     };
 
     let result = msg_client
-        .send_sealed_message("00000000-0000-0000-0000-000000000000", 1, sealed_message)
+        .send_sealed_messages(
+            "00000000-0000-0000-0000-000000000000",
+            vec![SealedDeviceMessage { device_id: 1, registration_id: 0, sealed_message: Some(sealed_message) }],
+            SealedDelivery::NamedDevices,
+            &uuid::Uuid::new_v4().to_string(),
+        )
         .await;
 
     assert!(result.is_err(), "Should fail for non-existent user");

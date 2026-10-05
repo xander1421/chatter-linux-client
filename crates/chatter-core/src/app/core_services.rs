@@ -869,10 +869,15 @@ async fn announce_rotated_group_mailbox(
                 timestamp: TimestampNanos::now_anonymized().as_u64(),
             };
             match anon_messages
-                .send_sealed_message_with_uak(
+                .send_sealed_messages_with_uak(
                     &recipient.user_id.to_string(),
-                    recipient.device_id,
-                    sealed,
+                    vec![crate::proto::chat_v1::SealedDeviceMessage {
+                        device_id: recipient.device_id,
+                        registration_id: 0,
+                        sealed_message: Some(sealed),
+                    }],
+                    crate::proto::chat_v1::SealedDelivery::NamedDevices,
+                    &uuid::Uuid::new_v4().to_string(),
                     &uak,
                 )
                 .await

@@ -1572,52 +1572,48 @@ impl MessageService {
         Some(content.encode_to_vec())
     }
 
-    /// Deposit one sealed envelope in one device inbox, UAK-authorized when we
-    /// hold the peer's profile key (the same choice as
-    /// `send_decryption_error_report`).
+    /// Deposit one sealed envelope in one device inbox
+    /// (`SealedDelivery::NamedDevices`), UAK-authorized when we hold the
+    /// peer's profile key (the same choice as `send_decryption_error_report`).
+    /// A retired device comes back as `MismatchedDevices` with it `extra`
+    /// (`NetworkError::is_unknown_destination_device`).
     pub(super) async fn deposit_sealed_to_device(
         &self,
         peer_id: &UserId,
         device_id: u32,
         sealed_body: Vec<u8>,
     ) -> Result<(), MessageError> {
-        let sealed_message = crate::proto::chat_v1::SealedSenderMessage {
-            sealed_body,
-            server_key_id: self.signal_service.get_server_key_id(),
-            timestamp: TimestampNanos::now_anonymized().as_u64(),
+        let message = crate::proto::chat_v1::SealedDeviceMessage {
+            device_id,
+            registration_id: 0,
+            sealed_message: Some(crate::proto::chat_v1::SealedSenderMessage {
+                sealed_body,
+                server_key_id: self.signal_service.get_server_key_id(),
+                timestamp: TimestampNanos::now_anonymized().as_u64(),
+            }),
         };
         let peer = peer_id.to_string();
         let uak = self.sealed_access_key(&peer, false);
-        let identified = match uak {
-            Some(uak) => match self
-                .grpc_pool
-                .anonymous_message_client()
-                .send_sealed_message_with_uak(&peer, device_id, sealed_message.clone(), &uak)
-                .await
-            {
-                Ok(_) => false,
-                // Our stored key is stale: the peer rotated it
-                // (`profile_visibility`), so its UAK moved with it.
-                Err(e) if e.is_auth_error() => {
-                    tracing::warn!(%peer_id, reason = "UAK from our stored profile key rejected", "SEALED SENDER DEGRADED: group resend delivered identified");
-                    true
-                }
-                Err(e) => return Err(e.into()),
-            },
-            None => {
-                tracing::warn!(
-                    %peer_id,
-                    reason = "no stored profile key to derive the peer's UAK",
-                    "SEALED SENDER DEGRADED: group resend delivered identified \
-                     (Basic auth) — the server WILL record us as the sender"
-                );
-                true
-            }
-        };
-        if identified {
-            self.message_client()
-                .send_sealed_message(&peer, device_id, sealed_message)
-                .await?;
+        if uak.is_none() {
+            tracing::warn!(
+                %peer_id,
+                reason = "no stored profile key to derive the peer's UAK",
+                "SEALED SENDER DEGRADED: group resend delivered identified \
+                 (Basic auth) — the server WILL record us as the sender"
+            );
+        }
+        let (_, uak_rejected) = self
+            .send_sealed_batch(
+                &mut self.message_client(),
+                &peer,
+                vec![message],
+                crate::proto::chat_v1::SealedDelivery::NamedDevices,
+                uak.as_ref(),
+                &uuid::Uuid::new_v4().to_string(),
+            )
+            .await?;
+        if uak_rejected {
+            tracing::warn!(%peer_id, reason = "UAK from our stored profile key rejected", "SEALED SENDER DEGRADED: group resend delivered identified");
         }
         Ok(())
     }

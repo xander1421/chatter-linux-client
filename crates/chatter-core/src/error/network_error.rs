@@ -175,11 +175,11 @@ impl NetworkError {
         )
     }
 
-    /// The server refused a sealed send because the destination device is
-    /// retired (FailedPrecondition "unknown destination device"). The sender
-    /// should stop encrypting to that device, not fail the whole send.
+    /// The server refused a sealed send because a device it names is not
+    /// registered (retired by Log Out / unlink): `MismatchedDevices` with
+    /// `extra` devices. The sender should stop encrypting to those devices.
     pub fn is_unknown_destination_device(&self) -> bool {
-        matches!(self, NetworkError::InvalidRequest(m) if m.contains("unknown destination device"))
+        matches!(self, NetworkError::MismatchedDevices { extra, .. } if !extra.is_empty())
     }
 }
 
@@ -304,11 +304,11 @@ mod tests {
 
     #[test]
     fn test_unknown_destination_device() {
+        let extra = NetworkError::MismatchedDevices { missing: vec![], extra: vec![3], stale: vec![] };
+        assert!(extra.is_unknown_destination_device());
+        let missing = NetworkError::MismatchedDevices { missing: vec![3], extra: vec![], stale: vec![] };
+        assert!(!missing.is_unknown_destination_device());
         let err = NetworkError::from_status(&Status::failed_precondition("unknown destination device"));
-        assert!(err.is_unknown_destination_device());
-        let err = NetworkError::from_status(&Status::failed_precondition("something else"));
-        assert!(!err.is_unknown_destination_device());
-        let err = NetworkError::from_status(&Status::not_found("unknown destination device"));
-        assert!(!err.is_unknown_destination_device());
+        assert!(!err.is_unknown_destination_device(), "the server no longer answers with a status");
     }
 }

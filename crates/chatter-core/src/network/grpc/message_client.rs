@@ -15,8 +15,8 @@ use crate::proto::chat_v1::{
     GetDeviceMessagesResponse,
     GetMessagesRequest, GetMessagesResponse,
     ListPinnedMessagesResponse, Message, MessageEvent, MessageSearchRequest, MessageSearchResponse,
-    MessageSortDirection, MessageUpdate, SealedSenderMessage,
-    DestinationDevice, SendMessageRequest, SendSealedMessageRequest, SendSealedMessageResponse,
+    MessageSortDirection, MessageUpdate, SealedDelivery, SealedDeviceMessage,
+    SendMessageRequest, SendSealedMessageRequest, SendSealedMessageResponse,
     StreamGlobalEventsRequest, StreamMessageEventsRequest,
     StreamMessagesRequest, StreamMessagesResponse,
 };
@@ -249,55 +249,29 @@ impl MessageClient {
 
     // ==================== Sealed Sender RPCs ====================
 
-    /// Send a sealed sender message (anonymous to server).
+    /// One sealed send to `destination_user_id`, IDENTIFIED (Basic auth):
+    /// every device's envelope in one request, queued all together or not at
+    /// all. For a sender that holds no Unidentified-Access-Key for the
+    /// recipient, and for sends to our own user — the UAK path is
+    /// `AnonymousMessageClient::send_sealed_messages_with_uak`.
     ///
-    /// This endpoint uses UAK (Unidentified Access Key) authentication
-    /// instead of regular auth, hiding sender identity from the server.
-    ///
-    /// # Arguments
-    ///
-    /// * `destination_user_id` - Recipient user ID
-    /// * `destination_device_id` - Recipient device ID (0 for all devices)
-    /// * `sealed_message` - The sealed sender envelope
-    ///
-    /// # Note
-    ///
-    /// This method does NOT include UAK headers. For proper anonymous sending,
-    /// use `send_sealed_message_anonymous` which includes the recipient's UAK.
-    pub async fn send_sealed_message(
+    /// A device-set difference the server reports for `delivery` comes back
+    /// as [`NetworkError::MismatchedDevices`], with nothing queued.
+    /// `client_request_id` is the message GUID every device's copy is stored
+    /// under: a repeated send under the same id is not queued twice.
+    pub async fn send_sealed_messages(
         &mut self,
         destination_user_id: &str,
-        destination_device_id: u32,
-        sealed_message: SealedSenderMessage,
-    ) -> Result<SendSealedMessageResponse, NetworkError> {
-        self.send_sealed_message_to_device_set(
-            destination_user_id,
-            destination_device_id,
-            sealed_message,
-            Vec::new(),
-        )
-        .await
-    }
-
-    /// [`Self::send_sealed_message`] as one request of a send to every device
-    /// of the recipient: `device_set` is all the devices that send is
-    /// encrypted for. The server checks it against the recipient's registered
-    /// devices and a difference comes back as
-    /// [`NetworkError::MismatchedDevices`], with nothing queued.
-    pub async fn send_sealed_message_to_device_set(
-        &mut self,
-        destination_user_id: &str,
-        destination_device_id: u32,
-        sealed_message: SealedSenderMessage,
-        device_set: Vec<DestinationDevice>,
+        messages: Vec<SealedDeviceMessage>,
+        delivery: SealedDelivery,
+        client_request_id: &str,
     ) -> Result<SendSealedMessageResponse, NetworkError> {
         let request = SendSealedMessageRequest {
             destination_user_id: destination_user_id.to_string(),
-            destination_device_id,
-            sealed_message: Some(sealed_message),
-            client_request_id: uuid::Uuid::new_v4().to_string(),
+            messages,
+            client_request_id: client_request_id.to_string(),
             envelope_type: 0, // Default: server determines from content
-            device_set,
+            delivery: delivery as i32,
         };
 
         self.inner
@@ -305,81 +279,6 @@ impl MessageClient {
             .await
             .map_err(|s| NetworkError::from_status(&s))
             .and_then(|r| sealed_send_result(r.into_inner()))
-    }
-
-    /// Send a sealed sender message with UAK for anonymous delivery.
-    ///
-    /// This is the proper Signal-style sealed sender flow where the server
-    /// cannot identify the sender. The UAK (Unidentified Access Key) is
-    /// derived from the recipient's profile key.
-    ///
-    /// # Arguments
-    ///
-    /// * `destination_user_id` - Recipient user ID
-    /// * `destination_device_id` - Recipient device ID (0 for all devices)
-    /// * `sealed_message` - The sealed sender envelope
-    /// * `recipient_uak` - Recipient's 16-byte Unidentified Access Key
-    pub async fn send_sealed_message_anonymous(
-        &mut self,
-        destination_user_id: &str,
-        destination_device_id: u32,
-        sealed_message: SealedSenderMessage,
-        recipient_uak: &[u8],
-    ) -> Result<SendSealedMessageResponse, NetworkError> {
-        self.send_sealed_message_with_uak(
-            destination_user_id,
-            destination_device_id,
-            sealed_message,
-            recipient_uak,
-        )
-        .await
-    }
-
-    /// Internal helper to send sealed message with UAK header.
-    async fn send_sealed_message_with_uak(
-        &mut self,
-        destination_user_id: &str,
-        destination_device_id: u32,
-        sealed_message: SealedSenderMessage,
-        uak: &[u8],
-    ) -> Result<SendSealedMessageResponse, NetworkError> {
-        use base64::Engine;
-        use tonic::Request;
-
-        let proto_request = SendSealedMessageRequest {
-            destination_user_id: destination_user_id.to_string(),
-            destination_device_id,
-            sealed_message: Some(sealed_message),
-            client_request_id: uuid::Uuid::new_v4().to_string(),
-            envelope_type: 0, // Default: server determines from content
-            device_set: Vec::new(),
-        };
-
-        // Create request with UAK headers for anonymous delivery
-        let mut request = Request::new(proto_request);
-
-        // Add Unidentified-Access-Key header (base64 encoded)
-        let uak_b64 = base64::engine::general_purpose::STANDARD.encode(uak);
-        request.metadata_mut().insert(
-            "unidentified-access-key",
-            uak_b64
-                .parse()
-                .map_err(|_| NetworkError::InvalidRequest("invalid UAK encoding".into()))?,
-        );
-
-        // Add destination user header
-        request.metadata_mut().insert(
-            "x-destination-user-id",
-            destination_user_id
-                .parse()
-                .map_err(|_| NetworkError::InvalidRequest("invalid user ID".into()))?,
-        );
-
-        self.inner
-            .send_sealed_message(request)
-            .await
-            .map(|r| r.into_inner())
-            .map_err(|s| NetworkError::from_status(&s))
     }
 
     // ==================== Device Message Queue RPCs ====================
@@ -749,19 +648,6 @@ mod tests {
         assert_eq!(event.event_id, "event-001");
         assert_eq!(event.channel_id, "channel-456");
         assert!(matches!(event.event, Some(Event::MessageSent(_))));
-    }
-
-    #[test]
-    fn test_sealed_sender_message_construction() {
-        // Verify SealedSenderMessage can be constructed
-        let sealed_msg = SealedSenderMessage {
-            sealed_body: vec![0u8; 128], // Encrypted envelope
-            server_key_id: 1,
-            timestamp: 1234567890000,
-        };
-
-        assert_eq!(sealed_msg.server_key_id, 1);
-        assert_eq!(sealed_msg.sealed_body.len(), 128);
     }
 }
 

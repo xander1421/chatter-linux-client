@@ -516,7 +516,6 @@ impl MessageService {
             .map_err(|e| MessageError::from_signal_send(e, "Session archive failed"))?;
         tracing::info!(peer_id = %peer_id, archived, "Archived sessions with peer for reset");
 
-        self.signal_service.forget_device_list(&peer);
         let device_ids = self.signal_service
             .ensure_sessions_all_devices(auth_client, &peer)
             .await

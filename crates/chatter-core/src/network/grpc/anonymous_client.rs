@@ -14,9 +14,9 @@ use crate::error::NetworkError;
 use crate::proto::chat_v1::{
     auth_service_client::AuthServiceClient,
     key_transparency_service_client::KeyTransparencyServiceClient,
-    message_service_client::MessageServiceClient, DestinationDevice, GetConsistencyProofRequest,
+    message_service_client::MessageServiceClient, GetConsistencyProofRequest,
     GetConsistencyProofResponse, GetPreKeyBundleRequest, GetPreKeyBundleResponse, GetProofRequest,
-    GetProofResponse, SealedSenderMessage, SendSealedMessageRequest,
+    GetProofResponse, SealedDelivery, SealedDeviceMessage, SendSealedMessageRequest,
     SendSealedMessageResponse,
 };
 
@@ -42,8 +42,10 @@ impl AnonymousMessageClient {
         }
     }
 
-    /// Send a sealed message authorized by the recipient's Unidentified Access
-    /// Key, with NO `authorization` header.
+    /// One sealed send authorized by the recipient's Unidentified Access Key,
+    /// with NO `authorization` header: every device's envelope in one request,
+    /// queued all together or not at all (`MessageClient::send_sealed_messages`
+    /// has the semantics of `delivery` and `client_request_id`).
     ///
     /// This is Signal's sealed-sender transport: possession of the recipient's
     /// UAK proves the sender is authorized to deliver to them, without telling
@@ -60,44 +62,17 @@ impl AnonymousMessageClient {
     /// ("provide exactly one auth method"). Sending here is the only way to
     /// guarantee the `authorization` header is absent.
     ///
-    /// # Arguments
-    ///
-    /// * `destination_user_id` - Recipient user ID (server knows the recipient)
-    /// * `destination_device_id` - Recipient device ID
-    /// * `sealed_message` - The sealed sender envelope (content encrypted)
-    /// * `uak` - The recipient's 16-byte Unidentified Access Key
-    ///
     /// # Privacy Guarantees
     ///
     /// - Server knows: recipient user ID
     /// - Server does NOT know: sender identity
     /// - Server cannot read: message content (sealed sender encryption)
-    pub async fn send_sealed_message_with_uak(
+    pub async fn send_sealed_messages_with_uak(
         &mut self,
         destination_user_id: &str,
-        destination_device_id: u32,
-        sealed_message: SealedSenderMessage,
-        uak: &[u8; 16],
-    ) -> Result<SendSealedMessageResponse, NetworkError> {
-        self.send_sealed_message_to_device_set_with_uak(
-            destination_user_id,
-            destination_device_id,
-            sealed_message,
-            Vec::new(),
-            uak,
-        )
-        .await
-    }
-
-    /// [`Self::send_sealed_message_with_uak`] as one request of a send to
-    /// every device of the recipient — see
-    /// `MessageClient::send_sealed_message_to_device_set`.
-    pub async fn send_sealed_message_to_device_set_with_uak(
-        &mut self,
-        destination_user_id: &str,
-        destination_device_id: u32,
-        sealed_message: SealedSenderMessage,
-        device_set: Vec<DestinationDevice>,
+        messages: Vec<SealedDeviceMessage>,
+        delivery: SealedDelivery,
+        client_request_id: &str,
         uak: &[u8; 16],
     ) -> Result<SendSealedMessageResponse, NetworkError> {
         use base64::Engine;
@@ -105,11 +80,10 @@ impl AnonymousMessageClient {
 
         let proto_request = SendSealedMessageRequest {
             destination_user_id: destination_user_id.to_string(),
-            destination_device_id,
-            sealed_message: Some(sealed_message),
-            client_request_id: uuid::Uuid::new_v4().to_string(),
+            messages,
+            client_request_id: client_request_id.to_string(),
             envelope_type: 0, // Default: server determines from content
-            device_set,
+            delivery: delivery as i32,
         };
 
         // Create request WITHOUT any auth headers
@@ -140,23 +114,16 @@ impl AnonymousMessageClient {
             .and_then(|r| super::message_client::sealed_send_result(r.into_inner()))
     }
 
-    /// Send a sealed message using anonymous credential (blind signature).
+    /// One sealed send under an anonymous credential (blind signature), with
+    /// an explicit envelope type (4 = ECIES_INIT, 0 = server default).
     ///
     /// This is the core anonymous delivery method for:
     /// - Anonymous DM message requests
-    /// - Any other anonymous contact flows
+    /// - The DM bootstrap
     ///
     /// The server can verify the sender has a valid account (via blind signature)
-    /// but cannot determine WHO the sender is.
-    ///
-    /// # Arguments
-    ///
-    /// * `destination_user_id` - Recipient user ID (server knows recipient)
-    /// * `destination_device_id` - Recipient device ID (0 for all devices)
-    /// * `sealed_message` - The sealed sender envelope (content encrypted)
-    /// * `public_key` - Ed25519 public key from the blind-signed token
-    /// * `signature` - Server's blind signature over the public key
-    /// * `randomizer` - Optional message randomizer for signature verification
+    /// but cannot determine WHO the sender is. One credential covers the whole
+    /// send, every device included.
     ///
     /// # Privacy Guarantees
     ///
@@ -164,51 +131,26 @@ impl AnonymousMessageClient {
     /// - Server does NOT know: sender identity (only that they're a valid user)
     /// - Server cannot read: message content (sealed sender encryption)
     /// - Server cannot link: multiple messages from same sender (one-time tokens)
+    #[allow(clippy::too_many_arguments)]
     pub async fn send_with_anonymous_credential(
         &mut self,
         destination_user_id: &str,
-        destination_device_id: u32,
-        sealed_message: SealedSenderMessage,
-        public_key: &[u8],
-        signature: &[u8],
-        randomizer: Option<&[u8]>,
-    ) -> Result<SendSealedMessageResponse, NetworkError> {
-        self.send_with_anonymous_credential_typed(
-            destination_user_id,
-            destination_device_id,
-            sealed_message,
-            public_key,
-            signature,
-            randomizer,
-            0, // Default envelope type (server will use SEALED_SENDER)
-        )
-        .await
-    }
-
-    /// Send with anonymous credential and explicit envelope type.
-    ///
-    /// Use envelope_type=4 for ECIES_INIT (HPKE-encrypted initial contact).
-    #[allow(clippy::too_many_arguments)]
-    pub async fn send_with_anonymous_credential_typed(
-        &mut self,
-        destination_user_id: &str,
-        destination_device_id: u32,
-        sealed_message: SealedSenderMessage,
-        public_key: &[u8],
-        signature: &[u8],
-        randomizer: Option<&[u8]>,
+        messages: Vec<SealedDeviceMessage>,
+        delivery: SealedDelivery,
         envelope_type: i32,
+        public_key: &[u8],
+        signature: &[u8],
+        randomizer: Option<&[u8]>,
     ) -> Result<SendSealedMessageResponse, NetworkError> {
         use base64::Engine;
         use tonic::Request;
 
         let proto_request = SendSealedMessageRequest {
             destination_user_id: destination_user_id.to_string(),
-            destination_device_id,
-            sealed_message: Some(sealed_message),
+            messages,
             client_request_id: uuid::Uuid::new_v4().to_string(),
             envelope_type,
-            device_set: Vec::new(),
+            delivery: delivery as i32,
         };
 
         // Create request WITHOUT any auth headers
@@ -243,8 +185,8 @@ impl AnonymousMessageClient {
         self.inner
             .send_sealed_message(request)
             .await
-            .map(|r| r.into_inner())
             .map_err(|s| NetworkError::from_status(&s))
+            .and_then(|r| super::message_client::sealed_send_result(r.into_inner()))
     }
 }
 

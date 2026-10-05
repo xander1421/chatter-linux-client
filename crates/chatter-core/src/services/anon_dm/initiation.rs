@@ -242,14 +242,18 @@ impl AnonDmService {
         const ENVELOPE_TYPE_ECIES_INIT: i32 = 4;
 
         anon_client
-            .send_with_anonymous_credential_typed(
+            .send_with_anonymous_credential(
                 &friend_code.user_id.to_string(),
-                0, // All devices
-                sealed_message,
+                vec![crate::proto::chat_v1::SealedDeviceMessage {
+                    device_id: 0,
+                    registration_id: 0,
+                    sealed_message: Some(sealed_message),
+                }],
+                crate::proto::chat_v1::SealedDelivery::Broadcast,
+                ENVELOPE_TYPE_ECIES_INIT,
                 &token.public_key,
                 &token.signature,
                 token.randomizer.as_deref(),
-                ENVELOPE_TYPE_ECIES_INIT,
             )
             .await
             .map_err(|e| AnonDmError::MessageError(format!("Failed to send ECIES message: {}", e)))?;

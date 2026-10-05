@@ -393,8 +393,13 @@ async fn handle_bootstrap_request_async(
     anon_client
         .send_with_anonymous_credential(
             &peer_id_str,
-            peer_device_id,
-            sealed_msg,
+            vec![crate::proto::chat_v1::SealedDeviceMessage {
+                device_id: peer_device_id,
+                registration_id: 0,
+                sealed_message: Some(sealed_msg),
+            }],
+            crate::proto::chat_v1::SealedDelivery::NamedDevices,
+            0,
             &token.public_key,
             &token.signature,
             token.randomizer.as_deref(),

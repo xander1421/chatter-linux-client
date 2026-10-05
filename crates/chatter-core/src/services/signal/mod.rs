@@ -34,10 +34,11 @@ pub struct SignalService {
     /// Per-recipient encryption locks (now managed within or by the actor logic).
     pub(crate) encrypt_locks: Arc<Mutex<HashMap<String, Arc<Mutex<()>>>>>,
     pub(crate) encrypt_lock_lru: Arc<Mutex<std::collections::VecDeque<String>>>,
-    /// Per-recipient result of the last all-devices bundle fetch, so a send
-    /// to a peer we hold sessions with does not re-fetch (and pop a one-time
-    /// prekey per device) every time. See `session::DeviceListCache`.
-    pub(crate) device_lists: Arc<std::sync::Mutex<session::DeviceListCache>>,
+    /// Per recipient, the `unrestricted_unidentified_access` flag of the last
+    /// bundle fetch this run (see
+    /// `ensure_sessions_and_access_policy_all_devices`). Not a device list:
+    /// which devices a recipient has is the server's answer to each send.
+    pub(crate) unrestricted_access: Arc<std::sync::Mutex<HashMap<String, bool>>>,
 }
 
 impl Clone for SignalService {
@@ -49,7 +50,7 @@ impl Clone for SignalService {
             actor: self.actor.clone(),
             encrypt_locks: self.encrypt_locks.clone(),
             encrypt_lock_lru: self.encrypt_lock_lru.clone(),
-            device_lists: self.device_lists.clone(),
+            unrestricted_access: self.unrestricted_access.clone(),
         }
     }
 }
@@ -81,7 +82,7 @@ impl SignalService {
             actor,
             encrypt_locks: Arc::new(Mutex::new(HashMap::new())),
             encrypt_lock_lru: Arc::new(Mutex::new(std::collections::VecDeque::new())),
-            device_lists: Arc::default(),
+            unrestricted_access: Arc::default(),
         }
     }
 }

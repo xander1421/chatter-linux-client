@@ -42,6 +42,22 @@ use std::time::SystemTime;
 /// So run the real thing: build a bundle, process it, and take the session the
 /// X3DH/PQXDH handshake actually produced.
 async fn usable_session_bytes(peer: &ProtocolAddress) -> Vec<u8> {
+    let (alice_store, _bob_store) = handshake(peer).await;
+    alice_store
+        .load_session(peer)
+        .await
+        .expect("load session")
+        .expect("the handshake must have produced one")
+        .serialize()
+        .expect("serialize")
+}
+
+/// Alice's registration id in [`handshake`].
+const ALICE_REGISTRATION_ID: u32 = 0xAAAA;
+
+/// Bob (at `peer`) publishes a bundle and Alice processes it: Alice holds an
+/// initiator session with Bob, Bob holds his prekeys and no session yet.
+async fn handshake(peer: &ProtocolAddress) -> (InMemSignalProtocolStore, InMemSignalProtocolStore) {
     // Seeded, so a failure here is reproducible rather than a new random key
     // every run.
     let mut bob_rng = StdRng::seed_from_u64(0x5E551_014);
@@ -115,7 +131,7 @@ async fn usable_session_bytes(peer: &ProtocolAddress) -> Vec<u8> {
         .expect("save kyber prekey");
 
     let alice_identity = IdentityKeyPair::generate(&mut alice_rng);
-    let mut alice_store = InMemSignalProtocolStore::new(alice_identity, 0xAAAA).expect("alice store");
+    let mut alice_store = InMemSignalProtocolStore::new(alice_identity, ALICE_REGISTRATION_ID).expect("alice store");
     process_prekey_bundle(
         peer,
         &alice_addr(),
@@ -127,14 +143,7 @@ async fn usable_session_bytes(peer: &ProtocolAddress) -> Vec<u8> {
     )
     .await
     .expect("process bundle");
-
-    alice_store
-        .load_session(peer)
-        .await
-        .expect("load session")
-        .expect("the handshake must have produced one")
-        .serialize()
-        .expect("serialize")
+    (alice_store, bob_store)
 }
 
 /// Helper to set up a test database and SignalService.
@@ -215,6 +224,105 @@ async fn archive_peer_sessions_leaves_no_reusable_session_for_that_peer_only() {
         "archived, not deleted: in-flight messages under the old state still decrypt"
     );
     assert_eq!(service.session_devices("other-uuid").await.unwrap(), vec![1]);
+}
+
+/// OPEN-ITEMS §125: the registration id a sealed send names for a device is
+/// read from our session with it (`SignalService::session_registration_id`).
+/// When the PEER started the session — we are the responder, our session
+/// came from its PreKeySignalMessage — libsignal must have recorded the
+/// peer's registration id from that message, or every send to such a device
+/// would name no id and be refused as stale.
+#[tokio::test]
+async fn responder_session_records_the_initiators_registration_id() {
+    let (service, key_store, _settings, _db_file) = setup_test_service().await;
+    let bob = ProtocolAddress::new("bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb".to_string(), DeviceId::new(2).unwrap());
+    let (mut alice_store, mut bob_store) = handshake(&bob).await;
+    let mut rng = StdRng::seed_from_u64(7);
+
+    let ciphertext = libsignal_protocol::message_encrypt(
+        b"hello bob",
+        &bob,
+        &alice_addr(),
+        &mut alice_store.session_store,
+        &mut alice_store.identity_store,
+        SystemTime::now(),
+        &mut rng,
+    )
+    .await
+    .expect("alice encrypts");
+    assert!(matches!(ciphertext, libsignal_protocol::CiphertextMessage::PreKeySignalMessage(_)));
+    let plaintext = libsignal_protocol::message_decrypt(
+        &ciphertext,
+        &alice_addr(),
+        &bob,
+        &mut bob_store.session_store,
+        &mut bob_store.identity_store,
+        &mut bob_store.pre_key_store,
+        &bob_store.signed_pre_key_store,
+        &mut bob_store.kyber_pre_key_store,
+        &mut rng,
+    )
+    .await
+    .expect("bob decrypts the PreKey message");
+    assert_eq!(plaintext, b"hello bob");
+
+    // Bob's responder session, stored where chatter keeps sessions.
+    let bob_session = bob_store
+        .load_session(&alice_addr())
+        .await
+        .expect("load")
+        .expect("decrypting the PreKey message made a session")
+        .serialize()
+        .expect("serialize");
+    let alice = alice_addr();
+    key_store
+        .store_session(&format!("{}:{}", alice.name(), u32::from(alice.device_id())), &bob_session)
+        .unwrap();
+
+    assert_eq!(
+        service.session_registration_id(alice.name(), u32::from(alice.device_id())),
+        Some(ALICE_REGISTRATION_ID),
+        "the responder session names the initiator's registration id"
+    );
+}
+
+/// F2 / OPEN-ITEMS §124: a recipient we hold sessions with is sent to on
+/// those sessions with NO prekey-bundle fetch — the server's answer to the
+/// send names any device we are missing. Before, a 10-minute
+/// `DEVICE_LIST_TTL` re-fetched the list (popping a one-time prekey per
+/// device) on any send it had not cached. The auth client here points at a
+/// closed port, so any fetch fails the call.
+#[tokio::test]
+async fn held_sessions_are_used_without_a_bundle_fetch() {
+    let (service, key_store, _settings, _db_file) = setup_test_service().await;
+    for device in [1u32, 2] {
+        let address = ProtocolAddress::new("peer-uuid".to_string(), DeviceId::try_from(device).unwrap());
+        key_store
+            .store_session(&format!("peer-uuid:{device}"), &usable_session_bytes(&address).await)
+            .unwrap();
+    }
+    let mut auth_client = unreachable_auth_client();
+
+    assert_eq!(
+        service.ensure_sessions_all_devices(&mut auth_client, "peer-uuid").await.unwrap(),
+        vec![1, 2]
+    );
+
+    // Only a caller that needs the recipient's sealed-sender access policy,
+    // not read yet this run, fetches (and so fails here).
+    assert!(service
+        .ensure_sessions_and_access_policy_all_devices(&mut auth_client, "peer-uuid", true)
+        .await
+        .is_err());
+}
+
+fn unreachable_auth_client() -> chatter_core::network::grpc::AuthClient {
+    let channel = tonic::transport::Endpoint::from_static("http://127.0.0.1:9")
+        .connect_lazy();
+    chatter_core::network::grpc::AuthClient::new(
+        channel.into(),
+        chatter_core::network::grpc::interceptors::AuthInterceptor::default(),
+    )
 }
 
 /// Test that actor operations are serialized through the message channel.

@@ -54,8 +54,15 @@ impl AnonDmService {
         anon_client
             .send_with_anonymous_credential(
                 &peer_id.to_string(),
-                0, // All devices
-                sealed_message,
+                // `encrypt_anonymous` seals to the peer's device 1 session
+                // only, so only device 1 can open it.
+                vec![crate::proto::chat_v1::SealedDeviceMessage {
+                    device_id: 1,
+                    registration_id: 0,
+                    sealed_message: Some(sealed_message),
+                }],
+                crate::proto::chat_v1::SealedDelivery::NamedDevices,
+                0,
                 &send_token.public_key,
                 &send_token.signature,
                 send_token.randomizer.as_deref(),

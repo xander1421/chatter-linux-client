@@ -548,20 +548,24 @@ impl SignalService {
     // Multi-Device Operations
     // =========================================================================
 
-    /// Ensure sessions exist for ALL devices of a recipient.
+    /// Ensure sessions exist for the devices of a recipient, the way
+    /// Signal-Desktop's `sendToServiceId` does: the devices we hold a session
+    /// with are used as they are, and only a recipient we hold no session
+    /// with at all gets a `"*"` prekey-bundle fetch. Which devices the
+    /// recipient has now is the server's answer to the send itself
+    /// (`SealedDelivery::AllDevices`, `NetworkError::MismatchedDevices`),
+    /// not a re-fetch on a timer.
     ///
-    /// Fetches prekey bundles for all devices and establishes sessions.
-    /// Returns the list of device IDs for which sessions were established.
-    ///
-    /// This is used to send messages to all of a recipient's devices,
-    /// ensuring they receive the message on any device they're using.
+    /// Returns the device ids we hold a session with afterwards (possibly
+    /// none: the recipient has no device to fetch a bundle for, or it is our
+    /// own user and this is our only device).
     pub async fn ensure_sessions_all_devices(
         &self,
         auth_client: &mut AuthClient,
         recipient_id: &str,
     ) -> Result<Vec<u32>, ServiceError> {
         Ok(self
-            .ensure_sessions_and_access_policy_all_devices(auth_client, recipient_id)
+            .ensure_sessions_and_access_policy_all_devices(auth_client, recipient_id, false)
             .await?
             .0)
     }
@@ -569,34 +573,25 @@ impl SignalService {
     /// Same as [`Self::ensure_sessions_all_devices`], but also returns whether
     /// the recipient accepts sealed sender from anyone
     /// (`SignalPreKeyBundle.unrestricted_unidentified_access`, Signal's
-    /// `unrestrictedUnidentifiedAccess`). Read from the fetch we are already
-    /// making: a second bundle fetch would burn one of the recipient's one-time
-    /// prekeys. The server never serves the UAK itself — a sender derives it
-    /// from the recipient's profile key (`MessageService::sealed_access_key`).
+    /// `unrestrictedUnidentifiedAccess`), as last read from a bundle fetch.
+    /// The server never serves the UAK itself — a sender derives it from the
+    /// recipient's profile key (`MessageService::sealed_access_key`).
+    ///
+    /// `need_access_policy`: the caller has no profile key for the recipient,
+    /// so the flag decides whether the send can be sealed. When it was not
+    /// read yet this run, the `"*"` fetch is made even though we hold
+    /// sessions — it pops one one-time prekey per device, so it is made only
+    /// for a caller that needs the flag.
     ///
     /// When the recipient is our own user, THIS device is dropped before any
-    /// session work: there is no session with ourselves, and the server
-    /// rejects a sealed message to ourselves ("self send of a sealed sender
-    /// message"). Every own-user fan-out (self-sync, SKDM, SenderKeyRequest)
-    /// routes through here, so no caller has to remember it. If this was our
-    /// only device the result is an empty list — nothing to send, not a failure.
+    /// session work: there is no session with ourselves, and libsignal
+    /// refuses to seal to ourselves. Every own-user fan-out (self-sync, SKDM,
+    /// SenderKeyRequest) routes through here, so no caller has to remember it.
     pub async fn ensure_sessions_and_access_policy_all_devices(
         &self,
         auth_client: &mut AuthClient,
         recipient_id: &str,
-    ) -> Result<(Vec<u32>, bool), ServiceError> {
-        self.ensure_sessions_all_devices_inner(auth_client, recipient_id, false).await
-    }
-
-    /// `server_checked`: the caller sends with the device set named
-    /// (`SendSealedMessageRequest.device_set`), so the server reports a device
-    /// we are missing and [`Self::reconcile_devices`] fetches just that one.
-    /// Such a send reuses the sessions it holds however old the last fetch is.
-    async fn ensure_sessions_all_devices_inner(
-        &self,
-        auth_client: &mut AuthClient,
-        recipient_id: &str,
-        server_checked: bool,
+        need_access_policy: bool,
     ) -> Result<(Vec<u32>, bool), ServiceError> {
         use crate::proto::chat_v1::get_pre_key_bundle_response;
 
@@ -610,8 +605,7 @@ impl SignalService {
         // Single-flight per recipient. Concurrent first sends to one peer (a
         // new friend's prewarm and profile-key send) each fetched a bundle —
         // popping a one-time prekey apiece — and built a session over the
-        // other's. The one that waits here finds the device list the first
-        // recorded below and reuses its sessions.
+        // other's. The one that waits here finds the sessions the first built.
         let build_lock = self.get_encrypt_lock(&format!("{recipient_id}:establish")).await;
         let _build = build_lock.lock().await;
 
@@ -620,77 +614,56 @@ impl SignalService {
             .then(|| self.settings_repo.get::<u32>(keys::CURRENT_DEVICE_ID).ok().flatten())
             .flatten();
 
-        // Signal fetches a bundle only for a device it has no session with.
-        // Every "*" fetch counts against the server's per-(caller, target)
-        // fetch limit, so doing it on every send (text, receipt, typing) got
-        // rapid sends throttled. A server-checked send reuses the sessions it
-        // holds and lets the server name what changed. Any other send gets no
-        // such answer, so it reuses them only while the last fetched device
-        // list is fresh and all of it is still sessioned.
         let with_session: Vec<u32> = self
             .session_devices(recipient_id)
             .await?
             .into_iter()
             .filter(|d| Some(*d) != this_device)
             .collect();
-        let cached = self
-            .device_lists
-            .lock()
-            .map_err(|_| ServiceError::Internal("device list cache poisoned".into()))?
-            .reusable(recipient_id, std::time::Instant::now(), &with_session, server_checked);
-        if let Some(unrestricted) = cached {
-            return Ok((with_session, unrestricted));
+        let known_policy = self.unrestricted_access(recipient_id);
+        if !with_session.is_empty() && (known_policy.is_some() || !need_access_policy) {
+            return Ok((with_session, known_policy.unwrap_or(false)));
         }
 
         // Fetch prekey bundles for ALL devices using wildcard
         let response = match auth_client.get_pre_key_bundles_all_devices(recipient_id).await {
             Ok(r) => r,
-            // A throttled refresh must not fail a send we can already encrypt:
-            // the sessions we hold are as good as they were a minute ago.
+            // A throttled policy read must not fail a send we can already
+            // encrypt: it goes identified, as it would have without the flag.
             Err(crate::error::NetworkError::RateLimited) if !with_session.is_empty() => {
                 tracing::warn!(
                     recipient = %recipient_id,
                     devices = ?with_session,
-                    "Device list refresh throttled; sending to the devices we hold sessions with"
+                    "Access-policy fetch throttled; sending to the devices we hold sessions with"
                 );
-                let unrestricted = self
-                    .device_lists
-                    .lock()
-                    .ok()
-                    .and_then(|lists| lists.last_unrestricted(recipient_id))
-                    .unwrap_or(false);
-                return Ok((with_session, unrestricted));
+                return Ok((with_session, false));
             }
             Err(e) => return Err(e.into()),
         };
 
-        let result = response.result.ok_or(ServiceError::Validation(
-            "No device bundles returned for recipient".into(),
-        ))?;
+        let Some(result) = response.result else {
+            // No bundle at all: nothing to fetch a session from. The send
+            // still asks the server, which names any device we are missing.
+            return Ok((with_session, false));
+        };
 
         match result {
             // Multiple devices response
             get_pre_key_bundle_response::Result::Devices(device_list) => {
-                if device_list.bundles.is_empty() {
-                    return Err(ServiceError::Validation(
-                        "No devices registered for recipient".into(),
-                    ));
-                }
-
-                let mut established_device_ids = Vec::with_capacity(device_list.bundles.len());
-
                 // The policy is per user; every bundle carries the same flag.
                 let unrestricted = device_list
                     .bundles
                     .iter()
                     .any(|b| b.unrestricted_unidentified_access == Some(true));
+                self.record_unrestricted_access(recipient_id, unrestricted);
 
                 let bundles = without_device(device_list.bundles, this_device);
                 if bundles.is_empty() {
-                    self.record_device_list(recipient_id, Vec::new(), unrestricted);
                     return Ok((Vec::new(), unrestricted));
                 }
 
+                let mut established_device_ids = Vec::with_capacity(bundles.len());
+                let mut last_error = None;
                 for proto_bundle in bundles {
                     let device_id = proto_bundle.device_id;
                     let device_id_struct = match DeviceId::try_from(device_id) {
@@ -708,16 +681,15 @@ impl SignalService {
 
                     // Check if a usable session already exists
                     if self.actor.has_session(address.clone()).await? {
-                        tracing::debug!(
-                            recipient = %recipient_id,
-                            device_id,
-                            "Usable session already exists for device"
-                        );
                         established_device_ids.push(device_id);
                         continue;
                     }
 
-                    // Establish new session from bundle
+                    // Establish new session from bundle. A device that fails
+                    // here is left out; the server names it missing on the
+                    // send, and `reconcile_devices` tries it once more on its
+                    // own (Signal-Desktop fails the recipient if that fails
+                    // too: `OutgoingMessage.doSendMessage` -> `registerError`).
                     match Self::convert_prekey_bundle(proto_bundle) {
                         Ok(bundle) => {
                             // KT gate: a device whose identity key is not committed
@@ -734,17 +706,11 @@ impl SignalService {
                                     error = %e,
                                     "KT verification failed for device bundle, skipping device"
                                 );
+                                last_error = Some(e);
                                 continue;
                             }
                             match self.actor.establish_session(address, bundle).await {
-                                Ok(_) => {
-                                    tracing::debug!(
-                                        recipient = %recipient_id,
-                                        device_id,
-                                        "Established session with device"
-                                    );
-                                    established_device_ids.push(device_id);
-                                }
+                                Ok(_) => established_device_ids.push(device_id),
                                 Err(e) => {
                                     tracing::warn!(
                                         recipient = %recipient_id,
@@ -752,6 +718,7 @@ impl SignalService {
                                         error = %e,
                                         "Failed to establish session with device"
                                     );
+                                    last_error = Some(e);
                                 }
                             }
                         }
@@ -762,14 +729,15 @@ impl SignalService {
                                 error = %e,
                                 "Failed to convert prekey bundle for device"
                             );
+                            last_error = Some(e);
                         }
                     }
                 }
 
                 if established_device_ids.is_empty() {
-                    return Err(ServiceError::Validation(
-                        "Failed to establish session with any device".into(),
-                    ));
+                    return Err(last_error.unwrap_or_else(|| {
+                        ServiceError::Validation("Failed to establish session with any device".into())
+                    }));
                 }
 
                 tracing::info!(
@@ -778,8 +746,6 @@ impl SignalService {
                     device_ids = ?established_device_ids,
                     "Established sessions with all devices"
                 );
-
-                self.record_device_list(recipient_id, established_device_ids.clone(), unrestricted);
                 Ok((established_device_ids, unrestricted))
             }
 
@@ -787,29 +753,25 @@ impl SignalService {
             get_pre_key_bundle_response::Result::Bundle(single_bundle) => {
                 let device_id = single_bundle.device_id;
                 let unrestricted = single_bundle.unrestricted_unidentified_access == Some(true);
+                self.record_unrestricted_access(recipient_id, unrestricted);
                 if this_device == Some(device_id) {
-                    self.record_device_list(recipient_id, Vec::new(), unrestricted);
                     return Ok((Vec::new(), unrestricted));
                 }
                 self.ensure_session(auth_client, recipient_id, device_id).await?;
-                self.record_device_list(recipient_id, vec![device_id], unrestricted);
                 Ok((vec![device_id], unrestricted))
             }
         }
     }
 
-    fn record_device_list(&self, recipient_id: &str, devices: Vec<u32>, unrestricted: bool) {
-        if let Ok(mut lists) = self.device_lists.lock() {
-            lists.record(recipient_id, std::time::Instant::now(), devices, unrestricted);
-        }
+    /// The recipient's `unrestricted_unidentified_access` flag from the last
+    /// bundle fetch this run, if any.
+    fn unrestricted_access(&self, recipient_id: &str) -> Option<bool> {
+        self.unrestricted_access.lock().ok()?.get(recipient_id).copied()
     }
 
-    /// Drop the cached device list for `recipient_id`, so the next
-    /// all-devices send re-fetches bundles. For a send that reached no device
-    /// and for session resets.
-    pub fn forget_device_list(&self, recipient_id: &str) {
-        if let Ok(mut lists) = self.device_lists.lock() {
-            lists.forget(recipient_id);
+    fn record_unrestricted_access(&self, recipient_id: &str, unrestricted: bool) {
+        if let Ok(mut flags) = self.unrestricted_access.lock() {
+            flags.insert(recipient_id.to_string(), unrestricted);
         }
     }
 
@@ -915,20 +877,21 @@ impl SignalService {
     /// [`Self::ensure_sessions_and_access_policy_all_devices`]), which the
     /// caller needs to pick the `Unidentified-Access-Key` for the deposit.
     ///
-    /// To our own user this device is excluded; if it was our only device,
-    /// this is an `Ok` empty map.
+    /// To our own user this device is excluded. An empty map — no device to
+    /// encrypt for — is `Ok`; the server-checked send asks the server about it.
     ///
-    /// `server_checked`: see [`Self::ensure_sessions_all_devices_inner`].
+    /// `need_access_policy`: see
+    /// [`Self::ensure_sessions_and_access_policy_all_devices`].
     pub async fn encrypt_message_all_devices_with_access_policy(
         &self,
         auth_client: &mut AuthClient,
         recipient_id: &str,
         plaintext: &[u8],
-        server_checked: bool,
+        need_access_policy: bool,
     ) -> Result<(HashMap<u32, DeviceCiphertext>, bool), ServiceError> {
         // First ensure we have sessions with all devices
         let (device_ids, unrestricted) = self
-            .ensure_sessions_all_devices_inner(auth_client, recipient_id, server_checked)
+            .ensure_sessions_and_access_policy_all_devices(auth_client, recipient_id, need_access_policy)
             .await?;
         if device_ids.is_empty() {
             return Ok((HashMap::new(), unrestricted));
@@ -1338,114 +1301,11 @@ mod tests {
     }
 }
 
-/// How long a fetched device list is trusted by a send the server does not
-/// check (one that names no `device_set`, so it gets no mismatch answer), and
-/// how long "this user has no device to send to" is trusted by any send: with
-/// nothing to send there is no request for the server to answer. A re-fetch is
-/// then how the sender learns of a newly linked device, and this bounds how
-/// long it is missed (a device that messages us first is picked up at once,
-/// from its session).
-const DEVICE_LIST_TTL: std::time::Duration = std::time::Duration::from_secs(10 * 60);
-
-/// Per recipient: the devices the last all-devices fetch established sessions
-/// with, when, and the recipient's `unrestricted_unidentified_access` flag.
 /// One device's sealed ciphertext and the registration id of the session
 /// that encrypted it, from [`SignalService::encrypt_message_all_devices_with_access_policy`].
 pub struct DeviceCiphertext {
     pub ciphertext: Vec<u8>,
     pub registration_id: u32,
-}
-
-#[derive(Default)]
-pub(crate) struct DeviceListCache(HashMap<String, CachedDeviceList>);
-
-struct CachedDeviceList {
-    fetched_at: std::time::Instant,
-    devices: Vec<u32>,
-    unrestricted: bool,
-}
-
-impl DeviceListCache {
-    /// The cached `unrestricted` flag when a send to `recipient_id` can go to
-    /// `with_session` without a fetch; `None` means fetch.
-    ///
-    /// A server-checked send with any session at all never needs one: the
-    /// server names the devices it is missing. Otherwise the list must be
-    /// younger than the TTL and every device on it still in `with_session`.
-    fn reusable(
-        &self,
-        recipient_id: &str,
-        now: std::time::Instant,
-        with_session: &[u32],
-        server_checked: bool,
-    ) -> Option<bool> {
-        let entry = self.0.get(recipient_id)?;
-        ((server_checked && !with_session.is_empty())
-            || (now.duration_since(entry.fetched_at) < DEVICE_LIST_TTL
-                && entry.devices.iter().all(|d| with_session.contains(d))))
-        .then_some(entry.unrestricted)
-    }
-
-    fn record(&mut self, recipient_id: &str, now: std::time::Instant, devices: Vec<u32>, unrestricted: bool) {
-        self.0.insert(recipient_id.to_string(), CachedDeviceList { fetched_at: now, devices, unrestricted });
-    }
-
-    /// The flag from the last fetch, however old (the policy rarely changes).
-    fn last_unrestricted(&self, recipient_id: &str) -> Option<bool> {
-        self.0.get(recipient_id).map(|e| e.unrestricted)
-    }
-
-    fn forget(&mut self, recipient_id: &str) {
-        self.0.remove(recipient_id);
-    }
-}
-
-#[cfg(test)]
-mod device_list_cache_tests {
-    use super::*;
-    use std::time::{Duration, Instant};
-
-    #[test]
-    fn unchecked_send_reuses_sessions_only_while_fresh_and_complete() {
-        let t0 = Instant::now();
-        let mut cache = DeviceListCache::default();
-        assert_eq!(cache.reusable("bob", t0, &[1, 2], false), None, "never fetched: fetch");
-
-        cache.record("bob", t0, vec![1, 2], true);
-        assert_eq!(cache.reusable("bob", t0 + Duration::from_secs(5), &[1, 2], false), Some(true));
-        // A device that messaged us first adds a session; still fresh.
-        assert_eq!(cache.reusable("bob", t0, &[1, 2, 3], false), Some(true));
-        // A listed device lost its session (archived / retired): fetch.
-        assert_eq!(cache.reusable("bob", t0, &[1], false), None);
-        assert_eq!(cache.reusable("bob", t0 + DEVICE_LIST_TTL, &[1, 2], false), None, "expired: fetch");
-
-        cache.forget("bob");
-        assert_eq!(cache.reusable("bob", t0, &[1, 2], false), None);
-
-        // Own user with no other device: an empty list is a real answer.
-        cache.record("me", t0, vec![], false);
-        assert_eq!(cache.reusable("me", t0, &[], false), Some(false));
-    }
-
-    #[test]
-    fn server_checked_send_reuses_sessions_without_a_ttl() {
-        let t0 = Instant::now();
-        let long_after = t0 + DEVICE_LIST_TTL * 1000;
-        let mut cache = DeviceListCache::default();
-        // Sessions but no fetch this run: one fetch, for the access policy.
-        assert_eq!(cache.reusable("bob", t0, &[1, 2], true), None);
-
-        cache.record("bob", t0, vec![1, 2], true);
-        assert_eq!(cache.reusable("bob", long_after, &[1, 2], true), Some(true));
-        // A listed device lost its session: the server will call it missing.
-        assert_eq!(cache.reusable("bob", long_after, &[1], true), Some(true));
-        // No session at all: nothing to send, so nothing for the server to
-        // answer. Back to the TTL.
-        assert_eq!(cache.reusable("bob", long_after, &[], true), None);
-        cache.record("me", t0, vec![], false);
-        assert_eq!(cache.reusable("me", t0, &[], true), Some(false));
-        assert_eq!(cache.reusable("me", long_after, &[], true), None);
-    }
 }
 
 /// Device ids of `recipient_id`'s stored session addresses (`"user:device"`).
