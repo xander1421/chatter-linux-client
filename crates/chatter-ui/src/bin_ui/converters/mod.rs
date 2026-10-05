@@ -11,6 +11,8 @@ mod attachment;
 mod message;
 mod kind;
 pub(crate) mod markdown;
+#[cfg(test)]
+mod open_bench;
 
 pub use chatter_core::ui::sidebar_data::{ChatRowSendData, FriendDataSendData, FriendRequestSendData};
 pub use utils::*;

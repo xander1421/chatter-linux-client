@@ -99,8 +99,9 @@ pub fn wire_channel_selected(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             // Mark as read
             let handle = ui_ctx.conversation(chatter_core::state::ActiveConversation::Channel(channel_id));
             // Where the user left off. This is the only moment it exists: the
-            // call that returns it is the call that clears `is_read`.
-            let anchor = handle.mark_as_read().await.unwrap_or_default();
+            // call that returns it is the call that clears `is_read`. The
+            // receipts go out for the page `load_channel_into_ui` loads.
+            let anchor = handle.mark_read_local().unwrap_or_default();
             // Reading a foldered channel has to clear its folder badge too.
             let ui_ctx_badges = ui_ctx.clone();
             run_ui!(weak, |w| super::refresh_section_badges(&w, &ui_ctx_badges));
@@ -110,6 +111,7 @@ pub fn wire_channel_selected(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                 channel_id,
                 ui_ctx.clone(),
                 anchor,
+                Some(handle),
             ).await;
         });
     });
@@ -121,11 +123,15 @@ pub fn wire_channel_selected(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
 /// `ConversationHandle::mark_as_read`); paths with no unread concept — a
 /// freshly created channel, Saved Messages — pass `UnreadAnchor::default()`,
 /// which opens at the newest message.
+///
+/// `receipts`: the handle whose `mark_read_local` produced `anchor`; its read
+/// receipts are sent for the page loaded here rather than a second query.
 pub async fn load_channel_into_ui(
     weak: slint::Weak<MainWindow>,
     channel_id: ChannelId,
     ui_ctx: Arc<ChatterClient>,
     anchor: chatter_core::domain::message::UnreadAnchor,
+    receipts: Option<chatter_core::services::conversation::ConversationHandle>,
 ) -> Vec<String> {
     // 1. Get channel metadata
     let channel = match ui_ctx.get_channel_local(&channel_id) {
@@ -163,12 +169,16 @@ pub async fn load_channel_into_ui(
         }
     };
 
+    if let Some(handle) = receipts {
+        handle.send_read_receipts_for_page(&messages);
+    }
+
     let message_timestamps: Vec<String> = messages.iter().map(|m| m.sent_at.to_string()).collect();
 
     // 3. Convert to display format
     let mut display_messages = messages_to_display_batch(
         &messages,
-        |m| ui_ctx.message_sender_display_name(m),
+        |ms| ui_ctx.message_sender_display_names(ms),
         |m| ui_ctx.message_sender_avatar(m),
         |att_id| ui_ctx.get_attachment(att_id),
         |m| ui_ctx.reply_author_display_name(m),

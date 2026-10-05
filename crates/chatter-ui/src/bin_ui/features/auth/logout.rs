@@ -21,6 +21,8 @@ pub fn wire_logout(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             if let Err(e) = ui_ctx.logout().await {
                 tracing::warn!("logout: {e}");
             }
+            // The next account must not be shown this one's avatars and media.
+            crate::bin_ui::decode_cache::on_logout();
 
             // Switch to login view
             let _ = slint::invoke_from_event_loop(move || {

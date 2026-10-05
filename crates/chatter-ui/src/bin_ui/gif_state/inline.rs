@@ -425,6 +425,21 @@ pub fn register_gif_attachment(
     std::thread::spawn(move || {
         use chatter_core::domain::attachment::ContentLocation;
 
+        // Decoded on an earlier open: no decrypt, no decode.
+        if let Some(cached) = crate::bin_ui::decode_cache::gif(&attachment_id) {
+            let _ = slint::invoke_from_event_loop(move || {
+                let first = register_inline_gif_from_buffers(
+                    &attachment_id,
+                    cached.frames.to_vec(),
+                    cached.delays.to_vec(),
+                );
+                if let (Some(first), Some(w)) = (first, window_weak.upgrade()) {
+                    set_attachment_thumbnail(&w, &attachment_id, first);
+                }
+            });
+            return;
+        }
+
         // Parse attachment ID
         let att_id: chatter_core::domain::ids::AttachmentId = match attachment_id.parse() {
             Ok(id) => id,
@@ -570,6 +585,7 @@ pub fn register_gif_attachment(
 
         // Final update with all frames
         if all_buffers.len() > 1 {
+            crate::bin_ui::decode_cache::put_gif(&attachment_id, all_buffers.clone(), all_delays.clone());
             let att_id_full = attachment_id.clone();
             let weak_full = window_weak.clone();
             let buffers_full = all_buffers.clone();

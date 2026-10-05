@@ -9,7 +9,7 @@ use crate::{MessageItemData, RichTextSpan};
 
 use super::attachment::{attachment_to_display_data, AttachmentDisplayData};
 use super::markdown::{parse_markdown, strip_markdown};
-use super::utils::{avatar_bytes_to_image, format_count, reaction_counts_to_entries};
+use super::utils::{format_count, reaction_counts_to_entries};
 
 /// A message body as a row renders it: `rich_content` is the markdown spans
 /// the bubble draws, `content` the stripped text used for empty checks and the
@@ -97,15 +97,16 @@ pub struct MessageDisplayData {
     /// Raw thumbnail bytes of the quoted media (image/jpeg, image/png).
     /// Populated from `Message.reply_to_thumbnail` on receive/send.
     pub reply_to_thumbnail_bytes: Option<Vec<u8>>,
-    /// Pre-decoded thumbnail pixels of the quoted media (RGBA, width, height).
-    /// Decoded from `reply_to_thumbnail_bytes` before hitting the UI thread.
-    pub reply_to_thumbnail_decoded: Option<(Vec<u8>, u32, u32)>,
+    /// Pre-decoded thumbnail of the quoted media, decoded from
+    /// `reply_to_thumbnail_bytes` before hitting the UI thread.
+    pub reply_to_thumbnail_decoded: Option<crate::bin_ui::decode_cache::Pixels>,
     pub delivery_status: String,
     pub failure_reason: String,
     /// Raw avatar bytes for anonymous group members.
     pub sender_avatar_bytes: Option<Vec<u8>>,
-    /// Pre-decoded avatar pixels (RGBA, width, height).
-    pub sender_avatar_decoded: Option<(Vec<u8>, u32, u32)>,
+    /// The sender's avatar at row size, shared by every row of that sender
+    /// (`decode_cache::avatar`).
+    pub sender_avatar_decoded: Option<crate::bin_ui::decode_cache::Pixels>,
     // Call message fields
     pub is_pinned: bool,
     pub is_call: bool,
@@ -121,29 +122,20 @@ impl MessageDisplayData {
             att.decode_thumbnail();
         }
 
-        // Decode sender avatar if available
-        if let Some(bytes) = &self.sender_avatar_bytes {
-            if !bytes.is_empty() {
-                self.sender_avatar_decoded = image::load_from_memory(bytes)
-                    .ok()
-                    .map(|img| {
-                        let rgba = img.to_rgba8();
-                        let (w, h) = rgba.dimensions();
-                        (rgba.into_raw(), w, h)
-                    });
+        if self.sender_avatar_decoded.is_none() {
+            if let Some(bytes) = &self.sender_avatar_bytes {
+                self.sender_avatar_decoded = crate::bin_ui::decode_cache::avatar(bytes);
             }
         }
 
         // Decode reply-bubble thumbnail
         if let Some(bytes) = &self.reply_to_thumbnail_bytes {
             if !bytes.is_empty() {
-                self.reply_to_thumbnail_decoded = image::load_from_memory(bytes)
-                    .ok()
-                    .map(|img| {
-                        let rgba = img.to_rgba8();
-                        let (w, h) = rgba.dimensions();
-                        (rgba.into_raw(), w, h)
-                    });
+                self.reply_to_thumbnail_decoded = image::load_from_memory(bytes).ok().map(|img| {
+                    let rgba = img.to_rgba8();
+                    let (w, h) = rgba.dimensions();
+                    crate::bin_ui::decode_cache::Pixels::clone_from_slice(rgba.as_raw(), w, h)
+                });
             }
         }
     }
@@ -192,11 +184,11 @@ impl MessageDisplayData {
             matches
         };
 
-        let (sender_avatar_source, has_avatar) = if let Some((ref pixels, w, h)) = self.sender_avatar_decoded {
-            (crate::bin_ui::slint_conversions::rgba_to_slint_image(pixels, w, h), true)
+        let (sender_avatar_source, has_avatar) = if let Some(pixels) = &self.sender_avatar_decoded {
+            (slint::Image::from_rgba8(pixels.clone()), true)
         } else if let Some(bytes) = &self.sender_avatar_bytes {
-            match avatar_bytes_to_image(bytes) {
-                Some(img) => (img, true),
+            match crate::bin_ui::decode_cache::avatar(bytes) {
+                Some(pixels) => (slint::Image::from_rgba8(pixels), true),
                 None => (slint::Image::default(), false),
             }
         } else {
@@ -204,8 +196,9 @@ impl MessageDisplayData {
         };
 
         let (reply_to_thumbnail, reply_to_has_thumbnail, reply_to_thumb_w, reply_to_thumb_h) =
-            if let Some((ref pixels, w, h)) = self.reply_to_thumbnail_decoded {
-                (crate::bin_ui::slint_conversions::rgba_to_slint_image(pixels, w, h,), true, w as i32, h as i32)
+            if let Some(pixels) = &self.reply_to_thumbnail_decoded {
+                let (w, h) = (pixels.width(), pixels.height());
+                (slint::Image::from_rgba8(pixels.clone()), true, w as i32, h as i32)
             } else {
                 (slint::Image::default(), false, 0, 0)
             };
@@ -402,7 +395,8 @@ pub fn message_to_display_data_with_replies(
 ///
 /// # Arguments
 /// - `messages`: slice of domain Messages to convert
-/// - `sender_name`: `ChatterClient::message_sender_display_name`
+/// - `sender_names`: `ChatterClient::message_sender_display_names` — the
+///   whole page's names, in order
 /// - `resolve_attachment`: resolves an `AttachmentId` to an `Option<Attachment>`
 ///   (callers should handle the `Result` → `Option` conversion themselves)
 /// - `reply_author_name`: `ChatterClient::reply_author_display_name`
@@ -463,7 +457,7 @@ pub fn apply_reply_counts(
 
 pub fn messages_to_display_batch(
     messages: &[Message],
-    sender_name: impl Fn(&Message) -> String,
+    sender_names: impl FnOnce(&[Message]) -> Vec<String>,
     sender_avatar: impl Fn(&Message) -> Option<Vec<u8>>,
     resolve_attachment: impl Fn(&chatter_core::domain::AttachmentId) -> Option<Attachment>,
     reply_author_name: impl Fn(&Message) -> String,
@@ -471,15 +465,26 @@ pub fn messages_to_display_batch(
     reply_parent_media: impl Fn(&Message) -> chatter_core::client::ReplyParentMedia,
 ) -> Vec<MessageDisplayData> {
     let mut display_messages = Vec::with_capacity(messages.len());
-    // One profile read per sender, not per message.
-    // each row still decodes its own copy of the avatar; share one
-    // `slint::Image` per sender if long histories make that show up.
-    let mut avatars: std::collections::HashMap<Option<chatter_core::domain::ids::UserId>, Option<Vec<u8>>> =
-        std::collections::HashMap::new();
+    // The whole page's names in one call (core batches the lookup).
+    let names = sender_names(messages);
+    // One avatar per sender, decoded once at row size and shared by all of
+    // that sender's rows (`decode_cache::avatar`). Decoding the full 512 px
+    // avatar again for every row was most of a conversation open.
+    let mut avatars: std::collections::HashMap<
+        Option<chatter_core::domain::ids::UserId>,
+        (Option<Vec<u8>>, Option<crate::bin_ui::decode_cache::Pixels>),
+    > = std::collections::HashMap::new();
 
-    for msg in messages {
-        let sender = sender_name(msg);
-        let avatar = avatars.entry(msg.sender_id).or_insert_with(|| sender_avatar(msg)).clone();
+    for (i, msg) in messages.iter().enumerate() {
+        let sender = names.get(i).cloned().unwrap_or_default();
+        let (avatar_bytes, avatar_pixels) = avatars
+            .entry(msg.sender_id)
+            .or_insert_with(|| {
+                let bytes = sender_avatar(msg);
+                let pixels = bytes.as_deref().and_then(crate::bin_ui::decode_cache::avatar);
+                (bytes, pixels)
+            })
+            .clone();
 
         let resolved_attachments: Vec<_> = msg
             .attachments
@@ -488,7 +493,8 @@ pub fn messages_to_display_batch(
             .collect();
 
         let mut display_data =
-            message_to_display_data(msg, &sender, &resolved_attachments, avatar);
+            message_to_display_data(msg, &sender, &resolved_attachments, avatar_bytes);
+        display_data.sender_avatar_decoded = avatar_pixels;
 
         if display_data.is_reply {
             display_data.reply_to_sender_name = reply_author_name(msg);

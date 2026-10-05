@@ -365,7 +365,7 @@ fn load_older(w: &MainWindow, ui_ctx: &Arc<ChatterClient>, until: Option<Message
         // Convert older messages to display data
         let mut display_messages = messages_to_display_batch(
             &older_messages,
-            |m| ui_ctx.message_sender_display_name(m),
+            |ms| ui_ctx.message_sender_display_names(ms),
             |m| ui_ctx.message_sender_avatar(m),
             |att_id| ui_ctx.get_attachment(att_id),
             |m| ui_ctx.reply_author_display_name(m),

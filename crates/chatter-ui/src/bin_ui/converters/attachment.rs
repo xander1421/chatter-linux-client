@@ -38,8 +38,9 @@ pub struct AttachmentDisplayData {
     pub progress: f32,
     /// Thumbnail JPEG bytes from sender (for instant preview without download).
     pub thumbnail_bytes: Vec<u8>,
-    /// Pre-decoded thumbnail pixels (RGBA, width, height) - decode before UI thread.
-    pub thumbnail_pixels: Option<(Vec<u8>, u32, u32)>,
+    /// Decoded thumbnail, from `decode_cache` — decode before the UI thread.
+    /// Shared with the cache, so the UI thread wraps it without copying.
+    pub thumbnail_pixels: Option<crate::bin_ui::decode_cache::Pixels>,
 }
 
 impl AttachmentDisplayData {
@@ -66,13 +67,10 @@ impl AttachmentDisplayData {
         // opened — 95% of the entire conversation-open budget, for a difference
         // invisible at 280px. Cheap first, original only as a fallback.
         if !self.thumbnail_bytes.is_empty() {
-            self.thumbnail_pixels = image::load_from_memory(&self.thumbnail_bytes)
-                .ok()
-                .map(|img| {
-                    let rgba = img.to_rgba8();
-                    let (w, h) = rgba.dimensions();
-                    (rgba.into_raw(), w, h)
-                });
+            let bytes = &self.thumbnail_bytes;
+            self.thumbnail_pixels = crate::bin_ui::decode_cache::thumbnail(&self.id, bytes.len(), || {
+                image::load_from_memory(bytes).ok()
+            });
             if self.thumbnail_pixels.is_some() {
                 return;
             }
@@ -87,14 +85,12 @@ impl AttachmentDisplayData {
                 .as_deref()
                 .filter(|p| std::path::Path::new(p).exists())
             {
-                if let Ok(img) = image::open(path) {
-                    // Cap the long edge; ample even at 2x HiDPI while staying
-                    // cheap to hold in memory.
-                    const DISPLAY_MAX: u32 = 1024;
-                    let rgba = img.thumbnail(DISPLAY_MAX, DISPLAY_MAX).to_rgba8();
-                    let (w, h) = rgba.dimensions();
-                    self.thumbnail_pixels = Some((rgba.into_raw(), w, h));
-                }
+                // Cap the long edge; ample even at 2x HiDPI while staying
+                // cheap to hold in memory.
+                const DISPLAY_MAX: u32 = 1024;
+                self.thumbnail_pixels = crate::bin_ui::decode_cache::thumbnail(&self.id, 0, || {
+                    image::open(path).ok().map(|img| img.thumbnail(DISPLAY_MAX, DISPLAY_MAX))
+                });
             }
         }
     }
@@ -104,12 +100,10 @@ impl AttachmentDisplayData {
         // Priority 0: Use pre-decoded pixels (fastest - no decoding on UI thread)
         // Priority 1: Try to load thumbnail from sender-provided bytes (instant preview)
         // Priority 2: Load from local path after download
-        let (has_thumbnail, thumbnail, img_width, img_height) = if let Some((ref pixels, w, h)) = self.thumbnail_pixels {
-            // Use pre-decoded pixels (fast - just wrap in Slint buffer)
-            let slint_img = crate::bin_ui::slint_conversions::rgba_to_slint_image(pixels,
-                w,
-                h,);
-            (true, slint_img, w as i32, h as i32)
+        let (has_thumbnail, thumbnail, img_width, img_height) = if let Some(pixels) = &self.thumbnail_pixels {
+            // Pre-decoded and shared: wrapping it is a reference count, no copy.
+            let (w, h) = (pixels.width(), pixels.height());
+            (true, Image::from_rgba8(pixels.clone()), w as i32, h as i32)
         } else if !self.thumbnail_bytes.is_empty() {
             // Fallback: decode on UI thread (should be avoided - call decode_thumbnail() first)
             tracing::warn!(

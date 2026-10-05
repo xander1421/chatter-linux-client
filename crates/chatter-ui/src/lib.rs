@@ -91,6 +91,10 @@ fn android_main(app: i_slint_backend_android_activity::AndroidApp) {
                 PollEvent::Main(MainEvent::Pause) => false,
                 _ => return,
             };
+            if !visible {
+                // Screen locked or app backgrounded: drop every decoded image.
+                crate::bin_ui::decode_cache::on_lock();
+            }
             if let Some(client) = listener_client.get() {
                 let _rt = rt_handle().enter();
                 client.set_app_visible(visible);

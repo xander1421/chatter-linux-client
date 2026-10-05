@@ -54,42 +54,16 @@ pub fn load_private_group_messages(window: &MainWindow, ui_ctx: &Arc<ChatterClie
             }
         };
 
-        // Convert messages to display data
-        let mut display_messages: Vec<crate::bin_ui::converters::MessageDisplayData> = Vec::with_capacity(messages.len());
-        for msg in &messages {
-            // Name resolution (conversation-scoped) lives in core; avatar bytes
-            // are presentation and stay here.
-            let sender_name = ui_ctx.message_sender_display_name(msg);
-            let sender_avatar = msg.sender_id.as_ref()
-                .and_then(|sid| ui_ctx.get_anon_group_member(&group_id, sid))
-                .and_then(|member| member.avatar);
+        let display_messages = crate::bin_ui::converters::messages_to_display_batch(
+            &messages,
+            |ms| ui_ctx.message_sender_display_names(ms),
+            |m| ui_ctx.message_sender_avatar(m),
+            |att_id| ui_ctx.get_attachment(att_id),
+            |m| ui_ctx.reply_author_display_name(m),
+            |m| ui_ctx.reply_parent_missing_for(m),
+            |m| ui_ctx.reply_parent_media(m),
+        );
 
-            // Resolve attachments from stored IDs
-            let resolved_attachments: Vec<chatter_core::domain::Attachment> = msg.attachments
-                .iter()
-                .filter_map(|att_id| ui_ctx.get_attachment(att_id))
-                .collect();
-
-            let mut display_data = crate::bin_ui::converters::message_to_display_data(
-                msg,
-                &sender_name,
-                &resolved_attachments,
-                sender_avatar,
-            );
-
-            if display_data.is_reply {
-                display_data.reply_to_sender_name = ui_ctx.reply_author_display_name(msg);
-                display_data.reply_to_not_found = ui_ctx.reply_parent_missing_for(msg);
-            }
-
-            display_messages.push(display_data);
-        }
-
-        // Pre-decode attachment thumbnails before UI thread
-        for msg in &mut display_messages {
-            msg.decode_attachment_thumbnails();
-        }
-        
         // Update UI to show selected group and messages
         let group_name = group.name.clone();
         let ui_ctx_gifs = ui_ctx.clone();
@@ -220,37 +194,15 @@ async fn load_private_group_messages_internal(
     // Reaction counts populated in core.
     let messages = ui_ctx.get_anon_group_messages_asc(&group_id, None, chatter_core::config::MESSAGE_PAGE_SIZE).unwrap_or_default();
 
-    let mut display_messages = Vec::with_capacity(messages.len());
-    for msg in &messages {
-        // Name resolution (conversation-scoped) lives in core; avatar bytes
-        // are presentation and stay here.
-        let sender_name = ui_ctx.message_sender_display_name(msg);
-        let sender_avatar = msg.sender_id.as_ref()
-            .and_then(|sid| ui_ctx.get_anon_group_member(&group_id, sid))
-            .and_then(|member| member.avatar);
-
-        let resolved_attachments: Vec<_> = msg.attachments
-            .iter()
-            .filter_map(|att_id| ui_ctx.get_attachment(att_id))
-            .collect();
-
-        let mut display_data = crate::bin_ui::converters::message_to_display_data(
-            msg,
-            &sender_name,
-            &resolved_attachments,
-            sender_avatar,
-        );
-
-        if display_data.is_reply {
-            display_data.reply_to_sender_name = ui_ctx.reply_author_display_name(msg);
-            display_data.reply_to_not_found = ui_ctx.reply_parent_missing_for(msg);
-        }
-        display_messages.push(display_data);
-    }
-
-    for msg in &mut display_messages {
-        msg.decode_attachment_thumbnails();
-    }
+    let display_messages = crate::bin_ui::converters::messages_to_display_batch(
+        &messages,
+        |ms| ui_ctx.message_sender_display_names(ms),
+        |m| ui_ctx.message_sender_avatar(m),
+        |att_id| ui_ctx.get_attachment(att_id),
+        |m| ui_ctx.reply_author_display_name(m),
+        |m| ui_ctx.reply_parent_missing_for(m),
+        |m| ui_ctx.reply_parent_media(m),
+    );
 
     let group_name = group.name.clone();
     let group_id_str = group_id.to_string();

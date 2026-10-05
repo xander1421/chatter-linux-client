@@ -82,7 +82,7 @@ pub fn open(window: &MainWindow, ui_ctx: &Arc<ChatterClient>, id: &str) {
         let display = messages_to_display_batch(
             &messages,
             // Mesh senders, not chatter accounts — see `core_api::sender_display_name`.
-            |m| core_api::sender_display_name(&ui_ctx, m),
+            |ms| ms.iter().map(|m| core_api::sender_display_name(&ui_ctx, m)).collect(),
             // No chatter profile behind a mesh sender.
             |_| None,
             |att_id| ui_ctx.get_attachment(att_id),
@@ -194,7 +194,7 @@ pub(super) fn append_incoming(
         std::slice::from_ref(&message.message),
         // Core supplies collision suffixes; retain the live nickname if the
         // sender has no peer record (for example our own local echo).
-        |_| nickname.clone(),
+        |ms| vec![nickname.clone(); ms.len()],
         |_| None,
         |att_id| ui_ctx.get_attachment(att_id),
         |m| ui_ctx.reply_author_display_name(m),

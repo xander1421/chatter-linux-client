@@ -82,6 +82,7 @@ pub(crate) fn wire_saved_messages(window: &MainWindow, ui_ctx: &Arc<ChatterClien
                 channel_id,
                 ui_ctx,
                 Default::default(),
+                None,
             ).await;
         });
     });

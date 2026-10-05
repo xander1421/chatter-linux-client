@@ -758,6 +758,7 @@ pub fn wire_settings_callbacks(window: &MainWindow, ui_ctx: &Arc<ChatterClient>)
                     // Account is gone server-side and local auth state is cleared
                     // by the wrapper. Reflect it in the UI and route to login.
                     ui_ctx.auth_state().set_logged_out();
+                    crate::bin_ui::decode_cache::on_logout();
                     let _ = slint::invoke_from_event_loop(move || {
                         if let Some(w) = weak.upgrade() {
                             w.set_settings_delete_loading(false);

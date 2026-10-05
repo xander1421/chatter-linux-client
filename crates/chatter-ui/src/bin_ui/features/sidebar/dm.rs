@@ -88,12 +88,6 @@ pub fn wire_dm_selected(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
         // both read `active_channel_id`; if they fire before the async task
         // sets it, send_message.rs:86 early-returns and
         // handle_message_received drops the bubble (`is_active=false`).
-        // Catch up on the peer's profile edits (throttled in core).
-        if let Some(peer) = peer_id_for_dm {
-            let refresh_ctx = ui_ctx.clone();
-            tokio::spawn(async move { refresh_ctx.refresh_profile_if_stale(&peer).await });
-        }
-
         tracing::info!(?active, dm_id = %dm_id_str, is_anon = is_anon_dm, "[UI_OPEN_DM] committing active conversation pre-spawn");
         ui_ctx.chat_state().set_active_conversation(active);
 
@@ -135,11 +129,9 @@ pub fn wire_dm_selected(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             // path makes; covers anon and server DMs alike.
             // Where the user left off. This is the only moment it exists:
             // the call that returns it is the call that clears `is_read`.
-            let anchor = ui_ctx
-                .conversation(active)
-                .mark_as_read()
-                .await
-                .unwrap_or_default();
+            // Receipts go out below, for the page this open loads anyway.
+            let read_handle = ui_ctx.conversation(active);
+            let anchor = read_handle.mark_read_local().unwrap_or_default();
 
             // 1. Handle Anon DM selection
             // The resolved conversation, not the row id: a peer's row can
@@ -175,10 +167,11 @@ pub fn wire_dm_selected(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                         return;
                     }
                 };
+                read_handle.send_read_receipts_for_page(&messages);
 
                 let display_messages = messages_to_display_batch(
                     &messages,
-                    |m| ui_ctx.message_sender_display_name(m),
+                    |ms| ui_ctx.message_sender_display_names(ms),
                     |m| ui_ctx.message_sender_avatar(m),
                     |att_id| ui_ctx.get_attachment(att_id),
                     |m| ui_ctx.reply_author_display_name(m),
@@ -271,14 +264,15 @@ pub fn wire_dm_selected(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                     return;
                 }
             };
+            read_handle.send_read_receipts_for_page(&messages);
 
-            // The fetch refreshes the stored profile; when it fails (offline,
-            // server error) the stored one stands. The name is the chat list's
-            // resolution (profile → username → placeholder), never the raw id.
-            let peer_profile = match ui_ctx.get_user_profile(&peer_id).await {
-                Ok(p) => Some(p),
-                Err(_) => ui_ctx.get_profile_local(&peer_id),
-            };
+            // The stored profile, not a server fetch: the open no longer waits
+            // on a network round trip (and in Shield makes no identified
+            // request at all). The throttled refresh after the first paint,
+            // below, patches the header through `UserProfileUpdated`. The name
+            // is the chat list's resolution (profile → username →
+            // placeholder), never the raw id.
+            let peer_profile = ui_ctx.get_profile_local(&peer_id);
             let title = ui_ctx.display_name(&peer_id);
 
             let status_str = peer_profile.as_ref()
@@ -287,7 +281,7 @@ pub fn wire_dm_selected(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
 
             let display_messages = messages_to_display_batch(
                 &messages,
-                |m| ui_ctx.message_sender_display_name(m),
+                |ms| ui_ctx.message_sender_display_names(ms),
                 |m| ui_ctx.message_sender_avatar(m),
                 |att_id| ui_ctx.get_attachment(att_id),
                 |m| ui_ctx.reply_author_display_name(m),
@@ -308,6 +302,7 @@ pub fn wire_dm_selected(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                     })
                 });
 
+            let refresh_ctx = ui_ctx.clone();
             let anchor_page = messages.clone();
             run_ui!(weak, |w| {
                 super::apply_unread_anchor(&w, anchor, &anchor_page);
@@ -344,6 +339,10 @@ pub fn wire_dm_selected(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                 // anon-DM / channel / group open paths.
                 crate::bin_ui::gif_state::auto_register_gifs_from_messages(w.as_weak(), ui_ctx.clone());
             });
+
+            // Catch up on the peer's profile edits once the conversation is on
+            // screen (throttled in core; skipped in Shield).
+            refresh_ctx.refresh_profile_if_stale(&peer_id).await;
         });
     });
 }

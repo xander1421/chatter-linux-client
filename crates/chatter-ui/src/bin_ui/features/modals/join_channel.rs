@@ -212,6 +212,7 @@ pub fn wire_join_channel(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                         channel_id,
                         ui_ctx,
                         Default::default(),
+                        None,
                     ).await;
 
 

@@ -102,7 +102,7 @@ fn wire_load_more_thread_replies(window: &MainWindow, ui_ctx: &Arc<ChatterClient
             if page.is_empty() { return; }
             let display = messages_to_display_batch(
                 &page,
-                |m| ui_ctx.message_sender_display_name(m),
+                |ms| ui_ctx.message_sender_display_names(ms),
                 |m| ui_ctx.message_sender_avatar(m),
                 |att_id| ui_ctx.get_attachment(att_id),
                 |m| ui_ctx.reply_author_display_name(m),
@@ -241,7 +241,7 @@ pub fn thread_reply_display(
 ) -> crate::bin_ui::converters::MessageDisplayData {
     let mut display = messages_to_display_batch(
         std::slice::from_ref(message),
-        |m| ui_ctx.message_sender_display_name(m),
+        |ms| ui_ctx.message_sender_display_names(ms),
         |m| ui_ctx.message_sender_avatar(m),
         |att_id| ui_ctx.get_attachment(att_id),
         |m| ui_ctx.reply_author_display_name(m),
@@ -274,7 +274,7 @@ pub fn load_thread_data(
             let total_replies = ui_ctx.thread_reply_count(&root_message_id);
             let display = messages_to_display_batch(
                 &replies,
-                |m| ui_ctx.message_sender_display_name(m),
+                |ms| ui_ctx.message_sender_display_names(ms),
                 |m| ui_ctx.message_sender_avatar(m),
                 |att_id| ui_ctx.get_attachment(att_id),
                 |m| ui_ctx.reply_author_display_name(m),
