@@ -457,6 +457,7 @@ pub fn solve_registration_pow(challenge: &chatter_core::proto::chat_v1::RequestR
         chatter_core::crypto::pow::Purpose::Register,
         &c.token,
         c.difficulty,
+        c.gate_bits,
         std::time::Instant::now() + std::time::Duration::from_secs(240),
     )
     .expect("registration proof of work")

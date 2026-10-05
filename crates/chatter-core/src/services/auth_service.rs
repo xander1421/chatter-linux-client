@@ -190,11 +190,13 @@ pub async fn login_start_paying_pow(
             pow::Purpose::Login,
             challenge.token.clone(),
             challenge.difficulty,
+            challenge.gate_bits,
             started + LOGIN_POW_DEADLINE,
         )
         .await?;
         tracing::info!(
             pow_bits = challenge.difficulty,
+            gate_bits = challenge.gate_bits,
             solve_ms = solve_started.elapsed().as_millis() as u64,
             "login proof of work solved"
         );
@@ -1053,12 +1055,14 @@ impl AuthService {
             crate::crypto::pow::Purpose::Register,
             pow_challenge.token.clone(),
             pow_challenge.difficulty,
+            pow_challenge.gate_bits,
             pow_started + std::time::Duration::from_secs(240),
         )
         .await
         .map_err(AuthError::Crypto)?;
         tracing::info!(
             pow_bits = pow_challenge.difficulty,
+            gate_bits = pow_challenge.gate_bits,
             solve_ms = pow_started.elapsed().as_millis() as u64,
             "registration proof of work solved"
         );

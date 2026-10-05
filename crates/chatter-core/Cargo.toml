@@ -272,6 +272,14 @@ chatter-mesh-android = { path = "../chatter-mesh-android", optional = true }
 # follows the call route (earpiece / speaker / headset) AudioManager selects.
 oboe = { version = "0.6", features = ["java-interface"] }
 
+# Android aarch64: SHA-256 on the ARMv8 SHA2 instructions for the
+# proof-of-work gate (crypto/pow.rs), which rises to 2^23 SHA-256 under a
+# flood. sha2 0.10 uses them only with `asm` (runtime `cpufeatures` hwcap
+# check, software fallback). Measured on a Galaxy S9, server OPEN-ITEMS §130:
+# 8.3 vs 2.3 M hash/s/thread. x86_64 keeps its own SHA-NI path without it.
+[target.'cfg(all(target_os = "android", target_arch = "aarch64"))'.dependencies]
+sha2 = { version = "0.10", features = ["asm"] }
+
 [dev-dependencies]
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 # Paused-clock tests (heartbeat.rs `start_paused`).

@@ -432,18 +432,18 @@ async fn test_login_priced_by_proof_of_work_not_locked() {
     // A solution for the sign-up puzzle over the same token is not a login
     // solution (unless by chance it is both; skip those).
     use chatter_core::crypto::pow::{self, Purpose};
-    let reg = (0u64..)
-        .find(|s| {
-            pow::verify(Purpose::Register, &challenge.token, *s, challenge.difficulty)
-                && !pow::verify(Purpose::Login, &challenge.token, *s, challenge.difficulty)
-        })
-        .unwrap();
-    let ke1 = opaque::login_start("wrong guess").unwrap().ke1;
-    let refused = auth_client.login_start(&identifier, &ke1, Some((&challenge.token, reg)), &[], &[]).await;
-    assert!(
-        matches!(&refused, Err(NetworkError::PermissionDenied)),
-        "sign-up-domain solution must be refused: {refused:?}"
-    );
+    let far = std::time::Instant::now() + std::time::Duration::from_secs(120);
+    let reg = pow::solve(Purpose::Register, &challenge.token, challenge.difficulty, challenge.gate_bits, far).unwrap();
+    // (By chance it can be both; the domain separation is then left to the
+    // unit tests.)
+    if !pow::verify(Purpose::Login, &challenge.token, reg, challenge.difficulty, challenge.gate_bits) {
+        let ke1 = opaque::login_start("wrong guess").unwrap().ke1;
+        let refused = auth_client.login_start(&identifier, &ke1, Some((&challenge.token, reg)), &[], &[]).await;
+        assert!(
+            matches!(&refused, Err(NetworkError::PermissionDenied)),
+            "sign-up-domain solution must be refused: {refused:?}"
+        );
+    }
 
     // The owner: solved transparently, then a normal login.
     let paid = AtomicU32::new(0);
