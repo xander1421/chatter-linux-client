@@ -90,6 +90,7 @@ export component ChatLayout inherits Rectangle {
     in-out property <string> emoji-search;
     in-out property <string> gif-search;
     private property <string> drawer-search-text;
+    init => { root.drawer-search-text = root.gif-picker-visible ? root.gif-search : root.emoji-search; }
     changed emoji-search => { if root.emoji-picker-visible { root.drawer-search-text = root.emoji-search; } }
     changed gif-search => { if root.gif-picker-visible { root.drawer-search-text = root.gif-search; } }
     changed emoji-picker-visible => { if root.emoji-picker-visible { root.drawer-search-text = root.emoji-search; } }

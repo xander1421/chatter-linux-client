@@ -195,6 +195,13 @@ fn composer_drawer_and_recording_have_usable_geometry() {
         let search_value = || testing::ElementHandle::find_by_accessible_label(&w, "Search emoji and GIFs")
             .next().unwrap().accessible_value().unwrap().to_string();
         assert_eq!(search_value(), "cat");
+        w.set_active_call_fullscreen(true);
+        pump_at(&w, width, height);
+        assert!(testing::ElementHandle::find_by_element_type_name(&w, "ChatLayout").next().is_none());
+        w.set_active_call_fullscreen(false);
+        pump_at(&w, width, height);
+        assert_eq!(search_value(), "cat", "remounted drawer lost its visible query");
+        assert_eq!(w.get_composer_text().as_str(), "Draft stays here", "open drawer remount replayed emoji insertion");
         click(&w, "GIFs");
         pump_at(&w, width, height);
         assert_eq!(search_value(), w.get_composer_gif_picker_search().as_str());
@@ -216,6 +223,8 @@ fn composer_drawer_and_recording_have_usable_geometry() {
         w.set_composer_emoji_picker_visible(false);
         w.set_composer_gif_picker_visible(true);
         pump_at(&w, width, height);
+        let chat = testing::ElementHandle::find_by_element_type_name(&w, "ChatLayout").next().unwrap();
+        let cp = chat.absolute_position();
         let gif = testing::ElementHandle::find_by_element_type_name(&w, "GifPicker")
             .next()
             .unwrap();
