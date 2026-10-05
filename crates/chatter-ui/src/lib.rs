@@ -100,6 +100,10 @@ fn android_main(app: i_slint_backend_android_activity::AndroidApp) {
     ))
     .expect("Failed to set Android platform");
 
+    // The SQLCipher passphrase and mesh seal key are Keystore-sealed; the
+    // wrapper must be in place before `app_init` builds the client.
+    crate::platform::android::keystore::init();
+
     // Two-phase startup (see desktop `app_main` for the same split):
     //   Phase 1: block_on(app_init) while the reactor is polling.
     //   Phase 2: leave block_on, enter runtime ctx, run Slint event loop.

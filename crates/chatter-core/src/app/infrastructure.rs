@@ -345,48 +345,71 @@ impl InfrastructureContainer {
         })
     }
 
+    /// The Android `.db_key` logic, with the Keystore wrapper as a parameter so
+    /// it is testable on the host.
+    ///
+    /// Generates ONLY when there is neither a key file nor a database. A sealed
+    /// key the Keystore will not open, or a database whose key file is gone,
+    /// is an error: generating there would orphan the existing database (the
+    /// caller then moves it aside as unreadable).
+    #[cfg_attr(not(target_os = "android"), allow(dead_code))]
+    fn android_passphrase(
+        directories: &Directories,
+        wrap: &dyn crate::system::sealed_secret::KeyWrap,
+    ) -> Result<String, ContextError> {
+        use crate::system::sealed_secret;
+        let err = |e: String| ContextError::System(crate::error::SystemError::Keyring(e));
+        let key_file = directories.data_dir().join(".db_key");
+
+        if let Some(existing) = sealed_secret::read(&key_file, sealed_secret::DB_ALIAS, wrap).map_err(|e| {
+            err(format!(
+                "{e}. The database is left untouched; the app cannot open it on this device. \
+                 Reinstall (clearing app data) to start over."
+            ))
+        })? {
+            tracing::info!("unsealed the database passphrase with the Android Keystore");
+            return Ok(existing.to_string());
+        }
+
+        if directories.database_path().exists() {
+            return Err(err(format!(
+                "{} exists but its key file {} is missing, so it cannot be opened. \
+                 Refusing to generate a new key over it; reinstall (clearing app data) to start over.",
+                directories.database_path().display(),
+                key_file.display()
+            )));
+        }
+
+        let mut bytes = zeroize::Zeroizing::new([0u8; 32]);
+        // OsRng for the DB master passphrase (highest-value key) — matches
+        // the crate's stated RNG policy, not the ThreadRng userspace CSPRNG.
+        {
+            use rand::TryRngCore;
+            rand::rngs::OsRng
+                .try_fill_bytes(bytes.as_mut())
+                .map_err(|e| err(format!("OS CSPRNG failed: {e}")))?;
+        }
+        let passphrase = zeroize::Zeroizing::new(hex::encode(bytes.as_ref()));
+        // Persisted before use: a database keyed by a passphrase we failed to
+        // store would be unopenable on the next launch.
+        sealed_secret::write(&key_file, sealed_secret::DB_ALIAS, wrap, &passphrase).map_err(err)?;
+        tracing::info!("generated a database passphrase and sealed it with the Android Keystore");
+        Ok(passphrase.to_string())
+    }
+
     /// Get or generate database passphrase from keyring.
     ///
     /// On Android, the system keyring (secret-service/kwallet) is unavailable.
-    /// Falls back to file-based storage in the app's private data directory,
-    /// which is sandboxed by Android's per-app Linux UID.
+    /// The passphrase lives in `.db_key` in the app data directory, sealed
+    /// under an Android Keystore key (`system::sealed_secret`), so a copy of
+    /// the app's files does not contain it.
     fn passphrase_or_generate(keyring: &Keyring, directories: &Directories) -> Result<String, ContextError> {
-        // On Android, use file-based passphrase storage (app sandbox protects it)
         #[cfg(target_os = "android")]
         {
             let _ = keyring;
-            let passphrase_file = directories.data_dir().join(".db_key");
-            if let Ok(existing) = std::fs::read_to_string(&passphrase_file) {
-                let trimmed = existing.trim().to_string();
-                if !trimmed.is_empty() {
-                    tracing::info!("Retrieved existing passphrase from app storage");
-                    return Ok(trimmed);
-                }
-            }
-
-            // Generate new passphrase
-            let mut bytes = [0u8; 32];
-            // OsRng for the DB master passphrase (highest-value key) — matches
-            // the crate's stated RNG policy, not the ThreadRng userspace CSPRNG.
-            { use rand::TryRngCore; rand::rngs::OsRng.try_fill_bytes(&mut bytes).expect("OS CSPRNG must not fail"); }
-            let passphrase = hex::encode(bytes);
-
-            // Store in app's private directory
-            if let Some(parent) = passphrase_file.parent() {
-                let _ = std::fs::create_dir_all(parent);
-            }
-            std::fs::write(&passphrase_file, &passphrase)
-                .map_err(|e| ContextError::System(crate::error::SystemError::DirectoryCreate(e)))?;
-
-            // Restrict permissions to owner only
-            #[cfg(unix)]
-            {
-                use std::os::unix::fs::PermissionsExt;
-                let _ = std::fs::set_permissions(&passphrase_file, std::fs::Permissions::from_mode(0o600));
-            }
-
-            tracing::info!("Generated and stored new passphrase in app storage");
-            return Ok(passphrase);
+            let wrap = crate::system::sealed_secret::installed_key_wrap()
+                .map_err(|e| ContextError::System(crate::error::SystemError::Keyring(e)))?;
+            return Self::android_passphrase(directories, wrap);
         }
 
         #[cfg(not(target_os = "android"))]
@@ -447,5 +470,60 @@ impl InfrastructureContainer {
 
             Ok(passphrase)
         }
+    }
+}
+
+#[cfg(test)]
+mod android_passphrase_tests {
+    use super::*;
+    use crate::system::sealed_secret::tests::FakeWrap;
+
+    const OK: FakeWrap = FakeWrap { fail_unseal: false };
+
+    fn dirs() -> (tempfile::TempDir, Directories) {
+        let tmp = tempfile::tempdir().unwrap();
+        let dirs = Directories::with_base_dir(tmp.path().to_path_buf()).unwrap();
+        (tmp, dirs)
+    }
+
+    #[test]
+    fn first_run_generates_seals_and_then_reads_back_the_same_passphrase() {
+        let (_tmp, dirs) = dirs();
+        let first = InfrastructureContainer::android_passphrase(&dirs, &OK).unwrap();
+        assert_eq!(first.len(), 64);
+        let on_disk = std::fs::read_to_string(dirs.data_dir().join(".db_key")).unwrap();
+        assert!(on_disk.starts_with("ks1:") && !on_disk.contains(&first));
+        std::fs::write(dirs.database_path(), b"db").unwrap();
+        assert_eq!(InfrastructureContainer::android_passphrase(&dirs, &OK).unwrap(), first);
+    }
+
+    #[test]
+    fn an_unsealable_key_fails_closed_and_leaves_key_and_database_alone() {
+        let (_tmp, dirs) = dirs();
+        InfrastructureContainer::android_passphrase(&dirs, &OK).unwrap();
+        std::fs::write(dirs.database_path(), b"db").unwrap();
+        let key_before = std::fs::read(dirs.data_dir().join(".db_key")).unwrap();
+        assert!(InfrastructureContainer::android_passphrase(&dirs, &FakeWrap { fail_unseal: true }).is_err());
+        assert_eq!(std::fs::read(dirs.data_dir().join(".db_key")).unwrap(), key_before);
+        assert_eq!(std::fs::read(dirs.database_path()).unwrap(), b"db");
+    }
+
+    #[test]
+    fn a_database_without_a_key_file_is_refused_not_rekeyed() {
+        let (_tmp, dirs) = dirs();
+        std::fs::write(dirs.database_path(), b"db").unwrap();
+        assert!(InfrastructureContainer::android_passphrase(&dirs, &OK).is_err());
+        assert!(!dirs.data_dir().join(".db_key").exists());
+    }
+
+    #[test]
+    fn a_legacy_plaintext_key_keeps_the_existing_database() {
+        let (_tmp, dirs) = dirs();
+        let legacy = "ab".repeat(32);
+        std::fs::write(dirs.data_dir().join(".db_key"), &legacy).unwrap();
+        std::fs::write(dirs.database_path(), b"db").unwrap();
+        assert_eq!(InfrastructureContainer::android_passphrase(&dirs, &OK).unwrap(), legacy);
+        let on_disk = std::fs::read_to_string(dirs.data_dir().join(".db_key")).unwrap();
+        assert!(on_disk.starts_with("ks1:") && !on_disk.contains(&legacy));
     }
 }

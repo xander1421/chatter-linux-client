@@ -13,6 +13,7 @@ pub mod camera;
 pub mod clipboard;
 pub mod file_picker;
 pub mod haptics;
+pub mod keystore;
 pub mod notifications;
 pub mod permissions;
 pub mod qr_scanner;

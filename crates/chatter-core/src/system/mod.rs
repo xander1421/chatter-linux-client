@@ -6,6 +6,7 @@ pub mod antidebug;
 pub mod directories;
 pub mod notification_sink;
 pub mod platform;
+pub mod sealed_secret;
 
 // Desktop-only modules (not available on Android)
 #[cfg(not(any(target_os = "android", target_os = "ios")))]

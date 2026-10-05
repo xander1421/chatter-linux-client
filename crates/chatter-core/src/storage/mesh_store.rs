@@ -350,12 +350,21 @@ impl MeshSealer {
     /// sentence for the user, not a type: every caller turns it into the same
     /// unavailable sealer.
     fn acquire(db_path: &Path) -> Result<Self, String> {
-        Self::acquire_with(db_path, APP_SANDBOXED)
+        let sandbox_wrap = if APP_SANDBOXED {
+            Some(crate::system::sealed_secret::installed_key_wrap()?)
+        } else {
+            None
+        };
+        Self::acquire_with(db_path, sandbox_wrap)
     }
 
     /// [`acquire`](Self::acquire) with the platform decision as a parameter, so
-    /// the Android path is testable on the host.
-    fn acquire_with(db_path: &Path, app_sandboxed: bool) -> Result<Self, String> {
+    /// the Android path is testable on the host: `Some(wrap)` is an
+    /// app-sandboxed platform whose key file is sealed by that wrapper.
+    fn acquire_with(
+        db_path: &Path,
+        sandbox_wrap: Option<&dyn crate::system::sealed_secret::KeyWrap>,
+    ) -> Result<Self, String> {
         // Development / headless bypass, mirroring `CHATTER_DB_PASSPHRASE`.
         //
         // Without this the mesh cannot start on a box with no Secret Service, and
@@ -391,10 +400,13 @@ impl MeshSealer {
         // hands back its in-memory mock (keyring 3.6.3 lib.rs:301-309), so a key
         // generated there died with the process and the next launch read every
         // seal as malformed. The key lives in the app-private data directory
-        // instead, protected by the per-app UID sandbox — the same place and the
-        // same protection the database passphrase already has there
-        // (`app/infrastructure.rs`, `.db_key`).
-        if app_sandboxed || crate::system::keyring::keyring_disabled(db_path) {
+        // instead, sealed under an Android Keystore key the same way the
+        // database passphrase is (`app/infrastructure.rs`, `.db_key`), so a copy
+        // of the app's files does not contain it.
+        if let Some(wrap) = sandbox_wrap {
+            return Self::from_sealed_key_file(db_path, wrap);
+        }
+        if crate::system::keyring::keyring_disabled(db_path) {
             return Self::from_local_key_file(db_path);
         }
 
@@ -504,7 +516,37 @@ impl MeshSealer {
         }
     }
 
-    /// Where the seal key lives when the keyring is opted out of.
+    /// The seal key from a Keystore-sealed file beside the database (Android),
+    /// generating it only when the file does not exist.
+    ///
+    /// A file the Keystore will not open is an error and the mesh stays off:
+    /// regenerating would orphan every sealed blob while looking like it worked.
+    fn from_sealed_key_file(db_path: &Path, wrap: &dyn crate::system::sealed_secret::KeyWrap) -> Result<Self, String> {
+        use crate::system::sealed_secret::{self, MESH_SEAL_ALIAS};
+        let path = Self::local_key_path(db_path);
+
+        if let Some(encoded) = sealed_secret::read(&path, MESH_SEAL_ALIAS, wrap)? {
+            let raw = Zeroizing::new(
+                hex::decode(encoded.as_bytes()).map_err(|e| format!("{} is not hex: {e}", path.display()))?,
+            );
+            let key: [u8; KEY_SIZE] = raw
+                .as_slice()
+                .try_into()
+                .map_err(|_| format!("{} must hold {KEY_SIZE} key bytes", path.display()))?;
+            let key = Zeroizing::new(key);
+            return Ok(Self::from_key(&key));
+        }
+
+        let key = Zeroizing::new(random_key().map_err(|e| format!("no randomness for a new key: {e}"))?);
+        let encoded = Zeroizing::new(hex::encode(key.as_slice()));
+        // Persisted before use: a key sealed with but never stored reads back as
+        // garbage after a restart.
+        sealed_secret::write(&path, MESH_SEAL_ALIAS, wrap, &encoded)
+            .map_err(|e| format!("the mesh seal key could not be saved: {e}"))?;
+        Ok(Self::generated(&key))
+    }
+
+    /// Where the seal key lives when the keyring is opted out of, or sealed on Android.
     fn local_key_path(db_path: &Path) -> std::path::PathBuf {
         let mut path = db_path.to_path_buf();
         path.set_extension("mesh-seal-key");
@@ -647,15 +689,49 @@ mod tests {
         let db_path = dir.path().join("chatter.db");
 
         // An app-sandboxed platform (Android) keeps the key beside the database,
-        // as it already keeps the database passphrase.
-        let first = MeshSealer::acquire_with(&db_path, true).expect("first run");
+        // Keystore-sealed, as it already keeps the database passphrase.
+        let wrap = crate::system::sealed_secret::tests::FakeWrap { fail_unseal: false };
+        let first = MeshSealer::acquire_with(&db_path, Some(&wrap)).expect("first run");
+        assert!(first.key_is_new());
         let sealed = first.seal(b"peer pins").expect("seal");
         drop(first);
-        let second = MeshSealer::acquire_with(&db_path, true).expect("second run");
+        let on_disk = std::fs::read_to_string(MeshSealer::local_key_path(&db_path)).expect("key file");
+        assert!(on_disk.starts_with("ks1:"), "the Android key file must hold only a sealed blob");
+        let second = MeshSealer::acquire_with(&db_path, Some(&wrap)).expect("second run");
+        assert!(!second.key_is_new());
         assert_eq!(
             second.open(&sealed).expect("a seal this device wrote must open after restart"),
             b"peer pins"
         );
+    }
+
+    #[test]
+    fn an_android_seal_key_the_keystore_will_not_open_is_refused_not_replaced() {
+        use crate::system::sealed_secret::tests::FakeWrap;
+        let dir = tempfile::tempdir().expect("temp dir");
+        let db_path = dir.path().join("chatter.db");
+        MeshSealer::acquire_with(&db_path, Some(&FakeWrap { fail_unseal: false })).expect("first run");
+        let key_file = MeshSealer::local_key_path(&db_path);
+        let before = std::fs::read(&key_file).expect("key file");
+
+        assert!(MeshSealer::acquire_with(&db_path, Some(&FakeWrap { fail_unseal: true })).is_err());
+        assert_eq!(std::fs::read(&key_file).expect("key file"), before, "the sealed key must survive");
+    }
+
+    #[test]
+    fn a_legacy_plaintext_android_seal_key_is_kept_and_sealed() {
+        use crate::system::sealed_secret::tests::FakeWrap;
+        let dir = tempfile::tempdir().expect("temp dir");
+        let db_path = dir.path().join("chatter.db");
+        let key = [0x33u8; KEY_SIZE];
+        let sealed = MeshSealer::from_key(&key).seal(b"pins").expect("seal");
+        std::fs::write(MeshSealer::local_key_path(&db_path), hex::encode(key)).expect("legacy file");
+
+        let sealer = MeshSealer::acquire_with(&db_path, Some(&FakeWrap { fail_unseal: false })).expect("migrate");
+        assert!(!sealer.key_is_new(), "a migrated key is not new; mesh state must not be wiped");
+        assert_eq!(sealer.open(&sealed).expect("open"), b"pins");
+        let on_disk = std::fs::read_to_string(MeshSealer::local_key_path(&db_path)).expect("key file");
+        assert!(on_disk.starts_with("ks1:") && !on_disk.contains(&hex::encode(key)));
     }
 
     #[test]
