@@ -13,6 +13,30 @@ use chatter_core::proto::chat_v1::auth_event;
 
 use common::*;
 
+fn signed_kyber_prekey(
+    identity: &libsignal_protocol::IdentityKeyPair,
+    id: u32,
+    timestamp: u64,
+) -> chatter_core::proto::chat_v1::signal_pre_key_bundle::KyberPreKeyRecord {
+    use libsignal_protocol::{GenericSignedPreKey, KyberPreKeyId, KyberPreKeyRecord, kem};
+    let key = KyberPreKeyRecord::generate(
+        kem::KeyType::Kyber1024,
+        KyberPreKeyId::from(id),
+        identity.private_key(),
+    )
+    .expect("Kyber prekey generation should succeed");
+    chatter_core::proto::chat_v1::signal_pre_key_bundle::KyberPreKeyRecord {
+        id,
+        public_key: key
+            .public_key()
+            .expect("Kyber public key")
+            .serialize()
+            .to_vec(),
+        signature: key.signature().expect("Kyber signature"),
+        timestamp,
+    }
+}
+
 // ============================================================================
 // Registration Tests
 // ============================================================================
@@ -60,13 +84,20 @@ async fn test_register_user_stream() {
             timestamp: std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap()
-                .as_millis() as u64,
+                .as_nanos() as u64,
         }),
         one_time_prekey: Some(PreKeyRecord {
             id: 1,
             public_key: one_time_prekey_pair.public_key.serialize().to_vec(),
         }),
-        kyber_prekey: None,
+        kyber_prekey: Some(signed_kyber_prekey(
+            &identity_key_pair,
+            1,
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos() as u64,
+        )),
         unrestricted_unidentified_access: Some(false),
     };
 
@@ -121,7 +152,7 @@ async fn test_register_user_stream() {
                 &username_hash_hex,
                 &opaque_record,
                 &encrypted_display_name,
-                identity_public_key.as_ref(),
+                identity_public_key_stripped,
                 "integration-test",
                 &device_auth_token,
                 &uak,
@@ -209,13 +240,20 @@ async fn test_register_duplicate_username() {
             timestamp: std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap()
-                .as_millis() as u64,
+                .as_nanos() as u64,
         }),
         one_time_prekey: Some(PreKeyRecord {
             id: 1,
             public_key: one_time_prekey_pair.public_key.serialize().to_vec(),
         }),
-        kyber_prekey: None,
+        kyber_prekey: Some(signed_kyber_prekey(
+            &identity_key_pair,
+            1,
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos() as u64,
+        )),
         unrestricted_unidentified_access: Some(false),
     };
 
@@ -274,7 +312,7 @@ async fn test_register_duplicate_username() {
             &dup_username_hash_hex,
             &dup_record,
             &dup_encrypted_name,
-            identity_public_key.as_ref(),
+            identity_public_key_stripped,
             "test-device",
             &random_device_auth_token(),
             &dup_uak,
@@ -886,18 +924,24 @@ async fn test_upload_and_get_prekey_bundle() {
             id: 2, // Different from registration bundle
             public_key: signed_prekey_pair.public_key.serialize().to_vec(),
             signature: signed_prekey_signature.into_vec(),
-            // Server's UploadPreKeyBundle calls ValidatePreKeyTimestamps which
-            // interprets this as Unix seconds; ms would be far in the future.
+            // Upload validation uses Unix nanoseconds, like registration.
             timestamp: std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap()
-                .as_secs(),
+                .as_nanos() as u64,
         }),
         one_time_prekey: Some(PreKeyRecord {
             id: 100,
             public_key: one_time_prekey_pair.public_key.serialize().to_vec(),
         }),
-        kyber_prekey: None,
+        kyber_prekey: Some(signed_kyber_prekey(
+            &identity_key_pair,
+            2,
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos() as u64,
+        )),
         unrestricted_unidentified_access: Some(false),
     };
 
