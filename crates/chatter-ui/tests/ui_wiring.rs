@@ -2770,7 +2770,7 @@ fn folder_badges_refresh_on_message_arrival_and_on_read() {
     );
 
     let channel = include_str!("../src/bin_ui/features/sidebar/channel.rs");
-    let read_idx = channel.find("mark_as_read()").expect("mark_as_read present");
+    let read_idx = channel.find("mark_read_local()").expect("mark_read_local present");
     assert!(
         channel[read_idx..].contains("refresh_section_badges"),
         "reading a foldered channel must clear its folder badge too"
@@ -2781,7 +2781,7 @@ fn folder_badges_refresh_on_message_arrival_and_on_read() {
     // else — the count came straight back on the next refresh and after every
     // restart.
     let dm = include_str!("../src/bin_ui/features/sidebar/dm.rs");
-    let dm_read_idx = dm.find("mark_as_read()").expect(
+    let dm_read_idx = dm.find("mark_read_local()").expect(
         "selecting a DM must mark it read in core, not just zero the sidebar model",
     );
     assert!(
@@ -3432,9 +3432,19 @@ fn conversation_open_anchors_on_the_unread_boundary() {
             include_str!("../src/bin_ui/features/sidebar/private_group.rs"),
         ),
     ] {
+        // `mark_as_read`, or its local half `mark_read_local` when the open
+        // receipts the page it loads itself (`send_read_receipts_for_page`).
         let read_idx = src
-            .find("mark_as_read()")
+            .find("mark_read_local()")
+            .or_else(|| src.find("mark_as_read()"))
             .unwrap_or_else(|| panic!("{name} open path must mark the conversation read"));
+        if src[read_idx..].starts_with("mark_read_local()") {
+            assert!(
+                src.contains("send_read_receipts_for_page("),
+                "{name}: mark_read_local sends no receipts; the open must send \
+                 them for the page it loads"
+            );
+        }
         // The anchor is bound from the mark_as_read expression itself, not
         // fetched afterwards from a conversation that is now fully read.
         let bind = src[..read_idx]
