@@ -21,6 +21,19 @@
 //! what it binds, the client only hashes it. Must match the server
 //! (`internal/antiabuse/antiabuse.go` `Hash`).
 //!
+//! The gate (server review H1): the solution's HIGH 32 bits must also make
+//!
+//! ```text
+//! SHA-256(gate_domain || token || be32(s >> 32))
+//! ```
+//!
+//! start with [`GATE_BITS`] zero bits, where `gate_domain` is
+//! `"chatter-pow-v3/gate/register\0"` or `"chatter-pow-v3/gate/login\0"`. The
+//! server checks it before spending anything on a submission, so junk costs
+//! its sender ~2^18 SHA-256. [`solve`] finds one gate-passing high half per
+//! challenge, then searches the low 32 bits with Argon2id: the gate is paid
+//! once, the Argon2id count is unchanged.
+//!
 //! Only symmetric, hash-based primitives (Argon2id is BLAKE2b inside):
 //! nothing here weakens under a quantum computer beyond Grover's square root.
 
@@ -28,6 +41,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::Instant;
 
 use argon2::{Algorithm, Argon2, Block, Params, Version};
+use sha2::{Digest, Sha256};
 
 use crate::error::CryptoError;
 
@@ -40,6 +54,13 @@ pub enum Purpose {
 }
 
 impl Purpose {
+    fn gate_domain(self) -> &'static [u8] {
+        match self {
+            Purpose::Register => b"chatter-pow-v3/gate/register\0",
+            Purpose::Login => b"chatter-pow-v3/gate/login\0",
+        }
+    }
+
     fn domain(self) -> &'static [u8] {
         match self {
             Purpose::Register => b"chatter-pow-v3/argon2id/register\0",
@@ -50,6 +71,10 @@ impl Purpose {
 
 /// Length of a challenge token (server `antiabuse.TokenSize`).
 pub const TOKEN_LEN: usize = 75;
+
+/// Leading zero bits the gate asks of the solution's high half (server
+/// `antiabuse.GateBits`).
+pub const GATE_BITS: u32 = 18;
 
 /// Argon2id memory per attempt, KiB (server `antiabuse.MemoryKiB`).
 pub const POW_MEMORY_KIB: u32 = 16 * 1024;
@@ -99,34 +124,69 @@ fn leading_zero_bits(h: &[u8]) -> u32 {
     n
 }
 
-/// Whether `solution` meets `bits` for `token`. Difficulty 0 accepts anything.
-pub fn verify(purpose: Purpose, token: &[u8], solution: u64, bits: u32) -> bool {
-    bits == 0 || leading_zero_bits(&pow_hash(purpose, token, solution)) >= bits
+/// The gate hash of a high half.
+pub fn gate_hash(purpose: Purpose, token: &[u8], high: u32) -> [u8; 32] {
+    let mut h = Sha256::new();
+    h.update(purpose.gate_domain());
+    h.update(token);
+    h.update(high.to_be_bytes());
+    h.finalize().into()
 }
 
-/// Try solutions handed out by `next` until one meets `bits`, `stop`, or
-/// `deadline`. One Argon2id evaluation per attempt, in this thread's own
-/// reused memory.
-fn search(
-    purpose: Purpose,
-    token: &[u8],
-    bits: u32,
-    next: &AtomicU64,
-    stop: &AtomicBool,
-    deadline: Instant,
-) -> Option<u64> {
-    let a = argon2();
-    let salt = salt(purpose, token);
-    let mut memory = vec![Block::default(); a.params().block_count()];
-    loop {
-        if stop.load(Ordering::Relaxed) || Instant::now() >= deadline {
-            return None;
+fn gate_ok(purpose: Purpose, token: &[u8], solution: u64) -> bool {
+    leading_zero_bits(&gate_hash(purpose, token, (solution >> 32) as u32)) >= GATE_BITS
+}
+
+/// Whether `solution` meets `bits` for `token`: the gate, then Argon2id.
+/// Difficulty 0 accepts anything.
+pub fn verify(purpose: Purpose, token: &[u8], solution: u64, bits: u32) -> bool {
+    bits == 0
+        || (gate_ok(purpose, token, solution) && leading_zero_bits(&pow_hash(purpose, token, solution)) >= bits)
+}
+
+/// Run `test` over 0, 1, 2, ... on `threads` threads, each with its own
+/// `init()` state, until one value passes, or `deadline`. A shared counter
+/// rather than fixed strides: big and little cores each take the next
+/// untried value, so a slow core never holds up the search.
+///
+/// Each thread claims `chunk` consecutive values per counter update: for the
+/// cheap gate, one shared atomic per SHA-256 would cost as much as the hash.
+fn race<S, I, T>(threads: usize, chunk: u64, deadline: Instant, init: I, test: T) -> Option<u64>
+where
+    I: Fn() -> S + Sync,
+    T: Fn(&mut S, u64) -> bool + Sync,
+{
+    let next = AtomicU64::new(0);
+    let stop = AtomicBool::new(false);
+    let found = AtomicU64::new(0);
+    let solved = AtomicBool::new(false);
+    std::thread::scope(|scope| {
+        for _ in 0..threads {
+            let (next, stop, found, solved, init, test) = (&next, &stop, &found, &solved, &init, &test);
+            scope.spawn(move || {
+                let mut state = init();
+                loop {
+                    if stop.load(Ordering::Relaxed) || Instant::now() >= deadline {
+                        return;
+                    }
+                    let first = next.fetch_add(chunk, Ordering::Relaxed);
+                    for v in first..first + chunk {
+                        if v > u64::from(u32::MAX) {
+                            return;
+                        }
+                        if test(&mut state, v) {
+                            if !solved.swap(true, Ordering::AcqRel) {
+                                found.store(v, Ordering::Release);
+                            }
+                            stop.store(true, Ordering::Relaxed);
+                            return;
+                        }
+                    }
+                }
+            });
         }
-        let s = next.fetch_add(1, Ordering::Relaxed);
-        if leading_zero_bits(&hash_with(&a, &salt, s, &mut memory)) >= bits {
-            return Some(s);
-        }
-    }
+    });
+    solved.load(Ordering::Acquire).then(|| found.load(Ordering::Acquire))
 }
 
 /// Find a solution on up to [`MAX_SOLVER_THREADS`] cores. Blocking: call from
@@ -153,32 +213,34 @@ pub fn solve(purpose: Purpose, token: &[u8], bits: u32, deadline: Instant) -> Re
     let threads = std::thread::available_parallelism()
         .map_or(1, |n| n.get())
         .min(MAX_SOLVER_THREADS);
-    // A shared counter rather than fixed strides: big and little cores each
-    // take the next untried value, so a slow core never holds up the search.
-    let next = AtomicU64::new(0);
-    let stop = AtomicBool::new(false);
-    let found = AtomicU64::new(0);
-    let solved = AtomicBool::new(false);
-    std::thread::scope(|scope| {
-        for _ in 0..threads {
-            let (next, stop, found, solved) = (&next, &stop, &found, &solved);
-            scope.spawn(move || {
-                if let Some(s) = search(purpose, token, bits, next, stop, deadline) {
-                    if !solved.swap(true, Ordering::AcqRel) {
-                        found.store(s, Ordering::Release);
-                    }
-                    stop.store(true, Ordering::Relaxed);
-                }
-            });
-        }
-    });
-    if solved.load(Ordering::Acquire) {
-        Ok(found.load(Ordering::Acquire))
-    } else {
-        Err(CryptoError::Protocol(
-            "proof of work not found before the challenge expired".into(),
-        ))
-    }
+    let expired = || CryptoError::Protocol("proof of work not found before the challenge expired".into());
+    // The gate, once: ~2^18 SHA-256 over the high half. The constant
+    // prefix (domain || token) is hashed once and cloned per attempt.
+    let mut prefix = Sha256::new();
+    prefix.update(purpose.gate_domain());
+    prefix.update(token);
+    let high = race(threads, 4096, deadline, || (), |_, h| {
+        let mut d = prefix.clone();
+        d.update((h as u32).to_be_bytes());
+        leading_zero_bits(&d.finalize()) >= GATE_BITS
+    })
+    .ok_or_else(expired)?;
+    // Then Argon2id over the low half, one attempt per value, each thread in
+    // its own reused memory.
+    let salt = salt(purpose, token);
+    let low = race(
+        threads,
+        1,
+        deadline,
+        || {
+            let a = argon2();
+            let memory = vec![Block::default(); a.params().block_count()];
+            (a, memory)
+        },
+        |(a, memory), low| leading_zero_bits(&hash_with(a, &salt, high << 32 | low, memory)) >= bits,
+    )
+    .ok_or_else(expired)?;
+    Ok(high << 32 | low)
 }
 
 /// [`solve`] on the blocking pool, so the async runtime (and the UI it
@@ -203,8 +265,11 @@ mod tests {
         (0u8..TOKEN_LEN as u8).collect()
     }
 
+    /// The reference search (server `Guard.Solve`): smallest gate-passing
+    /// high half, then smallest low half.
     fn smallest(purpose: Purpose, token: &[u8], bits: u32) -> u64 {
-        (0u64..).find(|&s| verify(purpose, token, s, bits)).unwrap()
+        let high = (0u64..).find(|&h| gate_ok(purpose, token, h << 32)).unwrap();
+        (0u64..).map(|l| high << 32 | l).find(|&s| verify(purpose, token, s, bits)).unwrap()
     }
 
     /// Shared with the server: internal/antiabuse/antiabuse_test.go
@@ -220,15 +285,26 @@ mod tests {
             hex::encode(pow_hash(Purpose::Login, &token, 0)),
             "05b30e27f5221912155173c2dc77f6261cbd93c7a234f28870282de2a1e35772"
         );
-        assert_eq!(
-            hex::encode(pow_hash(Purpose::Register, &token, 24)),
-            "0e72473d0d03ba23731ccc1bf965943d7d74506fe898da7f4ded1d7e1caf2663"
-        );
-        // Smallest 4-bit solutions.
-        assert_eq!(smallest(Purpose::Register, &token, 4), 24);
-        assert_eq!(smallest(Purpose::Login, &token, 4), 0);
-        // The domain separates purposes.
-        assert!(!verify(Purpose::Register, &token, 0, 4));
+        for (purpose, s, gate, work) in [
+            (
+                Purpose::Register,
+                621_906_969_493_515u64, // high 144799, low 11
+                "000027cf35f097a8b865011c86744ec0fa1fec2b5d89ce28882134fe905f9380",
+                "030e91fa3c95a9b79d72fb569eee85db33ad34307815c280983e054e2cca0a0e",
+            ),
+            (
+                Purpose::Login,
+                27_337_466_839_087u64, // high 6365, low 47
+                "00000c9e71e119b71989a622b9a15d0c59dd47557693d2bd9be1d5daf6255527",
+                "08d0bf418a8658483492620c1e0e2f9ec232a5d9cf20a60316435ddcec338fd7",
+            ),
+        ] {
+            assert_eq!(smallest(purpose, &token, 4), s, "{purpose:?}");
+            assert_eq!(hex::encode(gate_hash(purpose, &token, (s >> 32) as u32)), gate);
+            assert_eq!(hex::encode(pow_hash(purpose, &token, s)), work);
+        }
+        // A low half alone (high 0) does not pass the gate.
+        assert!(!verify(Purpose::Register, &token, 11, 4));
     }
 
     #[test]
@@ -279,6 +355,17 @@ mod tests {
         }
         let per = t0.elapsed() / n as u32;
         println!("one thread: {per:?} per Argon2id ({} MiB)", POW_MEMORY_KIB / 1024);
+        let g0 = Instant::now();
+        let n_sha = 1u32 << 20;
+        for h in 0..n_sha {
+            std::hint::black_box(gate_hash(Purpose::Register, &[1u8; TOKEN_LEN], h));
+        }
+        let rate = f64::from(n_sha) / g0.elapsed().as_secs_f64();
+        println!(
+            "one thread: {:.1} M SHA-256/s; gate 2^{GATE_BITS} expected {:?} on one thread",
+            rate / 1e6,
+            Duration::from_secs_f64(f64::from(1u32 << GATE_BITS) / rate)
+        );
         let far = Instant::now() + Duration::from_secs(600);
         for (bits, runs) in [(4u32, 40), (6, 40), (8, 20)] {
             let mut times: Vec<Duration> = (0..runs)

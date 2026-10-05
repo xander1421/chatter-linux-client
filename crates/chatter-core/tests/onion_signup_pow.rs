@@ -231,7 +231,13 @@ async fn onion_register_without_pow_is_refused() {
         username: auth_crypto::login_identifier(&nick),
         opaque_registration_record: record,
         svr_public_key: identity_key[1..].to_vec(),
-        display_name: "anVuaw==".into(),
+        // A real ciphertext: the handler refuses anything outside the
+        // display-name padding buckets before the challenge is looked at.
+        display_name: {
+            use base64::Engine as _;
+            let ct = chatter_core::crypto::profile_crypto::encrypt_display_name(&random32(), "junk").unwrap();
+            base64::engine::general_purpose::STANDARD.encode(ct)
+        },
         device_info: "onion-pow-negative".into(),
         request_id: uuid::Uuid::new_v4().to_string(),
         device_auth_token: random32().to_vec(),
