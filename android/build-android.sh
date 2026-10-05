@@ -52,8 +52,8 @@ setup_boringssl_for_sqlcipher() {
     # while compiling, so asking for a prior successful build was circular.
     export LK_CUSTOM_WEBRTC
     LK_CUSTOM_WEBRTC="$(python3 "$PROJECT_ROOT/android/bootstrap-webrtc.py" "$PROJECT_ROOT" "$TARGET_DIR")"
-    webrtc_a="$LK_CUSTOM_WEBRTC/libwebrtc.a"
-    webrtc_inc="$LK_CUSTOM_WEBRTC/third_party/boringssl/src/include"
+    webrtc_a="$LK_CUSTOM_WEBRTC/lib/libwebrtc.a"
+    webrtc_inc="$LK_CUSTOM_WEBRTC/include/third_party/boringssl/src/include"
     stage="$TARGET_DIR/boringssl-sqlcipher"
     mkdir -p "$stage/lib"
     # -lcrypto resolves to webrtc's BoringSSL. Duplicate of the main libwebrtc.a

@@ -24,9 +24,12 @@ MAX_EXPANDED = 3 * MAX_ARCHIVE
 
 
 def validate_tree(root):
-    for rel in ["libwebrtc.a", "libwebrtc.jar", "webrtc.ninja", "third_party/boringssl/src/include/openssl/ssl.h"]:
+    # SDK 0.3.18 consumes lib/ and include/ from the pinned release archive.
+    for rel in ["lib/libwebrtc.a", "libwebrtc.jar", "webrtc.ninja",
+                "include/api/peer_connection_interface.h",
+                "include/third_party/boringssl/src/include/openssl/ssl.h"]:
         if not (root / rel).is_file():
-            raise ValueError("Incomplete pinned WebRTC prebuilt tree")
+            raise ValueError(f"Incomplete pinned WebRTC prebuilt tree: missing {rel}")
 
 
 def extract_archive(archive, stage):
