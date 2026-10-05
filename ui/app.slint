@@ -1220,7 +1220,14 @@ export component MainWindow inherits Window {
     // because unhandled key events bubble UP the focus chain to this ancestor.
     forward-focus: back-scope;
 
-    changed channel-id => { VoiceRecording.cancel(); }
+    changed channel-id => {
+        VoiceRecording.cancel();
+        root.composer-emoji-picker-visible = false;
+        root.composer-gif-picker-visible = false;
+    }
+    private property <string> inserted-emoji;
+    private property <int> insert-serial;
+    public function insert-composer-emoji(emoji: string) { root.inserted-emoji = emoji; root.insert-serial += 1; }
     changed conversation-kind => { VoiceRecording.cancel(); }
     changed selection-mode => { if root.selection-mode { VoiceRecording.cancel(); } }
     changed composer-is-editing => { if root.composer-is-editing { VoiceRecording.cancel(); } }
@@ -1246,7 +1253,11 @@ export component MainWindow inherits Window {
             back-scope.focus();
         }
     }
+    callback composer-gif-closed();
+    in-out property <int> composer-gif-generation;
     changed composer-gif-picker-visible => {
+        root.composer-gif-generation += 1;
+        if !root.composer-gif-picker-visible { root.composer-gif-closed(); }
         if root.composer-gif-picker-visible && root.is-mobile-platform {
             back-scope.focus();
         }
@@ -1808,7 +1819,7 @@ export component MainWindow inherits Window {
 
                         if !root.active-call-fullscreen
                             && !(root.is-small-screen && root.thread-panel-visible)
-                            && (root.channel-name != "" || root.loading-messages): ChatLayout {
+                            && (root.channel-name != "" || root.loading-messages): conversation-layout := ChatLayout {
                         vertical-stretch: 1;
                         hide-header: root.selection-mode;
                         // No back button: the conversation list is always on
@@ -1880,6 +1891,23 @@ export component MainWindow inherits Window {
                         composer-reply-thumbnail: root.composer-reply-thumbnail;
 
                         // Picker state
+                        composer-focus-released => { root.release-text-focus(); }
+                        inserted-emoji: root.inserted-emoji;
+                        insert-serial: root.insert-serial;
+                        emoji-list: root.composer-emoji-list;
+                        emoji-category <=> root.composer-emoji-category;
+                        emoji-skin-tone <=> root.composer-emoji-skin-tone;
+                        emoji-search <=> root.composer-emoji-search;
+                        gif-search <=> root.composer-gif-picker-search;
+                        gif-results: root.composer-gif-picker-results;
+                        gif-loading: root.composer-gif-picker-loading;
+                        gif-failed: root.composer-gif-picker-failed;
+                        emoji-selected(emoji) => { root.composer-emoji-selected(emoji); }
+                        emoji-category-changed(category) => { root.composer-emoji-category-changed(category); }
+                        emoji-search-changed(query) => { root.composer-emoji-search-changed(query); }
+                        emoji-skin-tone-changed(tone) => { root.composer-emoji-skin-tone-changed(tone); }
+                        gif-selected(id, url) => { root.composer-gif-selected(id, url); }
+                        gif-search-changed(query) => { root.composer-gif-search-changed(query); }
                         emoji-picker-visible <=> root.composer-emoji-picker-visible;
                         gif-picker-visible <=> root.composer-gif-picker-visible;
 
@@ -3378,78 +3406,6 @@ export component MainWindow inherits Window {
                 } else {
                     root.selection-delete-clicked();
                 }
-            }
-        }
-
-        // Composer emoji picker overlay (positioned above composer)
-        EmojiPicker {
-            show: root.composer-emoji-picker-visible;
-            emoji-list: root.composer-emoji-list;
-            selected-category <=> root.composer-emoji-category;
-            search-query <=> root.composer-emoji-search;
-            selected-skin-tone <=> root.composer-emoji-skin-tone;
-            max-picker-width: min(280px, root.width - 32px);
-            max-picker-height: min(320px, root.height - 128px);
-
-            // Position above the composer buttons (right side). Lift with the
-            // IME so the picker doesn't get hidden behind the keyboard.
-            x: root.width - self.width - Spacing.md;
-            y: parent.height - self.height - 80px;
-
-            emoji-selected(emoji) => {
-                // Stays open: the composer picker is for composing, and closing
-                // after every single emoji made "😀😀😀" four taps each (§112u).
-                // The REACTION picker still closes — one reaction is the whole
-                // interaction there.
-                root.composer-emoji-selected(emoji);
-            }
-            category-changed(cat) => {
-                root.composer-emoji-category-changed(cat);
-            }
-            search-changed(q) => {
-                root.composer-emoji-search-changed(q);
-            }
-            skin-tone-changed(tone) => {
-                root.composer-emoji-skin-tone-changed(tone);
-            }
-            close => {
-                root.composer-emoji-picker-visible = false;
-            }
-            gif-mode-requested => {
-                root.composer-emoji-picker-visible = false;
-                root.composer-gif-picker-visible = true;
-                root.gif-clicked();
-            }
-        }
-
-        // Composer GIF picker overlay (positioned above composer)
-        GifPicker {
-            show: root.composer-gif-picker-visible;
-            loading: root.composer-gif-picker-loading;
-            failed: root.composer-gif-picker-failed;
-            results: root.composer-gif-picker-results;
-            search-query <=> root.composer-gif-picker-search;
-            max-picker-width: min(320px, root.width - 32px);
-            max-picker-height: min(400px, root.height - 128px);
-
-            // Position above the composer buttons (right side). Lift with IME.
-            x: root.width - self.width - Spacing.md;
-            y: parent.height - self.height - 80px;
-
-            gif-selected(id, url) => {
-                root.composer-gif-picker-visible = false;
-                root.composer-gif-selected(id, url);
-            }
-            search(q) => {
-                root.composer-gif-search-changed(q);
-            }
-            close => {
-                root.composer-gif-picker-visible = false;
-            }
-            emoji-mode-requested => {
-                root.composer-gif-picker-visible = false;
-                root.composer-emoji-picker-visible = true;
-                root.emoji-clicked();
             }
         }
 

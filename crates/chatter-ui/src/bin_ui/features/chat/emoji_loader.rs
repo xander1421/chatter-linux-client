@@ -94,17 +94,15 @@ pub fn wire_emoji_loader(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
         }
     });
 
-    // Track emoji usage + insert into composer text + close picker
+    // Track emoji usage and insert at the saved composer caret/selection.
     window.on_composer_emoji_selected({
         let weak = weak.clone();
         let store = store.clone();
         move |emoji| {
             store.record(&emoji);
-            let emoji_str = emoji.to_string();
+
             if let Some(w) = weak.upgrade() {
-                let current_text = w.get_composer_text().to_string();
-                let new_text = format!("{current_text}{emoji_str}");
-                w.set_composer_text(new_text.into());
+                w.invoke_insert_composer_emoji(emoji);
                 // Deliberately left OPEN. Picking an emoji for the composer is
                 // usually not the last thing you do — closing after each one
                 // made "😀😀😀" four taps (§112u). Back, or the emoji button,

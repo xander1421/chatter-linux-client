@@ -36,8 +36,13 @@ pub fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     );
     mentions::wire_mention_selected(window);
     voice::wire(window, ui_ctx);
-    format_text::wire_format_text(window);
+    wire_text_format(window);
     wire_per_conversation_drafts(window, ui_ctx);
+}
+
+/// Wire the pure text operations independently of network/client callbacks.
+pub fn wire_text_format(window: &MainWindow) {
+    format_text::wire_format_text(window);
 }
 
 /// Each conversation keeps its own unsent text (OPEN-ITEMS §112x). Every
@@ -69,6 +74,8 @@ fn wire_per_conversation_drafts(window: &MainWindow, ui_ctx: &Arc<ChatterClient>
             let weak = weak.clone();
             let _ = slint::invoke_from_event_loop(move || {
                 if let Some(w) = weak.upgrade() {
+                    w.set_composer_emoji_picker_visible(false);
+                    w.set_composer_gif_picker_visible(false);
                     // Left mid-edit: the edit is cancelled and the draft it
                     // held aside is what gets parked, not the edit text.
                     crate::bin_ui::features::chat::edit::end_edit(&w);

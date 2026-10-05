@@ -24,6 +24,7 @@ export component GifPicker inherits GlassSurface {
     elevation: 4;
     border-radius: Spacing.radius-xl;
 
+    in property <bool> embedded: false;
     // Picker visibility
     in property <bool> show: false;
 
@@ -70,8 +71,8 @@ export component GifPicker inherits GlassSurface {
         padding: Spacing.sm;
         spacing: Spacing.sm;
 
-        // Header with emoji toggle, title, and close button
-        HorizontalLayout {
+        // Standalone picker chrome
+        if !root.embedded: HorizontalLayout {
             height: Spacing.header-action-box;
             spacing: Spacing.header-action-gap;
 
@@ -99,7 +100,8 @@ export component GifPicker inherits GlassSurface {
 
         // Search input
         Rectangle {
-            height: 36px;
+            visible: !root.embedded;
+            height: root.embedded ? 0px : Spacing.touch-target-min;
             border-radius: Spacing.radius-md;
             background: transparent;
             border-width: Spacing.stroke;
@@ -136,7 +138,7 @@ export component GifPicker inherits GlassSurface {
                 // Clear button (shown when search has text)
                 if root.search-query != "": Rectangle {
                     width: Spacing.button-height;
-                    height: Spacing.button-height;
+                    height: root.embedded ? 0px : Spacing.button-height;
                     y: (parent.height - self.height) / 2;
                     border-radius: Spacing.radius-full;
                     background: clear-area.has-hover ? Colors.surface-hover : transparent;
@@ -163,7 +165,7 @@ export component GifPicker inherits GlassSurface {
         }
 
         // Tab bar
-        Rectangle {
+        if !root.embedded: Rectangle {
             height: Spacing.button-height + Spacing.xs * 2;
             background: transparent;
             border-radius: Spacing.radius-md;

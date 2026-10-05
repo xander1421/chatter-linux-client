@@ -18,6 +18,7 @@ export component EmojiPicker inherits GlassSurface {
     elevation: 4;
     border-radius: Spacing.radius-xl;
 
+    in property <bool> embedded: false;
     // Picker visibility
     in property <bool> show: false;
 
@@ -83,9 +84,10 @@ export component EmojiPicker inherits GlassSurface {
         padding: Spacing.sm;
         spacing: Spacing.sm;
 
-        // Search input
+        // Search lives in the unified drawer when embedded.
         Rectangle {
-            height: Spacing.button-height;
+            visible: !root.embedded;
+            height: root.embedded ? 0px : Spacing.button-height;
             // Concentric with the panel: its radius minus the padding.
             border-radius: Spacing.radius-xl - Spacing.sm;
             background: transparent;

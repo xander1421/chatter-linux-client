@@ -2,7 +2,7 @@
 use crate::{MainWindow, VoiceRecording};
 use chatter_core::client::ChatterClient;
 use chatter_core::services::voice_recording::{
-    recording_context_is_current, RecordedVoiceNote, RecordingEvent, RecordingSession,
+    RecordedVoiceNote, RecordingEvent, RecordingSession, recording_context_is_current,
 };
 use slint::ComponentHandle;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -72,6 +72,9 @@ pub(super) fn wire(window: &MainWindow, client: &Arc<ChatterClient>) {
             return;
         }
         let ticket = generation.fetch_add(1, Ordering::SeqCst) + 1;
+        w.set_composer_emoji_picker_visible(false);
+        w.set_composer_gif_picker_visible(false);
+        w.invoke_release_text_focus();
         g.set_active(true);
         g.set_busy(true);
         g.set_locked(false);

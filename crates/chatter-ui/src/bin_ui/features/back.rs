@@ -175,10 +175,12 @@ pub fn handle_back(window: &MainWindow) -> bool {
     // natural way to dismiss it.
     if window.get_composer_emoji_picker_visible() {
         window.set_composer_emoji_picker_visible(false);
+        window.invoke_release_text_focus();
         return true;
     }
     if window.get_composer_gif_picker_visible() {
         window.set_composer_gif_picker_visible(false);
+        window.invoke_release_text_focus();
         return true;
     }
 

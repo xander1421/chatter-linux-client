@@ -10,6 +10,7 @@ use chatter_core::client::ChatterClient;
 use crate::{GifData, MainWindow};
 
 pub(crate) fn wire_gif_clicked(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
+    window.on_composer_gif_closed(crate::bin_ui::gif_state::clear_picker_gifs);
     let weak_window = window.as_weak();
     let ui_ctx = ui_ctx.clone();
 
@@ -21,14 +22,16 @@ pub(crate) fn wire_gif_clicked(window: &MainWindow, ui_ctx: &Arc<ChatterClient>)
         let _ = slint::invoke_from_event_loop(move || {
             if let Some(w) = weak.upgrade() {
                 if w.get_composer_gif_picker_visible() {
+                    w.set_composer_gif_picker_search("".into());
+                    let generation = w.get_composer_gif_generation();
                     w.set_composer_gif_picker_loading(true);
                     w.set_composer_gif_picker_failed(false);
-                    
+
                     let weak_load = weak.clone();
                     let ui_ctx_load = ui_ctx.clone();
                     tokio::spawn(async move {
                         let raw_gifs = fetch_trending_gifs_raw(&ui_ctx_load).await;
-                        load_gif_previews(raw_gifs, weak_load, ui_ctx_load);
+                        load_gif_previews(raw_gifs, weak_load, ui_ctx_load, generation);
                     });
                 } else {
                     // Stop animations when picker is hidden
@@ -53,6 +56,7 @@ pub(crate) fn wire_gif_selected(window: &MainWindow, ui_ctx: &Arc<ChatterClient>
         // Hide picker immediately for responsiveness
         if let Some(w) = weak.upgrade() {
             w.set_composer_gif_picker_visible(false);
+            w.invoke_release_text_focus();
         }
         crate::bin_ui::gif_state::clear_picker_gifs();
 
@@ -121,7 +125,10 @@ pub(crate) fn wire_gif_search(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) 
         let weak = weak_window.clone();
         let query_str = query.to_string();
         let ui_ctx = ui_ctx.clone();
-        tracing::debug!("GIF search: {}", query_str);
+        tracing::debug!("GIF search requested");
+        let Some(w) = weak.upgrade() else { return };
+        w.set_composer_gif_generation(w.get_composer_gif_generation() + 1);
+        let generation = w.get_composer_gif_generation();
 
         if let Some(w) = weak.upgrade() {
             w.set_composer_gif_picker_loading(true);
@@ -135,7 +142,7 @@ pub(crate) fn wire_gif_search(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) 
             } else {
                 search_gifs_raw(&query_str, &ui_ctx).await
             };
-            load_gif_previews(raw_gifs, weak, ui_ctx);
+            load_gif_previews(raw_gifs, weak, ui_ctx, generation);
         });
     });
 }
@@ -148,7 +155,11 @@ struct RawGifFrames {
     frames: Vec<(Vec<u8>, u32, u32, u64)>,
 }
 
-async fn fetch_full_gif_frames(id: String, url: &str, ui_ctx: &std::sync::Arc<ChatterClient>) -> Option<RawGifFrames> {
+async fn fetch_full_gif_frames(
+    id: String,
+    url: &str,
+    ui_ctx: &std::sync::Arc<ChatterClient>,
+) -> Option<RawGifFrames> {
     let bytes = match ui_ctx.fetch_gif_media(url).await {
         Ok(b) => b,
         Err(e) => {
@@ -157,8 +168,8 @@ async fn fetch_full_gif_frames(id: String, url: &str, ui_ctx: &std::sync::Arc<Ch
         }
     };
 
-    use image::codecs::gif::GifDecoder;
     use image::AnimationDecoder;
+    use image::codecs::gif::GifDecoder;
     use std::io::Cursor;
 
     let cursor = Cursor::new(&bytes);
@@ -181,7 +192,11 @@ async fn fetch_full_gif_frames(id: String, url: &str, ui_ctx: &std::sync::Arc<Ch
 
         let delay = frame.delay();
         let (numer, denom) = delay.numer_denom_ms();
-        let delay_ms = if denom == 0 { 100 } else { (numer as u64) / (denom as u64) };
+        let delay_ms = if denom == 0 {
+            100
+        } else {
+            (numer as u64) / (denom as u64)
+        };
         let delay_ms = delay_ms.max(20);
 
         let buffer = frame.into_buffer();
@@ -189,12 +204,16 @@ async fn fetch_full_gif_frames(id: String, url: &str, ui_ctx: &std::sync::Arc<Ch
         let raw_data = buffer.into_raw();
 
         frames.push((raw_data, width, height, delay_ms));
-        
+
         // Limit frames for picker performance
-        if frames.len() >= 30 { break; }
+        if frames.len() >= 30 {
+            break;
+        }
     }
 
-    if frames.is_empty() { return None; }
+    if frames.is_empty() {
+        return None;
+    }
 
     Some(RawGifFrames { id, frames })
 }
@@ -203,6 +222,7 @@ fn load_gif_previews(
     raw_gifs: Result<Vec<RawGifData>, chatter_core::error::NetworkError>,
     weak_window: slint::Weak<MainWindow>,
     ui_ctx: std::sync::Arc<ChatterClient>,
+    generation: i32,
 ) {
     let raw_gifs = match raw_gifs {
         Ok(gifs) => gifs,
@@ -210,6 +230,11 @@ fn load_gif_previews(
             tracing::warn!(%error, "GIF request failed");
             let _ = slint::invoke_from_event_loop(move || {
                 if let Some(w) = weak_window.upgrade() {
+                    if !w.get_composer_gif_picker_visible()
+                        || w.get_composer_gif_generation() != generation
+                    {
+                        return;
+                    }
                     w.set_composer_gif_picker_results(ModelRc::new(VecModel::<GifData>::default()));
                     w.set_composer_gif_picker_failed(true);
                     w.set_composer_gif_picker_loading(false);
@@ -220,15 +245,18 @@ fn load_gif_previews(
     };
     let raw_gifs_clone: Vec<_> = raw_gifs
         .iter()
-        .map(|(id, _, full_url, width, height)| {
-            (id.clone(), full_url.clone(), *width, *height)
-        })
+        .map(|(id, _, full_url, width, height)| (id.clone(), full_url.clone(), *width, *height))
         .collect();
 
     {
         let weak = weak_window.clone();
         let _ = slint::invoke_from_event_loop(move || {
             if let Some(w) = weak.upgrade() {
+                if !w.get_composer_gif_picker_visible()
+                    || w.get_composer_gif_generation() != generation
+                {
+                    return;
+                }
                 let gifs: Vec<GifData> = raw_gifs_clone
                     .into_iter()
                     .map(|(id, full_url, width, height)| GifData {
@@ -253,7 +281,8 @@ fn load_gif_previews(
         let ui_ctx_fetch = ui_ctx.clone();
 
         tokio::spawn(async move {
-            if let Some(decoded) = fetch_full_gif_frames(gif_id, &preview_url, &ui_ctx_fetch).await {
+            if let Some(decoded) = fetch_full_gif_frames(gif_id, &preview_url, &ui_ctx_fetch).await
+            {
                 let id_for_ui = decoded.id.clone();
                 let first_frame_raw = decoded.frames.first().unwrap();
                 let frame_bytes = first_frame_raw.0.clone();
@@ -262,9 +291,16 @@ fn load_gif_previews(
 
                 let _ = slint::invoke_from_event_loop(move || {
                     if let Some(w) = weak.upgrade() {
-                        let first_image = crate::bin_ui::slint_conversions::rgba_to_slint_image(&frame_bytes,
+                        if !w.get_composer_gif_picker_visible()
+                            || w.get_composer_gif_generation() != generation
+                        {
+                            return;
+                        }
+                        let first_image = crate::bin_ui::slint_conversions::rgba_to_slint_image(
+                            &frame_bytes,
                             width,
-                            height,);
+                            height,
+                        );
 
                         let model = w.get_composer_gif_picker_results();
                         for i in 0..model.row_count() {
@@ -276,7 +312,7 @@ fn load_gif_previews(
                                 }
                             }
                         }
-                        
+
                         crate::bin_ui::gif_state::register_picker_gif(decoded.id, decoded.frames);
                     }
                 });
@@ -288,7 +324,9 @@ fn load_gif_previews(
 async fn fetch_trending_gifs_raw(
     ui_ctx: &ChatterClient,
 ) -> Result<Vec<RawGifData>, chatter_core::error::NetworkError> {
-    Ok(ui_ctx.trending_gifs(20).await?
+    Ok(ui_ctx
+        .trending_gifs(20)
+        .await?
         .into_iter()
         .map(|r| {
             let width = r.dims.first().copied().unwrap_or(0) as u32;
@@ -302,7 +340,9 @@ async fn search_gifs_raw(
     query: &str,
     ui_ctx: &ChatterClient,
 ) -> Result<Vec<RawGifData>, chatter_core::error::NetworkError> {
-    Ok(ui_ctx.search_gifs(query, 20).await?
+    Ok(ui_ctx
+        .search_gifs(query, 20)
+        .await?
         .into_iter()
         .map(|r| {
             let width = r.dims.first().copied().unwrap_or(0) as u32;

@@ -22,14 +22,32 @@ const WIN_H: f32 = 900.0;
 /// briefly so conditional sub-trees materialize and get geometry. Varying the
 /// size between pumps forces a full relayout (a same-size event is a no-op).
 fn pump_at(w: &MainWindow, width: f32, height: f32) {
-    let scale = w.window().scale_factor();
-    w.window().dispatch_event(slint::platform::WindowEvent::Resized {
-        size: slint::LogicalSize::new(width, height).to_physical(scale).to_logical(scale),
+    w.window().set_size(slint::LogicalSize::new(width, height));
+    // Re-entering run() after quit returns immediately. Drive real frames and
+    // wall-clock time so size/focus/height animations settle on every pump.
+    for _ in 0..12 {
+        w.window().dispatch_event(slint::platform::WindowEvent::Resized {
+            size: slint::LogicalSize::new(width, height),
+        });
+        slint::Timer::single_shot(std::time::Duration::from_millis(1), || {
+            slint::quit_event_loop().unwrap();
+        });
+        w.run().unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+}
+
+fn click(w: &MainWindow, label: &str) {
+    let element = testing::ElementHandle::find_by_accessible_label(w, label).next().unwrap();
+    let pos = element.absolute_position();
+    let size = element.size();
+    let position = slint::LogicalPosition::new(pos.x + size.width / 2.0, pos.y + size.height / 2.0);
+    w.window().dispatch_event(slint::platform::WindowEvent::PointerPressed {
+        position, button: slint::platform::PointerEventButton::Left,
     });
-    slint::Timer::single_shot(std::time::Duration::from_millis(80), || {
-        slint::quit_event_loop().unwrap();
+    w.window().dispatch_event(slint::platform::WindowEvent::PointerReleased {
+        position, button: slint::platform::PointerEventButton::Left,
     });
-    w.run().unwrap();
 }
 
 fn pump(w: &MainWindow) {
@@ -62,12 +80,15 @@ fn thread_panel_lands_inside_the_normal_desktop_layout() {
     let w = MainWindow::new().expect("MainWindow::new");
     w.set_current_view("main".into());
 
-    let count =
-        || testing::ElementHandle::find_by_element_type_name(&w, "ThreadPanel").count();
+    let count = || testing::ElementHandle::find_by_element_type_name(&w, "ThreadPanel").count();
 
     // Negative control: panel closed → not in the tree.
     pump(&w);
-    assert_eq!(count(), 0, "ThreadPanel present before thread-panel-visible was set");
+    assert_eq!(
+        count(),
+        0,
+        "ThreadPanel present before thread-panel-visible was set"
+    );
 
     // Open the panel exactly the way the Rust thread handler does.
     w.set_thread_panel_visible(true);
@@ -113,4 +134,141 @@ fn thread_panel_lands_inside_the_normal_desktop_layout() {
         size.width,
         win.width
     );
+    composer_drawer_and_recording_have_usable_geometry();
+}
+
+/// The drawer must fit the conversation and leave its composer in view; a
+/// recording needs its own height instead of overlaying four controls on 56px.
+fn composer_drawer_and_recording_have_usable_geometry() {
+    use chatter_ui::VoiceRecording;
+    require_element_queries();
+    let w = MainWindow::new().unwrap();
+    w.set_current_view("main".into());
+    chatter_ui::bin_ui::features::composer::wire_text_format(&w);
+    w.set_channel_name("Composer geometry".into());
+    w.set_mobile_show_chat(true);
+    w.set_composer_text("Draft stays here".into());
+    for (mobile, width, height) in [(true, 320.0, 800.0), (true, 360.0, 480.0), (false, 1200.0, 900.0)] {
+        w.set_is_mobile_platform(mobile);
+        w.window().set_size(slint::LogicalSize::new(width, height));
+        pump_at(&w, width, height);
+        click(&w, "Message input");
+        w.window().dispatch_event(slint::platform::WindowEvent::KeyPressed { text: slint::platform::Key::End.into() });
+        w.window().dispatch_event(slint::platform::WindowEvent::KeyPressed { text: slint::platform::Key::LeftArrow.into() });
+        click(&w, "Emoji & GIF picker");
+        pump_at(&w, width, height);
+        assert!(w.get_composer_emoji_picker_visible());
+        assert!((w.window().size().to_logical(w.window().scale_factor()).width - width).abs() < 1.0);
+        w.invoke_insert_composer_emoji("😀".into());
+        pump_at(&w, width, height);
+        assert_eq!(w.get_composer_text().as_str(), "Draft stays her😀e");
+        click(&w, "Show keyboard");
+        pump_at(&w, width, height);
+        assert!(!w.get_composer_emoji_picker_visible());
+        w.window().dispatch_event(slint::platform::WindowEvent::KeyPressed { text: slint::platform::Key::Backspace.into() });
+        assert_eq!(w.get_composer_text().as_str(), "Draft stays here");
+        w.set_composer_emoji_picker_visible(true);
+        pump_at(&w, width, height);
+        let chat = testing::ElementHandle::find_by_element_type_name(&w, "ChatLayout")
+            .next()
+            .unwrap();
+        let emoji = testing::ElementHandle::find_by_element_type_name(&w, "EmojiPicker")
+            .next()
+            .unwrap();
+        let composer = testing::ElementHandle::find_by_element_type_name(&w, "MessageComposer")
+            .next()
+            .unwrap();
+        let cp = chat.absolute_position();
+        let ep = emoji.absolute_position();
+        assert!(emoji.size().width >= chat.size().width - 50.0);
+        assert!(ep.x >= cp.x && ep.x + emoji.size().width <= cp.x + chat.size().width + 1.0);
+        assert!(ep.y >= composer.absolute_position().y + composer.size().height - 1.0);
+        assert!(ep.y + emoji.size().height <= cp.y + chat.size().height + 1.0);
+        w.set_composer_emoji_picker_visible(false);
+        w.set_composer_gif_picker_visible(true);
+        pump_at(&w, width, height);
+        let gif = testing::ElementHandle::find_by_element_type_name(&w, "GifPicker")
+            .next()
+            .unwrap();
+        assert!(gif.size().width >= chat.size().width - 50.0);
+        assert!(gif.absolute_position().y + gif.size().height <= cp.y + chat.size().height + 1.0);
+        w.set_composer_gif_picker_visible(false);
+        pump_at(&w, width, height);
+        assert!(
+            testing::ElementHandle::find_by_accessible_label(&w, "Record voice message")
+                .next()
+                .is_none()
+        );
+        assert!(
+            testing::ElementHandle::find_by_accessible_label(&w, "Send message")
+                .next()
+                .is_some()
+        );
+        w.set_composer_text("".into());
+        pump_at(&w, width, height);
+        assert!(
+            testing::ElementHandle::find_by_accessible_label(&w, "Record voice message")
+                .next()
+                .is_some()
+        );
+        assert!(
+            testing::ElementHandle::find_by_accessible_label(&w, "Send message")
+                .next()
+                .is_none()
+        );
+        w.set_composer_text("Draft stays here".into());
+        w.global::<VoiceRecording>().set_active(true);
+        w.global::<VoiceRecording>().set_locked(true);
+        pump_at(&w, width, height);
+        let composer = testing::ElementHandle::find_by_element_type_name(&w, "MessageComposer")
+            .next()
+            .unwrap();
+        assert!(composer.size().height >= 112.0);
+        let mut last_right = composer.absolute_position().x;
+        for label in [
+            "Cancel voice message",
+            "Lock recording",
+            "Send voice message",
+        ] {
+            let control = testing::ElementHandle::find_by_accessible_label(&w, label)
+                .next()
+                .unwrap();
+            assert!(control.size().width >= 48.0 && control.size().height >= 48.0);
+            assert!(control.absolute_position().x >= last_right);
+            last_right = control.absolute_position().x + control.size().width;
+        }
+        assert_eq!(w.get_composer_text().as_str(), "Draft stays here");
+        let finishes = std::rc::Rc::new(std::cell::Cell::new(0));
+        let capture = finishes.clone();
+        w.global::<VoiceRecording>()
+            .on_finish(move || capture.set(capture.get() + 1));
+        w.global::<VoiceRecording>().set_busy(true);
+        pump_at(&w, width, height);
+        testing::ElementHandle::find_by_accessible_label(&w, "Send voice message")
+            .next()
+            .unwrap()
+            .invoke_accessible_default_action();
+        assert_eq!(finishes.get(), 0, "busy recording must not send");
+        w.global::<VoiceRecording>().set_busy(false);
+        pump_at(&w, width, height);
+        testing::ElementHandle::find_by_accessible_label(&w, "Send voice message")
+            .next()
+            .unwrap()
+            .invoke_accessible_default_action();
+        assert_eq!(finishes.get(), 1);
+        assert_eq!(w.get_composer_text().as_str(), "Draft stays here");
+        w.global::<VoiceRecording>().set_active(false);
+        pump_at(&w, width, height);
+        click(&w, "Message input");
+        w.set_selection_mode(true);
+        pump_at(&w, width, height);
+        w.window().dispatch_event(slint::platform::WindowEvent::KeyPressed { text: "x".into() });
+        assert_eq!(w.get_composer_text().as_str(), "Draft stays here", "hidden composer retained typing focus");
+        w.set_selection_mode(false);
+        w.set_mobile_show_chat(false);
+        pump_at(&w, width, height);
+        w.set_mobile_show_chat(true);
+        pump_at(&w, width, height);
+        assert_eq!(w.get_composer_text().as_str(), "Draft stays here", "mount replayed the previous emoji insertion");
+    }
 }

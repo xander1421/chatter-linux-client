@@ -1,3 +1,6 @@
+import { EmojiPicker, EmojiData } from "../components/emoji_picker.slint";
+import { GifPicker, GifData } from "../components/gif_picker.slint";
+import { Icons } from "../theme/icons.slint";
 import { GlassSurface } from "../components/glass_surface.slint";
 // Main chat layout component
 //
@@ -80,6 +83,27 @@ export component ChatLayout inherits Rectangle {
     // Picker properties
     in-out property <bool> emoji-picker-visible: false;
     in-out property <bool> gif-picker-visible: false;
+
+    in property <[EmojiData]> emoji-list;
+    in-out property <int> emoji-category;
+    in-out property <int> emoji-skin-tone;
+    in-out property <string> emoji-search;
+    in-out property <string> gif-search;
+    in property <[GifData]> gif-results;
+    in property <bool> gif-loading;
+    in property <bool> gif-failed;
+    callback emoji-selected(string);
+    callback emoji-category-changed(int);
+    callback emoji-search-changed(string);
+    callback emoji-skin-tone-changed(int);
+    callback gif-selected(string, string);
+    callback gif-search-changed(string);
+    callback composer-focus-released();
+    in property <string> inserted-emoji;
+    in property <int> insert-serial;
+    changed insert-serial => {
+        if root.emoji-picker-visible { composer.insert-emoji(root.inserted-emoji); }
+    }
 
     // Composer properties
     in-out property <string> composer-text: "";
@@ -415,7 +439,9 @@ export component ChatLayout inherits Rectangle {
 
         // Hidden while selecting messages: the selection bar owns the screen
         // then, and a live composer invited typing into a mode that ignores it.
-        if root.composer-notice == "" && !root.selection-mode: MessageComposer {
+        composer := MessageComposer {
+            collapsed: root.composer-notice != "" || root.selection-mode;
+            picker-open: root.emoji-picker-visible || root.gif-picker-visible;
             width: 100%;
             vertical-stretch: 0;
             mobile: root.mobile;
@@ -451,7 +477,7 @@ export component ChatLayout inherits Rectangle {
                 root.paste-image();
             }
             emoji-clicked => {
-                root.emoji-picker-visible = !root.emoji-picker-visible;
+                root.emoji-picker-visible = !(root.emoji-picker-visible || root.gif-picker-visible);
                 root.gif-picker-visible = false;
                 root.emoji-clicked();
             }
@@ -460,6 +486,7 @@ export component ChatLayout inherits Rectangle {
                 root.emoji-picker-visible = false;
                 root.gif-clicked();
             }
+            input-dismissed => { root.composer-focus-released(); }
             input-focused => {
                 root.emoji-picker-visible = false;
                 root.gif-picker-visible = false;
@@ -472,6 +499,92 @@ export component ChatLayout inherits Rectangle {
             }
             typing-changed(is-typing) => {
                 root.typing-changed(is-typing);
+            }
+        }
+
+        if (root.emoji-picker-visible || root.gif-picker-visible) && !root.selection-mode && root.composer-notice == "": GlassSurface {
+            width: 100%;
+            height: min(340px, root.height * 0.48);
+            vertical-stretch: 0;
+            VerticalLayout {
+                padding: Spacing.sm;
+                spacing: Spacing.xs;
+                Rectangle {
+                    height: Spacing.touch-target-min;
+                    border-radius: Spacing.radius-md;
+                    background: Colors.inset;
+                    HorizontalLayout {
+                        padding-left: Spacing.sm;
+                        padding-right: Spacing.sm;
+                        Image { source: Icons.search; width: 20px; height: 20px; colorize: Colors.text-muted; }
+                        Rectangle {
+                            horizontal-stretch: 1;
+                            if drawer-search.text == "" && drawer-search.preedit-text == "": Text {
+                                text: root.gif-picker-visible ? "Search GIFs" : "Search emoji";
+                                color: Colors.text-muted;
+                                vertical-alignment: center;
+                            }
+                            drawer-search := TextInput {
+                                width: 100%; height: 100%;
+                                text: root.gif-picker-visible ? root.gif-search : root.emoji-search;
+                                color: Colors.text-primary;
+                                single-line: true;
+                                accessible-label: "Search emoji and GIFs";
+                                edited => {
+                                    if root.gif-picker-visible { root.gif-search = self.text; root.gif-search-changed(self.text); }
+                                    else { root.emoji-search = self.text; root.emoji-search-changed(self.text); }
+                                }
+                            }
+                        }
+                    }
+                }
+                Rectangle {
+                    vertical-stretch: 1;
+                    min-height: 0px;
+                    if root.emoji-picker-visible: EmojiPicker {
+                        embedded: true; show-gif-tab: false; show: true;
+                        max-picker-width: parent.width;
+                        max-picker-height: parent.height;
+
+                        emoji-list: root.emoji-list;
+                        selected-category <=> root.emoji-category;
+                        selected-skin-tone <=> root.emoji-skin-tone;
+                        search-query: root.emoji-search;
+                        emoji-selected(emoji) => { root.emoji-selected(emoji); }
+                        category-changed(category) => { root.emoji-category-changed(category); }
+                        skin-tone-changed(tone) => { root.emoji-skin-tone-changed(tone); }
+                    }
+                    if root.gif-picker-visible: GifPicker {
+                        embedded: true; show: true;
+                        max-picker-width: parent.width;
+                        max-picker-height: parent.height;
+
+                        results: root.gif-results;
+                        loading: root.gif-loading;
+                        failed: root.gif-failed;
+                        search-query: root.gif-search;
+                        search(query) => { root.gif-search-changed(query); }
+                        gif-selected(id, url) => { root.gif-picker-visible = false; root.gif-selected(id, url); }
+                    }
+                }
+                HorizontalLayout {
+                    height: Spacing.touch-target-min;
+                    for tab[index] in ["Emoji", "GIFs"]: Rectangle {
+                        horizontal-stretch: 1;
+                        background: (index == 0 ? root.emoji-picker-visible : root.gif-picker-visible) ? Colors.primary.with-alpha(0.2) : transparent;
+                        border-radius: Spacing.radius-md;
+                        accessible-role: button;
+                        accessible-label: tab;
+                        Text { text: tab; color: Colors.text-primary; horizontal-alignment: center; vertical-alignment: center; }
+                        TouchArea { clicked => {
+                            drawer-search.clear-focus();
+                            root.emoji-picker-visible = index == 0;
+                            root.gif-picker-visible = index == 1;
+                            if index == 0 { root.emoji-clicked(); } else { root.gif-clicked(); }
+                        } }
+                    }
+                }
+
             }
         }
 
