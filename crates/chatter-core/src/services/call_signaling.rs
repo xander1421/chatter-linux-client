@@ -406,25 +406,38 @@ impl CallSignalingService {
         // Full membership, paginated: a member past the server's page size who
         // IS in the room used to be silently skipped here and left unable to
         // decrypt after rotation (OPEN-ITEMS §16).
-        let members = with_policy_deadline(
+        let membership_started = std::time::Instant::now();
+        let membership = with_policy_deadline(
             "channel member list",
             self.channel_service.get_all_channel_members(channel_id),
-        ).await?;
+        ).await;
+        let stage = if membership.is_ok() { "rotation_membership_refresh_succeeded" } else { "rotation_membership_refresh_failed" };
+        tracing::info!(stage, call_id, epoch, elapsed_us = membership_started.elapsed().as_micros() as u64, "Call stage");
+        let members = membership?;
         let recipients = rotation_recipients(&members, room_identities, &current_user);
         let channel_id_str = channel_id.to_string();
 
         // In parallel: one slow recipient (a first session, a KT fetch) must
         // not hold every later participant's key — a joiner hears nothing
         // until its copy lands.
-        let sends = recipients.iter().map(|peer_id| {
+        let sends = recipients.iter().enumerate().map(|(recipient_index, peer_id)| {
             let content = build_group_call_signal_content(
                 call_id, &channel_id_str, crate::domain::call::GroupCallSignal::Key { key, epoch },
             );
             async move {
+                let send_started = std::time::Instant::now();
                 let sent = with_policy_deadline(
                     "group call key send",
                     self.message_service.send_friend_dm_content(peer_id, content),
                 ).await;
+                // Whole per-recipient send includes own-device sync; this is
+                // not a deposit ACK or evidence of remote audio arrival.
+                let stage = if sent.is_ok() {
+                    "rotation_recipient_whole_send_including_own_device_sync_succeeded"
+                } else {
+                    "rotation_recipient_whole_send_including_own_device_sync_failed"
+                };
+                tracing::info!(stage, call_id, epoch, recipient_index, elapsed_us = send_started.elapsed().as_micros() as u64, "Call stage: whole send includes own-device sync, not deposit ACK");
                 if let Err(e) = &sent {
                     tracing::warn!(
                         call_id, epoch, peer_id = %peer_id, error = %e,

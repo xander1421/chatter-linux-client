@@ -695,13 +695,22 @@ impl RoomManager {
         });
 
         // Connect to room (timeout prevents indefinite hang on slow/dead servers)
-        let (room, mut events) = tokio::time::timeout(
+        let connect_started = std::time::Instant::now();
+        tracing::info!(stage = "room_connect_begin", elapsed_us = 0u64, "Call stage");
+        let connected = tokio::time::timeout(
             tokio::time::Duration::from_secs(10),
             Room::connect(url, token, room_options),
         )
-        .await
-        .map_err(|_| CallError::ConnectionFailed("LiveKit connection timed out (10s)".to_string()))?
-        .map_err(|e| CallError::ConnectionFailed(e.to_string()))?;
+        .await;
+        let stage = match &connected {
+            Ok(Ok(_)) => "room_connect_succeeded",
+            Ok(Err(_)) => "room_connect_failed",
+            Err(_) => "room_connect_timed_out",
+        };
+        tracing::info!(stage, elapsed_us = connect_started.elapsed().as_micros() as u64, "Call stage");
+        let (room, mut events) = connected
+            .map_err(|_| CallError::ConnectionFailed("LiveKit connection timed out (10s)".to_string()))?
+            .map_err(|e| CallError::ConnectionFailed(e.to_string()))?;
 
         // Enable E2EE
         room.e2ee_manager().set_enabled(true);

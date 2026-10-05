@@ -1334,6 +1334,7 @@ fn run_call_worker(
                     joiner_id,
                     response,
                 } => {
+                    tracing::info!(stage = "join_call_handler_start", %call_id, elapsed_us = 0u64, "Call stage");
                     let result = join_call_impl(
                         &call_client,
                         &room_manager,
@@ -2194,10 +2195,12 @@ async fn join_call_impl(
     // Join call on server
     let response = {
         let mut client = call_client.lock().await;
-        client
-            .join_call(&call_id.to_string())
-            .await
-            .map_err(|e| CallError::ServerError(e.to_string()))?
+        let rpc_started = std::time::Instant::now();
+        tracing::info!(stage = "join_call_rpc_begin", %call_id, elapsed_us = 0u64, "Call stage");
+        let joined = client.join_call(&call_id.to_string()).await;
+        let stage = if joined.is_ok() { "join_call_rpc_succeeded" } else { "join_call_rpc_failed" };
+        tracing::info!(stage, %call_id, elapsed_us = rpc_started.elapsed().as_micros() as u64, "Call stage");
+        joined.map_err(|e| CallError::ServerError(e.to_string()))?
     };
 
     // Derive E2EE key. A group joiner has none of the call's: it connects

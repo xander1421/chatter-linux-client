@@ -903,7 +903,15 @@ impl ChatterClient {
             tracing::warn!(call_id, "Group call signal with a malformed call id; ignored");
             return false;
         };
-        match self.call_signaling().is_channel_member(&channel_id, &sender_id).await {
+        let membership_started = std::time::Instant::now();
+        let membership = self.call_signaling().is_channel_member(&channel_id, &sender_id).await;
+        let stage = match &membership {
+            Ok(true) => "group_signal_membership_validated",
+            Ok(false) => "group_signal_membership_rejected",
+            Err(_) => "group_signal_membership_failed",
+        };
+        tracing::info!(stage, call_id = %call, elapsed_us = membership_started.elapsed().as_micros() as u64, "Call stage");
+        match membership {
             Ok(true) => {}
             Ok(false) => {
                 tracing::warn!(%sender_id, %channel_id, ?signal, "Group call signal from a non-member; ignored");
@@ -1116,6 +1124,7 @@ impl ChatterClient {
     ) -> Result<crate::domain::call::CallSetupResult, ClientError> {
         let call = call_id.parse::<crate::domain::ids::CallId>()
             .map_err(|_| ClientError::Inbox("malformed group call id".into()))?;
+        tracing::info!(stage = "join_group_call_core_entry", call_id = %call, elapsed_us = 0u64, "Call stage");
         let user_id = self.session_current_user_id()
             .ok_or_else(|| ClientError::Inbox("Not logged in".into()))?;
         self.call_signaling().accept_group_call_invite(call_id);
