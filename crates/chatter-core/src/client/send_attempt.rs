@@ -382,6 +382,9 @@ mod tests {
             SendError::Message(crate::services::message::MessageError::InvalidContent(
                 "empty".into(),
             )),
+            SendError::Message(crate::services::message::MessageError::InvalidContent(
+                "message content too large for sealed delivery".into(),
+            )),
             storage_error(StorageError::InvalidData("local preparation failed".into())),
         ];
         for error in errors {
@@ -403,33 +406,48 @@ mod tests {
             // Unblock/refill/repair allows the same unsent identity to run.
             claim(&db, "owner:dm", &original).unwrap();
             discard_preparation(&db, "owner:dm", &original.attempt_id).unwrap();
+            // A new valid send must also be admitted after local refusal.
+            let next = pending();
+            claim(&db, "owner:dm", &next).unwrap();
+            discard_preparation(&db, "owner:dm", &next.attempt_id).unwrap();
         }
-        let original = pending();
-        claim(&db, "owner:dm", &original).unwrap();
-        let (error, started, row) = track_submission(
-            async {
-                mark_submission_started().unwrap(); // first recipient may already have accepted
-                SendError::NotLoggedIn // same class is unsafe after partial fanout
-            },
-            None,
-        )
-        .await;
-        assert!(matches!(
-            settle_failure(
-                &db,
-                "owner:dm",
-                original.attempt_id.parse().unwrap(),
-                started,
-                row,
-                error
+        for error in [
+            SendError::NotLoggedIn,
+            SendError::Message(crate::services::message::MessageError::InvalidContent(
+                "message content too large for sealed delivery".into(),
+            )),
+            SendError::Message(crate::services::message::MessageError::Network(
+                crate::error::NetworkError::InvalidRequest("sealed message too large".into()),
+            )),
+        ] {
+            let original = pending();
+            claim(&db, "owner:dm", &original).unwrap();
+            let (error, started, row) = track_submission(
+                async {
+                    mark_submission_started().unwrap(); // first recipient may already have accepted
+                    error // same cause is unsafe after encryption or partial fanout
+                },
+                None,
             )
-            .unwrap(),
-            SendError::DeliveryUnconfirmed
-        ));
-        assert!(matches!(
-            claim(&db, "owner:dm", &pending()),
-            Err(SendError::SendInProgress)
-        ));
+            .await;
+            assert!(matches!(
+                settle_failure(
+                    &db,
+                    "owner:dm",
+                    original.attempt_id.parse().unwrap(),
+                    started,
+                    row,
+                    error
+                )
+                .unwrap(),
+                SendError::DeliveryUnconfirmed
+            ));
+            assert!(matches!(
+                claim(&db, "owner:dm", &pending()),
+                Err(SendError::SendInProgress)
+            ));
+            discard_preparation(&db, "owner:dm", &original.attempt_id).unwrap();
+        }
     }
 
     #[tokio::test]

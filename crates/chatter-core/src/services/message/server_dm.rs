@@ -34,6 +34,21 @@ use crate::services::current_user::CurrentUserProvider;
 
 use super::{DmSendResult, MessageError, MessageService};
 
+// Mirrors internal/services/message/adapters/signal_crypto.go. Signal encryption
+// and sealed-sender wrapping add bytes; neither compresses the encoded Content.
+const MAX_SEALED_BODY_BYTES: usize = 8192;
+
+fn validate_sealed_plaintext_size(encoded_len: usize) -> Result<(), MessageError> {
+    // A lower bound only: content within this cap may still exceed it after
+    // encryption. Those outcomes must retain the existing uncertain boundary.
+    if encoded_len > MAX_SEALED_BODY_BYTES {
+        return Err(MessageError::InvalidContent(format!(
+            "message content too large for sealed delivery: {encoded_len} bytes (max {MAX_SEALED_BODY_BYTES})"
+        )));
+    }
+    Ok(())
+}
+
 impl MessageService {
     /// Send a DataMessage (text + optional attachments) to a friend over
     /// the channel-free sealed-sender path, and persist it locally as
@@ -202,8 +217,9 @@ impl MessageService {
 
         // Attachment pointers are compact by construction — the thumbnail is a
         // separate CDN sidecar (thumbnail_cdn_key), not inline, and no field
-        // scales with file size — so the sealed body always fits the device-inbox
-        // padding budget (≤4096-byte buckets, 8192-byte hard cap) on every path.
+        // scales with file size. Text and quote metadata can still exceed the
+        // device-inbox cap; sealed delivery validates the encoded content before
+        // encryption, without applying this transport's limit to Shield.
         let content = match &reply_ctx {
             Some((q, parts)) => crate::services::build_reply_content(
                 text,
@@ -502,6 +518,7 @@ impl MessageService {
                 "no original device of this message can be retried".into(),
             ));
         }
+        validate_sealed_plaintext_size(content.encoded_len())?;
         let plaintext = content.encode_to_vec();
         let peer = peer_id.to_string();
         let mut auth_client = self.auth_client();
@@ -569,6 +586,7 @@ impl MessageService {
                 "Shield mode: refusing the sealed-sender streaming transport for a DM".into(),
             ));
         }
+        validate_sealed_plaintext_size(content.encoded_len())?;
         let plaintext = content.encode_to_vec();
 
         let mut auth_client = self.auth_client();
@@ -1404,6 +1422,32 @@ mod tests {
             .is_err()
         );
         assert_eq!(calls.get(), 1);
+    }
+
+    #[tokio::test]
+    async fn oversized_content_refuses_before_encryption_boundary() {
+        use super::MessageError;
+        use crate::services::gateway::submission::{mark_submission_started, track_submission};
+        use prost::Message as _;
+        for text in ["A".repeat(1024 * 1024), "界".repeat(3000)] {
+            let content = crate::services::build_data_message_content(&text, vec![], 1);
+            let (result, started, row) = track_submission(
+                async {
+                    super::validate_sealed_plaintext_size(content.encoded_len())?;
+                    mark_submission_started()?;
+                    Ok::<_, MessageError>(())
+                },
+                None,
+            )
+            .await;
+            assert!(matches!(result, Err(MessageError::InvalidContent(_))));
+            assert!(!started, "definitely oversized content reached encryption");
+            assert!(row.is_none());
+        }
+        let valid = crate::services::build_data_message_content(&"U".repeat(6000), vec![], 1);
+        assert!(super::validate_sealed_plaintext_size(valid.encoded_len()).is_ok());
+        assert!(super::validate_sealed_plaintext_size(super::MAX_SEALED_BODY_BYTES).is_ok());
+        assert!(super::validate_sealed_plaintext_size(super::MAX_SEALED_BODY_BYTES + 1).is_err());
     }
 
     #[test]
