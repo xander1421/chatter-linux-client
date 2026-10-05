@@ -895,8 +895,13 @@ impl ChatterClient {
                 let due = key_request_is_due(&me, call, &channel_id, &sender_id, active.as_ref(), seniority.as_ref());
                 if !due {
                     tracing::debug!(%sender_id, call_id, "Group call key request not ours to answer; ignored");
+                    return false;
                 }
-                due
+                if self.call_signaling().recently_keyed(&call_id, &sender_id, KEY_REQUEST_AFTER) {
+                    tracing::debug!(%sender_id, call_id, "Group call key request crossed its key in flight; not re-rotating");
+                    return false;
+                }
+                true
             }
         }
     }
@@ -1365,7 +1370,8 @@ impl ChatterClient {
 
     /// Participants joined the call: rotate so they get a key that covered
     /// nothing from before they joined ([`Self::rotate_group_call_key`]).
-    /// Joins are coalesced into one call of this by [`JoinRotationGate`].
+    /// Runs at once on a join; joins during a run coalesce into one more run
+    /// ([`JoinRotationGate`]).
     #[cfg(feature = "media")]
     pub(crate) async fn handle_participants_joined(&self) -> Result<(), ClientError> {
         self.rotate_group_call_key(None).await
@@ -1435,8 +1441,9 @@ impl ChatterClient {
         let epoch = call_worker.rotate_key(new_key).await
             .map_err(|e| ClientError::Inbox(format!("key rotation failed: {e}")))?;
 
-        // Brief delay for LiveKit key propagation before peers receive new-key frames
-        tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
+        // No wait before sending: we already encrypt with the new key, so
+        // every moment before the peers hold it is media they cannot decrypt
+        // (and a joiner hears nothing until it arrives).
 
         // Redistribute to the peers actually still in the room, not to the
         // channel membership — a departed peer is still a member, so the old
@@ -1671,10 +1678,6 @@ where
     roster
 }
 
-/// How long joins (and key requests) are gathered into one rotation.
-#[cfg(feature = "media")]
-pub(crate) const ROSTER_SETTLE: std::time::Duration = std::time::Duration::from_secs(2);
-
 /// Longest a key from an in-room participant who is not yet the key
 /// authority in our view is held for that view to catch up. Above LiveKit's
 /// own departure timeout (20 s by default), after which a participant that
@@ -1688,33 +1691,49 @@ const KEY_AUTHORITY_SETTLE_MAX: std::time::Duration = std::time::Duration::from_
 const KEY_AUTHORITY_RECHECK: std::time::Duration = std::time::Duration::from_millis(500);
 
 /// A participant holding no current key asks for one when this long passes
-/// without it — past a join rotation's own delay (`ROSTER_SETTLE` + the 1 s
-/// propagation wait + the send).
+/// without it. The authority rotates on the join at once, so the push lands
+/// well inside this on a working link; the request is the fallback.
 #[cfg(feature = "media")]
-pub(crate) const KEY_REQUEST_AFTER: std::time::Duration = std::time::Duration::from_secs(5);
+pub(crate) const KEY_REQUEST_AFTER: std::time::Duration = std::time::Duration::from_secs(2);
 
-/// Key requests per wait before giving up (a minute at [`KEY_REQUEST_AFTER`]).
+/// Key requests per wait before giving up (about a minute at [`KEY_REQUEST_AFTER`]).
 #[cfg(feature = "media")]
-const KEY_REQUEST_ATTEMPTS: u32 = 12;
+const KEY_REQUEST_ATTEMPTS: u32 = 30;
 
-/// Coalesces joins into one rotation: the first join arms it, and every join
-/// until it fires (after [`ROSTER_SETTLE`]) is covered by the same rotation,
-/// which reads the roster when it runs.
+/// Single-flight join rotation with one trailing run: a join starts a
+/// rotation at once when none runs; a join during a run asks for one more
+/// run after it (which reads the roster then). No fixed wait anywhere.
 #[cfg(feature = "media")]
 #[derive(Default)]
-pub(crate) struct JoinRotationGate(std::sync::atomic::AtomicBool);
+pub(crate) struct JoinRotationGate(parking_lot::Mutex<(bool, bool)>);
 
 #[cfg(feature = "media")]
 impl JoinRotationGate {
-    /// True when this join must schedule the rotation — none is pending.
-    pub(crate) fn arm(&self) -> bool {
-        !self.0.swap(true, std::sync::atomic::Ordering::SeqCst)
+    /// A join (or key request) happened. True: the caller starts the
+    /// rotation now. False: one is running and will run again for it.
+    pub(crate) fn request(&self) -> bool {
+        let mut g = self.0.lock();
+        let (running, again) = &mut *g;
+        if *running {
+            *again = true;
+            false
+        } else {
+            *running = true;
+            true
+        }
     }
 
-    /// The pending rotation is about to read the roster: a join from now on
-    /// needs a rotation of its own.
-    pub(crate) fn fire(&self) {
-        self.0.store(false, std::sync::atomic::Ordering::SeqCst);
+    /// The running rotation finished. True: run once more (a join arrived
+    /// meanwhile); false: idle.
+    pub(crate) fn finish(&self) -> bool {
+        let mut g = self.0.lock();
+        let (running, again) = &mut *g;
+        if std::mem::take(again) {
+            true
+        } else {
+            *running = false;
+            false
+        }
     }
 }
 
@@ -1837,7 +1856,7 @@ mod group_call_key_tests {
             KEY_AUTHORITY_SETTLE_MAX,
         ).await;
         assert!(is_key_authority(&rotator, &roster), "the rotator's key was given up on");
-        assert!(started.elapsed() > ROSTER_SETTLE, "the departure landed after the old fixed settle");
+        assert!(started.elapsed() > std::time::Duration::from_secs(2), "the departure landed after the old fixed 2 s settle");
 
         // A sender who never becomes the authority is refused, after the cap.
         let roster = settle_key_authority(
@@ -1850,15 +1869,17 @@ mod group_call_key_tests {
         assert!(!is_key_authority(&rotator, &roster));
     }
 
-    /// Joins that land together cost one rotation; a join after it has
-    /// fired gets its own.
+    /// A join rotates at once; joins during a running rotation cost one
+    /// more run (none missed, no fixed wait); an idle gate starts again.
     #[test]
-    fn simultaneous_joins_make_one_rotation() {
+    fn joins_rotate_at_once_and_coalesce_while_running() {
         let gate = JoinRotationGate::default();
-        let scheduled = (0..5).filter(|_| gate.arm()).count();
-        assert_eq!(scheduled, 1);
-        gate.fire();
-        assert!(gate.arm(), "a later join rotates again");
-        assert!(!gate.arm());
+        assert!(gate.request(), "the first join starts the rotation immediately");
+        let piggyback = (0..5).filter(|_| gate.request()).count();
+        assert_eq!(piggyback, 0, "joins during a run start nothing of their own");
+        assert!(gate.finish(), "…but the run goes once more for them");
+        assert!(!gate.finish(), "then it idles");
+        assert!(gate.request(), "a later join rotates again at once");
+        assert!(!gate.finish());
     }
 }

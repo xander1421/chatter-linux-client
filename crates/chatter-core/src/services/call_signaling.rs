@@ -144,6 +144,21 @@ pub struct CallSignalingService {
     /// The call a task is waiting for (and requesting) a key in, so a burst
     /// of lags runs one wait per call, not one each.
     group_key_wait: Arc<Mutex<Option<String>>>,
+    /// The last rotated key we sent: call, when, and to whom.
+    last_key_sent: Arc<Mutex<Option<KeySent>>>,
+}
+
+/// One rotated key's send ([`CallSignalingService::recently_keyed`]).
+#[derive(Clone)]
+struct KeySent {
+    call_id: String,
+    at: std::time::Instant,
+    to: Vec<UserId>,
+}
+
+/// Whether `peer` was sent a rotation for `call_id` within `window` of `now`.
+fn sent_recently(last: Option<&KeySent>, call_id: &str, peer: &UserId, now: std::time::Instant, window: std::time::Duration) -> bool {
+    last.is_some_and(|k| k.call_id == call_id && now.saturating_duration_since(k.at) < window && k.to.contains(peer))
 }
 
 /// Held by the one task waiting for a group-call key in a call
@@ -177,7 +192,15 @@ impl CallSignalingService {
             pending_dm_call: Arc::new(Mutex::new(None)),
             group_call_invites: Arc::new(Mutex::new(HashMap::new())),
             group_key_wait: Arc::new(Mutex::new(None)),
+            last_key_sent: Arc::new(Mutex::new(None)),
         }
+    }
+
+    /// Whether we sent `peer` a rotation for `call_id` within `window`: its
+    /// key request crossed that key in flight, and a second rotation would
+    /// only churn the call (it asks again if the key never lands).
+    pub fn recently_keyed(&self, call_id: &str, peer: &UserId, window: std::time::Duration) -> bool {
+        sent_recently(self.last_key_sent.lock().as_ref(), call_id, peer, std::time::Instant::now(), window)
     }
 
     /// Become the one task waiting for a group-call key in `call_id`; `None`
@@ -390,23 +413,34 @@ impl CallSignalingService {
         let recipients = rotation_recipients(&members, room_identities, &current_user);
         let channel_id_str = channel_id.to_string();
 
-        let mut sent_count = 0;
-        for peer_id in &recipients {
+        // In parallel: one slow recipient (a first session, a KT fetch) must
+        // not hold every later participant's key — a joiner hears nothing
+        // until its copy lands.
+        let sends = recipients.iter().map(|peer_id| {
             let content = build_group_call_signal_content(
                 call_id, &channel_id_str, crate::domain::call::GroupCallSignal::Key { key, epoch },
             );
-            if let Err(e) = with_policy_deadline(
-                "group call key send",
-                self.message_service.send_friend_dm_content(peer_id, content),
-            ).await {
-                tracing::warn!(
-                    call_id, epoch, peer_id = %peer_id, error = %e,
-                    "Failed to redistribute rotated group call key to participant"
-                );
-            } else {
-                sent_count += 1;
+            async move {
+                let sent = with_policy_deadline(
+                    "group call key send",
+                    self.message_service.send_friend_dm_content(peer_id, content),
+                ).await;
+                if let Err(e) = &sent {
+                    tracing::warn!(
+                        call_id, epoch, peer_id = %peer_id, error = %e,
+                        "Failed to redistribute rotated group call key to participant"
+                    );
+                }
+                sent.is_ok()
             }
-        }
+        });
+        let sent = futures::future::join_all(sends).await;
+        let sent_count = sent.iter().filter(|ok| **ok).count();
+        *self.last_key_sent.lock() = Some(KeySent {
+            call_id: call_id.to_string(),
+            at: std::time::Instant::now(),
+            to: recipients.iter().zip(&sent).filter(|(_, ok)| **ok).map(|(p, _)| *p).collect(),
+        });
 
         tracing::info!(
             call_id, epoch, sent_count,
@@ -1555,6 +1589,22 @@ fn rotation_recipients(
 #[cfg(test)]
 mod rotation_recipient_tests {
     use super::*;
+
+    /// A key request that crossed the rotation it asks for in flight is not
+    /// answered with another rotation; a later one, or one for another call
+    /// or from someone the key did not go to, is.
+    #[test]
+    fn a_request_crossing_its_key_in_flight_is_not_rerotated() {
+        let (b, c) = (UserId::new(), UserId::new());
+        let t0 = std::time::Instant::now();
+        let w = std::time::Duration::from_secs(2);
+        let k = KeySent { call_id: "call".into(), at: t0, to: vec![b] };
+        assert!(sent_recently(Some(&k), "call", &b, t0 + std::time::Duration::from_millis(900), w));
+        assert!(!sent_recently(Some(&k), "call", &b, t0 + std::time::Duration::from_secs(3), w), "too long ago");
+        assert!(!sent_recently(Some(&k), "call", &c, t0, w), "not a recipient");
+        assert!(!sent_recently(Some(&k), "other", &b, t0, w), "another call");
+        assert!(!sent_recently(None, "call", &b, t0, w));
+    }
     use crate::domain::channel::{MemberRole, Membership, NotificationPreference};
 
     fn member(channel_id: &ChannelId, user_id: &UserId) -> Membership {

@@ -2260,8 +2260,8 @@ impl ChatterClient {
     /// Call-worker group-call key policy listener. In a channel-based group
     /// call the designated rotator rotates the encryption key on every
     /// membership change: on `ParticipantLeft` so the departed participant
-    /// can't decrypt future frames, and on `ParticipantJoined` — joins within
-    /// `ROSTER_SETTLE` coalesced into one rotation — so a joiner is sent only
+    /// can't decrypt future frames, and on `ParticipantJoined` — at once,
+    /// joins during a running rotation coalesced into one more — so a joiner is sent only
     /// a key that covered nothing before it joined. A received
     /// `GroupCallSignal` rings, installs a key, or — a key request we are
     /// the authority for — rotates like a join. The "when" decisions live in
@@ -4099,27 +4099,32 @@ async fn upload_attachments(pending: &[PendingAttachment], attachment_service: &
 #[cfg(feature = "media")]
 const CALL_KEY_TASKS: usize = 8;
 
-/// Who left and who joined between two views of a call's room.
-#[cfg(feature = "media")]
-/// Schedule one group-call key rotation for the joins (and key requests)
-/// arriving within [`calls::ROSTER_SETTLE`]: the first arms it, the rest ride
-/// along, and it reads the roster when it fires.
+/// Rotate the group-call key for a join (or a key request) NOW: no settle
+/// wait — the joiner hears nothing until it has the key. Single-flight: a
+/// join arriving while a rotation runs makes it run once more when done
+/// (that run reads the roster afresh), so a burst of joins costs at most two
+/// rotations and none is missed (§124 1k device check, 2026-10-05).
 #[cfg(feature = "media")]
 fn schedule_join_rotation(client: &Arc<ChatterClient>, gate: &Arc<calls::JoinRotationGate>) {
-    if !gate.arm() {
+    if !gate.request() {
         return;
     }
     let client = Arc::clone(client);
     let gate = Arc::clone(gate);
     tokio::spawn(async move {
-        tokio::time::sleep(calls::ROSTER_SETTLE).await;
-        gate.fire();
-        if let Err(e) = client.handle_participants_joined().await {
-            tracing::error!(error = %e, "Failed to rotate the group call key for joiners");
+        loop {
+            if let Err(e) = client.handle_participants_joined().await {
+                tracing::error!(error = %e, "Failed to rotate the group call key for joiners");
+            }
+            if !gate.finish() {
+                break;
+            }
         }
     });
 }
 
+/// Who left and who joined between two views of a call's room.
+#[cfg(feature = "media")]
 fn roster_changes(
     before: &std::collections::HashSet<String>,
     now: &std::collections::HashSet<String>,

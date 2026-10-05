@@ -11885,10 +11885,25 @@ async fn v58_group_call_key_rotates_on_join_and_leave() {
     // must publish nothing while it shares no key with A.
     let mut b_seen: Vec<Vec<u8>> = Vec::new();
     let mut b_published_keyless = 0usize;
+    // Timing (§124 1k device check): the authority must rotate as soon as it
+    // sees the joiner, and the joiner must hold the key before its own
+    // key-request fallback could have fired — i.e. by push, not by request.
+    let b_joined = Instant::now();
+    let mut a_saw_b: Option<Instant> = None;
+    let mut a_rotated: Option<Instant> = None;
+    let worker_a = client_a.call_service_handle_opt().expect("A has no call service");
     let e_ab = {
         let deadline = Instant::now() + Duration::from_secs(60);
         loop {
+            if a_saw_b.is_none()
+                && worker_a.room_seniority().await.is_some_and(|r| r.remote.iter().any(|(id, _)| *id == uid_b.to_string()))
+            {
+                a_saw_b = Some(Instant::now());
+            }
             let a = call_key_view(&client_a).await.expect("A left the call");
+            if a_rotated.is_none() && !start_chain.contains(&a.1) {
+                a_rotated = Some(Instant::now());
+            }
             let b = call_key_view(&client_b).await;
             let b_tracks = local_tracks(&client_b).await;
             if let Some((_, _, _, ring)) = &b {
@@ -11902,9 +11917,21 @@ async fn v58_group_call_key_rotates_on_join_and_leave() {
             }
             assert!(Instant::now() < deadline, "JOIN ROTATION FAILED: A and B never agreed on a key \
                 off A's starting chain within 60s of B joining");
-            tokio::time::sleep(POLL_INTERVAL).await;
+            tokio::time::sleep(Duration::from_millis(50)).await;
         }
     };
+    let b_keyed = Instant::now();
+    let a_saw_b = a_saw_b.unwrap_or(b_keyed);
+    let a_rotated = a_rotated.expect("A agreed with B on a key off its starting chain, so it rotated");
+    let react = a_rotated.saturating_duration_since(a_saw_b);
+    let join_to_key = b_keyed.duration_since(b_joined);
+    println!("  timing: A saw B +{:?}, A rotated +{:?} (reaction {:?}), B keyed +{:?} after B's join",
+        a_saw_b.duration_since(b_joined), a_rotated.duration_since(b_joined), react, join_to_key);
+    // The authority's own reaction is what this asserts: the joiner's
+    // receipt adds the harness's inbox poll (~1.5 s; devices stream), and
+    // LiveKit reports a joiner only once its transport is up (~2 s here).
+    assert!(react <= Duration::from_secs(1), "SLOW JOIN ROTATION: the authority rotated {react:?} \
+        after it saw the joiner (want <= 1 s: no settle wait)");
     let leaked: Vec<_> = b_seen.iter().filter(|k| start_chain.contains(k)).collect();
     assert!(leaked.is_empty(), "THE RING CARRIED A MEDIA KEY: B's KeyProvider held {} key(s) on \
         A's starting chain — a member who was only rung could decrypt A's media", leaked.len());
