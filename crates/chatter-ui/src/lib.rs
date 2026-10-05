@@ -151,6 +151,29 @@ pub struct AppState {
     _tray_handle: Option<chatter_core::system::TrayHandle>,
 }
 
+/// Anon Mode: enforce default-off on every fresh window and mirror the `onion`
+/// Cargo feature into `AnonMode.onion-built`.
+///
+/// The core flag is already false (in-memory AtomicBool); this keeps the Slint
+/// global in sync defensively. Auto-revert on restart is the privacy property
+/// of this feature; do NOT persist this flag.
+///
+/// STUB-1: mirror `onion` exactly as the `jarvis` block in `app_init` mirrors
+/// its own. Shield itself is offered in every build (it is the anonymous-mailbox
+/// mode); only the sidebar's Tor status dot is gated on `onion-built`, because
+/// without Tor it would be a permanent red.
+///
+/// Public so the headless UI suite drives the real mirror rather than reading
+/// the Slint default back (which equals `cfg!(feature = "onion")` only in a
+/// build without `onion`).
+pub fn mirror_anon_mode_build(window: &MainWindow) {
+    use slint::ComponentHandle;
+    window.global::<AnonMode>().set_enabled(false);
+    window
+        .global::<AnonMode>()
+        .set_onion_built(cfg!(feature = "onion"));
+}
+
 /// Phase 1: Async initialization (runs inside block_on — reactor is active).
 /// Creates client, gRPC channels, window, and wires callbacks.
 /// Returns state for the sync event loop phase.
@@ -331,25 +354,7 @@ pub async fn app_init() -> AppState {
             .on_initials(|name| chatter_core::ui::initials_from_name(&name).into());
     }
 
-    // Anon Mode: enforce default-off on every fresh window. The core flag
-    // is already false (in-memory AtomicBool), this keeps the Slint global
-    // in sync defensively. Auto-revert on restart is the privacy property
-    // of this feature; do NOT persist this flag.
-    {
-        use slint::ComponentHandle;
-        window.global::<AnonMode>().set_enabled(false);
-
-        // STUB-1: mirror the `onion` Cargo feature, exactly as the `jarvis`
-        // block above mirrors its own. Without `onion` there is no Tor
-        // transport to switch to, so every anon surface (`if
-        // AnonMode.onion-built : ...` in ui/sidebar/sidebar.slint) renders as
-        // nothing. Offering the shield in a build that cannot honour it is
-        // worse than not offering it: the user passes a PIN gate, the shield
-        // glows, and the traffic goes direct.
-        window
-            .global::<AnonMode>()
-            .set_onion_built(cfg!(feature = "onion"));
-    }
+    mirror_anon_mode_build(&window);
 
     // Touch feedback. One binding site for the whole app — see the module docs.
     bin_ui::haptics::install(&window);

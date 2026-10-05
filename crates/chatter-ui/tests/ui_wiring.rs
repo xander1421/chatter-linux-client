@@ -4141,16 +4141,26 @@ fn shield_toggle_is_offered_without_tor_but_the_tor_dot_is_not() {
     let dots = sidebar_src.matches("visible: AnonMode.enabled && AnonMode.onion-built;").count();
     assert_eq!(dots, shields, "every shield's Tor dot must be gated on onion-built");
 
-    // Rust mirrors the Cargo feature, exactly as it does for jarvis.
+    // Rust mirrors the Cargo feature, exactly as it does for jarvis, and the
+    // real startup path runs that mirror.
     let lib_src = include_str!("../src/lib.rs");
     assert!(
         lib_src.contains(r#"set_onion_built(cfg!(feature = "onion"))"#),
         "lib.rs must mirror the `onion` Cargo feature into AnonMode.onion-built"
     );
+    assert!(
+        lib_src.contains("mirror_anon_mode_build(&window);"),
+        "app_init must run the AnonMode build mirror on the real window"
+    );
 
-    // Dynamic: under this test binary's feature set the global reflects reality.
+    // Dynamic: drive the real mirror (a bare `boot()` only reads back the
+    // Slint default, false, which matches only a build without `onion`) and
+    // check the global reflects this test binary's feature set — with and
+    // without `onion`.
     use slint::ComponentHandle;
     let w = boot();
+    chatter_ui::mirror_anon_mode_build(&w);
+    assert!(!w.global::<AnonMode>().get_enabled(), "Shield must start off");
     assert_eq!(
         w.global::<AnonMode>().get_onion_built(),
         cfg!(feature = "onion"),
