@@ -285,7 +285,8 @@ export component UnifiedSearch inherits Rectangle {
                 // hides that on first open and not at all afterwards, when the
                 // user taps it to correct a query.
                 height: Spacing.touch-target-min;
-                border-radius: Spacing.radius-md;
+                // Concentric with the panel: its radius minus the padding.
+                border-radius: Spacing.radius-xl - Spacing.md;
                 background: Colors.inset;
                 border-width: Spacing.stroke;
                 border-color: search-input.has-focus ? Colors.primary : Colors.border;

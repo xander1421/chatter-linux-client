@@ -51,6 +51,7 @@ import { UnifiedSearch, QuickSwitcherItem, SearchResult } from "components/unifi
 import { SettingsScreen, LocalAIProviderData, CatalogModelData } from "settings/settings_screen.slint";
 import { AccountMenu } from "settings/account_menu.slint";
 import { CreateMenu, NewChatPicker } from "sidebar/create_menu.slint";
+import { ChatHeaderMenu } from "chat/chat_header_menu.slint";
 import { JarvisMemoryModal, MemoryFactData, MemoryEntityData, MemoryGraphNodeData, MemoryGraphEdgeData } from "modals/jarvis_memory.slint";
 
 // Import components
@@ -360,6 +361,9 @@ export component MainWindow inherits Window {
     // ChatLayout.list-scrolling, mirrored here for the SelectionBar, which sits
     // over the message list but is not inside ChatLayout.
     property <bool> chat-list-scrolling: false;
+    // Which rows the chat header's ⋯ menu offers, set by the header as it opens it.
+    property <bool> chat-menu-video: false;
+    property <bool> chat-menu-settings: false;
     in-out property <bool> is-at-bottom: true;  // True when message list is scrolled to bottom
     // Unread boundary from core — see MessageList.
     in-out property <int> unread-index: -1;
@@ -1881,7 +1885,11 @@ export component MainWindow inherits Window {
 
                         settings-clicked => { root.chat-settings-clicked(); }
                         voice-call-clicked => { root.start-voice-call(); }
-                        video-call-clicked => { root.start-video-call(); }
+                        header-more-clicked(video, settings) => {
+                            root.chat-menu-video = video;
+                            root.chat-menu-settings = settings;
+                            root.nav-push("chat-menu");
+                        }
                         invite-clicked => { root.invite-member(); }
                         // Peer identity change prompt
                         identity-change-visible: root.identity-change-visible;
@@ -2683,6 +2691,24 @@ export component MainWindow inherits Window {
             new-section => {
                 root.nav-close("create-menu");
                 root.start-create-section();
+            }
+        }
+
+        // The chat header's ⋯ menu, dropped from the top-right of the chat
+        // pane (the header's trailing edge on a phone and on two-pane).
+        if root.active-modal == "chat-menu": ChatHeaderMenu {
+            show-video-call: root.chat-menu-video;
+            show-settings: root.chat-menu-settings;
+            card-x: root.width - self.card-width - Spacing.sm;
+            card-y: (root.is-mobile-platform ? Spacing.xs + Spacing.header-height-touch : Spacing.header-height) + Spacing.xs;
+            close => { root.nav-close("chat-menu"); }
+            video-call => {
+                root.nav-close("chat-menu");
+                root.start-video-call();
+            }
+            settings => {
+                root.nav-close("chat-menu");
+                root.chat-settings-clicked();
             }
         }
 

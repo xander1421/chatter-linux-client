@@ -1,0 +1,48 @@
+import { GlassSurface } from "../components/glass_surface.slint";
+// The chat header's ⋯ menu: Video call and Conversation settings (owner,
+// 2026-10-05: video call moved out of the header row into this menu, voice
+// call stays in the row). Pushed on the modal stack as "chat-menu" (app.slint),
+// so Back and the backdrop close it like any other layer; it drops from the
+// top-right corner of the chat pane, under the header's ⋯.
+
+import { Spacing } from "../theme/spacing.slint";
+import { Icons } from "../theme/icons.slint";
+import { MenuRow } from "../settings/account_menu.slint";
+
+export component ChatHeaderMenu inherits Rectangle {
+    in property <length> card-x;
+    in property <length> card-y;
+    in property <bool> show-video-call;
+    in property <bool> show-settings;
+    out property <length> card-width: 240px;
+    out property <length> card-height: menu.preferred-height;
+
+    callback close();
+    callback video-call();
+    callback settings();
+
+    // Taps outside the card close it and must not reach the chat under it.
+    TouchArea { clicked => { root.close(); } }
+
+    GlassSurface {
+        enter-distance: 6px;
+
+        material-level: 3;
+        elevation: 4;
+
+        x: root.card-x;
+        y: (root.card-y) + self.entrance-offset;
+        width: root.card-width;
+        height: root.card-height;
+        border-radius: Spacing.radius-xl;
+        // Eat taps on the card's own padding.
+        TouchArea { }
+
+        menu := VerticalLayout {
+            padding-top: Spacing.xs;
+            padding-bottom: Spacing.xs;
+            if root.show-video-call: MenuRow { icon: Icons.video; label: "Video call"; clicked => { root.video-call(); } }
+            if root.show-settings: MenuRow { icon: Icons.settings; label: "Conversation settings"; clicked => { root.settings(); } }
+        }
+    }
+}

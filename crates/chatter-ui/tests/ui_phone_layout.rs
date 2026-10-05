@@ -172,4 +172,42 @@ fn settings_tab_bar_and_link_device_status_land_where_designed_on_a_phone() {
     let after = scrolled.1;
     println!("records content y before scroll={before}, after={after}");
     assert!(after < before - 50.0, "the records list did not scroll (y {before} -> {after})");
+
+    // ── Composer: the field is concentric with the glass shell ──
+    // Owner, 2026-10-05: the field's rounding did not match the shell's. The
+    // field's radius is the shell's minus the inset between them
+    // (Spacing.radius-chrome-inner); that only reads as concentric when the
+    // inset is the same on every side, which is what is measured here.
+    let spacing = include_str!("../../../ui/theme/spacing.slint");
+    assert!(spacing.contains("out property <length> radius-chrome-inner: radius-chrome - chrome-inset;"));
+    assert!(spacing.contains("out property <length> chrome-inset: xs;"));
+    assert!(spacing.contains("out property <length> xs: 4px;"));
+    let inset = 4.0_f32;
+    let composer_src = include_str!("../../../ui/chat/message_composer.slint");
+    assert!(composer_src.contains("border-radius: Spacing.radius-chrome;"), "shell radius");
+    assert_eq!(
+        composer_src.matches("border-radius: Spacing.radius-chrome-inner;").count(),
+        4,
+        "field, emoji, attach and send are concentric with the shell"
+    );
+    w.set_modal_stack(slint::ModelRc::new(slint::VecModel::from(Vec::<slint::SharedString>::new())));
+    w.set_conversation_kind(chatter_ui::ConversationKind::ServerDm);
+    w.set_channel_name("Bob".into());
+    w.set_mobile_show_chat(true);
+    pump(&w);
+    let shell = testing::ElementHandle::find_by_element_type_name(&w, "MessageComposer")
+        .find(|e| e.size().height > 0.0)
+        .expect("no MessageComposer on the open chat");
+    let (sx, sy, sw, sh) = rect(&shell);
+    let (fx, fy, fw, fh) = rect(&one(&w, "Message input"));
+    let (bx, _, bw, _) = rect(&one(&w, "Record voice message"));
+    println!("composer {sx},{sy} {sw}x{sh}; field {fx},{fy} {fw}x{fh}; trailing button x={bx} w={bw}");
+    for (side, got) in [
+        ("left", fx - sx),
+        ("top", fy - sy),
+        ("bottom", sy + sh - (fy + fh)),
+        ("right (trailing button)", sx + sw - (bx + bw)),
+    ] {
+        assert!((got - inset).abs() < 0.5, "composer {side} inset is {got}px, not chrome-inset ({inset}px)");
+    }
 }

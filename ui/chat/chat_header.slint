@@ -55,8 +55,10 @@ export component ChatHeader inherits GlassSurface {
     callback settings-clicked();
     callback pin-clicked();
     callback voice-call-clicked();
-    callback video-call-clicked();
     callback invite-clicked();
+    // The ⋯ button. The menu itself is on the window's modal stack (app.slint,
+    // "chat-menu"); these say which of its rows apply to this conversation.
+    callback more-clicked(/* video-call */ bool, /* settings */ bool);
 
     // Presence dot colour, drawn by the DM avatar (picture or initials).
     property <color> presence-dot:
@@ -92,7 +94,7 @@ export component ChatHeader inherits GlassSurface {
     // `if`s on that group exactly; used by the mesh divider above it, which
     // otherwise hangs off the right edge with nothing to separate.
     property <bool> has-utility-actions:
-        root.show-invite || root.show-pin || root.show-settings;
+        root.show-invite || root.show-pin || root.show-more;
     // The pin only brings back a dismissed pinned bar (`pinned-show-clicked`),
     // so it exists only while that bar is hidden. Always-on, it duplicated the
     // bar and its extra box cut a phone title to five characters.
@@ -138,6 +140,9 @@ export component ChatHeader inherits GlassSurface {
 
     // Show call buttons for everything except saved messages
     property <bool> show-calls: has-channel && !is-saved && !is-mesh && !read-only;
+    // ⋯ holds Video call (owner, 2026-10-05: out of the header row, into the
+    // menu) and Conversation settings, so it is there when either is.
+    property <bool> show-more: root.show-calls || root.show-settings;
 
     // "Touch input", plumbed from ChatLayout. The 52px/28px/18px set below is
     // mouse density; on a phone this is the bar you navigate the whole app from
@@ -149,7 +154,7 @@ export component ChatHeader inherits GlassSurface {
     property <length> header-height: root.mobile ? Spacing.header-height-touch : Spacing.header-height;
     property <length> header-avatar: root.mobile ? 40px : 28px;
     // Every button in this row is the shared HeaderButton (touch: mobile), so
-    // back, call, video, pin and kebab are one box and one glyph on one axis.
+    // back, call, pin and ⋯ are one box and one glyph on one axis.
     // Signal's ~20sp title; xl elided "Carol Sweep" to "Carol …" on a phone.
     property <length> header-title-size: Typography.lg;
 
@@ -463,13 +468,6 @@ export component ChatHeader inherits GlassSurface {
                     label: "Voice call";
                     clicked => { root.voice-call-clicked(); }
                 }
-                HeaderButton {
-                    touch: root.mobile;
-                    backdrop-paused: root.backdrop-paused;
-                    icon: Icons.video;
-                    label: "Video call";
-                    clicked => { root.video-call-clicked(); }
-                }
                 // Divider — wide screens only. At 411dp it draws a line between
                 // two things the eye already reads as separate, in the one place
                 // on the screen with the least room for a decoration.
@@ -545,12 +543,12 @@ export component ChatHeader inherits GlassSurface {
                     label: "Pinned messages";
                     clicked => { root.pin-clicked(); }
                 }
-                if root.show-settings: HeaderButton {
+                if root.show-more: HeaderButton {
                     touch: root.mobile;
                     backdrop-paused: root.backdrop-paused;
                     icon: Icons.more-vertical;
-                    label: "Conversation settings";
-                    clicked => { root.settings-clicked(); }
+                    label: "More options";
+                    clicked => { root.more-clicked(root.show-calls, root.show-settings); }
                 }
             }
         }

@@ -221,10 +221,12 @@ export component MessageComposer inherits GlassSurface {
     // 48px touch target, so the row is already tall enough to breathe on its own
     // — 16px on top of it made the composer 65px for one line of text and left
     // the screen looking bottom-heavy. The buttons are untouched.
-    property <length> row-padding: Spacing.xs;
+    // The same inset on all four sides of the row, so the field and the
+    // buttons are concentric with the shell (Spacing.radius-chrome-inner).
+    property <length> row-padding: Spacing.chrome-inset;
 
     // Layout - dynamic height based on content (includes Bento Box when expanded)
-    height: content-height + attachment-tray-height + edit-bar-height + reply-bar-height + format-bar-height + row-padding * 2 + 1px;
+    height: content-height + attachment-tray-height + edit-bar-height + reply-bar-height + format-bar-height + row-padding * 2;
     animate height { duration: 150ms; easing: ease-out; }
     // "Touch input", plumbed from ChatLayout.
     in property <bool> mobile: false;
@@ -234,7 +236,6 @@ export component MessageComposer inherits GlassSurface {
     VerticalLayout {
         // 100% width for proper text wrapping in children
         width: 100%;
-        padding-top: Spacing.xxs;
 
         // Edit mode indicator bar
         if root.is-editing: Rectangle {
@@ -759,8 +760,8 @@ export component MessageComposer inherits GlassSurface {
         HorizontalLayout {
             width: 100%;
             height: root.content-height + root.row-padding * 2;
-            padding-left: Spacing.md;
-            padding-right: Spacing.md;
+            padding-left: root.row-padding;
+            padding-right: root.row-padding;
             padding-top: root.row-padding;
             padding-bottom: root.row-padding;
             // 4px between the field and the three 48px buttons. At 8px the gaps
@@ -778,7 +779,8 @@ export component MessageComposer inherits GlassSurface {
                 min-width: 0px;
                 height: root.content-height;
                 background: Colors.inset;
-                border-radius: Spacing.radius-lg;
+                // Concentric with the shell: radius-chrome − chrome-inset.
+                border-radius: Spacing.radius-chrome-inner;
                 // The glass shell supplies the resting silhouette. Keep a
                 // physical-pixel focus cue without a second permanent rim.
                 border-width: text-input.has-focus ? 1phx : 0px;
@@ -872,7 +874,7 @@ export component MessageComposer inherits GlassSurface {
                 width: Spacing.touch-target-min;
                 height: Spacing.touch-target-min;
                 background: emoji-touch.has-hover ? Colors.surface-hover : transparent;
-                border-radius: Spacing.radius-sm;
+                border-radius: Spacing.radius-chrome-inner;
                 opacity: root.disabled ? 0.5 : 1.0;
                 accessible-role: button;
                 accessible-label: "Emoji & GIF picker";
@@ -917,7 +919,7 @@ export component MessageComposer inherits GlassSurface {
                 width: Spacing.touch-target-min;
                 height: Spacing.touch-target-min;
                 background: attachment-touch.has-hover ? Colors.surface-hover : transparent;
-                border-radius: Spacing.radius-sm;
+                border-radius: Spacing.radius-chrome-inner;
                 opacity: root.disabled ? 0.5 : 1.0;
                 accessible-role: button;
                 accessible-label: "Attach file";
@@ -993,7 +995,7 @@ export component MessageComposer inherits GlassSurface {
                 width: Spacing.touch-target-min;
                 height: Spacing.touch-target-min;
                 background: send-touch.has-hover ? Colors.action-hover : Colors.action-fill;
-                border-radius: Spacing.radius-md;
+                border-radius: Spacing.radius-chrome-inner;
                 opacity: root.disabled ? 0.5 : 1.0;
                 accessible-role: button;
                 accessible-label: "Send message";

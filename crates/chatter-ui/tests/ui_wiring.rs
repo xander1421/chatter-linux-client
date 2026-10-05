@@ -4978,3 +4978,86 @@ fn shield_toggle_on_sign_in_and_create_account() {
         assert_eq!(hits.get(), before + 1, "the {view} Shield did not reach the toggle callback");
     }
 }
+
+/// Owner, 2026-10-05: "Remove the video-call button from the header and put it
+/// in the ⋯ menu." Voice call stays in the row; ⋯ opens a menu holding Video
+/// call (and Conversation settings where the conversation has them), and its
+/// Video call row starts the same call the header button used to.
+#[test]
+fn video_call_lives_in_the_header_more_menu() {
+    use chatter_ui::bin_ui::features::back;
+    use chatter_ui::ConversationKind;
+    use slint::ComponentHandle;
+    require_element_queries();
+
+    let header = include_str!("../../../ui/chat/chat_header.slint");
+    assert!(!header.contains("Icons.video"), "the header row draws a video-call button again");
+    assert!(!header.contains("video-call-clicked"), "the header still emits video-call-clicked");
+
+    let w = boot();
+    back::wire(&w);
+    let started = std::rc::Rc::new(std::cell::Cell::new(0));
+    let s = started.clone();
+    w.on_start_video_call(move || s.set(s.get() + 1));
+    let opened_settings = std::rc::Rc::new(std::cell::Cell::new(0));
+    let o = opened_settings.clone();
+    w.on_chat_settings_clicked(move || o.set(o.get() + 1));
+    w.set_current_view("main".into());
+
+    let button = |w: &MainWindow, label: &str| {
+        testing::ElementHandle::find_by_accessible_label(w, label)
+            .find(|e| e.accessible_role() == Some(testing::AccessibleRole::Button))
+    };
+    let click = |w: &MainWindow, label: &str| {
+        button(w, label)
+            .unwrap_or_else(|| panic!("no {label:?} button"))
+            .mock_single_click(slint::platform::PointerEventButton::Left);
+    };
+
+    // Phone DM, then two-pane channel, private group and anon DM: every header
+    // variant keeps Voice call in the row and Video call only behind ⋯.
+    for (phone, kind, name, settings_row) in [
+        (true, ConversationKind::ServerDm, "Bob", false),
+        (false, ConversationKind::Channel, "general", true),
+        (false, ConversationKind::AnonGroup, "Group", true),
+        (true, ConversationKind::AnonDm, "Anon", false),
+    ] {
+        w.set_is_mobile_platform(phone);
+        w.window().set_size(if phone {
+            slint::LogicalSize::new(400.0, 800.0)
+        } else {
+            slint::LogicalSize::new(1000.0, 800.0)
+        });
+        w.set_conversation_kind(kind);
+        w.set_channel_name(name.into());
+        w.set_mobile_show_chat(true);
+        slint::platform::update_timers_and_animations();
+
+        assert!(button(&w, "Voice call").is_some(), "{kind:?}: voice call left the header");
+        assert!(button(&w, "Video call").is_none(), "{kind:?}: video call is still in the header row");
+        click(&w, "More options");
+        assert_eq!(w.get_active_modal().as_str(), "chat-menu", "{kind:?}: ⋯ did not open the menu");
+        assert_eq!(
+            button(&w, "Conversation settings").is_some(),
+            settings_row,
+            "{kind:?}: Conversation settings row"
+        );
+        let before = started.get();
+        click(&w, "Video call");
+        assert_eq!(started.get(), before + 1, "{kind:?}: the menu's Video call did not start a video call");
+        assert_eq!(w.get_active_modal().as_str(), "none", "{kind:?}: the menu stayed open over the call");
+
+        if settings_row {
+            click(&w, "More options");
+            let before = opened_settings.get();
+            click(&w, "Conversation settings");
+            assert_eq!(opened_settings.get(), before + 1, "{kind:?}: settings row did nothing");
+            w.set_modal_stack(slint::ModelRc::new(slint::VecModel::from(Vec::<slint::SharedString>::new())));
+        }
+
+        // Back closes the menu like any other layer.
+        click(&w, "More options");
+        assert!(back::handle_back(&w));
+        assert_eq!(w.get_active_modal().as_str(), "none");
+    }
+}
