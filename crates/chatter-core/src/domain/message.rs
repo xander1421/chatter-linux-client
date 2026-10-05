@@ -672,6 +672,9 @@ impl SealedSenderContent {
 pub enum SystemMessage {
     UserJoined(UserId),
     UserLeft(UserId),
+    /// This member is gone from the roster and no verified signed change says
+    /// why: "{user} is no longer a member". Never worded as a leave.
+    UserGone(UserId),
     ChannelCreated,
     ChannelRenamed { old_name: String, new_name: String },
     UserAdded { by: UserId, added: UserId },
@@ -742,6 +745,7 @@ impl SystemMessage {
         match self {
             Self::UserJoined(_) => "joined the channel".to_string(),
             Self::UserLeft(_) => "left the channel".to_string(),
+            Self::UserGone(_) => "is no longer a member".to_string(),
             Self::ChannelCreated => "created the channel".to_string(),
             Self::ChannelRenamed { old_name, new_name } => {
                 format!("renamed the channel from \"{}\" to \"{}\"", old_name, new_name)

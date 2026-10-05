@@ -519,17 +519,13 @@ impl ChannelClient {
             .map_err(|s| NetworkError::from_status(&s))
     }
 
-    /// Why `user_id` is no longer in the channel, as far as the server
-    /// recorded it (ban, deletion); see the proto for who may ask.
+    /// Why WE are no longer in the channel: the signed change that removed
+    /// us (with the state it applied to), or the channel's deletion.
     pub async fn get_departure(
         &mut self,
         channel_id: &str,
-        user_id: &str,
     ) -> Result<crate::proto::chat_v1::Departure, NetworkError> {
-        let request = crate::proto::chat_v1::GetDepartureRequest {
-            channel_id: channel_id.to_string(),
-            user_id: user_id.to_string(),
-        };
+        let request = crate::proto::chat_v1::GetDepartureRequest { channel_id: channel_id.to_string() };
         self.inner
             .get_departure(request)
             .await

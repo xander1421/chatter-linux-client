@@ -1922,9 +1922,8 @@ pub mod channel_service_client {
                 .insert(GrpcMethod::new("chat.v1.ChannelService", "ListBannedUsers"));
             self.inner.unary(req, path, codec).await
         }
-        /** Why a user is no longer in a channel, as far as the server recorded it:
- how a sync that missed the live event tells a ban or a deletion from a
- leave. See Departure for who may ask.
+        /** Why the caller is no longer in a channel: the signed change that removed
+ them, or the channel's deletion. See Departure.
 */
         pub async fn get_departure(
             &mut self,

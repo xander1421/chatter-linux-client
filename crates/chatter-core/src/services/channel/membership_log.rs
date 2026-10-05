@@ -166,6 +166,17 @@ pub trait LogObserver: Send + Sync {
     fn notice(&self, channel_id: &ChannelId, notice: MembershipNotice);
 }
 
+/// Who removed us from a channel and why, from a verified signed change
+/// ([`MembershipLog::verify_own_removal`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OwnRemoval {
+    pub author: String,
+    pub reason: pb::remove_member::Reason,
+    /// The change's (author's) timestamp, Unix nanos: the notice's identity,
+    /// shared with the live path so either files it once.
+    pub timestamp: u64,
+}
+
 /// The state an authored change builds on.
 #[derive(Clone, Copy)]
 pub enum AuthorBase<'a> {
@@ -542,6 +553,68 @@ impl MembershipLog {
             _ => {}
         }
         Ok(disposition)
+    }
+
+    /// Verify the signed change that removed US, which `GetDeparture` hands a
+    /// former member because the log is closed to them (F79). Returns who
+    /// removed us and why only when the change verifies in full — signature,
+    /// the author's KT-verified key, the rules, both state hashes — against:
+    ///  * our own verified state, when the removal is its next revision;
+    ///  * otherwise `prev_state` (revision N-1), which the author's signed
+    ///    `prev_state_hash` authenticates. Changes between our state and N-1
+    ///    stay unseen: the removal is authenticated, not chained to our state.
+    ///
+    /// A removal not newer than our state (a replay of an earlier one), one
+    /// that does not take us out of ACTIVE, or one that fails verification is
+    /// `None`: the caller shows no reason. Nothing is committed and no banner
+    /// is raised — we are out of the channel either way.
+    pub async fn verify_own_removal(
+        &self,
+        channel_id: &ChannelId,
+        change: &pb::ChannelChange,
+        prev_state: Option<&pb::MembershipState>,
+    ) -> Result<Option<OwnRemoval>, LogError> {
+        let cid = channel_id.to_string();
+        let (me, _) = self.backend.me().await?;
+        let Ok(actions) = decode_actions(change) else { return Ok(None) };
+        if actions.timestamp > now_nanos().saturating_add(MAX_FUTURE_SKEW.as_nanos() as u64) {
+            return Ok(None);
+        }
+        let local = self.repo.load(channel_id)?.map(|v| v.state);
+        let local_revision = local.as_ref().map_or(0, |s| s.revision);
+        if actions.revision <= local_revision {
+            tracing::warn!(%channel_id, revision = actions.revision, local_revision, "Departure change is not newer than our verified state");
+            return Ok(None);
+        }
+        let base = if local.is_some() && actions.revision == local_revision + 1 {
+            local
+        } else {
+            match prev_state.map(MembershipState::from_proto).transpose() {
+                Ok(base) => base,
+                Err(e) => {
+                    tracing::warn!(%channel_id, error = %e, "Departure base state is invalid");
+                    return Ok(None);
+                }
+            }
+        };
+        // A genesis removes no one: no base, no removal.
+        let Some(base) = base else { return Ok(None) };
+        let verified = match vs::verify_change(&cid, Some(&base), change, self.kt.as_ref()).await {
+            Ok(v) => v,
+            Err(VerifyError::KtUnavailable(m)) => return Err(LogError::KtUnavailable(m)),
+            Err(e) => {
+                tracing::warn!(%channel_id, error = %e, "The change said to have removed us failed verification");
+                return Ok(None);
+            }
+        };
+        if !verified.left_active(Some(&base)).contains(&me) {
+            return Ok(None);
+        }
+        let reason = actions.actions.iter().find_map(|a| match &a.action {
+            Some(Action::RemoveMember(r)) if r.user_id == me => pb::remove_member::Reason::try_from(r.reason).ok(),
+            _ => None,
+        });
+        Ok(reason.map(|reason| OwnRemoval { author: verified.0.author_user_id, reason, timestamp: actions.timestamp }))
     }
 
     /// Forget a channel's verified state (it was deleted).
