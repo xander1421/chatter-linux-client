@@ -70,7 +70,7 @@ pub fn content_type_name(content: &Option<content::Content>) -> &'static str {
         Some(content::Content::CallKey(_)) => "CallKey",
         Some(content::Content::CallHangup(_)) => "CallHangup",
         Some(content::Content::DeleteForMeSync(_)) => "DeleteForMeSync",
-        Some(content::Content::GroupCallKey(_)) => "GroupCallKey",
+        Some(content::Content::GroupCallSignal(_)) => "GroupCallSignal",
         Some(content::Content::AnonGroupInvite(_)) => "AnonGroupInvite",
         Some(content::Content::AnonGroupJoinAck(_)) => "AnonGroupJoinAck",
         Some(content::Content::AnonGroupMemberList(_)) => "AnonGroupMemberList",
@@ -200,12 +200,11 @@ pub enum DmContent {
         ephemeral_public_key: [u8; 32],
         timestamp: u64,
     },
-    /// Group call key received (pairwise distribution).
-    GroupCallKey {
+    /// Channel group-call signal (pairwise): ring, key rotation, key request.
+    GroupCallSignal {
         call_id: String,
-        key_material: [u8; 32],
-        key_epoch: u32,
         channel_id: String,
+        signal: crate::domain::call::GroupCallSignal,
         timestamp: u64,
     },
     /// Call hangup notification.

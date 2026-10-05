@@ -96,7 +96,7 @@ pub async fn handle_domain_event(
         // which delegates to key_exchange for ECDH and call_service for group keys.
         // =========================================================================
         DomainEvent::CallKeyAnswerReceived { .. }
-        | DomainEvent::GroupCallKeyReceived { .. } => {}
+        | DomainEvent::GroupCallSignalReceived { .. } => {}
 
         // =========================================================================
         // Call Hangup

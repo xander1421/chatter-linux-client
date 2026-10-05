@@ -224,28 +224,26 @@ impl InboxEventProcessor {
                 });
             }
 
-            InboxEvent::GroupCallKeyReceived {
+            InboxEvent::GroupCallSignalReceived {
                 sender_id,
                 call_id,
-                key_material,
-                key_epoch,
                 channel_id,
+                signal,
                 timestamp,
             } => {
                 tracing::info!(
                     sender_id = %sender_id,
                     call_id = %call_id,
-                    key_epoch = key_epoch,
+                    ?signal,
                     channel_id = %channel_id,
                     timestamp = timestamp,
-                    "Group call key received - updating encryption"
+                    "Group call signal received"
                 );
-                self.event_bus.emit_domain(DomainEvent::GroupCallKeyReceived {
+                self.event_bus.emit_domain(DomainEvent::GroupCallSignalReceived {
                     call_id: call_id.clone(),
                     sender_id: *sender_id,
-                    key_material: *key_material,
-                    key_epoch: *key_epoch,
                     channel_id: *channel_id,
+                    signal: *signal,
                 });
             }
 

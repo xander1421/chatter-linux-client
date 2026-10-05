@@ -481,22 +481,18 @@ pub enum InboxEvent {
     // =========================================================================
     // Group Call Events (pairwise key distribution)
     // =========================================================================
-    /// Group call key received via pairwise sealed sender.
-    ///
-    /// Each group member receives an independent copy of the symmetric call key.
-    /// Per NDSS '21: Distribution is via client-side fanout to preserve privacy.
-    GroupCallKeyReceived {
-        /// Sender user ID (call initiator or key rotator).
+    /// Channel group-call signal received via pairwise sealed sender: a
+    /// ring (no key), the key authority's rotation, or a key request.
+    /// Per NDSS '21: distribution is client-side fanout, to preserve privacy.
+    GroupCallSignalReceived {
+        /// Authenticated sender.
         sender_id: UserId,
         /// Call ID.
         call_id: String,
-        /// AES-256 encryption key (32 bytes) for LiveKit E2EE.
-        key_material: [u8; 32],
-        /// Key epoch (increments on rotation).
-        key_epoch: u32,
         /// Channel ID (group channel).
         channel_id: ChannelId,
-        /// Timestamp when key was sent.
+        signal: crate::domain::call::GroupCallSignal,
+        /// Timestamp when the signal was sent.
         timestamp: u64,
     },
     // =========================================================================

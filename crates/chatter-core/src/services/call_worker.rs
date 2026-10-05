@@ -316,7 +316,10 @@ enum CallCommand {
     /// Join an existing call.
     JoinCall {
         call_id: CallId,
-        encryption_root_key: [u8; 32],
+        /// `None`: a channel group call, joined holding no key. We connect
+        /// under a random key of our own that is never sent, and publish
+        /// nothing until the key authority's key is installed ([`PublishGate`]).
+        encryption_root_key: Option<[u8; 32]>,
         joiner_id: UserId,
         response: oneshot::Sender<Result<Call, CallError>>,
     },
@@ -371,6 +374,15 @@ enum CallCommand {
     /// Our join time and the remote peers' `(identity, join time)`.
     GetRoomSeniority {
         response: oneshot::Sender<Option<RoomSeniority>>,
+    },
+    /// Test-only: how many tracks we publish.
+    #[cfg(feature = "testing")]
+    GetLocalTrackCount {
+        response: oneshot::Sender<usize>,
+    },
+    /// The active call's group-key standing.
+    GetGroupKeyStatus {
+        response: oneshot::Sender<Option<GroupKeyStatus>>,
     },
     /// Publish microphone.
     PublishMicrophone {
@@ -827,10 +839,22 @@ impl CallWorkerHandle {
         self.cmd_tx
             .try_send(CallCommand::JoinCall {
                 call_id,
-                encryption_root_key: *encryption_root_key,
+                encryption_root_key: Some(*encryption_root_key),
                 joiner_id,
                 response: tx,
             })
+            .map_err(|_| CallError::WorkerShutdown)?;
+        rx.await.map_err(|_| CallError::WorkerShutdown)?
+    }
+
+    /// Join a channel group call holding no key: connect under a random key
+    /// of our own that is never sent, and publish nothing until the key
+    /// authority's rotation is installed ([`Self::install_group_key`]) or we
+    /// rotate ourselves ([`Self::rotate_key`]).
+    pub async fn join_group_call(&self, call_id: CallId, joiner_id: UserId) -> Result<Call, CallError> {
+        let (tx, rx) = oneshot::channel();
+        self.cmd_tx
+            .try_send(CallCommand::JoinCall { call_id, encryption_root_key: None, joiner_id, response: tx })
             .map_err(|_| CallError::WorkerShutdown)?;
         rx.await.map_err(|_| CallError::WorkerShutdown)?
     }
@@ -951,6 +975,15 @@ impl CallWorkerHandle {
     pub async fn room_seniority(&self) -> Option<RoomSeniority> {
         let (tx, rx) = oneshot::channel();
         self.cmd_tx.try_send(CallCommand::GetRoomSeniority { response: tx }).ok()?;
+        rx.await.ok().flatten()
+    }
+
+    /// The active call's group-key standing: which call, the generation of
+    /// the newest key from outside our own chain, and whether our media is
+    /// still held back for want of a key. `None` when not in a call.
+    pub async fn group_key_status(&self) -> Option<GroupKeyStatus> {
+        let (tx, rx) = oneshot::channel();
+        self.cmd_tx.try_send(CallCommand::GetGroupKeyStatus { response: tx }).ok()?;
         rx.await.ok().flatten()
     }
 
@@ -1140,6 +1173,16 @@ impl CallWorkerHandle {
         rx.await.ok().flatten()
     }
 
+    /// Test-only: how many tracks we publish to the room (0 when not in one).
+    #[cfg(feature = "testing")]
+    pub async fn local_track_count(&self) -> usize {
+        let (tx, rx) = oneshot::channel();
+        if self.cmd_tx.try_send(CallCommand::GetLocalTrackCount { response: tx }).is_err() {
+            return 0;
+        }
+        rx.await.unwrap_or(0)
+    }
+
     /// Attempt to reconnect to the current call.
     ///
     /// This requests a new token from the server and reconnects to LiveKit.
@@ -1271,7 +1314,13 @@ fn run_call_worker(
                         // installed (complete_dm_call publishes right after
                         // set_encryption_key). Group/join connect with a real
                         // random key, so they still publish immediately.
-                        if encryption_root_key != [0u8; 32] {
+                        //
+                        // A group call the server says someone else started is
+                        // one we joined (`CreateCall` returns a channel's live
+                        // call): we hold no key of the call's yet, so publishing
+                        // waits behind the gate like any joiner's.
+                        let gated = active_call.borrow().as_ref().is_some_and(|s| s.publish_gate.is_closed());
+                        if encryption_root_key != [0u8; 32] && !gated {
                             auto_publish_media(&room_manager, matches!(call_type, CallType::Video)).await;
                         }
                     }
@@ -1290,7 +1339,7 @@ fn run_call_worker(
                         &room_manager,
                         &active_call,
                         call_id,
-                        &encryption_root_key,
+                        encryption_root_key,
                         joiner_id,
                     )
                     .await;
@@ -1302,7 +1351,10 @@ fn run_call_worker(
                             .ok()
                             .map(|c| matches!(c.call_type, CallType::Video))
                             .unwrap_or(false);
-                        auto_publish_media(&room_manager, is_video).await;
+                        // A group joiner publishes once it holds the call's key.
+                        if encryption_root_key.is_some() {
+                            auto_publish_media(&room_manager, is_video).await;
+                        }
                     }
 
                     let _ = response.send(result);
@@ -1461,8 +1513,27 @@ fn run_call_worker(
                     let _ = response.send(seniority);
                 }
 
+                #[cfg(feature = "testing")]
+                CallCommand::GetLocalTrackCount { response } => {
+                    let _ = response.send(room_manager.local_track_count());
+                }
+
+                CallCommand::GetGroupKeyStatus { response } => {
+                    let status = active_call.borrow().as_ref().map(|s| GroupKeyStatus {
+                        call_id: s.call.id,
+                        anchor: s.key_state.anchor(),
+                        awaiting_key: s.publish_gate.is_closed(),
+                    });
+                    let _ = response.send(status);
+                }
+
                 CallCommand::PublishMicrophone { device_id, response } => {
-                    let result = room_manager.publish_microphone(device_id.as_deref()).await;
+                    let result = if gate_defers(&active_call, |g| g.defer_mic(device_id.clone())) {
+                        tracing::info!("Microphone held back until the call's key arrives");
+                        Ok(())
+                    } else {
+                        room_manager.publish_microphone(device_id.as_deref()).await
+                    };
                     let _ = response.send(result);
                 }
 
@@ -1471,6 +1542,11 @@ fn run_call_worker(
                     config,
                     response,
                 } => {
+                    if gate_defers(&active_call, PublishGate::defer_camera) {
+                        tracing::info!("Camera held back until the call's key arrives");
+                        let _ = response.send(Ok(()));
+                        continue;
+                    }
                     // Spawn — never await a capture publish inside the command
                     // loop (see PublishScreenShare below for the full rationale).
                     let rm = room_manager.clone();
@@ -1481,10 +1557,12 @@ fn run_call_worker(
                 }
 
                 CallCommand::StopMicrophone => {
+                    gate_defers(&active_call, |g| { g.drop_mic(); false });
                     room_manager.stop_microphone();
                 }
 
                 CallCommand::StopCamera => {
+                    gate_defers(&active_call, |g| { g.drop_camera(); false });
                     room_manager.stop_camera().await;
                 }
 
@@ -1514,6 +1592,10 @@ fn run_call_worker(
 
                 #[cfg(not(any(target_os = "android", target_os = "ios")))]
                 CallCommand::PublishScreenShare { source, response } => {
+                    if gate_defers(&active_call, |g| g.is_closed()) {
+                        let _ = response.send(Err(CallError::AwaitingKey));
+                        continue;
+                    }
                     // CRITICAL: spawn, don't await here. publish_screen_share runs
                     // the desktop-capture handshake, which on Wayland waits on the
                     // XDG portal and can stall for tens of seconds (flaky portals)
@@ -1546,7 +1628,9 @@ fn run_call_worker(
                     let result = match rotated {
                         Some(Ok((epoch, key_cur, key_next))) => {
                             room_manager.set_ratcheted_shared_key(epoch, key_cur, key_next);
-                            tracing::info!(epoch, "Call key rotated after member departure");
+                            tracing::info!(epoch, "Call key rotated after a membership change");
+                            // We decided this key, so we hold the current one.
+                            open_publish_gate(&active_call, &room_manager);
                             Ok(epoch)
                         }
                         Some(Err(e)) => Err(CallError::CryptoError(e.to_string())),
@@ -1559,8 +1643,11 @@ fn run_call_worker(
                     let adopted = adopt_into_call(active_call.borrow_mut().as_mut(), call_id, key, epoch);
                     let result = adopted.map(|adopted| match adopted {
                         Some((epoch, key_cur, key_next)) => {
+                            // Key first, then media: the deferred publishes
+                            // start under the key just installed.
                             room_manager.set_ratcheted_shared_key(epoch, key_cur, key_next);
                             tracing::info!(epoch, "Installed group call key from participant");
+                            open_publish_gate(&active_call, &room_manager);
                             true
                         }
                         None => {
@@ -1838,6 +1925,117 @@ struct ActiveCallState {
     room_name: String,
     /// LiveKit server URL for reconnection.
     livekit_url: String,
+    /// Closed while we hold none of the call's keys (a group joiner).
+    publish_gate: PublishGate,
+}
+
+/// The active call's group-key standing ([`CallWorkerHandle::group_key_status`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct GroupKeyStatus {
+    pub call_id: CallId,
+    /// Generation of the newest key from outside our chain
+    /// ([`CallKeyState::anchor`]); 0 = only our starting key.
+    pub anchor: u32,
+    /// Our media is held back: we hold no key of the call's yet.
+    pub awaiting_key: bool,
+}
+
+/// Media a channel group-call participant may not publish yet (§124 1k).
+///
+/// A joiner connects under a random key of its own that nobody else holds —
+/// the ring no longer carries one — so frames it sent before the key
+/// authority's key arrived would be undecryptable to everyone, and before
+/// this gate they went out under the ring's root key, which every channel
+/// member held. Closed, it publishes nothing and remembers what was asked
+/// for; it opens when the authority's key is installed or we rotate
+/// ourselves, and the remembered mic/camera are published then — after the
+/// key is in LiveKit, so the first frame already uses it.
+#[derive(Debug, Default)]
+struct PublishGate {
+    closed: bool,
+    /// `Some(device)`: publish the microphone (on `device`) once open.
+    mic: Option<Option<String>>,
+    camera: bool,
+}
+
+/// What a [`PublishGate`] had held back when it opened.
+#[derive(Debug, Default, PartialEq, Eq)]
+struct DeferredMedia {
+    mic: Option<Option<String>>,
+    camera: bool,
+}
+
+impl PublishGate {
+    /// A joiner's gate: closed, with the call's auto-publish waiting in it.
+    fn awaiting_key(is_video: bool) -> Self {
+        Self { closed: true, mic: Some(None), camera: is_video }
+    }
+
+    fn is_closed(&self) -> bool {
+        self.closed
+    }
+
+    /// Hold back a microphone publish; false (nothing held) when open.
+    fn defer_mic(&mut self, device: Option<String>) -> bool {
+        if self.closed {
+            self.mic = Some(device);
+        }
+        self.closed
+    }
+
+    /// Hold back a camera publish; false (nothing held) when open.
+    fn defer_camera(&mut self) -> bool {
+        if self.closed {
+            self.camera = true;
+        }
+        self.closed
+    }
+
+    fn drop_mic(&mut self) {
+        self.mic = None;
+    }
+
+    fn drop_camera(&mut self) {
+        self.camera = false;
+    }
+
+    /// Open the gate: what it held back, the first time; `None` when it
+    /// was already open.
+    fn open(&mut self) -> Option<DeferredMedia> {
+        if !self.closed {
+            return None;
+        }
+        self.closed = false;
+        Some(DeferredMedia { mic: self.mic.take(), camera: std::mem::take(&mut self.camera) })
+    }
+}
+
+/// Run `f` on the active call's publish gate; false when not in a call.
+fn gate_defers(
+    active_call: &Rc<RefCell<Option<ActiveCallState>>>,
+    f: impl FnOnce(&mut PublishGate) -> bool,
+) -> bool {
+    active_call.borrow_mut().as_mut().is_some_and(|s| f(&mut s.publish_gate))
+}
+
+/// Open the active call's publish gate and publish what it held back.
+/// Spawned: capture start-up must not hold the command loop.
+fn open_publish_gate(active_call: &Rc<RefCell<Option<ActiveCallState>>>, room_manager: &Arc<RoomManager>) {
+    let Some(media) = active_call.borrow_mut().as_mut().and_then(|s| s.publish_gate.open()) else { return };
+    tracing::info!(mic = media.mic.is_some(), camera = media.camera, "Call key held: publishing");
+    let rm = room_manager.clone();
+    tokio::task::spawn_local(async move {
+        if let Some(device) = media.mic {
+            if let Err(e) = rm.publish_microphone(device.as_deref()).await {
+                tracing::warn!(error = %e, "deferred microphone publish failed");
+            }
+        }
+        if media.camera {
+            if let Err(e) = rm.publish_camera(None, None).await {
+                tracing::warn!(error = %e, "deferred camera publish failed");
+            }
+        }
+    });
 }
 
 /// [`adopt_group_key`] into the active call, which must be `call_id`.
@@ -1933,7 +2131,14 @@ async fn initiate_call_impl(
     let call_id =
         CallId::from_str(&response.call_id).map_err(|_| CallError::InvalidCallId)?;
 
-    let mut call = Call::new(channel_id, initiator_id, call_type);
+    // `CreateCall` hands back a group channel's live call when there is one:
+    // then its creator is someone else and we have joined it, holding none of
+    // its keys (the key we connected with is ours alone).
+    let creator = response.call_info.as_ref()
+        .and_then(|ci| UserId::from_str(&ci.created_by).ok())
+        .unwrap_or(initiator_id);
+    let joined_existing = creator != initiator_id && encryption_root_key != &[0u8; 32];
+    let mut call = Call::new(channel_id, creator, call_type);
     call.id = call_id;
     // The DM caller joins with a placeholder before the peer answers. Keep
     // connected_at unset until OrchMarkConnected; group calls connect now.
@@ -1954,6 +2159,11 @@ async fn initiate_call_impl(
         key_state,
         room_name: response.room_name,
         livekit_url: response.livekit_url,
+        publish_gate: if joined_existing {
+            PublishGate::awaiting_key(matches!(call_type, CallType::Video))
+        } else {
+            PublishGate::default()
+        },
     });
 
     Ok(call)
@@ -1973,7 +2183,7 @@ async fn join_call_impl(
     room_manager: &Arc<RoomManager>,
     active_call: &Rc<RefCell<Option<ActiveCallState>>>,
     call_id: CallId,
-    encryption_root_key: &[u8; 32],
+    encryption_root_key: Option<[u8; 32]>,
     joiner_id: UserId,
 ) -> Result<Call, CallError> {
     // Check if already in a call
@@ -1990,8 +2200,13 @@ async fn join_call_impl(
             .map_err(|e| CallError::ServerError(e.to_string()))?
     };
 
-    // Derive E2EE key
-    let key_state = CallKeyState::new(encryption_root_key, &call_id.to_string())
+    // Derive E2EE key. A group joiner has none of the call's: it connects
+    // under a random key of its own, never sent, and publishes nothing until
+    // the key authority's key is installed (`PublishGate`).
+    let root = zeroize::Zeroizing::new(
+        encryption_root_key.unwrap_or_else(crate::crypto::generate_group_call_key),
+    );
+    let key_state = CallKeyState::new(&root, &call_id.to_string())
         .map_err(|e| CallError::CryptoError(e.to_string()))?;
 
     // Connect to LiveKit room
@@ -2029,11 +2244,17 @@ async fn join_call_impl(
     call.add_participant(Participant::new(joiner_id));
 
     // Store active call
+    let publish_gate = if encryption_root_key.is_none() {
+        PublishGate::awaiting_key(matches!(call.call_type, CallType::Video))
+    } else {
+        PublishGate::default()
+    };
     *active_call.borrow_mut() = Some(ActiveCallState {
         call: call.clone(),
         key_state,
         room_name: call_info.room_name,
         livekit_url: response.livekit_url,
+        publish_gate,
     });
 
     Ok(call)
@@ -2106,6 +2327,7 @@ async fn connect_with_token_impl(
         key_state,
         room_name: room_name.clone(),
         livekit_url: livekit_url.to_string(),
+        publish_gate: PublishGate::default(),
     });
 
     tracing::info!(
@@ -2798,11 +3020,11 @@ fn handle_domain_event(
         }
 
         // Key answers are completed by the UI/glue layer against the
-        // ChatterClient API; group-call keys (ring, rotation) by
-        // `ChatterClient::handle_group_call_key`, which needs channel
+        // ChatterClient API; group-call signals (ring, rotation, key request)
+        // by `ChatterClient::handle_group_call_signal`, which needs channel
         // membership and the server's view of the call.
         DomainEvent::CallKeyAnswerReceived { .. }
-        | DomainEvent::GroupCallKeyReceived { .. } => {}
+        | DomainEvent::GroupCallSignalReceived { .. } => {}
 
         _ => {}
     }
@@ -3114,8 +3336,71 @@ mod failed_accept_tests {
 }
 
 #[cfg(test)]
+mod anon_cancel_tests {
+    use super::*;
+
+    /// §124 1f: cancelling our anon call while it still rings reaches the
+    /// cancel branch. `end_active_call` routes on `orch_active_kind` — the
+    /// ringing outgoing call must resolve to its anon kind — and
+    /// `end_anon_call` takes the ringing branch (which sends the anon hangup,
+    /// `call_signaling.rs` `finish_anon_call`) only when we are in no room.
+    /// The hangup's delivery to the callee is not covered here.
+    #[tokio::test]
+    async fn a_ringing_anon_call_cancels_through_the_hangup_path() {
+        for kind in [OrchestratedCallKind::AnonDm, OrchestratedCallKind::AnonGroup] {
+            let channel = tonic::transport::Endpoint::from_static("http://127.0.0.1:9").connect_lazy();
+            let worker = CallWorkerHandle::spawn(crate::network::grpc::CallClient::new(
+                channel.into(),
+                crate::network::grpc::interceptors::AuthInterceptor::new(),
+            ));
+            let room = format!("anon-{}", uuid::Uuid::new_v4());
+            worker.orch_register_outgoing(CallHandle::from(room.as_str()), kind, UserId(uuid::Uuid::nil()), String::new(), false);
+            assert_eq!(worker.orch_active_kind().await, Some(kind), "a ringing {kind:?} call is not what End ends");
+            assert_eq!(worker.get_room_name().await, None, "ringing, yet in a room: the cancel would skip the hangup");
+            worker.shutdown();
+        }
+    }
+}
+
+#[cfg(test)]
+mod publish_gate_tests {
+    use super::{DeferredMedia, PublishGate};
+
+    /// §124 1k item 2: a group joiner publishes nothing until it holds the
+    /// call's key; what it asked for meanwhile is published then, once.
+    #[test]
+    fn a_joiner_publishes_only_once_keyed() {
+        let mut gate = PublishGate::awaiting_key(false);
+        assert!(gate.is_closed());
+        assert!(gate.defer_mic(Some("usb".into())), "mic held back while keyless");
+        assert!(gate.defer_camera(), "camera held back while keyless");
+        assert_eq!(gate.open(), Some(DeferredMedia { mic: Some(Some("usb".into())), camera: true }));
+        assert!(!gate.is_closed());
+        assert_eq!(gate.open(), None, "published once");
+        assert!(!gate.defer_mic(None), "open: publishes go straight out");
+        assert!(!gate.defer_camera());
+    }
+
+    #[test]
+    fn a_video_joiner_holds_its_camera_and_stopping_drops_it() {
+        let mut gate = PublishGate::awaiting_key(true);
+        gate.drop_camera();
+        gate.drop_mic();
+        assert_eq!(gate.open(), Some(DeferredMedia { mic: None, camera: false }));
+    }
+
+    #[test]
+    fn a_keyed_participant_is_never_held() {
+        let mut gate = PublishGate::default();
+        assert!(!gate.is_closed());
+        assert!(!gate.defer_mic(None));
+        assert_eq!(gate.open(), None);
+    }
+}
+
+#[cfg(test)]
 mod group_key_install_tests {
-    use super::{adopt_group_key, adopt_into_call, chain_install, ratchet_to, MAX_RATCHET_CATCH_UP, ActiveCallState, Call, CallError, CallId, CallKeyState, CallType, ChannelId, UserId};
+    use super::{adopt_group_key, adopt_into_call, chain_install, ratchet_to, MAX_RATCHET_CATCH_UP, ActiveCallState, Call, CallError, CallId, CallKeyState, CallType, ChannelId, PublishGate, UserId};
 
     const CALL: &str = "11111111-2222-4333-8444-555555555555";
 
@@ -3127,6 +3412,7 @@ mod group_key_install_tests {
             key_state: CallKeyState::new(&root, CALL).unwrap(),
             room_name: String::new(),
             livekit_url: String::new(),
+            publish_gate: PublishGate::default(),
         }
     }
 

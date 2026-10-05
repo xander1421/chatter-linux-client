@@ -11751,6 +11751,14 @@ async fn wait_for_call_key_agreement(
     }
 }
 
+/// How many tracks `client` publishes to its call's room.
+async fn local_tracks(client: &Arc<ChatterClient>) -> usize {
+    match client.call_service_handle_opt() {
+        Some(worker) => worker.local_track_count().await,
+        None => 0,
+    }
+}
+
 /// Accept the ring for `call_id` on `client` once the orchestrator presents it.
 async fn accept_group_ring(
     client: &Arc<ChatterClient>,
@@ -11783,10 +11791,15 @@ async fn accept_group_ring(
 /// each client (`CallWorkerHandle::installed_key_ring`, `testing` only) — not
 /// on epochs or our own bookkeeping.
 ///
-///   1. A starts a call in a channel with B and C. B joins; A and B converge.
-///   2. JOIN: C joins. A, B and C converge on one key at a new epoch that is
-///      not on the chain A was using before C joined (no ratchet of it), and
-///      C's key ring never holds any key of that pre-join chain.
+///   1. A starts a call in a channel with B and C. B joins from the ring; A
+///      and B converge. The ring carried no key (§124 1k): B's KeyProvider
+///      never holds A's starting chain, and B publishes no track while it
+///      shares no key with A (positive control: A's own publish; B publishes
+///      once keyed).
+///   2. JOIN: C joins unrung, from the open channel (`start_group_call` on a
+///      channel with a live call). A, B and C converge on one key at a new
+///      epoch that is not on the chain A was using before C joined (no
+///      ratchet of it), and C's key ring never holds any key of that chain.
 ///   3. AUTHORITY: in every client's room roster, A is the most senior (the
 ///      earliest LiveKit join) — the participant whose rotations are installed.
 ///   4. LEAVE: B leaves. A and C converge on a key that is not on the chain B
@@ -11836,7 +11849,7 @@ async fn v58_group_call_key_rotates_on_join_and_leave() {
     )
     .await;
     let mut ev_b = client_b.subscribe_call_orchestrator_events().expect("B has no call service");
-    let mut ev_c = client_c.subscribe_call_orchestrator_events().expect("C has no call service");
+    let ev_c = client_c.subscribe_call_orchestrator_events().expect("C has no call service");
 
     let setup = client_a
         .start_group_call(group.id.clone(), chatter_core::domain::call::CallType::Voice, uid_a)
@@ -11845,21 +11858,75 @@ async fn v58_group_call_key_rotates_on_join_and_leave() {
     let call_id = setup.call_id.to_string();
     println!("  A started group call {call_id}");
 
-    // ---- 1. B joins ---------------------------------------------------------
+    // A's starting key, before anyone joins: what the ring used to carry to
+    // every member (§124 1k). Its whole chain, from the epoch-1 key A
+    // pre-installs on.
+    let (e_a0, k_a0, next_a0, _) = call_key_view(&client_a).await.expect("A is not in the call");
+    let mut start_chain = vec![k_a0.clone()];
+    if let Some(next) = &next_a0 {
+        start_chain.extend(derivable_call_keys(&call_id, next, e_a0 + 1, 20));
+    }
+    // Positive control for the publish check: A (holding its key) publishes.
+    let a_tracks = {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            let n = local_tracks(&client_a).await;
+            if n > 0 || Instant::now() >= deadline {
+                break n;
+            }
+            tokio::time::sleep(POLL_INTERVAL).await;
+        }
+    };
+
+    // ---- 1. B joins from the ring --------------------------------------------
     accept_group_ring(&client_b, &mut ev_b, &call_id, "B").await;
-    // B's join is itself rotated (ROSTER_SETTLE 2s + 1s propagation, then the
-    // send). Watch A for 8s past agreement so that rotation is on the pre-join
-    // chain too: everything A keyed the call with from here to C's join is
-    // "before C". Epoch 0 is the ring's root chain, which every channel member
-    // was sent at the start by design, so it is not part of that set.
-    let (e_ab, _) = wait_for_call_key_agreement(
-        &[("A", &client_a), ("B", &client_b)],
-        |_| true,
-        "A+B after B joined",
-    )
-    .await;
-    println!("  A and B agree at epoch {e_ab}");
-    let mut pre_chain: Vec<Vec<u8>> = Vec::new();
+    // Sample B from its join until A and B agree on a key: B's KeyProvider
+    // must never hold A's starting chain (the ring carried no key), and B
+    // must publish nothing while it shares no key with A.
+    let mut b_seen: Vec<Vec<u8>> = Vec::new();
+    let mut b_published_keyless = 0usize;
+    let e_ab = {
+        let deadline = Instant::now() + Duration::from_secs(60);
+        loop {
+            let a = call_key_view(&client_a).await.expect("A left the call");
+            let b = call_key_view(&client_b).await;
+            let b_tracks = local_tracks(&client_b).await;
+            if let Some((_, _, _, ring)) = &b {
+                if !ring.iter().any(|k| a.3.contains(k)) {
+                    b_published_keyless = b_published_keyless.max(b_tracks);
+                }
+                b_seen.extend(ring.iter().cloned());
+            }
+            if matches!(&b, Some((e, k, _, _)) if *e == a.0 && *k == a.1) && !start_chain.contains(&a.1) {
+                break a.0;
+            }
+            assert!(Instant::now() < deadline, "JOIN ROTATION FAILED: A and B never agreed on a key \
+                off A's starting chain within 60s of B joining");
+            tokio::time::sleep(POLL_INTERVAL).await;
+        }
+    };
+    let leaked: Vec<_> = b_seen.iter().filter(|k| start_chain.contains(k)).collect();
+    assert!(leaked.is_empty(), "THE RING CARRIED A MEDIA KEY: B's KeyProvider held {} key(s) on \
+        A's starting chain — a member who was only rung could decrypt A's media", leaked.len());
+    assert_eq!(b_published_keyless, 0, "JOINER PUBLISHED WITHOUT THE CALL'S KEY: B published {} \
+        track(s) while it shared no key with A", b_published_keyless);
+    if a_tracks > 0 {
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while local_tracks(&client_b).await == 0 {
+            assert!(Instant::now() < deadline, "POSITIVE CONTROL FAILED: A publishes, but B never \
+                published after it was keyed — the gate never opens");
+            tokio::time::sleep(POLL_INTERVAL).await;
+        }
+    } else {
+        println!("  (no capture device here: A publishes no track, so the publish gate is checked \
+                  only as \"nothing while keyless\")");
+    }
+    println!("  A and B agree at epoch {e_ab}; B never held A's starting chain ({} ring samples); \
+              B published nothing while keyless (A tracks: {a_tracks})", b_seen.len());
+
+    // Watch A for 8s past agreement: everything A keyed the call with from
+    // here to C's join is "before C".
+    let mut pre_chain: Vec<Vec<u8>> = start_chain.clone();
     let mut a_samples = std::collections::HashSet::new();
     let window = Instant::now() + Duration::from_secs(8);
     while Instant::now() < window || a_samples.is_empty() {
@@ -11884,8 +11951,15 @@ async fn v58_group_call_key_rotates_on_join_and_leave() {
         "POSITIVE CONTROL FAILED: B does not hold A's pre-join key at epoch {e_pre}"
     );
 
-    // ---- 2. C joins ---------------------------------------------------------
-    accept_group_ring(&client_c, &mut ev_c, &call_id, "C").await;
+    // ---- 2. C joins from the open channel, not the ring -----------------------
+    // `start_group_call` on a channel with a live call joins it (the server's
+    // CreateCall hands it back): no ring is involved on C's side.
+    let c_setup = client_c
+        .start_group_call(group.id.clone(), chatter_core::domain::call::CallType::Voice, uid_c)
+        .await
+        .expect("C failed to join the channel's call");
+    assert_eq!(c_setup.call_id.to_string(), call_id, "C started a second call instead of joining");
+    drop(ev_c);
     // Sample C's ring while the join rotation lands, so a pre-join key that
     // C held even briefly is caught.
     let mut c_seen: Vec<Vec<u8>> = Vec::new();
@@ -11920,8 +11994,8 @@ async fn v58_group_call_key_rotates_on_join_and_leave() {
          before C joined — C could decrypt what was said before it joined",
         leaked.len()
     );
-    println!("  JOIN: A, B, C rotated to one fresh key at epoch {e_join}; C never held a pre-join key \
-              ({} ring samples)", c_seen.len());
+    println!("  JOIN (unrung, from the channel): A, B, C rotated to one fresh key at epoch {e_join}; \
+              C never held a pre-join key ({} ring samples)", c_seen.len());
 
     // ---- 3. authority = most senior -----------------------------------------
     for (label, c, me) in [("A", &client_a, &uid_a), ("B", &client_b, &uid_b), ("C", &client_c, &uid_c)] {

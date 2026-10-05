@@ -2152,7 +2152,7 @@ pub fn dispatch_control_content(
         // (inbox/polling/dm.rs); a friend DM's conversation id is the peer's.
         inner @ (content::Content::CallKey(_)
         | content::Content::CallHangup(_)
-        | content::Content::GroupCallKey(_)) => {
+        | content::Content::GroupCallSignal(_)) => {
             use crate::services::gateway::DmContent;
             let parsed = MessageGateway::parse_content(Content {
                 content: Some(inner),
@@ -2178,18 +2178,17 @@ pub fn dispatch_control_content(
                     reason,
                     timestamp,
                 },
-                Ok(DmContent::GroupCallKey { call_id, key_material, key_epoch, channel_id, timestamp }) => {
+                Ok(DmContent::GroupCallSignal { call_id, channel_id, signal, timestamp }) => {
                     let Ok(channel_id) = channel_id.parse::<ChannelId>() else {
-                        tracing::warn!(sender_id = %sender_id, "Group call key with invalid channel_id");
+                        tracing::warn!(sender_id = %sender_id, "Group call signal with invalid channel_id");
                         stats.write().messages_failed += 1;
                         return;
                     };
-                    InboxEvent::GroupCallKeyReceived {
+                    InboxEvent::GroupCallSignalReceived {
                         sender_id: *sender_id,
                         call_id,
-                        key_material,
-                        key_epoch,
                         channel_id,
+                        signal,
                         timestamp,
                     }
                 }

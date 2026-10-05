@@ -336,6 +336,12 @@ impl CallKeyState {
         self.epoch
     }
 
+    /// Generation of the newest key adopted or rotated in from outside the
+    /// chain; 0 while only the starting key is held.
+    pub fn anchor(&self) -> u32 {
+        self.anchor
+    }
+
     /// Get the call ID.
     pub fn call_id(&self) -> &str {
         &self.call_id

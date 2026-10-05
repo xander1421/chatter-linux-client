@@ -9,8 +9,10 @@
 //! Offer → Answer → both derive shared secret → AES key for media.
 //!
 //! # Group Calls
-//! Uses a randomly generated AES-256 key distributed to all members
-//! via pairwise sealed sender DMs (`GroupCallKey` proto).
+//! Signalled pairwise over sealed sender (`GroupCallSignal` proto). As in
+//! Signal, the ring carries no key: a random AES-256 key is sent only by the
+//! call's key authority, only to the participants in the room, on every join
+//! and leave (`client/calls.rs`). A participant without one asks for it.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -42,7 +44,7 @@ use crate::services::call_worker::{
 use crate::services::channel::ChannelService;
 use crate::services::gateway::{
     build_call_key_offer, build_call_key_answer,
-    build_call_hangup_content, build_group_call_key_content,
+    build_call_hangup_content, build_group_call_signal_content,
     CallHangupReason,
 };
 use crate::services::message::MessageService;
@@ -103,11 +105,10 @@ where
 /// a channel member; the cap bounds what a large channel can make us hold.
 const MAX_BUFFERED_KEY_SENDERS: usize = 32;
 
-/// A channel group call we were rung for, held from the ring until we have
-/// joined it, declined it, or it rang out. The ring carries the call's root
-/// key — what `join_call` connects with.
+/// A channel group call we were rung for (or are joining unrung), held from
+/// the ring until we have joined it, declined it, or it rang out. The ring
+/// carries no key; this only collects the keys that reach us mid-join.
 struct GroupCallInvite {
-    root_key: Zeroizing<[u8; 32]>,
     /// Set once the user accepts, so the ring-out timer leaves it alone.
     accepted: bool,
     /// Each sender's newest key `(key, epoch)` that arrived while we were
@@ -140,6 +141,25 @@ pub struct CallSignalingService {
     pending_dm_call: Arc<Mutex<Option<PendingDmCall>>>,
     /// Channel group calls we were rung for, by call id.
     group_call_invites: Arc<Mutex<HashMap<String, GroupCallInvite>>>,
+    /// The call a task is waiting for (and requesting) a key in, so a burst
+    /// of lags runs one wait per call, not one each.
+    group_key_wait: Arc<Mutex<Option<String>>>,
+}
+
+/// Held by the one task waiting for a group-call key in a call
+/// ([`CallSignalingService::begin_group_key_wait`]); releases on drop.
+pub struct GroupKeyWaitGuard {
+    slot: Arc<Mutex<Option<String>>>,
+    call_id: String,
+}
+
+impl Drop for GroupKeyWaitGuard {
+    fn drop(&mut self) {
+        let mut slot = self.slot.lock();
+        if slot.as_deref() == Some(self.call_id.as_str()) {
+            *slot = None;
+        }
+    }
 }
 
 impl CallSignalingService {
@@ -156,7 +176,20 @@ impl CallSignalingService {
             anon_group_service,
             pending_dm_call: Arc::new(Mutex::new(None)),
             group_call_invites: Arc::new(Mutex::new(HashMap::new())),
+            group_key_wait: Arc::new(Mutex::new(None)),
         }
+    }
+
+    /// Become the one task waiting for a group-call key in `call_id`; `None`
+    /// when one already is. A wait for another (earlier) call is superseded:
+    /// it ends by itself once that call is no longer the active one.
+    pub fn begin_group_key_wait(&self, call_id: &str) -> Option<GroupKeyWaitGuard> {
+        let mut slot = self.group_key_wait.lock();
+        if slot.as_deref() == Some(call_id) {
+            return None;
+        }
+        *slot = Some(call_id.to_string());
+        Some(GroupKeyWaitGuard { slot: Arc::clone(&self.group_key_wait), call_id: call_id.to_string() })
     }
 
     /// Store a pending outgoing DM call.
@@ -270,15 +303,14 @@ impl CallSignalingService {
         Ok(())
     }
 
-    /// Hold the root key of a group call we are being rung for. False when
-    /// this call is already held — a repeated ring.
-    pub fn store_group_call_invite(&self, call_id: &str, root_key: [u8; 32]) -> bool {
+    /// Hold a group call we are being rung for (or joining unrung). False
+    /// when this call is already held — a repeated ring.
+    pub fn store_group_call_invite(&self, call_id: &str) -> bool {
         let mut invites = self.group_call_invites.lock();
         if invites.contains_key(call_id) {
             return false;
         }
         invites.insert(call_id.to_string(), GroupCallInvite {
-            root_key: Zeroizing::new(root_key),
             accepted: false,
             latest: HashMap::new(),
         });
@@ -296,13 +328,14 @@ impl CallSignalingService {
         true
     }
 
-    /// The user answered: hand back the call's root key to join with, and
-    /// keep the invite (collecting keys) until [`Self::take_group_call_invite`].
-    pub fn accept_group_call_invite(&self, call_id: &str) -> Option<Zeroizing<[u8; 32]>> {
-        let mut invites = self.group_call_invites.lock();
-        let invite = invites.get_mut(call_id)?;
-        invite.accepted = true;
-        Some(invite.root_key.clone())
+    /// The user is joining: keep the invite (collecting keys) until
+    /// [`Self::take_group_call_invite`], whatever the ring timer does. An
+    /// unrung join (from the open channel) holds one from here.
+    pub fn accept_group_call_invite(&self, call_id: &str) {
+        self.group_call_invites.lock()
+            .entry(call_id.to_string())
+            .or_insert_with(|| GroupCallInvite { accepted: false, latest: HashMap::new() })
+            .accepted = true;
     }
 
     /// Forget a group call invite (joined, declined or failed), returning
@@ -331,7 +364,7 @@ impl CallSignalingService {
 
     /// Redistribute a rotated group call key to the peers actually in the room.
     ///
-    /// Unlike [`Self::distribute_group_call_key`] — which invites the whole
+    /// Unlike [`Self::ring_group_call`] — which rings the whole
     /// channel to a call that is starting — rotation exists to lock a departed
     /// participant *out*. A peer who leaves the LiveKit room is still a channel
     /// member, so sending the rotated key to the membership list hands it
@@ -359,7 +392,9 @@ impl CallSignalingService {
 
         let mut sent_count = 0;
         for peer_id in &recipients {
-            let content = build_group_call_key_content(call_id, key, epoch, &channel_id_str);
+            let content = build_group_call_signal_content(
+                call_id, &channel_id_str, crate::domain::call::GroupCallSignal::Key { key, epoch },
+            );
             if let Err(e) = with_policy_deadline(
                 "group call key send",
                 self.message_service.send_friend_dm_content(peer_id, content),
@@ -382,46 +417,52 @@ impl CallSignalingService {
         Ok(sent_count)
     }
 
-    /// Distribute a group call encryption key to all channel members.
-    ///
-    /// Sends the key pairwise via sealed sender DM to each member
-    /// (excluding ourselves). This ensures all participants have the
-    /// same AES-256 key for E2EE media.
-    pub async fn distribute_group_call_key(
+    /// Ring a channel's members for the group call we started. The ring
+    /// carries no key (§124 1k): the call's key goes only to participants in
+    /// the room, from its key authority. Sent pairwise to each member but us.
+    pub async fn ring_group_call(
         &self,
         channel_id: &ChannelId,
         call_id: &str,
-        key: [u8; 32],
-        epoch: u32,
     ) -> Result<usize, CallSignalingError> {
         let current_user = self.channel_service.current_user_id()?;
         // Full membership, paginated — a member past the server's page size
-        // otherwise never receives the call key at all (OPEN-ITEMS §16).
+        // otherwise never rings (OPEN-ITEMS §16).
         let members = self.channel_service.get_all_channel_members(channel_id).await?;
         let channel_id_str = channel_id.to_string();
 
         let mut sent_count = 0;
-        for member in &members {
-            if member.user_id == current_user {
-                continue;
-            }
-
-            let content = build_group_call_key_content(call_id, key, epoch, &channel_id_str);
-            if let Err(e) = self.message_service
-                .send_friend_dm_content(&member.user_id, content)
-                .await
-            {
-                tracing::warn!(
-                    call_id, peer_id = %member.user_id, error = %e,
-                    "Failed to distribute group call key to member"
-                );
-            } else {
-                sent_count += 1;
+        for member in members.iter().filter(|m| m.user_id != current_user) {
+            let content = build_group_call_signal_content(
+                call_id, &channel_id_str, crate::domain::call::GroupCallSignal::Ring,
+            );
+            match self.message_service.send_friend_dm_content(&member.user_id, content).await {
+                Ok(_) => sent_count += 1,
+                Err(e) => tracing::warn!(call_id, peer_id = %member.user_id, error = %e, "Group call ring not sent"),
             }
         }
 
-        tracing::info!(call_id, sent_count, "Completed group call key distribution");
+        tracing::info!(call_id, sent_count, "Group call rung");
         Ok(sent_count)
+    }
+
+    /// Ask the call's key `authority` to rotate: we are in the room holding
+    /// no current key — just joined, or a rotation was lost on its way.
+    pub async fn request_group_call_key(
+        &self,
+        channel_id: &ChannelId,
+        call_id: &str,
+        authority: &UserId,
+    ) -> Result<(), CallSignalingError> {
+        let content = build_group_call_signal_content(
+            call_id, &channel_id.to_string(), crate::domain::call::GroupCallSignal::KeyRequest,
+        );
+        with_policy_deadline(
+            "group call key request",
+            self.message_service.send_friend_dm_content(authority, content),
+        ).await?;
+        tracing::info!(call_id, %authority, "Group call key requested");
+        Ok(())
     }
 
     // =========================================================================

@@ -20,7 +20,7 @@ use chatter_core::services::{
     build_delete_for_me_content, build_saved_message_sync_content,
     build_delete_for_everyone_content,
     build_call_key_offer, build_call_key_answer,
-    build_group_call_key_content, build_call_hangup_content,
+    build_group_call_signal_content, build_call_hangup_content,
     generate_padding, PADDING_GROUP_CONTROL, PADDING_MESSAGE, PADDING_LARGE,
     CallHangupReason,
 };
@@ -466,21 +466,30 @@ fn test_build_call_key_answer() {
     }
 }
 
-/// Test building a group call key distribution.
+/// A group-call key rotation carries its key and epoch; a ring and a key
+/// request carry no key at all (§124 1k).
 #[test]
-fn test_build_group_call_key() {
+fn test_build_group_call_signal() {
+    use chatter_core::domain::call::GroupCallSignal;
+    use chatter_core::proto::content_v1::group_call_signal::Signal;
     let key = [55u8; 32];
-    let content = build_group_call_key_content("group-call-789", key, 3, "ch-999");
-
-    match content.content.unwrap() {
-        content::Content::GroupCallKey(gck) => {
-            assert_eq!(gck.call_id, "group-call-789");
-            assert_eq!(gck.key_material.as_slice(), &key[..]);
-            assert_eq!(gck.key_epoch, 3);
-            assert_eq!(gck.channel_id, "ch-999");
+    let signal_of = |s| match build_group_call_signal_content("group-call-789", "ch-999", s).content.unwrap() {
+        content::Content::GroupCallSignal(gcs) => {
+            assert_eq!(gcs.call_id, "group-call-789");
+            assert_eq!(gcs.channel_id, "ch-999");
+            gcs.signal.expect("signal set")
         }
-        other => panic!("Expected GroupCallKey, got {:?}", other),
+        other => panic!("Expected GroupCallSignal, got {:?}", other),
+    };
+    match signal_of(GroupCallSignal::Key { key, epoch: 3 }) {
+        Signal::Key(k) => {
+            assert_eq!(k.key_material.as_slice(), &key[..]);
+            assert_eq!(k.key_epoch, 3);
+        }
+        other => panic!("Expected Key, got {:?}", other),
     }
+    assert!(matches!(signal_of(GroupCallSignal::Ring), Signal::Ring(_)), "a ring carries no key");
+    assert!(matches!(signal_of(GroupCallSignal::KeyRequest), Signal::KeyRequest(_)));
 }
 
 /// Test building a call hangup notification.

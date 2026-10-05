@@ -52,7 +52,7 @@ pub use builders::{
     // DM call key exchange (ephemeral keys for PFS)
     build_call_key_offer, build_call_key_answer,
     // Group call key distribution (pairwise sealed sender)
-    build_group_call_key_content,
+    build_group_call_signal_content,
     // Call hangup
     build_call_hangup_content,
     build_call_self_sync,

@@ -985,6 +985,12 @@ impl RoomManager {
         Some((e2ee.epoch, (0..KEY_RING_SIZE).map(|i| provider.get_shared_key(i)).collect()))
     }
 
+    /// Test-only: how many tracks we publish to the room. 0 when not connected.
+    #[cfg(feature = "testing")]
+    pub fn local_track_count(&self) -> usize {
+        self.room.read().as_ref().map_or(0, |r| r.local_participant().track_publications().len())
+    }
+
     /// Install an externally-ratcheted shared key for `epoch`, pre-installing
     /// `epoch + 1` so a peer whose 30 s ratchet timer fires slightly ahead can
     /// still decrypt immediately.

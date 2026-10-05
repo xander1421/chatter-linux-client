@@ -562,10 +562,10 @@ impl EventHandlers {
                 trace!(?call_id, ?peer_id, "CallKeyAnswerReceived: handled by UI thread");
             }
 
-            DomainEvent::GroupCallKeyReceived { call_id, sender_id, key_epoch, .. } => {
-                // Group call key is handled by the UI thread in calls.rs via event bus subscription.
+            DomainEvent::GroupCallSignalReceived { call_id, sender_id, signal, .. } => {
+                // Handled by the call key policy listener (client/mod.rs).
                 // No state store updates needed here.
-                trace!(?call_id, ?sender_id, key_epoch, "GroupCallKeyReceived: handled by UI thread");
+                trace!(?call_id, ?sender_id, ?signal, "GroupCallSignalReceived: handled by the call key policy");
             }
 
             // ================================================================

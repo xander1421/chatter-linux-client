@@ -247,7 +247,9 @@ impl ChatterClient {
                         channel_id: channel_id.to_string(),
                         is_video,
                         is_anonymous: false,
-                        verification_emojis: Some(setup.verification_emojis),
+                        // A group call has no SAS (as in Signal): no key is
+                        // shared by everyone who could compare one.
+                        verification_emojis: None,
                         title: String::new(), // UI substitutes channel name.
                         peer: None,
                     })
@@ -277,9 +279,15 @@ impl ChatterClient {
             .map_err(|e| ClientError::Inbox(e.to_string()))
     }
 
-    /// Start a group call in a channel: generate key, initiate on server, distribute key.
+    /// Start a group call in a channel, or join the one it already has.
     ///
-    /// Returns a `CallSetupResult` with call_id and verification emojis for the UI.
+    /// We connect under a random key of our own that is never sent (§124 1k):
+    /// the ring carries no key, and the call's key reaches a participant only
+    /// from its key authority, after it is in the room ([`Self::handle_group_call_signal`]).
+    /// The server hands back the channel's live call when there is one — then
+    /// we joined it unrung, holding none of its keys: nothing is published
+    /// until the authority's key arrives, and we ask for it if it does not
+    /// ([`await_group_call_key`]). Group calls carry no verification emojis.
     #[cfg(feature = "media")]
     pub async fn start_group_call(
         &self,
@@ -287,14 +295,11 @@ impl ChatterClient {
         call_type: crate::domain::call::CallType,
         user_id: crate::domain::ids::UserId,
     ) -> Result<crate::domain::call::CallSetupResult, ClientError> {
-        use crate::crypto::generate_group_call_key;
-        use crate::services::call_verification::CallVerification;
-
         let call_worker = self.call_service().get()
             .ok_or_else(|| ClientError::Inbox("Call service not initialized".into()))?
             .clone();
 
-        let group_key = generate_group_call_key();
+        let own_key = zeroize::Zeroizing::new(crate::crypto::generate_group_call_key());
 
         let call_type_str = match call_type {
             crate::domain::call::CallType::Voice => "Voice Call",
@@ -303,9 +308,10 @@ impl ChatterClient {
         };
 
         let call = call_worker
-            .initiate_call(channel_id, call_type_str, call_type, &group_key, user_id)
+            .initiate_call(channel_id, call_type_str, call_type, &own_key, user_id)
             .await
             .map_err(|e| ClientError::Inbox(e.to_string()))?;
+        drop(own_key);
 
         // Register the active call so the orchestrator can resolve its kind on
         // hangup. A group/channel call has no single peer, so we use a nil
@@ -320,45 +326,56 @@ impl ChatterClient {
             matches!(call_type, crate::domain::call::CallType::Video),
         );
 
-        // Publish microphone immediately
-        if let Err(e) = call_worker.publish_microphone(None).await {
-            tracing::error!("Failed to publish microphone: {}", e);
-        }
-
-        // Distribute key to all channel members (fire-and-forget)
-        let call_id_str = call.id.to_string();
-        let signaling = self.call_signaling().clone();
-        let ch_id = channel_id;
-        tokio::spawn(async move {
-            match signaling.distribute_group_call_key(&ch_id, &call_id_str, group_key, 0).await {
-                Ok(count) => tracing::info!(call_id = %call_id_str, sent = count, "Group call key distributed"),
-                Err(e) => tracing::error!(call_id = %call_id_str, error = %e, "Failed to distribute group call key"),
-            }
-        });
-
-        // Tell the channel a call started (O9): every member device files the
-        // Call row, joined or not. Fire-and-forget like the key fan-out.
-        let messages = self.messages().clone();
-        let started_id = call.id.to_string();
         let is_video = matches!(call_type, crate::domain::call::CallType::Video);
-        tokio::spawn(async move {
-            use crate::services::message::ChannelCallPhase;
-            if let Err(e) = messages
-                .post_channel_call_event(&ch_id, &started_id, ChannelCallPhase::Started, 0, is_video)
-                .await
-            {
-                tracing::warn!(error = %e, "Channel call STARTED not posted");
+        if call.initiator_id != user_id {
+            // The channel's call was already going: we joined it, unrung.
+            tracing::info!(call_id = %call.id, "Joined the channel's live group call");
+            // Rung for it too: the ring is answered now, and any key held for
+            // the join belongs to this one (else it would sit in the invite).
+            let call_id = call.id.to_string();
+            call_worker.orch_withdraw_incoming(CallHandle::from(call_id.as_str()), crate::services::call_worker::CallEndReason::AnsweredElsewhere);
+            let _ = self.services.notification_service.cancel_incoming_call(&call_id);
+            for pending in self.call_signaling().take_group_call_invite(&call_id) {
+                self.install_participant_group_key(
+                    &call_worker, call.id, &channel_id, pending.sender, *pending.key, pending.epoch, false,
+                ).await;
             }
-        });
+            spawn_group_key_wait(call_worker.clone(), self.call_signaling().clone(), user_id, call.id, channel_id, 0, KEY_REQUEST_AFTER);
+        } else {
+            // Publish microphone immediately: the key is ours, and we are alone.
+            if let Err(e) = call_worker.publish_microphone(None).await {
+                tracing::error!("Failed to publish microphone: {}", e);
+            }
 
-        let verification = CallVerification::derive_verification_emojis(&group_key, &call.id.to_string());
-        let emojis = CallVerification::to_slint_tuple(&verification);
+            // Ring the channel (no key in it; fire-and-forget).
+            let call_id_str = call.id.to_string();
+            let signaling = self.call_signaling().clone();
+            tokio::spawn(async move {
+                if let Err(e) = signaling.ring_group_call(&channel_id, &call_id_str).await {
+                    tracing::error!(call_id = %call_id_str, error = %e, "Failed to ring the group call");
+                }
+            });
+
+            // Tell the channel a call started (O9): every member device files the
+            // Call row, joined or not. Fire-and-forget like the ring.
+            let messages = self.messages().clone();
+            let started_id = call.id.to_string();
+            tokio::spawn(async move {
+                use crate::services::message::ChannelCallPhase;
+                if let Err(e) = messages
+                    .post_channel_call_event(&channel_id, &started_id, ChannelCallPhase::Started, 0, is_video)
+                    .await
+                {
+                    tracing::warn!(error = %e, "Channel call STARTED not posted");
+                }
+            });
+        }
 
         Ok(crate::domain::call::CallSetupResult {
             call_id: call.id,
             channel_id,
-            verification_emojis: [emojis.0, emojis.1, emojis.2, emojis.3],
-            is_video: matches!(call_type, crate::domain::call::CallType::Video),
+            verification_emojis: Default::default(),
+            is_video,
             started_at_ns: call.started_at
                 .and_then(|d| d.timestamp_nanos_opt())
                 .filter(|n| *n > 0)
@@ -800,55 +817,111 @@ impl ChatterClient {
 
     // ── Channel group call keys ──────────────────────────────────────
     //
-    // One wire message, `GroupCallKey { call_id, key, epoch }`, carries every
-    // group-call key. Epoch 0 is the ring: the initiator sends the call's
-    // root key to the channel when the call starts. Any later epoch is the
-    // designated rotator's rotation on a leave or a join — a joiner is sent
-    // that fresh key, never the one in use before it joined — adopted onto
-    // our chain (`CallWorkerHandle::install_group_key`). Only the key
-    // authority's keys are installed (`is_key_authority`). Never in the UI.
+    // One wire message, `GroupCallSignal`, in three kinds (§124 1k, after
+    // Signal's group calls: RingRTC's ring carries a ring id and no key, and
+    // media keys are exchanged only among devices in the call —
+    // Signal-Desktop `ts/services/calling.preload.ts` `#handleGroupCallRingUpdate`,
+    // `resendGroupCallMediaKeys`):
+    //   * Ring — the initiator rang the channel. No key: a member who never
+    //     joins learns nothing that decrypts media.
+    //   * Key — the key authority's rotation, on every join and leave, sent to
+    //     the participants in the room. A joiner holds no key of the call's
+    //     before this (it connects under one of its own, never sent, and
+    //     publishes nothing — `call_worker::PublishGate`), and is never sent
+    //     one that was in use before it joined. Only the key authority's keys
+    //     are installed (`is_key_authority`).
+    //   * KeyRequest — a participant in the room holds no current key (the
+    //     rotation was lost, or it joined unrung); the authority rotates
+    //     again, for everyone in the room. Never a resend of a key in use.
+    // Never in the UI.
 
-    /// Route a received group-call key: ring, install, keep for after the
-    /// join, or drop. Senders must be members of the channel the key names;
-    /// installing also requires them in the room.
+    /// Route a received group-call signal: ring, install or hold a key, or
+    /// take a key request. Senders must be members of the channel the signal
+    /// names. True when a key request is due a rotation from us — the caller
+    /// schedules it, coalesced with joins ([`JoinRotationGate`]).
     #[cfg(feature = "media")]
-    pub(crate) async fn handle_group_call_key(
+    pub(crate) async fn handle_group_call_signal(
         &self,
         call_id: String,
         sender_id: crate::domain::ids::UserId,
-        key: [u8; 32],
-        epoch: u32,
         channel_id: crate::domain::ids::ChannelId,
-    ) {
-        let Some(worker) = self.call_service().get().cloned() else { return };
+        signal: crate::domain::call::GroupCallSignal,
+    ) -> bool {
+        use crate::domain::call::GroupCallSignal;
+
+        let Some(worker) = self.call_service().get().cloned() else { return false };
         let Ok(call) = call_id.parse::<crate::domain::ids::CallId>() else {
-            tracing::warn!(call_id, "Group call key with a malformed call id; ignored");
-            return;
+            tracing::warn!(call_id, "Group call signal with a malformed call id; ignored");
+            return false;
         };
         match self.call_signaling().is_channel_member(&channel_id, &sender_id).await {
             Ok(true) => {}
             Ok(false) => {
-                tracing::warn!(%sender_id, %channel_id, "Group call key from a non-member; ignored");
-                return;
+                tracing::warn!(%sender_id, %channel_id, ?signal, "Group call signal from a non-member; ignored");
+                return false;
             }
             Err(e) => {
-                tracing::warn!(error = %e, %channel_id, "Group call key: membership check failed; ignored");
-                return;
+                tracing::warn!(error = %e, %channel_id, "Group call signal: membership check failed; ignored");
+                return false;
             }
         }
 
-        // Checked before the active call: a join takes the invite only after
-        // the call is active, so a key that misses the invite finds the call.
-        if epoch > 0 && self.call_signaling().buffer_group_call_key(&call_id, sender_id, key, epoch) {
-            return;
+        match signal {
+            GroupCallSignal::Ring => {
+                if worker.active_call().await.is_some_and(|c| c.id == call) {
+                    return false;
+                }
+                self.present_group_call_ring(&worker, call_id, sender_id, channel_id).await;
+                false
+            }
+            GroupCallSignal::Key { key, epoch } => {
+                // Checked before the active call: a join takes the invite only
+                // after the call is active, so a key that misses the invite
+                // finds the call.
+                if self.call_signaling().buffer_group_call_key(&call_id, sender_id, key, epoch) {
+                    return false;
+                }
+                if worker.active_call().await.is_some_and(|c| c.id == call) {
+                    self.install_participant_group_key(&worker, call, &channel_id, sender_id, key, epoch, true).await;
+                } else {
+                    tracing::debug!(call_id, epoch, "Group call key for a call we are not in; ignored");
+                }
+                false
+            }
+            GroupCallSignal::KeyRequest => {
+                let Some(me) = self.sessions().current_user_id() else { return false };
+                let active = worker.active_call().await;
+                let seniority = worker.room_seniority().await;
+                let due = key_request_is_due(&me, call, &channel_id, &sender_id, active.as_ref(), seniority.as_ref());
+                if !due {
+                    tracing::debug!(%sender_id, call_id, "Group call key request not ours to answer; ignored");
+                }
+                due
+            }
         }
-        if worker.active_call().await.is_some_and(|c| c.id == call) {
-            self.install_participant_group_key(&worker, call, &channel_id, sender_id, key, epoch, true).await;
-        } else if epoch == 0 {
-            self.present_group_call_ring(&worker, call_id, sender_id, key, channel_id).await;
-        } else {
-            tracing::debug!(call_id, epoch, "Group call key for a call we are not in; ignored");
-        }
+    }
+
+    /// Ask for a fresh key after group-call signals may have been lost (the
+    /// domain bus lagged, or key handling was saturated): in a channel group
+    /// call where we are not the key authority, request a rotation and keep
+    /// asking until a newer key is installed ([`await_group_call_key`]).
+    #[cfg(feature = "media")]
+    pub(crate) fn resync_group_call_key(&self) {
+        let Some(worker) = self.call_service().get().cloned() else { return };
+        let Some(me) = self.sessions().current_user_id() else { return };
+        let signaling = self.call_signaling().clone();
+        tokio::spawn(async move {
+            use crate::services::call_worker::OrchestratedCallKind;
+            // Channel group calls only: a 1:1 or anonymous call has no key
+            // authority to ask.
+            if worker.orch_active_kind().await != Some(OrchestratedCallKind::GroupChannel) {
+                return;
+            }
+            let Some(status) = worker.group_key_status().await else { return };
+            let Some(call) = worker.active_call().await.filter(|c| c.id == status.call_id) else { return };
+            tracing::info!(call_id = %call.id, "Group call signals may have been lost; requesting a fresh key");
+            spawn_group_key_wait(worker, signaling, me, call.id, call.channel_id, status.anchor, std::time::Duration::ZERO);
+        });
     }
 
     /// Install a participant's `(key, epoch)` into the active call `call`,
@@ -856,8 +929,10 @@ impl ChatterClient {
     ///
     /// `settle`: a departure the rotator has already seen may not have reached
     /// our room view yet — the departed senior then still outranks the
-    /// rotator — so a key from a participant who is in the room but not the
-    /// authority is re-checked once after [`ROSTER_SETTLE`].
+    /// rotator. A key from a participant who is in the room but not (yet) the
+    /// authority is held, and re-checked on every room event, until our view
+    /// makes them the authority or [`KEY_AUTHORITY_SETTLE_MAX`] passes — not
+    /// dropped after one fixed wait (§124 1k residual).
     #[cfg(feature = "media")]
     #[allow(clippy::too_many_arguments)]
     async fn install_participant_group_key(
@@ -871,13 +946,20 @@ impl ChatterClient {
         settle: bool,
     ) {
         let key = zeroize::Zeroizing::new(key);
-        let in_channel = worker.active_call().await.is_some_and(|c| c.channel_id == *channel_id);
+        let in_channel = worker.active_call().await.is_some_and(|c| c.id == call && c.channel_id == *channel_id);
         let remote = |s: Option<crate::services::call_worker::RoomSeniority>| s.map(|s| s.remote).unwrap_or_default();
         let mut roster = remote(worker.room_seniority().await);
-        let in_room = roster.iter().any(|(id, _)| *id == sender_id.to_string());
-        if settle && in_room && !is_key_authority(&sender_id, &roster) {
-            tokio::time::sleep(ROSTER_SETTLE).await;
-            roster = remote(worker.room_seniority().await);
+        if settle {
+            let events = tokio::sync::Mutex::new(worker.subscribe_room_events());
+            roster = settle_key_authority(
+                &sender_id,
+                roster,
+                || async { remote(worker.room_seniority().await) },
+                // Woken by a room event (a departure) or, at the latest, a
+                // short re-read: an event lost to a lag must not stall it.
+                || async { let _ = tokio::time::timeout(KEY_AUTHORITY_RECHECK, events.lock().await.recv()).await; },
+                KEY_AUTHORITY_SETTLE_MAX,
+            ).await;
         }
         if !in_channel || !is_key_authority(&sender_id, &roster) {
             tracing::warn!(%sender_id, %call, "Group call key from outside the call or not its key authority; ignored");
@@ -899,7 +981,6 @@ impl ChatterClient {
         worker: &CallWorkerHandle,
         call_id: String,
         sender_id: crate::domain::ids::UserId,
-        root_key: [u8; 32],
         channel_id: crate::domain::ids::ChannelId,
     ) {
         use crate::proto::chat_v1::CallType as ProtoCallType;
@@ -941,7 +1022,7 @@ impl ChatterClient {
             worker.orch_missed_incoming(handle, OrchestratedCallKind::GroupChannel, peer_name, is_video, channel_id.to_string());
             return;
         }
-        if !self.call_signaling().store_group_call_invite(&call_id, root_key) {
+        if !self.call_signaling().store_group_call_invite(&call_id) {
             return;
         }
         worker.orch_present_incoming(
@@ -968,24 +1049,23 @@ impl ChatterClient {
         });
     }
 
-    /// Join the group call we were rung for with its root key, then install
-    /// the join rotation's key if it reached us while we were joining.
+    /// Join the group call we were rung for, holding none of its keys: our
+    /// media waits behind the publish gate until the key authority's join
+    /// rotation is installed — taken from what reached us while joining, or
+    /// asked for if it never comes ([`await_group_call_key`]).
     #[cfg(feature = "media")]
     async fn join_group_call(
         &self,
         worker: &CallWorkerHandle,
         call_id: &str,
     ) -> Result<crate::domain::call::CallSetupResult, ClientError> {
-        use crate::services::call_verification::CallVerification;
-
         let call = call_id.parse::<crate::domain::ids::CallId>()
             .map_err(|_| ClientError::Inbox("malformed group call id".into()))?;
-        let root_key = self.call_signaling().accept_group_call_invite(call_id)
-            .ok_or_else(|| ClientError::Inbox("no key for this group call".into()))?;
         let user_id = self.session_current_user_id()
             .ok_or_else(|| ClientError::Inbox("Not logged in".into()))?;
+        self.call_signaling().accept_group_call_invite(call_id);
 
-        let joined = worker.join_call(call, &root_key, user_id).await
+        let joined = worker.join_group_call(call, user_id).await
             .map_err(|e| ClientError::Inbox(e.to_string()))?;
 
         // Only the key authority's passes; the others are dropped there.
@@ -994,13 +1074,12 @@ impl ChatterClient {
                 worker, call, &joined.channel_id, pending.sender, *pending.key, pending.epoch, false,
             ).await;
         }
+        spawn_group_key_wait(worker.clone(), self.call_signaling().clone(), user_id, call, joined.channel_id, 0, KEY_REQUEST_AFTER);
 
-        let verification = CallVerification::derive_verification_emojis(&root_key, call_id);
-        let emojis = CallVerification::to_slint_tuple(&verification);
         Ok(crate::domain::call::CallSetupResult {
             call_id: call,
             channel_id: joined.channel_id,
-            verification_emojis: [emojis.0, emojis.1, emojis.2, emojis.3],
+            verification_emojis: Default::default(),
             is_video: matches!(joined.call_type, crate::domain::call::CallType::Video),
             started_at_ns: joined.started_at
                 .and_then(|d| d.timestamp_nanos_opt())
@@ -1446,9 +1525,7 @@ fn seniority(identity: &str, joined_at_ms: i64) -> (i64, &str) {
 /// senior, so it never decides a key.
 #[cfg(feature = "media")]
 fn is_key_authority(sender: &crate::domain::ids::UserId, remote: &[(String, i64)]) -> bool {
-    remote.iter()
-        .min_by(|a, b| seniority(&a.0, a.1).cmp(&seniority(&b.0, b.1)))
-        .is_some_and(|(id, _)| *id == sender.to_string())
+    key_authority(remote).is_some_and(|id| id == sender.to_string())
 }
 
 /// Whether we rotate the call key on a leave or a join: we have been in the
@@ -1461,11 +1538,164 @@ fn is_designated_rotator(me: &crate::domain::ids::UserId, my_joined_at_ms: i64, 
     others.iter().all(|(id, at)| seniority(&me, my_joined_at_ms) < seniority(id, *at))
 }
 
-/// How long a key from an in-room participant who is not (yet) the key
-/// authority waits for our room view to catch up before it is re-checked —
-/// and how long joins are gathered into one rotation.
+/// The participant whose keys are installed, as `remote` (the others in
+/// the room) ranks it: the most senior. `None` in an empty room.
+#[cfg(feature = "media")]
+fn key_authority(remote: &[(String, i64)]) -> Option<&str> {
+    remote.iter()
+        .min_by(|a, b| seniority(&a.0, a.1).cmp(&seniority(&b.0, b.1)))
+        .map(|(id, _)| id.as_str())
+}
+
+/// Whether a key request from `sender` for `call` in `channel` is ours to
+/// answer with a rotation: it is our active call, in that channel, the
+/// sender is in the room with us, and we are the key authority. A rotation —
+/// never a resend: the key in use may predate the requester's join.
+#[cfg(feature = "media")]
+fn key_request_is_due(
+    me: &crate::domain::ids::UserId,
+    call: crate::domain::ids::CallId,
+    channel: &crate::domain::ids::ChannelId,
+    sender: &crate::domain::ids::UserId,
+    active: Option<&crate::domain::call::Call>,
+    room: Option<&crate::services::call_worker::RoomSeniority>,
+) -> bool {
+    let (Some(active), Some(room)) = (active, room) else { return false };
+    let sender = sender.to_string();
+    active.id == call
+        && active.channel_id == *channel
+        && room.remote.iter().any(|(id, _)| *id == sender)
+        && is_designated_rotator(me, room.local_joined_at_ms, &room.remote)
+}
+
+/// One step of waiting for a group-call key ([`await_group_call_key`]).
+#[cfg(feature = "media")]
+#[derive(Debug, PartialEq, Eq)]
+enum KeyWait {
+    /// Stop: the key came, the call changed, or the next rotation is ours.
+    Done,
+    /// Ask this participant — the key authority — for a rotation.
+    Request(String),
+}
+
+/// What to do now while waiting, in `call`, for a key newer than generation
+/// `min_anchor`.
+#[cfg(feature = "media")]
+fn key_wait_step(
+    me: &crate::domain::ids::UserId,
+    call: crate::domain::ids::CallId,
+    min_anchor: u32,
+    status: Option<crate::services::call_worker::GroupKeyStatus>,
+    room: Option<&crate::services::call_worker::RoomSeniority>,
+) -> KeyWait {
+    let (Some(status), Some(room)) = (status, room) else { return KeyWait::Done };
+    if status.call_id != call || status.anchor > min_anchor {
+        return KeyWait::Done;
+    }
+    // Alone, or the most senior: the next membership change rotates, and
+    // the rotation is ours (`rotate_group_call_key`) — nobody to ask.
+    if is_designated_rotator(me, room.local_joined_at_ms, &room.remote) {
+        return KeyWait::Done;
+    }
+    match key_authority(&room.remote) {
+        Some(authority) => KeyWait::Request(authority.to_string()),
+        None => KeyWait::Done,
+    }
+}
+
+/// Wait for a key newer than generation `min_anchor` in `call`, asking the
+/// key authority for a rotation each time one has not come within
+/// [`KEY_REQUEST_AFTER`] (the first ask after `first_delay`), at most
+/// [`KEY_REQUEST_ATTEMPTS`] times. One wait per call runs at a time.
+#[cfg(feature = "media")]
+fn spawn_group_key_wait(
+    worker: CallWorkerHandle,
+    signaling: crate::services::call_signaling::CallSignalingService,
+    me: crate::domain::ids::UserId,
+    call: crate::domain::ids::CallId,
+    channel: crate::domain::ids::ChannelId,
+    min_anchor: u32,
+    first_delay: std::time::Duration,
+) {
+    let call_id = call.to_string();
+    let Some(guard) = signaling.begin_group_key_wait(&call_id) else { return };
+    tokio::spawn(async move {
+        let _guard = guard;
+        let mut delay = first_delay;
+        for _ in 0..KEY_REQUEST_ATTEMPTS {
+            tokio::time::sleep(delay).await;
+            delay = KEY_REQUEST_AFTER;
+            let status = worker.group_key_status().await;
+            let room = worker.room_seniority().await;
+            let authority = match key_wait_step(&me, call, min_anchor, status, room.as_ref()) {
+                KeyWait::Done => return,
+                KeyWait::Request(authority) => authority,
+            };
+            let Ok(authority) = authority.parse::<crate::domain::ids::UserId>() else { return };
+            if let Err(e) = signaling.request_group_call_key(&channel, &call_id, &authority).await {
+                tracing::warn!(error = %e, call_id, "Group call key request not sent");
+            }
+        }
+        tracing::warn!(call_id, "Still no group call key after {KEY_REQUEST_ATTEMPTS} requests");
+    });
+}
+
+/// Hold a key from `sender` — in the room, not (yet) the key authority in
+/// `roster` — until a re-read roster (`read`, after each `wait`) makes it the
+/// authority, shows it gone, or `max` passes. Returns the last roster read.
+/// A departed senior our view still lists is waited out for as long as the
+/// view takes to drop it, not one fixed interval.
+#[cfg(feature = "media")]
+async fn settle_key_authority<R, RF, W, WF>(
+    sender: &crate::domain::ids::UserId,
+    mut roster: Vec<(String, i64)>,
+    mut read: R,
+    mut wait: W,
+    max: std::time::Duration,
+) -> Vec<(String, i64)>
+where
+    R: FnMut() -> RF,
+    RF: std::future::Future<Output = Vec<(String, i64)>>,
+    W: FnMut() -> WF,
+    WF: std::future::Future<Output = ()>,
+{
+    let sender_id = sender.to_string();
+    let deadline = tokio::time::Instant::now() + max;
+    while roster.iter().any(|(id, _)| *id == sender_id)
+        && !is_key_authority(sender, &roster)
+        && tokio::time::Instant::now() < deadline
+    {
+        wait().await;
+        roster = read().await;
+    }
+    roster
+}
+
+/// How long joins (and key requests) are gathered into one rotation.
 #[cfg(feature = "media")]
 pub(crate) const ROSTER_SETTLE: std::time::Duration = std::time::Duration::from_secs(2);
+
+/// Longest a key from an in-room participant who is not yet the key
+/// authority in our view is held for that view to catch up. Above LiveKit's
+/// own departure timeout (20 s by default), after which a participant that
+/// dropped without leaving is gone from every view.
+#[cfg(feature = "media")]
+const KEY_AUTHORITY_SETTLE_MAX: std::time::Duration = std::time::Duration::from_secs(30);
+
+/// While a key is held: how often the roster is re-read when no room event
+/// wakes it first.
+#[cfg(feature = "media")]
+const KEY_AUTHORITY_RECHECK: std::time::Duration = std::time::Duration::from_millis(500);
+
+/// A participant holding no current key asks for one when this long passes
+/// without it — past a join rotation's own delay (`ROSTER_SETTLE` + the 1 s
+/// propagation wait + the send).
+#[cfg(feature = "media")]
+pub(crate) const KEY_REQUEST_AFTER: std::time::Duration = std::time::Duration::from_secs(5);
+
+/// Key requests per wait before giving up (a minute at [`KEY_REQUEST_AFTER`]).
+#[cfg(feature = "media")]
+const KEY_REQUEST_ATTEMPTS: u32 = 12;
 
 /// Coalesces joins into one rotation: the first join arms it, and every join
 /// until it fires (after [`ROSTER_SETTLE`]) is covered by the same rotation,
@@ -1527,6 +1757,97 @@ mod group_call_key_tests {
         assert!(!is_key_authority(&mallory, &room), "an in-room non-rotator is ignored");
         assert!(!is_key_authority(&joiner, &room), "not in the room");
         assert!(!is_key_authority(&rotator, &[]));
+    }
+
+    fn room(local: i64, remote: &[(UserId, i64)]) -> crate::services::call_worker::RoomSeniority {
+        crate::services::call_worker::RoomSeniority {
+            local_joined_at_ms: local,
+            remote: remote.iter().map(|(u, at)| (u.to_string(), *at)).collect(),
+        }
+    }
+
+    fn status(call: crate::domain::ids::CallId, anchor: u32) -> crate::services::call_worker::GroupKeyStatus {
+        crate::services::call_worker::GroupKeyStatus { call_id: call, anchor, awaiting_key: anchor == 0 }
+    }
+
+    /// §124 1k item 5 / item 4: a participant holding no current key asks
+    /// the most senior participant — and nobody when the rotation is its own.
+    #[test]
+    fn a_keyless_participant_asks_the_authority() {
+        let call: crate::domain::ids::CallId = "11111111-2222-4333-8444-555555555555".parse().unwrap();
+        let other: crate::domain::ids::CallId = "11111111-2222-4333-8444-666666666666".parse().unwrap();
+        let (authority, middle, me) = (user(9), user(1), user(3));
+        let r = room(300, &[(middle, 200), (authority, 100)]);
+
+        assert_eq!(key_wait_step(&me, call, 0, Some(status(call, 0)), Some(&r)), KeyWait::Request(authority.to_string()));
+        assert_eq!(key_wait_step(&me, call, 0, Some(status(call, 4)), Some(&r)), KeyWait::Done, "the key came");
+        // A resync waits for a key newer than the one it held.
+        assert_eq!(key_wait_step(&me, call, 4, Some(status(call, 4)), Some(&r)), KeyWait::Request(authority.to_string()));
+        assert_eq!(key_wait_step(&me, call, 4, Some(status(call, 5)), Some(&r)), KeyWait::Done);
+        assert_eq!(key_wait_step(&me, call, 0, Some(status(other, 0)), Some(&r)), KeyWait::Done, "another call");
+        assert_eq!(key_wait_step(&me, call, 0, None, Some(&r)), KeyWait::Done, "left the call");
+        // The authority left: we are the most senior now, the rotation is ours.
+        assert_eq!(key_wait_step(&me, call, 0, Some(status(call, 0)), Some(&room(50, &[(middle, 200)]))), KeyWait::Done);
+        assert_eq!(key_wait_step(&me, call, 0, Some(status(call, 0)), Some(&room(300, &[]))), KeyWait::Done, "alone");
+    }
+
+    /// A key request rotates only at the authority, only for a requester in
+    /// the room with it, only in that call and channel.
+    #[test]
+    fn only_the_authority_answers_a_key_request_from_the_room() {
+        use crate::domain::call::{Call, CallType};
+        use crate::domain::ids::ChannelId;
+        let (me, joiner, stranger, senior) = (user(9), user(3), user(4), user(1));
+        let channel = ChannelId::new();
+        let mut active = Call::new(channel, me, CallType::Voice);
+        active.id = "11111111-2222-4333-8444-555555555555".parse().unwrap();
+        let call = active.id;
+        let r = room(100, &[(joiner, 300)]);
+
+        assert!(key_request_is_due(&me, call, &channel, &joiner, Some(&active), Some(&r)));
+        assert!(!key_request_is_due(&me, call, &channel, &stranger, Some(&active), Some(&r)), "not in the room");
+        assert!(!key_request_is_due(&me, call, &ChannelId::new(), &joiner, Some(&active), Some(&r)), "another channel");
+        let other_call = "11111111-2222-4333-8444-666666666666".parse().unwrap();
+        assert!(!key_request_is_due(&me, other_call, &channel, &joiner, Some(&active), Some(&r)), "another call");
+        assert!(!key_request_is_due(&me, call, &channel, &joiner, None, Some(&r)), "not in a call");
+        let not_senior = room(100, &[(joiner, 300), (senior, 50)]);
+        assert!(!key_request_is_due(&me, call, &channel, &joiner, Some(&active), Some(&not_senior)), "not the authority");
+    }
+
+    /// §124 1k item 3: a departed senior still listed in our view past the
+    /// old one-shot 2 s settle no longer costs the rotator's key — it is
+    /// held until the view drops the departed one.
+    #[tokio::test(start_paused = true)]
+    async fn a_key_waits_out_a_departed_senior_still_listed() {
+        use std::sync::atomic::{AtomicU32, Ordering};
+        let (departed, rotator) = (user(1), user(9));
+        let stale = vec![(departed.to_string(), 100), (rotator.to_string(), 200)];
+        let reads = AtomicU32::new(0);
+        let started = tokio::time::Instant::now();
+        // The departure reaches our view 6 s in (12 re-reads of 500 ms).
+        let roster = settle_key_authority(
+            &rotator,
+            stale.clone(),
+            || {
+                let n = reads.fetch_add(1, Ordering::SeqCst) + 1;
+                let view = if n >= 12 { vec![(rotator.to_string(), 200)] } else { stale.clone() };
+                async move { view }
+            },
+            || tokio::time::sleep(std::time::Duration::from_millis(500)),
+            KEY_AUTHORITY_SETTLE_MAX,
+        ).await;
+        assert!(is_key_authority(&rotator, &roster), "the rotator's key was given up on");
+        assert!(started.elapsed() > ROSTER_SETTLE, "the departure landed after the old fixed settle");
+
+        // A sender who never becomes the authority is refused, after the cap.
+        let roster = settle_key_authority(
+            &rotator,
+            stale.clone(),
+            || { let v = stale.clone(); async move { v } },
+            || tokio::time::sleep(std::time::Duration::from_millis(500)),
+            KEY_AUTHORITY_SETTLE_MAX,
+        ).await;
+        assert!(!is_key_authority(&rotator, &roster));
     }
 
     /// Joins that land together cost one rotation; a join after it has

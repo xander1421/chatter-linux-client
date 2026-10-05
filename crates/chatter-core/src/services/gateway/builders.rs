@@ -432,37 +432,35 @@ pub fn build_call_key_answer(
 }
 
 // =============================================================================
-// Group Call Key Distribution (Pairwise sealed sender)
+// Group Call Signaling (pairwise sealed sender)
 // =============================================================================
 
-/// Create a Content proto for group call key distribution.
-///
-/// Distributes the symmetric call key to a single group member via pairwise
-/// sealed sender. Must be called once for each member (client-side fanout).
-///
-/// Per NDSS '21: Server cannot correlate these independent messages to a group.
-///
-/// # Arguments
-/// * `call_id` - Unique call identifier
-/// * `key` - AES-256 encryption key (32 bytes) for LiveKit E2EE
-/// * `epoch` - Key epoch (0 for initial, increments on rotation)
-/// * `channel_id` - Group channel ID
-pub fn build_group_call_key_content(
+/// Create a Content proto carrying one channel group-call signal for a single
+/// member (client-side fanout: the server cannot correlate the copies — NDSS
+/// '21). A ring carries no key; only a [`GroupCallSignal::Key`] does.
+pub fn build_group_call_signal_content(
     call_id: &str,
-    key: [u8; 32],
-    epoch: u32,
     channel_id: &str,
+    signal: crate::domain::call::GroupCallSignal,
 ) -> Content {
-    use crate::proto::content_v1::GroupCallKey;
+    use crate::domain::call::GroupCallSignal;
+    use crate::proto::content_v1::{group_call_signal, GroupCallKeyRequest, GroupCallKeyUpdate, GroupCallRing};
     let now = TimestampNanos::now().as_u64();
-    Content {
-        timestamp: now,
-        content: Some(content::Content::GroupCallKey(GroupCallKey {
-            call_id: call_id.to_string(),
+    let signal = match signal {
+        GroupCallSignal::Ring => group_call_signal::Signal::Ring(GroupCallRing {}),
+        GroupCallSignal::Key { key, epoch } => group_call_signal::Signal::Key(GroupCallKeyUpdate {
             key_material: key.to_vec(),
             key_epoch: epoch,
-            timestamp: now,
+        }),
+        GroupCallSignal::KeyRequest => group_call_signal::Signal::KeyRequest(GroupCallKeyRequest {}),
+    };
+    Content {
+        timestamp: now,
+        content: Some(content::Content::GroupCallSignal(crate::proto::content_v1::GroupCallSignal {
+            call_id: call_id.to_string(),
             channel_id: channel_id.to_string(),
+            timestamp: now,
+            signal: Some(signal),
         })),
         ..Default::default()
     }

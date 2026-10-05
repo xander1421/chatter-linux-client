@@ -548,7 +548,7 @@ impl MessageGateway {
                     | Some(content::Content::SavedMessageSync(_))
                     | Some(content::Content::CallKey(_))
                     | Some(content::Content::CallHangup(_))
-                    | Some(content::Content::GroupCallKey(_))
+                    | Some(content::Content::GroupCallSignal(_))
                     | Some(content::Content::CallEvent(_))
             );
             if is_control {
@@ -918,22 +918,32 @@ impl MessageGateway {
                     })
                 }
             }
-            Some(content::Content::GroupCallKey(group_key)) => {
-                // Group call key distributed via pairwise sealed sender
-                let key_material: [u8; 32] = group_key.key_material
-                    .as_slice()
-                    .try_into()
-                    .map_err(|_| ServiceError::Validation(format!(
-                        "Invalid group call key length: {} (expected 32)",
-                        group_key.key_material.len()
-                    )))?;
-
-                Ok(DmContent::GroupCallKey {
-                    call_id: group_key.call_id,
-                    key_material,
-                    key_epoch: group_key.key_epoch,
-                    channel_id: group_key.channel_id,
-                    timestamp: group_key.timestamp,
+            Some(content::Content::GroupCallSignal(msg)) => {
+                use crate::domain::call::GroupCallSignal;
+                use crate::proto::content_v1::group_call_signal::Signal;
+                let signal = match msg.signal {
+                    Some(Signal::Ring(_)) => GroupCallSignal::Ring,
+                    Some(Signal::KeyRequest(_)) => GroupCallSignal::KeyRequest,
+                    Some(Signal::Key(update)) => {
+                        let key: [u8; 32] = update.key_material.as_slice().try_into().map_err(|_| {
+                            ServiceError::Validation(format!(
+                                "Invalid group call key length: {} (expected 32)",
+                                update.key_material.len()
+                            ))
+                        })?;
+                        // Epoch 0 is a participant's own starting key, never sent.
+                        if update.key_epoch == 0 {
+                            return Err(ServiceError::Validation("group call key at epoch 0".into()));
+                        }
+                        GroupCallSignal::Key { key, epoch: update.key_epoch }
+                    }
+                    None => return Err(ServiceError::Validation("empty group call signal".into())),
+                };
+                Ok(DmContent::GroupCallSignal {
+                    call_id: msg.call_id,
+                    channel_id: msg.channel_id,
+                    signal,
+                    timestamp: msg.timestamp,
                 })
             }
             Some(content::Content::CallHangup(hangup)) => {
@@ -1291,6 +1301,26 @@ mod thread_id_tests {
             }
             other => panic!("expected DmContent::Edit, got {other:?}"),
         }
+    }
+
+    /// §124 1k: a ring and a key request parse with no key; a key parses
+    /// only as a 32-byte rotation at epoch >= 1 (epoch 0 is a participant's
+    /// own starting key and is never sent).
+    #[test]
+    fn group_call_signals_parse_and_epoch_zero_keys_are_refused() {
+        use crate::domain::call::GroupCallSignal;
+        use crate::services::gateway::build_group_call_signal_content;
+        let parse = |s| MessageGateway::parse_content(build_group_call_signal_content("c", "ch", s));
+        for signal in [GroupCallSignal::Ring, GroupCallSignal::KeyRequest, GroupCallSignal::Key { key: [3; 32], epoch: 2 }] {
+            match parse(signal).expect("parse_content failed") {
+                DmContent::GroupCallSignal { call_id, channel_id, signal: parsed, .. } => {
+                    assert_eq!((call_id.as_str(), channel_id.as_str()), ("c", "ch"));
+                    assert_eq!(parsed, signal);
+                }
+                other => panic!("expected DmContent::GroupCallSignal, got {other:?}"),
+            }
+        }
+        assert!(parse(GroupCallSignal::Key { key: [3; 32], epoch: 0 }).is_err(), "epoch-0 key accepted");
     }
 
     #[test]

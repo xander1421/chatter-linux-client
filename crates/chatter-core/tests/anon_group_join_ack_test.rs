@@ -149,7 +149,7 @@ fn test_all_content_types_listed() {
         "CallKey",
         "CallHangup",
         "DeleteForMeSync",
-        "GroupCallKey",
+        "GroupCallSignal",
         "AnonGroupInvite",
         "AnonGroupJoinAck",     // <-- This was the one missing handling
         "AnonGroupMemberList",

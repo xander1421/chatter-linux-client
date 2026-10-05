@@ -107,7 +107,7 @@ pub use gateway::{
     // DM call key exchange (ephemeral keys for PFS)
     build_call_key_offer, build_call_key_answer,
     // Group call key distribution
-    build_group_call_key_content,
+    build_group_call_signal_content,
     // Call hangup
     build_call_hangup_content, CallHangupReason,
 };

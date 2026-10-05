@@ -223,6 +223,30 @@ impl VerificationBadge {
 use crate::crypto::call_key_provider::EphemeralCallKey;
 use zeroize::Zeroizing;
 
+/// One channel group-call signal (`GroupCallSignal` on the wire). A ring
+/// carries no key: as in Signal, media keys go only to participants in the
+/// call, and only as the key authority's rotation (`client/calls.rs`).
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum GroupCallSignal {
+    /// The sender started the call.
+    Ring,
+    /// The key authority's rotation: the call's key from `epoch` (>= 1) on.
+    Key { key: [u8; 32], epoch: u32 },
+    /// A participant holds no current key and asks the authority to rotate.
+    KeyRequest,
+}
+
+impl std::fmt::Debug for GroupCallSignal {
+    // Never print key material.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Ring => f.write_str("Ring"),
+            Self::Key { epoch, .. } => write!(f, "Key {{ epoch: {epoch} }}"),
+            Self::KeyRequest => f.write_str("KeyRequest"),
+        }
+    }
+}
+
 /// Result of completing a DM call key exchange (caller or callee side).
 ///
 /// Contains everything the UI needs to display the active call.

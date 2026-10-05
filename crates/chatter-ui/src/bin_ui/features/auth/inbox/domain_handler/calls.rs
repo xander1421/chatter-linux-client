@@ -41,7 +41,7 @@ pub(super) fn handle_call_key_offer(
 // NOTE: CallKeyAnswerReceived is handled by calls/event_handlers.rs
 // (wire_call_key_answer_handler), which delegates to
 // key_exchange::handle_call_key_answer for ECDH key derivation.
-// GroupCallKeyReceived is installed in core (ChatterClient::handle_group_call_key);
+// GroupCallSignalReceived is handled in core (ChatterClient::handle_group_call_signal);
 // the UI never sees group key bytes. The domain_handler arms for these
 // events are intentional no-ops.
 

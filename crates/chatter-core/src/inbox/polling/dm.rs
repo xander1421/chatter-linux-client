@@ -880,32 +880,27 @@ fn dispatch_dm_content(
             });
         }
 
-        DmContent::GroupCallKey {
+        DmContent::GroupCallSignal {
             call_id,
-            key_material,
-            key_epoch,
             channel_id,
+            signal,
             timestamp,
         } => {
-            // Group call key distributed via pairwise sealed sender
             tracing::info!(
                 peer_id = %peer_id,
                 call_id = %call_id,
-                key_epoch = key_epoch,
-                "Group call key received via pairwise distribution"
+                ?signal,
+                "Group call signal received via pairwise distribution"
             );
-
-            // Parse channel_id
-            let channel_id: ChannelId = channel_id
-                .parse()
-                .unwrap_or_else(|_| ChannelId::new());
-
-            let _ = event_tx.send(InboxEvent::GroupCallKeyReceived {
+            let Ok(channel_id) = channel_id.parse::<ChannelId>() else {
+                tracing::warn!(peer_id = %peer_id, "Group call signal with invalid channel_id");
+                return;
+            };
+            let _ = event_tx.send(InboxEvent::GroupCallSignalReceived {
                 sender_id: *sender_id,
                 call_id,
-                key_material,
-                key_epoch,
                 channel_id,
+                signal,
                 timestamp,
             });
         }

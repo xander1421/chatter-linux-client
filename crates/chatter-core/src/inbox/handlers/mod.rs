@@ -274,15 +274,13 @@ pub enum DomainEvent {
         /// Callee's ephemeral X25519 public key (32 bytes).
         ephemeral_public_key: [u8; 32],
     },
-    /// Group call key received (distributed via pairwise sealed sender).
-    GroupCallKeyReceived {
+    /// Channel group-call signal (pairwise sealed sender): ring, key, or
+    /// key request. Handled by the call key policy (`client/mod.rs`).
+    GroupCallSignalReceived {
         call_id: String,
         sender_id: UserId,
-        /// AES-256 encryption key (32 bytes).
-        key_material: [u8; 32],
-        /// Key epoch (increments on rotation).
-        key_epoch: u32,
         channel_id: ChannelId,
+        signal: crate::domain::call::GroupCallSignal,
     },
 
     // ========================================================================
@@ -707,7 +705,7 @@ impl DomainEvent {
             DomainEvent::DeviceLinked { .. } => None,
             DomainEvent::CallHangupReceived { .. } => None,
             DomainEvent::CallKeyAnswerReceived { .. } => None,
-            DomainEvent::GroupCallKeyReceived { channel_id, .. } => Some(*channel_id),
+            DomainEvent::GroupCallSignalReceived { channel_id, .. } => Some(*channel_id),
             DomainEvent::AnonGroupInviteReceived { .. } => None,
             DomainEvent::AnonGroupJoined { .. } => None,
             DomainEvent::AnonGroupMemberJoined { .. } => None,

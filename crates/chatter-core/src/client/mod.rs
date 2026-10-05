@@ -2262,17 +2262,19 @@ impl ChatterClient {
     /// membership change: on `ParticipantLeft` so the departed participant
     /// can't decrypt future frames, and on `ParticipantJoined` — joins within
     /// `ROSTER_SETTLE` coalesced into one rotation — so a joiner is sent only
-    /// a key that covered nothing before it joined. A received `GroupCallKey`
-    /// rings, or is installed. The "when" decisions live in core, not the UI
-    /// crate.
+    /// a key that covered nothing before it joined. A received
+    /// `GroupCallSignal` rings, installs a key, or — a key request we are
+    /// the authority for — rotates like a join. The "when" decisions live in
+    /// core, not the UI crate.
     ///
     /// The loop only dispatches: each event's network work runs in its own
     /// task with deadlines, so a slow server or a flood of keys never holds
     /// up a `ParticipantLeft`. Received keys are handled at most
-    /// [`CALL_KEY_TASKS`] at a time — the rest are dropped — and need no
-    /// ordering: adoption only moves forward (`CallKeyState::adopt`). If the
-    /// room-event bus still lags, the roster is re-read and any departure
-    /// in the gap rotates the key.
+    /// [`CALL_KEY_TASKS`] at a time and need no ordering: adoption only
+    /// moves forward (`CallKeyState::adopt`). A signal dropped there, or lost
+    /// to a domain-bus lag, triggers a resync: we ask the key authority for a
+    /// fresh rotation (`resync_group_call_key`). If the room-event bus lags,
+    /// the roster is re-read and any departure in the gap rotates the key.
     #[cfg(feature = "media")]
     fn spawn_call_room_policy_listener(self: &Arc<Self>) -> tokio::task::JoinHandle<()> {
         let client = Arc::clone(self);
@@ -2306,20 +2308,7 @@ impl ChatterClient {
                     }
                 });
             };
-            let joined = || {
-                if !join_gate.arm() {
-                    return;
-                }
-                let client = Arc::clone(&client);
-                let gate = Arc::clone(&join_gate);
-                tokio::spawn(async move {
-                    tokio::time::sleep(calls::ROSTER_SETTLE).await;
-                    gate.fire();
-                    if let Err(e) = client.handle_participants_joined().await {
-                        tracing::error!(error = %e, "Failed to rotate the group call key for joiners");
-                    }
-                });
-            };
+            let joined = || schedule_join_rotation(&client, &join_gate);
 
             loop {
                 tokio::select! {
@@ -2352,20 +2341,30 @@ impl ChatterClient {
                         Err(RecvError::Closed) => break,
                     },
                     event = domain_rx.recv() => match event {
-                        Ok(DomainEvent::GroupCallKeyReceived { call_id, sender_id, key_material, key_epoch, channel_id }) => {
+                        Ok(DomainEvent::GroupCallSignalReceived { call_id, sender_id, channel_id, signal }) => {
                             let Ok(slot) = Arc::clone(&key_slots).try_acquire_owned() else {
-                                tracing::warn!(%sender_id, "Group call key dropped: key handling saturated");
+                                // Dropped, so resync: whatever it was, a
+                                // fresh rotation covers it.
+                                tracing::warn!(%sender_id, ?signal, "Group call signal dropped: handling saturated; resyncing the key");
+                                client.resync_group_call_key();
                                 continue;
                             };
                             let client = Arc::clone(&client);
+                            let gate = Arc::clone(&join_gate);
                             tokio::spawn(async move {
-                                client.handle_group_call_key(call_id, sender_id, key_material, key_epoch, channel_id).await;
+                                // A key request due an answer rotates like a join.
+                                if client.handle_group_call_signal(call_id, sender_id, channel_id, signal).await {
+                                    schedule_join_rotation(&client, &gate);
+                                }
                                 drop(slot);
                             });
                         }
                         Ok(_) => {}
                         Err(RecvError::Lagged(n)) => {
-                            tracing::warn!(skipped = n, "Call key policy lagged on domain events");
+                            // A lost signal may be a rotation we needed: never
+                            // carry on as if nothing was missed (§124 1k).
+                            tracing::warn!(skipped = n, "Call key policy lagged on domain events; resyncing the key");
+                            client.resync_group_call_key();
                         }
                         Err(RecvError::Closed) => break,
                     },
@@ -4102,6 +4101,25 @@ const CALL_KEY_TASKS: usize = 8;
 
 /// Who left and who joined between two views of a call's room.
 #[cfg(feature = "media")]
+/// Schedule one group-call key rotation for the joins (and key requests)
+/// arriving within [`calls::ROSTER_SETTLE`]: the first arms it, the rest ride
+/// along, and it reads the roster when it fires.
+#[cfg(feature = "media")]
+fn schedule_join_rotation(client: &Arc<ChatterClient>, gate: &Arc<calls::JoinRotationGate>) {
+    if !gate.arm() {
+        return;
+    }
+    let client = Arc::clone(client);
+    let gate = Arc::clone(gate);
+    tokio::spawn(async move {
+        tokio::time::sleep(calls::ROSTER_SETTLE).await;
+        gate.fire();
+        if let Err(e) = client.handle_participants_joined().await {
+            tracing::error!(error = %e, "Failed to rotate the group call key for joiners");
+        }
+    });
+}
+
 fn roster_changes(
     before: &std::collections::HashSet<String>,
     now: &std::collections::HashSet<String>,
