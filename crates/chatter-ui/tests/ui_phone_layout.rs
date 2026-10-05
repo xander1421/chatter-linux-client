@@ -177,7 +177,8 @@ fn settings_tab_bar_and_link_device_status_land_where_designed_on_a_phone() {
     // Owner, 2026-10-05: the field's rounding did not match the shell's. The
     // field's radius is the shell's minus the inset between them
     // (Spacing.radius-chrome-inner); that only reads as concentric when the
-    // inset is the same on every side, which is what is measured here.
+    // outer controls and field share the top/bottom inset. The leading
+    // emoji toggle owns the left edge; the field follows it by one inset.
     let spacing = include_str!("../../../ui/theme/spacing.slint");
     assert!(spacing.contains("out property <length> radius-chrome-inner: radius-chrome - chrome-inset;"));
     assert!(spacing.contains("out property <length> chrome-inset: xs;"));
@@ -201,9 +202,12 @@ fn settings_tab_bar_and_link_device_status_land_where_designed_on_a_phone() {
     let (sx, sy, sw, sh) = rect(&shell);
     let (fx, fy, fw, fh) = rect(&one(&w, "Message input"));
     let (bx, _, bw, _) = rect(&one(&w, "Record voice message"));
-    println!("composer {sx},{sy} {sw}x{sh}; field {fx},{fy} {fw}x{fh}; trailing button x={bx} w={bw}");
+    // The emoji & GIF toggle leads the row; the field sits one inset after it.
+    let (ex, _, ew, _) = rect(&one(&w, "Emoji & GIF picker"));
+    println!("composer {sx},{sy} {sw}x{sh}; leading toggle x={ex} w={ew}; field {fx},{fy} {fw}x{fh}; trailing button x={bx} w={bw}");
     for (side, got) in [
-        ("left", fx - sx),
+        ("left (leading toggle)", ex - sx),
+        ("toggle-to-field gap", fx - (ex + ew)),
         ("top", fy - sy),
         ("bottom", sy + sh - (fy + fh)),
         ("right (trailing button)", sx + sw - (bx + bw)),
