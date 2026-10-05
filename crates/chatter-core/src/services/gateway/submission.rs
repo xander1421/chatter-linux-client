@@ -108,6 +108,8 @@ mod tests {
     fn legacy_cleanup_keeps_unknown_ciphertext_and_redacts_all_confirmed_content() {
         let dir = tempfile::tempdir().unwrap();
         let db = Database::open(&dir.path().join("legacy.db"), "test-only").unwrap();
+        db.run_migrations()
+            .expect("migrate throwaway test database");
         db.connection()
             .unwrap()
             .execute(
@@ -163,6 +165,8 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("submission.db");
         let db = Database::open(&path, "test-only").unwrap();
+        db.run_migrations()
+            .expect("migrate throwaway test database");
         let Admission::First(key) =
             prepare(&db, "owner", "peer", b"exact-padded-envelope").unwrap()
         else {
@@ -177,6 +181,8 @@ mod tests {
         ));
         drop(db);
         let db = Database::open(&path, "test-only").unwrap();
+        db.run_migrations()
+            .expect("migrate throwaway test database");
         assert!(matches!(
             prepare(&db, "owner", "peer", b"exact-padded-envelope").unwrap(),
             Admission::Unconfirmed
@@ -377,6 +383,8 @@ mod boundary_tests {
         let dir = tempfile::tempdir().unwrap();
         let db =
             std::sync::Arc::new(Database::open(&dir.path().join("bound.db"), "test-only").unwrap());
+        db.run_migrations()
+            .expect("migrate throwaway test database");
         db.connection()
             .unwrap()
             .execute(

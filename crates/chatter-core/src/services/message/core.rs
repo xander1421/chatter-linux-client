@@ -1586,6 +1586,8 @@ mod retry_receipt_tests {
             crate::storage::database::Database::open(&dir.path().join("receipt.db"), "test-only")
                 .unwrap(),
         );
+        db.run_migrations()
+            .expect("migrate throwaway test database");
         let repo = UnifiedMessageRepository::new(db.clone());
         for kind in [
             ConversationType::Channel,

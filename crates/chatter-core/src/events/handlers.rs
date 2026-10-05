@@ -1048,13 +1048,21 @@ mod tests {
         )
     }
 
-    #[test]
-    fn real_bootstrap_events_and_anonymous_success_preserve_persisted_receipts() {
-        static MOCK_KEYRING: std::sync::Once = std::sync::Once::new();
-        MOCK_KEYRING.call_once(|| {
-            keyring::set_default_credential_builder(keyring::mock::default_credential_builder());
-        });
+    #[tokio::test]
+    async fn real_bootstrap_events_and_anonymous_success_preserve_persisted_receipts() {
         let dir = tempfile::tempdir().unwrap();
+        // Opt out before client construction so this fixture never uses a keyring.
+        let db_path = crate::system::Directories::with_base_dir(dir.path().to_path_buf())
+            .unwrap()
+            .database_path();
+        std::fs::write(
+            db_path
+                .parent()
+                .unwrap()
+                .join(crate::system::keyring::NO_KEYRING_MARKER),
+            b"",
+        )
+        .unwrap();
         let client = crate::client::ChatterClient::builder()
             .server_url("https://localhost:1")
             .data_dir(dir.path().to_str().unwrap())

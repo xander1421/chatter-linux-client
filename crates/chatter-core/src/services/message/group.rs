@@ -2388,7 +2388,7 @@ mod tests {
         let inbound = ChannelInbound::new(bob.messages().clone(), bob.attachments().clone());
         assert_eq!(
             inbound.ingest(&server_copy, channel_id, false).await,
-            Ingested::Dropped,
+            Ingested::RetryableFailure,
             "positive control: the pre-SKDM message is unreadable on its own"
         );
 
@@ -2773,7 +2773,7 @@ mod tests {
     /// next message: one undecryptable message used to fail the whole resync,
     /// so the cursor never moved and every channel stalled behind it.
     #[tokio::test]
-    async fn resync_continues_past_a_message_waiting_for_its_sender_key() {
+    async fn deferred_resync_requires_retry_while_later_messages_remain_ingestible() {
         use crate::domain::ids::MessageId;
         use crate::services::message::channel_inbound::ChannelInbound;
 
@@ -2802,12 +2802,17 @@ mod tests {
             ..Default::default()
         };
 
-        for message in [&parked, &next] {
+        assert!(
             inbound
-                .ingest_resynced(message, t.channel_id)
+                .ingest_resynced(&parked, t.channel_id)
                 .await
-                .expect("a message's own outcome never fails the resync");
-        }
+                .is_err(),
+            "resync must not acknowledge content still waiting for a sender key"
+        );
+        inbound
+            .ingest_resynced(&next, t.channel_id)
+            .await
+            .expect("the following usable message remains independently ingestible");
         assert_eq!(
             m.pending_group_decrypts
                 .lock()

@@ -110,6 +110,12 @@ impl MessageSync {
                     Ingested::OwnMessage
                     | Ingested::DeferredPendingSenderKey
                     | Ingested::Dropped => {}
+                    Ingested::RetryableFailure => {
+                        return Err(SyncError::Storage(format!(
+                            "channel {}: message ingestion must be retried",
+                            channel_id
+                        )));
+                    }
                 }
             }
 

@@ -161,6 +161,8 @@ mod tests {
         let db = std::sync::Arc::new(
             Database::open(&dir.path().join("queue-failure.db"), "test-only").unwrap(),
         );
+        db.run_migrations()
+            .expect("migrate throwaway test database");
         let repo = AnonGroupRepository::new(db.clone());
         let group = AnonGroupId::new();
         let first = UserId::new();
@@ -199,6 +201,8 @@ mod tests {
     fn all_joinack_waiters_and_missing_tokens_stay_queued_until_each_original_deposit() {
         let dir = tempfile::tempdir().unwrap();
         let db = Database::open(&dir.path().join("queue.db"), "test-only").unwrap();
+        db.run_migrations()
+            .expect("migrate throwaway test database");
         let id = MessageId::new();
         register(&db, "queued-original", &id.to_string()).unwrap();
         initialize(
@@ -235,6 +239,8 @@ mod tests {
         let path = dir.path().join("group.db");
         let id = MessageId::new();
         let db = Database::open(&path, "test-only").unwrap();
+        db.run_migrations()
+            .expect("migrate throwaway test database");
         register(&db, "send.group.completion.v1:original", &id.to_string()).unwrap();
         assert_eq!(
             initialize(
@@ -266,6 +272,8 @@ mod tests {
         );
         drop(db);
         let db = Database::open(&path, "test-only").unwrap();
+        db.run_migrations()
+            .expect("migrate throwaway test database");
         assert_eq!(
             record(&db, "send.group.completion.v1:original", "A", "failed").unwrap(),
             None

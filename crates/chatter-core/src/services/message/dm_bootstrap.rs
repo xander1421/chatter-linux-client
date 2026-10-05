@@ -1191,8 +1191,8 @@ mod tests {
     /// F54: a REQUEST goes to EVERY live device of a multi-device peer, each
     /// sealed to that device under its own token — not to the newest one
     /// only (the offline Tab while the S9 was online). Nothing is behind the
-    /// server URL, so each deposit fails after its token is spent: four
-    /// devices, four tokens.
+    /// server URL, so the batched deposit fails after its credential is spent:
+    /// four independently encrypted devices, one batch credential.
     #[tokio::test]
     async fn request_fans_out_to_every_live_device() {
         let me = UserId::from_uuid(uuid::Uuid::max());
@@ -1207,6 +1207,17 @@ mod tests {
         seed_half_open(ms, &friend, &crate::mailbox::dm::ConversationKey::new(), 5);
         seed_tokens(ms, 10);
 
+        let before: Vec<_> = [2, 6, 7, 8]
+            .into_iter()
+            .map(|device| {
+                ms.signal_service
+                    .key_store
+                    .load_session(&format!("{friend}:{device}"))
+                    .unwrap()
+                    .expect("cached device session")
+            })
+            .collect();
+
         let sent = ms
             .send_friend_dm_content(&friend, crate::services::build_text_content("hi", 1))
             .await;
@@ -1216,9 +1227,18 @@ mod tests {
         );
         assert_eq!(
             ms.token_manager.available_token_count().unwrap(),
-            6,
-            "one REQUEST per device"
+            9,
+            "one credential covers the complete device batch"
         );
+        for (device, original) in [2, 6, 7, 8].into_iter().zip(before) {
+            let after = ms
+                .signal_service
+                .key_store
+                .load_session(&format!("{friend}:{device}"))
+                .unwrap()
+                .expect("device session retained");
+            assert_ne!(after, original, "REQUEST encrypted for device {device}");
+        }
     }
 
     /// F54: with device 6 ready, a send owes its copy to devices 7 and 8

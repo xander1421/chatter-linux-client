@@ -1,10 +1,10 @@
 //! Durable fail-closed admission for composed sends. An absent response is not
 //! evidence of non-delivery. Until exact-envelope retries exist for every
 //! transport, an unresolved attempt must not be replaced or encrypted again.
-use super::ChatterClient;
+use super::{ChatterClient, SendOptions};
 use crate::domain::ids::MessageId;
 use crate::error::StorageError;
-use crate::services::gateway::{QuoteIntent, SendError, SendOptions};
+use crate::services::gateway::{QuoteIntent, SendError};
 use crate::state::{ActiveConversation, chat_state::PendingAttachment};
 use crate::storage::database::Database;
 use prost::Message as _;
@@ -331,6 +331,8 @@ mod tests {
         let first = pending();
         {
             let db = Database::open(&path, "test-only").unwrap();
+            db.run_migrations()
+                .expect("migrate throwaway test database");
             claim(&db, "owner:channel", &first).unwrap();
             // Simulate remote accept followed by loss/cancellation of response:
             // the caller must not remove its durable claim.
@@ -340,6 +342,8 @@ mod tests {
             ));
         }
         let db = Database::open(&path, "test-only").unwrap();
+        db.run_migrations()
+            .expect("migrate throwaway test database");
         let stored = read_pending(&db, "owner:channel").unwrap().unwrap();
         assert_eq!(stored.attempt_id, first.attempt_id);
         assert_eq!(stored.text, "original");
@@ -366,6 +370,8 @@ mod tests {
         use crate::services::gateway::submission::{mark_submission_started, track_submission};
         let dir = tempfile::tempdir().unwrap();
         let db = Database::open(&dir.path().join("refusals.db"), "test-only").unwrap();
+        db.run_migrations()
+            .expect("migrate throwaway test database");
         // A blocked check, an exhausted rate window, invalid content and local
         // preparation/storage failure all precede the real submission marker.
         let errors = vec![
@@ -441,6 +447,8 @@ mod tests {
             let dir = tempfile::tempdir().unwrap();
             let path = dir.path().join("retry.db");
             let db = std::sync::Arc::new(Database::open(&path, "test-only").unwrap());
+            db.run_migrations()
+                .expect("migrate throwaway test database");
             let mut original = pending();
             let row = MessageId::new().to_string();
             original.message_id = Some(row.clone());
@@ -471,6 +479,8 @@ mod tests {
             .unwrap();
             drop(db);
             let db = Database::open(&path, "test-only").unwrap();
+            db.run_migrations()
+                .expect("migrate throwaway test database");
             let retained = read_pending(&db, route).unwrap().unwrap();
             assert_eq!(retained.message_id, original.message_id);
             assert_eq!(retained.original_row, original.original_row);
@@ -512,6 +522,8 @@ mod tests {
         let db = std::sync::Arc::new(
             Database::open(&dir.path().join("attempt.db"), "test-only").unwrap(),
         );
+        db.run_migrations()
+            .expect("migrate throwaway test database");
         let threads: Vec<_> = (0..16)
             .map(|_| {
                 let db = db.clone();

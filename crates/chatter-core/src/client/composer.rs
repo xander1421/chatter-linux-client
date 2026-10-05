@@ -186,10 +186,6 @@ mod tests {
     use crate::domain::ids::{AttachmentId, ChannelId};
 
     fn client() -> (Arc<ChatterClient>, tempfile::TempDir) {
-        static MOCK_KEYRING: std::sync::Once = std::sync::Once::new();
-        MOCK_KEYRING.call_once(|| {
-            keyring::set_default_credential_builder(keyring::mock::default_credential_builder());
-        });
         let dir = tempfile::tempdir().unwrap();
         // Persistent opt-out beside the database, before anything opens it.
         let db = crate::system::Directories::with_base_dir(dir.path().to_path_buf())
@@ -207,6 +203,9 @@ mod tests {
             .data_dir(dir.path().to_str().unwrap())
             .build()
             .expect("build client");
+        client
+            .auth_state()
+            .set_logged_in(crate::domain::ids::UserId::new(), 1, "Test user".into());
         (client, dir)
     }
 
